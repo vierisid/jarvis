@@ -26,8 +26,11 @@ static void jarvisAddEditCommand(NSMenu* menu, NSString* title, SEL action,
 
 // Identify an existing Edit-equivalent menu by responder-chain actions, not
 // its display title. macOS localizes "Edit", and embedding hosts can choose a
-// different title while still providing the standard commands.
+// different title while still providing the standard commands. All four core
+// commands must be present somewhere in the menu bar — a partial menu (say,
+// copy without paste) must not suppress installing the full set.
 static BOOL jarvisHasEditMenu(NSMenu* mainMenu) {
+    BOOL hasCut = NO, hasCopy = NO, hasPaste = NO, hasSelectAll = NO;
     for (NSMenuItem* item in mainMenu.itemArray) {
         NSMenu* submenu = item.submenu;
         if (submenu == nil) {
@@ -35,13 +38,13 @@ static BOOL jarvisHasEditMenu(NSMenu* mainMenu) {
         }
         for (NSMenuItem* command in submenu.itemArray) {
             SEL action = command.action;
-            if (action == @selector(cut:) || action == @selector(copy:) ||
-                action == @selector(paste:) || action == @selector(selectAll:)) {
-                return YES;
-            }
+            if (action == @selector(cut:)) hasCut = YES;
+            else if (action == @selector(copy:)) hasCopy = YES;
+            else if (action == @selector(paste:)) hasPaste = YES;
+            else if (action == @selector(selectAll:)) hasSelectAll = YES;
         }
     }
-    return NO;
+    return hasCut && hasCopy && hasPaste && hasSelectAll;
 }
 
 static void jarvisInstallApplicationMenusOnMain(void) {
@@ -54,6 +57,18 @@ static void jarvisInstallApplicationMenusOnMain(void) {
     }
     if (jarvisHasEditMenu(mainMenu)) {
         return; // app bundle or another window already supplied one
+    }
+
+    // AppKit renders item 0 of the main menu as the application menu (the bold
+    // app-name menu). The menu bar is visible whenever the activation policy is
+    // Regular — the vendored webview raises it for the first-run window — so
+    // keep a placeholder in slot 0 or the Edit commands would render under the
+    // app name.
+    if (mainMenu.numberOfItems == 0) {
+        NSMenuItem* appRoot = [[NSMenuItem alloc]
+            initWithTitle:@"" action:nil keyEquivalent:@""];
+        appRoot.submenu = [[NSMenu alloc] initWithTitle:@""];
+        [mainMenu addItem:appRoot];
     }
 
     NSMenu* editMenu = [[NSMenu alloc] initWithTitle:@"Edit"];
