@@ -7,7 +7,16 @@ import { OpenRouterProvider } from './openrouter.ts';
 import { NVIDIAProvider } from './nvidia.ts';
 import { LiteLLMProvider } from './litellm.ts';
 import { LLMManager } from './manager.ts';
-import { guardImageSize, classifyHttpStatus, classifyErrorString, type LLMMessage, type ContentBlock } from './provider.ts';
+import { configureLLMTiers } from './config-binding.ts';
+import {
+  guardImageSize,
+  classifyHttpStatus,
+  classifyErrorString,
+  parseRetryAfterMs,
+  toLLMStreamError,
+  type LLMMessage,
+  type ContentBlock,
+} from './provider.ts';
 import { isToolResult, type ToolResult } from '../actions/tools/registry.ts';
 
 describe('LLM Provider Types', () => {
@@ -210,6 +219,247 @@ describe('LLMManager', () => {
     expect(events.some((event) => event.type === 'text' && event.text === 'fallback stream ok')).toBe(true);
     expect(events.some((event) => event.type === 'done')).toBe(true);
     expect(events.some((event) => event.type === 'error')).toBe(false);
+  });
+
+  test('tier chat falls back from a broken conversation provider to llm.default', async () => {
+    const manager = new LLMManager();
+    let anthropicCalls = 0;
+    let groqCalls = 0;
+    const anthropic = {
+      name: 'anthropic', listModels: async () => ['claude'],
+      async chat() {
+        anthropicCalls++;
+        throw new Error('Anthropic API error (401): invalid x-api-key');
+      },
+      async *stream() { /* not used */ },
+    };
+    const groq = {
+      name: 'groq', listModels: async () => ['llama'],
+      async chat(_messages: LLMMessage[], options?: { model?: string }) {
+        groqCalls++;
+        expect(options?.model).toBe('llama');
+        return {
+          content: 'groq recovered', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 },
+          model: 'llama', finish_reason: 'stop' as const,
+        };
+      },
+      async *stream() { /* not used */ },
+    };
+    manager.registerProvider(anthropic);
+    manager.registerProvider(groq);
+    configureLLMTiers(manager, {
+      default: 'groq:llama',
+      tiers: { conversation: 'anthropic:claude', medium: 'anthropic:claude' },
+    });
+
+    const response = await manager.chatTier('conversation', 'conv_orchestrator', sampleMessages);
+    expect(response.content).toBe('groq recovered');
+    expect(anthropicCalls).toBe(1);
+    expect(groqCalls).toBe(1);
+  });
+
+  test('tier stream falls back before output and never exposes the primary error', async () => {
+    const manager = new LLMManager();
+    const anthropic = {
+      name: 'anthropic', listModels: async () => ['claude'],
+      async chat() { throw new Error('not used'); },
+      async *stream() {
+        yield { type: 'error' as const, error: 'invalid x-api-key', code: 'auth' as const };
+      },
+    };
+    const groq = {
+      name: 'groq', listModels: async () => ['llama'],
+      async chat() { throw new Error('not used'); },
+      async *stream() {
+        yield { type: 'text' as const, text: 'fallback stream' };
+        yield { type: 'done' as const, response: {
+          content: 'fallback stream', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 },
+          model: 'llama', finish_reason: 'stop' as const,
+        } };
+      },
+    };
+    manager.registerProvider(anthropic);
+    manager.registerProvider(groq);
+    configureLLMTiers(manager, {
+      default: 'groq:llama',
+      tiers: { conversation: 'anthropic:claude' },
+    });
+
+    const events = [];
+    for await (const event of manager.streamTier('conversation', 'conv_orchestrator', sampleMessages)) events.push(event);
+    expect(events.some((event) => event.type === 'text' && event.text === 'fallback stream')).toBe(true);
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+  });
+
+  test('tier fallback does not resend malformed requests', async () => {
+    const manager = new LLMManager();
+    let fallbackCalls = 0;
+    const primary = {
+      name: 'primary', listModels: async () => ['model-a'],
+      async chat() { throw new Error('400 invalid_request: invalid tool schema'); },
+      async *stream() { /* not used */ },
+    };
+    const fallback = {
+      name: 'fallback', listModels: async () => ['model-b'],
+      async chat() {
+        fallbackCalls++;
+        throw new Error('must not run');
+      },
+      async *stream() { /* not used */ },
+    };
+    manager.registerProvider(primary);
+    manager.registerProvider(fallback);
+    configureLLMTiers(manager, {
+      default: 'fallback:model-b',
+      tiers: { medium: 'primary:model-a' },
+    });
+
+    await expect(manager.chatTier('medium', 'chat_orchestrator', sampleMessages)).rejects.toThrow('invalid tool schema');
+    expect(fallbackCalls).toBe(0);
+  });
+
+  test('tier fallback never sends content to a merely registered provider', async () => {
+    const manager = new LLMManager();
+    let unmappedCalls = 0;
+    const primary = {
+      name: 'primary', listModels: async () => ['model-a'],
+      async chat() { throw new Error('401 invalid x-api-key'); },
+      async *stream() { /* not used */ },
+    };
+    const unmapped = {
+      name: 'unmapped', listModels: async () => ['model-b'],
+      async chat() {
+        unmappedCalls++;
+        throw new Error('must not run');
+      },
+      async *stream() { /* not used */ },
+    };
+    manager.registerProvider(primary);
+    manager.registerProvider(unmapped);
+    manager.setTierMap({ medium: { provider: 'primary', model: 'model-a' } });
+
+    await expect(manager.chatTier('medium', 'test', sampleMessages)).rejects.toThrow('invalid x-api-key');
+    expect(unmappedCalls).toBe(0);
+  });
+
+  test('tier stream never crosses providers after output has started', async () => {
+    const manager = new LLMManager();
+    let fallbackCalls = 0;
+    const primary = {
+      name: 'primary', listModels: async () => ['model-a'],
+      async chat() { throw new Error('not used'); },
+      async *stream() {
+        yield { type: 'text' as const, text: 'partial' };
+        yield { type: 'error' as const, error: '429 quota exhausted', code: 'rate_limit' as const };
+      },
+    };
+    const fallback = {
+      name: 'fallback', listModels: async () => ['model-b'],
+      async chat() { throw new Error('not used'); },
+      async *stream() { fallbackCalls++; },
+    };
+    manager.registerProvider(primary);
+    manager.registerProvider(fallback);
+    configureLLMTiers(manager, {
+      default: 'fallback:model-b',
+      tiers: { medium: 'primary:model-a' },
+    });
+
+    const events = [];
+    for await (const event of manager.streamTier('medium', 'chat_orchestrator_stream', sampleMessages)) events.push(event);
+    expect(events.some((event) => event.type === 'text' && event.text === 'partial')).toBe(true);
+    expect(events.some((event) => event.type === 'error')).toBe(true);
+    expect(fallbackCalls).toBe(0);
+  });
+
+  test('background tier failures never cross provider boundaries', async () => {
+    const manager = new LLMManager();
+    let groqCalls = 0;
+    const anthropic = {
+      name: 'anthropic', listModels: async () => ['claude'],
+      async chat() { throw new Error('Anthropic API error (401): invalid x-api-key'); },
+      async *stream() { /* not used */ },
+    };
+    const groq = {
+      name: 'groq', listModels: async () => ['llama'],
+      async chat() {
+        groqCalls++;
+        throw new Error('must not run');
+      },
+      async *stream() { /* not used */ },
+    };
+    manager.registerProvider(anthropic);
+    manager.registerProvider(groq);
+    configureLLMTiers(manager, {
+      default: 'groq:llama',
+      tiers: { medium: 'anthropic:claude' },
+    });
+
+    await expect(manager.chatTier('medium', 'background_agent', sampleMessages))
+      .rejects.toThrow('invalid x-api-key');
+    expect(groqCalls).toBe(0);
+  });
+
+  test('last tier candidate honors retryAfterMs before retrying chat', async () => {
+    const manager = new LLMManager();
+    let calls = 0;
+    const provider = {
+      name: 'groq', listModels: async () => ['llama'],
+      async chat() {
+        calls++;
+        if (calls === 1) {
+          throw Object.assign(new Error('Groq API error (429): rate limited'), {
+            code: 'rate_limit' as const,
+            retryAfterMs: 1,
+          });
+        }
+        return {
+          content: 'recovered', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 },
+          model: 'llama', finish_reason: 'stop' as const,
+        };
+      },
+      async *stream() { /* not used */ },
+    };
+    manager.registerProvider(provider);
+    manager.setTierMap({ medium: { provider: 'groq', model: 'llama' } });
+
+    const response = await manager.chatTier('medium', 'test', sampleMessages);
+    expect(response.content).toBe('recovered');
+    expect(calls).toBe(2);
+  });
+
+  test('last tier candidate honors stream retryAfterMs instead of retrying immediately', async () => {
+    const manager = new LLMManager();
+    let calls = 0;
+    const provider = {
+      name: 'groq', listModels: async () => ['llama'],
+      async chat() { throw new Error('not used'); },
+      async *stream() {
+        calls++;
+        if (calls === 1) {
+          yield {
+            type: 'error' as const,
+            error: 'Groq API error (429): rate limited',
+            code: 'rate_limit' as const,
+            retryAfterMs: 1,
+          };
+          return;
+        }
+        yield { type: 'text' as const, text: 'recovered stream' };
+        yield { type: 'done' as const, response: {
+          content: 'recovered stream', tool_calls: [], usage: { input_tokens: 1, output_tokens: 1 },
+          model: 'llama', finish_reason: 'stop' as const,
+        } };
+      },
+    };
+    manager.registerProvider(provider);
+    manager.setTierMap({ medium: { provider: 'groq', model: 'llama' } });
+
+    const events = [];
+    for await (const event of manager.streamTier('medium', 'test', sampleMessages)) events.push(event);
+    expect(events.some((event) => event.type === 'text' && event.text === 'recovered stream')).toBe(true);
+    expect(events.some((event) => event.type === 'error')).toBe(false);
+    expect(calls).toBe(2);
   });
 });
 
@@ -696,6 +946,65 @@ describe('Groq request shaping', () => {
     expect(JSON.stringify(secondBody).length).toBeLessThan(JSON.stringify(firstBody).length);
   });
 
+  test('GroqProvider retries TPM quota failures once with a tighter payload', async () => {
+    globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+      const callCount = (globalThis.fetch as unknown as ReturnType<typeof mock>).mock.calls.length;
+      if (callCount === 1) {
+        return new Response(JSON.stringify({
+          error: {
+            message: 'Rate limit reached on tokens per minute (TPM). Used 9524, Requested 9754. Please try again in 36.39s.',
+          },
+        }), { status: 429, headers: { 'Retry-After': '37' } });
+      }
+      return new Response(JSON.stringify({
+        id: 'cmpl_quota_retry', object: 'chat.completion', created: Date.now(), model: 'llama-test',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'compact quota retry ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as unknown as typeof fetch;
+
+    const provider = new GroqProvider('test-key');
+    const messages: LLMMessage[] = [
+      { role: 'system', content: 'S'.repeat(14_000) },
+      { role: 'user', content: 'U'.repeat(10_000) },
+      { role: 'assistant', content: 'A'.repeat(10_000) },
+      { role: 'user', content: 'Can you still answer?' },
+    ];
+
+    const response = await provider.chat(messages);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    const firstBody = JSON.parse(String(fetchMock.mock.calls[0]?.[1]?.body));
+    const secondBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
+    expect(response.content).toBe('compact quota retry ok');
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(secondBody).length).toBeLessThan(JSON.stringify(firstBody).length);
+  });
+
+  test('GroqProvider rotates chat to the next model when daily model quota is exhausted', async () => {
+    globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.model === 'llama-3.3-70b-versatile') {
+        return new Response(JSON.stringify({
+          error: { message: 'Tokens per day (TPD): Limit 100000, Used 98608, Requested 3019.' },
+        }), { status: 429, headers: { 'Retry-After': '1200' } });
+      }
+      return new Response(JSON.stringify({
+        id: 'cmpl_rotated', object: 'chat.completion', created: Date.now(), model: body.model,
+        choices: [{ index: 0, message: { role: 'assistant', content: 'rotated ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 10, completion_tokens: 5, total_tokens: 15 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as unknown as typeof fetch;
+
+    const provider = new GroqProvider('test-key');
+    const response = await provider.chat([{ role: 'user', content: 'hello' }]);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    const models = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).model);
+
+    expect(response.content).toBe('rotated ok');
+    expect(response.model).toBe('llama-3.1-8b-instant');
+    expect(models).toEqual(['llama-3.3-70b-versatile', 'llama-3.1-8b-instant']);
+  });
+
   test('GroqProvider compaction never orphans a tool message from its assistant tool_call', async () => {
     let captured: any = null;
     globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
@@ -793,6 +1102,42 @@ describe('Groq request shaping', () => {
     expect(events.join('')).toBe('retry-stream ok');
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(JSON.stringify(secondBody).length).toBeLessThan(JSON.stringify(firstBody).length);
+  });
+
+  test('GroqProvider rotates streaming to the next model on a model rate limit', async () => {
+    const enc = new TextEncoder();
+    globalThis.fetch = mock(async (_url: string, init?: RequestInit) => {
+      const body = JSON.parse(String(init?.body));
+      if (body.model === 'llama-3.3-70b-versatile') {
+        return new Response(JSON.stringify({ error: { message: 'TPD quota exhausted' } }), {
+          status: 429,
+          headers: { 'Retry-After': '1200' },
+        });
+      }
+      const stream = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(enc.encode(`data: ${JSON.stringify({
+            id: 'rotated', object: 'chat.completion.chunk', created: 0, model: body.model,
+            choices: [{ index: 0, delta: { content: 'stream rotated ok' }, finish_reason: null }],
+          })}\n\n`));
+          controller.enqueue(enc.encode('data: [DONE]\n\n'));
+          controller.close();
+        },
+      });
+      return new Response(stream, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    }) as unknown as typeof fetch;
+
+    const provider = new GroqProvider('test-key');
+    const events = [];
+    for await (const event of provider.stream([{ role: 'user', content: 'hello' }])) events.push(event);
+    const fetchMock = globalThis.fetch as unknown as ReturnType<typeof mock>;
+    const models = fetchMock.mock.calls.map((call) => JSON.parse(String(call[1]?.body)).model);
+    const done = events.find((event) => event.type === 'done');
+
+    expect(models).toEqual(['llama-3.3-70b-versatile', 'llama-3.1-8b-instant']);
+    expect(events.some((event) => event.type === 'text' && event.text === 'stream rotated ok')).toBe(true);
+    expect(done?.type === 'done' ? done.response.model : null).toBe('llama-3.1-8b-instant');
+    expect(events.some((event) => event.type === 'error')).toBe(false);
   });
 });
 
@@ -947,5 +1292,31 @@ describe('classifyErrorString', () => {
     expect(classifyErrorString('something unexpected happened')).toBe('unknown');
     expect(classifyErrorString(undefined)).toBe('unknown');
     expect(classifyErrorString('')).toBe('unknown');
+  });
+});
+
+describe('parseRetryAfterMs', () => {
+  test('parses standard seconds and Groq decimal-second quota messages', () => {
+    expect(parseRetryAfterMs('37')).toBe(37_000);
+    expect(parseRetryAfterMs(undefined, 'Please try again in 36.39s.')).toBe(36_390);
+  });
+
+  test('returns undefined when the provider gives no retry timing', () => {
+    expect(parseRetryAfterMs(undefined, 'rate limited')).toBeUndefined();
+  });
+});
+
+describe('toLLMStreamError', () => {
+  test('preserves the final provider code and retry timing over earlier error text', () => {
+    const error = Object.assign(new Error(
+      'Anthropic API error (401): invalid x-api-key\n\nGroq API error (429): rate limited',
+    ), { code: 'rate_limit' as const, retryAfterMs: 90_000 });
+
+    expect(toLLMStreamError(error)).toEqual({
+      type: 'error',
+      error: error.message,
+      code: 'rate_limit',
+      retryAfterMs: 90_000,
+    });
   });
 });
