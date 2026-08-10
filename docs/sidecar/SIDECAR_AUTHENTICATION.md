@@ -11,11 +11,13 @@ Each enrollment token contains two operator-controlled URLs:
 - `brain` → the WebSocket endpoint the sidecar dials (`wss://.../sidecar/connect` or `ws://.../sidecar/connect`)
 - `jwks` → the HTTP(S) endpoint the sidecar uses to fetch the signing key (`https://.../api/sidecars/.well-known/jwks.json`)
 
-In the current daemon, those claims are chosen from a single configured brain origin with this precedence:
+In the current daemon, those claims are chosen from a single configured public origin with this precedence:
 
-1. `JARVIS_BRAIN_DOMAIN`
-2. `daemon.brain_domain`
-3. `localhost:<daemon.port>` fallback
+1. `JARVIS_PUBLIC_URL`
+2. `daemon.public_url`
+3. `JARVIS_BRAIN_DOMAIN` (legacy alias)
+4. `daemon.brain_domain` (legacy alias)
+5. `localhost:<daemon.port>` fallback
 
 At startup, the daemon applies the env override in `src/config/loader.ts`, then passes the effective value into `SidecarManager` in `src/daemon/index.ts`. `src/sidecar/manager.ts` derives both JWT claims from that one origin:
 
@@ -25,7 +27,8 @@ At startup, the daemon applies the env override in `src/config/loader.ts`, then 
 
 ### What to Set for Remote Sidecars
 
-For sidecars running on another machine, set `JARVIS_BRAIN_DOMAIN` or `daemon.brain_domain` to the public origin that machine can actually reach.
+For sidecars running on another machine, set `JARVIS_PUBLIC_URL` or
+`daemon.public_url` to the public origin that machine can actually reach.
 
 Good examples:
 
@@ -224,7 +227,7 @@ Symptoms:
 
 Fix:
 
-1. Set `JARVIS_BRAIN_DOMAIN` or `daemon.brain_domain` to the correct public origin
+1. Set `JARVIS_PUBLIC_URL` or `daemon.public_url` to the correct public origin
 2. Restart/reload Jarvis so the daemon uses the new value
 3. Re-enroll the sidecar so a fresh token is minted with corrected claims
 
@@ -260,7 +263,9 @@ Fix:
 
 ### YAML and environment disagree
 
-`JARVIS_BRAIN_DOMAIN` overrides `daemon.brain_domain`. If the token does not match the YAML value you expected, check the daemon process environment first.
+`JARVIS_PUBLIC_URL` overrides `daemon.public_url`, which overrides the legacy
+brain-domain settings. If the token does not match the YAML value you expected,
+check the daemon process environment first.
 
 ## Security Considerations
 

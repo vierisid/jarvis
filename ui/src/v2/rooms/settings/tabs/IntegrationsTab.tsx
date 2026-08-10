@@ -14,11 +14,28 @@ export function IntegrationsTab({
   const [clientSecret, setClientSecret] = useState("");
   const [phase, setPhase] = useState<"idle" | "saving" | "authenticating">("idle");
   const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [googleRedirectUri, setGoogleRedirectUri] = useState(
+    () => `${window.location.origin}/api/auth/google/callback`,
+  );
+  const [originWarnings, setOriginWarnings] = useState<string[]>([]);
+
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/system/external-origin")
+      .then((response) => response.json())
+      .then((result: { google_callback?: string; warnings?: string[] }) => {
+        if (cancelled) return;
+        if (result.google_callback) setGoogleRedirectUri(result.google_callback);
+        setOriginWarnings(result.warnings ?? []);
+      })
+      .catch(() => { /* keep the browser-origin guess; may differ from the daemon's resolved origin */ });
+    return () => { cancelled = true; };
+  }, []);
 
   // Listen for the OAuth popup completion event
   const handleMessage = useCallback(
     (event: MessageEvent) => {
-      if (event.data === "google-auth-complete") {
+      if (event.origin === window.location.origin && event.data === "google-auth-complete") {
         if (pollRef.current) {
           clearInterval(pollRef.current);
           pollRef.current = null;
@@ -150,12 +167,15 @@ export function IntegrationsTab({
                 <li>
                   Add this Authorized redirect URI:
                   <code className="v2-set__code v2-set__code--block">
-                    http://localhost:3142/api/auth/google/callback
+                    {googleRedirectUri}
                   </code>
                 </li>
                 <li>Paste the Client ID and Client Secret below</li>
               </ol>
             </div>
+            {originWarnings.map((warning) => (
+              <p className="v2-set__hint v2-set__hint--warn" key={warning}>{warning}</p>
+            ))}
             <div className="v2-set__field">
               <label className="v2-set__field-label">Client ID</label>
               <input
@@ -188,6 +208,13 @@ export function IntegrationsTab({
         ) : g.status === "credentials_saved" && phase === "idle" ? (
           <>
             <p className="v2-set__hint">Credentials saved. Connect a Google account to authorize.</p>
+            <div className="v2-set__field">
+              <div className="v2-set__field-label">Authorized redirect URI</div>
+              <code className="v2-set__code v2-set__code--block">{googleRedirectUri}</code>
+            </div>
+            {originWarnings.map((warning) => (
+              <p className="v2-set__hint v2-set__hint--warn" key={warning}>{warning}</p>
+            ))}
             <div style={{ display: "flex", gap: "var(--s-2)", flexWrap: "wrap" }}>
               <button
                 type="button"

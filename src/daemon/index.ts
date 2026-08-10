@@ -47,6 +47,7 @@ import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { applyApprovalDecision } from "./approval-decision.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 import { SidecarManager, buildEnrollmentUrls } from "../sidecar/manager.ts";
+import { resolveExternalOrigin } from "../util/external-origin.ts";
 import { ensureWorkflowSchema } from "../workflows/db/index.ts";
 import { Worker as WorkflowWorker } from "../workflows/queue/worker.ts";
 import { recoverOrphanedJobs } from "../workflows/db/repos/job-queue.ts";
@@ -580,16 +581,18 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 6c. Create sidecar manager
     const sidecarManager = new SidecarManager(jarvisConfig.daemon.data_dir.replace('~', os.homedir()));
-    // Brain URL precedence: env > config.yaml > default fallback. The loader
-    // already collapses env into config.daemon.brain_domain, so we re-check
-    // the env var here only to attribute the source in the startup log —
-    // the operator needs to see which knob is active when debugging.
-    const brainSource: 'env' | 'config' | 'default' = process.env.JARVIS_BRAIN_DOMAIN
-      ? 'env'
-      : jarvisConfig.daemon.brain_domain
-        ? 'config'
+    // Public-origin precedence: env > public_url > legacy brain_domain >
+    // local fallback. Re-check env only to attribute the startup log source.
+    const externalOrigin = resolveExternalOrigin(jarvisConfig);
+    for (const warning of externalOrigin.warnings) {
+      console.warn(`[ExternalOrigin] ${warning}`);
+    }
+    const brainSource: 'env' | 'config' | 'public_url' | 'default' = externalOrigin.source === 'public_url'
+      ? (process.env.JARVIS_PUBLIC_URL ? 'env' : 'public_url')
+      : externalOrigin.source === 'brain_domain'
+        ? (process.env.JARVIS_BRAIN_DOMAIN ? 'env' : 'config')
         : 'default';
-    const brainDomain = jarvisConfig.daemon.brain_domain ?? `localhost:${config.port}`;
+    const brainDomain = externalOrigin.httpOrigin;
     sidecarManager.setBrainUrl(brainDomain, brainSource);
 
     // Panel webviews must render the same brain origin the JWT pins: the sidecar
@@ -3976,7 +3979,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       sidecarManager,
       settingsReload,
     };
-    setCorsOrigin(jarvisConfig.daemon.port);
+    setCorsOrigin(externalOrigin.httpOrigin);
+    wsService.getServer().setCorsOrigin(externalOrigin.httpOrigin);
 
     // Construct the workflow runtime's shared collaborators early so the
     // route table can carry a TriggerManager reference (used for cron /

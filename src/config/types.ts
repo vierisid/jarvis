@@ -385,7 +385,8 @@ export type JarvisConfig = {
      * (`brain.example.com`, `10.0.0.5:3142`). Bare local hosts default to
      * ws/http; everything else defaults to wss/https.
      *
-     * Precedence: `JARVIS_BRAIN_DOMAIN` env var > this field > internal
+     * Legacy alias for `public_url`. Precedence is `JARVIS_PUBLIC_URL` /
+     * `public_url`, then `JARVIS_BRAIN_DOMAIN` / this field, then the internal
      * `localhost:<port>` fallback (with a startup warning).
      *
      * Sidecars must be able to reach both derived endpoints from the
@@ -393,6 +394,13 @@ export type JarvisConfig = {
      * the token is re-issued with a reachable origin.
      */
     brain_domain?: string;
+    /**
+     * Canonical public HTTP(S) origin for OAuth callbacks, webhooks, dashboard
+     * links, and sidecar enrollment. Prefer this clearer name for new
+     * deployments; `brain_domain` remains a backwards-compatible alias.
+     * Must be an origin with no path, query, fragment, or credentials.
+     */
+    public_url?: string;
     /**
      * Graceful-drain deadline (ms). On SIGTERM the daemon quiesces (stops
      * accepting new work) and waits up to this long for in-flight agent turns

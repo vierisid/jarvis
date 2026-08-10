@@ -58,10 +58,11 @@ connections and token mints.
 ### The URL baked into enrollment tokens
 
 `jarvis enroll` embeds the brain's address into the token - that is where the
-sidecar will connect. It comes from `daemon.brain_domain` in `config.yaml`
-(env override: `JARVIS_BRAIN_DOMAIN`). If unset, tokens point at
-`localhost:<port>` and only work for sidecars on the same machine; the CLI
-warns when this happens.
+sidecar will connect. It comes from `daemon.public_url` in `config.yaml`
+(environment override: `JARVIS_PUBLIC_URL`). The older `daemon.brain_domain`
+and `JARVIS_BRAIN_DOMAIN` names remain supported as aliases. If unset, tokens
+point at `localhost:<port>` and only work for sidecars on the same machine;
+the CLI warns when this happens.
 
 The scheme rules are secure by default:
 
@@ -116,7 +117,7 @@ Set the brain address so tokens point somewhere reachable, with an explicit
 
 ```yaml
 daemon:
-  brain_domain: "http://192.168.1.10:3142"
+  public_url: "http://192.168.1.10:3142"
 ```
 
 Then enroll each device and paste the token into its sidecar. Remember:
@@ -153,14 +154,17 @@ default to `wss`):
 ## 3. VPS with a domain
 
 The production shape: a reverse proxy owns ports 80/443 and TLS, the daemon
-listens privately behind it.
+listens privately behind it. Set `daemon.public_url` (or the
+`JARVIS_PUBLIC_URL` environment variable) to the public HTTPS origin and
+restart Jarvis — network configuration is deliberately config-file/env only,
+never editable from the dashboard.
 
 `~/.jarvis/config.yaml` on the VPS:
 
 ```yaml
 daemon:
   port: 3142                                    # bound behind the proxy
-  brain_domain: "https://jarvis.example.com"    # what goes into device tokens
+  public_url: "https://jarvis.example.com"      # OAuth, webhooks, device tokens
 ```
 
 Caddy makes the proxy a two-liner (automatic Let's Encrypt certificates,
@@ -192,6 +196,26 @@ server {
 }
 ```
 
+Jarvis uses `public_url` as the authoritative external origin for OAuth
+callbacks, sidecar enrollment, CORS, and generated public links. It is never
+inferred from request headers: if it is unset, Jarvis assumes
+`localhost:<port>` and warns when requests appear to come through a proxy.
+
+For Google OAuth, register this exact Authorized redirect URI in Google Cloud:
+
+```text
+https://jarvis.example.com/api/auth/google/callback
+```
+
+Settings → Integrations displays the resolved value reported by the daemon, so
+you do not need to translate a localhost example manually.
+
+> **Upgrading with `brain_domain` set?** The dashboard Google flow used to
+> always call back to `http://localhost:3142/...`; it now calls back to your
+> configured origin. Register the new redirect URI shown in Settings →
+> Integrations in Google Cloud, and make sure that origin routes to the
+> daemon, or re-connecting Google will fail.
+
 Make sure port 3142 is not directly reachable from the internet (bind
 firewall rules accordingly, or use the unix socket below and skip TCP
 entirely). If you expose it raw, the failure mode is at least the safe one:
@@ -205,7 +229,7 @@ Then, over SSH on the VPS:
 jarvis enroll "my-laptop"
 ```
 
-Because `brain_domain` is an `https://` URL, the token carries
+Because `public_url` is an `https://` URL, the token carries
 `wss://jarvis.example.com/sidecar/connect`. Paste it into the sidecar on
 your laptop and everything - dashboard included - flows through TLS. The
 dashboard is a secure context, so voice and all other features work.
@@ -255,7 +279,7 @@ timezone: "Europe/Rome"
 | | Single machine | LAN via IP | VPS + domain |
 |---|---|---|---|
 | TLS needed | no | no (with tradeoffs) | yes, via reverse proxy |
-| `brain_domain` | not needed | `http://<ip>:3142` (explicit scheme) | `https://your.domain` |
+| `public_url` | not needed | `http://<ip>:3142` (explicit scheme) | `https://your.domain` |
 | Voice / mic in dashboard | yes | no (secure-context gated) | yes |
 | Tokens on the wire | loopback only | cleartext on your LAN | encrypted |
 | Sidecar URL in tokens | `ws://localhost:3142` | `ws://<ip>:3142` | `wss://your.domain` |

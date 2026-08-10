@@ -13,6 +13,8 @@ import { homedir } from 'node:os';
 import { spawnSync } from 'bun';
 import { c, printOk, printWarn, printErr, printInfo, askYesNo, ask, askSecret, startSpinner, detectPlatform } from './helpers.ts';
 import { LINUX_BROWSER_PATHS, MACOS_BROWSER_PATHS, type BrowserExecutable } from '../actions/browser/chrome-launcher.ts';
+import { externalUrl, resolveExternalOrigin } from '../util/external-origin.ts';
+import { GoogleOAuthFlowStore } from '../integrations/google-oauth-flow.ts';
 
 export type DepKind = 'core' | 'browser' | 'linux' | 'google';
 
@@ -370,6 +372,9 @@ export async function installCoreTools(missing: string[]): Promise<boolean> {
  * Run inline Google OAuth setup flow.
  */
 export async function setupGoogleOAuth(config: any): Promise<boolean> {
+  const externalOrigin = resolveExternalOrigin(config);
+  for (const warning of externalOrigin.warnings) printWarn(warning);
+  const redirectUri = externalUrl(externalOrigin, '/api/auth/google/callback');
   let clientId = config.google?.client_id ?? '';
   let clientSecret = config.google?.client_secret ?? '';
 
@@ -377,7 +382,7 @@ export async function setupGoogleOAuth(config: any): Promise<boolean> {
     printInfo('Google OAuth requires OAuth2 credentials from Google Cloud Console.');
     printInfo('1. Go to https://console.cloud.google.com/apis/credentials');
     printInfo('2. Create an OAuth2 client ID (Web application)');
-    printInfo('3. Add redirect URI: http://localhost:3142/api/auth/google/callback');
+    printInfo(`3. Add redirect URI: ${redirectUri}`);
     console.log('');
 
     clientId = await ask('Google OAuth Client ID (or press Enter to skip)');
@@ -392,7 +397,7 @@ export async function setupGoogleOAuth(config: any): Promise<boolean> {
 
   // Import GoogleAuth and start inline flow
   const { GoogleAuth } = await import('../integrations/google-auth.ts');
-  const auth = new GoogleAuth(clientId, clientSecret);
+  const auth = new GoogleAuth(clientId, clientSecret, { redirectUri });
 
   if (auth.isAuthenticated()) {
     printOk('Already authenticated with Google!');
@@ -404,7 +409,12 @@ export async function setupGoogleOAuth(config: any): Promise<boolean> {
     'https://www.googleapis.com/auth/calendar.readonly',
   ];
 
-  const authUrl = auth.getAuthUrl(SCOPES);
+  const oauthFlows = new GoogleOAuthFlowStore();
+  const startedFlow = oauthFlows.start(redirectUri);
+  const authUrl = auth.getAuthUrl(SCOPES, {
+    state: startedFlow.state,
+    codeChallenge: startedFlow.codeChallenge,
+  });
 
   console.log('');
   printInfo('Opening browser for Google authorization...');
@@ -426,19 +436,20 @@ export async function setupGoogleOAuth(config: any): Promise<boolean> {
   }
 
   // Start temporary callback server for OAuth redirect
-  printInfo('Waiting for authorization callback on port 3142...');
+  printInfo(`Waiting for authorization callback at ${redirectUri}...`);
 
   return new Promise<boolean>((resolve) => {
     let server: ReturnType<typeof Bun.serve>;
     try {
       server = Bun.serve({
-        port: 3142,
+        port: config.daemon.port,
         async fetch(req) {
           const url = new URL(req.url);
 
           if (url.pathname === '/api/auth/google/callback') {
             const code = url.searchParams.get('code');
             const error = url.searchParams.get('error');
+            const state = url.searchParams.get('state');
 
             if (error) {
               clearTimeout(timeout);
@@ -454,8 +465,13 @@ export async function setupGoogleOAuth(config: any): Promise<boolean> {
               return new Response('Missing code', { status: 400 });
             }
 
+            const pendingFlow = state ? oauthFlows.consume(state) : null;
+            if (!pendingFlow) {
+              return new Response('Invalid or expired OAuth state', { status: 400 });
+            }
+
             try {
-              await auth.exchangeCode(code);
+              await auth.exchangeCode(code, { codeVerifier: pendingFlow.codeVerifier });
               clearTimeout(timeout);
               printOk('Google OAuth configured! Tokens saved.');
               setTimeout(() => { server.stop(); resolve(true); }, 300);
@@ -478,8 +494,9 @@ export async function setupGoogleOAuth(config: any): Promise<boolean> {
         },
       });
     } catch (err) {
-      printErr(`Could not start OAuth callback server on port 3142 (port in use?)`);
-      printInfo('Stop the JARVIS daemon first, or run later with: bun run setup:google');
+      printErr(`Could not start OAuth callback server on port ${config.daemon.port} (port in use?)`);
+      printInfo('The JARVIS daemon is probably running — connect Google from the dashboard (Settings → Integrations),');
+      printInfo('or stop the daemon and run: bun run setup:google');
       resolve(false);
       return;
     }

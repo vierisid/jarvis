@@ -102,7 +102,7 @@ describe('standalone enrollment', () => {
 
   test('missing brain URL is a hard error, not a localhost token', async () => {
     await expect(enrollDevice(dataDir, '', 'desktop-NA23', { onExisting: 'upsert' })).rejects.toThrow(
-      /brain_domain/i,
+      /public_url/i,
     );
   });
 });

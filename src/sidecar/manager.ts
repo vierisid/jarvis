@@ -133,17 +133,18 @@ export class SidecarManager implements Service {
    * glance which knob is active when something looks wrong (env var vs
    * config.yaml vs default-fallback). Pass undefined for silent setters.
    */
-  setBrainUrl(url: string, source?: 'env' | 'config' | 'default'): void {
+  setBrainUrl(url: string, source?: 'env' | 'config' | 'public_url' | 'default'): void {
     this.brainUrl = url;
     if (source) {
       const { brainWs } = buildEnrollmentUrls(url);
-      const sourceLabel = source === 'env' ? 'JARVIS_BRAIN_DOMAIN env var'
+      const sourceLabel = source === 'env' ? 'JARVIS_PUBLIC_URL / JARVIS_BRAIN_DOMAIN env var'
+        : source === 'public_url' ? 'daemon.public_url / JARVIS_PUBLIC_URL'
         : source === 'config' ? 'config.yaml daemon.brain_domain'
-        : `default fallback — set daemon.brain_domain in config.yaml or JARVIS_BRAIN_DOMAIN env to override`;
+        : `default fallback — set daemon.public_url in config.yaml or JARVIS_PUBLIC_URL env to override`;
       console.log(`[SidecarManager] Brain URL: ${brainWs} (source: ${sourceLabel})`);
       if (isLocalhostBrainUrl(url)) {
         console.warn(
-          `[SidecarManager] Brain URL points at a local host. Sidecars on other machines will NOT be able to reach this URL — only enroll local sidecars, or set daemon.brain_domain to a routable hostname before enrolling remote sidecars.`,
+          `[SidecarManager] Brain URL points at a local host. Sidecars on other machines will NOT be able to reach this URL — only enroll local sidecars, or set daemon.public_url to a routable HTTPS origin before enrolling remote sidecars.`,
         );
       }
     }

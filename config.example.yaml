@@ -5,11 +5,13 @@ daemon:
   port: 3142
   data_dir: "~/.jarvis"
   db_path: "~/.jarvis/jarvis.db"
-  # Public origin written into sidecar enrollment JWTs (`brain` + `jwks`).
-  # For remote sidecars, set this to the externally reachable URL/host they
-  # can actually reach, not localhost or a private/container-only hostname.
-  # Env override: JARVIS_BRAIN_DOMAIN="https://brain.example.com"
-  # brain_domain: "https://brain.example.com"
+  # Canonical public origin: OAuth callbacks, generated links, and the sidecar
+  # enrollment JWTs (`brain` + `jwks`). Behind a reverse proxy or for remote
+  # sidecars, set this to the externally reachable HTTPS origin — never
+  # localhost or a private/container-only hostname. No path, query, or
+  # credentials. Env override: JARVIS_PUBLIC_URL="https://jarvis.example.com"
+  # (legacy alias: brain_domain / JARVIS_BRAIN_DOMAIN)
+  # public_url: "https://jarvis.example.com"
   # Bind a unix domain socket INSTEAD of a TCP port (for a reverse proxy on
   # the same host). When set, nothing listens on TCP. See docs/SELF_HOSTING.md.
   # listen: "unix:/run/jarvis/jarvis.sock"

@@ -166,6 +166,10 @@ export class WebSocketServer {
     this.insecureOpenAccess = enabled;
   }
 
+  setCorsOrigin(origin: string): void {
+    this.corsOrigin = origin.replace(/\/+$/, '');
+  }
+
   setHandler(handler: WSClientHandler): void {
     this.handler = handler;
   }

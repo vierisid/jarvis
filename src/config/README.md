@@ -77,6 +77,7 @@ daemon: {
   port: number;          // WebSocket server port (default: 7777)
   data_dir: string;      // Data directory path (default: ~/.jarvis)
   db_path: string;       // SQLite database path (default: ~/.jarvis/jarvis.db)
+  public_url?: string;   // Public HTTPS origin behind a reverse proxy
 }
 ```
 
@@ -161,6 +162,7 @@ daemon:
   port: 7777
   data_dir: "~/.jarvis"
   db_path: "~/.jarvis/jarvis.db"
+  # public_url: "https://jarvis.example.com"
 
 llm:
   primary: "anthropic"

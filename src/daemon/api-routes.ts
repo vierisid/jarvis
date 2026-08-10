@@ -62,6 +62,8 @@ import { mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import { isWithin } from '../util/path.ts';
+import { externalUrl, resolveExternalOrigin } from '../util/external-origin.ts';
+import { GoogleOAuthFlowStore } from '../integrations/google-oauth-flow.ts';
 
 // --- Security helpers ---
 
@@ -175,9 +177,9 @@ let CORS: Record<string, string> = {
 };
 
 /** Call once during init to set the correct CORS origin from config */
-export function setCorsOrigin(port: number, host = 'localhost') {
+export function setCorsOrigin(origin: string) {
   CORS = {
-    'Access-Control-Allow-Origin': `http://${host}:${port}`,
+    'Access-Control-Allow-Origin': origin.replace(/\/+$/, ''),
     'Access-Control-Allow-Methods': 'GET, POST, PATCH, DELETE, OPTIONS',
     'Access-Control-Allow-Headers': 'Content-Type',
   };
@@ -286,10 +288,25 @@ function buildAgentSnapshots(ctx: ApiContext) {
  * Create all API route handlers.
  */
 export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
+  const googleOAuthFlows = new GoogleOAuthFlowStore();
   return {
     // --- Health ---
     '/api/health': {
       GET: () => json(ctx.healthMonitor.getHealth()),
+    },
+
+    '/api/system/external-origin': {
+      GET: (req: Request) => {
+        const resolved = resolveExternalOrigin(ctx.config, req);
+        return json({
+          public_origin: resolved.httpOrigin,
+          websocket_origin: resolved.wsOrigin,
+          source: resolved.source,
+          proxy_detected: resolved.proxyDetected,
+          google_callback: externalUrl(resolved, '/api/auth/google/callback'),
+          warnings: resolved.warnings,
+        });
+      },
     },
 
     // --- Vault: Entities ---
@@ -1940,7 +1957,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const params = getSearchParams(req);
         const code = params.get('code');
         const authError = params.get('error');
+        const state = params.get('state');
 
+        // A denial has nothing to protect and nothing to exchange — render it
+        // before touching (and burning) the one-time state.
         if (authError) {
           return new Response(
             `<html><body><h1>Authorization Denied</h1><p>${escapeHtml(authError)}</p><p>You can close this tab.</p></body></html>`,
@@ -1952,6 +1972,18 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           return error('Missing authorization code', 400);
         }
 
+        // Top-level browser navigation: state failures get an HTML page, not JSON.
+        const pendingFlow = state ? googleOAuthFlows.consume(state) : null;
+        if (!pendingFlow) {
+          const reason = state
+            ? 'This authorization link was already used or has expired.'
+            : 'This authorization link is missing its OAuth state.';
+          return new Response(
+            `<html><body><h1>Authorization Failed</h1><p>${reason}</p><p>Start Google authorization again from the Jarvis dashboard.</p></body></html>`,
+            { headers: { ...CORS, 'Content-Type': 'text/html' }, status: 400 }
+          );
+        }
+
         // Try to exchange the code using GoogleAuth from context
         const googleConfig = ctx.config.google;
         if (!googleConfig?.client_id || !googleConfig?.client_secret) {
@@ -1961,8 +1993,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         try {
           // Lazy import to avoid circular deps
           const { GoogleAuth } = await import('../integrations/google-auth.ts');
-          const auth = new GoogleAuth(googleConfig.client_id, googleConfig.client_secret);
-          await auth.exchangeCode(code);
+          const auth = new GoogleAuth(googleConfig.client_id, googleConfig.client_secret, {
+            redirectUri: pendingFlow.redirectUri,
+          });
+          await auth.exchangeCode(code, { codeVerifier: pendingFlow.codeVerifier });
 
           // The exchange above used a throwaway GoogleAuth that saved the
           // tokens to disk; nudge the hot-reload applier so the daemon's
@@ -2054,13 +2088,19 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
         try {
           const { GoogleAuth } = await import('../integrations/google-auth.ts');
-          const auth = new GoogleAuth(googleConfig.client_id, googleConfig.client_secret);
+          const externalOrigin = resolveExternalOrigin(ctx.config);
+          const redirectUri = externalUrl(externalOrigin, '/api/auth/google/callback');
+          const flow = googleOAuthFlows.start(redirectUri);
+          const auth = new GoogleAuth(googleConfig.client_id, googleConfig.client_secret, { redirectUri });
           const scopes = [
             'https://www.googleapis.com/auth/gmail.readonly',
             'https://www.googleapis.com/auth/calendar.readonly',
           ];
-          const authUrl = auth.getAuthUrl(scopes);
-          return json({ auth_url: authUrl });
+          const authUrl = auth.getAuthUrl(scopes, {
+            state: flow.state,
+            codeChallenge: flow.codeChallenge,
+          });
+          return json({ auth_url: authUrl, redirect_uri: redirectUri });
         } catch (err) {
           const msg = err instanceof Error ? err.message : String(err);
           return error(`Failed to generate auth URL: ${msg}`, 500);

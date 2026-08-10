@@ -187,7 +187,7 @@ export async function enrollDevice(
   options: EnrollOptions,
 ): Promise<EnrollResult> {
   if (!brainUrl) {
-    throw new Error('Brain URL not configured - set daemon.brain_domain (or JARVIS_BRAIN_DOMAIN)');
+    throw new Error('Brain URL not configured - set daemon.public_url (or JARVIS_PUBLIC_URL)');
   }
   const trimmed = validateSidecarName(name);
   const keys = options.keys ?? (await loadOrGenerateSidecarKeys(dataDir));

@@ -115,7 +115,10 @@ export class GoogleAuth {
   /**
    * Generate OAuth2 consent URL.
    */
-  getAuthUrl(scopes: string[]): string {
+  getAuthUrl(
+    scopes: string[],
+    opts: { state?: string; codeChallenge?: string } = {},
+  ): string {
     const params = new URLSearchParams({
       client_id: this.clientId,
       redirect_uri: this.redirectUri,
@@ -124,23 +127,30 @@ export class GoogleAuth {
       access_type: 'offline',
       prompt: 'consent',
     });
+    if (opts.state) params.set('state', opts.state);
+    if (opts.codeChallenge) {
+      params.set('code_challenge', opts.codeChallenge);
+      params.set('code_challenge_method', 'S256');
+    }
     return `${AUTH_ENDPOINT}?${params.toString()}`;
   }
 
   /**
    * Exchange authorization code for tokens.
    */
-  async exchangeCode(code: string): Promise<GoogleTokens> {
+  async exchangeCode(code: string, opts: { codeVerifier?: string } = {}): Promise<GoogleTokens> {
+    const body = new URLSearchParams({
+      code,
+      client_id: this.clientId,
+      client_secret: this.clientSecret,
+      redirect_uri: this.redirectUri,
+      grant_type: 'authorization_code',
+    });
+    if (opts.codeVerifier) body.set('code_verifier', opts.codeVerifier);
     const resp = await fetch(TOKEN_ENDPOINT, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        code,
-        client_id: this.clientId,
-        client_secret: this.clientSecret,
-        redirect_uri: this.redirectUri,
-        grant_type: 'authorization_code',
-      }),
+      body,
     });
 
     if (!resp.ok) {

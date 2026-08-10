@@ -119,6 +119,7 @@ authority:
 daemon:
   port: 9090
   brain_domain: "u1.vps1.usejarvis.host"
+  public_url: "https://jarvis.example.com"
 auth:
   insecure_open_access: true
 google:
@@ -128,6 +129,7 @@ google:
     await Bun.write(TEST_CONFIG_PATH, systemYaml);
     const loaded = await loadConfig(TEST_CONFIG_PATH);
     expect(loaded.daemon.brain_domain).toBe('u1.vps1.usejarvis.host');
+    expect(loaded.daemon.public_url).toBe('https://jarvis.example.com');
     expect(loaded.auth?.insecure_open_access).toBe(true);
     // google is system-owned when the file provides it (hosted: the shared
     // company OAuth client). The DB fallback only applies when absent here.
