@@ -1044,18 +1044,20 @@ function useLiveProviderCatalogs(
     }))
     .sort((a, b) => a.name.localeCompare(b.name));
   const signature = JSON.stringify(targets);
-  const names = targets.map((target) => target.name);
   const [catalogs, setCatalogs] = useState<Record<string, string[]>>({});
 
   useEffect(() => {
-    if (names.length === 0) {
+    if (targets.length === 0) {
       setCatalogs({});
       return;
     }
     let cancelled = false;
-    Promise.all(names.map(async (name) => {
+    Promise.all(targets.map(async ({ name, kind }) => {
       try {
-        const response = await fetch('/api/config/llm/groq/models', {
+        const endpoint = kind === "groq"
+          ? '/api/config/llm/groq/models'
+          : '/api/config/llm/omniroute/models';
+        const response = await fetch(endpoint, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ name }),
@@ -1069,7 +1071,7 @@ function useLiveProviderCatalogs(
       if (!cancelled) setCatalogs(Object.fromEntries(entries));
     });
     return () => { cancelled = true; };
-  }, [signature]); // names are represented by the stable signature
+  }, [signature]); // targets are represented by the stable signature
 
   return catalogs;
 }

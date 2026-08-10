@@ -8,6 +8,8 @@ import { NVIDIAProvider } from './nvidia.ts';
 import { LiteLLMProvider } from './litellm.ts';
 import { LLMManager } from './manager.ts';
 import { guardImageSize, classifyHttpStatus, classifyErrorString, LLMProviderError, type LLMMessage, type ContentBlock } from './provider.ts';
+import { setUsageDatabase } from './usage.ts';
+import { initDatabase, closeDb } from '../vault/schema.ts';
 import { isToolResult, type ToolResult } from '../actions/tools/registry.ts';
 
 describe('LLM Provider Types', () => {
@@ -636,6 +638,51 @@ describe('LLMManager', () => {
       retry_after_ms: 120_000,
     });
   });
+
+  test('Retry-After sleeps draw down a shared per-provider budget', async () => {
+    const manager = new LLMManager() as unknown as {
+      waitForRetry(retryAfterMs: number | undefined, budget: { remainingMs: number }): Promise<boolean>;
+    };
+    const budget = { remainingMs: 100 };
+    expect(await manager.waitForRetry(60, budget)).toBe(true);
+    expect(budget.remainingMs).toBe(40);
+    // A second wait that would overrun the remaining budget fails over
+    // instead of stacking sleeps past the cap.
+    expect(await manager.waitForRetry(60, budget)).toBe(false);
+    // No Retry-After: retry immediately without drawing down the budget.
+    expect(await manager.waitForRetry(undefined, budget)).toBe(true);
+    expect(budget.remainingMs).toBe(40);
+  });
+
+  test('tier streaming records usage when the consumer stops mid-stream', async () => {
+    closeDb();
+    const db = initDatabase(':memory:');
+    setUsageDatabase(() => db);
+    try {
+      const manager = new LLMManager();
+      const streamer = {
+        name: 'streamer', listModels: async () => ['model-a'],
+        async chat(): Promise<never> { throw new Error('not used'); },
+        async *stream() {
+          yield { type: 'text' as const, text: 'first chunk' };
+          yield { type: 'text' as const, text: 'never consumed' };
+        },
+      };
+      manager.registerProvider(streamer);
+      manager.setTierMap({ medium: { provider: 'streamer', model: 'model-a' } });
+
+      for await (const event of manager.streamTier('medium', 'abort-test', sampleMessages)) {
+        if (event.type === 'text') break; // consumer disconnects mid-stream
+      }
+
+      const rows = db.query('SELECT provider, subsystem FROM llm_usage').all() as
+        Array<{ provider: string; subsystem: string }>;
+      expect(rows).toEqual([{ provider: 'streamer', subsystem: 'abort-test' }]);
+    } finally {
+      setUsageDatabase(() => null);
+      closeDb();
+    }
+  });
 });
 
 describe('Message Types', () => {
@@ -967,6 +1014,8 @@ describe('Groq request shaping', () => {
     expect(isGroqJarvisModel('deepseek-r1-distill-llama-70b')).toBe(false);
     expect(isGroqJarvisModel('whisper-large-v3')).toBe(false);
     expect(isGroqJarvisModel('groq/compound')).toBe(false);
+    expect(isGroqJarvisModel('meta-llama/llama-guard-4-12b')).toBe(false);
+    expect(isGroqJarvisModel('playai-tts')).toBe(false);
   });
 
   test('GroqProvider relaxes optional tool params to accept null before sending', async () => {
@@ -1353,6 +1402,10 @@ describe('classifyHttpStatus', () => {
     expect(classifyHttpStatus(502)).toBe('network');
     expect(classifyHttpStatus(503)).toBe('network');
     expect(classifyHttpStatus(504)).toBe('network');
+  });
+
+  test('non-standard 498 (gateway upstream expiry) → network (transient)', () => {
+    expect(classifyHttpStatus(498)).toBe('network');
   });
 
   test('other 5xx → server', () => {

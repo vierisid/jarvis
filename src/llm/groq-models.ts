@@ -1,4 +1,8 @@
-/** Retired Groq chat models and the supported defaults that replace them. */
+/**
+ * Retired Groq chat models and the supported defaults that replace them.
+ * Replacements are capability-matched (70b-class -> gpt-oss-120b, small ->
+ * gpt-oss-20b); the provider-wide default stays gpt-oss-20b (cheap tier).
+ */
 export const GROQ_DEPRECATED_MODEL_REPLACEMENTS: Readonly<Record<string, string>> = {
   'deepseek-r1-distill-llama-70b': 'openai/gpt-oss-120b',
   'llama-3.3-70b-versatile': 'openai/gpt-oss-120b',

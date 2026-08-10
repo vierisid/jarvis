@@ -290,7 +290,11 @@ export function OnboardingWizard({
   const [groqModels, setGroqModels] = useState<string[] | null>(null);
   const [groqLoading, setGroqLoading] = useState(false);
   useEffect(() => {
-    if (provId !== "groq" || !apiKey) return;
+    if (provId !== "groq" || !apiKey) {
+      setGroqModels(null); // drop a catalog fetched with a previous key
+      setGroqLoading(false); // a cancelled in-flight fetch never clears this
+      return;
+    }
     let cancelled = false;
     setGroqLoading(true);
     const timer = window.setTimeout(() => {

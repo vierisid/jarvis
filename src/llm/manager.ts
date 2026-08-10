@@ -25,7 +25,10 @@ export class LLMManager {
   private tierMap: TierMap = {};
   private static readonly MAX_RETRIES_PER_PROVIDER = 3;
   private static readonly REQUEST_TIMEOUT_MS = 90000; // 90 second timeout for LLM calls
-  /** Never park an interactive request for a very long quota reset. */
+  /**
+   * Never park an interactive request for a very long quota reset. Applies
+   * cumulatively across one provider's attempts (see waitForRetry).
+   */
   private static readonly MAX_RETRY_AFTER_MS = 60000;
   private static readonly isDebugging = process.env.JARVIS_LOG_LEVEL === 'debug' || process.env.DEBUG_LLM === 'true';
 
@@ -210,12 +213,25 @@ export class LLMManager {
       || /\b(?:decommissioned|retired)\b.{0,160}\bmodel\b/i.test(message);
   }
 
-  /** Honor provider Retry-After; oversized waits should fail over immediately. */
-  private async waitForRetry(retryAfterMs: number | undefined): Promise<boolean> {
+  /**
+   * Honor provider Retry-After. The budget is shared across one provider's
+   * attempts, so stacked Retry-After sleeps can never park a request for
+   * longer than MAX_RETRY_AFTER_MS in total. Returns false when the wait
+   * would overrun what remains — the caller stops retrying and fails over.
+   */
+  private async waitForRetry(
+    retryAfterMs: number | undefined,
+    budget: { remainingMs: number },
+  ): Promise<boolean> {
     if (retryAfterMs === undefined || retryAfterMs <= 0) return true;
-    if (retryAfterMs > LLMManager.MAX_RETRY_AFTER_MS) return false;
+    if (retryAfterMs > budget.remainingMs) return false;
+    budget.remainingMs -= retryAfterMs;
     await new Promise<void>((resolve) => setTimeout(resolve, retryAfterMs));
     return true;
+  }
+
+  private newRetryBudget(): { remainingMs: number } {
+    return { remainingMs: LLMManager.MAX_RETRY_AFTER_MS };
   }
 
   /**
@@ -374,32 +390,36 @@ export class LLMManager {
         .some((candidate) => candidate.provider.name !== provider.name
           && !exhaustedProviders.has(candidate.provider.name));
 
-      for await (const event of this.streamWithRetry(
-        provider,
-        messages,
-        mergedOptions,
-        hasAlternativeProvider,
-      )) {
-        if (event.type === 'done') finalResponse = event.response;
-        if (event.type === 'text' || event.type === 'tool_call') emittedContent = true;
-        if (event.type === 'error') {
-          terminalError = event;
-          continue; // hold it while a clean failover is still possible
+      try {
+        for await (const event of this.streamWithRetry(
+          provider,
+          messages,
+          mergedOptions,
+          hasAlternativeProvider,
+        )) {
+          if (event.type === 'done') finalResponse = event.response;
+          if (event.type === 'text' || event.type === 'tool_call') emittedContent = true;
+          if (event.type === 'error') {
+            terminalError = event;
+            continue; // hold it while a clean failover is still possible
+          }
+          yield event;
         }
-        yield event;
+      } finally {
+        // Runs even when the consumer stops iterating mid-stream (client
+        // disconnect / stop) so partial calls still land in telemetry.
+        recordUsage({
+          tier, resolved_tier: resolution.tier, subsystem, provider: provider.name,
+          model: finalResponse?.model || model || '',
+          input_tokens: finalResponse?.usage?.input_tokens ?? 0,
+          output_tokens: finalResponse?.usage?.output_tokens ?? 0,
+          cache_read_input_tokens: finalResponse?.usage?.cache_read_input_tokens ?? 0,
+          cache_creation_input_tokens: finalResponse?.usage?.cache_creation_input_tokens ?? 0,
+          latency_ms: Date.now() - started,
+          error_code: terminalError?.code
+            ?? (terminalError ? classifyErrorString(terminalError.error) : undefined),
+        });
       }
-
-      recordUsage({
-        tier, resolved_tier: resolution.tier, subsystem, provider: provider.name,
-        model: finalResponse?.model || model || '',
-        input_tokens: finalResponse?.usage?.input_tokens ?? 0,
-        output_tokens: finalResponse?.usage?.output_tokens ?? 0,
-        cache_read_input_tokens: finalResponse?.usage?.cache_read_input_tokens ?? 0,
-        cache_creation_input_tokens: finalResponse?.usage?.cache_creation_input_tokens ?? 0,
-        latency_ms: Date.now() - started,
-        error_code: terminalError?.code
-          ?? (terminalError ? classifyErrorString(terminalError.error) : undefined),
-      });
 
       if (!terminalError) return;
       if (emittedContent) {
@@ -442,6 +462,7 @@ export class LLMManager {
     const errors: string[] = [];
     let lastCode: LLMErrorCode = 'unknown';
     let lastRetryAfterMs: number | undefined;
+    const retryBudget = this.newRetryBudget();
     for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
       try {
         const result = await this.withTimeout(provider.chat(messages, options), provider.name);
@@ -461,7 +482,7 @@ export class LLMManager {
         if (!shouldRetry || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
         const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
         if (failFastOnRateLimit && lastCode === 'rate_limit') break;
-        if (!await this.waitForRetry(retryAfterMs)) break;
+        if (!await this.waitForRetry(retryAfterMs, retryBudget)) break;
       }
     }
     throw new LLMProviderError(
@@ -480,6 +501,7 @@ export class LLMManager {
     const errors: string[] = [];
     let lastErrorCode: LLMErrorCode | undefined;
     let lastRetryAfterMs: number | undefined;
+    const retryBudget = this.newRetryBudget();
     for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
       let emittedContent = false;
       let retryableEvent = true;
@@ -516,7 +538,7 @@ export class LLMManager {
         if (!hasError) return;
         if (!retryableEvent || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
         if (failFastOnRateLimit && lastErrorCode === 'rate_limit') break;
-        if (!await this.waitForRetry(eventRetryAfterMs)) break;
+        if (!await this.waitForRetry(eventRetryAfterMs, retryBudget)) break;
       } catch (err) {
         const errorMsg = err instanceof Error ? err.message : String(err);
         errors.push(`attempt ${attempt}: ${errorMsg}`);
@@ -538,7 +560,7 @@ export class LLMManager {
         }
         if (!shouldRetry || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
         if (failFastOnRateLimit && lastErrorCode === 'rate_limit') break;
-        if (!await this.waitForRetry(retryAfterMs)) break;
+        if (!await this.waitForRetry(retryAfterMs, retryBudget)) break;
       }
     }
     yield {
@@ -571,6 +593,7 @@ export class LLMManager {
       }
 
       const errors: string[] = [];
+      const retryBudget = this.newRetryBudget();
       for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
         try {
           const result = await this.withTimeout(provider.chat(messages, options), providerName);
@@ -589,7 +612,7 @@ export class LLMManager {
 
           if (!shouldRetry) break;
           const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
-          if (attempt < LLMManager.MAX_RETRIES_PER_PROVIDER && !await this.waitForRetry(retryAfterMs)) break;
+          if (attempt < LLMManager.MAX_RETRIES_PER_PROVIDER && !await this.waitForRetry(retryAfterMs, retryBudget)) break;
         }
       }
 
@@ -635,6 +658,7 @@ export class LLMManager {
       }
 
       const errors: string[] = [];
+      const retryBudget = this.newRetryBudget();
       for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
         let emittedContent = false;
         let retryableEvent = true;
@@ -673,7 +697,7 @@ export class LLMManager {
             return;
           }
           if (!retryableEvent || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
-          if (!await this.waitForRetry(eventRetryAfterMs)) break;
+          if (!await this.waitForRetry(eventRetryAfterMs, retryBudget)) break;
         } catch (err) {
           const errorMsg = err instanceof Error ? err.message : String(err);
           errors.push(`attempt ${attempt}: ${errorMsg}`);
@@ -697,7 +721,7 @@ export class LLMManager {
           }
 
           if (!shouldRetry || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
-          if (!await this.waitForRetry(retryAfterMs)) break;
+          if (!await this.waitForRetry(retryAfterMs, retryBudget)) break;
         }
       }
 

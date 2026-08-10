@@ -91,9 +91,10 @@ type GroqStreamChunk = {
 /** Models suitable for Jarvis chat + local function calling. */
 export function isGroqJarvisModel(id: string): boolean {
   if (isDeprecatedGroqModel(id)) return false;
-  // These active catalog entries use audio/moderation endpoints, or (for
-  // Compound) reject user-provided local tools.
-  return !/(whisper|orpheus|prompt-guard|safeguard|^groq\/compound)/i.test(id);
+  // These active catalog entries use audio (whisper/orpheus/tts), moderation
+  // (guard), or embedding endpoints, or (for Compound) reject user-provided
+  // local tools.
+  return !/(whisper|orpheus|playai|tts|guard|embed|^groq\/compound)/i.test(id);
 }
 
 /**
@@ -200,12 +201,12 @@ export class GroqProvider implements LLMProvider {
     if (!response.ok) {
       const errorText = await response.text();
       if (!this.isRequestTooLargeError(response.status, errorText)) {
+        const retryAfterMs = this.retryAfterMs(response);
         yield {
           type: 'error',
           error: `Groq API error (${response.status}): ${errorText}`,
           code: classifyHttpStatus(response.status),
-          ...(this.retryAfterMs(response) !== undefined
-            ? { retry_after_ms: this.retryAfterMs(response) } : {}),
+          ...(retryAfterMs !== undefined ? { retry_after_ms: retryAfterMs } : {}),
         };
         return;
       }
@@ -219,12 +220,12 @@ export class GroqProvider implements LLMProvider {
       );
       if (!response.ok) {
         const retryError = await response.text();
+        const retryAfterMs = this.retryAfterMs(response);
         yield {
           type: 'error',
           error: `Groq API error after retry (${response.status}): ${retryError}`,
           code: classifyHttpStatus(response.status),
-          ...(this.retryAfterMs(response) !== undefined
-            ? { retry_after_ms: this.retryAfterMs(response) } : {}),
+          ...(retryAfterMs !== undefined ? { retry_after_ms: retryAfterMs } : {}),
         };
         return;
       }

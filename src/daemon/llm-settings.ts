@@ -255,7 +255,8 @@ export function saveLLMSettings(
   }
 
   // Repair old Groq references before the updated providers are reloaded.
-  migrateDeprecatedGroqModels(config);
+  // No persist: the block below writes default + tiers to the DB anyway.
+  migrateDeprecatedGroqModels(config, false);
 
   // Persist non-secret state to DB. CRITICAL: strip api_key from every
   // provider entry before serializing - the in-memory entries carry secrets
