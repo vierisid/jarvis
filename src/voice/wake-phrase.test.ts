@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { containsWakePhrase } from './wake-phrase.ts';
+import { containsStopPhrase, containsWakePhrase } from './wake-phrase.ts';
 
 describe('containsWakePhrase', () => {
   test('matches the bare wake phrase', () => {
@@ -47,5 +47,21 @@ describe('containsWakePhrase', () => {
 
   test('matches multiple occurrences (still returns true; not a count)', () => {
     expect(containsWakePhrase('Jarvis told Jarvis about Jarvis')).toBe(true);
+  });
+});
+
+describe('containsStopPhrase', () => {
+  test('matches spoken stop phrases with TTS punctuation', () => {
+    expect(containsStopPhrase("Say 'Jarvis, stop' to interrupt me.")).toBe(true);
+    expect(containsStopPhrase('Jarvis stop')).toBe(true);
+    expect(containsStopPhrase('You can say "Jarvis... be quiet" anytime.')).toBe(true);
+    expect(containsStopPhrase('jarvis quiet')).toBe(true);
+  });
+
+  test('does not match ordinary mentions of Jarvis or stop', () => {
+    expect(containsStopPhrase('Jarvis stopped the timer for you')).toBe(false);
+    expect(containsStopPhrase('Ask Jarvis about the bus stop')).toBe(false);
+    expect(containsStopPhrase('Please stop by tomorrow')).toBe(false);
+    expect(containsStopPhrase('')).toBe(false);
   });
 });

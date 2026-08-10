@@ -75,17 +75,22 @@ test('WebSocketServer - root endpoint returns 404 without static dir', async () 
 
 test('WebSocketServer - dashboard HTML is never cached by a reverse proxy', async () => {
   const staticDir = mkdtempSync(path.join(tmpdir(), 'jarvis-static-'));
+  // Own port: earlier tests leave a pooled keep-alive connection to 3143
+  // whose (stopped, draining) server instance would answer this fetch with
+  // its own routing — a 404, since it had no staticDir.
+  const htmlServer = new WebSocketServer(3144);
+  htmlServer.setInsecureOpenAccess(true);
   try {
     await Bun.write(path.join(staticDir, 'index.html'), '<!doctype html><title>Jarvis</title>');
-    server.setStaticDir(staticDir);
-    server.start();
+    htmlServer.setStaticDir(staticDir);
+    htmlServer.start();
 
-    const response = await fetch('http://localhost:3143/');
+    const response = await fetch('http://localhost:3144/');
     expect(response.status).toBe(200);
     expect(response.headers.get('cache-control')).toBe('no-store');
     expect(response.headers.get('content-type')).toContain('text/html');
   } finally {
-    server.stop();
+    htmlServer.stop();
     rmSync(staticDir, { recursive: true, force: true });
   }
 });

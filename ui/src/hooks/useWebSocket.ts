@@ -100,10 +100,14 @@ export type VoiceCallbacks = {
   onTTSBinary: (data: ArrayBuffer) => void;
   /** `containsWake` — true if the TTS sentence about to play contains
    *  "Jarvis". UI uses it to suppress the wake-word recognizer for the
-   *  duration of the playback so TTS doesn't self-trigger via mic echo. */
-  onTTSStart: (requestId: string, containsWake: boolean) => void;
-  /** Mid-turn flip: a later sentence in the same turn contains "Jarvis". */
-  onTTSContainsWake?: () => void;
+   *  duration of the playback so TTS doesn't self-trigger via mic echo.
+   *  `containsStop` — the sentence contains a spoken stop phrase
+   *  ("Jarvis, stop"), so the UI must also suppress its stop-phrase
+   *  bypass or the echo cancels the playback. */
+  onTTSStart: (requestId: string, containsWake: boolean, containsStop?: boolean) => void;
+  /** Mid-turn flip: a later sentence in the same turn contains "Jarvis"
+   *  (and possibly a stop phrase). */
+  onTTSContainsWake?: (containsStop?: boolean) => void;
   /** `bargeIn` — realtime voice sends tts_end{bargeIn:true} when the user
    *  starts speaking, so the player can flush queued output immediately. */
   onTTSEnd: (requestId?: string, bargeIn?: boolean) => void;
@@ -502,6 +506,7 @@ export function useWebSocket() {
           voiceCallbacksRef.current?.onTTSStart(
             msg.payload?.requestId,
             Boolean(msg.payload?.containsWake),
+            Boolean(msg.payload?.containsStop),
           );
           setThinking(false); // speaking supersedes thinking
           return;
@@ -511,7 +516,9 @@ export function useWebSocket() {
           // UI must suppress the wake recognizer so TTS playback doesn't
           // self-trigger.
           if (msg.payload?.containsWake) {
-            voiceCallbacksRef.current?.onTTSContainsWake?.();
+            voiceCallbacksRef.current?.onTTSContainsWake?.(
+              Boolean(msg.payload?.containsStop),
+            );
           }
           return;
         }
@@ -560,9 +567,21 @@ export function useWebSocket() {
           return;
         }
         if (msg.type === "thinking_start") {
+          // thinking_start is a broadcast (voice pipeline), so it can arrive
+          // for a turn other than the one this client owns. Never overwrite
+          // an active turn's id — a stale broadcast would make the gate drop
+          // the active response's stream chunks and strand the composer in
+          // its Stop state.
+          if (
+            currentChatRequestIdRef.current
+            && msg.id
+            && msg.id !== currentChatRequestIdRef.current
+          ) return;
           setThinking(true);
           setIsResponding(true);
-          if (msg.id) currentChatRequestIdRef.current = msg.id;
+          if (msg.id && !currentChatRequestIdRef.current) {
+            currentChatRequestIdRef.current = msg.id;
+          }
           return;
         }
         if (msg.type === "thinking_end") {
@@ -1047,8 +1066,10 @@ export function useWebSocket() {
 
       // Typed barge-in: the replacement turn owns the composer immediately.
       // The daemon also enforces this, but doing it here prevents even a single
-      // late chunk from the old request flashing into the new response.
-      if (currentChatRequestIdRef.current || isResponding) cancelResponse();
+      // late chunk from the old request flashing into the new response. The ref
+      // is set before isResponding in every path, so it alone is a sufficient
+      // (and render-stable) guard.
+      if (currentChatRequestIdRef.current) cancelResponse();
 
       const id = uuid();
       currentChatRequestIdRef.current = id;
@@ -1099,7 +1120,7 @@ export function useWebSocket() {
         setNotices((prev) => [notice, ...prev.filter((item) => item.text !== notice.text)].slice(0, 3));
       }
     },
-    [cancelResponse, isResponding]
+    [cancelResponse]
   );
 
   const dismissNotice = useCallback((noticeId: string) => {

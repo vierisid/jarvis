@@ -27,7 +27,7 @@ import { getUserProfile } from '../vault/user-profile.ts';
 import { formatUserProfileForPrompt } from '../user/profile.ts';
 import { routeByConfidence, intentToRoomKey, intentIsBackToThread, type Intent, type RoomKey } from '../voice/intent.ts';
 import { matchWindowControl, type WindowControl } from '../voice/window-control.ts';
-import { containsWakePhrase } from '../voice/wake-phrase.ts';
+import { containsStopPhrase, containsWakePhrase } from '../voice/wake-phrase.ts';
 import {
   createInterviewSession,
   runInterviewTurn,
@@ -135,22 +135,30 @@ export function sweepExpiredVoiceConfirmations<W>(
   return expired;
 }
 
-/** Voice-only hard interrupt; never forward these phrases to the LLM. */
+/**
+ * Voice-only hard interrupt; never forward these phrases to the LLM.
+ * Twin of `isSpeechStopCommand` in ui/src/hooks/useVoice.ts (browser-STT
+ * path) — keep the phrase lists in sync when editing either one. The bare
+ * "stop" is server-only: daemon STT runs per recorded utterance, so it can't
+ * collide with TTS echo the way the browser's always-on recognizer can.
+ */
+const VOICE_STOP_PHRASES = new Set([
+  'stop',
+  'jarvis stop',
+  'hey jarvis stop',
+  'jarvis be quiet',
+  'hey jarvis be quiet',
+  'jarvis quiet',
+  'hey jarvis quiet',
+]);
+
 export function isVoiceStopCommand(transcript: string): boolean {
   const normalized = transcript
     .toLowerCase()
     .replace(/[.,!?;:]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim();
-  return new Set([
-    'stop',
-    'jarvis stop',
-    'hey jarvis stop',
-    'jarvis be quiet',
-    'hey jarvis be quiet',
-    'jarvis quiet',
-    'hey jarvis quiet',
-  ]).has(normalized);
+  return VOICE_STOP_PHRASES.has(normalized);
 }
 
 export class WebSocketService implements Service {
@@ -804,22 +812,27 @@ export class WebSocketService implements Service {
     this.activeChats.delete(ws);
     active.controller.abort(reason);
     if (notify) {
-      this.wsServer.sendToClient(ws, {
+      // Stream chunks are broadcast to every dashboard, and the aborted relay
+      // never emits its `status: done` — so the terminal `cancelled` status
+      // (and the thinking_end that mirrors the broadcast thinking_start) must
+      // broadcast too, or mirroring clients keep a spinner forever.
+      this.wsServer.broadcast({
         type: 'status',
         payload: { status: 'cancelled', requestId: active.requestId, reason },
         id: active.requestId,
         timestamp: Date.now(),
       });
-      // Flush both the browser audio queue and its speaking/thinking state now;
-      // the provider stream may need another network chunk before its iterator
-      // observes the AbortSignal.
+      // Flush the browser audio queue and its speaking state now; the provider
+      // stream may need another network chunk before its iterator observes the
+      // AbortSignal. TTS audio is per-socket (sendBinary), so this one stays
+      // addressed to the owning client.
       this.wsServer.sendToClient(ws, {
         type: 'tts_end',
         payload: { requestId: active.requestId, cancelled: true },
         id: active.requestId,
         timestamp: Date.now(),
       });
-      this.wsServer.sendToClient(ws, {
+      this.wsServer.broadcast({
         type: 'thinking_end',
         payload: { requestId: active.requestId, cancelled: true },
         id: active.requestId,
@@ -835,10 +848,12 @@ export class WebSocketService implements Service {
         return this.handleChat(msg, ws);
 
       case 'cancel': {
+        // Cancel stops the *response* (generation + TTS). It deliberately
+        // leaves any in-flight voiceSessions recording alone — that buffer is
+        // user input, and voice_end will process it normally.
         const requestId = (msg.payload as { requestId?: string } | undefined)?.requestId;
         this.cancelActiveChat(ws, 'user', true, requestId);
         this.realtimeSessions.get(ws)?.session.interrupt();
-        this.voiceSessions.delete(ws);
         return undefined;
       }
 
@@ -1152,13 +1167,17 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // recognizer for the duration of the audio (otherwise TTS
         // playback echoes through the mic and self-triggers).
         const sentenceHasWake = containsWakePhrase(sentence);
+        // A spoken stop phrase ("say 'Jarvis, stop'…") would echo through the
+        // mic and hit the UI's stop-phrase bypass, cancelling the very reply
+        // that's explaining it. Flag it so the UI suppresses stop matches too.
+        const sentenceHasStop = containsStopPhrase(sentence);
 
         // Send tts_start exactly once before the first audio chunk
         if (!ttsStartSent) {
           ttsStartSent = true;
           this.wsServer.sendToClient(ws, {
             type: 'tts_start',
-            payload: { requestId, containsWake: sentenceHasWake },
+            payload: { requestId, containsWake: sentenceHasWake, containsStop: sentenceHasStop },
             id: requestId,
             timestamp: Date.now(),
           });
@@ -1169,7 +1188,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           // still be in the speaker buffer.)
           this.wsServer.sendToClient(ws, {
             type: 'tts_text',
-            payload: { requestId, containsWake: true },
+            payload: { requestId, containsWake: true, containsStop: sentenceHasStop },
             id: requestId,
             timestamp: Date.now(),
           });
