@@ -909,3 +909,4 @@
 .v2-set__tab[data-active="true"] { border-radius: 7px 2px 7px 7px; }
 .v2-set__stat-value, .v2-set__section-title { font-family: var(--sans); font-weight: 700; letter-spacing: -0.015em; }
 .v2-set :focus-visible { outline-color: var(--speak); }
+

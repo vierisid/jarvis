@@ -384,14 +384,19 @@ export class AnthropicProvider implements LLMProvider {
 
     try {
       const response = await fetch(this.apiUrl.replace(/\/messages$/, '/models'), {
-        headers: { authorization: `Bearer ${this.apiKey}` },
+        headers: {
+          authorization: `Bearer ${this.apiKey}`,
+          'anthropic-version': '2023-06-01',
+        },
       });
       if (!response.ok) return [];
       const payload = await response.json() as { data?: Array<{ id?: unknown }> };
       const models = payload.data
         ?.map((entry) => entry.id)
         .filter((id): id is string => typeof id === 'string' && id.length > 0);
-      return models?.length ? [...new Set(models)].sort() : [];
+      // Keep the gateway's own ordering: its first entry is the closest
+      // thing to a recommended default we have.
+      return models?.length ? [...new Set(models)] : [];
     } catch {
       return [];
     }

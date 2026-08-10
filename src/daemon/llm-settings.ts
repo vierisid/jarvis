@@ -168,25 +168,47 @@ export function saveLLMSettings(
 
   // Apply provider updates (add / modify / remove).
   if (body.providers) {
-    for (const [name, update] of Object.entries(body.providers)) {
+    const updates = Object.entries(body.providers);
+    // Validate every update before mutating anything: a rejection mid-loop
+    // would otherwise leave earlier entries applied in memory but never
+    // persisted by the setSetting() block at the end of this function.
+    for (const [name, update] of updates) {
+      if (update === null) continue;
+      const existing = config.llm.providers[name] ?? {};
+      const nextBaseUrl = normalizeBaseUrl(update.base_url);
+      const existingBaseUrl = normalizeBaseUrl(existing.base_url);
+      const retainsStoredCredential = update.api_key === undefined
+        && (Boolean(existing.api_key) || hasSecret(keychainKey(name)));
+      // A stored credential is scoped to its saved endpoint in BOTH
+      // directions: it must not follow the provider to a new gateway, and a
+      // gateway token must not be replayed against the official endpoint
+      // after the URL is cleared. Any base_url move requires the credential
+      // again in the same request.
+      if (
+        update.base_url !== undefined
+        && nextBaseUrl !== existingBaseUrl
+        && retainsStoredCredential
+      ) {
+        throw new Error(`Provider '${name}' requires the API key or auth token again when changing base_url`);
+      }
+      // `kind` selects an endpoint just like base_url does — switching it
+      // would replay the stored credential against another provider's API.
+      // (Legacy entries without an explicit kind are keyed by their name.)
+      if (
+        update.kind !== undefined
+        && update.kind !== (existing.kind ?? name)
+        && retainsStoredCredential
+      ) {
+        throw new Error(`Provider '${name}' requires the API key or auth token again when changing kind`);
+      }
+    }
+    for (const [name, update] of updates) {
       if (update === null) {
         delete config.llm.providers[name];
         try { deleteSecret(keychainKey(name)); } catch { /* ignore */ }
         continue;
       }
       const existing = config.llm.providers[name] ?? {};
-      const nextBaseUrl = normalizeBaseUrl(update.base_url);
-      const existingBaseUrl = normalizeBaseUrl(existing.base_url);
-      const retainsStoredCredential = update.api_key === undefined
-        && (Boolean(existing.api_key) || hasSecret(keychainKey(name)));
-      if (
-        update.base_url !== undefined
-        && nextBaseUrl
-        && nextBaseUrl !== existingBaseUrl
-        && retainsStoredCredential
-      ) {
-        throw new Error(`Provider '${name}' requires the API key or auth token again when changing base_url`);
-      }
       const merged: LLMProviderEntry = { ...existing };
       if (update.kind !== undefined) merged.kind = update.kind;
       if (update.base_url !== undefined) merged.base_url = update.base_url;
@@ -480,18 +502,30 @@ export async function testLLMProvider(
   const normalizedRequestedBaseUrl = normalizeBaseUrl(requestedBaseUrl);
   const normalizedConfiguredBaseUrl = normalizeBaseUrl(configuredBaseUrl);
 
-  // A stored credential is scoped to its saved endpoint. Never attach it to
-  // a caller-supplied URL; changing to a new custom endpoint requires the
-  // caller to provide the credential again in the same request. An explicit
-  // empty URL is safe: it switches Anthropic back to its official origin.
+  // A stored credential is scoped to its saved endpoint, in both directions:
+  // never attach it to a caller-supplied URL, and never replay a gateway
+  // token against the official endpoint after the URL is cleared. Moving the
+  // endpoint anywhere requires the credential again in the same request.
   if (
     hasExplicitBaseUrl
-    && requestedBaseUrl
     && normalizedRequestedBaseUrl !== normalizedConfiguredBaseUrl
     && storedApiKey
     && !opts.api_key
   ) {
-    return { ok: false, error: 'A new base_url requires an explicit api_key or auth token' };
+    return { ok: false, error: 'Changing base_url requires an explicit api_key or auth token' };
+  }
+
+  // `kind` selects an endpoint just like base_url does — an overridden kind
+  // would replay the stored credential against another provider's API (some
+  // kinds don't even need a base_url to reach one, e.g. their default
+  // origin). Legacy entries without an explicit kind are keyed by name.
+  if (
+    opts.kind !== undefined
+    && opts.kind !== (configured?.kind ?? name)
+    && storedApiKey
+    && !opts.api_key
+  ) {
+    return { ok: false, error: 'Changing the provider kind requires an explicit api_key or auth token' };
   }
 
   // Resolve credentials: explicit > keychain > config inline. Preserve an
@@ -518,7 +552,7 @@ export async function testLLMProvider(
       if (!models.length) {
         return { ok: false, error: 'Could not discover any models from the custom Anthropic endpoint' };
       }
-      testModel ??= models[0];
+      testModel = models[0];
     }
     const resp = await instance.chat(
       [{ role: 'user', content: 'Say OK' }],

@@ -104,10 +104,45 @@ describe('POST /api/config/llm/test Anthropic endpoint scoping', () => {
     expect(requests.every((request) => request.authorization === 'Bearer fresh-token')).toBe(true);
   });
 
-  it('an explicit empty URL tests official Anthropic instead of the stored gateway', async () => {
+  it('refuses to replay the stored gateway token against the official endpoint', async () => {
     const response = await callEndpoint(
       { 'anthropic-sec-test': { kind: 'anthropic', api_key: 'stored-secret', base_url: 'https://saved.example' } },
       { name: 'anthropic-sec-test', base_url: '' },
+    );
+    const body = await response.json() as { ok: boolean; error: string };
+
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('requires an explicit api_key');
+    expect(requests).toHaveLength(0);
+  });
+
+  it('refuses to replay the stored token against another provider kind', async () => {
+    const response = await callEndpoint(
+      { 'anthropic-sec-test': { kind: 'anthropic', api_key: 'stored-secret' } },
+      { name: 'anthropic-sec-test', kind: 'omniroute' },
+    );
+    const body = await response.json() as { ok: boolean; error: string };
+
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('requires an explicit api_key');
+    expect(requests).toHaveLength(0);
+  });
+
+  it('accepts the stored token when the kind is restated unchanged', async () => {
+    const response = await callEndpoint(
+      { 'anthropic-sec-test': { kind: 'anthropic', api_key: 'stored-secret', base_url: 'https://saved.example' } },
+      { name: 'anthropic-sec-test', kind: 'anthropic' },
+    );
+    const body = await response.json() as { ok: boolean };
+
+    expect(body.ok).toBe(true);
+    expect(requests.every((request) => request.url.startsWith('https://saved.example/'))).toBe(true);
+  });
+
+  it('tests the official endpoint after the URL is cleared and a fresh key is supplied', async () => {
+    const response = await callEndpoint(
+      { 'anthropic-sec-test': { kind: 'anthropic', api_key: 'stored-secret', base_url: 'https://saved.example' } },
+      { name: 'anthropic-sec-test', base_url: '', api_key: 'fresh-key' },
     );
     const body = await response.json() as { ok: boolean; models?: string[] };
 
@@ -115,7 +150,7 @@ describe('POST /api/config/llm/test Anthropic endpoint scoping', () => {
     expect(body.models).toBeUndefined();
     expect(requests).toHaveLength(1);
     expect(requests[0]!.url).toBe('https://api.anthropic.com/v1/messages');
-    expect(requests[0]!.apiKey).toBe('stored-secret');
+    expect(requests[0]!.apiKey).toBe('fresh-key');
     expect(requests[0]!.authorization).toBeNull();
   });
 
@@ -153,5 +188,60 @@ describe('POST /api/config/llm/test Anthropic endpoint scoping', () => {
         'anthropic-sec-test': { base_url: 'https://attacker.example' },
       },
     })).toThrow('requires the API key or auth token again');
+  });
+
+  it('also rejects clearing the gateway URL while retaining the stored token', () => {
+    const config = {
+      llm: {
+        providers: {
+          'anthropic-sec-test': { kind: 'anthropic', api_key: 'stored-secret', base_url: 'https://saved.example' },
+        },
+        tiers: {},
+      },
+    } as unknown as JarvisConfig;
+
+    expect(() => saveLLMSettings(config, {
+      providers: {
+        'anthropic-sec-test': { base_url: '' },
+      },
+    })).toThrow('requires the API key or auth token again');
+  });
+
+  it('also rejects switching the provider kind while retaining the stored token', () => {
+    const config = {
+      llm: {
+        providers: {
+          'anthropic-sec-test': { kind: 'anthropic', api_key: 'stored-secret' },
+        },
+        tiers: {},
+      },
+    } as unknown as JarvisConfig;
+
+    expect(() => saveLLMSettings(config, {
+      providers: {
+        'anthropic-sec-test': { kind: 'openai' },
+      },
+    })).toThrow('requires the API key or auth token again');
+  });
+
+  it('validates every provider update before applying any of them', () => {
+    const config = {
+      llm: {
+        providers: {
+          'anthropic-sec-test': { kind: 'anthropic', api_key: 'stored-secret' },
+        },
+        tiers: {},
+      },
+    } as unknown as JarvisConfig;
+
+    expect(() => saveLLMSettings(config, {
+      providers: {
+        innocent: { kind: 'anthropic', base_url: 'https://ok.example', api_key: 'fresh-key' },
+        'anthropic-sec-test': { base_url: 'https://attacker.example' },
+      },
+    })).toThrow('requires the API key or auth token again');
+    // The valid entry listed before the rejected one must not have been
+    // applied to the in-memory config.
+    expect(config.llm.providers?.['innocent']).toBeUndefined();
   });
 });

@@ -130,7 +130,8 @@ describe('AnthropicProvider custom endpoint', () => {
 
     expect(requestUrl).toBe('https://gateway.example.com/v1/models');
     expect(requestHeaders.get('authorization')).toBe('Bearer custom-token');
-    expect(models).toEqual(['claude-custom-fast', 'claude-custom-large']);
+    expect(requestHeaders.get('anthropic-version')).toBe('2023-06-01');
+    expect(models).toEqual(['claude-custom-large', 'claude-custom-fast']);
   });
 });
 

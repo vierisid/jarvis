@@ -300,6 +300,9 @@ function ProvidersList({
   );
 }
 
+/** Match the daemon's base_url comparison: trim plus trailing-slash strip. */
+const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, "");
+
 function ProviderRow({
   name,
   entry,
@@ -328,13 +331,23 @@ function ProviderRow({
   const [testing, setTesting] = useState(false);
   const [saving, setSaving] = useState(false);
   const [testResult, setTestResult] = useState<{ ok: boolean; text: string; models?: string[] } | null>(null);
-  const endpointChanged = customEndpoint
-    && baseUrl.trim() !== (entry.base_url?.trim() ?? "");
+  // The daemon scopes a stored credential to its saved endpoint and refuses
+  // any base_url move without the credential re-entered — including a revert
+  // to the official endpoint. Mirror that rule here so the user is told
+  // before Test/Save bounce off it.
+  const effectiveBaseUrl = supportsUrl ? normalizeBaseUrl(baseUrl) : "";
+  const endpointChanged = (usesUrl || optionalUrl)
+    && entry.has_api_key
+    && effectiveBaseUrl !== normalizeBaseUrl(entry.base_url ?? "");
 
   useEffect(() => {
     setBaseUrl(entry.base_url ?? "");
     setCustomEndpoint(optionalUrl && Boolean(entry.base_url));
   }, [entry.base_url, optionalUrl]);
+
+  // A test verdict describes the inputs it ran with — editing any of them
+  // invalidates it (mirrors the onboarding wizard).
+  useEffect(() => { setTestResult(null); }, [apiKey, baseUrl, customEndpoint]);
 
   return (
     <div className={"v2-set__provider-row " + (expanded ? "v2-set__provider-row--open" : "")}>
@@ -471,7 +484,7 @@ function ProviderRow({
 
           {endpointChanged && !apiKey && (
             <div className="v2-set__hint v2-set__hint--warn">
-              Enter the auth token again before testing or saving a new endpoint URL.
+              Enter the API key or auth token again before testing or saving a changed endpoint URL.
             </div>
           )}
 
