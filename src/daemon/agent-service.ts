@@ -369,7 +369,9 @@ export class AgentService implements Service, IAgentService {
             const separator = event.newSegment && fullText && !fullText.endsWith('\n') ? '\n\n' : '';
             const chunk = separator + event.text;
             fullText += chunk;
-            yield { type: 'text', text: chunk };
+            // A segmentEnd-only event has no text; forward the signal so TTS
+            // can speak the finished acknowledgment without waiting.
+            yield { type: 'text', text: chunk, segmentEnd: event.segmentEnd };
           }
           // 'done' is implicit - the generator ends.
         }

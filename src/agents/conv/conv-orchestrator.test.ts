@@ -10,6 +10,9 @@ import { ConvOrchestrator } from './conv-orchestrator.ts';
  * the conv tier emitting delegate tool calls and the task tier returning
  * text results.
  */
+/** Deliberately small and not aligned to any token boundary. */
+const CHUNK_SIZE = 4;
+
 class MockProvider implements LLMProvider {
   name = 'mock';
   private queue: LLMResponse[] = [];
@@ -29,9 +32,16 @@ class MockProvider implements LLMProvider {
     }
     return next;
   }
+  /**
+   * Emits content in small pieces the way a real provider does. Streaming a
+   * whole response as one text event would hide anything that depends on where
+   * chunk boundaries fall — which is exactly where serialized tool calls leak.
+   */
   async *stream(messages: LLMMessage[], opts?: LLMOptions): AsyncIterable<LLMStreamEvent> {
     const response = await this.chat(messages, opts);
-    if (response.content) yield { type: 'text', text: response.content };
+    for (let index = 0; index < response.content.length; index += CHUNK_SIZE) {
+      yield { type: 'text', text: response.content.slice(index, index + CHUNK_SIZE) };
+    }
     for (const toolCall of response.tool_calls) {
       yield { type: 'tool_call', tool_call: toolCall };
     }
@@ -50,10 +60,10 @@ function textResponse(content: string): LLMResponse {
   };
 }
 
-function toolCallResponse(name: string, args: Record<string, unknown>): LLMResponse {
+function toolCallResponse(name: string, args: Record<string, unknown>, content = ''): LLMResponse {
   const call: LLMToolCall = { id: `call_${Math.random()}`, name, arguments: args };
   return {
-    content: '',
+    content,
     tool_calls: [call],
     usage: { input_tokens: 10, output_tokens: 5 },
     model: 'mock',
@@ -170,6 +180,79 @@ describe('ConvOrchestrator', () => {
     expect(result.text).not.toContain('(delegate');
     expect(result.text).not.toContain('"template"');
     expect(result.tasksRun).toHaveLength(1);
+  });
+
+  it('hides a serialized delegate call the model prints after its prose', async () => {
+    // The prompt asks the model to acknowledge first, so the leaked call
+    // usually arrives *after* prose — the position a prefix-only guard misses.
+    const provider = new MockProvider([
+      textResponse('Sure, let me look into that. /delegate{"tier":"medium","template":"research","intent":"Check the inbox"}'),
+      textResponse('Your latest email is from Alice.'),
+      textResponse('Your latest email is from Alice.'),
+    ]);
+    const llm = makeManager(provider);
+    const runner = async ({ tier, subsystem, originalMessage }: { tier: 'low' | 'medium' | 'high'; subsystem: string; originalMessage: string }) => {
+      const r = await llm.chatTier(tier, subsystem, [{ role: 'user', content: originalMessage }]);
+      return { kind: 'completed' as const, text: r.content, conversation: [] };
+    };
+    const dispatcher = new TaskDispatcher(llm, registry, runner as never);
+    const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
+
+    const spoken: string[] = [];
+    for await (const event of conv.streamTurn('Check my email', {})) {
+      if (event.type === 'text') spoken.push(event.text);
+    }
+    const streamed = spoken.join('');
+    expect(streamed).not.toContain('/delegate');
+    expect(streamed).not.toContain('"template"');
+    expect(streamed).not.toContain('{');
+    expect(streamed).toBe('Sure, let me look into that. Your latest email is from Alice.');
+  });
+
+  it('marks the acknowledgment segment complete before delegating', async () => {
+    const provider = new MockProvider([
+      textResponse('Let me check that. /delegate{"tier":"medium","template":"research","intent":"x"}'),
+      textResponse('All done.'),
+      textResponse('All done.'),
+    ]);
+    const llm = makeManager(provider);
+    let dispatched = false;
+    const runner = async () => {
+      dispatched = true;
+      return { kind: 'completed' as const, text: 'All done.', conversation: [] };
+    };
+    const dispatcher = new TaskDispatcher(llm, registry, runner as never);
+    const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
+
+    let sawSegmentEnd = false;
+    for await (const event of conv.streamTurn('Check it', {})) {
+      if (event.type === 'text' && event.segmentEnd) {
+        // The signal has to arrive while the task tier is still idle, or TTS
+        // gains nothing over waiting for the answer.
+        expect(dispatched).toBe(false);
+        sawSegmentEnd = true;
+      }
+    }
+    expect(sawSegmentEnd).toBe(true);
+  });
+
+  it('separates the routing-failure message from the preceding acknowledgment', async () => {
+    // Every turn delegates and never settles, so the loop runs to its cap.
+    const responses = Array.from({ length: 40 }, (_, index) => toolCallResponse(
+      'delegate',
+      { tier: 'medium', template: 'research', intent: `step ${index}` },
+      'Working on it.',
+    ));
+    const provider = new MockProvider(responses);
+    const llm = makeManager(provider);
+    const runner = async () => ({ kind: 'completed' as const, text: 'partial', conversation: [] });
+    const dispatcher = new TaskDispatcher(llm, registry, runner as never);
+    const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
+
+    const result = await conv.processTurn('go', {});
+    expect(result.text).toContain('I got stuck routing your request.');
+    expect(result.text).not.toContain('it.I got stuck');
+    expect(result.text.endsWith('\nI got stuck routing your request. Could you rephrase or try again?')).toBe(true);
   });
 
   it('surfaces a fallback acknowledgment before a silent delegated task starts', async () => {

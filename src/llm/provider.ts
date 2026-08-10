@@ -52,7 +52,15 @@ export type LLMErrorCode =
   | 'unknown';
 
 export type LLMStreamEvent =
-  | { type: 'text'; text: string }
+  /**
+   * `segmentEnd` marks the text as a finished, speakable unit — set by
+   * orchestrators when an acknowledgment is complete and slow tool work is
+   * about to start. Consumers use it to flush a pending TTS sentence instead
+   * of inferring completion from punctuation in a partial token buffer.
+   * Providers never set it; the text may be empty when the signal is all the
+   * producer has to say.
+   */
+  | { type: 'text'; text: string; segmentEnd?: boolean }
   | { type: 'tool_call'; tool_call: LLMToolCall }
   | { type: 'done'; response: LLMResponse }
   | { type: 'error'; error: string; code?: LLMErrorCode };

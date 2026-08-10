@@ -20,10 +20,10 @@
  */
 
 import type { LLMManager } from '../../llm/manager.ts';
-import type { LLMMessage, LLMToolCall } from '../../llm/provider.ts';
+import type { LLMMessage, LLMResponse, LLMToolCall } from '../../llm/provider.ts';
 import { progressAcknowledgement } from '../progress.ts';
 import { CONV_TOOLS, CONV_TOOL_NAMES } from './conv-tools.ts';
-import { couldStartWithSerializedConvTool, recoverSerializedConvTools } from './conv-tool-recovery.ts';
+import { recoverSerializedConvTools, visibleStreamText } from './conv-tool-recovery.ts';
 import { TaskDispatcher } from './task-dispatcher.ts';
 import { TaskRegistry } from './task-registry.ts';
 import type { TaskRecord, TaskRequest, TaskResultEnvelope } from './task-envelope.ts';
@@ -64,7 +64,7 @@ export type ConvProcessResult = {
  * user immediately, instead of waiting for the slow task tier to finish.
  */
 export type ConvStreamEvent =
-  | { type: 'text'; text: string; newSegment?: boolean }
+  | { type: 'text'; text: string; newSegment?: boolean; segmentEnd?: boolean }
   | { type: 'task'; event: ConvTaskEvent }
   | { type: 'done'; tasksRun: string[] };
 
@@ -92,6 +92,8 @@ export class ConvOrchestrator {
     const tasksRun: string[] = [];
     for await (const event of this.streamTurn(userMessage, context)) {
       if (event.type === 'text') {
+        // Skip segmentEnd-only events: they carry a TTS signal, not content.
+        if (!event.text) continue;
         const separator = event.newSegment && fullText && !fullText.endsWith('\n') ? '\n' : '';
         fullText += separator + event.text;
       } else if (event.type === 'task') {
@@ -145,9 +147,12 @@ export class ConvOrchestrator {
     for (let iteration = 0; iteration < MAX_CONV_ITERATIONS; iteration++) {
       let responseText = '';
       const responseToolCalls: LLMToolCall[] = [];
-      let response: import('../../llm/provider.ts').LLMResponse | null = null;
+      let response: LLMResponse | null = null;
       let firstTextChunk = true;
-      let deferPotentialToolText = true;
+      // Visible text already yielded for this iteration, after serialized-tool
+      // removal. Successive strips of a growing buffer only ever extend this,
+      // so the delta is what's new.
+      let emittedVisible = '';
 
       // Stream the conversation layer itself instead of waiting for a full
       // chat response. Natural acknowledgments now reach the user as soon as
@@ -158,17 +163,17 @@ export class ConvOrchestrator {
       })) {
         if (event.type === 'text') {
           responseText += event.text;
-          // Do not expose a text-serialized tool call to either the chat UI
-          // or TTS. Ordinary prose still streams as soon as the prefix can no
-          // longer be mistaken for an internal conversation tool.
-          if (deferPotentialToolText && couldStartWithSerializedConvTool(responseText)) {
-            continue;
-          }
-          const visibleChunk = deferPotentialToolText ? responseText : event.text;
-          deferPotentialToolText = false;
+          // Never expose a text-serialized tool call to the chat UI or TTS.
+          // Only the tail that could still become one is withheld — anywhere in
+          // the response, not just at the start — so ordinary prose keeps
+          // streaming at token latency.
+          const visible = visibleStreamText(responseText);
+          if (visible.length <= emittedVisible.length) continue;
+          const delta = visible.slice(emittedVisible.length);
+          emittedVisible = visible;
           yield {
             type: 'text',
-            text: visibleChunk,
+            text: delta,
             newSegment: firstTextChunk && hasVisibleText,
           };
           firstTextChunk = false;
@@ -201,14 +206,21 @@ export class ConvOrchestrator {
       );
       response = { ...response, content: recovered.text, tool_calls: recovered.toolCalls };
 
-      // A possible serialized-tool prefix was buffered for safety. Emit only
-      // the recovered human-facing portion once parsing is complete.
-      if (deferPotentialToolText && response.content) {
+      // Flush anything the hold-back buffer was still holding when the stream
+      // ended — e.g. a trailing "/deleg" that never became a call, or content
+      // a provider only reports on its `done` event.
+      //
+      // `emittedVisible` is always a prefix of the recovered content (stripping
+      // a growing buffer only ever extends the visible text — see the
+      // monotonicity test in conv-tool-recovery.test.ts), so the tail is the
+      // part the user hasn't seen.
+      if (response.content.length > emittedVisible.length) {
         yield {
           type: 'text',
-          text: response.content,
+          text: response.content.slice(emittedVisible.length),
           newSegment: firstTextChunk && hasVisibleText,
         };
+        emittedVisible = response.content;
         firstTextChunk = false;
         hasVisibleText = true;
       }
@@ -225,8 +237,13 @@ export class ConvOrchestrator {
       if (!response.content.trim() && !acknowledgedWork) {
         const acknowledgment = progressAcknowledgement(response.tool_calls);
         response.content = acknowledgment;
-        yield { type: 'text', text: acknowledgment, newSegment: hasVisibleText };
+        yield { type: 'text', text: acknowledgment, newSegment: hasVisibleText, segmentEnd: true };
         hasVisibleText = true;
+      } else if (response.content.trim()) {
+        // The model wrote its own acknowledgment. Tell downstream TTS that it
+        // is complete so the sentence is spoken before the delegated task runs
+        // instead of waiting for the task's answer to arrive.
+        yield { type: 'text', text: '', segmentEnd: true };
       }
       if (response.content.trim()) acknowledgedWork = true;
 
@@ -265,6 +282,10 @@ export class ConvOrchestrator {
     yield {
       type: 'text',
       text: 'I got stuck routing your request. Could you rephrase or try again?',
+      // Separators are opt-in now, so this must be marked or it runs straight
+      // into whatever acknowledgment the loop already emitted.
+      newSegment: true,
+      segmentEnd: true,
     };
     yield { type: 'done', tasksRun };
   }

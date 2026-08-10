@@ -628,8 +628,15 @@ export class AgentOrchestrator {
 
       // Tool calls present — execute them
       if (!accumulatedText.trim() && !acknowledgedWork) {
-        accumulatedText = progressAcknowledgement(toolCalls);
-        yield { type: 'text', text: accumulatedText };
+        // Display-only activity narration for a model that called tools
+        // silently. It trails a blank line so the answer that follows doesn't
+        // run into it, and it stays out of `messages` — the model never said
+        // this, and attributing it back to the model would make the next turn
+        // reason from words it didn't write.
+        const narration = progressAcknowledgement(toolCalls) + '\n\n';
+        acknowledgedWork = true;
+        yield { type: 'text', text: narration, segmentEnd: true };
+        finalText += narration;
       }
       if (accumulatedText.trim()) acknowledgedWork = true;
       finalText += accumulatedText;
