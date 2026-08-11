@@ -1,4 +1,4 @@
-import type { PersonalityModel } from './model.ts';
+import type { LearnedPreferenceKey, PersonalityModel } from './model.ts';
 
 /**
  * Channel-specific personality defaults
@@ -61,11 +61,23 @@ const CHANNEL_DEFAULTS: Record<string, Partial<PersonalityModel>> = {
 };
 
 /**
+ * What mergePersonality actually accepts. Partial<PersonalityModel> is shallow,
+ * so it would type a half-filled learned_preferences as a complete one.
+ */
+type PersonalityOverride = Omit<
+  Partial<PersonalityModel>,
+  'learned_preferences' | 'relationship'
+> & {
+  learned_preferences?: Partial<PersonalityModel['learned_preferences']>;
+  relationship?: Partial<PersonalityModel['relationship']>;
+};
+
+/**
  * Deep merge helper for personality overrides
  */
 function mergePersonality(
   base: PersonalityModel,
-  override: Partial<PersonalityModel>
+  override: PersonalityOverride
 ): PersonalityModel {
   return {
     ...base,
@@ -86,18 +98,48 @@ function mergePersonality(
 }
 
 /**
+ * Drop the preferences the learner has explicitly moved from a channel preset.
+ *
+ * A preset is a floor, not a ceiling: it fills in preferences the user has
+ * never expressed an opinion about, and stays out of the way of the ones they
+ * have. Without this filter the preset overwrites every learned value, because
+ * learned_preferences is always fully populated.
+ */
+function presetForUnlearnedKeys(
+  preset: Partial<PersonalityModel>,
+  learnedKeys: LearnedPreferenceKey[] | undefined
+): PersonalityOverride {
+  const presetPreferences = preset.learned_preferences;
+  if (!presetPreferences || !learnedKeys?.length) return preset;
+
+  const remaining: Partial<PersonalityModel['learned_preferences']> = {};
+  for (const [key, value] of Object.entries(presetPreferences)) {
+    if (learnedKeys.includes(key as LearnedPreferenceKey)) continue;
+    (remaining as Record<string, unknown>)[key] = value;
+  }
+
+  return { ...preset, learned_preferences: remaining };
+}
+
+/**
  * Get personality adapted for a specific channel
  */
 export function getChannelPersonality(personality: PersonalityModel, channel: string): PersonalityModel {
-  // First, apply channel-specific overrides from stored personality
+  // First, apply channel-specific overrides from stored personality. These are
+  // set deliberately for one channel, so they outrank both the learner and the
+  // preset.
   let adapted = personality;
   if (personality.channel_overrides[channel]) {
     adapted = mergePersonality(personality, personality.channel_overrides[channel]);
   }
 
-  // Then, apply default channel adaptations if no stored override exists
+  // Then, apply default channel adaptations if no stored override exists -
+  // but only for preferences the learner has not already moved.
   if (!personality.channel_overrides[channel] && CHANNEL_DEFAULTS[channel]) {
-    adapted = mergePersonality(adapted, CHANNEL_DEFAULTS[channel]);
+    adapted = mergePersonality(
+      adapted,
+      presetForUnlearnedKeys(CHANNEL_DEFAULTS[channel], personality.learned_keys)
+    );
   }
 
   return adapted;

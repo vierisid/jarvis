@@ -37,6 +37,23 @@ describe('Personality Engine', () => {
       expect(personality.relationship.message_count).toBe(0);
     });
 
+    test('backfills learned_keys for personalities stored before the field existed', () => {
+      const legacy = getPersonality();
+      legacy.learned_preferences.verbosity = 2;   // deviates: was learned
+      legacy.learned_preferences.emoji_usage = true;
+      delete (legacy as Partial<PersonalityModel>).learned_keys;
+      savePersonality(legacy as PersonalityModel);
+
+      const loaded = getPersonality();
+
+      expect(loaded.learned_keys).toEqual(['verbosity']);
+      // Untouched preferences stay unlearned, so presets still shape them.
+      expect(loaded.learned_keys).not.toContain('formality');
+      // emoji_usage is never explicitly learned, so presets keep governing it.
+      expect(loaded.learned_keys).not.toContain('emoji_usage');
+      expect(getChannelPersonality(loaded, 'websocket').learned_preferences.verbosity).toBe(2);
+    });
+
     test('default personality is not shared across calls', () => {
       const first = getPersonality();
       first.relationship.message_count = 99;
@@ -187,6 +204,86 @@ describe('Personality Engine', () => {
       expect(adapted.learned_preferences.formality).toBe(0);
     });
 
+    test('learned preferences survive the channel preset', () => {
+      // The regression: the preset used to be merged over the learned values,
+      // so "keep it brief" never reached the prompt on any real channel.
+      let personality = getPersonality();
+      personality = applySignals(personality, extractSignals('keep it brief', 'Response'));
+
+      const learnedVerbosity = personality.learned_preferences.verbosity;
+      expect(learnedVerbosity).toBe(4);
+
+      // websocket is the app itself, and its preset is identical to the
+      // shipped defaults - so the bug reset learned values to factory values.
+      const adapted = getChannelPersonality(personality, 'websocket');
+      expect(adapted.learned_preferences.verbosity).toBe(learnedVerbosity);
+    });
+
+    test('channel preset still applies to preferences the user never moved', () => {
+      let personality = getPersonality();
+      personality = applySignals(personality, extractSignals('keep it brief', 'Response'));
+
+      const adapted = getChannelPersonality(personality, 'email');
+
+      // Learned: wins over the preset's verbosity of 7.
+      expect(adapted.learned_preferences.verbosity).toBe(4);
+      // Untouched: the email preset still shapes these.
+      expect(adapted.learned_preferences.formality).toBe(8);
+      expect(adapted.learned_preferences.humor_level).toBe(2);
+      expect(adapted.learned_preferences.preferred_format).toBe('prose');
+    });
+
+    test('an explicit format request survives the preset', () => {
+      let personality = getPersonality();
+      personality = applySignals(personality, extractSignals('answer in prose please', 'Response'));
+
+      // The email preset would also set prose, so use a channel that disagrees.
+      const adapted = getChannelPersonality(personality, 'whatsapp');
+      expect(adapted.learned_preferences.preferred_format).toBe('prose');
+      // Never expressed an opinion on emoji, so WhatsApp's preset stands.
+      expect(adapted.learned_preferences.emoji_usage).toBe(true);
+    });
+
+    test('passively copied emoji habit does not outrank a formal preset', () => {
+      let personality = getPersonality();
+      personality = applySignals(personality, extractSignals('sounds good 🎉', 'Response'));
+
+      // The habit is copied...
+      expect(personality.learned_preferences.emoji_usage).toBe(true);
+      // ...but it was never asked for, so it is not a learned preference.
+      expect(personality.learned_keys).not.toContain('emoji_usage');
+      // Email stays emoji-free.
+      expect(getChannelPersonality(personality, 'email').learned_preferences.emoji_usage).toBe(false);
+      // And a channel that likes emoji still gets them.
+      expect(getChannelPersonality(personality, 'whatsapp').learned_preferences.emoji_usage).toBe(true);
+    });
+
+    test('stored channel overrides outrank learned preferences', () => {
+      let personality = getPersonality();
+      personality = applySignals(personality, extractSignals('keep it brief', 'Response'));
+      personality.channel_overrides.email = {
+        learned_preferences: {
+          verbosity: 9,
+          formality: 9,
+          humor_level: 0,
+          emoji_usage: false,
+          preferred_format: 'prose',
+        },
+      };
+
+      const adapted = getChannelPersonality(personality, 'email');
+      expect(adapted.learned_preferences.verbosity).toBe(9);
+    });
+
+    test('learned preferences reach the generated prompt', () => {
+      let personality = getPersonality();
+      personality = applySignals(personality, extractSignals('too long, be concise', 'Response'));
+
+      const prompt = personalityToPrompt(getChannelPersonality(personality, 'websocket'));
+
+      expect(prompt).toContain('verbosity (4/10)');
+    });
+
     test('should generate personality prompt', () => {
       const personality = getPersonality();
       personality.relationship.message_count = 25;
@@ -227,6 +324,8 @@ describe('Personality Engine', () => {
       const loaded = getPersonality();
       // Verbosity should have decreased from initial value
       expect(loaded.learned_preferences.verbosity).toBeLessThan(initialVerbosity);
+      // And it must round-trip as learned, or the presets would mask it again
+      expect(loaded.learned_keys).toContain('verbosity');
       // Message count should have increased by 3
       expect(loaded.relationship.message_count).toBeGreaterThanOrEqual(3);
     });

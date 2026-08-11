@@ -1,14 +1,25 @@
 import { getDb } from '../vault/schema.ts';
 
+export type LearnedPreferences = {
+  verbosity: number;        // 0-10
+  formality: number;        // 0-10
+  humor_level: number;      // 0-10
+  emoji_usage: boolean;
+  preferred_format: 'lists' | 'prose' | 'tables' | 'adaptive';
+};
+
+export type LearnedPreferenceKey = keyof LearnedPreferences;
+
 export type PersonalityModel = {
   core_traits: string[];
-  learned_preferences: {
-    verbosity: number;        // 0-10
-    formality: number;        // 0-10
-    humor_level: number;      // 0-10
-    emoji_usage: boolean;
-    preferred_format: 'lists' | 'prose' | 'tables' | 'adaptive';
-  };
+  learned_preferences: LearnedPreferences;
+  /**
+   * Preferences the learner has explicitly moved. Every field of
+   * learned_preferences always holds a value, so this is the only way to tell
+   * a learned preference from an untouched default - which is what lets a
+   * learned value outrank a channel preset in getChannelPersonality().
+   */
+  learned_keys: LearnedPreferenceKey[];
   relationship: {
     first_interaction: number;
     message_count: number;
@@ -27,6 +38,7 @@ const DEFAULT_PERSONALITY: PersonalityModel = {
     emoji_usage: false,
     preferred_format: 'adaptive',
   },
+  learned_keys: [],
   relationship: {
     first_interaction: Date.now(),
     message_count: 0,
@@ -35,6 +47,41 @@ const DEFAULT_PERSONALITY: PersonalityModel = {
   },
   channel_overrides: {},
 };
+
+/**
+ * Preferences a user can move by asking. emoji_usage is deliberately absent:
+ * it is only ever set by passive mimicry, never by an explicit request, so it
+ * stays under the channel presets' control. Keep in sync with applySignals().
+ */
+const EXPLICITLY_LEARNABLE_KEYS: LearnedPreferenceKey[] = [
+  'verbosity',
+  'formality',
+  'humor_level',
+  'preferred_format',
+];
+
+/**
+ * Reconstruct learned_keys for personalities stored before the field existed.
+ *
+ * The learner is the only writer of learned_preferences, so any preference
+ * that deviates from the shipped default was necessarily learned. Without
+ * this, every pre-existing user's learned state would stay masked by the
+ * channel presets even after the precedence fix.
+ *
+ * The converse is only approximate: a user who moved a preference and then
+ * moved it back reads as untouched. That self-corrects the next time the
+ * learner records a signal, which is every interaction.
+ */
+function backfillLearnedKeys(model: PersonalityModel): PersonalityModel {
+  if (Array.isArray(model.learned_keys)) return model;
+
+  const prefs = model.learned_preferences ?? DEFAULT_PERSONALITY.learned_preferences;
+  model.learned_keys = EXPLICITLY_LEARNABLE_KEYS.filter(
+    (key) => prefs[key] !== DEFAULT_PERSONALITY.learned_preferences[key]
+  );
+
+  return model;
+}
 
 type DeepPartial<T> = {
   [P in keyof T]?: T[P] extends object ? DeepPartial<T[P]> : T[P]
@@ -60,7 +107,7 @@ export function loadPersonality(): PersonalityModel {
   }
 
   try {
-    return JSON.parse(row.data) as PersonalityModel;
+    return backfillLearnedKeys(JSON.parse(row.data) as PersonalityModel);
   } catch (error) {
     console.error('Failed to parse personality data:', error);
     return structuredClone(DEFAULT_PERSONALITY);

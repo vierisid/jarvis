@@ -1,5 +1,5 @@
 // Re-export all personality engine modules
-export type { PersonalityModel } from './model.ts';
+export type { LearnedPreferenceKey, LearnedPreferences, PersonalityModel } from './model.ts';
 export {
   loadPersonality,
   savePersonality,

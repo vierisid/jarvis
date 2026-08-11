@@ -1,4 +1,4 @@
-import type { PersonalityModel } from './model.ts';
+import type { LearnedPreferenceKey, PersonalityModel } from './model.ts';
 
 export type InteractionSignal = {
   type: 'user_feedback' | 'message_style' | 'explicit_preference';
@@ -145,8 +145,16 @@ export function extractSignals(userMessage: string, assistantResponse: string): 
  */
 export function applySignals(personality: PersonalityModel, signals: InteractionSignal[]): PersonalityModel {
   const updated = { ...personality };
+  // Built as a copy, so recording a learned key never mutates the caller's
+  // array. Channel presets defer to every key that lands in here.
+  const learnedKeys = new Set<LearnedPreferenceKey>(personality.learned_keys ?? []);
 
   for (const signal of signals) {
+    // Only preferences the user actually asked for outrank a channel preset.
+    // `message_style` is passive mimicry - we copy the user's emoji habit, but
+    // a formal channel is still entitled to suppress it.
+    const isExplicit = signal.type !== 'message_style';
+
     const { preference, direction, value } = signal.data as {
       preference?: string;
       direction?: number;
@@ -165,11 +173,13 @@ export function applySignals(personality: PersonalityModel, signals: Interaction
       const adjustment = direction ?? 0;
       const newValue = clamp(currentValue + adjustment, 0, 10);
       (updated.learned_preferences as any)[preference] = newValue;
+      if (isExplicit) learnedKeys.add(preference);
     }
 
     // Handle boolean preferences
     if (preference === 'emoji_usage' && typeof value === 'boolean') {
       updated.learned_preferences.emoji_usage = value;
+      if (isExplicit) learnedKeys.add('emoji_usage');
     }
 
     // Handle enum preferences
@@ -182,9 +192,12 @@ export function applySignals(personality: PersonalityModel, signals: Interaction
       ];
       if (validFormats.includes(value as any)) {
         updated.learned_preferences.preferred_format = value as any;
+        if (isExplicit) learnedKeys.add('preferred_format');
       }
     }
   }
+
+  updated.learned_keys = [...learnedKeys];
 
   return updated;
 }
