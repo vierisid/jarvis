@@ -113,6 +113,8 @@ export type LLMSettingsResponse = {
   };
   /** Provider classes the system can instantiate. UI dropdowns use this. */
   available_kinds: LLMProviderKind[];
+  /** True on hosted installs (the system-owned usejarvis_ai block is live). */
+  hosted_llm?: boolean;
   /** Provider-side prompt caching. Defaults to true; only explicit false disables. */
   prompt_cache: boolean;
 };
@@ -155,6 +157,10 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
   const providers: Record<string, LLMSettingsProviderView> = {};
   for (const [name, entry] of Object.entries(config.llm.providers ?? {})) {
     if (!entry) continue;
+    // The injected hosted provider is SYSTEM-owned: not editable, and its
+    // base_url/key presence are none of the dashboard's business. It is
+    // surfaced separately as a managed flag below.
+    if (name === USEJARVIS_PROVIDER_NAME) continue;
     const kind = (entry.kind ?? name) as LLMProviderKind;
     providers[name] = {
       kind,
@@ -190,6 +196,12 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
     tiers,
     available_kinds: AVAILABLE_KINDS,
     prompt_cache: config.llm.prompt_cache !== false,
+    // Hosted installs: tells the dashboard to render the read-only
+    // "included with your plan" card (no base_url, no key material).
+    hosted_llm: Object.prototype.hasOwnProperty.call(
+      config.llm.providers ?? {},
+      USEJARVIS_PROVIDER_NAME,
+    ),
   };
 }
 
@@ -453,7 +465,8 @@ export function mergeLLMSettingsIntoConfig(
   // surface them in `config.llm.providers.<name>.api_key` (that would risk
   // saving them back to disk) - instead the config-binding module reads
   // from the keychain at provider-instantiation time. So this step only
-  // ensures entries exist for any name with a keychain secret.
+  // ensures entries exist for any name with a keychain secret. (There is no
+  // YAML write path: loader.ts deliberately has no saveConfig.)
   for (const name of Object.keys(config.llm.providers)) {
     // The hosted provider's credential comes from the config.yaml block only;
     // a keychain entry squatting on the reserved name must not shadow it.
@@ -750,6 +763,12 @@ export async function testLLMProvider(
   // Resolve effective name + kind. Legacy `provider` is treated as `name`.
   const name = opts.name ?? opts.provider ?? opts.kind;
   if (!name) return { ok: false, error: 'provider name required' };
+  // The hosted provider's key must never pass through user hands: a caller
+  // could combine the inherited credential with a kind/base_url OVERRIDE and
+  // exfiltrate it to an arbitrary endpoint. It is system-tested, not user-tested.
+  if (name === USEJARVIS_PROVIDER_NAME) {
+    return { ok: false, error: 'usejarvis_ai is system-managed and cannot be tested here' };
+  }
 
   // Look up config entry to inherit settings the caller didn't override.
   const configured = config.llm.providers?.[name];

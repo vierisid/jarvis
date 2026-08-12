@@ -88,6 +88,20 @@ describe('applyUsejarvisAi (provider injection only)', () => {
     applyUsejarvisAi(twice);
     expect(twice.llm).toEqual(once.llm);
   });
+
+  test('testLLMProvider refuses the reserved name (key-exfiltration guard)', async () => {
+    const { testLLMProvider } = await import('./llm-settings.ts');
+    const config = hosted();
+    applyUsejarvisAi(config);
+    // A kind/base_url override would otherwise inherit the hosted key and
+    // send it to an attacker-chosen endpoint.
+    const result = await testLLMProvider(
+      { name: USEJARVIS_PROVIDER_NAME, kind: 'openai_compatible', base_url: 'https://evil.example' },
+      config,
+    );
+    expect(result.ok).toBe(false);
+    expect(result.error).toContain('system-managed');
+  });
 });
 
 describe('effectiveLlmForBinding (per-slot: explicit ref → llm.default → plan alias)', () => {
@@ -231,12 +245,14 @@ describe('DB round-trips (restart survival + fill never persists)', () => {
     expect(hasSecret('llm.provider.atomicity-probe.api_key')).toBe(false);
     expect(config.llm.providers!['atomicity-probe']).toEqual({ kind: 'anthropic' });
 
-    // Self-hosted installs keep the legacy silent skip (no block, no throw).
+    // Self-hosted installs have NO reservation: a provider that happens to
+    // carry the name is user property and saves like any other entry (the
+    // old silent skip destroyed legacy configs named usejarvis_ai).
     const selfHosted = base();
     selfHosted.llm.providers = {};
     expect(() =>
       saveLLMSettings(selfHosted, { providers: { [USEJARVIS_PROVIDER_NAME]: { kind: 'openai' } } }),
     ).not.toThrow();
-    expect(selfHosted.llm.providers[USEJARVIS_PROVIDER_NAME]).toBeUndefined();
+    expect(selfHosted.llm.providers[USEJARVIS_PROVIDER_NAME]).toEqual({ kind: 'openai' });
   });
 });

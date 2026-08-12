@@ -24,8 +24,16 @@ import type { JarvisConfig, LLMConfig } from '../config/types.ts';
  * choices.
  */
 
-/** Reserved provider name: the map key, the kind, and the tier-ref prefix. */
+/** Reserved provider name: the map key and the tier-ref prefix. */
 export const USEJARVIS_PROVIDER_NAME = 'usejarvis_ai';
+
+/**
+ * The hosted provider's `kind`. Same literal as the name today, but a
+ * DISTINCT constant: gates that ask "is this entry the hosted provider"
+ * compare kinds against this, never kind-vs-name — the two coinciding is an
+ * implementation detail, not a contract (see pr3 review #11).
+ */
+export const USEJARVIS_KIND = 'usejarvis_ai';
 
 /** Default tier wiring: identical on every plan — per-plan model resolution
  * happens at the proxy via these aliases, never in this file. */
