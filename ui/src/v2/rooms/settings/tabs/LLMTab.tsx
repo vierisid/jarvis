@@ -598,7 +598,10 @@ function NewProviderRow({
   const sendsHeader = sendsAuthHeader(kind, supportsUrl);
   // Suggest name = kind unless user typed something
   const effectiveName = name.trim() || kind;
-  const duplicate = existing.includes(effectiveName);
+  // The reserved hosted name is blocked like a duplicate: the daemon silently
+  // refuses to persist it, so accepting it here would toast a success for a no-op.
+  const reserved = effectiveName === USEJARVIS_NAME;
+  const duplicate = existing.includes(effectiveName) || reserved;
 
   return (
     <div className="v2-set__provider-row v2-set__provider-row--open">
@@ -637,7 +640,9 @@ function NewProviderRow({
           />
           {duplicate && (
             <div className="v2-set__hint v2-set__hint--warn">
-              A provider named &quot;{effectiveName}&quot; already exists. Pick a different name.
+              {reserved
+                ? <>&quot;{USEJARVIS_NAME}&quot; is reserved for the hosted provider. Pick a different name.</>
+                : <>A provider named &quot;{effectiveName}&quot; already exists. Pick a different name.</>}
             </div>
           )}
         </div>

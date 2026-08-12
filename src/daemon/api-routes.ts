@@ -1635,8 +1635,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const models = await provider.listModels();
           return json({ ok: true, models });
         } catch (err) {
-          const msg = err instanceof Error ? err.message : String(err);
-          return json({ ok: false, error: msg, models: [] });
+          // listModels embeds the upstream response body in its errors, and a
+          // CDN/proxy error page can echo the hosted base_url hostname this
+          // surface deliberately hides — the detail stays in the server log.
+          console.warn(
+            '[LLM] Usejarvis AI catalog fetch failed:',
+            err instanceof Error ? err.message : err,
+          );
+          return json({ ok: false, error: 'Usejarvis AI catalog unavailable', models: [] });
         }
       },
     },
