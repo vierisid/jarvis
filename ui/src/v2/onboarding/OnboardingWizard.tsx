@@ -45,7 +45,9 @@ type Provider = {
   keyLabel?: string; urlLabel?: string; urlPh?: string; models?: string[]; hint?: string;
 };
 const PROVIDERS: Provider[] = [
-  { id: "jarvis", name: "Jarvis AI", abbr: "JA", kind: "no key", soon: true, noConfig: true },
+  // Hosted brain. `soon: true` is the self-hosted default; the wizard flips
+  // it off when GET /api/config/llm reports hosted_llm (see provList below).
+  { id: "jarvis", name: "Jarvis AI", abbr: "JA", kind: "included", soon: true, noConfig: true },
   { id: "anthropic", name: "Anthropic", abbr: "A", kind: "API key", needsKey: true, optionalBaseUrl: true, keyLabel: "API key", urlLabel: "Custom endpoint URL", urlPh: "https://gateway.example.com", models: ["claude-fable-5", "claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5-20251001"], hint: "Enable the custom endpoint option to use ANTHROPIC_BASE_URL and ANTHROPIC_AUTH_TOKEN-style authentication." },
   { id: "openai", name: "OpenAI", abbr: "O", kind: "API key", needsKey: true, models: ["gpt-5.5", "gpt-5.5-pro", "gpt-5.4", "gpt-5-mini", "o4-mini"] },
   { id: "groq", name: "Groq", abbr: "G", kind: "API key", needsKey: true, models: ["openai/gpt-oss-20b", "openai/gpt-oss-120b", "qwen/qwen3.6-27b"], hint: "Loads the current model catalog from Groq so decommissioned models are never suggested." },
@@ -140,8 +142,26 @@ export function OnboardingWizard({
 
   // permissions
   // brain
+  // Hosted install? GET /api/config/llm reports hosted_llm when the
+  // system-owned usejarvis_ai block is live. Until (and unless) it says so,
+  // the "Jarvis AI" card stays a disabled "Soon" — self-hosted default.
+  const [hosted, setHosted] = useState(false);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/config/llm")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((d: { hosted_llm?: boolean } | null) => {
+        if (!cancelled && d?.hosted_llm) setHosted(true);
+      })
+      .catch(() => { /* unreachable daemon reads as self-hosted */ });
+    return () => { cancelled = true; };
+  }, []);
+  const provList = useMemo(
+    () => PROVIDERS.map((p) => (p.id === "jarvis" ? { ...p, soon: !hosted } : p)),
+    [hosted],
+  );
   const [provId, setProvId] = useState("anthropic");
-  const prov = PROVIDERS.find((p) => p.id === provId)!;
+  const prov = provList.find((p) => p.id === provId)!;
   const [apiKey, setApiKey] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [customEndpoint, setCustomEndpoint] = useState(false);
@@ -378,21 +398,25 @@ export function OnboardingWizard({
   const saveSetup = useCallback(async () => {
     setBusy(true); setError(null);
     try {
-      const entry: Record<string, unknown> = { kind: prov.kind === "no key" ? "jarvis" : provId };
-      if (prov.needsKey && apiKey) entry.api_key = apiKey;
-      if (prov.needsBaseUrl) entry.base_url = baseUrl.trim();
-      if (prov.optionalBaseUrl && customEndpoint && baseUrl.trim()) entry.base_url = baseUrl.trim();
-      const validatedModel = test.status === "ok" ? test.validatedModel : undefined;
-      const llm: Record<string, unknown> = {
-        providers: { [provId]: entry },
-        default: onboardingDefaultModelRef(provId, model, validatedModel),
-      };
-
       const ttsBlock: Record<string, unknown> = { enabled: tts !== "off", provider: tts === "off" ? "edge" : tts };
       if (tts === "edge") { ttsBlock.voice = edgeVoice; ttsBlock.rate = "+0%"; }
       else if (tts === "elevenlabs") ttsBlock.elevenlabs = { api_key: elevenKey, voice_id: elevenVoice, model: elevenModel };
 
-      const payload: Record<string, unknown> = { llm, tts: ttsBlock };
+      const payload: Record<string, unknown> = { tts: ttsBlock };
+      // Hosted "Jarvis AI" needs NO llm block: the daemon's carve-out already
+      // injected the provider and tier wiring, so setup simply omits it
+      // (/api/onboarding/setup treats llm as optional).
+      if (provId !== "jarvis") {
+        const entry: Record<string, unknown> = { kind: provId };
+        if (prov.needsKey && apiKey) entry.api_key = apiKey;
+        if (prov.needsBaseUrl) entry.base_url = baseUrl.trim();
+        if (prov.optionalBaseUrl && customEndpoint && baseUrl.trim()) entry.base_url = baseUrl.trim();
+        const validatedModel = test.status === "ok" ? test.validatedModel : undefined;
+        payload.llm = {
+          providers: { [provId]: entry },
+          default: onboardingDefaultModelRef(provId, model, validatedModel),
+        };
+      }
       if (stt !== "skip") {
         const sttBlock: Record<string, unknown> = { provider: stt };
         if ((stt === "openai" || stt === "groq") && sttKey) sttBlock[stt] = { api_key: sttKey };
@@ -667,9 +691,13 @@ export function OnboardingWizard({
       case "brain": return (
         <div className="obw-body"><div className="obw-wrap wide">
           <h2>Pick a brain for Jarvis.</h2>
-          <div className="obw-sub">Bring your own: Ollama runs locally with no key, or add an API key for Anthropic, OpenAI, and more. Jarvis AI, our hosted brain, is coming soon. Change it anytime in Settings.</div>
+          <div className="obw-sub">
+            {hosted
+              ? "Jarvis AI is included with your plan — nothing to configure. Prefer your own? Ollama runs locally with no key, or add an API key for Anthropic, OpenAI, and more. Change it anytime in Settings."
+              : "Bring your own: Ollama runs locally with no key, or add an API key for Anthropic, OpenAI, and more. Jarvis AI, our hosted brain, is coming soon. Change it anytime in Settings."}
+          </div>
           <div className="obw-provgrid" style={{ marginTop: 14 }}>
-            {PROVIDERS.map((p) => (
+            {provList.map((p) => (
               <button
                 key={p.id}
                 className={`obw-prov ${p.reco ? "reco" : ""} ${p.soon ? "soon" : ""} ${provId === p.id ? "on" : ""}`}

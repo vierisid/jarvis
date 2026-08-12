@@ -17,7 +17,12 @@ export type LLMProviderKind =
   | "nvidia"
   | "openai_compatible"
   | "litellm"
-  | "omniroute";
+  | "omniroute"
+  // Hosted platform proxy. SYSTEM-owned: injected by the daemon on hosted
+  // installs, never user-creatable, so it is deliberately absent from
+  // LLM_PROVIDER_KINDS (the "Add provider" dropdown) and from every one of
+  // the key/url field sets below (no credential inputs are ever shown).
+  | "usejarvis_ai";
 
 export const LLM_PROVIDER_KINDS: readonly LLMProviderKind[] = [
   "anthropic",
@@ -43,6 +48,7 @@ export const LLM_PROVIDER_KIND_LABELS: Record<LLMProviderKind, string> = {
   openai_compatible: "OpenAI-compatible",
   litellm: "LiteLLM",
   omniroute: "OmniRoute",
+  usejarvis_ai: "Usejarvis AI",
 };
 
 /**
@@ -148,6 +154,13 @@ export interface LLMConfig {
     low: string | null;
   };
   available_kinds: LLMProviderKind[];
+  /**
+   * True on hosted installs: the system-owned usejarvis_ai provider is
+   * injected into the running config (and hidden from `providers` above so
+   * its base_url never reaches the client). The tab renders a read-only
+   * "included with your plan" card and offers `usejarvis_ai:*` model refs.
+   */
+  hosted_llm?: boolean;
 }
 
 /** Helper: split a "provider:model" reference into its parts. */

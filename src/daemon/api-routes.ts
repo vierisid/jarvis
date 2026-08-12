@@ -1618,6 +1618,29 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    // Live Usejarvis AI catalog: the uj-* aliases THIS account's key may
+    // call (the proxy filters per key, so there is no hardcoded list). The
+    // provider is built from the system-owned config.yaml block — the route
+    // takes no credentials and never echoes the base_url or key back.
+    '/api/config/llm/usejarvis/models': {
+      GET: async () => {
+        const { hasUsejarvisAi } = await import('./usejarvis-ai.ts');
+        if (!hasUsejarvisAi(ctx.config)) {
+          return error('Usejarvis AI is only available on hosted installs.', 503);
+        }
+        try {
+          const { UsejarvisAIProvider } = await import('../llm/usejarvis.ts');
+          const block = ctx.config.usejarvis_ai!;
+          const provider = new UsejarvisAIProvider(block.base_url!.trim(), block.api_key!.trim());
+          const models = await provider.listModels();
+          return json({ ok: true, models });
+        } catch (err) {
+          const msg = err instanceof Error ? err.message : String(err);
+          return json({ ok: false, error: msg, models: [] });
+        }
+      },
+    },
+
     // Full OmniRoute catalog: provider models, free routes, automatic routes,
     // and user-defined combos. POST keeps an onboarding API key out of the URL
     // and also supports a saved provider by name from Settings.

@@ -10,12 +10,31 @@ import {
   OPTIONAL_BASE_URL_KINDS,
   URL_BASED_KINDS,
   sendsAuthHeader,
+  type LLMConfig,
   type LLMConfigProviderView,
   type LLMProviderKind,
   type LLMTier,
   type SettingsHook,
   parseModelRef,
 } from "../useSettingsData";
+
+/** Reserved hosted provider name (mirrors the daemon's usejarvis_ai carve-out). */
+const USEJARVIS_NAME = "usejarvis_ai";
+
+/**
+ * Providers offered by the model pickers: the user's editable entries plus,
+ * on hosted installs, the system-owned Usejarvis AI provider. The backend
+ * hides it from `llm.providers` (its base_url must never reach the client),
+ * so the pickers synthesize a credential-free view here — refs like
+ * `usejarvis_ai:uj-high` stay selectable.
+ */
+function pickerProviders(llm: LLMConfig): Record<string, LLMConfigProviderView> {
+  if (!llm.hosted_llm) return llm.providers;
+  return {
+    [USEJARVIS_NAME]: { kind: "usejarvis_ai", has_api_key: true },
+    ...llm.providers,
+  };
+}
 
 /**
  * Curated model lists per provider class. Each key is a kind (not a name)
@@ -90,6 +109,9 @@ const MODELS_BY_KIND: Record<LLMProviderKind, string[]> = {
   openai_compatible: [],
   litellm: [],
   omniroute: [],
+  // Hosted proxy: the uj-* aliases are key-scoped (per plan), so the real
+  // list always comes from the live catalog endpoint.
+  usejarvis_ai: [],
 };
 
 const DEFAULT_BASE_URLS: Partial<Record<LLMProviderKind, string>> = {
@@ -134,7 +156,10 @@ export function LLMTab({
   const ollamaModels = useOllamaModels(
     Object.values(llm?.providers ?? {}).some((p) => p.kind === "ollama"),
   );
-  const providerCatalogs = useLiveProviderCatalogs(llm?.providers ?? {});
+  // The pickers see the editable providers PLUS the managed hosted one; the
+  // live-catalog hook fetches for both (OmniRoute routes, uj-* aliases).
+  const allProviders = useMemo(() => (llm ? pickerProviders(llm) : {}), [llm]);
+  const providerCatalogs = useLiveProviderCatalogs(allProviders);
 
   if (!llm) return <div className="v2-set__empty">Loading LLM config...</div>;
 
@@ -188,9 +213,9 @@ export function LLMTab({
       </section>
 
       {mode === "single" ? (
-        <SingleModelSection data={data} onToast={onToast} ollamaModels={ollamaModels} providerCatalogs={providerCatalogs} />
+        <SingleModelSection data={data} onToast={onToast} providers={allProviders} ollamaModels={ollamaModels} providerCatalogs={providerCatalogs} />
       ) : (
-        <MultiTierSection data={data} onToast={onToast} ollamaModels={ollamaModels} providerCatalogs={providerCatalogs} />
+        <MultiTierSection data={data} onToast={onToast} providers={allProviders} ollamaModels={ollamaModels} providerCatalogs={providerCatalogs} />
       )}
     </div>
   );
@@ -261,7 +286,9 @@ function ProvidersList({
 
   return (
     <div>
-      {names.length === 0 && !adding && (
+      {llm.hosted_llm && <ManagedUsejarvisRow />}
+
+      {names.length === 0 && !adding && !llm.hosted_llm && (
         <div className="v2-set__empty">No providers configured yet.</div>
       )}
 
@@ -302,6 +329,30 @@ function ProvidersList({
 
 /** Match the daemon's base_url comparison: trim plus trailing-slash strip. */
 const normalizeBaseUrl = (value: string) => value.trim().replace(/\/+$/, "");
+/**
+ * Read-only card for the system-owned hosted provider. Deliberately inert:
+ * no key field, no base-url field, no expand, no delete — its config lives
+ * in the platform's config.yaml carve-out, which the dashboard can neither
+ * see nor change, and nothing from this card ever enters a save POST (the
+ * daemon would refuse the reserved name anyway).
+ */
+function ManagedUsejarvisRow() {
+  return (
+    <div className="v2-set__row">
+      <div className="v2-set__row-head" style={{ cursor: "default" }}>
+        <span className="v2-set__row-name">
+          {LLM_PROVIDER_KIND_LABELS.usejarvis_ai}{" "}
+          <span className="v2-set__chip" style={{ marginLeft: 6 }}>
+            included with your plan
+          </span>
+        </span>
+        <span className="v2-set__row-state">
+          <span className="v2-set__chip v2-set__chip--ok">managed</span>
+        </span>
+      </div>
+    </div>
+  );
+}
 
 function ProviderRow({
   name,
@@ -726,11 +777,13 @@ function ProviderTestResult({
 function SingleModelSection({
   data,
   onToast,
+  providers,
   ollamaModels,
   providerCatalogs,
 }: {
   data: SettingsHook;
   onToast: (text: string, tone?: "ok" | "warn") => void;
+  providers: Record<string, LLMConfigProviderView>;
   ollamaModels: string[] | null;
   providerCatalogs: Record<string, string[]>;
 }) {
@@ -750,7 +803,7 @@ function SingleModelSection({
       <ModelSelector
         label="Default model"
         value={llm.default}
-        providers={llm.providers}
+        providers={providers}
         ollamaModels={ollamaModels}
         providerCatalogs={providerCatalogs}
         onChange={async (ref) => {
@@ -767,11 +820,13 @@ function SingleModelSection({
 function MultiTierSection({
   data,
   onToast,
+  providers,
   ollamaModels,
   providerCatalogs,
 }: {
   data: SettingsHook;
   onToast: (text: string, tone?: "ok" | "warn") => void;
+  providers: Record<string, LLMConfigProviderView>;
   ollamaModels: string[] | null;
   providerCatalogs: Record<string, string[]>;
 }) {
@@ -819,7 +874,7 @@ function MultiTierSection({
             label={t.label}
             sub={t.sub}
             value={llm.tiers[t.id]}
-            providers={llm.providers}
+            providers={providers}
             ollamaModels={ollamaModels}
             providerCatalogs={providerCatalogs}
             allowClear
@@ -839,7 +894,7 @@ function MultiTierSection({
         <ModelSelector
           label=""
           value={llm.default}
-          providers={llm.providers}
+          providers={providers}
           ollamaModels={ollamaModels}
           providerCatalogs={providerCatalogs}
           allowClear
@@ -1036,7 +1091,13 @@ function providerModels(
   // The curated list is untagged guesswork, so prefer the real catalog when
   // the daemon could read it; fall back to the guesses when it could not.
   if (entry.kind === "ollama" && live && live.length > 0) return live;
-  if ((entry.kind === "omniroute" || entry.kind === "groq") && providerCatalogs[name]?.length) {
+  // Live-only catalogs: OmniRoute routes include user-defined combos, Groq's
+  // list is account-scoped, and the hosted uj-* aliases are key-scoped — a
+  // curated list cannot know any of them.
+  if (
+    (entry.kind === "omniroute" || entry.kind === "groq" || entry.kind === "usejarvis_ai")
+    && providerCatalogs[name]?.length
+  ) {
     return providerCatalogs[name]!;
   }
   return MODELS_BY_KIND[entry.kind] ?? [];
@@ -1067,12 +1128,17 @@ function useOllamaModels(enabled: boolean): string[] | null {
   return models;
 }
 
-/** Load volatile catalogs for gateways/providers whose IDs change frequently. */
+/** Load volatile catalogs for gateways/providers whose IDs change frequently:
+ * OmniRoute (user-defined routes/combos) and the hosted Usejarvis AI proxy
+ * (key-scoped uj-* aliases). */
 function useLiveProviderCatalogs(
   providers: Record<string, LLMConfigProviderView>,
 ): Record<string, string[]> {
   const targets = Object.entries(providers)
-    .filter(([, entry]) => entry.kind === "omniroute" || (entry.kind === "groq" && entry.has_api_key))
+    .filter(([, entry]) =>
+      entry.kind === "omniroute"
+      || entry.kind === "usejarvis_ai"
+      || (entry.kind === "groq" && entry.has_api_key))
     .map(([name, entry]) => ({
       name,
       kind: entry.kind,
@@ -1091,14 +1157,20 @@ function useLiveProviderCatalogs(
     let cancelled = false;
     Promise.all(targets.map(async ({ name, kind }) => {
       try {
-        const endpoint = kind === "groq"
-          ? '/api/config/llm/groq/models'
-          : '/api/config/llm/omniroute/models';
-        const response = await fetch(endpoint, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ name }),
-        });
+        // The hosted catalog needs no inputs (the daemon holds the system
+        // credentials); Groq and OmniRoute are looked up by saved provider name.
+        const response = kind === "usejarvis_ai"
+          ? await fetch("/api/config/llm/usejarvis/models")
+          : await fetch(
+              kind === "groq"
+                ? "/api/config/llm/groq/models"
+                : "/api/config/llm/omniroute/models",
+              {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ name }),
+              },
+            );
         const data = await response.json() as { ok: boolean; models?: string[] };
         return [name, data.ok && data.models ? data.models : []] as const;
       } catch {

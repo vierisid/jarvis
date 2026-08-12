@@ -231,6 +231,28 @@ describe('getLLMSettings: the block is reported, never exposed', () => {
   });
 });
 
+describe('getLLMSettings (hosted vs self-hosted surface)', () => {
+  beforeEach(() => { closeDb(); initDatabase(':memory:'); });
+  afterEach(() => { closeDb(); });
+
+  test('hosted: a user provider lists alone, the managed entry stays hidden', () => {
+    const config = hostedConfig();
+    config.llm.providers!.anthropic = { api_key: 'sk-ant-user' };
+    const out = getLLMSettings(config);
+    expect(out.hosted_llm).toBe(true);
+    expect(out.providers[USEJARVIS_PROVIDER_NAME]).toBeUndefined();
+    expect(Object.keys(out.providers)).toEqual(['anthropic']);
+  });
+
+  test('self-hosted: providers pass through in display shape', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.llm.providers = { anthropic: { api_key: 'sk-ant-user' } };
+    const out = getLLMSettings(config);
+    expect(out.hosted_llm).toBe(false);
+    expect(out.providers.anthropic).toEqual({ kind: 'anthropic', has_api_key: true });
+  });
+});
+
 describe('getLLMSettings.effective: the dashboard reads routing reality, not a re-derivation', () => {
   beforeEach(() => { closeDb(); initDatabase(':memory:'); });
   afterEach(() => { closeDb(); });
