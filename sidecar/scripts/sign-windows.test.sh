@@ -271,18 +271,27 @@ else
 	no "rejects a trailing slash" "$out"
 fi
 
-# Before the certificate is issued this is the EXPECTED state, so it has to
-# read as "the cert isn't there yet" rather than a Java stack trace. Run from
-# another directory: the default path is resolved relative to the script, not
-# the caller's cwd.
+# A checkout without the chain must fail readably — "the cert isn't there"
+# rather than a Java stack trace. That was the state before Sectigo issued;
+# it is still reachable via a partial checkout, and it is exactly what the
+# next renewal looks like if the new chain is not committed.
+#
+# The chain now EXISTS at the default path, so this cannot be tested by
+# unsetting CODESIGN_CERT_FILE and running the repo's own script — the default
+# resolves relative to the script, and would find the real file. Run an
+# isolated copy instead, whose sibling packaging/ directory does not exist, so
+# the default resolves to a genuinely absent path.
+#
 # The "No such file" clause also asserts the existence check runs BEFORE the
 # PEM sniff: reading a file that isn't there would spray a raw grep error into
 # the release log next to our own message.
-out="$(cd / && CERTFILE_OVERRIDE= run_sign "$WORK/app.exe" 2>&1)"
+mkdir -p "$WORK/isolated"
+cp "$SCRIPT" "$WORK/isolated/sign-windows.sh"
+out="$(SCRIPT="$WORK/isolated/sign-windows.sh" CERTFILE_OVERRIDE= run_sign "$WORK/app.exe" 2>&1)"
 if [ $? -ne 0 ] && [[ "$out" == *"certificate chain not found"* ]] &&
 	[[ "$out" == *"packaging/windows/codesign-chain.pem"* ]] &&
 	[[ "$out" != *"No such file or directory"* ]]; then
-	ok "names the default chain path when the certificate is not installed yet"
+	ok "names the default chain path when the chain is absent from the checkout"
 else
 	no "names the default chain path when the cert is missing" "$out"
 fi

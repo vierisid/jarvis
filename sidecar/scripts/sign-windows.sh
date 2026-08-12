@@ -124,9 +124,9 @@ done
 
 # Cloud KMS stores the private key ONLY, so jsign cannot discover the
 # certificate: --certfile is mandatory. Fail on it here rather than letting a
-# missing file surface as a Java stack trace — before the certificate is
-# issued this is the expected state, and it must read as "the cert isn't there
-# yet", not as a broken pipeline.
+# missing file surface as a Java stack trace. The chain is committed, so this
+# now fires on a partial checkout — or on the next renewal, if the new chain
+# is never committed.
 [ -f "$CODESIGN_CERT_FILE" ] ||
 	fail "certificate chain not found at ${CODESIGN_CERT_FILE} — Cloud KMS holds only the private key, so the Sectigo chain PEM must be committed at sidecar/packaging/windows/codesign-chain.pem (or pointed at with CODESIGN_CERT_FILE). See code-signing/windows-setup.md in usejarvis-docs."
 grep -q 'BEGIN CERTIFICATE' "$CODESIGN_CERT_FILE" ||
