@@ -16,6 +16,7 @@ import type { STTProvider } from '../comms/voice.ts';
 import { ChannelManager } from '../comms/index.ts';
 import { TelegramAdapter } from '../comms/channels/telegram.ts';
 import { createSTTProvider } from '../comms/voice.ts';
+import { effectiveSttForBinding, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
 import { getSettingsByPrefix, setSetting } from '../vault/settings.ts';
 import { classifyErrorString } from '../llm/provider.ts';
@@ -78,11 +79,15 @@ export class ChannelService implements Service {
       //    empty until the user re-messages each bot).
       this.loadPersistedRecipients();
 
-      // 1. Create STT provider if configured
-      if (this.config.stt) {
-        this.sttProvider = createSTTProvider(this.config.stt);
+      // 1. Create STT provider if configured. The binding view (not the raw
+      // user section) picks the hosted Usejarvis AI default when the user
+      // never chose a provider; the proxy credentials ride as a separate
+      // argument so they never touch the persisted cfg.stt.
+      const sttBinding = effectiveSttForBinding(this.config);
+      if (sttBinding) {
+        this.sttProvider = createSTTProvider(sttBinding, usejarvisVoiceCredentials(this.config));
         if (this.sttProvider) {
-          console.log(`[ChannelService] STT provider: ${this.config.stt.provider}`);
+          console.log(`[ChannelService] STT provider: ${sttBinding.provider}`);
         } else {
           console.log('[ChannelService] STT configured but no valid credentials — voice messages disabled');
         }

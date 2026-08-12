@@ -298,6 +298,9 @@ export function ChannelsTab({
               onToast(r.message, r.ok ? "ok" : "warn");
             }}
           >
+            {sttCfg?.usejarvis_available && (
+              <option value="usejarvis">Usejarvis AI (included)</option>
+            )}
             <option value="openai">OpenAI Whisper</option>
             <option value="groq">Groq Whisper</option>
             <option value="sarvam">Sarvam AI</option>

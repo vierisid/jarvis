@@ -148,7 +148,13 @@ export type VoiceConfig = {
 };
 
 export type STTConfig = {
-  provider: 'openai' | 'groq' | 'local' | 'sarvam';
+  /**
+   * `usejarvis` is a pure string choice: the hosted "Usejarvis AI" STT rides
+   * the system-owned `usejarvis_ai` credentials, which are threaded to
+   * createSTTProvider as a separate argument and NEVER stored here (this
+   * section persists as plaintext JSON in the DB settings store).
+   */
+  provider: 'openai' | 'groq' | 'local' | 'sarvam' | 'usejarvis';
   openai?: { api_key: string; model?: string };
   groq?: { api_key: string; model?: string };
   local?: { endpoint: string; model?: string; server_type?: 'whisper_cpp' | 'openai_compatible' };

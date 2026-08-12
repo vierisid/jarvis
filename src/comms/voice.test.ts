@@ -6,6 +6,7 @@ import {
   GroqWhisperSTT,
   LocalWhisperSTT,
   SarvamSTT,
+  UsejarvisSTT,
   EdgeTTSProvider,
   SarvamTTSProvider,
   splitIntoSentences,
@@ -112,6 +113,30 @@ describe('createSTTProvider factory', () => {
 
   test('returns null when provider=sarvam and no key', () => {
     const config: STTConfig = { provider: 'sarvam' };
+    expect(createSTTProvider(config)).toBeNull();
+  });
+
+  test('returns UsejarvisSTT when provider=usejarvis and hosted creds passed', () => {
+    const config: STTConfig = { provider: 'usejarvis' };
+    const provider = createSTTProvider(config, {
+      baseUrl: 'https://llm.usejarvis.host',
+      apiKey: 'sk-uj-not-real',
+    });
+    expect(provider).toBeInstanceOf(UsejarvisSTT);
+  });
+
+  test('returns null when provider=usejarvis and no hosted creds (self-hosted)', () => {
+    const config: STTConfig = { provider: 'usejarvis' };
+    expect(createSTTProvider(config)).toBeNull();
+    expect(createSTTProvider(config, null)).toBeNull();
+    expect(createSTTProvider(config, { baseUrl: '', apiKey: 'sk-uj-not-real' })).toBeNull();
+    expect(createSTTProvider(config, { baseUrl: 'https://llm.usejarvis.host', apiKey: '' })).toBeNull();
+  });
+
+  test('cfg.stt sub-blocks never feed the usejarvis case (key stays out of user config)', () => {
+    // Even a squatting sub-block in the persisted user section is ignored:
+    // only the separately-threaded hosted argument can supply credentials.
+    const config = { provider: 'usejarvis', usejarvis: { api_key: 'from-db-row' } } as unknown as STTConfig;
     expect(createSTTProvider(config)).toBeNull();
   });
 });
@@ -461,6 +486,95 @@ describe('LocalWhisperSTT.transcribe', () => {
       expect(err.message).toBe('Connection refused');
     }
   });
+});
+
+describe('UsejarvisSTT.transcribe', () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  test('POSTs multipart WAV to <origin>/v1/audio/transcriptions with bearer + uj-stt', async () => {
+    const stt = new UsejarvisSTT('https://llm.usejarvis.host', 'sk-uj-not-real');
+    const wav = makeWavBuffer();
+    let calledUrl = '';
+    let auth = '';
+    let model = '';
+    let file: File | null = null;
+
+    globalThis.fetch = mock(async (url: string, init: any) => {
+      calledUrl = url;
+      auth = init.headers['Authorization'];
+      const body = init.body as FormData;
+      model = String(body.get('model'));
+      file = body.get('file') as File;
+      return new Response(JSON.stringify({ text: 'hosted transcript' }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as any;
+
+    expect(await stt.transcribe(wav)).toBe('hosted transcript');
+    expect(calledUrl).toBe('https://llm.usejarvis.host/v1/audio/transcriptions');
+    expect(auth).toBe('Bearer sk-uj-not-real');
+    expect(model).toBe('uj-stt');
+    // The browser mic sends WAV — the form must say so (the audio.webm
+    // mislabel made strict servers reject the part).
+    expect(file!.name).toBe('audio.wav');
+    expect(file!.type).toBe('audio/wav');
+  });
+
+  test('does not double the /v1 prefix when the base already carries it', async () => {
+    const stt = new UsejarvisSTT('https://llm.usejarvis.host/v1/', 'sk-uj-not-real');
+    let calledUrl = '';
+
+    globalThis.fetch = mock(async (url: string) => {
+      calledUrl = url;
+      return new Response(JSON.stringify({ text: 'ok' }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as any;
+
+    await stt.transcribe(makeWavBuffer());
+    expect(calledUrl).toBe('https://llm.usejarvis.host/v1/audio/transcriptions');
+  });
+
+  test('throws with status on HTTP error', async () => {
+    const stt = new UsejarvisSTT('https://llm.usejarvis.host', 'sk-uj-not-real');
+    globalThis.fetch = mock(async () => new Response('no active plan', { status: 403 })) as any;
+    await expect(stt.transcribe(makeWavBuffer())).rejects.toThrow(/Usejarvis AI STT error \(403\)/);
+  });
+
+  test('throws when the response carries no text field', async () => {
+    const stt = new UsejarvisSTT('https://llm.usejarvis.host', 'sk-uj-not-real');
+    globalThis.fetch = mock(async () =>
+      new Response(JSON.stringify({ unexpected: 'shape' }), {
+        headers: { 'content-type': 'application/json' },
+      })
+    ) as any;
+    await expect(stt.transcribe(makeWavBuffer())).rejects.toThrow('Usejarvis AI STT returned no transcript');
+  });
+});
+
+describe('WAV labeling of the shared browser-mic buffer', () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  for (const [label, make] of [
+    ['OpenAIWhisperSTT', () => new OpenAIWhisperSTT('test-key-not-real')],
+    ['GroqWhisperSTT', () => new GroqWhisperSTT('test-key-not-real')],
+  ] as const) {
+    test(`${label} sends audio.wav with audio/wav type`, async () => {
+      let file: File | null = null;
+      globalThis.fetch = mock(async (_url: string, init: any) => {
+        file = (init.body as FormData).get('file') as File;
+        return new Response(JSON.stringify({ text: 'ok' }), {
+          headers: { 'content-type': 'application/json' },
+        });
+      }) as any;
+
+      await make().transcribe(makeWavBuffer());
+      expect(file!.name).toBe('audio.wav');
+      expect(file!.type).toBe('audio/wav');
+    });
+  }
 });
 
 describe('SarvamSTT.transcribe', () => {

@@ -9,7 +9,9 @@ import { hasSecret } from '../vault/keychain.ts';
 import {
   applyUsejarvisAi,
   effectiveLlmForBinding,
+  effectiveSttForBinding,
   hasUsejarvisAi,
+  usejarvisVoiceCredentials,
   USEJARVIS_PROVIDER_NAME,
 } from './usejarvis-ai.ts';
 import { mergeLLMSettingsIntoConfig, saveLLMSettings } from './llm-settings.ts';
@@ -284,5 +286,71 @@ describe('hasUsejarvisAi: malformed blocks read as NOT hosted, never fatal', () 
 
   test('a well-formed block still reads as hosted', () => {
     expect(hasUsejarvisAi(withBlock({ base_url: 'https://llm.usejarvis.host', api_key: 'sk-uj-abc' }))).toBe(true);
+  });
+});
+
+describe('usejarvisVoiceCredentials (the SEPARATE credential channel)', () => {
+  test('null on self-hosted installs', () => {
+    expect(usejarvisVoiceCredentials(base())).toBeNull();
+    const partial = base();
+    partial.usejarvis_ai = { base_url: 'https://llm.usejarvis.host' }; // no key
+    expect(usejarvisVoiceCredentials(partial)).toBeNull();
+  });
+
+  test('returns trimmed proxy origin + key when hosted', () => {
+    const config = hosted();
+    config.usejarvis_ai = { base_url: ' https://llm.usejarvis.host ', api_key: ' sk-uj-abc123 ' };
+    expect(usejarvisVoiceCredentials(config)).toEqual({
+      baseUrl: 'https://llm.usejarvis.host',
+      apiKey: 'sk-uj-abc123',
+    });
+  });
+});
+
+describe('effectiveSttForBinding (hosted STT default, persistence-pure)', () => {
+  const noRow = () => undefined;
+
+  test('self-hosted: returns cfg.stt untouched (same reference), DB never read', () => {
+    const config = base();
+    let reads = 0;
+    const spy = () => { reads += 1; return undefined; };
+    expect(effectiveSttForBinding(config, spy)).toBe(config.stt);
+    expect(reads).toBe(0);
+  });
+
+  test('hosted + no stored stt row: binding view says usejarvis, config is NOT mutated', () => {
+    const config = hosted();
+    const view = effectiveSttForBinding(config, noRow);
+    expect(view?.provider).toBe('usejarvis');
+    // Persistence purity: the in-memory section every /api/config/stt save
+    // round-trips must still carry only user intent (the stock default).
+    expect(config.stt?.provider).toBe('openai');
+  });
+
+  test('hosted + stored row WITH a provider: the explicit user choice wins', () => {
+    const config = hosted();
+    config.stt = { provider: 'groq', groq: { api_key: 'gsk-user' } };
+    const view = effectiveSttForBinding(config, (section) =>
+      section === 'stt' ? { provider: 'groq', groq: { api_key: 'gsk-user' } } : undefined);
+    expect(view).toBe(config.stt); // untouched, same reference
+    expect(view?.provider).toBe('groq');
+  });
+
+  test('hosted + stored row WITHOUT a provider field: still silent, defaults to usejarvis', () => {
+    const config = hosted();
+    // What boot produces when the row only carries a key: the merge layered
+    // it over DEFAULT_CONFIG.stt, so provider 'openai' here is NOT intent.
+    config.stt = { provider: 'openai', openai: { api_key: 'sk-user' } };
+    const view = effectiveSttForBinding(config, () => ({ openai: { api_key: 'sk-user' } }));
+    expect(view?.provider).toBe('usejarvis');
+    // ...and the user's sub-blocks survive in the view untouched.
+    expect((view as { openai?: { api_key?: string } }).openai).toEqual({ api_key: 'sk-user' });
+  });
+
+  test('the view never carries credentials: only the provider string differs', () => {
+    const config = hosted();
+    const view = effectiveSttForBinding(config, noRow)!;
+    expect(JSON.stringify(view)).not.toContain('sk-uj-abc123');
+    expect(view).toEqual({ ...config.stt!, provider: 'usejarvis' });
   });
 });

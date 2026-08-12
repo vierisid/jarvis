@@ -12,6 +12,7 @@ import { SecretStorageError } from './section-secrets.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import { resolveRealtimeVoice, DEFAULT_BLOCKED_CATEGORIES } from '../config/realtime.ts';
+import { hasUsejarvisAi, effectiveSttForBinding } from './usejarvis-ai.ts';
 import type { EntityType } from '../vault/entities.ts';
 import type { CommitmentPriority, CommitmentStatus } from '../vault/commitments.ts';
 import type { ObservationType } from '../vault/observations.ts';
@@ -2470,8 +2471,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/config/stt': {
       GET: () => {
         const stt = ctx.config.stt;
+        // `provider` reports the BINDING view: on hosted installs where the
+        // user never chose, it reads 'usejarvis' (what actually transcribes)
+        // while the persisted cfg.stt row stays untouched. No key material —
+        // the hosted credentials live only in the system config.
+        const effective = effectiveSttForBinding(ctx.config);
         return json({
-          provider: stt?.provider ?? 'openai',
+          provider: effective?.provider ?? stt?.provider ?? 'openai',
+          usejarvis_available: hasUsejarvisAi(ctx.config),
           has_openai_key: !!stt?.openai?.api_key,
           has_groq_key: !!stt?.groq?.api_key,
           has_sarvam_key: !!stt?.sarvam?.api_key,

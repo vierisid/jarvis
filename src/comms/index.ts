@@ -7,6 +7,7 @@ export {
   OpenAIWhisperSTT,
   GroqWhisperSTT,
   LocalWhisperSTT,
+  UsejarvisSTT,
   EdgeTTSProvider,
   ElevenLabsTTSProvider,
   createSTTProvider,
@@ -15,6 +16,7 @@ export {
   splitIntoSentences,
   type STTProvider,
   type TTSProvider,
+  type HostedVoiceCredentials,
 } from './voice.ts';
 
 // Channel adapters

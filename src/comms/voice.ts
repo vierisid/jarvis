@@ -10,6 +10,16 @@ export interface TTSProvider {
 }
 
 /**
+ * Hosted "Usejarvis AI" credentials for the voice factories. Sourced from the
+ * SYSTEM-owned `usejarvis_ai` config.yaml block at the call sites (see
+ * daemon/usejarvis-ai.ts) and passed as a separate argument on purpose:
+ * cfg.stt / cfg.tts persist as plaintext JSON in the DB settings store and
+ * round-trip through the /api/config routes, so the per-user proxy key must
+ * never live inside them.
+ */
+export type HostedVoiceCredentials = { baseUrl: string; apiKey: string };
+
+/**
  * OpenAI Whisper STT — uses the OpenAI /v1/audio/transcriptions endpoint.
  */
 export class OpenAIWhisperSTT implements STTProvider {
@@ -23,7 +33,10 @@ export class OpenAIWhisperSTT implements STTProvider {
 
   async transcribe(audio: Buffer): Promise<string> {
     const formData = new FormData();
-    formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/webm' }), 'audio.webm');
+    // The browser mic encodes PCM to WAV before sending (ui useVoice
+    // encodeWav writes a RIFF header) — label it truthfully like the local
+    // and Sarvam providers already do; 'audio.webm' was a mislabel.
+    formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/wav' }), 'audio.wav');
     formData.append('model', this.model);
     formData.append('language', 'en');
 
@@ -57,7 +70,8 @@ export class GroqWhisperSTT implements STTProvider {
 
   async transcribe(audio: Buffer): Promise<string> {
     const formData = new FormData();
-    formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/webm' }), 'audio.webm');
+    // Same WAV-mislabel fix as OpenAIWhisperSTT: the audio really is WAV.
+    formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/wav' }), 'audio.wav');
     formData.append('model', this.model);
     formData.append('language', 'en');
 
@@ -73,6 +87,52 @@ export class GroqWhisperSTT implements STTProvider {
     }
 
     const result = await response.json() as any;
+    return result.text;
+  }
+}
+
+/**
+ * Hosted "Usejarvis AI" STT — the platform proxy's OpenAI-compatible
+ * /audio/transcriptions endpoint. `uj-stt` is a stable per-plan alias the
+ * proxy resolves server-side (same scheme as the uj-* LLM tiers). Credentials
+ * come from the system-owned `usejarvis_ai` block via the factory's `hosted`
+ * argument — never from cfg.stt.
+ */
+export class UsejarvisSTT implements STTProvider {
+  private baseUrl: string;
+  private apiKey: string;
+  private model: string;
+
+  constructor(baseUrl: string, apiKey: string, model: string = 'uj-stt') {
+    // The provisioner writes the proxy ORIGIN; normalize to the /v1 prefix
+    // exactly like UsejarvisAIProvider (src/llm/usejarvis.ts) does.
+    const trimmed = baseUrl.replace(/\/+$/, '');
+    this.baseUrl = /\/v1$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
+    this.apiKey = apiKey;
+    this.model = model;
+  }
+
+  async transcribe(audio: Buffer): Promise<string> {
+    const formData = new FormData();
+    formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/wav' }), 'audio.wav');
+    formData.append('model', this.model);
+    formData.append('language', 'en');
+
+    const response = await fetch(`${this.baseUrl}/audio/transcriptions`, {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${this.apiKey}` },
+      body: formData,
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Usejarvis AI STT error (${response.status}): ${err}`);
+    }
+
+    const result = await response.json() as { text?: string };
+    if (typeof result.text !== 'string') {
+      throw new Error(`Usejarvis AI STT returned no transcript: ${JSON.stringify(result).slice(0, 200)}`);
+    }
     return result.text;
   }
 }
@@ -200,9 +260,20 @@ export class SarvamSTT implements STTProvider {
 /**
  * Factory: create the right STT provider from config.
  * Returns null if the selected provider lacks required credentials.
+ *
+ * `hosted` carries the Usejarvis AI proxy credentials as a SEPARATE argument
+ * (see HostedVoiceCredentials): cfg.stt only ever stores the string choice
+ * `provider: 'usejarvis'`, so the key can never leak into the persisted
+ * plaintext settings row.
  */
-export function createSTTProvider(config: STTConfig): STTProvider | null {
+export function createSTTProvider(
+  config: STTConfig,
+  hosted?: HostedVoiceCredentials | null,
+): STTProvider | null {
   switch (config.provider) {
+    case 'usejarvis':
+      if (!hosted?.baseUrl || !hosted?.apiKey) return null;
+      return new UsejarvisSTT(hosted.baseUrl, hosted.apiKey);
     case 'openai':
       if (!config.openai?.api_key) return null;
       return new OpenAIWhisperSTT(config.openai.api_key, config.openai.model);
