@@ -71,14 +71,14 @@ export class RealtimeVoiceSession {
     // Fold realtime token usage into the shared llm_usage table so the Usage
     // room reports realtime spend alongside the text tiers. Tier is
     // 'conversation' (realtime is the conversational brain when active) and
-    // subsystem labels the source. Provider name is hardcoded since realtime
-    // only runs against OpenAI; the model id comes from the resolved session.
+    // subsystem labels the source; the provider comes from the resolved
+    // session (openai for BYO keys, usejarvis_ai for the hosted proxy).
     this.session.onUsage((u) => {
       recordUsage({
         tier: 'conversation',
         resolved_tier: 'conversation',
         subsystem: 'realtime_voice',
-        provider: 'openai',
+        provider: resolved.provider,
         model: resolved.model,
         input_tokens: u.input_tokens,
         output_tokens: u.output_tokens,

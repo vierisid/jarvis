@@ -11,6 +11,8 @@ import type { LLMTool } from '../llm/provider.ts';
 import { BrowserAudioTransport } from './audio-transport.ts';
 
 const RESOLVED: ResolvedRealtimeVoice = {
+  provider: 'openai',
+  url: 'wss://api.openai.com/v1/realtime',
   apiKey: 'sk-test',
   model: 'gpt-realtime-2',
   voice: 'marin',

@@ -19,7 +19,9 @@ import type { LLMTool } from '../llm/provider.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import type { AudioTransport } from './audio-transport.ts';
 
-export const REALTIME_URL = 'wss://api.openai.com/v1/realtime';
+// Kept as a re-export for back-compat; sessions dial resolved.url so the
+// hosted proxy path (wss://llm.<host>/v1/realtime) uses the same machinery.
+export { OPENAI_REALTIME_URL as REALTIME_URL } from '../config/realtime.ts';
 
 /**
  * OpenAI realtime rejects an input audio rate below 24 kHz
@@ -188,7 +190,7 @@ export class RealtimeSession {
   /** Connect, send session.update, and wire the transport's mic + playback. */
   async connect(): Promise<void> {
     const { resolved, safetyIdentifier, socketFactory, transport } = this.opts;
-    const url = `${REALTIME_URL}?model=${encodeURIComponent(resolved.model)}`;
+    const url = `${resolved.url}?model=${encodeURIComponent(resolved.model)}`;
     const headers: Record<string, string> = {
       Authorization: `Bearer ${resolved.apiKey}`,
     };

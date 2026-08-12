@@ -113,6 +113,37 @@ describe('resolveRealtimeVoice', () => {
     expect(r2.ok && r2.resolved.reasoningEffort).toBe('low');
   });
 
+  test('hosted fallback: no BYO key + usejarvis_ai block resolves the proxy session', () => {
+    const config = makeConfig();
+    config.usejarvis_ai = { base_url: 'https://llm.usejarvis.host', api_key: 'sk-uj-abc' };
+    config.voice!.realtime = { enabled: true, model: 'gpt-realtime-2', monthly_budget_usd: 25 };
+    const res = resolveRealtimeVoice(config);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.resolved.provider).toBe('usejarvis_ai');
+      expect(res.resolved.url).toBe('wss://llm.usejarvis.host/v1/realtime');
+      expect(res.resolved.modelsUrl).toBe('https://llm.usejarvis.host/v1/models');
+      // The alias is fixed regardless of the configured model — the proxy
+      // resolves the actual model per plan.
+      expect(res.resolved.model).toBe('uj-realtime');
+      // The LOCAL estimate guard must not double-block hosted sessions.
+      expect(res.resolved.monthlyBudgetUsd).toBeUndefined();
+    }
+  });
+
+  test("a user's own OpenAI key still wins over the hosted path", () => {
+    const config = withOpenAIProvider(makeConfig(), 'sk-user-own');
+    config.usejarvis_ai = { base_url: 'https://llm.usejarvis.host', api_key: 'sk-uj-abc' };
+    config.voice!.realtime = { enabled: true };
+    const res = resolveRealtimeVoice(config);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.resolved.provider).toBe('openai');
+      expect(res.resolved.apiKey).toBe('sk-user-own');
+      expect(res.resolved.url).toBe('wss://api.openai.com/v1/realtime');
+    }
+  });
+
   test('passes through blocked_categories and budget', () => {
     const config = withOpenAIProvider(makeConfig(), 'k');
     config.voice!.realtime = {

@@ -17,8 +17,20 @@ export const DEFAULT_BLOCKED_CATEGORIES: ActionCategory[] = (Object.keys(IMPACT_
  * Resolved, ready-to-use realtime voice settings. Produced by
  * `resolveRealtimeVoice` once gating + key resolution have passed.
  */
+/** OpenAI's realtime websocket endpoint (the BYO-key path). */
+export const OPENAI_REALTIME_URL = 'wss://api.openai.com/v1/realtime';
+
 export type ResolvedRealtimeVoice = {
   apiKey: string;
+  /** Which backend serves the session — drives usage attribution and whether
+   * the LOCAL estimate-based budget applies (hosted spend is metered and
+   * enforced by the platform proxy, not the $/minute guess). */
+  provider: 'openai' | 'usejarvis_ai';
+  /** Websocket endpoint (model appended as a query param at connect). */
+  url: string;
+  /** Hosted only: the key-scoped catalog endpoint — the session starter
+   * pre-checks that uj-realtime is included in the plan before dialing. */
+  modelsUrl?: string;
   model: string;
   voice?: string;
   reasoningEffort: RealtimeReasoningEffort;
@@ -80,6 +92,42 @@ export function resolveRealtimeVoice(
 
   const apiKey = findOpenAIProviderKey(config).trim();
 
+  // Hosted fallback: no BYO OpenAI key, but the platform block is live — the
+  // proxy serves realtime under the plan-gated uj-realtime alias. A user's
+  // own OpenAI provider still wins (their explicit choice, their own spend).
+  const hosted = config.usejarvis_ai;
+  const hostedReady = Boolean(hosted?.base_url?.trim() && hosted?.api_key?.trim());
+  if (!apiKey && hostedReady) {
+    const origin = hosted!.base_url!.trim().replace(/\/+$/, '');
+    const httpBase = /\/v1$/.test(origin) ? origin : `${origin}/v1`;
+    return {
+      ok: true,
+      resolved: {
+        apiKey: hosted!.api_key!.trim(),
+        provider: 'usejarvis_ai',
+        url: `${httpBase.replace(/^http/, 'ws')}/realtime`,
+        modelsUrl: `${httpBase}/models`,
+        // The proxy resolves the actual model per plan; the alias is fixed.
+        model: 'uj-realtime',
+        voice: rt.voice,
+        reasoningEffort: VALID_EFFORTS.includes(rt.reasoning_effort as RealtimeReasoningEffort)
+          ? (rt.reasoning_effort as RealtimeReasoningEffort)
+          : DEFAULT_EFFORT,
+        maxSessionMinutes:
+          typeof rt.max_session_minutes === 'number' && rt.max_session_minutes > 0
+            ? rt.max_session_minutes
+            : DEFAULT_MAX_SESSION_MINUTES,
+        // Deliberately unset: the local $/minute ESTIMATE guard must not
+        // double-block hosted sessions — the proxy meters real spend and
+        // enforces the plan windows itself.
+        monthlyBudgetUsd: undefined,
+        blockedCategories: Array.isArray(rt.blocked_categories)
+          ? rt.blocked_categories
+          : DEFAULT_BLOCKED_CATEGORIES,
+      },
+    };
+  }
+
   if (!apiKey) {
     return {
       ok: false,
@@ -102,6 +150,8 @@ export function resolveRealtimeVoice(
     ok: true,
     resolved: {
       apiKey,
+      provider: 'openai',
+      url: OPENAI_REALTIME_URL,
       model: rt.model?.trim() || DEFAULT_MODEL,
       voice: rt.voice,
       reasoningEffort,

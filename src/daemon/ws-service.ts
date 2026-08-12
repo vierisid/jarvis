@@ -878,7 +878,7 @@ export class WebSocketService implements Service {
         const { requestId, currentRoom } = msg.payload as { requestId: string; currentRoom?: string };
         // Premium path: if realtime voice is enabled + keyed, open (or reuse) a
         // full-duplex realtime session and skip the STT accumulator entirely.
-        if (this.tryStartRealtimeVoice(ws)) return undefined;
+        if (await this.tryStartRealtimeVoice(ws)) return undefined;
         this.voiceSessions.set(ws, {
           requestId,
           chunks: [],
@@ -1401,7 +1401,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * realtime (OpenAI's semantic VAD detects turns), and the session is closed
    * on disconnect or after `max_session_minutes` (cost guard).
    */
-  private tryStartRealtimeVoice(ws: ServerWebSocket<unknown>): boolean {
+  private async tryStartRealtimeVoice(ws: ServerWebSocket<unknown>): Promise<boolean> {
     if (this.realtimeSessions.has(ws)) return true; // already streaming
 
     let resolved: ResolvedRealtimeVoice;
@@ -1421,6 +1421,31 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // bare error flash. Falling through to the standard pipeline would be wrong:
     // the client is already streaming raw realtime PCM, which the WAV-based path
     // can't consume.
+    // Hosted plan gate: uj-realtime is absent from the key-scoped catalog on
+    // plans that don't include it — pre-check instead of dialing a websocket
+    // that will be refused, and fall back to the STT->LLM->TTS pipeline with
+    // a clear reason. Catalog fetch failures are ADVISORY (proceed and let
+    // the session attempt decide) — a network blip must not disable voice.
+    if (resolved.modelsUrl) {
+      try {
+        const res = await fetch(resolved.modelsUrl, {
+          headers: { Authorization: `Bearer ${resolved.apiKey}` },
+        });
+        if (res.ok) {
+          const payload = await res.json() as { data?: Array<{ id?: unknown }> };
+          const ids = Array.isArray(payload.data)
+            ? payload.data.map((m) => m.id).filter((id): id is string => typeof id === 'string')
+            : [];
+          if (!ids.includes(resolved.model)) {
+            console.warn('[WSService] realtime not included in this plan — using standard pipeline');
+            return false; // caller falls back to STT->LLM->TTS
+          }
+        }
+      } catch {
+        // advisory only
+      }
+    }
+
     if (resolved.monthlyBudgetUsd && !this.getRealtimeBudget().canStart(resolved.monthlyBudgetUsd)) {
       console.warn('[WSService] realtime monthly budget reached — refusing new session');
       this.wsServer.sendToClient(ws, {
