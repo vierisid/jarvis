@@ -127,10 +127,14 @@ export function setSecret(name: string, value: string): void {
 
 /**
  * Apply several writes in ONE decrypt/encrypt pass; `null` deletes the entry.
- * Callers that persist a group of related credentials (e.g. every API key of a
- * config section) should prefer this over N setSecret calls: each of those
- * rewrites the whole file, and a crash midway would leave the group half
- * applied. No-ops when every entry already has the requested value.
+ * Callers that persist a group of related credentials (e.g. every key of a
+ * config section) should prefer this over N setSecret calls, each of which
+ * rewrites the whole file. No-ops when every entry already has the requested
+ * value.
+ *
+ * One file write, not an atomic one: saveSecrets truncates in place, so a
+ * crash mid-write still loses the file (and loadSecrets then starts empty).
+ * Grouping shrinks that window; it does not close it.
  */
 export function setSecrets(entries: Record<string, string | null>): void {
   const secrets = loadSecrets();

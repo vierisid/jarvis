@@ -1,6 +1,7 @@
 /**
- * STT/TTS API keys must live in the encrypted keychain, never in the plaintext
- * `settings` table — the same split llm-settings.ts applies to provider keys.
+ * Section credentials — STT/TTS API keys and channel bot tokens — must live in
+ * the encrypted keychain, never in the plaintext `settings` table, the same
+ * split llm-settings.ts applies to provider keys.
  *
  * The keychain writes to `~/.jarvis`, so every test redirects it to a
  * throwaway dir via JARVIS_SECRETS_DIR — never the developer's real store.
@@ -26,17 +27,17 @@ function freshConfig(): JarvisConfig {
 }
 
 /** Raw bytes of the row as stored — the assertion that matters for leaks. */
-function rawRow(section: 'stt' | 'tts'): string {
+function rawRow(section: 'stt' | 'tts' | 'channels'): string {
   return getSetting(`cfg.${section}`) ?? '';
 }
 
-describe('voice secrets (stt/tts api keys)', () => {
+describe('section secrets (stt/tts keys, channel tokens)', () => {
   let secretsDir: string;
   let prevSecretsDir: string | undefined;
 
   beforeEach(() => {
     prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
-    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-voice-secrets-'));
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-section-secrets-'));
     process.env.JARVIS_SECRETS_DIR = secretsDir;
     initDatabase(':memory:');
   });
@@ -59,6 +60,74 @@ describe('voice secrets (stt/tts api keys)', () => {
     const enc = join(secretsDir, '.secrets.enc');
     expect(existsSync(enc)).toBe(true);
     expect(readFileSync(enc).toString('latin1')).not.toContain('gk-secret');
+  });
+
+  test('channels: bot tokens round-trip through the keychain, not the row', () => {
+    saveUserSection('channels', {
+      telegram: { enabled: true, bot_token: 'tg-token', allowed_users: [42] },
+      discord: { enabled: true, bot_token: 'dc-token', allowed_users: ['u1'], guild_id: 'g1' },
+    });
+
+    const row = rawRow('channels');
+    expect(row).not.toContain('tg-token');
+    expect(row).not.toContain('dc-token');
+    // Non-secret channel settings stay in the row.
+    expect(row).toContain('42');
+    expect(getSecret('channels.telegram.bot_token')).toBe('tg-token');
+    expect(getSecret('channels.discord.bot_token')).toBe('dc-token');
+
+    const config = freshConfig();
+    mergeUserSettingsIntoConfig(config);
+
+    expect(config.channels?.telegram?.bot_token).toBe('tg-token');
+    expect(config.channels?.telegram?.allowed_users).toEqual([42]);
+    expect(config.channels?.discord?.bot_token).toBe('dc-token');
+    expect(config.channels?.discord?.guild_id).toBe('g1');
+  });
+
+  test('channels: a legacy plaintext row migrates on the next hydration', () => {
+    setSetting('cfg.channels', JSON.stringify({
+      telegram: { enabled: true, bot_token: 'legacy-tg', allowed_users: [7] },
+      discord: { enabled: false, bot_token: '', allowed_users: [] },
+    }));
+
+    const config = freshConfig();
+    mergeUserSettingsIntoConfig(config);
+
+    expect(rawRow('channels')).not.toContain('legacy-tg');
+    expect(getSecret('channels.telegram.bot_token')).toBe('legacy-tg');
+    expect(config.channels?.telegram?.bot_token).toBe('legacy-tg');
+    // An empty token was never a credential — nothing stored for it.
+    expect(getSecret('channels.discord.bot_token')).toBeNull();
+    expect(config.channels?.telegram?.enabled).toBe(true);
+  });
+
+  test('channels: the real route path keeps the token out of the row', async () => {
+    const config = freshConfig();
+    const ctx = {
+      daemonStartedAt: Date.now(),
+      healthMonitor: {},
+      config,
+    } as unknown as ApiContext;
+    const route = createApiRoutes(ctx)['/api/config/channels'] as {
+      GET: () => Response;
+      POST: (req: Request) => Promise<Response>;
+    };
+
+    const saved = await route.POST(new Request('http://x/api/config/channels', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telegram: { enabled: true, bot_token: 'tg-http', allowed_users: [1] } }),
+    }));
+    expect(await saved.json()).toMatchObject({ ok: true });
+
+    expect(rawRow('channels')).not.toContain('tg-http');
+    expect(getSecret('channels.telegram.bot_token')).toBe('tg-http');
+    expect(await route.GET().json()).toMatchObject({ telegram: { has_token: true } });
+
+    const rebooted = freshConfig();
+    mergeUserSettingsIntoConfig(rebooted);
+    expect(rebooted.channels?.telegram?.bot_token).toBe('tg-http');
   });
 
   test('merge injects the stored key back into the in-memory config', () => {
@@ -245,6 +314,42 @@ describe('voice secrets (stt/tts api keys)', () => {
     // loop never visits that section.
     expect(importLegacyUserSettings({ personality: { assistant_name: 'Edith' } })).toEqual(['personality']);
     expect(getSetting('cfg.__import_state')).not.toContain('file-gk');
+  });
+
+  test('import: the state row is scrubbed with no config.yaml at all, and survives a hand-edited value', () => {
+    setSetting('cfg.__import_state', JSON.stringify({
+      stt: JSON.stringify({ provider: 'groq', groq: { api_key: 'file-gk' } }),
+      channels: 42, // not a string: must not take the boot import down with it
+    }));
+
+    // The file is gone (deleted, or unreadable — index.ts passes null then).
+    expect(importLegacyUserSettings(null)).toEqual([]);
+    expect(getSetting('cfg.__import_state')).not.toContain('file-gk');
+  });
+
+  test('a keychain failure is reported as a storage error, not an invalid body', async () => {
+    const blocked = join(secretsDir, 'blocked');
+    writeFileSync(blocked, 'not a dir');
+    process.env.JARVIS_SECRETS_DIR = blocked;
+
+    const ctx = {
+      daemonStartedAt: Date.now(),
+      healthMonitor: {},
+      config: freshConfig(),
+    } as unknown as ApiContext;
+    const route = createApiRoutes(ctx)['/api/config/channels'] as {
+      POST: (req: Request) => Promise<Response>;
+    };
+
+    const res = await route.POST(new Request('http://x/api/config/channels', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ telegram: { enabled: true, bot_token: 'tg-1', allowed_users: [] } }),
+    }));
+
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ ok: false });
+    expect(rawRow('channels')).toBe('');
   });
 
   test('import: a pre-digest baseline row is upgraded without re-importing', () => {

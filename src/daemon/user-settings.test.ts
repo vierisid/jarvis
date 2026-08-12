@@ -20,8 +20,8 @@ function freshConfig(): JarvisConfig {
 }
 
 describe('user-settings', () => {
-  // stt/tts saves reach the keychain (see voice-secrets.ts) — redirect it to a
-  // throwaway dir so tests never touch the developer's real secrets store.
+  // stt/tts/channels saves reach the keychain (see section-secrets.ts) —
+  // redirect it to a throwaway dir so tests never touch the real store.
   let secretsDir: string;
   let prevSecretsDir: string | undefined;
 

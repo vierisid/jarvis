@@ -7,6 +7,7 @@
 
 import type { HealthMonitor } from './health.ts';
 import { applyApprovalDecision } from './approval-decision.ts';
+import { SecretStorageError } from './section-secrets.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import { resolveRealtimeVoice, DEFAULT_BLOCKED_CATEGORIES } from '../config/realtime.ts';
@@ -196,6 +197,20 @@ function error(message: string, status = 400): Response {
 function errorFromException(err: unknown): Response {
   if (err instanceof HttpError) return error(err.message, err.status);
   return error(err instanceof Error ? err.message : String(err), 500);
+}
+
+/**
+ * Failure path shared by the config POST handlers. A malformed body is the
+ * caller's fault (400), but a credential the keychain refused is ours: the
+ * setting genuinely did not persist, and reporting that as "Invalid request
+ * body" would send the user hunting for a typo in a valid request.
+ */
+function configSaveError(context: string, err: unknown): Response {
+  console.error(`[API] ${context}:`, err);
+  if (err instanceof SecretStorageError) {
+    return json({ ok: false, message: err.message }, 500);
+  }
+  return error('Invalid request body');
 }
 
 function getSearchParams(req: Request): URLSearchParams {
@@ -1348,6 +1363,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             tutorial_progress_step: fresh.onboarding?.tutorial_progress_step,
             last_reset_at: fresh.onboarding?.last_reset_at,
           };
+          // Credential-bearing sections first, the completion flag LAST: a
+          // keychain failure throws out of here, and the flag not being written
+          // is what we want — setup did not succeed, so the wizard must run
+          // again rather than leave the user with a "done" marker and no key.
           if (body.stt) saveUserSection('stt', fresh.stt);
           if (body.tts) saveUserSection('tts', fresh.tts);
           saveUserSection('onboarding', fresh.onboarding);
@@ -2201,8 +2220,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           }
           return json({ ok: true, message: 'Channel config saved and applied.' });
         } catch (err) {
-          console.error('[API] Error saving channels config:', err);
-          return error('Invalid request body');
+          return configSaveError('Error saving channels config', err);
         }
       },
     },
@@ -2240,8 +2258,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           }
           return json({ ok: true, message: 'STT config saved and applied.' });
         } catch (err) {
-          console.error('[API] Error saving STT config:', err);
-          return error('Invalid request body');
+          return configSaveError('Error saving STT config', err);
         }
       },
     },
@@ -2293,8 +2310,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
           return json({ ok: true, message: 'TTS config saved.' });
         } catch (err) {
-          console.error('[API] Error saving TTS config:', err);
-          return error('Invalid request body');
+          return configSaveError('Error saving TTS config', err);
         }
       },
     },
