@@ -116,7 +116,7 @@ export const LLM_PROVIDERS = LLM_PROVIDER_KINDS;
 export const LLM_PROVIDER_LABELS = LLM_PROVIDER_KIND_LABELS;
 
 export type STTProvider = "openai" | "groq" | "sarvam" | "local" | "usejarvis";
-export type TTSProvider = "edge" | "elevenlabs" | "sarvam";
+export type TTSProvider = "edge" | "elevenlabs" | "sarvam" | "usejarvis";
 
 /**
  * Per-provider summary returned by GET /api/config/llm. The credential value
@@ -212,6 +212,8 @@ export interface STTConfig {
 export interface TTSConfig {
   enabled: boolean;
   provider: string;
+  /** True on hosted installs: the "Usejarvis AI (included)" option applies. */
+  usejarvis_available?: boolean;
   voice: string;
   rate: string;
   volume: string;

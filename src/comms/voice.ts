@@ -505,6 +505,60 @@ export class ElevenLabsTTSProvider implements TTSProvider {
 }
 
 /**
+ * Hosted "Usejarvis AI" TTS — the platform proxy's OpenAI-compatible
+ * /audio/speech endpoint. `uj-tts` is the stable per-plan alias (resolution
+ * happens at the proxy, like uj-stt and the LLM tiers). Credentials come from
+ * the system-owned `usejarvis_ai` block via the factory's `hosted` argument —
+ * never from cfg.tts.
+ */
+export class UsejarvisTTS implements TTSProvider {
+  private baseUrl: string;
+  private apiKey: string;
+  private voice: string;
+
+  constructor(baseUrl: string, apiKey: string, voice: string = 'alloy') {
+    // Same origin→/v1 normalization as UsejarvisSTT / UsejarvisAIProvider.
+    const trimmed = baseUrl.replace(/\/+$/, '');
+    this.baseUrl = /\/v1$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
+    this.apiKey = apiKey;
+    this.voice = voice;
+  }
+
+  async synthesize(text: string): Promise<Buffer> {
+    const response = await fetch(`${this.baseUrl}/audio/speech`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${this.apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'uj-tts',
+        input: text,
+        voice: this.voice,
+        response_format: 'mp3',
+      }),
+    });
+
+    if (!response.ok) {
+      const err = await response.text();
+      throw new Error(`Usejarvis AI TTS error (${response.status}): ${err}`);
+    }
+
+    const arrayBuffer = await response.arrayBuffer();
+    return Buffer.from(arrayBuffer);
+  }
+
+  async *synthesizeStream(text: string): AsyncIterable<Buffer> {
+    // Same fake-streaming shape as the other providers: one complete MP3 per
+    // sentence, so the browser's decodeAudioData always gets a valid file.
+    const audio = await this.synthesize(text);
+    if (audio.length > 0) {
+      yield audio;
+    }
+  }
+}
+
+/**
  * Sarvam AI TTS Provider — high-quality Indian language voices via Sarvam AI.
  */
 export class SarvamTTSProvider implements TTSProvider {
@@ -587,9 +641,24 @@ export async function listElevenLabsVoices(apiKey: string): Promise<{
 /**
  * Factory: create the right TTS provider from config.
  * Returns null if TTS is disabled.
+ *
+ * `hosted` is the same separate credential channel as createSTTProvider's:
+ * cfg.tts only ever stores the string choice `provider: 'usejarvis'`.
  */
-export function createTTSProvider(config: TTSConfig): TTSProvider | null {
+export function createTTSProvider(
+  config: TTSConfig,
+  hosted?: HostedVoiceCredentials | null,
+): TTSProvider | null {
   if (!config.enabled) return null;
+
+  if (config.provider === 'usejarvis') {
+    if (!hosted?.baseUrl || !hosted?.apiKey) return null;
+    // Reuse a configured voice only when it isn't an Edge neural name:
+    // cfg.tts.voice defaults to 'en-US-AriaNeural' (Edge-specific), which the
+    // OpenAI-compatible proxy would reject — those fall back to 'alloy'.
+    const voice = config.voice && !/Neural$/i.test(config.voice) ? config.voice : undefined;
+    return new UsejarvisTTS(hosted.baseUrl, hosted.apiKey, voice ?? 'alloy');
+  }
 
   if (config.provider === 'elevenlabs') {
     if (!config.elevenlabs?.api_key) return null;

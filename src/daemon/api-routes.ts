@@ -12,7 +12,7 @@ import { SecretStorageError } from './section-secrets.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import { resolveRealtimeVoice, DEFAULT_BLOCKED_CATEGORIES } from '../config/realtime.ts';
-import { hasUsejarvisAi, effectiveSttForBinding } from './usejarvis-ai.ts';
+import { hasUsejarvisAi, effectiveSttForBinding, effectiveTtsForBinding, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
 import type { EntityType } from '../vault/entities.ts';
 import type { CommitmentPriority, CommitmentStatus } from '../vault/commitments.ts';
 import type { ObservationType } from '../vault/observations.ts';
@@ -1403,7 +1403,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             try {
               if (ctx.config.tts && ctx.wsService) {
                 const { createTTSProvider } = await import('../comms/voice.ts');
-                const provider = await createTTSProvider(ctx.config.tts);
+                const ttsBinding = effectiveTtsForBinding(ctx.config) ?? ctx.config.tts;
+                const provider = createTTSProvider(ttsBinding, usejarvisVoiceCredentials(ctx.config));
                 if (provider) ctx.wsService.setTTSProvider(provider);
               }
             } catch (err) {
@@ -2539,9 +2540,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/config/tts': {
       GET: () => {
         const tts = ctx.config.tts;
+        // Same shape as GET /api/config/stt: `provider` is the BINDING view
+        // (hosted installs with no recorded choice read 'usejarvis'), the
+        // persisted cfg.tts row stays pure user intent, no key material.
+        const effective = effectiveTtsForBinding(ctx.config);
         return json({
           enabled: tts?.enabled ?? false,
-          provider: tts?.provider ?? 'edge',
+          provider: effective?.provider ?? tts?.provider ?? 'edge',
+          usejarvis_available: hasUsejarvisAi(ctx.config),
           voice: tts?.voice ?? 'en-US-AriaNeural',
           rate: tts?.rate ?? '+0%',
           volume: tts?.volume ?? '+0%',
@@ -2574,7 +2580,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           // Hot-reload TTS provider if wsService available
           if (ctx.wsService && merged) {
             const { createTTSProvider } = await import('../comms/voice.ts');
-            const provider = createTTSProvider(merged);
+            // Bind through the routing view: a hosted user who never chose a
+            // provider must get the included voice, not the DEFAULT_CONFIG
+            // 'edge' fill that `merged` carries. ctx.config.tts is already
+            // the post-save value (assigned above).
+            const ttsBinding = effectiveTtsForBinding(ctx.config) ?? merged;
+            const provider = createTTSProvider(ttsBinding, usejarvisVoiceCredentials(ctx.config));
             if (provider) {
               ctx.wsService.setTTSProvider(provider);
             }
@@ -2694,7 +2705,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             provider?: string; voice?: string; api_key?: string; voice_id?: string; model?: string; text?: string;
           };
           const text = (typeof body.text === 'string' && body.text.trim() ? body.text.trim() : "Hi, I'm Jarvis. This is how I'll sound.").slice(0, 280);
-          const cfg: Record<string, unknown> = { enabled: true, provider: body.provider === 'elevenlabs' ? 'elevenlabs' : 'edge' };
+          const cfg: Record<string, unknown> = {
+            enabled: true,
+            provider: body.provider === 'elevenlabs' || body.provider === 'usejarvis' ? body.provider : 'edge',
+          };
           if (body.provider === 'elevenlabs') {
             if (!body.api_key) return error('ElevenLabs API key required.', 400);
             cfg.elevenlabs = {
@@ -2702,11 +2716,16 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
               voice_id: typeof body.voice_id === 'string' ? body.voice_id : undefined,
               model: typeof body.model === 'string' ? body.model : undefined,
             };
+          } else if (body.provider === 'usejarvis') {
+            // Hosted preview: no key in the body — the factory gets the
+            // system-owned proxy credentials as its separate argument below.
+            if (!hasUsejarvisAi(ctx.config)) return error('Usejarvis AI is not available on this install.', 400);
+            if (typeof body.voice === 'string' && body.voice) cfg.voice = body.voice;
           } else {
             cfg.voice = body.voice || 'en-US-AriaNeural';
           }
           const { createTTSProvider } = await import('../comms/voice.ts');
-          const provider = createTTSProvider(cfg as never);
+          const provider = createTTSProvider(cfg as never, usejarvisVoiceCredentials(ctx.config));
           if (!provider) return error('Could not build a TTS provider from those settings.', 400);
           const audio = await provider.synthesize(text);
           return new Response(new Uint8Array(audio), { headers: { 'Content-Type': 'audio/mpeg', 'Cache-Control': 'no-store' } });

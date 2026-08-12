@@ -7,6 +7,7 @@ import {
   LocalWhisperSTT,
   SarvamSTT,
   UsejarvisSTT,
+  UsejarvisTTS,
   EdgeTTSProvider,
   SarvamTTSProvider,
   splitIntoSentences,
@@ -185,6 +186,27 @@ describe('createTTSProvider factory', () => {
   test('returns null when provider=sarvam and no key', () => {
     const config: TTSConfig = { enabled: true, provider: 'sarvam' };
     expect(createTTSProvider(config)).toBeNull();
+  });
+
+  test('returns UsejarvisTTS when provider=usejarvis and hosted creds passed', () => {
+    const config: TTSConfig = { enabled: true, provider: 'usejarvis' };
+    const provider = createTTSProvider(config, {
+      baseUrl: 'https://llm.usejarvis.host',
+      apiKey: 'sk-uj-not-real',
+    });
+    expect(provider).toBeInstanceOf(UsejarvisTTS);
+  });
+
+  test('returns null when provider=usejarvis and no hosted creds (self-hosted)', () => {
+    const config: TTSConfig = { enabled: true, provider: 'usejarvis' };
+    expect(createTTSProvider(config)).toBeNull();
+    expect(createTTSProvider(config, null)).toBeNull();
+    expect(createTTSProvider(config, { baseUrl: '', apiKey: 'sk-uj-not-real' })).toBeNull();
+  });
+
+  test('returns null for usejarvis when tts disabled, even with creds', () => {
+    const config: TTSConfig = { enabled: false, provider: 'usejarvis' };
+    expect(createTTSProvider(config, { baseUrl: 'https://llm.usejarvis.host', apiKey: 'k' })).toBeNull();
   });
 });
 
@@ -587,6 +609,87 @@ describe('sniffAudioFormat', () => {
     expect(sniffAudioFormat(Buffer.from('????garbage'))).toEqual({ filename: 'audio.wav', mimeType: 'audio/wav' });
     expect(sniffAudioFormat(Buffer.from([0x00]))).toEqual({ filename: 'audio.wav', mimeType: 'audio/wav' });
     expect(sniffAudioFormat(Buffer.alloc(0))).toEqual({ filename: 'audio.wav', mimeType: 'audio/wav' });
+  });
+});
+
+describe('UsejarvisTTS', () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  const mp3Bytes = new Uint8Array([0x49, 0x44, 0x33, 0x04, 0x00, 0x00]); // ID3v4 header
+
+  test('POSTs JSON to <origin>/v1/audio/speech with bearer, uj-tts and mp3 format', async () => {
+    const tts = new UsejarvisTTS('https://llm.usejarvis.host', 'sk-uj-not-real');
+    let calledUrl = '';
+    let auth = '';
+    let contentType = '';
+    let sentBody: Record<string, unknown> = {};
+
+    globalThis.fetch = mock(async (url: string, init: any) => {
+      calledUrl = url;
+      auth = init.headers['Authorization'];
+      contentType = init.headers['Content-Type'];
+      sentBody = JSON.parse(init.body as string);
+      return new Response(mp3Bytes);
+    }) as any;
+
+    const audio = await tts.synthesize('Hello there.');
+    expect(calledUrl).toBe('https://llm.usejarvis.host/v1/audio/speech');
+    expect(auth).toBe('Bearer sk-uj-not-real');
+    expect(contentType).toBe('application/json');
+    expect(sentBody).toEqual({
+      model: 'uj-tts',
+      input: 'Hello there.',
+      voice: 'alloy', // constructor default
+      response_format: 'mp3',
+    });
+    expect(Buffer.compare(audio, Buffer.from(mp3Bytes))).toBe(0);
+  });
+
+  test('does not double the /v1 prefix when the base already carries it', async () => {
+    const tts = new UsejarvisTTS('https://llm.usejarvis.host/v1', 'sk-uj-not-real');
+    let calledUrl = '';
+    globalThis.fetch = mock(async (url: string) => { calledUrl = url; return new Response(mp3Bytes); }) as any;
+    await tts.synthesize('hi');
+    expect(calledUrl).toBe('https://llm.usejarvis.host/v1/audio/speech');
+  });
+
+  test('synthesizeStream yields the complete MP3 exactly once', async () => {
+    const tts = new UsejarvisTTS('https://llm.usejarvis.host', 'sk-uj-not-real');
+    globalThis.fetch = mock(async () => new Response(mp3Bytes)) as any;
+    const chunks: Buffer[] = [];
+    for await (const chunk of tts.synthesizeStream('Hello.')) chunks.push(chunk);
+    expect(chunks.length).toBe(1);
+    expect(Buffer.compare(chunks[0]!, Buffer.from(mp3Bytes))).toBe(0);
+  });
+
+  test('synthesizeStream yields nothing for empty audio', async () => {
+    const tts = new UsejarvisTTS('https://llm.usejarvis.host', 'sk-uj-not-real');
+    globalThis.fetch = mock(async () => new Response(new Uint8Array(0))) as any;
+    const chunks: Buffer[] = [];
+    for await (const chunk of tts.synthesizeStream('Hello.')) chunks.push(chunk);
+    expect(chunks.length).toBe(0);
+  });
+
+  test('throws with status on HTTP error', async () => {
+    const tts = new UsejarvisTTS('https://llm.usejarvis.host', 'sk-uj-not-real');
+    globalThis.fetch = mock(async () => new Response('budget exceeded', { status: 429 })) as any;
+    await expect(tts.synthesize('hi')).rejects.toThrow(/Usejarvis AI TTS error \(429\)/);
+  });
+
+  test('factory passes a non-Edge cfg voice through; Edge neural names fall back to alloy', async () => {
+    const voices: string[] = [];
+    globalThis.fetch = mock(async (_url: string, init: any) => {
+      voices.push(JSON.parse(init.body as string).voice);
+      return new Response(mp3Bytes);
+    }) as any;
+
+    const hosted = { baseUrl: 'https://llm.usejarvis.host', apiKey: 'sk-uj-not-real' };
+    await createTTSProvider({ enabled: true, provider: 'usejarvis', voice: 'nova' }, hosted)!.synthesize('hi');
+    // The persisted default 'en-US-AriaNeural' is Edge-specific — the
+    // OpenAI-compatible proxy would reject it, so it must not leak through.
+    await createTTSProvider({ enabled: true, provider: 'usejarvis', voice: 'en-US-AriaNeural' }, hosted)!.synthesize('hi');
+    expect(voices).toEqual(['nova', 'alloy']);
   });
 });
 

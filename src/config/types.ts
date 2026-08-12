@@ -171,7 +171,12 @@ export type STTConfig = {
 
 export type TTSConfig = {
   enabled: boolean;
-  provider?: 'edge' | 'elevenlabs' | 'sarvam';  // default: 'edge'
+  /**
+   * Default: 'edge'. `usejarvis` is a pure string choice like the STT one:
+   * the hosted credentials ride the factory's separate `hosted` argument
+   * (never this persisted section).
+   */
+  provider?: 'edge' | 'elevenlabs' | 'sarvam' | 'usejarvis';
   voice?: string;       // e.g. 'en-US-AriaNeural' (edge)
   rate?: string;        // e.g. '+0%', '+10%' (edge)
   volume?: string;      // e.g. '+0%' (edge)

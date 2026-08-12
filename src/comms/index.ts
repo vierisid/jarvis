@@ -8,6 +8,7 @@ export {
   GroqWhisperSTT,
   LocalWhisperSTT,
   UsejarvisSTT,
+  UsejarvisTTS,
   EdgeTTSProvider,
   ElevenLabsTTSProvider,
   createSTTProvider,

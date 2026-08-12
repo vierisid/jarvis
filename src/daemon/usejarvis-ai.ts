@@ -1,4 +1,4 @@
-import type { JarvisConfig, LLMConfig, STTConfig } from '../config/types.ts';
+import type { JarvisConfig, LLMConfig, STTConfig, TTSConfig } from '../config/types.ts';
 import type { HostedVoiceCredentials } from '../comms/voice.ts';
 import { loadUserSection } from './user-settings.ts';
 
@@ -170,7 +170,7 @@ export function validateHostedModelRef(model: string): string | null {
   return null;
 }
 
-// ── Hosted voice (STT) ──────────────────────────────────────────────────────
+// ── Hosted voice (STT + TTS) ────────────────────────────────────────────────
 
 /**
  * The proxy credentials for the voice provider factories, as a value SEPARATE
@@ -231,4 +231,23 @@ export function effectiveSttForBinding(
   if (!hasUsejarvisAi(config)) return config.stt;
   if (storedProviderChoice(loadStored('stt'))) return config.stt;
   return { ...config.stt, provider: 'usejarvis' };
+}
+
+/**
+ * The BINDING view of cfg.tts, same rules as effectiveSttForBinding. The one
+ * extra wrinkle: 'edge' is DEFAULT_CONFIG's provider value, so the in-memory
+ * section reading 'edge' cannot distinguish "explicitly chose Edge" from
+ * "never chose" — only a `provider` recorded in the stored `cfg.tts` DB row
+ * counts as choice (any dashboard TTS save writes one, so an explicit Edge
+ * selection sticks). `enabled` is passed through untouched — the hosted
+ * default never switches speech on, it only picks who speaks once the user
+ * turns it on.
+ */
+export function effectiveTtsForBinding(
+  config: JarvisConfig,
+  loadStored: (section: 'stt' | 'tts') => unknown = loadUserSection,
+): TTSConfig | undefined {
+  if (!hasUsejarvisAi(config)) return config.tts;
+  if (storedProviderChoice(loadStored('tts'))) return config.tts;
+  return { ...(config.tts ?? { enabled: false }), provider: 'usejarvis' };
 }

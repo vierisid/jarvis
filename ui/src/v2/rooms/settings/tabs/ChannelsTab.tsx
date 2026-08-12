@@ -459,6 +459,9 @@ export function ChannelsTab({
               onToast(r.message, r.ok ? "ok" : "warn");
             }}
           >
+            {ttsCfg?.usejarvis_available && (
+              <option value="usejarvis">Usejarvis AI (included)</option>
+            )}
             <option value="edge">Edge TTS (free)</option>
             <option value="elevenlabs">ElevenLabs (API key)</option>
             <option value="sarvam">Sarvam AI (Indian languages)</option>

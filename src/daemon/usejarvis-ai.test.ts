@@ -10,6 +10,7 @@ import {
   applyUsejarvisAi,
   effectiveLlmForBinding,
   effectiveSttForBinding,
+  effectiveTtsForBinding,
   hasUsejarvisAi,
   usejarvisVoiceCredentials,
   USEJARVIS_PROVIDER_NAME,
@@ -363,5 +364,55 @@ describe('effectiveSttForBinding (hosted STT default, persistence-pure)', () => 
     const view = effectiveSttForBinding(config, noRow)!;
     expect(JSON.stringify(view)).not.toContain('sk-uj-abc123');
     expect(view).toEqual({ ...config.stt!, provider: 'usejarvis' });
+  });
+});
+
+describe('effectiveTtsForBinding (hosted TTS default, explicit Edge respected)', () => {
+  const noRow = () => undefined;
+
+  test('self-hosted: returns cfg.tts untouched (same reference), DB never read', () => {
+    const config = base();
+    let reads = 0;
+    const spy = () => { reads += 1; return undefined; };
+    expect(effectiveTtsForBinding(config, spy)).toBe(config.tts);
+    expect(reads).toBe(0);
+  });
+
+  test('hosted + no stored tts row: binding view says usejarvis, enabled and config untouched', () => {
+    const config = hosted();
+    const view = effectiveTtsForBinding(config, noRow);
+    expect(view?.provider).toBe('usejarvis');
+    // The hosted default never switches speech ON — it only picks who
+    // speaks once the user enables TTS.
+    expect(view?.enabled).toBe(false);
+    // Persistence purity: the in-memory section still carries the stock
+    // default, so a later save records no choice the user never made.
+    expect(config.tts?.provider).toBe('edge');
+  });
+
+  test("hosted + stored row with provider 'edge': the EXPLICIT Edge choice wins", () => {
+    // The in-memory 'edge' alone is ambiguous (it is also DEFAULT_CONFIG's
+    // value) — the stored row's provider field is what makes it intent.
+    const config = hosted();
+    config.tts = { enabled: true, provider: 'edge', voice: 'en-GB-SoniaNeural' };
+    const view = effectiveTtsForBinding(config, (section) =>
+      section === 'tts' ? { enabled: true, provider: 'edge', voice: 'en-GB-SoniaNeural' } : undefined);
+    expect(view).toBe(config.tts); // same reference, untouched
+    expect(view?.provider).toBe('edge');
+  });
+
+  test('hosted + stored row WITHOUT a provider field (voice-command enable): still silent', () => {
+    const config = hosted();
+    config.tts = { ...config.tts!, enabled: true };
+    const view = effectiveTtsForBinding(config, () => ({ enabled: true }));
+    expect(view?.provider).toBe('usejarvis');
+    expect(view?.enabled).toBe(true);
+  });
+
+  test('the view never carries credentials', () => {
+    const config = hosted();
+    const view = effectiveTtsForBinding(config, noRow)!;
+    expect(JSON.stringify(view)).not.toContain('sk-uj-abc123');
+    expect(view).toEqual({ ...config.tts!, provider: 'usejarvis' });
   });
 });
