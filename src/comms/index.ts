@@ -14,6 +14,7 @@ export {
   createSTTProvider,
   createTTSProvider,
   listElevenLabsVoices,
+  sniffAudioFormat,
   splitIntoSentences,
   type STTProvider,
   type TTSProvider,

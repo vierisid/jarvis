@@ -11,6 +11,7 @@ import {
   loadUserSection,
   importLegacyUserSettings,
   mergeUserSettingsIntoConfig,
+  persistUserPatch,
   saveGoogleSettings,
   setSectionSavedListener,
 } from './user-settings.ts';
@@ -244,6 +245,44 @@ describe('user-settings', () => {
     hosted.google = { client_id: 'company-client', client_secret: 'company-secret' };
     mergeUserSettingsIntoConfig(hosted);
     expect(hosted.google.client_id).toBe('company-client');
+  });
+
+  test('persistUserPatch: a provider-less patch NEVER stamps a provider into the row', () => {
+    // The silence signal effectiveSttForBinding/effectiveTtsForBinding read
+    // is the row's provider field — an enable-toggle or key-only save must
+    // not turn silence into a recorded 'edge'/'openai' choice.
+    persistUserPatch('tts', { enabled: true });
+    expect(loadUserSection('tts')).toEqual({ enabled: true });
+
+    persistUserPatch('stt', { openai: { api_key: 'sk-user' } });
+    expect(loadUserSection('stt')).toEqual({ openai: { api_key: 'sk-user' } });
+  });
+
+  test('persistUserPatch: merges over the STORED row, not the in-memory merged section', () => {
+    saveUserSection('tts', { enabled: false, elevenlabs: { api_key: 'el-key' } });
+    // Patch omitting the key (GET redacts it) keeps the stored one; the
+    // DEFAULT_CONFIG fills (provider/voice/rate) never appear in the row.
+    persistUserPatch('tts', { enabled: true, elevenlabs: { voice_id: 'v-2' } });
+    expect(loadUserSection('tts')).toEqual({
+      enabled: true,
+      elevenlabs: { api_key: 'el-key', voice_id: 'v-2' },
+    });
+  });
+
+  test('persistUserPatch: an explicit provider in the patch is recorded as intent', () => {
+    persistUserPatch('tts', { enabled: true, provider: 'edge', voice: 'en-GB-SoniaNeural' });
+    expect(loadUserSection('tts')).toEqual({ enabled: true, provider: 'edge', voice: 'en-GB-SoniaNeural' });
+
+    persistUserPatch('stt', { provider: 'usejarvis' });
+    expect(loadUserSection('stt')).toEqual({ provider: 'usejarvis' });
+  });
+
+  test('persistUserPatch: notifies the section-saved listener (hot-reload choke point)', () => {
+    const events: string[] = [];
+    setSectionSavedListener((section) => events.push(section));
+    persistUserPatch('stt', { provider: 'groq' });
+    persistUserPatch('tts', { enabled: true });
+    expect(events).toEqual(['stt', 'tts']);
   });
 
   test('end to end: legacy file -> import -> discard -> merge equals old behavior', async () => {

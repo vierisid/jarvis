@@ -398,7 +398,12 @@ export function OnboardingWizard({
   const saveSetup = useCallback(async () => {
     setBusy(true); setError(null);
     try {
-      const ttsBlock: Record<string, unknown> = { enabled: tts !== "off", provider: tts === "off" ? "edge" : tts };
+      // "No voice" sends NO provider field: declining the voice step is not
+      // a provider choice, and stamping 'edge' would permanently mark the
+      // user as having chosen (hosted installs would then never default to
+      // the included Usejarvis AI voice when TTS is enabled later).
+      const ttsBlock: Record<string, unknown> = { enabled: tts !== "off" };
+      if (tts !== "off") ttsBlock.provider = tts;
       if (tts === "edge") { ttsBlock.voice = edgeVoice; ttsBlock.rate = "+0%"; }
       else if (tts === "elevenlabs") ttsBlock.elevenlabs = { api_key: elevenKey, voice_id: elevenVoice, model: elevenModel };
 

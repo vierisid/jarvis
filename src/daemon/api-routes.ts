@@ -1368,7 +1368,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           //    daemon kill (or crash) between them persisted setup HALF-done
           //    — TTS saved but the completion flag lost — and the user was
           //    funneled back into onboarding on the next boot.
-          const { saveUserSection } = await import('./user-settings.ts');
+          const { saveUserSection, persistUserPatch } = await import('./user-settings.ts');
           const { mergeSTTConfig, mergeTTSConfig } = await import('./config-merge.ts');
           // Everything is merged into LOCALS and published to ctx.config only
           // after all three saves succeeded. saveUserSection throws when the
@@ -1390,8 +1390,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           // keychain failure throws out of here, and the flag not being written
           // is what we want — setup did not succeed, so the wizard must run
           // again rather than leave the user with a "done" marker and no key.
-          if (stt) saveUserSection('stt', stt);
-          if (tts) saveUserSection('tts', tts);
+          //
+          // Persist the wizard's PATCHES over the stored rows (not the merged
+          // sections): a declined voice step ({enabled:false} with no
+          // provider) must not stamp the DEFAULT provider into the row, or
+          // every onboarded hosted install would read as "explicitly chose
+          // Edge" and never get the included Usejarvis AI default.
+          if (body.stt) persistUserPatch('stt', body.stt);
+          if (body.tts) persistUserPatch('tts', body.tts);
           saveUserSection('onboarding', onboarding);
           if (stt) ctx.config.stt = stt;
           if (tts) ctx.config.tts = tts;
@@ -2494,7 +2500,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         try {
           const body = await req.json() as Record<string, unknown>;
-          const { saveUserSection } = await import('./user-settings.ts');
+          const { persistUserPatch } = await import('./user-settings.ts');
           const { mergeSTTConfig } = await import('./config-merge.ts');
 
           // Validate before anything persists: an unknown provider (or
@@ -2516,11 +2522,16 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           // settings row, the exact leak the credential split exists to stop.
           delete body.usejarvis;
 
-          // Merged locally, published only once the save succeeded — see the
-          // channels route: a throwing keychain must not leave the live config
-          // holding a key the API reported as rejected.
+          // Merged locally and published only once the save succeeded (a
+          // throwing keychain must not leave the live config holding a key the
+          // API reported as rejected), but what gets PERSISTED is the request
+          // patch, not the merged section: the merge carries DEFAULT_CONFIG
+          // fills, and storing those would stamp a provider choice the user
+          // never made and permanently defeat the hosted-default silence
+          // detection. Appliers run on a scheduled tick, so they observe the
+          // published config below rather than this frame.
           const merged = mergeSTTConfig(ctx.config.stt, body);
-          saveUserSection('stt', merged);
+          persistUserPatch('stt', body);
           ctx.config.stt = merged;
 
           if (!ctx.settingsReload) {
@@ -2570,11 +2581,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         try {
           const body = await req.json() as Record<string, unknown>;
-          const { saveUserSection } = await import('./user-settings.ts');
+          const { persistUserPatch } = await import('./user-settings.ts');
           const { mergeTTSConfig } = await import('./config-merge.ts');
 
+          // Same discipline as /api/config/stt POST above.
           const merged = mergeTTSConfig(ctx.config.tts, body);
-          saveUserSection('tts', merged);
+          persistUserPatch('tts', body);
           ctx.config.tts = merged;
 
           // Hot-reload TTS provider if wsService available
@@ -2720,7 +2732,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             // Hosted preview: no key in the body — the factory gets the
             // system-owned proxy credentials as its separate argument below.
             if (!hasUsejarvisAi(ctx.config)) return error('Usejarvis AI is not available on this install.', 400);
-            if (typeof body.voice === 'string' && body.voice) cfg.voice = body.voice;
+            if (typeof body.voice === 'string' && body.voice) {
+              // Reject Edge neural names outright instead of letting the
+              // factory silently preview 'alloy' — the sample the user hears
+              // must be the voice they asked for.
+              if (/Neural$/i.test(body.voice)) {
+                return error(`"${body.voice}" is an Edge TTS voice — Usejarvis AI uses OpenAI-style voices (e.g. alloy).`, 400);
+              }
+              cfg.voice = body.voice;
+            }
           } else {
             cfg.voice = body.voice || 'en-US-AriaNeural';
           }

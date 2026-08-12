@@ -10,6 +10,7 @@ import {
   UsejarvisTTS,
   EdgeTTSProvider,
   SarvamTTSProvider,
+  sniffAudioFormat,
   splitIntoSentences,
   sniffAudioFormat,
 } from './voice.ts';
@@ -35,7 +36,7 @@ function makeWavBuffer(pcmBytes = 100): Buffer {
   return buf;
 }
 
-/** Build a buffer with an OGG page header (what Telegram voice notes carry). */
+/** Build a minimal OGG-page-prefixed buffer (Telegram voice-note container). */
 function makeOggBuffer(payloadBytes = 64): Buffer {
   const buf = Buffer.alloc(4 + payloadBytes);
   buf.write('OggS', 0, 'ascii');
