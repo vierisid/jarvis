@@ -15,11 +15,25 @@
  *
  * Layout: one settings row per section, key `cfg.<section>`, value JSON.
  *
+ * Secrets are the one exception to "the row holds the section": the settings
+ * table is plaintext, so the `stt`/`tts` API keys are split out to the
+ * encrypted keychain on the way in and injected back on the way out (see
+ * voice-secrets.ts) — the same treatment llm-settings.ts gives provider keys.
+ *
  * Requires the vault DB (initDatabase) to be open, same as llm-settings.
  */
 
+import { createHash } from 'node:crypto';
 import { getSetting, setSetting } from '../vault/settings.ts';
 import { deepMerge } from '../config/loader.ts';
+import {
+  VOICE_SECRET_SECTIONS,
+  hasInlineVoiceSecret,
+  injectVoiceSecrets,
+  isVoiceSecretSection,
+  persistVoiceSecrets,
+  stripVoiceSecrets,
+} from './voice-secrets.ts';
 import {
   DEFAULT_CONFIG,
   USER_OWNED_SECTIONS,
@@ -63,12 +77,29 @@ function notifySectionSaved(section: UserOwnedSection | 'google'): void {
  * then persist that section — the write is per-section, so there is no
  * load-modify-save race across unrelated sections (which is what the old
  * `loadConfig -> mutate -> saveConfig` dance existed to avoid).
+ *
+ * The `stt`/`tts` sections carry API keys. The settings table is plaintext,
+ * so those keys go to the encrypted keychain and the row is written stripped —
+ * same split llm-settings.ts uses for provider credentials. Callers always
+ * pass the live in-memory section (which mergeUserSettingsIntoConfig hydrated
+ * with the stored keys), so nothing is lost by the round-trip.
+ *
+ * THROWS when the keychain write fails. Writing the stripped row anyway would
+ * destroy the key — absent from the keychain, erased from the row — and report
+ * success while doing it. Failing leaves both stores exactly as they were.
  */
 export function saveUserSection<K extends UserOwnedSection>(
   section: K,
   value: JarvisConfig[K],
 ): void {
-  setSetting(settingKey(section), JSON.stringify(value ?? null));
+  let stored: unknown = value;
+  if (isVoiceSecretSection(section)) {
+    if (!persistVoiceSecrets(section, value)) {
+      throw new Error(`Could not store the ${section} API key(s) in the encrypted keychain; ${section} settings were NOT saved`);
+    }
+    stored = stripVoiceSecrets(section, value);
+  }
+  setSetting(settingKey(section), JSON.stringify(stored ?? null));
   notifySectionSaved(section);
 }
 
@@ -87,6 +118,22 @@ export function loadUserSection(section: UserOwnedSection): unknown {
 
 /** Meta row remembering the file value each section was last imported from. */
 const IMPORT_STATE_KEY = 'cfg.__import_state';
+
+const DIGEST_PREFIX = 'sha256:';
+
+/**
+ * Change-tracking marker for a section's file value. For the API-key-bearing
+ * sections it is a digest rather than the JSON itself: the import-state row
+ * lives in the same plaintext settings table, and mirroring a config.yaml
+ * credential there would undo the keychain split. Rows written before this
+ * hold the raw JSON; importLegacyUserSettings upgrades them in place, which
+ * keeps change detection intact (same input, same digest). A stored JSON value
+ * always starts with `{`, so it can never collide with the digest prefix.
+ */
+function importMarker(section: UserOwnedSection, fileJson: string): string {
+  if (!isVoiceSecretSection(section)) return fileJson;
+  return `${DIGEST_PREFIX}${createHash('sha256').update(fileJson).digest('hex')}`;
+}
 
 function loadImportState(): Record<string, string> {
   const raw = getSetting(IMPORT_STATE_KEY);
@@ -120,22 +167,49 @@ export function importLegacyUserSettings(rawYaml: Record<string, unknown> | null
   const state = loadImportState();
   let stateChanged = false;
 
+  // Normalize pre-digest baselines for the key-bearing sections BEFORE the
+  // loop: their raw JSON may itself be a config.yaml credential, and a section
+  // the user has since deleted from the file is never reached below — the
+  // plaintext would sit in this row forever.
+  for (const section of VOICE_SECRET_SECTIONS) {
+    const raw = state[section];
+    if (raw === undefined || raw.startsWith(DIGEST_PREFIX)) continue;
+    state[section] = importMarker(section, raw);
+    stateChanged = true;
+  }
+
   for (const section of USER_OWNED_SECTIONS) {
     const fileValue = rawYaml[section];
     if (fileValue === undefined || fileValue === null) continue;
     const fileJson = JSON.stringify(fileValue);
+    const marker = importMarker(section, fileJson);
     const hasDbValue = getSetting(settingKey(section)) !== null;
     const lastImported = state[section];
 
     if (hasDbValue && lastImported === undefined) {
-      state[section] = fileJson; // baseline only
+      state[section] = marker; // baseline only
       stateChanged = true;
       continue;
     }
-    if (hasDbValue && fileJson === lastImported) continue;
+    if (hasDbValue && lastImported === marker) continue;
 
-    setSetting(settingKey(section), fileJson);
-    state[section] = fileJson;
+    if (isVoiceSecretSection(section)) {
+      // The file value is authoritative for the whole section, exactly as the
+      // raw setSetting below: keys move to the keychain, the row is stripped.
+      // A failed keychain write skips the section entirely (no marker either),
+      // so the next boot retries instead of importing a key-less section.
+      if (!persistVoiceSecrets(section, fileValue)) {
+        console.error(`[UserSettings] Keychain write failed — skipping the ${section} import from config.yaml (will retry on the next boot)`);
+        continue;
+      }
+      setSetting(settingKey(section), JSON.stringify(stripVoiceSecrets(section, fileValue)));
+      if (hasInlineVoiceSecret(section, fileValue)) {
+        console.log(`[UserSettings] Imported ${section} API key(s) from config.yaml into the encrypted keychain — the plaintext key can be removed from the file`);
+      }
+    } else {
+      setSetting(settingKey(section), fileJson);
+    }
+    state[section] = marker;
     stateChanged = true;
     imported.push(section);
   }
@@ -151,11 +225,18 @@ export function importLegacyUserSettings(rawYaml: Record<string, unknown> | null
  *
  * Call AFTER loadConfig (which discarded any file-provided user sections)
  * and re-apply env overrides afterwards if env must win (the daemon does).
+ *
+ * STT/TTS API keys are pulled from the encrypted keychain and injected back
+ * into their sub-blocks, so consumers keep reading `config.stt.openai.api_key`
+ * without knowing where it is stored.
  */
 export function mergeUserSettingsIntoConfig(config: JarvisConfig): void {
+  migratePlaintextVoiceSecrets();
+  const hasStoredRow = new Set<string>();
   for (const section of USER_OWNED_SECTIONS) {
     const stored = loadUserSection(section);
     if (stored === undefined) continue;
+    hasStoredRow.add(section);
     const def = (DEFAULT_CONFIG as Record<string, unknown>)[section];
     const target = config as Record<string, unknown>;
     // `workflows` system path keys are FILE-owned (loadConfig preserved them
@@ -181,7 +262,43 @@ export function mergeUserSettingsIntoConfig(config: JarvisConfig): void {
       target[section] = { ...(target[section] as object), ...filePaths };
     }
   }
+  // Inject stored keys only into sections that actually have a settings row.
+  // Every path that stores a key writes one (save, import, migration), so a
+  // secret without a row is an orphan - e.g. a default backup (DB only, no
+  // keychain) restored onto a machine whose keychain holds another install's
+  // keys. Grafting those onto the restored config would silently hand the
+  // user a credential their settings never referenced.
+  const target = config as Record<string, unknown>;
+  for (const section of VOICE_SECRET_SECTIONS) {
+    if (!hasStoredRow.has(section)) continue;
+    target[section] = injectVoiceSecrets(section, target[section]);
+  }
   mergeGoogleSettingsIntoConfig(config);
+}
+
+/**
+ * Upgrade path for installs written before the keychain split: move any
+ * api_key still sitting in a plaintext `cfg.stt` / `cfg.tts` row into the
+ * keychain and rewrite the row stripped. Idempotent and cheap (two rows), so
+ * it runs on every hydration — including SettingsReloadCoordinator.reloadAll,
+ * which is what a restore-from-backup of an older DB goes through.
+ */
+function migratePlaintextVoiceSecrets(): void {
+  for (const section of VOICE_SECRET_SECTIONS) {
+    const stored = loadUserSection(section);
+    if (!hasInlineVoiceSecret(section, stored)) continue;
+    // The row predates the split, so it is the authority for the whole
+    // section: persist every key it carries, drop stale ones.
+    if (!persistVoiceSecrets(section, stored)) {
+      // Keep the plaintext row rather than strip a key the keychain never
+      // took: a working (if unencrypted) credential beats a destroyed one.
+      // The next hydration retries.
+      console.error(`[UserSettings] Keychain write failed — leaving the plaintext ${section} API key(s) in the settings table for now`);
+      continue;
+    }
+    setSetting(settingKey(section), JSON.stringify(stripVoiceSecrets(section, stored)));
+    console.log(`[UserSettings] Moved plaintext ${section} API key(s) from the settings table into the encrypted keychain`);
+  }
 }
 
 // ── google: system-owned when the FILE provides it ─────────────────────────

@@ -1,4 +1,7 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import { getSetting, setSetting } from '../vault/settings.ts';
 import { loadConfig } from '../config/loader.ts';
@@ -17,13 +20,24 @@ function freshConfig(): JarvisConfig {
 }
 
 describe('user-settings', () => {
+  // stt/tts saves reach the keychain (see voice-secrets.ts) — redirect it to a
+  // throwaway dir so tests never touch the developer's real secrets store.
+  let secretsDir: string;
+  let prevSecretsDir: string | undefined;
+
   beforeEach(() => {
+    prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-user-settings-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
     initDatabase(':memory:');
   });
 
   afterEach(() => {
     setSectionSavedListener(null);
     closeDb();
+    if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
+    rmSync(secretsDir, { recursive: true, force: true });
   });
 
   test('workflows: file-provided SYSTEM path keys win over a saved user section', () => {

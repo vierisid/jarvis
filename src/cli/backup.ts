@@ -18,9 +18,16 @@
  *
  * `--full` additionally includes the plaintext secrets: google-tokens.json,
  * the sidecar signing keys, and the keychain pair (.secrets.enc/.secrets.key)
- * that holds the LLM provider credentials — so a restore works without
- * re-connecting anything. That is the variant hosting backups use; the
- * default keeps the archive far less sensitive for user-facing downloads.
+ * that holds the LLM provider credentials and the STT/TTS API keys — so a
+ * restore works without re-connecting anything. That is the variant hosting
+ * backups use; the default keeps the archive far less sensitive for
+ * user-facing downloads (the DB it carries has no API key in it).
+ *
+ * CAVEAT, and the reason for the legacy-root warning further down: the
+ * keychain always lives in ~/.jarvis, so on an install whose data_dir points
+ * elsewhere (JARVIS_HOME) it is NOT under the staged tree and even `--full`
+ * comes back without any API key. Every credential now rides in that pair —
+ * nothing key-shaped is left in the DB to soften the landing.
  *
  * Restore is stop-before-restore: it acquires the daemon's own flock (which
  * is JARVIS_HOME-aware, same resolution the daemon uses) plus the data dir's,

@@ -12,18 +12,37 @@ import { constants as fsConstants, existsSync, readFileSync, mkdirSync, chmodSyn
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 
-const JARVIS_DIR = join(homedir(), '.jarvis');
-const KEY_PATH = join(JARVIS_DIR, '.secrets.key');
-const SECRETS_PATH = join(JARVIS_DIR, '.secrets.enc');
 const ALGORITHM = 'aes-256-gcm';
 const IV_LENGTH = 12;
 const TAG_LENGTH = 16;
 
+/**
+ * Directory holding the keychain pair. Resolved per call, not at module load,
+ * so `JARVIS_SECRETS_DIR` can redirect it — a seam for tests, which must never
+ * write into the developer's real store.
+ *
+ * Deliberately NOT JARVIS_HOME-aware: hosted deployments set that variable and
+ * their existing secrets live in ~/.jarvis, so honoring it here would move the
+ * keychain out from under them on upgrade.
+ */
+function jarvisDir(): string {
+  return process.env.JARVIS_SECRETS_DIR || join(homedir(), '.jarvis');
+}
+
+function keyPath(): string {
+  return join(jarvisDir(), '.secrets.key');
+}
+
+function secretsPath(): string {
+  return join(jarvisDir(), '.secrets.enc');
+}
+
 function ensureDir(): void {
-  mkdirSync(JARVIS_DIR, { recursive: true, mode: 0o700 });
-  try { chmodSync(JARVIS_DIR, 0o700); } catch (err) {
+  const dir = jarvisDir();
+  mkdirSync(dir, { recursive: true, mode: 0o700 });
+  try { chmodSync(dir, 0o700); } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.warn(`[Keychain] Failed to chmod ${JARVIS_DIR} to 700: ${message}`);
+    console.warn(`[Keychain] Failed to chmod ${dir} to 700: ${message}`);
   }
 }
 
@@ -47,12 +66,13 @@ function writeSecretFileSync(path: string, data: string | Buffer, mode: number):
 
 function getOrCreateKey(): Buffer {
   ensureDir();
-  if (existsSync(KEY_PATH)) {
-    const hex = readFileSync(KEY_PATH, 'utf-8').trim();
+  const path = keyPath();
+  if (existsSync(path)) {
+    const hex = readFileSync(path, 'utf-8').trim();
     return Buffer.from(hex, 'hex');
   }
   const key = randomBytes(32);
-  writeSecretFileSync(KEY_PATH, key.toString('hex'), 0o600);
+  writeSecretFileSync(path, key.toString('hex'), 0o600);
   return key;
 }
 
@@ -74,10 +94,10 @@ function decrypt(key: Buffer, data: Buffer): string {
 }
 
 function loadSecrets(): Record<string, string> {
-  if (!existsSync(SECRETS_PATH)) return {};
+  if (!existsSync(secretsPath())) return {};
   try {
     const key = getOrCreateKey();
-    const raw = readFileSync(SECRETS_PATH);
+    const raw = readFileSync(secretsPath());
     const json = decrypt(key, raw);
     return JSON.parse(json);
   } catch (err) {
@@ -91,7 +111,7 @@ function saveSecrets(secrets: Record<string, string>): void {
   const key = getOrCreateKey();
   const json = JSON.stringify(secrets);
   const encrypted = encrypt(key, json);
-  writeSecretFileSync(SECRETS_PATH, encrypted, 0o600);
+  writeSecretFileSync(secretsPath(), encrypted, 0o600);
 }
 
 export function getSecret(name: string): string | null {
@@ -103,6 +123,30 @@ export function setSecret(name: string, value: string): void {
   const secrets = loadSecrets();
   secrets[name] = value;
   saveSecrets(secrets);
+}
+
+/**
+ * Apply several writes in ONE decrypt/encrypt pass; `null` deletes the entry.
+ * Callers that persist a group of related credentials (e.g. every API key of a
+ * config section) should prefer this over N setSecret calls: each of those
+ * rewrites the whole file, and a crash midway would leave the group half
+ * applied. No-ops when every entry already has the requested value.
+ */
+export function setSecrets(entries: Record<string, string | null>): void {
+  const secrets = loadSecrets();
+  let changed = false;
+  for (const [name, value] of Object.entries(entries)) {
+    if (value === null) {
+      if (name in secrets) {
+        delete secrets[name];
+        changed = true;
+      }
+    } else if (secrets[name] !== value) {
+      secrets[name] = value;
+      changed = true;
+    }
+  }
+  if (changed) saveSecrets(secrets);
 }
 
 export function deleteSecret(name: string): void {

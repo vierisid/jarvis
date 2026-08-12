@@ -1,4 +1,7 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import { setSetting } from '../vault/settings.ts';
 import { DEFAULT_CONFIG, type JarvisConfig } from '../config/types.ts';
@@ -12,12 +15,23 @@ function freshConfig(): JarvisConfig {
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
 describe('settings-reload', () => {
+  // reloadAll hydrates stt/tts, which moves any api_key in those rows into the
+  // keychain — redirect it to a throwaway dir, never the real secrets store.
+  let secretsDir: string;
+  let prevSecretsDir: string | undefined;
+
   beforeEach(() => {
+    prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-settings-reload-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
     initDatabase(':memory:');
   });
 
   afterEach(() => {
     closeDb();
+    if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
+    rmSync(secretsDir, { recursive: true, force: true });
   });
 
   test('sectionChanged runs the applier with the live config', async () => {
