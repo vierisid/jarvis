@@ -1485,16 +1485,28 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // persists via the DB settings store; the saveUserSection choke-point
       // hook then runs the stt/tts appliers (pebble + dashboard providers),
       // so the next response uses the new setting without a daemon restart.
-      const applyTTSEnabled = async (enabled: boolean): Promise<void> => {
+      // Both appliers persist BEFORE mutating jarvisConfig and report failure
+      // instead of throwing: saveUserSection throws when the keychain refuses a
+      // credential, and an exception here would abort the whole response cycle
+      // — the user would get silence instead of an answer.
+      const applyTTSEnabled = async (enabled: boolean): Promise<boolean> => {
         const { saveUserSection } = await import('./user-settings.ts');
-        if (!jarvisConfig.tts) jarvisConfig.tts = { enabled, provider: 'edge' };
-        else jarvisConfig.tts.enabled = enabled;
-        saveUserSection('tts', jarvisConfig.tts);
+        const next = jarvisConfig.tts
+          ? { ...jarvisConfig.tts, enabled }
+          : { enabled, provider: 'edge' as const };
+        try {
+          saveUserSection('tts', next);
+        } catch (err) {
+          console.error('[ambient-ui] Could not save the TTS setting:', err);
+          return false;
+        }
+        jarvisConfig.tts = next;
         // Await the applier (vs the save hook's scheduled run) so pebbleTTS
         // is already rebuilt when the confirmation reply is spoken — "turn
         // on text to speech" must be audible in the SAME response cycle.
         await settingsReload?.applyNow('tts');
         console.log(`[ambient-ui] TTS ${enabled ? 'enabled' : 'disabled'} via voice command`);
+        return true;
       };
 
       const applySTTProvider = async (provider: 'openai' | 'groq' | 'sarvam' | 'local'): Promise<boolean> => {
@@ -1508,8 +1520,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           return !!sub?.api_key;
         })();
         if (!hasKey) return false;
-        jarvisConfig.stt.provider = provider;
-        saveUserSection('stt', jarvisConfig.stt);
+        const next = { ...jarvisConfig.stt, provider };
+        try {
+          saveUserSection('stt', next);
+        } catch (err) {
+          console.error('[ambient-ui] Could not save the STT provider:', err);
+          return false;
+        }
+        jarvisConfig.stt = next;
         // Deterministic swap: the next transcription must already use the
         // new provider when we confirm the switch to the user.
         await settingsReload?.applyNow('stt');
@@ -1691,15 +1709,23 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const ttsOff = /\b(turn off|disable|switch off|deactivate)\s+(?:the\s+)?(text[- ]to[- ]speech|tts|voice (?:output|response)?|speech|tts response)\b/.test(t);
         const ttsOn  = /\b(turn on|enable|switch on|activate|reactivate)\s+(?:the\s+)?(text[- ]to[- ]speech|tts|voice (?:output|response)?|speech|tts response)\b/.test(t);
         if (ttsOff) {
-          await applyTTSEnabled(false);
+          const ok = await applyTTSEnabled(false);
           // Speak the confirmation BEFORE shutting TTS down — temp
           // restore a one-shot provider so the user hears acknowledgment.
-          await speakConfirmation(sidecarId, "Text-to-speech turned off.", ctrl);
+          await speakConfirmation(
+            sidecarId,
+            ok ? "Text-to-speech turned off." : "I couldn't save that setting.",
+            ctrl,
+          );
           return true;
         }
         if (ttsOn) {
-          await applyTTSEnabled(true);
-          await speakConfirmation(sidecarId, "Text-to-speech turned on.", ctrl);
+          const ok = await applyTTSEnabled(true);
+          await speakConfirmation(
+            sidecarId,
+            ok ? "Text-to-speech turned on." : "I couldn't save that setting.",
+            ctrl,
+          );
           return true;
         }
 
@@ -1719,7 +1745,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             sidecarId,
             ok
               ? `Switched transcription to ${target}.`
-              : `I can't switch to ${target} — it doesn't have an API key configured.`,
+              : `I couldn't switch to ${target} — it may not have an API key configured.`,
             ctrl,
           );
           return true;

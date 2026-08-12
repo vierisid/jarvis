@@ -1345,34 +1345,32 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           //    funneled back into onboarding on the next boot.
           const { saveUserSection } = await import('./user-settings.ts');
           const { mergeSTTConfig, mergeTTSConfig } = await import('./config-merge.ts');
-          const fresh = ctx.config;
-          if (body.stt) {
-            // Mirrors /api/config/stt POST semantics. The saveUserSection
-            // below triggers the stt hot-reload applier.
-            fresh.stt = mergeSTTConfig(fresh.stt, body.stt);
-          }
-          if (body.tts) {
-            fresh.tts = mergeTTSConfig(fresh.tts, body.tts);
-          }
+          // Everything is merged into LOCALS and published to ctx.config only
+          // after all three saves succeeded. saveUserSection throws when the
+          // keychain refuses a key, and a half-published config would leave the
+          // running daemon reporting setup as complete (GET /api/onboarding/
+          // status reads ctx.config) with no key stored.
+          const stt = body.stt ? mergeSTTConfig(ctx.config.stt, body.stt) : undefined;
+          const tts = body.tts ? mergeTTSConfig(ctx.config.tts, body.tts) : undefined;
           const now = Date.now();
-          fresh.onboarding = {
+          const onboarding = {
             setup_completed_at: now,
-            tutorial_completed_at: fresh.onboarding?.tutorial_completed_at ?? null,
-            setup_skipped_profile: fresh.onboarding?.setup_skipped_profile,
-            tutorial_dismissed_at: fresh.onboarding?.tutorial_dismissed_at,
-            tutorial_progress_step: fresh.onboarding?.tutorial_progress_step,
-            last_reset_at: fresh.onboarding?.last_reset_at,
+            tutorial_completed_at: ctx.config.onboarding?.tutorial_completed_at ?? null,
+            setup_skipped_profile: ctx.config.onboarding?.setup_skipped_profile,
+            tutorial_dismissed_at: ctx.config.onboarding?.tutorial_dismissed_at,
+            tutorial_progress_step: ctx.config.onboarding?.tutorial_progress_step,
+            last_reset_at: ctx.config.onboarding?.last_reset_at,
           };
           // Credential-bearing sections first, the completion flag LAST: a
           // keychain failure throws out of here, and the flag not being written
           // is what we want — setup did not succeed, so the wizard must run
           // again rather than leave the user with a "done" marker and no key.
-          if (body.stt) saveUserSection('stt', fresh.stt);
-          if (body.tts) saveUserSection('tts', fresh.tts);
-          saveUserSection('onboarding', fresh.onboarding);
-          if (body.stt) ctx.config.stt = fresh.stt;
-          if (body.tts) ctx.config.tts = fresh.tts;
-          ctx.config.onboarding = fresh.onboarding;
+          if (stt) saveUserSection('stt', stt);
+          if (tts) saveUserSection('tts', tts);
+          saveUserSection('onboarding', onboarding);
+          if (stt) ctx.config.stt = stt;
+          if (tts) ctx.config.tts = tts;
+          ctx.config.onboarding = onboarding;
 
           // 3. Hot-reload the TTS provider when possible so the post-setup
           //    "Welcome to Jarvis" reply is spoken immediately.
@@ -2191,25 +2189,27 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         try {
           const body = await req.json() as Record<string, unknown>;
           const { saveUserSection } = await import('./user-settings.ts');
-          const freshConfig = ctx.config;
 
-          if (!freshConfig.channels) freshConfig.channels = {};
-
+          // Merge into a LOCAL copy: saveUserSection throws when the keychain
+          // refuses the token, and mutating ctx.config first would leave the
+          // running daemon holding a credential the API just reported as not
+          // saved (GET would answer has_token: true) until the next restart.
+          const merged: NonNullable<JarvisConfig['channels']> = { ...ctx.config.channels };
           if (body.telegram && typeof body.telegram === 'object') {
-            freshConfig.channels.telegram = {
-              ...freshConfig.channels.telegram,
+            merged.telegram = {
+              ...merged.telegram,
               ...(body.telegram as Record<string, unknown>),
             } as any;
           }
           if (body.discord && typeof body.discord === 'object') {
-            freshConfig.channels.discord = {
-              ...freshConfig.channels.discord,
+            merged.discord = {
+              ...merged.discord,
               ...(body.discord as Record<string, unknown>),
             } as any;
           }
 
-          saveUserSection('channels', freshConfig.channels);
-          ctx.config.channels = freshConfig.channels;
+          saveUserSection('channels', merged);
+          ctx.config.channels = merged;
 
           if (!ctx.settingsReload) {
             return json({ ok: true, message: 'Channel config saved. Restart to apply (hot reload unavailable).' });
@@ -2243,11 +2243,13 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const body = await req.json() as Record<string, unknown>;
           const { saveUserSection } = await import('./user-settings.ts');
           const { mergeSTTConfig } = await import('./config-merge.ts');
-          const freshConfig = ctx.config;
 
-          freshConfig.stt = mergeSTTConfig(freshConfig.stt, body);
-          saveUserSection('stt', freshConfig.stt);
-          ctx.config.stt = freshConfig.stt;
+          // Merged locally, published only once the save succeeded — see the
+          // channels route: a throwing keychain must not leave the live config
+          // holding a key the API reported as rejected.
+          const merged = mergeSTTConfig(ctx.config.stt, body);
+          saveUserSection('stt', merged);
+          ctx.config.stt = merged;
 
           if (!ctx.settingsReload) {
             return json({ ok: true, message: 'STT config saved. Restart to apply (hot reload unavailable).' });
@@ -2293,16 +2295,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const body = await req.json() as Record<string, unknown>;
           const { saveUserSection } = await import('./user-settings.ts');
           const { mergeTTSConfig } = await import('./config-merge.ts');
-          const freshConfig = ctx.config;
 
-          freshConfig.tts = mergeTTSConfig(freshConfig.tts, body);
-          saveUserSection('tts', freshConfig.tts);
-          ctx.config.tts = freshConfig.tts;
+          const merged = mergeTTSConfig(ctx.config.tts, body);
+          saveUserSection('tts', merged);
+          ctx.config.tts = merged;
 
           // Hot-reload TTS provider if wsService available
-          if (ctx.wsService && freshConfig.tts) {
+          if (ctx.wsService && merged) {
             const { createTTSProvider } = await import('../comms/voice.ts');
-            const provider = createTTSProvider(freshConfig.tts);
+            const provider = createTTSProvider(merged);
             if (provider) {
               ctx.wsService.setTTSProvider(provider);
             }

@@ -338,6 +338,7 @@ describe('section secrets (stt/tts keys, channel tokens)', () => {
       config: freshConfig(),
     } as unknown as ApiContext;
     const route = createApiRoutes(ctx)['/api/config/channels'] as {
+      GET: () => Response;
       POST: (req: Request) => Promise<Response>;
     };
 
@@ -350,6 +351,11 @@ describe('section secrets (stt/tts keys, channel tokens)', () => {
     expect(res.status).toBe(500);
     expect(await res.json()).toMatchObject({ ok: false });
     expect(rawRow('channels')).toBe('');
+    // ...and the rejected token is not left in the live config either: the API
+    // said it was not saved, so nothing may report it as present or persist it
+    // on a later save of the same section.
+    expect(ctx.config.channels?.telegram?.bot_token).toBeFalsy();
+    expect(await route.GET().json()).toMatchObject({ telegram: { has_token: false } });
   });
 
   test('import: a pre-digest baseline row is upgraded without re-importing', () => {
