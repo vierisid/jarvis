@@ -71,7 +71,61 @@ export interface ExecuteFlowOptions {
   executionState?: { steps: Record<string, unknown>; tags?: string[] };
 }
 
-const DEFAULT_TIMEOUT_S = 600;
+/**
+ * Per-operation budget handed to the engine. The engine itself does NOT
+ * enforce this (upstream relies on its worker killing the sandbox); it is
+ * the daemon that must hold the deadline. `EngineHandle` derives the RPC ack
+ * timeout from whatever value ends up on the operation, so this constant is
+ * the single knob that bounds how long a flow may run.
+ *
+ * Override via `JARVIS_WORKFLOW_FLOW_TIMEOUT_SECONDS` for deployments that
+ * want to fail long flows sooner (or allow longer ones).
+ */
+export const DEFAULT_TIMEOUT_S = parsePositiveIntEnv(
+  process.env["JARVIS_WORKFLOW_FLOW_TIMEOUT_SECONDS"],
+  600,
+);
+
+function parsePositiveIntEnv(raw: string | undefined, fallback: number): number {
+  if (!raw) return fallback;
+  const n = parseInt(raw, 10);
+  return Number.isFinite(n) && n > 0 ? n : fallback;
+}
+
+/**
+ * Slack added on top of an operation's `timeoutInSeconds` when deriving the
+ * RPC ack deadline. The engine needs a little room past the flow's own budget
+ * to serialize the final execution state, PUT the zstd log backup, and send
+ * the terminal `uploadRunLog` before it replies to EXECUTE_FLOW. Waiting
+ * exactly `timeoutInSeconds` would race that tail and abandon runs that were
+ * about to report success.
+ */
+export const ENGINE_ACK_MARGIN_MS = 30_000;
+
+/**
+ * Budget for the control-plane operations -- trigger hooks and piece-metadata
+ * extraction. These are short by nature (register a webhook, poll a trigger,
+ * import a piece module), and they sit on latency-sensitive paths: a stuck
+ * poll blocks that flow's polling for the whole budget, and extraction is
+ * already bounded daemon-side at 10s per piece by `buildPieceCatalog`.
+ *
+ * Kept separate from the flow budget on purpose. Flows legitimately run for
+ * minutes; hooks that take minutes are hung, and waiting out a flow-sized
+ * deadline for them would trade one stall for another.
+ */
+export const CONTROL_OPERATION_TIMEOUT_S = 60;
+
+/**
+ * The ack deadline for an operation envelope: the budget we told the engine,
+ * plus the flush margin. Falls back to the default budget when an operation
+ * carries no explicit `timeoutInSeconds` (never the case for the builders
+ * here, but callers may hand-roll envelopes).
+ */
+export function ackTimeoutMsForOperation(envelope: EngineOperationEnvelope): number {
+  const raw = envelope.operation["timeoutInSeconds"];
+  const seconds = typeof raw === "number" && Number.isFinite(raw) && raw > 0 ? raw : DEFAULT_TIMEOUT_S;
+  return seconds * 1000 + ENGINE_ACK_MARGIN_MS;
+}
 
 export function buildExecuteFlowOperation(opts: ExecuteFlowOptions): EngineOperationEnvelope {
   const executionType = opts.executionType ?? "BEGIN";
@@ -141,7 +195,7 @@ export function buildExtractPieceMetadataOperation(
       engineToken: opts.engineToken,
       internalApiUrl: ensureTrailingSlash(opts.internalApiUrl),
       publicApiUrl: ensureApiSuffix(opts.publicApiUrl ?? opts.internalApiUrl),
-      timeoutInSeconds: opts.timeoutInSeconds ?? DEFAULT_TIMEOUT_S,
+      timeoutInSeconds: opts.timeoutInSeconds ?? CONTROL_OPERATION_TIMEOUT_S,
     },
   };
 }
@@ -191,7 +245,7 @@ export function buildExecuteTriggerHookOperation(
     engineToken: opts.engineToken,
     internalApiUrl: ensureTrailingSlash(opts.internalApiUrl),
     publicApiUrl: ensureApiSuffix(opts.publicApiUrl ?? opts.internalApiUrl),
-    timeoutInSeconds: opts.timeoutInSeconds ?? DEFAULT_TIMEOUT_S,
+    timeoutInSeconds: opts.timeoutInSeconds ?? CONTROL_OPERATION_TIMEOUT_S,
     webhookUrl: opts.webhookUrl ?? "",
   };
   if (opts.triggerPayload !== undefined) op.triggerPayload = opts.triggerPayload;

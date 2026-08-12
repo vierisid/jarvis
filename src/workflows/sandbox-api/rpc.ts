@@ -58,14 +58,34 @@ const NON_RPC_KEYS: ReadonlySet<string | symbol> = new Set<string | symbol>([
   Symbol.asyncIterator,
 ]);
 
+/**
+ * Per-call overrides. The ack timeout is the only thing a caller can vary --
+ * the wire envelope (`{method, payload}`) is unchanged, so this stays
+ * compatible with the engine's own `createRpcServer`.
+ *
+ * Callers pass this when the default client timeout is the wrong bound for
+ * one particular operation: EXECUTE_FLOW, for instance, must be allowed to
+ * take as long as the flow's own `timeoutInSeconds` budget rather than the
+ * client-wide default (see `EngineHandle.executeFlow`).
+ */
+export interface RpcCallOptions {
+  timeoutMs?: number;
+}
+
 export function createRpcClient<T extends Contract>(socket: RpcSocket, timeoutMs: number): T {
   return new Proxy({} as T, {
     get(_target, method) {
       if (NON_RPC_KEYS.has(method)) return undefined;
       const name = typeof method === "symbol" ? method.description ?? "" : method;
-      return async (payload: unknown) => {
+      return async (payload: unknown, callOpts?: RpcCallOptions) => {
+        const effectiveTimeoutMs =
+          callOpts?.timeoutMs !== undefined && callOpts.timeoutMs > 0
+            ? callOpts.timeoutMs
+            : timeoutMs;
         try {
-          const result = await socket.timeout(timeoutMs).emitWithAck(RPC_EVENT, { method: name, payload });
+          const result = await socket
+            .timeout(effectiveTimeoutMs)
+            .emitWithAck(RPC_EVENT, { method: name, payload });
           if (isRpcErrorEnvelope(result)) {
             throw new Error(`RPC [${name}] handler threw: ${result.__rpcError}`);
           }
@@ -73,7 +93,7 @@ export function createRpcClient<T extends Contract>(socket: RpcSocket, timeoutMs
         } catch (error) {
           if (error instanceof Error && error.message.startsWith("RPC [")) throw error;
           const message = error instanceof Error ? error.message : String(error);
-          throw new Error(`RPC [${name}] failed (timeout: ${timeoutMs}ms): ${message}`);
+          throw new Error(`RPC [${name}] failed (timeout: ${effectiveTimeoutMs}ms): ${message}`);
         }
       };
     },

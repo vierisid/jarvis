@@ -13,7 +13,7 @@ import { io as socketIoClient } from "socket.io-client";
 import { closeWorkflowDb, initWorkflowDb } from "../db";
 import { createFlow } from "../db/repos/flow";
 import { createDraftVersion, lockVersion } from "../db/repos/flow-version";
-import { createFlowRun, getFlowRun } from "../db/repos/flow-run";
+import { createFlowRun, getFlowRun, updateRun } from "../db/repos/flow-run";
 import { DEFAULT_IDS } from "../db/schema";
 import { CredentialResolver } from "../credentials/adapter";
 import { EngineTokenSigner } from "./engine-token";
@@ -181,6 +181,120 @@ describe("WorkerRpcServer (B4: socket.io engine <-> daemon)", () => {
       const updated = getFlowRun(sb.runId);
       // Original status preserved (initial state is QUEUED from createFlowRun)
       expect(updated?.status).not.toBe("FAILED");
+    } finally {
+      sb.client.close();
+    }
+  });
+
+  test("uploadRunLog maps the engine's failedStep.message onto errorMessage", async () => {
+    const sb = await makeSandbox();
+    try {
+      await sb.workerClient.uploadRunLog({
+        runId: sb.runId,
+        projectId: sb.projectId,
+        status: "FAILED",
+        failedStep: { name: "step2", displayName: "Send Email", message: "boom" },
+      });
+      const updated = getFlowRun(sb.runId);
+      expect(updated?.failedStep).toEqual({
+        name: "step2",
+        displayName: "Send Email",
+        errorMessage: "boom",
+      });
+    } finally {
+      sb.client.close();
+    }
+  });
+
+  // Regression: an engine the daemon has already given up on keeps its 15s
+  // backup loop running and re-reports RUNNING. Letting that land flips a
+  // settled run back to RUNNING forever -- the "zombie run" symptom.
+  test("uploadRunLog does not resurrect a run that already settled", async () => {
+    const sb = await makeSandbox();
+    try {
+      updateRun(sb.runId, { status: "FAILED", finishTime: 999 });
+      await sb.workerClient.uploadRunLog({
+        runId: sb.runId,
+        projectId: sb.projectId,
+        status: "RUNNING",
+      });
+      expect(getFlowRun(sb.runId)?.status).toBe("FAILED");
+    } finally {
+      sb.client.close();
+    }
+  });
+
+  test("updateRunProgress does not resurrect a run that already settled", async () => {
+    const sb = await makeSandbox();
+    try {
+      updateRun(sb.runId, { status: "FAILED", finishTime: 999 });
+      await sb.workerClient.updateRunProgress({
+        flowRun: {
+          id: sb.runId,
+          status: "RUNNING",
+          flowId: sb.flowId,
+          flowVersionId: sb.flowVersionId,
+          projectId: sb.projectId,
+        },
+        step: { name: "late", path: [], output: { late: true } },
+      });
+      const after = getFlowRun(sb.runId);
+      expect(after?.status).toBe("FAILED");
+      expect(after?.steps ?? {}).not.toHaveProperty("late");
+    } finally {
+      sb.client.close();
+    }
+  });
+
+  // The normal end of a failing run: the engine reports the terminal verdict
+  // via updateRunProgress and only then sends the uploadRunLog carrying
+  // failedStep / stepsCount / finishTime. A guard that rejected everything
+  // once the row reads FAILED would drop exactly the detail the run history
+  // needs.
+  test("a settled run still accepts the engine's terminal uploadRunLog", async () => {
+    const sb = await makeSandbox();
+    try {
+      await sb.workerClient.updateRunProgress({
+        flowRun: {
+          id: sb.runId,
+          status: "FAILED",
+          flowId: sb.flowId,
+          flowVersionId: sb.flowVersionId,
+          projectId: sb.projectId,
+        },
+      });
+      expect(getFlowRun(sb.runId)?.status).toBe("FAILED");
+
+      await sb.workerClient.uploadRunLog({
+        runId: sb.runId,
+        projectId: sb.projectId,
+        status: "FAILED",
+        failedStep: { name: "step2", displayName: "Send Email", message: "boom" },
+        stepsCount: 2,
+        finishTime: new Date(456_000).toISOString(),
+      });
+      const after = getFlowRun(sb.runId);
+      expect(after?.failedStep?.name).toBe("step2");
+      expect(after?.failedStep?.errorMessage).toBe("boom");
+      expect(after?.stepsCount).toBe(2);
+      expect(after?.finishTime).toBe(456_000);
+    } finally {
+      sb.client.close();
+    }
+  });
+
+  // PAUSED is not terminal: a resumed run reports RUNNING again under the
+  // same runId, and that must still be recorded.
+  test("a PAUSED run still accepts progress from its resume attempt", async () => {
+    const sb = await makeSandbox();
+    try {
+      updateRun(sb.runId, { status: "PAUSED" });
+      await sb.workerClient.uploadRunLog({
+        runId: sb.runId,
+        projectId: sb.projectId,
+        status: "RUNNING",
+      });
+      expect(getFlowRun(sb.runId)?.status).toBe("RUNNING");
     } finally {
       sb.client.close();
     }

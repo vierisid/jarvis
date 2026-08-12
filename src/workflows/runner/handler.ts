@@ -209,18 +209,23 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       }
     } catch (e) {
       const ts = now();
+      // Persist the reason, not just the step. Both branches used to record a
+      // bare `{name, displayName}`, so an operator looking at a failed run saw
+      // "engine" and nothing else -- the actual message (RPC timeout, engine
+      // rejection, ...) lived only in the daemon log.
+      const errorMessage = e instanceof Error ? e.message : String(e);
       if (e instanceof FlowExecutionError) {
         updateRun(runId, {
           status: "FAILED",
           steps: e.steps,
           stepsCount: Object.keys(e.steps).length,
-          failedStep: e.failedStep,
+          failedStep: { ...e.failedStep, errorMessage },
           finishTime: ts,
         });
       } else {
         updateRun(runId, {
           status: "FAILED",
-          failedStep: { name: "<engine>", displayName: "engine" },
+          failedStep: { name: "<engine>", displayName: "engine", errorMessage },
           finishTime: ts,
         });
       }

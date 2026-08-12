@@ -22,7 +22,7 @@
 
 import { existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { resolve } from "node:path";
-import type { EngineContract } from "../../sandbox-api/contracts";
+import type { EngineContract, EngineResponse } from "../../sandbox-api/contracts";
 import type { SandboxApi } from "../../sandbox-api/server";
 import { SandboxRegistry } from "../../sandbox-api/sandbox-registry";
 import { workflowLogsBase } from "../../sandbox-api/config";
@@ -30,9 +30,11 @@ import { spawnEngine, type SpawnedEngine, type SpawnEngineOptions } from "./spaw
 import { ENGINE_BUILD_PATHS } from "./build";
 import { materializeCodeActions } from "./code-materialize";
 import {
+  ackTimeoutMsForOperation,
   buildExecuteFlowOperation,
   buildExecuteTriggerHookOperation,
   buildExtractPieceMetadataOperation,
+  type EngineOperationEnvelope,
   type ExecuteFlowOptions,
   type ExecuteTriggerHookOptions,
   type TriggerHookType,
@@ -140,6 +142,22 @@ export class EngineHandle {
    */
   private readonly releaseImpl: () => Promise<void>;
 
+  /**
+   * Number of `executeOperation` calls currently awaiting an engine reply.
+   * A handle with work in flight must never be parked in the warm pool --
+   * the next acquire would rebind the sandbox to a different run while the
+   * engine is still executing the previous one.
+   */
+  private inFlight = 0;
+  /**
+   * Set when an `executeOperation` call fails at the transport level (ack
+   * timeout, socket error). At that point the engine's state is unknown:
+   * there is no cancel message in EngineContract, so it is most likely
+   * still executing the abandoned operation. Such an engine is destroyed on
+   * release rather than reused.
+   */
+  private abandoned = false;
+
   constructor(
     public readonly sandboxId: string,
     public readonly runId: string,
@@ -167,6 +185,40 @@ export class EngineHandle {
 
   get stderr(): NodeJS.ReadableStream | null {
     return this.proc.stderr;
+  }
+
+  /**
+   * True once an operation on this handle failed at the transport level.
+   * Exposed for tests and for callers that want to log why an engine was
+   * destroyed instead of pooled.
+   */
+  get isAbandoned(): boolean {
+    return this.abandoned;
+  }
+
+  /**
+   * Send one operation to the engine, bounding the wait by the budget we
+   * told the engine to honour rather than by the RPC client's default.
+   *
+   * The engine does not enforce `timeoutInSeconds` itself (upstream relies
+   * on its worker killing the sandbox), so this deadline is the only thing
+   * bounding a hung piece -- which is exactly why exceeding it marks the
+   * engine abandoned and gets it destroyed on release.
+   */
+  private async send(operation: EngineOperationEnvelope): Promise<EngineResponse<unknown>> {
+    this.inFlight++;
+    try {
+      return await this.engineClient.executeOperation(operation, {
+        timeoutMs: ackTimeoutMsForOperation(operation),
+      });
+    } catch (e) {
+      // Transport-level failure: we stopped waiting, the engine did not stop
+      // working. Never reuse this process.
+      this.abandoned = true;
+      throw e;
+    } finally {
+      this.inFlight--;
+    }
   }
 
   /**
@@ -217,7 +269,16 @@ export class EngineHandle {
     if (opts.executionState !== undefined) baseExecuteFlowOptions.executionState = opts.executionState;
 
     const operation = buildExecuteFlowOperation(baseExecuteFlowOptions);
-    await this.engineClient.executeOperation(operation);
+    const reply = await this.send(operation);
+    // A non-OK status means the engine bailed out of the operation itself --
+    // it threw before (or instead of) recording the failure on the run. It
+    // never uploads a terminal run log in that case, so swallowing this
+    // status leaves the caller polling a row that will never settle. Upstream
+    // attaches the inspected error; surface it verbatim.
+    if (reply.status !== "OK") {
+      const detail = typeof reply.error === "string" && reply.error.length > 0 ? `: ${reply.error}` : "";
+      throw new Error(`executeFlow(run ${this.runId}) -> ${reply.status}${detail}`);
+    }
 
     const run = getFlowRun(this.runId);
     if (!run) throw new Error(`flow_run ${this.runId} disappeared after executeFlow`);
@@ -275,9 +336,10 @@ export class EngineHandle {
     if (opts.timeoutInSeconds !== undefined) merged.timeoutInSeconds = opts.timeoutInSeconds;
 
     const op = buildExecuteTriggerHookOperation(merged);
-    const reply = await this.engineClient.executeOperation(op);
+    const reply = await this.send(op);
     if (reply.status !== "OK") {
-      throw new Error(`executeTriggerHook(${hookType}) -> ${reply.status}`);
+      const detail = typeof reply.error === "string" && reply.error.length > 0 ? `: ${reply.error}` : "";
+      throw new Error(`executeTriggerHook(${hookType}) -> ${reply.status}${detail}`);
     }
     return reply.response;
   }
@@ -313,10 +375,11 @@ export class EngineHandle {
       baseOpts.timeoutInSeconds = opts.timeoutInSeconds;
     }
     const op = buildExtractPieceMetadataOperation(baseOpts);
-    const reply = await this.engineClient.executeOperation(op);
+    const reply = await this.send(op);
     if (reply.status !== "OK") {
+      const detail = typeof reply.error === "string" && reply.error.length > 0 ? `: ${reply.error}` : "";
       throw new Error(
-        `extractPieceMetadata(${opts.pieceName}@${opts.pieceVersion}) -> ${reply.status}`,
+        `extractPieceMetadata(${opts.pieceName}@${opts.pieceVersion}) -> ${reply.status}${detail}`,
       );
     }
     return reply.response as import("../../runtime/piece-catalog").RawPieceMetadata;
@@ -327,8 +390,19 @@ export class EngineHandle {
    * sandbox in the registry so subsequent calls from a zombie engine are
    * rejected. When the runtime is pooled, the runtime supplies a different
    * strategy that returns the engine to the idle slot.
+   *
+   * The pooled strategy is bypassed when this handle abandoned an operation
+   * or still has one in flight. Parking such an engine is what turns one
+   * slow flow into a cascade: the next acquire rebinds the sandbox to a new
+   * run, so the still-running operation's `uploadRunLog` is dropped by the
+   * runId guard (its run hangs in RUNNING forever) and a retry re-issues the
+   * same flow into a process already executing it -- duplicating whatever
+   * side effects the flow performs.
    */
   async release(): Promise<void> {
+    if (this.abandoned || this.inFlight > 0) {
+      return this.killAndTerminate();
+    }
     return this.releaseImpl();
   }
 

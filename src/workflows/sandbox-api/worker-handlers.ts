@@ -19,9 +19,35 @@ import type {
   UpdateStepProgressRequest,
   UploadRunLogsRequest,
 } from "./contracts";
-import { getFlowRun, updateRun } from "../db/repos/flow-run";
+import { getFlowRun, updateRun, type FlowRunStatus } from "../db/repos/flow-run";
 
 const PER_RUN_LOG_BUFFER_MAX = 200;
+
+/**
+ * Statuses a run never leaves on its own. Once the row reads one of these,
+ * the attempt that produced it is over and late engine chatter must not
+ * drag it back to RUNNING.
+ *
+ * The engine's 15-second backup loop keeps sending `uploadRunLog` with
+ * `status: RUNNING` for as long as its process is alive. If the daemon has
+ * already given up on that operation and marked the run FAILED, an
+ * unguarded write flips the row back to RUNNING -- permanently, since
+ * nothing else will ever touch it again. That is the "zombie stuck in
+ * RUNNING" failure mode.
+ *
+ * PAUSED is deliberately NOT here: a paused run is resumed under the same
+ * runId, and its resume attempt legitimately reports RUNNING again.
+ */
+const TERMINAL_RUN_STATUSES: ReadonlySet<FlowRunStatus> = new Set<FlowRunStatus>([
+  "SUCCEEDED",
+  "FAILED",
+  "INTERNAL_ERROR",
+  "TIMEOUT",
+  "QUOTA_EXCEEDED",
+  "STOPPED",
+  "MEMORY_LIMIT_EXCEEDED",
+  "SCHEDULE_FAILURE",
+]);
 
 export interface WorkerHandlersOptions {
   registry: SandboxRegistry;
@@ -68,9 +94,36 @@ export class DefaultWorkerHandlers
     return record?.runId ?? null;
   }
 
+  /**
+   * True when this engine message would drag an already-settled run BACK to
+   * a non-terminal state -- the zombie case. A missing row also counts:
+   * there is nothing to update, and re-creating one from an engine message
+   * is not something these handlers do.
+   *
+   * Deliberately narrow. A settled run still accepts a terminal message,
+   * because that is the normal end of a run: the engine reports the final
+   * verdict via `updateRunProgress` first and only then sends the
+   * `uploadRunLog` carrying `failedStep` / `stepsCount` / `finishTime`.
+   * Rejecting the whole message once the row reads FAILED would throw that
+   * detail away and leave the run history showing a failure with no step
+   * and no reason.
+   */
+  private isStaleWrite(runId: string, incoming: FlowRunStatus): boolean {
+    if (TERMINAL_RUN_STATUSES.has(incoming)) return false;
+    try {
+      const row = getFlowRun(runId);
+      if (!row) return true;
+      return TERMINAL_RUN_STATUSES.has(row.status);
+    } catch {
+      return true;
+    }
+  }
+
   async updateRunProgress(sandboxId: string, input: UpdateRunProgressRequest): Promise<void> {
     if (!this.requireRunId(sandboxId)) return;
     this.lastProgress.set(sandboxId, input);
+    // Late progress from an engine whose run the daemon already settled.
+    if (this.isStaleWrite(input.flowRun.id, input.flowRun.status)) return;
     // Persist in-flight status. In TESTING mode the engine also streams per-
     // step output via `input.step` -- accumulate it onto the run's `steps`
     // record so callers reading `flow_run.steps[stepName].output` see the
@@ -102,9 +155,17 @@ export class DefaultWorkerHandlers
     const runId = this.requireRunId(sandboxId);
     if (!runId) return;
     if (input.runId !== runId) return; // mismatch: engine talking about a different run
+    if (this.isStaleWrite(input.runId, input.status)) return; // don't resurrect a settled run
 
     const patch: Parameters<typeof updateRun>[1] = { status: input.status };
-    if (input.failedStep) patch.failedStep = input.failedStep;
+    if (input.failedStep) {
+      // The engine's wire shape carries the detail as `message`; the run row
+      // reads it back as `errorMessage` (see FailedStep in repos/flow-run).
+      // Without this mapping the detail is written under a key nothing reads
+      // and the run history shows a bare step name with no reason.
+      const { name, displayName, message } = input.failedStep;
+      patch.failedStep = message ? { name, displayName, errorMessage: message } : { name, displayName };
+    }
     if (input.stepsCount !== undefined) patch.stepsCount = input.stepsCount;
     if (input.finishTime) patch.finishTime = Date.parse(input.finishTime);
     if (input.startTime) patch.startTime = Date.parse(input.startTime);

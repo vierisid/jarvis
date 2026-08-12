@@ -154,7 +154,11 @@ describe("RUN_FLOW handler with custom executor", () => {
     await worker.drain();
     const after = getFlowRun(runId);
     expect(after?.status).toBe("FAILED");
-    expect(after?.failedStep).toEqual({ name: "step2", displayName: "Send Email" });
+    expect(after?.failedStep).toEqual({
+      name: "step2",
+      displayName: "Send Email",
+      errorMessage: "step2 blew up",
+    });
     expect(after?.steps).toEqual({ step1: { output: "ok" }, step2: { error: "blew up" } });
     expect(after?.stepsCount).toBe(2);
   });
@@ -182,6 +186,8 @@ describe("RUN_FLOW handler with custom executor", () => {
     const after = getFlowRun(run.id);
     expect(after?.status).toBe("FAILED");
     expect(after?.failedStep?.name).toBe("<engine>");
+    // The reason must survive onto the run row, not just the daemon log.
+    expect(after?.failedStep?.errorMessage).toBe("network blip");
   });
 
   test("clears failed_step from a prior attempt before retry", async () => {

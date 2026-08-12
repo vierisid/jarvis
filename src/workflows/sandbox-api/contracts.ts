@@ -123,11 +123,35 @@ export type EngineOperationType =
 export interface EngineResponse<T> {
   status: "OK" | "USER_FAILURE" | "INTERNAL_ERROR" | "TIMEOUT" | "MEMORY_ISSUE" | "LOG_SIZE_EXCEEDED";
   response: T;
+  /**
+   * Inspected error string the engine attaches when an operation throws
+   * before it could record the failure on the run itself (see upstream
+   * `engine/src/lib/operations/index.ts`). Populated alongside a non-OK
+   * status; callers should surface it verbatim -- it is often the only
+   * description of why a flow never started.
+   */
+  error?: string;
+}
+
+/**
+ * Per-call knobs for a daemon -> engine call. `timeoutMs` overrides the RPC
+ * client's default ack timeout for this one operation; the engine sees no
+ * difference (it is a client-side deadline only).
+ *
+ * Needed because a single ack timeout cannot fit every operation: metadata
+ * extraction is a sub-second call, while EXECUTE_FLOW may legitimately run
+ * for the flow's whole `timeoutInSeconds` budget.
+ */
+export interface EngineCallOptions {
+  timeoutMs?: number;
 }
 
 export interface EngineContract {
-  executeOperation(input: {
-    operationType: EngineOperationType;
-    operation: Record<string, unknown>;
-  }): Promise<EngineResponse<unknown>>;
+  executeOperation(
+    input: {
+      operationType: EngineOperationType;
+      operation: Record<string, unknown>;
+    },
+    opts?: EngineCallOptions,
+  ): Promise<EngineResponse<unknown>>;
 }
