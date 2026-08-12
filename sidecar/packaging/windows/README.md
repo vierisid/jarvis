@@ -22,7 +22,7 @@ leaks nothing, and versioning it means a renewal is a reviewable diff.
 | Issuer | Sectigo Public Code Signing CA R36 |
 | Serial | `99D22DF966EC85DDB3B46CFD4DF01400` |
 | Valid | 2026-08-11 → **2027-08-11** |
-| Key | Cloud KMS `jarvis-signing`, non-exportable, HSM |
+| Key | Cloud KMS `jarvis-codesign` version 1 (keyring `jarvis`, project `usejarvis-prod`) — non-exportable, HSM |
 
 The chain is leaf → *Sectigo Public Code Signing CA R36* → *Sectigo Public
 Code Signing Root R46*. That last one reads like a root but is cross-signed by
@@ -55,14 +55,20 @@ cat /tmp/cert-00.pem /tmp/cert-01.pem /tmp/cert-02.pem \
   > sidecar/packaging/windows/codesign-chain.pem   # drop cert-03, the root
 ```
 
-Then verify all three of these before committing — the first is the one that
-matters, since a chain whose leaf is not our HSM key produces signatures no
-one can make:
+The indices above are for the bundle we received; confirm the real order and
+count from the inspect step rather than assuming them.
+
+Then run all three checks before committing. The first is the one that
+matters: jsign signs with whatever key Cloud KMS holds and presents whatever
+certificate this file names. If they are not the same key, signing still
+"succeeds" and every resulting signature fails verification on the user's
+machine.
 
 ```bash
 # 1. the leaf really is the Cloud KMS key
-gcloud kms keys versions get-public-key 1 --key <key> --keyring <ring> \
-  --location <loc> --output-file /tmp/kms.pub
+gcloud kms keys versions get-public-key 1 \
+  --key jarvis-codesign --keyring jarvis --location global \
+  --project usejarvis-prod --output-file /tmp/kms.pub
 openssl x509 -in sidecar/packaging/windows/codesign-chain.pem -pubkey -noout \
   | diff - /tmp/kms.pub && echo "leaf matches the HSM key"
 
