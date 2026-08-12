@@ -344,7 +344,10 @@ export type LLMProviderKind =
   | 'nvidia'
   | 'openai_compatible'
   | 'litellm'
-  | 'omniroute';
+  | 'omniroute'
+  // Hosted "Usejarvis AI": the platform's LLM proxy, configured exclusively
+  // by the root-owned config.yaml `usejarvis_ai` block (never the dashboard).
+  | 'usejarvis_ai';
 
 /**
  * Credentials + endpoint for one provider instance. The `kind` field is
@@ -416,6 +419,14 @@ export type LLMConfig = {
 };
 
 export type JarvisConfig = {
+  /**
+   * Hosted-LLM access (SYSTEM-owned, file-authoritative): written by the
+   * hosting provisioner into the root-owned config.yaml, never by the brain
+   * or dashboard. Survives the user-section discard (not listed in
+   * USER_OWNED_SECTIONS) and is re-applied over every DB merge by
+   * applyUsejarvisAi (daemon/usejarvis-ai.ts). Absent on self-hosted installs.
+   */
+  usejarvis_ai?: { base_url?: string; api_key?: string };
   user?: UserConfig;
   onboarding?: OnboardingConfig;
   telemetry?: TelemetryConfig;

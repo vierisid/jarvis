@@ -22,6 +22,32 @@ describe('Config Loader', () => {
     await rm(TEST_CONFIG_DIR, { recursive: true, force: true });
   });
 
+  test('usejarvis_ai survives the load intact while llm: is discarded', async () => {
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(
+      TEST_CONFIG_PATH,
+      [
+        'usejarvis_ai:',
+        '  base_url: https://llm.usejarvis.host',
+        '  api_key: sk-uj-test0123456789abcdef',
+        // The llm block MUST stay ignored — DB is the sole authority there.
+        'llm:',
+        '  default: "openai:gpt-x"',
+        '  providers:',
+        '    evil: { kind: openai, api_key: sneaky }',
+        '',
+      ].join('\n'),
+    );
+    const loaded = await loadConfig(TEST_CONFIG_PATH);
+    expect(loaded.usejarvis_ai).toEqual({
+      base_url: 'https://llm.usejarvis.host',
+      api_key: 'sk-uj-test0123456789abcdef',
+    });
+    // llm from the file contributed NOTHING (existing rule, still true).
+    expect(loaded.llm.default).toBeUndefined();
+    expect(loaded.llm.providers).toEqual({});
+  });
+
   test('workflows SYSTEM path keys survive the user-section discard; user fields do not', async () => {
     // A hosted/system config carries only the ready-made artifact paths;
     // any user-tunable workflow fields in the FILE have no authority (they

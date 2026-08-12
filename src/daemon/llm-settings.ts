@@ -17,6 +17,7 @@
  */
 
 import type { JarvisConfig, LLMProviderEntry, LLMProviderKind } from '../config/types.ts';
+import { applyUsejarvisAi, USEJARVIS_PROVIDER_NAME } from './usejarvis-ai.ts';
 import { getSetting, setSetting } from '../vault/settings.ts';
 import { getSecret, setSecret, deleteSecret, hasSecret } from '../vault/keychain.ts';
 import type { LLMManager } from '../llm/manager.ts';
@@ -208,6 +209,11 @@ export function saveLLMSettings(
     // would otherwise leave earlier entries applied in memory but never
     // persisted by the setSetting() block at the end of this function.
     for (const [name, update] of updates) {
+      // SYSTEM-owned: never validated and never mutated (see the loop below),
+      // so the credential-scoping checks must not speak for it either — they
+      // would report a base_url/kind problem for an entry the dashboard has
+      // no business sending at all.
+      if (name === USEJARVIS_PROVIDER_NAME) continue;
       if (update === null) continue;
       const existing = config.llm.providers[name] ?? {};
       const nextBaseUrl = normalizeBaseUrl(update.base_url);
@@ -238,6 +244,10 @@ export function saveLLMSettings(
       }
     }
     for (const [name, update] of updates) {
+      // The hosted provider is SYSTEM-owned (config.yaml carve-out): the
+      // dashboard can neither create, edit, nor delete it, and nothing under
+      // the reserved name may reach the DB or keychain.
+      if (name === USEJARVIS_PROVIDER_NAME) continue;
       if (update === null) {
         delete config.llm.providers[name];
         // Drop every model ref the provider owned. The manager prunes its own
@@ -336,6 +346,10 @@ export function stripSecretsFromProviders(
   const out: Record<string, LLMProviderEntry> = {};
   for (const [name, entry] of Object.entries(providers ?? {})) {
     if (!entry) continue;
+    // The hosted provider is INJECTED from config.yaml on every merge — it
+    // must never round-trip into the persisted DB shape (it would survive
+    // un-hosting and shadow the file as a stale copy).
+    if (name === USEJARVIS_PROVIDER_NAME) continue;
     const { api_key: _omit, ...rest } = entry;
     void _omit;
     out[name] = rest;
@@ -429,6 +443,11 @@ export function mergeLLMSettingsIntoConfig(
       config.llm.providers[name] = { ...config.llm.providers[name], api_key: key };
     }
   }
+
+  // 4. Hosted installs: the usejarvis_ai config.yaml block is re-applied over
+  // every DB merge (this function REPLACES config.llm wholesale, and it runs
+  // on boot, SIGHUP reload, and around dashboard saves).
+  applyUsejarvisAi(config);
 }
 
 /**
@@ -585,6 +604,9 @@ function migrateLegacyDBSettings(config: JarvisConfig): void {
  * underlying replaceProviders/setTierMap operations are atomic.
  */
 export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManager): void {
+  // Idempotent: a dashboard save rebuilds config.llm from the request before
+  // calling this — the hosted provider must survive that too.
+  applyUsejarvisAi(config);
   // Build enriched entries with keychain secrets injected so providers can
   // instantiate. The injection is transient - only the in-memory entries
   // see it; persisted forms (DB / YAML) get stripped via
