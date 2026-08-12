@@ -27,6 +27,7 @@ import { NVIDIAProvider } from './nvidia.ts';
 import { OpenAICompatibleProvider } from './openai-compatible.ts';
 import { LiteLLMProvider } from './litellm.ts';
 import { OmniRouteProvider } from './omniroute.ts';
+import { UsejarvisAIProvider } from './usejarvis.ts';
 
 /**
  * Instantiate a provider class from a single entry. Returns null when the
@@ -96,6 +97,12 @@ export function instantiateProvider(
       break;
     case 'omniroute':
       provider = new OmniRouteProvider(entry.base_url?.trim() || undefined, undefined, entry.api_key, entry.auth_header);
+      break;
+    case 'usejarvis_ai':
+      // Hosted platform proxy: both values come from the system-owned
+      // config.yaml block (daemon/usejarvis-ai.ts) - nothing to guess.
+      if (!entry.base_url || !entry.api_key) return null;
+      provider = new UsejarvisAIProvider(entry.base_url, entry.api_key);
       break;
     default:
       console.warn(`[LLM] Unknown provider kind '${kind}' for '${name}' - skipping.`);
