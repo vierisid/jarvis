@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { Database } from 'bun:sqlite';
 import { cmdExport, cmdRestore, EXPORT_FORMAT, type ExportManifest } from './backup.ts';
 import { acquireLockAt } from '../daemon/pid.ts';
+import { getSecret, setSecrets } from '../vault/keychain.ts';
 
 /**
  * cmdExport/cmdRestore resolve the data dir through loadConfig(), which honors
@@ -59,6 +60,7 @@ async function tarEntries(archive: string): Promise<string[]> {
 let root: string;
 let dataDir: string;
 let prevHome: string | undefined;
+let prevSecretsDir: string | undefined;
 
 beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'jarvis-backup-test-'));
@@ -66,11 +68,17 @@ beforeEach(() => {
   seedDataDir(dataDir);
   prevHome = process.env.JARVIS_HOME;
   process.env.JARVIS_HOME = dataDir;
+  // Pin the keychain to the throwaway dir as well: export resolves it rather
+  // than assuming data_dir, and must never reach the real ~/.jarvis store.
+  prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
+  process.env.JARVIS_SECRETS_DIR = dataDir;
 });
 
 afterEach(() => {
   if (prevHome === undefined) delete process.env.JARVIS_HOME;
   else process.env.JARVIS_HOME = prevHome;
+  if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+  else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
   rmSync(root, { recursive: true, force: true });
 });
 
@@ -112,6 +120,49 @@ describe('jarvis export', () => {
     expect(entries).toContain('.secrets.enc');
     expect(entries).toContain('.secrets.key');
     expect(entries).not.toContain('config.yaml');
+  });
+
+  test('--full picks the keychain up from where it actually lives, not from data_dir', async () => {
+    // An install the daemon has not relocated yet keeps its keychain outside
+    // the data dir. Since it is the only place any API key exists, an archive
+    // without it restores to a brain with no credentials.
+    rmSync(join(dataDir, '.secrets.enc'), { force: true });
+    rmSync(join(dataDir, '.secrets.key'), { force: true });
+    const elsewhere = join(root, 'elsewhere');
+    mkdirSync(elsewhere, { recursive: true });
+    process.env.JARVIS_SECRETS_DIR = elsewhere;
+    setSecrets({ 'llm.provider.openai.api_key': 'sk-elsewhere' });
+
+    const archive = join(root, 'resolved.tar');
+    expect(await cmdExport(['--out', archive, '--full'], capture().io)).toBe(0);
+    expect(await tarEntries(archive)).toContain('.secrets.enc');
+
+    // ...and restore puts it where the daemon reads it, not merely into
+    // data_dir: a keychain restored somewhere unread is a brain with no
+    // credentials, discovered when the first LLM call fails.
+    const readAt = join(root, 'read-at');
+    mkdirSync(readAt, { recursive: true });
+    process.env.JARVIS_SECRETS_DIR = readAt;
+    expect(await cmdRestore([archive], capture().io)).toBe(0);
+    expect(getSecret('llm.provider.openai.api_key')).toBe('sk-elsewhere');
+    expect(existsSync(join(dataDir, '.secrets.enc'))).toBe(false);
+  });
+
+  test('restore leaves an existing keychain alone and says so', async () => {
+    const archive = join(root, 'full.tar');
+    expect(await cmdExport(['--out', archive, '--full'], capture().io)).toBe(0);
+
+    const readAt = join(root, 'occupied');
+    mkdirSync(readAt, { recursive: true });
+    await Bun.write(join(readAt, '.secrets.enc'), 'ALREADY-HERE\n');
+    process.env.JARVIS_SECRETS_DIR = readAt;
+
+    const { err } = capture();
+    const io = { out: () => {}, err: (l: string) => err.push(l) };
+    expect(await cmdRestore([archive], io)).toBe(0);
+
+    expect(await Bun.file(join(readAt, '.secrets.enc')).text()).toBe('ALREADY-HERE\n');
+    expect(err.join('\n')).toContain('warning: the restored keychain stayed in');
   });
 
   test('a symlinked entry is dereferenced: the archive holds real data', async () => {
@@ -402,7 +453,7 @@ describe('bin dispatch (subprocess)', () => {
   test('jarvis export --out - streams a valid tar to stdout', async () => {
     const repoRoot = join(import.meta.dir, '..', '..');
     const proc = Bun.spawn(['bun', join(repoRoot, 'bin', 'jarvis.ts'), 'export', '--out', '-', '--full'], {
-      env: { ...process.env, JARVIS_HOME: dataDir },
+      env: { ...process.env, JARVIS_HOME: dataDir, JARVIS_SECRETS_DIR: dataDir },
       stdout: 'pipe',
       stderr: 'pipe',
     });

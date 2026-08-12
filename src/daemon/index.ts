@@ -444,6 +444,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const { seedWebappTemplates } = await import('../vault/webapp-template-seeds.ts');
     seedWebappTemplates();
 
+    // 2a-bis. Relocate a pre-JARVIS_HOME keychain into the data dir before
+    // anything reads a credential, so hydration below sees the moved store and
+    // a data-dir backup finally includes it. No-op on a normal ~/.jarvis
+    // install, and it never removes the legacy pair unless the copy verified.
+    const { migrateKeychainToDataDir } = await import('../vault/keychain.ts');
+    try {
+      migrateKeychainToDataDir();
+    } catch (err) {
+      console.error('[Daemon] Keychain relocation failed; continuing with the existing store:', err);
+    }
+
     // 2b. Load all LLM settings (providers, credentials, single-LLM default,
     // tiers) from the DB + encrypted keychain. This is the sole source of LLM
     // config - config.yaml and env vars contribute nothing.

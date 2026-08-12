@@ -23,6 +23,13 @@
  * backups use; the default keeps the archive far less sensitive for
  * user-facing downloads (the DB it carries has no API key in it).
  *
+ * The keychain pair is staged from wherever `keychainDir()` resolves — the
+ * data dir on a JARVIS_HOME install the daemon has migrated, ~/.jarvis
+ * otherwise — because it is now the ONLY place any API key exists and an
+ * archive missing it restores to a brain with no credentials. The remaining
+ * secret entries are still ~/.jarvis-only; the legacy-root warning further
+ * down covers them.
+ *
  * Restore is stop-before-restore: it acquires the daemon's own flock (which
  * is JARVIS_HOME-aware, same resolution the daemon uses) plus the data dir's,
  * and HOLDS them until the swap is done — a running daemon makes restore
@@ -62,6 +69,7 @@ import { homedir } from 'node:os';
 import { Database } from 'bun:sqlite';
 import { loadConfig } from '../config/loader.ts';
 import { acquireLockAt, lockPathFor } from '../daemon/pid.ts';
+import { keychainDir, migrateKeychain } from '../vault/keychain.ts';
 import { getInstalledVersion } from './version.ts';
 
 interface CliIo {
@@ -197,17 +205,27 @@ export async function cmdExport(args: string[], io: CliIo = defaultIo): Promise<
       io.err(`Snapshotting database (${dbPath})...`);
       snapshotDb(dbPath, join(staging, 'jarvis.db'));
 
+      // The keychain is RESOLVED, not assumed: it sits in the data dir once
+      // the daemon has migrated it there, and in ~/.jarvis before that. Taking
+      // it from wherever it actually is keeps `--full` complete either way —
+      // and it is now the only place any API key exists.
+      const secretsDir = keychainDir();
+      const sourceDir = (entry: string): string =>
+        entry === '.secrets.enc' || entry === '.secrets.key' ? secretsDir : dataDir;
+
       const entries = [...BASE_ENTRIES, ...(full ? SECRET_ENTRIES : [])].filter((e) =>
-        existsSync(join(dataDir, e)),
+        existsSync(join(sourceDir(e), e)),
       );
 
-      // Some components write secrets to the legacy `~/.jarvis` root even when
-      // data_dir points elsewhere. Silently producing a "--full" archive that
-      // is missing them would only be discovered during a real restore — warn.
+      // The remaining secrets (google tokens, sidecar keys) are still written
+      // to the legacy `~/.jarvis` root even when data_dir points elsewhere.
+      // Silently producing a "--full" archive that is missing them would only
+      // be discovered during a real restore — warn.
       if (full) {
         const legacyRoot = join(homedir(), '.jarvis');
         if (dataDir !== legacyRoot) {
           for (const entry of SECRET_ENTRIES) {
+            if (sourceDir(entry) !== dataDir) continue; // resolved above
             if (!existsSync(join(dataDir, entry)) && existsSync(join(legacyRoot, entry))) {
               io.err(
                 `warning: '${entry}' exists at ${legacyRoot} but not in ${dataDir} — it will NOT be in this archive`,
@@ -219,7 +237,7 @@ export async function cmdExport(args: string[], io: CliIo = defaultIo): Promise<
 
       for (const entry of entries) {
         try {
-          cpSync(join(dataDir, entry), join(staging, entry), { recursive: true, dereference: true });
+          cpSync(join(sourceDir(entry), entry), join(staging, entry), { recursive: true, dereference: true });
         } catch (e) {
           throw new Error(
             `staging '${entry}' failed: ${e instanceof Error ? e.message : String(e)} (a broken symlink inside it cannot be archived)`,
@@ -475,6 +493,33 @@ export async function cmdRestore(
         }
         for (const swap of swaps) swap.commit();
         rmSync(asideDir, { recursive: true, force: true });
+
+        // The daemon resolves the keychain independently of data_dir (its own
+        // dir when JARVIS_HOME is set, ~/.jarvis otherwise), so a pair restored
+        // into data_dir can land where nothing will ever read it — a brain with
+        // no credentials, discovered only when the first LLM call fails. Put it
+        // where the daemon looks; migrateKeychain copies, verifies and only then
+        // removes, so a data dir on another filesystem is fine.
+        // Never fatal: the data is already restored and committed by now, so a
+        // keychain that cannot be moved (foreign key, unwritable target) is a
+        // warning to act on, not a reason to fail a completed restore.
+        const secretsTarget = keychainDir();
+        if (secretsTarget !== dataDir && existsSync(join(dataDir, '.secrets.enc'))) {
+          try {
+            if (migrateKeychain(dataDir, secretsTarget)) {
+              io.err(`Keychain placed at ${secretsTarget} (where the daemon reads it).`);
+            } else {
+              io.err(
+                `warning: the restored keychain stayed in ${dataDir} — ${secretsTarget} already holds one and was left untouched`,
+              );
+            }
+          } catch (e) {
+            io.err(
+              `warning: the restored keychain stayed in ${dataDir} and will not be read from there `
+              + `(moving it to ${secretsTarget} failed: ${e instanceof Error ? e.message : String(e)})`,
+            );
+          }
+        }
 
         io.out(JSON.stringify({ restored: true, brainVersion: manifest.brainVersion, files: restored }));
         io.err('Restore complete. Start the daemon with: jarvis start');
