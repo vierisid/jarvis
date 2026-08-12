@@ -131,6 +131,32 @@ describe('resolveRealtimeVoice', () => {
     }
   });
 
+  test('hosted block with realtime disabled stays off; partial block falls to no-key', () => {
+    const disabled = makeConfig();
+    disabled.usejarvis_ai = { base_url: 'https://llm.usejarvis.host', api_key: 'sk-uj-abc' };
+    disabled.voice!.realtime = { enabled: false };
+    expect(resolveRealtimeVoice(disabled).ok).toBe(false);
+
+    const partial = makeConfig();
+    partial.usejarvis_ai = { base_url: 'https://llm.usejarvis.host' }; // no key
+    partial.voice!.realtime = { enabled: true };
+    const res = resolveRealtimeVoice(partial);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain('no OpenAI key');
+  });
+
+  test('http dev proxy derives ws:// (not wss://)', () => {
+    const config = makeConfig();
+    config.usejarvis_ai = { base_url: 'http://dev-llm.usejarvis.dev:4000', api_key: 'sk-uj-abc' };
+    config.voice!.realtime = { enabled: true };
+    const res = resolveRealtimeVoice(config);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.resolved.url).toBe('ws://dev-llm.usejarvis.dev:4000/v1/realtime');
+      expect(res.resolved.modelsUrl).toBe('http://dev-llm.usejarvis.dev:4000/v1/models');
+    }
+  });
+
   test("a user's own OpenAI key still wins over the hosted path", () => {
     const config = withOpenAIProvider(makeConfig(), 'sk-user-own');
     config.usejarvis_ai = { base_url: 'https://llm.usejarvis.host', api_key: 'sk-uj-abc' };

@@ -22,6 +22,7 @@ import { createObservation } from "../vault/observations.ts";
 import { ObserverService, mapEventType } from "./observer-service.ts";
 import { WebSocketService } from "./ws-service.ts";
 import { PebbleRealtimeManager } from "./pebble-realtime.ts";
+import { hostedRealtimeIncluded } from './realtime-gate.ts';
 import { resolveRealtimeVoice } from "../config/realtime.ts";
 import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
@@ -820,10 +821,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
       // Tell each pebble-capable sidecar whether realtime is available so its
       // summon hotkey knows to toggle a live session vs. the one-shot capture.
-      sidecarManager.onSidecarConnected((sidecar) => {
+      sidecarManager.onSidecarConnected(async (sidecar) => {
         if (!sidecar.capabilities.includes('pebble')) return;
         const res = resolveRealtimeVoice(agentService.getConfig());
-        const enabled = res.ok;
+        // The advertisement must agree with the starters' plan gate, or the
+        // summon hotkey opens sessions the plan refuses at dial.
+        const enabled = res.ok && (await hostedRealtimeIncluded(res.resolved));
         console.log(`[pebble-realtime] configure_realtime → ${sidecar.id} enabled=${enabled}${res.ok ? '' : ` (${res.reason})`}`);
         void sidecarManager.dispatchRPC(sidecar.id, 'pebble.configure_realtime', { enabled })
           .catch((err) => console.warn(`[pebble-realtime] configure_realtime dispatch failed (older sidecar?):`, err));

@@ -19,6 +19,7 @@
 import { PebbleAudioTransport } from '../comms/pebble-audio-transport.ts';
 import { RealtimeVoiceSession } from './realtime-voice.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
+import { hostedRealtimeIncluded } from './realtime-gate.ts';
 import type { LLMTool } from '../llm/provider.ts';
 import type { SidecarAudioChannel } from '../sidecar/manager.ts';
 
@@ -122,6 +123,15 @@ export class PebbleRealtimeManager {
       this.deps.onStatus?.(sidecarId, 'error', `Realtime resolve failed: ${String(err)}`);
       return;
     }
+
+    // Same plan gate as WSService.tryStartRealtimeVoice — without it a hosted
+    // plan that excludes realtime would dial and fail instead of the sidecar
+    // falling back to one-shot capture.
+    if (!(await hostedRealtimeIncluded(resolved))) {
+      this.deps.onStatus?.(sidecarId, 'error', 'Realtime voice is not included in this plan.');
+      return;
+    }
+    if (this.sessions.has(sidecarId)) return; // re-check across the await
 
     const transport = new PebbleAudioTransport({
       // Output audio → the sidecar's streaming PCM player. Prefer the dedicated

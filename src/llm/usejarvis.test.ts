@@ -68,6 +68,19 @@ describe('UsejarvisAIProvider', () => {
     );
   });
 
+  it('rewrites STREAM error events too (the base class yields, never throws)', async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(400, { error: { message: 'ExceededBudget: budget has been exceeded for this key' } })) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    const events: Array<{ type: string; error?: string }> = [];
+    for await (const ev of provider.stream([{ role: 'user', content: 'hi' }], { model: 'uj-chat' })) {
+      events.push(ev as { type: string; error?: string });
+    }
+    const err = events.find((e) => e.type === 'error');
+    expect(err?.error).toMatch(/included AI usage is used up/);
+    expect(err?.error).toMatch(/\(400\)/);
+  });
+
   it('keeps retryable statuses recognizable (429 passes through with marker)', async () => {
     globalThis.fetch = (async () => jsonResponse(429, { error: { message: 'rate limited' } })) as unknown as typeof fetch;
     const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');

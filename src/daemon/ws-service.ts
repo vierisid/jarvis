@@ -43,6 +43,7 @@ import { BrowserAudioTransport } from '../comms/audio-transport.ts';
 import { RealtimeVoiceSession } from './realtime-voice.ts';
 import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from './realtime-nav-tools.ts';
 import { RealtimeBudgetTracker } from './realtime-budget.ts';
+import { hostedRealtimeIncluded } from './realtime-gate.ts';
 import { classifyErrorString } from '../llm/provider.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
 import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../user/profile-followup.ts';
@@ -1421,30 +1422,16 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // bare error flash. Falling through to the standard pipeline would be wrong:
     // the client is already streaming raw realtime PCM, which the WAV-based path
     // can't consume.
-    // Hosted plan gate: uj-realtime is absent from the key-scoped catalog on
-    // plans that don't include it — pre-check instead of dialing a websocket
-    // that will be refused, and fall back to the STT->LLM->TTS pipeline with
-    // a clear reason. Catalog fetch failures are ADVISORY (proceed and let
-    // the session attempt decide) — a network blip must not disable voice.
-    if (resolved.modelsUrl) {
-      try {
-        const res = await fetch(resolved.modelsUrl, {
-          headers: { Authorization: `Bearer ${resolved.apiKey}` },
-        });
-        if (res.ok) {
-          const payload = await res.json() as { data?: Array<{ id?: unknown }> };
-          const ids = Array.isArray(payload.data)
-            ? payload.data.map((m) => m.id).filter((id): id is string => typeof id === 'string')
-            : [];
-          if (!ids.includes(resolved.model)) {
-            console.warn('[WSService] realtime not included in this plan — using standard pipeline');
-            return false; // caller falls back to STT->LLM->TTS
-          }
-        }
-      } catch {
-        // advisory only
-      }
+    // Hosted plan gate (shared with the pebble starter + capability
+    // advertisement): cached + hard-timeout, advisory on failure.
+    if (!(await hostedRealtimeIncluded(resolved))) {
+      console.warn('[WSService] realtime not included in this plan — using standard pipeline');
+      return false; // caller falls back to STT->LLM->TTS
     }
+    // The await above opened a race a sync starter never had: a second
+    // voice_start arriving mid-gate would build a SECOND session and orphan
+    // the first (billed audio, teardown of the wrong one). First-in wins.
+    if (this.realtimeSessions.has(ws)) return true;
 
     if (resolved.monthlyBudgetUsd && !this.getRealtimeBudget().canStart(resolved.monthlyBudgetUsd)) {
       console.warn('[WSService] realtime monthly budget reached — refusing new session');

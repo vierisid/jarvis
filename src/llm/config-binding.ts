@@ -101,8 +101,8 @@ export function instantiateProvider(
     case 'usejarvis_ai':
       // Hosted platform proxy: both values come from the system-owned
       // config.yaml block (daemon/usejarvis-ai.ts) - nothing to guess.
-      if (!entry.base_url || !entry.api_key) return null;
-      provider = new UsejarvisAIProvider(entry.base_url, entry.api_key);
+      if (!entry.base_url?.trim() || !entry.api_key?.trim()) return null;
+      provider = new UsejarvisAIProvider(entry.base_url.trim(), entry.api_key.trim());
       break;
     default:
       console.warn(`[LLM] Unknown provider kind '${kind}' for '${name}' - skipping.`);

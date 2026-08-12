@@ -7,7 +7,7 @@ import { initDatabase, closeDb, getDb } from '../vault/schema.ts';
 import { setUsageDatabase } from '../llm/usage.ts';
 
 const RESOLVED: ResolvedRealtimeVoice = {
-  apiKey: 'k', provider: 'openai', url: 'wss://api.openai.com/v1/realtime', model: 'gpt-realtime-2', reasoningEffort: 'low', maxSessionMinutes: 10, blockedCategories: [],
+  apiKey: 'k', provider: 'usejarvis_ai', url: 'wss://proxy.test/v1/realtime', model: 'gpt-realtime-2', reasoningEffort: 'low', maxSessionMinutes: 10, blockedCategories: [],
 };
 
 /** Fake RealtimeSession capturing wired callbacks + outgoing results. */
@@ -132,7 +132,7 @@ describe('RealtimeVoiceSession usage tracking', () => {
     expect(rows[0]).toEqual({
       tier: 'conversation',
       subsystem: 'realtime_voice',
-      provider: 'openai',
+      provider: 'usejarvis_ai',
       model: 'gpt-realtime-2',
       input_tokens: 100,
       output_tokens: 25,
