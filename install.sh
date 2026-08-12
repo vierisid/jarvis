@@ -16,7 +16,6 @@ set -euo pipefail
 
 REPO_URL="https://github.com/vierisid/jarvis.git"
 INSTALL_DIR="$HOME/.jarvis/daemon"
-TRACKING_URL="https://getjarvis.dev/api/install"
 
 CYAN='\033[0;36m'
 GREEN='\033[0;32m'
@@ -371,14 +370,6 @@ main() {
   fi
 
   echo ""
-
-  # ── Track install (silent, non-blocking) ─────────────────────
-
-  BUN_VER=$(bun --version 2>/dev/null || echo "unknown")
-  curl -sS -X POST "$TRACKING_URL" \
-    -H "Content-Type: application/json" \
-    -d "{\"os\":\"$OS\",\"bun_version\":\"$BUN_VER\"}" \
-    --connect-timeout 2 --max-time 3 &>/dev/null &
 
   # ── Done ─────────────────────────────────────────────────────────
 
