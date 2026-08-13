@@ -10,9 +10,28 @@
  * rather than only ours.
  *
  * ONE definition on purpose: three copies drifted apart once already.
+ *
+ * Prefix matching alone is not enough. The proxy fronts several upstreams,
+ * and an auth failure echoed back from Bedrock, Vertex or Azure carries a
+ * credential with NO recognizable prefix (`AKIA…`, a bare JWT, a 32-hex
+ * api-key header). Those are caught by shape instead: an `Authorization:
+ * Bearer <opaque>` run, or an `api[-_]key`-labelled value. The labelled forms
+ * are matched before the bare-token form so the label itself is consumed.
  */
-const CREDENTIAL_RE = /\b(?:sk|gsk|xai|rk)[-_][A-Za-z0-9_-]{4,}|\bAIza[A-Za-z0-9_-]{10,}/g;
+const CREDENTIAL_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
+  // Labelled secrets — keep the label so the message still says WHAT failed,
+  // drop the value. Runs first so the label is consumed with its value.
+  [/\b(api[-_]?key|authorization|x-api-key)(["'\s:=]+)(?:bearer\s+)?[A-Za-z0-9._~+/=-]{12,}/gi, '$1$2***redacted***'],
+  [/\bbearer\s+[A-Za-z0-9._~+/=-]{12,}/gi, 'Bearer ***redacted***'],
+  // Known prefixes (ours included — sk-uj-… must never escape).
+  [/\b(?:sk|gsk|xai|rk)[-_][A-Za-z0-9_-]{4,}/g, '***redacted***'],
+  [/\bAIza[A-Za-z0-9_-]{10,}/g, '***redacted***'],
+  [/\bAKIA[0-9A-Z]{12,}/g, '***redacted***'],
+  [/\bya29\.[A-Za-z0-9._-]{10,}/g, '***redacted***'],
+];
 
 export function redactSecrets(text: string): string {
-  return text.replace(CREDENTIAL_RE, '***redacted***');
+  let out = text;
+  for (const [pattern, replacement] of CREDENTIAL_PATTERNS) out = out.replace(pattern, replacement);
+  return out;
 }

@@ -73,4 +73,81 @@ describe('UsejarvisAIProvider', () => {
     const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
     await expect(provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-chat' })).rejects.toThrow(/\(429\)/);
   });
+
+  // LiteLLM denies an out-of-plan model with 401, NOT 403 — so the model
+  // branch has to outrank the auth branch. Pinned at 401 specifically: at
+  // 400 (the old fixture) the ordering bug cannot fire, and a paying user
+  // picking a model outside their plan gets told their account is inactive.
+  it('reports model-not-in-plan for a 401 denial, not "no active plan"', async () => {
+    globalThis.fetch = (async () => jsonResponse(401, {
+      error: {
+        message: "Authentication Error, key not allowed to access model. This key can only access "
+          + "models=['uj-chat','uj-low']. Tried to access uj-realtime",
+      },
+    })) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    await expect(provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-realtime' })).rejects.toThrow(
+      /\(401\).*not included in your plan/,
+    );
+  });
+
+  it('carries the budget window and reset boundary in the copy', async () => {
+    globalThis.fetch = (async () => jsonResponse(429, {
+      error: {
+        message: 'ExceededBudget: Budget has been exceeded! Current cost: 0.0051, Max budget: 0.005, '
+          + 'budget_duration: 6h, budget_reset_at: 2026-08-13T12:00:00+00:00',
+      },
+    })) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    const failed = async (): Promise<string> => {
+      try {
+        await provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-chat' });
+        throw new Error('expected the budget error to throw');
+      } catch (e) {
+        return (e as Error).message;
+      }
+    };
+    expect(await failed()).toMatch(/for this 6h window \(resumes 12:00 UTC\)/);
+    // …and degrades rather than inventing a time when the proxy omits them.
+    globalThis.fetch = (async () => jsonResponse(429, {
+      error: { message: 'Budget has been exceeded!' },
+    })) as unknown as typeof fetch;
+    const bare = await failed();
+    expect(bare).toMatch(/for this window\./);
+    expect(bare).not.toMatch(/resumes \d/);
+  });
+
+  // The base class YIELDS {type:'error'} events instead of throwing, so a
+  // try/catch around super.stream() is dead code — and this is the path
+  // every conversation turn takes. Without the event rewrite the raw proxy
+  // body (which echoes the bearer we presented) reaches the chat bubble.
+  it('rewrites stream error EVENTS, leaking neither the key nor the body', async () => {
+    const key = 'sk-uj-7Yb2QpLmN4vXzR1aTgKe0wUf';
+    globalThis.fetch = (async () => new Response(
+      `<html><title>401</title><body>Upstream rejected credential Bearer ${key} `
+        + 'for host llm.usejarvis.host. ' + 'x'.repeat(4000) + '</body></html>',
+      { status: 401, headers: { 'Content-Type': 'text/html' } },
+    )) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', key);
+
+    const events: Array<{ type: string; error?: string }> = [];
+    for await (const event of provider.stream([{ role: 'user', content: 'hi' }], { model: 'uj-chat' })) {
+      events.push(event as { type: string; error?: string });
+    }
+    const errors = events.filter((e) => e.type === 'error');
+    expect(errors).toHaveLength(1);
+    const text = errors[0]!.error ?? '';
+    expect(text).not.toContain(key);
+    expect(text).not.toContain('llm.usejarvis.host');
+    expect(text).toMatch(/\(401\).*active plan is required/);
+    expect(text.length).toBeLessThan(300); // never the unbounded CDN page
+  });
+
+  it('filters the catalog to uj-* so a mis-scoped key cannot leak upstream ids', async () => {
+    globalThis.fetch = (async () => jsonResponse(200, {
+      data: [{ id: 'uj-chat' }, { id: 'claude-haiku-4-5-20251001' }, { id: 'gpt-4o-mini' }],
+    })) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    expect(await provider.listModels()).toEqual(['uj-chat']);
+  });
 });

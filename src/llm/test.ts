@@ -34,7 +34,11 @@ async function testProviders() {
     console.error('No providers configured.');
     return;
   }
-  configureLLMTiers(manager, config.llm);
+  // Routing view, not persisted intent — hosted tier defaults live only here
+  // (see effectiveLlmForBinding), so binding config.llm directly would leave
+  // this diagnostic with no tiers on a hosted install.
+  const { effectiveLlmForBinding } = await import('../daemon/usejarvis-ai.ts');
+  configureLLMTiers(manager, effectiveLlmForBinding(config));
 
   console.log(`Active providers: ${manager.getProviderNames().join(', ')}`);
   if (config.llm.default) console.log(`Default: ${config.llm.default}`);

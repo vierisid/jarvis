@@ -28,8 +28,14 @@ export class UsejarvisAIProvider extends OpenAIProvider {
     return 'Usejarvis AI';
   }
 
-  /** The key-scoped catalog: the uj-* aliases this plan includes (the proxy
-   * filters per key, so tier pickers need no hardcoded list). */
+  /** The key-scoped catalog: the uj-* aliases this plan includes.
+   *
+   * The proxy filters per key, but that is REMOTE state, not an invariant we
+   * hold: a key minted with an empty `models` list and no team means the full
+   * catalog at LiteLLM, not an empty one. Filtering to `uj-` locally keeps a
+   * mis-scoped key from leaking raw upstream deployment ids into the tier
+   * pickers — which would break alias opacity and let a user select a model
+   * whose per-plan resale price was never configured. */
   override async listModels(): Promise<string[]> {
     const response = await fetch(this.modelsUrl, {
       headers: { Authorization: `Bearer ${this.apiKey}` },
@@ -44,7 +50,7 @@ export class UsejarvisAIProvider extends OpenAIProvider {
     return [...new Set(
       payload.data
         .map((entry) => entry.id)
-        .filter((id): id is string => typeof id === 'string' && id.length > 0),
+        .filter((id): id is string => typeof id === 'string' && id.startsWith('uj-')),
     )].sort();
   }
 
@@ -61,33 +67,45 @@ export class UsejarvisAIProvider extends OpenAIProvider {
   override async *stream(
     ...args: Parameters<OpenAIProvider['stream']>
   ): ReturnType<OpenAIProvider['stream']> {
-    try {
-      yield* super.stream(...args);
-    } catch (error) {
-      throw this.rewrite(error);
+    // The base class never THROWS HTTP failures on this path — it yields
+    // { type: 'error' } events (pre-stream 4xx and mid-stream alike), so the
+    // rewrite must intercept EVENTS; a try/catch here is dead code, and the
+    // raw proxy body — which can echo the bearer we presented — would reach
+    // the chat bubble on the very path users talk through.
+    for await (const event of super.stream(...args)) {
+      if (event.type === 'error' && typeof event.error === 'string') {
+        yield { ...event, error: this.rewriteText(event.error) };
+      } else {
+        yield event;
+      }
     }
   }
 
   /** Map proxy errors to actionable copy. The `(status)` marker is kept so
-   * classifyErrorString still steers retries (429/503 retry; 400s do not). */
+   * classifyErrorString still steers retries (429/503 retry; 400s do not).
+   *
+   * Branch ORDER matters: LiteLLM denies an out-of-plan model with a 401
+   * "not allowed to access model", so the model check MUST run before the
+   * generic auth branch — otherwise a paying user who picks a model outside
+   * their plan is told their subscription is inactive, the worst false
+   * message this feature can produce.
+   *
+   * The proxy's own body never rides along in the returned copy: it is not a
+   * log-only channel — this Error's message becomes the chat bubble — and an
+   * upstream body carries the hosted hostname that the settings surface and
+   * the catalog route both deliberately withhold. Operators get it via
+   * console.warn instead. */
   private friendly(status: number, detail: string): Error {
     // Redact FIRST: proxy auth bodies can echo the bearer we presented, and
     // this per-account key is deliberately hidden from every other surface
-    // (settings, catalog route, provider test). It also keeps a key whose
-    // random body happens to contain "429"/"503" from making a non-retryable
-    // error retry — shouldRetry substring-matches those.
+    // (settings, catalog route, provider test).
     const safe = redactSecrets(detail);
     const lower = safe.toLowerCase();
+    if (safe) console.warn(`[usejarvis] proxy error (${status}): ${safe.slice(0, 200)}`);
     if (lower.includes('budget') && (lower.includes('exceed') || lower.includes('over'))) {
       return new Error(
-        `${this.errorLabel} API error (${status}): your included AI usage is used up for this window. ` +
-          'It resumes automatically - the usage meter shows when.',
-      );
-    }
-    if (status === 401 || status === 403 || lower.includes('blocked')) {
-      return new Error(
-        `${this.errorLabel} API error (${status}): Usejarvis AI is not active on this account - ` +
-          'an active plan is required.',
+        `${this.errorLabel} API error (${status}): your included AI usage is used up ` +
+          `${describeBudgetWindow(safe)}. It resumes automatically - the usage meter shows when.`,
       );
     }
     if (lower.includes('model') && (lower.includes('not allowed') || lower.includes('invalid model'))) {
@@ -95,9 +113,23 @@ export class UsejarvisAIProvider extends OpenAIProvider {
         `${this.errorLabel} API error (${status}): that model is not included in your plan.`,
       );
     }
+    if (status === 401 || status === 403) {
+      return new Error(
+        `${this.errorLabel} API error (${status}): Usejarvis AI is not active on this account - ` +
+          'an active plan is required.',
+      );
+    }
     // Truncated: an unbounded body is how a CDN error page (hostname
     // included) reaches a chat bubble.
     return new Error(`${this.errorLabel} API error (${status})${safe ? `: ${safe.slice(0, 120)}` : ''}`);
+  }
+
+  /** Text-shaped variant of `rewrite` for stream error EVENTS (the base class
+   * yields these rather than throwing — see `stream`). */
+  private rewriteText(text: string): string {
+    const match = text.match(/API error \((\d+)\): ?([\s\S]*)$/);
+    if (!match) return text;
+    return this.friendly(Number(match[1]), match[2] ?? '').message;
   }
 
   private rewrite(error: unknown): unknown {
@@ -108,4 +140,27 @@ export class UsejarvisAIProvider extends OpenAIProvider {
     if (!match) return error;
     return this.friendly(Number(match[1]), match[2] ?? '');
   }
+}
+
+/**
+ * Turn a proxy budget body into the window phrase the friendly copy promises.
+ * LiteLLM reports `budget_duration` and `budget_reset_at` on an exhausted
+ * key, and the reset lands on a FIXED clock boundary (a 6h window minted
+ * mid-morning resets at 12:00:00+00:00), so "resumes at 12:00 UTC" is exact
+ * rather than approximate. Degrades to the generic phrase when the proxy
+ * omits the fields — never guesses a time it was not told.
+ *
+ * Only the duration and timestamp are lifted out; the rest of the body stays
+ * out of user-facing copy (it can carry the hosted hostname).
+ */
+function describeBudgetWindow(body: string): string {
+  const duration = body.match(/budget_duration["'\s:=]+([0-9]+[a-z]+)/i)?.[1];
+  const resetAt = body.match(/budget_reset_at["'\s:=]+([0-9T:.+\-]{10,40})/i)?.[1];
+  const window = duration ? `for this ${duration} window` : 'for this window';
+  if (!resetAt) return window;
+  const parsed = new Date(resetAt);
+  if (Number.isNaN(parsed.getTime())) return window;
+  const hh = String(parsed.getUTCHours()).padStart(2, '0');
+  const mm = String(parsed.getUTCMinutes()).padStart(2, '0');
+  return `${window} (resumes ${hh}:${mm} UTC)`;
 }
