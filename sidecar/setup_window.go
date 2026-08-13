@@ -18,10 +18,12 @@ package main
 
 // setupWindowHTML is the self-host first-run form, Monochrome Lab
 // (brand_css.go): a centered raised card with the signature corner.
-// `window.submitToken(value)` is the Go binding installed below; it rejects with
-// a message when the token is empty/malformed so the form can show it inline,
-// and resolves when the brain check has STARTED (not passed) — the async
-// verdict lands in window.__tokenVerdict with an empty message on success.
+// `window.submitToken(token, brain)` is the Go binding installed below; the
+// second argument is an optional brain-address override for tokens whose baked-in
+// URL this machine can't use. It rejects with a message when the token is
+// empty/malformed so the form can show it inline, and resolves when the brain
+// check has STARTED (not passed) — the async verdict lands in
+// window.__tokenVerdict with an empty message on success.
 const setupWindowHTML = `<!doctype html>
 <html>
 <head>
@@ -53,7 +55,17 @@ const setupWindowHTML = `<!doctype html>
   }
   textarea::placeholder { color: var(--faint); }
   textarea:focus { border-color: var(--speak); background: var(--raise); box-shadow: 0 0 0 3px rgba(45,120,255,.14); }
+  input[type=text] {
+    width: 100%; height: 38px; padding: 0 12px;
+    font-family: var(--mono); font-size: 11.5px;
+    border: 1px solid var(--rule); border-radius: var(--corner-sm);
+    background: var(--panel2); color: var(--ink); outline: none;
+    transition: border-color .12s, box-shadow .12s, background .12s;
+  }
+  input[type=text]::placeholder { color: var(--faint); }
+  input[type=text]:focus { border-color: var(--speak); background: var(--raise); box-shadow: 0 0 0 3px rgba(45,120,255,.14); }
   .hint { font-size: 11px; color: var(--faint); margin: 8px 0 0; line-height: 1.5; }
+  .hint b { color: var(--ink3); font-weight: 600; }
   .row { display: flex; align-items: center; justify-content: space-between; margin-top: 16px; gap: 12px; }
   #err { color: var(--listen-tx); font-size: 12px; line-height: 1.5; min-height: 16px; flex: 1; text-align: left; }
   #err.checking { color: var(--ink3); }
@@ -80,7 +92,12 @@ const setupWindowHTML = `<!doctype html>
         authenticates it.</p>
       <label for="tok">Enrollment token</label>
       <textarea id="tok" placeholder="eyJhbGciOiJFUzI1NiIs..." spellcheck="false" autofocus></textarea>
-      <p class="hint">The token is stored locally at ~/.jarvis/sidecar.yaml. Press Cmd/Ctrl+Enter to connect.</p>
+      <p class="hint" id="brainHint"></p>
+      <label for="brain" style="margin-top:14px">Brain address <span style="color:var(--faint);font-weight:500">(optional)</span></label>
+      <input id="brain" type="text" placeholder="e.g. 192.168.1.20:3142 or https://brain.example.com" spellcheck="false">
+      <p class="hint">Only set this if the brain runs somewhere this token can't reach — for example
+        when the token points at <b>localhost</b> but your brain is on another machine.
+        The token is stored locally at ~/.jarvis/sidecar.yaml. Press Cmd/Ctrl+Enter to connect.</p>
       <div class="row">
         <span id="err"></span>
         <button id="go" onclick="submit()">Connect</button>
@@ -89,15 +106,42 @@ const setupWindowHTML = `<!doctype html>
   </div>
 <script>
   var tok = document.getElementById('tok');
+  var brain = document.getElementById('brain');
+  var brainHint = document.getElementById('brainHint');
   var err = document.getElementById('err');
   var btn = document.getElementById('go');
+
+  // Best-effort decode of the token's brain claim so the user can SEE the
+  // address they are about to connect to before submitting. When it names a
+  // loopback host we call that out, because a token minted without
+  // daemon.brain_domain points at localhost and only works on the brain
+  // machine itself — the Brain address field exists to correct exactly that.
+  function tokenBrain() {
+    try {
+      var parts = tok.value.trim().split('.');
+      if (parts.length !== 3) return '';
+      var b64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+      while (b64.length % 4) b64 += '=';
+      var claims = JSON.parse(decodeURIComponent(escape(atob(b64))));
+      return typeof claims.brain === 'string' ? claims.brain : '';
+    } catch (e) { return ''; }
+  }
+  function refreshBrainHint() {
+    var b = tokenBrain();
+    if (!b) { brainHint.innerHTML = ''; return; }
+    var loopback = /\/\/(localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1\])(:|\/|$)/i.test(b);
+    brainHint.innerHTML = loopback
+      ? 'This token points at <b>' + b + '</b> — that only works on the brain machine itself. If this is a different machine, enter the brain\'s address below.'
+      : 'This token points at <b>' + b + '</b>.';
+  }
+
   async function submit() {
     if (btn.disabled) return; // Cmd/Ctrl+Enter during an in-flight check
     err.className = '';
     err.textContent = '';
     btn.disabled = true;
     try {
-      await window.submitToken(tok.value);
+      await window.submitToken(tok.value, brain.value);
       // Structurally valid: Go is now checking it against the brain. The
       // verdict arrives via __tokenVerdict below; success closes the window.
       err.className = 'checking';
@@ -116,6 +160,10 @@ const setupWindowHTML = `<!doctype html>
     tok.focus();
   };
   tok.addEventListener('keydown', function (e) {
+    if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); submit(); }
+  });
+  tok.addEventListener('input', refreshBrainHint);
+  brain.addEventListener('keydown', function (e) {
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); submit(); }
   });
   tok.focus();

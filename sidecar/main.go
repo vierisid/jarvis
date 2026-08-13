@@ -154,7 +154,7 @@ Usage:
 		// Unconfigured: pop up the first-run window asking for the enrollment
 		// token instead of erroring out. (--token still works headlessly.)
 		log.Println("[sidecar] No token configured - opening connect window...")
-		tok, err := runFirstRunWindow(cfg)
+		tok, brain, err := runFirstRunWindow(cfg)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Error: %v\nAlternatively, run: jarvis-sidecar --token <jwt>\n", err)
 			os.Exit(1)
@@ -164,6 +164,12 @@ Usage:
 			os.Exit(1)
 		}
 		cfg.Token = tok
+		if brain != "" {
+			// The user corrected the token's baked-in brain address in the
+			// setup form (typically a localhost-pointing token used from
+			// another machine); persist it so reconnects use it too.
+			cfg.Brain = brain
+		}
 		if err := SaveConfig(cfg); err != nil {
 			log.Fatalf("[sidecar] Failed to save config: %v", err)
 		}

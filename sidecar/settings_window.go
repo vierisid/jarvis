@@ -28,7 +28,11 @@ func (c *SidecarClient) OpenSettings() {
 // binding (webview_go marshals it to JSON for the JS side).
 type settingsState struct {
 	Status string `json:"status"` // "connected" | "connecting" | "error"
-	Prefs  struct {
+	// Manual brain-address override from sidecar.yaml ("" = the token's own
+	// brain claim). Shown in the enrollment panel so it can be corrected
+	// without hand-editing the config file.
+	Brain string `json:"brain"`
+	Prefs struct {
 		StartAtStartup      bool `json:"start_at_startup"`
 		EtherealPebble      bool `json:"ethereal_pebble"`
 		EtherealIdleSeconds int  `json:"ethereal_idle_seconds"`
@@ -65,6 +69,7 @@ func (c *SidecarClient) runSettingsWindow() {
 			prefs := c.Preferences()
 			var st settingsState
 			st.Status = connStateString(c.ConnState())
+			st.Brain = c.BrainOverride()
 			st.Prefs.StartAtStartup = prefs.StartAtStartup
 			st.Prefs.EtherealPebble = prefs.EtherealPebble
 			st.Prefs.EtherealIdleSeconds = prefs.EtherealIdleSeconds
@@ -81,13 +86,21 @@ func (c *SidecarClient) runSettingsWindow() {
 		// saved, or why not — lands async via window.__tokenVerdict. Only a
 		// token the brain accepted is written to the config; it applies on the
 		// next reconnect attempt, and a restart guarantees a clean reconnect.
-		_ = w.Bind("saveToken", func(raw string) error {
+		_ = w.Bind("saveToken", func(raw, brain string) error {
 			raw = trimToken(raw)
 			if raw == "" {
 				return fmt.Errorf("Paste a token to save.")
 			}
 			if _, err := DecodeJWTPayload(raw); err != nil {
 				return fmt.Errorf("That doesn't look like a valid token. Copy the full token printed by 'jarvis enroll'.")
+			}
+			// Optional brain-address override (normalized like the config
+			// field); outranks the stored override for this check and, on
+			// success, replaces it.
+			brain = normalizeBrainOverride(brain)
+			override := c.BrainOverride()
+			if brain != "" {
+				override = brain
 			}
 			if !checkInFlight.CompareAndSwap(false, true) {
 				return fmt.Errorf("A token check is already running.")
@@ -96,9 +109,14 @@ func (c *SidecarClient) runSettingsWindow() {
 			go func() {
 				defer verifyWG.Done()
 				defer checkInFlight.Store(false)
-				verr := verifyBrainToken(verifyCtx, raw, c.BrainOverride())
+				verr := verifyBrainToken(verifyCtx, raw, override)
 				if verr == nil {
-					if err := c.editConfig(func(cfg *SidecarConfig) { cfg.Token = raw }); err != nil {
+					if err := c.editConfig(func(cfg *SidecarConfig) {
+						cfg.Token = raw
+						if brain != "" {
+							cfg.Brain = brain
+						}
+					}); err != nil {
 						verr = fmt.Errorf("Could not save the token: %v", err)
 					} else {
 						log.Printf("[settings] enrollment token verified with the brain and updated")
@@ -234,9 +252,14 @@ const settingsWindowHTML = `<!doctype html>
   .sw input:checked + .track::after { transform: translateX(16px); }
   /* token field */
   .field { font-size: 11px; font-weight: 600; color: var(--ink2); display: block; margin-bottom: 7px; }
+  .field .opt { color: var(--faint); font-weight: 500; }
   textarea { width: 100%; height: 80px; resize: none; padding: 10px 12px; font-family: var(--mono); font-size: 11.5px; line-height: 1.5; border: 1px solid var(--rule); border-radius: var(--corner-sm); background: var(--panel2); color: var(--ink); outline: none; transition: border-color .12s, box-shadow .12s, background .12s; }
   textarea::placeholder { color: var(--faint); }
   textarea:focus { border-color: var(--speak); background: var(--raise); box-shadow: 0 0 0 3px rgba(45,120,255,.14); }
+  input.txt { width: 100%; height: 36px; padding: 0 12px; font-family: var(--mono); font-size: 11.5px; border: 1px solid var(--rule); border-radius: var(--corner-sm); background: var(--panel2); color: var(--ink); outline: none; transition: border-color .12s, box-shadow .12s, background .12s; box-sizing: border-box; }
+  input.txt::placeholder { color: var(--faint); }
+  input.txt:focus { border-color: var(--speak); background: var(--raise); box-shadow: 0 0 0 3px rgba(45,120,255,.14); }
+  .subhint { font-size: 11px; color: var(--faint); margin: 7px 0 0; line-height: 1.5; }
   .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 11px; }
   .msg { font-size: 11.5px; min-height: 16px; flex: 1; color: var(--ink3); }
   .msg.ok { color: var(--ok-tx); }
@@ -271,6 +294,10 @@ const settingsWindowHTML = `<!doctype html>
   <div class="panel pad">
     <label class="field" for="tok">Paste a new token to re-point this machine</label>
     <textarea id="tok" placeholder="eyJhbGciOiJFUzI1NiIs…" spellcheck="false"></textarea>
+    <label class="field" for="brain" style="margin-top:11px">Brain address <span class="opt">(optional)</span></label>
+    <input id="brain" class="txt" type="text" placeholder="e.g. 192.168.1.20:3142 or https://brain.example.com" spellcheck="false">
+    <p class="subhint">Only set this if the brain runs somewhere the token can't reach — for example when the token
+      points at localhost but your brain is on another machine. Leave it blank to keep the current address.</p>
     <div class="row">
       <span id="tokMsg" class="msg"></span>
       <button id="saveTok" class="sbtn pri" onclick="doSaveToken()">Save token</button>
@@ -340,6 +367,9 @@ const settingsWindowHTML = `<!doctype html>
   async function init() {
     var st = await window.getState();
     paintStatus(st.status);
+    if (st.brain) {
+      document.getElementById('brain').value = st.brain;
+    }
     document.getElementById('start_at_startup').checked = !!st.prefs.start_at_startup;
     document.getElementById('ethereal_pebble').checked = !!st.prefs.ethereal_pebble;
     document.getElementById('ethereal_idle_seconds').value = st.prefs.ethereal_idle_seconds || 5;
@@ -347,6 +377,7 @@ const settingsWindowHTML = `<!doctype html>
     updateIdleRow();
     // Typing a new token after a save reverts the button from Restart to Save.
     document.getElementById('tok').addEventListener('input', resetTokenButton);
+    document.getElementById('brain').addEventListener('input', resetTokenButton);
     setInterval(pollStatus, 2000);
   }
 
@@ -355,6 +386,7 @@ const settingsWindowHTML = `<!doctype html>
   // and remembers what was submitted so the verdict never wipes newer input.
   var tokenChecking = false;
   var submittedTok = '';
+  var submittedBrain = '';
 
   function resetTokenButton() {
     if (tokenChecking) return;
@@ -390,12 +422,14 @@ const settingsWindowHTML = `<!doctype html>
     var btn = document.getElementById('saveTok');
     var msg = document.getElementById('tokMsg');
     var tok = document.getElementById('tok');
+    var brain = document.getElementById('brain');
     msg.className = 'msg'; msg.textContent = '';
     btn.disabled = true;
     tokenChecking = true;
     submittedTok = tok.value;
+    submittedBrain = brain.value;
     try {
-      await window.saveToken(tok.value);
+      await window.saveToken(tok.value, brain.value);
       msg.textContent = 'Checking the token with your brain…';
     } catch (e) {
       tokenChecking = false;
@@ -409,6 +443,7 @@ const settingsWindowHTML = `<!doctype html>
     var btn = document.getElementById('saveTok');
     var msg = document.getElementById('tokMsg');
     var tok = document.getElementById('tok');
+    var brain = document.getElementById('brain');
     tokenChecking = false;
     btn.disabled = false;
     if (errMsg) {
@@ -421,6 +456,7 @@ const settingsWindowHTML = `<!doctype html>
     // Only clear what was actually saved — never a newer token typed while
     // the check was running.
     if (tok.value === submittedTok) tok.value = '';
+    if (brain.value === submittedBrain) brain.value = '';
     // Morph Save -> Restart for a one-click apply.
     btn.textContent = 'Restart Jarvis';
     btn.onclick = doRestart;

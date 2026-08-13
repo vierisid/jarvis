@@ -197,13 +197,16 @@ func TestHandshakeCancelledByContext(t *testing.T) {
 func TestSubmitTokenHandlerGate(t *testing.T) {
 	jwt := testJWT(t)
 	active := false
-	var accepted string
-	handler := submitTokenHandler(func() bool { return active }, func(tok string) { accepted = tok })
+	var accepted, acceptedBrain string
+	handler := submitTokenHandler(func() bool { return active }, func(tok, brain string) {
+		accepted = tok
+		acceptedBrain = brain
+	})
 
 	// Regression (review major 1): with the hosted flow showing remote
 	// content (Clerk/Stripe redirects), any page can call the binding. While
 	// the local form is NOT active it must refuse even a valid JWT.
-	if err := handler(jwt); err == nil {
+	if err := handler(jwt, ""); err == nil {
 		t.Fatal("submitToken must be refused while the token form is inactive")
 	}
 	if accepted != "" {
@@ -212,14 +215,27 @@ func TestSubmitTokenHandlerGate(t *testing.T) {
 
 	// Active form: garbage rejected, valid JWT accepted.
 	active = true
-	if err := handler("not-a-jwt"); err == nil {
+	if err := handler("not-a-jwt", ""); err == nil {
 		t.Fatal("garbage token must be rejected")
 	}
-	if err := handler("  " + jwt + "  "); err != nil {
+	if err := handler("  "+jwt+"  ", ""); err != nil {
 		t.Fatalf("valid token rejected: %v", err)
 	}
 	if accepted != jwt {
 		t.Fatalf("accepted token mismatch: %q", accepted)
+	}
+	if acceptedBrain != "" {
+		t.Fatalf("brain override must be empty when not supplied, got %q", acceptedBrain)
+	}
+
+	// A supplied brain address is normalized exactly like the config override
+	// (bare host:port -> ws(s)://host:port/sidecar/connect) before the caller
+	// sees it, so verification and persistence agree.
+	if err := handler(jwt, " 192.168.1.20:3142 "); err != nil {
+		t.Fatalf("valid token with brain override rejected: %v", err)
+	}
+	if acceptedBrain != "ws://192.168.1.20:3142/sidecar/connect" {
+		t.Fatalf("brain override not normalized: %q", acceptedBrain)
 	}
 }
 

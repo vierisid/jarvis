@@ -47,6 +47,15 @@ const PUBLIC_KEY_FILE = 'public.pem';
 const ACCESS_TOKEN_AUDIENCE = 'brain-api';
 const ACCESS_TOKEN_TTL_SECONDS = 600; // 10 minutes
 
+// Clock tolerance for JWT time checks. The brain and a sidecar are often
+// different machines, and consumer clocks routinely drift by tens of seconds
+// (or jump after sleep/NTP sync). With zero tolerance, a slightly-ahead clock
+// makes freshly minted access tokens read as not-yet-valid (and a behind
+// clock expires them early), surfacing as a confusing 401 on the data plane
+// even though the enrollment token is fine. 60s absorbs ordinary drift while
+// staying far below the access-token TTL.
+const CLOCK_TOLERANCE_SECONDS = 60;
+
 /**
  * Accept only strings shaped like IANA zone names ("Area/City", up to three
  * segments, "UTC"), max 64 chars. Mirrors the Go sidecar's ianaNameRe.
@@ -487,6 +496,7 @@ export class SidecarManager implements Service {
     try {
       const { payload } = await jwtVerify(token, this.publicKey, {
         algorithms: [ALG],
+        clockTolerance: CLOCK_TOLERANCE_SECONDS,
       });
 
       const claims = payload as unknown as SidecarTokenClaims;
@@ -544,6 +554,7 @@ export class SidecarManager implements Service {
       const { payload } = await jwtVerify(token, this.publicKey, {
         algorithms: [ALG],
         audience: ACCESS_TOKEN_AUDIENCE,
+        clockTolerance: CLOCK_TOLERANCE_SECONDS,
       });
       const sid = typeof payload.sid === 'string' ? payload.sid : '';
       if (!sid) return null;

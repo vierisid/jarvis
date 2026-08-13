@@ -211,10 +211,16 @@ func (c *SidecarClient) Start(ctx context.Context) {
 			// (connError was set in connectAndServe) until the user quits or
 			// restarts after fixing the config.
 			log.Printf("[sidecar] Token rejected by the brain (HTTP %d). Not reconnecting until reconfigured.", tokErr.status)
+			hint := "Re-enroll it by running 'jarvis enroll \"<device-name>\"' on the brain machine, update the token in the config, then restart."
+			if isLoopbackBrainURL(c.claims.Brain) {
+				// The address in use names localhost: on any machine but the
+				// brain itself that reaches a different daemon (or nothing),
+				// which reads as a rejected token. Point at the override first.
+				hint = "The connection is using a localhost address. If your brain runs on another machine, set 'brain:' in ~/.jarvis/sidecar.yaml to that machine's address and restart. Otherwise re-enroll: run 'jarvis enroll \"<device-name>\"' on the brain machine, update the token, then restart."
+			}
 			c.alertOnce.Do(func() {
 				platformShowAlert("JARVIS Sidecar",
-					"This machine's enrollment token is not valid — the brain rejected it.\n\n"+
-						"Re-enroll it by running 'jarvis enroll \"<device-name>\"' on the brain machine, update the token in the config, then restart.")
+					"This machine's enrollment token is not valid — the brain rejected it.\n\n"+hint)
 			})
 			<-ctx.Done()
 			return

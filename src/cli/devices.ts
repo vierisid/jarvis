@@ -17,9 +17,10 @@
 
 import { loadConfig } from '../config/loader.ts';
 import { initDatabase, getDb } from '../vault/schema.ts';
-import { enrollDevice } from '../sidecar/enrollment.ts';
+import { buildEnrollmentUrls, enrollDevice, isLocalhostBrainUrl } from '../sidecar/enrollment.ts';
 import type { SidecarRecord } from '../sidecar/types.ts';
 import { resolveExternalOrigin } from '../util/external-origin.ts';
+import { networkInterfaces } from 'node:os';
 
 interface CliIo {
   out: (line: string) => void;
@@ -38,12 +39,34 @@ async function openVault(io: CliIo): Promise<{ dataDir: string; brainUrl: string
   for (const warning of resolved.warnings) io.err(`warning: ${warning}`);
   const brainUrl = resolved.httpOrigin;
   if (resolved.source === 'fallback' && resolved.warnings.length === 0) {
+    const lan = firstLanAddress();
     io.err(
       'warning: daemon.public_url is not set; tokens will point at ' +
-        `localhost:${config.daemon.port} and only work for sidecars on this machine.`,
+        `localhost:${config.daemon.port} and only work for sidecars on this machine.` +
+        (lan
+          ? ` For other devices, set it to e.g. http://${lan}:${config.daemon.port} and enroll again.`
+          : ' For other devices, set it to this machine\'s reachable address and enroll again.'),
     );
   }
   return { dataDir: config.daemon.data_dir, brainUrl };
+}
+
+/**
+ * First non-internal IPv4 address of this machine — used only to suggest a
+ * public_url that sidecars on the same network can actually reach. Returns ''
+ * when there is none (offline / loopback-only hosts).
+ */
+function firstLanAddress(): string {
+  try {
+    for (const ifaces of Object.values(networkInterfaces())) {
+      for (const info of ifaces ?? []) {
+        if (info.family === 'IPv4' && !info.internal) return info.address;
+      }
+    }
+  } catch {
+    // Suggestion only — never fail enrollment over it.
+  }
+  return '';
 }
 
 export async function cmdEnroll(args: string[], io: CliIo = defaultIo): Promise<number> {
@@ -58,6 +81,7 @@ export async function cmdEnroll(args: string[], io: CliIo = defaultIo): Promise<
   try {
     const { dataDir, brainUrl } = await openVault(io);
     const result = await enrollDevice(dataDir, brainUrl, name, { onExisting: 'upsert', rotate });
+    const { brainWs } = buildEnrollmentUrls(brainUrl);
     if (json) {
       io.out(
         JSON.stringify({
@@ -65,6 +89,7 @@ export async function cmdEnroll(args: string[], io: CliIo = defaultIo): Promise<
           sid: result.sidecar.id,
           name: result.sidecar.name,
           created: result.created,
+          brain: brainWs,
         }),
       );
     } else {
@@ -73,6 +98,17 @@ export async function cmdEnroll(args: string[], io: CliIo = defaultIo): Promise<
           ? `enrolled "${result.sidecar.name}" (${result.sidecar.id})`
           : `re-minted token for existing device "${result.sidecar.name}" (${result.sidecar.id}); previous tokens REMAIN VALID (use --rotate to invalidate them)`,
       );
+      // The brain URL is baked into the token at mint time; print it so a
+      // cross-machine setup fails here (loudly, at enroll) instead of later
+      // as a mysterious rejected-token error on the other device.
+      io.err(`token points at ${brainWs}`);
+      if (isLocalhostBrainUrl(brainWs)) {
+        io.err(
+          'note: that is a loopback address, so this token only works on this machine. ' +
+            'On another device you can still fix it by entering the brain address in the setup window ' +
+            "(or setting 'brain:' in ~/.jarvis/sidecar.yaml).",
+        );
+      }
       io.out(result.token);
     }
     return 0;
