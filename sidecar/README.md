@@ -42,16 +42,49 @@ CC="clang -target arm64-apple-macos11" GOOS=darwin GOARCH=arm64 go build -o jarv
 
 ### Linux prerequisites
 
+`third_party/webview_go/webview.go` hardcodes the pkg-config name
+`webkit2gtk-4.0`, which recent distros no longer ship — Arch removed it
+outright, Debian 13 and Ubuntu 24.04 dropped it, and only older releases
+(Ubuntu 22.04, Debian 12) still carry `libwebkit2gtk-4.0-dev`. Install **4.1**
+and add a `.pc` name shim rather than chasing a 4.0 package. The two differ
+only where libsoup types surface in the API (4.1 is libsoup3, 4.0 libsoup2) —
+webview_go touches none of them, so the shim is a pure rename. On Arch in
+particular, do **not** install a 4.0 package: it resolves to an AUR source
+build that compiles WebKit from scratch and typically fails.
+
+**Debian / Ubuntu**
+
 ```bash
 sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev build-essential pkg-config
 
-# webview_go's cgo line hardcodes the pkg-config name webkit2gtk-4.0, but
-# current distros only ship 4.1. Symlink the .pc files so build-time
-# pkg-config resolves (the runtime loader already prefers 4.1).
 sudo ln -sf /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.1.pc \
             /usr/lib/x86_64-linux-gnu/pkgconfig/webkit2gtk-4.0.pc
 sudo ln -sf /usr/lib/x86_64-linux-gnu/pkgconfig/javascriptcoregtk-4.1.pc \
             /usr/lib/x86_64-linux-gnu/pkgconfig/javascriptcoregtk-4.0.pc
+```
+
+**Arch**
+
+Arch's pkgconfig dir is `/usr/lib/pkgconfig` (no multiarch triplet), so the
+Debian paths above do not apply. Keep the shims out of the pacman-managed tree
+by putting them in `~/.local` — Arch's default search path is only
+`/usr/lib/pkgconfig:/usr/share/pkgconfig`, so `PKG_CONFIG_PATH` must name it:
+
+```bash
+sudo pacman -S --needed webkit2gtk-4.1 gtk3 base-devel pkgconf
+
+mkdir -p ~/.local/lib/pkgconfig
+ln -sf /usr/lib/pkgconfig/webkit2gtk-4.1.pc        ~/.local/lib/pkgconfig/webkit2gtk-4.0.pc
+ln -sf /usr/lib/pkgconfig/javascriptcoregtk-4.1.pc ~/.local/lib/pkgconfig/javascriptcoregtk-4.0.pc
+
+# add to ~/.bashrc or ~/.zshrc so `make build` works without a prefix
+export PKG_CONFIG_PATH="$HOME/.local/lib/pkgconfig${PKG_CONFIG_PATH:+:$PKG_CONFIG_PATH}"
+```
+
+Verify the shim before building — this should print `-lwebkit2gtk-4.1`:
+
+```bash
+pkg-config --libs gtk+-3.0 webkit2gtk-4.0
 ```
 
 Windows needs the **WebView2 runtime** (pre-installed on Win11; the sidecar
