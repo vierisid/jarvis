@@ -20,9 +20,14 @@ import {
 
 /** Reserved hosted provider name (mirrors the daemon's usejarvis_ai carve-out). */
 const USEJARVIS_NAME = "usejarvis_ai";
-/** Hosted aliases that are NOT chat models: the key-scoped catalog lists every
- * modality, but these pickers only ever choose chat tiers. */
-const NON_CHAT_USEJARVIS_ALIASES = new Set(["uj-stt", "uj-tts", "uj-realtime"]);
+/** Hosted aliases that ARE chat models — an ALLOWLIST, mirroring the
+ * platform's SLOTS_BY_MODALITY.chat. A denylist fails OPEN: the platform's
+ * slots are data (a new alias ships without any jarvis release), and
+ * `providerModels()[0]` is auto-committed when the provider dropdown changes,
+ * so an unknown `uj-*` sorting before `uj-chat` would silently become someone's
+ * conversation model. Missing a future CHAT tier here is harmless by
+ * comparison — it is simply absent until the next release. */
+const CHAT_USEJARVIS_ALIASES = new Set(["uj-chat", "uj-low", "uj-medium", "uj-high"]);
 
 /**
  * Providers offered by the model pickers: the user's editable entries plus,
@@ -1087,7 +1092,7 @@ function ModelSelector({
   );
 }
 
-function providerModels(
+export function providerModels(
   providers: Record<string, LLMConfigProviderView>,
   name: string,
   live?: string[] | null,
@@ -1113,7 +1118,7 @@ function providerModels(
     // point the conversation at a transcription or speech endpoint and break
     // chat outright. Voice slots are chosen in Channels/Voice, not here.
     return entry.kind === "usejarvis_ai"
-      ? catalog.filter((id) => !NON_CHAT_USEJARVIS_ALIASES.has(id))
+      ? catalog.filter((id) => CHAT_USEJARVIS_ALIASES.has(id))
       : catalog;
   }
   return MODELS_BY_KIND[entry.kind] ?? [];
