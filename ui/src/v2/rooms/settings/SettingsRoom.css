@@ -80,11 +80,13 @@
   color: var(--ink);
   font-family: var(--font-sans);
   font-size: var(--text-sm);
+  flex-wrap: wrap;
 }
 
 .v2-set__banner > svg { color: var(--warn); flex-shrink: 0; }
 
 .v2-set__banner > span { flex: 1; }
+.v2-set__banner > span { min-width: min(240px, 100%); }
 
 .v2-set__banner-btn {
   padding: 4px 12px;
@@ -161,6 +163,7 @@
   min-height: 0;
   overflow-y: auto;
   padding: var(--s-5) var(--s-6) var(--s-8);
+  overflow-x: hidden;
 }
 
 /* ── Section card (used by every tab) ── */
@@ -174,6 +177,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--s-3);
+  min-width: 0;
 }
 
 .v2-set__section-head {
@@ -205,6 +209,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--s-2);
+  min-width: 0;
 }
 
 .v2-set__field-label {
@@ -222,6 +227,7 @@
   gap: var(--s-3);
   font-family: var(--font-sans);
   font-size: var(--text-sm);
+  flex-wrap: wrap;
 }
 
 .v2-set__row-label { color: var(--ink-2); }
@@ -250,12 +256,19 @@
   font: inherit;
   text-align: left;
   cursor: pointer;
+  min-width: 0;
+}
+
+.v2-set__row-name {
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
 
 .v2-set__row-state {
   display: inline-flex;
   align-items: center;
   gap: var(--s-2);
+  flex: 0 0 auto;
 }
 
 .v2-set__provider-row--open .v2-set__row-state svg {
@@ -264,6 +277,7 @@
 
 .v2-set__row-body {
   padding: 0 0 var(--s-4);
+  min-width: 0;
 }
 
 .v2-set__provider-grid {
@@ -318,6 +332,7 @@
   color: var(--ink);
   outline: 0;
   box-sizing: border-box;
+  min-width: 0;
 }
 
 .v2-set__textarea {
@@ -436,6 +451,10 @@
   transition: background var(--dur-fast) var(--ease-out),
               color var(--dur-fast) var(--ease-out),
               border-color var(--dur-fast) var(--ease-out);
+  min-height: 32px;
+  max-width: 100%;
+  white-space: normal;
+  text-align: center;
 }
 
 .v2-set__btn:hover { background: var(--paper-3); color: var(--ink); }
@@ -535,6 +554,9 @@
   color: var(--ink-2);
   font-family: var(--font-mono);
   font-size: var(--text-xs);
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  white-space: normal;
 }
 
 .v2-set__chip--ok { background: color-mix(in srgb, var(--ok) 14%, transparent); color: var(--ok); }
@@ -644,6 +666,7 @@
   display: flex;
   align-items: center;
   gap: var(--s-2);
+  flex-wrap: wrap;
 }
 
 .v2-set__token-box {
@@ -821,6 +844,7 @@
   padding: var(--s-3) var(--s-5);
   border-top: var(--hair-soft);
   background: var(--paper-2);
+  flex-wrap: wrap;
 }
 
 /* ── Embedded legacy SidecarConfigEditor — retheme cascade ── */
@@ -870,6 +894,7 @@
   display: flex;
   flex-direction: column;
   gap: var(--s-1);
+  min-width: 0;
 }
 
 .v2-set__mode-card:hover:not(:disabled) {
@@ -899,6 +924,33 @@
   font-size: var(--text-xs);
   color: var(--ink-3);
   line-height: 1.4;
+  overflow-wrap: anywhere;
+}
+
+.v2-set__row-actions {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  margin-top: var(--s-3);
+  flex-wrap: wrap;
+}
+
+.v2-set__row-actions .v2-set__btn--danger {
+  margin-left: auto;
+}
+
+@media (max-width: 560px) {
+  .v2-set__stats,
+  .v2-set--inline .v2-set__stats { grid-template-columns: 1fr; }
+  .v2-set__body,
+  .v2-set--inline .v2-set__body { padding: var(--s-3); }
+  .v2-set__tabs,
+  .v2-set--inline .v2-set__tabs { padding: 0 var(--s-2); }
+  .v2-set__section { padding: var(--s-3); }
+  .v2-set__mode { grid-template-columns: 1fr; }
+  .v2-set__row-actions > .v2-set__btn,
+  .v2-set__row-actions .v2-set__btn--danger { flex: 1 1 140px; margin-left: 0 !important; }
+  .v2-set__dialog-foot > .v2-set__btn { flex: 1 1 120px; }
 }
 
 /* ════════════ Brand Book III / Monochrome Lab ════════════
@@ -909,4 +961,3 @@
 .v2-set__tab[data-active="true"] { border-radius: 7px 2px 7px 7px; }
 .v2-set__stat-value, .v2-set__section-title { font-family: var(--sans); font-weight: 700; letter-spacing: -0.015em; }
 .v2-set :focus-visible { outline-color: var(--speak); }
-
