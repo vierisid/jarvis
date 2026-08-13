@@ -20,6 +20,9 @@ import {
 
 /** Reserved hosted provider name (mirrors the daemon's usejarvis_ai carve-out). */
 const USEJARVIS_NAME = "usejarvis_ai";
+/** Hosted aliases that are NOT chat models: the key-scoped catalog lists every
+ * modality, but these pickers only ever choose chat tiers. */
+const NON_CHAT_USEJARVIS_ALIASES = new Set(["uj-stt", "uj-tts", "uj-realtime"]);
 
 /**
  * Providers offered by the model pickers: the user's editable entries plus,
@@ -1103,7 +1106,15 @@ function providerModels(
     (entry.kind === "omniroute" || entry.kind === "groq" || entry.kind === "usejarvis_ai")
     && providerCatalogs[name]?.length
   ) {
-    return providerCatalogs[name]!;
+    const catalog = providerCatalogs[name]!;
+    // The hosted catalog is key-scoped across ALL modalities, so it also
+    // carries the voice aliases. These pickers choose CHAT tiers (and the
+    // single-model default) — selecting uj-stt/uj-tts/uj-realtime there would
+    // point the conversation at a transcription or speech endpoint and break
+    // chat outright. Voice slots are chosen in Channels/Voice, not here.
+    return entry.kind === "usejarvis_ai"
+      ? catalog.filter((id) => !NON_CHAT_USEJARVIS_ALIASES.has(id))
+      : catalog;
   }
   return MODELS_BY_KIND[entry.kind] ?? [];
 }
