@@ -6,7 +6,7 @@
  * to it instead of launching a headed window via WSLg). Skipped entirely when
  * no Chromium executable is available.
  */
-import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
+import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
 import { existsSync, mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -97,7 +97,7 @@ describe.skipIf(!chromiumExe)('browser primitives (integration)', () => {
     if (!up) throw new Error(`Chromium CDP did not come up on port ${TEST_PORT}`);
 
     browser = new BrowserController(TEST_PORT);
-    await browser.navigate(`data:text/html,${encodeURIComponent(TEST_PAGE)}`);
+    await loadTestPage();
     // 90s, not 60s: the poll alone may run ~46s and navigate() carries an
     // internal 30s load wait — the hook must exceed their sum.
   }, 90_000);
@@ -107,6 +107,57 @@ describe.skipIf(!chromiumExe)('browser primitives (integration)', () => {
     proc?.kill();
     if (profileDir) rmSync(profileDir, { recursive: true, force: true });
   });
+
+  /**
+   * Navigate to a pristine TEST_PAGE and block until the DOM the tests assert
+   * on actually exists.
+   *
+   * navigate() resolves on Page.loadEventFired plus a FIXED 800ms settle, and
+   * when the load wait times out it only warns and continues — so on a loaded
+   * runner it can hand back a page whose script hasn't run. That produced the
+   * two failure shapes seen in CI: `document.getElementById("field")` being
+   * null (TypeError reading 'value'), and window.__events coming back empty
+   * because the listeners weren't attached yet. Polling for the real
+   * postcondition removes the dependence on that fixed sleep.
+   */
+  async function loadTestPage(): Promise<void> {
+    await browser.navigate(`data:text/html,${encodeURIComponent(TEST_PAGE)}`);
+
+    const deadline = Date.now() + 15_000;
+    let last = 'never evaluated';
+    while (Date.now() < deadline) {
+      try {
+        const ready = await browser.evaluate(`(() => {
+          const el = document.getElementById('field');
+          const ed = document.getElementById('editor');
+          const btn = document.getElementById('clickme');
+          if (!el || !ed || !btn) return 'dom-missing';
+          if (!Array.isArray(window.__events)) return 'script-not-run';
+          if (window.frames.length < 2) return 'iframes-missing';
+          // The iframes are written synchronously, but their documents settle a
+          // tick later — the snapshot walker needs both to be traversable.
+          if (!window.frames[0].document.querySelector('button')) return 'frame0-empty';
+          if (!window.frames[1].document.querySelector('[contenteditable]')) return 'frame1-empty';
+          return 'ready';
+        })()`) as string;
+        if (ready === 'ready') return;
+        last = ready;
+      } catch (err) {
+        last = `evaluate threw: ${err}`;
+      }
+      await Bun.sleep(100);
+    }
+    throw new Error(`TEST_PAGE never became ready (last state: ${last})`);
+  }
+
+  // Every test starts from a pristine page. These tests share one browser and
+  // one document, and several of them MUTATE it — typing into #field and
+  // #editor, and the no-body test below navigates away entirely. That made the
+  // suite order-dependent: a test's assertions silently depended on which
+  // sibling had run before it, and any incomplete restore leaked forward.
+  beforeEach(async () => {
+    await loadTestPage();
+  }, 30_000);
 
   async function events(): Promise<string[]> {
     return await browser.evaluate('window.__events') as string[];
@@ -144,7 +195,9 @@ describe.skipIf(!chromiumExe)('browser primitives (integration)', () => {
     const snap = await browser.snapshot();
     expect(snap.text).toBe('');
     expect(Array.isArray(snap.elements)).toBe(true);
-    await browser.navigate(`data:text/html,${encodeURIComponent(TEST_PAGE)}`);
+    // No manual restore: beforeEach re-loads TEST_PAGE and waits for it to be
+    // ready. The old restore here was fire-and-forget — if it hadn't settled,
+    // the NEXT test ran against this body-less page.
   }, 20_000);
 
   test('pressKey sends plain and modified keys to the page', async () => {

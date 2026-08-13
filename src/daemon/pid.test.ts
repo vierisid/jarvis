@@ -1,7 +1,7 @@
-import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
+import { test, expect, describe, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
 import {
   acquireLock,
   isLocked,
@@ -14,8 +14,23 @@ import {
   getLogDir,
 } from './pid.ts';
 
-const JARVIS_DIR = join(homedir(), '.jarvis');
-const LOCK_PATH = join(JARVIS_DIR, 'jarvis.pid');
+// The lock lives at `JARVIS_HOME`/jarvis.pid, resolved per call (see
+// pid.ts:daemonRootDir). These tests used to flock the developer's REAL
+// ~/.jarvis/jarvis.pid, which made them fail whenever anything else held that
+// lock — a jarvis daemon running on the dev machine, or a child process leaked
+// by an earlier test file that hadn't been reaped yet. Under full-suite load
+// that showed up as "Child process failed to acquire lock". Point JARVIS_HOME
+// at a throwaway dir instead, the same seam backup.test.ts uses, so this file
+// owns its lock and can't collide with anything.
+let DATA_DIR: string;
+let LOCK_PATH: string;
+let prevJarvisHome: string | undefined;
+
+// Logs are the exception: getLogPath/getLogDir read a module-level constant
+// built from homedir() at import time, so they are NOT JARVIS_HOME-aware and
+// still resolve under the real home. Asserted against this on purpose.
+const REAL_JARVIS_DIR = join(homedir(), '.jarvis');
+
 const PID_MODULE = join(import.meta.dir, 'pid.ts');
 const READY_SIGNAL = join(tmpdir(), 'jarvis-test-lock-ready');
 const HOLDER_SCRIPT = join(tmpdir(), 'jarvis-test-lock-holder.ts');
@@ -29,6 +44,10 @@ function cleanup(): void {
 /**
  * Spawn a child process that acquires the flock and holds it until killed.
  * Returns once the child has confirmed it holds the lock.
+ *
+ * The child gets this file's isolated JARVIS_HOME explicitly, so it flocks the
+ * same throwaway path the parent asserts on rather than inheriting whatever the
+ * ambient environment points at.
  */
 async function spawnLockHolder(): Promise<{ proc: ReturnType<typeof Bun.spawn>; pid: number }> {
   try { unlinkSync(READY_SIGNAL); } catch {}
@@ -41,28 +60,62 @@ writeFileSync(${JSON.stringify(READY_SIGNAL)}, ok ? String(process.pid) : 'FAIL'
 await Bun.sleep(60000);
 `);
 
+  // stderr is piped, not ignored: when the child can't take the lock its reason
+  // (pid.ts logs one) is the only thing that explains the failure, and a bare
+  // "failed to acquire lock" on a CI runner is undebuggable.
   const proc = Bun.spawn(['bun', HOLDER_SCRIPT], {
-    stdio: ['ignore', 'ignore', 'ignore'],
+    stdio: ['ignore', 'ignore', 'pipe'],
+    env: { ...process.env, JARVIS_HOME: DATA_DIR },
   });
 
-  for (let i = 0; i < 50; i++) {
-    await Bun.sleep(100);
-    if (existsSync(READY_SIGNAL)) {
-      const content = readFileSync(READY_SIGNAL, 'utf-8').trim();
-      if (content === 'FAIL') {
-        proc.kill();
-        await proc.exited;
-        throw new Error('Child process failed to acquire lock');
-      }
-      return { proc, pid: parseInt(content, 10) };
+  const childStderr = async (): Promise<string> => {
+    try { return (await new Response(proc.stderr as ReadableStream).text()).trim(); }
+    catch { return '<no stderr>'; }
+  };
+
+  // 15s, not 5s: the child pays for a cold `bun` start AND the one-time TinyCC
+  // compile of flock.c (pid.ts:getFlock). On a loaded 2-core runner that can
+  // take several seconds on its own, and a timeout here read as a real bug.
+  const deadline = Date.now() + 15_000;
+  while (Date.now() < deadline) {
+    await Bun.sleep(50);
+    if (!existsSync(READY_SIGNAL)) continue;
+
+    const content = readFileSync(READY_SIGNAL, 'utf-8').trim();
+    if (content === 'FAIL') {
+      const err = await childStderr();
+      proc.kill();
+      await proc.exited;
+      throw new Error(
+        `Child process failed to acquire lock at ${LOCK_PATH}` +
+        `\n  holder stderr: ${err || '<empty>'}` +
+        `\n  lock currently held by pid: ${isLocked() ?? 'nobody'}`,
+      );
     }
+    return { proc, pid: parseInt(content, 10) };
   }
+
+  const err = await childStderr();
   proc.kill();
   await proc.exited;
-  throw new Error('Timed out waiting for child to acquire lock');
+  throw new Error(`Timed out waiting for child to acquire lock\n  holder stderr: ${err || '<empty>'}`);
 }
 
 describe('Process Lock Manager', () => {
+  beforeAll(() => {
+    prevJarvisHome = process.env.JARVIS_HOME;
+    DATA_DIR = mkdtempSync(join(tmpdir(), 'jarvis-pid-test-'));
+    process.env.JARVIS_HOME = DATA_DIR;
+    LOCK_PATH = join(DATA_DIR, 'jarvis.pid');
+  });
+
+  afterAll(() => {
+    cleanup();
+    if (prevJarvisHome === undefined) delete process.env.JARVIS_HOME;
+    else process.env.JARVIS_HOME = prevJarvisHome;
+    try { rmSync(DATA_DIR, { recursive: true, force: true }); } catch { /* ignore */ }
+  });
+
   beforeEach(() => cleanup());
   afterEach(() => cleanup());
 
@@ -100,7 +153,7 @@ describe('Process Lock Manager', () => {
     });
 
     test('returns null for stale file (file exists, no lock held)', () => {
-      mkdirSync(JARVIS_DIR, { recursive: true });
+      mkdirSync(DATA_DIR, { recursive: true });
       writeFileSync(LOCK_PATH, '99999');
       // No flock held — probe should succeed → not locked
       expect(isLocked()).toBeNull();
@@ -156,37 +209,37 @@ describe('Process Lock Manager', () => {
     });
 
     test('returns PID from file', () => {
-      mkdirSync(JARVIS_DIR, { recursive: true });
+      mkdirSync(DATA_DIR, { recursive: true });
       writeFileSync(LOCK_PATH, '12345');
       expect(readPid()).toBe(12345);
     });
 
     test('trims whitespace', () => {
-      mkdirSync(JARVIS_DIR, { recursive: true });
+      mkdirSync(DATA_DIR, { recursive: true });
       writeFileSync(LOCK_PATH, '  42\n');
       expect(readPid()).toBe(42);
     });
 
     test('returns null for non-numeric content', () => {
-      mkdirSync(JARVIS_DIR, { recursive: true });
+      mkdirSync(DATA_DIR, { recursive: true });
       writeFileSync(LOCK_PATH, 'not-a-pid');
       expect(readPid()).toBeNull();
     });
 
     test('returns null for empty file', () => {
-      mkdirSync(JARVIS_DIR, { recursive: true });
+      mkdirSync(DATA_DIR, { recursive: true });
       writeFileSync(LOCK_PATH, '');
       expect(readPid()).toBeNull();
     });
 
     test('returns null for zero', () => {
-      mkdirSync(JARVIS_DIR, { recursive: true });
+      mkdirSync(DATA_DIR, { recursive: true });
       writeFileSync(LOCK_PATH, '0');
       expect(readPid()).toBeNull();
     });
 
     test('returns null for negative PID', () => {
-      mkdirSync(JARVIS_DIR, { recursive: true });
+      mkdirSync(DATA_DIR, { recursive: true });
       writeFileSync(LOCK_PATH, '-1');
       expect(readPid()).toBeNull();
     });
@@ -200,31 +253,31 @@ describe('Process Lock Manager', () => {
     });
 
     test('returns null for legacy PID-only lock file', () => {
-      mkdirSync(JARVIS_DIR, { recursive: true });
+      mkdirSync(DATA_DIR, { recursive: true });
       writeFileSync(LOCK_PATH, '12345');
       expect(readLockedPort()).toBeNull();
     });
 
     test('returns the port from a two-line lock file', () => {
-      mkdirSync(JARVIS_DIR, { recursive: true });
+      mkdirSync(DATA_DIR, { recursive: true });
       writeFileSync(LOCK_PATH, '12345\n9000\n');
       expect(readLockedPort()).toBe(9000);
     });
 
     test('returns null for out-of-range port', () => {
-      mkdirSync(JARVIS_DIR, { recursive: true });
+      mkdirSync(DATA_DIR, { recursive: true });
       writeFileSync(LOCK_PATH, '12345\n99999\n');
       expect(readLockedPort()).toBeNull();
     });
 
     test('returns null for non-numeric port line', () => {
-      mkdirSync(JARVIS_DIR, { recursive: true });
+      mkdirSync(DATA_DIR, { recursive: true });
       writeFileSync(LOCK_PATH, '12345\nabc\n');
       expect(readLockedPort()).toBeNull();
     });
 
     test('readPid still works for two-line format', () => {
-      mkdirSync(JARVIS_DIR, { recursive: true });
+      mkdirSync(DATA_DIR, { recursive: true });
       writeFileSync(LOCK_PATH, '12345\n9000\n');
       expect(readPid()).toBe(12345);
     });
@@ -266,18 +319,29 @@ describe('Process Lock Manager', () => {
   // ── path getters ─────────────────────────────────────────────────
 
   describe('path getters', () => {
-    test('getPidPath returns ~/.jarvis/jarvis.pid', () => {
-      expect(getPidPath()).toBe(join(homedir(), '.jarvis', 'jarvis.pid'));
+    test('getPidPath tracks JARVIS_HOME', () => {
+      expect(getPidPath()).toBe(join(DATA_DIR, 'jarvis.pid'));
+    });
+
+    test('getPidPath falls back to ~/.jarvis/jarvis.pid with no JARVIS_HOME', () => {
+      // The path is resolved per call, so unsetting the var mid-test is enough
+      // to exercise the default branch that the isolated DATA_DIR otherwise hides.
+      delete process.env.JARVIS_HOME;
+      try {
+        expect(getPidPath()).toBe(join(homedir(), '.jarvis', 'jarvis.pid'));
+      } finally {
+        process.env.JARVIS_HOME = DATA_DIR;
+      }
     });
 
     test('getLogPath returns path and creates logs dir', () => {
       const logPath = getLogPath();
-      expect(logPath).toBe(join(JARVIS_DIR, 'logs', 'jarvis.log'));
-      expect(existsSync(join(JARVIS_DIR, 'logs'))).toBe(true);
+      expect(logPath).toBe(join(REAL_JARVIS_DIR, 'logs', 'jarvis.log'));
+      expect(existsSync(join(REAL_JARVIS_DIR, 'logs'))).toBe(true);
     });
 
     test('getLogDir returns logs directory', () => {
-      expect(getLogDir()).toBe(join(JARVIS_DIR, 'logs'));
+      expect(getLogDir()).toBe(join(REAL_JARVIS_DIR, 'logs'));
     });
   });
 
