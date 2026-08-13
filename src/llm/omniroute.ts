@@ -16,8 +16,9 @@ export class OmniRouteProvider extends OpenAIProvider {
     baseUrl = 'http://localhost:20128/v1',
     defaultModel = 'auto',
     apiKey = '',
+    authHeader = 'Authorization',
   ) {
-    super(apiKey, defaultModel, baseUrl);
+    super(apiKey, defaultModel, baseUrl, authHeader);
   }
 
   protected override get errorLabel(): string {
@@ -30,8 +31,7 @@ export class OmniRouteProvider extends OpenAIProvider {
    * families, which is incorrect for a multi-provider gateway.
    */
   override async listModels(): Promise<string[]> {
-    const headers: Record<string, string> = {};
-    if (this.apiKey) headers.Authorization = `Bearer ${this.apiKey}`;
+    const headers = this.requestHeaders(false);
 
     const response = await fetch(this.modelsUrl, { headers });
     if (!response.ok) {

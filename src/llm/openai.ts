@@ -112,6 +112,7 @@ export class OpenAIProvider implements LLMProvider {
   protected apiKey: string;
   protected defaultModel: string;
   protected baseUrl: string;
+  protected authHeader: string;
   protected get apiUrl(): string {
     return `${this.baseUrl}/chat/completions`;
   }
@@ -122,10 +123,21 @@ export class OpenAIProvider implements LLMProvider {
     return 'OpenAI';
   }
 
-  constructor(apiKey: string, defaultModel = 'gpt-4o', baseUrl = 'https://api.openai.com/v1') {
+  constructor(apiKey: string, defaultModel = 'gpt-4o', baseUrl = 'https://api.openai.com/v1', authHeader = 'Authorization') {
     this.apiKey = apiKey;
     this.defaultModel = defaultModel;
     this.baseUrl = baseUrl.replace(/\/$/, '');
+    this.authHeader = authHeader;
+  }
+
+  protected requestHeaders(includeContentType = true): Record<string, string> {
+    const headers: Record<string, string> = includeContentType ? { 'Content-Type': 'application/json' } : {};
+    if (this.apiKey) {
+      headers[this.authHeader] = this.authHeader.toLowerCase() === 'authorization'
+        ? `Bearer ${this.apiKey}`
+        : this.apiKey;
+    }
+    return headers;
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
@@ -149,10 +161,7 @@ export class OpenAIProvider implements LLMProvider {
       body.tool_choice = tool_choice || 'auto';  // Enable tool calling
     }
 
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+    const headers = this.requestHeaders();
 
     const response = await fetch(this.apiUrl, {
       method: 'POST',
@@ -191,10 +200,7 @@ export class OpenAIProvider implements LLMProvider {
       body.tool_choice = tool_choice || 'auto';  // Enable tool calling
     }
 
-    const headers: Record<string, string> = {
-      'Content-Type': 'application/json',
-    };
-    if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+    const headers = this.requestHeaders();
 
     const response = await fetch(this.apiUrl, {
       method: 'POST',
@@ -319,8 +325,7 @@ export class OpenAIProvider implements LLMProvider {
 
   async listModels(): Promise<string[]> {
     try {
-      const headers: Record<string, string> = {};
-      if (this.apiKey) headers['Authorization'] = `Bearer ${this.apiKey}`;
+      const headers = this.requestHeaders(false);
       const response = await fetch(this.modelsUrl, { headers });
 
       if (!response.ok) {

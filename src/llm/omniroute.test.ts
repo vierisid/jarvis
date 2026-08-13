@@ -107,6 +107,31 @@ describe('OmniRouteProvider', () => {
     ]);
   });
 
+  it('uses the configured x-api-key header for chat and model discovery', async () => {
+    const headers: Headers[] = [];
+    globalThis.fetch = (async (input: RequestInfo | URL, init?: RequestInit) => {
+      headers.push(new Headers(init?.headers));
+      if (String(input).endsWith('/models')) {
+        return new Response(JSON.stringify({ data: [{ id: 'auto' }] }), { status: 200 });
+      }
+      return new Response(JSON.stringify({
+        id: '1', object: 'chat.completion', created: 0, model: 'auto',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      }), { status: 200 });
+    }) as typeof fetch;
+
+    const provider = new OmniRouteProvider('https://omni.example/v1', 'auto', 'omni-key', 'x-api-key');
+    await provider.chat([{ role: 'user', content: 'hi' }]);
+    await provider.listModels();
+
+    expect(headers).toHaveLength(2);
+    for (const header of headers) {
+      expect(header.get('x-api-key')).toBe('omni-key');
+      expect(header.get('authorization')).toBeNull();
+    }
+  });
+
   it('assembles streamed tool-call deltas from routed models', async () => {
     const events = [
       { id: '1', object: 'chat.completion.chunk', created: 0, model: 'auto', choices: [{ index: 0, delta: { tool_calls: [{ index: 0, id: 'call_stream', type: 'function', function: { name: 'weather', arguments: '{"city"' } }] }, finish_reason: null }] },

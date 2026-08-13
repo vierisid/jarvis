@@ -302,6 +302,8 @@ export type LLMProviderEntry = {
   api_key?: string;
   /** Base URL for local providers and compatible API gateways. */
   base_url?: string;
+  /** Header used to send api_key. Authorization values are prefixed with Bearer. */
+  auth_header?: string;
 };
 
 /**

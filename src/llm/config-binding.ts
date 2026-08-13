@@ -57,6 +57,7 @@ export function instantiateProvider(
       provider = new AnthropicProvider(entry.api_key, undefined, {
         promptCache: globals?.promptCache !== false,
         baseUrl: entry.base_url,
+        authHeader: entry.auth_header,
       });
       break;
     case 'openai':
@@ -87,14 +88,14 @@ export function instantiateProvider(
       break;
     case 'openai_compatible':
       if (!entry.base_url) return null;
-      provider = new OpenAICompatibleProvider(entry.base_url, undefined, entry.api_key);
+      provider = new OpenAICompatibleProvider(entry.base_url, undefined, entry.api_key, entry.auth_header);
       break;
     case 'litellm':
       if (!entry.base_url) return null;
-      provider = new LiteLLMProvider(entry.base_url, undefined, entry.api_key);
+      provider = new LiteLLMProvider(entry.base_url, undefined, entry.api_key, entry.auth_header);
       break;
     case 'omniroute':
-      provider = new OmniRouteProvider(entry.base_url?.trim() || undefined, undefined, entry.api_key);
+      provider = new OmniRouteProvider(entry.base_url?.trim() || undefined, undefined, entry.api_key, entry.auth_header);
       break;
     default:
       console.warn(`[LLM] Unknown provider kind '${kind}' for '${name}' - skipping.`);

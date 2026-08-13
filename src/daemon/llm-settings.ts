@@ -52,6 +52,7 @@ export type LLMSettingsProviderView = {
   kind: LLMProviderKind;
   has_api_key: boolean;
   base_url?: string;
+  auth_header?: string;
 };
 
 export type LLMMode = 'single' | 'multi-tier';
@@ -85,6 +86,7 @@ export type LLMSettingsRequest = {
     kind?: LLMProviderKind;
     api_key?: string;
     base_url?: string;
+    auth_header?: string;
   } | null>;            // null deletes the provider
   default?: string | null;     // null clears
   mode?: LLMMode;              // persisted architecture choice
@@ -121,6 +123,7 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
       kind,
       has_api_key: hasSecret(keychainKey(name)) || Boolean(entry.api_key),
       ...(entry.base_url ? { base_url: entry.base_url } : {}),
+      ...(entry.auth_header ? { auth_header: entry.auth_header } : {}),
     };
   }
 
@@ -213,6 +216,13 @@ export function saveLLMSettings(
       const merged: LLMProviderEntry = { ...existing };
       if (update.kind !== undefined) merged.kind = update.kind;
       if (update.base_url !== undefined) merged.base_url = update.base_url;
+      if (update.auth_header !== undefined) {
+        const header = update.auth_header.trim();
+        if (header && !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(header)) {
+          throw new Error(`Provider '${name}' has an invalid auth header name`);
+        }
+        merged.auth_header = header || undefined;
+      }
       // api_key is persisted to the keychain only - never store the plaintext
       // back into the config object that might end up on disk.
       if (update.api_key !== undefined) {
@@ -531,6 +541,7 @@ export async function testLLMProvider(
     provider?: string;
     api_key?: string;
     base_url?: string;
+    auth_header?: string;
     model?: string;
   },
   config: JarvisConfig,
@@ -585,6 +596,9 @@ export async function testLLMProvider(
     kind,
     ...(apiKey ? { api_key: apiKey } : {}),
     ...(baseUrl ? { base_url: baseUrl } : {}),
+    ...((opts.auth_header ?? configured?.auth_header)
+      ? { auth_header: opts.auth_header ?? configured?.auth_header }
+      : {}),
   };
 
   const instance = instantiateProvider(name, entry);

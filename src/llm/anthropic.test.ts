@@ -85,6 +85,22 @@ describe('AnthropicProvider custom endpoint', () => {
     expect(requestHeaders.get('anthropic-version')).toBe('2023-06-01');
   });
 
+  it('can use x-api-key authentication with a custom base URL', async () => {
+    let requestHeaders = new Headers();
+    globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {
+      requestHeaders = new Headers(init?.headers);
+      return new Response(JSON.stringify(anthropicResponse()), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    await new AnthropicProvider('gateway-key', undefined, {
+      baseUrl: 'https://gateway.example.com',
+      authHeader: 'x-api-key',
+    }).chat([{ role: 'user', content: 'hi' }]);
+
+    expect(requestHeaders.get('x-api-key')).toBe('gateway-key');
+    expect(requestHeaders.get('authorization')).toBeNull();
+  });
+
   it('keeps x-api-key authentication on Anthropic by default', async () => {
     let requestHeaders = new Headers();
     globalThis.fetch = (async (_input: RequestInfo | URL, init?: RequestInit) => {

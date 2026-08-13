@@ -20,8 +20,8 @@ import { OpenAIProvider } from './openai.ts';
 export class LiteLLMProvider extends OpenAIProvider {
   override name = 'litellm';
 
-  constructor(baseUrl = 'http://localhost:4000/v1', defaultModel = '', apiKey = '') {
-    super(apiKey, defaultModel, baseUrl);
+  constructor(baseUrl = 'http://localhost:4000/v1', defaultModel = '', apiKey = '', authHeader = 'Authorization') {
+    super(apiKey, defaultModel, baseUrl, authHeader);
   }
 
   protected override get errorLabel(): string {

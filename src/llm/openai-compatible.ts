@@ -13,8 +13,8 @@ import { OpenAIProvider } from './openai.ts';
 export class OpenAICompatibleProvider extends OpenAIProvider {
   override name = 'openai_compatible';
 
-  constructor(baseUrl: string, defaultModel = '', apiKey = '') {
-    super(apiKey, defaultModel, baseUrl);
+  constructor(baseUrl: string, defaultModel = '', apiKey = '', authHeader = 'Authorization') {
+    super(apiKey, defaultModel, baseUrl, authHeader);
   }
 
   protected override get errorLabel(): string {

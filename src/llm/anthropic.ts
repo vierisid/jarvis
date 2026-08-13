@@ -136,17 +136,19 @@ export class AnthropicProvider implements LLMProvider {
   private promptCache: boolean;
   private apiUrl: string;
   private bearerAuth: boolean;
+  private authHeader: string;
 
   constructor(
     apiKey: string,
     defaultModel = 'claude-sonnet-4-5-20250929',
-    opts?: { promptCache?: boolean; baseUrl?: string },
+    opts?: { promptCache?: boolean; baseUrl?: string; authHeader?: string },
   ) {
     this.apiKey = apiKey;
     this.defaultModel = defaultModel;
     this.promptCache = opts?.promptCache !== false;
     this.apiUrl = anthropicMessagesUrl(opts?.baseUrl);
     this.bearerAuth = isAnthropicCustomBaseUrl(opts?.baseUrl);
+    this.authHeader = opts?.authHeader || (this.bearerAuth ? 'Authorization' : 'x-api-key');
   }
 
   /**
@@ -157,8 +159,9 @@ export class AnthropicProvider implements LLMProvider {
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
     };
-    if (this.bearerAuth) headers.authorization = `Bearer ${this.apiKey}`;
-    else headers['x-api-key'] = this.apiKey;
+    headers[this.authHeader] = this.authHeader.toLowerCase() === 'authorization'
+      ? `Bearer ${this.apiKey}`
+      : this.apiKey;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
       const response = await fetch(this.apiUrl, {
@@ -385,7 +388,8 @@ export class AnthropicProvider implements LLMProvider {
     try {
       const response = await fetch(this.apiUrl.replace(/\/messages$/, '/models'), {
         headers: {
-          authorization: `Bearer ${this.apiKey}`,
+          [this.authHeader]: this.authHeader.toLowerCase() === 'authorization'
+            ? `Bearer ${this.apiKey}` : this.apiKey,
           'anthropic-version': '2023-06-01',
         },
       });

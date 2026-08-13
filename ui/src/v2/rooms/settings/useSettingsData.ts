@@ -56,6 +56,8 @@ export const KEY_BASED_KINDS: ReadonlySet<LLMProviderKind> = new Set([
   "gemini",
   "openrouter",
   "nvidia",
+  "openai_compatible",
+  "litellm",
   "omniroute",
 ]);
 
@@ -65,6 +67,8 @@ export const KEY_BASED_KINDS: ReadonlySet<LLMProviderKind> = new Set([
  */
 export const OPTIONAL_KEY_KINDS: ReadonlySet<LLMProviderKind> = new Set([
   "omniroute",
+  "openai_compatible",
+  "litellm",
 ]);
 
 /** Provider kinds that need a base_url. */
@@ -100,6 +104,7 @@ export interface LLMConfigProviderView {
   kind: LLMProviderKind;
   has_api_key: boolean;
   base_url?: string;
+  auth_header?: string;
 }
 
 /**
@@ -486,7 +491,7 @@ export function useSettingsData() {
   const upsertProvider = useCallback(
     async (
       name: string,
-      input: { kind?: LLMProviderKind; api_key?: string; base_url?: string },
+      input: { kind?: LLMProviderKind; api_key?: string; base_url?: string; auth_header?: string },
     ): Promise<ProviderTestResult> => {
       try {
         const r = await postJson<{ ok: boolean; message: string }>(
@@ -620,7 +625,7 @@ export function useSettingsData() {
   const testProvider = useCallback(
     async (
       name: string,
-      overrides?: { kind?: LLMProviderKind; model?: string; baseUrl?: string; apiKey?: string },
+      overrides?: { kind?: LLMProviderKind; model?: string; baseUrl?: string; apiKey?: string; authHeader?: string },
     ): Promise<ProviderTestResult> => {
       try {
         const body: Record<string, unknown> = { name };
@@ -630,6 +635,7 @@ export function useSettingsData() {
           body.base_url = overrides.baseUrl ?? "";
         }
         if (overrides?.apiKey) body.api_key = overrides.apiKey;
+        if (overrides?.authHeader) body.auth_header = overrides.authHeader;
         const r = await postJson<{ ok: boolean; model?: string; models?: string[]; error?: string }>(
           "/api/config/llm/test",
           body,
