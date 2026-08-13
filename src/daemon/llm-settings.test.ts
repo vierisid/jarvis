@@ -56,6 +56,32 @@ describe('LLM default provider settings', () => {
     expect(() => saveLLMSettings(config, { default_provider: 'missing' }))
       .toThrow("Default provider 'missing' is not configured");
   });
+
+  it('does not derive a provider from a model ref with an empty model id', () => {
+    const config = configWithProviders();
+    config.llm.default = 'test-anthropic:';
+
+    expect(getLLMSettings(config).default_provider).toBeNull();
+  });
+
+  it('clears every model assignment owned by a deleted provider', () => {
+    const config = configWithProviders();
+    config.llm.default_provider = 'test-anthropic';
+    config.llm.default = 'test-anthropic:claude-sonnet';
+    config.llm.tiers = {
+      conversation: 'test-anthropic:claude-haiku',
+      high: 'test-omniroute:auto',
+      medium: 'test-anthropic:claude-sonnet',
+    };
+
+    saveLLMSettings(config, { providers: { 'test-anthropic': null } });
+
+    expect(config.llm.default_provider).toBeUndefined();
+    expect(config.llm.default).toBeUndefined();
+    expect(config.llm.tiers).toEqual({ high: 'test-omniroute:auto' });
+    expect(getSetting('llm.tiers.conversation')).toBe('');
+    expect(getSetting('llm.tiers.medium')).toBe('');
+  });
 });
 
 describe('LLM settings model migrations', () => {

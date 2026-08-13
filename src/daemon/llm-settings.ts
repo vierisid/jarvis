@@ -215,6 +215,11 @@ export function saveLLMSettings(
         delete config.llm.providers[name];
         if (config.llm.default_provider === name) config.llm.default_provider = undefined;
         if (providerFromModelRef(config.llm.default) === name) config.llm.default = undefined;
+        for (const tier of ['conversation', 'high', 'medium', 'low'] as const) {
+          if (providerFromModelRef(config.llm.tiers[tier]) === name) {
+            delete config.llm.tiers[tier];
+          }
+        }
         try { deleteSecret(keychainKey(name)); } catch { /* ignore */ }
         continue;
       }
@@ -524,7 +529,7 @@ function migrateLegacyDBSettings(config: JarvisConfig): void {
 function providerFromModelRef(ref: string | null | undefined): string | null {
   if (!ref) return null;
   const separator = ref.indexOf(':');
-  return separator > 0 ? ref.slice(0, separator) : null;
+  return separator > 0 && separator < ref.length - 1 ? ref.slice(0, separator) : null;
 }
 
 // ── hotReloadLLMProviders ────────────────────────────────────────────────
