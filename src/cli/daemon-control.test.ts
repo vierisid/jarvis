@@ -22,6 +22,29 @@ let prevJarvisHome: string | undefined;
 
 const realKill = process.kill.bind(process);
 
+/**
+ * Spawn a child that spins until it can take the lock, the way a service
+ * manager relaunches the daemon the moment the old one dies (launchd
+ * KeepAlive=true, systemd Restart=). Returns immediately — it cannot acquire
+ * anything until the current holder exits.
+ */
+function spawnSupervisedReplacement(): { proc: ReturnType<typeof Bun.spawn>; ready: string } {
+  const readySignal = join(DATA_DIR, `replacement-ready-${Math.floor(performance.now() * 1000)}`);
+  const script = join(DATA_DIR, 'replacement.ts');
+  Bun.write(script, `
+import { acquireLock } from ${JSON.stringify(PID_MODULE)};
+import { writeFileSync } from 'node:fs';
+while (!acquireLock(process.pid)) await Bun.sleep(25);
+writeFileSync(${JSON.stringify(readySignal)}, String(process.pid));
+await Bun.sleep(60000);
+`);
+  const proc = Bun.spawn(['bun', script], {
+    stdio: ['ignore', 'ignore', 'ignore'],
+    env: { ...process.env, JARVIS_HOME: DATA_DIR },
+  });
+  return { proc, ready: readySignal };
+}
+
 /** Spawn a child holding the real flock, and wait until it confirms. */
 async function spawnHolder(opts: { ignoreSigterm?: boolean } = {}): Promise<ReturnType<typeof Bun.spawn>> {
   const readySignal = join(DATA_DIR, `ready-${Math.floor(performance.now() * 1000)}`);
@@ -139,5 +162,32 @@ describe('stopDaemonGracefully', () => {
 
     holder.kill(9);
     await holder.exited;
+  }, 30_000);
+
+  // The relaunch case: checking "is the pid we signalled gone" is not enough,
+  // because a service manager brings the daemon straight back under a NEW pid.
+  // The old pid is then dead, and a pid-based guard would unlink the lockfile
+  // the live replacement is holding.
+  test('leaves the lockfile intact when a supervisor relaunches the daemon', async () => {
+    const original = await spawnHolder();
+    const originalPid = isLocked();
+    expect(originalPid).not.toBeNull();
+
+    // Starts spinning now; it can only win the lock once `original` is killed.
+    const replacement = spawnSupervisedReplacement();
+
+    // 500ms poll: `original` dies on SIGTERM, and the replacement claims the
+    // lock during the interval before stopDaemonGracefully looks again.
+    const result = await stopDaemonGracefully({ timeoutMs: 5000, pollIntervalMs: 500 });
+    await original.exited;
+
+    const newPid = isLocked();
+    expect(newPid).not.toBeNull();
+    expect(newPid).not.toBe(originalPid); // a different process holds it now
+    expect(result.stopped).toBe(false);   // a daemon IS running against this dir
+    expect(existsSync(LOCK_PATH)).toBe(true);
+
+    replacement.proc.kill(9);
+    await replacement.proc.exited;
   }, 30_000);
 });
