@@ -270,15 +270,26 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
       await waitForProcessExit(pid, 2000);
     }
 
-    // releaseLock() unlinks the lockfile whether or not we hold it, so it must
-    // only run once the daemon is confirmed gone. Clearing a LIVE daemon's lock
-    // lets the next `jarvis start` take a fresh inode and run a second daemon
-    // against the same data dir. The usual reason to land here is EPERM — a
-    // daemon owned by another user, which isProcessAlive correctly reports as
-    // alive.
-    if (isProcessAlive(pid)) {
-      console.error(c.red(`✗ Could not stop JARVIS daemon (PID ${pid}) — it is still running.`));
-      console.error(c.dim('  Its lockfile was left in place. Stop it as its owner, or with root.'));
+    // releaseLock() unlinks the lockfile whether or not we hold it, so it may
+    // only run when nothing holds the flock. Probing the LOCK (rather than the
+    // pid we signalled) covers all three ways a daemon can still be there: it
+    // ignored/refused our signals (EPERM), or a service manager relaunched it
+    // under a new pid (launchd KeepAlive, systemd Restart). Unlinking in either
+    // case would let the next `jarvis start` take a fresh inode and run a
+    // second daemon against the same data dir.
+    const holder = isLocked();
+    if (holder !== null) {
+      const relaunched = holder !== pid;
+      console.error(c.red(
+        relaunched
+          ? `✗ JARVIS daemon (PID ${pid}) stopped, but a new one (PID ${holder}) is already running.`
+          : `✗ Could not stop JARVIS daemon (PID ${pid}) — it is still running.`,
+      ));
+      console.error(c.dim(
+        relaunched
+          ? '  A service manager restarted it. Disable autostart first: jarvis autostart disable'
+          : '  Its lockfile was left in place. Stop it as its owner, or with root.',
+      ));
       process.exit(1);
     }
 
@@ -302,11 +313,10 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
     console.log(c.green(`✓ JARVIS daemon stopped.${details}`));
   } catch (err) {
     console.error(c.red(`Failed to stop process ${pid}: ${err}`));
-    // Same rule as the success path: clear the lock only for a daemon that is
-    // genuinely gone (SIGTERM raising ESRCH — a stale lockfile), never for one
-    // we simply failed to signal.
-    if (isProcessAlive(pid)) {
-      console.error(c.dim('  Daemon is still running; its lockfile was left in place.'));
+    // Same rule as the success path: clear the lock only when nothing holds it
+    // (SIGTERM raising ESRCH — a stale lockfile), never while a daemon is live.
+    if (isLocked() !== null) {
+      console.error(c.dim('  A daemon still holds the lock; its lockfile was left in place.'));
       process.exit(1);
     }
     releaseLock();

@@ -25,10 +25,11 @@ export interface StopResult {
   /** True if the daemon exited via SIGTERM; false if we had to SIGKILL. */
   graceful: boolean;
   /**
-   * True when the daemon is confirmed gone (or there was none). False means it
-   * survived both signals — e.g. `kill` raised EPERM because the daemon belongs
-   * to another user. Callers that go on to modify the data dir must not treat a
-   * false here as "stopped".
+   * True when NO daemon holds the lock any more. False means one still does —
+   * either the daemon survived both signals (`kill` raised EPERM because it
+   * belongs to another user) or a service manager already relaunched it under a
+   * new pid. Callers that go on to modify the data dir must not treat a false
+   * here as "stopped".
    */
   stopped: boolean;
 }
@@ -87,13 +88,16 @@ export async function stopDaemonGracefully(options: StopOptions = {}): Promise<S
     // another user). The liveness check below tells the two apart.
   }
 
-  // Only clear the lockfile once the holder is confirmed gone. releaseLock()
-  // unlinks the path unconditionally, so calling it while the daemon is still
-  // alive deletes a LIVE holder's lock — after which isLocked() reports nothing
-  // and a second daemon can start against the same data dir. The stale-lock
-  // case this double-tap exists for is unaffected: a dead holder still gets its
-  // lockfile cleared.
-  const stopped = !isProcessAlive(pid);
+  // Ask the LOCK, not the pid we signalled. releaseLock() unlinks the path
+  // unconditionally, so it may only run when nothing holds the flock.
+  //
+  // Checking `!isProcessAlive(pid)` is not enough: autostart installs a launchd
+  // plist with KeepAlive=true (and a systemd unit with Restart=), so killing
+  // the daemon gets it relaunched under a NEW pid. The old pid is then gone,
+  // and we would unlink the lockfile the live replacement is holding — the
+  // double-daemon hazard this guard exists to prevent. Probing the lock covers
+  // that, the EPERM case, and the stale-lockfile case in one check.
+  const stopped = isLocked() === null;
   if (stopped) releaseLock();
 
   // A daemon that outlived both signals did not exit gracefully — it did not

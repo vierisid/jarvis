@@ -63,7 +63,13 @@ await Bun.sleep(60000);
     env: { ...process.env, JARVIS_HOME: DATA_DIR },
   });
 
-  const childStderr = async (): Promise<string> => {
+  // MUST be called only after the child has exited: reading the pipe drains it
+  // to EOF, and EOF arrives when the process ends. The holder sleeps 60s, so
+  // reading it while alive blocks for the full minute and turns a fast
+  // lock-acquisition failure into a silent test timeout.
+  const killThenStderr = async (): Promise<string> => {
+    proc.kill();
+    await proc.exited;
     try { return (await new Response(proc.stderr as ReadableStream).text()).trim(); }
     catch { return '<no stderr>'; }
   };
@@ -78,9 +84,7 @@ await Bun.sleep(60000);
 
     const content = readFileSync(READY_SIGNAL, 'utf-8').trim();
     if (content === 'FAIL') {
-      const err = await childStderr();
-      proc.kill();
-      await proc.exited;
+      const err = await killThenStderr();
       throw new Error(
         `Child process failed to acquire lock at ${LOCK_PATH}` +
         `\n  holder stderr: ${err || '<empty>'}` +
@@ -90,9 +94,7 @@ await Bun.sleep(60000);
     return { proc, pid: parseInt(content, 10) };
   }
 
-  const err = await childStderr();
-  proc.kill();
-  await proc.exited;
+  const err = await killThenStderr();
   throw new Error(`Timed out waiting for child to acquire lock\n  holder stderr: ${err || '<empty>'}`);
 }
 

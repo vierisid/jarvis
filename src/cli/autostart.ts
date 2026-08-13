@@ -123,25 +123,39 @@ ExecStart=${bunPath} ${jarvisPath} start --foreground
 Restart=on-failure
 RestartSec=5
 Environment=HOME=${homedir()}
-${jarvisHomeEnvLine('Environment=JARVIS_HOME=')}
+${systemdJarvisHomeLine()}
 [Install]
 WantedBy=default.target
 `;
 }
 
 /**
- * Propagate JARVIS_HOME into the service definition when the installing shell
- * has one set.
+ * Propagate JARVIS_HOME into the systemd unit when the installing shell has one
+ * set.
  *
  * Without this the service runs against ~/.jarvis while the CLI that installed
  * it (and `jarvis logs`, and the restart in `jarvis update`) resolves
  * $JARVIS_HOME — so the daemon locks and logs under one root while every tool
  * looks under another. Emits nothing when the var is unset, which keeps the
  * default single-root install byte-identical.
+ *
+ * The assignment is quoted and `%` doubled: systemd splits an unquoted
+ * `Environment=` on whitespace and reads `%` as a specifier introducer, so a
+ * data root containing either would be silently truncated or mangled — landing
+ * the daemon on a different root than the CLI, the exact split this prevents.
  */
-function jarvisHomeEnvLine(prefix: string): string {
+function systemdJarvisHomeLine(): string {
   const home = process.env.JARVIS_HOME;
-  return home ? `${prefix}${home}\n` : '';
+  if (!home) return '';
+  return `Environment="JARVIS_HOME=${home.replace(/%/g, '%%')}"\n`;
+}
+
+/** Escape a value for interpolation into plist text content. */
+function xmlEscape(value: string): string {
+  return value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;');
 }
 
 async function installSystemd(): Promise<boolean> {
@@ -250,8 +264,8 @@ export function generateLaunchdPlist(): string {
   <string>ai.jarvis.daemon</string>
   <key>ProgramArguments</key>
   <array>
-    <string>${bunPath}</string>
-    <string>${jarvisPath}</string>
+    <string>${xmlEscape(bunPath)}</string>
+    <string>${xmlEscape(jarvisPath)}</string>
     <string>start</string>
     <string>--foreground</string>
   </array>
@@ -260,15 +274,15 @@ export function generateLaunchdPlist(): string {
   <key>KeepAlive</key>
   <true/>
   <key>StandardOutPath</key>
-  <string>${logDir}/jarvis.log</string>
+  <string>${xmlEscape(logDir)}/jarvis.log</string>
   <key>StandardErrorPath</key>
-  <string>${logDir}/jarvis-error.log</string>
+  <string>${xmlEscape(logDir)}/jarvis-error.log</string>
   <key>EnvironmentVariables</key>
   <dict>
     <key>HOME</key>
-    <string>${homedir()}</string>
-${process.env.JARVIS_HOME ? `    <key>JARVIS_HOME</key>\n    <string>${process.env.JARVIS_HOME}</string>\n` : ''}    <key>PATH</key>
-    <string>/usr/local/bin:/usr/bin:/bin:${join(homedir(), '.bun', 'bin')}</string>
+    <string>${xmlEscape(homedir())}</string>
+${process.env.JARVIS_HOME ? `    <key>JARVIS_HOME</key>\n    <string>${xmlEscape(process.env.JARVIS_HOME)}</string>\n` : ''}    <key>PATH</key>
+    <string>/usr/local/bin:/usr/bin:/bin:${xmlEscape(join(homedir(), '.bun', 'bin'))}</string>
   </dict>
 </dict>
 </plist>

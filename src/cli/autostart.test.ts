@@ -228,7 +228,7 @@ describe('service definitions propagate JARVIS_HOME', () => {
 
   test('systemd unit exports JARVIS_HOME when set', () => {
     const unit = withJarvisHome('/srv/tenant7', generateSystemdUnit);
-    expect(unit).toContain('Environment=JARVIS_HOME=/srv/tenant7');
+    expect(unit).toContain('Environment="JARVIS_HOME=/srv/tenant7"');
     // The section header must not get swallowed by the injected line.
     expect(unit).toContain('[Install]');
     expect(unit).toContain('WantedBy=default.target');
@@ -245,5 +245,21 @@ describe('service definitions propagate JARVIS_HOME', () => {
     const plist = withJarvisHome(undefined, generateLaunchdPlist);
     expect(plist).toContain('/.jarvis/logs/jarvis.log');
     expect(plist).not.toContain('JARVIS_HOME');
+  });
+
+  // systemd splits an unquoted Environment= on whitespace and reads % as a
+  // specifier introducer. Either would truncate the path and put the daemon on
+  // a different root than the CLI — the split this line exists to close.
+  test('systemd quotes a data root containing spaces and escapes %', () => {
+    const unit = withJarvisHome('/srv/my data/100%', generateSystemdUnit);
+    expect(unit).toContain('Environment="JARVIS_HOME=/srv/my data/100%%"');
+  });
+
+  // An unescaped & or < yields a plist launchctl refuses to load, so autostart
+  // silently does nothing.
+  test('launchd plist XML-escapes the data root', () => {
+    const plist = withJarvisHome('/srv/a&b/<c>', generateLaunchdPlist);
+    expect(plist).toContain('<string>/srv/a&amp;b/&lt;c&gt;</string>');
+    expect(plist).not.toContain('/srv/a&b/<c>');
   });
 });

@@ -269,8 +269,9 @@ export class BrowserController {
    * than the flat sleep this replaced. Only a sustained run of failures (a
    * crashed tab, a closed target) ends the wait early.
    */
-  private async waitForSettled(maxMs = 3000, intervalMs = 150): Promise<void> {
-    const deadline = Date.now() + maxMs;
+  private async waitForSettled(maxMs = 3000, intervalMs = 150, minSettleMs = 800): Promise<void> {
+    const start = Date.now();
+    const deadline = start + maxMs;
     const maxConsecutiveFailures = 5;
     let lastCount = -1;
     let failures = 0;
@@ -301,8 +302,16 @@ export class BrowserController {
       }
       failures = 0;
 
+      // A stable element count is the settle signal; readyState decides how
+      // much corroboration it needs. 'complete' is conclusive, so return at
+      // once. Otherwise — an SPA, or a page whose load event already timed out,
+      // which may sit at 'loading'/'interactive' forever — accept a stable DOM
+      // once minSettleMs has passed. Without that floor those pages never
+      // satisfy the 'complete' conjunct and burn the whole maxMs budget, making
+      // navigation SLOWER than the flat 800ms sleep this replaced.
       const state = sample.split(':')[0];
-      if (state === 'complete' && count === lastCount) return;
+      const stable = count === lastCount;
+      if (stable && (state === 'complete' || Date.now() - start >= minSettleMs)) return;
       lastCount = count;
     }
   }
