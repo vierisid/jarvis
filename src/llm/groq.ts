@@ -8,7 +8,6 @@ import type {
   LLMToolCall,
 } from './provider.ts';
 import { classifyHttpStatus, LLMProviderError } from './provider.ts';
-import { isDeprecatedGroqModel } from './groq-models.ts';
 type GroqContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };
@@ -88,10 +87,18 @@ type GroqStreamChunk = {
   }>;
 };
 
-/** Models suitable for Jarvis chat + local function calling. */
+/**
+ * Models suitable for Jarvis chat + local function calling.
+ *
+ * Route shape only — deliberately NOT filtered against the deprecation map
+ * (see groq-models.ts). /models is answered per account, and Groq keeps
+ * serving retired IDs to committed-spend contracts past the public shutdown
+ * date. Hiding those would drop a model the account still owns, and since
+ * boot migration has already rewritten the saved reference, this picker is
+ * the only way back to it. The account's own catalog is the authority.
+ */
 export function isGroqJarvisModel(id: string): boolean {
-  if (isDeprecatedGroqModel(id)) return false;
-  // These active catalog entries use audio (whisper/orpheus/tts), moderation
+  // These catalog entries use audio (whisper/orpheus/tts), moderation
   // (guard), or embedding endpoints, or (for Compound) reject user-provided
   // local tools.
   return !/(whisper|orpheus|playai|tts|guard|embed|^groq\/compound)/i.test(id);

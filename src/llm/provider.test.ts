@@ -1008,14 +1008,27 @@ describe('Groq request shaping', () => {
     expect(out.properties.nested.properties.optional_inner.type).toEqual(['number', 'null']);
   });
 
-  test('live catalog filtering excludes decommissioned and non-chat routes', () => {
+  test('live catalog filtering excludes non-chat routes', () => {
     expect(isGroqJarvisModel('openai/gpt-oss-20b')).toBe(true);
     expect(isGroqJarvisModel('qwen/qwen3.6-27b')).toBe(true);
-    expect(isGroqJarvisModel('deepseek-r1-distill-llama-70b')).toBe(false);
+    expect(isGroqJarvisModel('minimaxai/minimax-m2.7')).toBe(true);
     expect(isGroqJarvisModel('whisper-large-v3')).toBe(false);
+    expect(isGroqJarvisModel('canopylabs/orpheus-v1-english')).toBe(false);
     expect(isGroqJarvisModel('groq/compound')).toBe(false);
+    expect(isGroqJarvisModel('groq/compound-mini')).toBe(false);
     expect(isGroqJarvisModel('meta-llama/llama-guard-4-12b')).toBe(false);
+    expect(isGroqJarvisModel('openai/gpt-oss-safeguard-20b')).toBe(false);
     expect(isGroqJarvisModel('playai-tts')).toBe(false);
+  });
+
+  // Groq answers /models per account: a committed-spend contract keeps
+  // serving IDs that are retired on the free and developer tiers. Since boot
+  // migration has already rewritten the saved reference, filtering these out
+  // of the picker would leave no way back to a model the account still owns.
+  test('live catalog keeps deprecated models the account can still reach', () => {
+    expect(isGroqJarvisModel('llama-3.3-70b-versatile')).toBe(true);
+    expect(isGroqJarvisModel('llama-3.1-8b-instant')).toBe(true);
+    expect(isGroqJarvisModel('deepseek-r1-distill-llama-70b')).toBe(true);
   });
 
   test('GroqProvider relaxes optional tool params to accept null before sending', async () => {
