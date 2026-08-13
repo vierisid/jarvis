@@ -678,6 +678,29 @@ describe('UsejarvisTTS', () => {
     await expect(tts.synthesize('hi')).rejects.toThrow(/Usejarvis AI TTS error \(429\)/);
   });
 
+  // A 200 that isn't audio is the same class as the STT no-transcript branch:
+  // without this guard the interstitial is returned AS the MP3, nothing
+  // throws, redaction never runs, and /api/tts/preview hands the browser a
+  // file with the per-account key inside it, labelled audio/mpeg.
+  test('rejects a 200 carrying a CDN interstitial instead of returning it as audio', async () => {
+    const key = 'sk-uj-LIFETIMEKEY0000000000';
+    const tts = new UsejarvisTTS('https://llm.usejarvis.host', key);
+    globalThis.fetch = mock(async () => new Response(
+      `<html><body>Access denied. token=${key} for llm.usejarvis.host</body></html>`,
+      { status: 200, headers: { 'Content-Type': 'text/html' } },
+    )) as any;
+    const err = await tts.synthesize('Hello.').then(() => null, (e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err!.message).toContain('non-audio body');
+    expect(err!.message).not.toContain(key);
+  });
+
+  test('accepts real audio whose content-type a proxy stripped (magic-byte sniff)', async () => {
+    const tts = new UsejarvisTTS('https://llm.usejarvis.host', 'sk-uj-not-real');
+    globalThis.fetch = mock(async () => new Response(mp3Bytes, { headers: { 'Content-Type': 'application/octet-stream' } })) as any;
+    expect(Buffer.compare(await tts.synthesize('hi'), Buffer.from(mp3Bytes))).toBe(0);
+  });
+
   test('factory passes a non-Edge cfg voice through; Edge neural names fall back to alloy', async () => {
     const voices: string[] = [];
     globalThis.fetch = mock(async (_url: string, init: any) => {

@@ -511,6 +511,15 @@ export class ElevenLabsTTSProvider implements TTSProvider {
  * the system-owned `usejarvis_ai` block via the factory's `hosted` argument —
  * never from cfg.tts.
  */
+/** MP3 frame sniff: an ID3 tag, or an MPEG audio sync word (0xFF Ex). Used to
+ * accept a correct response whose content-type header a proxy stripped or
+ * rewrote, so the guard rejects interstitials without rejecting real audio. */
+function looksLikeMp3(buf: Buffer): boolean {
+  if (buf.length < 3) return false;
+  if (buf[0] === 0x49 && buf[1] === 0x44 && buf[2] === 0x33) return true; // "ID3"
+  return buf[0] === 0xff && (buf[1]! & 0xe0) === 0xe0;
+}
+
 export class UsejarvisTTS implements TTSProvider {
   private baseUrl: string;
   private apiKey: string;
@@ -541,11 +550,28 @@ export class UsejarvisTTS implements TTSProvider {
 
     if (!response.ok) {
       const err = await response.text();
-      throw new Error(`Usejarvis AI TTS error (${response.status}): ${redactSecrets(err)}`);
+      throw new Error(`Usejarvis AI TTS error (${response.status}): ${redactSecrets(err).slice(0, 200)}`);
     }
 
     const arrayBuffer = await response.arrayBuffer();
-    return Buffer.from(arrayBuffer);
+    const audio = Buffer.from(arrayBuffer);
+
+    // A 200 that isn't audio is the SAME class as UsejarvisSTT's
+    // no-transcript branch: a proxy or CDN interstitial is exactly where an
+    // echoed bearer shows up. Without this check the HTML would be returned
+    // AS the MP3 — nothing throws, so redaction never runs, and the preview
+    // route ships it to the browser labelled audio/mpeg with the key inside.
+    // Empty stays a no-op (callers already treat it as "nothing to speak");
+    // an interstitial always carries bytes, so the guard loses nothing.
+    const contentType = response.headers.get('content-type') ?? '';
+    if (audio.length > 0 && !contentType.toLowerCase().startsWith('audio/') && !looksLikeMp3(audio)) {
+      const body = audio.subarray(0, 2048).toString('utf8');
+      throw new Error(
+        `Usejarvis AI TTS returned a non-audio body (content-type: ${contentType || 'none'}): ` +
+          `${redactSecrets(body).slice(0, 200)}`,
+      );
+    }
+    return audio;
   }
 
   async *synthesizeStream(text: string): AsyncIterable<Buffer> {
