@@ -1,4 +1,5 @@
 import { OpenAIProvider } from './openai.ts';
+import { redactSecrets } from '../util/redact.ts';
 
 /**
  * Hosted "Usejarvis AI" provider: the platform's OpenAI-compatible LLM proxy.
@@ -70,7 +71,13 @@ export class UsejarvisAIProvider extends OpenAIProvider {
   /** Map proxy errors to actionable copy. The `(status)` marker is kept so
    * classifyErrorString still steers retries (429/503 retry; 400s do not). */
   private friendly(status: number, detail: string): Error {
-    const lower = detail.toLowerCase();
+    // Redact FIRST: proxy auth bodies can echo the bearer we presented, and
+    // this per-account key is deliberately hidden from every other surface
+    // (settings, catalog route, provider test). It also keeps a key whose
+    // random body happens to contain "429"/"503" from making a non-retryable
+    // error retry — shouldRetry substring-matches those.
+    const safe = redactSecrets(detail);
+    const lower = safe.toLowerCase();
     if (lower.includes('budget') && (lower.includes('exceed') || lower.includes('over'))) {
       return new Error(
         `${this.errorLabel} API error (${status}): your included AI usage is used up for this window. ` +
@@ -88,7 +95,9 @@ export class UsejarvisAIProvider extends OpenAIProvider {
         `${this.errorLabel} API error (${status}): that model is not included in your plan.`,
       );
     }
-    return new Error(`${this.errorLabel} API error (${status})${detail ? `: ${detail}` : ''}`);
+    // Truncated: an unbounded body is how a CDN error page (hostname
+    // included) reaches a chat bubble.
+    return new Error(`${this.errorLabel} API error (${status})${safe ? `: ${safe.slice(0, 120)}` : ''}`);
   }
 
   private rewrite(error: unknown): unknown {
