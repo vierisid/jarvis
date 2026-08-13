@@ -302,16 +302,15 @@ export class BrowserController {
       }
       failures = 0;
 
-      // A stable element count is the settle signal; readyState decides how
-      // much corroboration it needs. 'complete' is conclusive, so return at
-      // once. Otherwise — an SPA, or a page whose load event already timed out,
-      // which may sit at 'loading'/'interactive' forever — accept a stable DOM
-      // once minSettleMs has passed. Without that floor those pages never
-      // satisfy the 'complete' conjunct and burn the whole maxMs budget, making
-      // navigation SLOWER than the flat 800ms sleep this replaced.
-      const state = sample.split(':')[0];
+      // A stable element count is the settle signal, floored at minSettleMs for
+      // EVERY page — `readyState === 'complete'` is not a licence to return
+      // early. Plenty of pages build their DOM from a load handler or a short
+      // setTimeout, which run AFTER 'complete'; returning at ~300ms would
+      // snapshot them empty, a regression against the flat 800ms sleep this
+      // replaced. The floor keeps the old guarantee; the stability check is
+      // what lets a slow page take longer, up to maxMs.
       const stable = count === lastCount;
-      if (stable && (state === 'complete' || Date.now() - start >= minSettleMs)) return;
+      if (stable && Date.now() - start >= minSettleMs) return;
       lastCount = count;
     }
   }

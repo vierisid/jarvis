@@ -24,6 +24,7 @@ import { homedir, tmpdir } from 'node:os';
 import { join, resolve, sep } from 'node:path';
 import { closeRL, ask, askYesNo, c } from './helpers.ts';
 import { stopDaemonGracefully } from './daemon-control.ts';
+import { isLocked } from '../daemon/pid.ts';
 import { getAutostartName, isAutostartInstalled, uninstallAutostart } from './autostart.ts';
 import {
   detectInstallMethod,
@@ -226,20 +227,11 @@ try {
 // ── Side-effect cleanup (synchronous, parent process) ───────────────
 
 async function runSideEffectCleanup(plan: CleanupPlan): Promise<boolean> {
-  const stop = await stopDaemonGracefully({
-    onStart: (pid) => console.log(c.dim(`Stopping daemon (PID ${pid})...`)),
-    onForce: (pid) => console.log(c.dim(`Force-killing daemon (PID ${pid})...`)),
-  });
-  // A daemon we failed to kill is still writing jarvis.db, the keychain, and
-  // workflow state. removablePaths includes the data dir, so continuing would
-  // rm -rf it underneath a live writer. Bail — the caller aborts the uninstall.
-  if (!stop.stopped) {
-    console.log(c.red(`\n✗ Daemon (PID ${stop.pid}) could not be stopped.`));
-    console.log(c.dim('  Uninstall aborted: removing the data dir while it is running would corrupt it.'));
-    console.log(c.dim('  Stop it as its owner (or with root), then re-run `jarvis uninstall`.'));
-    return false;
-  }
-
+  // Autostart FIRST, then the daemon. The launchd plist is installed with
+  // KeepAlive=true (and the systemd unit with Restart=), so stopping the daemon
+  // while the service is still registered just gets it relaunched under a new
+  // pid — the stop then reports `stopped: false`, we abort, and the unload that
+  // would have broken the cycle never runs. Every retry loops the same way.
   if (plan.autostartInstalled) {
     console.log(c.dim(`Removing ${getAutostartName()}...`));
     try {
@@ -251,6 +243,21 @@ async function runSideEffectCleanup(plan: CleanupPlan): Promise<boolean> {
       console.log(c.yellow(`  ! Autostart removal failed: ${String(err).slice(0, 120)}`));
       console.log(c.dim(`    You may need to remove it manually.`));
     }
+  }
+
+  const stop = await stopDaemonGracefully({
+    onStart: (pid) => console.log(c.dim(`Stopping daemon (PID ${pid})...`)),
+    onForce: (pid) => console.log(c.dim(`Force-killing daemon (PID ${pid})...`)),
+  });
+  // A daemon we failed to kill is still writing jarvis.db, the keychain, and
+  // workflow state. removablePaths includes the data dir, so continuing would
+  // rm -rf it underneath a live writer. Bail — the caller aborts the uninstall.
+  if (!stop.stopped) {
+    const holder = isLocked();
+    console.log(c.red(`\n✗ Daemon (PID ${holder ?? stop.pid}) could not be stopped.`));
+    console.log(c.dim('  Uninstall aborted: removing the data dir while it is running would corrupt it.'));
+    console.log(c.dim('  Stop it as its owner (or with root), then re-run `jarvis uninstall`.'));
+    return false;
   }
 
   return true;

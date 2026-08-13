@@ -28,21 +28,39 @@ const realKill = process.kill.bind(process);
  * KeepAlive=true, systemd Restart=). Returns immediately — it cannot acquire
  * anything until the current holder exits.
  */
-function spawnSupervisedReplacement(): { proc: ReturnType<typeof Bun.spawn>; ready: string } {
-  const readySignal = join(DATA_DIR, `replacement-ready-${Math.floor(performance.now() * 1000)}`);
-  const script = join(DATA_DIR, 'replacement.ts');
-  Bun.write(script, `
+async function spawnSupervisedReplacement(): Promise<ReturnType<typeof Bun.spawn>> {
+  const stamp = Math.floor(performance.now() * 1000);
+  const spinningSignal = join(DATA_DIR, `replacement-spinning-${stamp}`);
+  const script = join(DATA_DIR, `replacement-${stamp}.ts`);
+
+  // The first acquireLock attempt is expected to FAIL (the original still holds
+  // the lock) — its purpose is to pay the one-time TinyCC compile of flock.c
+  // before we signal "spinning", so the replacement can win the lock inside a
+  // single poll interval rather than racing a cold start against it.
+  await Bun.write(script, `
 import { acquireLock } from ${JSON.stringify(PID_MODULE)};
 import { writeFileSync } from 'node:fs';
-while (!acquireLock(process.pid)) await Bun.sleep(25);
-writeFileSync(${JSON.stringify(readySignal)}, String(process.pid));
+let got = acquireLock(process.pid);
+writeFileSync(${JSON.stringify(spinningSignal)}, '1');
+while (!got) { await Bun.sleep(25); got = acquireLock(process.pid); }
 await Bun.sleep(60000);
 `);
+
   const proc = Bun.spawn(['bun', script], {
     stdio: ['ignore', 'ignore', 'ignore'],
     env: { ...process.env, JARVIS_HOME: DATA_DIR },
   });
-  return { proc, ready: readySignal };
+
+  // Block until it is actually spinning; otherwise the test races a cold `bun`
+  // start and intermittently sees the lock go free.
+  const deadline = Date.now() + 20_000;
+  while (Date.now() < deadline) {
+    if (existsSync(spinningSignal)) return proc;
+    await Bun.sleep(25);
+  }
+  proc.kill();
+  await proc.exited;
+  throw new Error('replacement never started spinning');
 }
 
 /** Spawn a child holding the real flock, and wait until it confirms. */
@@ -173,11 +191,13 @@ describe('stopDaemonGracefully', () => {
     const originalPid = isLocked();
     expect(originalPid).not.toBeNull();
 
-    // Starts spinning now; it can only win the lock once `original` is killed.
-    const replacement = spawnSupervisedReplacement();
+    // Already spinning (and past its cold start) before the stop begins; it can
+    // only win the lock once `original` is killed.
+    const replacement = await spawnSupervisedReplacement();
 
-    // 500ms poll: `original` dies on SIGTERM, and the replacement claims the
-    // lock during the interval before stopDaemonGracefully looks again.
+    // 500ms poll: `original` dies on SIGTERM, and the replacement — already
+    // warm, retrying every 25ms — claims the lock well within the interval
+    // before stopDaemonGracefully looks again.
     const result = await stopDaemonGracefully({ timeoutMs: 5000, pollIntervalMs: 500 });
     await original.exited;
 
@@ -187,7 +207,7 @@ describe('stopDaemonGracefully', () => {
     expect(result.stopped).toBe(false);   // a daemon IS running against this dir
     expect(existsSync(LOCK_PATH)).toBe(true);
 
-    replacement.proc.kill(9);
-    await replacement.proc.exited;
-  }, 30_000);
+    replacement.kill(9);
+    await replacement.exited;
+  }, 45_000);
 });

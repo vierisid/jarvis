@@ -139,15 +139,21 @@ WantedBy=default.target
  * looks under another. Emits nothing when the var is unset, which keeps the
  * default single-root install byte-identical.
  *
- * The assignment is quoted and `%` doubled: systemd splits an unquoted
- * `Environment=` on whitespace and reads `%` as a specifier introducer, so a
- * data root containing either would be silently truncated or mangled — landing
- * the daemon on a different root than the CLI, the exact split this prevents.
+ * The assignment is quoted and escaped: systemd splits an unquoted
+ * `Environment=` on whitespace, reads `%` as a specifier introducer, and treats
+ * `\` and `"` as escape/terminator INSIDE the quotes. Any of them in the data
+ * root would truncate or mangle the value — landing the daemon on a different
+ * root than the CLI, the exact split this prevents. Backslash first, so the
+ * escapes added afterwards aren't doubled.
  */
 function systemdJarvisHomeLine(): string {
   const home = process.env.JARVIS_HOME;
   if (!home) return '';
-  return `Environment="JARVIS_HOME=${home.replace(/%/g, '%%')}"\n`;
+  const escaped = home
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"')
+    .replace(/%/g, '%%');
+  return `Environment="JARVIS_HOME=${escaped}"\n`;
 }
 
 /** Escape a value for interpolation into plist text content. */

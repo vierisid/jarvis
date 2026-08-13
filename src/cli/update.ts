@@ -321,7 +321,10 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
     const stop = await stopDaemon();
     if (stop && stop.stopped === false) {
       daemonStopped = false;
-      console.log(c.yellow(`  Warning: daemon (PID ${stop.pid}) is still running — update may not take effect until it restarts.`));
+      // isLocked(), not stop.pid: under a supervisor the pid we signalled IS
+      // gone and a NEW daemon holds the lock — naming the dead one misleads.
+      const holder = isLocked() ?? stop.pid;
+      console.log(c.yellow(`  Warning: daemon (PID ${holder}) is still running — update may not take effect until it restarts.`));
     }
   }
 
@@ -349,8 +352,9 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
       // The old daemon still holds the lock, so a spawned replacement would
       // fail acquireLock() and die into the log while the user reads
       // "Restarting daemon..." followed by "✓ Updated".
-      console.log(c.yellow('\nSkipping restart — the previous daemon is still running.'));
-      console.log(c.dim(`  Stop PID ${runningPid} and run \`jarvis start\` to pick up the update.`));
+      const holder = isLocked() ?? runningPid;
+      console.log(c.yellow('\nSkipping restart — a daemon is still running.'));
+      console.log(c.dim(`  Stop PID ${holder} and run \`jarvis start\` to pick up the update.`));
     }
   }
 

@@ -19,7 +19,7 @@
 import { join } from 'node:path';
 import { existsSync, openSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { acquireLock, releaseLock, isLocked, getLogPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
+import { acquireLock, releaseLock, releaseLockIfUnheld, isLocked, getLogPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
 import { ensurePortReleased, getConfiguredPort, resolveStopPort } from '../src/cli/lifecycle.ts';
 import { getInstalledVersion } from '../src/cli/version.ts';
@@ -201,7 +201,10 @@ async function cmdStart(args: string[]): Promise<void> {
   }
 }
 
-async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promise<void> {
+// Returns true when the daemon is stopped and its lock cleared; false when a
+// daemon still holds the lock (unsignalable, or relaunched by a supervisor).
+// Callers decide whether that is fatal — `jarvis restart` must not exit here.
+async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promise<boolean> {
   const verb = opts.verb ?? 'Stopping';
   const pid = isLocked();
 
@@ -230,7 +233,7 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
   if (!pid) {
     if (port === null) {
       console.log(c.yellow('JARVIS is not running.'));
-      return;
+      return true;
     }
     const cleanup = await ensurePortReleased(port);
     if (cleanup.terminated.length > 0 || cleanup.forced.length > 0) {
@@ -241,7 +244,7 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
     } else {
       console.log(c.yellow('JARVIS is not running.'));
     }
-    return;
+    return true;
   }
 
   console.log(c.cyan(`${verb} JARVIS daemon (PID ${pid})...`));
@@ -277,9 +280,13 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
     // under a new pid (launchd KeepAlive, systemd Restart). Unlinking in either
     // case would let the next `jarvis start` take a fresh inode and run a
     // second daemon against the same data dir.
-    const holder = isLocked();
-    if (holder !== null) {
-      const relaunched = holder !== pid;
+    // releaseLockIfUnheld() unlinks ONLY when nothing holds the flock, and does
+    // it while holding the lock itself — so a supervisor-spawned replacement
+    // (launchd KeepAlive, systemd Restart) can neither be mistaken for a dead
+    // daemon nor slip in between the check and the unlink.
+    if (!releaseLockIfUnheld()) {
+      const holder = isLocked();
+      const relaunched = holder !== null && holder !== pid;
       console.error(c.red(
         relaunched
           ? `✗ JARVIS daemon (PID ${pid}) stopped, but a new one (PID ${holder}) is already running.`
@@ -287,22 +294,20 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
       ));
       console.error(c.dim(
         relaunched
-          ? '  A service manager restarted it. Disable autostart first: jarvis autostart disable'
+          ? '  A service manager restarted it. Remove autostart first: jarvis uninstall (or disable the service).'
           : '  Its lockfile was left in place. Stop it as its owner, or with root.',
       ));
-      process.exit(1);
+      return false;
     }
 
     if (port === null) {
-      releaseLock();
       console.log(c.green('✓ JARVIS daemon stopped.'));
-      return;
+      return true;
     }
     const cleanup = await ensurePortReleased(port);
-    releaseLock();
     if (!cleanup.released) {
       console.error(c.red(`✗ JARVIS stopped but port ${port} is still occupied.`));
-      process.exit(1);
+      return false;
     }
 
     const details = cleanup.forced.length > 0
@@ -311,15 +316,16 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
         ? ` Cleaned up lingering listener(s) on port ${port}: ${cleanup.terminated.join(', ')}.`
         : '';
     console.log(c.green(`✓ JARVIS daemon stopped.${details}`));
+    return true;
   } catch (err) {
     console.error(c.red(`Failed to stop process ${pid}: ${err}`));
     // Same rule as the success path: clear the lock only when nothing holds it
     // (SIGTERM raising ESRCH — a stale lockfile), never while a daemon is live.
-    if (isLocked() !== null) {
+    if (!releaseLockIfUnheld()) {
       console.error(c.dim('  A daemon still holds the lock; its lockfile was left in place.'));
-      process.exit(1);
+      return false;
     }
-    releaseLock();
+    return true;
   }
 }
 
@@ -356,7 +362,18 @@ async function cmdUninstall(): Promise<void> {
 async function cmdRestart(args: string[]): Promise<void> {
   const pid = isLocked();
   if (pid) {
-    await cmdStop();
+    if (!await cmdStop()) {
+      // Under launchd KeepAlive / systemd Restart the daemon comes straight
+      // back under a new pid. That IS the restart the user asked for — report
+      // it rather than exiting, and never fall through to cmdStart, which would
+      // only fail acquireLock() against the live replacement.
+      const holder = isLocked();
+      if (holder !== null && holder !== pid) {
+        console.log(c.green(`✓ JARVIS restarted by its service manager (PID ${holder}).`));
+        return;
+      }
+      process.exit(1);
+    }
   }
 
   console.log('');
@@ -445,11 +462,11 @@ switch (command) {
     await cmdStart(commandArgs);
     break;
   case 'stop':
-    await cmdStop(commandArgs);
+    if (!await cmdStop(commandArgs)) process.exit(1);
     break;
   case 'drain':
     // Same signal as stop (SIGTERM -> bounded graceful drain); clearer label.
-    await cmdStop(commandArgs, { verb: 'Draining' });
+    if (!await cmdStop(commandArgs, { verb: 'Draining' })) process.exit(1);
     break;
   case 'restart':
     await cmdRestart(commandArgs);

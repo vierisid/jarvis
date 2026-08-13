@@ -90,12 +90,18 @@ export async function ensurePortReleased(
 
     try {
       process.kill(pid, 'SIGTERM');
-      if (await waitForExit(pid, 2000)) {
-        terminated.push(pid);
-        continue;
-      }
-    } catch {
-      // Fall through to final verification and force-kill path.
+    } catch (err) {
+      // EPERM: someone else's listener on our port — we can neither signal it
+      // nor wait it out, so skip instead of burning the 2s + 1s waits below.
+      // (The old local isPidAlive reported EPERM as dead and skipped at the top
+      // of the loop; now that it reports alive, the skip has to be explicit.)
+      if ((err as NodeJS.ErrnoException)?.code === 'EPERM') continue;
+      // ESRCH and friends: fall through — the wait below returns at once.
+    }
+
+    if (await waitForExit(pid, 2000)) {
+      terminated.push(pid);
+      continue;
     }
 
     if (!isPidAlive(pid)) {

@@ -238,6 +238,59 @@ export function releaseLock(): void {
 }
 
 /**
+ * Remove the lockfile ONLY if no process currently holds the flock.
+ * Returns true when the lock is free afterwards (cleared, or never there).
+ *
+ * Callers that stop the daemon need "is it safe to unlink this file", and
+ * neither `isProcessAlive` nor `isLocked` answers that correctly:
+ *
+ *  - a pid check misses a supervisor relaunch (launchd KeepAlive, systemd
+ *    Restart) that put a NEW process behind the same lock;
+ *  - `isLocked` returns null for "held but the pid is unreadable" — the lock
+ *    file is empty for an instant during acquireLock's truncate→write, and
+ *    unreadable entirely if it belongs to another user — which would read as
+ *    "free" and unlink a live holder's lock.
+ *
+ * This asks the only authoritative question (can I take the flock?) and does
+ * the unlink WHILE HOLDING it, so no acquirer can slip into the gap between
+ * the check and the removal.
+ */
+export function releaseLockIfUnheld(): boolean {
+  // We hold it ourselves — the normal release path already handles that.
+  if (lockFd !== null) {
+    releaseLock();
+    return true;
+  }
+
+  const lockPath = defaultLockPath();
+  if (!existsSync(lockPath)) return true;
+
+  let fd: number;
+  try {
+    fd = openSync(lockPath, constants.O_RDONLY);
+  } catch {
+    // Can't even open it (e.g. EACCES on another user's file) — treat as held,
+    // never as free.
+    return false;
+  }
+
+  try {
+    const flock = getFlock();
+    if (flock.do_flock(fd, LOCK_EX | LOCK_NB) !== 0) {
+      closeSync(fd);
+      return false; // someone holds it
+    }
+    try { unlinkSync(lockPath); } catch { /* already gone */ }
+    flock.do_flock(fd, LOCK_UN);
+    closeSync(fd);
+    return true;
+  } catch {
+    try { closeSync(fd); } catch { /* already closed */ }
+    return false;
+  }
+}
+
+/**
  * Read the PID from the lock file. Returns null if no file or invalid content.
  *
  * Lock file format (either form is accepted):

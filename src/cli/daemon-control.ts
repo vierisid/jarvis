@@ -4,7 +4,7 @@
  * and both need to release the lockfile afterward.
  */
 
-import { isLocked, releaseLock, isProcessAlive, waitForProcessExit } from '../daemon/pid.ts';
+import { isLocked, releaseLockIfUnheld, isProcessAlive, waitForProcessExit } from '../daemon/pid.ts';
 
 export interface StopOptions {
   /** How long to wait for graceful exit before SIGKILL. Default 5s. */
@@ -88,17 +88,12 @@ export async function stopDaemonGracefully(options: StopOptions = {}): Promise<S
     // another user). The liveness check below tells the two apart.
   }
 
-  // Ask the LOCK, not the pid we signalled. releaseLock() unlinks the path
-  // unconditionally, so it may only run when nothing holds the flock.
-  //
-  // Checking `!isProcessAlive(pid)` is not enough: autostart installs a launchd
-  // plist with KeepAlive=true (and a systemd unit with Restart=), so killing
-  // the daemon gets it relaunched under a NEW pid. The old pid is then gone,
-  // and we would unlink the lockfile the live replacement is holding — the
-  // double-daemon hazard this guard exists to prevent. Probing the lock covers
-  // that, the EPERM case, and the stale-lockfile case in one check.
-  const stopped = isLocked() === null;
-  if (stopped) releaseLock();
+  // Ask the LOCK, not the pid we signalled — and let the release itself make
+  // that decision atomically. `isLocked() === null` was still wrong twice over:
+  // it reports "free" for a lock whose pid is momentarily unreadable, and it
+  // leaves a window between the check and the unlink for a supervisor-spawned
+  // replacement to acquire. See releaseLockIfUnheld.
+  const stopped = releaseLockIfUnheld();
 
   // A daemon that outlived both signals did not exit gracefully — it did not
   // exit at all. Without this, an EPERM stop short-circuits to the catch above
