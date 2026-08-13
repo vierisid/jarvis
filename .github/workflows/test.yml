@@ -34,6 +34,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       sidecar: ${{ steps.filter.outputs.sidecar }}
+      daemon-cli: ${{ steps.filter.outputs.daemon-cli }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
@@ -47,6 +48,16 @@ jobs:
               # a change to how they invoke it must re-run its tests.
               - '.github/workflows/sidecar-release.yml'
               - '.github/workflows/installer-release.yml'
+            # The daemon lifecycle (lock acquire/release, autostart service
+            # definitions) is the one TypeScript area with behaviour that only
+            # exists on macOS: the launchd agent is installed with KeepAlive, so
+            # stopping the daemon gets it relaunched. That path is unreachable
+            # from the ubuntu job — see daemon-control.launchd.test.ts.
+            daemon-cli:
+              - 'src/cli/**'
+              - 'src/daemon/pid.ts'
+              - 'bin/**'
+              - '.github/workflows/test.yml'
 
   test:
     runs-on: ubuntu-latest
@@ -75,6 +86,34 @@ jobs:
       - run: bun run scripts/check-migrations.ts
       - run: bun test
       - run: bunx tsc --noEmit
+
+  # ─── Daemon lifecycle on macOS (launchd) ───────────────────────
+  # The ubuntu `test` job runs the same files, but every launchd assertion in
+  # them skips there. The macOS-only behaviour is real and has already produced
+  # one bug: the plist installs with KeepAlive=true, so `jarvis uninstall`
+  # stopping the daemon BEFORE unloading the agent deadlocked — launchd kept
+  # relaunching it and the unload never ran.
+  #
+  # Scoped to the daemon/CLI tests rather than the whole suite: macOS minutes
+  # bill at 10x and the rest is already covered on ubuntu.
+  daemon-cli-darwin:
+    needs: changes
+    if: needs.changes.outputs.daemon-cli == 'true'
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: "1.3.14"
+      - name: Cache bun install cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.bun/install/cache
+          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+          restore-keys: ${{ runner.os }}-bun-
+      - run: bun install --frozen-lockfile
+      - name: Daemon + CLI tests (launchd paths active)
+        run: bun test src/cli/ src/daemon/pid.test.ts
 
   # ─── Sidecar compile + test gate (cgo) ─────────────────────────
   # The sidecar is a cgo program (webview_go + GTK overlays). The local
