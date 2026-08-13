@@ -64,8 +64,13 @@ async function validateConfig(): Promise<any> {
     console.log(`  Daemon port: ${config.daemon.port}`);
     console.log(`  Data directory: ${config.daemon.data_dir}`);
     console.log(`  Database: ${config.daemon.db_path}`);
-    console.log(`  Primary LLM: ${config.llm.primary}`);
-    console.log(`  Fallback chain: ${config.llm.fallback.join(' → ')}`);
+    // `llm.primary` / `llm.fallback` are a schema that no longer exists — the
+    // fallback line threw on `undefined.join` every time this ran. The current
+    // shape is a single `default` model plus an optional per-tier map.
+    console.log(`  Default LLM: ${config.llm.default ?? '(not set)'}`);
+    const tiers = Object.entries(config.llm.tiers ?? {}).filter(([, v]) => v);
+    console.log(`  Tiers: ${tiers.length > 0 ? tiers.map(([k, v]) => `${k}=${v}`).join(', ') : '(none)'}`);
+    console.log(`  Providers: ${Object.keys(config.llm.providers ?? {}).join(', ') || '(none)'}`);
     console.log(`  Active role: ${config.active_role}`);
     console.log('');
 

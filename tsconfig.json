@@ -22,6 +22,6 @@
     "noUnusedParameters": false,
     "noPropertyAccessFromIndexSignature": false
   },
-  "include": ["src/**/*.ts", "ui/**/*.ts", "ui/**/*.tsx"],
+  "include": ["src/**/*.ts", "ui/**/*.ts", "ui/**/*.tsx", "bin/**/*.ts", "scripts/**/*.ts"],
   "exclude": ["src/workflows/activepieces/**"]
 }

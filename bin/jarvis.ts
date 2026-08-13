@@ -394,7 +394,7 @@ function cmdLogs(args: string[]): void {
   let lines = 50;
   const nIdx = args.indexOf('-n') !== -1 ? args.indexOf('-n') : args.indexOf('--lines');
   if (nIdx !== -1 && args[nIdx + 1]) {
-    const n = parseInt(args[nIdx + 1], 10);
+    const n = parseInt(args[nIdx + 1]!, 10);
     if (!isNaN(n) && n > 0) lines = n;
   }
 
