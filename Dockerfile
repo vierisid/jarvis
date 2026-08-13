@@ -1,7 +1,10 @@
 # ─── J.A.R.V.I.S. Docker Image ──────────────────────────────────────
 #
 # Multi-stage build for the JARVIS daemon.
-# Uses Debian-based Bun images (not Alpine) for sharp glibc compatibility.
+# Uses the Debian-based Bun images (`oven/bun:1`, the default tag) rather than
+# the Alpine variants. Nothing in the tree needs glibc today — there are no
+# native addons left after sharp was dropped — so this is just the default,
+# not a constraint; Alpine is a fair option if an image-size push wants it.
 #
 # Build:   docker build -t jarvis .
 # Build with version: docker build --build-arg VERSION=0.3.1 -t jarvis .

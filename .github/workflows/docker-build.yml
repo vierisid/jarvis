@@ -4,10 +4,14 @@ name: Docker Build
 # Catches regressions like broken stages, missing FROMs, or deps that fail
 # to install in the container — before they reach the release workflow.
 
+# `push` is main-only, matching test.yml. With `branches: ["**"]` a push to a
+# PR branch triggered this twice — push + pull_request — and since both runs
+# write `cache-to: type=gha,mode=max` into the SAME cache scope, the duplicate
+# pair raced over that scope on every push. The paths filter below includes
+# bun.lock and package.json, so dependency changes hit this most often.
 on:
   push:
-    branches: ["**"]
-    tags-ignore: ["v*"]
+    branches: [main]
     paths:
       - "Dockerfile"
       - ".dockerignore"
@@ -21,6 +25,12 @@ on:
       - "bun.lock"
       - "package.json"
       - ".github/workflows/docker-build.yml"
+
+# One in-flight image build per ref; never cancel main, whose run is the
+# post-merge verdict on the Dockerfile.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
 
 jobs:
   docker-build:
