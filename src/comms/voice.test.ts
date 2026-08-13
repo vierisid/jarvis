@@ -639,3 +639,35 @@ describe('SarvamSTT.transcribe', () => {
     await expect(stt.transcribe(wav)).rejects.toThrow(/Sarvam STT error \(401\)/);
   });
 });
+
+describe('hosted STT error redaction', () => {
+  // This block stubs globalThis.fetch and MUST restore it: the file-level
+  // afterEach lives in another describe, and a leaked stub fails unrelated
+  // test files (websocket's health endpoint suddenly returns our 401 body).
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  test('never lets key-shaped material out of either STT throw', async () => {
+    const leak = 'sk-uj-LIFETIMEKEY0000000000';
+    // error branch
+    globalThis.fetch = (async () =>
+      new Response(`Authentication Error: bearer ${leak} rejected`, { status: 401 })) as unknown as typeof fetch;
+    const stt = new UsejarvisSTT('https://llm.usejarvis.host', 'sk-uj-abc');
+    await expect(stt.transcribe(makeWavBuffer())).rejects.toThrow(/\(401\)/);
+    await stt.transcribe(makeWavBuffer()).catch((e: Error) => {
+      expect(e.message).not.toContain(leak);
+    });
+    // 200-with-no-transcript branch (a proxy/CDN interstitial)
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ note: `upstream said ${leak}` }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      })) as unknown as typeof fetch;
+    await stt.transcribe(makeWavBuffer()).catch((e: Error) => {
+      expect(e.message).not.toContain(leak);
+      expect(e.message).toContain('***redacted***');
+    });
+  });
+});

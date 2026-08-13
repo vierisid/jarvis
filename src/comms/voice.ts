@@ -1,4 +1,5 @@
 import type { STTConfig, TTSConfig } from '../config/types.ts';
+import { redactSecrets } from '../util/redact.ts';
 
 export interface STTProvider {
   transcribe(audio: Buffer): Promise<string>;
@@ -126,12 +127,16 @@ export class UsejarvisSTT implements STTProvider {
 
     if (!response.ok) {
       const err = await response.text();
-      throw new Error(`Usejarvis AI STT error (${response.status}): ${err}`);
+      throw new Error(`Usejarvis AI STT error (${response.status}): ${redactSecrets(err)}`);
     }
 
     const result = await response.json() as { text?: string };
     if (typeof result.text !== 'string') {
-      throw new Error(`Usejarvis AI STT returned no transcript: ${JSON.stringify(result).slice(0, 200)}`);
+      // Same class as the error branch: a 200 carrying a proxy/CDN
+      // interstitial is exactly where an echoed bearer shows up.
+      throw new Error(
+        `Usejarvis AI STT returned no transcript: ${redactSecrets(JSON.stringify(result)).slice(0, 200)}`,
+      );
     }
     return result.text;
   }
