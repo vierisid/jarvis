@@ -29,7 +29,13 @@ describe("extractNestedMessage", () => {
 describe("formatProviderErrorMessage — buckets", () => {
   test("auth: 401 status code", () => {
     const r = formatProviderErrorMessage("OpenAI API error (401): invalid_api_key");
-    expect(r.summary).toContain("API key");
+    expect(r.summary).toContain("401 Unauthorized");
+  });
+
+  test("auth: distinguishes 403 permission failures from invalid credentials", () => {
+    const r = formatProviderErrorMessage("OpenAI API error (403): model access denied", "auth");
+    expect(r.summary).toContain("403 Forbidden");
+    expect(r.summary).toContain("denied access");
   });
 
   test("auth: invalid x-api-key", () => {
@@ -50,7 +56,7 @@ describe("formatProviderErrorMessage — buckets", () => {
 
   test("network: 503", () => {
     const r = formatProviderErrorMessage("Service temporarily unavailable (503)");
-    expect(r.summary).toContain("connection");
+    expect(r.summary).toContain("503 Provider Error");
     expect(r.summary).not.toContain("rate-limit");
   });
 
@@ -117,12 +123,12 @@ describe("formatProviderErrorMessage — structured code branching (Phase B)", (
 
   test("server has its own copy", () => {
     const r = formatProviderErrorMessage("500 internal server error", "server");
-    expect(r.summary).toContain("server error");
+    expect(r.summary).toContain("500 Provider Error");
   });
 
   test("unknown code falls back to keyword heuristic", () => {
     const r = formatProviderErrorMessage("OpenAI API error (401): invalid_api_key", "unknown");
-    expect(r.summary).toContain("API key");
+    expect(r.summary).toContain("401 Unauthorized");
   });
 
   test("code present but no raw still returns a summary", () => {
@@ -145,6 +151,6 @@ describe("formatProviderErrorMessage — status-code brittleness fix", () => {
 
   test("DOES match '\\b401\\b' when it is a real status code", () => {
     const r = formatProviderErrorMessage("HTTP 401 Unauthorized");
-    expect(r.summary).toContain("Check your API key and model settings");
+    expect(r.summary).toContain("401 Unauthorized");
   });
 });

@@ -291,6 +291,29 @@ function summaryForCode(code: ProviderErrorCode | undefined): string | null {
   }
 }
 
+function summaryForHttpStatus(raw: string): string | null {
+  if (/\b401\b/.test(raw)) {
+    return "401 Unauthorized — the AI provider rejected the API key or authentication header.";
+  }
+  if (/\b403\b/.test(raw)) {
+    return "403 Forbidden — the AI provider accepted the credentials but denied access to this model or endpoint.";
+  }
+  if (/\b400\b|\b422\b/.test(raw)) {
+    return "400 Bad Request — the AI provider rejected the request payload or model parameters.";
+  }
+  if (/\b404\b/.test(raw)) {
+    return "404 Not Found — the configured model or provider endpoint does not exist.";
+  }
+  if (/\b429\b/.test(raw)) {
+    return "429 Too Many Requests — the AI provider is rate-limiting this request.";
+  }
+  if (/\b50[0-9]\b/.test(raw)) {
+    const status = raw.match(/\b50[0-9]\b/)?.[0] ?? "5xx";
+    return `${status} Provider Error — the AI provider or gateway failed while handling the request.`;
+  }
+  return null;
+}
+
 export function formatProviderErrorMessage(
   raw: string | undefined,
   code?: ProviderErrorCode,
@@ -314,6 +337,12 @@ export function formatProviderErrorMessage(
       }
     }
   }
+
+  // Preserve an upstream HTTP status when the provider included one. The
+  // structured auth bucket intentionally combines 401 and 403, but those
+  // require different corrective actions for the user.
+  const statusSummary = summaryForHttpStatus(original);
+  if (statusSummary) return { summary: statusSummary, detail: normalized };
 
   // Prefer the server-supplied structured code when available — the emission
   // site knows the HTTP status and error type, and doesn't need us to guess
