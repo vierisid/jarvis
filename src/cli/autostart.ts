@@ -11,6 +11,7 @@ import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { c, printOk, printErr, printWarn } from './helpers.ts';
+import { getLogDir } from '../daemon/pid.ts';
 
 function canSpawnBinary(binary: string): boolean {
   try {
@@ -108,7 +109,7 @@ export function canUseSystemdUserService(spawnSync: SpawnSyncFn = defaultSpawnSy
 const SYSTEMD_DIR = join(homedir(), '.config', 'systemd', 'user');
 const SYSTEMD_SERVICE = join(SYSTEMD_DIR, 'jarvis.service');
 
-function generateSystemdUnit(): string {
+export function generateSystemdUnit(): string {
   const bunPath = getBunPath();
   const jarvisPath = getJarvisPath();
 
@@ -122,10 +123,25 @@ ExecStart=${bunPath} ${jarvisPath} start --foreground
 Restart=on-failure
 RestartSec=5
 Environment=HOME=${homedir()}
-
+${jarvisHomeEnvLine('Environment=JARVIS_HOME=')}
 [Install]
 WantedBy=default.target
 `;
+}
+
+/**
+ * Propagate JARVIS_HOME into the service definition when the installing shell
+ * has one set.
+ *
+ * Without this the service runs against ~/.jarvis while the CLI that installed
+ * it (and `jarvis logs`, and the restart in `jarvis update`) resolves
+ * $JARVIS_HOME — so the daemon locks and logs under one root while every tool
+ * looks under another. Emits nothing when the var is unset, which keeps the
+ * default single-root install byte-identical.
+ */
+function jarvisHomeEnvLine(prefix: string): string {
+  const home = process.env.JARVIS_HOME;
+  return home ? `${prefix}${home}\n` : '';
 }
 
 async function installSystemd(): Promise<boolean> {
@@ -218,10 +234,13 @@ function isSystemdInstalled(): boolean {
 const LAUNCHD_DIR = join(homedir(), 'Library', 'LaunchAgents');
 const LAUNCHD_PLIST = join(LAUNCHD_DIR, 'ai.jarvis.daemon.plist');
 
-function generateLaunchdPlist(): string {
+export function generateLaunchdPlist(): string {
   const bunPath = getBunPath();
   const jarvisPath = getJarvisPath();
-  const logDir = join(homedir(), '.jarvis', 'logs');
+  // getLogDir() so the plist's StandardOutPath matches where the daemon itself
+  // resolves its log file (both honor JARVIS_HOME) — and the plist exports the
+  // var below, so the launched daemon agrees with this path.
+  const logDir = getLogDir();
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -248,7 +267,7 @@ function generateLaunchdPlist(): string {
   <dict>
     <key>HOME</key>
     <string>${homedir()}</string>
-    <key>PATH</key>
+${process.env.JARVIS_HOME ? `    <key>JARVIS_HOME</key>\n    <string>${process.env.JARVIS_HOME}</string>\n` : ''}    <key>PATH</key>
     <string>/usr/local/bin:/usr/bin:/bin:${join(homedir(), '.bun', 'bin')}</string>
   </dict>
 </dict>
@@ -263,7 +282,7 @@ async function installLaunchd(): Promise<boolean> {
     }
 
     // Ensure log directory exists
-    const logDir = join(homedir(), '.jarvis', 'logs');
+    const logDir = getLogDir();
     if (!existsSync(logDir)) {
       mkdirSync(logDir, { recursive: true });
     }

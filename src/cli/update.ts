@@ -312,13 +312,15 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
   const checkRunning = deps.checkRunning ?? isLocked;
   const stopDaemon = deps.stopDaemon ?? (() => stopDaemonGracefully());
   const runningPid = checkRunning();
+  // `stopped: false` means the process survived both signals (e.g. it belongs
+  // to another user). Tracked out here because the restart at the end must not
+  // fire against a daemon that is still holding the lock.
+  let daemonStopped = true;
   if (runningPid) {
     console.log(c.dim(`  Stopping daemon (PID ${runningPid}) before update...`));
     const stop = await stopDaemon();
-    // `stopped: false` means the process survived both signals (e.g. it belongs
-    // to another user). Updating underneath a live daemon is what we were
-    // trying to avoid, so say so rather than continuing silently.
     if (stop && stop.stopped === false) {
+      daemonStopped = false;
       console.log(c.yellow(`  Warning: daemon (PID ${stop.pid}) is still running — update may not take effect until it restarts.`));
     }
   }
@@ -340,8 +342,16 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
   }
 
   if (runningPid && result.outcome !== 'failed' && restart) {
-    console.log(c.dim('\nRestarting daemon...'));
-    restartDaemonDetached(deps.packageRoot);
+    if (daemonStopped) {
+      console.log(c.dim('\nRestarting daemon...'));
+      restartDaemonDetached(deps.packageRoot);
+    } else {
+      // The old daemon still holds the lock, so a spawned replacement would
+      // fail acquireLock() and die into the log while the user reads
+      // "Restarting daemon..." followed by "✓ Updated".
+      console.log(c.yellow('\nSkipping restart — the previous daemon is still running.'));
+      console.log(c.dim(`  Stop PID ${runningPid} and run \`jarvis start\` to pick up the update.`));
+    }
   }
 
   return result;

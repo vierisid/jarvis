@@ -259,18 +259,26 @@ export class BrowserController {
    *
    * Polls readyState plus the element count and returns as soon as two
    * consecutive samples agree, so the common case is FASTER than the old sleep
-   * while a slow page gets up to `maxMs`. Never throws: a page we can't
-   * evaluate in (cross-origin redirect, crashed tab) just ends the wait and
-   * lets the caller's snapshot report whatever is there.
+   * while a slow page gets up to `maxMs`.
+   *
+   * A failed sample is RETRIED rather than treated as terminal. Chrome rejects
+   * Runtime.evaluate with "Cannot find context with specified id" while the
+   * execution context is being swapped — i.e. exactly during the navigation we
+   * are waiting on. Bailing on the first such error would end the wait after a
+   * single tick and hand back a page whose scripts have not run, which is worse
+   * than the flat sleep this replaced. Only a sustained run of failures (a
+   * crashed tab, a closed target) ends the wait early.
    */
   private async waitForSettled(maxMs = 3000, intervalMs = 150): Promise<void> {
     const deadline = Date.now() + maxMs;
+    const maxConsecutiveFailures = 5;
     let lastCount = -1;
+    let failures = 0;
 
     while (Date.now() < deadline) {
       await Bun.sleep(intervalMs);
 
-      let sample: string;
+      let sample: string | null = null;
       try {
         const result = await this.cdp.send('Runtime.evaluate', {
           expression: `(() => {
@@ -279,17 +287,21 @@ export class BrowserController {
           })()`,
           returnByValue: true,
         });
-        if (result.exceptionDetails) return;
-        sample = String(result.result?.value ?? '');
+        if (!result.exceptionDetails && result.result?.value !== undefined) {
+          sample = String(result.result.value);
+        }
       } catch {
-        // CDP call failed — nothing useful left to wait for.
-        return;
+        // Transient during a context swap — fall through to the retry counter.
       }
 
-      const [state, rawCount] = sample.split(':');
-      const count = Number.parseInt(rawCount ?? '', 10);
-      if (Number.isNaN(count)) return;
+      const count = sample === null ? Number.NaN : Number.parseInt(sample.split(':')[1] ?? '', 10);
+      if (sample === null || Number.isNaN(count)) {
+        if (++failures >= maxConsecutiveFailures) return;
+        continue;
+      }
+      failures = 0;
 
+      const state = sample.split(':')[0];
       if (state === 'complete' && count === lastCount) return;
       lastCount = count;
     }

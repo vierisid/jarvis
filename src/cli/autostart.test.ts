@@ -1,6 +1,8 @@
 import { describe, expect, test } from 'bun:test';
 import {
   canUseSystemdUserService,
+  generateLaunchdPlist,
+  generateSystemdUnit,
   decodeLaunchctlOutput,
   isLaunchdAlreadyLoaded,
   probeSystemdUserService,
@@ -198,5 +200,50 @@ describe('decodeLaunchctlOutput', () => {
 
   test('returns empty string for undefined', () => {
     expect(decodeLaunchctlOutput(undefined)).toBe('');
+  });
+});
+
+// ── Service definitions carry the data root ──────────────────────────
+//
+// The daemon resolves its lock AND its logs through JARVIS_HOME. A service
+// definition that doesn't export the var launches a daemon under ~/.jarvis
+// while every CLI tool in the same shell looks under $JARVIS_HOME.
+describe('service definitions propagate JARVIS_HOME', () => {
+  function withJarvisHome<T>(value: string | undefined, fn: () => T): T {
+    const prev = process.env.JARVIS_HOME;
+    if (value === undefined) delete process.env.JARVIS_HOME;
+    else process.env.JARVIS_HOME = value;
+    try { return fn(); } finally {
+      if (prev === undefined) delete process.env.JARVIS_HOME;
+      else process.env.JARVIS_HOME = prev;
+    }
+  }
+
+  test('systemd unit omits JARVIS_HOME when unset', () => {
+    const unit = withJarvisHome(undefined, generateSystemdUnit);
+    expect(unit).not.toContain('JARVIS_HOME');
+    expect(unit).toContain('[Install]');
+    expect(unit).toContain('Environment=HOME=');
+  });
+
+  test('systemd unit exports JARVIS_HOME when set', () => {
+    const unit = withJarvisHome('/srv/tenant7', generateSystemdUnit);
+    expect(unit).toContain('Environment=JARVIS_HOME=/srv/tenant7');
+    // The section header must not get swallowed by the injected line.
+    expect(unit).toContain('[Install]');
+    expect(unit).toContain('WantedBy=default.target');
+  });
+
+  test('launchd plist logs under JARVIS_HOME and exports it', () => {
+    const plist = withJarvisHome('/srv/tenant7', generateLaunchdPlist);
+    expect(plist).toContain('<string>/srv/tenant7/logs/jarvis.log</string>');
+    expect(plist).toContain('<key>JARVIS_HOME</key>');
+    expect(plist).toContain('<string>/srv/tenant7</string>');
+  });
+
+  test('launchd plist falls back to ~/.jarvis/logs with no JARVIS_HOME', () => {
+    const plist = withJarvisHome(undefined, generateLaunchdPlist);
+    expect(plist).toContain('/.jarvis/logs/jarvis.log');
+    expect(plist).not.toContain('JARVIS_HOME');
   });
 });

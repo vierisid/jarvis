@@ -155,9 +155,13 @@ describe.skipIf(!chromiumExe)('browser primitives (integration)', () => {
   // #editor, and the no-body test below navigates away entirely. That made the
   // suite order-dependent: a test's assertions silently depended on which
   // sibling had run before it, and any incomplete restore leaked forward.
+  // 60s, matching the worst case of the call itself: navigate()'s 30s
+  // Page.loadEventFired wait + up to 3s settle + the 15s readiness poll. A
+  // 30s budget would time the HOOK out on exactly the loaded runner this is
+  // meant to harden against — trading one flake for another.
   beforeEach(async () => {
     await loadTestPage();
-  }, 30_000);
+  }, 60_000);
 
   async function events(): Promise<string[]> {
     return await browser.evaluate('window.__events') as string[];

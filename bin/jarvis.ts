@@ -19,7 +19,7 @@
 import { join } from 'node:path';
 import { existsSync, openSync } from 'node:fs';
 import { spawn } from 'node:child_process';
-import { acquireLock, releaseLock, isLocked, getLogPath } from '../src/daemon/pid.ts';
+import { acquireLock, releaseLock, isLocked, getLogPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
 import { ensurePortReleased, getConfiguredPort, resolveStopPort } from '../src/cli/lifecycle.ts';
 import { getInstalledVersion } from '../src/cli/version.ts';
@@ -259,13 +259,27 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
     let ticks = 0;
     while (Date.now() < deadline) {
       await new Promise(resolve => setTimeout(resolve, 500));
-      try { process.kill(pid, 0); } catch { alive = false; break; }
+      if (!isProcessAlive(pid)) { alive = false; break; }
       if (++ticks === 6) console.log(c.dim('  Draining in-flight work...'));
     }
 
     if (alive) {
       console.log(c.dim('  Drain deadline exceeded, sending SIGKILL...'));
       try { process.kill(pid, 'SIGKILL'); } catch { /* already gone */ }
+      // SIGKILL returns before the kernel finishes the teardown.
+      await waitForProcessExit(pid, 2000);
+    }
+
+    // releaseLock() unlinks the lockfile whether or not we hold it, so it must
+    // only run once the daemon is confirmed gone. Clearing a LIVE daemon's lock
+    // lets the next `jarvis start` take a fresh inode and run a second daemon
+    // against the same data dir. The usual reason to land here is EPERM — a
+    // daemon owned by another user, which isProcessAlive correctly reports as
+    // alive.
+    if (isProcessAlive(pid)) {
+      console.error(c.red(`✗ Could not stop JARVIS daemon (PID ${pid}) — it is still running.`));
+      console.error(c.dim('  Its lockfile was left in place. Stop it as its owner, or with root.'));
+      process.exit(1);
     }
 
     if (port === null) {
@@ -288,6 +302,13 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
     console.log(c.green(`✓ JARVIS daemon stopped.${details}`));
   } catch (err) {
     console.error(c.red(`Failed to stop process ${pid}: ${err}`));
+    // Same rule as the success path: clear the lock only for a daemon that is
+    // genuinely gone (SIGTERM raising ESRCH — a stale lockfile), never for one
+    // we simply failed to signal.
+    if (isProcessAlive(pid)) {
+      console.error(c.dim('  Daemon is still running; its lockfile was left in place.'));
+      process.exit(1);
+    }
     releaseLock();
   }
 }

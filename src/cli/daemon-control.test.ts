@@ -131,6 +131,8 @@ describe('stopDaemonGracefully', () => {
 
     expect(result.wasRunning).toBe(true);
     expect(result.stopped).toBe(false);
+    // A daemon that never exited did not exit "gracefully".
+    expect(result.graceful).toBe(false);
     // The live holder's lock must survive — this is what used to be deleted.
     expect(existsSync(LOCK_PATH)).toBe(true);
     expect(isLocked()).toBe(heldPid);

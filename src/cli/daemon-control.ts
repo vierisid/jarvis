@@ -4,7 +4,7 @@
  * and both need to release the lockfile afterward.
  */
 
-import { isLocked, releaseLock } from '../daemon/pid.ts';
+import { isLocked, releaseLock, isProcessAlive, waitForProcessExit } from '../daemon/pid.ts';
 
 export interface StopOptions {
   /** How long to wait for graceful exit before SIGKILL. Default 5s. */
@@ -31,27 +31,6 @@ export interface StopResult {
    * false here as "stopped".
    */
   stopped: boolean;
-}
-
-function isAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (err) {
-    // EPERM means the process EXISTS but isn't ours to signal (a daemon running
-    // as another user). Only ESRCH means "no such process". Treating EPERM as
-    // dead is what would let the caller clear a live daemon's lockfile.
-    return (err as NodeJS.ErrnoException)?.code === 'EPERM';
-  }
-}
-
-/** Poll until `pid` is gone, or the budget runs out. */
-async function waitForExit(pid: number, timeoutMs: number, pollIntervalMs = 50): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  while (Date.now() < deadline) {
-    if (!isAlive(pid)) return;
-    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-  }
 }
 
 /**
@@ -81,7 +60,7 @@ export async function stopDaemonGracefully(options: StopOptions = {}): Promise<S
     let alive = true;
     for (let i = 0; i < attempts; i += 1) {
       await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
-      if (!isAlive(pid)) {
+      if (!isProcessAlive(pid)) {
         alive = false;
         break;
       }
@@ -100,7 +79,7 @@ export async function stopDaemonGracefully(options: StopOptions = {}): Promise<S
       // Without this wait the liveness check below loses that race, reports
       // the daemon as alive, and leaves a stale lockfile blocking the next
       // start — the exact case the unconditional release used to cover.
-      await waitForExit(pid, 2000);
+      await waitForProcessExit(pid, 2000);
     }
   } catch {
     // SIGTERM failed. Usually the process was already dead (ESRCH), but it can
@@ -114,8 +93,12 @@ export async function stopDaemonGracefully(options: StopOptions = {}): Promise<S
   // and a second daemon can start against the same data dir. The stale-lock
   // case this double-tap exists for is unaffected: a dead holder still gets its
   // lockfile cleared.
-  const stopped = !isAlive(pid);
+  const stopped = !isProcessAlive(pid);
   if (stopped) releaseLock();
 
-  return { wasRunning: true, pid, graceful, stopped };
+  // A daemon that outlived both signals did not exit gracefully — it did not
+  // exit at all. Without this, an EPERM stop short-circuits to the catch above
+  // with `graceful` still at its initial true, reporting a clean shutdown that
+  // never happened.
+  return { wasRunning: true, pid, graceful: graceful && stopped, stopped };
 }

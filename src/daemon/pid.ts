@@ -329,6 +329,47 @@ export function getLogDir(): string {
   return join(daemonRootDir(), 'logs');
 }
 
+/**
+ * Is `pid` still running?
+ *
+ * EPERM means the process EXISTS but isn't ours to signal (a daemon running as
+ * another user) — that is ALIVE. Only ESRCH means "no such process". Getting
+ * this backwards is dangerous: callers use it to decide whether it's safe to
+ * clear the lockfile, and reporting a live daemon as dead lets a second one
+ * start against the same data dir.
+ *
+ * Lives here, next to the lock, because every caller that asks "is the daemon
+ * alive" is really asking "is it safe to touch its lock" — and three separate
+ * copies of this check had already drifted apart.
+ */
+export function isProcessAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException)?.code === 'EPERM';
+  }
+}
+
+/**
+ * Poll until `pid` is gone, or the budget runs out. Returns true if it exited.
+ *
+ * Needed after SIGKILL: the signal returns before the kernel finishes tearing
+ * the process down, and a killed-but-unreaped zombie still answers kill(pid, 0).
+ */
+export async function waitForProcessExit(
+  pid: number,
+  timeoutMs: number,
+  pollIntervalMs = 50,
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isProcessAlive(pid)) return true;
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
+  }
+  return !isProcessAlive(pid);
+}
+
 // ── Helpers ──────────────────────────────────────────────────────────
 
 function isInsideContainer(): boolean {

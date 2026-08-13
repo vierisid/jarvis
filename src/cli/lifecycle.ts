@@ -3,7 +3,7 @@ import { homedir } from 'node:os';
 import os from 'node:os';
 import { join } from 'node:path';
 import YAML from 'yaml';
-import { readLockedPort } from '../daemon/pid.ts';
+import { readLockedPort, isProcessAlive } from '../daemon/pid.ts';
 
 export const DEFAULT_DAEMON_PORT = 3142;
 
@@ -17,14 +17,11 @@ function parsePidList(output: string, currentPid: number): number[] {
   )];
 }
 
-function isPidAlive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
+// Re-exported under the local name this module already uses. The EPERM-vs-ESRCH
+// distinction lives in one place now (pid.ts) — this file used to have its own
+// copy that reported another user's listener as dead, so ensurePortReleased
+// skipped it silently.
+const isPidAlive = isProcessAlive;
 
 async function waitForExit(pid: number, timeoutMs: number): Promise<boolean> {
   const deadline = Date.now() + timeoutMs;

@@ -225,15 +225,19 @@ try {
 
 // ── Side-effect cleanup (synchronous, parent process) ───────────────
 
-async function runSideEffectCleanup(plan: CleanupPlan): Promise<void> {
+async function runSideEffectCleanup(plan: CleanupPlan): Promise<boolean> {
   const stop = await stopDaemonGracefully({
     onStart: (pid) => console.log(c.dim(`Stopping daemon (PID ${pid})...`)),
     onForce: (pid) => console.log(c.dim(`Force-killing daemon (PID ${pid})...`)),
   });
-  // Deleting the data dir out from under a daemon we failed to kill corrupts
-  // whatever it writes next — warn instead of pretending it stopped.
+  // A daemon we failed to kill is still writing jarvis.db, the keychain, and
+  // workflow state. removablePaths includes the data dir, so continuing would
+  // rm -rf it underneath a live writer. Bail — the caller aborts the uninstall.
   if (!stop.stopped) {
-    console.log(c.yellow(`Warning: daemon (PID ${stop.pid}) could not be stopped — remove it manually before reinstalling.`));
+    console.log(c.red(`\n✗ Daemon (PID ${stop.pid}) could not be stopped.`));
+    console.log(c.dim('  Uninstall aborted: removing the data dir while it is running would corrupt it.'));
+    console.log(c.dim('  Stop it as its owner (or with root), then re-run `jarvis uninstall`.'));
+    return false;
   }
 
   if (plan.autostartInstalled) {
@@ -248,6 +252,8 @@ async function runSideEffectCleanup(plan: CleanupPlan): Promise<void> {
       console.log(c.dim(`    You may need to remove it manually.`));
     }
   }
+
+  return true;
 }
 
 // ── Package removal (detached process) ──────────────────────────────
@@ -337,7 +343,13 @@ export async function runUninstallWizard(packageRoot = PACKAGE_ROOT): Promise<vo
 
   closeRL();
 
-  await runSideEffectCleanup(plan);
+  // A false here means the daemon survived the stop. Nothing further may run:
+  // both the dev/unknown path and schedulePackageRemoval below delete the data
+  // dir that daemon is still writing to.
+  if (!await runSideEffectCleanup(plan)) {
+    process.exitCode = 1;
+    return;
+  }
 
   if (plan.method === 'dev' || plan.method === 'unknown') {
     console.log(c.green('\n✓ Side-effect cleanup complete.'));
