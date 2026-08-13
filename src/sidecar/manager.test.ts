@@ -3,7 +3,7 @@ import { statSync } from 'node:fs';
 import { chmod, mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { decodeJwt } from 'jose';
+import { decodeJwt, SignJWT } from 'jose';
 import { buildEnrollmentUrls, isLocalhostBrainUrl, SidecarManager } from './manager.ts';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import { computeAnonId } from '../telemetry/anon-id.ts';
@@ -213,6 +213,43 @@ describe('SidecarManager access tokens', () => {
       const manager = new SidecarManager(dataDir);
       await manager.start();
       expect(await manager.issueAccessToken('does-not-exist')).toBeNull();
+      await manager.stop();
+    } finally {
+      closeDb();
+      await rm(dataDir, { recursive: true, force: true });
+    }
+  });
+
+  test('tolerates modest clock skew on access-token expiry', async () => {
+    // Brain and sidecar are usually different machines; consumer clocks drift
+    // (or jump after sleep/NTP). A freshly minted token read against a slightly
+    // ahead clock used to fail as expired -> a mysterious 401 on the data
+    // plane even though enrollment was fine. Within the tolerance window the
+    // token must still verify; well past it, it must not.
+    const dataDir = await mkdtemp(join(tmpdir(), 'jarvis-sidecar-manager-'));
+    initDatabase(':memory:');
+    try {
+      const manager = new SidecarManager(dataDir);
+      await manager.start();
+      manager.setBrainUrl('https://brain.example.com');
+      const { sidecar } = await manager.enrollSidecar('clock-skew-test');
+      const privateKey = (manager as unknown as { privateKey: CryptoKey }).privateKey;
+
+      const now = Math.floor(Date.now() / 1000);
+      const signWith = (exp: number) =>
+        new SignJWT({ sid: sidecar.id })
+          .setProtectedHeader({ alg: 'ES256' })
+          .setSubject(`sidecar:${sidecar.id}`)
+          .setAudience('brain-api')
+          .setIssuedAt(now)
+          .setExpirationTime(exp)
+          .sign(privateKey);
+
+      // Expired 30s ago: inside the tolerance, still accepted.
+      expect(await manager.verifyAccessToken(await signWith(now - 30))).toEqual({ sid: sidecar.id });
+      // Expired 2 minutes ago: beyond the tolerance, rejected.
+      expect(await manager.verifyAccessToken(await signWith(now - 120))).toBeNull();
+
       await manager.stop();
     } finally {
       closeDb();

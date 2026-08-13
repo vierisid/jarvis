@@ -151,15 +151,17 @@ func hostedShellWithSelfHostHint() string {
 }
 
 // runFirstRunWindow drives the no-token first run: hosted connect by default,
-// self-host token form one click away. Returns the enrollment JWT ("" if the
-// user closed the window). Blocks; must run on the main OS thread.
-func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
+// self-host token form one click away. Returns the enrollment JWT plus an
+// optional brain-address override the user typed into the self-host form
+// (both "" if the user closed the window). Blocks; must run on the main OS
+// thread.
+func runFirstRunWindow(cfg *SidecarConfig) (string, string, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
 
 	w := webview.New(false)
 	if w == nil {
-		return "", fmt.Errorf("could not open the setup window (no display, or the system webview runtime is missing)")
+		return "", "", fmt.Errorf("could not open the setup window (no display, or the system webview runtime is missing)")
 	}
 	defer w.Destroy()
 
@@ -191,6 +193,11 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 	// site in startHandshake.
 	var tokenMu sync.Mutex
 	var token string
+	// Optional brain-address override typed into the self-host form alongside
+	// the token ("" = use whatever the token names / the config already has).
+	// Guarded by tokenMu exactly like token: written by the submitToken
+	// goroutine, read after Run() returns.
+	var brainOverride string
 
 	// The user explicitly clicked "paste your own token". Distinct from ctx,
 	// which the deferred teardown ALSO cancels — so `ctx.Err() != nil` cannot
@@ -254,23 +261,32 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 			w.SetHtml(setupWindowHTML)
 		})
 	}); err != nil {
-		return "", fmt.Errorf("bind chooseSelfHost: %w", err)
+		return "", "", fmt.Errorf("bind chooseSelfHost: %w", err)
 	}
 
 	if err := w.Bind("submitToken", submitTokenHandler(
 		func() bool { return selfHostFormActive && !verifyInFlight },
-		func(tok string) {
+		func(tok, brain string) {
 			// Structurally valid — now prove it works against the brain it
 			// names before it is persisted. A wrong-URL token used to be saved
 			// blind: the window closed and the only trace of the failure was
 			// the reconnect loop in the log. The form shows "checking" while
 			// this runs; the verdict lands via window.__tokenVerdict, and
 			// success closes the window as before.
+			//
+			// A brain address typed into the form outranks the saved config
+			// override for this check, and (on success) replaces it: that is
+			// the whole point of the field — correcting a token that names an
+			// address this machine can't reach.
+			override := cfg.Brain
+			if brain != "" {
+				override = brain
+			}
 			verifyInFlight = true
 			handshakeWG.Add(1)
 			go func() {
 				defer handshakeWG.Done()
-				verr := verifyBrainToken(verifyCtx, tok, cfg.Brain)
+				verr := verifyBrainToken(verifyCtx, tok, override)
 				w.Dispatch(func() {
 					if torndown.Load() || verifyCtx.Err() != nil {
 						return
@@ -282,13 +298,14 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 					}
 					tokenMu.Lock()
 					token = tok
+					brainOverride = brain
 					tokenMu.Unlock()
 					w.Terminate()
 				})
 			}()
 		},
 	)); err != nil {
-		return "", fmt.Errorf("bind setup handler: %w", err)
+		return "", "", fmt.Errorf("bind setup handler: %w", err)
 	}
 
 	// Fallback for the shell's "open the sign-in page again" link: the
@@ -323,7 +340,7 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 			}
 		}()
 	}); err != nil {
-		return "", fmt.Errorf("bind openConnectPage: %w", err)
+		return "", "", fmt.Errorf("bind openConnectPage: %w", err)
 	}
 
 	startHandshake := func() {
@@ -481,7 +498,7 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 		})
 		startHandshake()
 	}); err != nil {
-		return "", fmt.Errorf("bind retryHosted: %w", err)
+		return "", "", fmt.Errorf("bind retryHosted: %w", err)
 	}
 
 	// Enrollment deep links (jarvis://enroll — the connect page's free door):
@@ -562,7 +579,7 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 	handshakeWG.Wait()
 	tokenMu.Lock()
 	defer tokenMu.Unlock()
-	return token, nil
+	return token, brainOverride, nil
 }
 
 // jsEscape makes a Go string safe inside a single-quoted JS string literal.

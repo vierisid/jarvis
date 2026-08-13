@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -57,6 +58,17 @@ func verifyBrainToken(ctx context.Context, raw, brainOverride string) error {
 	}
 	mintURL := deriveMintURL(brainURL)
 	host := hostForDisplay(mintURL)
+	// A token minted without daemon.brain_domain names localhost, which only
+	// works on the brain machine itself. When the probe then fails from THIS
+	// machine, the fix is usually a brain-address override, not a new token —
+	// say so instead of sending the user re-enrolling. Keyed on the token's
+	// own claim, and only while no override is in play: once the user has
+	// supplied one they already know the mechanism, and the probed address is
+	// theirs to own.
+	loopbackHint := ""
+	if isLoopbackBrainURL(claims.Brain) && normalizeBrainOverride(brainOverride) == "" {
+		loopbackHint = " The token points at localhost — if your brain runs on another machine, enter that machine's address in the Brain address field (or set 'brain:' in ~/.jarvis/sidecar.yaml) and try again."
+	}
 
 	ctx, cancel := context.WithTimeout(ctx, verifyBrainTimeout)
 	defer cancel()
@@ -71,7 +83,7 @@ func verifyBrainToken(ctx context.Context, raw, brainOverride string) error {
 			return context.Canceled
 		}
 		log.Printf("[verify] brain probe %s failed: %v", mintURL, err)
-		return fmt.Errorf("Could not reach the brain at %s. Check that it is running and reachable from this machine, then try again.", host)
+		return fmt.Errorf("Could not reach the brain at %s. Check that it is running and reachable from this machine, then try again.%s", host, loopbackHint)
 	}
 	defer resp.Body.Close()
 
@@ -79,7 +91,7 @@ func verifyBrainToken(ctx context.Context, raw, brainOverride string) error {
 	case resp.StatusCode == http.StatusOK:
 		// Fall through to the body check below.
 	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return fmt.Errorf("The brain at %s rejected this token — it may be revoked or belong to a different brain. Run 'jarvis enroll \"<device-name>\"' again and paste the fresh token.", host)
+		return fmt.Errorf("The brain at %s rejected this token — it may be revoked or belong to a different brain. Run 'jarvis enroll \"<device-name>\"' again and paste the fresh token.%s", host, loopbackHint)
 	case resp.StatusCode >= 500:
 		// A brain (or its proxy) that is up but erroring is not a wrong URL —
 		// don't steer the user into re-checking their token or address.
@@ -112,4 +124,23 @@ func hostForDisplay(rawURL string) string {
 		return u.Host
 	}
 	return rawURL
+}
+
+// isLoopbackBrainURL reports whether a brain connect URL points at a loopback
+// address (localhost, 127.0.0.1, ::1). Such URLs only work on the brain
+// machine itself; a sidecar anywhere else needs an address override, which is
+// exactly what the failure messages steer the user toward.
+func isLoopbackBrainURL(rawURL string) bool {
+	u, err := url.Parse(rawURL)
+	if err != nil || u.Host == "" {
+		return false
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
 }

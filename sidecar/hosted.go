@@ -57,10 +57,11 @@ func resolveHostedBaseURLWith(overrideAllowed bool, cfgValue, envValue string) s
 // the gate, any page in the Clerk/Stripe redirect chain could silently
 // enroll this sidecar to an attacker-controlled brain (enrollment JWTs are
 // self-describing via their brain/jwks claims). accept receives a
-// structurally valid JWT; the caller then verifies it against its brain
-// (verify_token.go) and closes the window only on success.
-func submitTokenHandler(isActive func() bool, accept func(token string)) func(string) error {
-	return func(raw string) error {
+// structurally valid JWT plus the optional (already normalized) brain-address
+// override typed alongside it; the caller then verifies the token against its
+// brain (verify_token.go) and closes the window only on success.
+func submitTokenHandler(isActive func() bool, accept func(token, brain string)) func(string, string) error {
+	return func(raw, brain string) error {
 		if !isActive() {
 			log.Printf("[hosted] submitToken called while the token form is not active - ignored")
 			return fmt.Errorf("Token entry is not active.")
@@ -72,7 +73,13 @@ func submitTokenHandler(isActive func() bool, accept func(token string)) func(st
 		if _, err := DecodeJWTPayload(raw); err != nil {
 			return fmt.Errorf("That doesn't look like a valid token. Copy the full token printed by 'jarvis enroll'.")
 		}
-		accept(raw)
+		// The brain address is an OPTIONAL override for the URL baked into the
+		// token's brain claim — the escape hatch for tokens that name an address
+		// this machine can't use (the classic case: brain_domain was unset at
+		// enroll time, so the claim says localhost). Normalized here exactly as
+		// the config override is, so what gets verified is what gets saved.
+		brain = normalizeBrainOverride(brain)
+		accept(raw, brain)
 		return nil
 	}
 }

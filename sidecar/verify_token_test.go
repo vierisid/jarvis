@@ -147,3 +147,77 @@ func TestVerifyBrainTokenCancelled(t *testing.T) {
 		t.Fatalf("a cancelled check must surface context.Canceled, got %v", err)
 	}
 }
+
+func TestIsLoopbackBrainURL(t *testing.T) {
+	cases := []struct {
+		url  string
+		want bool
+	}{
+		{"ws://localhost:3142/sidecar/connect", true},
+		{"ws://127.0.0.1:3142/sidecar/connect", true},
+		{"ws://[::1]:3142/sidecar/connect", true},
+		{"wss://brain.example.com/sidecar/connect", false},
+		{"ws://192.168.1.20:3142/sidecar/connect", false}, // LAN, not loopback
+		{"", false},
+		{"not a url", false},
+	}
+	for _, c := range cases {
+		if got := isLoopbackBrainURL(c.url); got != c.want {
+			t.Errorf("isLoopbackBrainURL(%q) = %v, want %v", c.url, got, c.want)
+		}
+	}
+}
+
+// A token minted without daemon.brain_domain names localhost (on Linux test
+// boxes, the httptest servers used as fake brains are loopback too, exactly
+// like a real localhost-pointing token probed in place). When that probe
+// fails, the message must steer the user toward the brain-address override
+// instead of a pointless re-enroll — but only while no override is in play.
+func TestVerifyBrainTokenLoopbackHint(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	t.Cleanup(srv.Close)
+
+	// Loopback token, no override: rejection carries the override hint.
+	err := verifyBrainToken(context.Background(), enrollJWT(t, wsURLFor(srv)), "")
+	if err == nil || !strings.Contains(err.Error(), "rejected this token") {
+		t.Fatalf("401 must read as a rejection, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "localhost") || !strings.Contains(err.Error(), "Brain address") {
+		t.Fatalf("loopback token failure must explain the override, got: %v", err)
+	}
+
+	// Non-loopback token (probed via override): no hint — the address is
+	// already a real one.
+	err = verifyBrainToken(context.Background(), enrollJWT(t, "wss://brain.example.com/sidecar/connect"), srv.URL)
+	if err == nil || !strings.Contains(err.Error(), "rejected this token") {
+		t.Fatalf("401 must read as a rejection, got %v", err)
+	}
+	if strings.Contains(err.Error(), "Brain address") {
+		t.Fatalf("non-loopback failure must not push the override hint, got: %v", err)
+	}
+
+	// Loopback token WITH an override: the user already corrected the
+	// address; repeating the hint would just blame the token again.
+	err = verifyBrainToken(context.Background(), enrollJWT(t, "ws://localhost:3142/sidecar/connect"), srv.URL)
+	if err == nil || !strings.Contains(err.Error(), "rejected this token") {
+		t.Fatalf("401 must read as a rejection, got %v", err)
+	}
+	if strings.Contains(err.Error(), "Brain address") {
+		t.Fatalf("override-supplied failure must not push the override hint, got: %v", err)
+	}
+
+	// Unreachable loopback brain (nothing listens): same hint on the
+	// "Could not reach" path.
+	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	deadURL := wsURLFor(dead)
+	dead.Close()
+	err = verifyBrainToken(context.Background(), enrollJWT(t, deadURL), "")
+	if err == nil || !strings.Contains(err.Error(), "Could not reach the brain") {
+		t.Fatalf("dead endpoint must read as unreachable, got %v", err)
+	}
+	if !strings.Contains(err.Error(), "Brain address") {
+		t.Fatalf("unreachable loopback brain must explain the override, got: %v", err)
+	}
+}
