@@ -1,4 +1,7 @@
 import { describe, expect, test } from 'bun:test';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
+import { mkdtempSync, writeFileSync } from 'node:fs';
 import {
   canUseSystemdUserService,
   generateLaunchdPlist,
@@ -261,5 +264,34 @@ describe('service definitions propagate JARVIS_HOME', () => {
     const plist = withJarvisHome('/srv/a&b/<c>', generateLaunchdPlist);
     expect(plist).toContain('<string>/srv/a&amp;b/&lt;c&gt;</string>');
     expect(plist).not.toContain('/srv/a&b/<c>');
+  });
+
+  // ── The generated files must be valid to the tools that consume them ──
+  //
+  // "contains the right substring" is not enough: systemd and launchctl reject
+  // malformed input, and a rejected service definition means autostart quietly
+  // does nothing.
+
+  const SYSTEMD_ANALYZE = Bun.which('systemd-analyze');
+  test.skipIf(!SYSTEMD_ANALYZE)('systemd-analyze accepts the generated unit', () => {
+    const unit = withJarvisHome('/srv/my data/100%', generateSystemdUnit);
+    const path = join(mkdtempSync(join(tmpdir(), 'jarvis-unit-')), 'jarvis-verify.service');
+    writeFileSync(path, unit, 'utf-8');
+    const r = Bun.spawnSync([SYSTEMD_ANALYZE!, 'verify', path], { stdout: 'pipe', stderr: 'pipe' });
+    const out = `${r.stdout.toString()}${r.stderr.toString()}`.trim();
+    expect({ code: r.exitCode, out }).toEqual({ code: 0, out: '' });
+  });
+
+  // plutil is macOS-only; xmllint covers well-formedness everywhere else.
+  const PLIST_LINT = Bun.which('plutil') ?? Bun.which('xmllint');
+  test.skipIf(!PLIST_LINT)('the generated plist parses with a hostile data root', () => {
+    const plist = withJarvisHome('/srv/a&b/<c>/"d"', generateLaunchdPlist);
+    const path = join(mkdtempSync(join(tmpdir(), 'jarvis-plist-')), 'jarvis.plist');
+    writeFileSync(path, plist, 'utf-8');
+    const cmd = PLIST_LINT!.endsWith('plutil')
+      ? [PLIST_LINT!, '-lint', path]
+      : [PLIST_LINT!, '--noout', path];
+    const r = Bun.spawnSync(cmd, { stdout: 'pipe', stderr: 'pipe' });
+    expect({ code: r.exitCode, err: r.stderr.toString().trim() }).toEqual({ code: 0, err: '' });
   });
 });

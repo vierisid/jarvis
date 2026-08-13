@@ -1,7 +1,7 @@
 import { test, expect, describe, beforeAll, afterAll, beforeEach, afterEach } from 'bun:test';
 import { join } from 'node:path';
 import { homedir, tmpdir } from 'node:os';
-import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync, mkdtempSync, rmSync, truncateSync, chmodSync } from 'node:fs';
 import {
   acquireLock,
   isLocked,
@@ -12,6 +12,7 @@ import {
   getPidPath,
   getLogPath,
   getLogDir,
+  releaseLockIfUnheld,
 } from './pid.ts';
 
 // The lock lives at `JARVIS_HOME`/jarvis.pid, resolved per call (see
@@ -357,6 +358,56 @@ describe('Process Lock Manager', () => {
         process.env.JARVIS_HOME = DATA_DIR;
       }
     });
+  });
+
+  // ── releaseLockIfUnheld ──────────────────────────────────────────
+  //
+  // The guard behind `jarvis stop` / `update` / `uninstall`. It must never
+  // unlink a lockfile some process still holds — doing so lets a second daemon
+  // start against the same data dir.
+
+  describe('releaseLockIfUnheld', () => {
+    test('clears a stale lockfile that nobody holds', () => {
+      mkdirSync(DATA_DIR, { recursive: true });
+      writeFileSync(LOCK_PATH, '99999');
+      expect(releaseLockIfUnheld()).toBe(true);
+      expect(existsSync(LOCK_PATH)).toBe(false);
+    });
+
+    test('refuses a held lock whose pid is unreadable', async () => {
+      const { proc } = await spawnLockHolder();
+      try {
+        // acquireLock truncates before writing the pid, so a held lock is
+        // briefly empty. Reproduce that window exactly.
+        truncateSync(LOCK_PATH, 0);
+
+        // isLocked() cannot tell this from "free" — it reads the pid and gets
+        // nothing. This is precisely why the guard must not be built on it.
+        expect(isLocked()).toBeNull();
+
+        expect(releaseLockIfUnheld()).toBe(false);
+        expect(existsSync(LOCK_PATH)).toBe(true);
+      } finally {
+        proc.kill();
+        await proc.exited;
+      }
+    }, 20_000);
+
+    // Root bypasses permission bits, so the unreadable case can't be staged.
+    test.skipIf(typeof process.getuid === 'function' && process.getuid() === 0)(
+      'refuses a lockfile it cannot even open',
+      async () => {
+        const { proc } = await spawnLockHolder();
+        try {
+          chmodSync(LOCK_PATH, 0o000);
+          expect(releaseLockIfUnheld()).toBe(false);
+          expect(existsSync(LOCK_PATH)).toBe(true);
+        } finally {
+          try { chmodSync(LOCK_PATH, 0o644); } catch { /* ignore */ }
+          proc.kill();
+          await proc.exited;
+        }
+      }, 20_000);
   });
 
   // ── cross-process locking ────────────────────────────────────────
