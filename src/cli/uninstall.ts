@@ -226,10 +226,15 @@ try {
 // ── Side-effect cleanup (synchronous, parent process) ───────────────
 
 async function runSideEffectCleanup(plan: CleanupPlan): Promise<void> {
-  await stopDaemonGracefully({
+  const stop = await stopDaemonGracefully({
     onStart: (pid) => console.log(c.dim(`Stopping daemon (PID ${pid})...`)),
     onForce: (pid) => console.log(c.dim(`Force-killing daemon (PID ${pid})...`)),
   });
+  // Deleting the data dir out from under a daemon we failed to kill corrupts
+  // whatever it writes next — warn instead of pretending it stopped.
+  if (!stop.stopped) {
+    console.log(c.yellow(`Warning: daemon (PID ${stop.pid}) could not be stopped — remove it manually before reinstalling.`));
+  }
 
   if (plan.autostartInstalled) {
     console.log(c.dim(`Removing ${getAutostartName()}...`));

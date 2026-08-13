@@ -24,8 +24,6 @@ import { cc } from 'bun:ffi';
 import flockSource from './flock.c' with { type: 'file' };
 
 const JARVIS_DIR = join(homedir(), '.jarvis');
-const LOG_DIR = join(JARVIS_DIR, 'logs');
-const LOG_PATH = join(LOG_DIR, 'jarvis.log');
 
 /**
  * The daemon's own root: `JARVIS_HOME` when set (hosted wrappers export it for
@@ -312,17 +310,23 @@ export function getPidPath(): string {
 
 /**
  * Get the log file path. Creates the log directory if needed.
+ *
+ * JARVIS_HOME-aware, like the lock path above. These used to be module-level
+ * constants built from homedir() at import time, so on an instance that sets
+ * JARVIS_HOME the daemon locked one root and logged to a different one —
+ * `jarvis logs` then tailed a file the daemon wasn't writing.
  */
 export function getLogPath(): string {
-  mkdirSync(LOG_DIR, { recursive: true });
-  return LOG_PATH;
+  const dir = getLogDir();
+  mkdirSync(dir, { recursive: true });
+  return join(dir, 'jarvis.log');
 }
 
 /**
- * Get the log directory path.
+ * Get the log directory path. Resolved per call — see `daemonRootDir`.
  */
 export function getLogDir(): string {
-  return LOG_DIR;
+  return join(daemonRootDir(), 'logs');
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────

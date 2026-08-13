@@ -314,7 +314,13 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
   const runningPid = checkRunning();
   if (runningPid) {
     console.log(c.dim(`  Stopping daemon (PID ${runningPid}) before update...`));
-    await stopDaemon();
+    const stop = await stopDaemon();
+    // `stopped: false` means the process survived both signals (e.g. it belongs
+    // to another user). Updating underneath a live daemon is what we were
+    // trying to avoid, so say so rather than continuing silently.
+    if (stop && stop.stopped === false) {
+      console.log(c.yellow(`  Warning: daemon (PID ${stop.pid}) is still running — update may not take effect until it restarts.`));
+    }
   }
 
   let result: UpdateResult;

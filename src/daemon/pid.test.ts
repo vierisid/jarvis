@@ -26,11 +26,6 @@ let DATA_DIR: string;
 let LOCK_PATH: string;
 let prevJarvisHome: string | undefined;
 
-// Logs are the exception: getLogPath/getLogDir read a module-level constant
-// built from homedir() at import time, so they are NOT JARVIS_HOME-aware and
-// still resolve under the real home. Asserted against this on purpose.
-const REAL_JARVIS_DIR = join(homedir(), '.jarvis');
-
 const PID_MODULE = join(import.meta.dir, 'pid.ts');
 const READY_SIGNAL = join(tmpdir(), 'jarvis-test-lock-ready');
 const HOLDER_SCRIPT = join(tmpdir(), 'jarvis-test-lock-holder.ts');
@@ -336,12 +331,29 @@ describe('Process Lock Manager', () => {
 
     test('getLogPath returns path and creates logs dir', () => {
       const logPath = getLogPath();
-      expect(logPath).toBe(join(REAL_JARVIS_DIR, 'logs', 'jarvis.log'));
-      expect(existsSync(join(REAL_JARVIS_DIR, 'logs'))).toBe(true);
+      expect(logPath).toBe(join(DATA_DIR, 'logs', 'jarvis.log'));
+      expect(existsSync(join(DATA_DIR, 'logs'))).toBe(true);
     });
 
     test('getLogDir returns logs directory', () => {
-      expect(getLogDir()).toBe(join(REAL_JARVIS_DIR, 'logs'));
+      expect(getLogDir()).toBe(join(DATA_DIR, 'logs'));
+    });
+
+    test('logs and lock resolve under the SAME root', () => {
+      // The bug this guards: logs were built from homedir() at import time
+      // while the lock honored JARVIS_HOME, so the daemon locked one root and
+      // logged to another.
+      expect(getLogDir().startsWith(DATA_DIR)).toBe(true);
+      expect(getPidPath().startsWith(DATA_DIR)).toBe(true);
+    });
+
+    test('getLogDir falls back to ~/.jarvis/logs with no JARVIS_HOME', () => {
+      delete process.env.JARVIS_HOME;
+      try {
+        expect(getLogDir()).toBe(join(homedir(), '.jarvis', 'logs'));
+      } finally {
+        process.env.JARVIS_HOME = DATA_DIR;
+      }
     });
   });
 

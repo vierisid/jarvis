@@ -264,7 +264,7 @@ describe('runUpdate — script install', () => {
       checkRunning: () => 12345, // pretend daemon is running
       stopDaemon: async () => {
         stopCalls += 1;
-        return { wasRunning: true, pid: 12345, graceful: true };
+        return { wasRunning: true, pid: 12345, graceful: true, stopped: true };
       },
       restartDaemon: false,
     });

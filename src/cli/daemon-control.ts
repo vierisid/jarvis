@@ -24,27 +24,47 @@ export interface StopResult {
   pid: number | null;
   /** True if the daemon exited via SIGTERM; false if we had to SIGKILL. */
   graceful: boolean;
+  /**
+   * True when the daemon is confirmed gone (or there was none). False means it
+   * survived both signals — e.g. `kill` raised EPERM because the daemon belongs
+   * to another user. Callers that go on to modify the data dir must not treat a
+   * false here as "stopped".
+   */
+  stopped: boolean;
 }
 
 function isAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
     return true;
-  } catch {
-    return false;
+  } catch (err) {
+    // EPERM means the process EXISTS but isn't ours to signal (a daemon running
+    // as another user). Only ESRCH means "no such process". Treating EPERM as
+    // dead is what would let the caller clear a live daemon's lockfile.
+    return (err as NodeJS.ErrnoException)?.code === 'EPERM';
+  }
+}
+
+/** Poll until `pid` is gone, or the budget runs out. */
+async function waitForExit(pid: number, timeoutMs: number, pollIntervalMs = 50): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!isAlive(pid)) return;
+    await new Promise((resolve) => setTimeout(resolve, pollIntervalMs));
   }
 }
 
 /**
  * Stop the running daemon, if any. Sends SIGTERM, polls for exit, escalates
- * to SIGKILL on timeout. Releases the lockfile on return regardless of path
- * (the daemon normally releases it on SIGTERM, but we double-tap in case of
- * a crashed daemon that never cleared its lock).
+ * to SIGKILL on timeout. Clears the lockfile once the holder is confirmed gone
+ * — including for a crashed daemon that never cleared its own lock — but
+ * leaves it in place if the daemon survived, since releaseLock() would
+ * otherwise unlink a live holder's lock. See `StopResult.stopped`.
  */
 export async function stopDaemonGracefully(options: StopOptions = {}): Promise<StopResult> {
   const pid = isLocked();
   if (!pid) {
-    return { wasRunning: false, pid: null, graceful: true };
+    return { wasRunning: false, pid: null, graceful: true, stopped: true };
   }
 
   const timeoutMs = options.timeoutMs ?? 5000;
@@ -75,12 +95,27 @@ export async function stopDaemonGracefully(options: StopOptions = {}): Promise<S
       } catch {
         // Already gone between our last check and the kill attempt.
       }
+      // SIGKILL returns before the kernel has finished tearing the process
+      // down, and a killed-but-unreaped zombie still answers kill(pid, 0).
+      // Without this wait the liveness check below loses that race, reports
+      // the daemon as alive, and leaves a stale lockfile blocking the next
+      // start — the exact case the unconditional release used to cover.
+      await waitForExit(pid, 2000);
     }
   } catch {
-    // SIGTERM failed — process was likely already dead. Fall through to
-    // releaseLock() so a stale lockfile doesn't block the next start.
+    // SIGTERM failed. Usually the process was already dead (ESRCH), but it can
+    // also mean we're not allowed to signal it (EPERM — a daemon owned by
+    // another user). The liveness check below tells the two apart.
   }
 
-  releaseLock();
-  return { wasRunning: true, pid, graceful };
+  // Only clear the lockfile once the holder is confirmed gone. releaseLock()
+  // unlinks the path unconditionally, so calling it while the daemon is still
+  // alive deletes a LIVE holder's lock — after which isLocked() reports nothing
+  // and a second daemon can start against the same data dir. The stale-lock
+  // case this double-tap exists for is unaffected: a dead holder still gets its
+  // lockfile cleared.
+  const stopped = !isAlive(pid);
+  if (stopped) releaseLock();
+
+  return { wasRunning: true, pid, graceful, stopped };
 }

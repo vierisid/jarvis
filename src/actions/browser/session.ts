@@ -243,10 +243,56 @@ export class BrowserController {
       console.warn(`[BrowserController] Page load timeout for ${url}, continuing anyway`);
     }
 
-    // Wait for JS to settle
-    await Bun.sleep(800);
+    await this.waitForSettled();
 
     return this.snapshot();
+  }
+
+  /**
+   * Wait for the document to stop changing, bounded.
+   *
+   * This replaces a flat `Bun.sleep(800)`. That sleep was wrong in both
+   * directions: on a static page it burned 800ms doing nothing, and on a loaded
+   * machine — or when the load-event wait above timed out and we continued
+   * anyway — 800ms wasn't enough, so callers got a snapshot of a page whose
+   * scripts hadn't run yet (missing elements, unattached listeners).
+   *
+   * Polls readyState plus the element count and returns as soon as two
+   * consecutive samples agree, so the common case is FASTER than the old sleep
+   * while a slow page gets up to `maxMs`. Never throws: a page we can't
+   * evaluate in (cross-origin redirect, crashed tab) just ends the wait and
+   * lets the caller's snapshot report whatever is there.
+   */
+  private async waitForSettled(maxMs = 3000, intervalMs = 150): Promise<void> {
+    const deadline = Date.now() + maxMs;
+    let lastCount = -1;
+
+    while (Date.now() < deadline) {
+      await Bun.sleep(intervalMs);
+
+      let sample: string;
+      try {
+        const result = await this.cdp.send('Runtime.evaluate', {
+          expression: `(() => {
+            try { return document.readyState + ':' + document.getElementsByTagName('*').length; }
+            catch { return 'error:-1'; }
+          })()`,
+          returnByValue: true,
+        });
+        if (result.exceptionDetails) return;
+        sample = String(result.result?.value ?? '');
+      } catch {
+        // CDP call failed — nothing useful left to wait for.
+        return;
+      }
+
+      const [state, rawCount] = sample.split(':');
+      const count = Number.parseInt(rawCount ?? '', 10);
+      if (Number.isNaN(count)) return;
+
+      if (state === 'complete' && count === lastCount) return;
+      lastCount = count;
+    }
   }
 
   /**
