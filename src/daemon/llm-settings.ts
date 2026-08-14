@@ -272,7 +272,14 @@ export function saveLLMSettings(
       // The hosted provider is SYSTEM-owned (config.yaml carve-out): the
       // dashboard can neither create, edit, nor delete it, and nothing under
       // the reserved name may reach the DB or keychain.
-      if (name === USEJARVIS_PROVIDER_NAME) continue;
+      //
+      // Refuse rather than silently skip. Skipping still answered "saved and
+      // applied", so a delete appeared to succeed and the card came back on
+      // the next render — the API contract lied about what it had done. The
+      // route maps this to a 400.
+      if (name === USEJARVIS_PROVIDER_NAME) {
+        throw new Error(`'${USEJARVIS_PROVIDER_NAME}' is managed by the platform and cannot be edited`);
+      }
       if (update === null) {
         delete config.llm.providers[name];
         // Drop every model ref the provider owned. The manager prunes its own
