@@ -550,7 +550,10 @@ export class UsejarvisTTS implements TTSProvider {
 
     if (!response.ok) {
       const err = await response.text();
-      throw new Error(`Usejarvis AI TTS error (${response.status}): ${redactSecrets(err).slice(0, 200)}`);
+      // Shared mapper, same reasoning as the STT branch: /api/tts/preview
+      // returns err.message straight to the settings toast, so budget and
+      // plan failures must read as copy, not as proxy JSON.
+      throw hostedProxyError('Usejarvis AI TTS', response.status, err);
     }
 
     const arrayBuffer = await response.arrayBuffer();
