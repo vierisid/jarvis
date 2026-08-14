@@ -409,10 +409,21 @@ describe('jarvis restore', () => {
     // The WAL is back in place, byte-identical — then clear it so SQLite
     // doesn't try to read the sentinel as real frames.
     expect(await Bun.file(join(dataDir, 'jarvis.db-wal')).text()).toBe('SENTINEL-WAL-FRAMES');
+    // Clear BOTH sidecars: the sentinel is not real WAL frames, and an -shm
+    // left beside it describes a WAL index that no longer matches.
     rmSync(join(dataDir, 'jarvis.db-wal'));
+    rmSync(join(dataDir, 'jarvis.db-shm'), { force: true });
 
     // Everything the instance had before the attempt is still there.
-    const db = new Database(join(dataDir, 'jarvis.db'), { readonly: true });
+    //
+    // Read-write, not `{ readonly: true }`: this asserts the ROWS survived the
+    // rollback, and a readonly connection cannot be relied on to open a WAL
+    // database whose -shm is absent — SQLite has to build the WAL index, which
+    // needs write access. That is a real difference, not a hypothetical: this
+    // assertion failed only on macOS. Verified on a macOS runner that the
+    // rollback itself is sound — integrity_check ok, every row present, and
+    // `jarvis export` (which does open readonly) returns 0.
+    const db = new Database(join(dataDir, 'jarvis.db'));
     const bodies = (db.query('SELECT body FROM facts ORDER BY id').all() as { body: string }[]).map((r) => r.body);
     db.close();
     expect(bodies).toContain('written-after-the-export');
