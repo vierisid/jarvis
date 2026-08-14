@@ -27,10 +27,12 @@ export type HostedVoiceCredentials = { baseUrl: string; apiKey: string };
 export class OpenAIWhisperSTT implements STTProvider {
   private apiKey: string;
   private model: string;
+  private language: string;
 
-  constructor(apiKey: string, model: string = 'whisper-1') {
+  constructor(apiKey: string, model: string = 'whisper-1', language: string = 'en') {
     this.apiKey = apiKey;
     this.model = model;
+    this.language = language;
   }
 
   async transcribe(audio: Buffer): Promise<string> {
@@ -40,7 +42,7 @@ export class OpenAIWhisperSTT implements STTProvider {
     // and Sarvam providers already do; 'audio.webm' was a mislabel.
     formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/wav' }), 'audio.wav');
     formData.append('model', this.model);
-    formData.append('language', 'en');
+    formData.append('language', this.language);
 
     const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
@@ -64,10 +66,12 @@ export class OpenAIWhisperSTT implements STTProvider {
 export class GroqWhisperSTT implements STTProvider {
   private apiKey: string;
   private model: string;
+  private language: string;
 
-  constructor(apiKey: string, model: string = 'whisper-large-v3-turbo') {
+  constructor(apiKey: string, model: string = 'whisper-large-v3-turbo', language: string = 'en') {
     this.apiKey = apiKey;
     this.model = model;
+    this.language = language;
   }
 
   async transcribe(audio: Buffer): Promise<string> {
@@ -75,7 +79,7 @@ export class GroqWhisperSTT implements STTProvider {
     // Same WAV-mislabel fix as OpenAIWhisperSTT: the audio really is WAV.
     formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/wav' }), 'audio.wav');
     formData.append('model', this.model);
-    formData.append('language', 'en');
+    formData.append('language', this.language);
 
     const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method: 'POST',
@@ -104,21 +108,23 @@ export class UsejarvisSTT implements STTProvider {
   private baseUrl: string;
   private apiKey: string;
   private model: string;
+  private language: string;
 
-  constructor(baseUrl: string, apiKey: string, model: string = 'uj-stt') {
+  constructor(baseUrl: string, apiKey: string, model: string = 'uj-stt', language: string = 'en') {
     // The provisioner writes the proxy ORIGIN; normalize to the /v1 prefix
     // exactly like UsejarvisAIProvider (src/llm/usejarvis.ts) does.
     const trimmed = baseUrl.replace(/\/+$/, '');
     this.baseUrl = /\/v1$/.test(trimmed) ? trimmed : `${trimmed}/v1`;
     this.apiKey = apiKey;
     this.model = model;
+    this.language = language;
   }
 
   async transcribe(audio: Buffer): Promise<string> {
     const formData = new FormData();
     formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/wav' }), 'audio.wav');
     formData.append('model', this.model);
-    formData.append('language', 'en');
+    formData.append('language', this.language);
 
     const response = await fetch(`${this.baseUrl}/audio/transcriptions`, {
       method: 'POST',
@@ -169,15 +175,18 @@ export class LocalWhisperSTT implements STTProvider {
   private endpoint: string;
   private model: string;
   private serverType: LocalWhisperServerType;
+  private language: string;
 
   constructor(
     endpoint: string = 'http://localhost:8080',
     model?: string,
     serverType: LocalWhisperServerType = 'whisper_cpp',
+    language: string = 'en',
   ) {
     this.endpoint = endpoint;
     this.model = model ?? 'base';
     this.serverType = serverType;
+    this.language = language;
   }
 
   private resolveUrl(): string {
@@ -199,7 +208,7 @@ export class LocalWhisperSTT implements STTProvider {
     } else {
       formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/wav' }), 'audio.wav');
       formData.append('model', this.model);
-      formData.append('language', 'en');
+      formData.append('language', this.language);
     }
     return formData;
   }
@@ -296,15 +305,20 @@ export function createSTTProvider(
   switch (config.provider) {
     case 'usejarvis':
       if (!hosted?.baseUrl || !hosted?.apiKey) return null;
-      return new UsejarvisSTT(hosted.baseUrl, hosted.apiKey);
+      return new UsejarvisSTT(hosted.baseUrl, hosted.apiKey, undefined, config.language);
     case 'openai':
       if (!config.openai?.api_key) return null;
-      return new OpenAIWhisperSTT(config.openai.api_key, config.openai.model);
+      return new OpenAIWhisperSTT(config.openai.api_key, config.openai.model, config.language);
     case 'groq':
       if (!config.groq?.api_key) return null;
-      return new GroqWhisperSTT(config.groq.api_key, config.groq.model);
+      return new GroqWhisperSTT(config.groq.api_key, config.groq.model, config.language);
     case 'local':
-      return new LocalWhisperSTT(config.local?.endpoint, config.local?.model, config.local?.server_type);
+      return new LocalWhisperSTT(
+        config.local?.endpoint,
+        config.local?.model,
+        config.local?.server_type,
+        config.language,
+      );
     case 'sarvam':
       if (!config.sarvam?.api_key) return null;
       return new SarvamSTT(config.sarvam.api_key, config.sarvam.model, config.sarvam.language);

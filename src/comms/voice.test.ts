@@ -693,3 +693,31 @@ describe('UsejarvisSTT non-JSON 200', () => {
     expect(err!.message).not.toContain(key);
   });
 });
+
+describe('STT language is configurable (was hardcoded to en everywhere)', () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  const languageSentBy = async (config: STTConfig, hosted?: { baseUrl: string; apiKey: string }) => {
+    let sent = '';
+    globalThis.fetch = mock(async (_url: string, init: any) => {
+      sent = String((init.body as FormData).get('language'));
+      return new Response(JSON.stringify({ text: 'ok' }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    }) as any;
+    await createSTTProvider(config, hosted)!.transcribe(makeWavBuffer());
+    return sent;
+  };
+
+  test('defaults to en, preserving the previous hardcoded behaviour', async () => {
+    expect(await languageSentBy({ provider: 'openai', openai: { api_key: 'k' } })).toBe('en');
+  });
+
+  test('a configured language reaches every Whisper-shaped provider', async () => {
+    const hosted = { baseUrl: 'https://llm.usejarvis.host', apiKey: 'sk-uj-not-real' };
+    expect(await languageSentBy({ provider: 'openai', language: 'it', openai: { api_key: 'k' } })).toBe('it');
+    expect(await languageSentBy({ provider: 'groq', language: 'it', groq: { api_key: 'k' } })).toBe('it');
+    expect(await languageSentBy({ provider: 'usejarvis', language: 'it' }, hosted)).toBe('it');
+  });
+});

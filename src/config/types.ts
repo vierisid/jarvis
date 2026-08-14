@@ -155,6 +155,13 @@ export type STTConfig = {
    * section persists as plaintext JSON in the DB settings store).
    */
   provider: 'openai' | 'groq' | 'local' | 'sarvam' | 'usejarvis';
+  /**
+   * ISO-639-1 hint sent to the Whisper-shaped providers (openai / groq /
+   * local / usejarvis). Defaults to 'en' — the value they were all hardcoded
+   * to — so behaviour is unchanged until someone sets it. Sarvam keeps its
+   * own `sarvam.language` (different API, different codes).
+   */
+  language?: string;
   openai?: { api_key: string; model?: string };
   groq?: { api_key: string; model?: string };
   local?: { endpoint: string; model?: string; server_type?: 'whisper_cpp' | 'openai_compatible' };
