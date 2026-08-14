@@ -48,30 +48,49 @@ export class UsejarvisAIProvider extends OpenAIProvider {
    * both reached Anthropic intact and billed the second call at the cache
    * rate.
    *
-   * Two breakpoints, the documented multi-turn shape:
-   *   - the LAST system message — the stable prefix (tools + system render
-   *     ahead of messages, so this one entry caches both);
-   *   - the LAST message overall — a rolling breakpoint, so each request
-   *     writes the prefix the NEXT one reads as history grows.
-   * Anthropic allows 4; staying at 2 leaves room and keeps the shape easy
-   * to reason about.
+   * Two breakpoints, matching AnthropicProvider exactly (see
+   * `applyLastMessageBreakpoint` and the system-block reduce there — the two
+   * providers implement ONE policy and must not drift):
    *
-   * Under a model's minimum cacheable prefix Anthropic silently declines
-   * (no error, cache_creation_input_tokens: 0), and that floor differs per
-   * model — so marking is safe to do unconditionally and costs nothing
-   * when the prompt is small.
+   *   - the last system message marked `cache: true`. NOT simply the last
+   *     system message: callers emit `[static (cache:true), profile
+   *     (cache:true), dynamic (unmarked)]`, and the dynamic block carries
+   *     elapsed-second counters and recent results. A breakpoint there would
+   *     end the cached prefix on bytes that change every turn, so the entry
+   *     could never be read back — paying the write premium for nothing and
+   *     re-billing the whole persona at full rate. `cache` is the codebase's
+   *     declared boundary (see LLMMessage) and is what to honour.
+   *
+   *   - the last message overall, a rolling breakpoint so each request writes
+   *     the prefix the next one reads — but ONLY on conversational requests.
+   *     One-shot calls (classification, extraction, a periodic screen
+   *     capture) never resend their prefix, so a breakpoint there is a
+   *     guaranteed-unread 1.25x cache write. Presence of an assistant turn is
+   *     the same signal AnthropicProvider uses.
+   *
+   * Anthropic allows 4 breakpoints; staying at 2 leaves room.
    */
   protected override convertMessages(messages: LLMMessage[]): OpenAIMessage[] {
     const converted = super.convertMessages(messages);
     if (!this.promptCache || converted.length === 0) return converted;
 
-    const lastSystem = converted.reduce(
-      (found, msg, i) => (msg.role === 'system' ? i : found),
+    // super.convertMessages is a 1:1 map, so indices align with `messages`
+    // and the `cache` flag can be read off the originals.
+    const marks = new Set<number>();
+    const lastMarkedSystem = messages.reduce(
+      (found, m, i) => (m.role === 'system' && m.cache === true ? i : found),
       -1,
     );
-    const marks = new Set<number>();
-    if (lastSystem >= 0) marks.add(lastSystem);
-    marks.add(converted.length - 1);
+    if (lastMarkedSystem >= 0) {
+      marks.add(lastMarkedSystem);
+    } else {
+      // No declared boundary: fall back to the last system message, which is
+      // then the whole system prefix and is as stable as the caller made it.
+      const lastSystem = messages.reduce((found, m, i) => (m.role === 'system' ? i : found), -1);
+      if (lastSystem >= 0) marks.add(lastSystem);
+    }
+    if (messages.some((m) => m.role === 'assistant')) marks.add(converted.length - 1);
+    if (marks.size === 0) return converted;
 
     return converted.map((msg, i) => (marks.has(i) ? markCacheBreakpoint(msg) : msg));
   }

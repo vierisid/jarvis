@@ -235,6 +235,11 @@ describe('UsejarvisAIProvider', () => {
  * live). LiteLLM only forwards the marker when it rides ON a content part —
  * a top-level cache_control field, which OpenRouter accepts, is dropped.
  */
+const sentVolatileMarked = (sent: any): boolean =>
+  sent.messages.some((m: any) =>
+    Array.isArray(m.content) &&
+    m.content.some((p: any) => p.cache_control && String(p.text).includes('In flight')));
+
 describe('UsejarvisAIProvider prompt-cache markers', () => {
   const capture = async (
     messages: Array<Record<string, unknown>>,
@@ -253,14 +258,13 @@ describe('UsejarvisAIProvider prompt-cache markers', () => {
     return sent;
   };
 
-  it('marks the last system message and the last message overall', async () => {
+  it('marks the cache:true system block and the last message overall', async () => {
     const sent = await capture([
-      { role: 'system', content: 'You are Jarvis. ' + 'x'.repeat(200) },
+      { role: 'system', content: 'You are Jarvis. ' + 'x'.repeat(200), cache: true },
       { role: 'user', content: 'first' },
       { role: 'assistant', content: 'reply' },
       { role: 'user', content: 'second' },
     ]);
-    // System: promoted to a content part carrying the breakpoint.
     expect(sent.messages[0].content).toEqual([
       { type: 'text', text: expect.stringContaining('You are Jarvis.'), cache_control: { type: 'ephemeral' } },
     ]);
@@ -269,6 +273,58 @@ describe('UsejarvisAIProvider prompt-cache markers', () => {
     // Untouched in between, so the prefix stays byte-identical across turns.
     expect(sent.messages[1].content).toBe('first');
     expect(sent.messages[2].content).toBe('reply');
+  });
+
+  // THE test for this feature. Callers emit [static(cache:true), dynamic],
+  // and the dynamic block carries elapsed-second counters. Marking the last
+  // SYSTEM message (rather than the last MARKED one) ends the cached prefix
+  // on bytes that change every turn, so the entry can never be read back —
+  // the write premium is paid and the persona is re-billed at full rate.
+  // Asserting the marked text is byte-identical across two turns is what
+  // catches that; it fails against a positional heuristic.
+  it('ends the cached prefix on stable bytes when a dynamic system block follows', async () => {
+    const persona = 'You are Jarvis. ' + 'x'.repeat(2000);
+    const turn = (elapsed: number) => [
+      { role: 'system', content: persona, cache: true },
+      { role: 'system', content: `In flight: task-1 (running, ${elapsed}s)` },
+      { role: 'user', content: 'hi' },
+    ];
+    const a = await capture(turn(12));
+    const b = await capture(turn(47));
+
+    const markedOf = (sent: any) =>
+      sent.messages
+        .filter((m: any) => Array.isArray(m.content))
+        .flatMap((m: any) => m.content)
+        .filter((p: any) => p.cache_control)
+        .map((p: any) => p.text);
+
+    expect(markedOf(a)).toEqual([persona]);
+    // Byte-identical across turns → the prefix is reusable.
+    expect(markedOf(a)).toEqual(markedOf(b));
+    // …and the volatile block is NOT the boundary.
+    expect(sentVolatileMarked(a)).toBe(false);
+    expect(sentVolatileMarked(b)).toBe(false);
+  });
+
+  // One-shot calls never resend their prefix, so a rolling breakpoint there
+  // is a guaranteed-unread 1.25x cache write. AnthropicProvider guards on the
+  // presence of an assistant turn; this must match.
+  it('skips the rolling breakpoint on one-shot calls (no assistant turn)', async () => {
+    const sent = await capture([
+      { role: 'user', content: 'classify this: ' + 'y'.repeat(2000) },
+    ]);
+    expect(JSON.stringify(sent)).not.toContain('cache_control');
+  });
+
+  it('still marks a one-shot call\'s stable system prefix', async () => {
+    const sent = await capture([
+      { role: 'system', content: 'Extraction rules. ' + 'z'.repeat(2000), cache: true },
+      { role: 'user', content: 'extract' },
+    ]);
+    expect(sent.messages[0].content[0].cache_control).toEqual({ type: 'ephemeral' });
+    // …but not the user turn: nothing will resend this prefix.
+    expect(sent.messages[1].content).toBe('extract');
   });
 
   it('never sends a TOP-LEVEL cache_control (LiteLLM drops it)', async () => {
@@ -298,9 +354,13 @@ describe('UsejarvisAIProvider prompt-cache markers', () => {
     expect(JSON.stringify(sent.messages[1])).not.toContain('cache_control');
   });
 
-  it('a single message still gets exactly one breakpoint', async () => {
-    const sent = await capture([{ role: 'user', content: 'hi' }]);
-    expect(sent.messages).toHaveLength(1);
+  it('falls back to the last system block when the caller declares no boundary', async () => {
+    const sent = await capture([
+      { role: 'system', content: 'Rules. ' + 'q'.repeat(500) },
+      { role: 'user', content: 'go' },
+      { role: 'assistant', content: 'ok' },
+      { role: 'user', content: 'again' },
+    ]);
     expect(sent.messages[0].content[0].cache_control).toEqual({ type: 'ephemeral' });
   });
 });

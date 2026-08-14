@@ -84,6 +84,10 @@ type OpenAIResponse = {
     completion_tokens: number;
     total_tokens: number;
     prompt_tokens_details?: { cached_tokens?: number };
+    /** LiteLLM surfaces Anthropic's cache WRITE count here when proxying an
+     * Anthropic upstream. Folded into prompt_tokens, so it must be subtracted
+     * out of input_tokens the same way cached_tokens is. */
+    cache_creation_input_tokens?: number;
   };
 };
 
@@ -450,10 +454,18 @@ export class OpenAIProvider implements LLMProvider {
         // tokens, so subtract them out; Anthropic already reports cache
         // tokens separately from input_tokens.
         input_tokens: response.usage.prompt_tokens
-          - (response.usage.prompt_tokens_details?.cached_tokens ?? 0),
+          - (response.usage.prompt_tokens_details?.cached_tokens ?? 0)
+          - (response.usage.cache_creation_input_tokens ?? 0),
         output_tokens: response.usage.completion_tokens,
         ...(response.usage.prompt_tokens_details?.cached_tokens !== undefined
           ? { cache_read_input_tokens: response.usage.prompt_tokens_details.cached_tokens } : {}),
+        // Without this the hosted provider reports every cache WRITE as
+        // ordinary input — and since `cache_creation_input_tokens: 0` is
+        // exactly the signal that Anthropic silently declined to cache, the
+        // one field that distinguishes "working" from "declined every time"
+        // would be hardcoded to zero on the provider the feature exists for.
+        ...(response.usage.cache_creation_input_tokens !== undefined
+          ? { cache_creation_input_tokens: response.usage.cache_creation_input_tokens } : {}),
       },
       model: response.model,
       finish_reason: this.mapFinishReason(choice!.finish_reason),
