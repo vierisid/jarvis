@@ -27,7 +27,7 @@ import {
 } from '../llm/config-binding.ts';
 import { isAnthropicCustomBaseUrl } from '../llm/anthropic.ts';
 import { GROQ_DEPRECATED_MODEL_REPLACEMENTS } from '../llm/groq-models.ts';
-import { TIERS, parseModelRef } from '../llm/tiers.ts';
+import { TIERS, type Tier, parseModelRef } from '../llm/tiers.ts';
 
 // ── DB keys ──────────────────────────────────────────────────────────────
 const SETTING_PROVIDERS = 'llm.providers';
@@ -38,6 +38,14 @@ const SETTING_TIER_HIGH = 'llm.tiers.high';
 const SETTING_TIER_MEDIUM = 'llm.tiers.medium';
 const SETTING_TIER_LOW = 'llm.tiers.low';
 const SETTING_PROMPT_CACHE = 'llm.prompt_cache';
+
+/** Settings key per tier. Single source so the read/write paths can't drift. */
+const SETTING_TIER_KEYS: Record<Tier, string> = {
+  conversation: SETTING_TIER_CONVERSATION,
+  high: SETTING_TIER_HIGH,
+  medium: SETTING_TIER_MEDIUM,
+  low: SETTING_TIER_LOW,
+};
 
 /** Keychain key for a provider's API key, by provider NAME (not kind). */
 function keychainKey(providerName: string): string {
@@ -333,6 +341,10 @@ export function mergeLLMSettingsIntoConfig(
 
   // 1. New shape: load providers JSON + default + tier strings.
   const providersJson = getSetting(SETTING_PROVIDERS);
+  // A parse failure means we don't actually know which providers exist, so the
+  // orphan prune below must not run - every ref would look dangling and we'd
+  // wipe a working config over one corrupt row.
+  let providersReadable = true;
   if (providersJson) {
     try {
       const parsed = JSON.parse(providersJson) as Record<string, LLMProviderEntry>;
@@ -340,6 +352,7 @@ export function mergeLLMSettingsIntoConfig(
         config.llm.providers[name] = entry;
       }
     } catch (err) {
+      providersReadable = false;
       console.warn('[LLM] Failed to parse stored providers JSON:', err);
     }
   }
@@ -347,13 +360,8 @@ export function mergeLLMSettingsIntoConfig(
   const dbDefault = getSetting(SETTING_DEFAULT);
   if (dbDefault) config.llm.default = dbDefault;
 
-  for (const [tier, key] of [
-    ['conversation', SETTING_TIER_CONVERSATION],
-    ['high', SETTING_TIER_HIGH],
-    ['medium', SETTING_TIER_MEDIUM],
-    ['low', SETTING_TIER_LOW],
-  ] as const) {
-    const value = getSetting(key);
+  for (const tier of TIERS) {
+    const value = getSetting(SETTING_TIER_KEYS[tier]);
     if (value) config.llm.tiers[tier] = value;
   }
 
@@ -372,6 +380,12 @@ export function mergeLLMSettingsIntoConfig(
   migrateLegacyDBSettings(config);
   migrateDeprecatedGroqModels(config, options.persistMigrations !== false);
 
+  // Repair installs dirtied before provider deletion cleaned up after itself.
+  // Runs after the legacy migration so refs it just revived still count.
+  if (providersReadable) {
+    pruneOrphanedModelRefs(config, options.persistMigrations !== false);
+  }
+
   // 3. Pull API keys from the keychain into provider entries. We do NOT
   // surface them in `config.llm.providers.<name>.api_key` (that would risk
   // saving them back to disk) - instead the config-binding module reads
@@ -386,6 +400,49 @@ export function mergeLLMSettingsIntoConfig(
       // persists secrets only to the keychain.
       config.llm.providers[name] = { ...config.llm.providers[name], api_key: key };
     }
+  }
+}
+
+/**
+ * Drop `default` / tier refs pointing at providers that are no longer
+ * configured. saveLLMSettings clears these when a provider is deleted, but
+ * installs dirtied before that landed still carry the dead refs: they load
+ * back in on every start, configureLLMTiers warns and skips them, and the
+ * affected tier silently falls up. Repairing on load makes those installs
+ * self-heal instead of needing the user to re-pick every tier.
+ *
+ * A provider that is configured but not instantiable (e.g. its API key is
+ * missing) is NOT an orphan - the entry still exists, so its refs stay put
+ * until the user removes the provider outright.
+ */
+function pruneOrphanedModelRefs(config: JarvisConfig, persist = true): void {
+  const orphanedOwner = (ref: string | undefined): string | null => {
+    const parsed = parseModelRef(ref);
+    if (!parsed || config.llm.providers?.[parsed.provider]) return null;
+    return parsed.provider;
+  };
+
+  const dropped: string[] = [];
+
+  const defaultOwner = orphanedOwner(config.llm.default);
+  if (defaultOwner) {
+    dropped.push(`default (${defaultOwner})`);
+    config.llm.default = undefined;
+    if (persist) setSetting(SETTING_DEFAULT, '');
+  }
+
+  for (const tier of TIERS) {
+    const owner = orphanedOwner(config.llm.tiers?.[tier]);
+    if (!owner) continue;
+    dropped.push(`${tier} (${owner})`);
+    delete config.llm.tiers?.[tier];
+    if (persist) setSetting(SETTING_TIER_KEYS[tier], '');
+  }
+
+  if (dropped.length > 0) {
+    console.warn(
+      `[LLM] Dropped model refs for providers that no longer exist: ${dropped.join(', ')}.`,
+    );
   }
 }
 
