@@ -190,7 +190,15 @@ export class WebSocketService implements Service {
    */
   private realtimeSessions = new Map<
     ServerWebSocket<unknown>,
-    { session: RealtimeVoiceSession; transport: BrowserAudioTransport; timeout: ReturnType<typeof setTimeout>; startedAt: number }
+    {
+      session: RealtimeVoiceSession;
+      transport: BrowserAudioTransport;
+      timeout: ReturnType<typeof setTimeout>;
+      startedAt: number;
+      /** True when the platform proxy is the billing authority for this
+       * session — see closeRealtimeVoice for why the local ledger is skipped. */
+      hosted: boolean;
+    }
   >();
   /**
    * Lazily-created monthly spend guard for realtime voice. Only used when a
@@ -1415,24 +1423,42 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       return false;
     }
 
-    // Monthly spend guard: refuse new sessions once the estimated budget is
-    // hit. Returns true (caller skips the standard accumulator) but opens no
-    // session. Sent as `closed` (not `error`) + a message so the client stops
-    // the mic via the normal close path and surfaces the reason, rather than a
-    // bare error flash. Falling through to the standard pipeline would be wrong:
-    // the client is already streaming raw realtime PCM, which the WAV-based path
-    // can't consume.
     // Hosted plan gate (shared with the pebble starter + capability
     // advertisement): cached + hard-timeout, advisory on failure.
+    //
+    // Refusal must NOT fall through to the standard pipeline. By the time we
+    // get here the client is already streaming raw 24kHz PCM, which the
+    // WAV-based path cannot consume: the accumulator would concatenate
+    // headerless frames, hand them to Whisper as audio.wav, and silently drop
+    // the turn — while the browser, never told to leave realtime mode, sits
+    // in `recording` forever. So report it the same way the budget guard
+    // does: `closed` + a reason, and return true so the caller opens no
+    // standard session.
     if (!(await hostedRealtimeIncluded(resolved))) {
-      console.warn('[WSService] realtime not included in this plan — using standard pipeline');
-      return false; // caller falls back to STT->LLM->TTS
+      console.warn('[WSService] realtime not included in this plan — refusing session');
+      this.wsServer.sendToClient(ws, {
+        type: 'realtime_status',
+        payload: {
+          state: 'closed',
+          reason: 'plan',
+          message: 'Live voice is not included in your plan, so this session was not started. '
+            + 'Say that again and it will go through the standard voice pipeline.',
+        },
+        timestamp: Date.now(),
+      });
+      return true;
     }
     // The await above opened a race a sync starter never had: a second
     // voice_start arriving mid-gate would build a SECOND session and orphan
     // the first (billed audio, teardown of the wrong one). First-in wins.
     if (this.realtimeSessions.has(ws)) return true;
 
+    // Monthly spend guard: refuse new sessions once the estimated budget is
+    // hit. Returns true (caller skips the standard accumulator) but opens no
+    // session. Sent as `closed` (not `error`) + a message so the client stops
+    // the mic via the normal close path and surfaces the reason, rather than a
+    // bare error flash. Falling through to the standard pipeline would be wrong
+    // for the same reason as the plan gate above.
     if (resolved.monthlyBudgetUsd && !this.getRealtimeBudget().canStart(resolved.monthlyBudgetUsd)) {
       console.warn('[WSService] realtime monthly budget reached — refusing new session');
       this.wsServer.sendToClient(ws, {
@@ -1491,7 +1517,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       this.closeRealtimeVoice(ws);
     }, resolved.maxSessionMinutes * 60_000);
 
-    this.realtimeSessions.set(ws, { session, transport, timeout, startedAt: Date.now() });
+    this.realtimeSessions.set(ws, {
+      session, transport, timeout, startedAt: Date.now(),
+      hosted: resolved.provider === 'usejarvis_ai',
+    });
     session.connect().then(
       () => this.wsServer.sendToClient(ws, { type: 'realtime_status', payload: { state: 'live', model: resolved.model }, timestamp: Date.now() }),
       (err) => {
@@ -1564,10 +1593,19 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // Record estimated spend against the monthly budget (only meaningful when a
     // budget is set; recording always is cheap and keeps the cap honest if one
     // is added mid-month).
-    try {
-      this.getRealtimeBudget().recordSessionSeconds((Date.now() - entry.startedAt) / 1000);
-    } catch (err) {
-      console.warn('[WSService] failed to record realtime spend:', err);
+    //
+    // EXCEPT on the hosted path, where the proxy is the billing authority and
+    // the local $/min estimate is deliberately unset. Writing hosted minutes
+    // into this shared ledger would charge them to a BYO key later: a user who
+    // runs 90 hosted minutes and then adds their own OpenAI key with a $25 cap
+    // would find $27 of spend they never incurred, and realtime refused
+    // immediately.
+    if (!entry.hosted) {
+      try {
+        this.getRealtimeBudget().recordSessionSeconds((Date.now() - entry.startedAt) / 1000);
+      } catch (err) {
+        console.warn('[WSService] failed to record realtime spend:', err);
+      }
     }
     try { entry.session.close(); } catch { /* ignore */ }
     try {

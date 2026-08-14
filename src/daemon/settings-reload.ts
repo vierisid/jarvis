@@ -48,6 +48,7 @@ import { applyEnvOverrides } from '../config/loader.ts';
 import { googleTokensPath } from '../integrations/google-auth.ts';
 import { USER_OWNED_SECTIONS, type JarvisConfig, type UserOwnedSection } from '../config/types.ts';
 import { mergeLLMSettingsIntoConfig } from './llm-settings.ts';
+import { clearRealtimeGateCache } from './realtime-gate.ts';
 import { mergeUserSettingsIntoConfig } from './user-settings.ts';
 
 export type ReloadSection = UserOwnedSection | 'llm' | 'google';
@@ -219,6 +220,11 @@ export class SettingsReloadCoordinator {
       mergeLLMSettingsIntoConfig(this.config);
       mergeUserSettingsIntoConfig(this.config);
       applyEnvOverrides(this.config);
+
+      // A reload is the moment a re-provisioned usejarvis_ai block lands, so
+      // any cached realtime plan verdict is now suspect. Cheap to drop: the
+      // next voice_start re-asks the catalog once and re-caches.
+      clearRealtimeGateCache();
 
       const changed = RELOAD_SECTIONS.filter((s) => this.snapshot(s) !== before.get(s));
       // The hosted deliver/revoke ops write the tokens file and SIGHUP us; the

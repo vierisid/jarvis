@@ -13,6 +13,7 @@ import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import { resolveRealtimeVoice, DEFAULT_BLOCKED_CATEGORIES } from '../config/realtime.ts';
 import { hasUsejarvisAi, effectiveSttForBinding, effectiveTtsForBinding, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
+import { cachedRealtimeVerdict } from './realtime-gate.ts';
 import type { EntityType } from '../vault/entities.ts';
 import type { CommitmentPriority, CommitmentStatus } from '../vault/commitments.ts';
 import type { ObservationType } from '../vault/observations.ts';
@@ -2737,9 +2738,17 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const rt = voice?.realtime;
         // Surface whether realtime would actually resolve (BYO key cascade),
         // so the UI can show "active / no key" without exposing secrets.
+        // The plan gate is part of "available": this flag is what puts the
+        // browser into raw-PCM capture mode, so reporting true for a plan
+        // that excludes uj-realtime makes client and server disagree about
+        // the wire format for a whole utterance. Read the gate's CACHE only —
+        // the dashboard polls this route, and a fetching gate here would turn
+        // that poll into sustained catalog traffic. An unknown verdict stays
+        // available, matching the gate's own advisory-allow stance.
         let available = false;
         try {
-          available = resolveRealtimeVoice(ctx.config).ok;
+          const res = resolveRealtimeVoice(ctx.config);
+          available = res.ok && cachedRealtimeVerdict(res.resolved) !== false;
         } catch { available = false; }
         return json({
           wake_engine: voice?.wake_engine ?? 'openwakeword',
