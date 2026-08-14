@@ -19,7 +19,7 @@
  * can build on a verified protocol.
  */
 
-import { REALTIME_URL, buildSessionUpdate } from '../src/comms/realtime.ts';
+import { buildSessionUpdate } from '../src/comms/realtime.ts';
 import type { ResolvedRealtimeVoice } from '../src/config/realtime.ts';
 import type { RealtimeReasoningEffort } from '../src/config/types.ts';
 
@@ -29,7 +29,14 @@ if (!key) {
   process.exit(1);
 }
 
+// The URL now rides ON the resolved config (the hosted path repoints it to
+// the platform proxy), so this script states the OpenAI one explicitly rather
+// than importing a constant that no longer exists.
+const OPENAI_REALTIME_URL = 'wss://api.openai.com/v1/realtime';
+
 const resolved: ResolvedRealtimeVoice = {
+  provider: 'openai',
+  url: OPENAI_REALTIME_URL,
   apiKey: key,
   model: process.env.REALTIME_MODEL || 'gpt-realtime-2',
   voice: process.env.REALTIME_VOICE || 'marin',
@@ -39,7 +46,7 @@ const resolved: ResolvedRealtimeVoice = {
 };
 
 const prompt = process.argv.slice(2).join(' ') || 'Say hello and tell me you are working, in one short sentence.';
-const url = `${REALTIME_URL}?model=${encodeURIComponent(resolved.model)}`;
+const url = `${resolved.url}?model=${encodeURIComponent(resolved.model)}`;
 
 console.log(`→ Connecting: ${url}`);
 console.log(`→ Model=${resolved.model}  effort=${resolved.reasoningEffort}  voice=${resolved.voice}`);
