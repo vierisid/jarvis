@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { providerModels } from "./LLMTab";
+import { providerModels, seedModelForProvider, USEJARVIS_TIER_ALIASES } from "./LLMTab";
 
 /** The hosted catalog is key-scoped across EVERY modality, so these pickers —
  * which choose chat tiers and the single-model default — must never offer a
@@ -34,5 +34,40 @@ describe("providerModels: hosted catalog filtering", () => {
       catalog: { omni: ["a/b", "c/d"] },
     };
     expect(providerModels(omni.kinds, "omni", null, omni.catalog)).toEqual(["a/b", "c/d"]);
+  });
+});
+
+/** Switching a tier's provider auto-commits immediately, so WHICH model gets
+ * seeded is a persisted decision, not a display detail. */
+describe("seedModelForProvider: per-tier seeding", () => {
+  const hostedChatModels = ["uj-chat", "uj-high", "uj-low", "uj-medium"];
+
+  test("each tier seeds its OWN alias, not the alphabetically-first one", () => {
+    // The bug this pins: models[0] is always "uj-chat", so switching the
+    // High-intelligence picker to the hosted provider silently persisted the
+    // thin conversation model as the deep-reasoning tier.
+    expect(seedModelForProvider(hostedChatModels, USEJARVIS_TIER_ALIASES.high)).toBe("uj-high");
+    expect(seedModelForProvider(hostedChatModels, USEJARVIS_TIER_ALIASES.medium)).toBe("uj-medium");
+    expect(seedModelForProvider(hostedChatModels, USEJARVIS_TIER_ALIASES.low)).toBe("uj-low");
+    expect(seedModelForProvider(hostedChatModels, USEJARVIS_TIER_ALIASES.conversation)).toBe("uj-chat");
+  });
+
+  test("falls back to the first entry when the provider lacks the preferred model", () => {
+    // A BYO provider has no uj-* aliases — seeding must not invent one.
+    expect(seedModelForProvider(["claude-opus-5", "claude-haiku-4-5"], "uj-high")).toBe("claude-opus-5");
+  });
+
+  test("an empty catalog yields the custom sentinel, never a bogus commit", () => {
+    expect(seedModelForProvider([], "uj-high")).toBe("__custom__");
+  });
+
+  test("every tier alias is one the picker actually offers (no drift)", () => {
+    const offered = providerModels(
+      { usejarvis_ai: { kind: "usejarvis_ai" as const, has_api_key: true } },
+      "usejarvis_ai",
+      null,
+      { usejarvis_ai: ["uj-chat", "uj-high", "uj-low", "uj-medium", "uj-stt"] },
+    );
+    for (const alias of Object.values(USEJARVIS_TIER_ALIASES)) expect(offered).toContain(alias);
   });
 });

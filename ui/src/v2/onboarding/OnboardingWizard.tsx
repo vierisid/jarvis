@@ -403,10 +403,19 @@ export function OnboardingWizard({
       else if (tts === "elevenlabs") ttsBlock.elevenlabs = { api_key: elevenKey, voice_id: elevenVoice, model: elevenModel };
 
       const payload: Record<string, unknown> = { tts: ttsBlock };
-      // Hosted "Jarvis AI" needs NO llm block: the daemon's carve-out already
-      // injected the provider and tier wiring, so setup simply omits it
-      // (/api/onboarding/setup treats llm as optional).
-      if (provId !== "jarvis") {
+      if (provId === "jarvis") {
+        // Hosted needs no provider or default — the daemon's carve-out injects
+        // the provider, and the uj-* tier wiring lives in the routing view.
+        //
+        // But the MODE must still be persisted. Without it getLLMSettings
+        // INFERS "single" (no default, no tiers stored), so the LLM tab shows
+        // "Single LLM · default unset" for an install that is actually running
+        // four tiers. The user then picks a default to fill the blank, which
+        // sets config.llm.default — and effectiveLlmForBinding returns early
+        // on that, tearing down all four hosted tiers so everything collapses
+        // onto uj-chat. Recording the mode makes the tab tell the truth.
+        payload.llm = { mode: "multi-tier" };
+      } else {
         const entry: Record<string, unknown> = { kind: provId };
         if (prov.needsKey && apiKey) entry.api_key = apiKey;
         if (prov.needsBaseUrl) entry.base_url = baseUrl.trim();

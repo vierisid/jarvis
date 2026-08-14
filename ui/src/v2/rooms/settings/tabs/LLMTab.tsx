@@ -27,7 +27,27 @@ const USEJARVIS_NAME = "usejarvis_ai";
  * so an unknown `uj-*` sorting before `uj-chat` would silently become someone's
  * conversation model. Missing a future CHAT tier here is harmless by
  * comparison — it is simply absent until the next release. */
-const CHAT_USEJARVIS_ALIASES = new Set(["uj-chat", "uj-low", "uj-medium", "uj-high"]);
+export const USEJARVIS_TIER_ALIASES: Record<LLMTier, string> = {
+  conversation: "uj-chat",
+  high: "uj-high",
+  medium: "uj-medium",
+  low: "uj-low",
+};
+/** Derived from the tier map so the two cannot drift: every alias a tier can
+ * be seeded with is, by construction, an alias the picker offers. */
+const CHAT_USEJARVIS_ALIASES = new Set(Object.values(USEJARVIS_TIER_ALIASES));
+
+/**
+ * Which model to auto-commit when the provider dropdown changes.
+ *
+ * Prefers the slot's own alias when the new provider offers it, else the
+ * first entry. Extracted so the choice is testable: the hosted catalog sorts
+ * alphabetically, so a bare `models[0]` seeds `uj-chat` into EVERY tier and
+ * deep reasoning silently runs on the thin conversation model.
+ */
+export function seedModelForProvider(models: string[], preferredModel?: string): string {
+  return (preferredModel && models.includes(preferredModel) ? preferredModel : models[0]) ?? "__custom__";
+}
 
 /**
  * Providers offered by the model pickers: the user's editable entries plus,
@@ -891,6 +911,7 @@ function MultiTierSection({
             ollamaModels={ollamaModels}
             providerCatalogs={providerCatalogs}
             allowClear
+            preferredModel={USEJARVIS_TIER_ALIASES[t.id]}
             onChange={async (ref) => {
               const r = await data.setTierModel(t.id, ref);
               onToast(r.message, r.ok ? "ok" : "warn");
@@ -931,6 +952,7 @@ function ModelSelector({
   ollamaModels,
   providerCatalogs,
   allowClear,
+  preferredModel,
   onChange,
 }: {
   label: string;
@@ -942,6 +964,11 @@ function ModelSelector({
   /** Live model/route catalogs keyed by configured provider name. */
   providerCatalogs: Record<string, string[]>;
   allowClear?: boolean;
+  /** Model to seed when the provider changes, if the new provider offers it.
+   * Without this the seed is `catalog[0]`, and the hosted catalog sorts
+   * alphabetically — so every tier would auto-commit `uj-chat`, silently
+   * running deep reasoning on the thin conversation model. */
+  preferredModel?: string;
   onChange: (ref: string | null) => void;
 }) {
   const parsed = useMemo(() => parseModelRef(value), [value]);
@@ -982,7 +1009,16 @@ function ModelSelector({
   }, [value, ollamaModels, providerCatalogs]);
 
   const models = providerModels(providers, selectedProvider, ollamaModels, providerCatalogs);
-  const usesCustomOnly = models.length === 0;
+  // The hosted provider is opaque BY DESIGN: its aliases are the only valid
+  // refs and the allowlist above is what keeps a voice alias out of a chat
+  // slot. Falling back to a free-text box when the catalog is empty (still
+  // loading, or the proxy is unreachable) would hand the user a control that
+  // bypasses that allowlist entirely — `usejarvis_ai:uj-stt` typed there
+  // points chat at a transcription endpoint. Nothing validates model refs
+  // server-side, so this is the only gate.
+  const isHosted = providers[selectedProvider]?.kind === USEJARVIS_NAME;
+  const usesCustomOnly = models.length === 0 && !isHosted;
+  const hostedCatalogUnavailable = isHosted && models.length === 0;
   const effectiveModel = selectedModel === "__custom__" ? customModel.trim() : selectedModel;
 
   const commit = (provider: string, model: string) => {
@@ -1015,7 +1051,7 @@ function ModelSelector({
             setSelectedProvider(next);
             // Reset model when provider changes - the model list is now different.
             const nextModels = providerModels(providers, next, ollamaModels, providerCatalogs);
-            const defaultModel = nextModels[0] ?? "__custom__";
+            const defaultModel = seedModelForProvider(nextModels, preferredModel);
             setSelectedModel(defaultModel);
             setCustomModel("");
             if (defaultModel !== "__custom__") {
@@ -1031,7 +1067,11 @@ function ModelSelector({
           ))}
         </select>
 
-        {usesCustomOnly ? (
+        {hostedCatalogUnavailable ? (
+          <select className="v2-set__select" disabled value="" style={{ flex: "1 1 200px" }}>
+            <option value="">Loading your plan’s models…</option>
+          </select>
+        ) : usesCustomOnly ? (
           <input
             type="text"
             className="v2-set__input"
