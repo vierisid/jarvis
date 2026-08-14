@@ -818,6 +818,32 @@ export function useSettingsData() {
     [refresh],
   );
 
+  /**
+   * Reset a voice provider to the plan default (hosted installs).
+   *
+   * Sends `provider: null`, which the daemon turns into a DELETE of the
+   * recorded choice — not a write of 'usejarvis'. The hosted defaults key off
+   * an absent provider, so recording one would pin the account off its own
+   * plan; only silence keeps the default applying.
+   */
+  const resetVoiceProvider = useCallback(
+    async (section: "stt" | "tts"): Promise<ActionResult> => {
+      try {
+        const r = await postJson<{ ok: boolean; message: string }>(
+          `/api/config/${section}`,
+          { provider: null },
+        );
+        await refresh();
+        return r.ok
+          ? { ok: true, message: r.message || "Reset to your plan default." }
+          : { ok: false, message: r.message || "Failed to reset." };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+      }
+    },
+    [refresh],
+  );
+
   // ── TTS (hot-reloaded) ──────────────────────────────────────────────
   const setTTS = useCallback(
     async (input: {
@@ -1061,6 +1087,7 @@ export function useSettingsData() {
     setTelegram,
     setDiscord,
     setSTTProvider,
+    resetVoiceProvider,
     setSTTLanguage,
     setTTS,
     setVoiceConfig,

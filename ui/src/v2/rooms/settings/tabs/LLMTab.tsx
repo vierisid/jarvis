@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ChevronRight, Plus, Trash2 } from "lucide-react";
+import { ChevronRight, Plus, RotateCcw, Trash2 } from "lucide-react";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
 import { Icon } from "../../../ui";
 import {
@@ -926,6 +926,13 @@ function MultiTierSection({
             allowClear
             preferredModel={USEJARVIS_TIER_ALIASES[t.id]}
             effectiveHint={llm.effective?.tiers[t.id]}
+            clearHint={
+              llm.default
+                ? { ref: llm.default, source: "default" }
+                : llm.hosted_llm
+                  ? { ref: `usejarvis_ai:${USEJARVIS_TIER_ALIASES[t.id]}`, source: "plan" }
+                  : undefined
+            }
             onChange={async (ref) => {
               const r = await data.setTierModel(t.id, ref);
               onToast(r.message, r.ok ? "ok" : "warn");
@@ -977,6 +984,7 @@ function ModelSelector({
   allowClear,
   preferredModel,
   effectiveHint,
+  clearHint,
   onChange,
 }: {
   label: string;
@@ -997,8 +1005,15 @@ function ModelSelector({
   preferredModel?: string;
   /** What the daemon actually routes this slot to (from llm.effective) —
    * rendered when no explicit ref is set, so an unset slot shows routing
-   * truth instead of a never-persisted `models[0]` (review pr3#7). */
+   * truth instead of a never-persisted `models[0]` (review pr3#7). Also
+   * drives the plan-default hint + reset affordance: `source === 'plan'` is
+   * the only state where "using your plan's default" is truthful (pr7#2). */
   effectiveHint?: { ref: string | null; source: "choice" | "default" | "plan" | null };
+  /** What clearing this slot resolves to (computed by the parent from
+   * llm.default / the plan alias), so the reset button's label states the
+   * actual post-clear routing instead of an unconditional "plan default"
+   * claim (review pr7#2). */
+  clearHint?: { ref: string; source: "default" | "plan" };
   onChange: (ref: string | null) => void;
 }) {
   const parsed = useMemo(() => parseModelRef(value), [value]);
@@ -1174,10 +1189,16 @@ function ModelSelector({
         {allowClear && value && (
           <button
             type="button"
-            className="v2-set__btn"
+            className="v2-set__btn v2-set__btn--icon"
             onClick={() => onChange(null)}
+            title={clearHint
+              ? `Reset — this slot returns to ${clearHint.source === "plan" ? "your plan's default" : "the fallback default"} (${clearHint.ref})`
+              : "Clear this model"}
+            aria-label={clearHint
+              ? `Reset to ${clearHint.source === "plan" ? "your plan's default" : "the fallback default"}, ${clearHint.ref}`
+              : "Clear this model"}
           >
-            Clear
+            <RotateCcw size={14} aria-hidden="true" />
           </button>
         )}
       </div>

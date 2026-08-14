@@ -14,11 +14,27 @@ import { modelForOnboardingTest, onboardingDefaultModelRef } from "./llm-setup";
 type StepKey =
   | "welcome" | "perms" | "brain" | "hear" | "speak" | "connect" | "interview" | "tour" | "allset";
 
-const STEPS: ReadonlyArray<[StepKey, string]> = [
+export const STEPS: ReadonlyArray<[StepKey, string]> = [
   ["welcome", "Welcome"], ["perms", "Permissions"], ["brain", "The brain"],
   ["hear", "Hearing"], ["speak", "Speaking"], ["connect", "Connect"],
   ["interview", "The interview"], ["tour", "The tour"], ["allset", "All set"],
 ];
+
+/** Steps the platform answers on a hosted install — hidden there, and the
+ * setup POST omits their config entirely (the daemon enforces that too). */
+export const HOSTED_PROVISIONED: ReadonlySet<StepKey> = new Set<StepKey>(["brain", "hear", "speak"]);
+
+/** The step list an install actually walks. Exported for tests: the
+ * hosted/self-hosted split is the whole point of this screen set. */
+export function stepsFor(hosted: boolean): ReadonlyArray<[StepKey, string]> {
+  return hosted ? STEPS.filter(([k]) => !HOSTED_PROVISIONED.has(k)) : STEPS;
+}
+
+/** Steps that show the progress bar (everything between Welcome and the
+ * interview). Key-based: an index range breaks the moment the list shrinks. */
+const PROGRESS_STEPS: ReadonlySet<StepKey> = new Set<StepKey>([
+  "perms", "brain", "hear", "speak", "connect",
+]);
 
 /* — inline SVG glyphs (design I{}) — */
 const SVG: Record<string, string> = {
@@ -116,19 +132,21 @@ export function OnboardingWizard({
   status: OnboardingStatus | null;
   onComplete: () => void;
 }) {
-  const startStep = useMemo<number>(() => {
-    if (!status?.setup_completed) return 0;
-    if (!status.profile_completed && !status.setup_skipped_profile) return 6;
-    if (!status.tutorial_completed && !status.tutorial_dismissed) return 7;
-    return 8;
+  const startKey = useMemo<StepKey>(() => {
+    if (!status?.setup_completed) return "welcome";
+    if (!status.profile_completed && !status.setup_skipped_profile) return "interview";
+    if (!status.tutorial_completed && !status.tutorial_dismissed) return "tour";
+    return "allset";
   }, [status]);
 
-  const [step, setStep] = useState(startStep);
-  const key = STEPS[step]![0];
+  // Position is tracked by KEY, not index. The step list shrinks when the
+  // hosted probe resolves (three steps disappear), and an index captured
+  // before that would silently point at a different screen afterwards.
+  const [stepKey, setStepKey] = useState<StepKey>(startKey);
   // True when the wizard is running the setup steps in this session (fresh
   // start) — a resume at the interview/tour never touched brain/voice state,
   // so the recap must not print those defaults as if they were saved.
-  const configuredThisSession = startStep === 0;
+  const configuredThisSession = startKey === "welcome";
 
   // welcome
   const [theme, setTheme] = useState<"light" | "dark">(
@@ -160,6 +178,25 @@ export function OnboardingWizard({
     () => PROVIDERS.map((p) => (p.id === "jarvis" ? { ...p, soon: !hosted } : p)),
     [hosted],
   );
+
+  // On a hosted install the platform already answers brain / hearing /
+  // speaking, so those screens are dropped: asking is noise, and — worse —
+  // answering WRITES intent (an llm.default that disables the uj-* tier
+  // wiring, a tts.provider that pins the account off its included voice).
+  // Self-hosted keeps all nine: there, configuring an LLM is mandatory or
+  // nothing works.
+  const steps = useMemo(
+    () => stepsFor(hosted),
+    [hosted],
+  );
+  const step = Math.max(0, steps.findIndex(([k]) => k === stepKey));
+  const key = steps[step]![0];
+
+  // If the probe resolves while the user is standing ON a now-hidden screen,
+  // move them forward rather than leaving them on a dead index.
+  useEffect(() => {
+    if (!steps.some(([k]) => k === stepKey)) setStepKey("connect");
+  }, [steps, stepKey]);
   const [provId, setProvId] = useState("anthropic");
   const prov = provList.find((p) => p.id === provId)!;
   const [apiKey, setApiKey] = useState("");
@@ -346,9 +383,10 @@ export function OnboardingWizard({
   }, []);
   useEffect(() => stopGooglePoll, [stopGooglePoll]);
 
-  const go = (n: number) => { setError(null); setStep(n); };
-  const next = () => go(Math.min(step + 1, STEPS.length - 1));
-  const back = () => go(Math.max(0, step - 1));
+  const goKey = (k: StepKey) => { setError(null); setStepKey(k); };
+  const go = (n: number) => goKey(steps[Math.min(Math.max(0, n), steps.length - 1)]![0]);
+  const next = () => go(step + 1);
+  const back = () => go(step - 1);
 
   /* — brain: test connection — */
   const runTest = useCallback(async () => {
@@ -407,8 +445,15 @@ export function OnboardingWizard({
       if (tts === "edge") { ttsBlock.voice = edgeVoice; ttsBlock.rate = "+0%"; }
       else if (tts === "elevenlabs") ttsBlock.elevenlabs = { api_key: elevenKey, voice_id: elevenVoice, model: elevenModel };
 
-      const payload: Record<string, unknown> = { tts: ttsBlock };
-      if (provId === "jarvis") {
+      // Hosted: send NOTHING but the architecture mode. The brain/hearing/
+      // speaking screens never ran, so this component's tts/stt state is
+      // untouched defaults — posting it would record choices the user was
+      // never shown, pinning them off their own plan. (The daemon drops
+      // these fields too; this keeps the request honest at the source.)
+      const payload: Record<string, unknown> = hosted ? {} : { tts: ttsBlock };
+      if (hosted) {
+        payload.llm = { mode: "multi-tier" };
+      } else if (provId === "jarvis") {
         // Hosted needs no provider or default — the daemon's carve-out injects
         // the provider, and the uj-* tier wiring lives in the routing view.
         //
@@ -431,7 +476,7 @@ export function OnboardingWizard({
           default: onboardingDefaultModelRef(provId, model, validatedModel),
         };
       }
-      if (stt !== "skip") {
+      if (!hosted && stt !== "skip") {
         const sttBlock: Record<string, unknown> = { provider: stt };
         if ((stt === "openai" || stt === "groq") && sttKey) sttBlock[stt] = { api_key: sttKey };
         else if (stt === "local") sttBlock.local = { endpoint: sttEndpoint.trim(), server_type: "whisper_cpp" };
@@ -439,11 +484,11 @@ export function OnboardingWizard({
       }
       const r = await fetch("/api/onboarding/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (!r.ok) throw new Error((await r.text().catch(() => "")) || `HTTP ${r.status}`);
-      go(5);
+      goKey("connect");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Setup failed.");
     } finally { setBusy(false); }
-  }, [prov, provId, apiKey, baseUrl, customEndpoint, model, test, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint]);
+  }, [hosted, prov, provId, apiKey, baseUrl, customEndpoint, model, test, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint]);
 
   const skipAll = useCallback(async () => {
     setBusy(true);
@@ -587,7 +632,7 @@ export function OnboardingWizard({
     try {
       const r = await fetch(endpoint, { method: "POST" });
       if (!r.ok) throw new Error(`HTTP ${r.status}`);
-      go(8);
+      goKey("allset");
     } catch {
       setError("Couldn't reach the daemon to save your progress — try again.");
     }
@@ -614,13 +659,13 @@ export function OnboardingWizard({
   const speakReady = tts !== "elevenlabs" || ttsTest.status === "ok";
 
   /* — progress bar (steps 1..5 only) — */
-  const showProgress = step >= 1 && step <= 5;
+  const showProgress = PROGRESS_STEPS.has(key);
   const progress = showProgress && (
     <>
       <div className="obw-steps">
-        {STEPS.map((_, i) => <i key={i} className={i < step ? "done" : i === step ? "cur" : ""} />)}
+        {steps.map((_, i) => <i key={i} className={i < step ? "done" : i === step ? "cur" : ""} />)}
       </div>
-      <div className="obw-steplab">Step {step + 1} of 9 · {STEPS[step]![1]}</div>
+      <div className="obw-steplab">Step {step + 1} of {steps.length} · {steps[step]![1]}</div>
     </>
   );
 
@@ -639,7 +684,7 @@ export function OnboardingWizard({
       {progress}
 
       {key === "interview" ? (
-        <InterviewStep ttsDisabled={tts === "off"} onComplete={() => go(7)} />
+        <InterviewStep ttsDisabled={tts === "off"} onComplete={() => goKey("tour")} />
       ) : key === "tour" ? (
         renderTour()
       ) : (
@@ -660,7 +705,9 @@ export function OnboardingWizard({
           <div className="obw-word" style={{ fontSize: 15, marginBottom: 11 }}><span className="u">use</span>jarvis</div>
           <h2>This is your Jarvis.</h2>
           <div className="obw-sub" style={{ maxWidth: "34ch", margin: "9px auto 0" }}>
-            Let’s spend about five minutes setting it up: what it can touch, the brain and voice it runs on, and a little about you. You can skip anything and finish later.
+            {hosted
+              ? "Let’s spend a couple of minutes setting it up: what it can touch, and a little about you. The AI and voice are included with your plan — already wired up, and yours to change in Settings whenever you like."
+              : "Let’s spend about five minutes setting it up: what it can touch, the brain and voice it runs on, and a little about you. You can skip anything and finish later."}
           </div>
           <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 11, alignItems: "center" }}>
             <div className="obw-themelab">Choose your look</div>
@@ -697,7 +744,21 @@ export function OnboardingWizard({
               ))}
             </div>
             <div className="obw-hint" style={{ marginTop: 12 }}>Review or revoke any of these anytime in {IS_MAC ? "System Settings → Privacy & Security" : "Windows Settings → Privacy & security"}, or from Settings → Permissions.</div>
-            <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><span className="grow" /><button className="obw-btn obw-btn-pri" onClick={next}>Continue</button></div>
+            <div className="obw-btnrow">
+              <button className="obw-btn obw-btn-ghost" onClick={back}>Back</button>
+              <span className="grow" />
+              {/* Hosted skips brain/hearing/speaking, so this is the last
+                  setup screen — the setup POST (which normally fires when
+                  leaving Speaking) has to run here instead, or onboarding is
+                  never marked complete and the wizard replays next launch. */}
+              <button
+                className="obw-btn obw-btn-pri"
+                disabled={busy}
+                onClick={hosted ? saveSetup : next}
+              >
+                {busy ? "Setting up…" : "Continue"}
+              </button>
+            </div>
           </div></div>
         );
       }
@@ -878,7 +939,14 @@ export function OnboardingWizard({
             {recapLine()} Bringing your dashboard online now.
           </div>
           <div className="obw-recap">
-            {configuredThisSession ? (
+            {configuredThisSession && hosted ? (
+              // Hosted never ran the brain/voice screens — report what the
+              // plan provides rather than this component's untouched state.
+              <>
+                <div><span className="ok">✓</span> AI &amp; voice · included with your plan</div>
+                <div><span className="ok">✓</span> profile saved to your Vault</div>
+              </>
+            ) : configuredThisSession ? (
               <>
                 <div><span className="ok">✓</span> brain · {prov.name}</div>
                 <div><span className="ok">✓</span> voice · {tts === "off" ? "text only" : tts === "edge" ? `Edge (${EDGE_VOICES.find((v) => v.id === edgeVoice)?.label.split(" ")[0]})` : "ElevenLabs"}{stt !== "skip" ? " + Whisper" : ""}</div>
@@ -900,6 +968,7 @@ export function OnboardingWizard({
 
   function recapLine() {
     if (!configuredThisSession) return "Your brain is wired up, and I know a little about you.";
+    if (hosted) return "Your plan's AI and voice are wired up, and I know a little about you.";
     return `${prov.name} is wired up${tts !== "off" ? ", voice is on" : ""}, and I know a little about you.`;
   }
 

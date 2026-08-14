@@ -145,6 +145,24 @@ export function persistUserPatch(section: 'stt' | 'tts', patch: Record<string, u
   }
 }
 
+/**
+ * Drop the user's explicit provider choice for a voice section, restoring
+ * SILENCE — which is what the hosted defaults key off (effectiveSttForBinding
+ * / effectiveTtsForBinding fill a provider-free row with the included uj
+ * stack). Deliberately a delete rather than a write of 'usejarvis': recording
+ * that as a choice would pin the account, so "reset to the plan default" has
+ * to leave no choice at all.
+ */
+export function clearProviderChoice(section: 'stt' | 'tts'): void {
+  const stored = loadUserSection(section);
+  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return;
+  const { provider: _dropped, ...rest } = stored as Record<string, unknown>;
+  // The stored row is user intent, not a complete config — it legitimately
+  // lacks fields the runtime type requires (that is the whole point of
+  // silence), so the cast is the honest shape here.
+  saveUserSection(section, rest as unknown as STTConfig | TTSConfig);
+}
+
 /** Read one stored section; undefined when absent or unparseable. */
 export function loadUserSection(section: UserOwnedSection): unknown {
   const raw = getSetting(settingKey(section));

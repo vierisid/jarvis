@@ -248,7 +248,8 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
     prompt_cache: config.llm.prompt_cache !== false,
     effective,
     // Hosted installs: tells the dashboard to render the read-only
-    // "included with your plan" card (no base_url, no key material).
+    // "included with your plan" card (no base_url, no key material), and
+    // gates the onboarding steps the platform already answers.
     // Derived from the config.yaml block — the single source of hostedness —
     // never from provider-map key presence, which a legacy row can fake.
     hosted_llm: hasUsejarvisAi(config),

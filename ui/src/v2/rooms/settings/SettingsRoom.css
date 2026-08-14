@@ -463,6 +463,15 @@
   outline-offset: 2px;
 }
 
+/* Square-ish icon-only variant: a symbol next to the model dropdowns rather
+   than a word, so the control reads at a glance and stays out of the way of
+   the two selects it sits beside. */
+.v2-set__btn--icon {
+  padding: 6px;
+  width: 30px;
+  flex: 0 0 auto;
+}
+
 .v2-set__btn--primary {
   background: var(--ink);
   color: var(--paper);

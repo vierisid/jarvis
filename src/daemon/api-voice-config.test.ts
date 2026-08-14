@@ -118,8 +118,12 @@ describe('voice config routes: persistence stays silence-preserving', () => {
     expect(effectiveSttForBinding(config)?.provider).toBe('groq');
   });
 
+  // Self-hosted on purpose: on a HOSTED install the setup route now drops
+  // stt/tts entirely (the wizard never shows those steps — see
+  // api-onboarding-hosted.test.ts). The patch-over-stored-row discipline this
+  // pins still governs self-hosted onboarding, which does send them.
   test("onboarding 'No voice' ({enabled:false}, no provider) does not mark the user as having chosen", async () => {
-    const config = hostedConfig();
+    const config = structuredClone(DEFAULT_CONFIG);
     const routes = createApiRoutes(makeCtx(config));
     const res = await post(getHandler(routes, '/api/onboarding/setup', 'POST'), '/api/onboarding/setup', {
       tts: { enabled: false },
@@ -129,12 +133,15 @@ describe('voice config routes: persistence stays silence-preserving', () => {
     expect(loadUserSection('tts')).toEqual({ enabled: false });
     const onboarding = loadUserSection('onboarding') as { setup_completed_at?: number };
     expect(typeof onboarding?.setup_completed_at).toBe('number');
-    // When TTS is enabled later, the included hosted voice is the default.
-    expect(effectiveTtsForBinding(config)?.provider).toBe('usejarvis');
+    // The stored-row assertion above is the one that matters: it stays
+    // provider-free, so nothing is pinned and a later hosted provisioning
+    // would find no recorded choice. (effectiveTtsForBinding is not checked
+    // here — on a self-hosted config it returns the runtime view, which
+    // legitimately carries the DEFAULT_CONFIG 'edge' fill.)
   });
 
   test('onboarding with a genuine provider choice persists it', async () => {
-    const config = hostedConfig();
+    const config = structuredClone(DEFAULT_CONFIG); // self-hosted; see above
     const routes = createApiRoutes(makeCtx(config));
     await post(getHandler(routes, '/api/onboarding/setup', 'POST'), '/api/onboarding/setup', {
       tts: { enabled: true, provider: 'edge', voice: 'en-GB-SoniaNeural', rate: '+0%' },

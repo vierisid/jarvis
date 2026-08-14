@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from "react";
+import { RotateCcw } from "lucide-react";
 import type {
   STTProvider,
   SettingsHook,
@@ -294,22 +295,38 @@ export function ChannelsTab({
 
         <div className="v2-set__field">
           <label className="v2-set__field-label">Provider</label>
-          <select
-            className="v2-set__select"
-            value={sttCfg?.provider ?? "openai"}
-            onChange={async (e) => {
-              const r = await data.setSTTProvider(e.target.value as STTProvider);
-              onToast(r.message, r.ok ? "ok" : "warn");
-            }}
-          >
-            {sttCfg?.usejarvis_available && (
-              <option value="usejarvis">Usejarvis AI (included)</option>
+          <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "center" }}>
+            <select
+              className="v2-set__select"
+              value={sttCfg?.provider ?? "openai"}
+              onChange={async (e) => {
+                const r = await data.setSTTProvider(e.target.value as STTProvider);
+                onToast(r.message, r.ok ? "ok" : "warn");
+              }}
+            >
+              {sttCfg?.usejarvis_available && (
+                <option value="usejarvis">Usejarvis AI (included)</option>
+              )}
+              <option value="openai">OpenAI Whisper</option>
+              <option value="groq">Groq Whisper</option>
+              <option value="sarvam">Sarvam AI</option>
+              <option value="local">Local Whisper (whisper.cpp)</option>
+            </select>
+            {sttCfg?.usejarvis_available && sttCfg?.provider !== "usejarvis" && (
+              <button
+                type="button"
+                className="v2-set__btn v2-set__btn--icon"
+                title="Reset to your plan's included voice"
+                aria-label="Reset to your plan's included voice"
+                onClick={async () => {
+                  const r = await data.resetVoiceProvider("stt");
+                  onToast(r.message, r.ok ? "ok" : "warn");
+                }}
+              >
+                <RotateCcw size={14} aria-hidden="true" />
+              </button>
             )}
-            <option value="openai">OpenAI Whisper</option>
-            <option value="groq">Groq Whisper</option>
-            <option value="sarvam">Sarvam AI</option>
-            <option value="local">Local Whisper (whisper.cpp)</option>
-          </select>
+          </div>
         </div>
 
         {sttCfg?.provider !== "sarvam" && (
@@ -455,21 +472,37 @@ export function ChannelsTab({
 
         <div className="v2-set__field">
           <label className="v2-set__field-label">Provider</label>
-          <select
-            className="v2-set__select"
-            value={ttsCfg?.provider ?? "edge"}
-            onChange={async (e) => {
-              const r = await data.setTTS({ provider: e.target.value as TTSProvider });
-              onToast(r.message, r.ok ? "ok" : "warn");
-            }}
-          >
-            {ttsCfg?.usejarvis_available && (
-              <option value="usejarvis">Usejarvis AI (included)</option>
+          <div style={{ display: "flex", gap: "var(--s-2)", alignItems: "center" }}>
+            <select
+              className="v2-set__select"
+              value={ttsCfg?.provider ?? "edge"}
+              onChange={async (e) => {
+                const r = await data.setTTS({ provider: e.target.value as TTSProvider });
+                onToast(r.message, r.ok ? "ok" : "warn");
+              }}
+            >
+              {ttsCfg?.usejarvis_available && (
+                <option value="usejarvis">Usejarvis AI (included)</option>
+              )}
+              <option value="edge">Edge TTS (free)</option>
+              <option value="elevenlabs">ElevenLabs (API key)</option>
+              <option value="sarvam">Sarvam AI (Indian languages)</option>
+            </select>
+            {ttsCfg?.usejarvis_available && ttsCfg?.provider !== "usejarvis" && (
+              <button
+                type="button"
+                className="v2-set__btn v2-set__btn--icon"
+                title="Reset to your plan's included voice"
+                aria-label="Reset to your plan's included voice"
+                onClick={async () => {
+                  const r = await data.resetVoiceProvider("tts");
+                  onToast(r.message, r.ok ? "ok" : "warn");
+                }}
+              >
+                <RotateCcw size={14} aria-hidden="true" />
+              </button>
             )}
-            <option value="edge">Edge TTS (free)</option>
-            <option value="elevenlabs">ElevenLabs (API key)</option>
-            <option value="sarvam">Sarvam AI (Indian languages)</option>
-          </select>
+          </div>
         </div>
 
         {ttsCfg?.provider === "usejarvis" && (
