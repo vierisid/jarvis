@@ -80,7 +80,9 @@ describe('voice config routes: persistence stays silence-preserving', () => {
     });
     expect(res.status).toBe(200);
 
-    expect(loadUserSection('stt')).toEqual({ openai: { api_key: 'sk-user' } });
+    // Row is written stripped (credentials split to the keychain) — what this
+    // pins is the absence of a `provider`, not the key round-tripping.
+    expect(loadUserSection('stt')).toEqual({ openai: {} });
     expect(config.stt?.openai?.api_key).toBe('sk-user'); // runtime view
     expect(effectiveSttForBinding(config)?.provider).toBe('usejarvis'); // still silent
   });
@@ -93,7 +95,7 @@ describe('voice config routes: persistence stays silence-preserving', () => {
       groq: { api_key: 'gsk-user' },
     });
 
-    expect(loadUserSection('stt')).toEqual({ provider: 'groq', groq: { api_key: 'gsk-user' } });
+    expect(loadUserSection('stt')).toEqual({ provider: 'groq', groq: {} });
     expect(effectiveSttForBinding(config)?.provider).toBe('groq');
   });
 

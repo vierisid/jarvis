@@ -255,17 +255,21 @@ describe('user-settings', () => {
     expect(loadUserSection('tts')).toEqual({ enabled: true });
 
     persistUserPatch('stt', { openai: { api_key: 'sk-user' } });
-    expect(loadUserSection('stt')).toEqual({ openai: { api_key: 'sk-user' } });
+    // The row is written STRIPPED — the credential is split out to the
+    // encrypted keychain on the way in — so what matters here is that no
+    // `provider` appeared, not that the key round-trips.
+    expect(loadUserSection('stt')).toEqual({ openai: {} });
   });
 
   test('persistUserPatch: merges over the STORED row, not the in-memory merged section', () => {
     saveUserSection('tts', { enabled: false, elevenlabs: { api_key: 'el-key' } });
-    // Patch omitting the key (GET redacts it) keeps the stored one; the
-    // DEFAULT_CONFIG fills (provider/voice/rate) never appear in the row.
+    // The point is the MERGE BASE: non-key fields of the stored row survive a
+    // partial patch, and the DEFAULT_CONFIG fills (provider/voice/rate) never
+    // appear. Credentials live in the keychain, so the row itself is stripped.
     persistUserPatch('tts', { enabled: true, elevenlabs: { voice_id: 'v-2' } });
     expect(loadUserSection('tts')).toEqual({
       enabled: true,
-      elevenlabs: { api_key: 'el-key', voice_id: 'v-2' },
+      elevenlabs: { voice_id: 'v-2' },
     });
   });
 
