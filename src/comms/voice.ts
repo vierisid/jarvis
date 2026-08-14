@@ -1,5 +1,6 @@
 import type { STTConfig, TTSConfig } from '../config/types.ts';
 import { redactSecrets } from '../util/redact.ts';
+import { hostedProxyError } from '../util/hosted-error.ts';
 
 export interface STTProvider {
   transcribe(audio: Buffer): Promise<string>;
@@ -127,7 +128,11 @@ export class UsejarvisSTT implements STTProvider {
 
     if (!response.ok) {
       const err = await response.text();
-      throw new Error(`Usejarvis AI STT error (${response.status}): ${redactSecrets(err)}`);
+      // Shared mapper: budgets block audio endpoints too, so a hosted user
+      // WILL hit this — they should get "your included usage is used up …",
+      // not the raw proxy JSON (or, behind a CDN, a whole HTML page carrying
+      // the hosted hostname) in a browser toast.
+      throw hostedProxyError('Usejarvis AI STT', response.status, err);
     }
 
     const result = await response.json() as { text?: string };
