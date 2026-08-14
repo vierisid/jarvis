@@ -217,8 +217,8 @@ describe('voice config routes: persistence stays silence-preserving', () => {
     await post(handler, '/api/config/stt', { provider: null });
     expect((loadUserSection('stt') as Record<string, unknown>).provider).toBeUndefined();
     expect(effectiveSttForBinding(config)?.provider).toBe('usejarvis');
-    // The row is stripped (main's credential split): what survives a reset in
-    // the ROW is the sub-block, not the key.
+    // The sub-block the user configured survives the reset (the credential
+    // itself lives in the encrypted keychain, so the row is stripped).
     expect((loadUserSection('stt') as any).groq).toBeDefined();
   });
 
