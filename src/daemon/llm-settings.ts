@@ -27,6 +27,7 @@ import {
 } from '../llm/config-binding.ts';
 import { isAnthropicCustomBaseUrl } from '../llm/anthropic.ts';
 import { GROQ_DEPRECATED_MODEL_REPLACEMENTS } from '../llm/groq-models.ts';
+import { TIERS, parseModelRef } from '../llm/tiers.ts';
 
 // ── DB keys ──────────────────────────────────────────────────────────────
 const SETTING_PROVIDERS = 'llm.providers';
@@ -206,6 +207,18 @@ export function saveLLMSettings(
     for (const [name, update] of updates) {
       if (update === null) {
         delete config.llm.providers[name];
+        // Drop every model ref the provider owned. The manager prunes its own
+        // tier map on replaceProviders, but the settings table is a separate
+        // store - leaving the refs there resurrects the dead routes on the
+        // next cold start.
+        if (parseModelRef(config.llm.default)?.provider === name) {
+          config.llm.default = undefined;
+        }
+        for (const tier of TIERS) {
+          if (parseModelRef(config.llm.tiers[tier])?.provider === name) {
+            delete config.llm.tiers[tier];
+          }
+        }
         try { deleteSecret(keychainKey(name)); } catch { /* ignore */ }
         continue;
       }
