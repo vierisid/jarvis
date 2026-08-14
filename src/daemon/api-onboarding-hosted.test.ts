@@ -80,18 +80,35 @@ describe('POST /api/onboarding/setup on a hosted install', () => {
       conversation: 'usejarvis_ai:uj-chat',
       high: 'usejarvis_ai:uj-high',
     });
-    // No voice intent was recorded, so the included voice still applies.
+    // No voice PROVIDER intent was recorded, so the included voice applies…
     expect(loadUserSection('stt') ?? null).toBeNull();
-    expect(loadUserSection('tts') ?? null).toBeNull();
+    expect((loadUserSection('tts') as { provider?: string } | undefined)?.provider).toBeUndefined();
     expect(effectiveTtsForBinding(config)?.provider).toBe('usejarvis');
+    // …and the assistant actually SPEAKS. DEFAULT_CONFIG.tts.enabled is
+    // false, so dropping `enabled` along with the provider would ship a
+    // hosted install mute while the wizard promises voice is included.
+    expect(config.tts?.enabled).toBe(true);
   });
 
   test('still completes setup, so onboarding does not replay next launch', async () => {
     const config = hostedConfig();
     const handler = getHandler(createApiRoutes(makeCtx(config)), '/api/onboarding/setup', 'POST');
-    const res = await post(handler, { llm: { mode: 'multi-tier' } });
+    const res = await post(handler, { llm: { mode: 'multi-tier' }, tts: { enabled: true } });
     expect(res.status).toBe(200);
     expect(config.onboarding?.setup_completed_at).toBeGreaterThan(0);
+  });
+
+  test('the tts whitelist admits enabled ONLY — a smuggled provider is still dropped', async () => {
+    const config = hostedConfig();
+    const handler = getHandler(createApiRoutes(makeCtx(config)), '/api/onboarding/setup', 'POST');
+    await post(handler, { tts: { enabled: true, provider: 'edge', voice: 'en-GB-SoniaNeural' } });
+
+    expect(config.tts?.enabled).toBe(true);
+    const stored = loadUserSection('tts') as Record<string, unknown> | undefined;
+    expect(stored?.provider).toBeUndefined();
+    expect(stored?.voice).toBeUndefined();
+    // Still silent, so the plan's voice is what speaks.
+    expect(effectiveTtsForBinding(config)?.provider).toBe('usejarvis');
   });
 
   test('a self-hosted install is untouched by the guard', async () => {

@@ -6,6 +6,7 @@ import { createApiRoutes, type ApiContext } from './api-routes.ts';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import { DEFAULT_CONFIG, type JarvisConfig } from '../config/types.ts';
 import { loadUserSection } from './user-settings.ts';
+import { getSecret } from '../vault/keychain.ts';
 import { effectiveSttForBinding, effectiveTtsForBinding } from './usejarvis-ai.ts';
 
 /**
@@ -179,6 +180,55 @@ describe('voice config routes: persistence stays silence-preserving', () => {
     const res = await post(getHandler(routes, '/api/config/tts', 'POST'), '/api/config/tts', { enabled: false }) as Response;
     expect(res.status).toBe(200);
     expect(setCalls).toEqual([null]); // published the null, not skipped it
+  });
+
+  // The Settings reset must restore SILENCE, never write 'usejarvis' — a
+  // recorded choice pins the account and the plan default stops applying.
+  test('POST /api/config/tts {provider:null} deletes the choice rather than recording usejarvis', async () => {
+    const config = hostedConfig();
+    const routes = createApiRoutes(makeCtx(config));
+    const handler = getHandler(routes, '/api/config/tts', 'POST');
+
+    // A real explicit choice first…
+    await post(handler, '/api/config/tts', { enabled: true, provider: 'edge', voice: 'en-GB-SoniaNeural' });
+    expect((loadUserSection('tts') as { provider?: string }).provider).toBe('edge');
+    expect(effectiveTtsForBinding(config)?.provider).toBe('edge');
+
+    // …then reset.
+    const res = await post(handler, '/api/config/tts', { provider: null });
+    expect(res.status).toBe(200);
+    const stored = loadUserSection('tts') as Record<string, unknown>;
+    expect(stored.provider).toBeUndefined();
+    expect(stored.provider).not.toBe('usejarvis'); // silence, not a choice
+    // Unrelated settings survive the reset.
+    expect(stored.enabled).toBe(true);
+    expect(stored.voice).toBe('en-GB-SoniaNeural');
+    // Runtime follows, so the plan's voice speaks without a restart.
+    expect(config.tts?.provider).toBeUndefined();
+    expect(effectiveTtsForBinding(config)?.provider).toBe('usejarvis');
+  });
+
+  test('POST /api/config/stt {provider:null} likewise restores the plan default', async () => {
+    const config = hostedConfig();
+    const handler = getHandler(createApiRoutes(makeCtx(config)), '/api/config/stt', 'POST');
+    await post(handler, '/api/config/stt', { provider: 'groq', groq: { api_key: 'gsk-user' } });
+    expect(effectiveSttForBinding(config)?.provider).toBe('groq');
+
+    await post(handler, '/api/config/stt', { provider: null });
+    expect((loadUserSection('stt') as Record<string, unknown>).provider).toBeUndefined();
+    expect(effectiveSttForBinding(config)?.provider).toBe('usejarvis');
+    // The row is stripped (main's credential split): what survives a reset in
+    // the ROW is the sub-block, not the key.
+    expect((loadUserSection('stt') as any).groq).toBeDefined();
+  });
+
+  // Self-hosted has no plan default to fall back to — clearing the choice
+  // would leave createSTTProvider with nothing and silently kill STT.
+  test('reset is refused on a self-hosted install', async () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    const handler = getHandler(createApiRoutes(makeCtx(config)), '/api/config/stt', 'POST');
+    const res = await post(handler, '/api/config/stt', { provider: null });
+    expect(res.status).toBeGreaterThanOrEqual(400);
   });
 
   test('GET /api/config/tts reports the binding-view provider and availability, no key material', async () => {

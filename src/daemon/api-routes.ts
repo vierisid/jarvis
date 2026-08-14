@@ -1369,11 +1369,18 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           //    records the architecture choice without naming a provider or a
           //    model, and without it the settings tab misreports multi-tier
           //    as single. Everything else is dropped.
+          //    `tts.enabled` is likewise kept: whether the assistant SPEAKS is
+          //    not a provider choice, and dropping it would leave a hosted
+          //    install mute (DEFAULT_CONFIG has it false) while the wizard
+          //    promises the plan includes voice. The provider field is still
+          //    stripped, so the row stays silent and the included uj voice
+          //    applies.
           if (hasUsejarvisAi(ctx.config)) {
             const mode = (body.llm as { mode?: unknown } | undefined)?.mode;
             body.llm = mode === 'single' || mode === 'multi-tier' ? { mode } : undefined;
             body.stt = undefined;
-            body.tts = undefined;
+            const enabled = (body.tts as { enabled?: unknown } | undefined)?.enabled;
+            body.tts = typeof enabled === 'boolean' ? { enabled } : undefined;
           }
 
           // 1. LLM settings — same path as /api/config/llm POST.
@@ -2528,8 +2535,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           // effectiveSttForBinding fills it with the included uj stack.
           // Writing 'usejarvis' instead would record a choice and pin them.
           // Runs BEFORE provider validation: null is a command, not a
-          // provider value.
+          // provider value. Hosted only: on a self-hosted install there is no
+          // plan default to fall back TO, so clearing the choice would leave
+          // createSTTProvider with nothing to build and silently kill
+          // transcription.
           if (body.provider === null) {
+            if (!hasUsejarvisAi(ctx.config)) {
+              return error('No plan default to reset to on a self-hosted install');
+            }
             clearProviderChoice('stt');
             if (ctx.config.stt) delete (ctx.config.stt as Record<string, unknown>).provider;
             if (!ctx.settingsReload) {
@@ -2624,6 +2637,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           // `provider: null` resets to the plan default, mirroring the STT
           // route: a command, handled before provider validation.
           if (body.provider === null) {
+            if (!hasUsejarvisAi(ctx.config)) {
+              return error('No plan default to reset to on a self-hosted install');
+            }
             clearProviderChoice('tts');
             if (ctx.config.tts) delete (ctx.config.tts as Record<string, unknown>).provider;
             if (!ctx.settingsReload) {

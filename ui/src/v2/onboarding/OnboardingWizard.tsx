@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useInterviewSession } from "./useInterviewSession";
 import type { OnboardingStatus } from "./useOnboardingStatus";
 import "./OnboardingWizard.css";
@@ -189,13 +189,21 @@ export function OnboardingWizard({
     () => stepsFor(hosted),
     [hosted],
   );
-  const step = Math.max(0, steps.findIndex(([k]) => k === stepKey));
+  const found = steps.findIndex(([k]) => k === stepKey);
+  // While the key is momentarily absent (the probe resolved under a hidden
+  // screen, repaired below), hold the LAST step rather than snapping to 0 —
+  // index 0 is Welcome, and flashing it would briefly re-offer "I'll do this
+  // later" mid-flow.
+  const step = found >= 0 ? found : steps.length - 1;
   const key = steps[step]![0];
 
-  // If the probe resolves while the user is standing ON a now-hidden screen,
-  // move them forward rather than leaving them on a dead index.
-  useEffect(() => {
-    if (!steps.some(([k]) => k === stepKey)) setStepKey("connect");
+  // If the probe resolves while the user is standing on a now-hidden screen,
+  // send them BACK to Permissions, not forward. Permissions is where the
+  // hosted setup POST fires; repairing forward to `connect` would skip it
+  // silently, leaving onboarding never marked complete — the wizard then
+  // replays on the next launch and "Open Jarvis" appears to do nothing.
+  useLayoutEffect(() => {
+    if (!steps.some(([k]) => k === stepKey)) setStepKey("perms");
   }, [steps, stepKey]);
   const [provId, setProvId] = useState("anthropic");
   const prov = provList.find((p) => p.id === provId)!;
@@ -445,14 +453,23 @@ export function OnboardingWizard({
       if (tts === "edge") { ttsBlock.voice = edgeVoice; ttsBlock.rate = "+0%"; }
       else if (tts === "elevenlabs") ttsBlock.elevenlabs = { api_key: elevenKey, voice_id: elevenVoice, model: elevenModel };
 
-      // Hosted: send NOTHING but the architecture mode. The brain/hearing/
-      // speaking screens never ran, so this component's tts/stt state is
-      // untouched defaults — posting it would record choices the user was
-      // never shown, pinning them off their own plan. (The daemon drops
-      // these fields too; this keeps the request honest at the source.)
-      const payload: Record<string, unknown> = hosted ? {} : { tts: ttsBlock };
+      // Hosted: the brain/hearing/speaking screens never ran, so this
+      // component's provider state is untouched defaults — posting it would
+      // record choices the user was never shown, pinning them off their own
+      // plan. (The daemon drops those fields too; this keeps the request
+      // honest at the source.)
+      //
+      // `tts.enabled` is the exception and MUST be sent: it is not a provider
+      // choice, and DEFAULT_CONFIG has it false, so omitting it ships a
+      // hosted install mute — while Welcome and the recap both promise voice
+      // is included. Sending `{enabled:true}` alone keeps the row
+      // provider-free, so effectiveTtsForBinding still fills in the included
+      // uj voice.
+      const payload: Record<string, unknown> = hosted
+        ? { llm: { mode: "multi-tier" }, tts: { enabled: true } }
+        : { tts: ttsBlock };
       if (hosted) {
-        payload.llm = { mode: "multi-tier" };
+        // nothing further: provider config is the platform's job
       } else if (provId === "jarvis") {
         // Hosted needs no provider or default — the daemon's carve-out injects
         // the provider, and the uj-* tier wiring lives in the routing view.
@@ -759,6 +776,12 @@ export function OnboardingWizard({
                 {busy ? "Setting up…" : "Continue"}
               </button>
             </div>
+            {/* The hosted setup POST fires from THIS screen, so its failure
+                has to surface here — otherwise the button just settles back
+                to "Continue" with no explanation and onboarding replays. */}
+            {error && (
+              <div className="obw-hint" style={{ color: "var(--listen)", marginTop: 8 }}>{error}</div>
+            )}
           </div></div>
         );
       }
