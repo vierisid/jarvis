@@ -113,6 +113,20 @@ describe('resolveRealtimeVoice', () => {
     expect(r2.ok && r2.resolved.reasoningEffort).toBe('low');
   });
 
+  // The ws derivation is a prefix rewrite, so a case-SENSITIVE one turns
+  // HTTPS://… into HTTPS://…/realtime — never dialable, and the failure reads
+  // as "realtime is broken" rather than "the scheme is wrong".
+  test('an uppercase scheme in the provisioned block still yields a ws(s) URL', () => {
+    const config = makeConfig();
+    config.usejarvis_ai = { base_url: 'HTTPS://LLM.Usejarvis.Host', api_key: 'sk-uj-abc' };
+    config.voice!.realtime = { enabled: true, model: 'gpt-realtime-2' };
+    const res = resolveRealtimeVoice(config);
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.resolved.url.startsWith('wss://')).toBe(true);
+    expect(res.resolved.modelsUrl!.startsWith('https://')).toBe(true);
+  });
+
   test('hosted fallback: no BYO key + usejarvis_ai block resolves the proxy session', () => {
     const config = makeConfig();
     config.usejarvis_ai = { base_url: 'https://llm.usejarvis.host', api_key: 'sk-uj-abc' };

@@ -103,6 +103,10 @@ let workflowEngineShutdown: (() => Promise<void>) | null = null;
 let systemCron: import('./system-cron.ts').SystemCronService | null = null;
 let timerScheduler: TimerWaitpointScheduler | null = null;
 let settingsReload: import('./settings-reload.ts').SettingsReloadCoordinator | null = null;
+/** Set once the sidecar manager is up; re-pushes the pebble realtime
+ * capability after a settings reload (a plan change arrives that way, and the
+ * advertisement is otherwise computed only at connect). */
+let readvertiseRealtime: (() => Promise<void>) | null = null;
 /** Graceful-drain deadline (ms), set from config at boot. Default 75s. */
 let drainDeadlineMs = 75_000;
 
@@ -821,15 +825,33 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
       // Tell each pebble-capable sidecar whether realtime is available so its
       // summon hotkey knows to toggle a live session vs. the one-shot capture.
-      sidecarManager.onSidecarConnected(async (sidecar) => {
-        if (!sidecar.capabilities.includes('pebble')) return;
+      const advertiseRealtime = async (sidecarId: string) => {
         const res = resolveRealtimeVoice(agentService.getConfig());
         // The advertisement must agree with the starters' plan gate, or the
         // summon hotkey opens sessions the plan refuses at dial.
         const enabled = res.ok && (await hostedRealtimeIncluded(res.resolved));
-        console.log(`[pebble-realtime] configure_realtime → ${sidecar.id} enabled=${enabled}${res.ok ? '' : ` (${res.reason})`}`);
-        void sidecarManager.dispatchRPC(sidecar.id, 'pebble.configure_realtime', { enabled })
+        console.log(`[pebble-realtime] configure_realtime → ${sidecarId} enabled=${enabled}${res.ok ? '' : ` (${res.reason})`}`);
+        await sidecarManager.dispatchRPC(sidecarId, 'pebble.configure_realtime', { enabled })
           .catch((err) => console.warn(`[pebble-realtime] configure_realtime dispatch failed (older sidecar?):`, err));
+      };
+      // Re-advertise after a settings reload: the advertisement is otherwise
+      // computed once at CONNECT, so a sidecar that attached while the plan
+      // excluded realtime keeps its summon hotkey in one-shot mode until it
+      // reconnects — even after an upgrade. reloadAll clears the gate cache,
+      // so this re-asks the catalog rather than repeating a stale verdict.
+      readvertiseRealtime = async () => {
+        for (const s of sidecarManager.listConnected()) {
+          if (s.capabilities.includes('pebble')) await advertiseRealtime(s.id);
+        }
+      };
+      sidecarManager.onSidecarConnected((sidecar) => {
+        if (!sidecar.capabilities.includes('pebble')) return;
+        // The listener is typed `=> void` and the dispatch loop only catches
+        // SYNCHRONOUS throws, so an async body would surface a rejection as
+        // an unhandled one. Keep the contract: fire and swallow here.
+        void advertiseRealtime(sidecar.id).catch((err) =>
+          console.warn('[pebble-realtime] advertisement failed:', err),
+        );
       });
 
       // Sidecar → daemon realtime control + mic stream.
@@ -5195,9 +5217,14 @@ if (process.platform !== 'win32') {
     }
     console.log('[Daemon] SIGHUP — reloading settings from DB');
     settingsReload.reloadAll()
-      .then((r) => {
+      .then(async (r) => {
         const changed = r.changed.length > 0 ? r.changed.join(', ') : 'nothing';
         console.log(`[Daemon] SIGHUP reload done — changed: ${changed}${r.errors.length ? `, errors: ${r.errors.length}` : ''}`);
+        // A re-provisioned usejarvis_ai block (plan change) lands on SIGHUP,
+        // and it is not a user-owned section, so no per-section applier fires.
+        await readvertiseRealtime?.().catch((err: unknown) =>
+          console.warn('[pebble-realtime] re-advertisement after reload failed:', err),
+        );
       })
       .catch((err) => console.error('[Daemon] SIGHUP reload failed:', err));
   });

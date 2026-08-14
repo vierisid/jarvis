@@ -98,7 +98,12 @@ export function resolveRealtimeVoice(
   const hosted = config.usejarvis_ai;
   const hostedReady = Boolean(hosted?.base_url?.trim() && hosted?.api_key?.trim());
   if (!apiKey && hostedReady) {
-    const origin = hosted!.base_url!.trim().replace(/\/+$/, '');
+    // Lowercase the SCHEME while normalizing: the ws(s) derivation below is a
+    // prefix rewrite, so a provisioner writing `HTTPS://…` would otherwise
+    // yield `HTTPS://…/realtime` — never a ws(s) URL — and the dial fails
+    // with an opaque error rather than a wrong-scheme one.
+    const origin = hosted!.base_url!.trim().replace(/\/+$/, '')
+      .replace(/^(https?):\/\//i, (_m, scheme: string) => `${scheme.toLowerCase()}://`);
     const httpBase = /\/v1$/.test(origin) ? origin : `${origin}/v1`;
     return {
       ok: true,

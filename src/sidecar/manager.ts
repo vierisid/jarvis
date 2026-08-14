@@ -395,6 +395,13 @@ export class SidecarManager implements Service {
   // --------------- Connection Tracking ---------------
 
   /** Register a connected sidecar (called after WS handshake + registration message) */
+  /** Currently CONNECTED sidecars (not merely enrolled — listSidecars() is
+   * the DB view). Exposed so callers can re-push a capability advertisement
+   * to live sidecars after config changes, rather than only at connect. */
+  listConnected(): ConnectedSidecar[] {
+    return [...this.connected.values()];
+  }
+
   registerConnection(sidecar: ConnectedSidecar): void {
     // The reported timezone is untrusted sidecar input headed for sensitive
     // sinks: `jarvis sidecars list --json` (read by the hosting server) and,
