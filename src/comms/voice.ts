@@ -511,6 +511,12 @@ export class ElevenLabsTTSProvider implements TTSProvider {
  * the system-owned `usejarvis_ai` block via the factory's `hosted` argument —
  * never from cfg.tts.
  */
+/** Per-request ceiling for hosted speech. Generous for a spoken sentence,
+ * bounded for a reply that never split. */
+const MAX_TTS_INPUT_CHARS = 4_000;
+/** Hard cap on one synthesis round-trip — see the call site. */
+const TTS_TIMEOUT_MS = 30_000;
+
 /** MP3 frame sniff: an ID3 tag, or an MPEG audio sync word (0xFF Ex). Used to
  * accept a correct response whose content-type header a proxy stripped or
  * rewrote, so the guard rejects interstitials without rejecting real audio. */
@@ -534,6 +540,13 @@ export class UsejarvisTTS implements TTSProvider {
   }
 
   async synthesize(text: string): Promise<Buffer> {
+    // Cap the input. splitIntoSentences returns the WHOLE text as one
+    // "sentence" when it cannot find a boundary (a long bullet list, a URL
+    // dump), and this endpoint is billed per CHARACTER — so an unsplittable
+    // reply would bill in one unbounded request. Truncating costs a clipped
+    // tail; not truncating costs real money on a runaway generation.
+    const input = text.length > MAX_TTS_INPUT_CHARS ? text.slice(0, MAX_TTS_INPUT_CHARS) : text;
+
     const response = await fetch(`${this.baseUrl}/audio/speech`, {
       method: 'POST',
       headers: {
@@ -542,10 +555,14 @@ export class UsejarvisTTS implements TTSProvider {
       },
       body: JSON.stringify({
         model: 'uj-tts',
-        input: text,
+        input,
         voice: this.voice,
         response_format: 'mp3',
       }),
+      // A hung proxy must not wedge the sentence queue: ws-service speaks
+      // sentences in sequence, so one stalled request silences everything
+      // after it with no error and no timeout of its own.
+      signal: AbortSignal.timeout(TTS_TIMEOUT_MS),
     });
 
     if (!response.ok) {

@@ -695,6 +695,30 @@ describe('UsejarvisTTS', () => {
     expect(err!.message).not.toContain(key);
   });
 
+  // Per-CHARACTER billing plus splitIntoSentences returning the whole text as
+  // one "sentence" when it cannot split = an unbounded billable request.
+  test('caps the input so an unsplittable reply cannot bill unbounded', async () => {
+    let sentLength = 0;
+    globalThis.fetch = mock(async (_url: string, init: any) => {
+      sentLength = String(JSON.parse(init.body as string).input).length;
+      return new Response(mp3Bytes);
+    }) as any;
+    const tts = new UsejarvisTTS('https://llm.usejarvis.host', 'sk-uj-not-real');
+    await tts.synthesize('x'.repeat(50_000));
+    expect(sentLength).toBeLessThanOrEqual(4_000);
+    expect(sentLength).toBeGreaterThan(0);
+  });
+
+  test('sends an abort signal so a hung proxy cannot wedge the sentence queue', async () => {
+    let hadSignal = false;
+    globalThis.fetch = mock(async (_url: string, init: any) => {
+      hadSignal = init.signal instanceof AbortSignal;
+      return new Response(mp3Bytes);
+    }) as any;
+    await new UsejarvisTTS('https://llm.usejarvis.host', 'sk-uj-not-real').synthesize('hi');
+    expect(hadSignal).toBe(true);
+  });
+
   test('accepts real audio whose content-type a proxy stripped (magic-byte sniff)', async () => {
     const tts = new UsejarvisTTS('https://llm.usejarvis.host', 'sk-uj-not-real');
     globalThis.fetch = mock(async () => new Response(mp3Bytes, { headers: { 'Content-Type': 'application/octet-stream' } })) as any;
