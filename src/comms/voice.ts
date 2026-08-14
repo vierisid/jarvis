@@ -135,7 +135,20 @@ export class UsejarvisSTT implements STTProvider {
       throw hostedProxyError('Usejarvis AI STT', response.status, err);
     }
 
-    const result = await response.json() as { text?: string };
+    // Read as TEXT first: response.json() rejects before the shape check
+    // below, and its rejection ("Failed to parse JSON") carries no provider,
+    // no status and none of the body — so an HTML interstitial served with a
+    // 200 produced a bare parse error with nothing to correlate. Reading the
+    // body ourselves keeps the diagnostic, still redacted and still capped.
+    const raw = await response.text();
+    let result: { text?: string };
+    try {
+      result = JSON.parse(raw) as { text?: string };
+    } catch {
+      throw new Error(
+        `Usejarvis AI STT returned a non-JSON body: ${redactSecrets(raw).slice(0, 200)}`,
+      );
+    }
     if (typeof result.text !== 'string') {
       // Same class as the error branch: a 200 carrying a proxy/CDN
       // interstitial is exactly where an echoed bearer shows up.

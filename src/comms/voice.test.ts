@@ -671,3 +671,25 @@ describe('hosted STT error redaction', () => {
     });
   });
 });
+
+describe('UsejarvisSTT non-JSON 200', () => {
+  const originalFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = originalFetch; });
+
+  // response.json() rejects with "Failed to parse JSON" — no provider, no
+  // status, no body — so a CDN interstitial served with a 200 used to leave
+  // nothing to correlate. Still redacted and capped.
+  test('reports the provider and a redacted body instead of a bare parse error', async () => {
+    const key = 'sk-uj-LIFETIMEKEY0000000000';
+    globalThis.fetch = mock(async () => new Response(
+      `<html><body>Access denied. token=${key}</body></html>`,
+      { status: 200, headers: { 'Content-Type': 'text/html' } },
+    )) as any;
+    const stt = new UsejarvisSTT('https://llm.usejarvis.host', key);
+    const err = await stt.transcribe(makeWavBuffer()).then(() => null, (e: Error) => e);
+    expect(err).toBeInstanceOf(Error);
+    expect(err!.message).toContain('non-JSON body');
+    expect(err!.message).toContain('Usejarvis AI STT');
+    expect(err!.message).not.toContain(key);
+  });
+});
