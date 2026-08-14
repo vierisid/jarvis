@@ -1,4 +1,5 @@
-import { OpenAIProvider } from './openai.ts';
+import { OpenAIProvider, type OpenAIMessage } from './openai.ts';
+import type { LLMMessage } from './provider.ts';
 import { hostedProxyError, isBudgetExhaustion } from '../util/hosted-error.ts';
 import { redactSecrets } from '../util/redact.ts';
 
@@ -18,7 +19,9 @@ import { redactSecrets } from '../util/redact.ts';
 export class UsejarvisAIProvider extends OpenAIProvider {
   override name = 'usejarvis_ai';
 
-  constructor(baseUrl: string, apiKey: string) {
+  private readonly promptCache: boolean;
+
+  constructor(baseUrl: string, apiKey: string, opts?: { promptCache?: boolean }) {
     // The provisioner writes the proxy ORIGIN (https://llm.example.host);
     // OpenAIProvider expects the /v1 prefix to already be present.
     const trimmed = baseUrl.replace(/\/+$/, '');
@@ -27,6 +30,50 @@ export class UsejarvisAIProvider extends OpenAIProvider {
     // and an empty default posted `{"model":""}` — a guaranteed 400 that
     // replaced the original error. Every plan carries the mid alias.
     super(apiKey, 'uj-medium', /\/v1$/.test(trimmed) ? trimmed : `${trimmed}/v1`);
+    this.promptCache = opts?.promptCache !== false;
+  }
+
+  /**
+   * Attach Anthropic prompt-cache breakpoints, in OpenAI wire format.
+   *
+   * MARGIN-CRITICAL. Agentic turns re-send a growing prefix, and a cached
+   * read bills at a fraction of fresh input — measured 0.1027x against the
+   * platform's own resale price. Without markers every hosted turn pays
+   * full rate on text the upstream has already seen.
+   *
+   * Why per-content-part and not a top-level field: OpenRouter accepts a
+   * top-level `cache_control`, LiteLLM does not — it forwards the marker
+   * only when it rides ON a content part. Verified live against the proxy
+   * (docs/LLM.md, POC case 3): a marked system part and a marked user part
+   * both reached Anthropic intact and billed the second call at the cache
+   * rate.
+   *
+   * Two breakpoints, the documented multi-turn shape:
+   *   - the LAST system message — the stable prefix (tools + system render
+   *     ahead of messages, so this one entry caches both);
+   *   - the LAST message overall — a rolling breakpoint, so each request
+   *     writes the prefix the NEXT one reads as history grows.
+   * Anthropic allows 4; staying at 2 leaves room and keeps the shape easy
+   * to reason about.
+   *
+   * Under a model's minimum cacheable prefix Anthropic silently declines
+   * (no error, cache_creation_input_tokens: 0), and that floor differs per
+   * model — so marking is safe to do unconditionally and costs nothing
+   * when the prompt is small.
+   */
+  protected override convertMessages(messages: LLMMessage[]): OpenAIMessage[] {
+    const converted = super.convertMessages(messages);
+    if (!this.promptCache || converted.length === 0) return converted;
+
+    const lastSystem = converted.reduce(
+      (found, msg, i) => (msg.role === 'system' ? i : found),
+      -1,
+    );
+    const marks = new Set<number>();
+    if (lastSystem >= 0) marks.add(lastSystem);
+    marks.add(converted.length - 1);
+
+    return converted.map((msg, i) => (marks.has(i) ? markCacheBreakpoint(msg) : msg));
   }
 
   protected override get errorLabel(): string {
@@ -198,3 +245,38 @@ export class UsejarvisAIProvider extends OpenAIProvider {
   }
 }
 
+
+/**
+ * Put an `ephemeral` cache breakpoint on a message's LAST content part,
+ * promoting plain-string content to a single text part (the marker cannot
+ * ride on a bare string).
+ *
+ * Left untouched when there is nothing safe to mark:
+ *  - assistant messages carrying tool_calls, whose content must stay '' —
+ *    promoting it to a part array changes the semantics the API expects;
+ *  - empty content, which would produce a part with no text.
+ * An image part is never marked either — the breakpoint goes on the last
+ * TEXT part, so a trailing image leaves the message unmarked rather than
+ * attaching the marker to binary content.
+ */
+function markCacheBreakpoint(msg: OpenAIMessage): OpenAIMessage {
+  if (msg.tool_calls && msg.tool_calls.length > 0) return msg;
+
+  if (typeof msg.content === 'string') {
+    if (!msg.content) return msg;
+    return {
+      ...msg,
+      content: [{ type: 'text', text: msg.content, cache_control: { type: 'ephemeral' } }],
+    };
+  }
+
+  const parts = msg.content;
+  const lastText = parts.reduce((found, p, i) => (p.type === 'text' ? i : found), -1);
+  if (lastText < 0) return msg;
+  return {
+    ...msg,
+    content: parts.map((p, i) =>
+      i === lastText ? { ...p, cache_control: { type: 'ephemeral' as const } } : p,
+    ),
+  };
+}

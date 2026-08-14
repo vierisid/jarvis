@@ -29,11 +29,15 @@ export function modelRejectsCustomTemperature(model: string): boolean {
   return false;
 }
 
-type OpenAIContentPart =
-  | { type: 'text'; text: string }
+export type OpenAIContentPart =
+  // `cache_control` is the Anthropic prompt-cache breakpoint. It is only ever
+  // set by the hosted provider (src/llm/usejarvis.ts): LiteLLM forwards the
+  // marker to Anthropic when it rides on a content part, and every other
+  // upstream ignores the extra key.
+  | { type: 'text'; text: string; cache_control?: { type: 'ephemeral' } }
   | { type: 'image_url'; image_url: { url: string; detail?: 'auto' | 'low' | 'high' } };
 
-type OpenAIMessage = {
+export type OpenAIMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
   // GPT-4o + later vision models accept an array of content parts on
   // user messages so images can travel inline. System / assistant /
@@ -363,7 +367,9 @@ export class OpenAIProvider implements LLMProvider {
     }
   }
 
-  private convertMessages(messages: LLMMessage[]): OpenAIMessage[] {
+  /** protected so subclasses can decorate the wire messages — the hosted
+   * provider attaches Anthropic cache breakpoints here (src/llm/usejarvis.ts). */
+  protected convertMessages(messages: LLMMessage[]): OpenAIMessage[] {
     return messages.map(m => {
       // Multi-modal user messages (T19 region capture) need the image to
       // ride alongside the text. OpenAI's vision API takes a content

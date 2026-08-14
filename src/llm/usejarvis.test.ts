@@ -228,3 +228,79 @@ describe('UsejarvisAIProvider', () => {
     expect((provider as unknown as { defaultModel: string }).defaultModel).toBe('uj-medium');
   });
 });
+
+/**
+ * Prompt-cache breakpoints. MARGIN-CRITICAL: agentic turns re-send a growing
+ * prefix, and the proxy bills a cached read at ~0.1x fresh input (measured
+ * live). LiteLLM only forwards the marker when it rides ON a content part —
+ * a top-level cache_control field, which OpenRouter accepts, is dropped.
+ */
+describe('UsejarvisAIProvider prompt-cache markers', () => {
+  const capture = async (
+    messages: Array<Record<string, unknown>>,
+    opts?: { promptCache?: boolean },
+  ): Promise<any> => {
+    let sent: any = null;
+    globalThis.fetch = (async (_url: any, init?: any) => {
+      sent = JSON.parse(String(init.body));
+      return jsonResponse(200, {
+        choices: [{ message: { role: 'assistant', content: 'ok' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1 },
+      });
+    }) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc', opts);
+    await provider.chat(messages as any, { model: 'uj-chat' });
+    return sent;
+  };
+
+  it('marks the last system message and the last message overall', async () => {
+    const sent = await capture([
+      { role: 'system', content: 'You are Jarvis. ' + 'x'.repeat(200) },
+      { role: 'user', content: 'first' },
+      { role: 'assistant', content: 'reply' },
+      { role: 'user', content: 'second' },
+    ]);
+    // System: promoted to a content part carrying the breakpoint.
+    expect(sent.messages[0].content).toEqual([
+      { type: 'text', text: expect.stringContaining('You are Jarvis.'), cache_control: { type: 'ephemeral' } },
+    ]);
+    // Rolling breakpoint on the newest turn — what the NEXT request reads.
+    expect(sent.messages[3].content[0].cache_control).toEqual({ type: 'ephemeral' });
+    // Untouched in between, so the prefix stays byte-identical across turns.
+    expect(sent.messages[1].content).toBe('first');
+    expect(sent.messages[2].content).toBe('reply');
+  });
+
+  it('never sends a TOP-LEVEL cache_control (LiteLLM drops it)', async () => {
+    const sent = await capture([{ role: 'user', content: 'hi' }]);
+    expect(sent.cache_control).toBeUndefined();
+  });
+
+  it('honours the global prompt-cache switch', async () => {
+    const sent = await capture([{ role: 'user', content: 'hi' }], { promptCache: false });
+    expect(sent.messages[0].content).toBe('hi');
+    expect(JSON.stringify(sent)).not.toContain('cache_control');
+  });
+
+  // An assistant turn carrying tool_calls must keep content '' — promoting it
+  // to a part array changes what the API expects and breaks the tool loop.
+  it('leaves a tool_calls assistant message alone', async () => {
+    const sent = await capture([
+      { role: 'user', content: 'do it' },
+      {
+        role: 'assistant',
+        content: '',
+        tool_calls: [{ id: 't1', name: 'search', arguments: { q: 'x' } }],
+      },
+    ]);
+    expect(sent.messages[1].content).toBe('');
+    expect(sent.messages[1].tool_calls).toHaveLength(1);
+    expect(JSON.stringify(sent.messages[1])).not.toContain('cache_control');
+  });
+
+  it('a single message still gets exactly one breakpoint', async () => {
+    const sent = await capture([{ role: 'user', content: 'hi' }]);
+    expect(sent.messages).toHaveLength(1);
+    expect(sent.messages[0].content[0].cache_control).toEqual({ type: 'ephemeral' });
+  });
+});
