@@ -10,10 +10,36 @@ import type {
 import { classifyHttpStatus } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
 
+type OllamaToolCall = {
+  function: {
+    name: string;
+    // Object, not a JSON string — Ollama's native /api/chat differs from
+    // OpenAI's wire format here in both directions.
+    arguments: Record<string, unknown>;
+  };
+};
+
 type OllamaMessage = {
-  role: 'system' | 'user' | 'assistant';
+  role: 'system' | 'user' | 'assistant' | 'tool';
   content: string;
   images?: string[];
+  /**
+   * Present on assistant messages that called tools. Ollama's chat templates
+   * render a tool result relative to the call that produced it, so dropping
+   * these leaves the model looking at an orphan result.
+   */
+  tool_calls?: OllamaToolCall[];
+  /** Names the tool a result answers — the field Ollama's own message carries. */
+  tool_name?: string;
+  /**
+   * OpenAI's correlation field, sent speculatively and unverified against a
+   * live Ollama, which as far as we know ignores it. Harmless either way (the
+   * server drops unknown JSON fields) and free if some build does read it.
+   * Don't mistake it for what pairs a result with its call: that's position in
+   * the array. Two parallel calls to the SAME tool yield two identical
+   * `tool_name`s, and only their order tells them apart.
+   */
+  tool_call_id?: string;
 };
 
 type OllamaToolDef = {
@@ -31,12 +57,7 @@ type OllamaResponse = {
   message: {
     role: 'assistant';
     content: string;
-    tool_calls?: Array<{
-      function: {
-        name: string;
-        arguments: Record<string, unknown>;
-      };
-    }>;
+    tool_calls?: OllamaToolCall[];
   };
   done: boolean;
   total_duration?: number;
@@ -51,12 +72,7 @@ type OllamaStreamChunk = {
   message?: {
     role: 'assistant';
     content: string;
-    tool_calls?: Array<{
-      function: {
-        name: string;
-        arguments: Record<string, unknown>;
-      };
-    }>;
+    tool_calls?: OllamaToolCall[];
   };
   done: boolean;
   total_duration?: number;
@@ -263,35 +279,60 @@ export class OllamaProvider implements LLMProvider {
   }
 
   private convertMessages(messages: LLMMessage[]): OllamaMessage[] {
-    return messages.map(m => {
-      if (typeof m.content === 'string') {
-        return {
-          role: m.role as 'system' | 'user' | 'assistant',
-          content: m.content,
-        };
-      }
+    // An assistant's tool calls and the results answering them have to survive
+    // this conversion together. Ollama renders a tool result relative to the
+    // preceding assistant `tool_calls`; a result that arrives alone reads as an
+    // orphan, and the model re-guesses the call it already made.
+    //
+    // Sequential, not a .map, because resolving a result's `tool_name` depends
+    // on having already walked the assistant message that named it.
+    // `compactHistory` keeps each assistant + its results in one chunk, so
+    // compaction can't strand a result whose call was dropped.
+    const toolNamesById = new Map<string, string>();
+    const converted: OllamaMessage[] = [];
 
-      // ContentBlock[] — extract text and images separately
-      let text = '';
+    for (const m of messages) {
+      let text: string;
       const images: string[] = [];
 
-      for (const block of m.content) {
-        if (block.type === 'text') {
-          text += (text ? '\n' : '') + block.text;
-        } else if (block.type === 'image') {
-          images.push(block.source.data);
+      if (typeof m.content === 'string') {
+        text = m.content;
+      } else {
+        // ContentBlock[] — extract text and images separately
+        text = '';
+        for (const block of m.content) {
+          if (block.type === 'text') {
+            text += (text ? '\n' : '') + block.text;
+          } else if (block.type === 'image') {
+            images.push(block.source.data);
+          }
         }
       }
 
-      const msg: OllamaMessage = {
-        role: m.role as 'system' | 'user' | 'assistant',
-        content: text,
-      };
+      const msg: OllamaMessage = { role: m.role, content: text };
       if (images.length > 0) {
         msg.images = images;
       }
-      return msg;
-    });
+
+      if (m.tool_calls && m.tool_calls.length > 0) {
+        msg.tool_calls = m.tool_calls.map(tc => {
+          toolNamesById.set(tc.id, tc.name);
+          return { function: { name: tc.name, arguments: tc.arguments } };
+        });
+      }
+
+      if (m.role === 'tool' && m.tool_call_id) {
+        msg.tool_call_id = m.tool_call_id;
+        const name = toolNamesById.get(m.tool_call_id);
+        // Absent only if the matching call fell outside the window; the
+        // result still goes through so the model isn't left waiting on it.
+        if (name) msg.tool_name = name;
+      }
+
+      converted.push(msg);
+    }
+
+    return converted;
   }
 
   private convertTools(tools: LLMTool[]): OllamaToolDef[] {
