@@ -320,3 +320,109 @@ describe('POST /api/config/llm/test OpenAI-compatible discovery', () => {
     ]);
   });
 });
+
+/**
+ * The settings tab sends the auth-header selection along with a connection
+ * test. These pin the daemon end of that seam: the header must only be
+ * applied when the caller actually chose one, because overriding a provider's
+ * own default silently breaks authentication against the official endpoint.
+ */
+describe('POST /api/config/llm/test auth header selection', () => {
+  const realFetch = globalThis.fetch;
+  let requests: CapturedRequest[];
+
+  beforeEach(() => {
+    requests = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const headers = new Headers(init?.headers);
+      const requestBody = init?.body ? JSON.parse(String(init.body)) as { model?: string } : {};
+      const url = String(input);
+      requests.push({
+        url,
+        authorization: headers.get('authorization'),
+        apiKey: headers.get('x-api-key'),
+        model: requestBody.model,
+      });
+      if (url.endsWith('/v1/models')) {
+        return new Response(JSON.stringify({ data: [{ id: 'gateway-fast' }] }), {
+          status: 200, headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      return new Response(JSON.stringify({
+        id: 'msg_test',
+        type: 'message',
+        role: 'assistant',
+        content: [{ type: 'text', text: 'OK' }],
+        model: requestBody.model ?? 'claude-default',
+        stop_reason: 'end_turn',
+        usage: { input_tokens: 1, output_tokens: 1 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as unknown as typeof fetch;
+  });
+
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  it('keeps x-api-key on the official Anthropic endpoint when no header is chosen', async () => {
+    const response = await callEndpoint(
+      { 'anthropic-hdr-test': { kind: 'anthropic', api_key: 'sk-ant-stored' } },
+      { name: 'anthropic-hdr-test' },
+    );
+    const body = await response.json() as { ok: boolean };
+
+    expect(body.ok).toBe(true);
+    expect(requests).toHaveLength(1);
+    expect(requests.every((r) => r.apiKey === 'sk-ant-stored')).toBe(true);
+    expect(requests.every((r) => r.authorization === null)).toBe(true);
+  });
+
+  it('still auto-selects Bearer for a custom Anthropic endpoint', async () => {
+    const response = await callEndpoint(
+      { 'gw-hdr-test': { kind: 'anthropic', api_key: 'gw-key', base_url: 'https://gw.example' } },
+      { name: 'gw-hdr-test' },
+    );
+    const body = await response.json() as { ok: boolean };
+
+    expect(body.ok).toBe(true);
+    expect(requests.every((r) => r.authorization === 'Bearer gw-key')).toBe(true);
+    expect(requests.every((r) => r.apiKey === null)).toBe(true);
+  });
+
+  it('honors an explicitly chosen x-api-key on a custom endpoint', async () => {
+    const response = await callEndpoint(
+      { 'gw-hdr-test': { kind: 'anthropic', api_key: 'gw-key', base_url: 'https://gw.example' } },
+      { name: 'gw-hdr-test', auth_header: 'x-api-key' },
+    );
+    const body = await response.json() as { ok: boolean };
+
+    expect(body.ok).toBe(true);
+    expect(requests.length).toBeGreaterThan(0);
+    expect(requests.every((r) => r.apiKey === 'gw-key')).toBe(true);
+    expect(requests.every((r) => r.authorization === null)).toBe(true);
+  });
+
+  it('falls back to the stored header when the request omits one', async () => {
+    const response = await callEndpoint(
+      { 'gw-hdr-test': { kind: 'anthropic', api_key: 'gw-key', base_url: 'https://gw.example', auth_header: 'x-api-key' } },
+      { name: 'gw-hdr-test' },
+    );
+    const body = await response.json() as { ok: boolean };
+
+    expect(body.ok).toBe(true);
+    expect(requests.every((r) => r.apiKey === 'gw-key')).toBe(true);
+    expect(requests.every((r) => r.authorization === null)).toBe(true);
+  });
+
+  it('rejects an illegal header name with the same message the save path uses', async () => {
+    const response = await callEndpoint(
+      { 'gw-hdr-test': { kind: 'anthropic', api_key: 'gw-key', base_url: 'https://gw.example' } },
+      { name: 'gw-hdr-test', auth_header: 'bad header\r\nX-Evil: 1' },
+    );
+    const body = await response.json() as { ok: boolean; error: string };
+
+    expect(body.ok).toBe(false);
+    expect(body.error).toContain('invalid auth header name');
+    expect(requests).toHaveLength(0);
+  });
+});

@@ -1525,6 +1525,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             api_key?: string;
             model?: string;
             base_url?: string;
+            auth_header?: string;
           };
           const { testLLMProvider } = await import('./llm-settings.ts');
           const result = await testLLMProvider(body, ctx.config);

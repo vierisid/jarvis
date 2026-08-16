@@ -47,6 +47,27 @@ function normalizeBaseUrl(value: string | undefined): string {
   return value?.trim().replace(/\/+$/, '') ?? '';
 }
 
+/** RFC 7230 `token` - the only characters legal in an HTTP header name. */
+const HEADER_NAME_RE = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+
+/**
+ * Normalize a caller-supplied auth header name, or throw if it isn't a legal
+ * header name. Both the save and the test path go through here so the two
+ * boundaries can't disagree about what they accept - a rejected name must
+ * produce the same message whether you clicked Save or Test.
+ *
+ * Returns undefined for a blank value, which clears the field and hands the
+ * provider back its own default.
+ */
+function validateAuthHeader(value: string, providerName: string): string | undefined {
+  const header = value.trim();
+  if (!header) return undefined;
+  if (!HEADER_NAME_RE.test(header)) {
+    throw new Error(`Provider '${providerName}' has an invalid auth header name`);
+  }
+  return header;
+}
+
 // ── Types exposed to the dashboard ───────────────────────────────────────
 export type LLMSettingsProviderView = {
   kind: LLMProviderKind;
@@ -217,11 +238,7 @@ export function saveLLMSettings(
       if (update.kind !== undefined) merged.kind = update.kind;
       if (update.base_url !== undefined) merged.base_url = update.base_url;
       if (update.auth_header !== undefined) {
-        const header = update.auth_header.trim();
-        if (header && !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(header)) {
-          throw new Error(`Provider '${name}' has an invalid auth header name`);
-        }
-        merged.auth_header = header || undefined;
+        merged.auth_header = validateAuthHeader(update.auth_header, name);
       }
       // api_key is persisted to the keychain only - never store the plaintext
       // back into the config object that might end up on disk.
@@ -592,13 +609,23 @@ export async function testLLMProvider(
   const apiKey = opts.api_key ?? storedApiKey;
   const baseUrl = hasExplicitBaseUrl ? requestedBaseUrl : configuredBaseUrl;
 
+  // Same validation as the save path - a test must not be able to smuggle in
+  // a header name that Save would have rejected. Report it as a failed test
+  // rather than letting it escape as a 'malformed body' from the route.
+  let authHeader: string | undefined;
+  try {
+    authHeader = opts.auth_header !== undefined
+      ? validateAuthHeader(opts.auth_header, name)
+      : configured?.auth_header;
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err) };
+  }
+
   const entry: LLMProviderEntry = {
     kind,
     ...(apiKey ? { api_key: apiKey } : {}),
     ...(baseUrl ? { base_url: baseUrl } : {}),
-    ...((opts.auth_header ?? configured?.auth_header)
-      ? { auth_header: opts.auth_header ?? configured?.auth_header }
-      : {}),
+    ...(authHeader ? { auth_header: authHeader } : {}),
   };
 
   const instance = instantiateProvider(name, entry);

@@ -137,7 +137,9 @@ export class OpenAIProvider implements LLMProvider {
     this.apiKey = apiKey;
     this.defaultModel = defaultModel;
     this.baseUrl = baseUrl.replace(/\/$/, '');
-    this.authHeader = authHeader;
+    // `||` not the default param alone: a stored empty string would otherwise
+    // survive and produce a nameless header that fetch rejects at runtime.
+    this.authHeader = authHeader || 'Authorization';
   }
 
   protected requestHeaders(includeContentType = true): Record<string, string> {

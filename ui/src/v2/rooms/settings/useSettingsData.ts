@@ -71,6 +71,23 @@ export const OPTIONAL_KEY_KINDS: ReadonlySet<LLMProviderKind> = new Set([
   "litellm",
 ]);
 
+/**
+ * Whether the settings form may send an `auth_header` override for a provider.
+ *
+ * Only true when the provider authenticates with a key AND points at a custom
+ * endpoint - i.e. exactly when the header dropdown is on screen and the user
+ * actually made a choice. Sending an override in any other case overrides the
+ * provider's own default: `Authorization` on official Anthropic replaces the
+ * `x-api-key` it requires, and every request 401s. Test and Save must both
+ * gate on this, or a connection test lies about a perfectly good key.
+ */
+export function sendsAuthHeader(
+  kind: LLMProviderKind,
+  supportsUrl: boolean,
+): boolean {
+  return KEY_BASED_KINDS.has(kind) && supportsUrl;
+}
+
 /** Provider kinds that need a base_url. */
 export const URL_BASED_KINDS: ReadonlySet<LLMProviderKind> = new Set([
   "ollama",
