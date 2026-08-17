@@ -266,6 +266,12 @@ export class SettingsReloadCoordinator {
 
     return this.enqueue(async () => {
       const errors = await this.runAppliers(section);
+      // Re-baseline the tokens fingerprint whenever the google appliers run,
+      // whatever triggered them. The in-daemon disconnect route deletes the file
+      // and calls applyNow('google') itself; without this the fingerprint would
+      // still hold the deleted token's hash, and the next SIGHUP would report a
+      // change and restart the observers for a disconnect already applied.
+      if (section === 'google') this.lastGoogleTokens = googleTokensFingerprint(this.googleTokensFile);
       this.emitBroadcast({ sections: [section], ok: errors.length === 0, errors });
       return errors[0] ?? null;
     });

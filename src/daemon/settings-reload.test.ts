@@ -232,6 +232,16 @@ describe('settings-reload', () => {
       rmSync(tokens);
       expect((await coordinator.reloadAll()).changed).toContain('google');
       expect(applied).toHaveLength(3);
+
+      // An apply the daemon did ITSELF (the in-daemon disconnect route deletes
+      // the file and calls applyNow) must re-baseline too, or the next SIGHUP
+      // would see a change that has already been applied and restart the
+      // observers for nothing.
+      writeFileSync(tokens, JSON.stringify({ access_token: 'c', refresh_token: 'r' }));
+      await coordinator.applyNow('google');
+      expect(applied).toHaveLength(4);
+      expect((await coordinator.reloadAll()).changed).not.toContain('google');
+      expect(applied).toHaveLength(4);
     } finally {
       rmSync(home, { recursive: true, force: true });
     }
