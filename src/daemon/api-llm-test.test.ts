@@ -285,3 +285,38 @@ describe('POST /api/config/llm/test Anthropic endpoint scoping', () => {
     expect(config.llm.providers?.['innocent']).toBeUndefined();
   });
 });
+
+describe('POST /api/config/llm/test OpenAI-compatible discovery', () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  it('normalizes the API root, discovers a model, and tests chat with it', async () => {
+    const requests: Array<{ url: string; model?: string }> = [];
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const requestBody = init?.body ? JSON.parse(String(init.body)) as { model?: string } : {};
+      requests.push({ url, model: requestBody.model });
+      if (url.endsWith('/models')) {
+        return Response.json({ data: [{ id: 'custom-chat' }, { id: 'another-model' }] });
+      }
+      return Response.json({
+        id: 'chat_test', object: 'chat.completion', created: 1, model: requestBody.model,
+        choices: [{ index: 0, message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+    }) as unknown as typeof fetch;
+
+    const response = await callEndpoint(
+      { compatible: { kind: 'openai_compatible', api_key: 'stored-secret', base_url: 'https://gateway.example/api' } },
+      { name: 'compatible' },
+    );
+    const body = await response.json() as { ok: boolean; model: string; models: string[] };
+
+    expect(body).toEqual({ ok: true, model: 'another-model', models: ['another-model', 'custom-chat'] });
+    expect(requests).toEqual([
+      { url: 'https://gateway.example/api/v1/models', model: undefined },
+      { url: 'https://gateway.example/api/v1/chat/completions', model: 'another-model' },
+    ]);
+  });
+});

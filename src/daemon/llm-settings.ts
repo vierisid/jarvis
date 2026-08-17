@@ -639,6 +639,13 @@ export async function testLLMProvider(
         error: `The custom Anthropic endpoint listed ${models.length} models, but this credential could not use any of them${lastModelError ? `: ${lastModelError}` : ''}`,
       };
     }
+    if (kind === 'openai_compatible' && !testModel) {
+      models = await instance.listModels();
+      if (!models.length) {
+        return { ok: false, error: 'The OpenAI-compatible endpoint did not return any models from /v1/models' };
+      }
+      testModel = models[0];
+    }
     const resp = await instance.chat(
       [{ role: 'user', content: 'Say OK' }],
       { max_tokens: 5, ...(testModel ? { model: testModel } : {}) },
