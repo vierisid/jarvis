@@ -1,4 +1,7 @@
 import { describe, expect, it, beforeEach } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import {
   setUsageDatabase,
@@ -154,7 +157,11 @@ describe('queryUsage', () => {
 describe('llm_usage cache column migration', () => {
   it('ALTER path adds cache columns to a legacy-shaped table and inserts succeed', async () => {
     const { Database } = await import('bun:sqlite');
-    const path = `${process.env.TMPDIR ?? '/tmp'}/jarvis-usage-migration-${Date.now()}.db`;
+    // mkdtemp, not a Date.now() filename: two runs in the same millisecond
+    // would collide, and a crash left the stray .db behind. The whole dir goes
+    // in the finally below.
+    const dir = mkdtempSync(join(tmpdir(), 'jarvis-usage-migration-'));
+    const path = join(dir, 'usage.db');
 
     // Simulate a DB created before prompt caching landed: legacy llm_usage
     // without the cache columns.
@@ -207,9 +214,15 @@ describe('llm_usage cache column migration', () => {
     } finally {
       closeDb();
       setUsageDatabase(() => null);
-      await import('node:fs/promises').then((fs) => fs.rm(path, { force: true }));
+      rmSync(dir, { recursive: true, force: true });
     }
-  });
+    // 30s, explicit. This test runs ~50ms locally (loaded or not) but timed out
+    // at bun's default 5s on a CI runner: unlike its siblings it opens a REAL
+    // on-disk SQLite database and runs the full schema migration through it, so
+    // it is at the mercy of the runner's disk rather than its CPU. The budget is
+    // for a stalled fsync, not for slow logic — if this ever approaches 30s,
+    // something is genuinely wrong rather than merely slow.
+  }, 30_000);
 });
 
 describe('recordUsage resilience', () => {

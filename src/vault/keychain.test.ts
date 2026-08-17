@@ -8,7 +8,7 @@
  */
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { mkdtempSync, rmSync, mkdirSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs';
-import { tmpdir } from 'node:os';
+import { tmpdir, homedir } from 'node:os';
 import { join } from 'node:path';
 import {
   getSecret,
@@ -52,14 +52,40 @@ describe('keychain', () => {
 
   // ── location ────────────────────────────────────────────────────────────
 
-  test('JARVIS_HOME is where a fresh install stores its keychain', () => {
+  // keychainDir() consults the REAL ~/.jarvis as the legacy dir — homedir() is
+  // fixed for the process, per the note at the top of this file. On a machine
+  // with an actual install, the documented relocate-at-boot rule CORRECTLY
+  // prefers that existing pair, so an unguarded `keychainDir() === dataDir`
+  // assertion fails for every developer who runs Jarvis and passes only on a
+  // clean runner. Split in two: the location rule is skipped where a real
+  // keychain exists, and the write path is pinned so it always runs.
+  const realLegacyHasKeychain =
+    existsSync(join(homedir(), '.jarvis', KEY_FILE)) ||
+    existsSync(join(homedir(), '.jarvis', SECRETS_FILE));
+
+  test.skipIf(realLegacyHasKeychain)(
+    'JARVIS_HOME is where a fresh install stores its keychain',
+    () => {
+      const dataDir = join(root, 'data');
+      process.env.JARVIS_HOME = dataDir;
+      expect(keychainDir()).toBe(dataDir);
+    },
+  );
+
+  test('a fresh install writes and reads its keychain under the configured dir', () => {
     const dataDir = join(root, 'data');
     process.env.JARVIS_HOME = dataDir;
-
-    expect(keychainDir()).toBe(dataDir);
-    setSecret('llm.provider.openai.api_key', 'sk-1');
-    expect(existsSync(join(dataDir, SECRETS_FILE))).toBe(true);
-    expect(getSecret('llm.provider.openai.api_key')).toBe('sk-1');
+    // JARVIS_SECRETS_DIR pins the location, so this exercises the read/write
+    // round-trip without depending on the legacy fallback — and, as the header
+    // says, never touches the developer's real store.
+    process.env.JARVIS_SECRETS_DIR = dataDir;
+    try {
+      setSecret('llm.provider.openai.api_key', 'sk-1');
+      expect(existsSync(join(dataDir, SECRETS_FILE))).toBe(true);
+      expect(getSecret('llm.provider.openai.api_key')).toBe('sk-1');
+    } finally {
+      delete process.env.JARVIS_SECRETS_DIR;
+    }
   });
 
   test('an un-migrated install keeps using the legacy pair, both halves together', () => {

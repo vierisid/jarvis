@@ -117,11 +117,11 @@ jobs:
       # relaunch, plist generation); the rest of src/cli is already covered on
       # ubuntu and would only add 10x-billed minutes.
       #
-      # A wider `bun test src/cli/` run here also fails backup.test.ts —
-      # "a failed swap rolls back" cannot reopen jarvis.db (SQLITE_CANTOPEN)
-      # after the rollback, on macOS only. That is a pre-existing defect in
-      # `jarvis restore`, not something this job introduced; it needs its own
-      # fix rather than being silently gated in here.
+      # (A wider `bun test src/cli/` run used to fail backup.test.ts here with
+      # SQLITE_CANTOPEN. That turned out to be the test, not `jarvis restore` —
+      # it opened a WAL database readonly with no -shm, which macOS refuses;
+      # fixed in that file. The scope stays narrow for the billing reason above,
+      # not because anything is known-broken.)
       - name: Daemon lifecycle tests (launchd paths active)
         run: |
           bun test \
