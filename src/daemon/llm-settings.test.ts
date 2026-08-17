@@ -2,7 +2,7 @@ import { afterEach, describe, expect, it } from 'bun:test';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import { getSetting, setSetting } from '../vault/settings.ts';
 import { DEFAULT_CONFIG } from '../config/types.ts';
-import { mergeLLMSettingsIntoConfig } from './llm-settings.ts';
+import { mergeLLMSettingsIntoConfig, saveLLMSettings } from './llm-settings.ts';
 
 afterEach(() => closeDb());
 
@@ -32,5 +32,28 @@ describe('LLM settings model migrations', () => {
 
     expect(config.llm.default).toBe('groq:openai/gpt-oss-120b');
     expect(getSetting('llm.default')).toBe('groq:deepseek-r1-distill-llama-70b');
+  });
+});
+
+describe('LLM provider deletion', () => {
+  it('clears persisted tier assignments owned by the deleted provider', () => {
+    initDatabase(':memory:');
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.llm.providers = {
+      anthropic: { kind: 'anthropic' },
+      omniroute: { kind: 'omniroute' },
+    };
+    config.llm.tiers = {
+      conversation: 'anthropic:claude-haiku',
+      high: 'omniroute:auto',
+      medium: 'anthropic:claude-sonnet',
+    };
+
+    saveLLMSettings(config, { providers: { anthropic: null } });
+
+    expect(config.llm.tiers).toEqual({ high: 'omniroute:auto' });
+    expect(getSetting('llm.tiers.conversation')).toBe('');
+    expect(getSetting('llm.tiers.medium')).toBe('');
+    expect(getSetting('llm.tiers.high')).toBe('omniroute:auto');
   });
 });

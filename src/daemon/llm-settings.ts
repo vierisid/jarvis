@@ -27,6 +27,7 @@ import {
 } from '../llm/config-binding.ts';
 import { isAnthropicCustomBaseUrl } from '../llm/anthropic.ts';
 import { GROQ_DEPRECATED_MODEL_REPLACEMENTS } from '../llm/groq-models.ts';
+import { parseModelRef } from '../llm/tiers.ts';
 
 // ── DB keys ──────────────────────────────────────────────────────────────
 const SETTING_PROVIDERS = 'llm.providers';
@@ -206,6 +207,11 @@ export function saveLLMSettings(
     for (const [name, update] of updates) {
       if (update === null) {
         delete config.llm.providers[name];
+        for (const tier of ['conversation', 'high', 'medium', 'low'] as const) {
+          if (parseModelRef(config.llm.tiers[tier])?.provider === name) {
+            delete config.llm.tiers[tier];
+          }
+        }
         try { deleteSecret(keychainKey(name)); } catch { /* ignore */ }
         continue;
       }
