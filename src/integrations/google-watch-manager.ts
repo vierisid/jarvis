@@ -61,9 +61,12 @@ export class GoogleWatchManager {
     if (this.calendarTimer) clearTimeout(this.calendarTimer);
     this.gmailTimer = null;
     this.calendarTimer = null;
-    // Tell Google to stop pushing. Not strictly required — the watches expire,
-    // and the bridge drops anything it cannot route — but leaving them armed
-    // means Google keeps publishing for a disconnected account for up to a week.
+    // Try to tell Google to stop pushing. Best effort, and often IMPOSSIBLE by
+    // design: on a disconnect the tokens file is deleted before this runs, so
+    // there is no access token left to call with and Google keeps publishing
+    // until the watch expires (up to a week for Gmail). The bridge dropping
+    // notifications it cannot route is the actual backstop — this only shortens
+    // the window when a token still happens to be available.
     const token = await this.accessToken();
     if (!token) return;
     if (this.targets.pubsubTopic) await stopGmailWatch(token);

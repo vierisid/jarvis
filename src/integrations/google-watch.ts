@@ -20,6 +20,19 @@
 
 import { randomUUID } from 'node:crypto';
 
+/**
+ * Every call here is bounded, and the stop calls especially.
+ *
+ * They are awaited from ObserverService.stop(), which the settings-reload
+ * coordinator awaits on its SINGLE-FLIGHT queue — so one hanging request to
+ * Google would wedge not just this shutdown but every subsequent settings
+ * apply. An unbounded fetch on a shutdown path is a daemon that will not
+ * shut down.
+ */
+const REGISTER_TIMEOUT_MS = 15_000;
+/** Shorter: best-effort, and nothing downstream depends on the answer. */
+const STOP_TIMEOUT_MS = 5_000;
+
 const GMAIL_BASE = 'https://gmail.googleapis.com/gmail/v1/users/me';
 const CALENDAR_BASE = 'https://www.googleapis.com/calendar/v3/calendars';
 
@@ -61,6 +74,7 @@ export async function registerGmailWatch(
       // INBOX only: the doorbell exists for incoming mail, and every label
       // change in the mailbox would otherwise ring it.
       body: JSON.stringify({ topicName, labelIds: ['INBOX'], labelFilterBehavior: 'INCLUDE' }),
+      signal: AbortSignal.timeout(REGISTER_TIMEOUT_MS),
     });
     if (!resp.ok) {
       const detail = await resp.text().catch(() => '');
@@ -89,6 +103,7 @@ export async function stopGmailWatch(accessToken: string): Promise<void> {
     await fetch(`${GMAIL_BASE}/stop`, {
       method: 'POST',
       headers: { Authorization: `Bearer ${accessToken}` },
+      signal: AbortSignal.timeout(STOP_TIMEOUT_MS),
     });
   } catch {
     // Best effort. An abandoned watch expires by itself in 7 days, and the
@@ -127,6 +142,7 @@ export async function registerCalendarWatch(
         address: input.callbackUrl,
         token: input.channelToken,
       }),
+      signal: AbortSignal.timeout(REGISTER_TIMEOUT_MS),
     });
     if (!resp.ok) {
       const detail = await resp.text().catch(() => '');
@@ -160,6 +176,7 @@ export async function stopCalendarWatch(
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({ id: channel.id, resourceId: channel.resourceId }),
+      signal: AbortSignal.timeout(STOP_TIMEOUT_MS),
     });
   } catch {
     // Best effort; the channel expires on its own.

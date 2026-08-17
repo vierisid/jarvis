@@ -3681,10 +3681,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       lastGoogleCreds = creds;
       if (observerService) {
         observerService.setGoogleAuth(googleAuth);
-        // Re-read alongside the auth: a migrate re-renders the config, and the
-        // notify secret and channel token are per-instance, so a moved instance
-        // must arm its watches with the NEW values rather than the ones it
-        // booted with.
+        // Re-read alongside the auth so the watches are armed from the live
+        // config rather than whatever booted. (The notify secret and channel
+        // token are keyed by the INSTANCE id, which a migration preserves, so
+        // those two do not actually change on a move — the topic and callback
+        // can, if the deployment's config did.)
         observerService.setPushTargets({
           pubsubTopic: cfg.google?.pubsub_topic,
           pushCallback: cfg.google?.push_callback,
