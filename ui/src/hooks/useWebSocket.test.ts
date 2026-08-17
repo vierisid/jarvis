@@ -1,5 +1,47 @@
 import { describe, expect, test } from "bun:test";
-import { extractNestedMessage, formatProviderErrorMessage } from "./useWebSocket.ts";
+import { extractNestedMessage, finalizeStreamMessage, formatProviderErrorMessage } from "./useWebSocket.ts";
+
+describe("finalizeStreamMessage", () => {
+  test("recovers text from the done frame when every stream chunk was missed", () => {
+    const messages = finalizeStreamMessage([], {
+      id: "assistant:req-1",
+      fullText: "This was spoken aloud.",
+      timestamp: 123,
+      toolCalls: [],
+      subAgentEvents: [],
+    });
+    expect(messages).toEqual([{
+      id: "assistant:req-1",
+      role: "assistant",
+      content: "This was spoken aloud.",
+      timestamp: 123,
+      isStreaming: false,
+    }]);
+  });
+
+  test("repairs partial streamed text with authoritative completed text", () => {
+    const messages = finalizeStreamMessage([{
+      id: "assistant:req-1", role: "assistant", content: "This was", timestamp: 100, isStreaming: true,
+    }], {
+      id: "assistant:req-1",
+      fullText: "This was spoken aloud.",
+      timestamp: 123,
+      toolCalls: [],
+      subAgentEvents: [],
+    });
+    expect(messages[0]?.content).toBe("This was spoken aloud.");
+    expect(messages[0]?.isStreaming).toBe(false);
+  });
+
+  test("does not duplicate a response when completion is handled twice", () => {
+    const existing = [{
+      id: "assistant:req-1", role: "assistant" as const, content: "OK", timestamp: 100, isStreaming: false,
+    }];
+    expect(finalizeStreamMessage(existing, {
+      id: "assistant:req-1", fullText: "OK", timestamp: 123, toolCalls: [], subAgentEvents: [],
+    })).toHaveLength(1);
+  });
+});
 
 describe("extractNestedMessage", () => {
   test("returns null for non-objects and empty values", () => {

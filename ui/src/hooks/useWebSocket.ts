@@ -28,6 +28,41 @@ export type ChatMessage = {
   detail?: string; // raw error/debug payload, rendered collapsed in the chat
 };
 
+export function finalizeStreamMessage(
+  messages: ChatMessage[],
+  options: {
+    id: string;
+    fullText?: string;
+    timestamp: number;
+    toolCalls: ToolCall[];
+    subAgentEvents: SubAgentEvent[];
+  },
+): ChatMessage[] {
+  const index = messages.findIndex((message) => message.id === options.id);
+  if (index < 0) {
+    if (!options.fullText) return messages;
+    return [...messages, {
+      id: options.id,
+      role: "assistant",
+      content: options.fullText,
+      timestamp: options.timestamp,
+      isStreaming: false,
+      ...(options.toolCalls.length ? { toolCalls: options.toolCalls } : {}),
+      ...(options.subAgentEvents.length ? { subAgentEvents: options.subAgentEvents } : {}),
+    }];
+  }
+
+  return messages.map((message, messageIndex) => messageIndex === index
+    ? {
+        ...message,
+        content: options.fullText || message.content,
+        isStreaming: false,
+        toolCalls: options.toolCalls.length ? options.toolCalls : message.toolCalls,
+        subAgentEvents: options.subAgentEvents.length ? options.subAgentEvents : message.subAgentEvents,
+      }
+    : message);
+}
+
 export type TaskEvent = {
   action: "created" | "updated" | "deleted";
   task: {
@@ -697,7 +732,7 @@ export function useWebSocket() {
 
         if (!streamIdRef.current) {
           // Start a new assistant message
-          const id = uuid();
+          const id = requestId ? `assistant:${requestId}` : uuid();
           streamIdRef.current = id;
           setMessages((prev) => [
             ...prev,
@@ -732,26 +767,16 @@ export function useWebSocket() {
       ) return;
       // Stream complete or explicitly stopped. Keep partial text visible but
       // remove its speaking/streaming state immediately.
-      if (streamIdRef.current) {
-        const finalId = streamIdRef.current;
-        const finalToolCalls = toolCallsRef.current;
-        const finalSubAgentEvents = subAgentEventsRef.current;
-        setMessages((prev) =>
-          prev.map((m) =>
-            m.id === finalId
-              ? {
-                  ...m,
-                  isStreaming: false,
-                  toolCalls:
-                    finalToolCalls.length > 0 ? finalToolCalls : m.toolCalls,
-                  subAgentEvents:
-                    finalSubAgentEvents.length > 0
-                      ? finalSubAgentEvents
-                      : m.subAgentEvents,
-                }
-              : m
-          )
-        );
+      const finalId = streamIdRef.current || (requestId ? `assistant:${requestId}` : "");
+      if (finalId) {
+        const fullText = typeof msg.payload?.fullText === "string" ? msg.payload.fullText : undefined;
+        setMessages((prev) => finalizeStreamMessage(prev, {
+          id: finalId,
+          fullText,
+          timestamp: msg.timestamp || Date.now(),
+          toolCalls: toolCallsRef.current,
+          subAgentEvents: subAgentEventsRef.current,
+        }));
       }
       // Reset stream state
       streamBufferRef.current = "";
