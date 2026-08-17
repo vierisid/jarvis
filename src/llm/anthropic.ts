@@ -183,9 +183,11 @@ export class AnthropicProvider implements LLMProvider {
         continue;
       }
 
-      // Non-retryable error
+      // Non-retryable error. Cap the body: a misrouted request can return a
+      // whole HTML page, and this message is pattern-matched downstream.
       const errorText = await response.text();
-      throw new Error(`Anthropic API error (${response.status}): ${errorText}`);
+      const detail = errorText.length > 2000 ? `${errorText.slice(0, 2000)}…` : errorText;
+      throw new Error(`Anthropic API error (${response.status}): ${detail}`);
     }
 
     throw new Error('Anthropic API: max retries exceeded');

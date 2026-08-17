@@ -152,8 +152,14 @@ export class OpenAIProvider implements LLMProvider {
     return headers;
   }
 
-  protected postChat(body: Record<string, unknown>): Promise<Response> {
-    return fetch(this.apiUrl, {
+  /**
+   * `base` lets a subclass aim one request at an alternate root without
+   * touching shared state. Passing it explicitly (rather than swapping
+   * `this.baseUrl` around the call) is what keeps concurrent requests from
+   * reading each other's root.
+   */
+  protected postChat(body: Record<string, unknown>, base = this.baseUrl): Promise<Response> {
+    return fetch(`${base}/chat/completions`, {
       method: 'POST',
       headers: this.requestHeaders(),
       body: JSON.stringify(body),

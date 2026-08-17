@@ -20,6 +20,7 @@ import type { JarvisConfig, LLMProviderEntry, LLMProviderKind } from '../config/
 import { getSetting, setSetting } from '../vault/settings.ts';
 import { getSecret, setSecret, deleteSecret, hasSecret } from '../vault/keychain.ts';
 import type { LLMManager } from '../llm/manager.ts';
+import type { LLMProvider } from '../llm/provider.ts';
 import {
   instantiateProvider,
   atomicReloadProviders,
@@ -615,11 +616,20 @@ export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManag
 /**
  * How many catalog models one connection test may probe before giving up.
  *
- * Every probe is a real, billable chat request, and gateways fronting many
- * upstreams routinely advertise catalogs in the hundreds — so this is a cost
- * ceiling, not a tuning knob. It applies to every provider kind that probes.
+ * Each probe is a real, billable chat request and gateways fronting many
+ * upstreams routinely advertise catalogs in the hundreds, so the walk has to
+ * stop somewhere. Note this bounds MODELS, not HTTP requests: a provider that
+ * resolves among several roots may spend more than one request per probe.
  */
 const MAX_TEST_MODEL_PROBES = 10;
+
+/**
+ * Longest error text worth pattern-matching. The classifiers below use
+ * `[\s\S]*`, which is quadratic on a non-matching subject, and an upstream
+ * error body can be arbitrarily long — a gateway returning a megabyte of HTML
+ * would otherwise stall the daemon's single event loop for seconds.
+ */
+const MAX_CLASSIFIED_ERROR_CHARS = 2000;
 
 /**
  * A rejection that names a model is worth stepping past: gateway catalogs are
@@ -630,8 +640,14 @@ const MAX_TEST_MODEL_PROBES = 10;
 const MODEL_SCOPED_FAILURE =
   /model[\s\S]*(not[ _]?allowed|not[ _]?found|unavailable|denied)|not[ _]?allowed[\s\S]*model/i;
 
-/** On a routed gateway a single upstream can be down for one model only. */
-const TRANSIENT_UPSTREAM_FAILURE = /HTTP (404|502|503|504)\b/;
+/**
+ * On a routed gateway a single upstream can be down for one model only.
+ *
+ * Deliberately excludes 404: a 404 that is genuinely about the model says so
+ * in words and is caught above, whereas a bare 404 means the ROUTE is wrong —
+ * and walking ten models against a wrong route just multiplies the failure.
+ */
+const TRANSIENT_UPSTREAM_FAILURE = /HTTP (502|503|504)\b/i;
 
 /**
  * Send the test prompt to each candidate model until one answers.
@@ -641,27 +657,30 @@ const TRANSIENT_UPSTREAM_FAILURE = /HTTP (404|502|503|504)\b/;
  * being buried under N retries against other models.
  */
 async function probeUsableModel(
-  instance: { chat: (m: Array<{ role: 'user'; content: string }>, o: Record<string, unknown>) => Promise<unknown> },
+  instance: LLMProvider,
   models: string[],
   allowTransientUpstream: boolean,
 ): Promise<{ model: string } | { lastError: string; probed: number }> {
   const candidates = models.slice(0, MAX_TEST_MODEL_PROBES);
   let lastError = '';
+  let probed = 0;
 
   for (const candidate of candidates) {
+    probed++;
     try {
       await instance.chat([{ role: 'user', content: 'Say OK' }], { max_tokens: 5, model: candidate });
       return { model: candidate };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       lastError = message;
-      const recoverable = MODEL_SCOPED_FAILURE.test(message)
-        || (allowTransientUpstream && TRANSIENT_UPSTREAM_FAILURE.test(message));
+      const classified = message.slice(0, MAX_CLASSIFIED_ERROR_CHARS);
+      const recoverable = MODEL_SCOPED_FAILURE.test(classified)
+        || (allowTransientUpstream && TRANSIENT_UPSTREAM_FAILURE.test(classified));
       if (!recoverable) throw err;
     }
   }
 
-  return { lastError, probed: candidates.length };
+  return { lastError, probed };
 }
 
 /**
