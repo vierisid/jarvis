@@ -77,6 +77,40 @@ daemon. Plaintext to anything that is not loopback must be spelled out with
 an explicit `http://` prefix. It is never inferred, so a public brain can't
 silently downgrade to sending tokens in the clear.
 
+### Troubleshooting `401` or "invalid enrollment key"
+
+The enrollment JWT is the only source of truth for the sidecar connection.
+Its signed `brain` and `jwks` claims cannot be corrected in the sidecar after
+the token is issued. A token minted while `daemon.public_url` is missing or
+wrong must be replaced; editing `brain:` in `sidecar.yaml` does not repair it.
+
+On the brain machine:
+
+1. Set `daemon.public_url` to the exact origin the sidecar can reach. Include
+   `http://` for an intentionally plaintext LAN deployment; use `https://` for
+   a reverse proxy or public deployment.
+2. Restart Jarvis so every service resolves the same public origin.
+3. Run `jarvis enroll "<device-name>" --rotate` to mint a token with corrected
+   signed claims and invalidate earlier tokens for that device.
+4. Replace the saved token on the sidecar and reconnect.
+
+You can inspect the non-secret destination before copying a token by decoding
+its JWT payload locally and checking that `brain` names the WebSocket endpoint
+and `jwks` names the matching public-key endpoint. Do not paste enrollment
+tokens into online JWT debugging sites: they grant access to the brain.
+
+Common misconfigurations:
+
+- `brain` contains `localhost` but the sidecar is on another machine: set a
+  reachable LAN or public URL and re-enroll.
+- `brain` uses `wss://` against the daemon's plain HTTP port: either include
+  `http://` in the LAN `public_url`, or terminate HTTPS at a reverse proxy.
+- The URL is correct but returns 401 after a reinstall or data-directory
+  change: the brain is using a different enrollment signing key; re-enroll.
+- A reverse proxy serves the dashboard but not WebSocket upgrades or the JWKS
+  route: proxy the entire origin, including `/sidecar/connect` and
+  `/api/sidecars/.well-known/jwks.json`.
+
 ### First-time setup escape hatch
 
 Enrollment normally happens from the CLI (`jarvis enroll`). If you are

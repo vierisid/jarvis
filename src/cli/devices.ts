@@ -40,7 +40,10 @@ async function openVault(io: CliIo): Promise<{ dataDir: string; brainUrl: string
   if (resolved.source === 'fallback' && resolved.warnings.length === 0) {
     io.err(
       'warning: daemon.public_url is not set; tokens will point at ' +
-        `localhost:${config.daemon.port} and only work for sidecars on this machine.`,
+        `localhost:${config.daemon.port} and only work for sidecars on this machine. ` +
+        'Before enrolling a sidecar on another machine, set daemon.public_url ' +
+        'to the brain URL that device can reach, restart Jarvis, and run this command again. ' +
+        'See docs/SELF_HOSTING.md#the-url-baked-into-enrollment-tokens.',
     );
   }
   return { dataDir: config.daemon.data_dir, brainUrl };
