@@ -25,13 +25,49 @@ import {
  * the retry, and a tighter one would hammer Google while an instance is
  * misconfigured — for a latency optimisation.
  */
+/**
+ * The Google-facing calls and the scheduler, injectable.
+ *
+ * Not for purity's sake: the two behaviours worth pinning here are "a Calendar
+ * re-registration stops the previous channel first" and "a failed attempt still
+ * re-arms", and both are only observable through these. Without the seams the
+ * only way to exercise them would be to wait hours for a real timer.
+ */
+export interface WatchApi {
+  registerGmail: typeof registerGmailWatch;
+  stopGmail: typeof stopGmailWatch;
+  registerCalendar: typeof registerCalendarWatch;
+  stopCalendar: typeof stopCalendarWatch;
+  /** Defaults to setTimeout; a test captures the callback and fires it itself. */
+  schedule: (fn: () => void, ms: number) => { cancel(): void };
+}
+
+const defaultApi: WatchApi = {
+  registerGmail: registerGmailWatch,
+  stopGmail: stopGmailWatch,
+  registerCalendar: registerCalendarWatch,
+  stopCalendar: stopCalendarWatch,
+  schedule: (fn, ms) => {
+    const t = setTimeout(fn, ms);
+    // Node/Bun keep the process alive for pending timers; a renewal must never
+    // be the reason a daemon will not exit.
+    t.unref?.();
+    return { cancel: () => clearTimeout(t) };
+  },
+};
+
 export class GoogleWatchManager {
   private auth: GoogleAuth | null = null;
   private targets: WatchTargets = {};
-  private gmailTimer: ReturnType<typeof setTimeout> | null = null;
-  private calendarTimer: ReturnType<typeof setTimeout> | null = null;
+  private gmailTimer: { cancel(): void } | null = null;
+  private calendarTimer: { cancel(): void } | null = null;
   private calendarChannel: CalendarChannel | null = null;
   private running = false;
+  private readonly api: WatchApi;
+
+  constructor(api: Partial<WatchApi> = {}) {
+    this.api = { ...defaultApi, ...api };
+  }
 
   configure(auth: GoogleAuth | null, targets: WatchTargets): void {
     this.auth = auth;
@@ -57,8 +93,8 @@ export class GoogleWatchManager {
 
   async stop(): Promise<void> {
     this.running = false;
-    if (this.gmailTimer) clearTimeout(this.gmailTimer);
-    if (this.calendarTimer) clearTimeout(this.calendarTimer);
+    this.gmailTimer?.cancel();
+    this.calendarTimer?.cancel();
     this.gmailTimer = null;
     this.calendarTimer = null;
     // Try to tell Google to stop pushing. Best effort, and often IMPOSSIBLE by
@@ -69,9 +105,9 @@ export class GoogleWatchManager {
     // the window when a token still happens to be available.
     const token = await this.accessToken();
     if (!token) return;
-    if (this.targets.pubsubTopic) await stopGmailWatch(token);
+    if (this.targets.pubsubTopic) await this.api.stopGmail(token);
     if (this.calendarChannel) {
-      await stopCalendarWatch(token, this.calendarChannel);
+      await this.api.stopCalendar(token, this.calendarChannel);
       this.calendarChannel = null;
     }
   }
@@ -93,14 +129,11 @@ export class GoogleWatchManager {
     if (!this.running || !this.targets.pubsubTopic) return;
     const token = await this.accessToken();
     if (!token) return;
-    const result = await registerGmailWatch(token, this.targets.pubsubTopic);
+    const result = await this.api.registerGmail(token, this.targets.pubsubTopic);
     // Re-arm even when this attempt failed: the timer is the retry, and a
     // transient refusal must not disable push until the next daemon restart.
     const delay = renewDelayMs(result?.expiration, Date.now(), GMAIL_WATCH_RENEW_MS);
-    this.gmailTimer = setTimeout(() => void this.armGmail(), delay);
-    // Node/Bun keep the process alive for pending timers; a renewal must never
-    // be the reason a daemon will not exit.
-    this.gmailTimer.unref?.();
+    this.gmailTimer = this.api.schedule(() => void this.armGmail(), delay);
   }
 
   private async armCalendar(): Promise<void> {
@@ -110,10 +143,10 @@ export class GoogleWatchManager {
     // Each registration creates a NEW channel, so the old one has to go or Google
     // fans every change out to a growing pile of channels for one instance.
     if (this.calendarChannel) {
-      await stopCalendarWatch(token, this.calendarChannel);
+      await this.api.stopCalendar(token, this.calendarChannel);
       this.calendarChannel = null;
     }
-    this.calendarChannel = await registerCalendarWatch(token, {
+    this.calendarChannel = await this.api.registerCalendar(token, {
       callbackUrl: this.targets.pushCallback,
       channelToken: this.targets.channelToken,
     });
@@ -122,7 +155,6 @@ export class GoogleWatchManager {
       Date.now(),
       CALENDAR_WATCH_FALLBACK_MS,
     );
-    this.calendarTimer = setTimeout(() => void this.armCalendar(), delay);
-    this.calendarTimer.unref?.();
+    this.calendarTimer = this.api.schedule(() => void this.armCalendar(), delay);
   }
 }
