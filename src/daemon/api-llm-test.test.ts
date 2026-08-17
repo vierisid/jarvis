@@ -92,6 +92,46 @@ describe('POST /api/config/llm/test Anthropic endpoint scoping', () => {
     expect(requests.every((request) => request.authorization === 'Bearer stored-secret')).toBe(true);
   });
 
+  it('tries the next discovered model when the key cannot use the first one', async () => {
+    globalThis.fetch = (async (input: string | URL | Request, init?: RequestInit) => {
+      const url = String(input);
+      const requestBody = init?.body ? JSON.parse(String(init.body)) as { model?: string } : {};
+      requests.push({
+        url,
+        authorization: new Headers(init?.headers).get('authorization'),
+        apiKey: null,
+        model: requestBody.model,
+      });
+      if (url.endsWith('/v1/models')) {
+        return new Response(JSON.stringify({
+          data: [{ id: 'premium-denied' }, { id: 'allowed-model' }],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      if (requestBody.model === 'premium-denied') {
+        return new Response(JSON.stringify({
+          error: { type: 'authentication_error', message: 'Model "premium-denied" not allowed for this key' },
+        }), { status: 403, headers: { 'Content-Type': 'application/json' } });
+      }
+      return new Response(JSON.stringify({
+        id: 'msg_test', type: 'message', role: 'assistant',
+        content: [{ type: 'text', text: 'OK' }], model: requestBody.model,
+        stop_reason: 'end_turn', usage: { input_tokens: 1, output_tokens: 1 },
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as unknown as typeof fetch;
+
+    const response = await callEndpoint(
+      { 'anthropic-sec-test': { kind: 'anthropic', api_key: 'stored-secret', base_url: 'https://saved.example' } },
+      { name: 'anthropic-sec-test' },
+    );
+    const body = await response.json() as { ok: boolean; model: string; models: string[] };
+
+    expect(body.ok).toBe(true);
+    expect(body.model).toBe('allowed-model');
+    expect(body.models).toEqual(['premium-denied', 'allowed-model']);
+    expect(requests.map((request) => request.model).filter(Boolean))
+      .toEqual(['premium-denied', 'allowed-model']);
+  });
+
   it('uses only an explicitly supplied token at a changed endpoint', async () => {
     const response = await callEndpoint(
       { 'anthropic-sec-test': { kind: 'anthropic', api_key: 'stored-secret', base_url: 'https://saved.example' } },

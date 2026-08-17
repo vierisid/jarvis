@@ -614,7 +614,30 @@ export async function testLLMProvider(
       if (!models.length) {
         return { ok: false, error: 'Could not discover any models from the custom Anthropic endpoint' };
       }
-      testModel = models[0];
+      let lastModelError = '';
+      for (const candidate of models) {
+        try {
+          const resp = await instance.chat(
+            [{ role: 'user', content: 'Say OK' }],
+            { max_tokens: 5, model: candidate },
+          );
+          return { ok: true, model: candidate, models };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          lastModelError = message;
+          // Gateways commonly expose a superset catalog, then enforce
+          // per-key model access on /messages. Keep looking only for an
+          // explicitly model-scoped rejection; a bad key, network failure,
+          // or malformed request should stop immediately.
+          if (!/model[\s\S]*(not allowed|not found|unavailable|denied)|not allowed[\s\S]*model/i.test(message)) {
+            throw err;
+          }
+        }
+      }
+      return {
+        ok: false,
+        error: `The custom Anthropic endpoint listed ${models.length} models, but this credential could not use any of them${lastModelError ? `: ${lastModelError}` : ''}`,
+      };
     }
     const resp = await instance.chat(
       [{ role: 'user', content: 'Say OK' }],
