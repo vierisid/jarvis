@@ -613,6 +613,58 @@ export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManag
 // ── testLLMProvider ──────────────────────────────────────────────────────
 
 /**
+ * How many catalog models one connection test may probe before giving up.
+ *
+ * Every probe is a real, billable chat request, and gateways fronting many
+ * upstreams routinely advertise catalogs in the hundreds — so this is a cost
+ * ceiling, not a tuning knob. It applies to every provider kind that probes.
+ */
+const MAX_TEST_MODEL_PROBES = 10;
+
+/**
+ * A rejection that names a model is worth stepping past: gateway catalogs are
+ * commonly a superset of what one credential may actually use. Matches both
+ * spaced and underscored wordings (`not found`, `not_found_error`,
+ * `model_not_found`) since each gateway phrases it differently.
+ */
+const MODEL_SCOPED_FAILURE =
+  /model[\s\S]*(not[ _]?allowed|not[ _]?found|unavailable|denied)|not[ _]?allowed[\s\S]*model/i;
+
+/** On a routed gateway a single upstream can be down for one model only. */
+const TRANSIENT_UPSTREAM_FAILURE = /HTTP (404|502|503|504)\b/;
+
+/**
+ * Send the test prompt to each candidate model until one answers.
+ *
+ * Stops immediately on anything that isn't model-scoped — a bad key, a
+ * network failure, or a malformed request must surface as itself rather than
+ * being buried under N retries against other models.
+ */
+async function probeUsableModel(
+  instance: { chat: (m: Array<{ role: 'user'; content: string }>, o: Record<string, unknown>) => Promise<unknown> },
+  models: string[],
+  allowTransientUpstream: boolean,
+): Promise<{ model: string } | { lastError: string; probed: number }> {
+  const candidates = models.slice(0, MAX_TEST_MODEL_PROBES);
+  let lastError = '';
+
+  for (const candidate of candidates) {
+    try {
+      await instance.chat([{ role: 'user', content: 'Say OK' }], { max_tokens: 5, model: candidate });
+      return { model: candidate };
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      lastError = message;
+      const recoverable = MODEL_SCOPED_FAILURE.test(message)
+        || (allowTransientUpstream && TRANSIENT_UPSTREAM_FAILURE.test(message));
+      if (!recoverable) throw err;
+    }
+  }
+
+  return { lastError, probed: candidates.length };
+}
+
+/**
  * Test a provider's credentials by instantiating it and sending a one-token
  * chat. Uses the supplied credentials if given, otherwise the current config.
  *
@@ -711,29 +763,12 @@ export async function testLLMProvider(
       if (!models.length) {
         return { ok: false, error: 'Could not discover any models from the custom Anthropic endpoint' };
       }
-      let lastModelError = '';
-      for (const candidate of models) {
-        try {
-          const resp = await instance.chat(
-            [{ role: 'user', content: 'Say OK' }],
-            { max_tokens: 5, model: candidate },
-          );
-          return { ok: true, model: candidate, models };
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          lastModelError = message;
-          // Gateways commonly expose a superset catalog, then enforce
-          // per-key model access on /messages. Keep looking only for an
-          // explicitly model-scoped rejection; a bad key, network failure,
-          // or malformed request should stop immediately.
-          if (!/model[\s\S]*(not allowed|not found|unavailable|denied)|not allowed[\s\S]*model/i.test(message)) {
-            throw err;
-          }
-        }
-      }
+      const probe = await probeUsableModel(instance, models, false);
+      if ('model' in probe) return { ok: true, model: probe.model, models };
       return {
         ok: false,
-        error: `The custom Anthropic endpoint listed ${models.length} models, but this credential could not use any of them${lastModelError ? `: ${lastModelError}` : ''}`,
+        error: `The custom Anthropic endpoint listed ${models.length} models, but this credential could not use any of the ${probe.probed} tried${probe.lastError ? `: ${probe.lastError}` : ''}`,
+        models,
       };
     }
     if (kind === 'openai_compatible' && !testModel) {
@@ -741,29 +776,11 @@ export async function testLLMProvider(
       if (!models.length) {
         return { ok: false, error: 'The OpenAI-compatible endpoint did not return any models from /v1/models' };
       }
-      let lastModelError = '';
-      for (const candidate of models.slice(0, 10)) {
-        try {
-          const resp = await instance.chat(
-            [{ role: 'user', content: 'Say OK' }],
-            { max_tokens: 5, model: candidate },
-          );
-          return { ok: true, model: candidate, models };
-        } catch (err) {
-          const message = err instanceof Error ? err.message : String(err);
-          lastModelError = message;
-          // A catalog can be a superset of the key's grants, and routed
-          // gateways can have an unhealthy upstream for one model. Continue
-          // only for model-scoped or transient route failures; invalid auth
-          // and malformed requests must remain immediate, specific errors.
-          if (!/model[\s\S]*(not allowed|not found|unavailable|denied)|not allowed[\s\S]*model|HTTP (404|502|503|504)\b/i.test(message)) {
-            throw err;
-          }
-        }
-      }
+      const probe = await probeUsableModel(instance, models, true);
+      if ('model' in probe) return { ok: true, model: probe.model, models };
       return {
         ok: false,
-        error: `The OpenAI-compatible endpoint listed models, but none of the first ${Math.min(models.length, 10)} accepted a test request${lastModelError ? `: ${lastModelError}` : ''}`,
+        error: `The OpenAI-compatible endpoint listed models, but none of the first ${probe.probed} accepted a test request${probe.lastError ? `: ${probe.lastError}` : ''}`,
         models,
       };
     }

@@ -285,11 +285,20 @@ export class AnthropicProvider implements LLMProvider {
       } else if (event.type === 'content_block_stop') {
         const pending = pendingTools.get(event.index);
         if (pending) {
-          toolCalls.push({
-            id: pending.id,
-            name: pending.name,
-            arguments: JSON.parse(pending.input || '{}') as Record<string, unknown>,
-          });
+          try {
+            toolCalls.push({
+              id: pending.id,
+              name: pending.name,
+              arguments: JSON.parse(pending.input || '{}') as Record<string, unknown>,
+            });
+          } catch {
+            // Truncated JSON (max_tokens hit mid-tool-call). Mirror the
+            // streaming path: drop the unusable call and tell the model why,
+            // rather than throwing away an otherwise complete response.
+            console.error(`[Anthropic] Tool call '${pending.name}' truncated (${pending.input.length} chars of JSON). max_tokens likely hit.`);
+            content += `\n\n[SYSTEM WARNING: Your tool call to "${pending.name}" was truncated due to output token limits. ` +
+              `The call was NOT executed. If you were writing long content, use append_body with shorter chunks (under 1000 words per call).]`;
+          }
           pendingTools.delete(event.index);
         }
       } else if (event.type === 'message_delta') {

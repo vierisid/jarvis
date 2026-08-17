@@ -426,3 +426,97 @@ describe('POST /api/config/llm/test auth header selection', () => {
     expect(requests).toHaveLength(0);
   });
 });
+
+/**
+ * A connection test probes catalog models until one answers. Each probe is a
+ * real billable request, so the walk is capped — gateways fronting many
+ * upstreams routinely advertise catalogs in the hundreds.
+ */
+describe('POST /api/config/llm/test model probing is bounded', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  function gatewayRejectingEveryModel(catalogSize: number) {
+    const counts = { chat: 0 };
+    const catalog = Array.from({ length: catalogSize }, (_, i) => ({ id: `model-${i}` }));
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      if (String(input).endsWith('/models')) return Response.json({ data: catalog });
+      counts.chat++;
+      return Response.json({ error: { message: 'model not allowed for this key' } }, { status: 403 });
+    }) as unknown as typeof fetch;
+    return counts;
+  }
+
+  it('caps the custom-Anthropic walk instead of probing the whole catalog', async () => {
+    const counts = gatewayRejectingEveryModel(60);
+    const response = await callEndpoint(
+      { 'gw-probe-anthropic': { kind: 'anthropic', api_key: 'k', base_url: 'https://gw.example' } },
+      { name: 'gw-probe-anthropic' },
+    );
+    const body = await response.json() as { ok: boolean; error: string };
+
+    expect(body.ok).toBe(false);
+    expect(counts.chat).toBe(10);
+    expect(body.error).toContain('could not use any of the 10 tried');
+  });
+
+  it('caps the OpenAI-compatible walk the same way', async () => {
+    const counts = gatewayRejectingEveryModel(60);
+    const response = await callEndpoint(
+      { 'gw-probe-compat': { kind: 'openai_compatible', api_key: 'k', base_url: 'https://gw.example/v1' } },
+      { name: 'gw-probe-compat' },
+    );
+    const body = await response.json() as { ok: boolean };
+
+    expect(body.ok).toBe(false);
+    expect(counts.chat).toBe(10);
+  });
+
+  it('stops at the first model when the credential itself is rejected', async () => {
+    let chat = 0;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      if (String(input).endsWith('/models')) {
+        return Response.json({ data: [{ id: 'a' }, { id: 'b' }, { id: 'c' }] });
+      }
+      chat++;
+      return Response.json({ error: { message: 'invalid api key' } }, { status: 401 });
+    }) as unknown as typeof fetch;
+
+    const response = await callEndpoint(
+      { 'gw-probe-auth': { kind: 'openai_compatible', api_key: 'bad', base_url: 'https://gw.example/v1' } },
+      { name: 'gw-probe-auth' },
+    );
+    const body = await response.json() as { ok: boolean; error: string };
+
+    expect(body.ok).toBe(false);
+    expect(chat).toBe(1);
+    expect(body.error).toContain('401');
+  });
+
+  it('accepts an underscored model rejection and moves to the next model', async () => {
+    let chat = 0;
+    globalThis.fetch = (async (input: string | URL | Request) => {
+      if (String(input).endsWith('/models')) {
+        return Response.json({ data: [{ id: 'locked' }, { id: 'usable' }] });
+      }
+      chat++;
+      if (chat === 1) {
+        return Response.json({ error: { message: 'model_not_found: locked' } }, { status: 404 });
+      }
+      return Response.json({
+        id: 'c', object: 'chat.completion', created: 1, model: 'usable',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'OK' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+    }) as unknown as typeof fetch;
+
+    const response = await callEndpoint(
+      { 'gw-probe-word': { kind: 'openai_compatible', api_key: 'k', base_url: 'https://gw.example/v1' } },
+      { name: 'gw-probe-word' },
+    );
+    const body = await response.json() as { ok: boolean; model: string };
+
+    expect(body.ok).toBe(true);
+    expect(body.model).toBe('usable');
+  });
+});

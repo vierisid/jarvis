@@ -403,3 +403,50 @@ describe('AnthropicProvider cache usage parsing', () => {
     }
   });
 });
+
+describe('AnthropicProvider SSE chat responses', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  function sseResponse(events: unknown[]) {
+    return new Response(events.map((e) => `data: ${JSON.stringify(e)}\n\n`).join(''), {
+      status: 200, headers: { 'content-type': 'text/event-stream' },
+    });
+  }
+
+  it('degrades a truncated tool call instead of discarding the whole response', async () => {
+    // Regression: an unguarded JSON.parse threw a bare parser error out of
+    // chat(), while the streaming path absorbs the identical payload.
+    globalThis.fetch = (async () => sseResponse([
+      { type: 'message_start', message: { model: 'gw-model', usage: { input_tokens: 3, output_tokens: 4 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: 'partial answer' } },
+      { type: 'content_block_start', index: 1, content_block: { type: 'tool_use', id: 't1', name: 'weather', input: {} } },
+      { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"city"' } },
+      { type: 'content_block_stop', index: 1 },
+      { type: 'message_delta', delta: { stop_reason: 'max_tokens' }, usage: { output_tokens: 4 } },
+    ])) as unknown as typeof fetch;
+
+    const result = await new AnthropicProvider('k', undefined, { baseUrl: 'https://gw.example' })
+      .chat([{ role: 'user', content: 'hi' }]);
+
+    expect(result.tool_calls).toEqual([]);
+    expect(result.content).toContain('partial answer');
+    expect(result.content).toContain('truncated');
+    expect(result.model).toBe('gw-model');
+  });
+
+  it('still assembles a complete tool call from the SSE stream', async () => {
+    globalThis.fetch = (async () => sseResponse([
+      { type: 'message_start', message: { model: 'gw-model', usage: { input_tokens: 1, output_tokens: 1 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'tool_use', id: 't1', name: 'weather', input: {} } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'input_json_delta', partial_json: '{"city":"Rome"}' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'tool_use' }, usage: { output_tokens: 2 } },
+    ])) as unknown as typeof fetch;
+
+    const result = await new AnthropicProvider('k', undefined, { baseUrl: 'https://gw.example' })
+      .chat([{ role: 'user', content: 'hi' }]);
+
+    expect(result.tool_calls).toEqual([{ id: 't1', name: 'weather', arguments: { city: 'Rome' } }]);
+  });
+});
