@@ -19,6 +19,16 @@ export interface Observer {
   stop(): Promise<void>;
   isRunning(): boolean;
   onEvent(handler: ObserverEventHandler): void;
+  /**
+   * Poll RIGHT NOW, out of band, and resolve when done.
+   *
+   * Optional because only the observers behind a push feed have anything to
+   * answer here. It is deliberately the same poll the timer runs rather than a
+   * separate incremental path: the notification that triggers it is a doorbell
+   * carrying no data, the observers already de-duplicate what they have seen,
+   * and one code path means push and polling cannot drift in behaviour.
+   */
+  syncNow?(): Promise<void>;
 }
 
 // Account-level integration observers. Host-sensing observers (file watcher,
@@ -46,6 +56,11 @@ export class ObserverManager {
     }
 
     console.log(`[ObserverManager] Registered observer: ${observer.name}`);
+  }
+
+  /** One registered observer by name, if present. */
+  get(name: string): Observer | undefined {
+    return this.observers.get(name);
   }
 
   /**

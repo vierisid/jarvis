@@ -17,6 +17,29 @@ export type SystemCronConfig = {
 export type GoogleConfig = {
   client_id: string;
   client_secret: string;
+  /**
+   * HOSTED ONLY (usejarvis, GOOGLE.md "Push bridging"). Present when the control
+   * plane runs a push bridge: Google notifies it, and it rings this instance's
+   * doorbell so a change reflects in seconds instead of on the next poll.
+   *
+   * All three absent = self-hosted, or a deployment with no bridge. Polling then
+   * covers everything, which is the designed fallback rather than a degraded
+   * mode — so nothing here is required and nothing fails without it.
+   */
+  /** HMAC key the inbound doorbell is verified with (per instance). */
+  notify_secret?: string;
+  /** Pub/Sub topic to point Gmail's users.watch at. */
+  pubsub_topic?: string;
+  /** The bridge's public URL, for Calendar's events.watch callback. */
+  push_callback?: string;
+  /**
+   * The token to set on the Calendar watch, which Google echoes back to the
+   * bridge so it can tell which instance a notification belongs to. Rendered
+   * whole by the control plane rather than built here from notify_secret — the
+   * derivation would then live in two codebases, and a drifted token is a
+   * notification the bridge refuses without anything looking wrong.
+   */
+  channel_token?: string;
 };
 
 export type ChannelConfig = {

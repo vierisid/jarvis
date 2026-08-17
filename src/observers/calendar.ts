@@ -64,6 +64,15 @@ export class CalendarSync implements Observer {
     this.handler = handler;
   }
 
+  /**
+   * Poll immediately (the push bridge's doorbell). No-op while stopped, so a
+   * notification that races a disconnect cannot resurrect a dead observer.
+   */
+  async syncNow(): Promise<void> {
+    if (!this.running) return;
+    await this.poll();
+  }
+
   private async poll(): Promise<void> {
     if (!this.googleAuth || !this.handler) return;
 

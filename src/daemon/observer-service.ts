@@ -19,6 +19,8 @@ import type { ObservationType } from '../vault/observations.ts';
 import type { EventReactor } from './event-reactor.ts';
 import type { EventCoalescer } from './event-coalescer.ts';
 import type { GoogleAuth } from '../integrations/google-auth.ts';
+import { GoogleWatchManager } from '../integrations/google-watch-manager.ts';
+import type { WatchTargets } from '../integrations/google-watch.ts';
 
 import { homedir } from 'node:os';
 import { ObserverManager } from '../observers/index.ts';
@@ -64,6 +66,8 @@ export class ObserverService implements Service {
   name = 'observers';
   private _status: ServiceStatus = 'stopped';
   private manager: ObserverManager;
+  private watches: GoogleWatchManager;
+  private pushTargets: WatchTargets = {};
   private reactor: EventReactor | null;
   private coalescer: EventCoalescer | null;
   private googleAuth: GoogleAuth | null;
@@ -83,6 +87,7 @@ export class ObserverService implements Service {
     dataDir?: string,
   ) {
     this.manager = new ObserverManager();
+    this.watches = new GoogleWatchManager();
     this.reactor = reactor ?? null;
     this.coalescer = coalescer ?? null;
     this.googleAuth = googleAuth ?? null;
@@ -105,6 +110,14 @@ export class ObserverService implements Service {
    */
   setGoogleAuth(auth: GoogleAuth | null): void {
     this.googleAuth = auth;
+  }
+
+  /**
+   * Hosted push targets from the system config (GOOGLE.md). Absent = no bridge,
+   * and the observers' own poll timers cover everything — the designed fallback.
+   */
+  setPushTargets(targets: WatchTargets): void {
+    this.pushTargets = targets;
   }
 
   async start(): Promise<void> {
@@ -170,6 +183,17 @@ export class ObserverService implements Service {
       // Start all observers (individual failures don't crash the service)
       await this.manager.startAll();
 
+      // Arm the push watches, if this deployment has a bridge. Deliberately
+      // AFTER the observers are up: a notification that arrives the instant a
+      // watch is registered should find something able to answer it.
+      this.watches.configure(this.googleAuth, this.pushTargets);
+      if (this.watches.enabled) {
+        // Not awaited: registering two watches is two round trips to Google, and
+        // nothing about starting observation should wait on a latency
+        // optimisation. Failures are logged inside.
+        void this.watches.start();
+      }
+
       this._status = 'running';
       console.log('[ObserverService] Started');
     } catch (error) {
@@ -178,8 +202,33 @@ export class ObserverService implements Service {
     }
   }
 
+  /**
+   * Make the named integration poll now — the push bridge's doorbell
+   * (GOOGLE.md). Returns which observers actually ran, so the webhook can answer
+   * honestly rather than claiming a sync that never happened.
+   *
+   * Errors are swallowed per observer: a notification is best-effort by design
+   * (the poll timer is the fallback), and one failing integration must not make
+   * the webhook look broken for the other.
+   */
+  async syncNow(source: 'gmail' | 'calendar'): Promise<string[]> {
+    const name = source === 'gmail' ? 'email' : 'calendar';
+    const observer = this.manager.get(name);
+    if (!observer?.syncNow) return [];
+    try {
+      await observer.syncNow();
+      return [name];
+    } catch (err) {
+      console.error(`[ObserverService] syncNow(${name}) failed:`, err);
+      return [];
+    }
+  }
+
   async stop(): Promise<void> {
     this._status = 'stopping';
+    // Before the observers: once they are down there is nothing to answer a
+    // notification, so Google should stop being told to send them.
+    await this.watches.stop();
     await this.manager.stopAll();
     this._status = 'stopped';
     console.log('[ObserverService] Stopped');

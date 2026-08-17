@@ -539,6 +539,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const observerService = config.noLocalTools
       ? null
       : new ObserverService(reactor, coalescer, googleAuth ?? undefined, config.dataDir);
+    // Hosted push bridge targets (GOOGLE.md). All absent on self-hosted, where
+    // the observers' own poll timers are the whole story.
+    observerService?.setPushTargets({
+      pubsubTopic: jarvisConfig.google?.pubsub_topic,
+      pushCallback: jarvisConfig.google?.push_callback,
+      channelToken: jarvisConfig.google?.channel_token,
+    });
     // Hosted mode: daemon.listen = unix:/run/jarvis/u_<id>.sock binds a unix
     // socket and no TCP port at all (Caddy is the only way in). `listen` was
     // resolved (and validated) once, before the lockfile write above.
@@ -3674,6 +3681,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       lastGoogleCreds = creds;
       if (observerService) {
         observerService.setGoogleAuth(googleAuth);
+        // Re-read alongside the auth: a migrate re-renders the config, and the
+        // notify secret and channel token are per-instance, so a moved instance
+        // must arm its watches with the NEW values rather than the ones it
+        // booted with.
+        observerService.setPushTargets({
+          pubsubTopic: cfg.google?.pubsub_topic,
+          pushCallback: cfg.google?.push_callback,
+          channelToken: cfg.google?.channel_token,
+        });
         await registry!.stopService('observers');
         await registry!.startService('observers');
       }
@@ -4015,6 +4031,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       goalService: undefined,
       sidecarManager,
       settingsReload,
+      // Lets the hosted push bridge's doorbell poll on demand. `?? undefined`
+      // rather than a cast: when observers are not running there is genuinely
+      // nothing to sync, and the webhook says so.
+      observerService: observerService ?? undefined,
     };
     setCorsOrigin(externalOrigin.httpOrigin);
     wsService.getServer().setCorsOrigin(externalOrigin.httpOrigin);

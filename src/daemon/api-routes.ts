@@ -5,6 +5,7 @@
  * Returns a routes object for Bun.serve().
  */
 
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { HealthMonitor } from './health.ts';
 import { applyApprovalDecision } from './approval-decision.ts';
 import { SecretStorageError } from './section-secrets.ts';
@@ -168,7 +169,21 @@ export type ApiContext = {
    * observers, ...) apply to the running process without a restart.
    */
   settingsReload?: import('./settings-reload.ts').SettingsReloadCoordinator;
+  /**
+   * Observer service, for the hosted push bridge's doorbell to poll on demand.
+   * Absent when observers are not running, which the webhook reports honestly
+   * rather than pretending to have synced.
+   */
+  observerService?: { syncNow(source: 'gmail' | 'calendar'): Promise<string[]> };
 };
+
+/**
+ * How far out of date a push doorbell may be. Generous, because it is bounded by
+ * Pub/Sub's retry window and clock skew between two machines, not by anything
+ * precise — the point is to reject a captured notification replayed hours later,
+ * not to police seconds.
+ */
+const NOTIFY_MAX_SKEW_MS = 5 * 60 * 1000;
 
 // CORS headers — scoped to the dashboard origin, not wildcard
 let CORS: Record<string, string> = {
@@ -2159,6 +2174,68 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const msg = err instanceof Error ? err.message : String(err);
           return error(`Failed to generate auth URL: ${msg}`, 500);
         }
+      },
+    },
+
+
+    /**
+     * The push bridge's doorbell (GOOGLE.md "Push bridging"). HOSTED ONLY.
+     *
+     * PUBLIC route, deliberately, and it has to be: the caller is the control
+     * plane, which holds no enrolled-device token and must not. It lives under
+     * `/api/webhooks/` because that prefix is already the public, signature-
+     * verified machine-to-machine surface (see isPublicRoute) — inventing a new
+     * exception for one route would widen the unauthenticated surface for no
+     * reason. Two path segments so it cannot be confused with the workflow
+     * webhook ingress at `/api/webhooks/:flowId`.
+     *
+     * Authentication is the HMAC over the exact body, keyed by the per-instance
+     * notify_secret from the system config. Constant-time compared: this is a MAC
+     * check on attacker-supplied input, and a byte-by-byte early exit is what a
+     * forgery attempt measures.
+     *
+     * The body is a DOORBELL — `{source, at}`, no data — so the worst a forged
+     * one achieves is an early poll. That is why the answer is deliberately
+     * uninformative about which instance or address exists.
+     */
+    '/api/webhooks/google/notify': {
+      POST: async (req: Request) => {
+        const secret = ctx.config.google?.notify_secret;
+        // No secret configured = self-hosted, or a hosted instance whose config
+        // predates the bridge. Nothing can be verified, so nothing is accepted.
+        if (!secret) return error('not configured', 404);
+
+        const raw = await req.text();
+        const provided = req.headers.get('x-jarvis-signature') ?? '';
+        const expected = createHmac('sha256', secret).update(raw).digest('hex');
+        if (
+          provided.length !== expected.length ||
+          !timingSafeEqual(Buffer.from(provided), Buffer.from(expected))
+        ) {
+          return error('bad signature', 401);
+        }
+
+        let source: 'gmail' | 'calendar' | null = null;
+        let at = 0;
+        try {
+          const body = JSON.parse(raw) as { source?: unknown; at?: unknown };
+          if (body.source === 'gmail' || body.source === 'calendar') source = body.source;
+          if (typeof body.at === 'string') at = Date.parse(body.at);
+        } catch {
+          return error('bad body', 400);
+        }
+        if (!source) return error('bad body', 400);
+        // The timestamp is INSIDE the signed bytes, so a replayed doorbell can be
+        // rejected without keeping a nonce store: an old one is either a retry
+        // long past being useful or a capture being replayed, and the poll timer
+        // covers anything genuinely missed.
+        if (!Number.isFinite(at) || Math.abs(Date.now() - at) > NOTIFY_MAX_SKEW_MS) {
+          return error('stale', 400);
+        }
+
+        if (!ctx.observerService) return json({ ok: true, synced: [] });
+        const synced = await ctx.observerService.syncNow(source);
+        return json({ ok: true, synced });
       },
     },
 
