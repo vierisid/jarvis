@@ -149,6 +149,32 @@ describe('AnthropicProvider custom endpoint', () => {
     expect(requestHeaders.get('anthropic-version')).toBe('2023-06-01');
     expect(models).toEqual(['claude-custom-large', 'claude-custom-fast']);
   });
+
+  it('accepts SSE from a gateway for a non-streaming chat request', async () => {
+    const events = [
+      { type: 'message_start', message: { model: 'gateway-model', usage: { input_tokens: 4, output_tokens: 0 } } },
+      { type: 'content_block_start', index: 0, content_block: { type: 'text', text: '' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'O' } },
+      { type: 'content_block_delta', index: 0, delta: { type: 'text_delta', text: 'K' } },
+      { type: 'content_block_stop', index: 0 },
+      { type: 'message_delta', delta: { stop_reason: 'end_turn', usage: { output_tokens: 2 } } },
+      { type: 'message_stop' },
+    ];
+    const sse = `: keepalive\n\n${events.map((event) => `event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`).join('')}`;
+    globalThis.fetch = (async () => new Response(sse, {
+      status: 200,
+      headers: { 'Content-Type': 'text/event-stream; charset=utf-8' },
+    })) as unknown as typeof fetch;
+
+    const response = await new AnthropicProvider('token', 'fallback', {
+      baseUrl: 'https://gateway.example.com',
+    }).chat([{ role: 'user', content: 'hi' }]);
+
+    expect(response.content).toBe('OK');
+    expect(response.model).toBe('gateway-model');
+    expect(response.usage).toEqual({ input_tokens: 4, output_tokens: 2 });
+    expect(response.finish_reason).toBe('stop');
+  });
 });
 
 describe('AnthropicProvider cache_control placement', () => {

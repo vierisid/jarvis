@@ -216,8 +216,103 @@ export class AnthropicProvider implements LLMProvider {
     }
 
     const response = await this.fetchWithRetry(JSON.stringify(body));
+    if (response.headers.get('content-type')?.toLowerCase().includes('text/event-stream')) {
+      return this.parseSSEChatResponse(await response.text(), model);
+    }
     const data = await response.json() as AnthropicResponse;
     return this.convertResponse(data);
+  }
+
+  /**
+   * Some Anthropic-compatible gateways always answer with SSE, even when the
+   * request omits `stream`. Accept that wire format on the regular chat path
+   * instead of trying to parse the event stream as one JSON document.
+   */
+  private parseSSEChatResponse(raw: string, fallbackModel: string): LLMResponse {
+    let content = '';
+    let model = fallbackModel;
+    let stopReason: string | null = null;
+    const usage: LLMResponse['usage'] = { input_tokens: 0, output_tokens: 0 };
+    const toolCalls: LLMToolCall[] = [];
+    const pendingTools = new Map<number, { id: string; name: string; input: string }>();
+
+    for (const line of raw.split(/\r?\n/)) {
+      if (!line.startsWith('data:')) continue;
+      const payload = line.slice(5).trim();
+      if (!payload || payload === '[DONE]') continue;
+
+      let event: AnthropicStreamEvent;
+      try {
+        event = JSON.parse(payload) as AnthropicStreamEvent;
+      } catch (err) {
+        throw new Error(`Anthropic gateway returned invalid SSE JSON: ${err instanceof Error ? err.message : String(err)}`);
+      }
+
+      if (event.type === 'error') {
+        throw new Error(`${event.error.type}: ${event.error.message}`);
+      }
+      if (event.type === 'message_start') {
+        if (event.message.model) model = event.message.model;
+        if (event.message.usage) {
+          usage.input_tokens = event.message.usage.input_tokens ?? 0;
+          usage.output_tokens = event.message.usage.output_tokens ?? 0;
+          if (event.message.usage.cache_read_input_tokens !== undefined) {
+            usage.cache_read_input_tokens = event.message.usage.cache_read_input_tokens;
+          }
+          if (event.message.usage.cache_creation_input_tokens !== undefined) {
+            usage.cache_creation_input_tokens = event.message.usage.cache_creation_input_tokens;
+          }
+        }
+      } else if (event.type === 'content_block_start') {
+        if (event.content_block.type === 'text') {
+          content += event.content_block.text ?? '';
+        } else if (event.content_block.type === 'tool_use') {
+          pendingTools.set(event.index, {
+            id: event.content_block.id,
+            name: event.content_block.name,
+            input: Object.keys(event.content_block.input ?? {}).length > 0
+              ? JSON.stringify(event.content_block.input)
+              : '',
+          });
+        }
+      } else if (event.type === 'content_block_delta') {
+        if (event.delta.type === 'text_delta') {
+          content += event.delta.text;
+        } else if (event.delta.type === 'input_json_delta') {
+          const pending = pendingTools.get(event.index);
+          if (pending) pending.input += event.delta.partial_json;
+        }
+      } else if (event.type === 'content_block_stop') {
+        const pending = pendingTools.get(event.index);
+        if (pending) {
+          toolCalls.push({
+            id: pending.id,
+            name: pending.name,
+            arguments: JSON.parse(pending.input || '{}') as Record<string, unknown>,
+          });
+          pendingTools.delete(event.index);
+        }
+      } else if (event.type === 'message_delta') {
+        stopReason = event.delta.stop_reason;
+        if (event.delta.usage) {
+          usage.output_tokens = event.delta.usage.output_tokens;
+          if (event.delta.usage.cache_read_input_tokens !== undefined) {
+            usage.cache_read_input_tokens = event.delta.usage.cache_read_input_tokens;
+          }
+          if (event.delta.usage.cache_creation_input_tokens !== undefined) {
+            usage.cache_creation_input_tokens = event.delta.usage.cache_creation_input_tokens;
+          }
+        }
+      }
+    }
+
+    return {
+      content,
+      tool_calls: toolCalls,
+      usage,
+      model,
+      finish_reason: this.mapStopReason(stopReason),
+    };
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
