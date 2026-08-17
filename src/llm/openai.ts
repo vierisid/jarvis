@@ -150,6 +150,14 @@ export class OpenAIProvider implements LLMProvider {
     return headers;
   }
 
+  protected postChat(body: Record<string, unknown>): Promise<Response> {
+    return fetch(this.apiUrl, {
+      method: 'POST',
+      headers: this.requestHeaders(),
+      body: JSON.stringify(body),
+    });
+  }
+
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
     const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
 
@@ -171,13 +179,7 @@ export class OpenAIProvider implements LLMProvider {
       body.tool_choice = tool_choice || 'auto';  // Enable tool calling
     }
 
-    const headers = this.requestHeaders();
-
-    const response = await fetch(this.apiUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    });
+    const response = await this.postChat(body);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -210,13 +212,7 @@ export class OpenAIProvider implements LLMProvider {
       body.tool_choice = tool_choice || 'auto';  // Enable tool calling
     }
 
-    const headers = this.requestHeaders();
-
-    const response = await fetch(this.apiUrl, {
-      method: 'POST',
-      headers,
-      body: JSON.stringify(body),
-    });
+    const response = await this.postChat(body);
 
     if (!response.ok) {
       const errorText = await response.text();

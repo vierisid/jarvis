@@ -34,10 +34,39 @@ export class OpenAICompatibleProvider extends OpenAIProvider {
     return 'OpenAI-compatible';
   }
 
+  private apiPrefixedBaseUrl(): string | null {
+    const url = new URL(this.baseUrl);
+    if (url.pathname.replace(/\/+$/, '') !== '/v1') return null;
+    url.pathname = '/api/v1';
+    return url.toString().replace(/\/+$/, '');
+  }
+
+  private async isHtmlRouteFailure(response: Response): Promise<boolean> {
+    if (response.status !== 403 && response.status !== 404) return false;
+    const contentType = response.headers.get('content-type')?.toLowerCase() ?? '';
+    if (contentType.includes('text/html')) return true;
+    const body = await response.clone().text();
+    return /^\s*(?:<!doctype html|<html)/i.test(body);
+  }
+
+  protected override async postChat(body: Record<string, unknown>): Promise<Response> {
+    const response = await super.postChat(body);
+    const alternate = this.apiPrefixedBaseUrl();
+    if (!alternate || !await this.isHtmlRouteFailure(response)) return response;
+    this.baseUrl = alternate;
+    return super.postChat(body);
+  }
+
   override async listModels(): Promise<string[]> {
-    const response = await fetch(this.modelsUrl, { headers: this.requestHeaders(false) });
+    let response = await fetch(this.modelsUrl, { headers: this.requestHeaders(false) });
+    const alternate = this.apiPrefixedBaseUrl();
+    if (alternate && await this.isHtmlRouteFailure(response)) {
+      this.baseUrl = alternate;
+      response = await fetch(this.modelsUrl, { headers: this.requestHeaders(false) });
+    }
     if (!response.ok) {
-      throw new Error(`OpenAI-compatible models API error (${response.status})`);
+      const body = await response.text();
+      throw new Error(`OpenAI-compatible models API error: ${response.status}${body.trim() ? ` ${body.trim().slice(0, 300)}` : ''}`);
     }
     const data = await response.json() as { data?: Array<{ id?: string }> };
     return [...new Set((data.data ?? []).map(model => model.id).filter((id): id is string => Boolean(id)))].sort();
