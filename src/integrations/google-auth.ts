@@ -14,6 +14,15 @@ import { secureParentDirectory, secureWriteFile } from '../util/fs-secure.ts';
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
 const AUTH_ENDPOINT = 'https://accounts.google.com/o/oauth2/v2/auth';
 
+/**
+ * Where the tokens live. Exported so a caller that needs to notice this file
+ * changing (settings-reload's per-section diff) cannot drift from the path this
+ * class actually reads.
+ */
+export function googleTokensPath(): string {
+  return path.join(os.homedir(), '.jarvis', 'google-tokens.json');
+}
+
 export type GoogleTokens = {
   access_token: string;
   refresh_token: string;

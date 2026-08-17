@@ -1,5 +1,5 @@
 import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
-import { mkdtempSync, rmSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initDatabase, closeDb } from '../vault/schema.ts';
@@ -178,6 +178,63 @@ describe('settings-reload', () => {
     const second = await coordinator.reloadAll();
     expect(second.changed).toEqual([]);
     expect(second.applied).toEqual([]);
+  });
+
+  test('reloadAll notices the Google TOKENS FILE, not just the config section', async () => {
+    // In hosted mode the tokens file is written and deleted by the control plane
+    // from OUTSIDE this process (the deliver/revoke ops), while the client creds
+    // in config never change. A section-only diff therefore saw nothing and left
+    // a freshly delivered connection inert until the next restart — and left the
+    // observers running after a revoke. Same wart self-hosted: delete the file
+    // by hand, SIGHUP, and the observers carried on.
+    const home = mkdtempSync(join(tmpdir(), 'jarvis-google-home-'));
+    const tokens = join(home, '.jarvis', 'google-tokens.json');
+    mkdirSync(join(home, '.jarvis'), { recursive: true });
+    try {
+      const config = freshConfig();
+      config.google = { client_id: 'id', client_secret: 'secret' };
+      // Injected rather than redirected via $HOME: Bun fixes os.homedir() at
+      // process start and does not re-read the env, so there is no other way.
+      const coordinator = new SettingsReloadCoordinator(config, { googleTokensPath: tokens });
+      const applied: string[] = [];
+      coordinator.registerApplier('google', () => {
+        applied.push('google');
+      });
+
+      // Nothing delivered yet.
+      expect((await coordinator.reloadAll()).changed).not.toContain('google');
+      expect(applied).toEqual([]);
+
+      // Delivery: the applier must run, because it is what constructs GoogleAuth
+      // and (re)starts the observers.
+      writeFileSync(tokens, JSON.stringify({ access_token: 'a', refresh_token: 'r' }));
+      expect((await coordinator.reloadAll()).changed).toContain('google');
+      expect(applied).toEqual(['google']);
+
+      // A re-delivery whose token differs but whose LENGTH and MTIME are
+      // identical. This is why the fingerprint hashes content: size+mtime would
+      // compare equal here and skip the reload, leaving the observers on the
+      // stale token. Forced with utimesSync rather than hoped for — two plain
+      // writes land on different mtimes, so without this the test passes either
+      // way and proves nothing (it did, until a mutation showed it).
+      const before = statSync(tokens);
+      writeFileSync(tokens, JSON.stringify({ access_token: 'b', refresh_token: 'r' }));
+      expect(statSync(tokens).size).toBe(before.size);
+      utimesSync(tokens, before.atime, before.mtime);
+      expect((await coordinator.reloadAll()).changed).toContain('google');
+      expect(applied).toEqual(['google', 'google']);
+
+      // Stable when nothing moved (appliers restart observers — no churn).
+      expect((await coordinator.reloadAll()).changed).not.toContain('google');
+
+      // Revoke removes the file: the observers must STOP, which needs the same
+      // detection in reverse.
+      rmSync(tokens);
+      expect((await coordinator.reloadAll()).changed).toContain('google');
+      expect(applied).toHaveLength(3);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
   });
 
   test('reloadAll cancels a pending scheduled apply for a changed section', async () => {

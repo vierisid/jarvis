@@ -32,14 +32,20 @@
  * workflows, ...) keep today's behavior: new values are visible to live
  * config readers, construction-time snapshots stay until restart.
  *
- * Known limitation: reloadAll() detects changes to CONFIG SECTIONS only.
- * State living outside the settings table — e.g. the Google tokens file —
- * doesn't show up in the diff, so deleting google-tokens.json externally
- * and sending SIGHUP won't deactivate observers (the in-daemon disconnect
- * route handles that case via applyNow('google')).
+ * reloadAll() otherwise detects changes to CONFIG SECTIONS only, so state
+ * living outside the settings table does not show up in the diff. The one
+ * exception is the Google TOKENS FILE, which is folded into the `google`
+ * snapshot (see googleTokensFingerprint): it is written and deleted from
+ * outside this process — by hand when self-hosted, by the control plane's
+ * deliver/revoke ops when hosted — and without that, SIGHUP would compare
+ * identical client creds and leave the observers running on a token that is
+ * gone, or inert while a fresh one sits on disk.
  */
 
+import { createHash } from 'node:crypto';
+import { readFileSync } from 'node:fs';
 import { applyEnvOverrides } from '../config/loader.ts';
+import { googleTokensPath } from '../integrations/google-auth.ts';
 import { USER_OWNED_SECTIONS, type JarvisConfig, type UserOwnedSection } from '../config/types.ts';
 import { mergeLLMSettingsIntoConfig } from './llm-settings.ts';
 import { mergeUserSettingsIntoConfig } from './user-settings.ts';
@@ -68,6 +74,30 @@ export interface SettingsAppliedPayload {
 
 const RELOAD_SECTIONS: readonly ReloadSection[] = [...USER_OWNED_SECTIONS, 'llm', 'google'];
 
+/**
+ * Content hash of the Google tokens file, or 'absent'.
+ *
+ * A CONTENT hash rather than size+mtime on purpose: a re-delivery replaces one
+ * access token with another of the same length, and two writes inside the same
+ * millisecond are entirely possible on the hosted path (deliver then revoke, or
+ * a retried delivery). Size+mtime would compare equal and the reload would be
+ * skipped — a missed change here means the observers never pick the new token
+ * up, which is the exact failure this fingerprint exists to prevent. Hashing a
+ * ~500-byte file on a reload is not worth optimising.
+ *
+ * Only the hash is kept, never the contents: snapshots are held in memory and
+ * compared, and a token must not sit in a diff string.
+ */
+function googleTokensFingerprint(file: string): string {
+  try {
+    return createHash('sha256').update(readFileSync(file)).digest('hex').slice(0, 32);
+  } catch {
+    // Unreadable and absent are the same thing for the observers: no usable
+    // credential. Distinguishing them would only add a state nothing acts on.
+    return 'absent';
+  }
+}
+
 interface RegisteredApplier {
   fn: SectionApplier;
   debounceMs: number;
@@ -84,9 +114,22 @@ export class SettingsReloadCoordinator {
   /** Single-flight chain: no two appliers ever run concurrently. */
   private queue: Promise<unknown> = Promise.resolve();
   private broadcast: ((payload: SettingsAppliedPayload) => void) | null = null;
+  private readonly googleTokensFile: string;
+  /** Fingerprint of the tokens file as of the last look; see googleTokensChanged. */
+  private lastGoogleTokens: string;
 
-  constructor(config: JarvisConfig) {
+  /**
+   * `googleTokensPath` is injectable for the same reason GoogleAuth's is: the
+   * default resolves through os.homedir(), which Bun fixes at process start and
+   * does NOT re-read from $HOME, so a test cannot redirect it any other way.
+   */
+  constructor(config: JarvisConfig, opts?: { googleTokensPath?: string }) {
     this.config = config;
+    this.googleTokensFile = opts?.googleTokensPath ?? googleTokensPath();
+    // Baseline at construction, which is boot: whatever is on disk now is what
+    // the daemon's own GoogleAuth was just built from, so the first reload must
+    // not report a change and pointlessly restart the observers.
+    this.lastGoogleTokens = googleTokensFingerprint(this.googleTokensFile);
   }
 
   /**
@@ -156,6 +199,9 @@ export class SettingsReloadCoordinator {
       applyEnvOverrides(this.config);
 
       const changed = RELOAD_SECTIONS.filter((s) => this.snapshot(s) !== before.get(s));
+      // The hosted deliver/revoke ops write the tokens file and SIGHUP us; the
+      // creds in config are untouched, so the section diff above sees nothing.
+      if (this.googleTokensChanged() && !changed.includes('google')) changed.push('google');
       const applied: ReloadSection[] = [];
       const errors: ApplyError[] = [];
       for (const section of changed) {
@@ -186,6 +232,25 @@ export class SettingsReloadCoordinator {
 
   private snapshot(section: ReloadSection): string {
     return JSON.stringify((this.config as Record<string, unknown>)[section] ?? null);
+  }
+
+  /**
+   * Has the Google tokens FILE changed since we last looked?
+   *
+   * Deliberately not folded into snapshot(): reloadAll's per-section diff
+   * compares before/after WITHIN one call, so it answers "did re-hydration
+   * change this?" — and the tokens file changes BETWEEN calls, which such a
+   * diff can never see. This keeps the last-seen fingerprint on the instance
+   * instead, which is the only way to notice an external write.
+   *
+   * Stateful on purpose, and it updates on read: a change must be reported
+   * exactly once, or every subsequent reload would restart the observers.
+   */
+  private googleTokensChanged(): boolean {
+    const fp = googleTokensFingerprint(this.googleTokensFile);
+    if (fp === this.lastGoogleTokens) return false;
+    this.lastGoogleTokens = fp;
+    return true;
   }
 
   /** Drop a scheduled apply (reloadAll runs the section's appliers itself). */
