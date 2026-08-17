@@ -13,7 +13,7 @@ describe('OpenAICompatibleProvider', () => {
     }) as typeof fetch;
 
     const provider = new OpenAICompatibleProvider('https://gateway.example/api', '', 'token');
-    expect(await provider.listModels()).toEqual(['claude-route', 'custom-z']);
+    expect(await provider.listModels()).toEqual(['custom-z', 'claude-route']);
     expect(requested).toBe('https://gateway.example/api/v1/models');
   });
 

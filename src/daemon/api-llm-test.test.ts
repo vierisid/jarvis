@@ -313,10 +313,10 @@ describe('POST /api/config/llm/test OpenAI-compatible discovery', () => {
     );
     const body = await response.json() as { ok: boolean; model: string; models: string[] };
 
-    expect(body).toEqual({ ok: true, model: 'another-model', models: ['another-model', 'custom-chat'] });
+    expect(body).toEqual({ ok: true, model: 'custom-chat', models: ['custom-chat', 'another-model'] });
     expect(requests).toEqual([
       { url: 'https://gateway.example/api/v1/models', model: undefined },
-      { url: 'https://gateway.example/api/v1/chat/completions', model: 'another-model' },
+      { url: 'https://gateway.example/api/v1/chat/completions', model: 'custom-chat' },
     ]);
   });
 });

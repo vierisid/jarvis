@@ -644,7 +644,31 @@ export async function testLLMProvider(
       if (!models.length) {
         return { ok: false, error: 'The OpenAI-compatible endpoint did not return any models from /v1/models' };
       }
-      testModel = models[0];
+      let lastModelError = '';
+      for (const candidate of models.slice(0, 10)) {
+        try {
+          const resp = await instance.chat(
+            [{ role: 'user', content: 'Say OK' }],
+            { max_tokens: 5, model: candidate },
+          );
+          return { ok: true, model: candidate, models };
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          lastModelError = message;
+          // A catalog can be a superset of the key's grants, and routed
+          // gateways can have an unhealthy upstream for one model. Continue
+          // only for model-scoped or transient route failures; invalid auth
+          // and malformed requests must remain immediate, specific errors.
+          if (!/model[\s\S]*(not allowed|not found|unavailable|denied)|not allowed[\s\S]*model|HTTP (404|502|503|504)\b/i.test(message)) {
+            throw err;
+          }
+        }
+      }
+      return {
+        ok: false,
+        error: `The OpenAI-compatible endpoint listed models, but none of the first ${Math.min(models.length, 10)} accepted a test request${lastModelError ? `: ${lastModelError}` : ''}`,
+        models,
+      };
     }
     const resp = await instance.chat(
       [{ role: 'user', content: 'Say OK' }],

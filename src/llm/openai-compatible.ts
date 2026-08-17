@@ -69,6 +69,6 @@ export class OpenAICompatibleProvider extends OpenAIProvider {
       throw new Error(`OpenAI-compatible models API error: ${response.status}${body.trim() ? ` ${body.trim().slice(0, 300)}` : ''}`);
     }
     const data = await response.json() as { data?: Array<{ id?: string }> };
-    return [...new Set((data.data ?? []).map(model => model.id).filter((id): id is string => Boolean(id)))].sort();
+    return [...new Set((data.data ?? []).map(model => model.id).filter((id): id is string => Boolean(id)))];
   }
 }
