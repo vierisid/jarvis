@@ -1,6 +1,7 @@
 import { test, expect, describe, beforeEach, afterEach, mock } from 'bun:test';
 import { AnthropicProvider } from './anthropic.ts';
 import { OpenAIProvider, modelRejectsCustomTemperature } from './openai.ts';
+import { OpenAICompatibleProvider } from './openai-compatible.ts';
 import { GroqProvider, isGroqJarvisModel, relaxOptionalFieldsToNullable } from './groq.ts';
 import { OllamaProvider } from './ollama.ts';
 import { OpenRouterProvider } from './openrouter.ts';
@@ -719,6 +720,17 @@ describe('Provider URLs', () => {
   test('OpenAIProvider uses correct API URL', () => {
     const provider = new OpenAIProvider('test-key') as any;
     expect(provider.apiUrl).toBe('https://api.openai.com/v1/chat/completions');
+  });
+
+  test('OpenAICompatibleProvider adds a version root to gateway URLs', () => {
+    const provider = new OpenAICompatibleProvider('https://gateway.example/api', '', 'test-key') as any;
+    expect(provider.apiUrl).toBe('https://gateway.example/api/v1/chat/completions');
+    expect(provider.modelsUrl).toBe('https://gateway.example/api/v1/models');
+  });
+
+  test('OpenAICompatibleProvider preserves an explicit version root', () => {
+    const provider = new OpenAICompatibleProvider('https://gateway.example/api/v1/', '', 'test-key') as any;
+    expect(provider.apiUrl).toBe('https://gateway.example/api/v1/chat/completions');
   });
 
   test('OpenRouterProvider uses correct API URL', () => {

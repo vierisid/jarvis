@@ -107,6 +107,16 @@ type OpenAIStreamChunk = {
   }>;
 };
 
+export function formatOpenAIHttpError(status: number, contentType: string | null, body: string): string {
+  const trimmed = body.trim();
+  if (contentType?.toLowerCase().includes('text/html') || /^<!doctype html|^<html/i.test(trimmed)) {
+    const title = trimmed.match(/<title[^>]*>([^<]+)<\/title>/i)?.[1]?.trim();
+    return `HTTP ${status}: ${title || 'the server returned an HTML page instead of an OpenAI-compatible API response'}`;
+  }
+  const compact = trimmed.replace(/\s+/g, ' ');
+  return `HTTP ${status}${compact ? `: ${compact.slice(0, 500)}${compact.length > 500 ? '…' : ''}` : ''}`;
+}
+
 export class OpenAIProvider implements LLMProvider {
   name = 'openai';
   protected apiKey: string;
@@ -171,7 +181,7 @@ export class OpenAIProvider implements LLMProvider {
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`${this.errorLabel} API error (${response.status}): ${errorText}`);
+      throw new Error(`${this.errorLabel} API error: ${formatOpenAIHttpError(response.status, response.headers.get('content-type'), errorText)}`);
     }
 
     const data = await response.json() as OpenAIResponse;
@@ -212,7 +222,7 @@ export class OpenAIProvider implements LLMProvider {
       const errorText = await response.text();
       yield {
         type: 'error',
-        error: `${this.errorLabel} API error (${response.status}): ${errorText}`,
+        error: `${this.errorLabel} API error: ${formatOpenAIHttpError(response.status, response.headers.get('content-type'), errorText)}`,
         code: classifyHttpStatus(response.status),
       };
       return;
