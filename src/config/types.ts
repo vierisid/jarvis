@@ -15,8 +15,13 @@ export type SystemCronConfig = {
 };
 
 export type GoogleConfig = {
-  client_id: string;
-  client_secret: string;
+  /**
+   * SELF-HOSTED ONLY. Absent on a control-plane managed instance, which holds no
+   * Google client credentials at all — see `refresh_url`. Optional so the
+   * compiler makes every reader face that case instead of trusting a `''`.
+   */
+  client_id?: string;
+  client_secret?: string;
   /**
    * HOSTED ONLY (usejarvis, GOOGLE.md "Push bridging"). Present when the control
    * plane runs a push bridge: Google notifies it, and it rings this instance's
@@ -43,8 +48,8 @@ export type GoogleConfig = {
   /**
    * Where the user connects Google, on the hosted account page.
    *
-   * Its PRESENCE means this instance is control-plane MANAGED: the credentials
-   * below were rendered by the server, the tokens are delivered rather than
+   * Its PRESENCE means this instance is control-plane MANAGED: there are no
+   * client credentials in this file at all, the tokens are delivered rather than
    * obtained here, and this daemon's own OAuth flow must not run — its redirect
    * URI is this instance's own hostname, which is not registered with Google and
    * cannot be (there is one registered URI, on the control plane, precisely so a

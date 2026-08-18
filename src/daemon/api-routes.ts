@@ -2098,14 +2098,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/auth/google/status': {
       GET: async () => {
         const googleConfig = ctx.config.google;
+        const { classifyGoogle, makeGoogleAuth, googleReconnectRequired } =
+          await import('../integrations/google-managed-refresh.ts');
         // A MANAGED instance has no client credentials by design — the control
         // plane holds them and refreshes on its behalf — so "configured" cannot
         // mean "has credentials" any more, or hosted would always read as
-        // not_configured.
-        const hasCredentials = !!(
-          (googleConfig?.client_id && googleConfig?.client_secret) ||
-          googleConfig?.refresh_url
-        );
+        // not_configured. Asked of the same classifier the auth builder uses, so
+        // this cannot claim a config is usable that makeGoogleAuth then refuses.
+        const hasCredentials = classifyGoogle(ctx.config).mode !== 'none';
         // Control-plane managed (GOOGLE.md): the settings UI must show the
         // hosted Connect button instead of the credentials form, because the
         // account is connected THROUGH the control plane and this daemon's own
@@ -2120,18 +2120,30 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         }
 
         try {
-          const { makeGoogleAuth } = await import('../integrations/google-managed-refresh.ts');
           const auth = makeGoogleAuth(ctx.config);
-          const authenticated = auth?.isAuthenticated() ?? false;
           const tokens = auth?.loadTokens() ?? null;
+          // A revoked or expired grant leaves the tokens file exactly where it
+          // was, so "we have tokens" is not "Google works". When the control
+          // plane has told us the grant is gone, report NOT authenticated —
+          // that is what puts the Connect button back in front of the user
+          // instead of a green "connected" chip over a dead integration.
+          const reconnect = googleReconnectRequired(auth);
+          const authenticated = !reconnect && (auth?.isAuthenticated() ?? false);
 
           return json({
             // Managed and not yet authenticated is "waiting for the control
             // plane to deliver", not "save your credentials" — there are none to
             // save here.
-            status: authenticated ? 'connected' : managed ? 'not_connected' : 'credentials_saved',
+            status: reconnect
+              ? 'reconnect_required'
+              : authenticated
+                ? 'connected'
+                : managed
+                  ? 'not_connected'
+                  : 'credentials_saved',
             has_credentials: true,
             is_authenticated: authenticated,
+            ...(reconnect ? { reconnect_reason: reconnect } : {}),
             scopes: ['gmail.readonly', 'calendar.readonly'],
             token_expiry: tokens?.expiry_date ?? null,
             ...managedFields,
@@ -2145,12 +2157,23 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/config/google': {
       POST: async (req: Request) => {
         try {
+          // MANAGED instances must not accept credentials here (GOOGLE.md).
+          // The sibling /api/auth/google/init already refuses; this one did not,
+          // and it REPLACES the whole google section — so one POST from a stale
+          // tab or a curl dropped refresh_url, instance_id and notify_secret
+          // from the running config and persisted a row that then won on every
+          // reload: refresh dead, doorbell 404, managed UI gone. Silently.
+          if (ctx.config.google?.connect_url || ctx.config.google?.refresh_url) {
+            return error(
+              'This instance is managed by usejarvis — its Google credentials are held by the control plane and cannot be set here.',
+              409,
+            );
+          }
           const body = await req.json() as { client_id: string; client_secret: string };
           if (!body.client_id || !body.client_secret) {
             return error('Missing client_id or client_secret');
           }
 
-          const { saveUserSection } = await import('./user-settings.ts');
           const freshConfig = ctx.config;
           freshConfig.google = { client_id: body.client_id, client_secret: body.client_secret };
           const { saveGoogleSettings } = await import('./user-settings.ts');

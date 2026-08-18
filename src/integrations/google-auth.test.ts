@@ -89,3 +89,96 @@ describe('GoogleAuth token storage', () => {
     }
   });
 });
+
+describe('GoogleAuth managed refresh', () => {
+  const realFetch = globalThis.fetch;
+  afterEach(() => {
+    globalThis.fetch = realFetch;
+  });
+
+  /** An auth whose token on disk is already past the 5-minute expiry buffer. */
+  async function staleAuth(refreshVia: (t: string) => Promise<any>) {
+    const dir = await mkdtemp(join(tmpdir(), 'jarvis-google-auth-managed-'));
+    const tokensPath = join(dir, 'google-tokens.json');
+    const auth = new GoogleAuth('', '', { tokensPath, refreshVia });
+    await auth.saveTokens({
+      access_token: 'stale-access',
+      refresh_token: 'refresh-1',
+      expiry_date: Date.now() - 60_000,
+      token_type: 'Bearer',
+    });
+    return { auth, dir, tokensPath };
+  }
+
+  test('concurrent callers share ONE refresh', async () => {
+    // Six independent callers cross the expiry buffer together at boot (both
+    // observers, both watch registrations, the suggestion engine, the workflow
+    // credential source). Six refreshes used to go out; the control plane's
+    // minimum-interval limiter now 429s five of them, and a watch that fails
+    // to arm reports as a broken sync.
+    globalThis.fetch = (() => {
+      throw new Error('a managed refresh must not call Google directly');
+    }) as unknown as typeof fetch;
+
+    let calls = 0;
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const { auth, dir } = await staleAuth(async () => {
+      calls += 1;
+      await gate;
+      return { access_token: 'fresh-access', expires_in: 3600 };
+    });
+
+    try {
+      const all = Promise.all(Array.from({ length: 6 }, () => auth.getAccessToken()));
+      await Bun.sleep(0);
+      release();
+      expect(await all).toEqual(Array(6).fill('fresh-access'));
+      expect(calls).toBe(1);
+
+      // And the flight is released afterwards: a later expiry refreshes again
+      // rather than serving the first result forever.
+      await auth.saveTokens({ ...auth.getTokens()!, expiry_date: Date.now() - 60_000 });
+      await auth.getAccessToken();
+      expect(calls).toBe(2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a failed refresh does not wedge the single-flight slot', async () => {
+    let calls = 0;
+    const { auth, dir } = await staleAuth(async () => {
+      calls += 1;
+      if (calls === 1) throw new Error('control plane unreachable');
+      return { access_token: 'fresh-access', expires_in: 3600 };
+    });
+
+    try {
+      await expect(auth.getAccessToken()).rejects.toThrow('control plane unreachable');
+      expect(await auth.getAccessToken()).toBe('fresh-access');
+      expect(calls).toBe(2);
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a rotated refresh token is persisted, not dropped', async () => {
+    // Google does not normally rotate, but dropping one it DID return strands
+    // the instance at its next refresh — and the control plane binds on the
+    // token's hash, so a stale token there is a hard reconnect.
+    const { auth, dir, tokensPath } = await staleAuth(async () => ({
+      access_token: 'fresh-access',
+      refresh_token: 'refresh-2',
+      expires_in: 3600,
+    }));
+
+    try {
+      await auth.getAccessToken();
+      expect(auth.getTokens()!.refresh_token).toBe('refresh-2');
+      expect(JSON.parse(await Bun.file(tokensPath).text()).refresh_token).toBe('refresh-2');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+});

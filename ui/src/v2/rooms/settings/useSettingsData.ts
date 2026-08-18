@@ -279,7 +279,13 @@ export interface RoleInfo {
 }
 
 export interface GoogleStatus {
-  status: "not_configured" | "credentials_saved" | "connected" | "not_connected";
+  status:
+    | "not_configured"
+    | "credentials_saved"
+    | "connected"
+    | "not_connected"
+    /** The grant is gone (revoked, or expired). Tokens may still be on disk. */
+    | "reconnect_required";
   has_credentials: boolean;
   is_authenticated: boolean;
   scopes: string[];
@@ -291,6 +297,8 @@ export interface GoogleStatus {
    * which is not registered with Google.
    */
   managed?: boolean;
+  /** Why a reconnect is needed, when `status` is "reconnect_required". */
+  reconnect_reason?: string;
   /** Where the user connects, when managed. */
   connect_url?: string;
 }

@@ -312,9 +312,11 @@ function migratePlaintextSectionSecrets(): void {
 
 // ── google: system-owned when the FILE provides it ─────────────────────────
 //
-// `google` is the one section with dual ownership. In hosted mode the system
-// config carries the shared company OAuth client (server-written), so the
-// file must win. Self-hosters without a file entry configure their own
+// `google` is the one section with dual ownership. When the system config
+// provides it, the file must win: on a hosted instance that section carries the
+// control-plane wiring (refresh_url, instance_id, notify_secret, connect_url)
+// and letting a stored row replace it would silently revert the instance to
+// self-hosted behaviour. Self-hosters without a file entry configure their own
 // client from the dashboard, which persists here in the DB as a fallback.
 
 const GOOGLE_KEY = `${CFG_PREFIX}google`;
@@ -324,8 +326,22 @@ export function saveGoogleSettings(value: JarvisConfig['google']): void {
   notifySectionSaved('google');
 }
 
+/** Did the FILE provide a google section? Any server-written key counts. */
+function googleIsFileProvided(google: JarvisConfig['google']): boolean {
+  // NOT `client_id` alone: a managed instance has no client credentials at all
+  // — that is the entire point of hosted mode — so keying on them let the stored
+  // row replace refresh_url, instance_id and notify_secret, breaking refresh and
+  // the push doorbell and turning the managed UI back into the credentials form.
+  return !!(
+    google?.client_id ||
+    google?.refresh_url ||
+    google?.notify_secret ||
+    google?.connect_url
+  );
+}
+
 function mergeGoogleSettingsIntoConfig(config: JarvisConfig): void {
-  if (config.google?.client_id) return; // file-provided: system-owned, file wins
+  if (googleIsFileProvided(config.google)) return; // system-owned, file wins
   const raw = getSetting(GOOGLE_KEY);
   if (raw === null) return;
   try {

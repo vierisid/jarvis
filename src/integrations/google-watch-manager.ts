@@ -127,18 +127,32 @@ export class GoogleWatchManager {
 
   private async armGmail(): Promise<void> {
     if (!this.running || !this.targets.pubsubTopic) return;
+    // Armed BEFORE anything that can fail. "Re-arm even when this attempt
+    // failed" only ever covered a failed registration: a token that could not
+    // be fetched returned early and scheduled nothing, so push stayed off until
+    // the next daemon restart. Under managed refresh that is no longer a rare
+    // path — "the control plane was briefly unreachable" is an ordinary
+    // transient, and it is likeliest at boot, which is exactly when this runs.
+    this.gmailTimer = this.api.schedule(() => void this.armGmail(), GMAIL_WATCH_RENEW_MS);
     const token = await this.accessToken();
+    if (!this.running) return this.gmailTimer?.cancel();
     if (!token) return;
     const result = await this.api.registerGmail(token, this.targets.pubsubTopic);
-    // Re-arm even when this attempt failed: the timer is the retry, and a
-    // transient refusal must not disable push until the next daemon restart.
+    // Replace the provisional timer with one derived from the real expiry.
+    this.gmailTimer?.cancel();
     const delay = renewDelayMs(result?.expiration, Date.now(), GMAIL_WATCH_RENEW_MS);
     this.gmailTimer = this.api.schedule(() => void this.armGmail(), delay);
   }
 
   private async armCalendar(): Promise<void> {
     if (!this.running || !this.targets.pushCallback || !this.targets.channelToken) return;
+    // Provisional re-arm before the fallible work — see armGmail.
+    this.calendarTimer = this.api.schedule(
+      () => void this.armCalendar(),
+      CALENDAR_WATCH_FALLBACK_MS,
+    );
     const token = await this.accessToken();
+    if (!this.running) return this.calendarTimer?.cancel();
     if (!token) return;
     // Each registration creates a NEW channel, so the old one has to go or Google
     // fans every change out to a growing pile of channels for one instance.
@@ -150,6 +164,7 @@ export class GoogleWatchManager {
       callbackUrl: this.targets.pushCallback,
       channelToken: this.targets.channelToken,
     });
+    this.calendarTimer?.cancel();
     const delay = renewDelayMs(
       this.calendarChannel?.expiration,
       Date.now(),

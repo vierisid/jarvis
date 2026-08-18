@@ -214,7 +214,26 @@ export class GoogleAuth {
   /**
    * Refresh the access token using the refresh token.
    */
-  private async refreshAccessToken(): Promise<void> {
+  /** In-flight refresh, so concurrent callers share one round trip. */
+  private refreshing: Promise<void> | null = null;
+
+  private refreshAccessToken(): Promise<void> {
+    // SINGLE-FLIGHT. Six independent callers can ask for a token at once (both
+    // observers' initial polls, both watch registrations, the suggestion engine,
+    // the workflow credential source) and they all cross the 5-minute expiry
+    // buffer together — most visibly right after a restart or a restore, when
+    // the tokens on disk are already old. Without this they each refresh: for a
+    // self-hosted instance that was merely wasteful, but a managed one now meets
+    // the control plane's minimum-interval limiter and all but one get a 429
+    // they report as a failed sync.
+    if (this.refreshing) return this.refreshing;
+    this.refreshing = this.doRefresh().finally(() => {
+      this.refreshing = null;
+    });
+    return this.refreshing;
+  }
+
+  private async doRefresh(): Promise<void> {
     if (!this.tokens?.refresh_token) {
       throw new Error('No refresh token available');
     }

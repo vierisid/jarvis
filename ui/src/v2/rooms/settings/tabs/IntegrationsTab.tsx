@@ -140,7 +140,7 @@ export function IntegrationsTab({
                 "v2-set__chip " +
                 (g.status === "connected"
                   ? "v2-set__chip--ok"
-                  : g.status === "credentials_saved"
+                  : g.status === "credentials_saved" || g.status === "reconnect_required"
                     ? "v2-set__chip--warn"
                     : "")
               }
@@ -181,8 +181,10 @@ export function IntegrationsTab({
             ) : (
               <>
                 <p className="v2-set__hint">
-                  Connect your Google account to let Jarvis read your Gmail and Calendar. Nothing is
-                  sent or changed — access is read-only, and you can disconnect at any time.
+                  {g.status === "reconnect_required"
+                    ? (g.reconnect_reason ??
+                      "Google access is no longer valid — connect your account again.")
+                    : "Connect your Google account to let Jarvis read your Gmail and Calendar. Nothing is sent or changed — access is read-only, and you can disconnect at any time."}
                 </p>
                 <div style={{ display: "flex", justifyContent: "flex-end" }}>
                   <a

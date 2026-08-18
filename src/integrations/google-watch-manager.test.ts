@@ -49,8 +49,17 @@ function fakeApi(over: Partial<WatchApi> = {}) {
       stoppedChannels.push(channel.id);
     },
     schedule: (fn, ms) => {
-      scheduled.push({ fn, ms });
-      return { cancel: () => {} };
+      const entry = { fn, ms };
+      scheduled.push(entry);
+      // cancel() really removes it, so `scheduled` is the set of timers that
+      // would ACTUALLY fire. A no-op cancel would let a leaked or provisional
+      // timer pass unnoticed, which is half of what these tests are for.
+      return {
+        cancel: () => {
+          const i = scheduled.indexOf(entry);
+          if (i >= 0) scheduled.splice(i, 1);
+        },
+      };
     },
     ...over,
   };
@@ -157,21 +166,49 @@ describe('GoogleWatchManager', () => {
     expect(calls.filter((c) => c === 'registerGmail:refused')).toHaveLength(2);
   });
 
+  test('a failed TOKEN re-arms too, not just a failed registration', async () => {
+    // The regression this pins: the retry used to be scheduled only AFTER the
+    // token was in hand, so "could not get an access token" returned early and
+    // scheduled nothing — push off until the next daemon restart. Under managed
+    // refresh the control plane is a hard dependency, so a momentary failure
+    // here is ordinary, and it is likeliest at boot when this first runs.
+    const { api, calls, scheduled } = fakeApi();
+    let working = false;
+    const auth = {
+      isAuthenticated: () => true,
+      getAccessToken: async () => {
+        if (!working) throw new Error('control plane unreachable');
+        return 'ya29.token';
+      },
+    } as unknown as GoogleAuth;
+
+    const m = new GoogleWatchManager(api);
+    m.configure(auth, allTargets);
+    await m.start();
+
+    expect(calls).toHaveLength(0);
+    expect(scheduled).toHaveLength(2);
+
+    working = true;
+    for (const t of scheduled.slice()) t.fn();
+    await Bun.sleep(0);
+    expect(calls).toContain(`registerGmail:${TOPIC}`);
+    expect(calls).toContain(`registerCalendar:${CHANNEL_TOKEN}`);
+  });
+
   test('stop() cancels the renewals and tells Google to stop', async () => {
     const { api, calls, scheduled } = fakeApi();
-    let cancelled = 0;
-    const m = new GoogleWatchManager({
-      ...api,
-      schedule: (fn, ms) => {
-        scheduled.push({ fn, ms });
-        return { cancel: () => { cancelled += 1; } };
-      },
-    });
+    const m = new GoogleWatchManager(api);
     m.configure(fakeAuth(), allTargets);
     await m.start();
+    const live = scheduled.slice();
     await m.stop();
 
-    expect(cancelled).toBe(2);
+    // Counting cancel() calls would pass on a manager that cancelled the same
+    // timer twice and leaked the other; what matters is that NO timer is left
+    // live.
+    expect(live).toHaveLength(2);
+    expect(scheduled).toHaveLength(0);
     expect(calls).toContain('stopGmail');
     expect(calls).toContain('stopCalendar:chan-1');
 
@@ -179,7 +216,7 @@ describe('GoogleWatchManager', () => {
     // that still runs (or a queued callback already in flight) must not
     // resurrect a watch for observers that are no longer running.
     const before = calls.length;
-    scheduled.at(-1)!.fn();
+    live.at(-1)!.fn();
     await Bun.sleep(0);
     expect(calls).toHaveLength(before);
   });

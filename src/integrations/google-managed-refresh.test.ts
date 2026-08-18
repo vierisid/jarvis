@@ -4,7 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createHmac } from 'node:crypto';
 import { GoogleAuth, GoogleReconnectRequired } from './google-auth.ts';
-import { googleIdentity, makeGoogleAuth, makeManagedRefresh } from './google-managed-refresh.ts';
+import {
+  classifyGoogle,
+  googleIdentity,
+  googleReconnectRequired,
+  makeGoogleAuth,
+  makeManagedRefresh,
+} from './google-managed-refresh.ts';
 import type { JarvisConfig } from '../config/types.ts';
 
 /**
@@ -156,5 +162,84 @@ describe('makeGoogleAuth', () => {
     // A moved instance keeps its id, so its identity is stable — no needless
     // rebuild, and the tokens are simply re-read.
     expect(googleIdentity({ google: MANAGED })).toBe(googleIdentity({ google: { ...MANAGED } }));
+  });
+});
+
+describe('a grant the control plane says is gone', () => {
+  const cfg = {
+    refreshUrl: MANAGED!.refresh_url!,
+    instanceId: MANAGED!.instance_id!,
+    notifySecret: MANAGED!.notify_secret!,
+  };
+
+  function authWith(refreshToken: string): GoogleAuth {
+    return new GoogleAuth('', '', {
+      tokensPath: tokensFile({
+        access_token: 'a',
+        refresh_token: refreshToken,
+        expiry_date: Date.now() + 60_000,
+        token_type: 'Bearer',
+      }),
+    });
+  }
+
+  test('is remembered, and clears itself when a new token arrives', async () => {
+    // Without this the classification is inert: a revoked grant leaves the
+    // tokens file untouched, so the settings tab keeps showing a green
+    // "connected" chip over an integration where every sync fails, and never
+    // offers the one action that fixes it.
+    const dead = makeManagedRefresh(cfg, (async () =>
+      new Response(JSON.stringify({ error: 'connect Google again', reconnect: true }), {
+        status: 409,
+      })) as unknown as typeof fetch);
+    await expect(dead('1//dead')).rejects.toBeInstanceOf(GoogleReconnectRequired);
+
+    expect(googleReconnectRequired(authWith('1//dead'))).toContain('connect Google again');
+    // Keyed on the token that actually failed: a DIFFERENT one is a reconnect
+    // that already happened, and must not inherit the old verdict.
+    expect(googleReconnectRequired(authWith('1//fresh-after-reconnect'))).toBeNull();
+    expect(googleReconnectRequired(null)).toBeNull();
+
+    // A refresh that succeeds says the grant is alive again.
+    const ok = makeManagedRefresh(cfg, (async () =>
+      new Response(JSON.stringify({ access_token: 'ya29.fresh', expires_in: 3599 }), {
+        status: 200,
+      })) as unknown as typeof fetch);
+    await ok('1//dead');
+    expect(googleReconnectRequired(authWith('1//dead'))).toBeNull();
+  });
+
+  test('a transient failure does NOT mark the grant dead', async () => {
+    const down = makeManagedRefresh(cfg, (async () =>
+      new Response('{}', { status: 500 })) as unknown as typeof fetch);
+    await expect(down('1//alive')).rejects.toThrow();
+    expect(googleReconnectRequired(authWith('1//alive'))).toBeNull();
+  });
+});
+
+describe('classifyGoogle', () => {
+  test('a partial managed block is none, not a fallback to the file credentials', () => {
+    expect(classifyGoogle({ google: MANAGED }).mode).toBe('managed');
+    expect(classifyGoogle({ google: { client_id: 'cid', client_secret: 'sec' } }).mode).toBe('self');
+    expect(classifyGoogle({}).mode).toBe('none');
+    // refresh_url without its companions: a config we mis-rendered. Using the
+    // credentials that happen to sit beside it would put a hosted instance back
+    // on the shared secret, invisibly, because Google would keep working.
+    for (const partial of [
+      { refresh_url: MANAGED!.refresh_url, client_id: 'cid', client_secret: 'sec' },
+      { refresh_url: MANAGED!.refresh_url, instance_id: 'inst-1', client_id: 'cid', client_secret: 'sec' },
+      { refresh_url: MANAGED!.refresh_url, notify_secret: 'a'.repeat(64) },
+    ]) {
+      expect(classifyGoogle({ google: partial }).mode).toBe('none');
+      expect(makeGoogleAuth({ google: partial })).toBeNull();
+      expect(googleIdentity({ google: partial })).toBeNull();
+    }
+    // notify_secret alone is the push doorbell's key — legitimate on a
+    // self-hosted instance, and must not disable it.
+    expect(
+      classifyGoogle({
+        google: { client_id: 'cid', client_secret: 'sec', notify_secret: 'a'.repeat(64) },
+      }).mode,
+    ).toBe('self');
   });
 });
