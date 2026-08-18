@@ -147,7 +147,7 @@ describe('managed (hosted) Google mode', () => {
     expect(res.status).toBe(409);
   });
 
-  it('POST /api/config/google still works for a self-hosted instance', async () => {
+  it('POST /api/config/google is NOT swallowed by the managed guard when self-hosted', async () => {
     const r = routes({ client_id: 'old', client_secret: 'old' });
     const res = await r['/api/config/google']!.POST!(
       new Request('http://localhost/api/config/google', {
