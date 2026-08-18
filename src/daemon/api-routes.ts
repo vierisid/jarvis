@@ -2099,9 +2099,17 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: async () => {
         const googleConfig = ctx.config.google;
         const hasCredentials = !!(googleConfig?.client_id && googleConfig?.client_secret);
+        // Control-plane managed (GOOGLE.md): the settings UI must show the
+        // hosted Connect button instead of the credentials form, because the
+        // account is connected THROUGH the control plane and this daemon's own
+        // OAuth flow cannot work here.
+        const managed = !!googleConfig?.connect_url;
+        const managedFields = managed
+          ? { managed: true as const, connect_url: googleConfig!.connect_url }
+          : { managed: false as const };
 
         if (!hasCredentials) {
-          return json({ status: 'not_configured', has_credentials: false, is_authenticated: false, scopes: [], token_expiry: null });
+          return json({ status: 'not_configured', has_credentials: false, is_authenticated: false, scopes: [], token_expiry: null, ...managedFields });
         }
 
         try {
@@ -2111,11 +2119,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const tokens = auth.loadTokens();
 
           return json({
-            status: authenticated ? 'connected' : 'credentials_saved',
+            // Managed and not yet authenticated is "waiting for the control
+            // plane to deliver", not "save your credentials" — there are none to
+            // save here.
+            status: authenticated ? 'connected' : managed ? 'not_connected' : 'credentials_saved',
             has_credentials: true,
             is_authenticated: authenticated,
             scopes: ['gmail.readonly', 'calendar.readonly'],
             token_expiry: tokens?.expiry_date ?? null,
+            ...managedFields,
           });
         } catch {
           return json({ status: 'credentials_saved', has_credentials: true, is_authenticated: false, scopes: [], token_expiry: null });
@@ -2151,6 +2163,18 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/auth/google/init': {
       POST: async () => {
         const googleConfig = ctx.config.google;
+        // MANAGED instances must not run this flow (GOOGLE.md). Its redirect URI
+        // is this instance's own hostname, which is not registered with Google —
+        // there is exactly ONE registered URI, on the control plane, precisely so
+        // that moving to another host does not break it. Starting the flow here
+        // therefore ends at a redirect_uri_mismatch error page, so it is refused
+        // at the API rather than only hidden in the UI.
+        if (googleConfig?.connect_url) {
+          return error(
+            `This instance is managed by usejarvis — connect Google from ${googleConfig.connect_url}`,
+            409,
+          );
+        }
         if (!googleConfig?.client_id || !googleConfig?.client_secret) {
           return error('Google credentials not configured. Save client_id and client_secret first.', 400);
         }

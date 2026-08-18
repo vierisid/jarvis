@@ -40,6 +40,17 @@ export type GoogleConfig = {
    * notification the bridge refuses without anything looking wrong.
    */
   channel_token?: string;
+  /**
+   * Where the user connects Google, on the hosted account page.
+   *
+   * Its PRESENCE means this instance is control-plane MANAGED: the credentials
+   * below were rendered by the server, the tokens are delivered rather than
+   * obtained here, and this daemon's own OAuth flow must not run — its redirect
+   * URI is this instance's own hostname, which is not registered with Google and
+   * cannot be (there is one registered URI, on the control plane, precisely so a
+   * VPS move does not break it).
+   */
+  connect_url?: string;
 };
 
 export type ChannelConfig = {

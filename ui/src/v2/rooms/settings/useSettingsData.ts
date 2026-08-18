@@ -279,11 +279,20 @@ export interface RoleInfo {
 }
 
 export interface GoogleStatus {
-  status: "not_configured" | "credentials_saved" | "connected";
+  status: "not_configured" | "credentials_saved" | "connected" | "not_connected";
   has_credentials: boolean;
   is_authenticated: boolean;
   scopes: string[];
   token_expiry: number | null;
+  /**
+   * Control-plane MANAGED (hosted). The credentials came from the system config
+   * and the account is connected through the control plane, so this daemon's own
+   * OAuth flow does not apply — its redirect URI is this instance's hostname,
+   * which is not registered with Google.
+   */
+  managed?: boolean;
+  /** Where the user connects, when managed. */
+  connect_url?: string;
 }
 
 export interface SidecarInfo {

@@ -129,7 +129,9 @@ export function IntegrationsTab({
           <div>
             <h3 className="v2-set__section-title">Google</h3>
             <div className="v2-set__section-sub">
-              Connect Gmail and Google Calendar (read-only). Restart-required after connect/disconnect.
+              {g?.managed
+                ? "Connect Gmail and Google Calendar (read-only), managed by usejarvis."
+                : "Connect Gmail and Google Calendar (read-only). Restart-required after connect/disconnect."}
             </div>
           </div>
           {g && (
@@ -150,6 +152,51 @@ export function IntegrationsTab({
 
         {!g ? (
           <div className="v2-set__empty">Loading Google status…</div>
+        ) : g.managed ? (
+          /* HOSTED. The credentials form and this daemon's own OAuth flow do not
+             belong here: the account is connected through the control plane,
+             which owns the one redirect URI Google knows about. Connecting needs
+             a signed-in session this UI does not have (it authenticates to the
+             daemon with a device token, not the account), so the button hands
+             off to the account page — which then opens the system browser,
+             because Google refuses OAuth inside an embedded webview. */
+          <>
+            {g.is_authenticated ? (
+              <>
+                <p className="v2-set__hint">
+                  Gmail and Google Calendar are connected, read-only. Jarvis never sends mail or
+                  edits events.
+                </p>
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <a
+                    className="v2-set__btn"
+                    href={g.connect_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Manage in your account
+                  </a>
+                </div>
+              </>
+            ) : (
+              <>
+                <p className="v2-set__hint">
+                  Connect your Google account to let Jarvis read your Gmail and Calendar. Nothing is
+                  sent or changed — access is read-only, and you can disconnect at any time.
+                </p>
+                <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                  <a
+                    className="v2-set__btn v2-set__btn--primary"
+                    href={g.connect_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                  >
+                    Connect Google account
+                  </a>
+                </div>
+              </>
+            )}
+          </>
         ) : g.status === "not_configured" && phase !== "saving" ? (
           <>
             <p className="v2-set__hint">
