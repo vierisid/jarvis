@@ -1132,7 +1132,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       let ttsSentenceQueue: string[] = [];
       let ttsSpeaking = false;
       let ttsStartSent = false;
-      let ttsStreamFullyDone = false; // set AFTER relayStream returns, not per-turn 'done'
+      let ttsStreamFullyDone = false; // set AFTER relayStream returns, not on the 'done' event
       let ttsSentenceCount = 0;
       let ttsChunkCount = 0;
 
@@ -1213,8 +1213,13 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
       // Relay stream to all WebSocket clients, collect full text.
       // onSentence fires for each complete sentence during streaming.
-      // NOTE: onTextDone fires per LLM turn (tool loop), NOT once at the end.
-      // We ignore onTextDone and use the relayStream return to mark stream completion.
+      // NOTE: exactly one 'done' event reaches the relay per request — the
+      // orchestrator swallows its per-iteration done events and yields a single
+      // terminal one after the tool loop settles. The dashboard relies on that:
+      // it keys the assistant message on `assistant:<requestId>` and rebuilds it
+      // from the done frame's fullText, so a second done frame for the same
+      // request would render a duplicate message under a duplicate React key.
+      // We still use the relayStream return (not onTextDone) to mark completion.
       const fullText = await this.streamRelay.relayStream(stream, requestId, {
         signal: activeChat?.controller.signal,
         // Voice enters "thinking" after STT-final. Flip it off as soon as

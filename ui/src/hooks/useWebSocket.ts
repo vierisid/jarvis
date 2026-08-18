@@ -28,6 +28,44 @@ export type ChatMessage = {
   detail?: string; // raw error/debug payload, rendered collapsed in the chat
 };
 
+/**
+ * Merge vault history into whatever already landed in the chat list.
+ *
+ * `ws.onopen` awaits the history fetch, but `ws.onmessage` keeps firing during
+ * that await — a turn that completes inside the fetch window appends its
+ * message first. Replacing the list would drop that message; skipping the
+ * restore because the list is "not empty" would drop the entire conversation.
+ * So restored history goes first and only the live messages it does not
+ * already account for are kept after it.
+ *
+ * Vault rows carry their own ids, so the live copy of a persisted message
+ * never matches by id — role + text is the only usable identity here. Matches
+ * are consumed one-for-one so a genuinely repeated answer keeps both copies.
+ */
+export function mergeRestoredHistory(
+  restored: ChatMessage[],
+  live: ChatMessage[],
+): ChatMessage[] {
+  if (live.length === 0) return restored;
+
+  const key = (message: ChatMessage) => `${message.role}\u0000${message.content.trim()}`;
+  const available = new Map<string, number>();
+  for (const message of restored) {
+    const messageKey = key(message);
+    available.set(messageKey, (available.get(messageKey) ?? 0) + 1);
+  }
+
+  const unmatched = live.filter((message) => {
+    const messageKey = key(message);
+    const remaining = available.get(messageKey) ?? 0;
+    if (remaining === 0) return true;
+    available.set(messageKey, remaining - 1);
+    return false;
+  });
+
+  return [...restored, ...unmatched];
+}
+
 export function finalizeStreamMessage(
   messages: ChatMessage[],
   options: {
@@ -435,6 +473,10 @@ export function useWebSocket() {
   } | null>(null);
   const wsRef = useRef<WebSocket | null>(null);
   const reconnectTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  // History is authoritative only for the first successful load. After that the
+  // client holds messages the vault never persists (system notices, errors,
+  // workflow lines), so a reconnect must not re-seed from the vault.
+  const historyHydratedRef = useRef(false);
   const streamBufferRef = useRef<string>("");
   const streamIdRef = useRef<string | null>(null);
   const toolCallsRef = useRef<ToolCall[]>([]);
@@ -456,24 +498,27 @@ export function useWebSocket() {
     ws.onopen = async () => {
       setIsConnected(true);
       console.log("[WS] Connected");
-      // Load chat history from backend on connect
-      try {
-        const resp = await fetch("/api/vault/conversations/active?channel=websocket");
-        if (resp.ok) {
-          const data = await resp.json();
-          if (data.messages && data.messages.length > 0) {
-            const restored: ChatMessage[] = data.messages.map((m: any) => ({
-              id: m.id,
-              role: m.role as MessageRole,
-              content: m.content,
-              timestamp: m.created_at,
-              toolCalls: m.tool_calls ?? undefined,
-            }));
-            setMessages((prev) => prev.length === 0 ? restored : prev);
+      // Load chat history from backend on the first connect that gets an answer.
+      if (!historyHydratedRef.current) {
+        try {
+          const resp = await fetch("/api/vault/conversations/active?channel=websocket");
+          if (resp.ok) {
+            const data = await resp.json();
+            historyHydratedRef.current = true;
+            if (data.messages && data.messages.length > 0) {
+              const restored: ChatMessage[] = data.messages.map((m: any) => ({
+                id: m.id,
+                role: m.role as MessageRole,
+                content: m.content,
+                timestamp: m.created_at,
+                toolCalls: m.tool_calls ?? undefined,
+              }));
+              setMessages((prev) => mergeRestoredHistory(restored, prev));
+            }
           }
+        } catch (err) {
+          console.warn("[WS] Failed to load history:", err);
         }
-      } catch (err) {
-        console.warn("[WS] Failed to load history:", err);
       }
 
       // Rehydrate any pending approval requests so a daemon restart (or a

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { extractNestedMessage, finalizeStreamMessage, formatProviderErrorMessage } from "./useWebSocket.ts";
+import { extractNestedMessage, finalizeStreamMessage, formatProviderErrorMessage, mergeRestoredHistory } from "./useWebSocket.ts";
 
 describe("finalizeStreamMessage", () => {
   test("recovers text from the done frame when every stream chunk was missed", () => {
@@ -40,6 +40,50 @@ describe("finalizeStreamMessage", () => {
     expect(finalizeStreamMessage(existing, {
       id: "assistant:req-1", fullText: "OK", timestamp: 123, toolCalls: [], subAgentEvents: [],
     })).toHaveLength(1);
+  });
+});
+
+describe("mergeRestoredHistory", () => {
+  const restored = [
+    { id: "vault-1", role: "user" as const, content: "hello", timestamp: 1 },
+    { id: "vault-2", role: "assistant" as const, content: "hi there", timestamp: 2 },
+  ];
+
+  test("returns history untouched when nothing raced in", () => {
+    expect(mergeRestoredHistory(restored, [])).toEqual(restored);
+  });
+
+  test("keeps a message that landed while the history fetch was in flight", () => {
+    const live = [{
+      id: "assistant:req-1", role: "assistant" as const, content: "recovered", timestamp: 3,
+    }];
+    expect(mergeRestoredHistory(restored, live)).toEqual([...restored, ...live]);
+  });
+
+  test("drops the live copy of a message the vault already has", () => {
+    const live = [{
+      id: "assistant:req-1", role: "assistant" as const, content: "hi there ", timestamp: 3,
+    }];
+    expect(mergeRestoredHistory(restored, live)).toEqual(restored);
+  });
+
+  test("does not collapse a genuinely repeated answer", () => {
+    const twice = [
+      ...restored,
+      { id: "vault-3", role: "assistant" as const, content: "hi there", timestamp: 3 },
+    ];
+    const live = [
+      { id: "a", role: "assistant" as const, content: "hi there", timestamp: 4 },
+      { id: "b", role: "assistant" as const, content: "hi there", timestamp: 5 },
+      { id: "c", role: "assistant" as const, content: "hi there", timestamp: 6 },
+    ];
+    // Two vault copies absorb two live copies; the third survives.
+    expect(mergeRestoredHistory(twice, live)).toHaveLength(4);
+  });
+
+  test("does not match across roles", () => {
+    const live = [{ id: "x", role: "user" as const, content: "hi there", timestamp: 3 }];
+    expect(mergeRestoredHistory(restored, live)).toHaveLength(3);
   });
 });
 
