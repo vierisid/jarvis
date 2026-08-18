@@ -43,7 +43,8 @@ export type LLMResponse = {
  * user-facing copy without string-matching the upstream error message.
  */
 export type LLMErrorCode =
-  | 'auth'         // invalid API key, unauthorized
+  | 'auth'         // 401, invalid or missing API key
+  | 'forbidden'    // 403, credentials accepted but this model/endpoint is not allowed
   | 'rate_limit'   // 429, quota exhausted
   | 'network'      // timeout, connection refused, 502/503/504
   | 'bad_request'  // 400/422, invalid parameters
@@ -83,7 +84,8 @@ export class LLMProviderError extends Error {
  * UI doesn't have to guess from the error string.
  */
 export function classifyHttpStatus(status: number): LLMErrorCode {
-  if (status === 401 || status === 403) return 'auth';
+  if (status === 401) return 'auth';
+  if (status === 403) return 'forbidden';
   if (status === 429) return 'rate_limit';
   // Some OpenAI-compatible gateways use non-standard 498 for an upstream
   // connection/token expiry and expect clients to retry it as a network fault.
@@ -103,12 +105,26 @@ export function classifyHttpStatus(status: number): LLMErrorCode {
 export function classifyErrorString(raw: string | undefined | null): LLMErrorCode {
   if (!raw) return 'unknown';
   const s = raw.toLowerCase();
+  // 403 and 401 need different advice (no model access vs. a bad key), so the
+  // authoritative markers for a permission failure are checked first. The
+  // softer permission wording is checked *after* auth, because providers mix
+  // it into 401 bodies too and a stated 401 is the better signal.
   if (
-    /\b401\b/.test(s) || /\b403\b/.test(s) ||
+    /\b403\b/.test(s) ||
+    s.includes('forbidden') ||
+    s.includes('permission_error') || s.includes('permission_denied')
+  ) return 'forbidden';
+  if (
+    /\b401\b/.test(s) ||
     s.includes('unauthorized') || s.includes('api key') ||
     s.includes('invalid_api_key') || s.includes('invalid x-api-key') ||
     s.includes('authentication')
   ) return 'auth';
+  // "not have access" covers both wordings providers use ("you do not have
+  // access to model X", "project ... does not have access to model X").
+  if (
+    s.includes('permission denied') || s.includes('not have access')
+  ) return 'forbidden';
   if (
     /\b429\b/.test(s) ||
     s.includes('rate limit') || s.includes('too many requests') ||

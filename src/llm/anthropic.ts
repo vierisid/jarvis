@@ -15,8 +15,9 @@ import { compactHistory, calculateHistoryBudget } from './history.ts';
 function classifyAnthropicErrorType(type: string): LLMErrorCode {
   switch (type) {
     case 'authentication_error':
-    case 'permission_error':
       return 'auth';
+    case 'permission_error':
+      return 'forbidden';
     case 'rate_limit_error':
       return 'rate_limit';
     case 'overloaded_error':

@@ -505,10 +505,13 @@ async function composeWithTools(
         // don't misdiagnose transient/auth failures as "no tool support":
         // classify the error and only fall back for bad-request / unknown
         // codes (the shapes a rejected-tools-param error takes). Clearly
-        // transient (rate_limit, network, server) or auth failures are surfaced
+        // transient (rate_limit, network, server) or auth/permission failures are surfaced
         // as-is -- dropping tools won't fix them and hides the real cause.
         const code = classifyErrorString(message);
-        if (code === "rate_limit" || code === "network" || code === "server" || code === "auth") {
+        if (
+          code === "rate_limit" || code === "network" || code === "server" ||
+          code === "auth" || code === "forbidden"
+        ) {
           logAttempt(turn, "tool-loop-error", `tool call failed (${code}); not falling back: ${message}`);
           return {
             ok: false,

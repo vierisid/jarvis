@@ -1405,9 +1405,12 @@ describe('modelRejectsCustomTemperature', () => {
 });
 
 describe('classifyHttpStatus', () => {
-  test('401/403 → auth', () => {
+  test('401 → auth', () => {
     expect(classifyHttpStatus(401)).toBe('auth');
-    expect(classifyHttpStatus(403)).toBe('auth');
+  });
+
+  test('403 → forbidden, not auth — a working key without model access', () => {
+    expect(classifyHttpStatus(403)).toBe('forbidden');
   });
 
   test('429 → rate_limit', () => {
@@ -1449,6 +1452,34 @@ describe('classifyErrorString', () => {
     expect(classifyErrorString('HTTP 401 Unauthorized')).toBe('auth');
     expect(classifyErrorString('invalid x-api-key')).toBe('auth');
     expect(classifyErrorString('Incorrect API key provided')).toBe('auth');
+  });
+
+  test('forbidden via 403 / permission markers', () => {
+    expect(classifyErrorString('HTTP 403 Forbidden')).toBe('forbidden');
+    expect(classifyErrorString('permission_error: not allowed to use this model')).toBe('forbidden');
+    expect(classifyErrorString('You do not have access to model gpt-5')).toBe('forbidden');
+  });
+
+  test('403 wins over the auth keywords it ships with', () => {
+    // Providers word 403s with auth-adjacent language; the status decides.
+    expect(classifyErrorString('403: authentication succeeded but access is denied')).toBe('forbidden');
+  });
+
+  test('a stated 401 keeps permission wording in the auth bucket', () => {
+    expect(classifyErrorString('401 Unauthorized: you do not have access')).toBe('auth');
+  });
+
+  test('permission wording alone, with no status, is forbidden', () => {
+    expect(classifyErrorString('permission denied for this model')).toBe('forbidden');
+    // Both wordings providers use for a model the caller can't reach.
+    expect(classifyErrorString('You do not have access to model gpt-5')).toBe('forbidden');
+    expect(classifyErrorString('Project `proj_a` does not have access to model `o3`')).toBe('forbidden');
+    // Google's canonical status uses an underscore, not a space.
+    expect(classifyErrorString('PERMISSION_DENIED: the API is not enabled')).toBe('forbidden');
+  });
+
+  test('word-boundary: 4030 does not collide with 403', () => {
+    expect(classifyErrorString('prompt has 4030 tokens')).not.toBe('forbidden');
   });
 
   test('rate_limit via 429 / quota / rate limit', () => {

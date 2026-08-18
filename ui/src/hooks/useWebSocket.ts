@@ -265,6 +265,7 @@ function deriveImpactFromCategory(category: string): ApprovalImpact {
  */
 export type ProviderErrorCode =
   | "auth"
+  | "forbidden"
   | "rate_limit"
   | "network"
   | "bad_request"
@@ -272,10 +273,16 @@ export type ProviderErrorCode =
   | "server"
   | "unknown";
 
+/** Shared by the structured `forbidden` code and the keyword fallbacks below. */
+const FORBIDDEN_SUMMARY =
+  "Your AI provider accepted the API key but won't allow this model. Check that your plan or organization has access to it, or pick a different model.";
+
 function summaryForCode(code: ProviderErrorCode | undefined): string | null {
   switch (code) {
     case "auth":
       return "Couldn't reach your AI provider. Check your API key and model settings.";
+    case "forbidden":
+      return FORBIDDEN_SUMMARY;
     case "rate_limit":
       return "Your AI provider is rate-limiting requests. Wait a moment, or check your usage and billing.";
     case "network":
@@ -325,6 +332,20 @@ export function formatProviderErrorMessage(
 
   const lowered = normalized.toLowerCase();
 
+  // Mirrors classifyErrorString: authoritative 403 markers first, the softer
+  // permission wording after the auth bucket.
+  if (
+    lowered.includes("forbidden") ||
+    lowered.includes("permission_error") ||
+    lowered.includes("permission_denied") ||
+    /\b403\b/.test(lowered)
+  ) {
+    return {
+      summary: FORBIDDEN_SUMMARY,
+      detail: normalized,
+    };
+  }
+
   if (
     lowered.includes("api key") ||
     lowered.includes("authentication") ||
@@ -336,6 +357,13 @@ export function formatProviderErrorMessage(
   ) {
     return {
       summary: "Couldn't reach your AI provider. Check your API key and model settings.",
+      detail: normalized,
+    };
+  }
+
+  if (lowered.includes("permission denied") || lowered.includes("not have access")) {
+    return {
+      summary: FORBIDDEN_SUMMARY,
       detail: normalized,
     };
   }

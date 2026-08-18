@@ -32,6 +32,22 @@ describe("formatProviderErrorMessage — buckets", () => {
     expect(r.summary).toContain("API key");
   });
 
+  test("forbidden: 403 gets model-access copy, not the API-key copy", () => {
+    const r = formatProviderErrorMessage("OpenAI API error (403): model access denied");
+    expect(r.summary).toContain("won't allow this model");
+    expect(r.summary).not.toContain("Check your API key and model settings");
+  });
+
+  test("auth wins when a 401 body also carries permission wording", () => {
+    const r = formatProviderErrorMessage("401 Unauthorized: you do not have access");
+    expect(r.summary).toContain("Check your API key and model settings");
+  });
+
+  test("forbidden: model-access wording with no status code", () => {
+    const r = formatProviderErrorMessage("Project `proj_a` does not have access to model `o3`");
+    expect(r.summary).toContain("won't allow this model");
+  });
+
   test("auth: invalid x-api-key", () => {
     const r = formatProviderErrorMessage("authentication_error: invalid x-api-key");
     expect(r.summary).toContain("API key");
@@ -105,6 +121,24 @@ describe("formatProviderErrorMessage — structured code branching (Phase B)", (
     expect(r.summary).not.toContain("connection");
   });
 
+  test("forbidden code has its own copy, distinct from auth", () => {
+    const forbidden = formatProviderErrorMessage("permission denied", "forbidden");
+    const auth = formatProviderErrorMessage("invalid api key", "auth");
+    expect(forbidden.summary).toContain("won't allow this model");
+    expect(forbidden.summary).not.toBe(auth.summary);
+  });
+
+  test("structured code still outranks digits in the raw message", () => {
+    // A quota failure whose payload happens to carry a 403/401-looking token
+    // must stay in the rate-limit bucket.
+    const r = formatProviderErrorMessage(
+      '{"error":{"message":"quota exceeded"},"request_id":"req-403-xyz"}',
+      "rate_limit",
+    );
+    expect(r.summary).toContain("rate-limit");
+    expect(r.summary).not.toContain("won't allow this model");
+  });
+
   test("not_found has its own copy", () => {
     const r = formatProviderErrorMessage("model xyz does not exist", "not_found");
     expect(r.summary).toContain("couldn't find");
@@ -136,6 +170,11 @@ describe("formatProviderErrorMessage — status-code brittleness fix", () => {
     const r = formatProviderErrorMessage("context window exceeded at token 14018");
     // falls through to the generic fallback, not the auth-specific copy
     expect(r.summary).not.toContain("Check your API key and model settings");
+  });
+
+  test("does NOT match '403' embedded in unrelated digits", () => {
+    const r = formatProviderErrorMessage("prompt length was 4030 tokens");
+    expect(r.summary).not.toContain("won't allow this model");
   });
 
   test("does NOT match '429' embedded in unrelated digits", () => {
