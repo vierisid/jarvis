@@ -114,6 +114,9 @@ export function SidecarConfigEditor({ sidecarId, sidecarName, unavailableCapabil
     if (config) setConfig(updater(config));
   };
 
+  // NOTE: overlayStyle is `position: fixed`, so this must not be mounted
+  // inside an element that establishes a containing block for fixed
+  // descendants (a transform, or `container-type` — see SidecarTab).
   return (
     <div style={overlayStyle} onClick={onClose}>
       <div style={modalStyle} onClick={(e) => e.stopPropagation()}>
@@ -440,6 +443,7 @@ const modalStyle: React.CSSProperties = {
   border: "1px solid var(--rule)",
   borderRadius: "10px",
   width: "560px",
+  maxWidth: "calc(100vw - 32px)",
   maxHeight: "80vh",
   display: "flex",
   flexDirection: "column",
@@ -526,6 +530,7 @@ const fieldRowStyle: React.CSSProperties = {
   display: "flex",
   alignItems: "center",
   gap: "8px",
+  flexWrap: "wrap",
 };
 
 const fieldLabelStyle: React.CSSProperties = {
@@ -543,6 +548,7 @@ const fieldInputStyle: React.CSSProperties = {
   fontSize: "12px",
   outline: "none",
   width: "160px",
+  maxWidth: "100%",
 };
 
 const checkboxLabelStyle: React.CSSProperties = {

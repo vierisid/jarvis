@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import { createPortal } from "react-dom";
 import type { SettingsHook } from "../useSettingsData";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
 // Embed the legacy config editor — it's a 200+ LOC YAML+form editor with
@@ -197,8 +198,13 @@ export function SidecarTab({
         )}
       </section>
 
-      {/* Legacy config editor modal — rethemed via cascade */}
-      {configTarget && (
+      {/* Legacy config editor modal — rethemed via cascade. Portaled to
+          <body> because .v2-set is a container-query container, which makes
+          it the containing block + stacking context for the editor's
+          `position: fixed` overlay; mounted in place, the overlay would
+          cover only the Settings room. The wrapper travels with it so the
+          --j-* cascade still applies. */}
+      {configTarget && createPortal(
         <div className="v2-set__legacy-embed">
           <SidecarConfigEditor
             sidecarId={configTarget.id}
@@ -208,7 +214,8 @@ export function SidecarTab({
             }
             onClose={() => setConfigTarget(null)}
           />
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );
