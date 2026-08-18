@@ -30,6 +30,7 @@ import { CommitmentExecutor } from "./commitment-executor.ts";
 import { classifyEvent } from "./event-classifier.ts";
 import { createApiRoutes, setCorsOrigin } from "./api-routes.ts";
 import { GoogleAuth } from "../integrations/google-auth.ts";
+import { googleIdentity, makeGoogleAuth } from "../integrations/google-managed-refresh.ts";
 import { ResearchQueue } from "./research-queue.ts";
 import { researchQueueTool, setResearchQueueRef } from "../actions/tools/research.ts";
 import { spawnPersistentAgent, assignPersistentAgentTask } from "../actions/tools/agents.ts";
@@ -519,8 +520,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
     // 4b. Create GoogleAuth if configured
     let googleAuth: GoogleAuth | null = null;
-    if (jarvisConfig.google?.client_id && jarvisConfig.google?.client_secret) {
-      googleAuth = new GoogleAuth(jarvisConfig.google.client_id, jarvisConfig.google.client_secret);
+    // Managed instances have NO client credentials — the control plane holds
+    // them — so this cannot key on their presence or hosted Google would never
+    // start.
+    googleAuth = makeGoogleAuth(jarvisConfig);
+    if (googleAuth) {
       if (googleAuth.isAuthenticated()) {
         console.log('[Daemon] Google OAuth: authenticated (Gmail + Calendar observers enabled)');
       } else {
@@ -3665,18 +3669,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // google — refresh the auth (disconnect unlinks the tokens file; the
     // null-first reload drops the stale in-memory tokens), hand it to the
     // observers and restart them so EmailSync/CalendarSync re-capture it.
-    let lastGoogleCreds = jarvisConfig.google?.client_id && jarvisConfig.google?.client_secret
-      ? `${jarvisConfig.google.client_id}\n${jarvisConfig.google.client_secret}`
-      : null;
+    let lastGoogleCreds = googleIdentity(jarvisConfig);
     settingsReload.registerApplier('google', async (cfg) => {
-      const g = cfg.google;
-      const creds = g?.client_id && g?.client_secret ? `${g.client_id}\n${g.client_secret}` : null;
+      const creds = googleIdentity(cfg);
       if (!creds) {
         googleAuth = null;
       } else if (googleAuth && creds === lastGoogleCreds) {
         googleAuth.reloadTokensFromDisk();
       } else {
-        googleAuth = new GoogleAuth(g!.client_id!, g!.client_secret!);
+        googleAuth = makeGoogleAuth(cfg);
       }
       lastGoogleCreds = creds;
       if (observerService) {

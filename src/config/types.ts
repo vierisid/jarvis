@@ -51,6 +51,16 @@ export type GoogleConfig = {
    * VPS move does not break it).
    */
   connect_url?: string;
+  /**
+   * Where this instance asks the control plane to refresh its access token.
+   *
+   * Present INSTEAD of client_id/client_secret on a managed instance: the
+   * control plane holds those and applies them on our behalf, so no shared
+   * credential sits in a file this daemon's own (tenant-owned) user can read.
+   */
+  refresh_url?: string;
+  /** This instance's control-plane id, used to name itself when refreshing. */
+  instance_id?: string;
 };
 
 export type ChannelConfig = {

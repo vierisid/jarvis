@@ -2098,7 +2098,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/auth/google/status': {
       GET: async () => {
         const googleConfig = ctx.config.google;
-        const hasCredentials = !!(googleConfig?.client_id && googleConfig?.client_secret);
+        // A MANAGED instance has no client credentials by design — the control
+        // plane holds them and refreshes on its behalf — so "configured" cannot
+        // mean "has credentials" any more, or hosted would always read as
+        // not_configured.
+        const hasCredentials = !!(
+          (googleConfig?.client_id && googleConfig?.client_secret) ||
+          googleConfig?.refresh_url
+        );
         // Control-plane managed (GOOGLE.md): the settings UI must show the
         // hosted Connect button instead of the credentials form, because the
         // account is connected THROUGH the control plane and this daemon's own
@@ -2113,10 +2120,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         }
 
         try {
-          const { GoogleAuth } = await import('../integrations/google-auth.ts');
-          const auth = new GoogleAuth(googleConfig!.client_id, googleConfig!.client_secret);
-          const authenticated = auth.isAuthenticated();
-          const tokens = auth.loadTokens();
+          const { makeGoogleAuth } = await import('../integrations/google-managed-refresh.ts');
+          const auth = makeGoogleAuth(ctx.config);
+          const authenticated = auth?.isAuthenticated() ?? false;
+          const tokens = auth?.loadTokens() ?? null;
 
           return json({
             // Managed and not yet authenticated is "waiting for the control

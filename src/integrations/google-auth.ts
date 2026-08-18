@@ -23,6 +23,21 @@ export function googleTokensPath(): string {
   return path.join(os.homedir(), '.jarvis', 'google-tokens.json');
 }
 
+export interface ManagedRefresh {
+  access_token: string;
+  expires_in?: number;
+  /** Passed through if the control plane ever reports a rotated token. */
+  refresh_token?: string;
+}
+
+/**
+ * A refresh that will not succeed by waiting: the grant is gone (revoked, or
+ * expired — Google revokes Gmail-scoped tokens on a password change and expires
+ * them after 7 days while an app is in Testing). The user must connect again,
+ * and callers must not treat it as a transient failure to retry forever.
+ */
+export class GoogleReconnectRequired extends Error {}
+
 export type GoogleTokens = {
   access_token: string;
   refresh_token: string;
@@ -37,13 +52,29 @@ export class GoogleAuth {
   private tokensPath: string;
   private redirectUri: string;
 
+  /**
+   * HOSTED: refresh through the control plane instead of calling Google here.
+   *
+   * Set when the system config carries `google.refresh_url`. The instance keeps
+   * its refresh token; the control plane holds the client secret and applies it.
+   * That is what lets a managed config carry no Google credentials at all — this
+   * daemon runs as the tenant's own user, so a secret it could use would be a
+   * secret the tenant could read.
+   */
+  private refreshVia: ((refreshToken: string) => Promise<ManagedRefresh>) | null;
+
   constructor(
     clientId: string,
     clientSecret: string,
-    opts?: { tokensPath?: string; redirectUri?: string }
+    opts?: {
+      tokensPath?: string;
+      redirectUri?: string;
+      refreshVia?: (refreshToken: string) => Promise<ManagedRefresh>;
+    }
   ) {
     this.clientId = clientId;
     this.clientSecret = clientSecret;
+    this.refreshVia = opts?.refreshVia ?? null;
     this.tokensPath = opts?.tokensPath ?? path.join(os.homedir(), '.jarvis', 'google-tokens.json');
     this.redirectUri = opts?.redirectUri ?? 'http://localhost:3142/api/auth/google/callback';
     this.loadTokens();
@@ -188,27 +219,37 @@ export class GoogleAuth {
       throw new Error('No refresh token available');
     }
 
-    const resp = await fetch(TOKEN_ENDPOINT, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        refresh_token: this.tokens.refresh_token,
-        client_id: this.clientId,
-        client_secret: this.clientSecret,
-        grant_type: 'refresh_token',
-      }),
-    });
+    let data: { access_token: string; expires_in?: number; refresh_token?: string };
 
-    if (!resp.ok) {
-      const err = await resp.text();
-      throw new Error(`Token refresh failed: ${err}`);
+    if (this.refreshVia) {
+      // Managed: the control plane holds the secret and applies it for us.
+      data = await this.refreshVia(this.tokens.refresh_token);
+    } else {
+      const resp = await fetch(TOKEN_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          refresh_token: this.tokens.refresh_token,
+          client_id: this.clientId,
+          client_secret: this.clientSecret,
+          grant_type: 'refresh_token',
+        }),
+      });
+
+      if (!resp.ok) {
+        const err = await resp.text();
+        throw new Error(`Token refresh failed: ${err}`);
+      }
+
+      data = await resp.json() as any;
     }
-
-    const data = await resp.json() as any;
 
     this.tokens = {
       ...this.tokens,
       access_token: data.access_token,
+      // Google does not normally rotate refresh tokens, but dropping one it DID
+      // return would strand this instance at its next refresh.
+      ...(data.refresh_token ? { refresh_token: data.refresh_token } : {}),
       expiry_date: Date.now() + (data.expires_in ?? 3600) * 1000,
     };
 
