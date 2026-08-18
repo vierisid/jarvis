@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { extractNestedMessage, finalizeStreamMessage, formatProviderErrorMessage, mergeRestoredHistory } from "./useWebSocket.ts";
+import { extractNestedMessage, finalizeStreamMessage, formatProviderErrorMessage, mergeRestoredHistory, nextStreamBuffer } from "./useWebSocket.ts";
 
 describe("finalizeStreamMessage", () => {
   test("recovers text from the done frame when every stream chunk was missed", () => {
@@ -84,6 +84,33 @@ describe("mergeRestoredHistory", () => {
   test("does not match across roles", () => {
     const live = [{ id: "x", role: "user" as const, content: "hi there", timestamp: 3 }];
     expect(mergeRestoredHistory(restored, live)).toHaveLength(3);
+  });
+});
+
+describe("nextStreamBuffer", () => {
+  test("adopts the relay's running total so a late client is not left truncated", () => {
+    // First chunk this client sees; everything before it was broadcast while
+    // the socket was still connecting.
+    expect(nextStreamBuffer("", { text: " world", accumulated: "hello world" }))
+      .toBe("hello world");
+  });
+
+  test("stays in step with local accumulation on a healthy stream", () => {
+    expect(nextStreamBuffer("hello", { text: " world", accumulated: "hello world" }))
+      .toBe("hello world");
+  });
+
+  test("falls back to appending when the chunk carries no accumulated total", () => {
+    expect(nextStreamBuffer("hello", { text: " world" })).toBe("hello world");
+  });
+
+  test("ignores a non-string accumulated value", () => {
+    expect(nextStreamBuffer("hello", { text: " world", accumulated: 42 }))
+      .toBe("hello world");
+  });
+
+  test("keeps the buffer intact when a chunk has no text at all", () => {
+    expect(nextStreamBuffer("hello", {})).toBe("hello");
   });
 });
 

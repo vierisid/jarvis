@@ -101,6 +101,28 @@ export function finalizeStreamMessage(
     : message);
 }
 
+/**
+ * Next value of the local stream buffer for an incoming text chunk.
+ *
+ * Chunks are broadcast to every dashboard, so a client that opens, reloads, or
+ * reconnects mid-turn starts with an empty buffer and would render the answer
+ * with its opening cut off. The relay stamps every chunk with `accumulated` —
+ * its own running total for the request, already including this chunk — so the
+ * first chunk a late client sees carries everything it missed. Prefer it and
+ * the answer is whole from the first render instead of staying truncated until
+ * the terminal frame repairs it.
+ *
+ * Falls back to local accumulation when `accumulated` is absent, so a daemon
+ * that predates the field still streams correctly.
+ */
+export function nextStreamBuffer(
+  buffer: string,
+  payload: { text?: string; accumulated?: unknown },
+): string {
+  if (typeof payload.accumulated === "string") return payload.accumulated;
+  return buffer + (payload.text ?? "");
+}
+
 export type TaskEvent = {
   action: "created" | "updated" | "deleted";
   task: {
@@ -801,7 +823,7 @@ export function useWebSocket() {
         }
       } else if (msg.payload?.text) {
         // Text chunk
-        streamBufferRef.current += msg.payload.text;
+        streamBufferRef.current = nextStreamBuffer(streamBufferRef.current, msg.payload);
 
         if (!streamIdRef.current) {
           // Start a new assistant message
