@@ -448,6 +448,36 @@ export function OnboardingWizard({
     setConnectErr(null);
     setGoogleState("pending");
     try {
+      // HOSTED (managed) instances connect through the control plane, never here:
+      // this daemon's OAuth redirect URI is its own hostname, which is not
+      // registered with Google and cannot be. Send the user to their account
+      // page instead. The poll below still finishes the job, because completing
+      // it there DELIVERS the tokens to this instance, which is exactly what the
+      // poll watches for.
+      const managed = await fetch("/api/auth/google/status")
+        .then((res) => res.json() as Promise<{ managed?: boolean; connect_url?: string }>)
+        .catch(() => ({}) as { managed?: boolean; connect_url?: string });
+      if (managed.managed && managed.connect_url) {
+        const acct = window.open(managed.connect_url, "_blank", "noopener,noreferrer");
+        if (!acct) {
+          setGoogleState("idle");
+          setConnectErr(`Open ${managed.connect_url} to connect Google, then come back here.`);
+          return;
+        }
+        stopGooglePoll();
+        googlePollRef.current = window.setInterval(async () => {
+          try {
+            const s = await fetch("/api/auth/google/status");
+            const d = (await s.json()) as { status?: string; is_authenticated?: boolean };
+            if (d.is_authenticated || d.status === "connected") {
+              stopGooglePoll();
+              setGoogleState("connected");
+              setConnected((c) => new Set(c).add("google").add("gmail"));
+            }
+          } catch { /* ignore */ }
+        }, 2000);
+        return;
+      }
       const r = await fetch("/api/auth/google/init", { method: "POST" });
       const d = (await r.json().catch(() => ({}))) as { auth_url?: string; error?: string };
       if (!r.ok || !d.auth_url) {
