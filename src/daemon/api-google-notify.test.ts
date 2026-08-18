@@ -98,6 +98,20 @@ describe('POST /api/webhooks/google/notify', () => {
       }),
     );
     expect(truncated.status).toBe(401);
+
+    // A 64-CHARACTER signature that is not 64 BYTES. This is the one that used
+    // to escape: String.length counts UTF-16 units, so it passed the length gate
+    // and then made timingSafeEqual throw — a 500 with a stack trace instead of
+    // a 401, from an unauthenticated caller, on a route that is public by design
+    // and sits under a Bun.serve with no error handler above it.
+    const nonAscii = await post(
+      new Request('http://localhost/api/webhooks/google/notify', {
+        method: 'POST',
+        headers: { 'x-jarvis-signature': 'é'.repeat(64) },
+        body,
+      }),
+    );
+    expect(nonAscii.status).toBe(401);
     expect(synced).toEqual([]);
   });
 

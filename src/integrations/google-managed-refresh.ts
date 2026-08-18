@@ -1,5 +1,5 @@
-import { createHash, createHmac } from 'node:crypto';
-import { GoogleAuth, GoogleReconnectRequired, type ManagedRefresh } from './google-auth.ts';
+import { GoogleAuth, GoogleReconnectRequired, clampReason, type ManagedRefresh } from './google-auth.ts';
+import { INSTANCE_SIGNATURE_HEADER, signWithSecret } from './google-signature.ts';
 import type { JarvisConfig } from '../config/types.ts';
 
 /**
@@ -20,36 +20,15 @@ import type { JarvisConfig } from '../config/types.ts';
 export interface ManagedRefreshConfig {
   refreshUrl: string;
   instanceId: string;
-  notifySecret: string;
+  /**
+   * The REFRESH key, not the doorbell's. They are separate derivations because
+   * they travel in opposite directions; see google-signature.ts.
+   */
+  refreshSecret: string;
 }
 
 /** How long to wait on the control plane. The caller is blocked on this. */
 const TIMEOUT_MS = 20_000;
-
-/**
- * The last grant we were told is GONE, remembered so the settings UI can say so.
- *
- * Without this the classification is inert: a revoked grant leaves the tokens
- * file in place, so status keeps reading "connected" while every sync quietly
- * fails, and the one action that fixes it (connect again) is never offered.
- *
- * Keyed by a hash of the refresh token that failed — never the token — so it
- * self-clears the moment the control plane delivers a new one, with no
- * cross-module reset to forget to call.
- */
-let deadGrant: { tokenHash: string; message: string } | null = null;
-
-const tokenHash = (t: string) => createHash('sha256').update(t).digest('hex');
-
-/**
- * The reason this instance must connect Google again, or null. Reported by
- * /api/auth/google/status; tokens on disk are NOT proof of a live grant.
- */
-export function googleReconnectRequired(auth: GoogleAuth | null): string | null {
-  const token = auth?.getTokens()?.refresh_token;
-  if (!token || !deadGrant) return null;
-  return deadGrant.tokenHash === tokenHash(token) ? deadGrant.message : null;
-}
 
 export function makeManagedRefresh(
   cfg: ManagedRefreshConfig,
@@ -61,13 +40,13 @@ export function makeManagedRefresh(
       refreshToken,
       at: new Date().toISOString(),
     });
-    const signature = createHmac('sha256', cfg.notifySecret).update(body).digest('hex');
+    const signature = signWithSecret(cfg.refreshSecret, body);
 
     let res: Response;
     try {
       res = await fetchImpl(cfg.refreshUrl, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'x-jarvis-signature': signature },
+        headers: { 'Content-Type': 'application/json', [INSTANCE_SIGNATURE_HEADER]: signature },
         body,
         signal: AbortSignal.timeout(TIMEOUT_MS),
       });
@@ -82,21 +61,28 @@ export function makeManagedRefresh(
     if (res.status === 200) {
       const data = (await res.json()) as ManagedRefresh;
       if (!data?.access_token) throw new Error('control plane returned no access token');
-      deadGrant = null;
       return data;
     }
 
     const detail = (await res.json().catch(() => null)) as
       | { error?: string; reconnect?: boolean }
       | null;
-    // 409+reconnect is the grant being gone; 404 means the control plane no
-    // longer has a connected record for this instance, which the user also fixes
-    // by connecting again. Both are permanent — retrying either forever would
-    // bury the one action that helps.
-    if (detail?.reconnect || res.status === 404) {
-      const message = detail?.error ?? 'Google access is no longer valid — connect Google again';
-      deadGrant = { tokenHash: tokenHash(refreshToken), message };
-      throw new GoogleReconnectRequired(message);
+    // `reconnect` is the control plane saying the grant is gone — 409 when the
+    // token is not the one bound to this instance, 404 when there is no connected
+    // record any more. Both are permanent, and retrying either forever would bury
+    // the one action that helps.
+    //
+    // Taken from the FLAG, never inferred from the status: a bare 404 is also what
+    // a wrong origin path, a rollback that drops the route, or a CDN answering for
+    // an unknown path returns, and treating those as a dead grant would tell the
+    // user to reconnect over a misconfiguration — then stop refreshing a token
+    // that was fine.
+    if (detail?.reconnect) {
+      throw new GoogleReconnectRequired(
+        // Someone else's text, shown to the user in our voice, so it is bounded
+        // and stripped of control characters before it goes anywhere.
+        detail.error ? clampReason(detail.error) : 'Google access is no longer valid — connect Google again',
+      );
     }
     throw new Error(`control plane refused the refresh (${res.status})`);
   };
@@ -120,9 +106,10 @@ export function makeManagedRefresh(
  * hosted. `none` covers both "no Google" and a config too broken to use.
  */
 export type GoogleShape =
-  | { mode: 'managed'; refreshUrl: string; instanceId: string; notifySecret: string }
+  | { mode: 'managed'; refreshUrl: string; instanceId: string; refreshSecret: string }
   | { mode: 'self'; clientId: string; clientSecret: string }
-  | { mode: 'none' };
+  /** `reason` is set only when a config was REFUSED, not when there is no Google. */
+  | { mode: 'none'; reason?: string };
 
 export function classifyGoogle(config: { google?: JarvisConfig['google'] }): GoogleShape {
   const g = config.google;
@@ -134,18 +121,24 @@ export function classifyGoogle(config: { google?: JarvisConfig['google'] }): Goo
     // remove, and do it invisibly, since everything would keep working. The
     // control plane's own googleAppCredsFromEnv refuses a half-set pair for the
     // same reason.
-    if (!g.instance_id || !g.notify_secret) {
-      console.error(
-        '[google] the config carries refresh_url but not instance_id and notify_secret — ' +
-          'Google is disabled rather than falling back to any credentials in this file.',
-      );
-      return { mode: 'none' };
+    //
+    // The reason is RETURNED, not logged: this function is called on every status
+    // poll as well as at construction, and logging here printed the same line
+    // twice per poll forever. The boot/reload edge logs it once, and the status
+    // endpoint can show it to whoever has to fix it.
+    if (!g.instance_id || !g.refresh_secret) {
+      return {
+        mode: 'none',
+        reason:
+          'the config carries refresh_url but not instance_id and refresh_secret, so Google ' +
+          'is disabled rather than falling back to any credentials in this file',
+      };
     }
     return {
       mode: 'managed',
       refreshUrl: g.refresh_url,
       instanceId: g.instance_id,
-      notifySecret: g.notify_secret,
+      refreshSecret: g.refresh_secret,
     };
   }
   if (g.client_id && g.client_secret) {
@@ -168,13 +161,15 @@ export function classifyGoogle(config: { google?: JarvisConfig['google'] }): Goo
 export function makeGoogleAuth(
   config: { google?: JarvisConfig['google'] },
   fetchImpl: typeof fetch = fetch,
+  /** Test seam — see ApiContext.googleTokensPath. */
+  tokensPath?: string,
 ): GoogleAuth | null {
   const shape = classifyGoogle(config);
   if (shape.mode === 'none') return null;
   if (shape.mode === 'managed') {
-    return new GoogleAuth('', '', { refreshVia: makeManagedRefresh(shape, fetchImpl) });
+    return GoogleAuth.managed(makeManagedRefresh(shape, fetchImpl), { tokensPath });
   }
-  return new GoogleAuth(shape.clientId, shape.clientSecret);
+  return new GoogleAuth(shape.clientId, shape.clientSecret, { tokensPath });
 }
 
 /**
@@ -185,7 +180,16 @@ export function makeGoogleAuth(
  */
 export function googleIdentity(config: { google?: JarvisConfig['google'] }): string | null {
   const shape = classifyGoogle(config);
-  if (shape.mode === 'managed') return `managed\n${shape.refreshUrl}\n${shape.instanceId}`;
+  // The refresh SECRET is part of the identity, not just the URL and the id: it is
+  // the one value that authenticates every refresh, and the managed refresher
+  // closes over it. If it ever changed without the URL changing (a master-key
+  // rotation on the control plane), an identity that ignored it would tell the
+  // reload applier "same Google, just re-read the tokens" and leave the refresher
+  // signing with a key the control plane no longer accepts — every refresh 401ing,
+  // forever, until a restart nobody knows to perform.
+  if (shape.mode === 'managed') {
+    return `managed\n${shape.refreshUrl}\n${shape.instanceId}\n${shape.refreshSecret}`;
+  }
   if (shape.mode === 'self') return `self\n${shape.clientId}\n${shape.clientSecret}`;
   return null;
 }

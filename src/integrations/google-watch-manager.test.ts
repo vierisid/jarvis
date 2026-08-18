@@ -196,6 +196,81 @@ describe('GoogleWatchManager', () => {
     expect(calls).toContain(`registerCalendar:${CHANNEL_TOKEN}`);
   });
 
+  test('a stop during an in-flight registration undoes the watch it created', async () => {
+    // THE leak: start() does not await the manager (observer-service fires it
+    // with `void`), so an arm can still be inside registerCalendar when the user
+    // disconnects. It then assigned the channel and armed a timer on a stopped
+    // manager — and no later stop() could cancel that channel, because a
+    // disconnect deletes the tokens file first, so there is no token left to call
+    // Google with. Google kept pushing that user's calendar for the channel's
+    // whole TTL.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const { api, calls, scheduled } = fakeApi();
+    const m = new GoogleWatchManager({
+      ...api,
+      registerCalendar: async (t, input) => {
+        await gate;
+        return api.registerCalendar(t, input);
+      },
+      registerGmail: async (t, topic) => {
+        await gate;
+        return api.registerGmail(t, topic);
+      },
+    });
+    m.configure(fakeAuth(), allTargets);
+
+    const starting = m.start();
+    await Bun.sleep(0);
+    await m.stop();
+    release();
+    await starting;
+
+    // Whatever was registered was stopped again, and nothing is left armed.
+    expect(calls).toContain('registerCalendar:' + CHANNEL_TOKEN);
+    expect(calls).toContain('stopCalendar:chan-1');
+    expect(calls.filter((c) => c === 'stopGmail')).not.toHaveLength(0);
+    expect(scheduled).toHaveLength(0);
+  });
+
+  test('a stop/start race leaves exactly one live channel and one live timer', async () => {
+    // The daemon's google applier stops then starts the observers without
+    // awaiting the manager, so two arms can overlap. The older one used to assign
+    // its channel over the newer one's — orphaning a channel nothing holds a
+    // reference to, so Google fanned every change out to two channels for one
+    // instance — and to overwrite the newer one's timer field, leaving a live but
+    // unreachable timer re-arming forever.
+    let gate1: () => void = () => {};
+    const first = new Promise<void>((r) => { gate1 = r; });
+    let seen = 0;
+    const { api, calls, scheduled, stoppedChannels } = fakeApi();
+    const m = new GoogleWatchManager({
+      ...api,
+      registerCalendar: async (t, input) => {
+        seen += 1;
+        if (seen === 1) await first;
+        return api.registerCalendar(t, input);
+      },
+    });
+    m.configure(fakeAuth(), allTargets);
+
+    const firstStart = m.start();
+    await Bun.sleep(0);
+    await m.stop();
+    await m.start();
+    gate1();
+    await firstStart;
+
+    // Two registrations happened, and exactly one channel was stopped: the one
+    // belonging to the arm that lost. WHICH id that is depends on the order the
+    // two arms reached Google, which is not the point — the point is that no
+    // channel is left with nobody holding a reference to it.
+    expect(calls.filter((c) => c.startsWith('registerCalendar')).length).toBe(2);
+    expect(stoppedChannels).toHaveLength(1);
+    // One Gmail timer + one Calendar timer, from the surviving generation only.
+    expect(scheduled).toHaveLength(2);
+  });
+
   test('stop() cancels the renewals and tells Google to stop', async () => {
     const { api, calls, scheduled } = fakeApi();
     const m = new GoogleWatchManager(api);

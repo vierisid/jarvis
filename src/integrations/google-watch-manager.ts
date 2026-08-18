@@ -63,6 +63,23 @@ export class GoogleWatchManager {
   private calendarTimer: { cancel(): void } | null = null;
   private calendarChannel: CalendarChannel | null = null;
   private running = false;
+  /**
+   * Bumped by every stop(). An arm carries the generation it began in and does
+   * nothing once that generation is over.
+   *
+   * The awaits in an arm are long (a token fetch that may go to the control
+   * plane, then a registration bounded at 15s) and the daemon's own google
+   * applier does `stopService('observers')` then `startService('observers')`
+   * without awaiting the manager — so an arm from before the stop can resolve
+   * after a new one has already begun. Two things went wrong then: a Calendar
+   * channel got REGISTERED after the user disconnected (and no later stop could
+   * ever cancel it, because the tokens file was already gone, so Google kept
+   * pushing that user's calendar for the channel's whole TTL), and two arms
+   * writing one timer field left the displaced one live but unreachable, each
+   * re-arming forever. The shared single-flight refresh made this likelier, not
+   * less: both arms now await the SAME promise and resume together.
+   */
+  private generation = 0;
   private readonly api: WatchApi;
 
   constructor(api: Partial<WatchApi> = {}) {
@@ -88,11 +105,13 @@ export class GoogleWatchManager {
     if (this.running) return;
     if (!this.enabled) return;
     this.running = true;
-    await Promise.all([this.armGmail(), this.armCalendar()]);
+    const gen = this.generation;
+    await Promise.all([this.armGmail(gen), this.armCalendar(gen)]);
   }
 
   async stop(): Promise<void> {
     this.running = false;
+    this.generation += 1;
     this.gmailTimer?.cancel();
     this.calendarTimer?.cancel();
     this.gmailTimer = null;
@@ -112,6 +131,19 @@ export class GoogleWatchManager {
     }
   }
 
+  /**
+   * Has this arm been overtaken? Either the manager stopped, or a later start()
+   * began a new generation.
+   *
+   * A stale arm returns WITHOUT touching the timer fields: whoever made it stale
+   * already cancelled what was there (stop()) or will cancel-then-replace it (the
+   * new generation's own arm), so reaching in here could only kill a live timer
+   * that belongs to somebody else.
+   */
+  private stale(gen: number): boolean {
+    return !this.running || gen !== this.generation;
+  }
+
   private async accessToken(): Promise<string | null> {
     if (!this.auth?.isAuthenticated()) return null;
     try {
@@ -125,51 +157,70 @@ export class GoogleWatchManager {
     }
   }
 
-  private async armGmail(): Promise<void> {
-    if (!this.running || !this.targets.pubsubTopic) return;
+  /** Cancel this generation's renewal and schedule the next one. */
+  private rearmGmail(gen: number, delay: number): void {
+    if (this.stale(gen)) return;
+    this.gmailTimer?.cancel();
+    this.gmailTimer = this.api.schedule(() => void this.armGmail(gen), delay);
+  }
+
+  private rearmCalendar(gen: number, delay: number): void {
+    if (this.stale(gen)) return;
+    this.calendarTimer?.cancel();
+    this.calendarTimer = this.api.schedule(() => void this.armCalendar(gen), delay);
+  }
+
+  private async armGmail(gen: number): Promise<void> {
+    if (this.stale(gen) || !this.targets.pubsubTopic) return;
     // Armed BEFORE anything that can fail. "Re-arm even when this attempt
     // failed" only ever covered a failed registration: a token that could not
     // be fetched returned early and scheduled nothing, so push stayed off until
     // the next daemon restart. Under managed refresh that is no longer a rare
     // path — "the control plane was briefly unreachable" is an ordinary
     // transient, and it is likeliest at boot, which is exactly when this runs.
-    this.gmailTimer = this.api.schedule(() => void this.armGmail(), GMAIL_WATCH_RENEW_MS);
+    this.rearmGmail(gen, GMAIL_WATCH_RENEW_MS);
     const token = await this.accessToken();
-    if (!this.running) return this.gmailTimer?.cancel();
-    if (!token) return;
+    if (this.stale(gen) || !token) return;
     const result = await this.api.registerGmail(token, this.targets.pubsubTopic);
+    if (this.stale(gen)) {
+      // Stopped while this registration was in flight. We still hold a token —
+      // which stop() itself may not have had, since a disconnect deletes the
+      // tokens file first — so UNDO the watch we just created instead of leaving
+      // Google publishing at a bridge that will drop everything.
+      if (result) await this.api.stopGmail(token).catch(() => {});
+      return;
+    }
     // Replace the provisional timer with one derived from the real expiry.
-    this.gmailTimer?.cancel();
-    const delay = renewDelayMs(result?.expiration, Date.now(), GMAIL_WATCH_RENEW_MS);
-    this.gmailTimer = this.api.schedule(() => void this.armGmail(), delay);
+    this.rearmGmail(gen, renewDelayMs(result?.expiration, Date.now(), GMAIL_WATCH_RENEW_MS));
   }
 
-  private async armCalendar(): Promise<void> {
-    if (!this.running || !this.targets.pushCallback || !this.targets.channelToken) return;
+  private async armCalendar(gen: number): Promise<void> {
+    if (this.stale(gen) || !this.targets.pushCallback || !this.targets.channelToken) return;
     // Provisional re-arm before the fallible work — see armGmail.
-    this.calendarTimer = this.api.schedule(
-      () => void this.armCalendar(),
-      CALENDAR_WATCH_FALLBACK_MS,
-    );
+    this.rearmCalendar(gen, CALENDAR_WATCH_FALLBACK_MS);
     const token = await this.accessToken();
-    if (!this.running) return this.calendarTimer?.cancel();
-    if (!token) return;
+    if (this.stale(gen) || !token) return;
     // Each registration creates a NEW channel, so the old one has to go or Google
     // fans every change out to a growing pile of channels for one instance.
     if (this.calendarChannel) {
       await this.api.stopCalendar(token, this.calendarChannel);
       this.calendarChannel = null;
     }
-    this.calendarChannel = await this.api.registerCalendar(token, {
+    const channel = await this.api.registerCalendar(token, {
       callbackUrl: this.targets.pushCallback,
       channelToken: this.targets.channelToken,
     });
-    this.calendarTimer?.cancel();
-    const delay = renewDelayMs(
-      this.calendarChannel?.expiration,
-      Date.now(),
-      CALENDAR_WATCH_FALLBACK_MS,
+    if (this.stale(gen)) {
+      // See armGmail. Assigning `channel` here would also ORPHAN whatever the new
+      // generation had already registered, leaving a channel nothing holds a
+      // reference to and no stop() can ever cancel.
+      if (channel) await this.api.stopCalendar(token, channel).catch(() => {});
+      return;
+    }
+    this.calendarChannel = channel;
+    this.rearmCalendar(
+      gen,
+      renewDelayMs(channel?.expiration, Date.now(), CALENDAR_WATCH_FALLBACK_MS),
     );
-    this.calendarTimer = this.api.schedule(() => void this.armCalendar(), delay);
   }
 }

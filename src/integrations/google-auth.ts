@@ -8,7 +8,8 @@
 
 import path from 'node:path';
 import os from 'node:os';
-import { readFileSync, existsSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, existsSync, rmSync } from 'node:fs';
 import { secureParentDirectory, secureWriteFile } from '../util/fs-secure.ts';
 
 const TOKEN_ENDPOINT = 'https://oauth2.googleapis.com/token';
@@ -63,6 +64,25 @@ export class GoogleAuth {
    */
   private refreshVia: ((refreshToken: string) => Promise<ManagedRefresh>) | null;
 
+  /**
+   * Where a "this grant is gone" verdict is remembered, beside the tokens it is
+   * about.
+   *
+   * PERSISTED, because the alternative is a lie with a timer on it: a revoked
+   * grant leaves the tokens file exactly where it was, so after every restart the
+   * settings tab would show a green "connected" chip over an integration where
+   * every sync fails, until something happened to attempt a refresh — up to an
+   * hour, since refreshes only run on the expiry clock.
+   *
+   * Keyed by a hash of the refresh token it applies to — never the token — so it
+   * self-clears the moment a new one is delivered, with no cross-module reset for
+   * anyone to forget to call. Beside the tokens file rather than at a fixed path
+   * so that redirecting one in a test redirects both.
+   */
+  private get reconnectPath(): string {
+    return `${this.tokensPath}.reconnect`;
+  }
+
   constructor(
     clientId: string,
     clientSecret: string,
@@ -78,6 +98,22 @@ export class GoogleAuth {
     this.tokensPath = opts?.tokensPath ?? path.join(os.homedir(), '.jarvis', 'google-tokens.json');
     this.redirectUri = opts?.redirectUri ?? 'http://localhost:3142/api/auth/google/callback';
     this.loadTokens();
+  }
+
+  /**
+   * A HOSTED instance's auth: no client credentials at all, refreshing through
+   * the control plane.
+   *
+   * A named constructor because the empty strings are a lie the type system would
+   * otherwise carry around — the credential arguments are meaningless on this
+   * path, and confining them to one line here is what lets every reader of
+   * `clientId` treat "empty" as "there is no such thing here".
+   */
+  static managed(
+    refreshVia: (refreshToken: string) => Promise<ManagedRefresh>,
+    opts: { tokensPath?: string } = {},
+  ): GoogleAuth {
+    return new GoogleAuth('', '', { ...opts, refreshVia });
   }
 
   /**
@@ -233,34 +269,92 @@ export class GoogleAuth {
     return this.refreshing;
   }
 
+  /**
+   * The reason this instance must connect Google again, or null.
+   *
+   * Tokens on disk are NOT proof of a live grant, which is the whole point:
+   * reported by /api/auth/google/status so the settings tab offers Connect
+   * instead of a green chip over an integration that cannot work.
+   */
+  reconnectRequired(): string | null {
+    const token = this.tokens?.refresh_token;
+    if (!token) return null;
+    try {
+      const saved = JSON.parse(readFileSync(this.reconnectPath, 'utf-8')) as {
+        tokenHash?: unknown;
+        message?: unknown;
+      };
+      if (typeof saved.tokenHash !== 'string' || typeof saved.message !== 'string') return null;
+      // A DIFFERENT token means a reconnect already happened, and the verdict on
+      // the old grant says nothing about the new one.
+      return saved.tokenHash === sha256(token) ? saved.message : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private async markReconnectRequired(refreshToken: string, message: string): Promise<void> {
+    try {
+      await secureParentDirectory(this.reconnectPath);
+      await secureWriteFile(
+        this.reconnectPath,
+        JSON.stringify({ tokenHash: sha256(refreshToken), message: clampReason(message) }),
+        0o600,
+        'GoogleAuth',
+      );
+    } catch (err) {
+      // Losing this only costs a stale "connected" chip until the next attempt;
+      // it must never turn a refresh failure into an unhandled one.
+      console.warn(
+        '[GoogleAuth] could not record the reconnect state:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+
+  private clearReconnect(): void {
+    try {
+      rmSync(this.reconnectPath, { force: true });
+    } catch {
+      // Same reasoning as above.
+    }
+  }
+
   private async doRefresh(): Promise<void> {
     if (!this.tokens?.refresh_token) {
       throw new Error('No refresh token available');
     }
+    // The token this flight is FOR. Everything below awaits — a managed refresh
+    // for up to 20s — and the tokens on disk can change underneath it: a
+    // disconnect deletes the file and reloadTokensFromDisk() nulls this cache, a
+    // reconnect replaces it with a different grant. Without this binding the
+    // merge below reads `this.tokens` again after the await and would either
+    // RE-CREATE the file the user just revoked (with a live access token for the
+    // account they revoked, since `{...null}` spreads nothing and drops the
+    // refresh token silently) or overwrite a freshly delivered grant's access
+    // token with one minted from the old one — and nothing refreshes on a 401,
+    // so that costs up to an hour of failing polls.
+    const bound = this.tokens.refresh_token;
 
     let data: { access_token: string; expires_in?: number; refresh_token?: string };
 
-    if (this.refreshVia) {
-      // Managed: the control plane holds the secret and applies it for us.
-      data = await this.refreshVia(this.tokens.refresh_token);
-    } else {
-      const resp = await fetch(TOKEN_ENDPOINT, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-        body: new URLSearchParams({
-          refresh_token: this.tokens.refresh_token,
-          client_id: this.clientId,
-          client_secret: this.clientSecret,
-          grant_type: 'refresh_token',
-        }),
-      });
+    // ONE recorder for both paths: a gone grant is a gone grant whether the
+    // control plane told us or Google did, and the settings tab has to say so
+    // either way.
+    try {
+      data = await this.fetchRefreshed(bound);
+    } catch (err) {
+      if (err instanceof GoogleReconnectRequired) await this.markReconnectRequired(bound, err.message);
+      throw err;
+    }
 
-      if (!resp.ok) {
-        const err = await resp.text();
-        throw new Error(`Token refresh failed: ${err}`);
-      }
-
-      data = await resp.json() as any;
+    // The grant moved while we were waiting: this result belongs to a token that
+    // is no longer ours. Discard it rather than write it — see `bound` above.
+    if (this.tokens?.refresh_token !== bound) {
+      console.warn(
+        '[GoogleAuth] discarding a refresh whose token was replaced while it was in flight',
+      );
+      throw new Error('the refresh token changed while the refresh was in flight');
     }
 
     this.tokens = {
@@ -273,6 +367,65 @@ export class GoogleAuth {
     };
 
     await this.saveTokens(this.tokens);
+    // A refresh that worked says the grant is alive, whatever we thought before.
+    this.clearReconnect();
     console.log('[GoogleAuth] Token refreshed successfully');
   }
+
+  /** The exchange itself: through the control plane when managed, else Google. */
+  private async fetchRefreshed(
+    refreshToken: string,
+  ): Promise<{ access_token: string; expires_in?: number; refresh_token?: string }> {
+    if (this.refreshVia) {
+      // Managed: the control plane holds the secret and applies it for us.
+      return await this.refreshVia(refreshToken);
+    } else {
+      const resp = await fetch(TOKEN_ENDPOINT, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+        body: new URLSearchParams({
+          refresh_token: refreshToken,
+          client_id: this.clientId,
+          client_secret: this.clientSecret,
+          grant_type: 'refresh_token',
+        }),
+      });
+
+      if (!resp.ok) {
+        const err = await resp.text();
+        // `invalid_grant` is Google's answer for a revoked, expired, or
+        // password-change-invalidated token — permanent, and fixed only by the
+        // user connecting again. Classified here too, not just on the managed
+        // path, or a self-hosted instance shows a green "connected" chip over a
+        // dead grant forever.
+        if (err.includes('invalid_grant')) {
+          throw new GoogleReconnectRequired(
+            'Google access is no longer valid — connect Google again',
+          );
+        }
+        throw new Error(`Token refresh failed: ${clampReason(err)}`);
+      }
+
+      return (await resp.json()) as { access_token: string; expires_in?: number };
+    }
+  }
+}
+
+/** sha256 hex. Used to key the reconnect state without storing a token. */
+function sha256(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+/**
+ * Bound and de-control-character an untrusted reason before it is stored or
+ * shown.
+ *
+ * The managed path's message comes from whatever answers `refresh_url`, and it is
+ * rendered to the user as this daemon's own explanation — so an unbounded or
+ * newline-bearing string would be someone else's text in our voice, and in our
+ * logs. Not XSS (React escapes it), but not ours to pass through either.
+ */
+export function clampReason(message: string): string {
+  const flat = message.replace(/[\u0000-\u001f\u007f]+/g, ' ').trim();
+  return flat.length > 200 ? `${flat.slice(0, 197)}...` : flat;
 }

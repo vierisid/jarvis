@@ -57,6 +57,15 @@ export type GoogleConfig = {
    */
   connect_url?: string;
   /**
+   * HMAC key this instance SIGNS its refresh requests with (hosted only).
+   *
+   * A different key from notify_secret, which the DOORBELL is verified with. The
+   * two travel in opposite directions, and while one key served both, the same
+   * signature was valid at either endpoint — safe only because the two body
+   * shapes happen to be disjoint. Both are rendered whole by the control plane.
+   */
+  refresh_secret?: string;
+  /**
    * Where this instance asks the control plane to refresh its access token.
    *
    * Present INSTEAD of client_id/client_secret on a managed instance: the

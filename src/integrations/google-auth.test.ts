@@ -163,6 +163,74 @@ describe('GoogleAuth managed refresh', () => {
     }
   });
 
+  test('a disconnect mid-flight does NOT re-create the tokens file', async () => {
+    // THE case: a refresh is in the air (managed refreshes are bounded at 20s)
+    // when the user hits Disconnect. revoke-google unlinks the tokens file and
+    // the reload applier calls reloadTokensFromDisk(), nulling the cache. The
+    // flight then resolved and wrote the file BACK — containing a live access
+    // token for the account that was just revoked, and no refresh token at all,
+    // because `{...null}` spreads nothing. It also bumped the settings-reload
+    // fingerprint into a spurious observer restart.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const { auth, dir, tokensPath } = await staleAuth(async () => {
+      await gate;
+      return { access_token: 'fresh-access', expires_in: 3600 };
+    });
+
+    try {
+      const inFlight = auth.getAccessToken();
+      await Bun.sleep(0);
+      // The disconnect.
+      await rm(tokensPath, { force: true });
+      expect(auth.reloadTokensFromDisk()).toBe(false);
+      release();
+
+      await expect(inFlight).rejects.toThrow(/in flight/);
+      expect(existsSync(tokensPath)).toBe(false);
+      expect(auth.getTokens()).toBeNull();
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a reconnect mid-flight does not clobber the new grant', async () => {
+    // The other direction: a new grant is delivered while an old-token refresh is
+    // in the air. Writing that result would keep the NEW refresh token but pair it
+    // with an access token minted from the OLD grant, and stamp an hour's expiry
+    // on it. Nothing refreshes on a 401 — the observers only log — so if the old
+    // grant is then revoked, every poll fails for that whole hour.
+    let release: () => void = () => {};
+    const gate = new Promise<void>((r) => { release = r; });
+    const { auth, dir, tokensPath } = await staleAuth(async () => {
+      await gate;
+      return { access_token: 'from-the-OLD-grant', expires_in: 3600 };
+    });
+
+    try {
+      const inFlight = auth.getAccessToken();
+      await Bun.sleep(0);
+      await Bun.write(
+        tokensPath,
+        JSON.stringify({
+          access_token: 'delivered-access',
+          refresh_token: 'refresh-2-delivered',
+          expiry_date: Date.now() + 3_600_000,
+          token_type: 'Bearer',
+        }),
+      );
+      expect(auth.reloadTokensFromDisk()).toBe(true);
+      release();
+
+      await expect(inFlight).rejects.toThrow(/in flight/);
+      const after = JSON.parse(await Bun.file(tokensPath).text()) as Record<string, string>;
+      expect(after.access_token).toBe('delivered-access');
+      expect(after.refresh_token).toBe('refresh-2-delivered');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
+  });
+
   test('a rotated refresh token is persisted, not dropped', async () => {
     // Google does not normally rotate, but dropping one it DID return strands
     // the instance at its next refresh — and the control plane binds on the

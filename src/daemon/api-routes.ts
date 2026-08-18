@@ -134,6 +134,15 @@ export type ApiContext = {
   healthMonitor: HealthMonitor;
   agentService: AgentService;
   config: JarvisConfig;
+  /**
+   * Where the Google tokens live. Only set by tests.
+   *
+   * GoogleAuth otherwise resolves this through os.homedir(), which Bun fixes at
+   * process start and no test can redirect — so without this seam the Google
+   * status endpoint reads whatever tokens the machine running the tests happens
+   * to have, and its reconnect/authenticated branches cannot be exercised at all.
+   */
+  googleTokensPath?: string;
   wsService?: WebSocketService;
   channelService?: ChannelService;
   authorityEngine?: AuthorityEngine;
@@ -2098,36 +2107,54 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/auth/google/status': {
       GET: async () => {
         const googleConfig = ctx.config.google;
-        const { classifyGoogle, makeGoogleAuth, googleReconnectRequired } =
-          await import('../integrations/google-managed-refresh.ts');
+        const { classifyGoogle, makeGoogleAuth } = await import(
+          '../integrations/google-managed-refresh.ts'
+        );
+        const shape = classifyGoogle(ctx.config);
         // A MANAGED instance has no client credentials by design — the control
         // plane holds them and refreshes on its behalf — so "configured" cannot
         // mean "has credentials" any more, or hosted would always read as
-        // not_configured. Asked of the same classifier the auth builder uses, so
-        // this cannot claim a config is usable that makeGoogleAuth then refuses.
-        const hasCredentials = classifyGoogle(ctx.config).mode !== 'none';
-        // Control-plane managed (GOOGLE.md): the settings UI must show the
-        // hosted Connect button instead of the credentials form, because the
-        // account is connected THROUGH the control plane and this daemon's own
-        // OAuth flow cannot work here.
-        const managed = !!googleConfig?.connect_url;
+        // not_configured.
+        const configured = shape.mode !== 'none';
+        // Control-plane managed (GOOGLE.md): the settings UI must show the hosted
+        // Connect button instead of the credentials form, because the account is
+        // connected THROUGH the control plane and this daemon's own OAuth flow
+        // cannot work here.
+        //
+        // From the CLASSIFIER, not from connect_url. Keyed on connect_url alone
+        // this disagreed with `configured` whenever a config had refresh_url and
+        // no connect_url: the instance was managed, refresh and the doorbell
+        // worked, and the tab still rendered the credentials form — whose save
+        // then 409s from the managed guard and whose OAuth button 400s. The
+        // control plane now refuses to boot without the link, and this reads the
+        // same source of truth the auth builder does.
+        const managed = shape.mode === 'managed';
         const managedFields = managed
-          ? { managed: true as const, connect_url: googleConfig!.connect_url }
+          ? { managed: true as const, connect_url: googleConfig?.connect_url ?? null }
           : { managed: false as const };
 
-        if (!hasCredentials) {
-          return json({ status: 'not_configured', has_credentials: false, is_authenticated: false, scopes: [], token_expiry: null, ...managedFields });
+        if (!configured) {
+          return json({
+            status: 'not_configured',
+            configured: false,
+            is_authenticated: false,
+            scopes: [],
+            token_expiry: null,
+            // A config we REFUSED says why; "no Google here" says nothing.
+            ...(shape.reason ? { reason: shape.reason } : {}),
+            ...managedFields,
+          });
         }
 
         try {
-          const auth = makeGoogleAuth(ctx.config);
+          const auth = makeGoogleAuth(ctx.config, undefined, ctx.googleTokensPath);
           const tokens = auth?.loadTokens() ?? null;
           // A revoked or expired grant leaves the tokens file exactly where it
-          // was, so "we have tokens" is not "Google works". When the control
-          // plane has told us the grant is gone, report NOT authenticated —
-          // that is what puts the Connect button back in front of the user
-          // instead of a green "connected" chip over a dead integration.
-          const reconnect = googleReconnectRequired(auth);
+          // was, so "we have tokens" is not "Google works". When the grant is
+          // known to be gone, report NOT authenticated — that is what puts the
+          // Connect button back in front of the user instead of a green
+          // "connected" chip over a dead integration.
+          const reconnect = auth?.reconnectRequired() ?? null;
           const authenticated = !reconnect && (auth?.isAuthenticated() ?? false);
 
           return json({
@@ -2141,7 +2168,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
                 : managed
                   ? 'not_connected'
                   : 'credentials_saved',
-            has_credentials: true,
+            configured: true,
             is_authenticated: authenticated,
             ...(reconnect ? { reconnect_reason: reconnect } : {}),
             scopes: ['gmail.readonly', 'calendar.readonly'],
@@ -2149,7 +2176,17 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             ...managedFields,
           });
         } catch {
-          return json({ status: 'credentials_saved', has_credentials: true, is_authenticated: false, scopes: [], token_expiry: null });
+          // managedFields is carried here too: dropping it answered
+          // `credentials_saved` with no `managed`, i.e. the self-hosted
+          // credentials form on a hosted box — the same wrong UI as above.
+          return json({
+            status: managed ? 'not_connected' : 'credentials_saved',
+            configured: true,
+            is_authenticated: false,
+            scopes: [],
+            token_expiry: null,
+            ...managedFields,
+          });
         }
       },
     },
@@ -2163,7 +2200,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           // tab or a curl dropped refresh_url, instance_id and notify_secret
           // from the running config and persisted a row that then won on every
           // reload: refresh dead, doorbell 404, managed UI gone. Silently.
-          if (ctx.config.google?.connect_url || ctx.config.google?.refresh_url) {
+          const { classifyGoogle } = await import('../integrations/google-managed-refresh.ts');
+          if (classifyGoogle(ctx.config).mode === 'managed' || ctx.config.google?.refresh_url) {
             return error(
               'This instance is managed by usejarvis — its Google credentials are held by the control plane and cannot be set here.',
               409,
@@ -2260,12 +2298,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (!secret) return error('not configured', 404);
 
         const raw = await req.text();
-        const provided = req.headers.get('x-jarvis-signature') ?? '';
-        const expected = createHmac('sha256', secret).update(raw).digest('hex');
-        if (
-          provided.length !== expected.length ||
-          !timingSafeEqual(Buffer.from(provided), Buffer.from(expected))
-        ) {
+        const { INSTANCE_SIGNATURE_HEADER, verifyWithSecret } = await import(
+          '../integrations/google-signature.ts'
+        );
+        // Byte-length compare, via the shared helper: the hand-rolled version
+        // here gated on String.length, so a 64-CHARACTER non-ASCII signature got
+        // past it and made timingSafeEqual throw — a 500 with a stack instead of
+        // a 401, from any unauthenticated caller, on a deliberately public route.
+        if (!verifyWithSecret(secret, raw, req.headers.get(INSTANCE_SIGNATURE_HEADER))) {
           return error('bad signature', 401);
         }
 

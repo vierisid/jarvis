@@ -30,7 +30,7 @@ import { CommitmentExecutor } from "./commitment-executor.ts";
 import { classifyEvent } from "./event-classifier.ts";
 import { createApiRoutes, setCorsOrigin } from "./api-routes.ts";
 import { GoogleAuth } from "../integrations/google-auth.ts";
-import { googleIdentity, makeGoogleAuth } from "../integrations/google-managed-refresh.ts";
+import { classifyGoogle, googleIdentity, makeGoogleAuth } from "../integrations/google-managed-refresh.ts";
 import { ResearchQueue } from "./research-queue.ts";
 import { researchQueueTool, setResearchQueueRef } from "../actions/tools/research.ts";
 import { spawnPersistentAgent, assignPersistentAgentTask } from "../actions/tools/agents.ts";
@@ -524,6 +524,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // them — so this cannot key on their presence or hosted Google would never
     // start.
     googleAuth = makeGoogleAuth(jarvisConfig);
+    // A config we REFUSED (a mis-rendered managed block) is logged HERE, once,
+    // rather than by the classifier: that runs on every status poll too, and
+    // logging inside it printed the same line twice per poll forever.
+    const googleShape = classifyGoogle(jarvisConfig);
+    if (googleShape.mode === 'none' && googleShape.reason) {
+      console.error(`[Daemon] Google is disabled: ${googleShape.reason}`);
+    }
     if (googleAuth) {
       if (googleAuth.isAuthenticated()) {
         console.log('[Daemon] Google OAuth: authenticated (Gmail + Calendar observers enabled)');

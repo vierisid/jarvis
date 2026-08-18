@@ -1,4 +1,8 @@
 import { describe, expect, it } from 'bun:test';
+import { createHash } from 'node:crypto';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createApiRoutes, type ApiContext } from './api-routes.ts';
 import type { JarvisConfig } from '../config/types.ts';
 
@@ -25,14 +29,18 @@ const CONNECT_URL = 'https://app.usejarvis.dev/account';
 const MANAGED = {
   refresh_url: 'https://app.usejarvis.dev/api/integrations/google/refresh',
   instance_id: 'inst-1',
+  // The doorbell key and the refresh key: different derivations, so a mix-up of
+  // the two cannot pass a test that uses this fixture.
   notify_secret: 'a'.repeat(64),
+  refresh_secret: 'c'.repeat(64),
   connect_url: CONNECT_URL,
 };
 
-function routes(google: Record<string, string> | undefined) {
+function routes(google: Record<string, string> | undefined, googleTokensPath?: string) {
   return createApiRoutes({
     daemonStartedAt: Date.now(),
     healthMonitor: {} as ApiContext['healthMonitor'],
+    googleTokensPath,
     config: {
       daemon: { port: 3142, data_dir: '/tmp/jarvis', db_path: '/tmp/jarvis/jarvis.db' },
       ...(google ? { google } : {}),
@@ -40,39 +48,47 @@ function routes(google: Record<string, string> | undefined) {
   } as ApiContext) as Record<string, { GET?: Handler; POST?: Handler }>;
 }
 
+async function status(r: Record<string, { GET?: Handler }>) {
+  return (await (await r['/api/auth/google/status']!.GET!(
+    new Request('http://localhost/api/auth/google/status'),
+  )).json()) as {
+    managed: boolean;
+    connect_url: string;
+    status: string;
+    is_authenticated: boolean;
+    configured: boolean;
+    reconnect_reason?: string;
+    reason?: string;
+  };
+}
+
 describe('managed (hosted) Google mode', () => {
   it('status reports managed + where to connect', async () => {
-    const r = routes(MANAGED);
-    const body = (await (await r['/api/auth/google/status']!.GET!(
-      new Request('http://localhost/api/auth/google/status'),
-    )).json()) as {
-      managed: boolean;
-      connect_url: string;
-      status: string;
-      is_authenticated: boolean;
-      has_credentials: boolean;
-    };
+    const dir = await mkdtemp(join(tmpdir(), 'jarvis-google-status-'));
+    const body = await status(routes(MANAGED, join(dir, 'google-tokens.json')));
     expect(body.managed).toBe(true);
     expect(body.connect_url).toBe(CONNECT_URL);
-    // Configured WITHOUT any credentials in the file — the whole point.
-    expect(body.has_credentials).toBe(true);
-    // The MAPPING is the assertion, relative to whatever token file this machine
-    // happens to have: unauthenticated + managed must read "not_connected", NOT
+    // Configured WITHOUT any credentials in the file — the whole point, and the
+    // reason the field is no longer called has_credentials.
+    expect(body.configured).toBe(true);
+    // Managed and unauthenticated must read "not_connected", NOT
     // "credentials_saved" — there are no credentials for the user to save here,
-    // and telling them to would be the old self-hosted story. Written this way
-    // because GoogleAuth resolves its path through os.homedir(), which Bun fixes
-    // at process start and no test can redirect.
-    expect(body.status).toBe(body.is_authenticated ? 'connected' : 'not_connected');
+    // and telling them to would be the old self-hosted story. Asserted against an
+    // empty tokens directory rather than as a mapping over "whatever this machine
+    // happens to have".
+    expect(body.status).toBe('not_connected');
+    expect(body.is_authenticated).toBe(false);
   });
 
   it('a self-hosted instance is NOT managed', async () => {
-    const r = routes({ client_id: 'cid', client_secret: 'sec' });
-    const body = (await (await r['/api/auth/google/status']!.GET!(
-      new Request('http://localhost/api/auth/google/status'),
-    )).json()) as { managed: boolean; status: string; is_authenticated: boolean };
+    const dir = await mkdtemp(join(tmpdir(), 'jarvis-google-self-'));
+    const body = await status(
+      routes({ client_id: 'cid', client_secret: 'sec' }, join(dir, 'google-tokens.json')),
+    );
     // Its own credentials form and OAuth flow are the RIGHT ui there.
     expect(body.managed).toBe(false);
-    expect(body.status).toBe(body.is_authenticated ? 'connected' : 'credentials_saved');
+    expect(body.is_authenticated).toBe(false);
+    expect(body.status).toBe('credentials_saved');
   });
 
   it('the daemon OAuth flow is refused when managed, and points at the account page', async () => {
@@ -102,14 +118,19 @@ describe('managed (hosted) Google mode', () => {
     // nothing would look wrong, because Google would keep working.
     const r = routes({
       refresh_url: MANAGED.refresh_url,
+      instance_id: MANAGED.instance_id,
+      // ...but no refresh_secret, so nothing here could sign a refresh request.
       client_id: 'cid',
       client_secret: 'sec',
     });
     const body = (await (await r['/api/auth/google/status']!.GET!(
       new Request('http://localhost/api/auth/google/status'),
-    )).json()) as { status: string; has_credentials: boolean };
-    expect(body.has_credentials).toBe(false);
+    )).json()) as { status: string; configured: boolean; reason?: string };
+    expect(body.configured).toBe(false);
     expect(body.status).toBe('not_configured');
+    // ...and it says WHY, because this shape is a config we refused rather than a
+    // deployment that simply does not run Google.
+    expect(body.reason).toContain('refresh_url');
   });
 
   it('POST /api/config/google is refused when managed', async () => {
@@ -137,5 +158,56 @@ describe('managed (hosted) Google mode', () => {
     // Rejected for its EMPTY body (400), not for being managed (409) — the
     // guard must not have swallowed the self-hosted path with it.
     expect(res.status).toBe(400);
+  });
+
+  it('a connected instance reads connected; a REVOKED grant reads reconnect_required', async () => {
+    // Previously untestable, and so untested: the route resolved the tokens path
+    // through os.homedir(), which Bun fixes at process start — the older test in
+    // this file even says so and asserts a mapping instead. With the path injected
+    // both branches can be driven, which matters because "tokens on disk" and
+    // "Google works" are exactly the two things this endpoint must stop
+    // conflating: a revoked grant leaves the file untouched.
+    const dir = await mkdtemp(join(tmpdir(), 'jarvis-google-status-'));
+    const tokensPath = join(dir, 'google-tokens.json');
+    try {
+      await Bun.write(
+        tokensPath,
+        JSON.stringify({
+          access_token: 'a',
+          refresh_token: '1//r',
+          expiry_date: Date.now() + 3_600_000,
+          token_type: 'Bearer',
+        }),
+      );
+      const connected = await status(routes(MANAGED, tokensPath));
+      expect(connected).toMatchObject({
+        managed: true,
+        configured: true,
+        is_authenticated: true,
+        status: 'connected',
+      });
+
+      // The verdict the refresh path records when the control plane says the
+      // grant is gone. Same tokens on disk; opposite answer.
+      await Bun.write(
+        `${tokensPath}.reconnect`,
+        JSON.stringify({
+          tokenHash: createHash('sha256').update('1//r').digest('hex'),
+          message: 'Google access is no longer valid — connect Google again',
+        }),
+      );
+      const revoked = await status(routes(MANAGED, tokensPath));
+      expect(revoked).toMatchObject({
+        managed: true,
+        // NOT authenticated, which is what puts the Connect button back in front
+        // of the user instead of a green chip over a dead integration.
+        is_authenticated: false,
+        status: 'reconnect_required',
+        connect_url: CONNECT_URL,
+      });
+      expect(revoked.reconnect_reason).toContain('connect Google again');
+    } finally {
+      await rm(dir, { recursive: true, force: true });
+    }
   });
 });

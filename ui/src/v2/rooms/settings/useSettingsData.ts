@@ -286,7 +286,12 @@ export interface GoogleStatus {
     | "not_connected"
     /** The grant is gone (revoked, or expired). Tokens may still be on disk. */
     | "reconnect_required";
-  has_credentials: boolean;
+  /**
+   * Google is usable on this instance. NOT "credentials are present": a managed
+   * instance has none by design — the control plane holds them — so the old name
+   * was false for exactly the mode it most had to describe.
+   */
+  configured: boolean;
   is_authenticated: boolean;
   scopes: string[];
   token_expiry: number | null;

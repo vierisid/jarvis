@@ -330,13 +330,22 @@ export function saveGoogleSettings(value: JarvisConfig['google']): void {
 function googleIsFileProvided(google: JarvisConfig['google']): boolean {
   // NOT `client_id` alone: a managed instance has no client credentials at all
   // — that is the entire point of hosted mode — so keying on them let the stored
-  // row replace refresh_url, instance_id and notify_secret, breaking refresh and
-  // the push doorbell and turning the managed UI back into the credentials form.
+  // row replace refresh_url, instance_id and the two derived keys, breaking
+  // refresh and the push doorbell and turning the managed UI back into the
+  // credentials form.
+  //
+  // Every key the SERVER writes counts, including the push-only ones: the
+  // renderer emits them together, so any of them present means this section came
+  // from the file, and a stored row must not win over it.
   return !!(
     google?.client_id ||
     google?.refresh_url ||
+    google?.refresh_secret ||
     google?.notify_secret ||
-    google?.connect_url
+    google?.connect_url ||
+    google?.pubsub_topic ||
+    google?.push_callback ||
+    google?.channel_token
   );
 }
 
