@@ -79,24 +79,26 @@ describe('GET /api/config/llm/usejarvis/models', () => {
   it('returns the key-scoped catalog, sending the block key ONLY to the block base_url', async () => {
     const res = await callEndpoint({ base_url: HOSTED_BASE, api_key: HOSTED_KEY });
     expect(res.status).toBe(200);
-    const body = await res.json() as { ok: boolean; models: string[] };
+    const body = await res.json() as { ok: boolean; models: string[]; degraded: boolean };
     expect(body.ok).toBe(true);
     expect(body.models).toEqual(['uj-chat', 'uj-high']); // provider sorts + dedupes
+    expect(body.degraded).toBe(false);
     expect(upstream!.url).toBe(`${HOSTED_BASE}/v1/models`);
     expect(upstream!.auth).toBe(`Bearer ${HOSTED_KEY}`);
   });
 
-  it('maps upstream failures to a generic error that leaks neither the key nor the host', async () => {
+  it('degrades upstream failures to the fallback aliases, leaking neither the key nor the host', async () => {
     // A CDN fronting the proxy answers with an HTML error page that names
-    // the origin host — exactly what the ok:false body must not echo.
+    // the origin host — exactly what the response body must not echo. The
+    // provider degrades to the core aliases so the tier picker keeps working.
     upstreamResponse = () =>
       new Response(`<html>origin ${HOSTED_BASE} unreachable</html>`, { status: 502 });
     const res = await callEndpoint({ base_url: HOSTED_BASE, api_key: HOSTED_KEY });
     expect(res.status).toBe(200);
-    const body = await res.json() as { ok: boolean; error: string; models: string[] };
-    expect(body.ok).toBe(false);
-    expect(body.error).toBe('Usejarvis AI catalog unavailable');
-    expect(body.models).toEqual([]);
+    const body = await res.json() as { ok: boolean; models: string[]; degraded: boolean };
+    expect(body.ok).toBe(true);
+    expect(body.models).toEqual(['uj-chat', 'uj-high', 'uj-low', 'uj-medium']);
+    expect(body.degraded).toBe(true);
     const serialized = JSON.stringify(body);
     expect(serialized).not.toContain('llm.usejarvis.host');
     expect(serialized).not.toContain(HOSTED_KEY);

@@ -120,3 +120,50 @@ export function effectiveLlmForBinding(config: JarvisConfig): LLMConfig {
   }
   return { ...config.llm, tiers };
 }
+
+// ── Hosted model allowlist (server-side gate) ────────────────────────────
+//
+// The dashboard's picker restrictions are advisory; THIS is the gate. Refs
+// under the reserved provider are validated against the plan catalog when we
+// have seen one recently, and against a conservative static rule otherwise.
+// The cache is fed by the catalog route (the UI hits it whenever a hosted
+// tier picker renders), because saveLLMSettings is synchronous and must not
+// fetch. A degraded catalog (proxy unreachable → fallback aliases) never
+// enters the cache: it would shrink the allowlist to four entries and reject
+// plan-specific aliases the user legitimately holds.
+
+const CATALOG_TTL_MS = 5 * 60_000;
+let hostedCatalog: { models: ReadonlySet<string>; at: number } | null = null;
+
+/** Feed the allowlist cache from a live (non-degraded) catalog response. */
+export function noteHostedCatalog(models: string[], degraded: boolean): void {
+  if (degraded) return;
+  hostedCatalog = { models: new Set(models), at: Date.now() };
+}
+
+export function clearHostedCatalogForTest(): void {
+  hostedCatalog = null;
+}
+
+/** Aliases that resolve to non-chat endpoints; never valid as a tier/default
+ * ref even when the live catalog is unavailable. */
+const NON_CHAT_ALIAS = /^uj-(stt|tts|realtime)\b/;
+
+/**
+ * Validate the model half of a `usejarvis_ai:<model>` ref. Returns an error
+ * message for the 400, or null when the ref is acceptable.
+ */
+export function validateHostedModelRef(model: string): string | null {
+  const fresh = hostedCatalog && Date.now() - hostedCatalog.at < CATALOG_TTL_MS
+    ? hostedCatalog.models
+    : null;
+  if (fresh) {
+    return fresh.has(model)
+      ? null
+      : `Model '${model}' is not in your plan's catalog`;
+  }
+  if (!model.startsWith('uj-') || NON_CHAT_ALIAS.test(model)) {
+    return `Model '${model}' is not a chat alias of your plan`;
+  }
+  return null;
+}

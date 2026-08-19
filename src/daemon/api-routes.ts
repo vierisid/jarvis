@@ -1630,10 +1630,16 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         }
         try {
           const { UsejarvisAIProvider } = await import('../llm/usejarvis.ts');
+          const { noteHostedCatalog } = await import('./usejarvis-ai.ts');
           const block = ctx.config.usejarvis_ai!;
           const provider = new UsejarvisAIProvider(block.base_url!.trim(), block.api_key!.trim());
-          const models = await provider.listModels();
-          return json({ ok: true, models });
+          const { models, degraded } = await provider.listModelsDetailed();
+          // A live catalog feeds the save-time allowlist; a degraded one never
+          // does (it would shrink the allowlist to the fallback four). The
+          // flag lets the dashboard show "plan catalog unreachable — Retry"
+          // instead of presenting the fallback as the plan's truth.
+          noteHostedCatalog(models, degraded);
+          return json({ ok: true, models, degraded });
         } catch (err) {
           // listModels embeds the upstream response body in its errors, and a
           // CDN/proxy error page can echo the hosted base_url hostname this

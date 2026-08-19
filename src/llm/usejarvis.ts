@@ -42,10 +42,18 @@ export class UsejarvisAIProvider extends OpenAIProvider {
    * pickers — which would break alias opacity and let a user select a model
    * whose per-plan resale price was never configured. */
   override async listModels(): Promise<string[]> {
-    // Never throws: the LLMProvider contract is degrade-to-fallback (every
-    // sibling catches), and the first caller — the tier-picker catalog route —
-    // must not turn a transient proxy 503 into an unhandled rejection. The
-    // fallback is the four core aliases every plan carries.
+    return (await this.listModelsDetailed()).models;
+  }
+
+  /** Like listModels, but reports whether the result is the live plan catalog
+   * or the degraded fallback — the catalog route forwards the flag so the
+   * dashboard can offer a retry instead of presenting the fallback as truth.
+   * Never throws: the LLMProvider contract is degrade-to-fallback (every
+   * sibling catches), and the first caller — the tier-picker catalog route —
+   * must not turn a transient proxy 503 into an unhandled rejection. The
+   * fallback is the four core aliases every plan carries. */
+  async listModelsDetailed(): Promise<{ models: string[]; degraded: boolean }> {
+    const fallback = { models: UsejarvisAIProvider.FALLBACK_MODELS.slice(), degraded: true };
     try {
       const response = await fetch(this.modelsUrl, {
         headers: { Authorization: `Bearer ${this.apiKey}` },
@@ -53,21 +61,22 @@ export class UsejarvisAIProvider extends OpenAIProvider {
       });
       if (!response.ok) {
         console.warn(`[usejarvis] model catalog unavailable (${response.status}); serving fallback aliases`);
-        return UsejarvisAIProvider.FALLBACK_MODELS.slice();
+        return fallback;
       }
       const payload = await response.json() as { data?: Array<{ id?: unknown }> };
       if (!Array.isArray(payload.data)) {
         console.warn(`[usejarvis] model catalog malformed; serving fallback aliases`);
-        return UsejarvisAIProvider.FALLBACK_MODELS.slice();
+        return fallback;
       }
-      return [...new Set(
+      const models = [...new Set(
         payload.data
           .map((entry) => entry.id)
           .filter((id): id is string => typeof id === 'string' && id.startsWith('uj-')),
       )].sort();
+      return { models, degraded: false };
     } catch (err) {
       console.warn('[usejarvis] model catalog fetch failed; serving fallback aliases:', err instanceof Error ? err.message : err);
-      return UsejarvisAIProvider.FALLBACK_MODELS.slice();
+      return fallback;
     }
   }
 

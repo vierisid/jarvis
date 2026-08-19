@@ -3,7 +3,12 @@ import { initDatabase, closeDb } from '../vault/schema.ts';
 import { getSetting, setSetting } from '../vault/settings.ts';
 import { DEFAULT_CONFIG, type JarvisConfig } from '../config/types.ts';
 import { getLLMSettings, mergeLLMSettingsIntoConfig, saveLLMSettings } from './llm-settings.ts';
-import { applyUsejarvisAi, USEJARVIS_PROVIDER_NAME } from './usejarvis-ai.ts';
+import {
+  applyUsejarvisAi,
+  clearHostedCatalogForTest,
+  noteHostedCatalog,
+  USEJARVIS_PROVIDER_NAME,
+} from './usejarvis-ai.ts';
 
 afterEach(() => closeDb());
 
@@ -165,6 +170,56 @@ function hostedConfig(): JarvisConfig {
   applyUsejarvisAi(config); // what boot / every merge does
   return config;
 }
+
+describe('saveLLMSettings: hosted model refs pass the server-side allowlist (W8)', () => {
+  beforeEach(() => { closeDb(); initDatabase(':memory:'); clearHostedCatalogForTest(); });
+  afterEach(() => { closeDb(); clearHostedCatalogForTest(); });
+
+  test('static rule (no catalog seen): non-chat aliases and raw upstream ids are refused, chat aliases save', () => {
+    const config = hostedConfig();
+    for (const model of ['uj-stt', 'uj-tts-hd', 'uj-realtime', 'gpt-5.5']) {
+      expect(() => saveLLMSettings(config, { tiers: { high: `usejarvis_ai:${model}` } }))
+        .toThrow(/not (in your plan|a chat alias)/);
+    }
+    expect(() => saveLLMSettings(config, { default: 'usejarvis_ai:gpt-5.5' })).toThrow();
+    saveLLMSettings(config, { tiers: { high: 'usejarvis_ai:uj-high' } });
+    expect(getSetting('llm.tiers.high')).toBe('usejarvis_ai:uj-high');
+  });
+
+  test('a live catalog narrows the allowlist to exactly the plan; a degraded one never does', () => {
+    const config = hostedConfig();
+    noteHostedCatalog(['uj-chat', 'uj-pro'], false);
+    saveLLMSettings(config, { tiers: { high: 'usejarvis_ai:uj-pro' } });
+    expect(getSetting('llm.tiers.high')).toBe('usejarvis_ai:uj-pro');
+    // uj-high passes the static rule but is not in THIS plan's catalog:
+    expect(() => saveLLMSettings(config, { tiers: { medium: 'usejarvis_ai:uj-high' } }))
+      .toThrow(/not in your plan/);
+    // Degraded fetches must not shrink the allowlist to the fallback four:
+    clearHostedCatalogForTest();
+    noteHostedCatalog(['uj-chat'], true);
+    saveLLMSettings(config, { tiers: { medium: 'usejarvis_ai:uj-high' } });
+    expect(getSetting('llm.tiers.medium')).toBe('usejarvis_ai:uj-high');
+  });
+
+  test('a rejected ref mutates nothing (validate-before-mutate)', () => {
+    const config = hostedConfig();
+    saveLLMSettings(config, { tiers: { high: 'usejarvis_ai:uj-high' } });
+    expect(() => saveLLMSettings(config, {
+      tiers: { high: 'usejarvis_ai:uj-stt' },
+      default: 'anthropic:claude-x',
+    })).toThrow();
+    expect(getSetting('llm.tiers.high')).toBe('usejarvis_ai:uj-high');
+    expect(config.llm.default).toBeUndefined();
+    expect(getSetting('llm.default') ?? '').toBe('');
+  });
+
+  test('self-hosted installs have no gate: a legacy provider named usejarvis_ai keeps free refs', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.llm.providers = { usejarvis_ai: { kind: 'openai_compatible', base_url: 'https://my.gw/v1' } };
+    saveLLMSettings(config, { tiers: { high: 'usejarvis_ai:gpt-5.5' } });
+    expect(getSetting('llm.tiers.high')).toBe('usejarvis_ai:gpt-5.5');
+  });
+});
 
 describe('saveLLMSettings: the hosted provider is not editable', () => {
   beforeEach(() => { closeDb(); initDatabase(':memory:'); });

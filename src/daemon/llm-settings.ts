@@ -22,6 +22,7 @@ import {
   effectiveLlmForBinding,
   hasUsejarvisAi,
   USEJARVIS_PROVIDER_NAME,
+  validateHostedModelRef,
 } from './usejarvis-ai.ts';
 import { getSetting, setSetting } from '../vault/settings.ts';
 import { getSecret, setSecret, deleteSecret, hasSecret } from '../vault/keychain.ts';
@@ -267,6 +268,28 @@ export function saveLLMSettings(
 ): void {
   if (!config.llm.providers) config.llm.providers = {};
   if (!config.llm.tiers) config.llm.tiers = {};
+
+  // Server-side allowlist for hosted refs (validate-before-mutate: this runs
+  // before ANY provider/tier/default application). The UI hides free-text
+  // model entry for the managed provider, but the UI is not the gate — a
+  // hand-crafted POST carrying `usejarvis_ai:gpt-5.5` or `usejarvis_ai:uj-stt`
+  // must not reach the proxy under the account key (review pr3#1, pr1#9).
+  if (hasUsejarvisAi(config)) {
+    const candidateRefs: string[] = [];
+    if (typeof body.default === 'string' && body.default) candidateRefs.push(body.default);
+    if (body.tiers) {
+      for (const value of Object.values(body.tiers)) {
+        if (typeof value === 'string' && value) candidateRefs.push(value);
+      }
+    }
+    for (const ref of candidateRefs) {
+      const parsed = parseModelRef(ref);
+      if (parsed?.provider === USEJARVIS_PROVIDER_NAME) {
+        const problem = validateHostedModelRef(parsed.model ?? '');
+        if (problem) throw new Error(problem);
+      }
+    }
+  }
 
   // Apply provider updates (add / modify / remove).
   if (body.providers) {
