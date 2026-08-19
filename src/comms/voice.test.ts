@@ -10,6 +10,7 @@ import {
   EdgeTTSProvider,
   SarvamTTSProvider,
   splitIntoSentences,
+  sniffAudioFormat,
 } from './voice.ts';
 import type { STTConfig, TTSConfig } from '../config/types.ts';
 
@@ -30,6 +31,13 @@ function makeWavBuffer(pcmBytes = 100): Buffer {
   buf.writeUInt16LE(16, 34);       // bits per sample
   buf.write('data', 36, 'ascii');
   buf.writeUInt32LE(dataSize, 40);
+  return buf;
+}
+
+/** Build a buffer with an OGG page header (what Telegram voice notes carry). */
+function makeOggBuffer(payloadBytes = 64): Buffer {
+  const buf = Buffer.alloc(4 + payloadBytes);
+  buf.write('OggS', 0, 'ascii');
   return buf;
 }
 
@@ -349,7 +357,7 @@ describe('LocalWhisperSTT.transcribe', () => {
     expect(calledUrl).toBe('http://localhost:8080/v1/audio/transcriptions');
   });
 
-  test('openai_compatible: sends model and language fields', async () => {
+  test('openai_compatible: sends model, omits language unless configured', async () => {
     const stt = new LocalWhisperSTT('http://localhost:8080/v1/audio/transcriptions', 'whisper-1', 'openai_compatible');
     const wav = makeWavBuffer();
 
@@ -357,7 +365,8 @@ describe('LocalWhisperSTT.transcribe', () => {
       const body = init.body as FormData;
       expect(body.has('model')).toBe(true);
       expect(body.get('model')).toBe('whisper-1');
-      expect(body.has('language')).toBe(true);
+      // Unset language = auto-detect: the param is omitted entirely.
+      expect(body.has('language')).toBe(false);
       expect(body.has('response_format')).toBe(false);
       return new Response(JSON.stringify({ text: 'ok' }), {
         headers: { 'content-type': 'application/json' },
@@ -365,6 +374,15 @@ describe('LocalWhisperSTT.transcribe', () => {
     }) as any;
 
     await stt.transcribe(wav);
+
+    globalThis.fetch = mock(async (_url: string, init: any) => {
+      expect((init.body as FormData).get('language')).toBe('it');
+      return new Response(JSON.stringify({ text: 'ok' }), {
+        headers: { 'content-type': 'application/json' },
+      });
+    }) as any;
+    const withLang = new LocalWhisperSTT('http://localhost:8080/v1/audio/transcriptions', 'whisper-1', 'openai_compatible', 'it');
+    await withLang.transcribe(wav);
   });
 
   // -- Response shape parsing ---------------------------------------------
@@ -553,26 +571,53 @@ describe('UsejarvisSTT.transcribe', () => {
   });
 });
 
-describe('WAV labeling of the shared browser-mic buffer', () => {
+describe('sniffAudioFormat', () => {
+  test('detects the containers the STT paths actually see', () => {
+    expect(sniffAudioFormat(makeWavBuffer())).toEqual({ filename: 'audio.wav', mimeType: 'audio/wav' });
+    expect(sniffAudioFormat(makeOggBuffer())).toEqual({ filename: 'audio.ogg', mimeType: 'audio/ogg' });
+    expect(sniffAudioFormat(Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x00, 0x00])))
+      .toEqual({ filename: 'audio.webm', mimeType: 'audio/webm' });
+    expect(sniffAudioFormat(Buffer.from('ID3\x04\x00\x00', 'latin1')))
+      .toEqual({ filename: 'audio.mp3', mimeType: 'audio/mpeg' });
+    expect(sniffAudioFormat(Buffer.from([0xff, 0xfb, 0x90, 0x00]))) // bare MPEG frame sync
+      .toEqual({ filename: 'audio.mp3', mimeType: 'audio/mpeg' });
+  });
+
+  test('falls back to WAV (the dashboard-mic format) for unknown or tiny buffers', () => {
+    expect(sniffAudioFormat(Buffer.from('????garbage'))).toEqual({ filename: 'audio.wav', mimeType: 'audio/wav' });
+    expect(sniffAudioFormat(Buffer.from([0x00]))).toEqual({ filename: 'audio.wav', mimeType: 'audio/wav' });
+    expect(sniffAudioFormat(Buffer.alloc(0))).toEqual({ filename: 'audio.wav', mimeType: 'audio/wav' });
+  });
+});
+
+describe('magic-byte labeling of the shared STT upload buffer', () => {
   const originalFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = originalFetch; });
 
+  // One provider instance serves the dashboard mic (WAV), Telegram voice
+  // notes (OGG/Opus) and Discord attachments — the declared part must track
+  // the buffer, not a hardcoded container.
   for (const [label, make] of [
     ['OpenAIWhisperSTT', () => new OpenAIWhisperSTT('test-key-not-real')],
     ['GroqWhisperSTT', () => new GroqWhisperSTT('test-key-not-real')],
+    ['UsejarvisSTT', () => new UsejarvisSTT('https://llm.usejarvis.host', 'sk-uj-not-real')],
   ] as const) {
-    test(`${label} sends audio.wav with audio/wav type`, async () => {
-      let file: File | null = null;
+    test(`${label} labels a WAV buffer audio.wav and an OGG buffer audio.ogg`, async () => {
+      const files: File[] = [];
       globalThis.fetch = mock(async (_url: string, init: any) => {
-        file = (init.body as FormData).get('file') as File;
+        files.push((init.body as FormData).get('file') as File);
         return new Response(JSON.stringify({ text: 'ok' }), {
           headers: { 'content-type': 'application/json' },
         });
       }) as any;
 
-      await make().transcribe(makeWavBuffer());
-      expect(file!.name).toBe('audio.wav');
-      expect(file!.type).toBe('audio/wav');
+      const provider = make();
+      await provider.transcribe(makeWavBuffer());
+      await provider.transcribe(makeOggBuffer());
+      expect(files.map((f) => [f.name, f.type])).toEqual([
+        ['audio.wav', 'audio/wav'],
+        ['audio.ogg', 'audio/ogg'],
+      ]);
     });
   }
 });
@@ -698,10 +743,11 @@ describe('STT language is configurable (was hardcoded to en everywhere)', () => 
   const originalFetch = globalThis.fetch;
   afterEach(() => { globalThis.fetch = originalFetch; });
 
-  const languageSentBy = async (config: STTConfig, hosted?: { baseUrl: string; apiKey: string }) => {
-    let sent = '';
+  const languageSentBy = async (config: STTConfig, hosted?: { baseUrl: string; apiKey: string }): Promise<string | null> => {
+    let sent: string | null = null;
     globalThis.fetch = mock(async (_url: string, init: any) => {
-      sent = String((init.body as FormData).get('language'));
+      const value = (init.body as FormData).get('language');
+      sent = value === null ? null : String(value);
       return new Response(JSON.stringify({ text: 'ok' }), {
         status: 200, headers: { 'Content-Type': 'application/json' },
       });
@@ -710,8 +756,13 @@ describe('STT language is configurable (was hardcoded to en everywhere)', () => 
     return sent;
   };
 
-  test('defaults to en, preserving the previous hardcoded behaviour', async () => {
-    expect(await languageSentBy({ provider: 'openai', openai: { api_key: 'k' } })).toBe('en');
+  test('unset language omits the param entirely — Whisper auto-detects', async () => {
+    const hosted = { baseUrl: 'https://llm.usejarvis.host', apiKey: 'sk-uj-not-real' };
+    // Forcing 'en' made an Italian hosted user's speech decode (or translate)
+    // as English; absence is the documented auto-detect switch.
+    expect(await languageSentBy({ provider: 'openai', openai: { api_key: 'k' } })).toBeNull();
+    expect(await languageSentBy({ provider: 'groq', groq: { api_key: 'k' } })).toBeNull();
+    expect(await languageSentBy({ provider: 'usejarvis' }, hosted)).toBeNull();
   });
 
   test('a configured language reaches every Whisper-shaped provider', async () => {

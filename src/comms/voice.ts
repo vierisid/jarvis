@@ -22,14 +22,40 @@ export interface TTSProvider {
 export type HostedVoiceCredentials = { baseUrl: string; apiKey: string };
 
 /**
+ * Sniff the audio container from magic bytes so multipart uploads declare
+ * what the buffer actually IS. The same STT provider instance receives
+ * dashboard-mic WAV (ui useVoice encodeWav writes a RIFF header), Telegram
+ * voice notes (OGG/Opus), and arbitrary Discord attachments — any hardcoded
+ * label is wrong for at least one of them, and strict servers (including the
+ * hosted proxy) may trust the declared container. Falls back to WAV, the
+ * dashboard-mic format, when nothing matches.
+ */
+export function sniffAudioFormat(audio: Buffer): { filename: string; mimeType: string } {
+  if (audio.length >= 4) {
+    const magic = audio.toString('latin1', 0, 4);
+    if (magic === 'RIFF') return { filename: 'audio.wav', mimeType: 'audio/wav' };
+    if (magic === 'OggS') return { filename: 'audio.ogg', mimeType: 'audio/ogg' };
+    // EBML header: WebM/Matroska (MediaRecorder output on some browsers).
+    if (audio[0] === 0x1a && audio[1] === 0x45 && audio[2] === 0xdf && audio[3] === 0xa3) {
+      return { filename: 'audio.webm', mimeType: 'audio/webm' };
+    }
+    // ID3v2 tag or a bare MPEG frame sync (0xFFEx).
+    if (magic.startsWith('ID3') || (audio[0] === 0xff && (audio[1]! & 0xe0) === 0xe0)) {
+      return { filename: 'audio.mp3', mimeType: 'audio/mpeg' };
+    }
+  }
+  return { filename: 'audio.wav', mimeType: 'audio/wav' };
+}
+
+/**
  * OpenAI Whisper STT — uses the OpenAI /v1/audio/transcriptions endpoint.
  */
 export class OpenAIWhisperSTT implements STTProvider {
   private apiKey: string;
   private model: string;
-  private language: string;
+  private language?: string;
 
-  constructor(apiKey: string, model: string = 'whisper-1', language: string = 'en') {
+  constructor(apiKey: string, model: string = 'whisper-1', language?: string) {
     this.apiKey = apiKey;
     this.model = model;
     this.language = language;
@@ -37,12 +63,14 @@ export class OpenAIWhisperSTT implements STTProvider {
 
   async transcribe(audio: Buffer): Promise<string> {
     const formData = new FormData();
-    // The browser mic encodes PCM to WAV before sending (ui useVoice
-    // encodeWav writes a RIFF header) — label it truthfully like the local
-    // and Sarvam providers already do; 'audio.webm' was a mislabel.
-    formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/wav' }), 'audio.wav');
+    // Label the part from the buffer's magic bytes (dashboard mic sends WAV,
+    // Telegram voice notes are OGG/Opus); 'audio.webm' was a mislabel.
+    const { filename, mimeType } = sniffAudioFormat(audio);
+    formData.append('file', new Blob([new Uint8Array(audio)], { type: mimeType }), filename);
     formData.append('model', this.model);
-    formData.append('language', this.language);
+    // Unset language = let Whisper auto-detect; forcing 'en' made non-English
+    // speech decode (or translate) as English on a hosted product.
+    if (this.language) formData.append('language', this.language);
 
     const response = await fetch('https://api.openai.com/v1/audio/transcriptions', {
       method: 'POST',
@@ -66,9 +94,9 @@ export class OpenAIWhisperSTT implements STTProvider {
 export class GroqWhisperSTT implements STTProvider {
   private apiKey: string;
   private model: string;
-  private language: string;
+  private language?: string;
 
-  constructor(apiKey: string, model: string = 'whisper-large-v3-turbo', language: string = 'en') {
+  constructor(apiKey: string, model: string = 'whisper-large-v3-turbo', language?: string) {
     this.apiKey = apiKey;
     this.model = model;
     this.language = language;
@@ -76,10 +104,11 @@ export class GroqWhisperSTT implements STTProvider {
 
   async transcribe(audio: Buffer): Promise<string> {
     const formData = new FormData();
-    // Same WAV-mislabel fix as OpenAIWhisperSTT: the audio really is WAV.
-    formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/wav' }), 'audio.wav');
+    // Same magic-byte labeling as OpenAIWhisperSTT.
+    const { filename, mimeType } = sniffAudioFormat(audio);
+    formData.append('file', new Blob([new Uint8Array(audio)], { type: mimeType }), filename);
     formData.append('model', this.model);
-    formData.append('language', this.language);
+    if (this.language) formData.append('language', this.language);
 
     const response = await fetch('https://api.groq.com/openai/v1/audio/transcriptions', {
       method: 'POST',
@@ -108,9 +137,20 @@ export class UsejarvisSTT implements STTProvider {
   private baseUrl: string;
   private apiKey: string;
   private model: string;
-  private language: string;
+  private language?: string;
 
-  constructor(baseUrl: string, apiKey: string, model: string = 'uj-stt', language: string = 'en') {
+  /** Bound on how long one hosted transcription round-trip may take. */
+  static readonly TIMEOUT_MS = 30_000;
+  /** Bound on how much of an ERROR body is read into memory (the caps below
+   * truncate to 200 chars AFTER the read — an unbounded read of a
+   * multi-megabyte interstitial would buffer it whole first, per request,
+   * on a memory-capped multi-tenant host). */
+  static readonly MAX_ERROR_BODY_BYTES = 8_192;
+  /** Bound on a SUCCESS body: generous (a transcript of hours of speech fits
+   * easily), but still a ceiling a misbehaving CDN cannot exceed. */
+  static readonly MAX_BODY_BYTES = 1_048_576;
+
+  constructor(baseUrl: string, apiKey: string, model: string = 'uj-stt', language?: string) {
     // The provisioner writes the proxy ORIGIN; normalize to the /v1 prefix
     // exactly like UsejarvisAIProvider (src/llm/usejarvis.ts) does.
     const trimmed = baseUrl.replace(/\/+$/, '');
@@ -120,20 +160,46 @@ export class UsejarvisSTT implements STTProvider {
     this.language = language;
   }
 
+  /** Read at most maxBytes from the response body. */
+  private static async boundedText(response: Response, maxBytes: number): Promise<string> {
+    const reader = response.body?.getReader();
+    if (!reader) return '';
+    const chunks: Uint8Array[] = [];
+    let total = 0;
+    try {
+      while (total < maxBytes) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        chunks.push(value);
+        total += value.byteLength;
+      }
+    } finally {
+      await reader.cancel().catch(() => {});
+    }
+    return Buffer.concat(chunks).toString('utf8').slice(0, maxBytes);
+  }
+
   async transcribe(audio: Buffer): Promise<string> {
     const formData = new FormData();
-    formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/wav' }), 'audio.wav');
+    // Magic-byte labeling matters most here: the hosted proxy may trust the
+    // declared container, and this instance sees dashboard WAV and Telegram
+    // OGG/Opus alike.
+    const { filename, mimeType } = sniffAudioFormat(audio);
+    formData.append('file', new Blob([new Uint8Array(audio)], { type: mimeType }), filename);
     formData.append('model', this.model);
-    formData.append('language', this.language);
+    if (this.language) formData.append('language', this.language);
 
+    // Timeout: a hung proxy/CDN left Telegram and WS transcribe calls pending
+    // forever with no user-visible failure.
     const response = await fetch(`${this.baseUrl}/audio/transcriptions`, {
       method: 'POST',
       headers: { 'Authorization': `Bearer ${this.apiKey}` },
       body: formData,
+      signal: AbortSignal.timeout(UsejarvisSTT.TIMEOUT_MS),
     });
 
     if (!response.ok) {
-      const err = await response.text();
+      const err = await UsejarvisSTT.boundedText(response, UsejarvisSTT.MAX_ERROR_BODY_BYTES);
       // Shared mapper: budgets block audio endpoints too, so a hosted user
       // WILL hit this — they should get "your included usage is used up …",
       // not the raw proxy JSON (or, behind a CDN, a whole HTML page carrying
@@ -146,7 +212,9 @@ export class UsejarvisSTT implements STTProvider {
     // no status and none of the body — so an HTML interstitial served with a
     // 200 produced a bare parse error with nothing to correlate. Reading the
     // body ourselves keeps the diagnostic, still redacted and still capped.
-    const raw = await response.text();
+    // Bounded: a real transcript fits well under the cap; an interstitial
+    // does not deserve more memory than the cap.
+    const raw = await UsejarvisSTT.boundedText(response, UsejarvisSTT.MAX_BODY_BYTES);
     let result: { text?: string };
     try {
       result = JSON.parse(raw) as { text?: string };
@@ -175,13 +243,13 @@ export class LocalWhisperSTT implements STTProvider {
   private endpoint: string;
   private model: string;
   private serverType: LocalWhisperServerType;
-  private language: string;
+  private language?: string;
 
   constructor(
     endpoint: string = 'http://localhost:8080',
     model?: string,
     serverType: LocalWhisperServerType = 'whisper_cpp',
-    language: string = 'en',
+    language?: string,
   ) {
     this.endpoint = endpoint;
     this.model = model ?? 'base';
@@ -208,7 +276,7 @@ export class LocalWhisperSTT implements STTProvider {
     } else {
       formData.append('file', new Blob([new Uint8Array(audio)], { type: 'audio/wav' }), 'audio.wav');
       formData.append('model', this.model);
-      formData.append('language', this.language);
+      if (this.language) formData.append('language', this.language);
     }
     return formData;
   }
