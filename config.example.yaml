@@ -20,6 +20,16 @@ daemon:
 # the server clock is not your local time (e.g. a UTC-hosted VPS).
 # timezone: "Europe/Rome"
 
+# HOSTED INSTALLS ONLY — written by the hosting provisioner, never by hand.
+# SYSTEM-owned and file-authoritative: the daemon re-reads it on SIGHUP /
+# POST /api/config/reload (key rotation without restart); removing the block
+# un-hosts the install. Keep the file root-owned / mode 0600 — the key is a
+# per-account credential. QUOTE both values (unquoted scalars can parse as
+# numbers/booleans and are ignored with a warning).
+# usejarvis_ai:
+#   base_url: "https://llm.usejarvis.host/v1"
+#   api_key: "sk-uj-..."
+
 # Set local: false on headless servers (no display): the brain never launches
 # a local Chromium; browser actions route to a connected sidecar's browser.
 # browser:
