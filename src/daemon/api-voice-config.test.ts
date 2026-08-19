@@ -235,9 +235,11 @@ describe('voice config routes: persistence stays silence-preserving', () => {
     await post(handler, '/api/config/stt', { provider: null });
     expect((loadUserSection('stt') as Record<string, unknown>).provider).toBe('');
     expect(effectiveSttForBinding(config)?.provider).toBe('usejarvis');
-    // The sub-block the user configured survives the reset (the credential
-    // itself lives in the encrypted keychain, so the row is stripped).
+    // The sub-block AND the credential survive the reset: the row keeps the
+    // stripped sub-block, and the key must still be in the encrypted keychain
+    // — a reset that deletes it is the pr7#1 critical, not a reset.
     expect((loadUserSection('stt') as any).groq).toBeDefined();
+    expect(getSecret('stt.groq.api_key')).toBe('gsk-user');
   });
 
   // Self-hosted has no plan default to fall back to — clearing the choice
