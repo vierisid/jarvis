@@ -458,17 +458,24 @@ export type JarvisConfig = {
     /**
      * OPT-IN for Anthropic prompt-cache breakpoints on hosted LLM calls
      * (margin-critical when on: cached reads bill at ~0.1x fresh input).
-     * Absent/false means OFF. The uj-* aliases are vendor-opaque, so the
-     * client cannot tell which upstream a marker reaches; the provisioner
-     * must confirm ALL THREE against the proxy before writing `true`:
-     *   (a) LiteLLM strips cache_control for non-Anthropic upstreams
-     *       (otherwise a plan mapping an alias to GPT/Gemini 400s on every
-     *       call — the marker is an unknown property there);
-     *   (b) the marker survives LiteLLM's tool→tool_result translation on
-     *       content parts (or is harmlessly dropped, never rejected);
-     *   (c) the prompt cache is scoped per virtual key — a shared upstream
-     *       namespace lets one tenant confirm byte-level guesses of
-     *       another's prompt prefix via cache_read_input_tokens.
+     * Absent/false means OFF.
+     *
+     * MUST REMAIN false FLEET-WIDE until the platform ships per-tenant
+     * upstream credentials. Platform-verified 2026-08-19: the prompt cache
+     * namespace follows the single upstream api_key shared by every tenant
+     * — a cross-tenant cache_read on a never-sent prefix was measured. A
+     * shared namespace is a byte-level confirmation oracle on other
+     * tenants' prompt prefixes (plus a 1.25x-write/0.1x-read billing
+     * asymmetry), and no client-side mitigation exists. The fix is
+     * platform-side; do not write `true` before it lands.
+     *
+     * Also verified 2026-08-19: cache_control forwarding is per-provider
+     * (openai/ upstreams receive the marker VERBATIM — 400 risk — while
+     * gemini/ drops it and anthropic/ translates and keeps it), so this
+     * gate stays required even after the namespace fix unless emission
+     * becomes vendor-aware; markers on tool-role messages ARE translated
+     * and honoured (cached at tool_result.content depth), so the
+     * last-user-message breakpoint anchor is safe.
      */
     prompt_cache?: boolean;
   };

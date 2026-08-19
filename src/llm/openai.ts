@@ -113,9 +113,12 @@ type OpenAIStreamChunk = {
     };
     finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter' | null;
   }>;
-  /** Present (non-null) only on the final chunk when the request set
-   * stream_options.include_usage — that chunk carries an EMPTY choices array,
-   * so it must be read outside the choices guard. */
+  /** Present (non-null) on at most one chunk when the request set
+   * stream_options.include_usage. WHERE it appears differs by backend:
+   * OpenAI sends a terminal chunk with an EMPTY choices array; the hosted
+   * LiteLLM proxy rides it on the LAST CONTENT chunk (choices=1) with no
+   * empty-choices terminal at all (platform-verified 2026-08-19). It must
+   * therefore be read on every chunk, outside the choices guard. */
   usage?: OpenAIResponse['usage'] | null;
 };
 
@@ -284,8 +287,9 @@ export class OpenAIProvider implements LLMProvider {
 
           try {
             const chunk = JSON.parse(data) as OpenAIStreamChunk;
-            // The include_usage final chunk has an EMPTY choices array —
-            // capture usage before the choices guard skips it.
+            // Capture usage from WHICHEVER chunk carries it (last one wins),
+            // before the choices guard: OpenAI attaches it to an empty-choices
+            // terminal chunk, the hosted proxy to the last content chunk.
             if (chunk.usage) streamUsage = chunk.usage;
             if (chunk.choices && chunk.choices.length > 0) {
               const choice = chunk.choices[0];

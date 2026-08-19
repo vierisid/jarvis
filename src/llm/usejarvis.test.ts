@@ -208,9 +208,39 @@ describe('UsejarvisAIProvider', () => {
   // Streaming is the primary hosted conversational path; without real usage
   // there, cache_creation_input_tokens is hardcoded 0 and a silent cache
   // decline is indistinguishable from success — the exact blindness the
-  // field exists to remove.
-  it('requests include_usage on stream and reports the final usage chunk', async () => {
+  // field exists to remove. Usage placement differs by backend: real OpenAI
+  // sends it on a terminal EMPTY-choices chunk, while the hosted LiteLLM
+  // proxy rides it on the LAST CONTENT chunk (choices=1, no empty-choices
+  // terminal at all — platform-verified 2026-08-19). The parser must take
+  // usage from whichever chunk carries it; both shapes below pin the same
+  // reported usage.
+  const STREAM_USAGE = {
+    prompt_tokens: 1000, completion_tokens: 5, total_tokens: 1005,
+    prompt_tokens_details: { cached_tokens: 800 },
+    cache_creation_input_tokens: 150,
+  };
+  const EXPECTED_STREAM_USAGE = {
+    input_tokens: 50, // 1000 - 800 cached - 150 written
+    output_tokens: 5,
+    cache_read_input_tokens: 800,
+    cache_creation_input_tokens: 150,
+  };
+
+  async function streamUsageFromSse(sse: string): Promise<{ sent: any; done: any }> {
     let sent: any = null;
+    globalThis.fetch = (async (_url: any, init?: any) => {
+      sent = JSON.parse(String(init.body));
+      return new Response(sse, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    }) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    const events: any[] = [];
+    for await (const event of provider.stream([{ role: 'user', content: 'hi' }], { model: 'uj-chat' })) {
+      events.push(event);
+    }
+    return { sent, done: events.find((e) => e.type === 'done') };
+  }
+
+  it('requests include_usage and reports usage from an empty-choices terminal chunk (OpenAI shape)', async () => {
     const sse = [
       'data: ' + JSON.stringify({
         id: 'c1', object: 'chat.completion.chunk', created: 1, model: 'uj-chat',
@@ -224,32 +254,33 @@ describe('UsejarvisAIProvider', () => {
       'data: ' + JSON.stringify({
         id: 'c1', object: 'chat.completion.chunk', created: 1, model: 'uj-chat',
         choices: [],
-        usage: {
-          prompt_tokens: 1000, completion_tokens: 5, total_tokens: 1005,
-          prompt_tokens_details: { cached_tokens: 800 },
-          cache_creation_input_tokens: 150,
-        },
+        usage: STREAM_USAGE,
       }),
       'data: [DONE]', '',
     ].join('\n');
-    globalThis.fetch = (async (_url: any, init?: any) => {
-      sent = JSON.parse(String(init.body));
-      return new Response(sse, { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
-    }) as unknown as typeof fetch;
-
-    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
-    const events: any[] = [];
-    for await (const event of provider.stream([{ role: 'user', content: 'hi' }], { model: 'uj-chat' })) {
-      events.push(event);
-    }
+    const { sent, done } = await streamUsageFromSse(sse);
     expect(sent.stream_options).toEqual({ include_usage: true });
-    const done = events.find((e) => e.type === 'done');
-    expect(done.response.usage).toEqual({
-      input_tokens: 50, // 1000 - 800 cached - 150 written
-      output_tokens: 5,
-      cache_read_input_tokens: 800,
-      cache_creation_input_tokens: 150,
-    });
+    expect(done.response.usage).toEqual(EXPECTED_STREAM_USAGE);
+  });
+
+  it('reports usage riding on the last CONTENT chunk with no empty-choices terminal (proxy shape)', async () => {
+    const sse = [
+      'data: ' + JSON.stringify({
+        id: 'c1', object: 'chat.completion.chunk', created: 1, model: 'uj-chat',
+        choices: [{ index: 0, delta: { role: 'assistant', content: 'hey' }, finish_reason: null }],
+      }),
+      // Measured proxy shape: usage on the final content chunk, choices=1,
+      // then straight to [DONE] — no empty-choices chunk exists.
+      'data: ' + JSON.stringify({
+        id: 'c1', object: 'chat.completion.chunk', created: 1, model: 'uj-chat',
+        choices: [{ index: 0, delta: {}, finish_reason: 'stop' }],
+        usage: STREAM_USAGE,
+      }),
+      'data: [DONE]', '',
+    ].join('\n');
+    const { done } = await streamUsageFromSse(sse);
+    expect(done.response.usage).toEqual(EXPECTED_STREAM_USAGE);
+    expect(done.response.content).toBe('hey');
   });
 
   // The uncached-input subtraction assumes the proxy folds cache writes into
