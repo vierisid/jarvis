@@ -191,11 +191,13 @@ export function OnboardingWizard({
   );
   const found = steps.findIndex(([k]) => k === stepKey);
   // While the key is momentarily absent (the probe resolved under a hidden
-  // screen, repaired below), hold the LAST step rather than snapping to 0 —
-  // index 0 is Welcome, and flashing it would briefly re-offer "I'll do this
-  // later" mid-flow.
-  const step = found >= 0 ? found : steps.length - 1;
-  const key = steps[step]![0];
+  // screen, repaired below), resolve to Permissions DURING RENDER — the same
+  // target the repair effect commits to. The previous `steps.length - 1`
+  // fallback mounted the terminal "All set" screen (and its onComplete
+  // wiring) for one pre-paint commit mid-flow; snapping to 0 would be no
+  // better, flashing Welcome's "I'll do this later".
+  const key = found >= 0 ? steps[found]![0] : "perms";
+  const step = found >= 0 ? found : steps.findIndex(([k]) => k === "perms");
 
   // If the probe resolves while the user is standing on a now-hidden screen,
   // send them BACK to Permissions, not forward. Permissions is where the
@@ -723,7 +725,7 @@ export function OnboardingWizard({
           <h2>This is your Jarvis.</h2>
           <div className="obw-sub" style={{ maxWidth: "34ch", margin: "9px auto 0" }}>
             {hosted
-              ? "Let’s spend a couple of minutes setting it up: what it can touch, and a little about you. The AI and voice are included with your plan — already wired up, and yours to change in Settings whenever you like."
+              ? "Let’s spend a couple of minutes setting it up: what it can touch, and a little about you. The AI and voice are included with your plan — Jarvis will speak its replies out loud from the start, and you can change the voice or turn it off any time in Settings → Channels."
               : "Let’s spend about five minutes setting it up: what it can touch, the brain and voice it runs on, and a little about you. You can skip anything and finish later."}
           </div>
           <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 11, alignItems: "center" }}>

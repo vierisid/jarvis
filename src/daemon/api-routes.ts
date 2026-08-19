@@ -2437,9 +2437,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/channels/status': {
       GET: () => {
         if (!ctx.channelService) return json({ channels: {}, stt: null });
+        // Binding view, like the /api/config/stt GET: after a provider reset
+        // on a hosted install the raw section has no (or an empty sentinel)
+        // provider while transcription runs happily on 'usejarvis' — the raw
+        // read blanked the Channels header on a working install.
+        const sttBinding = effectiveSttForBinding(ctx.config);
         return json({
           channels: ctx.channelService.getChannelStatus(),
-          stt: ctx.config.stt?.provider ?? null,
+          stt: sttBinding?.provider || ctx.config.stt?.provider || null,
         });
       },
     },
