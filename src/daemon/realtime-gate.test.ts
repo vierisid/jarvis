@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { cachedRealtimeVerdict, clearRealtimeGateCache, hostedRealtimeIncluded } from './realtime-gate.ts';
+import { ageRealtimeGateCacheForTest, cachedRealtimeVerdict, clearRealtimeGateCache, hostedRealtimeIncluded } from './realtime-gate.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 
 const originalFetch = globalThis.fetch;
@@ -79,6 +79,79 @@ describe('hostedRealtimeIncluded', () => {
   test('a non-2xx catalog is advisory-allow — only a definitive catalog gates', async () => {
     globalThis.fetch = (async () => new Response('bad gateway', { status: 502 })) as unknown as typeof fetch;
     expect(await hostedRealtimeIncluded(hosted())).toBe(true);
+  });
+
+  // A rotated/revoked key is a definitive "not entitled", not a network blip:
+  // advisory-allow here re-dialed a session the proxy is certain to refuse,
+  // repeating the stall + failed dial every advisory window.
+  test('401/403 from the catalog is a definitive refusal, cached like one', async () => {
+    let called = 0;
+    globalThis.fetch = (async () => { called++; return new Response('unauthorized', { status: 401 }); }) as unknown as typeof fetch;
+    expect(await hostedRealtimeIncluded(hosted())).toBe(false);
+    expect(await hostedRealtimeIncluded(hosted())).toBe(false);
+    expect(called).toBe(1); // cached with the definitive TTL, not the advisory one
+    expect(cachedRealtimeVerdict(hosted())).toBe(false);
+  });
+
+  test('concurrent gate calls share one in-flight catalog fetch', async () => {
+    let called = 0;
+    let release!: () => void;
+    const gateOpen = new Promise<void>((r) => { release = r; });
+    globalThis.fetch = (async () => { called++; await gateOpen; return catalog('uj-realtime'); }) as unknown as typeof fetch;
+    const [a, b, c] = [hostedRealtimeIncluded(hosted()), hostedRealtimeIncluded(hosted()), hostedRealtimeIncluded(hosted())];
+    release();
+    expect(await Promise.all([a, b, c])).toEqual([true, true, true]);
+    expect(called).toBe(1);
+  });
+});
+
+// pr6#3 regression: a definitive "excluded" that merely EXPIRED must not read
+// as unknown/open — /api/config/voice maps unknown to available:true, which
+// flips the browser back into raw-PCM capture once per TTL window and costs
+// the user that utterance. Decay is a background re-fetch, not an open door.
+describe('expired definitive refusals', () => {
+  test('hostedRealtimeIncluded answers false immediately and refreshes in the background', async () => {
+    globalThis.fetch = (async () => catalog('uj-chat')) as unknown as typeof fetch;
+    expect(await hostedRealtimeIncluded(hosted())).toBe(false);
+    ageRealtimeGateCacheForTest(11 * 60_000);
+    // Refetch now hangs — the answer must come from the stale verdict, not the wire.
+    let refetches = 0;
+    globalThis.fetch = ((_url: string, init?: { signal?: AbortSignal }) => {
+      refetches++;
+      return new Promise((_resolve, reject) => {
+        init?.signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      });
+    }) as unknown as typeof fetch;
+    const started = Date.now();
+    expect(await hostedRealtimeIncluded(hosted())).toBe(false);
+    expect(Date.now() - started).toBeLessThan(500); // no stall on the stale-false path
+    expect(refetches).toBe(1); // the background refresh did go out
+  });
+
+  test('cachedRealtimeVerdict reads an expired refusal as false, never null', async () => {
+    globalThis.fetch = (async () => catalog('uj-chat')) as unknown as typeof fetch;
+    await hostedRealtimeIncluded(hosted());
+    ageRealtimeGateCacheForTest(11 * 60_000);
+    expect(cachedRealtimeVerdict(hosted())).toBe(false);
+  });
+
+  test('an upgrade still lands: the background refresh flips the verdict', async () => {
+    globalThis.fetch = (async () => catalog('uj-chat')) as unknown as typeof fetch;
+    expect(await hostedRealtimeIncluded(hosted())).toBe(false);
+    ageRealtimeGateCacheForTest(11 * 60_000);
+    globalThis.fetch = (async () => catalog('uj-chat', 'uj-realtime')) as unknown as typeof fetch;
+    expect(await hostedRealtimeIncluded(hosted())).toBe(false); // stale answer, refresh kicked off
+    await Bun.sleep(10); // let the background fetch settle
+    expect(await hostedRealtimeIncluded(hosted())).toBe(true);
+  });
+
+  test('an expired advisory verdict still decays to unknown (re-fetch, not false)', async () => {
+    globalThis.fetch = (async () => { throw new Error('ECONNREFUSED'); }) as unknown as typeof fetch;
+    expect(await hostedRealtimeIncluded(hosted())).toBe(true); // advisory
+    ageRealtimeGateCacheForTest(60_000);
+    expect(cachedRealtimeVerdict(hosted())).toBeNull();
+    globalThis.fetch = (async () => catalog('uj-realtime')) as unknown as typeof fetch;
+    expect(await hostedRealtimeIncluded(hosted())).toBe(true); // real fetch this time
   });
 });
 
