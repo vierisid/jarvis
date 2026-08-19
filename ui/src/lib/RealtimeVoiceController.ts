@@ -72,10 +72,13 @@ export class RealtimeVoiceController {
       this.worklet = new AudioWorkletNode(this.captureCtx, "pcm-capture-processor");
 
       this.requestId = uuid();
+      // mode:"pcm" tells the daemon raw realtime frames follow — if the plan
+      // gate refuses the session, the daemon must NOT open a WAV accumulator
+      // for them (headerless PCM is garbage to the standard pipeline).
       ws.send(
         JSON.stringify({
           type: "voice_start",
-          payload: { requestId: this.requestId, currentRoom: this.opts.getCurrentRoom?.() ?? "home" },
+          payload: { requestId: this.requestId, currentRoom: this.opts.getCurrentRoom?.() ?? "home", mode: "pcm" },
           timestamp: Date.now(),
         }),
       );

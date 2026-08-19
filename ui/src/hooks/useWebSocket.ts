@@ -210,7 +210,7 @@ export type VoiceCallbacks = {
   /** Realtime session ended server-side (max_session_minutes timeout or
    *  server close). The client must stop the mic — it's otherwise streaming
    *  into a session that no longer exists. */
-  onRealtimeClosed?: () => void;
+  onRealtimeClosed?: (reason?: string) => void;
 };
 
 export type WorkflowEvent = {
@@ -678,7 +678,7 @@ export function useWebSocket() {
           }
           if (state === "error") voiceCallbacksRef.current?.onError(msg.payload?.message);
           // Server tore the session down (timeout/close) — stop the hot mic.
-          else if (state === "closed") voiceCallbacksRef.current?.onRealtimeClosed?.();
+          else if (state === "closed") voiceCallbacksRef.current?.onRealtimeClosed?.(msg.payload?.reason);
           return;
         }
         if (msg.type === "realtime_transcript") {

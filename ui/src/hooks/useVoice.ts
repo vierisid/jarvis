@@ -265,8 +265,9 @@ export type UseVoiceReturn = {
   handleTTSContainsWake: (containsStop?: boolean) => void;
   handleTTSEnd: (requestId?: string, bargeIn?: boolean) => void;
   handleError: (message?: string) => void;
-  /** Realtime session closed server-side — stop the mic, return to idle. */
-  handleRealtimeClosed: () => void;
+  /** Realtime session closed server-side — stop the mic, return to idle.
+   *  `reason:"plan"` additionally forces an immediate availability re-check. */
+  handleRealtimeClosed: (reason?: string) => void;
   // v2 additions (Phase 4A)
   /** Mute the mic. While muted, wake-word is paused and `startRecording` is a no-op. */
   muted: boolean;
@@ -416,6 +417,9 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   // --- Premium realtime voice availability ---
   // Poll the voice config so the recording/playback path can switch to the
   // realtime streaming flow. Cheap; mirrors the settings poll cadence.
+  // Kept in a ref as well so a server-side plan refusal can force an
+  // immediate re-check instead of waiting out the poll interval.
+  const refreshRealtimeAvailabilityRef = useRef<() => Promise<void>>(async () => {});
   useEffect(() => {
     let cancelled = false;
     const check = async () => {
@@ -428,6 +432,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
         }
       } catch { /* leave previous value; default false */ }
     };
+    refreshRealtimeAvailabilityRef.current = check;
     check();
     const id = window.setInterval(() => {
       if (typeof document !== "undefined" && document.hidden) return;
@@ -1050,7 +1055,12 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   // mic streaming PCM into a session that no longer exists (the server silently
   // drops it). Distinct from handleError: a normal close returns to idle with
   // no error flash.
-  const handleRealtimeClosed = useCallback(() => {
+  const handleRealtimeClosed = useCallback((reason?: string) => {
+    // A plan refusal means the server will refuse every future PCM session:
+    // re-fetch availability NOW (it will come back false) so the very next
+    // utterance uses the standard WAV pipeline — "say that again" must work
+    // immediately, not after the next 15s poll tick.
+    if (reason === "plan") void refreshRealtimeAvailabilityRef.current();
     if (!realtimeActiveRef.current) return;
     realtimeCtrlRef.current?.stopStreaming();
     realtimeCtrlRef.current?.flushPlayback();
@@ -1142,9 +1152,12 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     const wavBuffer = encodeWav(pcmChunksRef.current, sampleRateRef.current);
 
     // Signal start
+    // mode:"wav" tells the daemon this is a finished WAV upload, so it must
+    // never route the utterance into a realtime session (or refuse it when a
+    // hosted plan excludes realtime) — the standard STT pipeline handles it.
     ws.send(JSON.stringify({
       type: "voice_start",
-      payload: { requestId, currentRoom },
+      payload: { requestId, currentRoom, mode: "wav" },
       timestamp: Date.now(),
     }));
 
