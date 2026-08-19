@@ -39,7 +39,6 @@ import { getOrCreateConversation, getMessages, getRecentConversation } from '../
 import { getRecentObservations, summarizeObservation } from '../vault/observations.ts';
 import { listAgentActivity, countAgentActivity } from '../vault/agent-activity.ts';
 import { getPersonality } from '../personality/model.ts';
-import { hasUsejarvisAi } from './usejarvis-ai.ts';
 import { clearUserProfile, getUserProfile, saveUserProfile } from '../vault/user-profile.ts';
 import {
   USER_PROFILE_QUESTIONS,
