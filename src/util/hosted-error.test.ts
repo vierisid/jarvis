@@ -1,28 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { describeBudgetWindow, hostedProxyError } from './hosted-error.ts';
-
-describe('describeBudgetWindow', () => {
-  test('a Postgres-style naive timestamp (space separator) quotes the REAL time', () => {
-    // Used to truncate at the space → parse as UTC midnight → "resumes 00:00
-    // UTC" for an 18:00 reset (pr2 review #4).
-    const body = 'budget_duration: 6h, budget_reset_at: 2026-08-18 18:00:00';
-    expect(describeBudgetWindow(body)).toBe('for this 6h window (resumes 18:00 UTC)');
-  });
-
-  test('an ISO-T timestamp still works', () => {
-    const body = '{"budget_duration":"24h","budget_reset_at":"2026-08-19T06:30:00+00:00"}';
-    expect(describeBudgetWindow(body)).toBe('for this 24h window (resumes 06:30 UTC)');
-  });
-
-  test('a date with no time-of-day is never quoted as a time', () => {
-    const body = 'budget_reset_at: 2026-08-18, budget_duration: 6h';
-    expect(describeBudgetWindow(body)).toBe('for this 6h window');
-  });
-
-  test('no fields at all degrades to the generic phrase', () => {
-    expect(describeBudgetWindow('exceeded budget')).toBe('for this window');
-  });
-});
+import { hostedProxyError, isBudgetExhaustion } from './hosted-error.ts';
 
 describe('hostedProxyError', () => {
   test('the generic branch never carries the proxy body (hostname stays out of chat copy)', () => {
@@ -38,14 +15,60 @@ describe('hostedProxyError', () => {
     expect(err.message).not.toContain('502 Bad Gateway');
   });
 
-  test('the budget branch keeps its actionable copy', () => {
-    const err = hostedProxyError('Usejarvis AI API', 429, 'ExceededBudget: budget_duration: 6h, budget_reset_at: 2026-08-18 18:00:00');
-    expect(err.message).toContain('used up');
-    expect(err.message).toContain('resumes 18:00 UTC');
+  test('budget copy quotes a reset time ONLY when handed one (never parsed from the body)', () => {
+    // The 429 budget body carries no reset field (confirmed 2026-08-19); the
+    // caller fetches /key/info and passes the parsed Date in.
+    const timed = hostedProxyError(
+      'Usejarvis AI API',
+      429,
+      'ExceededBudget: Budget has been exceeded! Current cost: 0.0051, Max budget: 0.005',
+      new Date('2026-08-19T12:00:00+00:00'),
+    );
+    expect(timed.message).toContain('used up for this window (resumes 12:00 UTC)');
+
+    // No timestamp handed in → no time claimed, even if the body smuggles
+    // something date-shaped (the old parser would have quoted it).
+    const bare = hostedProxyError(
+      'Usejarvis AI API',
+      429,
+      'ExceededBudget: budget has been exceeded, budget_reset_at: 2026-08-18 18:00:00',
+    );
+    expect(bare.message).toContain('used up for this window.');
+    expect(bare.message).not.toMatch(/resumes \d/);
+
+    // An invalid Date degrades identically.
+    const invalid = hostedProxyError('Usejarvis AI API', 429, 'budget exceeded', new Date('nonsense'));
+    expect(invalid.message).not.toMatch(/resumes \d/);
   });
 
-  test('model denial precedes the generic auth branch (401 ordering)', () => {
+  test('403 maps to model-not-in-plan even without model text (team_model_access_denied)', () => {
+    const err = hostedProxyError('Usejarvis AI API', 403, '{"error":{"code":"team_model_access_denied"}}');
+    expect(err.message).toContain('(403)');
+    expect(err.message).toContain('not included in your plan');
+  });
+
+  test('model-denial TEXT still precedes the auth branch (historical 401 shape)', () => {
     const err = hostedProxyError('Usejarvis AI API', 401, 'key not allowed to access model uj-video');
     expect(err.message).toContain('not included in your plan');
+  });
+
+  test('401 without model text is the credential/plan copy', () => {
+    const err = hostedProxyError('Usejarvis AI API', 401, 'Authentication Error: key is blocked');
+    expect(err.message).toMatch(/\(401\).*active plan is required/);
+  });
+
+  test('an ordinary 429 rate limit is NOT budget copy (stays retryable-generic)', () => {
+    const err = hostedProxyError('Usejarvis AI API', 429, 'rate limited, retry shortly');
+    expect(err.message).toContain('(429)');
+    expect(err.message).not.toContain('used up');
+  });
+});
+
+describe('isBudgetExhaustion', () => {
+  test('matches the LiteLLM budget family and nothing else', () => {
+    expect(isBudgetExhaustion('ExceededBudget: budget has been exceeded for this key')).toBe(true);
+    expect(isBudgetExhaustion('{"error":{"code":"budget_exceeded","message":"over budget"}}')).toBe(true);
+    expect(isBudgetExhaustion('rate limited, retry shortly')).toBe(false);
+    expect(isBudgetExhaustion('model not allowed')).toBe(false);
   });
 });

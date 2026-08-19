@@ -18,29 +18,44 @@ import { redactSecrets } from './redact.ts';
  *    settings surface and the catalog route both withhold. Operators get the
  *    original via console.warn instead.
  *
- * Branch ORDER matters: LiteLLM denies an out-of-plan model with a 401 "not
- * allowed to access model", so the model check MUST precede the generic auth
- * branch — otherwise a paying user who picks a model outside their plan is
- * told their subscription is inactive.
+ * Status semantics, confirmed by the platform team (2026-08-19): 401 = bad or
+ * blocked key, 403 = model not allowed (`team_model_access_denied`), 429 with
+ * a budget_exceeded body = included usage exhausted. Some key shapes have
+ * historically denied out-of-plan models with a 401 "not allowed to access
+ * model" TEXT instead, so the model-text check still precedes the auth branch.
+ *
+ * The error body carries NO reset timestamp (confirmed — none is ever sent);
+ * the reset time lives on the proxy's `GET /key/info`, which the PROVIDER
+ * fetches and hands in as `resetAt`. This function never parses times out of
+ * bodies: it states a time only when explicitly given one.
  *
  * The `(status)` marker is preserved because classifyErrorString keys retry
  * behaviour on it (429/503 retry; 400s do not).
  */
-export function hostedProxyError(label: string, status: number, detail: string): Error {
+export function hostedProxyError(
+  label: string,
+  status: number,
+  detail: string,
+  resetAt?: Date | null,
+): Error {
   const safe = redactSecrets(detail);
   const lower = safe.toLowerCase();
   if (safe) console.warn(`[usejarvis] ${label} proxy error (${status}): ${safe.slice(0, 200)}`);
 
-  if (lower.includes('budget') && (lower.includes('exceed') || lower.includes('over'))) {
+  if (isBudgetExhaustion(safe)) {
+    const valid = resetAt && !Number.isNaN(resetAt.getTime());
+    const resumes = valid
+      ? ` (resumes ${String(resetAt.getUTCHours()).padStart(2, '0')}:${String(resetAt.getUTCMinutes()).padStart(2, '0')} UTC)`
+      : '';
     return new Error(
-      `${label} error (${status}): your included AI usage is used up ` +
-        `${describeBudgetWindow(safe)}. It resumes automatically - the usage meter shows when.`,
+      `${label} error (${status}): your included AI usage is used up for this window${resumes}. ` +
+        'It resumes automatically - the usage meter shows when.',
     );
   }
-  if (lower.includes('model') && (lower.includes('not allowed') || lower.includes('invalid model'))) {
+  if (status === 403 || (lower.includes('model') && (lower.includes('not allowed') || lower.includes('invalid model')))) {
     return new Error(`${label} error (${status}): that model is not included in your plan.`);
   }
-  if (status === 401 || status === 403) {
+  if (status === 401) {
     return new Error(
       `${label} error (${status}): Usejarvis AI is not active on this account - ` +
         'an active plan is required.',
@@ -54,34 +69,14 @@ export function hostedProxyError(label: string, status: number, detail: string):
 }
 
 /**
- * Turn a proxy budget body into the window phrase the friendly copy promises.
- * LiteLLM reports `budget_duration` and `budget_reset_at` on an exhausted key,
- * and the reset lands on a FIXED clock boundary (a 6h window minted
- * mid-morning resets at 12:00:00+00:00), so "resumes at 12:00 UTC" is exact
- * rather than approximate. Degrades to the generic phrase when the proxy omits
- * the fields — never guesses a time it was not told.
- *
- * Only the duration and timestamp are lifted out; the rest of the body stays
- * out of user-facing copy (it can carry the hosted hostname).
+ * Budget-exhaustion detector, shared with the provider layer (which uses it
+ * to decide whether a `/key/info` reset-time lookup is worth making before
+ * building the copy). Matches LiteLLM's `budget_exceeded` code and its
+ * "ExceededBudget" / "budget has been exceeded" message family; an ordinary
+ * rate limit ("rate limited") carries none of these words and stays on the
+ * retryable generic branch.
  */
-export function describeBudgetWindow(body: string): string {
-  const duration = body.match(/budget_duration["'\s:=]+([0-9]+[a-z]+)/i)?.[1];
-  // The timestamp must carry an explicit time-of-day to be quoted. A
-  // date-only match (LiteLLM's Postgres-style `2026-08-18 18:00:00` used to
-  // truncate at the space) would parse to UTC midnight and state a reset
-  // time the proxy never sent.
-  const resetAt = body.match(
-    /budget_reset_at["'\s:=]+(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)/i,
-  )?.[1];
-  const window = duration ? `for this ${duration} window` : 'for this window';
-  if (!resetAt) return window;
-  // A naive timestamp (no zone suffix) is documented by LiteLLM as UTC;
-  // normalize the space separator and pin the zone before parsing so the
-  // local machine's timezone cannot skew the quoted time.
-  const normalized = resetAt.replace(' ', 'T') + (/(Z|[+-]\d{2}:?\d{2})$/.test(resetAt) ? '' : 'Z');
-  const parsed = new Date(normalized);
-  if (Number.isNaN(parsed.getTime())) return window;
-  const hh = String(parsed.getUTCHours()).padStart(2, '0');
-  const mm = String(parsed.getUTCMinutes()).padStart(2, '0');
-  return `${window} (resumes ${hh}:${mm} UTC)`;
+export function isBudgetExhaustion(detail: string): boolean {
+  const lower = detail.toLowerCase();
+  return lower.includes('budget') && (lower.includes('exceed') || lower.includes('over'));
 }

@@ -91,13 +91,31 @@ describe('UsejarvisAIProvider', () => {
     );
   });
 
-  it('carries the budget window and reset boundary in the copy', async () => {
-    globalThis.fetch = (async () => jsonResponse(429, {
-      error: {
-        message: 'ExceededBudget: Budget has been exceeded! Current cost: 0.0051, Max budget: 0.005, '
-          + 'budget_duration: 6h, budget_reset_at: 2026-08-13T12:00:00+00:00',
-      },
-    })) as unknown as typeof fetch;
+  // The 429 budget body carries NO reset field (platform team, 2026-08-19);
+  // the reset time lives on GET /key/info at the proxy ROOT, readable with
+  // the account's own key, as ISO-8601 with an explicit offset.
+  it('budget copy quotes the /key/info reset time and memoizes the lookup', async () => {
+    let infoCalls = 0;
+    let infoUrl = '';
+    let infoAuth: string | null = null;
+    globalThis.fetch = (async (input: any, init?: any) => {
+      const url = String(input);
+      if (url.endsWith('/key/info')) {
+        infoCalls++;
+        infoUrl = url;
+        infoAuth = new Headers(init?.headers).get('Authorization');
+        return jsonResponse(200, {
+          key: 'sk-uj-abc',
+          info: { budget_reset_at: '2026-08-19T12:00:00+00:00', max_budget: 0.005 },
+        });
+      }
+      return jsonResponse(429, {
+        error: {
+          message: 'ExceededBudget: Budget has been exceeded! Current cost: 0.0051, Max budget: 0.005',
+          code: 'budget_exceeded',
+        },
+      });
+    }) as unknown as typeof fetch;
     const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
     const failed = async (): Promise<string> => {
       try {
@@ -107,14 +125,45 @@ describe('UsejarvisAIProvider', () => {
         return (e as Error).message;
       }
     };
-    expect(await failed()).toMatch(/for this 6h window \(resumes 12:00 UTC\)/);
-    // …and degrades rather than inventing a time when the proxy omits them.
-    globalThis.fetch = (async () => jsonResponse(429, {
-      error: { message: 'Budget has been exceeded!' },
-    })) as unknown as typeof fetch;
-    const bare = await failed();
-    expect(bare).toMatch(/for this window\./);
-    expect(bare).not.toMatch(/resumes \d/);
+    expect(await failed()).toMatch(/used up for this window \(resumes 12:00 UTC\)/);
+    // /key/info sits on the proxy ROOT, not under /v1, with the same bearer.
+    expect(infoUrl).toBe('https://llm.usejarvis.host/key/info');
+    expect(infoAuth ?? '').toBe('Bearer sk-uj-abc');
+    // A second budget error inside the memo window issues no second lookup.
+    expect(await failed()).toMatch(/resumes 12:00 UTC/);
+    expect(infoCalls).toBe(1);
+  });
+
+  it('budget copy degrades to time-less when /key/info fails, leaking nothing', async () => {
+    globalThis.fetch = (async (input: any) => {
+      if (String(input).endsWith('/key/info')) {
+        throw new Error('connect ETIMEDOUT llm.usejarvis.host:443');
+      }
+      return jsonResponse(429, { error: { message: 'Budget has been exceeded!' } });
+    }) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    let message = '';
+    try {
+      await provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-chat' });
+    } catch (e) {
+      message = (e as Error).message;
+    }
+    expect(message).toMatch(/used up for this window\./);
+    expect(message).not.toMatch(/resumes \d/);
+    expect(message).not.toContain('llm.usejarvis.host');
+  });
+
+  it('403 maps to model-not-in-plan (team_model_access_denied), no /key/info lookup', async () => {
+    let infoCalls = 0;
+    globalThis.fetch = (async (input: any) => {
+      if (String(input).endsWith('/key/info')) { infoCalls++; return jsonResponse(200, {}); }
+      return jsonResponse(403, { error: { message: 'team_model_access_denied', code: 'team_model_access_denied' } });
+    }) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    await expect(provider.chat([{ role: 'user', content: 'hi' }], { model: 'gpt-5.5' })).rejects.toThrow(
+      /\(403\).*not included in your plan/,
+    );
+    expect(infoCalls).toBe(0);
   });
 
   // The base class YIELDS {type:'error'} events instead of throwing, so a

@@ -1,5 +1,6 @@
 import { OpenAIProvider } from './openai.ts';
-import { hostedProxyError } from '../util/hosted-error.ts';
+import { hostedProxyError, isBudgetExhaustion } from '../util/hosted-error.ts';
+import { redactSecrets } from '../util/redact.ts';
 
 /**
  * Hosted "Usejarvis AI" provider: the platform's OpenAI-compatible LLM proxy.
@@ -80,7 +81,7 @@ export class UsejarvisAIProvider extends OpenAIProvider {
     try {
       return await super.chat(...args);
     } catch (error) {
-      throw this.rewrite(error);
+      throw await this.rewrite(error);
     }
   }
 
@@ -94,30 +95,84 @@ export class UsejarvisAIProvider extends OpenAIProvider {
     // the chat bubble on the very path users talk through.
     for await (const event of super.stream(...args)) {
       if (event.type === 'error' && typeof event.error === 'string') {
-        yield { ...event, error: this.rewriteText(event.error) };
+        yield { ...event, error: await this.rewriteText(event.error) };
       } else {
         yield event;
       }
     }
   }
 
+  /** Memoized `/key/info` result — success AND failure both count, so an
+   * exhausted-budget burst issues at most one lookup per window. */
+  private resetCache: { at: number; value: Date | null } | null = null;
+  private static readonly RESET_CACHE_MS = 60_000;
+
+  /** Reset-time lookup for the budget-exhaustion copy.
+   *
+   * The 429 budget body carries NO timestamp (confirmed by the platform team);
+   * the reset time lives on `GET /key/info` at the proxy ROOT (not under /v1),
+   * readable with this same account key, as ISO-8601 with an explicit offset
+   * (e.g. "2026-08-19T12:00:00+00:00" under `info.budget_reset_at`).
+   *
+   * Only the parsed Date ever leaves this method: the /key/info body follows
+   * the same discipline as every other proxy body and never reaches user copy.
+   * Any failure — timeout, non-200, missing field, unparseable date — degrades
+   * to a time-less budget message (never guess a time you were not told). */
+  private async budgetResetAt(): Promise<Date | null> {
+    const now = Date.now();
+    if (this.resetCache && now - this.resetCache.at < UsejarvisAIProvider.RESET_CACHE_MS) {
+      return this.resetCache.value;
+    }
+    let value: Date | null = null;
+    try {
+      const root = this.baseUrl.replace(/\/v1$/, '');
+      const response = await fetch(`${root}/key/info`, {
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+        signal: AbortSignal.timeout(3000),
+      });
+      if (response.ok) {
+        const payload = await response.json() as {
+          info?: { budget_reset_at?: unknown };
+          budget_reset_at?: unknown;
+        };
+        const raw = payload.info?.budget_reset_at ?? payload.budget_reset_at;
+        if (typeof raw === 'string') {
+          const parsed = new Date(raw);
+          if (!Number.isNaN(parsed.getTime())) value = parsed;
+        }
+        if (!value) console.warn('[usejarvis] /key/info carried no parseable budget_reset_at; budget copy stays time-less');
+      } else {
+        console.warn(`[usejarvis] /key/info unavailable (${response.status}); budget copy stays time-less`);
+      }
+    } catch (err) {
+      console.warn(
+        '[usejarvis] /key/info lookup failed; budget copy stays time-less:',
+        redactSecrets(err instanceof Error ? err.message : String(err)),
+      );
+    }
+    this.resetCache = { at: now, value };
+    return value;
+  }
+
   /** Shared with the hosted STT/TTS providers — see util/hosted-error.ts for
    * the redaction, branch-order and no-body-in-copy rules. The "<label> API"
    * form keeps the exact `Usejarvis AI API error (NNN)` prefix that
-   * classifyErrorString and rewriteText both parse. */
-  private friendly(status: number, detail: string): Error {
-    return hostedProxyError(`${this.errorLabel} API`, status, detail);
+   * classifyErrorString and rewriteText both parse. Budget errors trigger the
+   * /key/info reset lookup so the copy can quote a real resume time. */
+  private async friendly(status: number, detail: string): Promise<Error> {
+    const resetAt = isBudgetExhaustion(detail) ? await this.budgetResetAt() : null;
+    return hostedProxyError(`${this.errorLabel} API`, status, detail, resetAt);
   }
 
   /** Text-shaped variant of `rewrite` for stream error EVENTS (the base class
    * yields these rather than throwing — see `stream`). */
-  private rewriteText(text: string): string {
+  private async rewriteText(text: string): Promise<string> {
     const match = text.match(/API error \((\d+)\): ?([\s\S]*)$/);
     if (!match) return text;
-    return this.friendly(Number(match[1]), match[2] ?? '').message;
+    return (await this.friendly(Number(match[1]), match[2] ?? '')).message;
   }
 
-  private rewrite(error: unknown): unknown {
+  private async rewrite(error: unknown): Promise<unknown> {
     if (!(error instanceof Error)) return error;
     // Base-class errors read "<label> API error (NNN): <body>" - re-map the
     // ones users can act on; pass everything else (network, aborts) through.
