@@ -98,13 +98,26 @@ export function resolveRealtimeVoice(
   const hosted = config.usejarvis_ai;
   const hostedReady = Boolean(hosted?.base_url?.trim() && hosted?.api_key?.trim());
   if (!apiKey && hostedReady) {
-    // Lowercase the SCHEME while normalizing: the ws(s) derivation below is a
-    // prefix rewrite, so a provisioner writing `HTTPS://…` would otherwise
-    // yield `HTTPS://…/realtime` — never a ws(s) URL — and the dial fails
-    // with an opaque error rather than a wrong-scheme one.
-    const origin = hosted!.base_url!.trim().replace(/\/+$/, '')
-      .replace(/^(https?):\/\//i, (_m, scheme: string) => `${scheme.toLowerCase()}://`);
-    const httpBase = /\/v1$/.test(origin) ? origin : `${origin}/v1`;
+    // Normalize through URL parsing rather than string surgery: the block is
+    // provisioner-written, and each of these typo classes previously derailed
+    // the ws(s) derivation into an undialable URL — an uppercase scheme
+    // (`HTTPS://…` → prefix rewrite misses), a missing scheme
+    // (`llm.usejarvis.host` → `llm.usejarvis.host/v1/realtime`, no ws://),
+    // trailing slashes, and an uppercase `/V1` suffix (`…/V1/v1/realtime`).
+    // A missing scheme reads as https — the only transport the proxy serves.
+    const raw = hosted!.base_url!.trim();
+    let httpBase: string;
+    try {
+      const url = new URL(/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) ? raw : `https://${raw}`);
+      if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+        return { ok: false, reason: `usejarvis_ai.base_url has unsupported scheme: ${url.protocol}` };
+      }
+      const path = url.pathname.replace(/\/+$/, '');
+      const origin = `${url.protocol}//${url.host}${path}`;
+      httpBase = /\/v1$/i.test(origin) ? origin : `${origin}/v1`;
+    } catch {
+      return { ok: false, reason: `usejarvis_ai.base_url is not a valid URL: ${raw}` };
+    }
     return {
       ok: true,
       resolved: {

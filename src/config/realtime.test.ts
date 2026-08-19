@@ -127,6 +127,52 @@ describe('resolveRealtimeVoice', () => {
     expect(res.resolved.modelsUrl!.startsWith('https://')).toBe(true);
   });
 
+  // Provisioner typo classes the URL-based normalization must absorb: a
+  // scheme-less host previously left `replace(/^http/,'ws')` a no-op (the
+  // "URL" wasn't dialable at all), and an uppercase /V1 failed the
+  // case-sensitive suffix test, doubling into /V1/v1/realtime.
+  test('a scheme-less base_url reads as https and derives wss://', () => {
+    const config = makeConfig();
+    config.usejarvis_ai = { base_url: 'llm.usejarvis.host', api_key: 'sk-uj-abc' };
+    config.voice!.realtime = { enabled: true };
+    const res = resolveRealtimeVoice(config);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.resolved.url).toBe('wss://llm.usejarvis.host/v1/realtime');
+      expect(res.resolved.modelsUrl).toBe('https://llm.usejarvis.host/v1/models');
+    }
+  });
+
+  test('an uppercase /V1 suffix is recognized, not doubled', () => {
+    const config = makeConfig();
+    config.usejarvis_ai = { base_url: 'https://llm.usejarvis.host/V1', api_key: 'sk-uj-abc' };
+    config.voice!.realtime = { enabled: true };
+    const res = resolveRealtimeVoice(config);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.resolved.url).toBe('wss://llm.usejarvis.host/V1/realtime');
+      expect(res.resolved.modelsUrl).toBe('https://llm.usejarvis.host/V1/models');
+    }
+  });
+
+  test('trailing slashes are stripped before the /v1 suffix check', () => {
+    const config = makeConfig();
+    config.usejarvis_ai = { base_url: 'https://llm.usejarvis.host/v1///', api_key: 'sk-uj-abc' };
+    config.voice!.realtime = { enabled: true };
+    const res = resolveRealtimeVoice(config);
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.resolved.url).toBe('wss://llm.usejarvis.host/v1/realtime');
+  });
+
+  test('an unparseable or non-http base_url refuses instead of dialing garbage', () => {
+    const bad = makeConfig();
+    bad.usejarvis_ai = { base_url: 'ftp://llm.usejarvis.host', api_key: 'sk-uj-abc' };
+    bad.voice!.realtime = { enabled: true };
+    const res = resolveRealtimeVoice(bad);
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.reason).toContain('scheme');
+  });
+
   test('hosted fallback: no BYO key + usejarvis_ai block resolves the proxy session', () => {
     const config = makeConfig();
     config.usejarvis_ai = { base_url: 'https://llm.usejarvis.host', api_key: 'sk-uj-abc' };
