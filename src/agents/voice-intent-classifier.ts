@@ -281,8 +281,9 @@ settings room ("room": "settings"):
 - "disable_telegram" — args: {}   matches "disable telegram", "turn off telegram"
 - "enable_discord" — args: {}     matches "enable discord", "turn on discord"
 - "disable_discord" — args: {}    matches "disable discord", "turn off discord"
-- "set_stt_provider" — args: { "provider": "openai"|"groq"|"sarvam"|"local" }
-   matches "use groq for transcription", "set stt to local whisper"
+- "set_stt_provider" — args: { "provider": "openai"|"groq"|"sarvam"|"local"|"usejarvis" }
+   matches "use groq for transcription", "set stt to local whisper",
+   "switch transcription to usejarvis" (the hosted plan's included STT)
 - "enable_tts" — args: {}    matches "turn on TTS", "enable text to speech"
 - "disable_tts" — args: {}   matches "turn off TTS", "disable text to speech"
 - "set_tts_provider" — args: { "provider": "edge"|"elevenlabs"|"sarvam" }

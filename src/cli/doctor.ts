@@ -188,9 +188,15 @@ export async function runDoctor(): Promise<void> {
 
   if (config?.stt?.provider) {
     const sttProv = config.stt.provider;
+    const { hasUsejarvisAi } = await import('../daemon/usejarvis-ai.ts');
     const hasKey = sttProv === 'ollama' || sttProv === 'local'
       || (sttProv === 'openai' && config.stt.openai?.api_key)
-      || (sttProv === 'groq' && config.stt.groq?.api_key);
+      || (sttProv === 'groq' && config.stt.groq?.api_key)
+      || (sttProv === 'sarvam' && config.stt.sarvam?.api_key)
+      // Hosted STT rides the system-owned usejarvis_ai credentials, not a
+      // cfg.stt key — "API key missing" here was a false alarm on every
+      // working hosted install.
+      || (sttProv === 'usejarvis' && hasUsejarvisAi(config));
     results.push({
       name: 'STT',
       status: hasKey ? 'ok' : 'warn',

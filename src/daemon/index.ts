@@ -874,20 +874,22 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // edge-tts / ElevenLabs / Sarvam for TTS) carry over.
       let pebbleSTT: import('../comms/voice.ts').STTProvider | null = null;
       let pebbleTTS: import('../comms/voice.ts').TTSProvider | null = null;
-      if (jarvisConfig.stt) {
-        try {
-          const { createSTTProvider } = await import('../comms/voice.ts');
-          const { effectiveSttForBinding, usejarvisVoiceCredentials } = await import('./usejarvis-ai.ts');
-          const sttBinding = effectiveSttForBinding(jarvisConfig);
-          pebbleSTT = sttBinding
-            ? createSTTProvider(sttBinding, usejarvisVoiceCredentials(jarvisConfig))
-            : null;
-          if (pebbleSTT) {
-            console.log(`[ambient-ui] STT provider for pebble: ${sttBinding!.provider}`);
-          }
-        } catch (err) {
-          console.warn('[ambient-ui] failed to init STT provider:', err);
+      // Guard on the BINDING result, not on config.stt existing (like
+      // channel-service): the hosted default applies even when the section
+      // is absent, and an outer config.stt check would leave pebble STT
+      // dead on a surface where Telegram/Discord transcribe fine.
+      try {
+        const { createSTTProvider } = await import('../comms/voice.ts');
+        const { effectiveSttForBinding, usejarvisVoiceCredentials } = await import('./usejarvis-ai.ts');
+        const sttBinding = effectiveSttForBinding(jarvisConfig);
+        pebbleSTT = sttBinding
+          ? createSTTProvider(sttBinding, usejarvisVoiceCredentials(jarvisConfig))
+          : null;
+        if (pebbleSTT) {
+          console.log(`[ambient-ui] STT provider for pebble: ${sttBinding!.provider}`);
         }
+      } catch (err) {
+        console.warn('[ambient-ui] failed to init STT provider:', err);
       }
       if (jarvisConfig.tts?.enabled) {
         try {
@@ -3592,8 +3594,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       }
     }
 
-    // 8d. Wire STT provider for voice input via dashboard
-    if (jarvisConfig.stt) {
+    // 8d. Wire STT provider for voice input via dashboard. Guard on the
+    // BINDING result, not on config.stt existing (like channel-service):
+    // the hosted default applies even when the section is absent.
+    {
       const { createSTTProvider } = await import('../comms/voice.ts');
       const { effectiveSttForBinding, usejarvisVoiceCredentials } = await import('./usejarvis-ai.ts');
       const sttBinding = effectiveSttForBinding(jarvisConfig);
