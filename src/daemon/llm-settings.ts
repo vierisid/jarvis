@@ -117,6 +117,32 @@ export type LLMSettingsResponse = {
   hosted_llm?: boolean;
   /** Provider-side prompt caching. Defaults to true; only explicit false disables. */
   prompt_cache: boolean;
+  /**
+   * What the daemon is ACTUALLY routing with, computed from the same
+   * effectiveLlmForBinding view the provider-binding paths consume. The
+   * `tiers`/`mode`/`default` fields above are persisted user intent; this is
+   * the resolved result after hosted per-slot filling. The dashboard renders
+   * hints and fallback labels from HERE, never by re-deriving the fill —
+   * re-derivation is how the UI and the daemon ended up contradicting each
+   * other (pr2 review #3B, pr7 review #2).
+   */
+  effective: LLMSettingsEffectiveView;
+};
+
+/** Where an effective tier ref came from. */
+export type EffectiveTierSource =
+  | 'choice'   // the user's explicit tier ref
+  | 'default'  // filled from llm.default (per-slot, hosted installs)
+  | 'plan';    // filled from the plan's uj-* alias
+
+export type LLMSettingsEffectiveView = {
+  /** Architecture actually bound: router-first iff the effective view has a
+   * conversation tier (the same rule configureLLMTiers applies). */
+  mode: 'single' | 'router-first';
+  tiers: Record<Tier, {
+    ref: string | null;
+    source: EffectiveTierSource | null;
+  }>;
 };
 
 /** Body shape accepted by saveLLMSettings - all fields optional/partial. */
@@ -189,6 +215,27 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
         ? 'multi-tier'
         : 'single';
 
+  // The resolved routing view, from the same function the binding paths use.
+  const bound = effectiveLlmForBinding(config);
+  const effectiveTiers = {} as LLMSettingsEffectiveView['tiers'];
+  for (const tier of TIERS) {
+    const chosen = config.llm.tiers?.[tier];
+    if (chosen) {
+      effectiveTiers[tier] = { ref: chosen, source: 'choice' };
+      continue;
+    }
+    const resolved = bound.tiers?.[tier] ?? null;
+    effectiveTiers[tier] = resolved
+      ? { ref: resolved, source: config.llm.default ? 'default' : 'plan' }
+      : { ref: null, source: null };
+  }
+  const effective: LLMSettingsEffectiveView = {
+    // Same rule configureLLMTiers applies: a conversation tier in the BOUND
+    // view activates router-first, whatever the stored mode label says.
+    mode: effectiveTiers.conversation.ref ? 'router-first' : 'single',
+    tiers: effectiveTiers,
+  };
+
   return {
     providers,
     default: config.llm.default ?? null,
@@ -196,6 +243,7 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
     tiers,
     available_kinds: AVAILABLE_KINDS,
     prompt_cache: config.llm.prompt_cache !== false,
+    effective,
     // Hosted installs: tells the dashboard to render the read-only
     // "included with your plan" card (no base_url, no key material).
     hosted_llm: Object.prototype.hasOwnProperty.call(

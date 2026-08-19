@@ -230,3 +230,60 @@ describe('getLLMSettings: the block is reported, never exposed', () => {
     expect(getLLMSettings(structuredClone(DEFAULT_CONFIG)).hosted_llm).toBe(false);
   });
 });
+
+describe('getLLMSettings.effective: the dashboard reads routing reality, not a re-derivation', () => {
+  beforeEach(() => { closeDb(); initDatabase(':memory:'); });
+  afterEach(() => { closeDb(); });
+
+  test('hosted + everything silent: router-first on the four plan aliases, sourced "plan"', () => {
+    const config = hostedConfig();
+    const { effective } = getLLMSettings(config);
+    expect(effective.mode).toBe('router-first');
+    expect(effective.tiers.conversation).toEqual({ ref: 'usejarvis_ai:uj-chat', source: 'plan' });
+    expect(effective.tiers.high).toEqual({ ref: 'usejarvis_ai:uj-high', source: 'plan' });
+    expect(effective.tiers.medium).toEqual({ ref: 'usejarvis_ai:uj-medium', source: 'plan' });
+    expect(effective.tiers.low).toEqual({ ref: 'usejarvis_ai:uj-low', source: 'plan' });
+    // ...while the persisted view stays pure user intent (all null).
+    expect(getLLMSettings(config).tiers.high).toBeNull();
+  });
+
+  test('hosted + llm.default set: per-slot D1 resolution, explicit choice wins its slot', () => {
+    const config = hostedConfig();
+    config.llm.default = 'anthropic:claude-x';
+    config.llm.tiers = { high: 'usejarvis_ai:uj-high' };
+    const { effective } = getLLMSettings(config);
+    expect(effective.tiers.high).toEqual({ ref: 'usejarvis_ai:uj-high', source: 'choice' });
+    expect(effective.tiers.medium).toEqual({ ref: 'anthropic:claude-x', source: 'default' });
+    expect(effective.tiers.conversation).toEqual({ ref: 'anthropic:claude-x', source: 'default' });
+  });
+
+  test('self-hosted: effective mirrors the persisted refs, silent slots stay empty', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.llm.tiers = { high: 'anthropic:claude-x' };
+    const { effective } = getLLMSettings(config);
+    expect(effective.mode).toBe('single'); // no conversation tier bound
+    expect(effective.tiers.high).toEqual({ ref: 'anthropic:claude-x', source: 'choice' });
+    expect(effective.tiers.low).toEqual({ ref: null, source: null });
+  });
+});
+
+describe('self-hosted installs with a legacy provider literally named usejarvis_ai (W10)', () => {
+  beforeEach(() => { closeDb(); initDatabase(':memory:'); });
+  afterEach(() => { closeDb(); });
+
+  test('the entry survives an unrelated save, stays listed, and hosted_llm stays false', () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.llm.providers = { usejarvis_ai: { kind: 'openai_compatible', base_url: 'https://my.gw/v1' } };
+    saveLLMSettings(config, { prompt_cache: false });
+    // Persisted, not dropped:
+    expect(getSetting('llm.providers') ?? '').toContain('usejarvis_ai');
+    // Still visible to the dashboard, and the install does not read as hosted:
+    const view = getLLMSettings(config);
+    expect(view.providers.usejarvis_ai).toBeDefined();
+    expect(view.hosted_llm).toBe(false);
+    // Reload keeps it (no reserved-name skip on self-hosted):
+    const reloaded = structuredClone(DEFAULT_CONFIG);
+    mergeLLMSettingsIntoConfig(reloaded);
+    expect(reloaded.llm.providers?.usejarvis_ai?.base_url).toBe('https://my.gw/v1');
+  });
+});
