@@ -1,4 +1,7 @@
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createApiRoutes, type ApiContext } from './api-routes.ts';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import { DEFAULT_CONFIG, type JarvisConfig } from '../config/types.ts';
@@ -52,11 +55,24 @@ function post(handler: Handler, url: string, body: unknown): Response | Promise<
 }
 
 describe('voice config routes: persistence stays silence-preserving', () => {
+  // These routes reach persistSectionSecrets — redirect the keychain to a
+  // throwaway dir so tests never touch the real store (same as user-settings.test.ts).
+  let secretsDir: string;
+  let prevSecretsDir: string | undefined;
+
   beforeEach(() => {
+    prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-api-voice-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
     closeDb();
     initDatabase(':memory:');
   });
-  afterEach(() => { closeDb(); });
+  afterEach(() => {
+    closeDb();
+    if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
 
   test('POST /api/config/tts {enabled:true} leaves the stored row provider-free (hosted default survives)', async () => {
     const config = hostedConfig();

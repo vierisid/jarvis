@@ -63,6 +63,13 @@ export function resolveKeychainDir(configured: string, legacy: string): string {
 
 /** Directory actually in use. Resolved per call, never cached. */
 export function keychainDir(): string {
+  // Guard: under `bun test` (bun sets NODE_ENV=test) with no explicit dir
+  // override, this would resolve to the developer's REAL keychain — a test
+  // file missing its JARVIS_SECRETS_DIR setup once deleted real keys. Fail
+  // loudly instead of touching it.
+  if (process.env.NODE_ENV === 'test' && !process.env.JARVIS_SECRETS_DIR && !process.env.JARVIS_HOME) {
+    throw new Error('Refusing to touch the real keychain under test: point JARVIS_SECRETS_DIR at a temp dir in your test setup (see user-settings.test.ts)');
+  }
   const configured = configuredDir();
   if (process.env.JARVIS_SECRETS_DIR) return configured;
   return resolveKeychainDir(configured, legacyDir());
