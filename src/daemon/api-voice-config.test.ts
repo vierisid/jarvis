@@ -100,7 +100,10 @@ describe('voice config routes: persistence stays silence-preserving', () => {
     // pins is the absence of a `provider`, not the key round-tripping.
     expect(loadUserSection('stt')).toEqual({ openai: {} });
     expect(config.stt?.openai?.api_key).toBe('sk-user'); // runtime view
-    expect(effectiveSttForBinding(config)?.provider).toBe('usejarvis'); // still silent
+    // A row carrying a provider sub-block IS intent (storedProviderChoice):
+    // the user who pasted an OpenAI key gets their own provider, not the
+    // hosted default silently re-routing their audio past it.
+    expect(effectiveSttForBinding(config)?.provider).toBe('openai');
   });
 
   test('POST /api/config/stt with an explicit provider records intent and wins over the default', async () => {
