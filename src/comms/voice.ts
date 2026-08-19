@@ -545,7 +545,16 @@ export class UsejarvisTTS implements TTSProvider {
     // dump), and this endpoint is billed per CHARACTER — so an unsplittable
     // reply would bill in one unbounded request. Truncating costs a clipped
     // tail; not truncating costs real money on a runaway generation.
-    const input = text.length > MAX_TTS_INPUT_CHARS ? text.slice(0, MAX_TTS_INPUT_CHARS) : text;
+    let input = text;
+    if (text.length > MAX_TTS_INPUT_CHARS) {
+      let cut = MAX_TTS_INPUT_CHARS;
+      // Never split a surrogate pair — a lone surrogate is invalid JSON string
+      // content for the proxy.
+      const last = text.charCodeAt(cut - 1);
+      if (last >= 0xd800 && last <= 0xdbff) cut -= 1;
+      input = text.slice(0, cut);
+      console.warn(`[UsejarvisTTS] Input truncated from ${text.length} to ${input.length} chars (per-request cap; the spoken reply will cut off)`);
+    }
 
     const response = await fetch(`${this.baseUrl}/audio/speech`, {
       method: 'POST',

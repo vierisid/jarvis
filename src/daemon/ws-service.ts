@@ -663,14 +663,25 @@ export class WebSocketService implements Service {
       this.wsServer.broadcast(startMsg);
 
       let chunkCount = 0;
-      for await (const chunk of this.ttsProvider.synthesizeStream(text)) {
-        // Send binary audio to all connected clients
-        for (const ws of this.wsServer.getClients()) {
-          try {
-            ws.sendBinary(chunk);
-          } catch { /* client may have disconnected */ }
+      // Sentence-split like the reply path: proactive text goes to the
+      // provider whole otherwise, and the hosted provider truncates a single
+      // over-long input (billed per character, capped per request) — split
+      // sentences synthesize completely and fail independently.
+      const { splitIntoSentences } = await import('../comms/voice.ts');
+      for (const sentence of splitIntoSentences(text)) {
+        try {
+          for await (const chunk of this.ttsProvider.synthesizeStream(sentence)) {
+            // Send binary audio to all connected clients
+            for (const ws of this.wsServer.getClients()) {
+              try {
+                ws.sendBinary(chunk);
+              } catch { /* client may have disconnected */ }
+            }
+            chunkCount++;
+          }
+        } catch (err) {
+          console.error('[WSService] Proactive TTS sentence error:', err instanceof Error ? err.message : err);
         }
-        chunkCount++;
       }
 
       // Signal TTS end

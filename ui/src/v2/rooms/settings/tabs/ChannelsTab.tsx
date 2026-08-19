@@ -5,6 +5,10 @@ import type {
   TTSProvider,
 } from "../useSettingsData";
 
+// OpenAI-style voices the hosted Usejarvis TTS accepts (see createTTSProvider:
+// Edge neural names are rejected there, so this list is the whole picker).
+const UJ_VOICES = ["alloy", "echo", "fable", "nova", "onyx", "shimmer"];
+
 const EDGE_VOICES = [
   { id: "en-US-AriaNeural", label: "Aria (US Female)" },
   { id: "en-US-GuyNeural", label: "Guy (US Male)" },
@@ -467,6 +471,50 @@ export function ChannelsTab({
             <option value="sarvam">Sarvam AI (Indian languages)</option>
           </select>
         </div>
+
+        {ttsCfg?.provider === "usejarvis" && (
+          <div className="v2-set__field">
+            <label className="v2-set__field-label">Voice</label>
+            <select
+              className="v2-set__select"
+              value={UJ_VOICES.includes(ttsCfg?.voice ?? "") ? (ttsCfg?.voice as string) : "alloy"}
+              onChange={async (e) => {
+                const r = await data.setTTS({ voice: e.target.value });
+                onToast(r.message, r.ok ? "ok" : "warn");
+              }}
+            >
+              {UJ_VOICES.map((v) => (
+                <option key={v} value={v}>
+                  {v.charAt(0).toUpperCase() + v.slice(1)}
+                </option>
+              ))}
+            </select>
+            <button
+              type="button"
+              className="v2-set__btn"
+              onClick={async () => {
+                const voice = UJ_VOICES.includes(ttsCfg?.voice ?? "") ? ttsCfg?.voice : "alloy";
+                const res = await fetch("/api/tts/preview", {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ provider: "usejarvis", voice }),
+                });
+                if (!res.ok) {
+                  const body = await res.json().catch(() => ({ error: "Preview failed" }));
+                  onToast((body as { error?: string }).error ?? "Preview failed", "warn");
+                  return;
+                }
+                const buf = await res.arrayBuffer();
+                const url = URL.createObjectURL(new Blob([buf], { type: "audio/mpeg" }));
+                const a = new Audio(url);
+                a.onended = () => URL.revokeObjectURL(url);
+                await a.play().catch(() => URL.revokeObjectURL(url));
+              }}
+            >
+              Listen
+            </button>
+          </div>
+        )}
 
         {ttsCfg?.provider === "edge" && (
           <>

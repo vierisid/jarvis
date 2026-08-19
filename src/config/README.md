@@ -75,10 +75,20 @@ onboarding, ... — see `USER_OWNED_SECTIONS` in `types.ts`) persist to the
 vault DB settings store instead:
 
 ```typescript
-import { saveUserSection } from '../daemon/user-settings.ts';
+import { saveUserSection, persistUserPatch } from '../daemon/user-settings.ts';
 
+// Most sections: mutate in memory, then persist the section.
+config.personality = { ...config.personality, humor: 'dry' };
+saveUserSection('personality', config.personality);
+
+// stt/tts are the exception: persist the PATCH, never the merged in-memory
+// section — the in-memory value carries DEFAULT_CONFIG fills (provider
+// 'openai'/'edge'), and saving those records a provider choice the user never
+// made, which defeats the hosted "silent user gets the included voice"
+// default. persistUserPatch merges the patch over the stored row (hydrated
+// with keychain credentials) and saves that.
 config.tts = { ...config.tts, enabled: true };
-saveUserSection('tts', config.tts);
+persistUserPatch('tts', { enabled: true });
 ```
 
 A legacy `config.yaml` that still carries user sections seeds the DB once at
