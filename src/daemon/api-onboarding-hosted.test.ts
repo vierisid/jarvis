@@ -88,6 +88,19 @@ describe('POST /api/onboarding/setup on a hosted install', () => {
     // false, so dropping `enabled` along with the provider would ship a
     // hosted install mute while the wizard promises voice is included.
     expect(config.tts?.enabled).toBe(true);
+    // The guard REPORTS what it stripped: a wizard that raced the hosted
+    // probe collected this config, and a plain ok would let it print
+    // "✓ brain · Anthropic" for credentials that were never saved.
+    const body = await (res as Response).json() as { dropped?: string[] };
+    expect(body.dropped?.sort()).toEqual(['llm', 'stt', 'tts']);
+  });
+
+  test('a clean hosted payload (mode + enabled only) reports nothing dropped', async () => {
+    const config = hostedConfig();
+    const handler = getHandler(createApiRoutes(makeCtx(config)), '/api/onboarding/setup', 'POST');
+    const res = await post(handler, { llm: { mode: 'multi-tier' }, tts: { enabled: true } });
+    const body = await (res as Response).json() as { dropped?: string[] };
+    expect(body.dropped).toEqual([]);
   });
 
   test('still completes setup, so onboarding does not replay next launch', async () => {

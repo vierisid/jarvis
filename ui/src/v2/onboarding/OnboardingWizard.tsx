@@ -30,6 +30,29 @@ export function stepsFor(hosted: boolean): ReadonlyArray<[StepKey, string]> {
   return hosted ? STEPS.filter(([k]) => !HOSTED_PROVISIONED.has(k)) : STEPS;
 }
 
+export type HostedProbe = "unknown" | "hosted" | "self";
+
+/** True when a screen must show the probe-resolving gate instead of its
+ * content: the provisioned screens are exactly the ones whose answers the
+ * server guard drops on hosted installs, so they never render while the
+ * probe is unresolved — a slow/erroring probe used to read as self-hosted
+ * and walk a hosted user into typing credentials that were then silently
+ * discarded (review pr7#4 / pr3#10). */
+export function stepGatedOnProbe(probe: HostedProbe, key: StepKey): boolean {
+  return probe === "unknown" && HOSTED_PROVISIONED.has(key);
+}
+
+/** The key to render when the stored step key is momentarily absent from the
+ * current list (the probe resolved under a hidden screen): Permissions — the
+ * same target the repair effect commits — never the terminal screen (which
+ * mounted "All set" mid-flow) and never index 0 (which flashed Welcome). */
+export function resolveStepKey(
+  steps: ReadonlyArray<[StepKey, string]>,
+  stepKey: StepKey,
+): StepKey {
+  return steps.some(([k]) => k === stepKey) ? stepKey : "perms";
+}
+
 /** Steps that show the progress bar (everything between Welcome and the
  * interview). Key-based: an index range breaks the moment the list shrinks. */
 const PROGRESS_STEPS: ReadonlySet<StepKey> = new Set<StepKey>([
@@ -161,19 +184,34 @@ export function OnboardingWizard({
   // permissions
   // brain
   // Hosted install? GET /api/config/llm reports hosted_llm when the
-  // system-owned usejarvis_ai block is live. Until (and unless) it says so,
-  // the "Jarvis AI" card stays a disabled "Soon" — self-hosted default.
-  const [hosted, setHosted] = useState(false);
+  // system-owned usejarvis_ai block is live. TRI-state on purpose: a slow or
+  // erroring probe used to read as self-hosted, so a hosted user racing a
+  // booting daemon was walked through brain/hearing/speaking, typed three
+  // API keys, and the server guard then silently discarded all of them while
+  // the recap claimed success (review pr7#4 / pr3#10). While 'unknown', the
+  // provisioned screens gate on the probe and the setup POST refuses to fire.
+  const [hostedProbe, setHostedProbe] = useState<"unknown" | "hosted" | "self">("unknown");
+  const [probeAttempt, setProbeAttempt] = useState(0);
   useEffect(() => {
     let cancelled = false;
     fetch("/api/config/llm")
-      .then((r) => (r.ok ? r.json() : null))
+      .then((r) => (r.ok ? r.json() : Promise.reject(new Error(`HTTP ${r.status}`))))
       .then((d: { hosted_llm?: boolean } | null) => {
-        if (!cancelled && d?.hosted_llm) setHosted(true);
+        if (!cancelled) setHostedProbe(d?.hosted_llm ? "hosted" : "self");
       })
-      .catch(() => { /* unreachable daemon reads as self-hosted */ });
+      .catch(() => {
+        // Unreachable daemon stays UNKNOWN (blocked + retryable), never
+        // silently self-hosted. Auto-retry with a short backoff — the common
+        // cause is the daemon still booting under the wizard.
+        if (cancelled) return;
+        setTimeout(() => { if (!cancelled) setProbeAttempt((n) => n + 1); }, 1500);
+      });
     return () => { cancelled = true; };
-  }, []);
+  }, [probeAttempt]);
+  const hosted = hostedProbe === "hosted";
+  // Sections the setup route's hosted guard reported as stripped from OUR
+  // request — the recap must not print them as saved.
+  const [droppedSections, setDroppedSections] = useState<string[]>([]);
   const provList = useMemo(
     () => PROVIDERS.map((p) => (p.id === "jarvis" ? { ...p, soon: !hosted } : p)),
     [hosted],
@@ -189,15 +227,14 @@ export function OnboardingWizard({
     () => stepsFor(hosted),
     [hosted],
   );
-  const found = steps.findIndex(([k]) => k === stepKey);
   // While the key is momentarily absent (the probe resolved under a hidden
   // screen, repaired below), resolve to Permissions DURING RENDER — the same
   // target the repair effect commits to. The previous `steps.length - 1`
   // fallback mounted the terminal "All set" screen (and its onComplete
   // wiring) for one pre-paint commit mid-flow; snapping to 0 would be no
   // better, flashing Welcome's "I'll do this later".
-  const key = found >= 0 ? steps[found]![0] : "perms";
-  const step = found >= 0 ? found : steps.findIndex(([k]) => k === "perms");
+  const key = resolveStepKey(steps, stepKey);
+  const step = steps.findIndex(([k]) => k === key);
 
   // If the probe resolves while the user is standing on a now-hidden screen,
   // send them BACK to Permissions, not forward. Permissions is where the
@@ -444,6 +481,14 @@ export function OnboardingWizard({
 
   /* — the setup POST: fires when leaving Speaking (llm + stt + tts) — */
   const saveSetup = useCallback(async () => {
+    // Never post while the hosted probe is unresolved: the server guard
+    // decides what to keep by hostedness, and a wrong guess here is how
+    // typed-in credentials get silently discarded. The gated screens make
+    // this unreachable in practice; this is the backstop.
+    if (hostedProbe === "unknown") {
+      setError("Still checking what your plan includes — one moment, then try again.");
+      return;
+    }
     setBusy(true); setError(null);
     try {
       // "No voice" sends NO provider field: declining the voice step is not
@@ -503,11 +548,16 @@ export function OnboardingWizard({
       }
       const r = await fetch("/api/onboarding/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
       if (!r.ok) throw new Error((await r.text().catch(() => "")) || `HTTP ${r.status}`);
+      // The server reports any sections its hosted guard stripped — keep
+      // them so the recap tells the truth instead of printing dropped
+      // provider config as saved.
+      const resBody = await r.json().catch(() => null) as { dropped?: string[] } | null;
+      setDroppedSections(resBody?.dropped ?? []);
       goKey("connect");
     } catch (e) {
       setError(e instanceof Error ? e.message : "Setup failed.");
     } finally { setBusy(false); }
-  }, [hosted, prov, provId, apiKey, baseUrl, customEndpoint, model, test, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint]);
+  }, [hosted, hostedProbe, prov, provId, apiKey, baseUrl, customEndpoint, model, test, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint]);
 
   const skipAll = useCallback(async () => {
     setBusy(true);
@@ -714,6 +764,27 @@ export function OnboardingWizard({
 
   /* ─────────── step renderers ─────────── */
   function renderStep() {
+    // The provisioned screens are exactly the ones whose answers the server
+    // guard drops on hosted installs — never show them (or the "Jarvis AI ·
+    // Soon" mislabel) until the probe has actually said which install this
+    // is. Blocking here also blocks the path to the setup POST.
+    if (stepGatedOnProbe(hostedProbe, key)) {
+      return (
+        <div className="obw-body mid"><div className="obw-wrap">
+          <h2>Checking what your plan includes…</h2>
+          <div className="obw-sub" style={{ maxWidth: "36ch", margin: "9px auto 0" }}>
+            One moment — confirming whether the AI and voice are already part
+            of your plan, so you aren’t asked to configure something you
+            already have.
+          </div>
+          <div style={{ marginTop: 22, display: "flex", justifyContent: "center" }}>
+            <button className="obw-btn" onClick={() => setProbeAttempt((n) => n + 1)}>
+              Check again
+            </button>
+          </div>
+        </div></div>
+      );
+    }
     switch (key) {
       case "welcome": return (
         <div className="obw-body mid"><div className="obw-wrap">
@@ -973,8 +1044,12 @@ export function OnboardingWizard({
               </>
             ) : configuredThisSession ? (
               <>
-                <div><span className="ok">✓</span> brain · {prov.name}</div>
-                <div><span className="ok">✓</span> voice · {tts === "off" ? "text only" : tts === "edge" ? `Edge (${EDGE_VOICES.find((v) => v.id === edgeVoice)?.label.split(" ")[0]})` : "ElevenLabs"}{stt !== "skip" ? " + Whisper" : ""}</div>
+                {droppedSections.includes("llm")
+                  ? <div><span className="ok">✓</span> brain · included with your plan (the {prov.name} config wasn’t needed and wasn’t saved)</div>
+                  : <div><span className="ok">✓</span> brain · {prov.name}</div>}
+                {droppedSections.includes("tts") || droppedSections.includes("stt")
+                  ? <div><span className="ok">✓</span> voice · included with your plan (your provider entries weren’t needed and weren’t saved)</div>
+                  : <div><span className="ok">✓</span> voice · {tts === "off" ? "text only" : tts === "edge" ? `Edge (${EDGE_VOICES.find((v) => v.id === edgeVoice)?.label.split(" ")[0]})` : "ElevenLabs"}{stt !== "skip" ? " + Whisper" : ""}</div>}
                 <div><span className="ok">✓</span> profile saved to your Vault</div>
               </>
             ) : (

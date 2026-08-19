@@ -1375,11 +1375,22 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           //    promises the plan includes voice. The provider field is still
           //    stripped, so the row stays silent and the included uj voice
           //    applies.
+          // Whatever the guard strips is REPORTED back (`dropped`): a wizard
+          // that raced the hosted probe may have collected provider config
+          // the guard is about to discard — answering plain ok would let it
+          // print "✓ brain · Anthropic" for credentials that were never
+          // saved (review pr7#4).
+          const dropped: string[] = [];
           if (hasUsejarvisAi(ctx.config)) {
-            const mode = (body.llm as { mode?: unknown } | undefined)?.mode;
+            const llmBody = body.llm as { mode?: unknown; providers?: unknown; default?: unknown } | undefined;
+            const mode = llmBody?.mode;
+            if (llmBody && (llmBody.providers !== undefined || llmBody.default !== undefined)) dropped.push('llm');
             body.llm = mode === 'single' || mode === 'multi-tier' ? { mode } : undefined;
+            if (body.stt !== undefined) dropped.push('stt');
             body.stt = undefined;
-            const enabled = (body.tts as { enabled?: unknown } | undefined)?.enabled;
+            const ttsBody = body.tts as { enabled?: unknown; provider?: unknown } | undefined;
+            if (ttsBody && Object.keys(ttsBody).some((k) => k !== 'enabled')) dropped.push('tts');
+            const enabled = ttsBody?.enabled;
             body.tts = typeof enabled === 'boolean' ? { enabled } : undefined;
           }
 
@@ -1468,6 +1479,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             ok: true,
             setup_completed_at: now,
             post_setup_services_started: postSetupStarted,
+            // Sections the hosted guard stripped from this request, so the
+            // wizard can tell the user instead of claiming they were saved.
+            dropped,
             message: 'Setup complete. Jarvis is ready.',
           });
         } catch (err) {
