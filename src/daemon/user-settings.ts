@@ -122,18 +122,22 @@ export function saveUserSection<K extends UserOwnedSection>(
  * saveUserSection with the merged in-memory section re-introduces the stamp.
  * Callers update the in-memory config separately for runtime use.
  *
- * Uses the shared mergeSTTConfig/mergeTTSConfig helpers, so api_keys stored
- * in the row survive patches that omit them (the GET endpoints redact keys).
+ * The stored row is STRIPPED (credentials live in the encrypted keychain), so
+ * the merge base is hydrated via injectSectionSecrets first — saveUserSection
+ * re-runs the secret split on the way out, and persistSectionSecrets treats an
+ * absent credential as "delete it". Merging over the bare stripped row would
+ * therefore destroy every stored key the patch does not carry (it did, once).
  */
 export function persistUserPatch(section: 'stt' | 'tts', patch: Record<string, unknown>): void {
   const stored = loadUserSection(section);
-  const base = (typeof stored === 'object' && stored !== null && !Array.isArray(stored))
-    ? stored
-    : {};
   // Cast, don't default: the merge helpers substitute a provider-carrying
   // default for an UNDEFINED base, which would stamp silence into the row.
   // A `{}` base merges cleanly and stays provider-free unless the patch
-  // itself carries a choice.
+  // itself carries a choice. Secrets are injected only when a row exists —
+  // same orphan rule as mergeUserSettingsIntoConfig.
+  const base = (typeof stored === 'object' && stored !== null && !Array.isArray(stored))
+    ? injectSectionSecrets(section, stored)
+    : {};
   if (section === 'stt') {
     saveUserSection('stt', mergeSTTConfig(base as STTConfig, patch));
   } else {

@@ -104,11 +104,15 @@ function mergeCloudSubBlock(
   existing: AnyRec | undefined,
   incoming: AnyRec,
 ): AnyRec {
-  return {
-    ...existing,
-    ...incoming,
-    api_key: (incoming.api_key as string) || (existing?.api_key as string) || '',
-  };
+  const merged: AnyRec = { ...existing, ...incoming };
+  const key = (incoming.api_key as string) || (existing?.api_key as string) || '';
+  // Never materialize an explicit '' — persistSectionSecrets reads an empty
+  // credential as "delete the stored key", so a key-less merge writing '' into
+  // a touched sub-block would erase a keychain entry the caller never meant
+  // to clear.
+  if (key) merged.api_key = key;
+  else delete merged.api_key;
+  return merged;
 }
 
 /**

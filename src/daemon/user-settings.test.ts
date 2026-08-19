@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import { getSetting, setSetting } from '../vault/settings.ts';
+import { getSecret } from '../vault/keychain.ts';
 import { loadConfig } from '../config/loader.ts';
 import { DEFAULT_CONFIG, type JarvisConfig } from '../config/types.ts';
 import {
@@ -287,6 +288,45 @@ describe('user-settings', () => {
     persistUserPatch('stt', { provider: 'groq' });
     persistUserPatch('tts', { enabled: true });
     expect(events).toEqual(['stt', 'tts']);
+  });
+
+  // ── keychain survival: the stored row is STRIPPED, so the merge base must be
+  // hydrated with the stored credentials before the save re-runs the secret
+  // split — otherwise every patch deletes the keys it does not carry. ──────────
+
+  test('persistUserPatch: keychain key survives an {enabled}-only patch', () => {
+    saveUserSection('tts', { enabled: true, provider: 'elevenlabs', elevenlabs: { api_key: 'el-secret', voice_id: 'v1' } });
+    expect(getSecret('tts.elevenlabs.api_key')).toBe('el-secret');
+
+    persistUserPatch('tts', { enabled: false });
+
+    expect(getSecret('tts.elevenlabs.api_key')).toBe('el-secret');
+    expect(loadUserSection('tts')).toEqual({
+      enabled: false, provider: 'elevenlabs', elevenlabs: { voice_id: 'v1' },
+    });
+  });
+
+  test('persistUserPatch: switching STT provider keeps BOTH stored keys', () => {
+    saveUserSection('stt', {
+      provider: 'openai',
+      openai: { api_key: 'sk-openai-secret' },
+      groq: { api_key: 'gsk-groq-secret' },
+    });
+
+    persistUserPatch('stt', { provider: 'groq' });
+
+    expect(getSecret('stt.openai.api_key')).toBe('sk-openai-secret');
+    expect(getSecret('stt.groq.api_key')).toBe('gsk-groq-secret');
+    expect(loadUserSection('stt')).toEqual({ provider: 'groq', openai: {}, groq: {} });
+  });
+
+  test('persistUserPatch: a patch touching one sub-block does not delete a sibling key', () => {
+    saveUserSection('stt', { provider: 'openai', openai: { api_key: 'sk-openai-secret' } });
+
+    persistUserPatch('stt', { groq: { api_key: 'gsk-new' } });
+
+    expect(getSecret('stt.openai.api_key')).toBe('sk-openai-secret');
+    expect(getSecret('stt.groq.api_key')).toBe('gsk-new');
   });
 
   test('end to end: legacy file -> import -> discard -> merge equals old behavior', async () => {
