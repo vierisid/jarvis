@@ -1,4 +1,4 @@
-import type { JarvisConfig } from '../config/types.ts';
+import type { JarvisConfig, LLMConfig } from '../config/types.ts';
 
 /**
  * Hosted "Usejarvis AI" wiring (the platform's LLM proxy).
@@ -7,16 +7,21 @@ import type { JarvisConfig } from '../config/types.ts';
  * key) is SYSTEM-owned and file-authoritative: the provisioner writes it,
  * the brain never does, and the dashboard cannot touch it. But `config.llm`
  * is rebuilt WHOLESALE from the DB by mergeLLMSettingsIntoConfig on boot,
- * on SIGHUP reload, and around every dashboard save — so this hook re-applies
- * the hosted provider over every one of those merges. It must be called
- * after ANY code path that replaces `config.llm`.
+ * on SIGHUP reload, and around every dashboard save — so the provider is
+ * re-injected over every one of those merges (BEFORE the orphan prune, so
+ * persisted usejarvis_ai:* refs are never treated as dangling).
  *
- * Semantics (fill-if-silent):
- * - The provider itself is ALWAYS injected (users cannot delete it).
- * - Tier assignments are defaults only: each unset tier slot is pointed at
- *   the matching uj-* alias, but any tier the user chose in the dashboard
- *   wins for that slot, and a user who configured single-model mode
- *   (llm.default) keeps it untouched.
+ * Tier defaults are NEVER written into config.llm. They exist only in the
+ * binding view returned by effectiveLlmForBinding, which the provider
+ * registration paths consume. This keeps runtime defaults out of every
+ * persistence path by construction: saveLLMSettings can only ever write
+ * back what the DB or the request body contained.
+ *
+ * Per-slot resolution (decision D1): a tier slot resolves
+ *   explicit user ref → llm.default → plan uj-* alias.
+ * There is no all-or-nothing bail on llm.default; setting a default narrows
+ * the fallback for unset slots, it does not disable the other slots' explicit
+ * choices.
  */
 
 /** Reserved provider name: the map key, the kind, and the tier-ref prefix. */
@@ -24,22 +29,57 @@ export const USEJARVIS_PROVIDER_NAME = 'usejarvis_ai';
 
 /** Default tier wiring: identical on every plan — per-plan model resolution
  * happens at the proxy via these aliases, never in this file. */
-const TIER_DEFAULTS = {
+export const USEJARVIS_TIER_DEFAULTS = {
   conversation: `${USEJARVIS_PROVIDER_NAME}:uj-chat`,
   low: `${USEJARVIS_PROVIDER_NAME}:uj-low`,
   medium: `${USEJARVIS_PROVIDER_NAME}:uj-medium`,
   high: `${USEJARVIS_PROVIDER_NAME}:uj-high`,
 } as const;
 
-/** True when this install is hosted (a complete usejarvis_ai block exists). */
-export function hasUsejarvisAi(config: JarvisConfig): boolean {
-  const block = config.usejarvis_ai;
-  return Boolean(block?.base_url?.trim() && block?.api_key?.trim());
+/** Trailing-slash-stripped, trimmed URL (mirrors llm-settings normalizeBaseUrl;
+ * duplicated here because importing llm-settings would create a cycle). */
+function normalizeBlockUrl(value: string): string {
+  return value.trim().replace(/\/+$/, '');
 }
 
+/**
+ * Read and validate the SYSTEM block. A malformed block (non-string values —
+ * e.g. an unquoted YAML scalar parsed as number/boolean) is reported once per
+ * read and treated as absent rather than throwing from inside the boot merge.
+ */
+function readUsejarvisAiBlock(
+  config: JarvisConfig,
+): { base_url: string; api_key: string } | null {
+  const block = config.usejarvis_ai;
+  if (!block || typeof block !== 'object') return null;
+  const { base_url, api_key } = block as Record<string, unknown>;
+  if (
+    (base_url !== undefined && typeof base_url !== 'string')
+    || (api_key !== undefined && typeof api_key !== 'string')
+  ) {
+    console.warn(
+      '[UsejarvisAI] Ignoring malformed usejarvis_ai config block: base_url and api_key must be strings (quote them in config.yaml).',
+    );
+    return null;
+  }
+  const url = typeof base_url === 'string' ? normalizeBlockUrl(base_url) : '';
+  const key = typeof api_key === 'string' ? api_key.trim() : '';
+  if (!url || !key) return null;
+  return { base_url: url, api_key: key };
+}
+
+/** True when this install is hosted (a complete, well-formed usejarvis_ai block exists). */
+export function hasUsejarvisAi(config: JarvisConfig): boolean {
+  return readUsejarvisAiBlock(config) !== null;
+}
+
+/**
+ * Inject the hosted provider entry. Providers only — tier defaults live in
+ * effectiveLlmForBinding and never touch the config object.
+ */
 export function applyUsejarvisAi(config: JarvisConfig): void {
-  if (!hasUsejarvisAi(config)) return;
-  const block = config.usejarvis_ai!;
+  const block = readUsejarvisAiBlock(config);
+  if (!block) return;
 
   config.llm.providers ??= {};
   // Unconditional: whatever the DB merge brought in, the hosted provider
@@ -47,17 +87,28 @@ export function applyUsejarvisAi(config: JarvisConfig): void {
   // (saveLLMSettings also refuses to persist one).
   config.llm.providers[USEJARVIS_PROVIDER_NAME] = {
     kind: USEJARVIS_PROVIDER_NAME,
-    base_url: block.base_url!.trim(),
-    api_key: block.api_key!.trim(),
+    base_url: block.base_url,
+    api_key: block.api_key,
   };
+}
 
-  // Defaults only where the user is silent: an explicit single-model choice
-  // (llm.default) disables tier-filling entirely; otherwise each unset slot
-  // gets its uj-* alias while user-chosen slots stay untouched.
-  if (!config.llm.default) {
-    const tiers = (config.llm.tiers ??= {});
-    for (const [tier, ref] of Object.entries(TIER_DEFAULTS)) {
-      (tiers as Record<string, string>)[tier] ||= ref;
+/**
+ * The LLM config the provider-binding paths (boot registration, hot reload)
+ * must consume instead of config.llm. On self-hosted installs it IS
+ * config.llm. On hosted installs it is a copy whose tier slots are resolved
+ * per-slot: explicit user ref → llm.default → plan uj-* alias.
+ *
+ * Never mutates config and its result must never be persisted — the fill
+ * exists only for the duration of a bind.
+ */
+export function effectiveLlmForBinding(config: JarvisConfig): LLMConfig {
+  if (!hasUsejarvisAi(config)) return config.llm;
+
+  const tiers: Record<string, string> = { ...(config.llm.tiers ?? {}) };
+  for (const [tier, alias] of Object.entries(USEJARVIS_TIER_DEFAULTS)) {
+    if (!tiers[tier]) {
+      tiers[tier] = config.llm.default || alias;
     }
   }
+  return { ...config.llm, tiers };
 }
