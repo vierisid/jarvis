@@ -152,15 +152,29 @@ export function persistUserPatch(section: 'stt' | 'tts', patch: Record<string, u
  * stack). Deliberately a delete rather than a write of 'usejarvis': recording
  * that as a choice would pin the account, so "reset to the plan default" has
  * to leave no choice at all.
+ *
+ * Same hydration rule as persistUserPatch: the stored row is STRIPPED, and
+ * saveUserSection re-runs the secret split treating an absent credential as
+ * "delete it" — forwarding the bare row would destroy every stored key on
+ * the one click sold as harmless (it did, once: review pr7#1).
+ *
+ * Returns false when there was no stored row to clear, so the routes can say
+ * "nothing to reset" instead of toasting a success that changed nothing.
  */
-export function clearProviderChoice(section: 'stt' | 'tts'): void {
+export function clearProviderChoice(section: 'stt' | 'tts'): boolean {
   const stored = loadUserSection(section);
-  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return;
-  const { provider: _dropped, ...rest } = stored as Record<string, unknown>;
+  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return false;
+  const hydrated = injectSectionSecrets(section, stored as Record<string, unknown>);
+  // `provider: ''` is the explicit "cleared" sentinel, not a deletion: a row
+  // that ever held a credential keeps its sub-block (dropping it would drop
+  // the keychain key on the way out), and a bare sub-block reads as intent
+  // (storedProviderChoice's import heuristic) — the sentinel is what makes
+  // the reset stick anyway.
   // The stored row is user intent, not a complete config — it legitimately
   // lacks fields the runtime type requires (that is the whole point of
   // silence), so the cast is the honest shape here.
-  saveUserSection(section, rest as unknown as STTConfig | TTSConfig);
+  saveUserSection(section, { ...hydrated, provider: '' } as unknown as STTConfig | TTSConfig);
+  return true;
 }
 
 /** Read one stored section; undefined when absent or unparseable. */

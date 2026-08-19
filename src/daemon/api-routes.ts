@@ -2543,7 +2543,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             if (!hasUsejarvisAi(ctx.config)) {
               return error('No plan default to reset to on a self-hosted install');
             }
-            clearProviderChoice('stt');
+            const cleared = clearProviderChoice('stt');
+            if (!cleared) {
+              return json({ ok: true, message: 'Nothing to reset — no transcription choice is recorded, so your plan default already applies.' });
+            }
             if (ctx.config.stt) delete (ctx.config.stt as Record<string, unknown>).provider;
             if (!ctx.settingsReload) {
               return json({ ok: true, message: 'Reset to your plan default. Restart to apply.' });
@@ -2640,7 +2643,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             if (!hasUsejarvisAi(ctx.config)) {
               return error('No plan default to reset to on a self-hosted install');
             }
-            clearProviderChoice('tts');
+            const cleared = clearProviderChoice('tts');
+            if (!cleared) {
+              return json({ ok: true, message: 'Nothing to reset — no voice choice is recorded, so your plan default already applies.' });
+            }
             if (ctx.config.tts) delete (ctx.config.tts as Record<string, unknown>).provider;
             if (!ctx.settingsReload) {
               return json({ ok: true, message: 'Reset to your plan default. Restart to apply.' });

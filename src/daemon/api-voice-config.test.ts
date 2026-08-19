@@ -189,23 +189,41 @@ describe('voice config routes: persistence stays silence-preserving', () => {
     const routes = createApiRoutes(makeCtx(config));
     const handler = getHandler(routes, '/api/config/tts', 'POST');
 
-    // A real explicit choice first…
-    await post(handler, '/api/config/tts', { enabled: true, provider: 'edge', voice: 'en-GB-SoniaNeural' });
-    expect((loadUserSection('tts') as { provider?: string }).provider).toBe('edge');
-    expect(effectiveTtsForBinding(config)?.provider).toBe('edge');
+    // A real explicit choice first — with a credential, because the thing a
+    // reset must never do is delete it from the keychain (review pr7#1).
+    await post(handler, '/api/config/tts', {
+      enabled: true, provider: 'elevenlabs', elevenlabs: { api_key: 'el-user', voice_id: 'v1' },
+    });
+    expect((loadUserSection('tts') as { provider?: string }).provider).toBe('elevenlabs');
+    expect(effectiveTtsForBinding(config)?.provider).toBe('elevenlabs');
+    expect(getSecret('tts.elevenlabs.api_key')).toBe('el-user');
 
     // …then reset.
     const res = await post(handler, '/api/config/tts', { provider: null });
     expect(res.status).toBe(200);
     const stored = loadUserSection('tts') as Record<string, unknown>;
-    expect(stored.provider).toBeUndefined();
-    expect(stored.provider).not.toBe('usejarvis'); // silence, not a choice
+    // The explicit "cleared" sentinel — never 'usejarvis' (a recorded choice
+    // would pin the account), and not a bare deletion (the surviving
+    // sub-block would read as intent again via the import heuristic).
+    expect(stored.provider).toBe('');
     // Unrelated settings survive the reset.
     expect(stored.enabled).toBe(true);
-    expect(stored.voice).toBe('en-GB-SoniaNeural');
+    expect((stored.elevenlabs as Record<string, unknown>)?.voice_id).toBe('v1');
+    // The credential survives in the keychain — the one-click reset must
+    // never be the thing that destroys a key the user may not have anymore.
+    expect(getSecret('tts.elevenlabs.api_key')).toBe('el-user');
     // Runtime follows, so the plan's voice speaks without a restart.
     expect(config.tts?.provider).toBeUndefined();
     expect(effectiveTtsForBinding(config)?.provider).toBe('usejarvis');
+  });
+
+  test('reset with no stored row reports "nothing to reset" instead of a fake success', async () => {
+    const config = hostedConfig();
+    const handler = getHandler(createApiRoutes(makeCtx(config)), '/api/config/tts', 'POST');
+    const res = await post(handler, '/api/config/tts', { provider: null }) as Response;
+    expect(res.status).toBe(200);
+    const body = await res.json() as { message: string };
+    expect(body.message).toContain('Nothing to reset');
   });
 
   test('POST /api/config/stt {provider:null} likewise restores the plan default', async () => {
@@ -215,7 +233,7 @@ describe('voice config routes: persistence stays silence-preserving', () => {
     expect(effectiveSttForBinding(config)?.provider).toBe('groq');
 
     await post(handler, '/api/config/stt', { provider: null });
-    expect((loadUserSection('stt') as Record<string, unknown>).provider).toBeUndefined();
+    expect((loadUserSection('stt') as Record<string, unknown>).provider).toBe('');
     expect(effectiveSttForBinding(config)?.provider).toBe('usejarvis');
     // The sub-block the user configured survives the reset (the credential
     // itself lives in the encrypted keychain, so the row is stripped).

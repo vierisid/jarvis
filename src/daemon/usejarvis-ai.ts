@@ -185,7 +185,11 @@ export function usejarvisVoiceCredentials(config: JarvisConfig): HostedVoiceCred
 }
 
 /** Provider-specific sub-blocks a stored stt row can carry. */
-const STT_PROVIDER_BLOCKS = ['openai', 'groq', 'local', 'sarvam'] as const;
+// Sub-blocks that mark a row as provider intent. Shared by the stt AND tts
+// rows: openai/groq/local are STT-only, elevenlabs is TTS-only, sarvam is
+// both — a section can't contain the other section's blocks, so the union
+// has no false positives.
+const PROVIDER_INTENT_BLOCKS = ['openai', 'groq', 'local', 'sarvam', 'elevenlabs'] as const;
 
 /**
  * True when a stored user section records provider intent. An explicit
@@ -196,12 +200,19 @@ const STT_PROVIDER_BLOCKS = ['openai', 'groq', 'local', 'sarvam'] as const;
  * silently re-routed that user's audio to the hosted proxy past the key they
  * configured. (New imports also stamp `provider` explicitly; this keeps rows
  * imported before that fix honest.)
+ *
+ * The one shape that beats the sub-block heuristic: `provider: ''` — the
+ * explicit "cleared" sentinel clearProviderChoice writes. A reset click is a
+ * newer, stronger signal than a leftover sub-block, and without the sentinel
+ * the reset could never restore the plan default on a row that ever held a
+ * key (the sub-block survives the reset by design — deleting it would delete
+ * the keychain credential with it).
  */
 function storedProviderChoice(stored: unknown): boolean {
   if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return false;
   const rec = stored as Record<string, unknown>;
-  if (typeof rec.provider === 'string' && rec.provider.trim() !== '') return true;
-  return STT_PROVIDER_BLOCKS.some(
+  if (typeof rec.provider === 'string') return rec.provider.trim() !== '';
+  return PROVIDER_INTENT_BLOCKS.some(
     (block) => typeof rec[block] === 'object' && rec[block] !== null,
   );
 }
