@@ -166,19 +166,26 @@ export class UsejarvisAIProvider extends OpenAIProvider {
 
   /** Text-shaped variant of `rewrite` for stream error EVENTS (the base class
    * yields these rather than throwing — see `stream`). */
+  /** Base-class errors come in two shapes: the legacy "<label> API error
+   * (NNN): <body>" and the current "<label> API error: HTTP NNN: <body>"
+   * (formatOpenAIHttpError). Accept both so a base-class format change can
+   * never silently disable the hosted rewrites again. */
+  private static readonly BASE_ERROR_RE =
+    /API error(?: \((\d+)\):|: HTTP (\d+):?) ?([\s\S]*)$/;
+
   private async rewriteText(text: string): Promise<string> {
-    const match = text.match(/API error \((\d+)\): ?([\s\S]*)$/);
+    const match = text.match(UsejarvisAIProvider.BASE_ERROR_RE);
     if (!match) return text;
-    return (await this.friendly(Number(match[1]), match[2] ?? '')).message;
+    return (await this.friendly(Number(match[1] ?? match[2]), match[3] ?? '')).message;
   }
 
   private async rewrite(error: unknown): Promise<unknown> {
     if (!(error instanceof Error)) return error;
-    // Base-class errors read "<label> API error (NNN): <body>" - re-map the
-    // ones users can act on; pass everything else (network, aborts) through.
-    const match = error.message.match(/API error \((\d+)\): ?([\s\S]*)$/);
+    // Re-map the errors users can act on; pass everything else (network,
+    // aborts) through untouched.
+    const match = error.message.match(UsejarvisAIProvider.BASE_ERROR_RE);
     if (!match) return error;
-    return this.friendly(Number(match[1]), match[2] ?? '');
+    return this.friendly(Number(match[1] ?? match[2]), match[3] ?? '');
   }
 }
 
