@@ -143,6 +143,34 @@ describe('voice config routes: persistence stays silence-preserving', () => {
     expect(effectiveTtsForBinding(config)?.provider).toBe('edge');
   });
 
+  test('POST /api/config/tts rejects provider usejarvis on a self-hosted install', async () => {
+    const config = structuredClone(DEFAULT_CONFIG); // no usejarvis_ai block
+    const routes = createApiRoutes(makeCtx(config));
+    const res = await post(getHandler(routes, '/api/config/tts', 'POST'), '/api/config/tts', { provider: 'usejarvis' }) as Response;
+    expect(res.status).toBe(400);
+    expect(loadUserSection('tts')).toBeUndefined(); // nothing persisted
+  });
+
+  test('POST /api/config/tts rejects an unknown provider string', async () => {
+    const config = hostedConfig();
+    const routes = createApiRoutes(makeCtx(config));
+    const res = await post(getHandler(routes, '/api/config/tts', 'POST'), '/api/config/tts', { provider: 'espeak' }) as Response;
+    expect(res.status).toBe(400);
+  });
+
+  test('POST /api/config/tts that yields no provider clears the live one instead of leaving it speaking', async () => {
+    const config = hostedConfig();
+    const setCalls: unknown[] = [];
+    const ctx = makeCtx(config);
+    (ctx as unknown as Record<string, unknown>).wsService = {
+      setTTSProvider: (p: unknown) => { setCalls.push(p); },
+    };
+    const routes = createApiRoutes(ctx);
+    const res = await post(getHandler(routes, '/api/config/tts', 'POST'), '/api/config/tts', { enabled: false }) as Response;
+    expect(res.status).toBe(200);
+    expect(setCalls).toEqual([null]); // published the null, not skipped it
+  });
+
   test('GET /api/config/tts reports the binding-view provider and availability, no key material', async () => {
     const config = hostedConfig();
     const routes = createApiRoutes(makeCtx(config));

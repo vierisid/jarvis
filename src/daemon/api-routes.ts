@@ -2581,6 +2581,22 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         try {
           const body = await req.json() as Record<string, unknown>;
+
+          // Validate the provider before anything persists: an unknown string
+          // (or 'usejarvis' on a self-hosted install, where no hosted
+          // credentials exist to bind it) would be recorded as a choice that
+          // createTTSProvider can never construct — voice silently dead with
+          // an ok:true toast.
+          if (body.provider !== undefined) {
+            const VALID_TTS_PROVIDERS = ['edge', 'elevenlabs', 'sarvam', 'usejarvis'];
+            if (typeof body.provider !== 'string' || !VALID_TTS_PROVIDERS.includes(body.provider)) {
+              return json({ ok: false, error: `Unknown TTS provider: ${String(body.provider)}` }, 400);
+            }
+            if (body.provider === 'usejarvis' && !hasUsejarvisAi(ctx.config)) {
+              return json({ ok: false, error: 'The Usejarvis AI voice is only available on hosted installs; pick edge, elevenlabs or sarvam.' }, 400);
+            }
+          }
+
           const { persistUserPatch } = await import('./user-settings.ts');
           const { mergeTTSConfig } = await import('./config-merge.ts');
 
@@ -2598,8 +2614,16 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             // the post-save value (assigned above).
             const ttsBinding = effectiveTtsForBinding(ctx.config) ?? merged;
             const provider = createTTSProvider(ttsBinding, usejarvisVoiceCredentials(ctx.config));
-            if (provider) {
-              ctx.wsService.setTTSProvider(provider);
+            // Always publish the result — including null. Leaving the previous
+            // provider live after a save that yields none (disabled, or a
+            // provider missing its key) keeps a stale voice speaking while the
+            // response claims the new config applied.
+            ctx.wsService.setTTSProvider(provider);
+            if (!provider) {
+              const reason = merged.enabled === false
+                ? 'TTS config saved; speech is off.'
+                : 'TTS config saved, but no voice is active yet (the selected provider has no usable credentials).';
+              return json({ ok: true, message: reason });
             }
           }
 
