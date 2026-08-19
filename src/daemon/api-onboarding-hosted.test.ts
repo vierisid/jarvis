@@ -1,4 +1,7 @@
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { createApiRoutes, type ApiContext } from './api-routes.ts';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import { DEFAULT_CONFIG, type JarvisConfig } from '../config/types.ts';
@@ -60,8 +63,28 @@ const post = (handler: Handler, body: unknown) =>
   }));
 
 describe('POST /api/onboarding/setup on a hosted install', () => {
-  beforeEach(() => { closeDb(); initDatabase(':memory:'); });
-  afterEach(() => { closeDb(); });
+  // The setup route persists a user section, which writes section secrets to
+  // the keychain — and keychain.ts REFUSES to run under test without an
+  // explicit secrets dir, because a file that forgot this once wiped real
+  // keys. Without it every case here 500s on the write and the failure reads
+  // as a broken route rather than a missing fixture.
+  let secretsDir: string;
+  let prevSecretsDir: string | undefined;
+
+  beforeEach(() => {
+    prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-onboarding-hosted-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
+    closeDb();
+    initDatabase(':memory:');
+  });
+
+  afterEach(() => {
+    closeDb();
+    if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
 
   test('drops provider config a bypassing client sends, and keeps the plan defaults live', async () => {
     const config = hostedConfig();
