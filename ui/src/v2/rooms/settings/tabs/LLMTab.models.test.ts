@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { providerModels, seedModelForProvider, USEJARVIS_TIER_ALIASES } from "./LLMTab";
+import { providerModels, seedModelForProvider, unsetSlotPlaceholder, USEJARVIS_TIER_ALIASES } from "./LLMTab";
 
 /** The hosted catalog is key-scoped across EVERY modality, so these pickers —
  * which choose chat tiers and the single-model default — must never offer a
@@ -69,5 +69,30 @@ describe("seedModelForProvider: per-tier seeding", () => {
       { usejarvis_ai: ["uj-chat", "uj-high", "uj-low", "uj-medium", "uj-stt"] },
     );
     for (const alias of Object.values(USEJARVIS_TIER_ALIASES)) expect(offered).toContain(alias);
+  });
+});
+
+/** An unset tier slot renders routing truth from llm.effective — never a
+ * never-persisted models[0] presented as if it were saved (review pr3#7). */
+describe("unsetSlotPlaceholder: unset slots show routing truth", () => {
+  test("plan-sourced fill names the plan default", () => {
+    expect(unsetSlotPlaceholder({ ref: "usejarvis_ai:uj-high", source: "plan" }))
+      .toBe("Plan default: uj-high");
+  });
+
+  test("default-sourced fill names the fallback default", () => {
+    expect(unsetSlotPlaceholder({ ref: "anthropic:claude-x", source: "default" }))
+      .toBe("Default: claude-x");
+  });
+
+  test("nothing bound (self-hosted, no default) prompts a choice", () => {
+    expect(unsetSlotPlaceholder({ ref: null, source: null })).toBe("Select a model…");
+    expect(unsetSlotPlaceholder(undefined)).toBe("Select a model…");
+  });
+
+  test("a choice-sourced ref is not a placeholder case", () => {
+    // The slot has an explicit ref; the select shows it as the value instead.
+    expect(unsetSlotPlaceholder({ ref: "usejarvis_ai:uj-pro", source: "choice" }))
+      .toBe("Select a model…");
   });
 });

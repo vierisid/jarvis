@@ -161,6 +161,16 @@ export interface LLMConfig {
    * "included with your plan" card and offers `usejarvis_ai:*` model refs.
    */
   hosted_llm?: boolean;
+  /**
+   * Routing reality, computed by the daemon from the SAME per-slot resolution
+   * the binding paths use (explicit ref → llm.default → plan alias). The UI
+   * renders THIS for "what will actually run", never a re-derivation — the
+   * persisted `tiers`/`default` above stay pure user intent.
+   */
+  effective?: {
+    mode: "single" | "router-first";
+    tiers: Record<LLMTier, { ref: string | null; source: "choice" | "default" | "plan" | null }>;
+  };
 }
 
 /** Helper: split a "provider:model" reference into its parts. */

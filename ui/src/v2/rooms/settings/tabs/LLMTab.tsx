@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronRight, Plus, Trash2 } from "lucide-react";
 import { confirmDialog } from "../../../ui/ConfirmDialog";
 import { Icon } from "../../../ui";
@@ -20,6 +20,11 @@ import {
 
 /** Reserved hosted provider name (mirrors the daemon's usejarvis_ai carve-out). */
 const USEJARVIS_NAME = "usejarvis_ai";
+/** The hosted provider's KIND (mirrors the daemon's USEJARVIS_KIND). Same
+ * literal as the name today, but a distinct constant: gates asking "is this
+ * entry the hosted provider" compare kinds against this, never kind-vs-name —
+ * the two coinciding is an implementation detail, not a contract. */
+const USEJARVIS_KIND = "usejarvis_ai";
 /** Hosted aliases that ARE chat models — an ALLOWLIST, mirroring the
  * platform's SLOTS_BY_MODALITY.chat. A denylist fails OPEN: the platform's
  * slots are data (a new alias ships without any jarvis release), and
@@ -59,7 +64,7 @@ export function seedModelForProvider(models: string[], preferredModel?: string):
 function pickerProviders(llm: LLMConfig): Record<string, LLMConfigProviderView> {
   if (!llm.hosted_llm) return llm.providers;
   return {
-    [USEJARVIS_NAME]: { kind: "usejarvis_ai", has_api_key: true },
+    [USEJARVIS_NAME]: { kind: USEJARVIS_KIND, has_api_key: true },
     ...llm.providers,
   };
 }
@@ -187,7 +192,8 @@ export function LLMTab({
   // The pickers see the editable providers PLUS the managed hosted one; the
   // live-catalog hook fetches for both (OmniRoute routes, uj-* aliases).
   const allProviders = useMemo(() => (llm ? pickerProviders(llm) : {}), [llm]);
-  const providerCatalogs = useLiveProviderCatalogs(allProviders);
+  const catalogState = useLiveProviderCatalogs(allProviders);
+  const providerCatalogs = catalogState.catalogs;
 
   if (!llm) return <div className="v2-set__empty">Loading LLM config...</div>;
 
@@ -241,9 +247,9 @@ export function LLMTab({
       </section>
 
       {mode === "single" ? (
-        <SingleModelSection data={data} onToast={onToast} providers={allProviders} ollamaModels={ollamaModels} providerCatalogs={providerCatalogs} />
+        <SingleModelSection data={data} onToast={onToast} providers={allProviders} ollamaModels={ollamaModels} providerCatalogs={providerCatalogs} catalogState={catalogState} />
       ) : (
-        <MultiTierSection data={data} onToast={onToast} providers={allProviders} ollamaModels={ollamaModels} providerCatalogs={providerCatalogs} />
+        <MultiTierSection data={data} onToast={onToast} providers={allProviders} ollamaModels={ollamaModels} providerCatalogs={providerCatalogs} catalogState={catalogState} />
       )}
     </div>
   );
@@ -813,12 +819,14 @@ function SingleModelSection({
   providers,
   ollamaModels,
   providerCatalogs,
+  catalogState,
 }: {
   data: SettingsHook;
   onToast: (text: string, tone?: "ok" | "warn") => void;
   providers: Record<string, LLMConfigProviderView>;
   ollamaModels: string[] | null;
   providerCatalogs: Record<string, string[]>;
+  catalogState: LiveCatalogState;
 }) {
   const llm = data.llm!;
 
@@ -839,6 +847,8 @@ function SingleModelSection({
         providers={providers}
         ollamaModels={ollamaModels}
         providerCatalogs={providerCatalogs}
+        catalogState={catalogState}
+        allowClear
         onChange={async (ref) => {
           const r = await data.setDefaultModel(ref);
           onToast(r.message, r.ok ? "ok" : "warn");
@@ -856,12 +866,14 @@ function MultiTierSection({
   providers,
   ollamaModels,
   providerCatalogs,
+  catalogState,
 }: {
   data: SettingsHook;
   onToast: (text: string, tone?: "ok" | "warn") => void;
   providers: Record<string, LLMConfigProviderView>;
   ollamaModels: string[] | null;
   providerCatalogs: Record<string, string[]>;
+  catalogState: LiveCatalogState;
 }) {
   const llm = data.llm!;
 
@@ -910,8 +922,10 @@ function MultiTierSection({
             providers={providers}
             ollamaModels={ollamaModels}
             providerCatalogs={providerCatalogs}
+            catalogState={catalogState}
             allowClear
             preferredModel={USEJARVIS_TIER_ALIASES[t.id]}
+            effectiveHint={llm.effective?.tiers[t.id]}
             onChange={async (ref) => {
               const r = await data.setTierModel(t.id, ref);
               onToast(r.message, r.ok ? "ok" : "warn");
@@ -923,7 +937,14 @@ function MultiTierSection({
       <div className="v2-set__field" style={{ marginTop: "var(--s-4)" }}>
         <h4 className="v2-set__section-title">Default (fallback)</h4>
         <div className="v2-set__section-sub" style={{ marginBottom: "var(--s-2)" }}>
-          Used when a tier has no explicit model and the fall-up chain has nothing either.
+          {llm.hosted_llm ? (
+            <>Fills any tier you leave empty — it takes that slot over your
+            plan&apos;s tier default. Clear it to give empty tiers back to the
+            plan defaults. Tiers you set explicitly always win.</>
+          ) : (
+            <>Used when a tier has no explicit model and the fall-up chain has
+            nothing either.</>
+          )}
         </div>
         <ModelSelector
           label=""
@@ -931,6 +952,7 @@ function MultiTierSection({
           providers={providers}
           ollamaModels={ollamaModels}
           providerCatalogs={providerCatalogs}
+          catalogState={catalogState}
           allowClear
           onChange={async (ref) => {
             const r = await data.setDefaultModel(ref);
@@ -951,8 +973,10 @@ function ModelSelector({
   providers,
   ollamaModels,
   providerCatalogs,
+  catalogState,
   allowClear,
   preferredModel,
+  effectiveHint,
   onChange,
 }: {
   label: string;
@@ -963,12 +987,18 @@ function ModelSelector({
   ollamaModels: string[] | null;
   /** Live model/route catalogs keyed by configured provider name. */
   providerCatalogs: Record<string, string[]>;
+  /** Load state of the live catalogs plus the retry affordance. */
+  catalogState?: LiveCatalogState;
   allowClear?: boolean;
   /** Model to seed when the provider changes, if the new provider offers it.
    * Without this the seed is `catalog[0]`, and the hosted catalog sorts
    * alphabetically — so every tier would auto-commit `uj-chat`, silently
    * running deep reasoning on the thin conversation model. */
   preferredModel?: string;
+  /** What the daemon actually routes this slot to (from llm.effective) —
+   * rendered when no explicit ref is set, so an unset slot shows routing
+   * truth instead of a never-persisted `models[0]` (review pr3#7). */
+  effectiveHint?: { ref: string | null; source: "choice" | "default" | "plan" | null };
   onChange: (ref: string | null) => void;
 }) {
   const parsed = useMemo(() => parseModelRef(value), [value]);
@@ -989,7 +1019,12 @@ function ModelSelector({
     if (parsed) {
       setSelectedProvider(parsed.provider);
       const known = providerModels(providers, parsed.provider, ollamaModels, providerCatalogs);
-      if (known.includes(parsed.model)) {
+      const hostedRef = providers[parsed.provider]?.kind === USEJARVIS_KIND;
+      if (known.includes(parsed.model) || hostedRef) {
+        // Hosted refs are never parked in the custom field: free-text entry is
+        // suppressed for the managed provider, and a saved plan alias missing
+        // from a degraded fallback catalog is still the saved truth — it
+        // renders as itself (an extra option) rather than as "Custom…".
         setSelectedModel(parsed.model);
         setCustomModel("");
       } else {
@@ -1010,16 +1045,19 @@ function ModelSelector({
 
   const models = providerModels(providers, selectedProvider, ollamaModels, providerCatalogs);
   // The hosted provider is opaque BY DESIGN: its aliases are the only valid
-  // refs and the allowlist above is what keeps a voice alias out of a chat
-  // slot. Falling back to a free-text box when the catalog is empty (still
-  // loading, or the proxy is unreachable) would hand the user a control that
-  // bypasses that allowlist entirely — `usejarvis_ai:uj-stt` typed there
-  // points chat at a transcription endpoint. Nothing validates model refs
-  // server-side, so this is the only gate.
-  const isHosted = providers[selectedProvider]?.kind === USEJARVIS_NAME;
+  // refs. saveLLMSettings enforces the allowlist server-side (the real gate);
+  // hiding free-text entry here keeps the UI honest about it — a "Custom…"
+  // escape hatch or a fallback text box while the catalog loads would offer a
+  // control whose every input the server rejects (review pr3#1/#2).
+  const isHosted = providers[selectedProvider]?.kind === USEJARVIS_KIND;
   const usesCustomOnly = models.length === 0 && !isHosted;
-  const hostedCatalogUnavailable = isHosted && models.length === 0;
+  const catalogStatus: CatalogStatus | undefined = catalogState?.status[selectedProvider];
+  const hostedCatalogPending = isHosted && models.length === 0 && catalogStatus !== "failed";
+  const hostedCatalogFailed = isHosted && (catalogStatus === "failed" || catalogStatus === "degraded");
   const effectiveModel = selectedModel === "__custom__" ? customModel.trim() : selectedModel;
+  // Routing truth for an unset slot: what the daemon binds (plan alias or the
+  // default), shown as a placeholder — never presented as a saved choice.
+  const unsetPlaceholder = value ? "Select a model…" : unsetSlotPlaceholder(effectiveHint);
 
   const commit = (provider: string, model: string) => {
     if (!provider || !model) return;
@@ -1067,9 +1105,11 @@ function ModelSelector({
           ))}
         </select>
 
-        {hostedCatalogUnavailable ? (
+        {isHosted && models.length === 0 && !selectedModel ? (
           <select className="v2-set__select" disabled value="" style={{ flex: "1 1 200px" }}>
-            <option value="">Loading your plan’s models…</option>
+            <option value="">
+              {hostedCatalogPending ? "Loading your plan’s models…" : "Plan catalog unavailable"}
+            </option>
           </select>
         ) : usesCustomOnly ? (
           <input
@@ -1084,9 +1124,10 @@ function ModelSelector({
         ) : (
           <select
             className="v2-set__select"
-            value={selectedModel || models[0] || "__custom__"}
+            value={selectedModel || ""}
             onChange={(e) => {
               const next = e.target.value;
+              if (!next) return;
               setSelectedModel(next);
               if (next !== "__custom__") {
                 commit(selectedProvider, next);
@@ -1094,14 +1135,21 @@ function ModelSelector({
             }}
             style={{ flex: "1 1 200px" }}
           >
+            {/* An unset slot shows routing truth as an inert placeholder — a
+                pre-selected models[0] here read as a saved choice and invited
+                the user to "confirm" a downgrade (review pr3#7). */}
+            {!selectedModel && <option value="" disabled>{unsetPlaceholder}</option>}
+            {selectedModel && selectedModel !== "__custom__" && !models.includes(selectedModel) && (
+              <option value={selectedModel}>{selectedModel}</option>
+            )}
             {models.map((m) => (
               <option key={m} value={m}>{m}</option>
             ))}
-            <option value="__custom__">Custom…</option>
+            {!isHosted && <option value="__custom__">Custom…</option>}
           </select>
         )}
 
-        {selectedModel === "__custom__" && !usesCustomOnly && (
+        {selectedModel === "__custom__" && !usesCustomOnly && !isHosted && (
           <input
             type="text"
             className="v2-set__input"
@@ -1111,6 +1159,16 @@ function ModelSelector({
             onBlur={() => customModel && commit(selectedProvider, customModel.trim())}
             style={{ flex: "1 1 200px" }}
           />
+        )}
+
+        {hostedCatalogFailed && catalogState && (
+          <button
+            type="button"
+            className="v2-set__btn"
+            onClick={() => catalogState.retry()}
+          >
+            Retry
+          </button>
         )}
 
         {allowClear && value && (
@@ -1123,13 +1181,41 @@ function ModelSelector({
           </button>
         )}
       </div>
-      {effectiveModel && (
+      {hostedCatalogFailed && (
+        <div className="v2-set__hint v2-set__hint--warn" style={{ marginTop: "var(--s-2)" }}>
+          {catalogStatus === "degraded"
+            ? "Showing the standard aliases — your plan’s model catalog is unreachable."
+            : "Your plan’s model catalog could not be loaded."}
+        </div>
+      )}
+      {effectiveModel && effectiveModel !== "__custom__" && (
         <div className="v2-set__hint" style={{ marginTop: "var(--s-2)" }}>
           Saved as <code>{selectedProvider}:{effectiveModel}</code>
         </div>
       )}
+      {!value && effectiveHint?.ref && effectiveHint.source !== "choice" && (
+        <div className="v2-set__hint" style={{ marginTop: "var(--s-2)" }}>
+          No explicit choice — currently running on{" "}
+          {effectiveHint.source === "plan" ? "your plan’s default" : "the fallback default"}{" "}
+          <code>{effectiveHint.ref}</code>.
+        </div>
+      )}
     </div>
   );
+}
+
+/**
+ * Placeholder text for a tier slot with no explicit ref: routing truth from
+ * `llm.effective` (plan alias or the fallback default), or a neutral prompt
+ * when the daemon reports nothing bound. Extracted so the "never display a
+ * never-persisted models[0] as if it were saved" rule is pinned by tests.
+ */
+export function unsetSlotPlaceholder(
+  effectiveHint?: { ref: string | null; source: "choice" | "default" | "plan" | null },
+): string {
+  if (!effectiveHint?.ref || effectiveHint.source === "choice") return "Select a model…";
+  const model = parseModelRef(effectiveHint.ref)?.model ?? effectiveHint.ref;
+  return `${effectiveHint.source === "plan" ? "Plan default" : "Default"}: ${model}`;
 }
 
 export function providerModels(
@@ -1192,13 +1278,23 @@ function useOllamaModels(enabled: boolean): string[] | null {
 /** Load volatile catalogs for gateways/providers whose IDs change frequently:
  * OmniRoute (user-defined routes/combos) and the hosted Usejarvis AI proxy
  * (key-scoped uj-* aliases). */
+export type CatalogStatus = "loading" | "ok" | "degraded" | "failed";
+
+export interface LiveCatalogState {
+  catalogs: Record<string, string[]>;
+  /** Per provider name; absent = that provider has no live catalog to fetch. */
+  status: Record<string, CatalogStatus>;
+  /** Re-fetch every live catalog on demand (the "Retry" affordance). */
+  retry: () => void;
+}
+
 function useLiveProviderCatalogs(
   providers: Record<string, LLMConfigProviderView>,
-): Record<string, string[]> {
+): LiveCatalogState {
   const targets = Object.entries(providers)
     .filter(([, entry]) =>
       entry.kind === "omniroute"
-      || entry.kind === "usejarvis_ai"
+      || entry.kind === USEJARVIS_KIND
       || (entry.kind === "groq" && entry.has_api_key))
     .map(([name, entry]) => ({
       name,
@@ -1209,18 +1305,25 @@ function useLiveProviderCatalogs(
     .sort((a, b) => a.name.localeCompare(b.name));
   const signature = JSON.stringify(targets);
   const [catalogs, setCatalogs] = useState<Record<string, string[]>>({});
+  const [status, setStatus] = useState<Record<string, CatalogStatus>>({});
+  // Bumping the attempt re-runs the effect with the same signature — a
+  // permanent "Loading…" with no way out was review finding pr3#5.
+  const [attempt, setAttempt] = useState(0);
+  const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
   useEffect(() => {
     if (targets.length === 0) {
       setCatalogs({});
+      setStatus({});
       return;
     }
     let cancelled = false;
+    setStatus(Object.fromEntries(targets.map(({ name }) => [name, "loading" as const])));
     Promise.all(targets.map(async ({ name, kind }) => {
       try {
         // The hosted catalog needs no inputs (the daemon holds the system
         // credentials); Groq and OmniRoute are looked up by saved provider name.
-        const response = kind === "usejarvis_ai"
+        const response = kind === USEJARVIS_KIND
           ? await fetch("/api/config/llm/usejarvis/models")
           : await fetch(
               kind === "groq"
@@ -1232,16 +1335,22 @@ function useLiveProviderCatalogs(
                 body: JSON.stringify({ name }),
               },
             );
-        const data = await response.json() as { ok: boolean; models?: string[] };
-        return [name, data.ok && data.models ? data.models : []] as const;
+        const data = await response.json() as { ok: boolean; models?: string[]; degraded?: boolean };
+        if (!data.ok || !data.models) return [name, [] as string[], "failed"] as const;
+        // Degraded = the daemon served fallback aliases because the plan
+        // catalog was unreachable. The picker stays usable, but the state is
+        // surfaced (with Retry) instead of presented as the plan's truth.
+        return [name, data.models, data.degraded ? "degraded" : "ok"] as const;
       } catch {
-        return [name, []] as const;
+        return [name, [] as string[], "failed"] as const;
       }
     })).then((entries) => {
-      if (!cancelled) setCatalogs(Object.fromEntries(entries));
+      if (cancelled) return;
+      setCatalogs(Object.fromEntries(entries.map(([name, models]) => [name, models])));
+      setStatus(Object.fromEntries(entries.map(([name, , state]) => [name, state])));
     });
     return () => { cancelled = true; };
-  }, [signature]); // targets are represented by the stable signature
+  }, [signature, attempt]); // targets are represented by the stable signature
 
-  return catalogs;
+  return { catalogs, status, retry };
 }
