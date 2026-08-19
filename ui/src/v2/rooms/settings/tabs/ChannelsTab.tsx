@@ -308,6 +308,41 @@ export function ChannelsTab({
           </select>
         </div>
 
+        {sttCfg?.provider !== "sarvam" && (
+          <div className="v2-set__field">
+            <label className="v2-set__field-label">Spoken language</label>
+            <select
+              className="v2-set__select"
+              value={sttCfg?.language ?? ""}
+              onChange={async (e) => {
+                const r = await data.setSTTLanguage(e.target.value);
+                onToast(r.message, r.ok ? "ok" : "warn");
+              }}
+            >
+              <option value="">Auto-detect</option>
+              <option value="en">English</option>
+              <option value="it">Italiano</option>
+              <option value="es">Español</option>
+              <option value="fr">Français</option>
+              <option value="de">Deutsch</option>
+              <option value="pt">Português</option>
+              <option value="nl">Nederlands</option>
+              <option value="pl">Polski</option>
+              <option value="tr">Türkçe</option>
+              <option value="ru">Русский</option>
+              <option value="ar">العربية</option>
+              <option value="hi">हिन्दी</option>
+              <option value="ja">日本語</option>
+              <option value="ko">한국어</option>
+              <option value="zh">中文</option>
+            </select>
+            <p className="v2-set__hint">
+              Auto-detect works well; pick a language only if transcripts come
+              out wrong.
+            </p>
+          </div>
+        )}
+
         {(sttCfg?.provider === "openai" ||
           sttCfg?.provider === "groq" ||
           sttCfg?.provider === "sarvam") && (

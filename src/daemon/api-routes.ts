@@ -2479,6 +2479,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         return json({
           provider: effective?.provider ?? stt?.provider ?? 'openai',
           usejarvis_available: hasUsejarvisAi(ctx.config),
+          // Empty string = auto-detect (the language param is omitted from
+          // provider requests). Surfaced so hosted users — who have no shell
+          // access to config.yaml — can change it from the dashboard.
+          language: stt?.language ?? '',
           has_openai_key: !!stt?.openai?.api_key,
           has_groq_key: !!stt?.groq?.api_key,
           has_sarvam_key: !!stt?.sarvam?.api_key,
@@ -2492,6 +2496,25 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const body = await req.json() as Record<string, unknown>;
           const { saveUserSection } = await import('./user-settings.ts');
           const { mergeSTTConfig } = await import('./config-merge.ts');
+
+          // Validate before anything persists: an unknown provider (or
+          // 'usejarvis' on a self-hosted install, where createSTTProvider can
+          // never construct it) previously saved fine and answered ok:true —
+          // then STT was silently dead on every surface with only a console
+          // line to show for it.
+          const STT_PROVIDERS = ['openai', 'groq', 'local', 'sarvam', 'usejarvis'];
+          if (body.provider !== undefined) {
+            if (typeof body.provider !== 'string' || !STT_PROVIDERS.includes(body.provider)) {
+              return json({ ok: false, message: `Unknown STT provider: ${String(body.provider)}` }, 400);
+            }
+            if (body.provider === 'usejarvis' && !hasUsejarvisAi(ctx.config)) {
+              return json({ ok: false, message: 'Usejarvis AI transcription is only available on hosted installs.' }, 400);
+            }
+          }
+          // The hosted credentials never live in cfg.stt — a 'usejarvis'
+          // sub-block in the patch would persist a key into the plaintext
+          // settings row, the exact leak the credential split exists to stop.
+          delete body.usejarvis;
 
           // Merged locally, published only once the save succeeded — see the
           // channels route: a throwing keychain must not leave the live config

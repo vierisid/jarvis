@@ -200,6 +200,8 @@ export interface STTConfig {
   provider: string;
   /** True on hosted installs: the "Usejarvis AI (included)" option applies. */
   usejarvis_available?: boolean;
+  /** ISO-639-1 hint for the Whisper-shaped providers; '' = auto-detect. */
+  language?: string;
   has_openai_key: boolean;
   has_groq_key: boolean;
   has_sarvam_key: boolean;
@@ -761,6 +763,25 @@ export function useSettingsData() {
     [refresh],
   );
 
+  const setSTTLanguage = useCallback(
+    async (language: string): Promise<ActionResult> => {
+      try {
+        // '' = auto-detect; the daemon omits the param from provider requests.
+        const r = await postJson<{ ok: boolean; message: string }>(
+          "/api/config/stt",
+          { language },
+        );
+        await refresh();
+        return r.ok
+          ? { ok: true, message: r.message || "Transcription language saved." }
+          : { ok: false, message: r.message || "Failed to save transcription language." };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+      }
+    },
+    [refresh],
+  );
+
   const setSTTProvider = useCallback(
     async (
       provider: STTProvider,
@@ -1038,6 +1059,7 @@ export function useSettingsData() {
     setTelegram,
     setDiscord,
     setSTTProvider,
+    setSTTLanguage,
     setTTS,
     setVoiceConfig,
     setHeartbeatInterval,
