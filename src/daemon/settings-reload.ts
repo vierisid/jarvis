@@ -166,6 +166,19 @@ export class SettingsReloadCoordinator {
   }
 
   /**
+   * Runs at the end of every reloadAll — SIGHUP and POST /api/config/reload
+   * take the same path, so cross-cutting refreshes that are NOT per-section
+   * appliers (the pebble realtime re-advertisement, whose trigger is the
+   * SYSTEM-owned usejarvis_ai block that no section applier watches) fire on
+   * both. Errors are logged, never allowed to fail the reload itself.
+   */
+  setPostReloadAll(fn: (() => Promise<void>) | null): void {
+    this.postReloadAll = fn;
+  }
+
+  private postReloadAll: (() => Promise<void>) | null = null;
+
+  /**
    * Fire-and-forget: schedule a coalesced apply for the section. No-op when
    * the section has no appliers. A repeat call while one is pending restarts
    * the debounce timer — appliers read live config, so latest state wins.
@@ -243,6 +256,11 @@ export class SettingsReloadCoordinator {
 
       if (changed.length > 0) {
         this.emitBroadcast({ sections: [...changed], ok: errors.length === 0, errors });
+      }
+      try {
+        await this.postReloadAll?.();
+      } catch (err) {
+        console.warn('[SettingsReload] post-reload hook failed:', err);
       }
       return { changed, applied, errors };
     });

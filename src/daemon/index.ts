@@ -821,6 +821,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           void sidecarManager.dispatchRPC(sidecarId, 'pebble.realtime_status', { state: status, detail: detail ?? '' })
             .catch(() => {/* sidecar may lack the handler / be gone */});
         },
+        // Plan-gate refusal → re-push configure_realtime with the now-cached
+        // definitive verdict so the summon key downgrades to one-shot capture.
+        // (advertiseRealtime is defined just below; only ever called at runtime.)
+        readvertise: (sidecarId) => {
+          void advertiseRealtime(sidecarId).catch((err) =>
+            console.warn('[pebble-realtime] post-refusal re-advertisement failed:', err),
+          );
+        },
       });
 
       // Tell each pebble-capable sidecar whether realtime is available so its
@@ -844,6 +852,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           if (s.capabilities.includes('pebble')) await advertiseRealtime(s.id);
         }
       };
+      // Registered on the coordinator (not just the SIGHUP handler) so BOTH
+      // reload entry points — SIGHUP and POST /api/config/reload — re-push
+      // the advertisement; the route previously cleared the gate cache but
+      // left every connected pebble on its stale configure_realtime verdict.
+      settingsReload?.setPostReloadAll(async () => {
+        await readvertiseRealtime?.();
+      });
       sidecarManager.onSidecarConnected((sidecar) => {
         if (!sidecar.capabilities.includes('pebble')) return;
         // The listener is typed `=> void` and the dispatch loop only catches
@@ -5217,14 +5232,11 @@ if (process.platform !== 'win32') {
     }
     console.log('[Daemon] SIGHUP — reloading settings from DB');
     settingsReload.reloadAll()
-      .then(async (r) => {
+      .then((r) => {
         const changed = r.changed.length > 0 ? r.changed.join(', ') : 'nothing';
         console.log(`[Daemon] SIGHUP reload done — changed: ${changed}${r.errors.length ? `, errors: ${r.errors.length}` : ''}`);
-        // A re-provisioned usejarvis_ai block (plan change) lands on SIGHUP,
-        // and it is not a user-owned section, so no per-section applier fires.
-        await readvertiseRealtime?.().catch((err: unknown) =>
-          console.warn('[pebble-realtime] re-advertisement after reload failed:', err),
-        );
+        // The pebble realtime re-advertisement runs inside reloadAll's
+        // post-reload hook, shared with POST /api/config/reload.
       })
       .catch((err) => console.error('[Daemon] SIGHUP reload failed:', err));
   });

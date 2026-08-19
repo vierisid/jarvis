@@ -1,5 +1,108 @@
-import { test, expect, describe } from 'bun:test';
-import { foldTranscript, newTranscriptAccumulator } from './pebble-realtime.ts';
+import { test, expect, describe, afterEach } from 'bun:test';
+import { PebbleRealtimeManager, foldTranscript, newTranscriptAccumulator } from './pebble-realtime.ts';
+import { clearRealtimeGateCache } from './realtime-gate.ts';
+import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
+
+const originalFetch = globalThis.fetch;
+afterEach(() => {
+  globalThis.fetch = originalFetch;
+  clearRealtimeGateCache();
+});
+
+const hostedResolved = (): ResolvedRealtimeVoice => ({
+  provider: 'usejarvis_ai',
+  url: 'wss://llm.usejarvis.host/v1/realtime',
+  modelsUrl: 'https://llm.usejarvis.host/v1/models',
+  apiKey: 'sk-uj-abc',
+  model: 'uj-realtime',
+  reasoningEffort: 'low',
+  maxSessionMinutes: 10,
+  blockedCategories: [],
+});
+
+const makeManager = (over: Partial<ConstructorParameters<typeof PebbleRealtimeManager>[0]> = {}) =>
+  new PebbleRealtimeManager({
+    dispatchRPC: async () => undefined,
+    dispatchNotify: () => {},
+    getAudioChannel: () => null,
+    resolve: () => ({ ok: true, resolved: hostedResolved() }),
+    tools: () => [],
+    instructions: () => 'test',
+    executeToolCall: async () => 'ok',
+    ...over,
+  });
+
+describe('start/stop race across the plan gate', () => {
+  // pr6#2 regression: before the gate existed, the first await in start() came
+  // AFTER sessions.set(), so stop() always found the entry. The gate await
+  // opened a window where a stop (summon toggled off, sidecar disconnected)
+  // found nothing — and the start then opened a perpetual billed session for a
+  // peer that was already gone.
+  test('stop() during the gate window cancels the start — no session is opened', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    globalThis.fetch = (async () => {
+      await gate;
+      return new Response(JSON.stringify({ data: [{ id: 'uj-realtime' }] }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const mgr = makeManager();
+    const started = mgr.start('sidecar-1');
+    mgr.stop('sidecar-1'); // arrives while start() is parked on the gate
+    release();
+    await started;
+    expect(mgr.isActive('sidecar-1')).toBe(false);
+  });
+
+  test('a quick stop→start toggle mid-gate is adopted by the parked start', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((r) => { release = r; });
+    globalThis.fetch = (async () => {
+      await gate;
+      // Refuse the plan so the adopted start terminates before dialing a
+      // real websocket — the assertion is about the token, not the dial.
+      return new Response(JSON.stringify({ data: [{ id: 'uj-chat' }] }), {
+        status: 200, headers: { 'Content-Type': 'application/json' },
+      });
+    }) as unknown as typeof fetch;
+
+    const statuses: string[] = [];
+    const mgr = makeManager({ onStatus: (_id, status) => { statuses.push(status); } });
+    const started = mgr.start('sidecar-1');
+    mgr.stop('sidecar-1');
+    const second = mgr.start('sidecar-1'); // revives the parked start
+    release();
+    await Promise.all([started, second]);
+    // The refusal surfaced (the parked start ran to completion for the new
+    // request) rather than being silently swallowed by the cancelled token.
+    expect(statuses).toContain('closed');
+    expect(mgr.isActive('sidecar-1')).toBe(false);
+  });
+
+  // pr6#7: the summon key only reaches start() because configure_realtime said
+  // realtime was on. On a definitive plan refusal the sidecar must be told to
+  // downgrade to one-shot capture, not left to error on every summon press.
+  test('a plan refusal re-advertises so the sidecar falls back to one-shot', async () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ data: [{ id: 'uj-chat' }] }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    })) as unknown as typeof fetch;
+
+    const readvertised: string[] = [];
+    const statuses: Array<{ status: string; detail?: string }> = [];
+    const mgr = makeManager({
+      readvertise: (id) => { readvertised.push(id); },
+      onStatus: (_id, status, detail) => { statuses.push({ status, detail }); },
+    });
+    await mgr.start('sidecar-1');
+    expect(mgr.isActive('sidecar-1')).toBe(false);
+    expect(readvertised).toEqual(['sidecar-1']);
+    // Surfaced as a lifecycle close (informative), not an error flash.
+    expect(statuses.some((s) => s.status === 'closed')).toBe(true);
+    expect(statuses.some((s) => s.status === 'error')).toBe(false);
+  });
+});
 
 describe('foldTranscript', () => {
   test('assistant deltas accumulate — fragments are not cumulative text', () => {
