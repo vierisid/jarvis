@@ -113,6 +113,10 @@ type OpenAIStreamChunk = {
     };
     finish_reason: 'stop' | 'length' | 'tool_calls' | 'content_filter' | null;
   }>;
+  /** Present (non-null) only on the final chunk when the request set
+   * stream_options.include_usage — that chunk carries an EMPTY choices array,
+   * so it must be read outside the choices guard. */
+  usage?: OpenAIResponse['usage'] | null;
 };
 
 export function formatOpenAIHttpError(status: number, contentType: string | null, body: string): string {
@@ -139,6 +143,12 @@ export class OpenAIProvider implements LLMProvider {
   }
   protected get errorLabel(): string {
     return 'OpenAI';
+  }
+  /** Whether stream() asks for stream_options.include_usage. Default false:
+   * only endpoints known to accept the field opt in (the hosted proxy
+   * overrides this) — an unknown property is a 400 on stricter backends. */
+  protected get streamIncludeUsage(): boolean {
+    return false;
   }
 
   constructor(apiKey: string, defaultModel = 'gpt-4o', baseUrl = 'https://api.openai.com/v1', authHeader = 'Authorization') {
@@ -218,6 +228,7 @@ export class OpenAIProvider implements LLMProvider {
       messages: this.convertMessages(compactedMessages),
       stream: true,
     };
+    if (this.streamIncludeUsage) body.stream_options = { include_usage: true };
 
     if (temperature !== undefined && !modelRejectsCustomTemperature(model)) {
       body.temperature = temperature;
@@ -250,6 +261,7 @@ export class OpenAIProvider implements LLMProvider {
     const toolCallBuilders: Map<number, { id: string; name: string; arguments: string }> = new Map();
     let finishReason: string | null = null;
     let responseModel = model;
+    let streamUsage: OpenAIResponse['usage'] | null = null;
 
     try {
       const reader = response.body.getReader();
@@ -272,6 +284,9 @@ export class OpenAIProvider implements LLMProvider {
 
           try {
             const chunk = JSON.parse(data) as OpenAIStreamChunk;
+            // The include_usage final chunk has an EMPTY choices array —
+            // capture usage before the choices guard skips it.
+            if (chunk.usage) streamUsage = chunk.usage;
             if (chunk.choices && chunk.choices.length > 0) {
               const choice = chunk.choices[0];
               responseModel = chunk.model;
@@ -335,7 +350,11 @@ export class OpenAIProvider implements LLMProvider {
         response: {
           content: accumulatedText,
           tool_calls: toolCalls,
-          usage: { input_tokens: 0, output_tokens: 0 }, // OpenAI doesn't provide usage in stream
+          // Real usage when the endpoint honoured include_usage (the hosted
+          // proxy does); zeros only where usage genuinely isn't streamed.
+          usage: streamUsage
+            ? this.normalizeUsage(streamUsage)
+            : { input_tokens: 0, output_tokens: 0 },
           model: responseModel,
           finish_reason: mappedFinishReason,
         },
@@ -448,27 +467,36 @@ export class OpenAIProvider implements LLMProvider {
     return {
       content,
       tool_calls,
-      usage: {
-        // Normalized semantics (see LLMResponse.usage): input_tokens counts
-        // only UNCACHED prompt tokens. OpenAI's prompt_tokens includes cached
-        // tokens, so subtract them out; Anthropic already reports cache
-        // tokens separately from input_tokens.
-        input_tokens: response.usage.prompt_tokens
-          - (response.usage.prompt_tokens_details?.cached_tokens ?? 0)
-          - (response.usage.cache_creation_input_tokens ?? 0),
-        output_tokens: response.usage.completion_tokens,
-        ...(response.usage.prompt_tokens_details?.cached_tokens !== undefined
-          ? { cache_read_input_tokens: response.usage.prompt_tokens_details.cached_tokens } : {}),
-        // Without this the hosted provider reports every cache WRITE as
-        // ordinary input — and since `cache_creation_input_tokens: 0` is
-        // exactly the signal that Anthropic silently declined to cache, the
-        // one field that distinguishes "working" from "declined every time"
-        // would be hardcoded to zero on the provider the feature exists for.
-        ...(response.usage.cache_creation_input_tokens !== undefined
-          ? { cache_creation_input_tokens: response.usage.cache_creation_input_tokens } : {}),
-      },
+      usage: this.normalizeUsage(response.usage),
       model: response.model,
       finish_reason: this.mapFinishReason(choice!.finish_reason),
+    };
+  }
+
+  /** Wire usage → LLMResponse usage. Normalized semantics (see
+   * LLMResponse.usage): input_tokens counts only UNCACHED prompt tokens.
+   * OpenAI's prompt_tokens includes cached tokens, so subtract them out;
+   * Anthropic already reports cache tokens separately from input_tokens.
+   *
+   * Clamped at zero: the subtraction assumes the proxy folds
+   * cache_creation_input_tokens into prompt_tokens (true for current LiteLLM
+   * Anthropic mappings, not guaranteed across versions/routes) — an unfolded
+   * report would otherwise persist a NEGATIVE count into llm_usage and skew
+   * /api/usage totals downward.
+   *
+   * cache_creation_input_tokens passes through when present: `0` is exactly
+   * the signal that Anthropic silently declined to cache — the one field
+   * that distinguishes "working" from "declined every time". */
+  protected normalizeUsage(usage: OpenAIResponse['usage']): LLMResponse['usage'] {
+    return {
+      input_tokens: Math.max(0, usage.prompt_tokens
+        - (usage.prompt_tokens_details?.cached_tokens ?? 0)
+        - (usage.cache_creation_input_tokens ?? 0)),
+      output_tokens: usage.completion_tokens,
+      ...(usage.prompt_tokens_details?.cached_tokens !== undefined
+        ? { cache_read_input_tokens: usage.prompt_tokens_details.cached_tokens } : {}),
+      ...(usage.cache_creation_input_tokens !== undefined
+        ? { cache_creation_input_tokens: usage.cache_creation_input_tokens } : {}),
     };
   }
 
