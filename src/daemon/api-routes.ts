@@ -38,6 +38,7 @@ import { getOrCreateConversation, getMessages, getRecentConversation } from '../
 import { getRecentObservations, summarizeObservation } from '../vault/observations.ts';
 import { listAgentActivity, countAgentActivity } from '../vault/agent-activity.ts';
 import { getPersonality } from '../personality/model.ts';
+import { hasUsejarvisAi } from './usejarvis-ai.ts';
 import { clearUserProfile, getUserProfile, saveUserProfile } from '../vault/user-profile.ts';
 import {
   USER_PROFILE_QUESTIONS,
@@ -1451,7 +1452,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           // canonical summary - provider names, single-LLM default, and the
           // tier map. The dedicated dashboard endpoint is /api/config/llm.
           llm: {
-            providers: Object.keys(config.llm.providers ?? {}),
+            // Hosted installs: hide the injected reserved provider, matching
+            // getLLMSettings — a client that round-trips this list into a
+            // save would hit the managed-provider 400 (pr2 review #9).
+            providers: Object.keys(config.llm.providers ?? {}).filter(
+              (name) => name !== 'usejarvis_ai' || !hasUsejarvisAi(config),
+            ),
             default: config.llm.default ?? null,
             tiers: config.llm.tiers ?? {},
           },

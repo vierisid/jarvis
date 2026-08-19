@@ -21,8 +21,11 @@
 const CREDENTIAL_PATTERNS: ReadonlyArray<readonly [RegExp, string]> = [
   // Labelled secrets — keep the label so the message still says WHAT failed,
   // drop the value. Runs first so the label is consumed with its value.
-  [/\b(api[-_]?key|authorization|x-api-key)(["'\s:=]+)(?:bearer\s+)?[A-Za-z0-9._~+/=-]{12,}/gi, '$1$2***redacted***'],
-  [/\bbearer\s+[A-Za-z0-9._~+/=-]{12,}/gi, 'Bearer ***redacted***'],
+  [/\b(api[-_]?key|authorization|x-api-key)(["'\s:=]+)(?:(?:bearer|basic|token)\s+)?[A-Za-z0-9._~+/=-]{12,}/gi, '$1$2***redacted***'],
+  [/\b(?:bearer|basic|token)\s+[A-Za-z0-9._~+/=-]{12,}/gi, '***redacted***'],
+  // Bare JWTs (three base64url segments) with no label at all — Vertex/Azure
+  // bodies echo these unlabelled.
+  [/\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{4,}/g, '***redacted***'],
   // Known prefixes (ours included — sk-uj-… must never escape).
   [/\b(?:sk|gsk|xai|rk)[-_][A-Za-z0-9_-]{4,}/g, '***redacted***'],
   [/\bAIza[A-Za-z0-9_-]{10,}/g, '***redacted***'],

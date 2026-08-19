@@ -21,7 +21,11 @@ export class UsejarvisAIProvider extends OpenAIProvider {
     // The provisioner writes the proxy ORIGIN (https://llm.example.host);
     // OpenAIProvider expects the /v1 prefix to already be present.
     const trimmed = baseUrl.replace(/\/+$/, '');
-    super(apiKey, '', /\/v1$/.test(trimmed) ? trimmed : `${trimmed}/v1`);
+    // uj-medium as the default model: the manager's failover path retries a
+    // provider WITHOUT a model assignment (chatTier deletes options.model),
+    // and an empty default posted `{"model":""}` — a guaranteed 400 that
+    // replaced the original error. Every plan carries the mid alias.
+    super(apiKey, 'uj-medium', /\/v1$/.test(trimmed) ? trimmed : `${trimmed}/v1`);
   }
 
   protected override get errorLabel(): string {
@@ -37,22 +41,38 @@ export class UsejarvisAIProvider extends OpenAIProvider {
    * pickers — which would break alias opacity and let a user select a model
    * whose per-plan resale price was never configured. */
   override async listModels(): Promise<string[]> {
-    const response = await fetch(this.modelsUrl, {
-      headers: { Authorization: `Bearer ${this.apiKey}` },
-    });
-    if (!response.ok) {
-      throw this.friendly(response.status, await response.text().catch(() => ''));
+    // Never throws: the LLMProvider contract is degrade-to-fallback (every
+    // sibling catches), and the first caller — the tier-picker catalog route —
+    // must not turn a transient proxy 503 into an unhandled rejection. The
+    // fallback is the four core aliases every plan carries.
+    try {
+      const response = await fetch(this.modelsUrl, {
+        headers: { Authorization: `Bearer ${this.apiKey}` },
+        signal: AbortSignal.timeout(10_000),
+      });
+      if (!response.ok) {
+        console.warn(`[usejarvis] model catalog unavailable (${response.status}); serving fallback aliases`);
+        return UsejarvisAIProvider.FALLBACK_MODELS.slice();
+      }
+      const payload = await response.json() as { data?: Array<{ id?: unknown }> };
+      if (!Array.isArray(payload.data)) {
+        console.warn(`[usejarvis] model catalog malformed; serving fallback aliases`);
+        return UsejarvisAIProvider.FALLBACK_MODELS.slice();
+      }
+      return [...new Set(
+        payload.data
+          .map((entry) => entry.id)
+          .filter((id): id is string => typeof id === 'string' && id.startsWith('uj-')),
+      )].sort();
+    } catch (err) {
+      console.warn('[usejarvis] model catalog fetch failed; serving fallback aliases:', err instanceof Error ? err.message : err);
+      return UsejarvisAIProvider.FALLBACK_MODELS.slice();
     }
-    const payload = await response.json() as { data?: Array<{ id?: unknown }> };
-    if (!Array.isArray(payload.data)) {
-      throw new Error(`${this.errorLabel} returned an invalid model catalog`);
-    }
-    return [...new Set(
-      payload.data
-        .map((entry) => entry.id)
-        .filter((id): id is string => typeof id === 'string' && id.startsWith('uj-')),
-    )].sort();
   }
+
+  /** The aliases every plan includes — served when the live catalog is
+   * unreachable so tier pickers degrade instead of hanging or throwing. */
+  static readonly FALLBACK_MODELS = ['uj-chat', 'uj-high', 'uj-low', 'uj-medium'] as const;
 
   override async chat(
     ...args: Parameters<OpenAIProvider['chat']>

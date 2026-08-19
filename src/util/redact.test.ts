@@ -27,4 +27,17 @@ describe('redactSecrets', () => {
     const text = 'model uj-chat is not included in your plan (sk is not a prefix here)';
     expect(redactSecrets(text)).toBe(text);
   });
+
+  test('Basic auth values are consumed, labelled or bare (pr2 review #8)', () => {
+    const b64 = Buffer.from('user:sk_uj-secret-material').toString('base64');
+    expect(redactSecrets(`Authorization: Basic ${b64}`)).not.toContain(b64);
+    expect(redactSecrets(`rejected credential Basic ${b64} at proxy`)).not.toContain(b64);
+  });
+
+  test('bare unlabelled JWTs are consumed (pr2 review #8)', () => {
+    const jwt = 'eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjM0NTY3ODkwIn0.dBjftJeZ4CVPmB92K27uhbUJU1p1r_wW1gFWFOEjXk';
+    const out = redactSecrets(`upstream said: ${jwt} expired`);
+    expect(out).not.toContain(jwt.split('.')[1]);
+    expect(out).toContain('***redacted***');
+  });
 });

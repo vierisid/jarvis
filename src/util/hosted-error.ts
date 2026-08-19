@@ -46,9 +46,11 @@ export function hostedProxyError(label: string, status: number, detail: string):
         'an active plan is required.',
     );
   }
-  // Truncated: an unbounded body is how a CDN error page (hostname included)
-  // reaches a chat bubble.
-  return new Error(`${label} error (${status})${safe ? `: ${safe.slice(0, 120)}` : ''}`);
+  // Invariant 2, enforced: the body NEVER rides along in user-facing copy —
+  // even truncated-and-redacted, a CDN 502 page puts the hosted hostname in
+  // its first line. Operators already have the full (redacted) body from the
+  // console.warn above.
+  return new Error(`${label} error (${status}): the AI service could not process this request. It usually recovers on its own - try again shortly.`);
 }
 
 /**
@@ -64,10 +66,20 @@ export function hostedProxyError(label: string, status: number, detail: string):
  */
 export function describeBudgetWindow(body: string): string {
   const duration = body.match(/budget_duration["'\s:=]+([0-9]+[a-z]+)/i)?.[1];
-  const resetAt = body.match(/budget_reset_at["'\s:=]+([0-9T:.+\-]{10,40})/i)?.[1];
+  // The timestamp must carry an explicit time-of-day to be quoted. A
+  // date-only match (LiteLLM's Postgres-style `2026-08-18 18:00:00` used to
+  // truncate at the space) would parse to UTC midnight and state a reset
+  // time the proxy never sent.
+  const resetAt = body.match(
+    /budget_reset_at["'\s:=]+(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?(?:Z|[+-]\d{2}:?\d{2})?)/i,
+  )?.[1];
   const window = duration ? `for this ${duration} window` : 'for this window';
   if (!resetAt) return window;
-  const parsed = new Date(resetAt);
+  // A naive timestamp (no zone suffix) is documented by LiteLLM as UTC;
+  // normalize the space separator and pin the zone before parsing so the
+  // local machine's timezone cannot skew the quoted time.
+  const normalized = resetAt.replace(' ', 'T') + (/(Z|[+-]\d{2}:?\d{2})$/.test(resetAt) ? '' : 'Z');
+  const parsed = new Date(normalized);
   if (Number.isNaN(parsed.getTime())) return window;
   const hh = String(parsed.getUTCHours()).padStart(2, '0');
   const mm = String(parsed.getUTCMinutes()).padStart(2, '0');

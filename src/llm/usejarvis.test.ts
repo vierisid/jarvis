@@ -150,4 +150,19 @@ describe('UsejarvisAIProvider', () => {
     const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
     expect(await provider.listModels()).toEqual(['uj-chat']);
   });
+
+  it('listModels degrades to the fallback aliases instead of throwing (pr2 review #6)', async () => {
+    // Transient 503:
+    globalThis.fetch = (async () => jsonResponse(503, { error: 'upstream down' })) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    expect(await provider.listModels()).toEqual(['uj-chat', 'uj-high', 'uj-low', 'uj-medium']);
+    // Network failure:
+    globalThis.fetch = (async () => { throw new Error('connect ECONNREFUSED'); }) as unknown as typeof fetch;
+    expect(await provider.listModels()).toEqual(['uj-chat', 'uj-high', 'uj-low', 'uj-medium']);
+  });
+
+  it('defaultModel is uj-medium so the manager model-less retry never posts an empty model (pr2 review #7)', () => {
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    expect((provider as unknown as { defaultModel: string }).defaultModel).toBe('uj-medium');
+  });
 });
