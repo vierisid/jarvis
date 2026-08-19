@@ -208,6 +208,36 @@ export async function readRawConfigFile(
 }
 
 
+/**
+ * Re-read ONLY the SYSTEM-owned `usejarvis_ai` block from config.yaml into
+ * the live config. Backs SIGHUP / POST /api/config/reload so a provisioner
+ * key rotation (or un-hosting) takes effect without a daemon restart.
+ *
+ * File-authoritative semantics: a missing file or absent block clears the
+ * block (the install is no longer hosted). An unreadable/corrupt file keeps
+ * the current in-memory value and warns — a transient write race must not
+ * un-host a running install.
+ */
+export async function reloadUsejarvisAiBlock(
+  config: JarvisConfig,
+  configPath?: string,
+): Promise<void> {
+  try {
+    const raw = await readRawConfigFile(configPath);
+    const block = raw?.usejarvis_ai;
+    if (block && typeof block === 'object' && !Array.isArray(block)) {
+      config.usejarvis_ai = block as { base_url?: string; api_key?: string };
+    } else {
+      delete config.usejarvis_ai;
+    }
+  } catch (err) {
+    console.warn(
+      '[Config] Could not re-read the usejarvis_ai block from config.yaml; keeping the current value:',
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
 // NOTE: there is intentionally no saveConfig here. The brain treats
 // config.yaml as READ-ONLY system configuration (network/hosting keys,
 // root-owned in hosted mode). All user-chosen settings persist to the vault

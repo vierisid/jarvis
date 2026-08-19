@@ -117,19 +117,30 @@ export class SettingsReloadCoordinator {
   private readonly googleTokensFile: string;
   /** Fingerprint of the tokens file as of the last look; see googleTokensChanged. */
   private lastGoogleTokens: string;
+  /** Optional pre-hydration hook that re-reads file-authoritative SYSTEM
+   * sections (e.g. the usejarvis_ai block) before the DB merge. Injected by
+   * the daemon so tests stay hermetic (no config.yaml reads). */
+  private readonly reloadSystemSections: ((config: JarvisConfig) => Promise<void>) | null;
 
   /**
    * `googleTokensPath` is injectable for the same reason GoogleAuth's is: the
    * default resolves through os.homedir(), which Bun fixes at process start and
    * does NOT re-read from $HOME, so a test cannot redirect it any other way.
    */
-  constructor(config: JarvisConfig, opts?: { googleTokensPath?: string }) {
+  constructor(
+    config: JarvisConfig,
+    opts?: {
+      googleTokensPath?: string;
+      reloadSystemSections?: (config: JarvisConfig) => Promise<void>;
+    },
+  ) {
     this.config = config;
     this.googleTokensFile = opts?.googleTokensPath ?? googleTokensPath();
     // Baseline at construction, which is boot: whatever is on disk now is what
     // the daemon's own GoogleAuth was just built from, so the first reload must
     // not report a change and pointlessly restart the observers.
     this.lastGoogleTokens = googleTokensFingerprint(this.googleTokensFile);
+    this.reloadSystemSections = opts?.reloadSystemSections ?? null;
   }
 
   /**
@@ -190,6 +201,17 @@ export class SettingsReloadCoordinator {
       const before = new Map<ReloadSection, string>();
       for (const section of RELOAD_SECTIONS) {
         before.set(section, this.snapshot(section));
+      }
+
+      // SYSTEM sections are file-authoritative: re-read them first so a
+      // provisioner key rotation (or removal of the usejarvis_ai block)
+      // lands on SIGHUP / POST /api/config/reload without a daemon restart.
+      if (this.reloadSystemSections) {
+        try {
+          await this.reloadSystemSections(this.config);
+        } catch (err) {
+          console.warn('[SettingsReload] System-section re-read failed:', err);
+        }
       }
 
       // Exact boot hydration order (daemon/index.ts): LLM, then user

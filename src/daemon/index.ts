@@ -501,7 +501,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // voice intent, pebble toggle — schedule the section's appliers.
     const { SettingsReloadCoordinator } = await import('./settings-reload.ts');
     const { setSectionSavedListener } = await import('./user-settings.ts');
-    settingsReload = new SettingsReloadCoordinator(jarvisConfig);
+    const { reloadUsejarvisAiBlock } = await import('../config/loader.ts');
+    settingsReload = new SettingsReloadCoordinator(jarvisConfig, {
+      // File-authoritative SYSTEM sections are re-read on every reloadAll so
+      // a provisioner rotation of the usejarvis_ai key (or un-hosting) takes
+      // effect on SIGHUP / POST /api/config/reload without a restart.
+      reloadSystemSections: (cfg) => reloadUsejarvisAiBlock(cfg),
+    });
     setSectionSavedListener((section) => settingsReload?.sectionChanged(section));
 
     // 3b. Anonymous usage telemetry (opt-out). Constructed here so it can be

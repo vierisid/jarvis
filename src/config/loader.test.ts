@@ -48,6 +48,35 @@ describe('Config Loader', () => {
     expect(loaded.llm.providers).toEqual({});
   });
 
+  test('reloadUsejarvisAiBlock: rotation lands, removal un-hosts, corruption keeps the current value', async () => {
+    const { writeFile } = await import('node:fs/promises');
+    const { reloadUsejarvisAiBlock } = await import('./loader.ts');
+    await writeFile(
+      TEST_CONFIG_PATH,
+      'usejarvis_ai:\n  base_url: https://llm.usejarvis.host\n  api_key: sk-uj-old\n',
+    );
+    const config = await loadConfig(TEST_CONFIG_PATH);
+    expect(config.usejarvis_ai?.api_key).toBe('sk-uj-old');
+
+    // Provisioner rotates the key: SIGHUP re-read must pick it up.
+    await writeFile(
+      TEST_CONFIG_PATH,
+      'usejarvis_ai:\n  base_url: https://llm.usejarvis.host\n  api_key: sk-uj-rotated\n',
+    );
+    await reloadUsejarvisAiBlock(config, TEST_CONFIG_PATH);
+    expect(config.usejarvis_ai?.api_key).toBe('sk-uj-rotated');
+
+    // Corrupt file: keep the current value (a write race must not un-host).
+    await writeFile(TEST_CONFIG_PATH, 'usejarvis_ai: [unclosed\n  broken');
+    await reloadUsejarvisAiBlock(config, TEST_CONFIG_PATH);
+    expect(config.usejarvis_ai?.api_key).toBe('sk-uj-rotated');
+
+    // Block removed: the install is no longer hosted.
+    await writeFile(TEST_CONFIG_PATH, 'daemon:\n  port: 8788\n');
+    await reloadUsejarvisAiBlock(config, TEST_CONFIG_PATH);
+    expect(config.usejarvis_ai).toBeUndefined();
+  });
+
   test('workflows SYSTEM path keys survive the user-section discard; user fields do not', async () => {
     // A hosted/system config carries only the ready-made artifact paths;
     // any user-tunable workflow fields in the FILE have no authority (they
