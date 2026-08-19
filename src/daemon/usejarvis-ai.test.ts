@@ -336,15 +336,26 @@ describe('effectiveSttForBinding (hosted STT default, persistence-pure)', () => 
     expect(view?.provider).toBe('groq');
   });
 
-  test('hosted + stored row WITHOUT a provider field: still silent, defaults to usejarvis', () => {
+  test('hosted + stored row with a sub-block but no provider: configuration, not silence', () => {
     const config = hosted();
-    // What boot produces when the row only carries a key: the merge layered
-    // it over DEFAULT_CONFIG.stt, so provider 'openai' here is NOT intent.
+    // What the legacy import wrote for a config.yaml that had
+    // `stt: { openai: {...} }` and relied on DEFAULT_CONFIG for the provider
+    // line: a stripped row with no `provider`. That user configured a key —
+    // re-routing their audio to the hosted proxy past it would bypass an
+    // explicit setup, so the sub-block reads as intent and the merged
+    // in-memory section (provider 'openai') binds.
     config.stt = { provider: 'openai', openai: { api_key: 'sk-user' } };
-    const view = effectiveSttForBinding(config, () => ({ openai: { api_key: 'sk-user' } }));
+    const view = effectiveSttForBinding(config, () => ({ openai: {} }));
+    expect(view).toBe(config.stt);
+    expect(view?.provider).toBe('openai');
+  });
+
+  test('hosted + stored row with only unknown fields: still silent, defaults to usejarvis', () => {
+    const config = hosted();
+    // A row carrying no provider AND no provider sub-block (e.g. just a
+    // language preference) records no routing intent.
+    const view = effectiveSttForBinding(config, () => ({ language: 'it' }));
     expect(view?.provider).toBe('usejarvis');
-    // ...and the user's sub-blocks survive in the view untouched.
-    expect((view as { openai?: { api_key?: string } }).openai).toEqual({ api_key: 'sk-user' });
   });
 
   test('the view never carries credentials: only the provider string differs', () => {

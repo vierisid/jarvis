@@ -132,6 +132,25 @@ describe('user-settings', () => {
     expect(config.active_role).toBe('villain');
   });
 
+  test('import: a provider-less stt row is stamped with the effective provider', () => {
+    // A config.yaml that had `stt: { openai: {...} }` relied on
+    // DEFAULT_CONFIG for the provider line. The stored row must record that
+    // effective choice explicitly: a provider-less row reads as "user never
+    // chose" downstream, and on a hosted plan that silently re-routes audio
+    // to the platform proxy past the key this import just moved to the
+    // keychain.
+    importLegacyUserSettings({ stt: { openai: { api_key: 'sk-user' } } });
+    const row = loadUserSection('stt') as { provider?: string; openai?: object };
+    expect(row.provider).toBe('openai');
+    expect(row.openai).toBeDefined();
+  });
+
+  test('import: an explicit stt provider in the file is imported unchanged', () => {
+    importLegacyUserSettings({ stt: { provider: 'groq', groq: { api_key: 'gsk-user' } } });
+    const row = loadUserSection('stt') as { provider?: string };
+    expect(row.provider).toBe('groq');
+  });
+
   test('import: an EDITED file value applies over the DB (editor-less sections stay tunable)', () => {
     // Review finding: heartbeat/cron/goals/... have no dashboard editor, so
     // write-once import made the file a lie. A changed file value is intent.

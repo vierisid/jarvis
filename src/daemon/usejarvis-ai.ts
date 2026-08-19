@@ -184,12 +184,25 @@ export function usejarvisVoiceCredentials(config: JarvisConfig): HostedVoiceCred
   return { baseUrl: block.base_url!.trim(), apiKey: block.api_key!.trim() };
 }
 
-/** True when a stored user section records an explicit provider choice. */
+/** Provider-specific sub-blocks a stored stt row can carry. */
+const STT_PROVIDER_BLOCKS = ['openai', 'groq', 'local', 'sarvam'] as const;
+
+/**
+ * True when a stored user section records provider intent. An explicit
+ * `provider` string is intent — but so is a row that carries any
+ * provider-specific sub-block without one: importLegacyUserSettings writes
+ * exactly that shape for a config.yaml that had `stt: { openai: {...} }` and
+ * relied on DEFAULT_CONFIG for the provider line. Treating it as silence
+ * silently re-routed that user's audio to the hosted proxy past the key they
+ * configured. (New imports also stamp `provider` explicitly; this keeps rows
+ * imported before that fix honest.)
+ */
 function storedProviderChoice(stored: unknown): boolean {
-  return (
-    typeof stored === 'object' && stored !== null && !Array.isArray(stored) &&
-    typeof (stored as { provider?: unknown }).provider === 'string' &&
-    ((stored as { provider: string }).provider.trim() !== '')
+  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return false;
+  const rec = stored as Record<string, unknown>;
+  if (typeof rec.provider === 'string' && rec.provider.trim() !== '') return true;
+  return STT_PROVIDER_BLOCKS.some(
+    (block) => typeof rec[block] === 'object' && rec[block] !== null,
   );
 }
 

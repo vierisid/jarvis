@@ -163,6 +163,22 @@ function loadImportState(): Record<string, string> {
  *
  * Returns the imported section names (for boot logging).
  */
+/**
+ * For the provider-choice sections (stt/tts): if the imported file value has
+ * sub-blocks but no `provider` line, stamp the DEFAULT_CONFIG provider that
+ * the merge layer would have supplied anyway — so the stored row records the
+ * effective choice instead of a shape that reads as "user never chose".
+ */
+function stampImplicitProvider(section: string, fileValue: unknown): unknown {
+  if (section !== 'stt' && section !== 'tts') return fileValue;
+  if (typeof fileValue !== 'object' || fileValue === null || Array.isArray(fileValue)) return fileValue;
+  const rec = fileValue as Record<string, unknown>;
+  if (typeof rec.provider === 'string' && rec.provider.trim() !== '') return fileValue;
+  const fallback = (DEFAULT_CONFIG[section] as { provider?: string } | undefined)?.provider;
+  if (!fallback) return fileValue;
+  return { ...rec, provider: fallback };
+}
+
 export function importLegacyUserSettings(rawYaml: Record<string, unknown> | null): string[] {
   const imported: string[] = [];
   const state = loadImportState();
@@ -211,7 +227,14 @@ export function importLegacyUserSettings(rawYaml: Record<string, unknown> | null
         console.error(`[UserSettings] Keychain write failed — skipping the ${section} import from config.yaml (will retry on the next boot)`);
         continue;
       }
-      setSetting(settingKey(section), JSON.stringify(stripSectionSecrets(section, fileValue)));
+      // Stamp the provider the file relied on DEFAULT_CONFIG for: a row
+      // holding `{ openai: {...} }` with no `provider` line reads as user
+      // silence downstream (effectiveSttForBinding), and on a hosted plan
+      // silence re-routes audio to the platform proxy — past the key this
+      // very import just moved to the keychain. The file's implicit choice
+      // becomes explicit at the moment it is recorded.
+      const stamped = stampImplicitProvider(section, fileValue);
+      setSetting(settingKey(section), JSON.stringify(stripSectionSecrets(section, stamped)));
       if (hasInlineSecret(section, fileValue)) {
         console.log(`[UserSettings] Imported ${section} credential(s) from config.yaml into the encrypted keychain — the plaintext value can be removed from the file`);
       }
