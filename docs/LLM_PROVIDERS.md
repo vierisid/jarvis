@@ -520,8 +520,19 @@ How it works per provider:
 - **Gemini**: implicit caching is automatic on 2.5+ models (2048-4096 token minimum); `cachedContentTokenCount` is surfaced in telemetry.
 - **Groq**: automatic prefix caching on supported models (50% discount, 2h TTL); `prompt_tokens_details.cached_tokens` is surfaced in telemetry.
 - **LiteLLM / OpenAI-compatible**: inherit the OpenAI client, so `cached_tokens` reported by the proxied backend is surfaced automatically.
+- **Usejarvis AI (hosted)**: explicit Anthropic-style breakpoints in OpenAI wire format — `cache_control` riding on content parts, since LiteLLM drops the top-level field OpenRouter accepts. **OFF by default**: emission is gated on the SYSTEM `usejarvis_ai.prompt_cache: true` opt-in (config.yaml, provisioner-written) *and* the user-level `llm.prompt_cache` switch. See "Usejarvis AI prompt caching" below for what the opt-in requires. Streamed requests set `stream_options: {include_usage: true}` so cache telemetry is real on the conversational path.
 - **Ollama**: local KV-cache reuse is automatic and free; nothing is reported or billed.
 - **Other providers**: the cache markers are ignored; no behavior change.
+
+#### Usejarvis AI prompt caching — verification record and enablement conditions
+
+Live verification against the hosted proxy (previously cited as "docs/LLM.md, POC case 3"; recorded here since that file was never committed): a `cache_control` marker on a **system** content part and on a **user** content part both reached the Anthropic upstream intact through LiteLLM; the second identical call billed the marked prefix at the cache-read rate (~0.1x the platform's resale input price). That is the full extent of what was verified.
+
+**Not verified**, which is why `usejarvis_ai.prompt_cache` defaults OFF and the provisioner must confirm each item against the proxy deployment before enabling:
+
+1. **Non-Anthropic upstreams**: the `uj-*` aliases are vendor-opaque. If a plan maps an alias to a GPT/Gemini model, the marker must be stripped by the proxy — OpenAI-style APIs reject unknown content-part properties (`400 Extra inputs are not permitted`), which would fail every call on that tier.
+2. **Tool-role translation**: whether a marker on a `tool` message's content part survives LiteLLM's tool→`tool_result` translation. The client sidesteps this by anchoring the rolling breakpoint on the last **user** message (never a tool result), but the guarantee should still be confirmed.
+3. **Cache scoping**: the prompt cache must be scoped per virtual key. With one shared upstream namespace, a tenant can confirm byte-level guesses of another tenant's prompt prefix by watching `cache_read_input_tokens` on a first request — a confirmation oracle — and the 1.25x write premium lands on whichever tenant sends a shared prefix first.
 
 Internals for callers: `LLMMessage.cache: true` marks a system message as a stable cache boundary. System prompts are built split into a static (byte-stable per role/channel) prefix and a dynamic per-turn suffix (`buildSystemPromptParts` in `src/roles/prompt-builder.ts`); volatile content (current time, observations, goals) must stay in the dynamic half or it invalidates the cache every turn. History trimming (`compactHistory`) uses page-aligned eviction so the retained prefix stays byte-stable between eviction events.
 
