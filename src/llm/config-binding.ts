@@ -103,10 +103,12 @@ export function instantiateProvider(
       // config.yaml block (daemon/usejarvis-ai.ts) - nothing to guess.
       if (!entry.base_url?.trim() || !entry.api_key?.trim()) return null;
       provider = new UsejarvisAIProvider(entry.base_url.trim(), entry.api_key.trim(), {
-        // Anthropic prompt caching, same global switch the anthropic and
-        // openrouter cases honour. Margin-critical on the hosted path: the
-        // proxy bills cached reads at a fraction of fresh input.
-        promptCache: globals?.promptCache !== false,
+        // Anthropic prompt caching. OPT-IN via the system block (the uj-*
+        // aliases are vendor-opaque, so only the provisioner can assert the
+        // proxy strips markers for non-Anthropic upstreams — see
+        // usejarvis_ai.prompt_cache in config/types.ts), AND still subject
+        // to the user-level switch the anthropic/openrouter cases honour.
+        promptCache: entry.prompt_cache === true && globals?.promptCache !== false,
       });
       break;
     default:

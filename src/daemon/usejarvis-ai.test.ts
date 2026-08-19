@@ -45,6 +45,7 @@ describe('applyUsejarvisAi (provider injection only)', () => {
       kind: 'usejarvis_ai',
       base_url: 'https://llm.usejarvis.host',
       api_key: 'sk-uj-abc123',
+      prompt_cache: false, // opt-in, absent block field reads as OFF
     });
     // Tier defaults live ONLY in the binding view — the config object stays
     // exactly what the DB (here: nothing) provided, so no save path can
@@ -80,7 +81,20 @@ describe('applyUsejarvisAi (provider injection only)', () => {
       kind: 'usejarvis_ai',
       base_url: 'https://llm.usejarvis.host',
       api_key: 'sk-uj-abc123',
+      prompt_cache: false,
     });
+  });
+
+  test('the provisioner prompt_cache opt-in carries through; junk reads as OFF', () => {
+    const optedIn = hosted();
+    optedIn.usejarvis_ai!.prompt_cache = true;
+    applyUsejarvisAi(optedIn);
+    expect(optedIn.llm.providers![USEJARVIS_PROVIDER_NAME]!.prompt_cache).toBe(true);
+
+    const junk = hosted();
+    (junk.usejarvis_ai as Record<string, unknown>).prompt_cache = 'yes'; // YAML-typed junk
+    applyUsejarvisAi(junk);
+    expect(junk.llm.providers![USEJARVIS_PROVIDER_NAME]!.prompt_cache).toBe(false);
   });
 
   test('idempotent: applying twice equals applying once', () => {

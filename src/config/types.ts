@@ -384,6 +384,13 @@ export type LLMProviderEntry = {
   base_url?: string;
   /** Header used to send api_key. Authorization values are prefixed with Bearer. */
   auth_header?: string;
+  /**
+   * usejarvis_ai entries only: the system-block prompt-cache opt-in,
+   * carried through by applyUsejarvisAi so the binding layer can see it.
+   * Unlike the user-level `llm.prompt_cache` toggle (default ON), this
+   * defaults OFF — see the `usejarvis_ai.prompt_cache` block comment.
+   */
+  prompt_cache?: boolean;
 };
 
 /**
@@ -445,7 +452,26 @@ export type JarvisConfig = {
    * USER_OWNED_SECTIONS) and is re-applied over every DB merge by
    * applyUsejarvisAi (daemon/usejarvis-ai.ts). Absent on self-hosted installs.
    */
-  usejarvis_ai?: { base_url?: string; api_key?: string };
+  usejarvis_ai?: {
+    base_url?: string;
+    api_key?: string;
+    /**
+     * OPT-IN for Anthropic prompt-cache breakpoints on hosted LLM calls
+     * (margin-critical when on: cached reads bill at ~0.1x fresh input).
+     * Absent/false means OFF. The uj-* aliases are vendor-opaque, so the
+     * client cannot tell which upstream a marker reaches; the provisioner
+     * must confirm ALL THREE against the proxy before writing `true`:
+     *   (a) LiteLLM strips cache_control for non-Anthropic upstreams
+     *       (otherwise a plan mapping an alias to GPT/Gemini 400s on every
+     *       call — the marker is an unknown property there);
+     *   (b) the marker survives LiteLLM's tool→tool_result translation on
+     *       content parts (or is harmlessly dropped, never rejected);
+     *   (c) the prompt cache is scoped per virtual key — a shared upstream
+     *       namespace lets one tenant confirm byte-level guesses of
+     *       another's prompt prefix via cache_read_input_tokens.
+     */
+    prompt_cache?: boolean;
+  };
   user?: UserConfig;
   onboarding?: OnboardingConfig;
   telemetry?: TelemetryConfig;

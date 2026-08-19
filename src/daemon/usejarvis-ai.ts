@@ -99,6 +99,11 @@ export function applyUsejarvisAi(config: JarvisConfig): void {
     kind: USEJARVIS_PROVIDER_NAME,
     base_url: block.base_url,
     api_key: block.api_key,
+    // Strict === true: this is the provisioner's opt-in (default OFF — see
+    // the block comment in config/types.ts), and YAML-typed junk must read
+    // as "not opted in", never as enabled. Read off the raw block: the
+    // validated read narrows to base_url/api_key only.
+    prompt_cache: config.usejarvis_ai?.prompt_cache === true,
   };
 }
 

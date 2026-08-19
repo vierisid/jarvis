@@ -30,7 +30,21 @@ export class UsejarvisAIProvider extends OpenAIProvider {
     // and an empty default posted `{"model":""}` — a guaranteed 400 that
     // replaced the original error. Every plan carries the mid alias.
     super(apiKey, 'uj-medium', /\/v1$/.test(trimmed) ? trimmed : `${trimmed}/v1`);
-    this.promptCache = opts?.promptCache !== false;
+    // OPT-IN, defaulting OFF — the inverse of the sibling providers. The
+    // uj-* aliases are vendor-opaque by design, so this client cannot know
+    // whether a marker lands on an Anthropic upstream (harmless, saves
+    // margin) or a non-Anthropic one (rejected as an unknown property →
+    // every call 400s). Only the provisioner can assert proxy behavior;
+    // see the `usejarvis_ai.prompt_cache` block comment in config/types.ts
+    // for the three conditions to confirm before enabling.
+    this.promptCache = opts?.promptCache === true;
+  }
+
+  /** The proxy (LiteLLM) supports stream_options.include_usage; without it
+   * streamed turns record zero usage and a silent cache decline is
+   * indistinguishable from success on the primary conversational path. */
+  protected override get streamIncludeUsage(): boolean {
+    return true;
   }
 
   /**
@@ -44,9 +58,11 @@ export class UsejarvisAIProvider extends OpenAIProvider {
    * Why per-content-part and not a top-level field: OpenRouter accepts a
    * top-level `cache_control`, LiteLLM does not — it forwards the marker
    * only when it rides ON a content part. Verified live against the proxy
-   * (docs/LLM.md, POC case 3): a marked system part and a marked user part
+   * (see "Usejarvis AI prompt caching" in docs/LLM_PROVIDERS.md for the
+   * record and its limits): a marked system part and a marked user part
    * both reached Anthropic intact and billed the second call at the cache
-   * rate.
+   * rate. That is ALL the live verification covers — which is why emission
+   * is gated on the provisioner's `prompt_cache` opt-in (see constructor).
    *
    * Two breakpoints, matching AnthropicProvider exactly (see
    * `applyLastMessageBreakpoint` and the system-block reduce there — the two
@@ -61,12 +77,26 @@ export class UsejarvisAIProvider extends OpenAIProvider {
    *     re-billing the whole persona at full rate. `cache` is the codebase's
    *     declared boundary (see LLMMessage) and is what to honour.
    *
-   *   - the last message overall, a rolling breakpoint so each request writes
+   *   - the last USER message, a rolling breakpoint so each request writes
    *     the prefix the next one reads — but ONLY on conversational requests.
    *     One-shot calls (classification, extraction, a periodic screen
    *     capture) never resend their prefix, so a breakpoint there is a
    *     guaranteed-unread 1.25x cache write. Presence of an assistant turn is
    *     the same signal AnthropicProvider uses.
+   *
+   *     The last USER message, not the last message overall: from the second
+   *     agentic iteration onward the last message is a `tool` result, and
+   *     LiteLLM's tool→tool_result translation is NOT verified to carry a
+   *     content-part cache_control through (the live POC covered system and
+   *     user parts only — see docs/LLM_PROVIDERS.md). A marker there is
+   *     either silently dropped (no-op on exactly the loop this feature
+   *     exists for) or rejected by the proxy. The user message is the newest
+   *     anchor with a verified translation.
+   *
+   * Both boundary picks skip messages with no text content: promoting an
+   * empty block would either bail (suppressing the breakpoint entirely) or
+   * produce a part with no text, where AnthropicProvider falls back to the
+   * previous marked block — the two providers must not drift.
    *
    * Anthropic allows 4 breakpoints; staying at 2 leaves room.
    */
@@ -78,7 +108,7 @@ export class UsejarvisAIProvider extends OpenAIProvider {
     // and the `cache` flag can be read off the originals.
     const marks = new Set<number>();
     const lastMarkedSystem = messages.reduce(
-      (found, m, i) => (m.role === 'system' && m.cache === true ? i : found),
+      (found, m, i) => (m.role === 'system' && m.cache === true && hasTextContent(m) ? i : found),
       -1,
     );
     if (lastMarkedSystem >= 0) {
@@ -86,10 +116,19 @@ export class UsejarvisAIProvider extends OpenAIProvider {
     } else {
       // No declared boundary: fall back to the last system message, which is
       // then the whole system prefix and is as stable as the caller made it.
-      const lastSystem = messages.reduce((found, m, i) => (m.role === 'system' ? i : found), -1);
+      const lastSystem = messages.reduce(
+        (found, m, i) => (m.role === 'system' && hasTextContent(m) ? i : found),
+        -1,
+      );
       if (lastSystem >= 0) marks.add(lastSystem);
     }
-    if (messages.some((m) => m.role === 'assistant')) marks.add(converted.length - 1);
+    if (messages.some((m) => m.role === 'assistant')) {
+      const lastUser = messages.reduce(
+        (found, m, i) => (m.role === 'user' && hasTextContent(m) ? i : found),
+        -1,
+      );
+      if (lastUser >= 0) marks.add(lastUser);
+    }
     if (marks.size === 0) return converted;
 
     return converted.map((msg, i) => (marks.has(i) ? markCacheBreakpoint(msg) : msg));
@@ -265,18 +304,31 @@ export class UsejarvisAIProvider extends OpenAIProvider {
 }
 
 
+/** True when the message carries at least one non-empty text span — the only
+ * shape markCacheBreakpoint can attach a marker to. Boundary selection skips
+ * anything else so an empty marked block cannot suppress the breakpoint
+ * (AnthropicProvider filters empty blocks the same way). */
+function hasTextContent(m: LLMMessage): boolean {
+  if (typeof m.content === 'string') return m.content.length > 0;
+  return m.content.some(
+    (b) => b.type === 'text' && typeof (b as { text?: unknown }).text === 'string'
+      && (b as { text: string }).text.length > 0,
+  );
+}
+
 /**
- * Put an `ephemeral` cache breakpoint on a message's LAST content part,
+ * Put an `ephemeral` cache breakpoint on a message's LAST TEXT part,
  * promoting plain-string content to a single text part (the marker cannot
  * ride on a bare string).
  *
  * Left untouched when there is nothing safe to mark:
  *  - assistant messages carrying tool_calls, whose content must stay '' —
  *    promoting it to a part array changes the semantics the API expects;
- *  - empty content, which would produce a part with no text.
- * An image part is never marked either — the breakpoint goes on the last
- * TEXT part, so a trailing image leaves the message unmarked rather than
- * attaching the marker to binary content.
+ *  - empty content, which would produce a part with no text;
+ *  - a part array with no text part at all (image-only).
+ * An image part itself is never marked — the breakpoint goes on the last
+ * TEXT part, so a trailing image simply falls outside the cached prefix
+ * while the message's interior text part still carries the marker.
  */
 function markCacheBreakpoint(msg: OpenAIMessage): OpenAIMessage {
   if (msg.tool_calls && msg.tool_calls.length > 0) return msg;
