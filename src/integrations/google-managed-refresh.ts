@@ -12,9 +12,10 @@ import type { JarvisConfig } from '../config/types.ts';
  * could read — and the control plane storing refresh tokens would make a single
  * compromise worth every user's mailbox.
  *
- * The request is signed with the per-instance notify secret from the system
- * config, the same key the push bridge's doorbell is verified with, used here in
- * the other direction. The timestamp is inside the signed bytes so a captured
+ * The request is signed with the per-instance REFRESH secret from the system
+ * config — a different key from the doorbell's notify secret. The two travel in
+ * opposite directions, and while one key served both, the same signature was
+ * valid at either endpoint. The timestamp is inside the signed bytes so a captured
  * request cannot be replayed later.
  */
 export interface ManagedRefreshConfig {

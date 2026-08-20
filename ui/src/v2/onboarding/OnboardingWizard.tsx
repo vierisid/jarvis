@@ -610,11 +610,18 @@ export function OnboardingWizard({
         .then((res) => res.json() as Promise<{ managed?: boolean; connect_url?: string }>)
         .catch(() => ({}) as { managed?: boolean; connect_url?: string });
       if (managed.managed && managed.connect_url) {
-        const acct = window.open(managed.connect_url, "_blank", "noopener,noreferrer");
+        // NO `noopener` in the features, deliberately: with it, window.open
+        // returns NULL by specification — so this branch ALWAYS fell into the
+        // error path below, which opens no tab and, worse, returns before
+        // starting the poll. A user who opened the link by hand and connected
+        // successfully watched this step sit unfinished forever. (The hosted
+        // account panel hit the identical bug and fixed it the same way.)
+        const acct = window.open(managed.connect_url, "_blank");
         if (!acct) {
-          setGoogleState("idle");
+          // Genuinely blocked, or a webview that refuses window.open. Tell the
+          // user where to go, but KEEP POLLING: completing it over there is what
+          // finishes this step, and that works whether or not we opened the tab.
           setConnectErr(`Open ${managed.connect_url} to connect Google, then come back here.`);
-          return;
         }
         stopGooglePoll();
         googlePollRef.current = window.setInterval(async () => {
