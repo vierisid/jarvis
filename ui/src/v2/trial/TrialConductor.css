@@ -1,0 +1,234 @@
+/* ══════════ The trial's opening · storyboard frames 02 to 04 ══════════
+   Two surfaces. The gate is a full-screen takeover with exactly one thing on
+   it; everything after it FLOATS OVER the live shell, because the founder has
+   to be able to see their vault filling while they talk. Uses the app's theme
+   tokens so it follows light/dark like the rest of the shell. */
+
+/* ── the drop (the pebble) ── */
+.tc-drop {
+  position: relative;
+  width: 44px;
+  height: 44px;
+  border-radius: 50% 50% 50% 12px;
+  transform: rotate(45deg);
+  background: rgba(255, 255, 255, 0.08);
+  border: 0.5px solid rgba(255, 255, 255, 0.5);
+  box-shadow: inset 1.5px 1.5px 1.5px rgba(255, 255, 255, 0.9), 0 6px 18px -4px rgba(20, 30, 45, 0.3);
+  flex-shrink: 0;
+}
+:root[data-theme="dark"] .tc-drop {
+  border-color: rgba(255, 255, 255, 0.4);
+  box-shadow: inset 1.5px 1.5px 1.5px rgba(255, 255, 255, 0.55), 0 8px 22px -4px rgba(0, 0, 0, 0.6);
+}
+.tc-drop .in {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: radial-gradient(circle at 50% 40%, #ff6e60, #e63b2e 58%, #b81e16);
+  animation: tc-breathe 2.6s ease infinite;
+}
+/* speaking — blue, faster. listening — the resting vermilion. */
+.tc-drop--speaking .in {
+  background: radial-gradient(circle at 50% 40%, #5e97ff, #2d78ff 60%, #1b5bd0);
+  animation: tc-breathe 1.1s ease infinite;
+}
+.tc-drop--connecting .in {
+  background: radial-gradient(circle at 50% 40%, #fff, #e6eaef 70%);
+}
+.tc-drop--error .in,
+.tc-drop--closed .in {
+  background: radial-gradient(circle at 50% 40%, #cfd6de, #9aa5b1 70%);
+  animation: none;
+}
+@keyframes tc-breathe {
+  0%, 100% { opacity: 0.62; transform: scale(0.96); }
+  50% { opacity: 1; transform: scale(1.05); }
+}
+
+/* ── frame 02 · the microphone gate ── */
+.tc-gate {
+  position: fixed;
+  inset: 0;
+  z-index: 240;
+  background: var(--bg);
+  color: var(--ink);
+  font-family: var(--sans);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 32px;
+  -webkit-font-smoothing: antialiased;
+}
+.tc-gate-wrap {
+  width: 100%;
+  max-width: 420px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+}
+.tc-gate .tc-drop { width: 56px; height: 56px; margin-bottom: 26px; }
+.tc-gate h2 {
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.028em;
+  line-height: 1.15;
+  margin: 0;
+}
+.tc-gate-sub {
+  font-size: 13px;
+  color: var(--ink3);
+  line-height: 1.55;
+  margin-top: 8px;
+}
+.tc-gate-card {
+  margin-top: 26px;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  text-align: left;
+  padding: 14px 14px 14px 16px;
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  background: var(--panel2);
+}
+.tc-gate-card.is-warn { border-color: var(--warn, #d08a1f); }
+.tc-gate-card-text { display: flex; flex-direction: column; gap: 3px; flex: 1; min-width: 0; }
+.tc-gate-card-text b { font-size: 12.5px; font-weight: 600; color: var(--ink); }
+.tc-gate-card-text span { font-size: 11.5px; color: var(--ink3); line-height: 1.45; }
+.tc-btn {
+  flex-shrink: 0;
+  font-family: var(--sans);
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--bg);
+  background: var(--ink);
+  border: none;
+  border-radius: 7px;
+  padding: 9px 16px;
+  cursor: pointer;
+  transition: opacity 0.15s ease;
+}
+.tc-btn:hover:not(:disabled) { opacity: 0.86; }
+.tc-btn:disabled { opacity: 0.5; cursor: default; }
+.tc-gate-clock {
+  margin-top: 22px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.02em;
+  color: var(--faint);
+  line-height: 1.5;
+}
+
+/* ── frames 03 and 04 · over the live shell ──
+   pointer-events are off on the layer so the founder can keep using the
+   dashboard underneath while they talk. Nothing here is clickable: the
+   conversation is the interface (D19). */
+.tc-layer {
+  position: fixed;
+  inset: 0;
+  z-index: 210;
+  pointer-events: none;
+  font-family: var(--sans);
+}
+
+/* the pebble, low and to the right, as in frame 03 */
+.tc-pebble {
+  position: absolute;
+  right: 26px;
+  bottom: 58px;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  max-width: min(460px, 46vw);
+}
+.tc-bubble {
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 12px 12px 3px 12px;
+  padding: 11px 14px;
+  font-size: 13px;
+  line-height: 1.5;
+  color: var(--ink);
+  box-shadow: 0 10px 30px -12px rgba(20, 30, 45, 0.35);
+  order: -1;
+}
+:root[data-theme="dark"] .tc-bubble { box-shadow: 0 12px 34px -12px rgba(0, 0, 0, 0.7); }
+.tc-bubble-hint { font-family: var(--mono); font-size: 10px; color: var(--faint); letter-spacing: 0.08em; }
+.tc-bubble-err { color: var(--warn, #d08a1f); font-size: 12px; }
+
+/* the vault, filling while they talk */
+.tc-vault {
+  position: absolute;
+  left: 26px;
+  bottom: 58px;
+  width: 244px;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-radius: 10px;
+  padding: 10px 12px 11px;
+  box-shadow: 0 10px 30px -14px rgba(20, 30, 45, 0.3);
+}
+.tc-vault-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink3);
+  margin-bottom: 8px;
+}
+.tc-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--listen, #e63b2e);
+  animation: tc-pulse 1.8s ease infinite;
+}
+@keyframes tc-pulse { 0%, 100% { opacity: 0.35; } 50% { opacity: 1; } }
+.tc-vault-list { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 5px; }
+.tc-vault-list li {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 11.5px;
+  color: var(--ink2);
+  animation: tc-land 0.34s ease both;
+}
+@keyframes tc-land {
+  from { opacity: 0; transform: translateY(-4px); }
+  to { opacity: 1; transform: none; }
+}
+.tc-vault-list li.is-new .tc-vault-name { color: var(--ink); font-weight: 600; }
+.tc-vault-name { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.tc-vault-kind { font-family: var(--mono); font-size: 9px; color: var(--faint); letter-spacing: 0.06em; }
+.tc-vault-now { margin-left: auto; font-family: var(--mono); font-size: 8.5px; color: var(--faint); }
+
+/* the footer strip */
+.tc-foot {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  height: 26px;
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 0 26px;
+  background: var(--panel2);
+  border-top: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+}
+.tc-foot-fuel { margin-left: auto; }
+.tc-foot-seam { color: var(--ok, #2fa45e); }
+
+@media (max-width: 900px) {
+  .tc-vault { display: none; }
+  .tc-pebble { max-width: 78vw; }
+}

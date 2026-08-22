@@ -2,11 +2,15 @@ import React from "react";
 import { OnboardingWizard } from "./OnboardingWizard";
 import { useOnboardingStatus } from "./useOnboardingStatus";
 import { RestartRequiredBanner, shouldShowRestartBanner } from "./RestartRequiredBanner";
+import { TrialConductor } from "../trial/TrialConductor";
+import { trialRunsConductor } from "../trial/trialGate";
+import { useTrialStatus } from "../trial/useTrialStatus";
 
 /**
  * Phase A + B onboarding gate. Sits between AppShellV2's render and
  * the AppShell + RoomDispatcher pair. Render order:
  *
+ *   0. a running trial entitlement      → <TrialConductor /> over the shell
  *   1. setup_completed === false        → <SetupRoom />
  *   2. profile_completed === false AND
  *      setup_skipped_profile === false  → <ProfileInterviewRoom />
@@ -19,6 +23,7 @@ import { RestartRequiredBanner, shouldShowRestartBanner } from "./RestartRequire
  */
 export function OnboardingGate({ children }: { children: React.ReactNode }) {
   const { status, loading, refresh } = useOnboardingStatus();
+  const { trial, loading: trialLoading } = useTrialStatus();
 
   // Tell the cold-start splash the app has booted, the first time the status
   // resolves (to the wizard or the shell — either way boot is done).
@@ -26,8 +31,20 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
     if (!loading && status) window.dispatchEvent(new Event("jarvis:boot-ready"));
   }, [loading, status]);
 
-  if (loading || !status) {
+  if (loading || !status || trialLoading) {
     return null;
+  }
+
+  // The 48-hour trial replaces the wizard entirely (D10): the microphone is
+  // asked for, then Jarvis speaks first and the conversation runs OVER the
+  // live shell — which is what lets the founder watch their vault fill while
+  // they talk (D22) and is where the seven room beats will attach (D17).
+  //
+  // `trialRunsConductor` is false for a null or absent entitlement, so an
+  // install with no trial — every install today — falls straight through to
+  // the existing path below, unchanged.
+  if (trialRunsConductor(trial)) {
+    return <TrialConductor>{children}</TrialConductor>;
   }
 
   // Any incomplete onboarding phase → the nine-screen wizard. It computes
