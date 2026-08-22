@@ -1,7 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import { NO_TRIAL, formatTimeRemaining, trialRunsConductor, type TrialStatus } from "./trialGate";
 
-/** Pure-function test, the OnboardingWizard.steps.test.ts precedent — this
+/** Pure-function test, the OnboardingWizard.steps.test.ts precedent, this
  *  repo has no DOM test infrastructure. The rule under test is the NEGATIVE
  *  one: an install with no entitlement (every install today) must reach the
  *  existing onboarding path, and the gate's branch is the only thing standing
@@ -37,7 +37,7 @@ describe("nobody outside a trial sees the conductor", () => {
 });
 
 describe("who does get it", () => {
-  test("an issued grant, before they have spoken — that is the whole point", () => {
+  test("an issued grant, before they have spoken, that is the whole point", () => {
     expect(trialRunsConductor(trial({ state: "issued", started_at: null }))).toBe(true);
   });
 
@@ -45,7 +45,7 @@ describe("who does get it", () => {
     expect(trialRunsConductor(trial({ state: "active", started_at: 1, expires_at: 2 }))).toBe(true);
   });
 
-  test("a completed opening still runs the conductor — the conversation continues (D17)", () => {
+  test("a completed opening still runs the conductor, the conversation continues (D17)", () => {
     // The seam is not an exit. Beats 06 to 12 happen inside this same surface.
     expect(trialRunsConductor(trial({ state: "active", opening_completed_at: 123 }))).toBe(true);
   });

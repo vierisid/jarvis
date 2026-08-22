@@ -299,7 +299,7 @@ describe('speaking first (D10)', () => {
     const sent = JSON.parse(socket.sent[0]!);
     expect(sent.type).toBe('response.create');
     expect(sent.response.instructions).toBe('Say exactly: hello.');
-    // The session prompt is untouched — the override is for this turn only.
+    // The session prompt is untouched, the override is for this turn only.
     expect(sent.session).toBeUndefined();
   });
 });

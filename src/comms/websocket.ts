@@ -73,7 +73,7 @@ export type WSMessage = {
       // broadcast as entities land in the vault DURING the conversation, which
       // is what makes D22 visible rather than a summary afterwards.
       // `trial_fuel` reports one of the five soft targets being captured, and
-      // `trial_opening_complete` is the seam the room beats attach to (D17 —
+      // `trial_opening_complete` is the seam the room beats attach to (D17,
       // NOT the end of the conversation).
       | 'trial_status' | 'trial_memory' | 'trial_fuel' | 'trial_opening_complete';
   payload: unknown;

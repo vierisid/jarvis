@@ -33,7 +33,7 @@ describe('a trial install is onboarded without the wizard (D10)', () => {
     expect(config.onboarding?.tutorial_dismissed_at).toBe(T0);
   });
 
-  test('does NOT mark the profile skipped — the conductor fills it for real', () => {
+  test('does NOT mark the profile skipped, the conductor fills it for real', () => {
     initDatabase(':memory:');
     const config = aConfig({ onboarding: undefined });
     markTrialInstallOnboarded(config, T0);

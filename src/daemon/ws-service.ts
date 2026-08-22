@@ -405,7 +405,7 @@ export class WebSocketService implements Service {
           // Tear down any realtime voice session (closes the OpenAI WS + timer).
           this.closeRealtimeVoice(ws);
           // And again for the socket that armed the conductor but never got as
-          // far as a session — closeRealtimeVoice returns early for those.
+          // far as a session, closeRealtimeVoice returns early for those.
           this.trialConductor.end(ws);
           // Clean up every per-socket map so a long-running daemon doesn't
           // accumulate dead-socket entries across reconnects. See
@@ -1523,7 +1523,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   private async tryStartRealtimeVoice(ws: ServerWebSocket<unknown>, mode?: 'pcm' | 'wav'): Promise<boolean> {
     if (this.realtimeSessions.has(ws)) return true; // already streaming
 
-    // D1 — a trial's realtime is on and its session cap is the trial's own
+    // D1: a trial's realtime is on and its session cap is the trial's own
     // length. Applied as an overlay at resolve time, never written to the
     // user's stored voice settings: `withTrialRealtime` returns the SAME
     // config object when no trial is running, so this line is inert for
@@ -1631,9 +1631,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
     // The conductor is a DIFFERENT ROLE, not a differently-configured version
     // of the assistant: its own prompt (co-founder, D11), its own three tools,
-    // no dashboard navigation (D16.1 — the founder is never shown a room during
-    // the opening), and it speaks first (D10). Everything else about the
-    // session — the transport, the audio loop, the transcripts — is shared.
+    // no dashboard navigation (D16.1: the founder is never shown a room during
+    // the opening), and it speaks first (D10). The transport, the audio loop
+    // and the transcripts are all shared with an ordinary session.
     if (conductor) this.trialConductor.begin(ws);
 
     const session = new RealtimeVoiceSession(resolved, transport, {
@@ -1649,12 +1649,12 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
             now: new Date().toISOString(),
           })
         : this.agentService.buildRealtimeVoiceInstructions(),
-      // D10 — no welcome screen, no "click to begin": the session opens and
+      // D10: no welcome screen, no "click to begin": the session opens and
       // Jarvis introduces itself as their co-founder, unprompted.
       speakFirst: conductor
         ? `Open the conversation by saying exactly this, and nothing else: "${TRIAL_OPENING_LINE}" Then stop and listen.`
         : undefined,
-      // D9 — the clock starts at the founder's first spoken WORD, which needs
+      // D9: the clock starts at the founder's first spoken WORD, which needs
       // their audio transcribed. Speech-to-speech does not otherwise transcribe
       // the input at all.
       sessionOptions: conductor ? { inputTranscriptionModel: 'whisper-1' } : undefined,

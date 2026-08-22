@@ -14,7 +14,7 @@ import "./TrialConductor.css";
    Storyboard frames 02 to 04. Two surfaces, and the second one is the reason
    this is not a wizard:
 
-     1. The microphone gate. Full screen, one thing on it. D10 — voice is
+     1. The microphone gate. Full screen, one thing on it. D10: voice is
         mandatory and there is no typed path through the trial.
      2. Everything after it. The gate DISSOLVES and the live shell is
         underneath, with the pebble and the captions floating over it. That is
@@ -42,7 +42,7 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
   const partialRef = useRef<string>("");
 
   // Already granted from a previous run? Then there is nothing to ask and the
-  // gate must not appear at all — D10's prompt exists only when it is needed.
+  // gate must not appear at all, D10's prompt exists only when it is needed.
   useEffect(() => {
     let cancelled = false;
     microphoneAlreadyGranted().then((granted) => {
@@ -79,8 +79,8 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
         setPhase(p);
         // A closed session is a dead end in the opening, not a quiet return to
         // typing: voice is the only path through the trial (D10). The daemon's
-        // own reason is used when it has one — a plan that excludes realtime
-        // says so — because "say that again" is advice the founder cannot act
+        // own reason is used when it has one, a plan that excludes realtime
+        // says so, because "say that again" is advice the founder cannot act
         // on here.
         if (p === "error") setError(detail ?? "Something went wrong.");
         else if (p === "closed") setError(detail ?? "The conversation ended. Reload to pick it back up.");

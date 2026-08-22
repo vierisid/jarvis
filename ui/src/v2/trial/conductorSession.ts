@@ -4,7 +4,7 @@
  * Owns a WebSocket dedicated to the conductor and a `RealtimeVoiceController`
  * bound to it. Deliberately its OWN socket rather than the shell's: the daemon
  * keys realtime sessions by socket, so a dedicated one keeps the conversation
- * entirely separate from the dashboard's chat, room actions and TTS — and the
+ * entirely separate from the dashboard's chat, room actions and TTS, and the
  * room beats can later drive the shell over its own connection without ever
  * touching this one.
  *
@@ -38,7 +38,7 @@ export interface ConductorCallbacks {
   onPhase: (phase: ConductorPhase, detail?: string) => void;
   /** Assistant / founder captions, streamed. */
   onTranscript: (role: "user" | "assistant", text: string, final: boolean) => void;
-  /** D22 — fires while the founder is still talking. */
+  /** D22: fires while the founder is still talking. */
   onEntitiesLanded: (landed: LandedEntity[]) => void;
   onFuelCaptured: (fuel: CapturedFuel) => void;
   /** The clock started, or any other entitlement change. */
@@ -62,7 +62,7 @@ export class ConductorSession {
    *
    * The order matters: `trial_conductor_start` has to reach the daemon BEFORE
    * the controller's `voice_start`, or the realtime starter builds an ordinary
-   * assistant session — the founder would be greeted by a helpful assistant
+   * assistant session, the founder would be greeted by a helpful assistant
    * rather than their co-founder, and only a page reload would fix it. Both
    * travel on the same socket, so send-order is delivery-order.
    */
@@ -181,12 +181,12 @@ export class ConductorSession {
 }
 
 /**
- * Ask for the microphone (D10 — voice is mandatory; if it is not granted, a
+ * Ask for the microphone (D10: voice is mandatory; if it is not granted, a
  * prompt asks for it).
  *
  * Returns the browser's verdict rather than throwing, because "they said no"
  * is a designed state here, not an exception: the screen stays and asks again.
- * The stream is released immediately — the realtime controller opens its own,
+ * The stream is released immediately, the realtime controller opens its own,
  * and holding a second one keeps the OS recording indicator lit for no reason.
  */
 export async function requestMicrophone(): Promise<"granted" | "denied" | "unavailable"> {

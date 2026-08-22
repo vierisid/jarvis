@@ -39,7 +39,7 @@ export type RealtimeVoiceDeps = {
   /** Injectable session factory (tests). Defaults to a real `RealtimeSession`. */
   sessionFactory?: (opts: RealtimeSessionOptions) => RealtimeSession;
   /**
-   * D10 — speak first, unprompted, the instant the session is live.
+   * D10: speak first, unprompted, the instant the session is live.
    *
    * When set, a `response.create` carrying these instructions is sent as soon
    * as the socket opens, so the founder hears Jarvis before they have said

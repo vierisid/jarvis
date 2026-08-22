@@ -2,7 +2,7 @@
  * Does this install run the trial's opening instead of the nine-step wizard?
  *
  * Pure, and separated from the gate component precisely so it can be TESTED
- * rather than asserted: the rule that matters here is the negative one — an
+ * rather than asserted: the rule that matters here is the negative one, an
  * install with no entitlement, which is every install today, must reach the
  * existing onboarding path untouched.
  */
@@ -32,7 +32,7 @@ export const NO_TRIAL: TrialStatus = {
  * True only for a real, unexpired entitlement.
  *
  * `issued` counts: the clock has not started because the founder has not spoken
- * yet (D9), and that is exactly who the opening is for. `expired` does not —
+ * yet (D9), and that is exactly who the opening is for. `expired` does not,
  * a lapsed trial gets the ordinary shell, not a conductor with no voice behind
  * it.
  *

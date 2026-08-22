@@ -85,7 +85,7 @@ describe('the conductor is a role, not a script (D12)', () => {
 });
 
 describe('the tool surface', () => {
-  test('is exactly three tools — nothing that drives a room during the opening', () => {
+  test('is exactly three tools, nothing that drives a room during the opening', () => {
     expect(CONDUCTOR_TOOLS.map((t) => t.name)).toEqual(['remember', 'capture_fuel', 'conclude_opening']);
   });
 
@@ -103,7 +103,7 @@ describe('the tool surface', () => {
   });
 });
 
-describe('remember — the vault fills while they talk (D22)', () => {
+describe('remember, the vault fills while they talk (D22)', () => {
   afterEach(() => closeDb());
 
   function landed(): LandedEntity[][] {
@@ -157,7 +157,7 @@ describe('remember — the vault fills while they talk (D22)', () => {
     expect(landed()[0]![0]!.isNew).toBe(false);
   });
 
-  test('the same fact said twice lands once — the founder is watching this list', () => {
+  test('the same fact said twice lands once, the founder is watching this list', () => {
     initDatabase(':memory:');
     run({
       entities: [{ name: 'Bowman', type: 'project' }],
@@ -190,7 +190,7 @@ describe('remember — the vault fills while they talk (D22)', () => {
   });
 });
 
-describe('capture_fuel — the soft targets (D13)', () => {
+describe('capture_fuel, the soft targets (D13)', () => {
   afterEach(() => closeDb());
 
   test('records into the profile the rest of the product already reads', () => {
@@ -239,7 +239,7 @@ describe('capture_fuel — the soft targets (D13)', () => {
   });
 });
 
-describe('conclude_opening — the seam (D17)', () => {
+describe('conclude_opening, the seam (D17)', () => {
   afterEach(() => closeDb());
 
   test('hands the room beats their fuel and everything landed, once', () => {

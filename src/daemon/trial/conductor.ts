@@ -1,7 +1,7 @@
 /**
  * The conductor: the role Jarvis plays in the opening of the 48-hour trial.
  *
- * This is beats 01 to 05 of the trial spec — the co-founder conversation that
+ * This is beats 01 to 05 of the trial spec, the co-founder conversation that
  * starts the moment the microphone is granted and does not stop. It is NOT the
  * text onboarding interviewer (`src/daemon/onboarding-interviewer.ts`), which
  * is untouched and still runs for everyone who is not in a trial.
@@ -9,7 +9,7 @@
  * Why alongside rather than extending the interviewer. The interviewer is a
  * turn loop: it owns the conversation by calling the LLM once per user message
  * and returning the text for the UI to speak. A realtime speech-to-speech
- * session inverts that completely — the model holds the turn-taking, the VAD
+ * session inverts that completely, the model holds the turn-taking, the VAD
  * decides when the founder stopped talking, and nothing on our side is invoked
  * between turns at all. There is no loop left to extend. What survives the
  * move is a system prompt and a small tool set, and that is exactly what this
@@ -55,8 +55,8 @@ export const TRIAL_VAULT_SOURCE = 'trial_conductor';
  * The first words of the trial, spoken unprompted the moment the session opens
  * (D10). Fixed on purpose: D12 rules out a scripted CONVERSATION, and names the
  * opening lines as one of the few things that are specified. Making the model
- * improvise its own introduction would put the single most load-bearing moment
- * in the product — the co-founder claim of D11 — at the mercy of sampling.
+ * improvise its own introduction would leave the single most load-bearing
+ * moment in the product, the co-founder claim of D11, at the mercy of sampling.
  *
  * Wording from the storyboard, frame 03.
  */
@@ -66,7 +66,7 @@ export const TRIAL_OPENING_LINE =
 
 /**
  * The soft extraction targets (D13). They are here because LATER BEATS NEED
- * THE FUEL, and for no other reason — each one is the input to a room Jarvis
+ * THE FUEL, and for no other reason, each one is the input to a room Jarvis
  * is about to act in. They are not a checklist, are not ordered, and are not
  * enforced; the model decides when it knows enough.
  */
@@ -118,7 +118,7 @@ export type ConductorPromptContext = {
  * Shaped as a ROLE, not a screenplay: who you are, what you are trying to
  * produce in the other person, what you must end up knowing, how to behave,
  * and when to stop. Every line of it is traceable to a locked decision, and
- * the negative instructions are as load-bearing as the positive ones — the
+ * the negative instructions are as load-bearing as the positive ones, the
  * failure mode this prompt exists to prevent is a warm, competent, scripted
  * interview, which is what a model will drift into if you only tell it what
  * to collect.
@@ -140,11 +140,11 @@ That is what a good first conversation between co-founders does. It comes from b
 # How to behave
 
 - Talk like a person talks. Short turns. You are being listened to, not read.
-- React before you move on. When they say something that matters, say what you heard and what it tells you — briefly — before you go anywhere else. A follow-up that shows you were listening is worth more than a new topic.
+- React before you move on. When they say something that matters, say briefly what you heard and what it tells you, before you go anywhere else. A follow-up that shows you were listening is worth more than a new topic.
 - Follow the thread they are on. Ask about the thing they just said, not the thing you were planning to ask. If something in their voice tells you a subject bothers them, go there.
 - One thing at a time. Never stack two questions.
 - Silence is theirs. Let them finish. Let them ramble; the rambling is where the useful things are.
-- Take the weight. When they describe something painful or messy, respond to it as a co-founder would — you are going to be dealing with this too — not as a survey that has recorded their answer.
+- Take the weight. When they describe something painful or messy, respond to it the way a co-founder would, as someone who is going to be dealing with this too, not as a survey that has recorded their answer.
 
 # What you must NOT do
 
@@ -171,7 +171,7 @@ Call \`capture_fuel\` when you have actually learned one of the five things abov
 
 # When you are done with the opening
 
-You decide. There is no fixed length. When you understand the company well enough to start doing real work with them — not perfectly, well enough — call \`conclude_opening\`.
+You decide. There is no fixed length. Call \`conclude_opening\` when you understand the company well enough to start doing real work with them. Not perfectly. Well enough.
 
 Calling it does NOT end the conversation and does not hand them to anything. Do not sign off, do not say you have what you need, do not announce a next phase, do not thank them for their time. You keep talking. It is a marker for you, invisible to them, and the tool's result will tell you what to do next.`
     + (ctx.now ? `\n\nThe current time is ${ctx.now}.` : '');
@@ -309,7 +309,7 @@ export type CapturedFuel = {
 
 export type ConductorSession = {
   startedAt: number;
-  /** D9 — stamped from the founder's first utterance, by the caller. */
+  /** D9: stamped from the founder's first utterance, by the caller. */
   firstSpeechAt: number | null;
   /** Everything the opening has landed, newest last. */
   landed: LandedEntity[];
@@ -353,7 +353,7 @@ export type ConductorDeps = {
    * THE SEAM. Fires once, when the model concludes the opening.
    *
    * The room beats (goals, tasks, calendar, workflows, authority, agents) attach
-   * HERE. The conversation is still live and still speaking when this fires —
+   * HERE. The conversation is still live and still speaking when this fires,
    * per D17 it must not be treated as the end of anything.
    */
   onOpeningComplete?: (handoff: TrialOpeningHandoff) => void;
@@ -457,7 +457,7 @@ function executeRemember(
     const detail = typeof f.detail === 'string' ? f.detail.trim() : '';
     if (!about || !detail) continue;
 
-    // Resolve against the entities landed in THIS call first, then the vault —
+    // Resolve against the entities landed in THIS call first, then the vault,
     // a fact about someone mentioned two sentences ago must still find them.
     let target = byName.get(about.toLowerCase())?.entity ?? null;
     if (!target) {
@@ -468,7 +468,7 @@ function executeRemember(
     }
     if (!target) {
       // The model named a subject it never landed. Land it as a concept rather
-      // than dropping the fact — the founder said it, so it belongs to them.
+      // than dropping the fact, the founder said it, so it belongs to them.
       try {
         target = createEntity('concept', about, {}, TRIAL_VAULT_SOURCE);
         const entry: LandedEntity = {
@@ -594,9 +594,9 @@ function executeConcludeOpening(
  * and a model told to "now go to the goals room" with no goals tools would
  * promise the founder something that never arrives.
  *
- * When the beats land, this becomes the instruction that starts beat 06 —
+ * When the beats land, this becomes the instruction that starts beat 06,
  * "propose their OKR tree out loud from what they just told you, then create it
- * when they say yes" — and the beat tools are appended to CONDUCTOR_TOOLS. No
+ * when they say yes", and the beat tools are appended to CONDUCTOR_TOOLS. No
  * other part of the opening needs to change.
  */
 export const CONCLUDE_RESULT_MESSAGE =

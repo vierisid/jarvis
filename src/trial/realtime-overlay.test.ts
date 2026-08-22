@@ -59,7 +59,7 @@ describe('the config of everyone who is not in a trial is untouched', () => {
   });
 });
 
-describe('D1 — a running trial gets realtime, uncapped', () => {
+describe('D1: a running trial gets realtime, uncapped', () => {
   test('turns it on and lifts the 10-minute cap to the length of the trial', () => {
     const res = resolveRealtimeVoice(withTrialRealtime(aConfig(), grant(), T0));
     expect(res.ok).toBe(true);
@@ -68,7 +68,7 @@ describe('D1 — a running trial gets realtime, uncapped', () => {
     expect(res.resolved.maxSessionMinutes * 60_000).toBe(TRIAL_DURATION_MS);
   });
 
-  test('applies before the founder has spoken — the clock has not started yet', () => {
+  test('applies before the founder has spoken, the clock has not started yet', () => {
     const unstarted = grant({ started_at: null, state: 'issued' });
     expect(resolveRealtimeVoice(withTrialRealtime(aConfig(), unstarted, T0)).ok).toBe(true);
   });

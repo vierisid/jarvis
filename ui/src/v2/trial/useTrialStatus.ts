@@ -5,7 +5,7 @@ import { NO_TRIAL, type TrialStatus } from "./trialGate";
  * The trial entitlement snapshot, from `GET /api/trial/status`.
  *
  * Fetched once on mount alongside the onboarding status. On every install that
- * has no entitlement — all of them today — this answers `{present: false}` and
+ * has no entitlement, all of them today, this answers `{present: false}` and
  * the gate falls straight through to the existing wizard path.
  *
  * A failed fetch resolves to NO_TRIAL rather than staying null forever: a

@@ -37,11 +37,11 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
 
   // The 48-hour trial replaces the wizard entirely (D10): the microphone is
   // asked for, then Jarvis speaks first and the conversation runs OVER the
-  // live shell — which is what lets the founder watch their vault fill while
+  // live shell, which is what lets the founder watch their vault fill while
   // they talk (D22) and is where the seven room beats will attach (D17).
   //
   // `trialRunsConductor` is false for a null or absent entitlement, so an
-  // install with no trial — every install today — falls straight through to
+  // install with no trial, every install today, falls straight through to
   // the existing path below, unchanged.
   if (trialRunsConductor(trial)) {
     return <TrialConductor>{children}</TrialConductor>;

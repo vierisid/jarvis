@@ -16,7 +16,7 @@
  *    is the only writer of `started_at` and it is idempotent, so a second
  *    utterance can never restart or extend the 48 hours.
  *  - D1. Realtime voice is on and NOT rationed for the length of the trial.
- *    The grant carries that, because it is the plane's to give — see
+ *    The grant carries that, because it is the plane's to give, see
  *    `withTrialRealtime` for how it reaches the running config.
  *
  * Storage is the vault settings store, one JSON row. It is deliberately NOT a
@@ -47,9 +47,9 @@ export const TRIAL_DURATION_MS = 48 * 60 * 60 * 1000;
 export const TRIAL_MAX_SESSION_MINUTES = TRIAL_DURATION_MS / 60_000;
 
 /**
- * `issued`  — granted, clock NOT started. The founder may sit here forever.
- * `active`  — the founder has spoken; `started_at` and `expires_at` are stamped.
- * `expired` — the 48 hours are up. Derived on read, never trusted from the row:
+ * `issued`: granted, clock NOT started. The founder may sit here forever.
+ * `active`: the founder has spoken; `started_at` and `expires_at` are stamped.
+ * `expired`: the 48 hours are up. Derived on read, never trusted from the row:
  *             a daemon that was off across the expiry moment must not wake up
  *             believing the trial is still live.
  */
@@ -67,13 +67,13 @@ export type TrialEntitlement = {
   /** How long the trial runs ONCE STARTED. Stored, not assumed, so a plane that
    *  grants a different length does not need a client release. */
   duration_ms: number;
-  /** D9 — the founder's first spoken word. Null until they speak. */
+  /** D9: the founder's first spoken word. Null until they speak. */
   started_at: number | null;
   /** `started_at + duration_ms`. Null until the clock starts. */
   expires_at: number | null;
   /** Last persisted state. `expired` is still derived on read; see resolveTrialState. */
   state: TrialState;
-  /** D1 — what the grant buys for voice. */
+  /** D1: what the grant buys for voice. */
   realtime: {
     enabled: boolean;
     /** Minutes. See TRIAL_MAX_SESSION_MINUTES for why this is the trial length. */
@@ -90,7 +90,7 @@ export type TrialEntitlement = {
 
 /** What the UI and the daemon read. Derived, never stored. */
 export type TrialSnapshot = {
-  /** False when no entitlement exists — the overwhelmingly common case. */
+  /** False when no entitlement exists, the overwhelmingly common case. */
   present: boolean;
   state: TrialState | null;
   started_at: number | null;
@@ -126,7 +126,7 @@ export function resolveTrialState(e: TrialEntitlement, now: number): TrialState 
 /**
  * D9, and the whole of it: stamp the clock at the founder's first spoken word.
  *
- * Pure and IDEMPOTENT — an entitlement that already carries `started_at` comes
+ * Pure and IDEMPOTENT, an entitlement that already carries `started_at` comes
  * back byte-identical. The caller fires this on every user utterance without
  * having to remember whether it already did, which is what keeps a second
  * sentence from moving the deadline.
@@ -247,14 +247,14 @@ export function clearTrialEntitlement(): void {
   try {
     deleteSetting(TRIAL_ENTITLEMENT_KEY);
   } catch {
-    /* no DB — nothing to clear */
+    /* no DB, nothing to clear */
   }
 }
 
 /**
  * Issue a trial. STUB for the control plane: the plane will POST this record,
  * and until it exists an install is seeded from the environment or the dev
- * route. Refuses to overwrite an existing grant — one trial per install is the
+ * route. Refuses to overwrite an existing grant, one trial per install is the
  * only local half of the one-trial-per-account rule (Q3 owns the real half),
  * and re-issuing would hand a fresh 48 hours to anyone who can call it twice.
  */
@@ -285,7 +285,7 @@ export function issueTrialEntitlement(opts?: {
 
 /**
  * D9 at the persistence layer. Called from the conductor the moment the
- * founder's first utterance is recognised, and on every one after it — the
+ * founder's first utterance is recognised, and on every one after it, the
  * idempotence is in `startedEntitlement`, so callers do not track state.
  *
  * Returns the entitlement as it now stands, or null when there is no trial.
@@ -301,7 +301,7 @@ export function startTrialClock(now = Date.now()): TrialEntitlement | null {
 /**
  * Mark the opening done. THE SEAM the room beats attach to. Idempotent, and
  * deliberately separate from anything that would read as "onboarding is
- * finished" — under D17 the conversation carries straight on into the rooms.
+ * finished", under D17 the conversation carries straight on into the rooms.
  */
 export function markOpeningCompleted(now = Date.now()): TrialEntitlement | null {
   const e = readTrialEntitlement();

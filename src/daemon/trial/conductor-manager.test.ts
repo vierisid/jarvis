@@ -50,7 +50,7 @@ describe('arming', () => {
     expect(manager.isRunning(ws)).toBe(false);
     manager.arm(ws);
     expect(manager.isArmed(ws)).toBe(true);
-    // Arming alone does not start a session — the realtime starter does.
+    // Arming alone does not start a session, the realtime starter does.
     expect(manager.isRunning(ws)).toBe(false);
   });
 
@@ -62,7 +62,7 @@ describe('arming', () => {
   });
 });
 
-describe('D9 — the 48-hour clock starts at the founder\'s first spoken word', () => {
+describe('D9: the 48-hour clock starts at the founder\'s first spoken word', () => {
   afterEach(() => closeDb());
 
   function running(now: () => number) {
@@ -76,7 +76,7 @@ describe('D9 — the 48-hour clock starts at the founder\'s first spoken word', 
 
   test('Jarvis speaking first does NOT start it', () => {
     const { manager, ws, broadcast } = running(() => T0);
-    // This is the opening line of every trial — it arrives before the founder
+    // This is the opening line of every trial, it arrives before the founder
     // has said a word, and it must not cost them a second of their 48 hours.
     manager.onTranscript(ws, 'assistant', 'I am Jarvis. From here on I am your co-founder.', true);
     expect(readTrialEntitlement()?.started_at).toBeNull();

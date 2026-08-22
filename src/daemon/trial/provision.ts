@@ -7,7 +7,7 @@
  * with their co-founder would land in a shell where chat is refused
  * (`setup_required`) and the background services were never constructed.
  *
- * A trial install is by definition one the platform provisions — the brain,
+ * A trial install is by definition one the platform provisions, the brain,
  * the hearing and the speaking come from the hosted plan, which is exactly why
  * the spec says those three wizard steps "become unnecessary under trial
  * auto-provisioning". So the flag is honest: there is nothing left for the

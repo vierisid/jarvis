@@ -103,8 +103,9 @@ export type SessionUpdateOptions = {
   /**
    * Transcribe the USER's audio with this model (e.g. `whisper-1`).
    *
-   * Speech-to-speech does not need it — the model hears the audio directly —
-   * so it is off by default and the input transcript events never fire. The
+   * Speech-to-speech does not need it, because the model hears the audio
+   * directly, so it is off by default and the input transcript events never
+   * fire. The
    * trial conductor turns it on because the 48-hour clock starts at the
    * founder's first spoken WORD (D9), and a word is a thing you can only know
    * you heard once something transcribes it.
@@ -291,8 +292,8 @@ export class RealtimeSession {
    *
    * Realtime is otherwise purely reactive: a response is only ever generated
    * after the VAD closes a user turn, so on a cold open the session sits silent
-   * until someone talks. D10 requires the opposite — the pebble appears and
-   * Jarvis speaks first, unprompted — and this is the event that does it.
+   * until someone talks. D10 requires the opposite: the pebble appears and
+   * Jarvis speaks first, unprompted. This is the event that does it.
    *
    * `instructions`, when given, applies to THIS response only and overrides the
    * session prompt for it. That is how the opening line is delivered verbatim

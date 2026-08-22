@@ -11,8 +11,8 @@ import type { JarvisConfig } from '../config/types.ts';
  * does. No session is ever dialed: the assertions all land before the socket to
  * OpenAI would open.
  *
- * The load-bearing test in here is the FIRST one. An install with no trial —
- * every install today — has to behave exactly as it does on main, and the only
+ * The load-bearing test in here is the FIRST one. An install with no trial,
+ * every install today, has to behave exactly as it does on main, and the only
  * thing standing between a stranger and a conductor session is the entitlement
  * check on `trial_conductor_start`.
  */
@@ -81,7 +81,7 @@ describe('an install with no trial entitlement', () => {
     expect(internals.trialConductor.isArmed(ws)).toBe(false);
   });
 
-  test('its voice_start behaves exactly as it does on main — realtime stays off', async () => {
+  test('its voice_start behaves exactly as it does on main, realtime stays off', async () => {
     initDatabase(':memory:');
     let catalogFetches = 0;
     globalThis.fetch = (async () => { catalogFetches++; return new Response('{}', { status: 200 }); }) as unknown as typeof fetch;
@@ -130,7 +130,7 @@ describe('an install with a running trial', () => {
     // The config here has realtime DISABLED. An unarmed socket resolves to
     // nothing and never consults the plan catalog; an armed one gets past
     // resolve and reaches the gate. That the catalog is asked at all is the
-    // proof that the overlay applied — and the refusal is what keeps this test
+    // proof that the overlay applied, and the refusal is what keeps this test
     // from dialing OpenAI.
     initDatabase(':memory:');
     issueTrialEntitlement({});
@@ -156,7 +156,7 @@ describe('an install with a running trial', () => {
     await internals.routeMessage(conductorStart(), ws);
 
     // The shell's own socket keeps its ordinary voice behaviour while the
-    // conversation runs — the room beats will drive it, not speak through it.
+    // conversation runs, the room beats will drive it, not speak through it.
     expect(internals.trialConductor.isArmed(ws)).toBe(true);
     expect(internals.trialConductor.isArmed(other)).toBe(false);
   });

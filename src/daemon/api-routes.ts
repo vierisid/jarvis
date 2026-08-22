@@ -1032,7 +1032,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     // ── The 48-hour trial ───────────────────────────────────────────
     // Read by the shell on every boot to decide whether this install runs
     // the conductor (beats 01 to 05) instead of the nine-step wizard.
-    // On an install with no entitlement — every install today — this
+    // On an install with no entitlement, every install today, this
     // answers `{present: false}` and nothing downstream changes.
 
     '/api/trial/status': {
@@ -1049,7 +1049,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
      * The founder granted the microphone and the opening is about to start.
      *
      * Marks the install onboarded (the wizard the trial replaced is what
-     * normally does this — see daemon/trial/provision.ts) and brings the
+     * normally does this, see daemon/trial/provision.ts) and brings the
      * post-setup services up in process, so the founder lands in a working
      * shell when the conversation moves on to the rooms.
      *
@@ -1094,7 +1094,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
      * Issue an entitlement locally. STUB, and labelled as one: the control
      * plane that will really issue these is not deployed, and this exists so
      * the opening can be run and reviewed before it is. Refuses when a grant
-     * already exists — re-issuing would hand out a fresh 48 hours.
+     * already exists, re-issuing would hand out a fresh 48 hours.
      */
     '/api/trial/issue': {
       POST: async (req: Request) => {

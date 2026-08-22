@@ -5,13 +5,13 @@
  * Realtime ships OFF by default with a 10-minute session cap
  * (`src/config/types.ts`), which is the right default for everyone who is not
  * in a trial and exactly wrong for the one experience the whole product is
- * selling. Rather than WRITE those values into the user's stored voice settings
- * — which would outlive the trial and silently leave a lapsed user's mic wired
- * to a session cap they never chose — the trial applies them as an OVERLAY,
- * per resolve, at the moment a conductor session is opened.
+ * selling. Writing those values into the user's stored voice settings would
+ * outlive the trial and silently leave a lapsed user's mic wired to a session
+ * cap they never chose, so the trial applies them as an OVERLAY instead, per
+ * resolve, at the moment a conductor session is opened.
  *
  * The contract that makes this safe to land: with no running trial this returns
- * THE SAME OBJECT it was handed. Not a clone, not an equal object — the same
+ * THE SAME OBJECT it was handed. Not a clone, not an equal object. The same
  * reference. Everyone who is not in a trial resolves realtime from a config
  * this module has provably not touched.
  */

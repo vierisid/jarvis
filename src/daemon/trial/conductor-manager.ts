@@ -3,7 +3,7 @@
  *
  * Everything stateful about the opening lives here rather than in ws-service:
  * which sockets are running a conductor session, what each has landed, and the
- * one piece of timing the whole commercial model rests on — when the 48-hour
+ * one piece of timing the whole commercial model rests on, when the 48-hour
  * clock starts.
  *
  * ws-service keeps a four-line branch and delegates.
@@ -31,8 +31,8 @@ import {
  *
  * The clock is meant to start at the first spoken WORD (D9), and words come
  * from input transcription, which the conductor session turns on. If that
- * transcript never arrives — the model does not support it, the plan does not
- * include it, the event shape drifts — the alternative to a backstop is a
+ * transcript never arrives (the model does not support it, the plan does not
+ * include it, the event shape drifts), the alternative to a backstop is a
  * trial that never expires and bills uncapped realtime forever (open question
  * Q1). So: prefer the word, fall back to "a complete utterance was heard".
  */
@@ -131,7 +131,7 @@ export class TrialConductorManager<W> {
 
   /**
    * A transcript arrived. Starts the 48-hour clock on the founder's first
-   * spoken word, and does nothing at all for Jarvis's own speech — Jarvis
+   * spoken word, and does nothing at all for Jarvis's own speech, Jarvis
    * speaks FIRST in this session (D10), so an assistant transcript is
    * guaranteed to arrive before any user one and must never be mistaken for
    * the founder having said something.
@@ -188,7 +188,7 @@ export class TrialConductorManager<W> {
   }
 
   private publishLanded(landed: LandedEntity[]): void {
-    // D22 — this is the push that makes the vault visibly fill while the
+    // D22: this is the push that makes the vault visibly fill while the
     // founder is still mid-sentence. Broadcast so the memory room sees it
     // without waiting for its 8-second poll.
     this.deps.broadcast({
@@ -208,7 +208,7 @@ export class TrialConductorManager<W> {
 
   private publishOpeningComplete(handoff: TrialOpeningHandoff): void {
     markOpeningCompleted(handoff.concludedAt);
-    console.log(`[Trial] opening complete — ${handoff.fuel.length}/5 fuel areas, ${handoff.entities.length} entities landed`);
+    console.log(`[Trial] opening complete, ${handoff.fuel.length}/5 fuel areas, ${handoff.entities.length} entities landed`);
     // The seam, on the wire. The conversation is still live when this fires.
     this.deps.broadcast({
       type: 'trial_opening_complete',

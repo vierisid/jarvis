@@ -46,7 +46,7 @@ describe('trial state, derived not trusted', () => {
   });
 
   test('expiry is computed at read time, not read from the row', () => {
-    // The row still SAYS active — this is what a daemon that was killed
+    // The row still SAYS active, this is what a daemon that was killed
     // mid-trial and restarted three days later finds on disk.
     const e = anEntitlement({ started_at: T0, expires_at: T0 + TRIAL_DURATION_MS, state: 'active' });
     expect(resolveTrialState(e, T0 + TRIAL_DURATION_MS - 1)).toBe('active');
@@ -63,7 +63,7 @@ describe('trial state, derived not trusted', () => {
   });
 });
 
-describe('D9 — the clock starts at the first spoken word', () => {
+describe('D9: the clock starts at the first spoken word', () => {
   test('starting stamps 48 hours from THAT moment, not from issue', () => {
     const issuedLongAgo = anEntitlement({ issued_at: T0 - 5 * 24 * 60 * 60 * 1000 });
     const started = startedEntitlement(issuedLongAgo, T0);
@@ -144,7 +144,7 @@ describe('persistence', () => {
     expect(readTrialEntitlement()?.id).toBe(issued!.id);
   });
 
-  test('a second issue is refused — one grant per install', () => {
+  test('a second issue is refused, one grant per install', () => {
     initDatabase(':memory:');
     const first = issueTrialEntitlement({ now: T0 });
     expect(issueTrialEntitlement({ now: T0 + 1 })).toBeNull();
@@ -187,7 +187,7 @@ describe('the control-plane stub', () => {
     closeDb();
   });
 
-  test('does nothing without the env flag — which is every install', () => {
+  test('does nothing without the env flag, which is every install', () => {
     initDatabase(':memory:');
     expect(seedTrialFromEnv({})).toBe(false);
     expect(seedTrialFromEnv({ JARVIS_TRIAL: '' })).toBe(false);
