@@ -5,6 +5,7 @@ import {
   convertToolsForRealtime,
   type RealtimeSocket,
   type RealtimeSocketFactory,
+  type SessionUpdateOptions,
 } from './realtime.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import type { LLMTool } from '../llm/provider.ts';
@@ -73,7 +74,7 @@ class FakeSocket implements RealtimeSocket {
   sentTypes(): string[] { return this.sent.map((s) => JSON.parse(s).type); }
 }
 
-function makeSession() {
+function makeSession(sessionOptions?: SessionUpdateOptions) {
   const socket = new FakeSocket();
   const dialed: string[] = [];
   const factory: RealtimeSocketFactory = (url) => {
@@ -91,6 +92,7 @@ function makeSession() {
     instructions: 'Be helpful',
     transport,
     socketFactory: factory,
+    sessionOptions,
   });
   return { socket, session, transport, sentAudio, dialed };
 }
@@ -273,5 +275,70 @@ describe('RealtimeSession lifecycle', () => {
     session.onError((e) => errs.push(e));
     await session.connect();
     expect(errs.some((e) => e.includes('24000') && e.includes('upsampled'))).toBe(true);
+  });
+});
+
+/* ── The two things the trial's opening needs from a realtime session ── */
+
+describe('speaking first (D10)', () => {
+  test('createResponse asks for a response with nothing said to it', async () => {
+    const { socket, session } = makeSession();
+    await session.connect();
+    socket.onopen!();
+    socket.sent.length = 0;
+    session.createResponse();
+    expect(JSON.parse(socket.sent[0]!)).toEqual({ type: 'response.create' });
+  });
+
+  test('per-response instructions ride on the response, not the session', async () => {
+    const { socket, session } = makeSession();
+    await session.connect();
+    socket.onopen!();
+    socket.sent.length = 0;
+    session.createResponse('Say exactly: hello.');
+    const sent = JSON.parse(socket.sent[0]!);
+    expect(sent.type).toBe('response.create');
+    expect(sent.response.instructions).toBe('Say exactly: hello.');
+    // The session prompt is untouched — the override is for this turn only.
+    expect(sent.session).toBeUndefined();
+  });
+});
+
+describe('hearing the first spoken word (D9)', () => {
+  test('input transcription is OFF unless a session asks for it', () => {
+    const msg = buildSessionUpdate(RESOLVED, TOOLS, 'Be helpful', 24000, 24000) as any;
+    expect(msg.session.audio.input.transcription).toBeUndefined();
+  });
+
+  test('the default payload is byte-identical with and without an empty options object', () => {
+    const bare = buildSessionUpdate(RESOLVED, TOOLS, 'Be helpful', 24000, 24000);
+    const withOpts = buildSessionUpdate(RESOLVED, TOOLS, 'Be helpful', 24000, 24000, {});
+    expect(JSON.stringify(withOpts)).toBe(JSON.stringify(bare));
+  });
+
+  test('asking for it adds the transcription block and leaves the VAD alone', () => {
+    const msg = buildSessionUpdate(RESOLVED, TOOLS, 'Be helpful', 24000, 24000, {
+      inputTranscriptionModel: 'whisper-1',
+    }) as any;
+    expect(msg.session.audio.input.transcription).toEqual({ model: 'whisper-1' });
+    expect(msg.session.audio.input.turn_detection).toEqual({ type: 'semantic_vad' });
+  });
+
+  test('the session forwards its options into session.update', async () => {
+    const { socket, session } = makeSession({ inputTranscriptionModel: 'whisper-1' });
+    await session.connect();
+    socket.onopen!();
+    const update = socket.sent.map((s) => JSON.parse(s)).find((m) => m.type === 'session.update');
+    expect(update.session.audio.input.transcription).toEqual({ model: 'whisper-1' });
+  });
+
+  test('speech_stopped is surfaced so the clock has a backstop', async () => {
+    const { socket, session } = makeSession();
+    let stopped = 0;
+    session.onSpeechStopped(() => stopped++);
+    await session.connect();
+    socket.onopen!();
+    socket.emit({ type: 'input_audio_buffer.speech_stopped' });
+    expect(stopped).toBe(1);
   });
 });

@@ -80,6 +80,8 @@ export type RealtimeSessionOptions = {
   safetyIdentifier?: string;
   /** Injectable socket factory (defaults to a Bun WebSocket). */
   socketFactory?: RealtimeSocketFactory;
+  /** Per-session extras (input transcription). Off unless set. */
+  sessionOptions?: SessionUpdateOptions;
 };
 
 /** Convert shared `LLMTool`s into the GA realtime `tools` entry format. */
@@ -92,6 +94,24 @@ export function convertToolsForRealtime(tools: LLMTool[]): Array<Record<string, 
   }));
 }
 
+/**
+ * Options a caller can turn on for one session. Everything here is OFF unless
+ * asked for, so a session that passes nothing produces byte-identical
+ * `session.update` output to the one this function has always produced.
+ */
+export type SessionUpdateOptions = {
+  /**
+   * Transcribe the USER's audio with this model (e.g. `whisper-1`).
+   *
+   * Speech-to-speech does not need it — the model hears the audio directly —
+   * so it is off by default and the input transcript events never fire. The
+   * trial conductor turns it on because the 48-hour clock starts at the
+   * founder's first spoken WORD (D9), and a word is a thing you can only know
+   * you heard once something transcribes it.
+   */
+  inputTranscriptionModel?: string;
+};
+
 /** Build the `session.update` payload for a speech-to-speech session. */
 export function buildSessionUpdate(
   resolved: ResolvedRealtimeVoice,
@@ -99,6 +119,7 @@ export function buildSessionUpdate(
   instructions: string,
   inputSampleRate: number,
   outputSampleRate: number,
+  opts: SessionUpdateOptions = {},
 ): Record<string, unknown> {
   const session: Record<string, unknown> = {
     type: 'realtime',
@@ -114,6 +135,9 @@ export function buildSessionUpdate(
         // first-turn "doesn't start" was dropped opening audio, fixed by the
         // transport buffering — not the VAD. Leave this alone.
         turn_detection: { type: 'semantic_vad' },
+        ...(opts.inputTranscriptionModel
+          ? { transcription: { model: opts.inputTranscriptionModel } }
+          : {}),
       },
       output: {
         // `rate` is required on output format too (confirmed via live smoke test).
@@ -155,6 +179,7 @@ export class RealtimeSession {
   private openCb: (() => void) | null = null;
   private closeCb: (() => void) | null = null;
   private speechStartedCb: (() => void) | null = null;
+  private speechStoppedCb: (() => void) | null = null;
   // Response-latency instrumentation (user-stopped → first audio).
   private turnEndedAt = 0;
   private loggedResponseLatency = false;
@@ -183,6 +208,14 @@ export class RealtimeSession {
   onClose(cb: () => void): void { this.closeCb = cb; }
   /** Fired when the model detects the user started speaking (barge-in). */
   onSpeechStarted(cb: () => void): void { this.speechStartedCb = cb; }
+  /**
+   * Fired when the VAD decides the user's utterance is over.
+   *
+   * The trial conductor uses it as the backstop for the 48-hour clock: it means
+   * a complete utterance was heard, which is true whether or not input
+   * transcription is on or working.
+   */
+  onSpeechStopped(cb: () => void): void { this.speechStoppedCb = cb; }
 
   /** Connect, send session.update, and wire the transport's mic + playback. */
   async connect(): Promise<void> {
@@ -206,7 +239,14 @@ export class RealtimeSession {
     this.ws = ws;
 
     ws.onopen = () => {
-      this.send(buildSessionUpdate(resolved, this.opts.tools, this.opts.instructions, transport.inputSampleRate, transport.outputSampleRate));
+      this.send(buildSessionUpdate(
+        resolved,
+        this.opts.tools,
+        this.opts.instructions,
+        transport.inputSampleRate,
+        transport.outputSampleRate,
+        this.opts.sessionOptions ?? {},
+      ));
       // Route mic audio straight into the realtime input buffer.
       transport.onMicChunk((pcm) => this.pushAudio(pcm));
       // Route realtime output audio to the speaker.
@@ -246,6 +286,25 @@ export class RealtimeSession {
     this.send({ type: 'response.create' });
   }
 
+  /**
+   * Ask the model to speak WITHOUT the user having said anything.
+   *
+   * Realtime is otherwise purely reactive: a response is only ever generated
+   * after the VAD closes a user turn, so on a cold open the session sits silent
+   * until someone talks. D10 requires the opposite — the pebble appears and
+   * Jarvis speaks first, unprompted — and this is the event that does it.
+   *
+   * `instructions`, when given, applies to THIS response only and overrides the
+   * session prompt for it. That is how the opening line is delivered verbatim
+   * without a session-wide instruction that would colour every later turn.
+   */
+  createResponse(instructions?: string): void {
+    this.send({
+      type: 'response.create',
+      ...(instructions ? { response: { instructions } } : {}),
+    });
+  }
+
   /** Cancel the in-flight response (used on barge-in). */
   interrupt(): void {
     this.send({ type: 'response.cancel' });
@@ -270,6 +329,7 @@ export class RealtimeSession {
         // User finished talking — start the response-latency clock.
         this.turnEndedAt = Date.now();
         this.loggedResponseLatency = false;
+        this.speechStoppedCb?.();
         break;
       }
       case 'response.created': {

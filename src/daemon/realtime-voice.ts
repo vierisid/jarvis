@@ -38,6 +38,21 @@ export type RealtimeVoiceDeps = {
   safetyIdentifier?: string;
   /** Injectable session factory (tests). Defaults to a real `RealtimeSession`. */
   sessionFactory?: (opts: RealtimeSessionOptions) => RealtimeSession;
+  /**
+   * D10 — speak first, unprompted, the instant the session is live.
+   *
+   * When set, a `response.create` carrying these instructions is sent as soon
+   * as the socket opens, so the founder hears Jarvis before they have said
+   * anything. Absent for every ordinary voice session, which stays reactive.
+   */
+  speakFirst?: string;
+  /** Per-session realtime extras (input transcription). */
+  sessionOptions?: RealtimeSessionOptions['sessionOptions'];
+  /**
+   * The user's utterance ended (VAD). Used by the trial conductor as the
+   * backstop for D9's clock when input transcription is unavailable.
+   */
+  onUserSpeechStopped?: () => void;
 };
 
 /**
@@ -58,11 +73,20 @@ export class RealtimeVoiceSession {
       instructions: deps.instructions,
       transport,
       safetyIdentifier: deps.safetyIdentifier,
+      sessionOptions: deps.sessionOptions,
     };
     this.session = deps.sessionFactory ? deps.sessionFactory(opts) : new RealtimeSession(opts);
 
     this.session.onTranscript((t) => this.deps.onTranscript?.(t));
     this.session.onError((e) => this.deps.onError?.(e));
+    if (deps.onUserSpeechStopped) this.session.onSpeechStopped(() => this.deps.onUserSpeechStopped?.());
+    // D10: the opening. `onOpen` fires after session.update has been sent, so
+    // the response is generated against the prompt and tools of THIS session.
+    if (deps.speakFirst) {
+      this.session.onOpen(() => {
+        if (!this.closed) this.session.createResponse(this.deps.speakFirst);
+      });
+    }
     this.session.onClose(() => {
       this.closed = true;
       this.deps.onClose?.();
