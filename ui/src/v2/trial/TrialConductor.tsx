@@ -77,7 +77,14 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
     const session = new ConductorSession({
       onPhase: (p, detail) => {
         setPhase(p);
+        // A closed session is a dead end in the opening, not a quiet return to
+        // typing: voice is the only path through the trial (D10). The daemon's
+        // own reason is used when it has one — a plan that excludes realtime
+        // says so — because "say that again" is advice the founder cannot act
+        // on here.
         if (p === "error") setError(detail ?? "Something went wrong.");
+        else if (p === "closed") setError(detail ?? "The conversation ended. Reload to pick it back up.");
+        else setError(null);
       },
       onTranscript: (role, text, final) => {
         if (role === "assistant") {
