@@ -450,6 +450,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const { seedWebappTemplates } = await import('../vault/webapp-template-seeds.ts');
     seedWebappTemplates();
 
+    // 2a-i. The 48-hour trial. No-op unless JARVIS_TRIAL is set and this
+    // install has no grant yet — the stub standing in for a control plane
+    // that is not deployed. See src/trial/entitlement.ts.
+    const { seedTrialFromEnv } = await import('../trial/entitlement.ts');
+    if (seedTrialFromEnv()) {
+      logWithTimestamp('Trial entitlement issued (local stub) — clock starts at first speech');
+    }
+
     // 2a-bis. Relocate a pre-JARVIS_HOME keychain into the data dir before
     // anything reads a credential, so hydration below sees the moved store and
     // a data-dir backup finally includes it. No-op on a normal ~/.jarvis
