@@ -5,6 +5,11 @@ import { BrowserAudioTransport } from '../comms/audio-transport.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import { initDatabase, closeDb, getDb } from '../vault/schema.ts';
 import { setUsageDatabase } from '../llm/usage.ts';
+import {
+  CONDUCTOR_TOOLS,
+  TRIAL_OPENING_LINE,
+  buildConductorInstructions,
+} from './trial/conductor.ts';
 
 const RESOLVED: ResolvedRealtimeVoice = {
   apiKey: 'k', provider: 'usejarvis_ai', url: 'wss://proxy.test/v1/realtime', model: 'gpt-realtime-2', reasoningEffort: 'low', maxSessionMinutes: 10, blockedCategories: [],
@@ -25,9 +30,15 @@ class FakeRealtimeSession {
   onFunctionCall(cb: (c: RealtimeFunctionCall) => void) { this.fnCb = cb; }
   onUsage(cb: (u: RealtimeUsage) => void) { this.usageCb = cb; }
   onError(cb: (e: string) => void) { this.errorCb = cb; }
-  onOpen() {}
+  openCb: (() => void) | null = null;
+  speechStoppedCb: (() => void) | null = null;
+  /** Instructions passed to each `response.create`; undefined when bare. */
+  responses: Array<string | undefined> = [];
+  onOpen(cb: () => void) { this.openCb = cb; }
   onClose(cb: () => void) { this.closeCb = cb; }
   onSpeechStarted() {}
+  onSpeechStopped(cb: () => void) { this.speechStoppedCb = cb; }
+  createResponse(instructions?: string) { this.responses.push(instructions); }
   async connect() { this.connected = true; }
   sendFunctionResult(callId: string, result: unknown) { this.results.push({ callId, result }); }
   interrupt() {}
@@ -138,5 +149,72 @@ describe('RealtimeVoiceSession usage tracking', () => {
       output_tokens: 25,
       latency_ms: 420,
     });
+  });
+});
+
+/* ── What the trial's opening asks of a voice session ── */
+
+describe('the conductor session (D9, D10)', () => {
+  function conductorSetup(over: Record<string, unknown> = {}) {
+    const fake = new FakeRealtimeSession();
+    const transport = new BrowserAudioTransport({ sendAudio: () => {}, inputSampleRate: 24000 });
+    const opts: Record<string, unknown> = {};
+    const rv = new RealtimeVoiceSession(RESOLVED, transport, {
+      tools: CONDUCTOR_TOOLS,
+      instructions: buildConductorInstructions(),
+      executeToolCall: async () => 'ok',
+      speakFirst: `Open the conversation by saying exactly this, and nothing else: "${TRIAL_OPENING_LINE}" Then stop and listen.`,
+      sessionOptions: { inputTranscriptionModel: 'whisper-1' },
+      sessionFactory: (o) => { Object.assign(opts, o); return fake as unknown as RealtimeSession; },
+      ...over,
+    });
+    return { fake, rv, opts };
+  }
+
+  test('Jarvis speaks first the moment the session opens, unprompted', async () => {
+    const { fake, rv } = conductorSetup();
+    await rv.connect();
+    // Nothing has been said to it, and no user turn has closed.
+    expect(fake.responses).toHaveLength(0);
+    fake.openCb!();
+    expect(fake.responses).toHaveLength(1);
+    expect(fake.responses[0]).toContain(TRIAL_OPENING_LINE);
+  });
+
+  test('an ordinary voice session never speaks first', async () => {
+    const { fake, rv } = setup(async () => 'ok');
+    await rv.connect();
+    // The default setup passes no speakFirst, so no open callback is wired.
+    expect(fake.openCb).toBeNull();
+    expect(fake.responses).toHaveLength(0);
+  });
+
+  test('a session closed before it opened does not speak into a dead socket', async () => {
+    const { fake, rv } = conductorSetup();
+    await rv.connect();
+    rv.close();
+    fake.openCb!();
+    expect(fake.responses).toHaveLength(0);
+  });
+
+  test('the founder\'s audio is transcribed, so the clock has a word to start on', async () => {
+    const { opts } = conductorSetup();
+    expect((opts.sessionOptions as { inputTranscriptionModel?: string })?.inputTranscriptionModel)
+      .toBe('whisper-1');
+  });
+
+  test('end of utterance reaches the clock backstop', async () => {
+    let stopped = 0;
+    const { fake, rv } = conductorSetup({ onUserSpeechStopped: () => stopped++ });
+    await rv.connect();
+    fake.speechStoppedCb!();
+    expect(stopped).toBe(1);
+  });
+
+  test('it carries the conductor\'s role and its three tools, and no others', async () => {
+    const { opts } = conductorSetup();
+    expect((opts.tools as Array<{ name: string }>).map((t) => t.name))
+      .toEqual(['remember', 'capture_fuel', 'conclude_opening']);
+    expect(opts.instructions as string).toContain('co-founder');
   });
 });
