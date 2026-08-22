@@ -44,6 +44,14 @@ import { RealtimeVoiceSession } from './realtime-voice.ts';
 import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from './realtime-nav-tools.ts';
 import { RealtimeBudgetTracker } from './realtime-budget.ts';
 import { hostedRealtimeIncluded } from './realtime-gate.ts';
+import { TrialConductorManager } from './trial/conductor-manager.ts';
+import {
+  CONDUCTOR_TOOLS,
+  TRIAL_OPENING_LINE,
+  buildConductorInstructions,
+} from './trial/conductor.ts';
+import { isTrialRunning, readTrialEntitlement, trialSnapshot } from '../trial/entitlement.ts';
+import { withTrialRealtime } from '../trial/realtime-overlay.ts';
 import { classifyErrorString } from '../llm/provider.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
 import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../user/profile-followup.ts';
@@ -236,6 +244,16 @@ export class WebSocketService implements Service {
    */
   private interviewSessions = new Map<ServerWebSocket<unknown>, InterviewSession>();
   /**
+   * The 48-hour trial's opening. Holds nothing at all on an install with no
+   * trial entitlement, which is every install today: sockets only enter it via
+   * `trial_conductor_start`, and that message is refused unless a running
+   * entitlement exists. See daemon/trial/conductor-manager.ts.
+   */
+  private trialConductor = new TrialConductorManager<ServerWebSocket<unknown>>({
+    send: (ws, msg) => this.wsServer.sendToClient(ws, msg),
+    broadcast: (msg) => this.wsServer.broadcast(msg),
+  });
+  /**
    * Periodic sweep handle for `pendingVoiceConfirmations` TTL eviction.
    * Started in `start()`, cleared in `stop()` so the daemon shuts down
    * cleanly without a dangling timer.
@@ -386,6 +404,9 @@ export class WebSocketService implements Service {
           this.cancelActiveChat(ws, 'disconnect', false);
           // Tear down any realtime voice session (closes the OpenAI WS + timer).
           this.closeRealtimeVoice(ws);
+          // And again for the socket that armed the conductor but never got as
+          // far as a session — closeRealtimeVoice returns early for those.
+          this.trialConductor.end(ws);
           // Clean up every per-socket map so a long-running daemon doesn't
           // accumulate dead-socket entries across reconnects. See
           // cleanupPerSocketMaps for the contract; tested in
@@ -998,6 +1019,24 @@ export class WebSocketService implements Service {
         return undefined;
       }
 
+      case 'trial_conductor_start': {
+        // The founder granted the microphone. Arm this socket so the
+        // voice_start that follows opens the conductor's session rather than
+        // an ordinary one (D10: mic, then the pebble, then Jarvis speaks).
+        const entitlement = readTrialEntitlement();
+        if (!isTrialRunning(entitlement, Date.now())) {
+          return {
+            type: 'error',
+            payload: { code: 'no_trial', message: 'No running trial entitlement on this install.' },
+            id: msg.id,
+            timestamp: Date.now(),
+          };
+        }
+        this.trialConductor.arm(ws);
+        this.trialConductor.publishStatus(trialSnapshot());
+        return undefined;
+      }
+
       default:
         return {
           type: 'error',
@@ -1484,9 +1523,19 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   private async tryStartRealtimeVoice(ws: ServerWebSocket<unknown>, mode?: 'pcm' | 'wav'): Promise<boolean> {
     if (this.realtimeSessions.has(ws)) return true; // already streaming
 
+    // D1 — a trial's realtime is on and its session cap is the trial's own
+    // length. Applied as an overlay at resolve time, never written to the
+    // user's stored voice settings: `withTrialRealtime` returns the SAME
+    // config object when no trial is running, so this line is inert for
+    // everyone else.
+    const conductor = this.trialConductor.isArmed(ws);
     let resolved: ResolvedRealtimeVoice;
     try {
-      const res = resolveRealtimeVoice(this.agentService.getConfig());
+      const res = resolveRealtimeVoice(
+        conductor
+          ? withTrialRealtime(this.agentService.getConfig(), readTrialEntitlement())
+          : this.agentService.getConfig(),
+      );
       if (!res.ok) return false;
       resolved = res.resolved;
     } catch (err) {
@@ -1580,27 +1629,59 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       outputSampleRate: 24000,
     });
 
+    // The conductor is a DIFFERENT ROLE, not a differently-configured version
+    // of the assistant: its own prompt (co-founder, D11), its own three tools,
+    // no dashboard navigation (D16.1 — the founder is never shown a room during
+    // the opening), and it speaks first (D10). Everything else about the
+    // session — the transport, the audio loop, the transcripts — is shared.
+    if (conductor) this.trialConductor.begin(ws);
+
     const session = new RealtimeVoiceSession(resolved, transport, {
       // Agent tools + dashboard navigation/in-room-action tools so the model
       // can drive the UI by voice (open settings, turn off TTS, go back…).
-      tools: [...orchestrator.getRealtimeTools(), ...REALTIME_NAV_TOOLS],
+      tools: conductor ? CONDUCTOR_TOOLS : [...orchestrator.getRealtimeTools(), ...REALTIME_NAV_TOOLS],
       // Lean voice prompt (~100 tokens) instead of the full ~5.6k-token agent
       // prompt — the big context was the dominant per-turn latency for simple
       // questions. Tools stay, so capability is unchanged. See agent-service.
-      instructions: this.agentService.buildRealtimeVoiceInstructions(),
+      instructions: conductor
+        ? buildConductorInstructions({
+            founderName: this.agentService.getConfig().user?.name?.trim() || undefined,
+            now: new Date().toISOString(),
+          })
+        : this.agentService.buildRealtimeVoiceInstructions(),
+      // D10 — no welcome screen, no "click to begin": the session opens and
+      // Jarvis introduces itself as their co-founder, unprompted.
+      speakFirst: conductor
+        ? `Open the conversation by saying exactly this, and nothing else: "${TRIAL_OPENING_LINE}" Then stop and listen.`
+        : undefined,
+      // D9 — the clock starts at the founder's first spoken WORD, which needs
+      // their audio transcribed. Speech-to-speech does not otherwise transcribe
+      // the input at all.
+      sessionOptions: conductor ? { inputTranscriptionModel: 'whisper-1' } : undefined,
+      onUserSpeechStopped: conductor ? () => this.trialConductor.onUserSpeechStopped(ws) : undefined,
       executeToolCall: (name, args) => {
+        if (conductor) {
+          const result = this.trialConductor.executeTool(ws, name, args);
+          // The conductor's tool surface is closed on purpose. Anything else
+          // the model invents is refused rather than handed to the agent
+          // bridge, which would let the opening take actions the room beats
+          // have not been built to take yet.
+          return Promise.resolve(result ?? `Not available yet: ${name}.`);
+        }
         // Dashboard nav/in-room actions are handled here (they broadcast to the
         // dashboard); everything else goes through the auto-approve tool bridge.
         const nav = this.executeRealtimeNavTool(name, args);
         if (nav !== null) return Promise.resolve(nav);
         return orchestrator.executeRealtimeToolCall(name, args, { blockedCategories: resolved.blockedCategories });
       },
-      onTranscript: (t) =>
+      onTranscript: (t) => {
+        if (conductor) this.trialConductor.onTranscript(ws, t.role, t.text, t.final);
         this.wsServer.sendToClient(ws, {
           type: 'realtime_transcript',
           payload: { role: t.role, text: t.text, final: t.final },
           timestamp: Date.now(),
-        }),
+        });
+      },
       onError: (err) => {
         console.error('[WSService] realtime voice error:', err);
         this.wsServer.sendToClient(ws, { type: 'realtime_status', payload: { state: 'error', message: err }, timestamp: Date.now() });
@@ -1712,6 +1793,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     try {
       this.wsServer.sendToClient(ws, { type: 'realtime_status', payload: { state: 'closed' }, timestamp: Date.now() });
     } catch { /* socket may already be gone */ }
+    // No-op unless this socket was running the trial's opening; clears the
+    // conductor's state and its clock-backstop timer.
+    this.trialConductor.end(ws);
   }
 
   /**

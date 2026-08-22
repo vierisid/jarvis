@@ -61,7 +61,21 @@ export type WSMessage = {
       // daemon (per-section apply or POST /api/config/reload / SIGHUP).
       // Payload: { sections: string[], ok: boolean, errors?: { section, error }[] }
       // — section names and error strings only, never setting values.
-      | 'settings_applied';
+      | 'settings_applied'
+      // ─── The 48-hour trial's opening (beats 01 to 05). ───
+      // `trial_conductor_start` is client → server: the microphone has been
+      // granted, arm this socket so the next voice_start opens the conductor's
+      // realtime session instead of an ordinary one. Refused when the socket's
+      // install carries no running trial entitlement.
+      | 'trial_conductor_start'
+      // Server → client. `trial_status` carries the entitlement snapshot,
+      // notably the moment the 48-hour clock started (D9). `trial_memory` is
+      // broadcast as entities land in the vault DURING the conversation, which
+      // is what makes D22 visible rather than a summary afterwards.
+      // `trial_fuel` reports one of the five soft targets being captured, and
+      // `trial_opening_complete` is the seam the room beats attach to (D17 —
+      // NOT the end of the conversation).
+      | 'trial_status' | 'trial_memory' | 'trial_fuel' | 'trial_opening_complete';
   payload: unknown;
   id?: string;
   priority?: 'urgent' | 'normal' | 'low';

@@ -42,6 +42,13 @@ import { listAgentActivity, countAgentActivity } from '../vault/agent-activity.t
 import { getPersonality } from '../personality/model.ts';
 import { clearUserProfile, getUserProfile, saveUserProfile } from '../vault/user-profile.ts';
 import {
+  isTrialRunning,
+  issueTrialEntitlement,
+  readTrialEntitlement,
+  trialSnapshot,
+} from '../trial/entitlement.ts';
+import { markTrialInstallOnboarded } from './trial/provision.ts';
+import {
   USER_PROFILE_QUESTIONS,
   countAnsweredUserProfileQuestions,
   hasUserProfile,
@@ -1019,6 +1026,91 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: () => {
         clearUserProfile();
         return json({ ok: true, message: 'User profile cleared.' });
+      },
+    },
+
+    // ── The 48-hour trial ───────────────────────────────────────────
+    // Read by the shell on every boot to decide whether this install runs
+    // the conductor (beats 01 to 05) instead of the nine-step wizard.
+    // On an install with no entitlement — every install today — this
+    // answers `{present: false}` and nothing downstream changes.
+
+    '/api/trial/status': {
+      GET: () => {
+        try {
+          return json(trialSnapshot());
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
+    /**
+     * The founder granted the microphone and the opening is about to start.
+     *
+     * Marks the install onboarded (the wizard the trial replaced is what
+     * normally does this — see daemon/trial/provision.ts) and brings the
+     * post-setup services up in process, so the founder lands in a working
+     * shell when the conversation moves on to the rooms.
+     *
+     * Deliberately does NOT start the 48-hour clock. D9 puts that at the
+     * first spoken word, and the founder has not spoken yet.
+     */
+    '/api/trial/opening/start': {
+      POST: async () => {
+        try {
+          const entitlement = readTrialEntitlement();
+          if (!isTrialRunning(entitlement, Date.now())) {
+            return json({ error: 'No running trial entitlement on this install.' }, 409);
+          }
+          const provisioned = markTrialInstallOnboarded(ctx.config);
+          let postSetupStarted = false;
+          if (provisioned.marked && ctx.startPostSetupServices) {
+            try {
+              await ctx.startPostSetupServices();
+              postSetupStarted = true;
+            } catch (err) {
+              // Non-fatal, exactly as in the wizard's setup route: the
+              // conversation is realtime and does not depend on these.
+              console.error(
+                '[Trial] Failed to start post-setup services in-process:',
+                err instanceof Error ? err.message : err,
+              );
+            }
+          }
+          return json({
+            ok: true,
+            trial: trialSnapshot(),
+            provisioned: provisioned.marked,
+            post_setup_services_started: postSetupStarted,
+          });
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
+    /**
+     * Issue an entitlement locally. STUB, and labelled as one: the control
+     * plane that will really issue these is not deployed, and this exists so
+     * the opening can be run and reviewed before it is. Refuses when a grant
+     * already exists — re-issuing would hand out a fresh 48 hours.
+     */
+    '/api/trial/issue': {
+      POST: async (req: Request) => {
+        try {
+          const body = (await req.json().catch(() => ({}))) as { account_id?: string };
+          const issued = issueTrialEntitlement({
+            account_id: typeof body.account_id === 'string' ? body.account_id : null,
+          });
+          if (!issued) {
+            return json({ error: 'This install already has a trial entitlement.' }, 409);
+          }
+          console.log('[Trial] local stub entitlement issued');
+          return json({ ok: true, trial: trialSnapshot() });
+        } catch (err) {
+          return errorFromException(err);
+        }
       },
     },
 
