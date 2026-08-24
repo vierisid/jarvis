@@ -99,15 +99,18 @@ Usage:
 		// wrong-URL token used to be saved blind and fail invisibly in the
 		// reconnect loop. Errors go to stderr as well as the log — --token is
 		// typically run from a terminal, and logs already go to the file.
+		// On Windows setupLogging has pointed stderr AT the log file, so the
+		// two land together there (the same line twice, once timestamped).
 		tok := trimToken(*token)
 		if err := verifyBrainToken(context.Background(), tok, cfg.Brain); err != nil {
 			log.Printf("[sidecar] enrollment token check failed: %v", err)
 			fmt.Fprintf(os.Stderr, "Error: %v\nThe token was not saved.\n", err)
-			// The Windows build is a GUI-subsystem binary — stderr goes
-			// nowhere — so surface the failure in a native message box there
-			// (MessageBoxW blocks until dismissed). Elsewhere this logs
-			// (Linux) or no-ops before exit (macOS, no run loop yet); the
-			// stderr line above covers those terminals.
+			// The Windows build is a GUI-subsystem binary with no console, so
+			// the line above reaches the log file but no human — surface the
+			// failure in a native message box there (MessageBoxW blocks until
+			// dismissed). Elsewhere this logs (Linux) or no-ops before exit
+			// (macOS, no run loop yet); the stderr line above covers those
+			// terminals.
 			platformShowAlert("JARVIS Sidecar", fmt.Sprintf("%v\n\nThe token was not saved.", err))
 			os.Exit(1)
 		}

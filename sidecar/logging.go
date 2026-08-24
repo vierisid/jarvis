@@ -31,6 +31,15 @@ func setupLogging() {
 	if err != nil {
 		return
 	}
+	// Runtime panics never reach the log package — the runtime writes them to
+	// fd 2 directly — so on Windows point the process's stderr handle at this
+	// file too. Without it, a panic under -H windowsgui kills the process with
+	// nothing written anywhere. When the swap succeeds os.Stderr IS f, so the
+	// tee below would double-write every line.
+	if redirectStderrToLog(f) {
+		log.SetOutput(f)
+		return
+	}
 	// File first so it always receives output even when stderr is a dead handle
 	// (the Windows GUI subsystem has no console). MultiWriter stops on the first
 	// error, so ordering matters.
