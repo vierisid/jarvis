@@ -3516,7 +3516,16 @@ using webview = browser_engine;
 
 WEBVIEW_API webview_t webview_create(int debug, void *wnd) {
   auto w = new webview::webview(debug, wnd);
-  if (!w->window()) {
+  // PATCHED (jarvis): require the BROWSER, not just the window. embed() gives
+  // up and returns false when a WM_QUIT is already queued on this thread (or
+  // WebView2 init fails outright), leaving m_webview/m_controller NULL while
+  // m_window is perfectly valid. Upstream's window-only check then returns
+  // that half-built engine, and the first call that touches the browser —
+  // bind(), navigate(), eval() — dereferences NULL and takes the process down
+  // with an access violation no Go recover can see. Fail the create instead;
+  // the Go binding turns a nullptr into a nil WebView (see JARVIS_PATCH.md)
+  // and callers already log and degrade on that.
+  if (!w->window() || !w->browser_controller()) {
     delete w;
     return nullptr;
   }

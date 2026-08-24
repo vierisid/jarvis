@@ -155,6 +155,16 @@ func New(debug bool) WebView { return NewWindow(debug, nil) }
 func NewWindow(debug bool, window unsafe.Pointer) WebView {
 	w := &webview{}
 	w.w = C.webview_create(boolToInt(debug), window)
+	// PATCHED (jarvis): webview_create returns NULL when the window could not be
+	// created (see webview.h: it deletes the instance and returns nullptr).
+	// Upstream wrapped that NULL in a non-nil *webview anyway, so the callers'
+	// `wv == nil` guard could never fire and the next C call dereferenced NULL
+	// inside C++ — an access violation that kills the process with no Go panic
+	// and nothing in the log. None of the C entry points are NULL-safe,
+	// webview_get_window included, so the check cannot live at the call site.
+	if w.w == nil {
+		return nil
+	}
 	return w
 }
 

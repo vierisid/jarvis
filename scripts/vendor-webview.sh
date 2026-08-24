@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # Re-vendor github.com/webview/webview_go into sidecar/third_party/webview_go at
-# a given version and re-apply the jarvis SW_HIDE patch (jarvis.patch).
+# a given version and re-apply the jarvis patches (jarvis.patch).
 #
 # We vendor + patch webview_go because upstream's Win32 engine constructor shows
 # the window before WebView2 finishes initializing, producing a black flash. The
@@ -74,14 +74,23 @@ rm -rf "$STASH"
 # Re-apply our patch with GNU patch (no git-index awareness, unlike `git apply`,
 # which would see the committed header as already-patched and skip). Strict on
 # purpose: if upstream moved the win32 constructor this fails loudly and a human
-# must regenerate jarvis.patch (the SW_HIDE edit).
+# must regenerate jarvis.patch. Regenerate it by diffing pristine upstream
+# against the patched tree for EVERY file we touch, not just the header.
 echo "Applying jarvis.patch..."
 ( cd "$VENDOR_DIR" && patch -p1 --no-backup-if-mismatch -i "$PATCH_FILE" )
 
-# Sanity-check the patch actually landed.
+# Sanity-check the patch actually landed. One assertion PER patched behavior:
+# the re-copy above restores pristine upstream over every vendored file except
+# KEEP_FILES, so anything jarvis.patch stops carrying is silently reverted, the
+# build still passes, and the monthly update PR goes green having dropped it.
+# A grep that only covers some of the patches cannot tell that apart, so every
+# hunk gets a marker here.
 HEADER="$VENDOR_DIR/libs/webview/include/webview.h"
 grep -q "PATCHED (jarvis)" "$HEADER"
-grep -q "ShowWindow(m_window, SW_HIDE)" "$HEADER"
+grep -q "ShowWindow(m_window, SW_HIDE)" "$HEADER"           # win32: no open flash
+grep -q "isMainThread" "$HEADER"                            # cocoa: main-thread window
+grep -q "w->browser_controller()" "$HEADER"                 # reject half-built engines
+grep -q "PATCHED (jarvis)" "$VENDOR_DIR/webview.go"         # nil WebView on NULL handle
 
 # Record the pinned version (single source of truth for the update workflow).
 printf '%s\n' "$VERSION" > "$VENDOR_DIR/UPSTREAM_VERSION"

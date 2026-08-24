@@ -26,11 +26,14 @@ func RunWindow(title string, width, height int, hint webview.Hint, build func(we
 	// to one OS thread past the window's life is not intended.
 	defer runtime.UnlockOSThread()
 	wv := webview.New(false)
-	// NOT `wv == nil`: webview.New always returns a non-nil interface value,
-	// even when the underlying webview_t is NULL, so that check never fires and
-	// the code proceeds to drive a NULL handle. Under -H windowsgui the symptom
-	// is the installer doing nothing at all when double-clicked, with no
-	// message anywhere. Window() exposes the real handle.
+	// `wv == nil` is the real guard: the vendored binding returns a nil
+	// interface when webview_create returned NULL (third_party/webview_go,
+	// JARVIS_PATCH.md). It MUST come first — Window() is not NULL-safe either
+	// (webview_get_window dereferences the handle), so it would fault on the
+	// very case being checked. It stays as a second condition for a handle
+	// that is null without create having reported failure. Under -H windowsgui
+	// the symptom of getting this wrong is the installer doing nothing at all
+	// when double-clicked, with no message anywhere.
 	if wv == nil || wv.Window() == nil {
 		log.Printf("[ui] could not open %q (webview runtime missing or failed to start?)", title)
 		return false

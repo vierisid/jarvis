@@ -39,12 +39,12 @@ func uiSync(wv webview.WebView, fn func()) {
 // panelImpl wraps a single webview window and the channel used to control it.
 type panelImpl struct {
 	spec       PanelSpec
-	wvVal      atomic.Value    // webview.WebView; set once by the runner goroutine, read by close-watcher / hotkey / service methods
-	ready      chan struct{}   // closed once wv is set + flags applied
-	done       chan struct{}   // closed when Run() returns
-	following  atomic.Bool     // when true, cursor-tracker actively moves window
-	followStop chan struct{}   // closed by Close()/Stop() to halt the tracker
-	hotkeyStop func()          // unregister + stop the hotkey listener
+	wvVal      atomic.Value  // webview.WebView; set once by the runner goroutine, read by close-watcher / hotkey / service methods
+	ready      chan struct{} // closed once wv is set + flags applied
+	done       chan struct{} // closed when Run() returns
+	following  atomic.Bool   // when true, cursor-tracker actively moves window
+	followStop chan struct{} // closed by Close()/Stop() to halt the tracker
+	hotkeyStop func()        // unregister + stop the hotkey listener
 	// macOS shared-loop teardown: uiClosed is closed (once) when the window is
 	// gone so the spawn goroutine, which does not run its own loop there, can
 	// return. Unused on Windows/Linux (those block in wv.Run()).
@@ -158,7 +158,7 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		debug := false
 		wv = webview.New(debug)
 		if wv == nil {
-			log.Printf("[panels] spawn(%s): webview.New returned nil — WebView2 runtime missing?", spec.ID)
+			log.Printf("[panels] spawn(%s): webview.New returned nil — WebView2 runtime missing, or its init failed", spec.ID)
 			close(impl.ready)
 			return
 		}
@@ -618,7 +618,41 @@ func (s *panelService) Close(id PanelID) error {
 		if err := platformDestroyWindow(wv.Window()); err != nil {
 			log.Printf("[panels] platformDestroyWindow(%s): %v (falling back to wv.Terminate)", id, err)
 		}
-		wv.Terminate()
+		// Terminate MUST run on the webview's own thread. terminate_impl() is
+		// PostQuitMessage(0) (win32), which posts WM_QUIT to the CALLING
+		// thread — and this runs on whatever goroutine served the close RPC.
+		// So the bare call never reached the panel's loop, and left a WM_QUIT
+		// sitting on a random runtime M that nothing would ever consume.
+		//
+		// That stray message is not inert. The next webview created on that M
+		// (panel goroutines LockOSThread, so they inherit one) pumps the queue
+		// while waiting for WebView2 to initialize, treats the queued WM_QUIT
+		// as "give up" (embed() -> got_quit_msg -> return false), and leaves
+		// m_webview NULL. webview_create validated only the WINDOW, so it handed
+		// back that browserless engine happily and the first Bind dereferenced
+		// NULL — an access violation, which is why the crash always followed a
+		// panel.close + panel.spawn pair and never reproduced on a fresh start.
+		//
+		// Dispatch hands the call to the engine's own message window, so the
+		// quit lands in the loop it is meant to stop.
+		//
+		// The impl.done check is not redundant. If the panel was ALREADY
+		// tearing down when this ran (user closed the window, or the daemon
+		// called Close in response to the closed event), the loop is gone and
+		// the WM_APP sits unread until ~win32_edge_engine's
+		// deplete_run_loop_event_queue drains it mid-destruction — running
+		// this closure and posting the very WM_QUIT the dispatch exists to
+		// avoid, onto an M about to be unlocked and reused. done is closed
+		// before Destroy in the spawn goroutine's defer chain, so by then this
+		// sees it and does nothing.
+		wv.Dispatch(func() {
+			select {
+			case <-impl.done:
+				return
+			default:
+			}
+			wv.Terminate()
+		})
 	}
 	return nil
 }

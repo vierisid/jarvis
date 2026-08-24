@@ -1,4 +1,3 @@
-diff --git a/libs/webview/include/webview.h b/libs/webview/include/webview.h
 --- a/libs/webview/include/webview.h
 +++ b/libs/webview/include/webview.h
 @@ -1471,6 +1471,7 @@
@@ -94,3 +93,40 @@ diff --git a/libs/webview/include/webview.h b/libs/webview/include/webview.h
      }
  
      auto cb =
+@@ -3500,7 +3516,16 @@
+ 
+ WEBVIEW_API webview_t webview_create(int debug, void *wnd) {
+   auto w = new webview::webview(debug, wnd);
+-  if (!w->window()) {
++  // PATCHED (jarvis): require the BROWSER, not just the window. embed() gives
++  // up and returns false when a WM_QUIT is already queued on this thread (or
++  // WebView2 init fails outright), leaving m_webview/m_controller NULL while
++  // m_window is perfectly valid. Upstream's window-only check then returns
++  // that half-built engine, and the first call that touches the browser —
++  // bind(), navigate(), eval() — dereferences NULL and takes the process down
++  // with an access violation no Go recover can see. Fail the create instead;
++  // the Go binding turns a nullptr into a nil WebView (see JARVIS_PATCH.md)
++  // and callers already log and degrade on that.
++  if (!w->window() || !w->browser_controller()) {
+     delete w;
+     return nullptr;
+   }
+--- a/webview.go
++++ b/webview.go
+@@ -155,6 +155,16 @@
+ func NewWindow(debug bool, window unsafe.Pointer) WebView {
+ 	w := &webview{}
+ 	w.w = C.webview_create(boolToInt(debug), window)
++	// PATCHED (jarvis): webview_create returns NULL when the window could not be
++	// created (see webview.h: it deletes the instance and returns nullptr).
++	// Upstream wrapped that NULL in a non-nil *webview anyway, so the callers'
++	// `wv == nil` guard could never fire and the next C call dereferenced NULL
++	// inside C++ — an access violation that kills the process with no Go panic
++	// and nothing in the log. None of the C entry points are NULL-safe,
++	// webview_get_window included, so the check cannot live at the call site.
++	if w.w == nil {
++		return nil
++	}
+ 	return w
+ }
+ 
