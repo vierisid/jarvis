@@ -57,6 +57,7 @@ const ROOM_ALIASES: Record<string, RoomKey> = {
   workspaces: "workspaces",
   project: "workspaces",
   projects: "workspaces",
+  usage: "usage",
   setting: "settings",
   settings: "settings",
 };

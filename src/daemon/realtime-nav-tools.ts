@@ -15,7 +15,7 @@ import type { LLMTool } from '../llm/provider.ts';
 /** Room keys that map 1:1 to RoomKey in src/voice/intent.ts. */
 export const REALTIME_ROOM_KEYS = [
   'workflows', 'memory', 'tools', 'agents', 'authority', 'logs',
-  'calendar', 'goals', 'tasks', 'content', 'workspaces', 'settings',
+  'calendar', 'goals', 'tasks', 'content', 'workspaces', 'usage', 'settings',
 ] as const;
 
 export const REALTIME_NAV_TOOL_NAMES = new Set([

@@ -34,6 +34,7 @@ const VALID_ROOMS: ReadonlySet<RoomKey> = new Set([
   'tasks',
   'content',
   'workspaces',
+  'usage',
   'settings',
 ]);
 

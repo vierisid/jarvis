@@ -17,6 +17,7 @@ const ROOM_KEYS = new Set<RoomKey>([
   "tasks",
   "content",
   "workspaces",
+  "usage",
   "settings",
 ]);
 

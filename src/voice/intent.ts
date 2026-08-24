@@ -133,6 +133,7 @@ export type RoomKey =
   | "tasks"
   | "content"
   | "workspaces"
+  | "usage"
   | "settings";
 
 export function intentToRoomKey(intent: Intent): RoomKey | null {

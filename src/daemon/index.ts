@@ -1885,6 +1885,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         tasks:       { aliases: ['tasks', 'todos', 'task list', 'task'],    title: 'Tasks',       w: 500, h: 600 },
         content:     { aliases: ['content', 'content pipeline', 'notes'],   title: 'Content',     w: 800, h: 600 },
         workspaces:  { aliases: ['workspaces', 'workspace', 'sites'],       title: 'Workspaces',  w: 800, h: 600 },
+        usage:       { aliases: ['token usage', 'usage room'],              title: 'Usage',       w: 800, h: 600 },
       };
 
       // Match aliases longest-first so "tool catalog" wins over "tools" when
