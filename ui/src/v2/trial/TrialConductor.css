@@ -15,6 +15,11 @@
   border: 0.5px solid rgba(255, 255, 255, 0.5);
   box-shadow: inset 1.5px 1.5px 1.5px rgba(255, 255, 255, 0.9), 0 6px 18px -4px rgba(20, 30, 45, 0.3);
   flex-shrink: 0;
+  /* The breathing orb inside is scaled by `tc-breathe`. Without this it grows
+     past the drop on every breath: the orb is a circle, the drop has one flat
+     12px corner, so it spilled on one side and left the shell showing on the
+     other, reading as two misaligned pebbles rather than one. */
+  overflow: hidden;
 }
 :root[data-theme="dark"] .tc-drop {
   border-color: rgba(255, 255, 255, 0.4);
@@ -40,9 +45,12 @@
   background: radial-gradient(circle at 50% 40%, #cfd6de, #9aa5b1 70%);
   animation: none;
 }
+/* Breathes DOWN from full size, never past it, so the orb can never exceed the
+   drop even for a frame. `overflow: hidden` on the parent is the belt to this
+   pair of braces. */
 @keyframes tc-breathe {
-  0%, 100% { opacity: 0.62; transform: scale(0.96); }
-  50% { opacity: 1; transform: scale(1.05); }
+  0%, 100% { opacity: 0.62; transform: scale(0.94); }
+  50% { opacity: 1; transform: scale(1); }
 }
 
 /* ── frame 02 · the microphone gate ── */
