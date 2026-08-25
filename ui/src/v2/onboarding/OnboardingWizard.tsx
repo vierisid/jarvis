@@ -70,9 +70,7 @@ const SVG: Record<string, string> = {
   vol: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M4 8h3l4-3v10l-4-3H4z"/><path d="M14 7a4 4 0 0 1 0 6"/></svg>',
   voloff: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l4-3v10l-4-3H4z"/><path d="M13.5 8l4 4M17.5 8l-4 4"/></svg>',
   calendar: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4.5" width="14" height="12.5" rx="2"/><path d="M3 8.5h14M7 3v3M13 3v3"/></svg>',
-  mail: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="M3.5 6l6.5 4.5L16.5 6"/></svg>',
   send: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M17 3L8.5 11.5M17 3l-5.5 14-3-6-6-3z"/></svg>',
-  chat: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M4 5h12a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H8l-4 3V6a1 1 0 0 1 1-1z"/></svg>',
   check: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 4.5 6.5 11.5 3 8"/></svg>',
 };
 const Glyph = ({ k }: { k: string }) => <span dangerouslySetInnerHTML={{ __html: SVG[k] ?? "" }} />;
@@ -631,7 +629,7 @@ export function OnboardingWizard({
             if (d.is_authenticated || d.status === "connected") {
               stopGooglePoll();
               setGoogleState("connected");
-              setConnected((c) => new Set(c).add("google").add("gmail"));
+              setConnected((c) => new Set(c).add("google"));
             }
           } catch { /* ignore */ }
         }, 2000);
@@ -671,7 +669,7 @@ export function OnboardingWizard({
         if (d.is_authenticated || d.status === "connected") {
           stopGooglePoll();
           setGoogleState("connected");
-          setConnected((c) => new Set(c).add("google").add("gmail"));
+          setConnected((c) => new Set(c).add("google"));
         }
       } catch { /* ignore */ }
       if (tries > 150) { stopGooglePoll(); setGoogleState((g) => (g === "pending" ? "idle" : g)); } // ~5 min cap
@@ -987,34 +985,39 @@ export function OnboardingWizard({
       }
 
       case "connect": {
-        const rows: Array<[string, string, string, string, boolean]> = [
-          ["google", "calendar", "Google Calendar", "Read your schedule and add holds.", false],
-          ["gmail", "mail", "Gmail", "Triage and draft, with your approval.", false],
-          ["telegram", "send", "Telegram", "Talk to Jarvis from your phone.", false],
-          ["discord", "chat", "Discord", "In the code as a stub today.", true],
-          ["whatsapp", "chat", "WhatsApp", "In the code as a stub today.", true],
+        // ONE Google row, because there is one Google grant. Calendar and Gmail
+        // were listed separately while both buttons ran the same consent and
+        // both were satisfied by it — so connecting either flipped both to
+        // "Connected", which reads like a bug even though it was correct.
+        // Discord and WhatsApp are gone: they were stubs advertised as "Soon".
+        const rows: Array<[string, string, string, string]> = [
+          // READ-ONLY, and the copy says only what the grant allows. The scopes
+          // are gmail.readonly and calendar.readonly, so "add holds" and "draft
+          // mail" — inherited from the two rows this replaces — described things
+          // no token from this consent can do. A first-run screen that promises
+          // more than the consent grants is a promise broken later, quietly.
+          ["google", "calendar", "Google", "Read-only access to your calendar and Gmail, so Jarvis can plan around your day and flag what needs you."],
+          ["telegram", "send", "Telegram", "Talk to Jarvis from your phone."],
         ];
         return (
           <div className="obw-body"><div className="obw-wrap wide">
             <h2>Connect your world.</h2>
             <div className="obw-sub">Hook up the apps Jarvis should know about. All optional, all revocable from Settings.</div>
             <div className="obw-rows" style={{ marginTop: 14 }}>
-              {rows.map(([id, ic, nm, bd, soon]) => {
-                const isGoogle = id === "google" || id === "gmail";
+              {rows.map(([id, ic, nm, bd]) => {
                 const isConnected = connected.has(id);
                 return (
                   <div key={id} className="obw-prow" style={{ flexWrap: "wrap" }}>
                     <span className="pg"><Glyph k={ic} /></span>
                     <div className="pt"><div className="pn">{nm}</div><div className="pb">{bd}</div></div>
-                    {soon ? <span className="obw-pill">Soon</span>
-                      : isConnected ? <span className="obw-granted"><Glyph k="check" />Connected</span>
-                      : isGoogle ? (
+                    {isConnected ? <span className="obw-granted"><Glyph k="check" />Connected</span>
+                      : id === "google" ? (
                         googleState === "pending"
                           ? <button className="obw-grant" onClick={cancelGoogle} title="Stop waiting for the sign-in">Connecting… ✕</button>
                           : <button className="obw-grant" onClick={connectGoogle}>Connect</button>
                       )
                       : id === "telegram" ? <button className="obw-grant" onClick={() => setTgOpen((o) => !o)}>Connect</button>
-                      : <span className="obw-pill">Soon</span>}
+                      : null}
                     {id === "telegram" && tgOpen && !isConnected && (
                       <div style={{ flexBasis: "100%", display: "flex", gap: 8, marginTop: 10 }}>
                         <input className="obw-inp" style={{ flex: 1 }} placeholder="Bot token from @BotFather" value={tgToken} onChange={(e) => setTgToken(e.target.value)} />
