@@ -175,6 +175,14 @@ export type BeatsSession = {
   done: RoomBeat[];
   /** The one proposal currently on the founder's screen. */
   proposal: BeatProposal | null;
+  /** When the current proposal went up. See `founderHasAnswered`. */
+  proposalShownAt: number | null;
+  /**
+   * The last moment the founder was heard saying anything: a final transcript
+   * with a word in it, or failing that the VAD closing their turn. Set by the
+   * conductor manager, which is the only thing that hears them.
+   */
+  lastUserTurnAt: number;
   /** D16.5 wants two flows. Names, in publish order. */
   workflowsPublished: string[];
   /** What the founder ended up granting. */
@@ -192,6 +200,8 @@ export function createBeatsSession(): BeatsSession {
     open: false,
     done: [],
     proposal: null,
+    proposalShownAt: null,
+    lastUserTurnAt: 0,
     workflowsPublished: [],
     authorityLevel: null,
     briefAt: null,
@@ -663,6 +673,51 @@ function nothingProposed(beat: RoomBeat, tool: string): BeatToolResult {
   };
 }
 
+/**
+ * Has the founder said ANYTHING since this proposal went on their screen?
+ *
+ * The honest limit of this, stated plainly because it would otherwise be
+ * mistaken for consent: it does not know whether they said yes. Realtime
+ * auto-approves every tool call outside a destructive blocklist, so no server
+ * anywhere in this codebase can tell a spoken yes from a spoken no, and this
+ * one does not pretend to.
+ *
+ * What it does kill is the failure mode that actually matters here, and the one
+ * a model drifts into under time pressure: proposing and committing in the same
+ * breath, so the founder watches their quarter appear while Jarvis is still
+ * asking whether to make it. D18 says the founder is the one who says yes; this
+ * at least guarantees they got to say something.
+ *
+ * Deliberately satisfied by the VAD as well as by a transcript. If input
+ * transcription is unavailable (the same failure the clock has a backstop for)
+ * a transcript-only gate would refuse every commit for the whole session and
+ * take the trial down with it.
+ */
+function founderHasAnswered(s: BeatsSession): boolean {
+  if (s.proposalShownAt === null) return true;
+  return s.lastUserTurnAt > s.proposalShownAt;
+}
+
+function notAnsweredYet(tool: string): BeatToolResult {
+  return {
+    message:
+      'They have not answered yet. It is on their screen and you have not heard back from them, ' +
+      `so ask, and then stop and listen. Call \`${tool}\` when they have replied.`,
+  };
+}
+
+/** One place, so a proposal can never go up without arming the gate. */
+function putOnScreen(s: BeatsSession, proposal: BeatProposal, deps: BeatDeps): void {
+  s.proposal = proposal;
+  s.proposalShownAt = deps.now();
+  deps.showProposal(proposal);
+}
+
+function takeOffScreen(s: BeatsSession): void {
+  s.proposal = null;
+  s.proposalShownAt = null;
+}
+
 /* ── beat 07 · goals ── */
 
 function proposeGoals(s: BeatsSession, args: Record<string, unknown>, deps: BeatDeps): BeatToolResult {
@@ -685,9 +740,8 @@ function proposeGoals(s: BeatsSession, args: Record<string, unknown>, deps: Beat
 
   const measure = str(args.measure);
   const proposal: GoalProposal = { beat: 'goals', objective, ...(measure ? { measure } : {}), keyResults };
-  s.proposal = proposal;
   deps.enterRoom('goals', 'their quarter');
-  deps.showProposal(proposal);
+  putOnScreen(s, proposal, deps);
   return {
     message:
       `On their screen: "${objective}" with ${keyResults.length} key result${keyResults.length === 1 ? '' : 's'}. ` +
@@ -698,6 +752,7 @@ function proposeGoals(s: BeatsSession, args: Record<string, unknown>, deps: Beat
 function createGoals(s: BeatsSession, deps: BeatDeps): BeatToolResult {
   const p = s.proposal;
   if (!p || p.beat !== 'goals') return nothingProposed('goals', 'create_goals');
+  if (!founderHasAnswered(s)) return notAnsweredYet('create_goals');
 
   let objective: Goal;
   try {
@@ -729,7 +784,7 @@ function createGoals(s: BeatsSession, deps: BeatDeps): BeatToolResult {
     }
   });
 
-  s.proposal = null;
+  takeOffScreen(s);
   markDone(s, 'goals');
   deps.proposalLanded('goals', `${p.objective} · ${p.keyResults.length} key results`);
   deps.refreshRoom('goals');
@@ -766,9 +821,8 @@ function proposeTasks(s: BeatsSession, args: Record<string, unknown>, deps: Beat
   }
 
   const proposal: TaskProposal = { beat: 'tasks', tasks };
-  s.proposal = proposal;
   deps.enterRoom('tasks', 'their week');
-  deps.showProposal(proposal);
+  putOnScreen(s, proposal, deps);
   const lateCount = tasks.filter((t) => t.late).length;
   return {
     message:
@@ -789,6 +843,7 @@ function resolveDue(text: string, now: number): number | null {
 function createTasks(s: BeatsSession, deps: BeatDeps): BeatToolResult {
   const p = s.proposal;
   if (!p || p.beat !== 'tasks') return nothingProposed('tasks', 'create_tasks');
+  if (!founderHasAnswered(s)) return notAnsweredYet('create_tasks');
 
   const created: Commitment[] = [];
   for (const t of p.tasks) {
@@ -809,7 +864,7 @@ function createTasks(s: BeatsSession, deps: BeatDeps): BeatToolResult {
     return { message: 'None of those saved. Say so plainly and try `create_tasks` again.' };
   }
 
-  s.proposal = null;
+  takeOffScreen(s);
   markDone(s, 'tasks');
   deps.proposalLanded('tasks', `${created.length} on the board`);
   deps.refreshRoom('tasks');
@@ -856,9 +911,8 @@ function proposeMorningBrief(s: BeatsSession, args: Record<string, unknown>, dep
   const minute = clampBriefMinute(args.minute);
   const because = str(args.because);
   const proposal: CalendarProposal = { beat: 'calendar', hour, minute, ...(because ? { because } : {}) };
-  s.proposal = proposal;
   deps.enterRoom('calendar', 'the brief hour');
-  deps.showProposal(proposal);
+  putOnScreen(s, proposal, deps);
   return {
     message: `On their screen: the brief at ${fmtTime(hour, minute)}. Say the hour and why, then let them answer.`,
   };
@@ -871,6 +925,7 @@ export function fmtTime(hour: number, minute: number): string {
 function setMorningBrief(s: BeatsSession, deps: BeatDeps): BeatToolResult {
   const p = s.proposal;
   if (!p || p.beat !== 'calendar') return nothingProposed('calendar', 'set_morning_brief');
+  if (!founderHasAnswered(s)) return notAnsweredYet('set_morning_brief');
 
   try {
     deps.setMorningBrief(p.hour, p.minute);
@@ -880,7 +935,7 @@ function setMorningBrief(s: BeatsSession, deps: BeatDeps): BeatToolResult {
   }
 
   s.briefAt = { hour: p.hour, minute: p.minute };
-  s.proposal = null;
+  takeOffScreen(s);
   markDone(s, 'calendar');
   deps.proposalLanded('calendar', `brief at ${fmtTime(p.hour, p.minute)}, every day`);
   deps.refreshRoom('calendar');
@@ -899,9 +954,8 @@ function proposeWorkflow(s: BeatsSession, args: Record<string, unknown>, deps: B
   }
   const never = str(args.never);
   const proposal: WorkflowProposal = { beat: 'workflows', name, runsWhen, steps, ...(never ? { never } : {}) };
-  s.proposal = proposal;
   deps.enterRoom('workflows', 'the flow');
-  deps.showProposal(proposal);
+  putOnScreen(s, proposal, deps);
   return {
     message:
       `On their screen: "${name}", ${steps.length} steps, ${runsWhen}. Say what it takes off them, ` +
@@ -912,10 +966,13 @@ function proposeWorkflow(s: BeatsSession, args: Record<string, unknown>, deps: B
 async function publishWorkflow(s: BeatsSession, deps: BeatDeps): Promise<BeatToolResult> {
   const p = s.proposal;
   if (!p || p.beat !== 'workflows') return nothingProposed('workflows', 'publish_workflow');
+  if (!founderHasAnswered(s)) return notAnsweredYet('publish_workflow');
 
   // The composer is a real LLM round trip and the founder is listening to
   // silence while it runs. Marking the card as building is what makes that
   // silence legible: they can see it working rather than wondering.
+  // Not putOnScreen: this is the same proposal in a different state, and
+  // re-arming the answered gate here would make them say yes twice.
   const building: WorkflowProposal = { ...p, building: true };
   s.proposal = building;
   deps.showProposal(building);
@@ -941,7 +998,7 @@ async function publishWorkflow(s: BeatsSession, deps: BeatDeps): Promise<BeatToo
   }
 
   s.workflowsPublished.push(p.name);
-  s.proposal = null;
+  takeOffScreen(s);
   const count = s.workflowsPublished.length;
   markDone(s, 'workflows');
   deps.proposalLanded('workflows', `${p.name} · published`);
@@ -963,9 +1020,8 @@ async function publishWorkflow(s: BeatsSession, deps: BeatDeps): Promise<BeatToo
 function proposeAuthority(s: BeatsSession, args: Record<string, unknown>, deps: BeatDeps): BeatToolResult {
   const level = args.level === undefined ? TRIAL_AUTHORITY_PROPOSED : clampAuthorityLevel(args.level);
   const proposal: AuthorityProposal = { beat: 'authority', level };
-  s.proposal = proposal;
   deps.enterRoom('authority', 'what you may do');
-  deps.showProposal(proposal);
+  putOnScreen(s, proposal, deps);
   return {
     message:
       `The ladder is on their screen with ${level} marked. Ask for it out loud, say what it buys and ` +
@@ -976,6 +1032,7 @@ function proposeAuthority(s: BeatsSession, args: Record<string, unknown>, deps: 
 function setAuthority(s: BeatsSession, args: Record<string, unknown>, deps: BeatDeps): BeatToolResult {
   const p = s.proposal;
   if (!p || p.beat !== 'authority') return nothingProposed('authority', 'set_authority');
+  if (!founderHasAnswered(s)) return notAnsweredYet('set_authority');
 
   const asked = args.level === undefined ? p.level : Math.round(Number(args.level));
   const level = clampAuthorityLevel(args.level === undefined ? p.level : args.level);
@@ -989,7 +1046,7 @@ function setAuthority(s: BeatsSession, args: Record<string, unknown>, deps: Beat
   }
 
   s.authorityLevel = landed;
-  s.proposal = null;
+  takeOffScreen(s);
   markDone(s, 'authority');
   deps.proposalLanded('authority', `level ${landed}`);
   deps.refreshRoom('authority');

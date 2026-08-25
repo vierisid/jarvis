@@ -17,6 +17,7 @@ import {
   ROOM_BEAT_TOOLS,
   TRIAL_AUTHORITY_CEILING,
   TRIAL_AUTHORITY_PROPOSED,
+  beatIsDone,
   beatIsOpen,
   clampAuthorityLevel,
   clampBriefHour,
@@ -48,6 +49,20 @@ type Recorder = {
 
 const NOW = 1_800_000_000_000;
 
+/**
+ * A clock that always moves forward, because the answered gate compares two
+ * moments. Every tick is a millisecond, so the due-date arithmetic below is
+ * unaffected and "did the founder speak after this went on screen" is a real
+ * comparison rather than a tie.
+ */
+let step = 0;
+const clock = () => NOW + step++;
+
+/** The founder said something. That is all the server can ever know. */
+function answers(s: BeatsSession): void {
+  s.lastUserTurnAt = clock();
+}
+
 function recorder(over: Partial<BeatDeps> = {}): Recorder {
   const r: Recorder = {
     rooms: [], refreshed: [], proposals: [], landed: [], completed: [],
@@ -55,7 +70,7 @@ function recorder(over: Partial<BeatDeps> = {}): Recorder {
     deps: null as never,
   };
   r.deps = {
-    now: () => NOW,
+    now: clock,
     fuel: () => ({}),
     enterRoom: (beat) => { r.rooms.push(beat); },
     refreshRoom: (room) => { r.refreshed.push(room); },
@@ -96,19 +111,21 @@ const GOALS_ARGS = {
 async function walkTo(s: BeatsSession, r: Recorder, beat: RoomBeat): Promise<void> {
   const run = (n: string, a: Record<string, unknown> = {}) => executeBeatTool(s, n, a, r.deps);
   const upto = ROOM_BEATS.indexOf(beat);
-  if (upto > 0) { await run('propose_goals', GOALS_ARGS); await run('create_goals'); }
+  if (upto > 0) { await run('propose_goals', GOALS_ARGS); answers(s); await run('create_goals'); }
   if (upto > 1) {
     await run('propose_tasks', {
       tasks: [{ what: 'File the VAT return', due: new Date(NOW + 2 * 86_400_000).toISOString() }],
     });
+    answers(s);
     await run('create_tasks');
   }
-  if (upto > 2) { await run('propose_morning_brief', { hour: 7, minute: 30 }); await run('set_morning_brief'); }
+  if (upto > 2) { await run('propose_morning_brief', { hour: 7, minute: 30 }); answers(s); await run('set_morning_brief'); }
   if (upto > 3) {
     await run('propose_workflow', { name: 'Monday pipeline review', runs_when: 'Mondays at 8', steps: ['Pull open deals', 'Flag stale ones'] });
+    answers(s);
     await run('publish_workflow');
   }
-  if (upto > 4) { await run('propose_authority', {}); await run('set_authority', {}); }
+  if (upto > 4) { await run('propose_authority', {}); answers(s); await run('set_authority', {}); }
 }
 
 beforeEach(() => {
@@ -171,10 +188,74 @@ describe('D18, nothing is written that they have not seen', () => {
     expect(findCommitments({})).toHaveLength(0);
   });
 
+  test('a commit refuses when they have not said anything since it went up', async () => {
+    const s = opened();
+    const r = recorder();
+    await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
+    // Proposed and committed in the same breath, which is the drift this gate
+    // exists to stop: the founder watching their quarter appear while Jarvis
+    // is still asking whether to make it.
+    const res = await executeBeatTool(s, 'create_goals', {}, r.deps);
+    expect(res!.message).toContain('have not answered yet');
+    expect(findGoals({})).toHaveLength(0);
+
+    answers(s);
+    await executeBeatTool(s, 'create_goals', {}, r.deps);
+    expect(findGoals({ level: 'objective' })).toHaveLength(1);
+  });
+
+  test('every one of the five commits is behind that gate, not just the first', async () => {
+    const r = recorder();
+    const cases: [RoomBeat, string, string, Record<string, unknown>][] = [
+      ['goals', 'propose_goals', 'create_goals', GOALS_ARGS],
+      ['tasks', 'propose_tasks', 'create_tasks', { tasks: [{ what: 'a' }] }],
+      ['calendar', 'propose_morning_brief', 'set_morning_brief', { hour: 8 }],
+      ['workflows', 'propose_workflow', 'publish_workflow', { name: 'f', runs_when: 'mondays', steps: ['x'] }],
+      ['authority', 'propose_authority', 'set_authority', {}],
+    ];
+    for (const [beat, propose, commit, args] of cases) {
+      initDatabase(':memory:');
+      const s = opened();
+      await walkTo(s, r, beat);
+      await executeBeatTool(s, propose, args, r.deps);
+      const res = await executeBeatTool(s, commit, {}, r.deps);
+      expect(res!.message).toContain('have not answered yet');
+      expect(beatIsDone(s, beat)).toBe(false);
+    }
+  });
+
+  test('the gate is satisfied by the VAD alone, so a failed transcription cannot end the trial', async () => {
+    const s = opened();
+    const r = recorder();
+    await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
+    // No transcript ever arrives; only `input_audio_buffer.speech_stopped`
+    // does. The conductor manager writes the same field from both.
+    s.lastUserTurnAt = clock();
+    const res = await executeBeatTool(s, 'create_goals', {}, r.deps);
+    expect(res!.message).not.toContain('have not answered yet');
+  });
+
+  test('a retry after a failed publish does not make them say yes twice', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'workflows');
+    await executeBeatTool(s, 'propose_workflow', {
+      name: 'Monday pipeline review', runs_when: 'Mondays at 8', steps: ['Pull open deals'],
+    }, r.deps);
+    answers(s);
+    r.workflowOk = false;
+    await executeBeatTool(s, 'publish_workflow', {}, r.deps);
+    r.workflowOk = true;
+    const res = await executeBeatTool(s, 'publish_workflow', {}, r.deps);
+    expect(res!.message).not.toContain('have not answered yet');
+    expect(s.workflowsPublished).toEqual(['Monday pipeline review']);
+  });
+
   test('a commit cannot be handed different content from what was proposed', async () => {
     const s = opened();
     const r = recorder();
     await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
+    answers(s);
     // create_goals takes no arguments at all: whatever a model invents here is
     // ignored and the thing on their screen is what lands.
     await executeBeatTool(s, 'create_goals', { objective: 'Something else entirely' }, r.deps);
@@ -209,6 +290,7 @@ describe('beat 07, goals', () => {
     const s = opened();
     const r = recorder();
     await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
+    answers(s);
     const res = await executeBeatTool(s, 'create_goals', {}, r.deps);
 
     const objectives = findGoals({ level: 'objective' });
@@ -268,6 +350,7 @@ describe('beat 08, tasks', () => {
         { what: 'Send Bowman the quote', due: new Date(NOW + 86_400_000).toISOString(), priority: 'high' },
       ],
     }, r.deps);
+    answers(s);
     const res = await executeBeatTool(s, 'create_tasks', {}, r.deps);
     const tasks = findCommitments({});
     expect(tasks).toHaveLength(2);
@@ -294,6 +377,7 @@ describe('beat 09, calendar', () => {
     await walkTo(s, r, 'calendar');
     await executeBeatTool(s, 'propose_morning_brief', { hour: 7, minute: 30, because: 'you are at the desk by eight' }, r.deps);
     expect(r.brief).toBeNull();
+    answers(s);
     const res = await executeBeatTool(s, 'set_morning_brief', {}, r.deps);
     expect(r.brief).toEqual({ hour: 7, minute: 30 });
     expect(s.briefAt).toEqual({ hour: 7, minute: 30 });
@@ -320,6 +404,7 @@ describe('beat 10, workflows', () => {
     await executeBeatTool(s, 'propose_workflow', {
       name: 'Monday pipeline review', runs_when: 'Mondays at 8', steps: ['Pull open deals'],
     }, r.deps);
+    answers(s);
     const res = await executeBeatTool(s, 'publish_workflow', {}, r.deps);
     expect(res!.message).toContain('Do not claim it is live');
     expect(s.workflowsPublished).toHaveLength(0);
@@ -336,6 +421,7 @@ describe('beat 10, workflows', () => {
     await executeBeatTool(s, 'propose_workflow', {
       name: 'Monday pipeline review', runs_when: 'Mondays at 8', steps: ['Pull open deals'],
     }, r.deps);
+    answers(s);
     r.proposals.length = 0;
     await executeBeatTool(s, 'publish_workflow', {}, r.deps);
     expect((r.proposals[0] as WorkflowProposal).building).toBe(true);
@@ -348,6 +434,7 @@ describe('beat 10, workflows', () => {
     await executeBeatTool(s, 'propose_workflow', {
       name: 'Monday pipeline review', runs_when: 'Mondays at 8', steps: ['Pull open deals'],
     }, r.deps);
+    answers(s);
     const res = await executeBeatTool(s, 'publish_workflow', {}, r.deps);
     expect(res!.message).toContain('second');
     expect(res!.message).toContain('propose_authority');
@@ -371,6 +458,7 @@ describe('beat 11, authority', () => {
     const r = recorder();
     await walkTo(s, r, 'authority');
     await executeBeatTool(s, 'propose_authority', {}, r.deps);
+    answers(s);
     await executeBeatTool(s, 'set_authority', { level: 3 }, r.deps);
     expect(r.authority).toBe(3);
     expect(s.authorityLevel).toBe(3);
@@ -381,6 +469,7 @@ describe('beat 11, authority', () => {
     const r = recorder();
     await walkTo(s, r, 'authority');
     await executeBeatTool(s, 'propose_authority', {}, r.deps);
+    answers(s);
     const res = await executeBeatTool(s, 'set_authority', { level: 9 }, r.deps);
     expect(r.authority).toBe(TRIAL_AUTHORITY_CEILING);
     expect(res!.message).toContain('seven and above is not on the table');
@@ -410,7 +499,7 @@ describe('beat 12, the finale', () => {
     }, r.deps);
     expect(r.spawned).toHaveLength(1);
     expect(s.agent?.agentId).toBe('agent-1');
-    expect(s.finishedAt).toBe(NOW);
+    expect(s.finishedAt).toBeGreaterThanOrEqual(NOW);
     expect(r.finished).toBe(1);
     expect(res!.message).toContain('back shortly');
     expect(res!.message).not.toContain('propose');

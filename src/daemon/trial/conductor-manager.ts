@@ -331,7 +331,20 @@ export class TrialConductorManager<W> {
   onTranscript(ws: W, role: 'user' | 'assistant', text: string, final: boolean): void {
     if (role !== 'user' || !final) return;
     if (!transcriptHasWords(text)) return;
+    this.noteUserTurn(ws);
     this.startClock(ws);
+  }
+
+  /**
+   * The founder was heard. The beats read this to refuse a commit that arrives
+   * without them having said anything since the proposal went up (see
+   * `founderHasAnswered`). Both the transcript and the VAD feed it: a
+   * transcript-only signal would take the whole session down on an install
+   * where input transcription is unavailable.
+   */
+  private noteUserTurn(ws: W): void {
+    const entry = this.entries.get(ws);
+    if (entry) entry.beats.lastUserTurnAt = this.now();
   }
 
   /**
@@ -340,6 +353,7 @@ export class TrialConductorManager<W> {
    * starts it when transcription is working.
    */
   onUserSpeechStopped(ws: W): void {
+    this.noteUserTurn(ws);
     const entry = this.entries.get(ws);
     if (!entry || entry.session.firstSpeechAt !== null || entry.clockFallback) return;
     entry.clockFallback = setTimeout(() => {

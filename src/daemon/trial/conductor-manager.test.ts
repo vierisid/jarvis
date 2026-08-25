@@ -281,7 +281,9 @@ describe('what the founder sees during a beat', () => {
   async function openedManager() {
     initDatabase(':memory:');
     issueTrialEntitlement({ now: T0 });
-    const h = harness(() => T0);
+    // A clock that moves, because the answered gate compares two moments.
+    let t = T0;
+    const h = harness(() => t++);
     h.manager.arm(h.ws);
     h.manager.begin(h.ws);
     await h.manager.executeTool(h.ws, 'conclude_opening', { understanding: 'ok' });
@@ -320,6 +322,7 @@ describe('what the founder sees during a beat', () => {
   test('what lands is pushed into the room, not left to its poll (D22)', async () => {
     const { manager, ws, broadcast } = await openedManager();
     await manager.executeTool(ws, 'propose_goals', { objective: 'o', key_results: [{ title: 'k' }] });
+    manager.onUserSpeechStopped(ws);
     await manager.executeTool(ws, 'create_goals', {});
 
     const refresh = broadcast.find(
@@ -350,21 +353,29 @@ describe('the finale', () => {
   test('the whole arc runs on one session and ends with onboarding complete', async () => {
     initDatabase(':memory:');
     issueTrialEntitlement({ now: T0 });
-    const { manager, ws, broadcast, actions } = harness(() => T0);
+    let t = T0;
+    const { manager, ws, broadcast, actions } = harness(() => t++);
     manager.arm(ws);
     manager.begin(ws);
     const run = (n: string, a: Record<string, unknown> = {}) => manager.executeTool(ws, n, a);
+    /** The founder answers. The VAD is what the server actually hears. */
+    const yes = () => manager.onUserSpeechStopped(ws);
 
     await run('conclude_opening', { understanding: 'Two-person B2B SaaS.' });
     await run('propose_goals', { objective: '40 customers by Q3', key_results: [{ title: '12 demos a month' }] });
+    yes();
     await run('create_goals');
     await run('propose_tasks', { tasks: [{ what: 'Send Bowman the quote' }] });
+    yes();
     await run('create_tasks');
     await run('propose_morning_brief', { hour: 7, minute: 30 });
+    yes();
     await run('set_morning_brief');
     await run('propose_workflow', { name: 'Monday pipeline review', runs_when: 'Mondays at 8', steps: ['Pull open deals'] });
+    yes();
     await run('publish_workflow');
     await run('propose_authority', {});
+    yes();
     await run('set_authority', {});
     await run('spawn_research_agent', { question: 'What the competitors charge', brief: 'Compare published prices.' });
 
@@ -382,7 +393,24 @@ describe('the finale', () => {
 
     // D17: onboarding finished, the conversation did not. Nothing closed it.
     expect(manager.isRunning(ws)).toBe(true);
-    expect(manager.beatsOf(ws)!.finishedAt).toBe(T0);
+    expect(manager.beatsOf(ws)!.finishedAt).toBeGreaterThanOrEqual(T0);
+  });
+
+  test('a commit that arrives before the founder has said anything is refused', async () => {
+    initDatabase(':memory:');
+    issueTrialEntitlement({ now: T0 });
+    let t = T0;
+    const { manager, ws } = harness(() => t++);
+    manager.arm(ws);
+    manager.begin(ws);
+    await manager.executeTool(ws, 'conclude_opening', { understanding: 'ok' });
+    await manager.executeTool(ws, 'propose_goals', { objective: 'o', key_results: [{ title: 'k' }] });
+
+    expect(await manager.executeTool(ws, 'create_goals')).toContain('have not answered yet');
+    // The founder speaks. A transcript and the VAD both count; this is the
+    // transcript path, and it also starts the clock, which is why it is here.
+    manager.onTranscript(ws, 'user', 'Yeah. Do it.', true);
+    expect(await manager.executeTool(ws, 'create_goals')).toContain('Created');
   });
 
   test('an install with no beat actions wired refuses out loud instead of pretending', async () => {
@@ -390,20 +418,24 @@ describe('the finale', () => {
     issueTrialEntitlement({ now: T0 });
     const sent: Array<{ ws: Sock; msg: WSMessage }> = [];
     const broadcast: WSMessage[] = [];
+    let t = T0;
     const manager = new TrialConductorManager<Sock>({
       send: (ws, msg) => sent.push({ ws, msg }),
       broadcast: (msg) => broadcast.push(msg),
-      now: () => T0,
+      now: () => t++,
     });
     const ws: Sock = { id: 'a' };
     manager.arm(ws);
     manager.begin(ws);
     await manager.executeTool(ws, 'conclude_opening', { understanding: 'ok' });
     await manager.executeTool(ws, 'propose_goals', { objective: 'o', key_results: [{ title: 'k' }] });
+    manager.onUserSpeechStopped(ws);
     await manager.executeTool(ws, 'create_goals');
     await manager.executeTool(ws, 'propose_tasks', { tasks: [{ what: 'a' }] });
+    manager.onUserSpeechStopped(ws);
     await manager.executeTool(ws, 'create_tasks');
     await manager.executeTool(ws, 'propose_morning_brief', { hour: 8 });
+    manager.onUserSpeechStopped(ws);
     const res = await manager.executeTool(ws, 'set_morning_brief');
     expect(res).toContain('did not save');
     expect(manager.beatsOf(ws)!.briefAt).toBeNull();
