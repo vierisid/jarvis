@@ -158,6 +158,26 @@
   display: none;
 }
 
+/* ── the two reasons Talk is hidden, written as their own rules ──
+   Beat 13 teaches the founder to press cmd-J and acknowledges it warmly the
+   moment they do (D23, D24), and the rule above makes that impossible: the
+   panel it summons does not exist during a trial. That beat is not built yet,
+   so nothing here changes today. What these two rules do is separate the
+   REASONS from the blanket, so whoever builds it deletes exactly one line,
+   `.rs-talk` from the selector above, and gets a Talk panel that is already
+   trial-safe rather than one that puts the second pebble back and offers a
+   typed path through a trial that has none (D10).
+
+   Still open for them, and not ours to invent: the trial's conversation runs
+   on the conductor's own socket, so the thread inside Talk is EMPTY during
+   onboarding. Summoning an empty panel is a worse reveal than no panel at all.
+   Beat 13 needs to decide what cmd-J shows a founder who is mid-conversation
+   with their co-founder. */
+:root[data-trial-conductor="live"] .rs-talk .rs-talk-mic,
+:root[data-trial-conductor="live"] .rs-talk .rs-talk-foot {
+  display: none;
+}
+
 /* the pebble, low and to the right, as in frame 03 */
 .tc-pebble {
   position: absolute;

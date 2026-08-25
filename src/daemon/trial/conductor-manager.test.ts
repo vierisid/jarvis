@@ -289,17 +289,24 @@ describe('what the founder sees during a beat', () => {
     return h;
   }
 
-  test('the pebble leads them to the room before the room opens (D21)', async () => {
+  test('the pebble leads them to the room, and carries where it leads (D21)', async () => {
     const { manager, ws, broadcast } = await openedManager();
     await manager.executeTool(ws, 'propose_goals', { objective: 'o', key_results: [{ title: 'k' }] });
 
-    const point = broadcast.findIndex((m) => m.type === 'trial_point');
-    const nav = broadcast.findIndex(
+    const point = broadcast.find((m) => m.type === 'trial_point');
+    expect(point).toBeDefined();
+    const payload = point!.payload as { target: string; label: string; room: string };
+    expect(payload.target).toBe('room:goals');
+    expect(payload.room).toBe('goals');
+    expect(payload.label).toBeTruthy();
+
+    // Deliberately NOT the shell's `navigate_room` notification: from the home
+    // thread that opens the room as an inline window inside the Thread, and
+    // the Thread lives in the Talk panel the trial hides. The founder would
+    // have watched nothing happen.
+    expect(broadcast.some(
       (m) => m.type === 'notification' && (m.payload as { source?: string }).source === 'navigate_room',
-    );
-    expect(point).toBeGreaterThanOrEqual(0);
-    expect(nav).toBeGreaterThan(point);
-    expect((broadcast[point]!.payload as { target: string }).target).toBe('room:goals');
+    )).toBe(false);
   });
 
   test('the pebble does not re-fly for a second proposal in the same room', async () => {

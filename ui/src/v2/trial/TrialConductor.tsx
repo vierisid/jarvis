@@ -13,7 +13,22 @@ import {
 } from "./conductorSession";
 import { TrialProposal } from "./TrialProposal";
 import { formatTimeRemaining, type TrialStatus } from "./trialGate";
+import { openRoom, type RoomKey } from "../router";
 import "./TrialConductor.css";
+
+/** How long the pebble has the founder's eye to itself before the room lands.
+ *  Long enough for the gesture to have started, short enough that the room
+ *  still feels like the consequence of it. */
+const ROOM_OPEN_DELAY_MS = 420;
+
+const ROOM_KEYS: ReadonlySet<string> = new Set([
+  "workflows", "memory", "tools", "agents", "authority", "logs",
+  "calendar", "goals", "tasks", "content", "workspaces", "usage", "settings",
+]);
+
+function isRoomKey(v: string): v is RoomKey {
+  return ROOM_KEYS.has(v);
+}
 
 /* ═══════ The 48-hour trial's conversation, from the mic to the finale ═══════
    Storyboard frames 02 to 10. Two surfaces, and the second one is the reason
@@ -126,7 +141,22 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
         if (resolved) setLandedProposal(resolved);
       },
       onBeatComplete: () => { /* the room underneath is the surface for this */ },
-      onPoint: (p) => setPoint(p),
+      onPoint: (p) => {
+        setPoint(p);
+        // The room opens BEHIND the gesture, not in front of it (D21): the
+        // pebble leaves its corner first, and by the time the room is on the
+        // screen the founder is already looking at where it came from.
+        //
+        // Opened as the surface rather than through the shell's own
+        // `navigate_room` handling, which from the home thread opens an inline
+        // window inside the Thread, and the Thread lives in the Talk panel the
+        // trial hides. Storyboard frames 05 to 10 all show the room owning the
+        // surface with the Index beside it, which is what `openRoom` does.
+        if (p.room && isRoomKey(p.room)) {
+          const key = p.room;
+          window.setTimeout(() => openRoom(key), ROOM_OPEN_DELAY_MS);
+        }
+      },
       onOnboardingComplete: (summary) => setFinished(summary),
     });
     sessionRef.current = session;

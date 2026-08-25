@@ -237,10 +237,18 @@ export class TrialConductorManager<W> {
    * Lead them into the room this beat happens in.
    *
    * D21: the pebble is a guide with physical presence, so it flies to the
-   * room's entry in the Index and holds a label there before the room opens.
-   * Only when the room actually CHANGES: a second proposal in the same room is
-   * the same room, and a pebble that re-flies on every tool call is a tic
-   * rather than a gesture.
+   * room's entry in the Index and holds a label there, and the room opens
+   * behind the gesture rather than in front of it. Only fires when the room
+   * actually CHANGES: a second proposal in the same room is the same room, and
+   * a pebble that re-flies on every tool call is a tic rather than a gesture.
+   *
+   * ONE event, carrying both the gesture and where it leads, and deliberately
+   * NOT the `navigate_room` notification the voice nav tools broadcast. From
+   * the home thread that notification opens the room as an INLINE WINDOW
+   * inside the Thread, and the Thread lives in the Talk panel, which the trial
+   * hides (see TrialConductor.css). The founder would have heard "here is your
+   * quarter" and watched nothing happen. The trial's own layer opens the room
+   * as the surface instead, which is what the storyboard shows.
    */
   private enterRoom(entry: Entry<W>, beat: RoomBeat, label: string): void {
     const room = BEAT_ROOM[beat];
@@ -248,14 +256,7 @@ export class TrialConductorManager<W> {
     entry.room = room;
     this.deps.broadcast({
       type: 'trial_point',
-      payload: { target: `room:${room}`, label },
-      timestamp: this.now(),
-    });
-    // The same notification the voice nav tools broadcast, so the dashboard
-    // opens the room exactly as it does for "open goals".
-    this.deps.broadcast({
-      type: 'notification',
-      payload: { source: 'navigate_room', key: room },
+      payload: { target: `room:${room}`, label, room },
       timestamp: this.now(),
     });
   }

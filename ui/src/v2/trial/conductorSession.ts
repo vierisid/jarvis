@@ -94,6 +94,12 @@ export interface ProposalLanded {
 export interface PebblePoint {
   target: string;
   label: string;
+  /**
+   * The room this gesture is leading them INTO, when it is leading them
+   * anywhere. The trial opens it as the surface itself rather than letting the
+   * shell open it as an inline window inside the hidden Talk panel.
+   */
+  room?: string;
   /** Bumped per event so the same target twice still moves it. */
   ts: number;
 }
@@ -242,9 +248,9 @@ export class ConductorSession {
         return;
       }
       case "trial_point": {
-        const p = (msg.payload ?? {}) as { target?: string; label?: string };
+        const p = (msg.payload ?? {}) as { target?: string; label?: string; room?: string };
         if (p.target) {
-          this.cb.onPoint({ target: p.target, label: p.label ?? "", ts: Date.now() });
+          this.cb.onPoint({ target: p.target, label: p.label ?? "", room: p.room, ts: Date.now() });
         }
         return;
       }
