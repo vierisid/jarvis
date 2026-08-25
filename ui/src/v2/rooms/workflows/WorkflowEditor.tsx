@@ -53,6 +53,7 @@ import type { ConnectionMeta } from "./useConnections";
 import { useFlowRuns } from "./useFlowRuns";
 import type { FlowRun, FlowRunStatus } from "./useWorkflowsData";
 import "./WorkflowEditor.css";
+import { modKey } from "../../ui/platform";
 
 // Horizontal flow layout. Each step in the flattened chain advances the
 // cursor rightward by NODE_X_STEP; nested branches (loop body / router
@@ -677,7 +678,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             disabled={!editor.canUndo}
             title={
               editor.canUndo
-                ? `Undo: ${editor.undoLabel ?? "last destructive change"} (Ctrl+Z)`
+                ? `Undo: ${editor.undoLabel ?? "last destructive change"} (${modKey("Z")})`
                 : "Nothing to undo"
             }
           >

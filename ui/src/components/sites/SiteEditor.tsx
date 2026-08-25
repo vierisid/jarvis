@@ -86,7 +86,8 @@ export function SiteEditor({ projectId, filePath }: Props) {
     }
   }, []);
 
-  // Keyboard shortcut: Ctrl+S
+  // Keyboard shortcut: Ctrl+S, and ⌘S on a Mac — the handler takes either
+  // modifier and preventDefaults, so the browser's own save dialog never opens.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.ctrlKey || e.metaKey) && e.key === "s") {
