@@ -171,6 +171,17 @@ export class RealtimeSession {
   // Pending function calls: call_id -> name (captured from output_item.added,
   // joined with arguments from function_call_arguments.done).
   private pendingCalls = new Map<string, string>();
+  /**
+   * Calls dispatched to the host and not yet answered. `pendingCalls` is
+   * cleared the moment the ARGUMENTS finish, which is before the tool has run,
+   * so it cannot answer "is a result still outstanding".
+   */
+  private awaitingResults = new Set<string>();
+  /**
+   * A tool result was submitted while a response was still generating, so the
+   * `response.create` that continues the turn was deferred to `response.done`.
+   */
+  private needsContinuation = false;
 
   private audioCb: ((chunk: Buffer) => void) | null = null;
   private transcriptCb: ((t: RealtimeTranscript) => void) | null = null;
@@ -284,6 +295,18 @@ export class RealtimeSession {
         output: typeof result === 'string' ? result : JSON.stringify(result),
       },
     });
+    this.awaitingResults.delete(callId);
+    // Only ONE `response.create` may be in flight, and only when no response is
+    // already generating. The conductor calls tools continuously mid-turn
+    // (`remember`, `capture_fuel`), so a turn routinely produces two or more
+    // results; sending a create per result made OpenAI reject the second with
+    // "Conversation already has an active response in progress", which surfaced
+    // as an error toast at every turn switch. If a response is still running,
+    // or a sibling call has not answered yet, the continuation is deferred.
+    if (this.responseActive || this.awaitingResults.size > 0) {
+      this.needsContinuation = true;
+      return;
+    }
     this.send({ type: 'response.create' });
   }
 
@@ -343,6 +366,13 @@ export class RealtimeSession {
       }
       case 'response.done': {
         this.responseActive = false;
+        // A tool answered while this response was still generating, so its
+        // continuation was deferred to here. Without this the model would sit
+        // silent after a mid-turn tool call.
+        if (this.needsContinuation && this.awaitingResults.size === 0) {
+          this.needsContinuation = false;
+          this.send({ type: 'response.create' });
+        }
         // Extract per-response usage if present and emit it. OpenAI realtime
         // reports `response.usage.{input_tokens, output_tokens}` (plus audio /
         // text breakdowns we don't currently surface). Missing fields default
@@ -416,6 +446,7 @@ export class RealtimeSession {
         // `name` may arrive on this event or earlier via output_item.added.
         const name = (evt.name as string | undefined) ?? this.pendingCalls.get(callId) ?? '';
         this.pendingCalls.delete(callId);
+        this.awaitingResults.add(callId);
         let args: Record<string, unknown> = {};
         const raw = evt.arguments as string | undefined;
         if (raw) {

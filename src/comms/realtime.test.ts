@@ -342,3 +342,66 @@ describe('hearing the first spoken word (D9)', () => {
     expect(stopped).toBe(1);
   });
 });
+
+describe('one response.create per turn, whatever the tools do', () => {
+  /**
+   * The conductor calls `remember` and `capture_fuel` in the same turn as it
+   * speaks, so one turn produces several tool results. Sending a
+   * `response.create` per result made OpenAI reject the extras with
+   * "Conversation already has an active response in progress", which the user
+   * saw as an error toast at every turn switch.
+   */
+  async function turnWithTwoCalls() {
+    const { socket, session } = makeSession();
+    await session.connect();
+    socket.onopen!();
+    socket.emit({ type: 'response.created' });
+    for (const [id, name] of [['a', 'remember'], ['b', 'capture_fuel']] as const) {
+      socket.emit({ type: 'response.output_item.added', item: { type: 'function_call', call_id: id, name } });
+      socket.emit({ type: 'response.function_call_arguments.done', call_id: id, name, arguments: '{}' });
+    }
+    socket.sent.length = 0;
+    return { socket, session };
+  }
+
+  test('two results while the response is live send no create, and exactly one when it ends', async () => {
+    const { socket, session } = await turnWithTwoCalls();
+    session.sendFunctionResult('a', 'Noted.');
+    session.sendFunctionResult('b', 'Noted.');
+    expect(socket.sentTypes().filter((t) => t === 'response.create')).toHaveLength(0);
+
+    socket.emit({ type: 'response.done', response: {} });
+    expect(socket.sentTypes().filter((t) => t === 'response.create')).toHaveLength(1);
+  });
+
+  test('the function outputs are still delivered, deferral only holds the create', async () => {
+    const { socket, session } = await turnWithTwoCalls();
+    session.sendFunctionResult('a', 'Noted.');
+    session.sendFunctionResult('b', 'Noted.');
+    expect(socket.sentTypes().filter((t) => t === 'conversation.item.create')).toHaveLength(2);
+  });
+
+  test('a result arriving after the response finished creates immediately', async () => {
+    const { socket, session } = makeSession();
+    await session.connect();
+    socket.onopen!();
+    socket.emit({ type: 'response.created' });
+    socket.emit({ type: 'response.output_item.added', item: { type: 'function_call', call_id: 'c', name: 'remember' } });
+    socket.emit({ type: 'response.function_call_arguments.done', call_id: 'c', name: 'remember', arguments: '{}' });
+    socket.emit({ type: 'response.done', response: {} });
+    socket.sent.length = 0;
+
+    session.sendFunctionResult('c', 'Noted.');
+    expect(socket.sentTypes().filter((t) => t === 'response.create')).toHaveLength(1);
+  });
+
+  test('a turn with no tool calls is unaffected', async () => {
+    const { socket, session } = makeSession();
+    await session.connect();
+    socket.onopen!();
+    socket.emit({ type: 'response.created' });
+    socket.sent.length = 0;
+    socket.emit({ type: 'response.done', response: {} });
+    expect(socket.sentTypes().filter((t) => t === 'response.create')).toHaveLength(0);
+  });
+});
