@@ -120,11 +120,18 @@ const ELEVEN_PREMADE = [
 const IS_MAC = typeof navigator !== "undefined" && /mac|iphone|ipad/i.test(navigator.userAgent || (navigator as { platform?: string }).platform || "");
 // Deep links to the OS privacy pane per permission. The app can't self-grant
 // (the OS forbids it), but it can open the exact place you grant it.
-const PERM_PANE: Record<string, { mac: string; win: string }> = {
-  access: { mac: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility", win: "ms-settings:easeofaccess" },
-  screen: { mac: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture", win: "ms-settings:privacy-general" },
-  auto: { mac: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation", win: "ms-settings:privacy-general" },
-  files: { mac: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles", win: "ms-settings:privacy-broadfilesystemaccess" },
+/**
+ * macOS panes only. The Windows column that used to live here pointed at
+ * `ms-settings:` pages that cannot grant any of this — `easeofaccess` is the
+ * accessibility *features* page, and `privacy-general` has no toggle for
+ * screen capture or automation — so it sent people somewhere that could not
+ * help them. Windows shows a different screen entirely now.
+ */
+const PERM_PANE: Record<string, string> = {
+  access: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+  screen: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+  auto: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
+  files: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
 };
 
 // Play MP3 bytes returned by /api/tts/preview in the dashboard itself.
@@ -826,19 +833,52 @@ export function OnboardingWizard({
         ];
         return (
           <div className="obw-body"><div className="obw-wrap wide">
-            <h2>Let Jarvis reach your machine.</h2>
-            <div className="obw-sub">It acts on your computer through these. Jarvis can’t grant them itself (the OS won’t let it), so each one opens the exact settings pane. Grant what you’re comfortable with, or approve later when your {IS_MAC ? "Mac" : "PC"} asks.</div>
-            <div className="obw-rows" style={{ marginTop: 16 }}>
-              {rows.map(([id, name, body, req]) => (
-                <button key={id} type="button" className="obw-prow" style={{ cursor: "pointer", textAlign: "left", width: "100%", background: "var(--raise)" }}
-                  onClick={() => { try { window.open((IS_MAC ? PERM_PANE[id]?.mac : PERM_PANE[id]?.win) || "", "_blank"); } catch { /* webview may block the scheme */ } }}>
-                  <span className="pg"><Glyph k={id} /></span>
-                  <div className="pt"><div className="pn">{name}{req && <span className="req">required</span>}</div><div className="pb">{body}</div></div>
-                  <span className="obw-grant" style={{ pointerEvents: "none" }}>Open settings ↗</span>
-                </button>
-              ))}
-            </div>
-            <div className="obw-hint" style={{ marginTop: 12 }}>Review or revoke any of these anytime in {IS_MAC ? "System Settings → Privacy & Security" : "Windows Settings → Privacy & security"}, or from Settings → Permissions.</div>
+            {/* macOS gates each of these behind a pane the user must visit, and
+                Jarvis cannot grant them itself. Windows does not work that way:
+                the app already has what it needs, and the one thing it might
+                ask for later — the microphone, for the embedded browser window
+                — has no Settings toggle to pre-grant, so sending someone to
+                ms-settings: would be sending them somewhere that cannot help.
+                Same step either way, so the flow and the hosted setup POST
+                below are untouched; only what the screen says changes. */}
+            {IS_MAC ? (
+              <>
+                <h2>Let Jarvis reach your machine.</h2>
+                <div className="obw-sub">It acts on your computer through these. Jarvis can’t grant them itself (the OS won’t let it), so each one opens the exact settings pane. Grant what you’re comfortable with, or approve later when your Mac asks.</div>
+                <div className="obw-rows" style={{ marginTop: 16 }}>
+                  {rows.map(([id, name, body, req]) => (
+                    <button key={id} type="button" className="obw-prow" style={{ cursor: "pointer", textAlign: "left", width: "100%", background: "var(--raise)" }}
+                      onClick={() => { try { window.open(PERM_PANE[id] || "", "_blank"); } catch { /* webview may block the scheme */ } }}>
+                      <span className="pg"><Glyph k={id} /></span>
+                      <div className="pt"><div className="pn">{name}{req && <span className="req">required</span>}</div><div className="pb">{body}</div></div>
+                      <span className="obw-grant" style={{ pointerEvents: "none" }}>Open settings ↗</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="obw-hint" style={{ marginTop: 12 }}>Review or revoke any of these anytime in System Settings → Privacy &amp; Security.</div>
+              </>
+            ) : (
+              <>
+                <h2>Nothing to set up here.</h2>
+                <div className="obw-sub">Jarvis already has the access it needs on Windows — there is no permissions pane to visit and nothing for you to switch on.</div>
+                <div className="obw-rows" style={{ marginTop: 16 }}>
+                  <div className="obw-prow">
+                    <span className="pg"><Glyph k="check" /></span>
+                    <div className="pt">
+                      <div className="pn">All set</div>
+                      <div className="pb">Windows granted Jarvis what it needs when you installed it.</div>
+                    </div>
+                  </div>
+                  <div className="obw-prow">
+                    <span className="pg"><Glyph k="mic" /></span>
+                    <div className="pt">
+                      <div className="pn">Microphone</div>
+                      <div className="pb">Windows asks the first time you talk to Jarvis. It can only be granted then — there is no setting to turn it on in advance.</div>
+                    </div>
+                  </div>
+                </div>
+              </>
+            )}
             <div className="obw-btnrow">
               <button className="obw-btn obw-btn-ghost" onClick={back}>Back</button>
               <span className="grow" />
