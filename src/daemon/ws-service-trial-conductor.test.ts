@@ -41,7 +41,10 @@ function makeService(config: JarvisConfig = shippedConfig()) {
     wsServer: { getClients: () => Set<unknown>; broadcast: (m: unknown) => void };
     voiceSessions: Map<unknown, unknown>;
     realtimeSessions: Map<unknown, unknown>;
-    trialConductor: { isArmed: (ws: unknown) => boolean };
+    trialConductor: {
+      isArmed: (ws: unknown) => boolean;
+      executeTool: (ws: unknown, name: string, args: Record<string, unknown>) => Promise<string | null>;
+    };
     routeMessage: (msg: unknown, ws: unknown) => Promise<unknown>;
   };
   internals.wsServer.getClients().add(ws);
@@ -107,6 +110,20 @@ describe('an install with no trial entitlement', () => {
 
     expect(reply.payload.code).toBe('no_trial');
     expect(internals.trialConductor.isArmed(ws)).toBe(false);
+  });
+
+  test('cannot reach a room beat, and nothing it does opens a room', async () => {
+    // The beat tools only exist on a conductor session's tool list, but the
+    // executor is the fence that matters: a socket that never armed gets null
+    // from the conductor and falls through to the ordinary tool bridge, where
+    // no such tool is registered. Nothing is written and nothing is broadcast.
+    initDatabase(':memory:');
+    const { ws, internals, broadcast } = makeService();
+
+    for (const name of ['propose_goals', 'create_goals', 'set_authority', 'spawn_research_agent']) {
+      expect(await internals.trialConductor.executeTool(ws, name, {})).toBeNull();
+    }
+    expect(broadcast).toHaveLength(0);
   });
 });
 

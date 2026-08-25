@@ -264,7 +264,9 @@ Write it as ONE objective with two to four key results underneath, out of the se
 
 Say it out loud as a proposal and call \`propose_goals\` in the SAME turn, so it is on their screen while you are still saying it. Then ask them plainly whether to make it real.
 
-They say yes: call \`create_goals\`. They want it different: call \`propose_goals\` again with the change and ask again. Never write it without them.${quoted('their goal', fuel.goal)}`;
+They say yes: call \`create_goals\`. They want it different: call \`propose_goals\` again with the change and ask again. Never write it without them.
+
+If they never actually told you what this quarter is for, ask them now, once, in their language, and write it from their answer.${quoted('their goal', fuel.goal)}`;
 }
 
 export function tasksBrief(fuel: BeatFuel = {}): string {
@@ -304,7 +306,9 @@ Call \`propose_authority\` while you are saying it, and \`set_authority\` when t
 export function agentsBrief(fuel: BeatFuel = {}): string {
   return `Last thing, and it is the only part of this that keeps working after you stop talking.
 
-They mentioned something about their market or their business they have never had time to answer. Put someone on it. Say what you are sending them off to find out, then call \`spawn_research_agent\` with the question in their words and a brief saying what a useful answer would look like for them specifically.${quoted('the open question', fuel.open_question)}`;
+They mentioned something about their market or their business they have never had time to answer. Put someone on it. Say what you are sending them off to find out, then call \`spawn_research_agent\` with the question in their words and a brief saying what a useful answer would look like for them specifically.
+
+If no such question ever came up, ask for one now, plainly: the thing about their market they would look into if they had a spare afternoon. Do not invent one for them, and do not settle for something you could answer yourself in a sentence.${quoted('the open question', fuel.open_question)}`;
 }
 
 export const FINALE_MESSAGE =
