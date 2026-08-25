@@ -294,14 +294,22 @@ select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
    on the last slide with no way forward. Pinned to the bottom edge it is always
    whole and its buttons always reachable; the callout stops pointing at a
    specific row, which is the right thing to lose when the alternative is a
-   dead end. `!important` because each slide's position is an inline style. */
-@media (max-height: 560px) {
+   dead end. `!important` because each slide's position is an inline style, and
+   an important declaration in a stylesheet is the one thing that outranks one.
+   The breakpoint is derived, not guessed: the tour step renders no progress bar,
+   so the frame is about `viewport - 98px`, and slide 5's card runs to ~325px —
+   clipping starts near a 425px viewport. Pinning earlier than that only costs
+   the pointing, so there is a little headroom and no more. */
+@media (max-height: 470px) {
   .obw-spot {
     top: auto !important;
     bottom: 12px !important;
     left: 12px !important;
     right: 12px !important;
+    /* Bounded, or a wide-short window stretches the callout into a 1300px
+       ribbon of 13px text with its buttons stranded at the far end. */
     width: auto !important;
+    max-width: 420px !important;
   }
 }
 @media (prefers-reduced-motion: reduce) {

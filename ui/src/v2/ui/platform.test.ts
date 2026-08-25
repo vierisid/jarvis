@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { detectDesktop, detectMac, modKeyFor } from "./platform";
+import { altKeyFor, ctrlLabelFor, detectDesktop, detectMac, modKeyFor } from "./platform";
 
 /**
  * The onboarding tour told every Windows user to press a key their keyboard
@@ -60,5 +60,19 @@ describe("modKeyFor", () => {
     expect(modKeyFor("J", true)).toBe("⌘J");
     expect(modKeyFor("J", false)).toBe("Ctrl+J");
     expect(modKeyFor("K", false)).not.toContain("⌘");
+  });
+});
+
+describe("the other two modifiers", () => {
+  test("Option/Alt is its own key, not Command/Control", () => {
+    // The notifications bell binds `altKey`; labelling it with modKey would
+    // have written ⌘/Ctrl over a key that is neither.
+    expect(altKeyFor("N", true)).toBe("⌥N");
+    expect(altKeyFor("N", false)).toBe("Alt+N");
+  });
+
+  test("the bare Control glyph is a Mac keycap marking", () => {
+    expect(ctrlLabelFor(true)).toBe("⌃");
+    expect(ctrlLabelFor(false)).toBe("Ctrl");
   });
 });

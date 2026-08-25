@@ -59,6 +59,31 @@ const HOST_UA =
 export const DESKTOP: Desktop = detectDesktop(HOST_UA);
 export const IS_MAC = DESKTOP === "mac";
 
+/**
+ * The Option/Alt modifier, which is a DIFFERENT key from the one above — worth
+ * its own function rather than a parameter, because the bell's shortcut is
+ * `altKey` and reaching for `modKey` there would have written ⌘/Ctrl over a key
+ * that is neither.
+ */
+export function altKeyFor(key: string, isMac: boolean): string {
+  return isMac ? `⌥${key}` : `Alt+${key}`;
+}
+
+/** `⌥N` on a Mac, `Alt+N` everywhere else. */
+export function altKey(key: string): string {
+  return altKeyFor(key, IS_MAC);
+}
+
+/**
+ * The bare Control glyph, for shortcuts written as "<key>+click" rather than as
+ * a combination. `⌃` is a Mac keyboard's marking and means nothing on a PC
+ * keycap, which just reads "Ctrl".
+ */
+export function ctrlLabelFor(isMac: boolean): string {
+  return isMac ? "⌃" : "Ctrl";
+}
+export const CTRL_LABEL = ctrlLabelFor(IS_MAC);
+
 /** `⌘J` on a Mac, `Ctrl+J` everywhere else. */
 export function modKey(key: string): string {
   return modKeyFor(key, IS_MAC);

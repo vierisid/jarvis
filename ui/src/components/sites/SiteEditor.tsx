@@ -90,7 +90,7 @@ export function SiteEditor({ projectId, filePath }: Props) {
   // modifier and preventDefaults, so the browser's own save dialog never opens.
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
-      if ((e.ctrlKey || e.metaKey) && e.key === "s") {
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "s") {
         e.preventDefault();
         handleSave();
       }

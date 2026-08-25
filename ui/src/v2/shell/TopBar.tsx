@@ -4,7 +4,7 @@ import { ROOM_NAV_ENTRIES } from "../palette/types";
 import type { ConnectionState } from "./Header";
 import type { VoiceState } from "./VoiceRail";
 import { useTheme } from "./useTheme";
-import { modKey } from "../ui/platform";
+import { altKey, modKey } from "../ui/platform";
 
 /**
  * Top bar — 44px, never two rows. Left: room name + contextual actions
@@ -106,7 +106,7 @@ export function TopBar({
             aria-label={`Notifications${count > 0 ? `, ${count} unread` : ""}`}
             aria-expanded={notificationsOpen}
           >
-            <span className="bb">⌥N</span>
+            <span className="bb">{altKey("N")}</span>
             {count > 0 && <span className="bn">{count > 9 ? "9+" : count}</span>}
           </button>
         )}
