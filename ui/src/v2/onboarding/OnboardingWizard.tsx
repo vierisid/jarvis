@@ -3,7 +3,7 @@ import { useInterviewSession } from "./useInterviewSession";
 import type { OnboardingStatus } from "./useOnboardingStatus";
 import "./OnboardingWizard.css";
 import { modelForOnboardingTest, onboardingDefaultModelRef } from "./llm-setup";
-import { IS_MAC, modKey } from "../ui/platform";
+import { DESKTOP, modKey } from "../ui/platform";
 
 /* ═══════════════════ Onboarding · the nine-screen first-run flow ═══════════
    Faithful to the design (usejarvis-onboarding.html): Welcome · Permissions
@@ -119,8 +119,6 @@ const ELEVEN_PREMADE = [
 ];
 
 
-// Deep links to the OS privacy pane per permission. The app can't self-grant
-// (the OS forbids it), but it can open the exact place you grant it.
 /**
  * macOS panes only. The Windows column that used to live here pointed at
  * `ms-settings:` pages that cannot grant any of this — `easeofaccess` is the
@@ -829,7 +827,8 @@ export function OnboardingWizard({
       );
 
       case "perms": {
-        const rows: Array<[string, string, string, boolean]> = [
+        // macOS only — four strings that no other platform renders.
+        const macRows: Array<[string, string, string, boolean]> = [
           ["access", "Accessibility", "Click, type, and read on-screen controls so Jarvis can operate your apps.", true],
           ["screen", "Screen Recording", "See your screen for Awareness: OCR, and noticing when you’re stuck.", false],
           ["auto", "Automation", "Drive other apps directly: your calendar, browser, and mail.", false],
@@ -845,12 +844,12 @@ export function OnboardingWizard({
                 ms-settings: would be sending them somewhere that cannot help.
                 Same step either way, so the flow and the hosted setup POST
                 below are untouched; only what the screen says changes. */}
-            {IS_MAC ? (
+            {DESKTOP === "mac" ? (
               <>
                 <h2>Let Jarvis reach your machine.</h2>
                 <div className="obw-sub">It acts on your computer through these. Jarvis can’t grant them itself (the OS won’t let it), so each one opens the exact settings pane. Grant what you’re comfortable with, or approve later when your Mac asks.</div>
                 <div className="obw-rows" style={{ marginTop: 16 }}>
-                  {rows.map(([id, name, body, req]) => (
+                  {macRows.map(([id, name, body, req]) => (
                     <button key={id} type="button" className="obw-prow" style={{ cursor: "pointer", textAlign: "left", width: "100%", background: "var(--raise)" }}
                       onClick={() => { try { window.open(PERM_PANE[id] || "", "_blank"); } catch { /* webview may block the scheme */ } }}>
                       <span className="pg"><Glyph k={id} /></span>
@@ -864,22 +863,36 @@ export function OnboardingWizard({
             ) : (
               <>
                 <h2>Nothing to set up here.</h2>
-                <div className="obw-sub">Jarvis already has the access it needs on Windows — there is no permissions pane to visit and nothing for you to switch on.</div>
+                <div className="obw-sub">Jarvis already has the access it needs{DESKTOP === "windows" ? " on Windows" : ""} — none of it is gated behind a permission you have to grant first.</div>
                 <div className="obw-rows" style={{ marginTop: 16 }}>
                   <div className="obw-prow">
                     <span className="pg"><Glyph k="check" /></span>
                     <div className="pt">
                       <div className="pn">All set</div>
-                      <div className="pb">Windows granted Jarvis what it needs when you installed it.</div>
+                      <div className="pb">Nothing to switch on for Jarvis to act on your machine.</div>
                     </div>
                   </div>
-                  <div className="obw-prow">
-                    <span className="pg"><Glyph k="mic" /></span>
-                    <div className="pt">
-                      <div className="pn">Microphone</div>
-                      <div className="pb">Windows asks the first time you talk to Jarvis. It can only be granted then — there is no setting to turn it on in advance.</div>
-                    </div>
-                  </div>
+                  {DESKTOP === "windows" && (
+                    // The ONE pane that is real here. Windows has no per-app
+                    // permission model for a desktop app, so the microphone is
+                    // governed by a single global toggle — and with it off there
+                    // is no in-the-moment prompt to rescue you, the capture just
+                    // fails. The sidecar's own native wizard deep-links exactly
+                    // this page for exactly this reason.
+                    <button
+                      type="button"
+                      className="obw-prow"
+                      style={{ cursor: "pointer", textAlign: "left", width: "100%", background: "var(--raise)" }}
+                      onClick={() => { try { window.open("ms-settings:privacy-microphone", "_blank"); } catch { /* webview may block the scheme */ } }}
+                    >
+                      <span className="pg"><Glyph k="mic" /></span>
+                      <div className="pt">
+                        <div className="pn">Microphone</div>
+                        <div className="pb">Only needed if you want to talk to Jarvis. Windows keeps one switch for all desktop apps — check it is on if the mic stays silent.</div>
+                      </div>
+                      <span className="obw-grant" style={{ pointerEvents: "none" }}>Open settings ↗</span>
+                    </button>
+                  )}
                 </div>
               </>
             )}

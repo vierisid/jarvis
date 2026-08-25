@@ -17,9 +17,32 @@
  * detection bug that reports Mac everywhere.
  */
 
+export type Desktop = "mac" | "windows" | "other";
+
+/**
+ * Classify the host from its user-agent, POSITIVELY — never "not a Mac,
+ * therefore Windows".
+ *
+ * That inference is what this replaces, and it was wrong twice over. The app
+ * ships on Linux too, so "not a Mac" named the wrong OS to those users; and a
+ * WebKit build on Linux can carry a mac-shaped agent string, so the Linux
+ * marker is checked FIRST and wins — better to fall through to copy that names
+ * no OS than to hand a Linux user a button that opens an Apple settings pane.
+ *
+ * A UA is still a guess. The host knows for certain (the sidecar is Go, and
+ * `runtime.GOOS` is right there); if this ever needs to be reliable rather than
+ * merely careful, that is where the answer should come from.
+ */
+export function detectDesktop(uaOrPlatform: string): Desktop {
+  if (/x11|linux|android|cros/i.test(uaOrPlatform)) return "other";
+  if (/mac|iphone|ipad/i.test(uaOrPlatform)) return "mac";
+  if (/windows|win32|win64/i.test(uaOrPlatform)) return "windows";
+  return "other";
+}
+
 /** Does this user-agent (or legacy platform string) describe a Mac? */
 export function detectMac(uaOrPlatform: string): boolean {
-  return /mac|iphone|ipad/i.test(uaOrPlatform);
+  return detectDesktop(uaOrPlatform) === "mac";
 }
 
 /** Write a modifier shortcut the way the given platform writes it. */
@@ -27,9 +50,14 @@ export function modKeyFor(key: string, isMac: boolean): string {
   return isMac ? `⌘${key}` : `Ctrl+${key}`;
 }
 
-export const IS_MAC =
-  typeof navigator !== "undefined" &&
-  detectMac(navigator.userAgent || (navigator as { platform?: string }).platform || "");
+const HOST_UA =
+  typeof navigator !== "undefined"
+    ? navigator.userAgent || (navigator as { platform?: string }).platform || ""
+    : "";
+
+/** What this app is running on, as best a user-agent can say. */
+export const DESKTOP: Desktop = detectDesktop(HOST_UA);
+export const IS_MAC = DESKTOP === "mac";
 
 /** `⌘J` on a Mac, `Ctrl+J` everywhere else. */
 export function modKey(key: string): string {

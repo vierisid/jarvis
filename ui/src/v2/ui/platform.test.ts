@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { detectMac, modKeyFor } from "./platform";
+import { detectDesktop, detectMac, modKeyFor } from "./platform";
 
 /**
  * The onboarding tour told every Windows user to press a key their keyboard
@@ -33,6 +33,25 @@ describe("detectMac", () => {
     // this one fails immediately.
     expect(detectMac("")).toBe(false);
     expect(detectMac("Bun/1.3.14")).toBe(false);
+  });
+});
+
+describe("detectDesktop", () => {
+  test("names an OS only when it can positively identify one", () => {
+    expect(detectDesktop(MAC_WEBVIEW)).toBe("mac");
+    expect(detectDesktop(WINDOWS_WEBVIEW2)).toBe("windows");
+    expect(detectDesktop(LINUX)).toBe("other");
+    // Unknown is "other", never Windows by elimination — the screen that names
+    // an OS has to be sure, or it tells a Linux user about Windows settings.
+    expect(detectDesktop("")).toBe("other");
+    expect(detectDesktop("Bun/1.3.14")).toBe("other");
+  });
+
+  test("a Linux marker beats a mac-shaped agent string", () => {
+    // Some WebKit builds on Linux carry a macOS-looking UA. Falling through to
+    // OS-neutral copy is recoverable; handing a Linux user a button that opens
+    // an Apple settings pane is the exact failure this file exists to stop.
+    expect(detectDesktop("Mozilla/5.0 (X11; Linux x86_64) ... Macintosh; Intel Mac OS X 10_15")).toBe("other");
   });
 });
 

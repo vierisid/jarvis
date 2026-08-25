@@ -148,6 +148,10 @@ select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
 .obw-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
 .obw-prow { display: flex; align-items: center; gap: 13px; padding: 13px 14px; border: 1px solid var(--rule); border-radius: 11px 2px 11px 11px; background: var(--raise); }
 .obw-prow .pg { width: 36px; height: 36px; flex-shrink: 0; border-radius: 9px 2px 9px 9px; background: var(--panel); display: grid; place-items: center; color: var(--ink2); }
+/* Every row glyph reads the same size. The set is not uniform at source —
+   `check` is drawn at 15px and the rest at 18px — which only showed once two
+   rows sat side by side using different ones. */
+.obw-prow .pg svg { width: 18px; height: 18px; }
 .obw-prow .pt { flex: 1; min-width: 0; }
 .obw-prow .pt .pn { font-size: 13px; font-weight: 600; color: var(--ink); }
 .obw-prow .pt .pn .req { font-family: var(--mono); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--listen); margin-left: 7px; }
