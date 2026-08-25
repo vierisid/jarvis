@@ -4,7 +4,7 @@ import { findEntities } from '../../vault/entities.ts';
 import { findFacts } from '../../vault/facts.ts';
 import { getUserProfile } from '../../vault/user-profile.ts';
 import {
-  CONCLUDE_RESULT_MESSAGE,
+  concludeResultMessage,
   CONDUCTOR_TOOLS,
   FUEL_AREA_KEYS,
   TRIAL_OPENING_LINE,
@@ -268,9 +268,26 @@ describe('conclude_opening, the seam (D17)', () => {
     initDatabase(':memory:');
     const session = createConductorSession(1000);
     const r = executeConductorTool(session, 'conclude_opening', { understanding: 'x' }, {}, 2000);
-    expect(r?.message).toBe(CONCLUDE_RESULT_MESSAGE);
-    expect(CONCLUDE_RESULT_MESSAGE).toContain('Stay in the conversation');
-    expect(CONCLUDE_RESULT_MESSAGE).toContain('Say nothing about this');
+    expect(r?.message).toBe(concludeResultMessage(session));
+    // It is a marker, not a moment: it must not read as an ending, and it must
+    // hand the model straight into the first beat rather than into a pause.
+    expect(r!.message).toContain('Say nothing about this');
+    expect(r!.message).not.toContain('onboarding');
+    expect(r!.message).toContain('propose_goals');
+  });
+
+  test('the seam carries the founder\'s own words into the first beat', () => {
+    initDatabase(':memory:');
+    const session = createConductorSession(1000);
+    executeConductorTool(
+      session,
+      'capture_fuel',
+      { area: 'goal', summary: 'Forty paying customers by the end of Q3.' },
+      {},
+      1500,
+    );
+    const r = executeConductorTool(session, 'conclude_opening', { understanding: 'x' }, {}, 2000);
+    expect(r!.message).toContain('Forty paying customers by the end of Q3.');
   });
 });
 

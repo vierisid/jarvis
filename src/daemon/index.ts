@@ -3829,6 +3829,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     settingsReload.registerApplier('awareness', async (cfg) => {
       awarenessService?.toggle(cfg.awareness?.enabled !== false);
     });
+    // goals: the rhythm crons are derived from morning_window/evening_window,
+    // so a changed brief hour has to reschedule rather than wait for a restart.
+    // The trial's calendar beat is the reason this exists: the founder picks
+    // the hour out loud and it has to be the hour that actually fires.
+    settingsReload.registerApplier('goals', async (cfg) => {
+      if (cfg.goals) goalService?.updateConfig(cfg.goals);
+    });
     // voice needs no applier: resolveRealtimeVoice reads live config per call.
 
     // ── Tray menu live data (design: usejarvis-tray §00) ──

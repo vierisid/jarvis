@@ -291,6 +291,14 @@ export type WorkflowConfig = {
 export type GoalConfig = {
   enabled: boolean;
   morning_window: { start: number; end: number };
+  /**
+   * Minutes past `morning_window.start` that the morning rhythm fires.
+   * Absent means on the hour, which is what every install had before this
+   * existed. The trial's calendar beat writes it, because a founder who says
+   * "half seven" and gets seven has been told a small lie on the one
+   * appointment the next morning depends on.
+   */
+  morning_minute?: number;
   evening_window: { start: number; end: number };
   accountability_style: 'drill_sergeant' | 'supportive' | 'balanced';
   escalation_weeks: { pressure: number; root_cause: number; suggest_kill: number };

@@ -19,13 +19,28 @@ type Sock = { id: string };
 function harness(now = () => T0, clockGraceMs?: number) {
   const sent: Array<{ ws: Sock; msg: WSMessage }> = [];
   const broadcast: WSMessage[] = [];
+  const actions = {
+    workflows: [] as string[],
+    brief: null as { hour: number; minute: number } | null,
+    authority: null as number | null,
+    spawned: [] as string[],
+  };
   const manager = new TrialConductorManager<Sock>({
     send: (ws, msg) => sent.push({ ws, msg }),
     broadcast: (msg) => broadcast.push(msg),
     now,
     clockGraceMs,
+    beatActions: {
+      publishWorkflow: async (p) => { actions.workflows.push(p.name); return { ok: true as const, detail: 'built' }; },
+      setMorningBrief: (hour, minute) => { actions.brief = { hour, minute }; },
+      setAuthorityLevel: (level) => { actions.authority = level; return level; },
+      spawnResearchAgent: async (question) => {
+        actions.spawned.push(question);
+        return { agentId: 'a1', taskId: 't1', agentName: 'Research Analyst' };
+      },
+    },
   });
-  return { manager, sent, broadcast, ws: { id: 'a' } as Sock };
+  return { manager, sent, broadcast, actions, ws: { id: 'a' } as Sock };
 }
 
 describe('transcriptHasWords', () => {
@@ -178,7 +193,7 @@ describe('the clock backstop when transcription never arrives', () => {
 describe('live surfaces', () => {
   afterEach(() => closeDb());
 
-  test('entities landing are broadcast, not sent to the conductor socket alone', () => {
+  test('entities landing are broadcast, not sent to the conductor socket alone', async () => {
     // The memory room lives on the shell's own socket. A targeted send would
     // leave it waiting on its 8-second poll, which is not "in real time" (D22).
     initDatabase(':memory:');
@@ -187,7 +202,7 @@ describe('live surfaces', () => {
     manager.arm(ws);
     manager.begin(ws);
 
-    manager.executeTool(ws, 'remember', { entities: [{ name: 'Kestrel', type: 'concept', role: 'company' }] });
+    await manager.executeTool(ws, 'remember', { entities: [{ name: 'Kestrel', type: 'concept', role: 'company' }] });
 
     const memory = broadcast.find((m) => m.type === 'trial_memory');
     expect(memory).toBeDefined();
@@ -195,14 +210,14 @@ describe('live surfaces', () => {
     expect(sent.filter((s) => s.msg.type === 'trial_memory')).toHaveLength(0);
   });
 
-  test('concluding stamps the seam on the entitlement and announces it', () => {
+  test('concluding stamps the seam on the entitlement and announces it', async () => {
     initDatabase(':memory:');
     issueTrialEntitlement({ now: T0 });
     const { manager, ws, broadcast } = harness(() => T0 + 1000);
     manager.arm(ws);
     manager.begin(ws);
 
-    manager.executeTool(ws, 'conclude_opening', { understanding: 'Two-person B2B SaaS.' });
+    await manager.executeTool(ws, 'conclude_opening', { understanding: 'Two-person B2B SaaS.' });
 
     expect(readTrialEntitlement()?.opening_completed_at).toBe(T0 + 1000);
     const done = broadcast.find((m) => m.type === 'trial_opening_complete');
@@ -210,9 +225,180 @@ describe('live surfaces', () => {
     expect((done!.payload as { understanding: string }).understanding).toBe('Two-person B2B SaaS.');
   });
 
-  test('a tool call on a socket with no conductor session is not the conductor\'s', () => {
+  test('a tool call on a socket with no conductor session is not the conductor\'s', async () => {
     initDatabase(':memory:');
     const { manager, ws } = harness(() => T0);
-    expect(manager.executeTool(ws, 'remember', {})).toBeNull();
+    expect(await manager.executeTool(ws, 'remember', {})).toBeNull();
+  });
+});
+
+/* ─────────────────── the seam, and the seven beats ─────────────────── */
+
+describe('the join between the opening and the beats', () => {
+  afterEach(() => closeDb());
+
+  test('a beat tool is refused until the opening concludes, and works the moment it does', async () => {
+    initDatabase(':memory:');
+    issueTrialEntitlement({ now: T0 });
+    const { manager, ws } = harness(() => T0);
+    manager.arm(ws);
+    manager.begin(ws);
+
+    const early = await manager.executeTool(ws, 'propose_goals', {
+      objective: 'x', key_results: [{ title: 'y' }],
+    });
+    expect(early).toContain('conclude_opening');
+    expect(manager.beatsOf(ws)!.open).toBe(false);
+
+    await manager.executeTool(ws, 'conclude_opening', { understanding: 'ok' });
+    expect(manager.beatsOf(ws)!.open).toBe(true);
+
+    const now = await manager.executeTool(ws, 'propose_goals', {
+      objective: '40 paying customers by the end of Q3', key_results: [{ title: '12 demos a month' }],
+    });
+    expect(now).toContain('On their screen');
+  });
+
+  test('concluding does not end anything: no close, no handover, session still live', async () => {
+    initDatabase(':memory:');
+    issueTrialEntitlement({ now: T0 });
+    const { manager, ws, broadcast } = harness(() => T0);
+    manager.arm(ws);
+    manager.begin(ws);
+    await manager.executeTool(ws, 'conclude_opening', { understanding: 'ok' });
+
+    expect(manager.isRunning(ws)).toBe(true);
+    expect(manager.isArmed(ws)).toBe(true);
+    // Nothing on the wire tells the founder the conversation changed gear.
+    expect(broadcast.some((m) => m.type === 'realtime_status')).toBe(false);
+    expect(broadcast.some((m) => m.type === 'tts_end')).toBe(false);
+  });
+});
+
+describe('what the founder sees during a beat', () => {
+  afterEach(() => closeDb());
+
+  async function openedManager() {
+    initDatabase(':memory:');
+    issueTrialEntitlement({ now: T0 });
+    const h = harness(() => T0);
+    h.manager.arm(h.ws);
+    h.manager.begin(h.ws);
+    await h.manager.executeTool(h.ws, 'conclude_opening', { understanding: 'ok' });
+    h.broadcast.length = 0;
+    return h;
+  }
+
+  test('the pebble leads them to the room before the room opens (D21)', async () => {
+    const { manager, ws, broadcast } = await openedManager();
+    await manager.executeTool(ws, 'propose_goals', { objective: 'o', key_results: [{ title: 'k' }] });
+
+    const point = broadcast.findIndex((m) => m.type === 'trial_point');
+    const nav = broadcast.findIndex(
+      (m) => m.type === 'notification' && (m.payload as { source?: string }).source === 'navigate_room',
+    );
+    expect(point).toBeGreaterThanOrEqual(0);
+    expect(nav).toBeGreaterThan(point);
+    expect((broadcast[point]!.payload as { target: string }).target).toBe('room:goals');
+  });
+
+  test('the pebble does not re-fly for a second proposal in the same room', async () => {
+    const { manager, ws, broadcast } = await openedManager();
+    await manager.executeTool(ws, 'propose_goals', { objective: 'o', key_results: [{ title: 'k' }] });
+    const first = broadcast.filter((m) => m.type === 'trial_point').length;
+    await manager.executeTool(ws, 'propose_goals', { objective: 'o2', key_results: [{ title: 'k2' }] });
+    expect(broadcast.filter((m) => m.type === 'trial_point')).toHaveLength(first);
+  });
+
+  test('what lands is pushed into the room, not left to its poll (D22)', async () => {
+    const { manager, ws, broadcast } = await openedManager();
+    await manager.executeTool(ws, 'propose_goals', { objective: 'o', key_results: [{ title: 'k' }] });
+    await manager.executeTool(ws, 'create_goals', {});
+
+    const refresh = broadcast.find(
+      (m) => m.type === 'notification'
+        && (m.payload as { source?: string; action?: string }).source === 'room_action'
+        && (m.payload as { action?: string }).action === 'refresh',
+    );
+    expect(refresh).toBeDefined();
+    expect((refresh!.payload as { room: string }).room).toBe('goals');
+    // And the card resolves rather than just vanishing.
+    const landed = broadcast.filter((m) => m.type === 'trial_proposal').at(-1);
+    expect((landed!.payload as { proposal: unknown; landed?: unknown }).proposal).toBeNull();
+    expect((landed!.payload as { landed?: { beat: string } }).landed?.beat).toBe('goals');
+  });
+
+  test('the proposal is broadcast so it reaches the shell, not only the conductor socket', async () => {
+    const { manager, ws, broadcast, sent } = await openedManager();
+    sent.length = 0;
+    await manager.executeTool(ws, 'propose_goals', { objective: 'o', key_results: [{ title: 'k' }] });
+    expect(broadcast.some((m) => m.type === 'trial_proposal')).toBe(true);
+    expect(sent.some((s) => s.msg.type === 'trial_proposal')).toBe(false);
+  });
+});
+
+describe('the finale', () => {
+  afterEach(() => closeDb());
+
+  test('the whole arc runs on one session and ends with onboarding complete', async () => {
+    initDatabase(':memory:');
+    issueTrialEntitlement({ now: T0 });
+    const { manager, ws, broadcast, actions } = harness(() => T0);
+    manager.arm(ws);
+    manager.begin(ws);
+    const run = (n: string, a: Record<string, unknown> = {}) => manager.executeTool(ws, n, a);
+
+    await run('conclude_opening', { understanding: 'Two-person B2B SaaS.' });
+    await run('propose_goals', { objective: '40 customers by Q3', key_results: [{ title: '12 demos a month' }] });
+    await run('create_goals');
+    await run('propose_tasks', { tasks: [{ what: 'Send Bowman the quote' }] });
+    await run('create_tasks');
+    await run('propose_morning_brief', { hour: 7, minute: 30 });
+    await run('set_morning_brief');
+    await run('propose_workflow', { name: 'Monday pipeline review', runs_when: 'Mondays at 8', steps: ['Pull open deals'] });
+    await run('publish_workflow');
+    await run('propose_authority', {});
+    await run('set_authority', {});
+    await run('spawn_research_agent', { question: 'What the competitors charge', brief: 'Compare published prices.' });
+
+    expect(actions.brief).toEqual({ hour: 7, minute: 30 });
+    expect(actions.authority).toBe(5);
+    expect(actions.workflows).toEqual(['Monday pipeline review']);
+    expect(actions.spawned).toEqual(['What the competitors charge']);
+
+    const done = broadcast.find((m) => m.type === 'trial_onboarding_complete');
+    expect(done).toBeDefined();
+    const payload = done!.payload as { beats: string[]; authorityLevel: number; agent: { agentId: string } };
+    expect(payload.beats).toEqual(['goals', 'tasks', 'calendar', 'workflows', 'authority', 'agents']);
+    expect(payload.authorityLevel).toBe(5);
+    expect(payload.agent.agentId).toBe('a1');
+
+    // D17: onboarding finished, the conversation did not. Nothing closed it.
+    expect(manager.isRunning(ws)).toBe(true);
+    expect(manager.beatsOf(ws)!.finishedAt).toBe(T0);
+  });
+
+  test('an install with no beat actions wired refuses out loud instead of pretending', async () => {
+    initDatabase(':memory:');
+    issueTrialEntitlement({ now: T0 });
+    const sent: Array<{ ws: Sock; msg: WSMessage }> = [];
+    const broadcast: WSMessage[] = [];
+    const manager = new TrialConductorManager<Sock>({
+      send: (ws, msg) => sent.push({ ws, msg }),
+      broadcast: (msg) => broadcast.push(msg),
+      now: () => T0,
+    });
+    const ws: Sock = { id: 'a' };
+    manager.arm(ws);
+    manager.begin(ws);
+    await manager.executeTool(ws, 'conclude_opening', { understanding: 'ok' });
+    await manager.executeTool(ws, 'propose_goals', { objective: 'o', key_results: [{ title: 'k' }] });
+    await manager.executeTool(ws, 'create_goals');
+    await manager.executeTool(ws, 'propose_tasks', { tasks: [{ what: 'a' }] });
+    await manager.executeTool(ws, 'create_tasks');
+    await manager.executeTool(ws, 'propose_morning_brief', { hour: 8 });
+    const res = await manager.executeTool(ws, 'set_morning_brief');
+    expect(res).toContain('did not save');
+    expect(manager.beatsOf(ws)!.briefAt).toBeNull();
   });
 });

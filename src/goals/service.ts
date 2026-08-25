@@ -73,37 +73,36 @@ export class GoalService implements Service {
     }
   }
 
-  async start(): Promise<void> {
-    if (!this.config.enabled) {
-      this._status = 'stopped';
-      console.log('[GoalService] Disabled by config');
-      return;
-    }
-
-    // Idempotency guard. Cron.schedule auto-cancels duplicates by id, but
-    // eventBus.subscribe creates a fresh subscription each call - without
-    // this guard a re-start would double accountability/health checks.
-    if (this._status === 'running' || this._status === 'starting') {
-      console.log('[GoalService] start() called while already running - ignoring');
-      return;
-    }
-
-    this._status = 'starting';
-
-    // Morning/evening rhythm: fire once at the start hour of each window using
-    // a dedicated cron job. The previous 60s timer was a polling approximation
-    // of "trigger sometime within the window"; once-at-start is more precise.
-    // Clamp to a valid cron hour (0-23) so an out-of-range config value falls
-    // back to a sane default rather than failing the schedule call.
+  /**
+   * Morning/evening rhythm: fire once at the start of each window using a
+   * dedicated cron job. The previous 60s timer was a polling approximation of
+   * "trigger sometime within the window"; once-at-start is more precise.
+   * Clamp to a valid cron hour (0-23) and minute (0-59) so an out-of-range
+   * config value falls back to a sane default rather than failing the
+   * schedule call.
+   *
+   * Split out of start() so the hour can be changed while the daemon is
+   * running. The trial's calendar beat is why: the founder chooses the hour
+   * their morning brief arrives, out loud, and a chosen hour that only takes
+   * effect after a restart is a promise the product does not keep.
+   * `cron.schedule` cancels a duplicate id before re-adding, so calling this
+   * again is a reschedule, not a second job.
+   */
+  private applyRhythmSchedule(): void {
     const clampHour = (h: number, fallback: number): number => {
       const n = Math.floor(h);
       return Number.isFinite(n) && n >= 0 && n <= 23 ? n : fallback;
     };
+    const clampMinute = (m: number | undefined): number => {
+      const n = Math.floor(m ?? 0);
+      return Number.isFinite(n) && n >= 0 && n <= 59 ? n : 0;
+    };
     const morningHour = clampHour(this.config.morning_window?.start ?? 7, 7);
+    const morningMinute = clampMinute(this.config.morning_minute);
     const eveningHour = clampHour(this.config.evening_window?.start ?? 20, 20);
 
     try {
-      this.cron.schedule('goals:morning', `0 ${morningHour} * * *`, () => {
+      this.cron.schedule('goals:morning', `${morningMinute} ${morningHour} * * *`, () => {
         this.runMorningPlan().catch(err =>
           console.error('[GoalService] Morning plan error:', err),
         );
@@ -121,6 +120,38 @@ export class GoalService implements Service {
     } catch (err) {
       console.error('[GoalService] Failed to schedule evening cron:', err);
     }
+  }
+
+  /**
+   * Adopt a new goal config while running, and reschedule the rhythm from it.
+   * Registered as the `goals` settings-reload applier, so any write to the
+   * section (dashboard, or the trial's `set_morning_brief`) lands on the live
+   * schedule. A no-op while stopped: start() applies the schedule itself.
+   */
+  updateConfig(config: GoalConfig): void {
+    this.config = config;
+    if (this._status !== 'running' && this._status !== 'starting') return;
+    this.applyRhythmSchedule();
+  }
+
+  async start(): Promise<void> {
+    if (!this.config.enabled) {
+      this._status = 'stopped';
+      console.log('[GoalService] Disabled by config');
+      return;
+    }
+
+    // Idempotency guard. Cron.schedule auto-cancels duplicates by id, but
+    // eventBus.subscribe creates a fresh subscription each call - without
+    // this guard a re-start would double accountability/health checks.
+    if (this._status === 'running' || this._status === 'starting') {
+      console.log('[GoalService] start() called while already running - ignoring');
+      return;
+    }
+
+    this._status = 'starting';
+
+    this.applyRhythmSchedule();
 
     // Accountability + global health sweep: piggyback on cron.hourly so
     // escalation-by-weeks and deadline-ratio-driven health transitions update
@@ -145,9 +176,7 @@ export class GoalService implements Service {
     }
 
     this._status = 'running';
-    console.log(
-      `[GoalService] Started (morning=0 ${morningHour} * * *, evening=0 ${eveningHour} * * *, accountability+health=cron.hourly)`,
-    );
+    console.log('[GoalService] Started (rhythm crons scheduled, accountability+health=cron.hourly)');
   }
 
   async stop(): Promise<void> {

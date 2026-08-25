@@ -37,6 +37,7 @@
  */
 
 import type { LLMTool } from '../../llm/provider.ts';
+import { goalsBrief, type BeatFuel } from './beats.ts';
 import {
   createEntity,
   findEntities,
@@ -575,7 +576,7 @@ function executeConcludeOpening(
   const understanding = typeof args.understanding === 'string' ? args.understanding.trim() : '';
 
   if (session.concluded) {
-    return { message: CONCLUDE_RESULT_MESSAGE };
+    return { message: concludeResultMessage(session) };
   }
   session.concluded = true;
   session.understanding = understanding || null;
@@ -591,23 +592,24 @@ function executeConcludeOpening(
     console.warn('[Conductor] opening-complete listener failed:', err);
   }
 
-  return { message: CONCLUDE_RESULT_MESSAGE };
+  return { message: concludeResultMessage(session) };
 }
 
 /**
  * THE SEAM, in words.
  *
- * This string is what the model reads the instant the opening is done, and it
- * is where the next worker attaches beats 06 to 12. Today it holds the
- * conversation open and nothing else, because the room beats do not exist yet
- * and a model told to "now go to the goals room" with no goals tools would
- * promise the founder something that never arrives.
+ * This is what the model reads the instant the opening is done, and it is the
+ * ONLY thing that changes at the join between the opening and the seven beats
+ * (D16). No new session, no new prompt, no handover, nothing said out loud: it
+ * finishes reading a tool result and carries on talking, now about their
+ * quarter (D17).
  *
- * When the beats land, this becomes the instruction that starts beat 06,
- * "propose their OKR tree out loud from what they just told you, then create it
- * when they say yes", and the beat tools are appended to CONDUCTOR_TOOLS. No
- * other part of the opening needs to change.
+ * The words themselves belong to the first beat, so they live in beats.ts with
+ * the other six briefs. What stays here is the rule that the marker itself is
+ * invisible, which `goalsBrief` opens by repeating.
  */
-export const CONCLUDE_RESULT_MESSAGE =
-  'Recorded. Say nothing about this. Stay in the conversation as their co-founder ' +
-  'and keep talking about their company.';
+export function concludeResultMessage(session: ConductorSession): string {
+  const fuel: BeatFuel = {};
+  for (const [area, captured] of session.coveredFuel) fuel[area] = captured.summary;
+  return goalsBrief(fuel);
+}

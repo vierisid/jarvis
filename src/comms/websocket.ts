@@ -75,7 +75,16 @@ export type WSMessage = {
       // `trial_fuel` reports one of the five soft targets being captured, and
       // `trial_opening_complete` is the seam the room beats attach to (D17,
       // NOT the end of the conversation).
-      | 'trial_status' | 'trial_memory' | 'trial_fuel' | 'trial_opening_complete';
+      | 'trial_status' | 'trial_memory' | 'trial_fuel' | 'trial_opening_complete'
+      // ─── The seven room beats (06 to 12). All server → client. ───
+      // `trial_point` flies the conductor's pebble to a target and holds a
+      // label there, which is D21's "guide with physical presence": it leads
+      // the founder's eye to the room before the room opens. `trial_proposal`
+      // carries the one thing currently awaiting their spoken yes, or null
+      // plus what just landed. `trial_beat` fires as each of the six stops
+      // completes, and `trial_onboarding_complete` when the finale's agent is
+      // running. NONE of them ends the conversation (D17).
+      | 'trial_point' | 'trial_proposal' | 'trial_beat' | 'trial_onboarding_complete';
   payload: unknown;
   id?: string;
   priority?: 'urgent' | 'normal' | 'low';

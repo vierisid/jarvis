@@ -50,6 +50,25 @@ import {
   TRIAL_OPENING_LINE,
   buildConductorInstructions,
 } from './trial/conductor.ts';
+import { ROOM_BEAT_TOOLS, type WorkflowProposal } from './trial/beats.ts';
+import { saveUserSection } from './user-settings.ts';
+import { DEFAULT_CONFIG } from '../config/types.ts';
+
+/**
+ * How long the trial's workflow beat waits for the composer before it gives
+ * up and hands the model a sentence to say. The founder is listening to
+ * silence for the whole of it (D20 says slowness is fine, but a hang is not
+ * slowness), and a compose that has not landed in this long is not going to.
+ */
+const TRIAL_COMPOSE_TIMEOUT_MS = 90_000;
+
+/**
+ * Specialist roles the trial's finale will use for its research agent, best
+ * first. Falls back to whatever is installed rather than failing the finale:
+ * the beat that matters is "someone is working on your question", not which
+ * role file it came from.
+ */
+const TRIAL_RESEARCH_SPECIALISTS = ['research-analyst', 'data-analyst'];
 import { isTrialRunning, readTrialEntitlement, trialSnapshot } from '../trial/entitlement.ts';
 import { withTrialRealtime } from '../trial/realtime-overlay.ts';
 import { classifyErrorString } from '../llm/provider.ts';
@@ -252,6 +271,15 @@ export class WebSocketService implements Service {
   private trialConductor = new TrialConductorManager<ServerWebSocket<unknown>>({
     send: (ws, msg) => this.wsServer.sendToClient(ws, msg),
     broadcast: (msg) => this.wsServer.broadcast(msg),
+    // The four things D16's beats need that are not a local vault write. Bound
+    // here because this is where the service graph is reachable; the beats
+    // themselves know nothing about it. See trial/beats.ts.
+    beatActions: {
+      publishWorkflow: (p) => this.trialPublishWorkflow(p),
+      setMorningBrief: (hour, minute) => this.trialSetMorningBrief(hour, minute),
+      setAuthorityLevel: (level) => this.trialSetAuthorityLevel(level),
+      spawnResearchAgent: (question, brief) => this.trialSpawnResearchAgent(question, brief),
+    },
   });
   /**
    * Periodic sweep handle for `pendingVoiceConfirmations` TTL eviction.
@@ -1639,7 +1667,15 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     const session = new RealtimeVoiceSession(resolved, transport, {
       // Agent tools + dashboard navigation/in-room-action tools so the model
       // can drive the UI by voice (open settings, turn off TTS, go back…).
-      tools: conductor ? CONDUCTOR_TOOLS : [...orchestrator.getRealtimeTools(), ...REALTIME_NAV_TOOLS],
+      // The conductor's surface is the opening's three tools plus D16's room
+      // beats, and NOTHING else: no agent bridge, no dashboard navigation.
+      // Navigation is deliberately absent even now that the beats open rooms.
+      // The rooms open as a CONSEQUENCE of the work (see enterRoom in the
+      // conductor manager), never because the model decided to show the
+      // founder around, which is what D16.1 and D12's "no tour" rule out.
+      tools: conductor
+        ? [...CONDUCTOR_TOOLS, ...ROOM_BEAT_TOOLS]
+        : [...orchestrator.getRealtimeTools(), ...REALTIME_NAV_TOOLS],
       // Lean voice prompt (~100 tokens) instead of the full ~5.6k-token agent
       // prompt — the big context was the dominant per-turn latency for simple
       // questions. Tools stay, so capability is unchanged. See agent-service.
@@ -1661,12 +1697,12 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       onUserSpeechStopped: conductor ? () => this.trialConductor.onUserSpeechStopped(ws) : undefined,
       executeToolCall: (name, args) => {
         if (conductor) {
-          const result = this.trialConductor.executeTool(ws, name, args);
           // The conductor's tool surface is closed on purpose. Anything else
           // the model invents is refused rather than handed to the agent
-          // bridge, which would let the opening take actions the room beats
-          // have not been built to take yet.
-          return Promise.resolve(result ?? `Not available yet: ${name}.`);
+          // bridge, which would let the trial take actions nobody designed.
+          return this.trialConductor
+            .executeTool(ws, name, args)
+            .then((result) => result ?? `Not available yet: ${name}.`);
         }
         // Dashboard nav/in-room actions are handled here (they broadcast to the
         // dashboard); everything else goes through the auto-approve tool bridge.
@@ -1755,6 +1791,170 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       default:
         return null;
     }
+  }
+
+  /* ─────────── D16's room beats: the four things they need ───────────
+     Bound into TrialConductorManager at construction. Everything else a beat
+     does is a local vault write it performs itself; these four need the
+     daemon's service graph, which is only reachable from here.
+
+     None of them goes through `orchestrator.executeRealtimeToolCall`. Two of
+     them could not: realtime auto-approve blocks the destructive categories,
+     and `modify_settings` is one of them, so the brief hour and the authority
+     level would both be refused by the very backstop that exists to stop an
+     open mic changing settings unattended. Rather than widen that blocklist
+     for the trial, the two settings writes are performed here, narrowly, with
+     the trial's own ceiling applied in code (see clampAuthorityLevel). */
+
+  /**
+   * Beat 10. Compose a flow from the founder's description and publish it.
+   *
+   * This is the one beat that takes real time: `compose` is an LLM build, and
+   * the founder hears silence while it runs, which is why the proposal card is
+   * marked as building before we get here. Capped so a hung composer becomes a
+   * sentence Jarvis can say rather than a conversation that stops.
+   */
+  private async trialPublishWorkflow(
+    p: WorkflowProposal,
+  ): Promise<{ ok: true; detail: string } | { ok: false; detail: string }> {
+    const registry = this.agentService.getOrchestrator().getToolRegistry();
+    const tool = registry?.get('manage_workflow');
+    if (!tool) return { ok: false, detail: 'the workflow builder is not running on this install' };
+
+    const description = [
+      p.steps.map((s, i) => `${i + 1}. ${s}`).join(' '),
+      `It runs ${p.runsWhen}.`,
+      p.never ? `It must never ${p.never}` : '',
+    ].filter(Boolean).join(' ');
+
+    const withTimeout = <T>(work: Promise<T>, ms: number, what: string): Promise<T> =>
+      Promise.race([
+        work,
+        new Promise<T>((_, rej) => setTimeout(() => rej(new Error(`${what} took too long`)), ms)),
+      ]);
+
+    let composed: { ok?: boolean; flow?: { id?: string }; errors?: unknown };
+    try {
+      const raw = await withTimeout(
+        tool.execute({ action: 'compose', name: p.name, description }),
+        TRIAL_COMPOSE_TIMEOUT_MS,
+        'building that flow',
+      );
+      composed = JSON.parse(String(raw)) as typeof composed;
+    } catch (err) {
+      return { ok: false, detail: err instanceof Error ? err.message : String(err) };
+    }
+    if (!composed.ok || !composed.flow?.id) {
+      const errors = Array.isArray(composed.errors) ? composed.errors.join('; ') : 'it would not compose';
+      return { ok: false, detail: errors };
+    }
+
+    try {
+      await withTimeout(
+        tool.execute({ action: 'publish', flow: composed.flow.id }),
+        TRIAL_COMPOSE_TIMEOUT_MS,
+        'publishing that flow',
+      );
+    } catch (err) {
+      return { ok: false, detail: `it built but would not publish: ${err instanceof Error ? err.message : String(err)}` };
+    }
+    return { ok: true, detail: `${p.steps.length} steps, ${p.runsWhen}` };
+  }
+
+  /**
+   * Beat 09. The hour the morning brief arrives.
+   *
+   * Written to the `goals` section, which is where the rhythm cron reads it
+   * from, and the settings-reload applier reschedules the running job off the
+   * back of the save. A brief hour that only took effect after a restart would
+   * be a promise the product does not keep on the one appointment day two
+   * depends on.
+   */
+  private trialSetMorningBrief(hour: number, minute: number): void {
+    const config = this.agentService.getConfig();
+    const goals = config.goals ?? DEFAULT_CONFIG.goals;
+    config.goals = {
+      ...(goals ?? {
+        enabled: true,
+        morning_window: { start: hour, end: hour + 2 },
+        evening_window: { start: 20, end: 22 },
+        accountability_style: 'balanced',
+        escalation_weeks: { pressure: 1, root_cause: 3, suggest_kill: 4 },
+        auto_decompose: true,
+        calendar_ownership: false,
+      }),
+      morning_window: { start: hour, end: Math.min(hour + 2, 23) },
+      morning_minute: minute,
+    };
+    saveUserSection('goals', config.goals);
+  }
+
+  /**
+   * Beat 11. What the founder agreed Jarvis may do unsupervised.
+   *
+   * The clamp lives in beats.ts and has already run by the time we get here;
+   * this is the write. The `authority` settings-reload applier picks the save
+   * up and pushes it into the live engine, so what they granted out loud is in
+   * force before the sentence finishes.
+   */
+  private trialSetAuthorityLevel(level: number): number {
+    const config = this.agentService.getConfig();
+    config.authority = { ...config.authority, default_level: level };
+    saveUserSection('authority', config.authority);
+    return level;
+  }
+
+  /**
+   * Beat 12, the finale. A research agent on the founder's own open question,
+   * spawned and left running.
+   *
+   * Wired to the same progress + completion broadcasts a dashboard-spawned
+   * agent gets, so it appears in the agent strip and announces itself when it
+   * lands. That announcement is beat 14's seam and it is not built yet: today
+   * it is the ordinary notification, which is a truthful floor rather than
+   * silence.
+   */
+  private async trialSpawnResearchAgent(
+    question: string,
+    brief: string,
+  ): Promise<{ agentId: string; taskId: string | null; agentName: string }> {
+    const taskManager = this.agentService.getTaskManager();
+    if (!taskManager) throw new Error('sub-agents are not running on this install');
+    const specialists = this.agentService.getSpecialists();
+    const specialistId = TRIAL_RESEARCH_SPECIALISTS.find((id) => specialists.has(id))
+      ?? [...specialists.keys()][0];
+    if (!specialistId) throw new Error('no research specialist is installed');
+
+    const deps = {
+      orchestrator: this.agentService.getOrchestrator(),
+      llmManager: this.agentService.getLLMManager(),
+      specialists,
+      taskManager,
+      onProgress: (event: { type: 'text' | 'tool_call' | 'done'; agentName: string; agentId: string; data: unknown }) =>
+        this.broadcastSubAgentProgress(event),
+      onTaskComplete: (task: { agentName: string; result?: { success?: boolean } }) => {
+        const ok = task.result?.success ?? false;
+        this.broadcastNotification(
+          ok
+            ? `**${task.agentName} finished its task.** Open the Agents room to read the result.`
+            : `**${task.agentName} could not complete its task.** Open the Agents room for details.`,
+          'normal',
+        );
+      },
+    };
+
+    const { spawnPersistentAgent, assignPersistentAgentTask } = await import('../actions/tools/agents.ts');
+    const spawned = spawnPersistentAgent(deps as never, specialistId);
+    const assignment = await assignPersistentAgentTask(deps as never, {
+      agentId: spawned.agent.id,
+      task: question,
+      context: brief,
+    });
+    return {
+      agentId: spawned.agent.id,
+      taskId: assignment?.task_id ?? null,
+      agentName: spawned.summary.name,
+    };
   }
 
   /** Lazily build the monthly spend tracker, persisted under the data dir. */
