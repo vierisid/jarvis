@@ -1,0 +1,54 @@
+name: Bun setup
+description: Install Bun, restore the install cache, and run a retrying `bun install --frozen-lockfile`.
+
+inputs:
+  bun-version:
+    description: >-
+      Bun release to install. Pinned, not `latest`: with --frozen-lockfile a Bun
+      release that migrates the lockfile format would fail every PR ("lockfile
+      had changes, but lockfile is frozen") with no repo change to blame. Bump
+      deliberately, alongside a regenerated bun.lock.
+    required: false
+    default: "1.3.14"
+
+runs:
+  using: composite
+  steps:
+    - uses: oven-sh/setup-bun@v2
+      with:
+        bun-version: ${{ inputs.bun-version }}
+
+    # setup-bun does not cache the install cache, only the toolchain. Without
+    # this every run re-downloads the whole tree from npm.
+    - name: Cache bun install cache
+      uses: actions/cache@v4
+      with:
+        path: ~/.bun/install/cache
+        key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
+        restore-keys: ${{ runner.os }}-bun-
+
+    # --frozen-lockfile: a package.json edit that never made it into bun.lock
+    # fails here instead of silently resolving something the lockfile has never
+    # seen.
+    #
+    # Retried because this step's observed CI failure is a NETWORK one, not a
+    # repo one: `prebuild-install` lost its socket fetching sharp's prebuilt
+    # binary, sharp fell back to compiling from source, and the runner has no
+    # libvips ("fatal error: vips/vips8: No such file or directory"). Install is
+    # idempotent, so re-running it is safe; a genuine lockfile or resolution
+    # error still fails all three attempts.
+    - name: Install dependencies
+      shell: bash
+      run: |
+        set -euo pipefail
+        for attempt in 1 2 3; do
+          if bun install --frozen-lockfile; then
+            exit 0
+          fi
+          if [ "$attempt" -eq 3 ]; then
+            echo "::error::bun install failed after 3 attempts"
+            exit 1
+          fi
+          echo "::warning::bun install failed (attempt $attempt/3), retrying"
+          sleep $((attempt * 15))
+        done

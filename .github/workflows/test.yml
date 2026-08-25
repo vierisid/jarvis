@@ -58,33 +58,31 @@ jobs:
               - 'src/daemon/pid.ts'
               - 'bin/**'
               - '.github/workflows/test.yml'
+              # This job's toolchain + install now live in a composite action;
+              # a change there must still re-run it.
+              - '.github/actions/bun-setup/**'
 
   test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: oven-sh/setup-bun@v2
-        with:
-          # Pinned, not `latest`: with --frozen-lockfile below, a Bun release
-          # that migrates the lockfile format would fail every PR ("lockfile had
-          # changes, but lockfile is frozen") with no repo change to blame.
-          # Bump deliberately, alongside a regenerated bun.lock.
-          bun-version: "1.3.14"
-      # setup-bun does not cache the install cache, only the toolchain. Without
-      # this every run re-downloads the whole tree from npm.
-      - name: Cache bun install cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: ${{ runner.os }}-bun-
-      # --frozen-lockfile: a package.json edit that never made it into bun.lock
-      # fails here instead of silently resolving something the lockfile has
-      # never seen.
-      - run: bun install --frozen-lockfile
+      - uses: ./.github/actions/bun-setup
       - run: bun run scripts/check-no-ee-imports.ts
       - run: bun run scripts/check-migrations.ts
-      - run: bun test
+      # --retry=2 (3 attempts per test), NOT a retry around the whole step.
+      # Every flake this suite has produced in CI is a per-test hook timing out
+      # on a loaded runner -- a headless Chromium slow to answer CDP
+      # (browser-primitives.test.ts) or a slow SQLite schema build
+      # (rotate-encryption-key.test.ts). Bun re-runs beforeEach/afterEach on
+      # each attempt, so those recover; a deterministic failure still fails all
+      # three. Retried tests print as "(attempt N)", so a flake stays visible in
+      # the log instead of silently disappearing.
+      #
+      # A step-level retry would re-run the whole ~130s suite on a runner still
+      # carrying the orphaned chrome processes the previous attempt leaked --
+      # slower, and less likely to pass.
+      - run: bun test --retry=2
+      # Not retried: deterministic.
       - run: bunx tsc --noEmit
 
   # ─── Daemon lifecycle on macOS (launchd) ───────────────────────
@@ -102,16 +100,7 @@ jobs:
     runs-on: macos-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: "1.3.14"
-      - name: Cache bun install cache
-        uses: actions/cache@v4
-        with:
-          path: ~/.bun/install/cache
-          key: ${{ runner.os }}-bun-${{ hashFiles('bun.lock') }}
-          restore-keys: ${{ runner.os }}-bun-
-      - run: bun install --frozen-lockfile
+      - uses: ./.github/actions/bun-setup
       # Scoped to the lifecycle + service-definition files, not all of src/cli.
       # This job exists for the macOS-only behaviour (launchd KeepAlive
       # relaunch, plist generation); the rest of src/cli is already covered on
@@ -124,7 +113,7 @@ jobs:
       # not because anything is known-broken.)
       - name: Daemon lifecycle tests (launchd paths active)
         run: |
-          bun test \
+          bun test --retry=2 \
             src/cli/daemon-control.test.ts \
             src/cli/daemon-control.launchd.test.ts \
             src/cli/daemon-control.systemd.test.ts \
@@ -142,6 +131,12 @@ jobs:
     needs: changes
     if: needs.changes.outputs.sidecar == 'true'
     runs-on: ubuntu-latest
+    # One literal for the `-skip`/`-run` pair below. They partition the package
+    # between an unretried step and a retried one, so they must stay in sync:
+    # drift would leave the flaky test running un-retried in the first step
+    # while the second matches nothing and passes vacuously.
+    env:
+      PARITY_TEST: '^TestBrowserHandlerParityIntegration$'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -178,7 +173,43 @@ jobs:
           set -euo pipefail
           go vet ./...
           go build ./...
-          go test ./...
+          # The browser parity test is split out and retried; everything else
+          # runs once so a real regression still fails fast.
+          go test -skip "$PARITY_TEST" ./...
+
+      # TestBrowserHandlerParityIntegration drives a real headless Chromium over
+      # the CDP pipe, and on a loaded runner that races: the observed CI flakes
+      # are "attach to page: CDP timeout for Target.getTargets" (Chromium not
+      # answering CDP inside the 30s budget) and a profile-dir cleanup losing to
+      # a still-dying Chrome. Both clear on a re-run, so give it up to 3
+      # attempts. -count=1 keeps the test cache from returning the failure.
+      - name: Browser parity integration test (retried, cgo)
+        working-directory: sidecar
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          set -euo pipefail
+          # Fail loudly if the pattern stops matching (a rename): `go test -run`
+          # with no match prints "no tests to run" and exits 0, which would turn
+          # this whole step into a no-op.
+          listed=$(go test -list "$PARITY_TEST" . | grep -c '^Test' || true)
+          if [ "$listed" -ne 1 ]; then
+            echo "::error::PARITY_TEST ($PARITY_TEST) matched $listed tests, expected 1"
+            exit 1
+          fi
+          for attempt in 1 2 3; do
+            if go test -count=1 -run "$PARITY_TEST" .; then
+              exit 0
+            fi
+            if [ "$attempt" -eq 3 ]; then
+              echo "::error::browser parity test failed after 3 attempts"
+              exit 1
+            fi
+            # Settle before retrying: a previous attempt's Chromium may still be
+            # tearing down, which is one of the races this retry exists for.
+            echo "::warning::browser parity test failed (attempt $attempt/3), retrying"
+            sleep 10
+          done
 
       - name: Cross-build (windows/amd64, mingw)
         working-directory: sidecar
