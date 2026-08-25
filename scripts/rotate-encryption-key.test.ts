@@ -34,6 +34,17 @@ let keyFile: string;
 let dbPath: string;
 let originalKey: Buffer;
 
+// Explicit budget: this hook builds a real schema'd SQLite DB and writes two
+// encrypted rows. That is ~140ms on a dev box, but it timed out CI against
+// bun's 5s default on a loaded shared runner. The work is fast; it just needs
+// headroom when the runner is throttled.
+const HOOK_TIMEOUT_MS = 30_000;
+
+// Same reasoning for the tests themselves: every one of them shells out to
+// `bun run scripts/rotate-encryption-key.ts`, and a cold subprocess start plus
+// a full rotation does not reliably fit in bun's 5s default on a loaded runner.
+const TEST_TIMEOUT_MS = 30_000;
+
 beforeEach(() => {
   dataDir = mkdtempSync(join(tmpdir(), "jarvis-rotate-"));
   keyFile = join(dataDir, "cache", "workflow-encryption.key");
@@ -68,13 +79,13 @@ beforeEach(() => {
   closeWorkflowDb();
   // Reset in-memory key state so the spawned script doesn't inherit it.
   setEncryptionKey(null);
-});
+}, HOOK_TIMEOUT_MS);
 
 afterEach(() => {
   closeWorkflowDb();
   setEncryptionKey(null);
   rmSync(dataDir, { recursive: true, force: true });
-});
+}, HOOK_TIMEOUT_MS);
 
 function runScript(opts: {
   env?: Record<string, string | undefined>;
@@ -138,7 +149,7 @@ describe("rotate-encryption-key", () => {
       .get() as { value: string };
     expect(() => decryptJson(row.value, "conn_a")).toThrow();
     db2.close();
-  });
+  }, TEST_TIMEOUT_MS);
 
   test("refuses to run when a daemon currently holds the pid lock for the same data dir", async () => {
     // Acquire a flock at the *test data dir's* pid path -- that's what the
@@ -158,7 +169,7 @@ describe("rotate-encryption-key", () => {
     } finally {
       handle.release();
     }
-  });
+  }, TEST_TIMEOUT_MS);
 
   test("--allow-running-daemon bypasses the lock check", async () => {
     const { acquireLockAt, lockPathFor } = await import("../src/daemon/pid");
@@ -171,7 +182,7 @@ describe("rotate-encryption-key", () => {
     } finally {
       handle.release();
     }
-  });
+  }, TEST_TIMEOUT_MS);
 
   test("ignores a daemon holding the default lock when --data-dir points elsewhere", async () => {
     // Regression: previously the script called isLocked() without honoring
@@ -184,7 +195,7 @@ describe("rotate-encryption-key", () => {
     const res = runScript({ allowDaemon: false });
     expect(res.status).toBe(0);
     expect(res.stderr).not.toMatch(/Daemon is running/);
-  });
+  }, TEST_TIMEOUT_MS);
 
   test("refuses to run when JARVIS_WORKFLOW_ENCRYPTION_KEY is set", () => {
     const res = runScript({
@@ -194,7 +205,7 @@ describe("rotate-encryption-key", () => {
     expect(res.stderr).toMatch(/JARVIS_WORKFLOW_ENCRYPTION_KEY/);
     // Keychain unchanged.
     expect(readFileSync(keyFile, "utf8").trim()).toBe(originalKey.toString("hex"));
-  });
+  }, TEST_TIMEOUT_MS);
 
   test("refuses to run when a `.new` sidecar already exists", () => {
     writeFileSync(`${keyFile}.new`, randomBytes(32).toString("hex") + "\n");
@@ -203,12 +214,12 @@ describe("rotate-encryption-key", () => {
     expect(res.stderr).toMatch(/sidecar/i);
     // Keychain unchanged.
     expect(readFileSync(keyFile, "utf8").trim()).toBe(originalKey.toString("hex"));
-  });
+  }, TEST_TIMEOUT_MS);
 
   test("noop when no keychain exists", () => {
     rmSync(keyFile);
     const res = runScript();
     expect(res.status).toBe(0);
     expect(res.stderr).toMatch(/nothing to rotate/i);
-  });
+  }, TEST_TIMEOUT_MS);
 });

@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -150,6 +151,12 @@ func chromiumLaunchArgs(profileDir string, headless bool) []string {
 	return args
 }
 
+// browserReadyTimeout bounds how long a freshly-spawned browser may take to
+// start answering CDP at all. Generous on purpose: it is a ceiling for a cold
+// start on a throttled CI runner, not a latency budget -- waitForBrowserReady
+// returns as soon as the browser replies.
+const browserReadyTimeout = 30 * time.Second
+
 // launchCDP finds a Chromium-based browser, starts it with the CDP pipe, and
 // attaches to a page target.
 func launchCDP(cfg *SidecarConfig, headless bool) (*cdpClient, error) {
@@ -183,6 +190,14 @@ func launchCDP(cfg *SidecarConfig, headless bool) (*cdpClient, error) {
 		pending:  make(map[int64]chan cdpReply),
 	}
 	go c.readLoop(proc.read)
+
+	// Wait for the process to actually be answering CDP before asking it for
+	// anything, so a slow start reads as "still booting" rather than as a
+	// timed-out Target.getTargets.
+	if err := c.waitForBrowserReady(browserReadyTimeout); err != nil {
+		c.shutdown()
+		return nil, fmt.Errorf("launch browser %q: %w", exe, err)
+	}
 
 	if err := c.attachToPage(); err != nil {
 		c.shutdown()
@@ -305,8 +320,24 @@ func (c *cdpClient) send(method string, params map[string]any) (json.RawMessage,
 	return c.sendOn(c.sessionID, method, params)
 }
 
+// cdpDefaultTimeout bounds a single CDP round-trip once the browser is known
+// to be answering. The launch handshake uses a shorter, retried budget instead
+// -- see waitForBrowserReady.
+const cdpDefaultTimeout = 30 * time.Second
+
+// errCDPTimeout marks a command that got no reply inside its budget. It is the
+// one failure worth retrying: the browser may simply not be listening yet. A
+// transport error means the pipe is gone and no retry can help, so callers that
+// poll must tell the two apart.
+var errCDPTimeout = errors.New("CDP timeout")
+
 // sendOn issues a command on a specific session ("" = browser-level).
 func (c *cdpClient) sendOn(sessionID, method string, params map[string]any) (json.RawMessage, error) {
+	return c.sendOnTimeout(sessionID, method, params, cdpDefaultTimeout)
+}
+
+// sendOnTimeout is sendOn with an explicit reply deadline.
+func (c *cdpClient) sendOnTimeout(sessionID, method string, params map[string]any, timeout time.Duration) (json.RawMessage, error) {
 	if c.closed.Load() {
 		return nil, fmt.Errorf("browser connection closed")
 	}
@@ -343,11 +374,54 @@ func (c *cdpClient) sendOn(sessionID, method string, params map[string]any) (jso
 			return nil, fmt.Errorf("CDP %s: %s", method, string(reply.errMsg))
 		}
 		return reply.result, nil
-	case <-time.After(30 * time.Second):
+	case <-time.After(timeout):
 		c.pendMu.Lock()
 		delete(c.pending, id)
 		c.pendMu.Unlock()
-		return nil, fmt.Errorf("CDP timeout for %s", method)
+		return nil, fmt.Errorf("%w for %s", errCDPTimeout, method)
+	}
+}
+
+// waitForBrowserReady blocks until the freshly-spawned browser answers a
+// browser-level CDP command, or the deadline passes.
+//
+// A cold Chromium on a loaded machine can take many seconds before it reads the
+// CDP pipe at all. Firing the first real command straight at it spends the full
+// 30s round-trip budget on a browser that simply had not started yet, then fails
+// the whole launch -- the "attach to page: CDP timeout for Target.getTargets"
+// flake seen on CI runners. Polling with a short per-attempt budget instead
+// turns that into a wait: each probe that finds nobody home is retried rather
+// than consuming the entire allowance.
+func (c *cdpClient) waitForBrowserReady(budget time.Duration) error {
+	const probeTimeout = 2 * time.Second
+
+	stop := time.Now().Add(budget)
+	var lastErr error
+	for {
+		// Belt and braces. In practice this cannot fire mid-launch: the only
+		// paths that set closed (readLoop's fail(), closeActiveCDP) take
+		// activeCDP.mu first, and getCDP holds it for the whole launch. A dead
+		// browser reaches us as the write error handled just below.
+		if c.closed.Load() {
+			return errors.New("browser connection closed before it became ready")
+		}
+
+		_, err := c.sendOnTimeout("", "Browser.getVersion", nil, probeTimeout)
+		if err == nil {
+			return nil
+		}
+		// Only a timeout means "not up yet". Anything else is a transport
+		// failure -- the browser died at startup and the pipe is broken -- and
+		// retrying it would trade an instant, accurate error for a 30s stall.
+		if !errors.Is(err, errCDPTimeout) {
+			return fmt.Errorf("browser died during startup: %w", err)
+		}
+		lastErr = err
+
+		if time.Now().After(stop) {
+			return fmt.Errorf("browser did not answer CDP within %s: %w", budget, lastErr)
+		}
+		time.Sleep(100 * time.Millisecond)
 	}
 }
 
