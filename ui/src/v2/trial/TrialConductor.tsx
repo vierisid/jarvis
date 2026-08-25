@@ -120,6 +120,23 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
     setGate(verdict === "denied" ? "denied" : "unavailable");
   }, [begin]);
 
+  // The conductor's pebble floats OVER the live shell, and the shell docks a
+  // pebble of its own at the bottom right, with a third inside its Talk panel.
+  // Two of them nine pixels apart horizontally and twenty-five vertically do
+  // not read as two pebbles, they read as one pebble sheared in half. While
+  // the conductor owns the conversation there is exactly one, and Talk goes
+  // with the docked one: it carries a composer, and the trial has no typed
+  // path through it (D10). The marker is what TrialConductor.css scopes that
+  // suppression to, so no other surface loses its pebble.
+  useEffect(() => {
+    if (gate !== "live") return;
+    const root = document.documentElement;
+    root.dataset.trialConductor = "live";
+    return () => {
+      delete root.dataset.trialConductor;
+    };
+  }, [gate]);
+
   if (gate === "checking") return null;
 
   if (gate !== "live") {

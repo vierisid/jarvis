@@ -15,10 +15,8 @@
   border: 0.5px solid rgba(255, 255, 255, 0.5);
   box-shadow: inset 1.5px 1.5px 1.5px rgba(255, 255, 255, 0.9), 0 6px 18px -4px rgba(20, 30, 45, 0.3);
   flex-shrink: 0;
-  /* The breathing orb inside is scaled by `tc-breathe`. Without this it grows
-     past the drop on every breath: the orb is a circle, the drop has one flat
-     12px corner, so it spilled on one side and left the shell showing on the
-     other, reading as two misaligned pebbles rather than one. */
+  /* As on the brand's `.gd`: the breath overshoots full size, and the drop is
+     what clips it back to the teardrop. */
   overflow: hidden;
 }
 :root[data-theme="dark"] .tc-drop {
@@ -45,12 +43,10 @@
   background: radial-gradient(circle at 50% 40%, #cfd6de, #9aa5b1 70%);
   animation: none;
 }
-/* Breathes DOWN from full size, never past it, so the orb can never exceed the
-   drop even for a frame. `overflow: hidden` on the parent is the belt to this
-   pair of braces. */
+/* The brand's `brS`, unchanged: 0.96 up to 1.05, clipped by the drop. */
 @keyframes tc-breathe {
-  0%, 100% { opacity: 0.62; transform: scale(0.94); }
-  50% { opacity: 1; transform: scale(1); }
+  0%, 100% { opacity: 0.62; transform: scale(0.96); }
+  50% { opacity: 1; transform: scale(1.05); }
 }
 
 /* ── frame 02 · the microphone gate ── */
@@ -139,6 +135,27 @@
   z-index: 210;
   pointer-events: none;
   font-family: var(--sans);
+}
+
+/* ── one pebble, not three ──
+   The layer floats over the LIVE shell, and the shell docks a pebble of its
+   own at the bottom right (`.rs-peb`), with a third inside the Talk panel it
+   opens. The conductor's sits at right 26 / bottom 58 and the shell's at
+   right 18 / bottom 16, so the two land 9px apart across and 25px apart down:
+   same size, same teardrop, offset diagonally, overlapping by about half.
+   That is not two pebbles to the eye, it is one pebble cut in two, which is
+   the bug the founder reported.
+
+   Talk goes with the docked pebble rather than just being unstyled: it is a
+   composer, and the trial has no typed path through it (D10), and leaving it
+   reachable on cmd-J would put the second pebble straight back on the screen.
+
+   Scoped to the conductor's own marker, set by TrialConductor only while the
+   layer is mounted, so the shell, the tray, the wizard and the boot splash
+   all keep their pebbles untouched. */
+:root[data-trial-conductor="live"] .rs-peb,
+:root[data-trial-conductor="live"] .rs-talk {
+  display: none;
 }
 
 /* the pebble, low and to the right, as in frame 03 */
