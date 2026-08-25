@@ -3,6 +3,7 @@ import { useInterviewSession } from "./useInterviewSession";
 import type { OnboardingStatus } from "./useOnboardingStatus";
 import "./OnboardingWizard.css";
 import { modelForOnboardingTest, onboardingDefaultModelRef } from "./llm-setup";
+import { IS_MAC, modKey } from "../ui/platform";
 
 /* ═══════════════════ Onboarding · the nine-screen first-run flow ═══════════
    Faithful to the design (usejarvis-onboarding.html): Welcome · Permissions
@@ -117,7 +118,7 @@ const ELEVEN_PREMADE = [
   { voice_id: "TxGEqnHWrfWFTfGW9XjX", name: "Josh · deep" },
 ];
 
-const IS_MAC = typeof navigator !== "undefined" && /mac|iphone|ipad/i.test(navigator.userAgent || (navigator as { platform?: string }).platform || "");
+
 // Deep links to the OS privacy pane per permission. The app can't self-grant
 // (the OS forbids it), but it can open the exact place you grant it.
 /**
@@ -145,7 +146,10 @@ async function playPreviewAudio(res: Response): Promise<void> {
 
 const TOUR = [
   { sm: "This is the Pebble, your companion. It lives at your cursor. Click it any time to talk to me.", t: "→ Click the Pebble to try", pos: { right: 18, bottom: 50 } },
-  { sm: "Press ⌘J to summon Talk, the conversation panel. Everything we say lives there, across sessions.", t: "→ Press ⌘J", pos: { right: 18, top: 60 } },
+  // The shortcut takes either modifier (AppShell: metaKey || ctrlKey), so this
+  // is the LABEL being wrong, not the binding — which is why a hardcoded ⌘
+  // survived: it kept working for any Windows user who guessed Ctrl.
+  { sm: `Press ${modKey("J")} to summon Talk, the conversation panel. Everything we say lives there, across sessions.`, t: `→ Press ${modKey("J")}`, pos: { right: 18, top: 60 } },
   { sm: "The Index, on the left, is every room. Names spelled out, badges flag what needs you. Recognition over recall.", t: "", pos: { left: 130, top: 58 } },
   { sm: "Now is your monitoring surface: what I’m doing and what’s waiting on you, at a glance.", t: "", pos: { left: 130, top: 104 } },
   { sm: "Authority is your control panel, with a kill-switch. Nothing with real-world impact happens without your yes.", t: "", pos: { left: 130, top: 150 } },
