@@ -3,8 +3,8 @@
 <plist version="1.0">
 <dict>
 	<!-- Hardened-runtime entitlements for the notarized bundle. Notarization
-	     requires --options runtime, and the hardened runtime denies these
-	     capabilities unless they are declared here (the TCC usage strings in
+	     requires the hardened runtime (codesign option `runtime`), which
+	     denies these capabilities unless they are declared here (the TCC usage strings in
 	     Info.plist are still required on top). Keep this list minimal: every
 	     entitlement is attack surface and shows up in security review. -->
 

@@ -27,6 +27,6 @@
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<!-- No TCC usage strings on purpose: the installer never requests
-	     permissions — the installed Jarvis.app does, in its --setup wizard. -->
+	     permissions — the installed Jarvis.app does, in its setup wizard. -->
 </dict>
 </plist>

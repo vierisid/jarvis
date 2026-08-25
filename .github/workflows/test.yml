@@ -295,6 +295,33 @@ jobs:
   # bugs (dictionary terms shadowing variables) only surface on a real macOS
   # interpreter at runtime — osacompile alone won't catch them, hence the
   # event-free `probe` command.
+  # Every .plist must be well-formed XML. This is not pedantry: codesign parses
+  # entitlements with AMFIUnserializeXML, which is far stricter than the
+  # CFPropertyList used for bundle Info.plists, and it rejects the file outright.
+  # XML forbids "--" inside a comment, so writing a flag name like --options in
+  # explanatory prose silently breaks signing — and only at release time, on a
+  # macOS runner, after the build has already burned several minutes.
+  plist-lint:
+    needs: changes
+    if: needs.changes.outputs.sidecar == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Parse every plist
+        run: |
+          set -euo pipefail
+          fail=0
+          while IFS= read -r f; do
+            if python3 -c "import plistlib,sys; plistlib.load(open(sys.argv[1],'rb'))" "$f" 2>/tmp/err; then
+              echo "ok   $f"
+            else
+              echo "FAIL $f — $(cat /tmp/err | tail -1)"
+              grep -n -- '--' "$f" | grep -v DOCTYPE | sed 's/^/       double-hyphen: /' || true
+              fail=1
+            fi
+          done < <(find . -name '*.plist' -not -path './.git/*' | sort)
+          exit $fail
+
   applescript-check:
     runs-on: macos-latest
     steps:
