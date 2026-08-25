@@ -70,6 +70,11 @@ export function TasksRoomBody({ mode }: { mode: RoomBodyMode }) {
 
   useRoomActions("tasks", (action, args) => {
     switch (action) {
+      // The daemon pushes this when something lands in this room from outside
+      // the UI, so a write is visible the moment it happens instead of on the
+      // next 8-second poll. The trial's room beats are what needed it: the
+      // founder is watching the room while they say yes (D22).
+      case "refresh": void data.refresh(); return true;
       case "switch_view": { const v = String(args.view); if (v === "kanban" || v === "list") { setView(v); return true; } return false; }
       case "search": setSearch(typeof args.query === "string" ? args.query : ""); return true;
       case "set_filter": {

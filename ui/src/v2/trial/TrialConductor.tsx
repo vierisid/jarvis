@@ -3,15 +3,20 @@ import {
   ConductorSession,
   microphoneAlreadyGranted,
   requestMicrophone,
+  type BeatProposal,
   type CapturedFuel,
   type ConductorPhase,
   type LandedEntity,
+  type OnboardingComplete,
+  type PebblePoint,
+  type ProposalLanded,
 } from "./conductorSession";
+import { TrialProposal } from "./TrialProposal";
 import { formatTimeRemaining, type TrialStatus } from "./trialGate";
 import "./TrialConductor.css";
 
-/* ═══════════════ The opening of the 48-hour trial, beats 01 to 05 ═══════════
-   Storyboard frames 02 to 04. Two surfaces, and the second one is the reason
+/* ═══════ The 48-hour trial's conversation, from the mic to the finale ═══════
+   Storyboard frames 02 to 10. Two surfaces, and the second one is the reason
    this is not a wizard:
 
      1. The microphone gate. Full screen, one thing on it. D10: voice is
@@ -24,7 +29,14 @@ import "./TrialConductor.css";
         conversation continues.
 
    There is no welcome screen, no bullet points and no "click to begin" (D10):
-   the moment the microphone is on, the session opens and Jarvis speaks. */
+   the moment the microphone is on, the session opens and Jarvis speaks.
+
+   The seven room beats (D16) render on the SAME surface, over the same live
+   shell, while the same conversation carries on. Nothing about this component
+   changes phase when the opening ends: a proposal card appears on the right
+   when something is waiting on the founder's yes, and the pebble occasionally
+   leaves its corner to lead them to a room. That is the whole of the visible
+   difference, which is the point of D17. */
 
 type GatePhase = "checking" | "gate" | "asking" | "denied" | "unavailable" | "live";
 
@@ -33,10 +45,14 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
   const [phase, setPhase] = useState<ConductorPhase>("connecting");
   const [error, setError] = useState<string | null>(null);
   const [caption, setCaption] = useState<string>("");
-  const [landed, setLanded] = useState<LandedEntity[]>([]);
+  const [landedEntities, setLandedEntities] = useState<LandedEntity[]>([]);
   const [fuel, setFuel] = useState<CapturedFuel[]>([]);
   const [trial, setTrial] = useState<TrialStatus | null>(null);
   const [openingDone, setOpeningDone] = useState(false);
+  const [proposal, setProposal] = useState<BeatProposal | null>(null);
+  const [landedProposal, setLandedProposal] = useState<ProposalLanded | null>(null);
+  const [point, setPoint] = useState<PebblePoint | null>(null);
+  const [finished, setFinished] = useState<OnboardingComplete | null>(null);
   const sessionRef = useRef<ConductorSession | null>(null);
   /** Streaming assistant deltas accumulate here until the turn is final. */
   const partialRef = useRef<string>("");
@@ -98,11 +114,20 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
       },
       onEntitiesLanded: (next) => {
         // Newest first: the founder is watching the top of this list.
-        setLanded((prev) => [...next].reverse().concat(prev).slice(0, 40));
+        setLandedEntities((prev) => [...next].reverse().concat(prev).slice(0, 40));
       },
       onFuelCaptured: (f) => setFuel((prev) => [...prev.filter((p) => p.area !== f.area), f]),
       onTrialStatus: (s) => setTrial(s),
       onOpeningComplete: () => setOpeningDone(true),
+      // The beats. None of these ends anything or says anything: the founder
+      // hears the same voice they have been hearing since the first sentence.
+      onProposal: (next, resolved) => {
+        setProposal(next);
+        if (resolved) setLandedProposal(resolved);
+      },
+      onBeatComplete: () => { /* the room underneath is the surface for this */ },
+      onPoint: (p) => setPoint(p),
+      onOnboardingComplete: (summary) => setFinished(summary),
     });
     sessionRef.current = session;
     try {
@@ -147,9 +172,15 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
     <>
       {children}
       <div className="tc-layer" aria-live="polite">
-        <ConductorPebble phase={phase} caption={caption} error={error} />
-        <VaultTicker landed={landed} />
-        <TrialFooter trial={trial} fuel={fuel} openingDone={openingDone} />
+        <ConductorPebble phase={phase} caption={caption} error={error} point={point} />
+        <TrialProposal proposal={proposal} landed={landedProposal} />
+        <VaultTicker landed={landedEntities} />
+        <TrialFooter
+          trial={trial}
+          fuel={fuel}
+          openingDone={openingDone}
+          finished={finished !== null}
+        />
       </div>
     </>
   );
@@ -205,19 +236,29 @@ function ConductorPebble({
   phase,
   caption,
   error,
+  point,
 }: {
   phase: ConductorPhase;
   caption: string;
   error: string | null;
+  point: PebblePoint | null;
 }) {
   const state = error ? "error" : phase;
+  const ref = useRef<HTMLDivElement | null>(null);
+  const pointing = usePebbleFlight(ref, point);
   return (
-    <div className={`tc-pebble tc-pebble--${state}`}>
+    <div
+      ref={ref}
+      className={`tc-pebble tc-pebble--${state}${pointing ? " is-pointing" : ""}`}
+      style={pointing ? { transform: `translate(${pointing.dx}px, ${pointing.dy}px)` } : undefined}
+    >
       <div className={`tc-drop tc-drop--${state}`}>
         <span className="in" />
       </div>
       <div className="tc-bubble">
-        {error ? (
+        {pointing ? (
+          <span className="tc-bubble-point">{pointing.label}</span>
+        ) : error ? (
           <span className="tc-bubble-err">{error}</span>
         ) : caption ? (
           <span>{caption}</span>
@@ -229,6 +270,70 @@ function ConductorPebble({
       </div>
     </div>
   );
+}
+
+/** How long the pebble holds its label at the target before drifting back.
+ *  Long enough to be a gesture, short enough not to hide the caption. */
+const POINT_HOLD_MS = 2400;
+
+/**
+ * D21, in the browser.
+ *
+ * The shipping `pebble.point_at` flies the OS sidecar's pebble to a screen
+ * coordinate. The trial's founder is looking at a browser, and the pebble they
+ * can see is a DOM node, so this is the same gesture in the same shape: the
+ * pebble leaves its corner, goes and stands next to the room it is about to
+ * open, holds a label there, and drifts back. It moves BEFORE the room opens,
+ * so the founder's eye is already where the change is going to happen.
+ *
+ * Purely visual and entirely optional: if the target is not on screen (the
+ * Index is collapsed to cluster tiles, or a room is expanded over it), the
+ * pebble simply stays where it is and the room opens as normal.
+ */
+function usePebbleFlight(
+  ref: React.RefObject<HTMLDivElement | null>,
+  point: PebblePoint | null,
+): { dx: number; dy: number; label: string } | null {
+  const [flight, setFlight] = useState<{ dx: number; dy: number; label: string } | null>(null);
+  useEffect(() => {
+    if (!point) return;
+    const el = ref.current;
+    if (!el) return;
+    const room = point.target.startsWith("room:") ? point.target.slice(5) : point.target;
+    const target =
+      document.querySelector(`[data-nav-room="${room}"]`)
+      ?? document.querySelector(`[data-nav-cluster~="${room}"]`);
+    if (!target) return;
+
+    // Two steps, and the first one is not decoration. The pebble is anchored
+    // to the RIGHT edge of the screen, so its left edge depends on how wide
+    // its bubble currently is; pointing swaps the caption for a label and
+    // re-lays it out. Measuring before that swap put it tens of pixels off.
+    // So: enter the pointing state first with no translation, let it settle,
+    // then measure and fly.
+    setFlight({ dx: 0, dy: 0, label: point.label });
+    let raf2 = 0;
+    const raf1 = requestAnimationFrame(() => {
+      raf2 = requestAnimationFrame(() => {
+        const from = el.getBoundingClientRect();
+        const to = target.getBoundingClientRect();
+        // Stand just to the RIGHT of the row rather than on top of it: the
+        // founder has to be able to read the name it is pointing at.
+        setFlight({
+          dx: to.right + 14 - from.left,
+          dy: to.top + to.height / 2 - (from.top + from.height / 2),
+          label: point.label,
+        });
+      });
+    });
+    const t = window.setTimeout(() => setFlight(null), POINT_HOLD_MS);
+    return () => {
+      cancelAnimationFrame(raf1);
+      cancelAnimationFrame(raf2);
+      window.clearTimeout(t);
+    };
+  }, [point, ref]);
+  return flight;
 }
 
 /* ─── Frame 04 · the vault filling while they are still talking (D22) ─── */
@@ -260,10 +365,12 @@ function TrialFooter({
   trial,
   fuel,
   openingDone,
+  finished,
 }: {
   trial: TrialStatus | null;
   fuel: CapturedFuel[];
   openingDone: boolean;
+  finished: boolean;
 }) {
   const remaining = formatTimeRemaining(trial?.ms_remaining ?? null);
   return (
@@ -276,7 +383,9 @@ function TrialFooter({
       <span className="tc-foot-fuel" title={fuel.map((f) => `${f.area}: ${f.summary}`).join("\n")}>
         {fuel.length}/5
       </span>
-      {openingDone && <span className="tc-foot-seam">opening complete</span>}
+      {finished
+        ? <span className="tc-foot-seam">set up</span>
+        : openingDone && <span className="tc-foot-seam">opening complete</span>}
     </div>
   );
 }

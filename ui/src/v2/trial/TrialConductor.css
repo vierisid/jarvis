@@ -167,6 +167,29 @@
   align-items: flex-end;
   gap: 12px;
   max-width: min(460px, 46vw);
+  /* D21. The pebble is a guide with physical presence, so when it goes to
+     lead the founder somewhere it TRAVELS: slow enough to be followed by the
+     eye, eased so it reads as something moving rather than something being
+     repositioned. The transform is set inline by usePebbleFlight and cleared
+     when it drifts back. */
+  transition: transform 0.62s cubic-bezier(0.32, 0.72, 0.24, 1);
+}
+.tc-pebble.is-pointing {
+  align-items: center;
+  max-width: 300px;
+}
+/* Pointing at a row in the Index means standing to its right, so the bubble
+   has to open the other way or it covers the name it is pointing at. */
+.tc-pebble.is-pointing .tc-bubble {
+  order: 1;
+  border-radius: 12px 12px 12px 3px;
+}
+.tc-bubble-point {
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--ink2);
+  white-space: nowrap;
 }
 .tc-bubble {
   background: var(--panel);
@@ -256,4 +279,190 @@
 @media (max-width: 900px) {
   .tc-vault { display: none; }
   .tc-pebble { max-width: 78vw; }
+}
+
+/* ══════ frames 05 to 09 · the thing waiting on their spoken yes ══════
+   One card for all five beats. Right-hand side of the room surface, so the
+   left of the room stays visible: that is where the tree, the board and the
+   flow list actually appear when they say yes (D22).
+
+   Nothing in it is clickable, on purpose. The layer is pointer-events: none
+   and stays that way; approval is spoken (D19) and a button here would make
+   the conversation optional. */
+.tc-prop {
+  position: absolute;
+  right: 26px;
+  top: 78px;
+  width: 336px;
+  max-height: calc(100vh - 210px);
+  overflow: hidden auto;
+  background: var(--panel);
+  border: 1px solid var(--rule);
+  border-left: 2px solid var(--hold, #d08a1f);
+  border-radius: 10px;
+  padding: 11px 14px 12px;
+  box-shadow: 0 16px 40px -18px rgba(20, 30, 45, 0.4);
+  animation: tc-prop-in 0.32s cubic-bezier(0.32, 0.72, 0.24, 1) both;
+}
+:root[data-theme="dark"] .tc-prop { box-shadow: 0 18px 44px -16px rgba(0, 0, 0, 0.7); }
+.tc-prop--landed { border-left-color: var(--ok, #2fa45e); }
+@keyframes tc-prop-in {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: none; }
+}
+.tc-prop-head {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--mono);
+  font-size: 9px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink3);
+  margin-bottom: 10px;
+}
+.tc-prop-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--hold, #d08a1f);
+  flex-shrink: 0;
+}
+.tc-prop-dot.is-ok { background: var(--ok, #2fa45e); }
+.tc-prop-dot.is-run { background: var(--speak, #2d78ff); animation: tc-pulse 1.1s ease infinite; }
+.tc-prop-from {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tc-prop-wait {
+  margin-left: auto;
+  color: var(--hold, #d08a1f);
+  letter-spacing: 0.06em;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.tc-prop-body { display: flex; flex-direction: column; gap: 9px; }
+.tc-prop-foot {
+  margin-top: 11px;
+  padding-top: 9px;
+  border-top: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: 9.5px;
+  color: var(--faint);
+  letter-spacing: 0.04em;
+}
+.tc-prop-landed { font-size: 12.5px; color: var(--ink); line-height: 1.45; }
+
+/* the objective / flow headline */
+.tc-goal { display: flex; align-items: baseline; gap: 8px; }
+.tc-goal-name {
+  font-size: 13.5px;
+  font-weight: 650;
+  letter-spacing: -0.012em;
+  color: var(--ink);
+  line-height: 1.3;
+}
+.tc-sub { font-size: 11.5px; color: var(--ink3); line-height: 1.45; }
+
+/* key results, tasks, steps: one row shape for all three */
+.tc-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
+.tc-rows li {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  font-size: 12px;
+  color: var(--ink2);
+  line-height: 1.4;
+}
+.tc-rows--steps li { align-items: flex-start; }
+.tc-row-name { flex: 1; min-width: 0; }
+.tc-bullet {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  border: 1px solid var(--ink3);
+  flex-shrink: 0;
+  transform: translateY(-1px);
+}
+.tc-rows li.is-late .tc-bullet { border-color: var(--listen, #e63b2e); background: var(--listen, #e63b2e); }
+.tc-tag {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.08em;
+  text-transform: lowercase;
+  color: var(--faint);
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.tc-tag.is-late { color: var(--listen, #e63b2e); }
+.tc-never {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  line-height: 1.5;
+  color: var(--ink3);
+  padding-left: 9px;
+  border-left: 1px solid var(--rule);
+}
+
+/* frame 07 · the brief hour */
+.tc-brief { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
+.tc-brief-time {
+  font-size: 26px;
+  font-weight: 300;
+  letter-spacing: -0.03em;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.tc-brief-what { display: flex; flex-direction: column; font-size: 12.5px; color: var(--ink); }
+.tc-brief-what span { font-family: var(--mono); font-size: 9px; letter-spacing: 0.08em; color: var(--faint); }
+.tc-brief .tc-sub { width: 100%; }
+
+/* frame 09 · the ladder */
+.tc-ladder { display: flex; gap: 3px; }
+.tc-rung {
+  flex: 1;
+  height: 22px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 3px;
+  border: 1px solid var(--rule);
+  font-family: var(--mono);
+  font-size: 9px;
+  color: var(--faint);
+}
+/* Granted has to be visibly different from merely reachable, or the founder
+   cannot read off the ladder what they are actually giving. */
+.tc-rung.is-granted {
+  background: color-mix(in srgb, var(--hold, #d08a1f) 18%, transparent);
+  border-color: color-mix(in srgb, var(--hold, #d08a1f) 34%, transparent);
+  color: var(--ink2);
+}
+.tc-rung.is-here {
+  background: var(--hold, #d08a1f);
+  border-color: var(--hold, #d08a1f);
+  color: #fff;
+  font-weight: 700;
+}
+.tc-rung.is-shut { opacity: 0.34; border-style: dashed; }
+.tc-buys { display: flex; flex-direction: column; gap: 7px; }
+.tc-buys > div { display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; color: var(--ink2); line-height: 1.42; }
+.tc-buys > div.is-no { color: var(--ink3); }
+.tc-buys-k {
+  font-family: var(--mono);
+  font-size: 8.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--faint);
+}
+
+@media (max-width: 1180px) {
+  /* Under the storyboard's width the card would sit on top of the room it is
+     describing. The room is the proof, so the card gives way. */
+  .tc-prop { width: 288px; top: 70px; }
+}
+@media (max-width: 900px) {
+  .tc-prop { display: none; }
 }

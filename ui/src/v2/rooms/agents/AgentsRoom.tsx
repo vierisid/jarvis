@@ -107,6 +107,11 @@ export function AgentsRoomBody({ mode }: { mode: RoomBodyMode }) {
   // the bus can log it instead of pretending it succeeded.
   useRoomActions("agents", (action, args) => {
     switch (action) {
+      // The daemon pushes this when something lands in this room from outside
+      // the UI, so a write is visible the moment it happens instead of on the
+      // next 8-second poll. The trial's room beats are what needed it: the
+      // founder is watching the room while they say yes (D22).
+      case "refresh": void data.refresh(); return true;
       case "switch_tab": {
         const tab = String(args.tab);
         if (tab === "command" || tab === "orbital" || tab === "builder") {

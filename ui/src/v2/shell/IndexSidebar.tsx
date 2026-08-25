@@ -164,6 +164,10 @@ export function IndexSidebar({
           return (
             <button
               key={target}
+              // The conductor's pebble flies to this element to lead the
+              // founder into a room before it opens (D21). Nothing else reads
+              // it, and it costs one attribute.
+              data-nav-room={target}
               className={`rs-item${isOn ? " on" : ""}`}
               style={row.kind === "room" && row.spaced ? { marginTop: 6 } : undefined}
               aria-current={isOn ? "page" : undefined}
@@ -193,6 +197,7 @@ export function IndexSidebar({
           return (
             <button
               key={c.id}
+              data-nav-cluster={[...c.rooms.map((r) => r.key), c.lead].join(" ")}
               className={`rs-ct${isOn ? " on" : ""}`}
               style={c.id === "sys" ? { marginTop: 6 } : undefined}
               onClick={() => navTo(c.lead)}

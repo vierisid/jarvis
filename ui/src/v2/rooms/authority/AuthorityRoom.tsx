@@ -83,6 +83,11 @@ export function AuthorityRoomBody({ mode }: { mode: RoomBodyMode }) {
   // Phase 6.6 plan): pause/kill/reset only via the buttons.
   useRoomActions("authority", (action, args) => {
     switch (action) {
+      // The daemon pushes this when something lands in this room from outside
+      // the UI, so a write is visible the moment it happens instead of on the
+      // next 8-second poll. The trial's room beats are what needed it: the
+      // founder is watching the room while they say yes (D22).
+      case "refresh": void data.refresh(); return true;
       case "switch_tab": {
         const t = String(args.tab);
         if (t === "approvals" || t === "audit" || t === "grants" || t === "learning") {

@@ -140,6 +140,11 @@ export function MemoryRoomBody({ mode }: { mode: RoomBodyMode }) {
   // Phase 6.3.5 — voice room actions.
   useRoomActions("memory", (action, args) => {
     switch (action) {
+      // The daemon pushes this when something lands in this room from outside
+      // the UI, so a write is visible the moment it happens instead of on the
+      // next 8-second poll. The trial's room beats are what needed it: the
+      // founder is watching the room while they say yes (D22).
+      case "refresh": void data.refresh(); return true;
       case "switch_tab": {
         const t = String(args.tab);
         if (t === "constellation" || t === "explorer" || t === "browser") {

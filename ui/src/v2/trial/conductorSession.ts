@@ -34,6 +34,78 @@ export interface CapturedFuel {
 
 export type ConductorPhase = "connecting" | "speaking" | "listening" | "closed" | "error";
 
+/* ── the seven room beats (D16), as they arrive on the wire ── */
+
+export type RoomBeat = "goals" | "tasks" | "calendar" | "workflows" | "authority" | "agents";
+
+export interface GoalProposal {
+  beat: "goals";
+  objective: string;
+  measure?: string;
+  keyResults: { title: string; measure?: string }[];
+}
+
+export interface TaskProposal {
+  beat: "tasks";
+  tasks: {
+    what: string;
+    due: number | null;
+    dueLabel: string | null;
+    priority: "low" | "normal" | "high" | "critical";
+    late: boolean;
+  }[];
+}
+
+export interface CalendarProposal {
+  beat: "calendar";
+  hour: number;
+  minute: number;
+  because?: string;
+}
+
+export interface WorkflowProposal {
+  beat: "workflows";
+  name: string;
+  runsWhen: string;
+  steps: string[];
+  never?: string;
+  building?: boolean;
+}
+
+export interface AuthorityProposal {
+  beat: "authority";
+  level: number;
+}
+
+export type BeatProposal =
+  | GoalProposal
+  | TaskProposal
+  | CalendarProposal
+  | WorkflowProposal
+  | AuthorityProposal;
+
+/** What just became real, for the card's last frame before it dissolves. */
+export interface ProposalLanded {
+  beat: RoomBeat;
+  summary: string;
+}
+
+/** D21: fly the pebble somewhere and hold a label there. */
+export interface PebblePoint {
+  target: string;
+  label: string;
+  /** Bumped per event so the same target twice still moves it. */
+  ts: number;
+}
+
+export interface OnboardingComplete {
+  beats: RoomBeat[];
+  workflows: string[];
+  authorityLevel: number | null;
+  briefAt: { hour: number; minute: number } | null;
+  agent: { agentId: string; agentName: string; question: string } | null;
+}
+
 export interface ConductorCallbacks {
   onPhase: (phase: ConductorPhase, detail?: string) => void;
   /** Assistant / founder captions, streamed. */
@@ -45,6 +117,14 @@ export interface ConductorCallbacks {
   onTrialStatus: (status: TrialStatus) => void;
   /** The seam. The conversation is still live when this fires (D17). */
   onOpeningComplete: (understanding: string) => void;
+  /** The one thing currently waiting on their spoken yes, or null. */
+  onProposal: (proposal: BeatProposal | null, landed?: ProposalLanded) => void;
+  /** One of the six stops just finished. */
+  onBeatComplete: (beat: RoomBeat, done: RoomBeat[]) => void;
+  /** D21: lead their eye somewhere before the room opens. */
+  onPoint: (point: PebblePoint) => void;
+  /** The finale's agent is running. Onboarding is over, the talking is not. */
+  onOnboardingComplete: (summary: OnboardingComplete) => void;
 }
 
 export class ConductorSession {
@@ -149,6 +229,27 @@ export class ConductorSession {
       case "trial_opening_complete": {
         const p = (msg.payload ?? {}) as { understanding?: string };
         this.cb.onOpeningComplete(p.understanding ?? "");
+        return;
+      }
+      case "trial_proposal": {
+        const p = (msg.payload ?? {}) as { proposal?: BeatProposal | null; landed?: ProposalLanded };
+        this.cb.onProposal(p.proposal ?? null, p.landed);
+        return;
+      }
+      case "trial_beat": {
+        const p = (msg.payload ?? {}) as { beat?: RoomBeat; done?: RoomBeat[] };
+        if (p.beat) this.cb.onBeatComplete(p.beat, p.done ?? []);
+        return;
+      }
+      case "trial_point": {
+        const p = (msg.payload ?? {}) as { target?: string; label?: string };
+        if (p.target) {
+          this.cb.onPoint({ target: p.target, label: p.label ?? "", ts: Date.now() });
+        }
+        return;
+      }
+      case "trial_onboarding_complete": {
+        this.cb.onOnboardingComplete((msg.payload ?? {}) as OnboardingComplete);
         return;
       }
       case "error": {

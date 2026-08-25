@@ -1114,6 +1114,47 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    /**
+     * Draw one of the room beats' surfaces without a microphone.
+     *
+     * The seven beats are driven by a realtime voice model talking to a
+     * founder, which means the only way to LOOK at what they put on screen is
+     * to have a microphone, an OpenAI realtime key and ten minutes of
+     * conversation. That made the card, the ladder and the pebble's flight
+     * unreviewable, and unreviewable surfaces are how the pebble shipped as
+     * two shapes that did not line up.
+     *
+     * So: this pushes one frame of the trial's own protocol onto the wire and
+     * does nothing else. It writes nothing, it does not touch the beat ledger,
+     * and the model never sees it. Refused unless a trial is actually running
+     * on this install, which is the same gate the conductor itself is behind.
+     *
+     * Body: {type: 'trial_proposal' | 'trial_point' | 'trial_beat' |
+     *        'trial_onboarding_complete', payload: {...}}
+     */
+    '/api/trial/preview': {
+      POST: async (req: Request) => {
+        try {
+          if (!isTrialRunning(readTrialEntitlement(), Date.now())) {
+            return json({ error: 'No running trial entitlement on this install.' }, 409);
+          }
+          const body = (await req.json().catch(() => ({}))) as { type?: string; payload?: unknown };
+          const allowed = ['trial_proposal', 'trial_point', 'trial_beat', 'trial_onboarding_complete'];
+          if (!body.type || !allowed.includes(body.type)) {
+            return json({ error: `type must be one of ${allowed.join(', ')}` }, 400);
+          }
+          ctx.wsService?.broadcastRaw({
+            type: body.type as 'trial_proposal',
+            payload: (body.payload ?? {}) as Record<string, unknown>,
+            timestamp: Date.now(),
+          });
+          return json({ ok: true });
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
     // ── Onboarding ──────────────────────────────────────────────────
     // Status + reset endpoints powering the v2 onboarding gate. See
     // `docs/ONBOARDING_PLAN.md`. Reset is intentionally available on

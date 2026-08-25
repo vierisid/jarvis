@@ -116,6 +116,11 @@ export function WorkflowsRoomBody(): React.ReactElement {
   // chat agent (which calls `manage_workflow:compose`). Text chat is
   // already routed there directly by ws-service.
   useRoomActions("workflows", (action, args) => {
+    // The daemon pushes this when something lands in this room from outside
+    // the UI, so a write is visible the moment it happens instead of on the
+    // next 8-second poll. The trial's room beats are what needed it: the
+    // founder is watching the room while they say yes (D22).
+    if (action === "refresh") { void data.refresh(); return true; }
     if (action !== "create_from_nl") return false;
     const prompt = typeof args?.prompt === "string" ? args.prompt.trim() : "";
     void (async () => {

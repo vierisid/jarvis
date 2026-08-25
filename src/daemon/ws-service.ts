@@ -2684,6 +2684,16 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * "open workflows" classifies cleanly (verb=show, object.type maps to a
    * RoomKey) — bypasses the chat agent.
    */
+  /**
+   * Put a frame on the wire verbatim. Used by `/api/trial/preview` to draw one
+   * of the room beats' surfaces without a microphone, and by nothing else:
+   * every other broadcaster on this class is typed to what it sends, and
+   * should stay that way.
+   */
+  broadcastRaw(msg: WSMessage): void {
+    this.wsServer.broadcast(msg);
+  }
+
   broadcastRoomNavigation(key: RoomKey, requestId?: string): void {
     this.wsServer.broadcast({
       type: 'notification',
