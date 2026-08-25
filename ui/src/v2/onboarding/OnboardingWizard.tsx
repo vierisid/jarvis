@@ -150,9 +150,9 @@ const TOUR = [
   // is the LABEL being wrong, not the binding — which is why a hardcoded ⌘
   // survived: it kept working for any Windows user who guessed Ctrl.
   { sm: `Press ${modKey("J")} to summon Talk, the conversation panel. Everything we say lives there, across sessions.`, t: `→ Press ${modKey("J")}`, pos: { right: 18, top: 60 } },
-  { sm: "The Index, on the left, is every room. Names spelled out, badges flag what needs you. Recognition over recall.", t: "", pos: { left: 130, top: 58 } },
-  { sm: "Now is your monitoring surface: what I’m doing and what’s waiting on you, at a glance.", t: "", pos: { left: 130, top: 104 } },
-  { sm: "Authority is your control panel, with a kill-switch. Nothing with real-world impact happens without your yes.", t: "", pos: { left: 130, top: 150 } },
+  { sm: "The Index, on the left, is every room. Names spelled out, badges flag what needs you. Recognition over recall.", t: "", pos: { left: "calc(var(--mrail-w) + 12px)", top: 58 } },
+  { sm: "Now is your monitoring surface: what I’m doing and what’s waiting on you, at a glance.", t: "", pos: { left: "calc(var(--mrail-w) + 12px)", top: 104 } },
+  { sm: "Authority is your control panel, with a kill-switch. Nothing with real-world impact happens without your yes.", t: "", pos: { left: "calc(var(--mrail-w) + 12px)", top: 150 } },
 ];
 
 type TestState = { status: "idle" | "testing" | "ok" | "err"; msg?: string; validatedModel?: string };
