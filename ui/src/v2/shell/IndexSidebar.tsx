@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { closeRoom, openRoom, useV2Route, type RoomKey } from "../router";
 import { useLiveData } from "./LiveDataContext";
+import { modKey } from "../ui/platform";
 
 /**
  * The Index — Brand Book III room-centric sidebar. Three states:
@@ -18,16 +19,16 @@ type Row =
   | { kind: "now"; label: string; kbd: string };
 
 const ROWS: Row[] = [
-  { kind: "now", label: "Now", kbd: "⌘1" },
+  { kind: "now", label: "Now", kbd: modKey("1") },
   { kind: "heading", label: "run" },
-  { kind: "room", key: "workflows", label: "Workflows", kbd: "⌘2" },
-  { kind: "room", key: "agents", label: "Agents", kbd: "⌘3" },
-  { kind: "room", key: "tasks", label: "Tasks", kbd: "⌘4" },
+  { kind: "room", key: "workflows", label: "Workflows", kbd: modKey("2") },
+  { kind: "room", key: "agents", label: "Agents", kbd: modKey("3") },
+  { kind: "room", key: "tasks", label: "Tasks", kbd: modKey("4") },
   { kind: "heading", label: "know" },
-  { kind: "room", key: "memory", label: "Memory", kbd: "⌘5" },
-  { kind: "room", key: "goals", label: "Goals", kbd: "⌘6" },
-  { kind: "room", key: "calendar", label: "Calendar", kbd: "⌘7" },
-  { kind: "room", key: "content", label: "Content", kbd: "⌘8" },
+  { kind: "room", key: "memory", label: "Memory", kbd: modKey("5") },
+  { kind: "room", key: "goals", label: "Goals", kbd: modKey("6") },
+  { kind: "room", key: "calendar", label: "Calendar", kbd: modKey("7") },
+  { kind: "room", key: "content", label: "Content", kbd: modKey("8") },
   { kind: "heading", label: "guard" },
   { kind: "room", key: "authority", label: "Authority" },
   { kind: "room", key: "logs", label: "Logs" },
@@ -35,7 +36,7 @@ const ROWS: Row[] = [
   { kind: "heading", label: "build" },
   { kind: "room", key: "workspaces", label: "Workspaces" },
   { kind: "room", key: "tools", label: "Tools" },
-  { kind: "room", key: "settings", label: "Settings", kbd: "⌘9", spaced: true },
+  { kind: "room", key: "settings", label: "Settings", kbd: modKey("9"), spaced: true },
 ];
 
 /** Cluster → its rooms, for collapsed tiles + hover-peek. */

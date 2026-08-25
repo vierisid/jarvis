@@ -286,6 +286,24 @@ select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
   .obw-provgrid { grid-template-columns: 1fr; }
   .obw-tourframe { --mrail-w: 84px; }
 }
+/* Short windows: pin the spotlight to the bottom of the frame instead of the
+   place its slide asked for.
+   The frame clips (overflow:hidden, for the mock), and slide 5's card starts
+   150px down and runs ~175px — so once the frame drops under roughly 330px it
+   was cut off, taking "Skip tour" and "Finish" with it and stranding the user
+   on the last slide with no way forward. Pinned to the bottom edge it is always
+   whole and its buttons always reachable; the callout stops pointing at a
+   specific row, which is the right thing to lose when the alternative is a
+   dead end. `!important` because each slide's position is an inline style. */
+@media (max-height: 560px) {
+  .obw-spot {
+    top: auto !important;
+    bottom: 12px !important;
+    left: 12px !important;
+    right: 12px !important;
+    width: auto !important;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .obw-drop .in, .obw-drop .ring, .obw-spot .sh .sd .in, .obw-micbars b, .obw-wave b, .obw-voicepill .ld { animation: none !important; }
   .obw-drop .in { opacity: 1 !important; }

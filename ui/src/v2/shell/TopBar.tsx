@@ -4,6 +4,7 @@ import { ROOM_NAV_ENTRIES } from "../palette/types";
 import type { ConnectionState } from "./Header";
 import type { VoiceState } from "./VoiceRail";
 import { useTheme } from "./useTheme";
+import { modKey } from "../ui/platform";
 
 /**
  * Top bar — 44px, never two rows. Left: room name + contextual actions
@@ -96,7 +97,7 @@ export function TopBar({
           {theme === "dark" ? "● dark" : "○ light"}
         </button>
 
-        <button className="rs-chip" onClick={onOpenPalette} aria-label="Quick open">⌘K</button>
+        <button className="rs-chip" onClick={onOpenPalette} aria-label="Quick open">{modKey("K")}</button>
 
         {onToggleNotifications && (
           <button
