@@ -486,3 +486,25 @@
 @media (max-width: 900px) {
   .tc-prop { display: none; }
 }
+
+/* ── the depth D41 added to the cards ── */
+
+/* A path is the one thing on these cards the founder has to be able to read
+   character by character: it is where their files are, and where the copy is
+   about to go. Monospaced, breakable, and never truncated with an ellipsis. */
+.tc-path {
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
+  font-size: 11px;
+  line-height: 1.35;
+  word-break: break-all;
+  white-space: normal;
+}
+
+/* The one task they chose to do first. Same treatment as `is-late`, in the
+   speaking blue rather than the vermilion: it is the thing to look at, not
+   the thing to worry about. */
+.tc-tag.is-first { color: #2d78ff; }
+:root[data-theme="dark"] .tc-tag.is-first { color: #8fb4ff; }
+
+/* Half a rhythm, drawn as half a rhythm rather than as a guess. */
+.tc-brief-time.is-blank { opacity: 0.35; }

@@ -18,6 +18,7 @@
 
 import type { WSMessage } from '../../comms/websocket.ts';
 import {
+  TRIAL_FILES_SOURCE,
   createConductorSession,
   executeConductorTool,
   type ConductorSession,
@@ -42,6 +43,7 @@ import {
   type TrialSnapshot,
 } from '../../trial/entitlement.ts';
 import type { RoomKey } from '../../voice/intent.ts';
+import type { FoundEntities } from './reader-tools.ts';
 
 /**
  * How long to wait for a transcript of the founder's first utterance before
@@ -67,13 +69,20 @@ type Timer = ReturnType<typeof setTimeout>;
 type Entry<W> = {
   socket: W;
   session: ConductorSession;
-  /** D16's seven beats, as a ledger. See beats.ts. */
+  /** D16's beats, as a ledger. See beats.ts. */
   beats: BeatsSession;
   /** The room the founder is currently looking at, so the pebble only flies
    *  when they are actually being led somewhere new (D21). */
   room: RoomKey | null;
   /** Backstop timer armed by the first `speech_stopped`. */
   clockFallback: Timer | null;
+  /**
+   * D42's reader, as seen from this socket. Bookkeeping only: the entities
+   * themselves live in the vault, and `found` is the running list of what has
+   * landed so `reading_so_far` can answer honestly, including when the honest
+   * answer is "nothing yet".
+   */
+  reader: { found: string[]; finished: boolean; summary: string | null } | null;
 };
 
 /**
@@ -88,10 +97,26 @@ type Entry<W> = {
 export type TrialBeatActions = {
   /** Compose + publish a flow from a proposal. Slow: it is a real LLM build. */
   publishWorkflow: (p: WorkflowProposal) => Promise<{ ok: true; detail: string } | { ok: false; detail: string }>;
-  /** Persist the morning brief hour into the goal rhythm. */
-  setMorningBrief: (hour: number, minute: number) => void;
-  /** Persist the authority level. Returns what actually landed. */
-  setAuthorityLevel: (level: number) => number;
+  /** Persist both ends of the day into the goal rhythm. */
+  setDailyRhythm: (morning: { hour: number; minute: number }, eveningHour: number) => void;
+  /** Persist the authority level and the founder's carve-out. Returns what
+   *  actually landed, since both are filtered on the way through. */
+  setAuthority: (level: number, alwaysAsk: string[]) => { level: number; alwaysAsk: string[] };
+  /**
+   * D42. Spawn the background reader on a folder the founder approved.
+   *
+   * The manager supplies the two callbacks rather than the daemon, because
+   * what the reader finds has to land through the SAME path the conversation
+   * uses (`remember` on this socket's conductor session) so that the founder
+   * sees one memory ticker filling rather than two sources of truth.
+   */
+  startFolderReader: (opts: {
+    folder: string;
+    shortlist: string[];
+    about: string;
+    onFound: (found: FoundEntities) => { landed: number; names: string[] };
+    onDone: (summary: string | null) => void;
+  }) => Promise<{ agentId: string; taskId: string | null }>;
   /** Spawn the finale's research agent and leave it running. */
   spawnResearchAgent: (
     question: string,
@@ -154,6 +179,7 @@ export class TrialConductorManager<W> {
       beats: createBeatsSession(),
       room: null,
       clockFallback: null,
+      reader: null,
     });
     return session;
   }
@@ -221,16 +247,76 @@ export class TrialConductorManager<W> {
         this.publishBeatComplete(entry, beat, detail),
       publishWorkflow: (p: WorkflowProposal) =>
         actions ? actions.publishWorkflow(p) : Promise.reject(new Error('The workflow builder is not available on this install.')),
-      setMorningBrief: (hour: number, minute: number) =>
-        actions ? actions.setMorningBrief(hour, minute) : notWired('The morning brief'),
-      setAuthorityLevel: (level: number): number =>
-        actions ? actions.setAuthorityLevel(level) : (notWired('Authority') as never),
+      setDailyRhythm: (morning: { hour: number; minute: number }, eveningHour: number) =>
+        actions ? actions.setDailyRhythm(morning, eveningHour) : notWired('The daily rhythm'),
+      setAuthority: (level: number, alwaysAsk: string[]) =>
+        actions ? actions.setAuthority(level, alwaysAsk) : (notWired('Authority') as never),
+      startFolderReader: (opts: { folder: string; shortlist: string[]; about: string }) =>
+        actions
+          ? actions.startFolderReader({
+              ...opts,
+              onFound: (found) => this.landFromReader(entry, found),
+              onDone: (summary) => this.readerFinished(entry, summary),
+            })
+          : Promise.reject(new Error('Sub-agents are not available on this install.')),
+      readerProgress: () => ({
+        found: entry.reader ? [...entry.reader.found] : [],
+        finished: entry.reader?.finished ?? false,
+        summary: entry.reader?.summary ?? null,
+      }),
       spawnResearchAgent: (question: string, brief: string) =>
         actions
           ? actions.spawnResearchAgent(question, brief)
           : Promise.reject(new Error('Sub-agents are not available on this install.')),
       onFinished: (beats: BeatsSession) => this.publishOnboardingComplete(entry, beats),
     };
+  }
+
+  /* ─────────────────── D42, what the reader sends back ─────────────────── */
+
+  /**
+   * Something the reader found in the founder's own files.
+   *
+   * Deliberately funnelled through the conversation's own `remember`, with a
+   * different vault source. That buys three things at once: the same
+   * de-duplication (a name in three documents lands once), the same
+   * `trial_memory` broadcast so the founder watches their files arrive in the
+   * ticker they have been watching all session, and one place where the D38
+   * debrief can later tell what it read from what they said.
+   */
+  private landFromReader(entry: Entry<W>, found: FoundEntities): { landed: number; names: string[] } {
+    if (!entry.reader) entry.reader = { found: [], finished: false, summary: null };
+    const before = entry.session.landed.length;
+    try {
+      executeConductorTool(entry.session, 'remember', found as Record<string, unknown>, {
+        onEntitiesLanded: (landed) => this.publishLanded(landed),
+        source: TRIAL_FILES_SOURCE,
+      }, this.now());
+    } catch (err) {
+      console.warn('[Trial] reader finding failed to land', err);
+      return { landed: 0, names: [] };
+    }
+    const fresh = entry.session.landed.slice(before);
+    const names: string[] = [];
+    for (const e of fresh) {
+      const label = e.role ? `${e.name} (${e.role})` : e.name;
+      if (!entry.reader.found.includes(label)) {
+        entry.reader.found.push(label);
+        names.push(label);
+      }
+    }
+    // Facts landing on an entity that was already known are real findings too,
+    // and they are the ones a founder is most surprised by. Counted through the
+    // fact tally rather than the entity list.
+    const facts = Array.isArray(found.facts) ? found.facts.length : 0;
+    return { landed: names.length || (facts > 0 ? facts : 0), names };
+  }
+
+  private readerFinished(entry: Entry<W>, summary: string | null): void {
+    if (!entry.reader) entry.reader = { found: [], finished: false, summary: null };
+    entry.reader.finished = true;
+    entry.reader.summary = summary;
+    console.log(`[Trial] the folder reader finished: ${entry.reader.found.length} things landed`);
   }
 
   /**

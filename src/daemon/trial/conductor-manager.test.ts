@@ -11,6 +11,10 @@ import {
   TrialConductorManager,
   transcriptHasWords,
 } from './conductor-manager.ts';
+import type { FoundEntities } from './reader-tools.ts';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 
 const T0 = 1_780_000_000_000;
 /** Stand-in for a socket. The manager only ever uses it as a map key. */
@@ -22,8 +26,13 @@ function harness(now = () => T0, clockGraceMs?: number) {
   const actions = {
     workflows: [] as string[],
     brief: null as { hour: number; minute: number } | null,
+    evening: null as number | null,
     authority: null as number | null,
+    alwaysAsk: [] as string[],
     spawned: [] as string[],
+    readerStarts: [] as { folder: string; shortlist: string[] }[],
+    readerFound: null as ((f: FoundEntities) => { landed: number; names: string[] }) | null,
+    readerDone: null as ((summary: string | null) => void) | null,
   };
   const manager = new TrialConductorManager<Sock>({
     send: (ws, msg) => sent.push({ ws, msg }),
@@ -32,8 +41,14 @@ function harness(now = () => T0, clockGraceMs?: number) {
     clockGraceMs,
     beatActions: {
       publishWorkflow: async (p) => { actions.workflows.push(p.name); return { ok: true as const, detail: 'built' }; },
-      setMorningBrief: (hour, minute) => { actions.brief = { hour, minute }; },
-      setAuthorityLevel: (level) => { actions.authority = level; return level; },
+      setDailyRhythm: (morning, eveningHour) => { actions.brief = morning; actions.evening = eveningHour; },
+      setAuthority: (level, alwaysAsk) => { actions.authority = level; actions.alwaysAsk = alwaysAsk; return { level, alwaysAsk }; },
+      startFolderReader: async (opts) => {
+        actions.readerStarts.push({ folder: opts.folder, shortlist: opts.shortlist });
+        actions.readerFound = opts.onFound;
+        actions.readerDone = opts.onDone;
+        return { agentId: 'reader-1', taskId: 'read-1' };
+      },
       spawnResearchAgent: async (question) => {
         actions.spawned.push(question);
         return { agentId: 'a1', taskId: 't1', agentName: 'Research Analyst' };
@@ -321,7 +336,7 @@ describe('what the founder sees during a beat', () => {
 
   test('what lands is pushed into the room, not left to its poll (D22)', async () => {
     const { manager, ws, broadcast } = await openedManager();
-    await manager.executeTool(ws, 'propose_goals', { objective: 'o', key_results: [{ title: 'k' }] });
+    await manager.executeTool(ws, 'propose_goals', DEEP_GOALS);
     manager.onUserSpeechStopped(ws);
     await manager.executeTool(ws, 'create_goals', {});
 
@@ -347,6 +362,18 @@ describe('what the founder sees during a beat', () => {
   });
 });
 
+/** A goal tree deep enough for `create_goals` to write it: two key results,
+ *  both with today's number, and the first move. See D41 in beats.ts. */
+const DEEP_GOALS = {
+  objective: '40 customers by Q3',
+  deadline: '2026-09-30',
+  key_results: [
+    { title: '12 demos a month', target: '12', today: '4' },
+    { title: 'Churn under 4%', target: '4%', today: '9%' },
+  ],
+  first_move: { what: 'Rewrite the pricing page', under: '12 demos a month', due: 'friday' },
+};
+
 describe('the finale', () => {
   afterEach(() => closeDb());
 
@@ -361,35 +388,56 @@ describe('the finale', () => {
     /** The founder answers. The VAD is what the server actually hears. */
     const yes = () => manager.onUserSpeechStopped(ws);
 
+    const folder = mkdtempSync(join(tmpdir(), 'arc-files-'));
+    writeFileSync(join(folder, 'pitch.md'), '# Acme\nWe sell to studios.', 'utf-8');
+
     await run('conclude_opening', { understanding: 'Two-person B2B SaaS.' });
-    await run('propose_goals', { objective: '40 customers by Q3', key_results: [{ title: '12 demos a month' }] });
+    await run('propose_goals', DEEP_GOALS);
     yes();
     await run('create_goals');
-    await run('propose_tasks', { tasks: [{ what: 'Send Bowman the quote' }] });
+    await run('propose_tasks', { tasks: [{ what: 'Send Bowman the quote', first: true }] });
     yes();
     await run('create_tasks');
-    await run('propose_morning_brief', { hour: 7, minute: 30 });
+    await run('propose_daily_rhythm', { hour: 7, minute: 30, evening_hour: 19 });
     yes();
-    await run('set_morning_brief');
-    await run('propose_workflow', { name: 'Monday pipeline review', runs_when: 'Mondays at 8', steps: ['Pull open deals'] });
+    await run('set_daily_rhythm');
+    await run('propose_workflow', {
+      name: 'Monday pipeline review', runs_when: 'Mondays at 8',
+      steps: ['Pull open deals'], never: 'email a client without you seeing it',
+    });
     yes();
     await run('publish_workflow');
-    await run('propose_authority', {});
+    await run('no_second_workflow', { because: 'the rest of their week is one-offs' });
+    await run('propose_authority', { always_ask: ['send_message'] });
     yes();
     await run('set_authority', {});
+    // D42: the folder, named and approved, then read in the background.
+    await run('propose_reading', { folder });
+    yes();
+    await run('start_reading');
+    // D43: refusable, and a refusal does not stall the conversation.
+    await run('move_on', { because: 'they would rather leave their files alone' });
     await run('spawn_research_agent', { question: 'What the competitors charge', brief: 'Compare published prices.' });
 
     expect(actions.brief).toEqual({ hour: 7, minute: 30 });
+    expect(actions.evening).toBe(19);
     expect(actions.authority).toBe(5);
+    expect(actions.alwaysAsk).toEqual(['send_message']);
     expect(actions.workflows).toEqual(['Monday pipeline review']);
+    expect(actions.readerStarts).toHaveLength(1);
+    expect(actions.readerStarts[0]!.folder).toBe(folder);
+    expect(actions.readerStarts[0]!.shortlist).toEqual(['pitch.md']);
     expect(actions.spawned).toEqual(['What the competitors charge']);
 
     const done = broadcast.find((m) => m.type === 'trial_onboarding_complete');
     expect(done).toBeDefined();
     const payload = done!.payload as { beats: string[]; authorityLevel: number; agent: { agentId: string } };
-    expect(payload.beats).toEqual(['goals', 'tasks', 'calendar', 'workflows', 'authority', 'agents']);
+    expect(payload.beats).toEqual([
+      'goals', 'tasks', 'calendar', 'workflows', 'authority', 'files', 'workspace', 'agents',
+    ]);
     expect(payload.authorityLevel).toBe(5);
     expect(payload.agent.agentId).toBe('a1');
+    rmSync(folder, { recursive: true, force: true });
 
     // D17: onboarding finished, the conversation did not. Nothing closed it.
     expect(manager.isRunning(ws)).toBe(true);
@@ -404,7 +452,7 @@ describe('the finale', () => {
     manager.arm(ws);
     manager.begin(ws);
     await manager.executeTool(ws, 'conclude_opening', { understanding: 'ok' });
-    await manager.executeTool(ws, 'propose_goals', { objective: 'o', key_results: [{ title: 'k' }] });
+    await manager.executeTool(ws, 'propose_goals', DEEP_GOALS);
 
     expect(await manager.executeTool(ws, 'create_goals')).toContain('have not answered yet');
     // The founder speaks. A transcript and the VAD both count; this is the
@@ -428,15 +476,15 @@ describe('the finale', () => {
     manager.arm(ws);
     manager.begin(ws);
     await manager.executeTool(ws, 'conclude_opening', { understanding: 'ok' });
-    await manager.executeTool(ws, 'propose_goals', { objective: 'o', key_results: [{ title: 'k' }] });
+    await manager.executeTool(ws, 'propose_goals', DEEP_GOALS);
     manager.onUserSpeechStopped(ws);
     await manager.executeTool(ws, 'create_goals');
-    await manager.executeTool(ws, 'propose_tasks', { tasks: [{ what: 'a' }] });
+    await manager.executeTool(ws, 'propose_tasks', { tasks: [{ what: 'a', first: true }] });
     manager.onUserSpeechStopped(ws);
     await manager.executeTool(ws, 'create_tasks');
-    await manager.executeTool(ws, 'propose_morning_brief', { hour: 8 });
+    await manager.executeTool(ws, 'propose_daily_rhythm', { hour: 8, evening_hour: 19 });
     manager.onUserSpeechStopped(ws);
-    const res = await manager.executeTool(ws, 'set_morning_brief');
+    const res = await manager.executeTool(ws, 'set_daily_rhythm');
     expect(res).toContain('did not save');
     expect(manager.beatsOf(ws)!.briefAt).toBeNull();
   });

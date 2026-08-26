@@ -37,13 +37,17 @@ export interface CapturedFuel {
 
 /* ── the seven room beats (D16), as they arrive on the wire ── */
 
-export type RoomBeat = "goals" | "tasks" | "calendar" | "workflows" | "authority" | "agents";
+export type RoomBeat =
+  | "goals" | "tasks" | "calendar" | "workflows" | "authority" | "files" | "workspace" | "agents";
 
 export interface GoalProposal {
   beat: "goals";
   objective: string;
   measure?: string;
-  keyResults: { title: string; measure?: string }[];
+  deadline: number | null;
+  deadlineLabel: string | null;
+  keyResults: { title: string; measure?: string; target?: string; today?: string }[];
+  firstMove: { what: string; due: number | null; dueLabel: string | null; under: string } | null;
 }
 
 export interface TaskProposal {
@@ -54,6 +58,8 @@ export interface TaskProposal {
     dueLabel: string | null;
     priority: "low" | "normal" | "high" | "critical";
     late: boolean;
+    toward?: string;
+    first: boolean;
   }[];
 }
 
@@ -62,6 +68,7 @@ export interface CalendarProposal {
   hour: number;
   minute: number;
   because?: string;
+  eveningHour: number | null;
 }
 
 export interface WorkflowProposal {
@@ -76,6 +83,38 @@ export interface WorkflowProposal {
 export interface AuthorityProposal {
   beat: "authority";
   level: number;
+  alwaysAsk: string[];
+}
+
+/** D42: exactly what is about to be read, named before they answer. */
+export interface FilesProposal {
+  beat: "files";
+  folder: string;
+  what: string;
+  sample: string[];
+  willRead: number;
+  total: number;
+  reading?: boolean;
+  found?: number;
+}
+
+/** D43: the better-organised folder, before it exists. */
+export interface WorkspaceProposal {
+  beat: "workspace";
+  kind: "workspace";
+  destination: string;
+  source: string;
+  title: string;
+  sections: { name: string; about: string; files: string[] }[];
+}
+
+/** D43: one real piece of work, on one file it actually read. */
+export interface EditProposal {
+  beat: "workspace";
+  kind: "edit";
+  file: string;
+  change: string;
+  as: string;
 }
 
 export type BeatProposal =
@@ -83,7 +122,10 @@ export type BeatProposal =
   | TaskProposal
   | CalendarProposal
   | WorkflowProposal
-  | AuthorityProposal;
+  | AuthorityProposal
+  | FilesProposal
+  | WorkspaceProposal
+  | EditProposal;
 
 /** What just became real, for the card's last frame before it dissolves. */
 export interface ProposalLanded {

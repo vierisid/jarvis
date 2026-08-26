@@ -62,9 +62,14 @@ function makeService(opts: {
     calls,
     internals: svc as unknown as {
       trialPublishWorkflow: (p: WorkflowProposal) => Promise<{ ok: boolean; detail: string }>;
-      trialSetMorningBrief: (hour: number, minute: number) => void;
-      trialSetAuthorityLevel: (level: number) => number;
+      trialSetDailyRhythm: (m: { hour: number; minute: number }, eveningHour: number) => void;
+      trialSetAuthority: (level: number, alwaysAsk: string[]) => { level: number; alwaysAsk: string[] };
       trialSpawnResearchAgent: (q: string, b: string) => Promise<unknown>;
+      trialStartFolderReader: (o: {
+        folder: string; shortlist: string[]; about: string;
+        onFound: (f: unknown) => { landed: number; names: string[] };
+        onDone: (s: string | null) => void;
+      }) => Promise<{ agentId: string; taskId: string | null }>;
     },
   };
 }
@@ -149,18 +154,22 @@ describe('beat 10, the workflow the founder agreed to', () => {
   });
 });
 
-describe('beat 09, the brief hour', () => {
-  test('is written where the goal rhythm actually reads it', () => {
+describe('beat 09, both ends of their day', () => {
+  test('are written where the goal rhythm actually reads them', () => {
     const { internals, config } = makeService();
-    internals.trialSetMorningBrief(7, 30);
+    internals.trialSetDailyRhythm({ hour: 7, minute: 30 }, 19);
 
     expect(config.goals?.morning_window.start).toBe(7);
     expect(config.goals?.morning_minute).toBe(30);
+    expect(config.goals?.evening_window.start).toBe(19);
     // And persisted, not just held in memory: a daemon restart must wake up
-    // with the hour the founder chose out loud.
-    const stored = loadUserSection('goals') as { morning_window?: { start: number }; morning_minute?: number };
+    // with the hours the founder chose out loud.
+    const stored = loadUserSection('goals') as {
+      morning_window?: { start: number }; morning_minute?: number; evening_window?: { start: number };
+    };
     expect(stored.morning_window?.start).toBe(7);
     expect(stored.morning_minute).toBe(30);
+    expect(stored.evening_window?.start).toBe(19);
   });
 
   test('leaves the rest of the goal config alone', () => {
@@ -175,31 +184,55 @@ describe('beat 09, the brief hour', () => {
       calendar_ownership: true,
     };
     const { internals } = makeService({ config });
-    internals.trialSetMorningBrief(6, 0);
+    internals.trialSetDailyRhythm({ hour: 6, minute: 0 }, 20);
 
     expect(config.goals.accountability_style).toBe('supportive');
-    expect(config.goals.evening_window).toEqual({ start: 21, end: 23 });
     expect(config.goals.calendar_ownership).toBe(true);
     expect(config.goals.morning_window.start).toBe(6);
+    expect(config.goals.evening_window.start).toBe(20);
   });
 });
 
-describe('beat 11, the authority level', () => {
-  test('is written to the section the engine reloads from', () => {
+describe('beat 11, the authority level and their carve-out', () => {
+  test('are written to the section the engine reloads from', () => {
     const { internals, config } = makeService();
-    expect(internals.trialSetAuthorityLevel(5)).toBe(5);
+    expect(internals.trialSetAuthority(5, ['send_message'])).toEqual({ level: 5, alwaysAsk: ['send_message'] });
     expect(config.authority.default_level).toBe(5);
-    const stored = loadUserSection('authority') as { default_level?: number };
+    expect(config.authority.governed_categories).toContain('send_message');
+    const stored = loadUserSection('authority') as { default_level?: number; governed_categories?: string[] };
     expect(stored.default_level).toBe(5);
+    expect(stored.governed_categories).toContain('send_message');
   });
 
-  test('does not touch the governed categories or the emergency state', () => {
+  test('the carve-out is added to what was already governed, never replacing it', () => {
     const config = shippedConfig();
     const governed = [...config.authority.governed_categories];
     const { internals } = makeService({ config });
-    internals.trialSetAuthorityLevel(5);
-    expect(config.authority.governed_categories).toEqual(governed);
+    internals.trialSetAuthority(5, ['execute_command']);
+    // A founder naming one thing they want to keep their hand on has not asked
+    // for send_email and make_payment to stop needing approval.
+    for (const already of governed) expect(config.authority.governed_categories).toContain(already);
+    expect(config.authority.governed_categories).toContain('execute_command');
     expect(config.authority.emergency_state).toBe('normal');
+  });
+
+  test('naming the same category twice does not double it', () => {
+    const config = shippedConfig();
+    const { internals } = makeService({ config });
+    // `send_message` is already governed by default.
+    internals.trialSetAuthority(5, ['send_message']);
+    const n = config.authority.governed_categories.filter((c) => c === 'send_message').length;
+    expect(n).toBe(1);
+  });
+});
+
+describe('D42, the background reader', () => {
+  test('refuses out loud on an install with no sub-agents rather than half-starting', async () => {
+    const { internals } = makeService();
+    await expect(internals.trialStartFolderReader({
+      folder: '/tmp', shortlist: [], about: '',
+      onFound: () => ({ landed: 0, names: [] }), onDone: () => {},
+    })).rejects.toThrow(/sub-agents are not running/);
   });
 });
 

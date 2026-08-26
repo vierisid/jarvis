@@ -3,10 +3,13 @@ import type {
   AuthorityProposal,
   BeatProposal,
   CalendarProposal,
+  EditProposal,
+  FilesProposal,
   GoalProposal,
   ProposalLanded,
   TaskProposal,
   WorkflowProposal,
+  WorkspaceProposal,
 } from "./conductorSession";
 
 /* ═══════════ What the founder is being asked to say yes to ═══════════
@@ -63,14 +66,23 @@ export function TrialProposal({
 
   const p = proposal!;
   const building = p.beat === "workflows" && p.building === true;
+  // The reading card is the one card that is not waiting on anything once it
+  // has started: the founder already said yes and it is working. It keeps the
+  // same shape so the surface does not change under them, and counts up.
+  const reading = p.beat === "files" && p.reading === true;
+  const working = building || reading;
   return (
     <div className="tc-prop">
       <div className="tc-prop-head">
-        <span className={`tc-prop-dot${building ? " is-run" : ""}`} />
+        <span className={`tc-prop-dot${working ? " is-run" : ""}`} />
         <span className="tc-prop-from">
-          {building ? "building it now" : "proposed · from what you told me"}
+          {building ? "building it now"
+            : reading ? "reading your files now"
+              : p.beat === "files" ? "it would read this · nothing has been read"
+                : p.beat === "workspace" ? "proposed · from what it read"
+                  : "proposed · from what you told me"}
         </span>
-        {!building && <span className="tc-prop-wait">waiting on you</span>}
+        {!working && <span className="tc-prop-wait">waiting on you</span>}
       </div>
       <div className="tc-prop-body">
         {p.beat === "goals" && <GoalsCard p={p} />}
@@ -78,9 +90,14 @@ export function TrialProposal({
         {p.beat === "calendar" && <CalendarCard p={p} />}
         {p.beat === "workflows" && <WorkflowCard p={p} />}
         {p.beat === "authority" && <AuthorityCard p={p} />}
+        {p.beat === "files" && <FilesCard p={p} />}
+        {p.beat === "workspace" && p.kind === "workspace" && <WorkspaceCard p={p} />}
+        {p.beat === "workspace" && p.kind === "edit" && <EditCard p={p} />}
       </div>
       <div className="tc-prop-foot">
-        {building ? "give it a few seconds" : 'or just say "yes"'}
+        {building ? "give it a few seconds"
+          : reading ? "it keeps going while you talk"
+            : 'or just say "yes"'}
       </div>
     </div>
   );
@@ -92,6 +109,8 @@ const LANDED_LABEL: Record<ProposalLanded["beat"], string> = {
   calendar: "set just now",
   workflows: "published just now",
   authority: "granted just now",
+  files: "reading now",
+  workspace: "written just now",
   agents: "running now",
 };
 
@@ -102,7 +121,7 @@ function GoalsCard({ p }: { p: GoalProposal }) {
     <>
       <div className="tc-goal">
         <span className="tc-goal-name">{p.objective}</span>
-        <span className="tc-tag">objective</span>
+        <span className="tc-tag">{p.deadlineLabel || "objective"}</span>
       </div>
       {p.measure && <div className="tc-sub">{p.measure}</div>}
       <ul className="tc-rows">
@@ -110,10 +129,22 @@ function GoalsCard({ p }: { p: GoalProposal }) {
           <li key={i}>
             <span className="tc-bullet" />
             <span className="tc-row-name">{kr.title}</span>
-            <span className="tc-tag">{kr.measure || "key result"}</span>
+            {/* Today against target is the whole point of this beat: a founder
+                looking at "9 → 40" is looking at a gap, not an aspiration. */}
+            <span className="tc-tag">
+              {kr.today
+                ? `${kr.today}${kr.target ? ` → ${kr.target}` : ""}`
+                : kr.target || kr.measure || "needs today's number"}
+            </span>
           </li>
         ))}
       </ul>
+      {p.firstMove && (
+        <div className="tc-never">
+          first move: {p.firstMove.what}
+          {p.firstMove.dueLabel ? ` · ${p.firstMove.dueLabel}` : ""}
+        </div>
+      )}
     </>
   );
 }
@@ -121,17 +152,24 @@ function GoalsCard({ p }: { p: GoalProposal }) {
 /* ── frame 06 · the tasks, including the late one ── */
 
 function TasksCard({ p }: { p: TaskProposal }) {
+  const toward = p.tasks.filter((t) => t.toward).length;
   return (
-    <ul className="tc-rows">
-      {p.tasks.map((t, i) => (
-        <li key={i} className={t.late ? "is-late" : ""}>
-          <span className="tc-bullet" />
-          <span className="tc-row-name">{t.what}</span>
-          {t.late && <span className="tc-tag is-late">late</span>}
-          <span className="tc-tag">{dueLabel(t)}</span>
-        </li>
-      ))}
-    </ul>
+    <>
+      <ul className="tc-rows">
+        {[...p.tasks].sort((a, b) => Number(b.first) - Number(a.first)).map((t, i) => (
+          <li key={i} className={t.late ? "is-late" : ""}>
+            <span className="tc-bullet" />
+            <span className="tc-row-name">{t.what}</span>
+            {t.first && <span className="tc-tag is-first">first</span>}
+            {t.late && <span className="tc-tag is-late">late</span>}
+            <span className="tc-tag">{t.toward ? `→ ${t.toward}` : dueLabel(t)}</span>
+          </li>
+        ))}
+      </ul>
+      <div className="tc-never">
+        {toward} of {p.tasks.length} move the quarter
+      </div>
+    </>
   );
 }
 
@@ -151,16 +189,27 @@ function dueLabel(t: TaskProposal["tasks"][number]): string {
 
 function CalendarCard({ p }: { p: CalendarProposal }) {
   return (
-    <div className="tc-brief">
-      <div className="tc-brief-time">
-        {String(p.hour).padStart(2, "0")}:{String(p.minute).padStart(2, "0")}
+    <>
+      <div className="tc-brief">
+        <div className="tc-brief-time">
+          {String(p.hour).padStart(2, "0")}:{String(p.minute).padStart(2, "0")}
+        </div>
+        <div className="tc-brief-what">
+          morning brief
+          <span>every day</span>
+        </div>
       </div>
-      <div className="tc-brief-what">
-        morning brief
-        <span>every day</span>
+      <div className="tc-brief">
+        <div className={`tc-brief-time${p.eveningHour === null ? " is-blank" : ""}`}>
+          {p.eveningHour === null ? "--:--" : `${String(p.eveningHour).padStart(2, "0")}:00`}
+        </div>
+        <div className="tc-brief-what">
+          evening review
+          <span>{p.eveningHour === null ? "when do you stop?" : "every day"}</span>
+        </div>
       </div>
       {p.because && <div className="tc-sub">{p.because}</div>}
-    </div>
+    </>
   );
 }
 
@@ -202,9 +251,20 @@ const RUNGS: { upTo: number; buys: string }[] = [
 
 const TRIAL_CEILING = 6;
 
+/** The carve-outs, in the founder's words rather than the category names.
+ *  Mirrors CARVE_OUT_CATEGORIES in src/daemon/trial/beats.ts. */
+const CARVE_OUT_SAYS: Record<string, string> = {
+  send_message: "messages sent as you",
+  execute_command: "commands on your machine",
+  write_data: "changes to your files",
+  access_browser: "a browser in your accounts",
+  control_app: "apps being controlled",
+};
+
 function AuthorityCard({ p }: { p: AuthorityProposal }) {
   const buys = RUNGS.filter((r) => r.upTo <= ceilTo(p.level)).map((r) => r.buys);
   const notYet = RUNGS.filter((r) => r.upTo > ceilTo(p.level)).map((r) => r.buys);
+  const kept = (p.alwaysAsk ?? []).map((id) => CARVE_OUT_SAYS[id] ?? id);
   return (
     <>
       <div className="tc-ladder">
@@ -229,10 +289,15 @@ function AuthorityCard({ p }: { p: AuthorityProposal }) {
         </div>
         <div className="is-no">
           <span className="tc-buys-k">still needs your yes</span>
-          <span>{notYet.join(". ")}.</span>
+          {/* Their carve-out first, because it is the half they chose. */}
+          <span>{[...kept, ...notYet].join(". ")}.</span>
         </div>
       </div>
-      <div className="tc-never">seven and up is not offered during a trial</div>
+      <div className="tc-never">
+        {kept.length === 0
+          ? "what do you want to keep your hand on?"
+          : "seven and up is not offered during a trial"}
+      </div>
     </>
   );
 }
@@ -240,4 +305,80 @@ function AuthorityCard({ p }: { p: AuthorityProposal }) {
 /** The rung a level sits on, so level 5 shows everything 6 buys. */
 function ceilTo(level: number): number {
   return RUNGS.find((r) => level <= r.upTo)?.upTo ?? 10;
+}
+
+/* ── D42 · exactly what is about to be read, before they answer ── */
+
+function FilesCard({ p }: { p: FilesProposal }) {
+  return (
+    <>
+      <div className="tc-goal">
+        <span className="tc-goal-name tc-path">{p.folder}</span>
+        <span className="tc-tag">{p.reading ? "reading" : `${p.willRead} of ${p.total}`}</span>
+      </div>
+      <div className="tc-sub">{p.what}</div>
+      <ul className="tc-rows tc-rows--steps">
+        {p.sample.map((f, i) => (
+          <li key={i}>
+            <span className="tc-tag">file</span>
+            <span className="tc-row-name tc-path">{f}</span>
+          </li>
+        ))}
+        {p.willRead > p.sample.length && (
+          <li>
+            <span className="tc-tag">and</span>
+            <span className="tc-row-name">{p.willRead - p.sample.length} more</span>
+          </li>
+        )}
+      </ul>
+      <div className="tc-never">
+        {p.reading
+          ? `${p.found ?? 0} things about your company so far · nothing is changed, only read`
+          : "read only · nothing is moved, changed or sent anywhere"}
+      </div>
+    </>
+  );
+}
+
+/* ── D43 · the organised copy, and the one real piece of work ── */
+
+function WorkspaceCard({ p }: { p: WorkspaceProposal }) {
+  const total = p.sections.reduce((n, s) => n + s.files.length, 0);
+  return (
+    <>
+      <div className="tc-goal">
+        <span className="tc-goal-name tc-path">{p.destination}</span>
+        <span className="tc-tag">{total} files</span>
+      </div>
+      <ul className="tc-rows">
+        {p.sections.map((s, i) => (
+          <li key={i}>
+            <span className="tc-bullet" />
+            <span className="tc-row-name">{s.name}</span>
+            <span className="tc-tag">{s.files.length}</span>
+          </li>
+        ))}
+      </ul>
+      {/* The one line on this card that matters most, and the reason it is a
+          line on the card and not only a sentence Jarvis says. */}
+      <div className="tc-never">
+        copies only · nothing in {p.source} is moved, renamed or deleted
+      </div>
+    </>
+  );
+}
+
+function EditCard({ p }: { p: EditProposal }) {
+  return (
+    <>
+      <div className="tc-goal">
+        <span className="tc-goal-name tc-path">{p.file}</span>
+        <span className="tc-tag">rewrite</span>
+      </div>
+      <div className="tc-sub">{p.change}</div>
+      <div className="tc-never">
+        written as {p.as}, beside yours · your file is not touched
+      </div>
+    </>
+  );
 }

@@ -8,7 +8,10 @@
  * and the finale marking onboarding finished when nothing was spawned.
  */
 
-import { describe, test, expect, beforeEach } from 'bun:test';
+import { describe, test, expect, beforeEach, afterEach } from 'bun:test';
+import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { initDatabase } from '../../vault/schema.ts';
 import { findGoals, getGoalChildren } from '../../vault/goals.ts';
 import { findCommitments } from '../../vault/commitments.ts';
@@ -41,8 +44,13 @@ type Recorder = {
   landed: { beat: RoomBeat; summary: string }[];
   completed: { beat: RoomBeat; detail: Record<string, unknown> }[];
   brief: { hour: number; minute: number } | null;
+  evening: number | null;
   authority: number | null;
+  alwaysAsk: string[];
   spawned: { question: string; brief: string }[];
+  readerStarts: { folder: string; shortlist: string[]; about: string }[];
+  reader: { found: string[]; finished: boolean; summary: string | null };
+  readerFails: boolean;
   finished: number;
   workflowOk: boolean;
 };
@@ -66,11 +74,14 @@ function answers(s: BeatsSession): void {
 function recorder(over: Partial<BeatDeps> = {}): Recorder {
   const r: Recorder = {
     rooms: [], refreshed: [], proposals: [], landed: [], completed: [],
-    brief: null, authority: null, spawned: [], finished: 0, workflowOk: true,
+    brief: null, evening: null, authority: null, alwaysAsk: [], spawned: [],
+    readerStarts: [], reader: { found: [], finished: false, summary: null },
+    readerFails: false, finished: 0, workflowOk: true,
     deps: null as never,
   };
   r.deps = {
     now: clock,
+    home: () => tmpHome,
     fuel: () => ({}),
     enterRoom: (beat) => { r.rooms.push(beat); },
     refreshRoom: (room) => { r.refreshed.push(room); },
@@ -81,8 +92,14 @@ function recorder(over: Partial<BeatDeps> = {}): Recorder {
       r.workflowOk
         ? { ok: true as const, detail: `${p.steps.length} steps` }
         : { ok: false as const, detail: 'no piece for that' },
-    setMorningBrief: (hour, minute) => { r.brief = { hour, minute }; },
-    setAuthorityLevel: (level) => { r.authority = level; return level; },
+    setDailyRhythm: (morning, eveningHour) => { r.brief = morning; r.evening = eveningHour; },
+    setAuthority: (level, alwaysAsk) => { r.authority = level; r.alwaysAsk = alwaysAsk; return { level, alwaysAsk }; },
+    startFolderReader: async (opts) => {
+      if (r.readerFails) throw new Error('sub-agents are not running on this install');
+      r.readerStarts.push(opts);
+      return { agentId: 'reader-1', taskId: 'read-1' };
+    },
+    readerProgress: () => ({ ...r.reader, found: [...r.reader.found] }),
     spawnResearchAgent: async (question, brief) => {
       r.spawned.push({ question, brief });
       return { agentId: 'agent-1', taskId: 'task-1', agentName: 'Research Analyst' };
@@ -100,7 +117,22 @@ function opened(): BeatsSession {
   return s;
 }
 
+/** A tree with the depth D41 requires: an end date, both numbers on every key
+ *  result, and the first move underneath one of them. */
 const GOALS_ARGS = {
+  objective: '40 paying customers by the end of Q3',
+  deadline: '2026-09-30',
+  key_results: [
+    { title: '12 booked demos a month', target: '12', today: '4' },
+    { title: 'Month three churn under 4%', measure: 'under 4%', target: '4%', today: 'about 9%' },
+  ],
+  first_move: { what: 'Rewrite the pricing page', under: '12 booked demos a month', due: 'friday' },
+};
+
+/** The same tree as the model first says it, before the founder has been asked
+ *  anything: one shape, no numbers, no move. This is what the beat used to
+ *  accept and now refuses. */
+const SHALLOW_GOALS_ARGS = {
   objective: '40 paying customers by the end of Q3',
   key_results: [
     { title: '12 booked demos a month' },
@@ -108,28 +140,63 @@ const GOALS_ARGS = {
   ],
 };
 
+const TASKS_ARGS = {
+  tasks: [
+    { what: 'File the VAT return', due: new Date(NOW + 2 * 86_400_000).toISOString(), first: true },
+    { what: 'Send Bowman the quote', due: 'friday', toward: '12 booked demos a month' },
+  ],
+};
+
+const WORKFLOW_ARGS = {
+  name: 'Monday pipeline review',
+  runs_when: 'Mondays at 8',
+  steps: ['Pull open deals', 'Flag stale ones'],
+  never: 'email a client without you seeing it',
+};
+
+/** A real folder on disk with a couple of readable files in it, because
+ *  `propose_reading` surveys for real and refuses anything it cannot see. */
+let tmpHome: string;
+let tmpFolder: string;
+function folder(): string { return tmpFolder; }
+
 async function walkTo(s: BeatsSession, r: Recorder, beat: RoomBeat): Promise<void> {
   const run = (n: string, a: Record<string, unknown> = {}) => executeBeatTool(s, n, a, r.deps);
   const upto = ROOM_BEATS.indexOf(beat);
   if (upto > 0) { await run('propose_goals', GOALS_ARGS); answers(s); await run('create_goals'); }
-  if (upto > 1) {
-    await run('propose_tasks', {
-      tasks: [{ what: 'File the VAT return', due: new Date(NOW + 2 * 86_400_000).toISOString() }],
-    });
+  if (upto > 1) { await run('propose_tasks', TASKS_ARGS); answers(s); await run('create_tasks'); }
+  if (upto > 2) {
+    await run('propose_daily_rhythm', { hour: 7, minute: 30, evening_hour: 19 });
     answers(s);
-    await run('create_tasks');
+    await run('set_daily_rhythm');
   }
-  if (upto > 2) { await run('propose_morning_brief', { hour: 7, minute: 30 }); answers(s); await run('set_morning_brief'); }
   if (upto > 3) {
-    await run('propose_workflow', { name: 'Monday pipeline review', runs_when: 'Mondays at 8', steps: ['Pull open deals', 'Flag stale ones'] });
+    await run('propose_workflow', WORKFLOW_ARGS);
     answers(s);
     await run('publish_workflow');
+    // D16.5 wants two, and the beat no longer closes on one.
+    await run('no_second_workflow', { because: 'the rest of their week is one-offs' });
   }
-  if (upto > 4) { await run('propose_authority', {}); answers(s); await run('set_authority', {}); }
+  if (upto > 4) {
+    await run('propose_authority', { always_ask: ['send_message'] });
+    answers(s);
+    await run('set_authority', {});
+  }
+  if (upto > 5) { await run('propose_reading', { folder: folder() }); answers(s); await run('start_reading'); }
+  if (upto > 6) { await run('move_on', { because: 'not now' }); }
 }
 
 beforeEach(() => {
   initDatabase(':memory:');
+  tmpHome = mkdtempSync(join(tmpdir(), 'beats-home-'));
+  tmpFolder = join(tmpHome, 'Acme');
+  mkdirSync(tmpFolder, { recursive: true });
+  writeFileSync(join(tmpFolder, 'pitch.md'), '# Acme\nWe sell things to studios.', 'utf-8');
+  writeFileSync(join(tmpFolder, 'numbers.csv'), 'month,revenue\nJul,4100', 'utf-8');
+});
+
+afterEach(() => {
+  rmSync(tmpHome, { recursive: true, force: true });
 });
 
 /* ─────────────────────── the order, D16 ─────────────────────── */
@@ -165,9 +232,16 @@ describe('D16, the order the beats happen in', () => {
     expect(res!.message).toContain('On their screen');
   });
 
-  test('the order is exactly D16, minus memory which is not a stop', () => {
-    expect([...ROOM_BEATS]).toEqual(['goals', 'tasks', 'calendar', 'workflows', 'authority', 'agents']);
+  test('the order is D16, plus D42 and D43 between authority and the finale', () => {
+    expect([...ROOM_BEATS]).toEqual([
+      'goals', 'tasks', 'calendar', 'workflows', 'authority', 'files', 'workspace', 'agents',
+    ]);
+    // `memory` is not a stop (D16.1), and `agents` is still last (D15): the
+    // finale is the only beat that keeps working after the talking ends.
     expect((ROOM_BEATS as readonly string[]).includes('memory')).toBe(false);
+    expect(ROOM_BEATS[ROOM_BEATS.length - 1]).toBe('agents');
+    // Reading their disk comes after the conversation about power, never before.
+    expect(ROOM_BEATS.indexOf('files')).toBeGreaterThan(ROOM_BEATS.indexOf('authority'));
   });
 });
 
@@ -204,20 +278,21 @@ describe('D18, nothing is written that they have not seen', () => {
     expect(findGoals({ level: 'objective' })).toHaveLength(1);
   });
 
-  test('every one of the five commits is behind that gate, not just the first', async () => {
+  test('every one of the commits is behind that gate, not just the first', async () => {
     const r = recorder();
     const cases: [RoomBeat, string, string, Record<string, unknown>][] = [
       ['goals', 'propose_goals', 'create_goals', GOALS_ARGS],
-      ['tasks', 'propose_tasks', 'create_tasks', { tasks: [{ what: 'a' }] }],
-      ['calendar', 'propose_morning_brief', 'set_morning_brief', { hour: 8 }],
-      ['workflows', 'propose_workflow', 'publish_workflow', { name: 'f', runs_when: 'mondays', steps: ['x'] }],
-      ['authority', 'propose_authority', 'set_authority', {}],
+      ['tasks', 'propose_tasks', 'create_tasks', { tasks: [{ what: 'a', first: true }] }],
+      ['calendar', 'propose_daily_rhythm', 'set_daily_rhythm', { hour: 8, evening_hour: 19 }],
+      ['workflows', 'propose_workflow', 'publish_workflow', WORKFLOW_ARGS],
+      ['authority', 'propose_authority', 'set_authority', { always_ask: ['send_message'] }],
+      ['files', 'propose_reading', 'start_reading', {}],
     ];
     for (const [beat, propose, commit, args] of cases) {
       initDatabase(':memory:');
       const s = opened();
       await walkTo(s, r, beat);
-      await executeBeatTool(s, propose, args, r.deps);
+      await executeBeatTool(s, propose, beat === 'files' ? { folder: folder() } : args, r.deps);
       const res = await executeBeatTool(s, commit, {}, r.deps);
       expect(res!.message).toContain('have not answered yet');
       expect(beatIsDone(s, beat)).toBe(false);
@@ -239,9 +314,7 @@ describe('D18, nothing is written that they have not seen', () => {
     const s = opened();
     const r = recorder();
     await walkTo(s, r, 'workflows');
-    await executeBeatTool(s, 'propose_workflow', {
-      name: 'Monday pipeline review', runs_when: 'Mondays at 8', steps: ['Pull open deals'],
-    }, r.deps);
+    await executeBeatTool(s, 'propose_workflow', WORKFLOW_ARGS, r.deps);
     answers(s);
     r.workflowOk = false;
     await executeBeatTool(s, 'publish_workflow', {}, r.deps);
@@ -275,7 +348,7 @@ describe('beat 07, goals', () => {
     expect(findGoals({})).toHaveLength(0);
     expect(r.rooms).toEqual(['goals']);
     expect(r.proposals[0]).toMatchObject({ beat: 'goals', objective: GOALS_ARGS.objective });
-    expect(res!.message).toContain('ask them');
+    expect(res!.message).toContain('On their screen');
   });
 
   test('an objective with no key results is refused, not half-created', async () => {
@@ -346,7 +419,7 @@ describe('beat 08, tasks', () => {
     await walkTo(s, r, 'tasks');
     await executeBeatTool(s, 'propose_tasks', {
       tasks: [
-        { what: 'File the Q2 VAT return', due: new Date(NOW - 86_400_000).toISOString(), priority: 'critical' },
+        { what: 'File the Q2 VAT return', due: new Date(NOW - 86_400_000).toISOString(), priority: 'critical', first: true },
         { what: 'Send Bowman the quote', due: new Date(NOW + 86_400_000).toISOString(), priority: 'high' },
       ],
     }, r.deps);
@@ -375,13 +448,18 @@ describe('beat 09, calendar', () => {
     const s = opened();
     const r = recorder();
     await walkTo(s, r, 'calendar');
-    await executeBeatTool(s, 'propose_morning_brief', { hour: 7, minute: 30, because: 'you are at the desk by eight' }, r.deps);
+    await executeBeatTool(s, 'propose_daily_rhythm', {
+      hour: 7, minute: 30, evening_hour: 19, because: 'you are at the desk by eight',
+    }, r.deps);
     expect(r.brief).toBeNull();
     answers(s);
-    const res = await executeBeatTool(s, 'set_morning_brief', {}, r.deps);
+    const res = await executeBeatTool(s, 'set_daily_rhythm', {}, r.deps);
     expect(r.brief).toEqual({ hour: 7, minute: 30 });
+    expect(r.evening).toBe(19);
     expect(s.briefAt).toEqual({ hour: 7, minute: 30 });
+    expect(s.eveningHour).toBe(19);
     expect(res!.message).toContain('07:30');
+    expect(res!.message).toContain('19:00');
   });
 
   test('an impossible hour is clamped rather than scheduled', () => {
@@ -401,9 +479,7 @@ describe('beat 10, workflows', () => {
     const r = recorder();
     await walkTo(s, r, 'workflows');
     r.workflowOk = false;
-    await executeBeatTool(s, 'propose_workflow', {
-      name: 'Monday pipeline review', runs_when: 'Mondays at 8', steps: ['Pull open deals'],
-    }, r.deps);
+    await executeBeatTool(s, 'propose_workflow', WORKFLOW_ARGS, r.deps);
     answers(s);
     const res = await executeBeatTool(s, 'publish_workflow', {}, r.deps);
     expect(res!.message).toContain('Do not claim it is live');
@@ -418,27 +494,70 @@ describe('beat 10, workflows', () => {
     const s = opened();
     const r = recorder();
     await walkTo(s, r, 'workflows');
-    await executeBeatTool(s, 'propose_workflow', {
-      name: 'Monday pipeline review', runs_when: 'Mondays at 8', steps: ['Pull open deals'],
-    }, r.deps);
+    await executeBeatTool(s, 'propose_workflow', WORKFLOW_ARGS, r.deps);
     answers(s);
     r.proposals.length = 0;
     await executeBeatTool(s, 'publish_workflow', {}, r.deps);
     expect((r.proposals[0] as WorkflowProposal).building).toBe(true);
   });
 
-  test('the first publish opens authority but still asks for a second flow', async () => {
+  test('D16.5: the beat does NOT close on one flow, so the second one happens', async () => {
     const s = opened();
     const r = recorder();
     await walkTo(s, r, 'workflows');
-    await executeBeatTool(s, 'propose_workflow', {
-      name: 'Monday pipeline review', runs_when: 'Mondays at 8', steps: ['Pull open deals'],
-    }, r.deps);
+    await executeBeatTool(s, 'propose_workflow', WORKFLOW_ARGS, r.deps);
     answers(s);
     const res = await executeBeatTool(s, 'publish_workflow', {}, r.deps);
-    expect(res!.message).toContain('second');
+    expect(res!.message).toContain('That is one');
+    // The old version handed over the authority brief here, which is exactly
+    // why a second flow never happened: the model had its yes and moved on.
+    expect(res!.message).not.toContain('propose_authority');
+    expect(beatIsDone(s, 'workflows')).toBe(false);
+    expect(beatIsOpen(s, 'authority')).toBe(false);
+
+    // A second flow closes it, and only then does authority open.
+    await executeBeatTool(s, 'propose_workflow', {
+      ...WORKFLOW_ARGS, name: 'Friday goal check-in', runs_when: 'Fridays at 5',
+    }, r.deps);
+    answers(s);
+    const second = await executeBeatTool(s, 'publish_workflow', {}, r.deps);
+    expect(s.workflowsPublished).toEqual(['Monday pipeline review', 'Friday goal check-in']);
+    expect(beatIsDone(s, 'workflows')).toBe(true);
+    expect(second!.message).toContain('propose_authority');
+  });
+
+  test('a founder whose week has one recurring thing is not given an invented second', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'workflows');
+    await executeBeatTool(s, 'propose_workflow', WORKFLOW_ARGS, r.deps);
+    answers(s);
+    await executeBeatTool(s, 'publish_workflow', {}, r.deps);
+    const res = await executeBeatTool(s, 'no_second_workflow', { because: 'the rest is one-offs' }, r.deps);
+    expect(s.onlyOneWorkflow).toBe(true);
+    expect(beatIsDone(s, 'workflows')).toBe(true);
     expect(res!.message).toContain('propose_authority');
-    expect(beatIsOpen(s, 'authority')).toBe(true);
+  });
+
+  test('a flow with no line it must never cross is refused', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'workflows');
+    r.proposals.length = 0;
+    const res = await executeBeatTool(s, 'propose_workflow', {
+      name: 'Monday pipeline review', runs_when: 'Mondays at 8', steps: ['Pull open deals'],
+    }, r.deps);
+    expect(res!.message).toContain('never cross');
+    expect(r.proposals).toHaveLength(0);
+  });
+
+  test('`no_second_workflow` before anything was published is refused', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'workflows');
+    const res = await executeBeatTool(s, 'no_second_workflow', { because: 'nothing' }, r.deps);
+    expect(res!.message).toContain('Nothing has been published');
+    expect(beatIsDone(s, 'workflows')).toBe(false);
   });
 });
 
@@ -457,7 +576,7 @@ describe('beat 11, authority', () => {
     const s = opened();
     const r = recorder();
     await walkTo(s, r, 'authority');
-    await executeBeatTool(s, 'propose_authority', {}, r.deps);
+    await executeBeatTool(s, 'propose_authority', { always_ask: ['send_message'] }, r.deps);
     answers(s);
     await executeBeatTool(s, 'set_authority', { level: 3 }, r.deps);
     expect(r.authority).toBe(3);
@@ -468,7 +587,7 @@ describe('beat 11, authority', () => {
     const s = opened();
     const r = recorder();
     await walkTo(s, r, 'authority');
-    await executeBeatTool(s, 'propose_authority', {}, r.deps);
+    await executeBeatTool(s, 'propose_authority', { always_ask: ['send_message'] }, r.deps);
     answers(s);
     const res = await executeBeatTool(s, 'set_authority', { level: 9 }, r.deps);
     expect(r.authority).toBe(TRIAL_AUTHORITY_CEILING);
@@ -523,8 +642,10 @@ describe('beat 12, the finale', () => {
     expect(s.done).toEqual([...ROOM_BEATS]);
     expect(currentBeat(s)).toBeNull();
     expect(r.completed.map((c) => c.beat)).toEqual([...ROOM_BEATS]);
-    // Every beat led them into its room, once each.
-    expect(r.rooms).toEqual(['goals', 'tasks', 'calendar', 'workflows', 'authority', 'agents']);
+    // Every beat led them into its room, once each. `files` and `workspace`
+    // share the memory room, and `enterRoom` is a no-op on an unchanged room,
+    // so the pebble makes one gesture across the two of them rather than two.
+    expect(r.rooms).toEqual(['goals', 'tasks', 'calendar', 'workflows', 'authority', 'files', 'agents']);
   });
 });
 

@@ -51,6 +51,8 @@ import {
   buildConductorInstructions,
 } from './trial/conductor.ts';
 import { ROOM_BEAT_TOOLS, type WorkflowProposal } from './trial/beats.ts';
+import { buildReaderTools, readerContext, readerTask, type FoundEntities } from './trial/reader-tools.ts';
+import { ToolRegistry } from '../actions/tools/registry.ts';
 import { saveUserSection } from './user-settings.ts';
 import { DEFAULT_CONFIG } from '../config/types.ts';
 
@@ -69,6 +71,13 @@ const TRIAL_COMPOSE_TIMEOUT_MS = 90_000;
  * role file it came from.
  */
 const TRIAL_RESEARCH_SPECIALISTS = ['research-analyst', 'data-analyst'];
+
+/**
+ * Specialist roles D42's background reader will use, best first. Its tools are
+ * hand-built and fenced regardless of which role it comes from (see
+ * `trialStartFolderReader`), so the role only supplies the reading voice.
+ */
+const TRIAL_READER_SPECIALISTS = ['research-analyst', 'data-analyst', 'content-writer'];
 import { isTrialRunning, readTrialEntitlement, trialSnapshot } from '../trial/entitlement.ts';
 import { withTrialRealtime } from '../trial/realtime-overlay.ts';
 import { classifyErrorString } from '../llm/provider.ts';
@@ -271,13 +280,14 @@ export class WebSocketService implements Service {
   private trialConductor = new TrialConductorManager<ServerWebSocket<unknown>>({
     send: (ws, msg) => this.wsServer.sendToClient(ws, msg),
     broadcast: (msg) => this.wsServer.broadcast(msg),
-    // The four things D16's beats need that are not a local vault write. Bound
-    // here because this is where the service graph is reachable; the beats
+    // The things the beats need that are not a local vault write. Bound here
+    // because this is where the service graph is reachable; the beats
     // themselves know nothing about it. See trial/beats.ts.
     beatActions: {
       publishWorkflow: (p) => this.trialPublishWorkflow(p),
-      setMorningBrief: (hour, minute) => this.trialSetMorningBrief(hour, minute),
-      setAuthorityLevel: (level) => this.trialSetAuthorityLevel(level),
+      setDailyRhythm: (morning, eveningHour) => this.trialSetDailyRhythm(morning, eveningHour),
+      setAuthority: (level, alwaysAsk) => this.trialSetAuthority(level, alwaysAsk),
+      startFolderReader: (opts) => this.trialStartFolderReader(opts),
       spawnResearchAgent: (question, brief) => this.trialSpawnResearchAgent(question, brief),
     },
   });
@@ -1870,21 +1880,22 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * be a promise the product does not keep on the one appointment day two
    * depends on.
    */
-  private trialSetMorningBrief(hour: number, minute: number): void {
+  private trialSetDailyRhythm(morning: { hour: number; minute: number }, eveningHour: number): void {
     const config = this.agentService.getConfig();
     const goals = config.goals ?? DEFAULT_CONFIG.goals;
     config.goals = {
       ...(goals ?? {
         enabled: true,
-        morning_window: { start: hour, end: hour + 2 },
-        evening_window: { start: 20, end: 22 },
+        morning_window: { start: morning.hour, end: morning.hour + 2 },
+        evening_window: { start: eveningHour, end: eveningHour + 2 },
         accountability_style: 'balanced',
         escalation_weeks: { pressure: 1, root_cause: 3, suggest_kill: 4 },
         auto_decompose: true,
         calendar_ownership: false,
       }),
-      morning_window: { start: hour, end: Math.min(hour + 2, 23) },
-      morning_minute: minute,
+      morning_window: { start: morning.hour, end: Math.min(morning.hour + 2, 23) },
+      morning_minute: morning.minute,
+      evening_window: { start: eveningHour, end: Math.min(eveningHour + 2, 23) },
     };
     saveUserSection('goals', config.goals);
   }
@@ -1897,11 +1908,82 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * up and pushes it into the live engine, so what they granted out loud is in
    * force before the sentence finishes.
    */
-  private trialSetAuthorityLevel(level: number): number {
+  private trialSetAuthority(level: number, alwaysAsk: string[]): { level: number; alwaysAsk: string[] } {
     const config = this.agentService.getConfig();
-    config.authority = { ...config.authority, default_level: level };
+    // Merged with whatever was already governed rather than replacing it. The
+    // defaults include `send_email` and `make_payment`, and a founder naming
+    // two things they want to keep their hand on has not asked for the rest to
+    // stop needing approval.
+    const governed = [...new Set([...(config.authority?.governed_categories ?? []), ...alwaysAsk])];
+    config.authority = { ...config.authority, default_level: level, governed_categories: governed };
     saveUserSection('authority', config.authority);
-    return level;
+    return { level, alwaysAsk };
+  }
+
+  /**
+   * D42. The background reader, on the one folder the founder approved.
+   *
+   * A real persistent sub-agent, so it appears in the agent strip and is
+   * tracked like any other, but with a HAND-BUILT tool registry rather than
+   * the role's usual scoped one. That is the whole security posture of this
+   * beat: `createScopedToolRegistry(['file-ops', 'terminal', 'browser'])` would
+   * have given it `read_file`, which resolves against the home directory and
+   * takes an absolute path anywhere on the disk, plus `write_file` and
+   * `run_command`. It gets three tools instead, two of them fenced to the
+   * approved folder in code and the third only able to write to the vault.
+   *
+   * Started and NOT awaited (D17): it reads while the conversation carries on.
+   */
+  private async trialStartFolderReader(opts: {
+    folder: string;
+    shortlist: string[];
+    about: string;
+    onFound: (found: FoundEntities) => { landed: number; names: string[] };
+    onDone: (summary: string | null) => void;
+  }): Promise<{ agentId: string; taskId: string | null }> {
+    const taskManager = this.agentService.getTaskManager();
+    if (!taskManager) throw new Error('sub-agents are not running on this install');
+    const specialists = this.agentService.getSpecialists();
+    const specialistId = TRIAL_READER_SPECIALISTS.find((id) => specialists.has(id))
+      ?? [...specialists.keys()][0];
+    if (!specialistId) throw new Error('no specialist is installed to read with');
+
+    const orchestrator = this.agentService.getOrchestrator();
+    const deps = {
+      orchestrator,
+      llmManager: this.agentService.getLLMManager(),
+      specialists,
+      taskManager,
+      onProgress: (event: { type: 'text' | 'tool_call' | 'done'; agentName: string; agentId: string; data: unknown }) =>
+        this.broadcastSubAgentProgress(event),
+    };
+
+    const { spawnPersistentAgent } = await import('../actions/tools/agents.ts');
+    const spawned = spawnPersistentAgent(deps as never, specialistId);
+
+    const registry = new ToolRegistry();
+    for (const tool of buildReaderTools({ folder: opts.folder, onFound: opts.onFound })) {
+      registry.register(tool);
+    }
+
+    const taskId = taskManager.launch({
+      agent: spawned.agent,
+      task: readerTask(opts.shortlist.length),
+      context: readerContext(opts),
+      llmManager: this.agentService.getLLMManager(),
+      toolRegistry: registry,
+      onProgress: deps.onProgress,
+      // Settles either way. A reader that fell over must not leave the
+      // conversation waiting for a picture that is never coming, so the failure
+      // is reported as a finish with nothing in it rather than as silence.
+      onComplete: (task) => {
+        const ok = task.result?.success ?? false;
+        opts.onDone(ok ? (task.result?.response ?? null) : null);
+        if (!ok) console.warn('[Trial] the folder reader did not complete');
+      },
+    });
+    console.log(`[Trial] reading ${opts.shortlist.length} files in ${opts.folder} as ${spawned.agent.id}`);
+    return { agentId: spawned.agent.id, taskId };
   }
 
   /**
