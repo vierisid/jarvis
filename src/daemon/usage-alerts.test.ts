@@ -112,20 +112,33 @@ describe('states that must NOT produce a warning', () => {
   });
 });
 
-describe('the proxy refusing while both bars look fine', () => {
-  test('still warns, because silence is the worst outcome there', () => {
-    // The proxy enforces a rolling 7d from key creation; we report a
-    // Monday-aligned week. A user can be refused at 3%.
+describe('a key that is switched off', () => {
+  test('warns, and does NOT call it "used up"', () => {
+    // The control plane sets `blocked` for a user with no plan or a converge
+    // that failed part-way — never for spending too much. Since !entitled has
+    // already returned, this is a paying user whose assistant does not work.
+    // Blaming their usage would send them to a meter reading 3%.
     const out = decideUsageAlerts(meter({ blocked: true, sessionPct: 3, weekPct: 3 }), fakeStore().delivered);
     expect(out).toHaveLength(1);
-    expect(out[0]!.body).toContain('used up');
+    expect(out[0]!.body).not.toContain('used up');
+    expect(out[0]!.title).toBe('AI is temporarily unavailable');
     expect(out[0]!.key).toBe(`${FLAG_PREFIX}blocked.${SESSION_RESET}`);
   });
 
-  test('does not double up when a window already explains it', () => {
+  test('stays quiet when a FULL window already explains the refusal', () => {
     const out = decideUsageAlerts(meter({ blocked: true, sessionPct: 100 }), fakeStore().delivered);
     expect(out).toHaveLength(1);
     expect(out[0]!.key).toBe(alertKey('session', 100, SESSION_RESET));
+  });
+
+  test('a 75% alert in the same pass does NOT suppress it', () => {
+    // "Running low" while nothing works at all is worse than saying nothing:
+    // the user reads it as a warning they still have room. Only a window that
+    // is actually full explains a refusal.
+    const out = decideUsageAlerts(meter({ blocked: true, sessionPct: 80 }), fakeStore().delivered);
+    expect(out.map((a) => a.key).sort()).toEqual(
+      [`${FLAG_PREFIX}blocked.${SESSION_RESET}`, alertKey('session', 75, SESSION_RESET)].sort(),
+    );
   });
 
   test('repeats at most once per session window while it lasts', () => {

@@ -120,8 +120,11 @@ function FilterBar({ data }: { data: ReturnType<typeof useUsageData> }) {
  * one strip would invite exactly that comparison.
  */
 function HostedBudgetStrip() {
-  const { state, meter } = useHostedBudget();
-  // Re-rendered on the poll, so the countdowns advance without their own timer.
+  const { state, meter, readAt } = useHostedBudget();
+  // Re-rendered on every completed read — including a failed one, which is the
+  // case that matters: a control-plane outage keeps the last good meter on
+  // screen, and without a re-render its countdowns would freeze with it.
+  void readAt;
   const now = Date.now();
   // Renders NOTHING while unknown and on a self-hosted install. An entitled
   // flag that is false means a hosted user with no active plan; there is no
@@ -135,13 +138,13 @@ function HostedBudgetStrip() {
         <Meter
           label="6-hour window"
           value={meter.sessionPct}
-          tone={meterTone(meter.sessionPct, meter.blocked)}
+          tone={meterTone(meter.sessionPct)}
           note={formatResetIn(meter.sessionResetsAt, now)}
         />
         <Meter
           label="this week"
           value={meter.weekPct}
-          tone={meterTone(meter.weekPct, meter.blocked)}
+          tone={meterTone(meter.weekPct)}
           note={formatResetIn(meter.weekResetsAt, now)}
         />
       </div>

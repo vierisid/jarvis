@@ -4177,6 +4177,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       canNotify: () => sidecarManager.getConnectedSidecars().length > 0,
     });
     usageAlerts.start();
+    // A pass with no sidecar connected leaves its flags unset on purpose, so
+    // the warning survives — but it would then wait up to fifteen minutes for
+    // the next tick. Re-check as soon as a machine appears, which is exactly
+    // when someone is there to read it. The 60s reader cache makes a reconnect
+    // storm cost one upstream request, and the flags make a duplicate pass a
+    // no-op.
+    sidecarManager.onSidecarConnected(() => {
+      void usageAlerts?.check().catch(() => {});
+    });
 
     // Bootstrap the workflow engine: build/locate the bundle, compile pieces,
     // start the loopback SandboxApi, construct the EngineRuntime, extract the

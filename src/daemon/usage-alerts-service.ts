@@ -1,7 +1,7 @@
 import { CronScheduler } from '../lib/cron-scheduler.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import { readHostedUsage, type HostedUsageMeter } from './hosted-usage.ts';
-import { decideUsageAlerts, staleFlagKeys, type UsageAlert } from './usage-alerts.ts';
+import { decideUsageAlerts, FLAG_PREFIX, staleFlagKeys, type UsageAlert } from './usage-alerts.ts';
 import { deleteSetting, getSetting, getSettingsByPrefix, setSetting } from '../vault/settings.ts';
 
 /**
@@ -44,7 +44,7 @@ export interface UsageAlertsDeps {
 const settingsStore = {
   get: (key: string) => getSetting(key),
   set: (key: string, value: string) => setSetting(key, value),
-  keys: () => Object.keys(getSettingsByPrefix('usage.notified.')),
+  keys: () => Object.keys(getSettingsByPrefix(FLAG_PREFIX)),
   delete: (key: string) => deleteSetting(key),
 };
 
@@ -88,6 +88,11 @@ export class UsageAlertsService {
       const due = decideUsageAlerts(meter, (key) => store.get(key) !== null);
       // Nowhere to deliver: leave the flags unset so the warning still lands
       // once a sidecar connects, rather than being silently consumed here.
+      //
+      // Sampled HERE, after the meter read, rather than before it: the read is
+      // a network round trip, and a sidecar that disconnects across it would
+      // otherwise have its warning recorded as delivered against a closed door.
+      // A `week.100` lost that way is lost for the rest of the week.
       if (due.length > 0 && !this.deps.canNotify()) return [];
 
       const at = String(this.deps.now?.() ?? Date.now());

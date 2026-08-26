@@ -148,9 +148,25 @@ export function makeHostedUsageReader(
             sessionResetsAt: parsed.sessionResetsAt,
             weekResetsAt: parsed.weekResetsAt,
           };
+          if (typeof parsed.entitled !== 'boolean') {
+            // Not fatal — the three checked fields are all present — but it is
+            // the one field whose absence degrades SILENTLY: `=== true` makes
+            // it false, the strip disappears and every warning stops, fleet
+            // wide, reading exactly like "this customer has no plan".
+            console.warn('[usage] meter has no `entitled` field; treating as not entitled');
+          }
         } else {
           console.warn('[usage] control plane returned an unrecognised meter shape; meter unavailable');
         }
+      } else if (res.status === 400) {
+        // 400 is the one status whose body is worth keeping. The control plane
+        // puts a deliberate diagnosis there — "check the instance clock" — and
+        // a >5min drift makes EVERY read fail, so the meter and every usage
+        // warning vanish with no other symptom. Redacted, and to the operator's
+        // console, which is the channel this module's header reserves for
+        // exactly this. Bounded so a long body cannot flood the log.
+        const detail = redactSecrets(await res.text().catch(() => '')).slice(0, 300);
+        console.warn(`[usage] control plane rejected the request: ${detail || '(no detail)'}`);
       } else {
         // STATUS only. The body can name the control-plane host, and a 401 body
         // could echo what we presented.

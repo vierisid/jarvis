@@ -26,7 +26,7 @@ import type { HostedUsageMeter } from './hosted-usage.ts';
  */
 
 export type UsageWindow = 'session' | 'week';
-export type UsageLevel = 75 | 100;
+export type UsageLevel = typeof WARN_PCT | 100;
 
 export interface UsageAlert {
   window: UsageWindow;
@@ -39,7 +39,7 @@ export interface UsageAlert {
 
 /** Must match the room's WARN_PCT (ui/.../hosted-budget.ts) — if these drift, a
  *  user gets a notification while the meter still shows a calm bar. */
-export const WARN_PCT = 75;
+export const WARN_PCT = 75 as const;
 
 export const FLAG_PREFIX = 'usage.notified.';
 
@@ -83,17 +83,22 @@ export function decideUsageAlerts(
   if (!meter || !meter.entitled) return [];
 
   const out: UsageAlert[] = [];
+  // Tracks whether a window is FULL, not whether anything was queued: a 75%
+  // alert firing in the same pass must not suppress the block notice, or the
+  // user is told "running low" while nothing works at all.
+  let exhausted = false;
   const consider = (window: UsageWindow, pct: number | null, resetsAt: string) => {
     if (pct === null) return; // unreadable window: no signal either way
     // 100 FIRST, and it suppresses the 75 for the same window: a user who goes
     // from 40% to full between two checks gets one notification, not two.
     if (pct >= 100) {
+      exhausted = true;
       const full = alertFor(window, 100, resetsAt);
       if (!delivered(full.key)) out.push(full);
       return;
     }
     if (pct >= WARN_PCT) {
-      const warn = alertFor(window, WARN_PCT as UsageLevel, resetsAt);
+      const warn = alertFor(window, WARN_PCT, resetsAt);
       if (!delivered(warn.key)) out.push(warn);
     }
   };
@@ -101,18 +106,31 @@ export function decideUsageAlerts(
   consider('session', meter.sessionPct, meter.sessionResetsAt);
   consider('week', meter.weekPct, meter.weekResetsAt);
 
-  // The proxy enforces a rolling 7 days from key creation while we report a
-  // Monday-aligned week (docs/LLM.md), so it can be REFUSING at a percentage
-  // both bars call fine. Staying silent there is the worst outcome: the user is
-  // blocked and nothing has told them why. Keyed on the session stamp so it
-  // repeats at most once every 6 hours while the disagreement lasts.
-  if (meter.blocked && out.length === 0) {
+  // `blocked` does NOT mean "the proxy refused you for spending too much".
+  //
+  // It is LiteLLM's explicit key-block flag, and the control plane writes it in
+  // exactly two situations (hosting-llm packages/db/src/llm-sweeps.ts:380,488):
+  // the user has no plan, and a converge that failed part-way left the key
+  // blocked fail-closed. The first is already gone — !entitled returned above —
+  // so reaching here means a user WITH a plan whose key is switched off. Their
+  // assistant does not work and it is not their doing, which is worth an
+  // interruption; calling it "used up" would be a lie that sends them to a
+  // meter reading 4%.
+  //
+  // Budget exhaustion is caught by the percentages instead: sessionPct is
+  // spend÷max_budget on the very key the proxy enforces, so >=100 IS the
+  // refusal condition for the 6-hour window. The WEEK has no such guarantee —
+  // the proxy enforces a rolling 7 days from key creation while we report a
+  // Monday-aligned week, and nothing reads the proxy's own weekly counter, so a
+  // refusal on it is invisible here. That gap is docs/LLM.md POC item 1 and
+  // needs a live probe to close, not a guess from this side.
+  if (meter.blocked && !exhausted) {
     const blocked: UsageAlert = {
       window: 'session',
       level: 100,
       key: `${FLAG_PREFIX}blocked.${meter.sessionResetsAt}`,
-      title: 'Included AI usage used up',
-      body: 'Your included AI usage is temporarily used up. It resumes when your usage window resets.',
+      title: 'AI is temporarily unavailable',
+      body: 'Your assistant cannot reach its AI models right now. This is being fixed on our side — nothing you need to do.',
     };
     if (!delivered(blocked.key)) out.push(blocked);
   }

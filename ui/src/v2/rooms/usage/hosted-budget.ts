@@ -23,14 +23,23 @@ export interface HostedMeter {
  *  notification threshold, so the banner and the OS notification agree. */
 export const WARN_PCT = 75;
 
-export function meterTone(pct: number | null, blocked = false): MeterTone {
-  if (blocked || (pct !== null && pct >= 100)) return "fail";
+/**
+ * Tone for ONE window's bar, from that window's own number.
+ *
+ * Deliberately not a function of `blocked`: that flag means the key is switched
+ * off (no plan, or a converge that failed part-way), not that this window is
+ * full, and painting a 4% bar red because of it tells the user the opposite of
+ * what the number says. The block state is the banner's job.
+ */
+export function meterTone(pct: number | null): MeterTone {
+  if (pct !== null && pct >= 100) return "fail";
   if (pct !== null && pct >= WARN_PCT) return "hold";
   return "mut";
 }
 
-/** Clamped for the BAR only. The label keeps the true number: a proxy that has
- *  overshot its budget should read "104%", not a quietly capped "100%". */
+/** Defensive clamp. The control plane already caps both percentages at 100
+ *  (llm-sweeps.ts `Math.min(100, Math.ceil(…))`), so >100 should not arrive;
+ *  this keeps a bar inside its track if that ever changes. */
 export function barWidthPct(pct: number | null): number {
   if (pct === null) return 0;
   return Math.max(0, Math.min(100, pct));
@@ -69,17 +78,22 @@ export interface MeterBanner {
 /**
  * The banner above the meter, or null when there is nothing to say.
  *
- * Keyed off `blocked` FIRST, and independently of the percentages. The proxy
- * enforces a rolling 7 days from key creation while we display a Monday-aligned
- * week (docs/LLM.md), so the two can disagree — and when they do, the surface
- * must not claim headroom the proxy is already refusing.
+ * Note what this CANNOT tell the user: the proxy enforces a rolling 7 days from
+ * key creation while we display a Monday-aligned week (docs/LLM.md POC item 1),
+ * and nothing reads the proxy's own weekly counter — so a refusal on it shows
+ * up here as neither a full bar nor a banner. The chat surface still explains
+ * it (src/util/hosted-error.ts); this one stays silent, which is a known gap
+ * rather than a claim of headroom.
  */
 export function bannerFor(meter: HostedMeter | null): MeterBanner | null {
   if (!meter || !meter.entitled) return null;
+  // Blocked is NOT "used up" — see the note in src/daemon/usage-alerts.ts. The
+  // control plane sets it for a user with no plan (filtered out above) or a
+  // converge gap, so reaching here means a plan whose key is switched off.
   if (meter.blocked) {
     return {
       tone: "fail",
-      text: "Included AI usage is used up for this window. It resumes when the window resets — the meter below shows when.",
+      text: "Your assistant cannot reach its AI models right now. This is being fixed on our side — nothing you need to do.",
     };
   }
   const hot: string[] = [];
@@ -87,4 +101,58 @@ export function bannerFor(meter: HostedMeter | null): MeterBanner | null {
   if (meter.weekPct >= WARN_PCT) hot.push("this week");
   if (hot.length === 0) return null;
   return { tone: "hold", text: `You have used over ${WARN_PCT}% of your included AI usage for ${hot.join(" and ")}.` };
+}
+
+// ─── The hosted gate, as a pure decision ─────────────────────────────────
+/**
+ * What one answer from `/api/llm/budget` means, and what it does to the strip.
+ *
+ * Split out of `useHostedBudget` because this is the part that re-litigates a
+ * recorded bug — OnboardingWizard.tsx documents a hosted probe that read as
+ * self-hosted while it was merely slow, and walked a hosted user through three
+ * screens of setup that the server then discarded. There is no DOM in this test
+ * suite, so a decision left inside the hook is a decision nothing checks.
+ */
+
+export type BudgetProbe =
+  | { kind: "self" }
+  | { kind: "meter"; meter: HostedMeter }
+  | { kind: "unreadable" }
+  | { kind: "failed" };
+
+export interface BudgetView {
+  state: "unknown" | "hosted" | "self";
+  meter: HostedMeter | null;
+}
+
+/** 503 is the ONLY answer that means "not a hosted install" — it is the route's
+ *  own `hasUsejarvisAi` guard. Everything else is either a reading or a
+ *  failure, and a failure is not evidence about which kind of install this is. */
+export function classifyBudgetResponse(
+  status: number,
+  body: { ok?: boolean; meter?: HostedMeter } | null,
+): BudgetProbe {
+  if (status === 503) return { kind: "self" };
+  if (status < 200 || status >= 300) return { kind: "failed" };
+  if (body?.ok && body.meter) return { kind: "meter", meter: body.meter };
+  return { kind: "unreadable" };
+}
+
+export function applyBudgetProbe(prev: BudgetView, probe: BudgetProbe): BudgetView {
+  switch (probe.kind) {
+    case "self":
+      return { state: "self", meter: null };
+    case "meter":
+      return { state: "hosted", meter: probe.meter };
+    case "unreadable":
+      // Hosted, but the control plane could not be read. KEEP the last good
+      // meter: a minute-old reading beats a strip that flickers empty every
+      // time the control plane hiccups.
+      return { state: "hosted", meter: prev.meter };
+    case "failed":
+      // Changes NOTHING — least of all to "self". An unreachable daemon is the
+      // slow-probe case from the wizard, and answering it with "self-hosted"
+      // hides a hosted user's meter exactly when they need it.
+      return prev;
+  }
 }

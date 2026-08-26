@@ -1,11 +1,14 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  applyBudgetProbe,
   bannerFor,
+  classifyBudgetResponse,
   barWidthPct,
   formatPct,
   formatResetIn,
   meterTone,
   WARN_PCT,
+  type BudgetView,
   type HostedMeter,
 } from './hosted-budget.ts';
 
@@ -30,11 +33,12 @@ describe('meter tone', () => {
     expect(meterTone(100)).toBe('fail');
   });
 
-  test('BLOCKED is fail regardless of the percentage', () => {
-    // The proxy enforces a rolling 7d while we display a Monday-aligned week,
-    // so it can refuse at a percentage that looks fine.
-    expect(meterTone(4, true)).toBe('fail');
-    expect(meterTone(null, true)).toBe('fail');
+  test('a BLOCKED key does not repaint a window that is nearly empty', () => {
+    // `blocked` means the key is switched off (no plan, or a converge gap) —
+    // not that this window is full. Painting a 4% bar red would contradict the
+    // number printed beside it; the block state is the banner's job.
+    expect(meterTone(4)).toBe('mut');
+    expect(meterTone(null)).toBe('mut');
   });
 
   test('an UNKNOWN reading is not a warning', () => {
@@ -98,18 +102,74 @@ describe('banner', () => {
     expect(both.tone).toBe('hold');
   });
 
-  test('BLOCKED wins over the percentages', () => {
-    // The whole reason the banner keys off `blocked`: the proxy can be
-    // refusing while our Monday-aligned week still shows headroom, and the
-    // room must not tell a user they have room they do not have.
+  test('a blocked key reads as OUR fault, not as the user being out of usage', () => {
+    // The control plane sets `blocked` for a user with no plan (filtered out
+    // above) or a converge that failed part-way — never for spending too much.
+    // "Used up" would send someone to a meter reading 3% and blame them for it.
     const b = bannerFor(meter({ blocked: true, sessionPct: 3, weekPct: 3 }))!;
     expect(b.tone).toBe('fail');
-    expect(b.text).toContain('used up');
+    expect(b.text).not.toContain('used up');
+    expect(b.text).toContain('being fixed on our side');
   });
 
   test('an unreadable session window alone does not raise a banner', () => {
     expect(bannerFor(meter({ sessionPct: null }))).toBeNull();
     // …but a hot week still does.
     expect(bannerFor(meter({ sessionPct: null, weekPct: 88 }))?.text).toContain('this week');
+  });
+});
+
+
+describe('the hosted gate', () => {
+  const hosted: BudgetView = { state: 'hosted', meter: meter() };
+  const unknown: BudgetView = { state: 'unknown', meter: null };
+
+  test('ONLY a 503 means self-hosted', () => {
+    // It is the route's own hasUsejarvisAi guard. Nothing else is evidence
+    // about which kind of install this is.
+    expect(classifyBudgetResponse(503, null).kind).toBe('self');
+    expect(classifyBudgetResponse(500, null).kind).toBe('failed');
+    expect(classifyBudgetResponse(404, null).kind).toBe('failed');
+    expect(classifyBudgetResponse(401, null).kind).toBe('failed');
+  });
+
+  test('a failure never demotes a hosted user to self-hosted', () => {
+    // OnboardingWizard.tsx records the bug this exists to prevent: a probe that
+    // read as self-hosted while it was merely slow. Here the cost is a hosted
+    // user's meter disappearing for good — the poll stops on 'self'.
+    expect(applyBudgetProbe(hosted, { kind: 'failed' })).toEqual(hosted);
+    expect(applyBudgetProbe(unknown, { kind: 'failed' })).toEqual(unknown);
+  });
+
+  test('a 404 from a daemon older than the route does not read as self-hosted', () => {
+    // Version skew during an upgrade: the UI ships before the daemon restarts.
+    const after = applyBudgetProbe(hosted, classifyBudgetResponse(404, null));
+    expect(after.state).toBe('hosted');
+    expect(after.meter).toEqual(hosted.meter!);
+  });
+
+  test('hosted-but-unreadable KEEPS the last good meter', () => {
+    // A minute-old reading beats a strip that flickers empty every time the
+    // control plane hiccups.
+    const probe = classifyBudgetResponse(200, { ok: false });
+    expect(probe.kind).toBe('unreadable');
+    expect(applyBudgetProbe(hosted, probe)).toEqual(hosted);
+  });
+
+  test('a reading promotes an unknown install and replaces the meter', () => {
+    const fresh = meter({ weekPct: 77 });
+    const after = applyBudgetProbe(unknown, classifyBudgetResponse(200, { ok: true, meter: fresh }));
+    expect(after).toEqual({ state: 'hosted', meter: fresh });
+  });
+
+  test('a 200 with a missing meter is unreadable, not a reading', () => {
+    // ok:true with no meter would otherwise set `meter: undefined` and render
+    // a strip of blanks.
+    expect(classifyBudgetResponse(200, { ok: true }).kind).toBe('unreadable');
+    expect(classifyBudgetResponse(200, null).kind).toBe('unreadable');
+  });
+
+  test('self-hosted clears any meter it was holding', () => {
+    expect(applyBudgetProbe(hosted, { kind: 'self' })).toEqual({ state: 'self', meter: null });
   });
 });

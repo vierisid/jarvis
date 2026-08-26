@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { HostedMeter } from "./hosted-budget";
+import { applyBudgetProbe, classifyBudgetResponse, type HostedMeter } from "./hosted-budget";
 
 /**
  * Polls the daemon's `/api/llm/budget`.
@@ -19,7 +19,11 @@ import type { HostedMeter } from "./hosted-budget";
 
 /** Matches the 60s caches on both sides — polling faster buys nothing. */
 export const BUDGET_POLL_MS = 60_000;
+/** First retry after a failed probe. Doubles up to RETRY_MAX_MS: a daemon that
+ *  is down stays down, and a fixed 5s retry on top of the poll is a request
+ *  every five seconds for as long as the room is open. */
 const RETRY_MS = 5_000;
+const RETRY_MAX_MS = BUDGET_POLL_MS;
 
 export type HostedState = "unknown" | "hosted" | "self";
 
@@ -28,6 +32,10 @@ export interface HostedBudget {
   /** null while unknown, on a self-hosted install, or when the control plane
    *  could not be reached — the strip renders "unavailable", not zeros. */
   meter: HostedMeter | null;
+  /** When the last read COMPLETED, successful or not. The strip derives its
+   *  countdowns at render, so this is what makes them tick during an outage
+   *  instead of freezing on the last good reading. */
+  readAt: number;
   refresh: () => void;
 }
 
@@ -39,7 +47,15 @@ interface BudgetResponse {
 export function useHostedBudget(): HostedBudget {
   const [state, setState] = useState<HostedState>("unknown");
   const [meter, setMeter] = useState<HostedMeter | null>(null);
+  // Bumped on every completed read, including a failed one, so the strip
+  // re-renders and its countdowns advance. Without it a room left open across
+  // a control-plane outage keeps a last-good meter on screen and goes on
+  // printing "resets in 2h 30m" an hour later.
+  const [readAt, setReadAt] = useState(0);
   const inFlightRef = useRef(false);
+  const retryRef = useRef<number | null>(null);
+  const backoffRef = useRef(RETRY_MS);
+  const aliveRef = useRef(true);
   const [attempt, setAttempt] = useState(0);
 
   const load = useCallback(async () => {
@@ -47,27 +63,43 @@ export function useHostedBudget(): HostedBudget {
     inFlightRef.current = true;
     try {
       const res = await fetch("/api/llm/budget");
-      if (res.status === 503) {
-        // The only answer that means "not a hosted install".
-        setState("self");
-        setMeter(null);
-        return;
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`);
-      const body = (await res.json()) as BudgetResponse | null;
-      setState("hosted");
-      // ok:false is hosted-but-unreadable. Keep the LAST GOOD meter rather
-      // than blanking the strip on one failed poll — a minute-old reading is
-      // far better than a room that flickers empty every time the control
-      // plane hiccups.
-      if (body?.ok && body.meter) setMeter(body.meter);
+      // A non-2xx that is not 503 has no body worth parsing, and a body that
+      // is not JSON must not read as a failed FETCH — both are "failed".
+      const body =
+        res.ok ? ((await res.json().catch(() => null)) as BudgetResponse | null) : null;
+      if (!aliveRef.current) return;
+      const probe = classifyBudgetResponse(res.status, body);
+      if (probe.kind === "failed") throw new Error(`HTTP ${res.status}`);
+      backoffRef.current = RETRY_MS;
+      setState((prevState) => applyBudgetProbe({ state: prevState, meter: null }, probe).state);
+      setMeter((prevMeter) => applyBudgetProbe({ state: "hosted", meter: prevMeter }, probe).meter);
+      setReadAt(Date.now());
     } catch {
       // Unreachable daemon stays UNKNOWN, never "self": the strip must not
       // vanish for a hosted user because one request failed.
-      setTimeout(() => setAttempt((n) => n + 1), RETRY_MS);
+      if (!aliveRef.current) return;
+      setReadAt(Date.now());
+      // Backed off and CLEARED on unmount. A UI newer than its daemon gets a
+      // 404 here on every attempt; at a fixed interval that is a request every
+      // five seconds forever, and the timer outlived the component besides.
+      const wait = backoffRef.current;
+      backoffRef.current = Math.min(wait * 2, RETRY_MAX_MS);
+      retryRef.current = window.setTimeout(() => {
+        retryRef.current = null;
+        if (typeof document !== "undefined" && document.hidden) return;
+        setAttempt((n) => n + 1);
+      }, wait);
     } finally {
       inFlightRef.current = false;
     }
+  }, []);
+
+  useEffect(() => {
+    aliveRef.current = true;
+    return () => {
+      aliveRef.current = false;
+      if (retryRef.current !== null) window.clearTimeout(retryRef.current);
+    };
   }, []);
 
   useEffect(() => {
@@ -83,5 +115,5 @@ export function useHostedBudget(): HostedBudget {
     return () => window.clearInterval(id);
   }, [load, state]);
 
-  return { state, meter, refresh: () => void load() };
+  return { state, meter, readAt, refresh: () => void load() };
 }
