@@ -45,7 +45,18 @@ const PUBLIC_KEY_FILE = 'public.pem';
 // the same ES256 key, scoped by audience, and verified statelessly (signature +
 // exp + aud, no DB hit) so a leak is bounded to the TTL rather than forever.
 const ACCESS_TOKEN_AUDIENCE = 'brain-api';
-const ACCESS_TOKEN_TTL_SECONDS = 600; // 10 minutes
+/**
+ * Ten minutes, and it is the whole lifetime of a browser page's data plane.
+ *
+ * Exported because anything that keeps ONE page open for longer than this has
+ * to renew inside it or go silently blind: the /ws socket is authenticated
+ * once at upgrade and then lives forever, so the frames keep arriving while
+ * every fetch under them starts coming back 401. The 48-hour trial is the
+ * first surface in the product that does that on purpose (D16's beats are an
+ * hour of one conversation on one page), and src/trial/session-renew.test.ts
+ * holds its renewal cadence against this number.
+ */
+export const ACCESS_TOKEN_TTL_SECONDS = 600;
 
 /**
  * Accept only strings shaped like IANA zone names ("Area/City", up to three

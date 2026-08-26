@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { pebbleView, type ConductorPhase } from "./pebbleState.ts";
+import { STALE_ROOMS_TEXT, pebbleView, type ConductorPhase } from "./pebbleState.ts";
 
 const PHASES: ConductorPhase[] = ["connecting", "speaking", "listening", "closed", "error"];
 
@@ -69,5 +69,29 @@ describe("error and pointing outrank the words", () => {
     const v = pebbleView({ phase: "listening", caption: "", error: "gone", pointing: "the week" });
     expect(v.state).toBe("error");
     expect(v.bubble.kind).toBe("point");
+  });
+});
+
+describe("the rooms going stale under a conversation that has not", () => {
+  test("says so in the gaps, without claiming the conversation broke", () => {
+    const v = pebbleView({ phase: "listening", caption: "", error: null, pointing: null, stale: true });
+    // The colour stays honest: Jarvis really is still listening.
+    expect(v.state).toBe("listening");
+    expect(v.bubble).toEqual({ kind: "error", text: STALE_ROOMS_TEXT });
+  });
+
+  test("never eats Jarvis's own words", () => {
+    const v = pebbleView({ phase: "speaking", caption: "here is your quarter", error: null, pointing: null, stale: true });
+    expect(v.bubble).toEqual({ kind: "caption", text: "here is your quarter" });
+  });
+
+  test("never eats the gesture", () => {
+    const v = pebbleView({ phase: "listening", caption: "", error: null, pointing: "their quarter", stale: true });
+    expect(v.bubble).toEqual({ kind: "point", text: "their quarter" });
+  });
+
+  test("a page that renewed says nothing new", () => {
+    const v = pebbleView({ phase: "listening", caption: "", error: null, pointing: null, stale: false });
+    expect(v.bubble).toEqual({ kind: "hint", text: "your turn" });
   });
 });

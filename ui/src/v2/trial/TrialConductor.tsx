@@ -13,6 +13,7 @@ import {
 } from "./conductorSession";
 import { TrialProposal } from "./TrialProposal";
 import { pebbleView, type PebbleBubble } from "./pebbleState";
+import { TRIAL_SESSION_RENEW_MS, renewTrialSession } from "./sessionRenew";
 import { formatTimeRemaining, type TrialStatus } from "./trialGate";
 import { openRoom, type RoomKey } from "../router";
 import "./TrialConductor.css";
@@ -69,6 +70,9 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
   const [landedProposal, setLandedProposal] = useState<ProposalLanded | null>(null);
   const [point, setPoint] = useState<PebblePoint | null>(null);
   const [finished, setFinished] = useState<OnboardingComplete | null>(null);
+  /** True once the page's credential could not be renewed, so the rooms under
+   *  the conversation have stopped updating and the founder has to be told. */
+  const [stale, setStale] = useState(false);
   const sessionRef = useRef<ConductorSession | null>(null);
   /** Streaming assistant deltas accumulate here until the turn is final. */
   const partialRef = useRef<string>("");
@@ -200,6 +204,26 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
     };
   }, [gate]);
 
+  // D22, and the reason it was not true. The rooms under this conversation are
+  // fetched over HTTP with a ten-minute credential; this conversation is an
+  // hour long and never reloads. Renew it from in here, starting the moment the
+  // layer goes live, because the token was minted before the founder opened the
+  // page and some of its ten minutes is already spent. See sessionRenew.ts.
+  useEffect(() => {
+    if (gate !== "live") return;
+    let stopped = false;
+    const renew = async () => {
+      const ok = await renewTrialSession();
+      if (!stopped) setStale(!ok);
+    };
+    void renew();
+    const id = window.setInterval(() => void renew(), TRIAL_SESSION_RENEW_MS);
+    return () => {
+      stopped = true;
+      window.clearInterval(id);
+    };
+  }, [gate]);
+
   if (gate === "checking") return null;
 
   if (gate !== "live") {
@@ -210,7 +234,7 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
     <>
       {children}
       <div className="tc-layer" aria-live="polite">
-        <ConductorPebble phase={phase} caption={caption} error={error} point={point} />
+        <ConductorPebble phase={phase} caption={caption} error={error} point={point} stale={stale} />
         <TrialProposal proposal={proposal} landed={landedProposal} />
         <VaultTicker landed={landedEntities} />
         <TrialFooter
@@ -275,15 +299,17 @@ function ConductorPebble({
   caption,
   error,
   point,
+  stale,
 }: {
   phase: ConductorPhase;
   caption: string;
   error: string | null;
   point: PebblePoint | null;
+  stale: boolean;
 }) {
   const ref = useRef<HTMLDivElement | null>(null);
   const pointing = usePebbleFlight(ref, point);
-  const view = pebbleView({ phase, caption, error, pointing: pointing?.label ?? null });
+  const view = pebbleView({ phase, caption, error, pointing: pointing?.label ?? null, stale });
   return (
     <div
       ref={ref}

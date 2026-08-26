@@ -232,6 +232,20 @@ function errorFromException(err: unknown): Response {
   return error(err instanceof Error ? err.message : String(err), 500);
 }
 
+/** One cookie off a request, by name. Used by the trial's session renewal,
+ *  which has to read the credential it is replacing. */
+export function readRequestCookie(req: Request, name: string): string | null {
+  const header = req.headers.get('Cookie');
+  if (!header) return null;
+  for (const part of header.split(';')) {
+    const eq = part.indexOf('=');
+    if (eq === -1) continue;
+    if (part.slice(0, eq).trim() !== name) continue;
+    return decodeURIComponent(part.slice(eq + 1).trim());
+  }
+  return null;
+}
+
 /**
  * Failure path shared by the config POST handlers. A malformed body is the
  * caller's fault (400), but a credential the keychain refused is ours: the
@@ -1108,6 +1122,71 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           }
           console.log('[Trial] local stub entitlement issued');
           return json({ ok: true, trial: trialSnapshot() });
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
+    /**
+     * Keep the founder's page authenticated for as long as they keep talking.
+     *
+     * The dashboard's data plane is a sidecar ACCESS token in an HttpOnly
+     * cookie, and it lives ten minutes (ACCESS_TOKEN_TTL_SECONDS). The /ws
+     * socket is authenticated once, at upgrade, and then lives forever. Those
+     * two facts are fine for a panel someone opens, uses and closes. They are
+     * not fine for the trial, which holds ONE page open through an hour of
+     * conversation: eleven minutes in, the conductor is still talking, the
+     * pebble still flies, the memory ticker still fills, the proposal card
+     * still resolves, and every room underneath has gone blind, because every
+     * fetch it makes is refused. A founder watching that says the write failed,
+     * and Jarvis had just told them it worked.
+     *
+     * So: the trial's own layer calls this on a timer well inside the TTL, and
+     * gets a fresh cookie back. Deliberately narrow.
+     *
+     *  - Refused unless a trial is actually RUNNING on this install, which is
+     *    the same gate the conductor and the preview endpoint sit behind. No
+     *    other surface's exposure changes: outside a trial, a leaked panel
+     *    credential is still bounded to one TTL, exactly as before.
+     *  - It renews; it does not mint from nothing. The request has already
+     *    passed the server's auth gate by the time it arrives here, so this can
+     *    only ever extend a session that is currently valid. An expired cookie
+     *    never reaches this handler.
+     *  - Nothing is written and no state moves. It is one signature.
+     *
+     * `renewed: false` with a 200 is the honest answer on an install running
+     * `auth.insecure_open_access`, where there is no cookie and nothing to
+     * expire. The client cannot tell the difference by itself: the cookie is
+     * HttpOnly, so the browser cannot read it.
+     */
+    '/api/trial/session/renew': {
+      POST: async (req: Request) => {
+        try {
+          if (!isTrialRunning(readTrialEntitlement(), Date.now())) {
+            return json({ error: 'No running trial entitlement on this install.' }, 409);
+          }
+          const current = readRequestCookie(req, 'token');
+          if (!current) return json({ ok: true, renewed: false });
+          const manager = ctx.sidecarManager;
+          if (!manager) return json({ error: 'No device enrolment to renew against.' }, 503);
+          const claims = await manager.verifyAccessToken(current);
+          if (!claims) return json({ error: 'This session cannot be renewed.' }, 401);
+          const minted = await manager.issueAccessToken(claims.sid);
+          if (!minted) return json({ error: 'This session cannot be renewed.' }, 401);
+          // Same attributes the mint-on-?token= path sets, so the replacement
+          // lands on the same cookie rather than beside it. Secure whenever the
+          // connection is TLS, directly or terminated upstream.
+          const xfProto = (req.headers.get('x-forwarded-proto') ?? '').split(',')[0]?.trim();
+          const isHttps = new URL(req.url).protocol === 'https:' || xfProto === 'https';
+          return new Response(JSON.stringify({ ok: true, renewed: true, expires_in: minted.expiresIn }), {
+            status: 200,
+            headers: {
+              ...CORS,
+              'Content-Type': 'application/json',
+              'Set-Cookie': `token=${minted.token}; Path=/; SameSite=Lax; HttpOnly${isHttps ? '; Secure' : ''}`,
+            },
+          });
         } catch (err) {
           return errorFromException(err);
         }

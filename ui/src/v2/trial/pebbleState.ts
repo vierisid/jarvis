@@ -46,11 +46,23 @@ export type PebbleView = {
   bubble: PebbleBubble;
 };
 
+/** Said in the gaps when the page's credential could not be renewed, so the
+ *  rooms have stopped updating under a conversation that has not. */
+export const STALE_ROOMS_TEXT = "The rooms have stopped updating. Reload to bring them back.";
+
 export function pebbleView(input: {
   phase: ConductorPhase;
   caption: string;
   error: string | null;
   pointing: string | null;
+  /**
+   * The page's credential could not be renewed, so every room under this
+   * conversation is now refusing to load and anything Jarvis writes will land
+   * invisibly. Deliberately does NOT change the colour: the conversation is
+   * genuinely still live and painting it as broken would be its own lie. It
+   * takes the place of the hint, so it never eats Jarvis's own words.
+   */
+  stale?: boolean;
 }): PebbleView {
   const state: ConductorPhase = input.error ? "error" : input.phase;
 
@@ -65,6 +77,8 @@ export function pebbleView(input: {
   if (state === "speaking" && input.caption) {
     return { state, bubble: { kind: "caption", text: input.caption } };
   }
+
+  if (input.stale) return { state, bubble: { kind: "error", text: STALE_ROOMS_TEXT } };
 
   return { state, bubble: { kind: "hint", text: hintFor(state) } };
 }
