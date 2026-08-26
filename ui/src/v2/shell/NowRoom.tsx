@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { openRoom, type RoomKey } from "../router";
 import { useLiveData, type LiveData } from "./LiveDataContext";
 import type { ConnectionState } from "./Header";
+import { widgetClock } from "./widgetClock";
 
 /**
  * Now — the home surface you compose. A grid of widgets, each a room's
@@ -136,7 +137,9 @@ function Stat({ n, unit, sub }: { n: React.ReactNode; unit?: string; sub?: React
 function Loading() { return <Empty><span className="dim">Loading…</span></Empty>; }
 
 function CalendarWidget() {
-  const now = Date.now();
+  // To the minute, not to the millisecond: this value goes into the URL, and
+  // the URL is what `useWidgetData` re-fetches on. See widgetClock.ts.
+  const now = widgetClock();
   const { data, loaded } = useWidgetData<Array<{ title: string; timestamp: number }>>(
     `/api/calendar?range_start=${now}&range_end=${now + 7 * 86400000}`);
   const up = Array.isArray(data) ? data.filter((e) => e.timestamp >= now).sort((a, b) => a.timestamp - b.timestamp) : [];
@@ -184,7 +187,8 @@ function AuthorityAuditWidget() {
 }
 
 function UsageWidget() {
-  const now = Date.now();
+  // See CalendarWidget above, and widgetClock.ts.
+  const now = widgetClock();
   const { data, loaded } = useWidgetData<Record<string, unknown>>(
     `/api/usage?range_start=${now - 7 * 86400000}&range_end=${now}`);
   // Shape varies; defensively pull a token total from the likely fields.
