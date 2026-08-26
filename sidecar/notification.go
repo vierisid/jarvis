@@ -3,9 +3,10 @@ package main
 import "sync/atomic"
 
 // Outbound OS notifications (design: usejarvis-tray.html §01). The brain
-// decides WHEN to interrupt — the four reasons Jarvis is allowed to: it needs
+// decides WHEN to interrupt — the five reasons Jarvis is allowed to: it needs
 // your OK (approval), it finished something (done), a machine dropped (sidecar),
-// or an update is ready (update) — and pushes a `notify.show` RPC. The sidecar
+// an update is ready (update), or a hosted plan's included AI usage is running
+// low or spent (usage) — and pushes a `notify.show` RPC. The sidecar
 // raises the native notification; a click (or an action button, where the
 // platform supports them) emits `notify.action` back so the brain can act.
 //
@@ -23,7 +24,7 @@ type NotifyAction struct {
 
 type Notification struct {
 	ID          string // approval id, or a synthetic id for done/sidecar/update
-	Kind        string // approval | done | sidecar | update
+	Kind        string // approval | done | sidecar | update | usage
 	Title       string
 	Body        string
 	Meta        string // e.g. "external · send_email" (shown inline on Windows)

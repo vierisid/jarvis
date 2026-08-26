@@ -92,7 +92,15 @@ static void jarvisNotifySetup(void) {
         UNNotificationAction* later     = [UNNotificationAction actionWithIdentifier:@"later"  title:@"Later"       options:UNNotificationActionOptionNone];
         UNNotificationCategory* update  = [UNNotificationCategory categoryWithIdentifier:@"update" actions:@[openU, later] intentIdentifiers:@[] options:UNNotificationCategoryOptionNone];
 
-        [center setNotificationCategories:[NSSet setWithObjects:approval, done, sidecar, update, nil]];
+        // usage: a hosted plan's included AI usage running low or spent. Same
+        // shape as `done` — nothing to decide, just somewhere to look — but its
+        // own category because macOS keys the action buttons off the identifier
+        // and an unregistered one renders the alert with no buttons at all.
+        UNNotificationAction* viewU     = [UNNotificationAction actionWithIdentifier:@"review"  title:@"Open Jarvis" options:UNNotificationActionOptionForeground];
+        UNNotificationAction* dismissU  = [UNNotificationAction actionWithIdentifier:@"dismiss" title:@"Dismiss"     options:UNNotificationActionOptionNone];
+        UNNotificationCategory* usage   = [UNNotificationCategory categoryWithIdentifier:@"usage" actions:@[viewU, dismissU] intentIdentifiers:@[] options:UNNotificationCategoryOptionNone];
+
+        [center setNotificationCategories:[NSSet setWithObjects:approval, done, sidecar, update, usage, nil]];
 
         [center requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound)
                               completionHandler:^(BOOL granted, NSError* _Nullable error) {
@@ -113,7 +121,7 @@ static void jarvisNotifyShow(const char* cid, const char* ckind, const char* cti
             content.title = title;
             content.body  = body;
             content.sound = [UNNotificationSound defaultSound];
-            content.categoryIdentifier = kind; // approval / done / sidecar
+            content.categoryIdentifier = kind; // approval / done / sidecar / update / usage
             content.userInfo = @{@"id": nid, @"kind": kind};
             UNNotificationRequest* req = [UNNotificationRequest requestWithIdentifier:[[NSUUID UUID] UUIDString]
                                                                               content:content
