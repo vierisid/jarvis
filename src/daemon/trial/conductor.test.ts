@@ -8,6 +8,7 @@ import {
   CONDUCTOR_TOOLS,
   FUEL_AREA_KEYS,
   TRIAL_OPENING_LINE,
+  TRIAL_FILES_SOURCE,
   TRIAL_VAULT_SOURCE,
   buildConductorInstructions,
   createConductorSession,
@@ -288,6 +289,53 @@ describe('conclude_opening, the seam (D17)', () => {
     );
     const r = executeConductorTool(session, 'conclude_opening', { understanding: 'x' }, {}, 2000);
     expect(r!.message).toContain('Forty paying customers by the end of Q3.');
+  });
+});
+
+describe("the reader's findings are told apart from what they said (D42)", () => {
+  afterEach(() => closeDb());
+
+  test("the opening's own remember is unchanged: it still stamps trial_conductor", () => {
+    initDatabase(':memory:');
+    const session = createConductorSession(1000);
+    executeConductorTool(session, 'remember', {
+      entities: [{ name: 'Ana', type: 'person', role: 'co-founder' }],
+      facts: [{ about: 'Ana', detail: 'Does the front end.' }],
+    }, {}, 1500);
+    const ana = findEntities({ name: 'Ana' })[0]!;
+    expect(ana.source).toBe(TRIAL_VAULT_SOURCE);
+    expect(findFacts({ subject_id: ana.id })[0]!.source).toBe(TRIAL_VAULT_SOURCE);
+  });
+
+  test('a source can be overridden, and then everything it writes carries it', () => {
+    initDatabase(':memory:');
+    const session = createConductorSession(1000);
+    executeConductorTool(session, 'remember', {
+      entities: [{ name: 'Bowman & Co', type: 'project', role: 'client' }],
+      facts: [{ about: 'Bowman & Co', detail: 'Renews in October.' }],
+      // A fact about something never landed as an entity: the implied entity
+      // has to carry the override too, or half a reading is filed as speech.
+    }, { source: TRIAL_FILES_SOURCE }, 1500);
+    executeConductorTool(session, 'remember', {
+      facts: [{ about: 'Kestrel', detail: 'Priced at 40 a seat.' }],
+    }, { source: TRIAL_FILES_SOURCE }, 1600);
+
+    for (const name of ['Bowman & Co', 'Kestrel']) {
+      const e = findEntities({ name })[0]!;
+      expect(e.source).toBe(TRIAL_FILES_SOURCE);
+      expect(findFacts({ subject_id: e.id })[0]!.source).toBe(TRIAL_FILES_SOURCE);
+    }
+  });
+
+  test('the two sources coexist, so the debrief can tell them apart', () => {
+    initDatabase(':memory:');
+    const session = createConductorSession(1000);
+    executeConductorTool(session, 'remember', { entities: [{ name: 'Ana', type: 'person' }] }, {}, 1500);
+    executeConductorTool(session, 'remember', {
+      entities: [{ name: 'Bowman & Co', type: 'project' }],
+    }, { source: TRIAL_FILES_SOURCE }, 1600);
+    expect(findEntities({ name: 'Ana' })[0]!.source).toBe(TRIAL_VAULT_SOURCE);
+    expect(findEntities({ name: 'Bowman & Co' })[0]!.source).toBe(TRIAL_FILES_SOURCE);
   });
 });
 

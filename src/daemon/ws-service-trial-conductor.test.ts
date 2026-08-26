@@ -4,6 +4,7 @@ import { clearRealtimeGateCache } from './realtime-gate.ts';
 import { closeDb, initDatabase } from '../vault/schema.ts';
 import { issueTrialEntitlement, startTrialClock, TRIAL_DURATION_MS } from '../trial/entitlement.ts';
 import type { JarvisConfig } from '../config/types.ts';
+import { ROOM_BEAT_TOOLS } from './trial/beats.ts';
 
 /**
  * The conductor branch in the realtime starter, exercised through the real
@@ -112,15 +113,25 @@ describe('an install with no trial entitlement', () => {
     expect(internals.trialConductor.isArmed(ws)).toBe(false);
   });
 
-  test('cannot reach a room beat, and nothing it does opens a room', async () => {
+  test('cannot reach ANY room beat, and nothing it does opens a room', async () => {
     // The beat tools only exist on a conductor session's tool list, but the
     // executor is the fence that matters: a socket that never armed gets null
     // from the conductor and falls through to the ordinary tool bridge, where
     // no such tool is registered. Nothing is written and nothing is broadcast.
+    //
+    // Every tool, not a sample: the fence has to hold for whichever one is
+    // added next, and the two that read and write the founder's own disk are
+    // the reason this test is not a formality.
     initDatabase(':memory:');
     const { ws, internals, broadcast } = makeService();
 
-    for (const name of ['propose_goals', 'create_goals', 'set_authority', 'spawn_research_agent']) {
+    for (const tool of ROOM_BEAT_TOOLS) {
+      expect(await internals.trialConductor.executeTool(ws, tool.name, {})).toBeNull();
+    }
+    // Named individually as well, so a rename cannot quietly empty the loop.
+    for (const name of ['propose_reading', 'start_reading', 'reading_so_far',
+      'propose_workspace', 'create_workspace', 'propose_edit', 'make_edit', 'move_on']) {
+      expect(ROOM_BEAT_TOOLS.some((t) => t.name === name)).toBe(true);
       expect(await internals.trialConductor.executeTool(ws, name, {})).toBeNull();
     }
     expect(broadcast).toHaveLength(0);

@@ -12,6 +12,8 @@ import {
   transcriptHasWords,
 } from './conductor-manager.ts';
 import type { FoundEntities } from './reader-tools.ts';
+import { TRIAL_FILES_SOURCE, TRIAL_VAULT_SOURCE } from './conductor.ts';
+import { findEntities } from '../../vault/entities.ts';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
@@ -487,5 +489,98 @@ describe('the finale', () => {
     const res = await manager.executeTool(ws, 'set_daily_rhythm');
     expect(res).toContain('did not save');
     expect(manager.beatsOf(ws)!.briefAt).toBeNull();
+  });
+});
+
+/* ══════════ D42 · what the reader finds, on its way to the founder ══════════ */
+
+describe('the reader lands its findings through the conversation, not beside it', () => {
+  afterEach(() => closeDb());
+
+  async function readingManager() {
+    initDatabase(':memory:');
+    issueTrialEntitlement({ now: T0 });
+    let t = T0;
+    const h = harness(() => t++);
+    h.manager.arm(h.ws);
+    h.manager.begin(h.ws);
+    const run = (n: string, a: Record<string, unknown> = {}) => h.manager.executeTool(h.ws, n, a);
+    const yes = () => h.manager.onUserSpeechStopped(h.ws);
+
+    const folder = mkdtempSync(join(tmpdir(), 'reader-land-'));
+    writeFileSync(join(folder, 'pitch.md'), '# Acme', 'utf-8');
+
+    await run('conclude_opening', { understanding: 'ok' });
+    await run('propose_goals', DEEP_GOALS); yes(); await run('create_goals');
+    await run('propose_tasks', { tasks: [{ what: 'a', first: true }] }); yes(); await run('create_tasks');
+    await run('propose_daily_rhythm', { hour: 7, minute: 30, evening_hour: 19 }); yes(); await run('set_daily_rhythm');
+    await run('propose_workflow', {
+      name: 'f', runs_when: 'mondays', steps: ['x'], never: 'send anything on its own',
+    });
+    yes();
+    await run('publish_workflow');
+    await run('no_second_workflow', { because: 'one thing' });
+    await run('propose_authority', { always_ask: ['send_message'] }); yes(); await run('set_authority', {});
+    await run('propose_reading', { folder }); yes(); await run('start_reading');
+    return { ...h, run, folder };
+  }
+
+  test('a finding lands in the vault and reaches the founder as a memory push (D22)', async () => {
+    const { manager, ws, broadcast, actions, folder } = await readingManager();
+    broadcast.length = 0;
+    const result = actions.readerFound!({
+      entities: [{ name: 'Bowman & Co', type: 'project', role: 'client' }],
+      facts: [{ about: 'Bowman & Co', detail: 'Renews in October.' }],
+    });
+    expect(result.landed).toBe(1);
+    expect(result.names).toEqual(['Bowman & Co (client)']);
+
+    // The same broadcast the conversation's own `remember` makes, so the
+    // founder watches one ticker rather than two sources of truth.
+    const memory = broadcast.find((m) => m.type === 'trial_memory');
+    expect(memory).toBeDefined();
+    expect((memory!.payload as { landed: { name: string }[] }).landed[0]!.name).toBe('Bowman & Co');
+
+    // And it is in the vault, stamped as something it READ rather than
+    // something they said, so the debrief can tell the two apart.
+    const entity = findEntities({ name: 'Bowman & Co' })[0]!;
+    expect(entity.source).toBe(TRIAL_FILES_SOURCE);
+    expect(entity.source).not.toBe(TRIAL_VAULT_SOURCE);
+    rmSync(folder, { recursive: true, force: true });
+    void manager; void ws;
+  });
+
+  test('the same name in three documents lands once', async () => {
+    const { actions, folder } = await readingManager();
+    for (let i = 0; i < 3; i++) {
+      actions.readerFound!({ entities: [{ name: 'Ana', type: 'person', role: 'co-founder' }] });
+    }
+    expect(findEntities({ name: 'Ana' })).toHaveLength(1);
+    rmSync(folder, { recursive: true, force: true });
+  });
+
+  test('`reading_so_far` reports what the reader has actually landed, and only that', async () => {
+    const { run, actions, folder } = await readingManager();
+    expect(await run('reading_so_far')).toContain('Say NOTHING about it');
+
+    actions.readerFound!({ entities: [{ name: 'Bowman & Co', type: 'project', role: 'client' }] });
+    const some = await run('reading_so_far');
+    expect(some).toContain('Bowman & Co (client)');
+    expect(some).toContain('still reading');
+
+    actions.readerDone!('A three-person design studio in Milan.');
+    const done = await run('reading_so_far');
+    expect(done).toContain('it has finished');
+    expect(done).toContain('A three-person design studio in Milan.');
+    rmSync(folder, { recursive: true, force: true });
+  });
+
+  test('a reader that fell over reports as finished with nothing, never as silence', async () => {
+    const { run, actions, folder } = await readingManager();
+    actions.readerDone!(null);
+    const res = await run('reading_so_far');
+    expect(res).toContain('found nothing about the company');
+    expect(res).toContain('without inventing a finding');
+    rmSync(folder, { recursive: true, force: true });
   });
 });
