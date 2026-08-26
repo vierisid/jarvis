@@ -52,6 +52,12 @@ import { appendUserProfileFact } from '../../vault/user-profile.ts';
  *  room beats and the D38 debrief tell trial-born knowledge from the rest. */
 export const TRIAL_VAULT_SOURCE = 'trial_conductor';
 
+/** Vault `source` for what D42's background reader finds in the founder's own
+ *  files. Distinct from `trial_conductor` on purpose: "what you told me" and
+ *  "what I read in your documents" are different claims, and the D38 debrief
+ *  should be able to say which is which. */
+export const TRIAL_FILES_SOURCE = 'trial_files';
+
 /**
  * The first words of the trial, spoken unprompted the moment the session opens
  * (D10). Fixed on purpose: D12 rules out a scripted CONVERSATION, and names the
@@ -367,6 +373,13 @@ export type ConductorDeps = {
    * per D17 it must not be treated as the end of anything.
    */
   onOpeningComplete?: (handoff: TrialOpeningHandoff) => void;
+  /**
+   * Which vault source to stamp on what `remember` writes. Defaults to the
+   * opening's own; D42's background reader passes `TRIAL_FILES_SOURCE` so the
+   * two are told apart, while still going through this one code path and
+   * therefore getting the same de-duplication and the same live broadcast.
+   */
+  source?: string;
 };
 
 export type ConductorToolResult = {
@@ -406,6 +419,7 @@ function executeRemember(
   args: Record<string, unknown>,
   deps: ConductorDeps,
 ): ConductorToolResult {
+  const source = deps.source ?? TRIAL_VAULT_SOURCE;
   const rawEntities = Array.isArray(args.entities) ? args.entities : [];
   const rawFacts = Array.isArray(args.facts) ? args.facts : [];
 
@@ -445,7 +459,7 @@ function executeRemember(
           type,
           name,
           { ...(role ? { role } : {}), ...(note ? { note } : {}) },
-          TRIAL_VAULT_SOURCE,
+          source,
         );
         isNew = true;
       }
@@ -480,7 +494,7 @@ function executeRemember(
       // The model named a subject it never landed. Land it as a concept rather
       // than dropping the fact, the founder said it, so it belongs to them.
       try {
-        target = createEntity('concept', about, {}, TRIAL_VAULT_SOURCE);
+        target = createEntity('concept', about, {}, source);
         const entry: LandedEntity = {
           id: target.id, name: target.name, type: target.type, isNew: true, factCount: 0,
         };
@@ -504,7 +518,7 @@ function executeRemember(
       // sentences in the founder's voice, and splitting them into a synthetic
       // subject/predicate/object triple would mangle the phrasing the memory
       // room is meant to show back to them.
-      createFact(target.id, 'said', detail, { confidence: 0.9, source: TRIAL_VAULT_SOURCE });
+      createFact(target.id, 'said', detail, { confidence: 0.9, source });
       factsSaved++;
       const idx = byName.get(about.toLowerCase())?.landedIdx;
       if (idx !== undefined && landed[idx]) landed[idx]!.factCount++;
