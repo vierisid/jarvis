@@ -2287,7 +2287,7 @@ function revisionName(file: string): string {
   const dot = base.lastIndexOf('.');
   const stem = dot > 0 ? base.slice(0, dot) : base;
   const ext = dot > 0 ? base.slice(dot) : '.md';
-  return `${stem} — rewritten${ext}`;
+  return `${stem} - rewritten${ext}`;
 }
 
 function makeEdit(s: BeatsSession, args: Record<string, unknown>, deps: BeatDeps): BeatToolResult {

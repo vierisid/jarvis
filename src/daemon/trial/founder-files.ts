@@ -440,7 +440,7 @@ export function createWorkspace(plan: WorkspacePlan, now = Date.now()): Workspac
       try {
         copyFileSync(from, to);
         copied++;
-        index.push(`- \`${safeName}/${basename(to)}\` — from \`${rel}\``);
+        index.push(`- \`${safeName}/${basename(to)}\` (from \`${rel}\`)`);
       } catch (err) {
         skipped.push({ rel, why: err instanceof Error ? err.message : String(err) });
       }
@@ -450,7 +450,7 @@ export function createWorkspace(plan: WorkspacePlan, now = Date.now()): Workspac
 
   if (skipped.length > 0) {
     index.push('## Not copied', '');
-    for (const s of skipped) index.push(`- \`${s.rel}\` — ${s.why}`);
+    for (const s of skipped) index.push(`- \`${s.rel}\`: ${s.why}`);
     index.push('');
   }
 
@@ -501,7 +501,7 @@ export function writeRevision(opts: {
   const stem = ext ? opts.originalName.slice(0, -ext.length) : opts.originalName;
   const safeLabel = opts.label.replace(/[/\\:*?"<>|]/g, '').trim() || 'revised';
   mkdirSync(opts.intoDir, { recursive: true });
-  const path = freshPath(opts.intoDir, `${stem} — ${safeLabel}${ext || '.md'}`);
+  const path = freshPath(opts.intoDir, `${stem} - ${safeLabel}${ext || '.md'}`);
   writeFileSync(path, opts.body, 'utf-8');
   return { path, bytes: opts.body.length, original: opts.originalName };
 }

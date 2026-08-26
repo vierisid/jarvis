@@ -358,7 +358,7 @@ describe('writeRevision writes beside, never over', () => {
     mkdirSync(dir, { recursive: true });
     const original = put('deck.html', '<h1>old</h1>');
     const r = writeRevision({ intoDir: dir, originalName: 'deck.html', label: 'rewritten', body: '<h1>new</h1>' });
-    expect(r.path).toBe(join(dir, 'deck — rewritten.html'));
+    expect(r.path).toBe(join(dir, 'deck - rewritten.html'));
     expect(readFileSync(r.path, 'utf-8')).toBe('<h1>new</h1>');
     expect(readFileSync(original, 'utf-8')).toBe('<h1>old</h1>');
   });
@@ -368,7 +368,7 @@ describe('writeRevision writes beside, never over', () => {
     writeRevision({ intoDir: dir, originalName: 'deck.html', label: 'rewritten', body: 'one' });
     const second = writeRevision({ intoDir: dir, originalName: 'deck.html', label: 'rewritten', body: 'two' });
     expect(second.path).toContain('(2)');
-    expect(readFileSync(join(dir, 'deck — rewritten.html'), 'utf-8')).toBe('one');
+    expect(readFileSync(join(dir, 'deck - rewritten.html'), 'utf-8')).toBe('one');
   });
 });
 

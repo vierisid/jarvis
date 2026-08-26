@@ -1362,7 +1362,7 @@ describe('D43, one real piece of work', () => {
       file: 'pitch.md', change: 'it never says who it is for',
     }, r.deps);
     expect(res!.message).toContain('We sell things to studios');
-    expect((r.proposals.at(-1) as { as: string }).as).toBe('pitch — rewritten.md');
+    expect((r.proposals.at(-1) as { as: string }).as).toBe('pitch - rewritten.md');
   });
 
   test('the rewrite is a new file and theirs is byte-identical afterwards', async () => {
