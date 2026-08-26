@@ -555,6 +555,8 @@ describe('the reader lands its findings through the conversation, not beside it'
       facts: [{ about: 'Bowman & Co', detail: 'Renews in October.' }],
     });
     expect(result.landed).toBe(1);
+    // What goes BACK to the reader agent is the bare name: it just wrote the
+    // fact and does not need it read out again.
     expect(result.names).toEqual(['Bowman & Co (client)']);
 
     // The same broadcast the conversation's own `remember` makes, so the
@@ -570,6 +572,21 @@ describe('the reader lands its findings through the conversation, not beside it'
     expect(entity.source).not.toBe(TRIAL_VAULT_SOURCE);
     rmSync(folder, { recursive: true, force: true });
     void manager; void ws;
+  });
+
+  test('D44: a name the reader has never seen still arrives with its fact attached', async () => {
+    const { run, actions, folder } = await readingManager();
+    actions.readerFound!({
+      entities: [{ name: 'Northwind', type: 'project', role: 'client' }],
+      facts: [{ about: 'Northwind', detail: 'Renews in October, deliverable due 14/09.' }],
+    });
+    // This list is the input to the five beats below the read, and a bare
+    // "Northwind (client)" is nothing for the tasks beat to work with. The
+    // dated commitment is the whole value: a founder never volunteers it,
+    // because as far as they are concerned it is already written down.
+    const res = await run('reading_so_far');
+    expect(res).toContain('Northwind (client): Renews in October, deliverable due 14/09.');
+    rmSync(folder, { recursive: true, force: true });
   });
 
   test('a fact about a name they already gave you comes back as the fact, not just the name', async () => {

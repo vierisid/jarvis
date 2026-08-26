@@ -423,9 +423,18 @@ export class TrialConductorManager<W> {
       // list is built from BOTH: the name, plus what was just learned about
       // it. `factCount` is only non-zero for facts that were genuinely new,
       // so a document repeating itself does not pad the count.
+      //
+      // D44 is why the fact now rides along for NEW names too. This list used
+      // to have one reader: the model, saying some of it back out loud, where
+      // a name it has never heard is news enough on its own. Now it is also
+      // the INPUT to five beats. "Northwind (client)" is nothing for the tasks
+      // beat to work with; "Northwind (client): renews in October, deliverable
+      // due 14/09" is two real tasks and a date on their calendar that nothing
+      // else knows about, and those are precisely the commitments a founder
+      // never volunteers because they are already written down somewhere.
       const label = e.role ? `${e.name} (${e.role})` : e.name;
       const said = TrialConductorManager.factsFor(found, e.name);
-      const line = !e.isNew && said ? `${label}: ${said}` : label;
+      const line = said ? `${label}: ${said}` : label;
       if (!entry.reader.found.includes(line)) {
         entry.reader.found.push(line);
         names.push(label);

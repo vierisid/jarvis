@@ -491,10 +491,20 @@ function FilesCard({ p }: { p: FilesProposal }) {
           <div className="tc-more">and {p.willRead - p.sample.length} more</div>
         )}
       </Group>
+      {/* "or sent anywhere" used to be in this sentence and is now gone. The
+          reader is a language model: it reads their documents the same way the
+          realtime session hears their voice, so that clause was a promise the
+          design never made and the code cannot keep. Under D44 the card is on
+          screen at minute three instead of minute forty, on a tenth of the
+          credit, which makes an overclaim here the most expensive sentence in
+          the trial rather than a loose one. The three claims that are left are
+          all true by construction: founder-files.ts imports mkdir, copyFile
+          and writeFile and nothing else, so there is no rename and no unlink
+          in the module to reach for. */}
       <Note label={p.reading ? "so far" : "read only"} tone={p.reading ? "run" : "hold"}>
         {p.reading
           ? `${p.found ?? 0} things about your company, and nothing has been changed.`
-          : "Nothing is moved, changed, deleted or sent anywhere. It reads, and it stops when you say."}
+          : "Nothing of yours is moved, changed or deleted. It reads, and it stops when you say."}
       </Note>
     </>
   );
