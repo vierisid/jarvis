@@ -838,6 +838,38 @@ describe('D41, goals: a tree is not a plan until it has a starting line', () => 
     // Already past it is 1.0, not 1.6.
     expect(baselineScore({ title: 'x', target: '40', today: '64' })).toBe(1);
   });
+
+  test('a number to get UNDER is not scored as if it were a number to reach', async () => {
+    // The one that matters: churn at 9% against a 4% target is a quarter of
+    // the way there. Scored naively it reads 2.25, clamps to 1.0, and the
+    // goals room tells the founder the hardest thing on their tree is done.
+    expect(baselineScore({ title: 'Month three churn under 4%', target: '4%', today: 'about 9%' })).toBeCloseTo(4 / 9, 5);
+    expect(baselineScore({ title: 'Month three churn under 4%', target: '4%', today: '3%' })).toBe(1);
+    expect(baselineScore({ title: 'Burn below 15k a month', target: '15000', today: '18400' })).toBeCloseTo(15 / 18.4, 3);
+    expect(baselineScore({ title: 'Reply in less than 2 hours', target: '2', today: '6' })).toBeCloseTo(1 / 3, 5);
+    expect(baselineScore({ title: 'Cut the review cycle to 3 days', target: '3', today: '9' })).toBeCloseTo(1 / 3, 5);
+    // And a growth target is still a growth target.
+    expect(baselineScore({ title: '40 paying customers', target: '40', today: '64' })).toBe(1);
+    expect(baselineScore({ title: '12 booked demos a month', target: '12', today: '4' })).toBeCloseTo(1 / 3, 5);
+  });
+
+  test('the churn key result lands in the vault with the honest score on it', async () => {
+    const s = opened();
+    const r = recorder();
+    await executeBeatTool(s, 'propose_goals', {
+      objective: 'Keep the customers we win',
+      key_results: [
+        { title: 'Month three churn under 4%', target: '4%', today: 'about 9%' },
+        { title: 'Twelve reference calls done', target: '12', today: '3' },
+      ],
+      first_move: { what: 'Call the three who left', under: 'Month three churn under 4%', due: 'friday' },
+    }, r.deps);
+    answers(s);
+    await executeBeatTool(s, 'create_goals', {}, r.deps);
+    const churn = findGoals({ level: 'key_result' }).find((g) => g.title.startsWith('Month three'))!;
+    expect(churn.score).toBeCloseTo(4 / 9, 5);
+    expect(churn.score).toBeLessThan(1);
+  });
 });
 
 describe('D41, tasks: the founder picks the one they do first', () => {

@@ -1453,12 +1453,31 @@ function createGoals(s: BeatsSession, deps: BeatDeps): BeatToolResult {
  * Only computed when both ends are actually numbers the founder said; anything
  * else starts at zero, because a made-up starting position is worse than an
  * honest one. "about three" against "40" is 0.075 and that is correct.
+ *
+ * Direction matters and getting it wrong is not a rounding error. "Month three
+ * churn under 4%", sitting at 9% today, is a quarter of the way there and NOT
+ * finished, but a naive today/target reads 2.25, clamps to 1.0, and tells a
+ * founder on the goals room's own progress bar that the hardest thing on their
+ * tree is already done. So a ceiling is detected from the words they used and
+ * scored the other way up.
  */
 export function baselineScore(kr: KeyResultProposal): number {
   const today = firstNumber(kr.today);
   const target = firstNumber(kr.target ?? kr.measure);
-  if (today === null || target === null || target === 0) return 0;
+  if (today === null || target === null) return 0;
+  if (isCeiling(kr)) {
+    if (today <= target) return 1;
+    return today === 0 ? 1 : Math.min(Math.max(target / today, 0), 1);
+  }
+  if (target === 0) return 0;
   return Math.min(Math.max(today / target, 0), 1);
+}
+
+/** Is this a number to get UNDER rather than a number to reach? Read off the
+ *  founder's own words, which is the only signal there is. */
+function isCeiling(kr: KeyResultProposal): boolean {
+  const text = `${kr.title} ${kr.target ?? ''} ${kr.measure ?? ''}`.toLowerCase();
+  return /\b(under|below|less than|fewer than|no more than|at most|down to|reduce|cut|lower)\b|<\s*\d/.test(text);
 }
 
 function firstNumber(text: string | undefined): number | null {

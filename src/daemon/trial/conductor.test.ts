@@ -292,6 +292,44 @@ describe('conclude_opening, the seam (D17)', () => {
   });
 });
 
+describe('a new fact about a name they already gave you (D22)', () => {
+  afterEach(() => closeDb());
+
+  test('puts them back on the ticker, so the founder sees it learning', () => {
+    initDatabase(':memory:');
+    const session = createConductorSession(1000);
+    const pushes: LandedEntity[][] = [];
+    const deps = { onEntitiesLanded: (l: LandedEntity[]) => pushes.push(l) };
+
+    executeConductorTool(session, 'remember', { entities: [{ name: 'Ana', type: 'person', role: 'co-founder' }] }, deps, 1500);
+    expect(pushes).toHaveLength(1);
+
+    // Later, out of one of their own files, something new about Ana.
+    executeConductorTool(session, 'remember', {
+      facts: [{ about: 'Ana', detail: 'Runs the front end two days a week.' }],
+    }, deps, 1600);
+    expect(pushes).toHaveLength(2);
+    expect(pushes[1]![0]).toMatchObject({ name: 'Ana', isNew: false, factCount: 1, role: 'co-founder' });
+    // One Ana in the vault, not two.
+    expect(findEntities({ name: 'Ana' })).toHaveLength(1);
+  });
+
+  test('a fact it has already recorded does NOT flash them up again', () => {
+    initDatabase(':memory:');
+    const session = createConductorSession(1000);
+    const pushes: LandedEntity[][] = [];
+    const deps = { onEntitiesLanded: (l: LandedEntity[]) => pushes.push(l) };
+
+    executeConductorTool(session, 'remember', { entities: [{ name: 'Ana', type: 'person' }] }, deps, 1500);
+    executeConductorTool(session, 'remember', { facts: [{ about: 'Ana', detail: 'Front end.' }] }, deps, 1600);
+    expect(pushes).toHaveLength(2);
+    // The model circles back and says the same thing again.
+    executeConductorTool(session, 'remember', { facts: [{ about: 'Ana', detail: 'front END.' }] }, deps, 1700);
+    expect(pushes).toHaveLength(2);
+    expect(findFacts({ subject_id: findEntities({ name: 'Ana' })[0]!.id })).toHaveLength(1);
+  });
+});
+
 describe("the reader's findings are told apart from what they said (D42)", () => {
   afterEach(() => closeDb());
 

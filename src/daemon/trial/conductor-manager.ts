@@ -299,17 +299,30 @@ export class TrialConductorManager<W> {
     const fresh = entry.session.landed.slice(before);
     const names: string[] = [];
     for (const e of fresh) {
+      // A fact about a name they gave you an hour ago is the most striking
+      // finding there is, and it is a fact rather than a new entity, so the
+      // list is built from BOTH: the name, plus what was just learned about
+      // it. `factCount` is only non-zero for facts that were genuinely new,
+      // so a document repeating itself does not pad the count.
       const label = e.role ? `${e.name} (${e.role})` : e.name;
-      if (!entry.reader.found.includes(label)) {
-        entry.reader.found.push(label);
+      const said = TrialConductorManager.factsFor(found, e.name);
+      const line = !e.isNew && said ? `${label}: ${said}` : label;
+      if (!entry.reader.found.includes(line)) {
+        entry.reader.found.push(line);
         names.push(label);
       }
     }
-    // Facts landing on an entity that was already known are real findings too,
-    // and they are the ones a founder is most surprised by. Counted through the
-    // fact tally rather than the entity list.
-    const facts = Array.isArray(found.facts) ? found.facts.length : 0;
-    return { landed: names.length || (facts > 0 ? facts : 0), names };
+    return { landed: names.length, names };
+  }
+
+  /** What this call said about `name`, joined, for the running list. */
+  private static factsFor(found: FoundEntities, name: string): string {
+    const lower = name.toLowerCase();
+    return (found.facts ?? [])
+      .filter((f) => (f.about ?? '').trim().toLowerCase() === lower)
+      .map((f) => (f.detail ?? '').trim())
+      .filter(Boolean)
+      .join(' ');
   }
 
   private readerFinished(entry: Entry<W>, summary: string | null): void {

@@ -241,30 +241,40 @@ function WorkflowCard({ p }: { p: WorkflowProposal }) {
    during a trial they are: the daemon clamps to 6 whatever is said out loud
    (D32), and a ladder that looked climbable would be a lie about that. */
 
-const RUNGS: { upTo: number; buys: string }[] = [
-  { upTo: 2, buys: "read your things" },
-  { upTo: 4, buys: "write and change them, send you a message" },
-  { upTo: 6, buys: "run a command, open a browser, drive an app" },
-  { upTo: 8, buys: "send email as you, install software" },
-  { upTo: 10, buys: "pay for things, delete things" },
+/**
+ * One clause per action category rather than one per rung.
+ *
+ * It used to be per rung, which was fine while the only thing on this card was
+ * a number. It is not fine now that the founder carves categories out: a card
+ * that said "without asking: send you a message" directly above "still needs
+ * your yes: messages sent as you" would be contradicting itself in the one
+ * beat that is entirely about what Jarvis is and is not allowed to do.
+ *
+ * `needs` mirrors AUTHORITY_REQUIREMENTS in src/roles/authority.ts, and the
+ * ids mirror CARVE_OUT_CATEGORIES in src/daemon/trial/beats.ts.
+ */
+const CLAUSES: { id: string; needs: number; buys: string; kept: string }[] = [
+  { id: "read_data", needs: 1, buys: "read your things", kept: "reading your things" },
+  { id: "write_data", needs: 3, buys: "write and change them", kept: "changes to your files" },
+  { id: "send_message", needs: 3, buys: "send you a message", kept: "messages sent as you" },
+  { id: "execute_command", needs: 5, buys: "run a command", kept: "commands on your machine" },
+  { id: "access_browser", needs: 5, buys: "open a browser", kept: "a browser in your accounts" },
+  { id: "control_app", needs: 5, buys: "drive an app", kept: "apps being controlled" },
+  { id: "send_email", needs: 7, buys: "send email as you", kept: "send email as you" },
+  { id: "install_software", needs: 7, buys: "install software", kept: "install software" },
+  { id: "make_payment", needs: 9, buys: "pay for things", kept: "pay for things" },
+  { id: "delete_data", needs: 9, buys: "delete things", kept: "delete things" },
 ];
 
 const TRIAL_CEILING = 6;
 
-/** The carve-outs, in the founder's words rather than the category names.
- *  Mirrors CARVE_OUT_CATEGORIES in src/daemon/trial/beats.ts. */
-const CARVE_OUT_SAYS: Record<string, string> = {
-  send_message: "messages sent as you",
-  execute_command: "commands on your machine",
-  write_data: "changes to your files",
-  access_browser: "a browser in your accounts",
-  control_app: "apps being controlled",
-};
-
 function AuthorityCard({ p }: { p: AuthorityProposal }) {
-  const buys = RUNGS.filter((r) => r.upTo <= ceilTo(p.level)).map((r) => r.buys);
-  const notYet = RUNGS.filter((r) => r.upTo > ceilTo(p.level)).map((r) => r.buys);
-  const kept = (p.alwaysAsk ?? []).map((id) => CARVE_OUT_SAYS[id] ?? id);
+  const carved = new Set(p.alwaysAsk ?? []);
+  // A category they carved out is NOT something it can do without asking,
+  // whatever the number says, so it moves across rather than appearing twice.
+  const buys = CLAUSES.filter((c) => c.needs <= p.level && !carved.has(c.id)).map((c) => c.buys);
+  const kept = CLAUSES.filter((c) => carved.has(c.id)).map((c) => c.kept);
+  const notYet = CLAUSES.filter((c) => c.needs > p.level && !carved.has(c.id)).map((c) => c.kept);
   return (
     <>
       <div className="tc-ladder">
@@ -300,11 +310,6 @@ function AuthorityCard({ p }: { p: AuthorityProposal }) {
       </div>
     </>
   );
-}
-
-/** The rung a level sits on, so level 5 shows everything 6 buys. */
-function ceilTo(level: number): number {
-  return RUNGS.find((r) => level <= r.upTo)?.upTo ?? 10;
 }
 
 /* ── D42 · exactly what is about to be read, before they answer ── */

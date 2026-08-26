@@ -550,6 +550,16 @@ describe('the reader lands its findings through the conversation, not beside it'
     void manager; void ws;
   });
 
+  test('a fact about a name they already gave you comes back as the fact, not just the name', async () => {
+    const { run, actions, folder } = await readingManager();
+    // They mentioned Ana in the conversation. The reader finds out what she does.
+    actions.readerFound!({ entities: [{ name: 'Ana', type: 'person', role: 'co-founder' }] });
+    actions.readerFound!({ facts: [{ about: 'Ana', detail: 'Runs the front end two days a week.' }] });
+    const res = await run('reading_so_far');
+    expect(res).toContain('Ana (co-founder): Runs the front end two days a week.');
+    rmSync(folder, { recursive: true, force: true });
+  });
+
   test('the same name in three documents lands once', async () => {
     const { actions, folder } = await readingManager();
     for (let i = 0; i < 3; i++) {

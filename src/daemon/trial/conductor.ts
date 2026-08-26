@@ -484,10 +484,14 @@ function executeRemember(
     // Resolve against the entities landed in THIS call first, then the vault,
     // a fact about someone mentioned two sentences ago must still find them.
     let target = byName.get(about.toLowerCase())?.entity ?? null;
+    /** True when the subject was already in the vault and is not yet on the
+     *  ticker for this call. See where it is used, below. */
+    let resurfaced = false;
     if (!target) {
       try {
         const found = findEntities({ name: about });
         target = found[0] ?? null;
+        resurfaced = target !== null;
       } catch { /* fall through */ }
     }
     if (!target) {
@@ -520,6 +524,23 @@ function executeRemember(
       // room is meant to show back to them.
       createFact(target.id, 'said', detail, { confidence: 0.9, source });
       factsSaved++;
+      if (resurfaced) {
+        // Known already, but something NEW has just been learned about it, so
+        // it belongs on the ticker. D22 is "the founder watches it learning",
+        // and the most striking moment of D42 is a fact about a person they
+        // named an hour ago turning up out of one of their own documents.
+        // Without this the entity resolves silently and nothing moves on
+        // their screen. Deliberately AFTER the duplicate check: the model
+        // repeats itself as the conversation circles back, and a name
+        // flashing up again for a fact that was already known is noise.
+        byName.set(about.toLowerCase(), { entity: target, landedIdx: landed.length });
+        landed.push({
+          id: target.id, name: target.name, type: target.type,
+          ...(typeof target.properties?.role === 'string' ? { role: target.properties.role } : {}),
+          isNew: false, factCount: 0,
+        });
+        resurfaced = false;
+      }
       const idx = byName.get(about.toLowerCase())?.landedIdx;
       if (idx !== undefined && landed[idx]) landed[idx]!.factCount++;
     } catch (err) {
