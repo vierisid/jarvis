@@ -1671,6 +1671,31 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     // call (the proxy filters per key, so there is no hardcoded list). The
     // provider is built from the system-owned config.yaml block — the route
     // takes no credentials and never echoes the base_url or key back.
+    /**
+     * This instance's hosted usage meter — % of each window used and when they
+     * reset (docs/LLM.md on the control plane, "Windows + meters").
+     *
+     * Hosted-only, like its neighbour below: a self-hosted install has no key,
+     * no plan and no windows, so 503 is the honest answer rather than zeros.
+     *
+     * Degrades to `{ ok: false }` rather than throwing, and never carries the
+     * upstream body — the control-plane host is withheld here for the same
+     * reason the catalog route withholds the proxy's.
+     */
+    '/api/llm/budget': {
+      GET: async () => {
+        const { hasUsejarvisAi } = await import('./usejarvis-ai.ts');
+        if (!hasUsejarvisAi(ctx.config)) {
+          return error('The usage meter is only available on hosted installs.', 503);
+        }
+        const { readHostedUsage } = await import('./hosted-usage.ts');
+        const meter = await readHostedUsage(ctx.config);
+        return meter
+          ? json({ ok: true, meter })
+          : json({ ok: false, error: 'Usage is unavailable right now' });
+      },
+    },
+
     '/api/config/llm/usejarvis/models': {
       GET: async () => {
         const { hasUsejarvisAi } = await import('./usejarvis-ai.ts');

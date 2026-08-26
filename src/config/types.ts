@@ -456,6 +456,21 @@ export type JarvisConfig = {
     base_url?: string;
     api_key?: string;
     /**
+     * Where this instance reads its OWN usage meter, and how it proves it is
+     * itself (control plane: POST /api/llm/instance-usage).
+     *
+     * In THIS block rather than under `google` — where `instance_id` also
+     * appears — because the meter is hosted-only and this block is exactly the
+     * hosted marker, while the google fields exist only when Google is
+     * configured. A hosted tenant who never connects Google still has a meter.
+     *
+     * All three or none: a partial set cannot authenticate, and treating it as
+     * present would poll a control plane that answers 401 on a timer.
+     */
+    usage_url?: string;
+    instance_id?: string;
+    usage_secret?: string;
+    /**
      * OPT-IN for Anthropic prompt-cache breakpoints on hosted LLM calls
      * (margin-critical when on: cached reads bill at ~0.1x fresh input).
      * Absent/false means OFF.
