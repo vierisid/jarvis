@@ -307,6 +307,17 @@ describe('D16, the order the beats happen in', () => {
     expect(res!.message).toContain('reading_so_far');
     expect(res!.message).toContain('Keep talking');
     expect(findGoals({})).toHaveLength(0);
+
+    // And once the reader HAS landed something, reaching ahead is answered
+    // with the beat they are actually standing in rather than a closed door.
+    // Nothing forces a model to call `reading_so_far`, so this is the backstop
+    // on the one new way D44 could leave a session stuck.
+    r.reader = { found: ['Northwind (client): renews in October'], finished: true, summary: 'x' };
+    const nudged = await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
+    expect(nudged!.message).toContain('Their files came back while you were talking');
+    expect(nudged!.message).toContain('propose_workspace');
+    expect(nudged!.message).toContain('Northwind (client): renews in October');
+    expect(findGoals({})).toHaveLength(0);
   });
 
   test('a finished beat stays open, so a task remembered later still lands', async () => {

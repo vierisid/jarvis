@@ -1753,11 +1753,33 @@ export async function executeBeatTool(
     // the model has reached ahead to their quarter while the reader is still
     // working. Telling it only "not yet" leaves it with nothing to do, which
     // is how a conversation stalls at minute four.
-    const hint = now === 'workspace' && s.files && !beatIsDone(s, 'workspace')
-      ? ' Their files are still being read. Keep talking to them and call `reading_so_far` as you go; ' +
-        'it will hand you what comes next the moment there is something to say.'
-      : ' Finish that with them first; this will open when it does.';
-    return { message: `Not yet. You are in the ${now} part of the work, not ${beat}.${hint}` };
+    //
+    // The workspace brief normally arrives from `reading_so_far`, and nothing
+    // in this design forces a model to call that. So a model that reaches
+    // ahead INSTEAD of checking on the reader gets the beat it is actually
+    // standing in, with the findings in it, rather than a closed door: the
+    // stall this removes is the only new way D44 can leave a session stuck.
+    if (now === 'workspace' && s.files && !beatIsDone(s, 'workspace')) {
+      const files = findingsOf(s, deps);
+      if (files.found.length > 0) {
+        return {
+          message:
+            `Not ${beat} yet. Their files came back while you were talking and there is something to ` +
+            `do with what is in them first.\n\n${onward(s, deps)}`,
+        };
+      }
+      return {
+        message:
+          `Not yet. You are in the ${now} part of the work, not ${beat}. Their files are still being ` +
+          'read. Keep talking to them and call `reading_so_far` as you go; it will hand you what comes ' +
+          'next the moment there is something to say.',
+      };
+    }
+    return {
+      message:
+        `Not yet. You are in the ${now} part of the work, not ${beat}. Finish that with them first; ` +
+        'this will open when it does.',
+    };
   }
 
   switch (name) {
