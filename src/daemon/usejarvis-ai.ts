@@ -240,6 +240,87 @@ function storedProviderChoice(stored: unknown): boolean {
  * two. `loadStored` is injectable for tests; the default reads the vault DB
  * (open in every runtime caller: boot, reload appliers, API routes).
  */
+/**
+ * The BINDING view of `voice.realtime.enabled`.
+ *
+ * Realtime is a paid slot on a hosted plan (`llm_profile_slots.slot =
+ * 'realtime'` — the one slot REQUIRED_LLM_SLOTS leaves optional). A tenant
+ * whose plan includes it should get it; today they never do, because
+ * `voice.realtime.enabled` defaults to false, the only thing that flips it is
+ * the JARVIS_REALTIME_VOICE env var, and the provisioner sets neither. The
+ * hosted branch of resolveRealtimeVoice — which derives the wss:// endpoint and
+ * dials the uj-realtime alias — has therefore never run in production.
+ *
+ * Same three rules as effectiveSttForBinding above, and for the same reasons:
+ *  - not hosted → untouched. A BYO-key user keeps the explicit opt-in; realtime
+ *    spends THEIR OpenAI money and must never switch itself on.
+ *  - the user recorded a choice → it wins, in both directions.
+ *  - otherwise → on, and the PLAN decides per session.
+ *
+ * ## Why the plan is not read here
+ *
+ * It cannot be, and it should not be. The `usejarvis_ai` block is
+ * plan-INDEPENDENT by design (see the renderer in the control plane): per-plan
+ * resolution happens at the proxy via aliases, so a plan change never rewrites
+ * an instance's config. Encoding the entitlement in the file would break that
+ * and require new machinery to re-render and push a config on every upgrade and
+ * downgrade — with an instance left silently wrong whenever that push failed.
+ *
+ * The authority is `hostedRealtimeIncluded` (daemon/realtime-gate.ts), which
+ * asks the key-scoped catalog whether the plan includes uj-realtime. It is
+ * already written, cached, and deliberately conservative about its own
+ * failures. This function only decides whether to ASK.
+ *
+ * ## Why a binding view rather than a mutation
+ *
+ * Writing the default into `config.voice` would let a dashboard voice save
+ * read-modify-write it back as an explicit user choice — pinning realtime on
+ * for a tenant who later loses it. Same hazard the tier defaults are kept out
+ * of `config.llm` to avoid: runtime defaults stay out of every persistence path
+ * by construction.
+ */
+export function effectiveRealtimeEnabled(
+  config: JarvisConfig,
+  loadStored: (section: 'voice') => unknown = loadUserSection,
+): boolean {
+  const configured = config.voice?.realtime?.enabled === true;
+  if (!hasUsejarvisAi(config)) return configured;
+  // An explicit TRUE needs no disambiguation, and must not cost a vault read:
+  // DEFAULT_CONFIG says false, so a true in the merged config can only have
+  // come from the user or from JARVIS_REALTIME_VOICE. Only FALSE is ambiguous.
+  if (configured) return true;
+  let choice: boolean | null = null;
+  try {
+    choice = storedRealtimeChoice(loadStored('voice'));
+  } catch (err) {
+    // The vault is the only place the user's answer lives, so an unreadable
+    // one means we cannot tell "declined" from "never asked". Fall back to the
+    // merged config rather than the hosted default: turning realtime ON for
+    // someone who may have switched it off is the worse of the two mistakes,
+    // and it opens a billed audio session to do it.
+    console.warn('[UsejarvisAI] could not read the stored voice section; leaving realtime as configured:', err);
+    return configured;
+  }
+  return choice ?? true;
+}
+
+/**
+ * The user's own answer, or null if they never gave one.
+ *
+ * Read from the STORED `cfg.voice` row, not the merged config: DEFAULT_CONFIG
+ * sets `enabled: false`, so the in-memory value cannot tell "turned it off"
+ * from "never touched" — the same trap effectiveTtsForBinding documents for
+ * Edge being the default TTS provider. Only a boolean actually persisted under
+ * `realtime.enabled` counts as an answer.
+ */
+function storedRealtimeChoice(stored: unknown): boolean | null {
+  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return null;
+  const rt = (stored as Record<string, unknown>).realtime;
+  if (typeof rt !== 'object' || rt === null || Array.isArray(rt)) return null;
+  const enabled = (rt as Record<string, unknown>).enabled;
+  return typeof enabled === 'boolean' ? enabled : null;
+}
+
 export function effectiveSttForBinding(
   config: JarvisConfig,
   loadStored: (section: 'stt' | 'tts') => unknown = loadUserSection,

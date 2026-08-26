@@ -12,6 +12,7 @@ import { SecretStorageError } from './section-secrets.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import { resolveRealtimeVoice, DEFAULT_BLOCKED_CATEGORIES } from '../config/realtime.ts';
+import { effectiveRealtimeEnabled } from './usejarvis-ai.ts';
 import { hasUsejarvisAi, effectiveSttForBinding, effectiveTtsForBinding, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
 import { cachedRealtimeVerdict } from './realtime-gate.ts';
 import type { EntityType } from '../vault/entities.ts';
@@ -2770,15 +2771,19 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         // the dashboard polls this route, and a fetching gate here would turn
         // that poll into sustained catalog traffic. An unknown verdict stays
         // available, matching the gate's own advisory-allow stance.
+        // The BINDING view, not the raw field: on a hosted install a tenant who
+        // never chose gets realtime on, and reporting the stored false here
+        // would show an off toggle for a feature that is actually running.
+        const enabledNow = effectiveRealtimeEnabled(ctx.config);
         let available = false;
         try {
-          const res = resolveRealtimeVoice(ctx.config);
+          const res = resolveRealtimeVoice(ctx.config, enabledNow);
           available = res.ok && cachedRealtimeVerdict(res.resolved) !== false;
         } catch { available = false; }
         return json({
           wake_engine: voice?.wake_engine ?? 'openwakeword',
           realtime: {
-            enabled: rt?.enabled ?? false,
+            enabled: enabledNow,
             model: rt?.model ?? 'gpt-realtime-2',
             voice: rt?.voice ?? null,
             reasoning_effort: rt?.reasoning_effort ?? 'low',

@@ -1,4 +1,4 @@
-import type { JarvisConfig, RealtimeReasoningEffort } from './types.ts';
+import type { JarvisConfig, RealtimeReasoningEffort, RealtimeVoiceConfig } from './types.ts';
 import { IMPACT_MAP, type ActionCategory } from '../roles/authority.ts';
 
 /**
@@ -83,10 +83,28 @@ function findOpenAIProviderKey(config: JarvisConfig): string {
  */
 export function resolveRealtimeVoice(
   config: JarvisConfig,
+  /**
+   * Whether realtime is switched on, as the BINDING view sees it
+   * (daemon/usejarvis-ai.ts effectiveRealtimeEnabled): a hosted tenant who
+   * never chose gets it on and the plan gate decides per session, while a
+   * BYO-key user keeps the explicit opt-in because realtime spends their own
+   * OpenAI money.
+   *
+   * Passed IN rather than read here so this stays a pure function of config —
+   * the binding view needs the vault DB to tell an explicit "off" from the
+   * default false, and this module is imported by paths that have no DB.
+   * Defaults to the raw config value, which is what a caller without the DB
+   * (and every existing test) should see.
+   */
+  enabled: boolean = config.voice?.realtime?.enabled === true,
 ): RealtimeVoiceResolution {
-  const rt = config.voice?.realtime;
+  // Every read below is defaulted, because the block can be legitimately
+  // ABSENT now: a hosted tenant who never opened the Voice tab has no stored
+  // `voice` section at all, and that is precisely the tenant this path exists
+  // to serve. Previously `!rt?.enabled` returned first and narrowed it away.
+  const rt: Partial<RealtimeVoiceConfig> = config.voice?.realtime ?? {};
 
-  if (!rt?.enabled) {
+  if (!enabled) {
     return { ok: false, reason: 'Realtime voice disabled (voice.realtime.enabled is false)' };
   }
 
