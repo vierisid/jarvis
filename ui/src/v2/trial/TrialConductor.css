@@ -295,6 +295,9 @@
 }
 .tc-foot-fuel { margin-left: auto; }
 .tc-foot-seam { color: var(--ok, #2fa45e); }
+/* A page whose credential has lapsed still LOOKS right and every room on it
+   has quietly stopped loading, so it is said rather than left to be found. */
+.tc-foot-stale { color: var(--listen-tx, #c2301f); }
 
 @media (max-width: 900px) {
   .tc-vault { display: none; }

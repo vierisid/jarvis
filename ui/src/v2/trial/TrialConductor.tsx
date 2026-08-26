@@ -330,8 +330,12 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
   // hour long and never reloads. Renew it from in here, starting the moment the
   // layer goes live, because the token was minted before the founder opened the
   // page and some of its ten minutes is already spent. See sessionRenew.ts.
+  //
+  // Handed over to TrialClock at the stand-down, so exactly one thing is doing
+  // it: after the handover this layer has no pebble left to report a failure
+  // through, and the clock is the surface that outlives the conversation.
   useEffect(() => {
-    if (gate !== "live") return;
+    if (gate !== "live" || stoodDown) return;
     let stopped = false;
     const renew = async () => {
       const ok = await renewTrialSession();
@@ -343,7 +347,7 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
       stopped = true;
       window.clearInterval(id);
     };
-  }, [gate]);
+  }, [gate, stoodDown]);
 
   if (gate === "checking") return null;
 
