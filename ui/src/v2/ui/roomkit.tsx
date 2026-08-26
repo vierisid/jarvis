@@ -33,6 +33,42 @@ export function StatsStrip({ items }: { items: { k: string; n: React.ReactNode; 
   );
 }
 
+/* ── Meter ── */
+/* A labelled progress bar. Announced as a real progressbar so the value is not
+   carried by colour alone — the amber/red tones are a second signal, never the
+   only one. `value` may be null ("unavailable"), which renders an empty track
+   rather than a full-looking zero. */
+export function Meter({ label, value, note, tone = "mut" }: {
+  label: React.ReactNode;
+  value: number | null;
+  note?: React.ReactNode;
+  tone?: "mut" | "hold" | "fail";
+}) {
+  const width = value === null ? 0 : Math.max(0, Math.min(100, value));
+  return (
+    <div className="rk-meter">
+      <div className="rk-meter__top">
+        <span className="rk-meter__label">{label}</span>
+        <span className={`rk-meter__val rk-meter__val--${tone}`}>
+          {value === null ? "unavailable" : `${Math.round(value)}%`}
+        </span>
+      </div>
+      <div
+        className="rk-meter__track"
+        role="progressbar"
+        aria-label={typeof label === "string" ? label : undefined}
+        aria-valuenow={value === null ? undefined : Math.round(value)}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuetext={value === null ? "unavailable" : undefined}
+      >
+        <span className={`rk-meter__fill rk-meter__fill--${tone}`} style={{ width: `${width}%` }} />
+      </div>
+      {note && <div className="rk-meter__note">{note}</div>}
+    </div>
+  );
+}
+
 /* ── Tabs ── */
 export function Tabs({ tabs, active, onChange }: { tabs: { key: string; label: string }[]; active: string; onChange: (k: string) => void }) {
   return (
