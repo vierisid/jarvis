@@ -27,7 +27,7 @@
 import { createHash } from 'node:crypto';
 import { getSetting, setSetting } from '../vault/settings.ts';
 import { deepMerge } from '../config/loader.ts';
-import { mergeSTTConfig, mergeTTSConfig } from './config-merge.ts';
+import { mergeSTTConfig, mergeTTSConfig, mergeVoiceConfig } from './config-merge.ts';
 import {
   SECRET_SECTIONS,
   SecretStorageError,
@@ -43,6 +43,7 @@ import {
   WORKFLOW_SYSTEM_KEYS,
   type JarvisConfig,
   type STTConfig,
+  type VoiceConfig,
   type TTSConfig,
   type UserOwnedSection,
 } from '../config/types.ts';
@@ -128,20 +129,34 @@ export function saveUserSection<K extends UserOwnedSection>(
  * absent credential as "delete it". Merging over the bare stripped row would
  * therefore destroy every stored key the patch does not carry (it did, once).
  */
-export function persistUserPatch(section: 'stt' | 'tts', patch: Record<string, unknown>): void {
+export function persistUserPatch(section: 'stt' | 'tts' | 'voice', patch: Record<string, unknown>): void {
   const stored = loadUserSection(section);
   // Cast, don't default: the merge helpers substitute a provider-carrying
   // default for an UNDEFINED base, which would stamp silence into the row.
   // A `{}` base merges cleanly and stays provider-free unless the patch
   // itself carries a choice. Secrets are injected only when a row exists —
   // same orphan rule as mergeUserSettingsIntoConfig.
-  const base = (typeof stored === 'object' && stored !== null && !Array.isArray(stored))
-    ? injectSectionSecrets(section, stored)
+  // `voice` holds no credentials, so it skips the hydration entirely — passing
+  // it to injectSectionSecrets would not type-check, and there is nothing to
+  // rehydrate. stt/tts rows ARE stripped, and merging over the bare row would
+  // destroy every stored key the patch does not carry (it did, once).
+  const usable = typeof stored === 'object' && stored !== null && !Array.isArray(stored);
+  const base = usable
+    ? (isSecretSection(section) ? injectSectionSecrets(section, stored) : stored)
     : {};
   if (section === 'stt') {
     saveUserSection('stt', mergeSTTConfig(base as STTConfig, patch));
-  } else {
+  } else if (section === 'tts') {
     saveUserSection('tts', mergeTTSConfig(base as TTSConfig, patch));
+  } else {
+    // `voice` joined this rule when hosted installs started defaulting
+    // realtime ON for a silent user (usejarvis-ai.ts realtimeEnablement).
+    // Merging a patch over the in-memory section stamps DEFAULT_CONFIG's
+    // `realtime.enabled: false` into the row, which then reads as an explicit
+    // decline — so changing the wake engine, or picking a realtime VOICE from
+    // the dropdown, silently switched realtime off while the user was in the
+    // middle of configuring it.
+    saveUserSection('voice', mergeVoiceConfig(base as VoiceConfig, patch));
   }
 }
 

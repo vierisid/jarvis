@@ -1,6 +1,7 @@
 import type { JarvisConfig, LLMConfig, STTConfig, TTSConfig } from '../config/types.ts';
 import type { HostedVoiceCredentials } from '../comms/voice.ts';
 import { loadUserSection } from './user-settings.ts';
+import { getSetting } from '../vault/settings.ts';
 
 /**
  * Hosted "Usejarvis AI" wiring (the platform's LLM proxy).
@@ -279,16 +280,29 @@ function storedProviderChoice(stored: unknown): boolean {
  * of `config.llm` to avoid: runtime defaults stay out of every persistence path
  * by construction.
  */
-export function effectiveRealtimeEnabled(
+export type RealtimeEnablement =
+  /** The user (or JARVIS_REALTIME_VOICE) said yes. Their BYO key may serve it. */
+  | 'user-on'
+  /** Nobody asked for it; it is on because the hosted plan may include it. A
+   *  session from this state MUST resolve to the hosted alias — see below. */
+  | 'hosted-default'
+  | 'off';
+
+export function realtimeEnablement(
   config: JarvisConfig,
-  loadStored: (section: 'voice') => unknown = loadUserSection,
-): boolean {
+  loadStored: (section: 'voice') => unknown = loadStoredVoice,
+): RealtimeEnablement {
   const configured = config.voice?.realtime?.enabled === true;
-  if (!hasUsejarvisAi(config)) return configured;
+  if (!hasUsejarvisAi(config)) return configured ? 'user-on' : 'off';
   // An explicit TRUE needs no disambiguation, and must not cost a vault read:
   // DEFAULT_CONFIG says false, so a true in the merged config can only have
   // come from the user or from JARVIS_REALTIME_VOICE. Only FALSE is ambiguous.
-  if (configured) return true;
+  if (configured) return 'user-on';
+  // ...except when the env var is SET, where false is not ambiguous at all:
+  // loader.ts documents "0"/"false" as an explicit disable, and the daemon
+  // re-applies env last over every merge. This is the operator's kill switch
+  // for the fleet where realtime just became default-on, so it must survive.
+  if (process.env.JARVIS_REALTIME_VOICE !== undefined) return 'off';
   let choice: boolean | null = null;
   try {
     choice = storedRealtimeChoice(loadStored('voice'));
@@ -297,11 +311,48 @@ export function effectiveRealtimeEnabled(
     // one means we cannot tell "declined" from "never asked". Fall back to the
     // merged config rather than the hosted default: turning realtime ON for
     // someone who may have switched it off is the worse of the two mistakes,
-    // and it opens a billed audio session to do it.
-    console.warn('[UsejarvisAI] could not read the stored voice section; leaving realtime as configured:', err);
-    return configured;
+    // and it opens a billed audio session to do it. Corrupt JSON reaches here
+    // too (loadStoredVoice throws rather than reading as silence), because a
+    // damaged row is not an answer either.
+    warnVaultOnce(err);
+    return configured ? 'user-on' : 'off';
   }
-  return choice ?? true;
+  if (choice === true) return 'user-on';
+  if (choice === false) return 'off';
+  return 'hosted-default';
+}
+
+/**
+ * Corruption must not read as "never asked".
+ *
+ * `loadUserSection` swallows a JSON parse error and returns undefined, which is
+ * indistinguishable from an absent row — and absent means "default it on". A
+ * tenant who explicitly declined, whose row later corrupts, would have realtime
+ * switched back on. Throwing routes it into the fail-closed catch instead.
+ */
+function loadStoredVoice(section: 'voice'): unknown {
+  const raw = getSetting(`cfg.${section}`);
+  if (raw === null) return undefined;
+  try {
+    const parsed = JSON.parse(raw);
+    return parsed === null ? undefined : parsed;
+  } catch {
+    throw new Error(`corrupt JSON in cfg.${section}`);
+  }
+}
+
+/** Once, not per call: GET /api/config/voice is polled every 15s per dashboard
+ *  and every voice_start reads this, so a broken vault would flood the log. */
+let vaultWarned = false;
+function warnVaultOnce(err: unknown): void {
+  if (vaultWarned) return;
+  vaultWarned = true;
+  console.warn('[UsejarvisAI] could not read the stored voice section; leaving realtime as configured:', err);
+}
+
+/** Test seam for the warn-once latch. */
+export function resetRealtimeVaultWarningForTest(): void {
+  vaultWarned = false;
 }
 
 /**

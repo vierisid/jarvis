@@ -179,6 +179,20 @@ export class SettingsReloadCoordinator {
   private postReloadAll: (() => Promise<void>) | null = null;
 
   /**
+   * Re-warm the realtime plan verdict right after the cache is cleared.
+   *
+   * Separate from postReloadAll on purpose: that hook runs AFTER every section
+   * applier, and the appliers take real time. The window this closes is the one
+   * between clearing the cache and the dashboard's next poll, so it has to fire
+   * at the clear, not at the end.
+   */
+  setWarmRealtime(fn: (() => void) | null): void {
+    this.warmRealtime = fn;
+  }
+
+  private warmRealtime: (() => void) | null = null;
+
+  /**
    * Fire-and-forget: schedule a coalesced apply for the section. No-op when
    * the section has no appliers. A repeat call while one is pending restarts
    * the debounce timer — appliers read live config, so latest state wins.
@@ -238,6 +252,14 @@ export class SettingsReloadCoordinator {
       // any cached realtime plan verdict is now suspect. Cheap to drop: the
       // next voice_start re-asks the catalog once and re-caches.
       clearRealtimeGateCache();
+      // ...but re-warm at once rather than waiting for that voice_start. With
+      // realtime default-on for hosted tenants, an empty cache reads as
+      // "available", which puts the browser into raw-PCM capture — and a
+      // refused PCM utterance is DROPPED. Hosted ops SIGHUP us routinely
+      // (Google deliver/revoke, and the key rotation that carries a plan
+      // change), so without this the lost utterance recurs on every one of
+      // them for any tenant with no pebble sidecar to re-advertise.
+      if (this.warmRealtime) this.warmRealtime();
 
       const changed = RELOAD_SECTIONS.filter((s) => this.snapshot(s) !== before.get(s));
       // The hosted deliver/revoke ops write the tokens file and SIGHUP us; the

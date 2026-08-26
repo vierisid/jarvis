@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import {
+  ageRealtimeGateCacheForTest,
   cachedRealtimeVerdict,
   clearRealtimeGateCache,
   hostedRealtimeIncluded,
+  settleRealtimeGateForTest,
   warmRealtimeGate,
 } from './realtime-gate.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
@@ -45,8 +47,11 @@ function catalog(ids: string[]) {
   return () => calls;
 }
 
-/** The warm is fire-and-forget; let its in-flight promise settle. */
-const settle = () => new Promise((r) => setTimeout(r, 0));
+/** The warm is fire-and-forget; await the actual in-flight request rather than
+ *  a bare setTimeout(0), which only works while the mocked body resolves inside
+ *  one macrotask flush — and whose failure mode is a test that passes against
+ *  an unsettled fetch. */
+const settle = () => settleRealtimeGateForTest();
 
 describe('warming the plan gate', () => {
   test('a plan WITHOUT realtime is known before anyone speaks', async () => {
@@ -105,5 +110,53 @@ describe('warming the plan gate', () => {
     warmRealtimeGate(hosted());
     await settle();
     expect(calls()).toBe(1);
+  });
+});
+
+describe('the cache is cleared more often than boot', () => {
+  test('a cleared cache re-warms to the same verdict', async () => {
+    // reloadAll clears this cache on every SIGHUP, which hosted ops do
+    // routinely — including the key rotation that carries a plan change. The
+    // daemon re-warms at the clear rather than waiting for a voice_start.
+    catalog(['uj-chat']);
+    warmRealtimeGate(hosted());
+    await settle();
+    expect(cachedRealtimeVerdict(hosted())).toBe(false);
+
+    clearRealtimeGateCache();
+    expect(cachedRealtimeVerdict(hosted())).toBeNull(); // and starts a fetch
+    await settle();
+    expect(cachedRealtimeVerdict(hosted())).toBe(false);
+  });
+
+  test('a failed warm still heals, because a MISS starts its own fetch', async () => {
+    // The proxy-still-booting case: the warm leaves only an advisory entry
+    // that expires back to nothing, so warming alone would contribute nothing.
+    globalThis.fetch = (async () => { throw new Error('proxy not up yet'); }) as unknown as typeof fetch;
+    warmRealtimeGate(hosted());
+    await settle();
+    clearRealtimeGateCache(); // stand in for the advisory entry expiring away
+
+    catalog(['uj-chat']);
+    expect(cachedRealtimeVerdict(hosted())).toBeNull();
+    await settle();
+    expect(cachedRealtimeVerdict(hosted())).toBe(false);
+  });
+
+  test('a failed refresh does NOT flip a known-excluded plan back to open', async () => {
+    // advisoryAllow used to overwrite unconditionally, so a stale definitive
+    // "excluded" whose background refresh failed read as available for 30s —
+    // flipping the browser into PCM capture and costing an utterance, which is
+    // the exact flap the asymmetric decay exists to prevent.
+    catalog(['uj-chat']);
+    warmRealtimeGate(hosted());
+    await settle();
+    expect(cachedRealtimeVerdict(hosted())).toBe(false);
+
+    ageRealtimeGateCacheForTest(60_000);
+    globalThis.fetch = (async () => { throw new Error('catalog down'); }) as unknown as typeof fetch;
+    expect(cachedRealtimeVerdict(hosted())).toBe(false); // kicks the refresh
+    await settle();
+    expect(cachedRealtimeVerdict(hosted())).toBe(false); // still excluded
   });
 });

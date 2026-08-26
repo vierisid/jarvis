@@ -1,4 +1,5 @@
 import type { JarvisConfig, RealtimeReasoningEffort, RealtimeVoiceConfig } from './types.ts';
+import type { RealtimeEnablement } from '../daemon/usejarvis-ai.ts';
 import { IMPACT_MAP, type ActionCategory } from '../roles/authority.ts';
 
 /**
@@ -84,11 +85,16 @@ function findOpenAIProviderKey(config: JarvisConfig): string {
 export function resolveRealtimeVoice(
   config: JarvisConfig,
   /**
-   * Whether realtime is switched on, as the BINDING view sees it
-   * (daemon/usejarvis-ai.ts effectiveRealtimeEnabled): a hosted tenant who
-   * never chose gets it on and the plan gate decides per session, while a
-   * BYO-key user keeps the explicit opt-in because realtime spends their own
-   * OpenAI money.
+   * Whether realtime is switched on, and on WHOSE authority
+   * (daemon/usejarvis-ai.ts realtimeEnablement).
+   *
+   * The distinction is load-bearing, not bookkeeping. `hosted-default` means
+   * nobody asked for realtime — it is on only because the plan may include it —
+   * so such a session must resolve to the hosted alias and NEVER to a BYO
+   * OpenAI key. Without that, a hosted tenant who added a personal OpenAI
+   * provider for chat would have every voice turn billed to their own account
+   * at ~$0.30/min, ungated (the plan gate skips BYO sessions) and unbudgeted
+   * (they never set a monthly cap), having opted into none of it.
    *
    * Passed IN rather than read here so this stays a pure function of config —
    * the binding view needs the vault DB to tell an explicit "off" from the
@@ -96,7 +102,7 @@ export function resolveRealtimeVoice(
    * Defaults to the raw config value, which is what a caller without the DB
    * (and every existing test) should see.
    */
-  enabled: boolean = config.voice?.realtime?.enabled === true,
+  enablement: RealtimeEnablement = config.voice?.realtime?.enabled === true ? 'user-on' : 'off',
 ): RealtimeVoiceResolution {
   // Every read below is defaulted, because the block can be legitimately
   // ABSENT now: a hosted tenant who never opened the Voice tab has no stored
@@ -104,11 +110,13 @@ export function resolveRealtimeVoice(
   // to serve. Previously `!rt?.enabled` returned first and narrowed it away.
   const rt: Partial<RealtimeVoiceConfig> = config.voice?.realtime ?? {};
 
-  if (!enabled) {
+  if (enablement === 'off') {
     return { ok: false, reason: 'Realtime voice disabled (voice.realtime.enabled is false)' };
   }
 
-  const apiKey = findOpenAIProviderKey(config).trim();
+  // A default-on session spends OUR money at the proxy or it does not happen.
+  // Reading the user's own key here is what would silently bill them.
+  const apiKey = enablement === 'hosted-default' ? '' : findOpenAIProviderKey(config).trim();
 
   // Hosted fallback: no BYO OpenAI key, but the platform block is live — the
   // proxy serves realtime under the plan-gated uj-realtime alias. A user's

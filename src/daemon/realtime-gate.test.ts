@@ -156,14 +156,31 @@ describe('expired definitive refusals', () => {
 });
 
 describe('cachedRealtimeVerdict', () => {
-  test('never fetches, and reports unknown until the gate has run', async () => {
+  test('a MISS answers unknown at once, but starts a fetch so the next read knows', async () => {
+    // The contract changed deliberately. "Never fetch" made the boot warm the
+    // ONLY defence against a cold cache — and reloadAll clears this cache on
+    // every SIGHUP, which hosted ops do routinely. Starting a background fetch
+    // makes the dashboard poll self-healing instead.
     let called = 0;
     globalThis.fetch = (async () => { called++; return catalog('uj-chat'); }) as unknown as typeof fetch;
+    // Still null for THIS read: a poll must never stall on the catalog.
     expect(cachedRealtimeVerdict(hosted())).toBeNull();
-    expect(called).toBe(0);
-    await hostedRealtimeIncluded(hosted());
+    expect(called).toBe(1);
+    await hostedRealtimeIncluded(hosted()); // joins the in-flight request
     expect(cachedRealtimeVerdict(hosted())).toBe(false);
-    expect(called).toBe(1); // the cached read added no traffic
+    expect(called).toBe(1); // ...and added no traffic of its own
+  });
+
+  test('repeated misses while the fetch is in flight do not pile up requests', async () => {
+    // GET /api/config/voice is polled every ~15s per dashboard; a miss that
+    // issued a request per read would turn a UI refresh into catalog traffic,
+    // which is the reason this function is cache-only in the first place.
+    let called = 0;
+    globalThis.fetch = (async () => { called++; return catalog('uj-chat'); }) as unknown as typeof fetch;
+    cachedRealtimeVerdict(hosted());
+    cachedRealtimeVerdict(hosted());
+    cachedRealtimeVerdict(hosted());
+    expect(called).toBe(1);
   });
 
   test('BYO is known-allowed without any catalog', () => {

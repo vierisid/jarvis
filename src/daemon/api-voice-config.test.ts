@@ -7,7 +7,7 @@ import { initDatabase, closeDb } from '../vault/schema.ts';
 import { DEFAULT_CONFIG, type JarvisConfig } from '../config/types.ts';
 import { loadUserSection } from './user-settings.ts';
 import { getSecret } from '../vault/keychain.ts';
-import { effectiveSttForBinding, effectiveTtsForBinding } from './usejarvis-ai.ts';
+import { effectiveSttForBinding, effectiveTtsForBinding, realtimeEnablement } from './usejarvis-ai.ts';
 
 /**
  * Route-level regressions for the voice-config persistence discipline.
@@ -259,5 +259,79 @@ describe('voice config routes: persistence stays silence-preserving', () => {
     expect(body.provider).toBe('usejarvis');
     expect(body.usejarvis_available).toBe(true);
     expect(JSON.stringify(body)).not.toContain('sk-uj-abc123');
+  });
+});
+
+describe('voice config routes: a save must not silently decline realtime', () => {
+  let secretsDir: string;
+  let prevSecretsDir: string | undefined;
+  let prevEnv: string | undefined;
+
+  beforeEach(() => {
+    prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
+    prevEnv = process.env.JARVIS_REALTIME_VOICE;
+    delete process.env.JARVIS_REALTIME_VOICE;
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-api-rt-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
+    closeDb();
+    initDatabase(':memory:');
+  });
+  afterEach(() => {
+    closeDb();
+    if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
+    if (prevEnv === undefined) delete process.env.JARVIS_REALTIME_VOICE;
+    else process.env.JARVIS_REALTIME_VOICE = prevEnv;
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
+
+  test('changing the WAKE ENGINE does not turn realtime off', async () => {
+    // The regression: the route merged the patch over the in-memory section,
+    // which always carries DEFAULT_CONFIG's `realtime.enabled: false`, and
+    // saved the whole thing. That false then reads as an explicit decline.
+    const config = hostedConfig();
+    expect(realtimeEnablement(config)).toBe('hosted-default');
+
+    const routes = createApiRoutes(makeCtx(config));
+    const res = await post(getHandler(routes, '/api/config/voice', 'POST'), '/api/config/voice', {
+      wake_engine: 'webspeech',
+    });
+    expect(res.status).toBe(200);
+
+    const stored = loadUserSection('voice') as { wake_engine?: string; realtime?: { enabled?: unknown } };
+    expect(stored.wake_engine).toBe('webspeech');
+    // The patch never mentioned realtime, so the row must not claim an answer.
+    expect(stored.realtime?.enabled).toBeUndefined();
+    expect(realtimeEnablement(config)).toBe('hosted-default');
+  });
+
+  test('picking a realtime VOICE does not turn realtime off', async () => {
+    // The cruellest version: the user is configuring realtime at the moment it
+    // switches itself off, because the partial patch merges over a base that
+    // carries the default false.
+    const config = hostedConfig();
+    const routes = createApiRoutes(makeCtx(config));
+    const res = await post(getHandler(routes, '/api/config/voice', 'POST'), '/api/config/voice', {
+      realtime: { voice: 'cedar' },
+    });
+    expect(res.status).toBe(200);
+
+    const stored = loadUserSection('voice') as { realtime?: { voice?: string; enabled?: unknown } };
+    expect(stored.realtime?.voice).toBe('cedar');
+    expect(stored.realtime?.enabled).toBeUndefined();
+    expect(realtimeEnablement(config)).toBe('hosted-default');
+  });
+
+  test('an EXPLICIT off is still recorded and still wins', async () => {
+    // The flip side: the discipline must not make the toggle unusable.
+    const config = hostedConfig();
+    const routes = createApiRoutes(makeCtx(config));
+    const res = await post(getHandler(routes, '/api/config/voice', 'POST'), '/api/config/voice', {
+      realtime: { enabled: false },
+    });
+    expect(res.status).toBe(200);
+    const stored = loadUserSection('voice') as { realtime?: { enabled?: unknown } };
+    expect(stored.realtime?.enabled).toBe(false);
+    expect(realtimeEnablement(config)).toBe('off');
   });
 });

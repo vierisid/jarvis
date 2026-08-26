@@ -36,10 +36,20 @@ export function VoiceTab({
           <div>
             <h3 className="v2-set__section-title">Premium Realtime Voice</h3>
             <div className="v2-set__section-sub">
-              Speech-to-speech via OpenAI&apos;s gpt-realtime-2 - lower latency, natural
-              turn-taking, reasons mid-conversation. Reuses the OpenAI provider key from
-              Settings &gt; LLM (you are billed by OpenAI, ~$0.30/min). Off by default;
-              the standard voice pipeline is unaffected.
+              Speech-to-speech - lower latency, natural turn-taking, reasons
+              mid-conversation.{" "}
+              {rt?.hosted ? (
+                <>
+                  Included with your plan and billed as part of it, so there is no
+                  separate key to add and nothing extra to pay.
+                </>
+              ) : (
+                <>
+                  Reuses the OpenAI provider key from Settings &gt; LLM (you are billed by
+                  OpenAI, ~$0.30/min). Off by default.
+                </>
+              )}{" "}
+              The standard voice pipeline is unaffected.
             </div>
           </div>
           <Chip tone={statusChip.tone}>{statusChip.label}</Chip>
@@ -64,8 +74,15 @@ export function VoiceTab({
           <>
             {!rt.available && (
               <p className="v2-set__hint" data-tone="warn">
-                Enabled, but no OpenAI provider is configured. Add one under Settings &gt; LLM.
-                Until then JARVIS uses the standard voice pipeline.
+                {rt.hosted
+                  ? "Live voice is not included in your current plan. JARVIS uses the standard voice pipeline instead."
+                  : "Enabled, but no OpenAI provider is configured. Add one under Settings > LLM. Until then JARVIS uses the standard voice pipeline."}
+              </p>
+            )}
+            {rt.available && rt.enabled_default && (
+              <p className="v2-set__hint">
+                On because your plan includes it. Switch it off here and JARVIS goes back
+                to the standard voice pipeline.
               </p>
             )}
 

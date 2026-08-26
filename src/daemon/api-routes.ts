@@ -12,8 +12,7 @@ import { SecretStorageError } from './section-secrets.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import { resolveRealtimeVoice, DEFAULT_BLOCKED_CATEGORIES } from '../config/realtime.ts';
-import { effectiveRealtimeEnabled } from './usejarvis-ai.ts';
-import { hasUsejarvisAi, effectiveSttForBinding, effectiveTtsForBinding, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
+import { hasUsejarvisAi, effectiveSttForBinding, effectiveTtsForBinding, realtimeEnablement, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
 import { cachedRealtimeVerdict } from './realtime-gate.ts';
 import type { EntityType } from '../vault/entities.ts';
 import type { CommitmentPriority, CommitmentStatus } from '../vault/commitments.ts';
@@ -2774,10 +2773,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         // The BINDING view, not the raw field: on a hosted install a tenant who
         // never chose gets realtime on, and reporting the stored false here
         // would show an off toggle for a feature that is actually running.
-        const enabledNow = effectiveRealtimeEnabled(ctx.config);
+        const enablement = realtimeEnablement(ctx.config);
+        const enabledNow = enablement !== 'off';
         let available = false;
         try {
-          const res = resolveRealtimeVoice(ctx.config, enabledNow);
+          const res = resolveRealtimeVoice(ctx.config, enablement);
           available = res.ok && cachedRealtimeVerdict(res.resolved) !== false;
         } catch { available = false; }
         return json({
@@ -2797,6 +2797,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             // it is so a client can tell "using the default" from an explicit set.
             blocked_categories: rt?.blocked_categories ?? DEFAULT_BLOCKED_CATEGORIES,
             blocked_categories_default: rt?.blocked_categories === undefined,
+            // WHY it is on, so the tab can stop telling a hosted tenant they
+            // are billed by OpenAI at $0.30/min for something their plan
+            // includes, and can name the real reason it is unavailable ("not
+            // in your plan") instead of "no OpenAI provider is configured".
+            // Same shape as blocked_categories_default above: the effective
+            // value plus a flag saying whose answer it is.
+            enabled_default: enablement === 'hosted-default',
+            hosted: hasUsejarvisAi(ctx.config),
             // true when enabled AND an OpenAI provider key resolves (via
             // llm.providers or env) - reflects whether realtime would actually
             // start if voice_start arrived right now.
@@ -2807,15 +2815,20 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         try {
           const body = await req.json() as Record<string, unknown>;
-          const { saveUserSection } = await import('./user-settings.ts');
+          const { persistUserPatch } = await import('./user-settings.ts');
           const { mergeVoiceConfig, validateVoicePatch } = await import('./config-merge.ts');
 
           const validation = validateVoicePatch(body);
           if (!validation.ok) return error(validation.error, 400);
 
+          // Persist the PATCH over the stored row, never the merged in-memory
+          // section: the latter always carries DEFAULT_CONFIG's
+          // `realtime.enabled: false`, and writing that back reads as the user
+          // explicitly declining realtime. The in-memory config is still
+          // updated below for the next voice_start — the two differ on purpose.
+          persistUserPatch('voice', validation.patch as Record<string, unknown>);
           const freshConfig = ctx.config;
           freshConfig.voice = mergeVoiceConfig(freshConfig.voice, validation.patch);
-          saveUserSection('voice', freshConfig.voice);
           // Update in-memory config so the next voice_start resolves with the
           // new settings — resolveRealtimeVoice reads ctx.config live, so no
           // provider hot-reload is needed (unlike TTS/LLM).
