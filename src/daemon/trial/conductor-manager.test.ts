@@ -419,7 +419,9 @@ describe('the finale', () => {
     await run('start_reading');
     // D43: refusable, and a refusal does not stall the conversation.
     await run('move_on', { because: 'they would rather leave their files alone' });
-    await run('spawn_research_agent', { question: 'What the competitors charge', brief: 'Compare published prices.' });
+    await run('propose_research', { question: 'What the competitors charge', brief: 'Compare published prices.' });
+    yes();
+    await run('spawn_research_agent', {});
 
     expect(actions.brief).toEqual({ hour: 7, minute: 30 });
     expect(actions.evening).toBe(19);

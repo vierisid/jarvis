@@ -301,51 +301,92 @@
   .tc-pebble { max-width: 78vw; }
 }
 
-/* ══════ frames 05 to 09 · the thing waiting on their spoken yes ══════
-   One card for all five beats. Right-hand side of the room surface, so the
-   left of the room stays visible: that is where the tree, the board and the
-   flow list actually appear when they say yes (D22).
+/* ══════ frames 05 to 10 · the thing waiting on their spoken yes ══════
+
+   One card for every beat. Right-hand side of the room surface, so the left of
+   the room stays visible: that is where the tree, the board and the flow list
+   actually appear when they say yes (D22).
 
    Nothing in it is clickable, on purpose. The layer is pointer-events: none
    and stays that way; approval is spoken (D19) and a button here would make
-   the conversation optional. */
+   the conversation optional.
+
+   ── Rebuilt 26 August, on the brand book rather than on instinct ──
+
+   Vieri: *"when there is a lot of writing in it, it becomes very confusing and
+   you can't really read."* The fix is structure, not truncation: they are
+   approving what is about to be written into their company, so they have to be
+   able to read all of it.
+
+   What changed, and why each one is off the brand book (`refs/
+   usejarvis-brand-book-FABLE5.html`, sections 03 Type, 04 Colour, 07 Shape,
+   and the `.approve` component in 06):
+
+   - THE SHAPE. `--corner`, the drop's one sharp corner, top-right. The card
+     used a uniform 10px radius, which is the one piece of chrome in the trial
+     that was not carrying the brand's geometry.
+   - THE STRUCTURE. `.approve` is head / body / foot, hairline-separated. So is
+     this now, and the body is the ONLY thing that scrolls: on a long tree,
+     "waiting on you" and 'or just say "yes"' used to scroll off the top and
+     bottom of the very card they belong to.
+   - THE TYPE. The book's scale is display 25 / heading 18 / body 14 / mono 11.5
+     machine / mono 11 label. The card ran at 13.5 / 12 / 11.5 / 9.5 / 8.5,
+     under the system's floor everywhere, with no gap between registers. It now
+     has three, and they are far enough apart to be read as a ranking.
+   - THE COLOUR. Amber is "Asking · the held breath, waiting for your yes",
+     which is exactly this card's state, and the book gives a separate AA text
+     value for it (`--hold-tx`) precisely because the glow value (`--hold`) does
+     not clear contrast as text. The card was using the glow value as text.
+   - THE ROWS. See TrialProposal.tsx: content and machine truth are on separate
+     lines now, so long content cannot squeeze a sentence to one word per line. */
+
 .tc-prop {
   position: absolute;
   right: 26px;
   top: 78px;
-  width: 336px;
+  width: clamp(320px, 25vw, 372px);
   max-height: calc(100vh - 210px);
-  overflow: hidden auto;
-  background: var(--panel);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  /* --raise, not --panel: this is a card lifted OFF the room, and the brand's
+     own approval component sits on the raised surface. It also gives the amber
+     note underneath something to be tinted against. */
+  background: var(--raise);
   border: 1px solid var(--rule);
-  border-left: 2px solid var(--hold, #d08a1f);
-  border-radius: 10px;
-  padding: 11px 14px 12px;
-  box-shadow: 0 16px 40px -18px rgba(20, 30, 45, 0.4);
+  border-left: 2px solid var(--hold, #eaa40e);
+  /* The drop's DNA: one sharp corner, top-right (brand book 07). */
+  border-radius: var(--corner, 14px 3px 14px 14px);
+  box-shadow: var(--sh-lg, 0 3px 8px rgba(20, 30, 45, 0.05), 0 22px 48px -18px rgba(20, 30, 45, 0.24));
   animation: tc-prop-in 0.32s cubic-bezier(0.32, 0.72, 0.24, 1) both;
 }
-:root[data-theme="dark"] .tc-prop { box-shadow: 0 18px 44px -16px rgba(0, 0, 0, 0.7); }
+.tc-prop--working { border-left-color: var(--speak, #2d78ff); }
 .tc-prop--landed { border-left-color: var(--ok, #2fa45e); }
 @keyframes tc-prop-in {
   from { opacity: 0; transform: translateY(-8px); }
   to { opacity: 1; transform: none; }
 }
+
+/* ── the head band, as the brand's `.approve .ah` ── */
 .tc-prop-head {
+  flex: 0 0 auto;
   display: flex;
   align-items: center;
-  gap: 6px;
+  gap: 7px;
+  padding: 11px 15px 10px;
+  border-bottom: 1px solid var(--rule);
   font-family: var(--mono);
-  font-size: 9px;
+  font-size: 9.5px;
   letter-spacing: 0.1em;
   text-transform: uppercase;
   color: var(--ink3);
-  margin-bottom: 10px;
 }
 .tc-prop-dot {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--hold, #d08a1f);
+  width: 6px;
+  height: 6px;
+  /* The mark corner, so even the 6px dot is the right shape. */
+  border-radius: 50% 50% 50% 2px;
+  background: var(--hold, #eaa40e);
   flex-shrink: 0;
 }
 .tc-prop-dot.is-ok { background: var(--ok, #2fa45e); }
@@ -358,88 +399,211 @@
 }
 .tc-prop-wait {
   margin-left: auto;
-  color: var(--hold, #d08a1f);
-  letter-spacing: 0.06em;
+  /* The AA text value, not the glow value. Brand book 04. */
+  color: var(--hold-tx, #8a6206);
+  letter-spacing: 0.08em;
   white-space: nowrap;
   flex-shrink: 0;
 }
-.tc-prop-body { display: flex; flex-direction: column; gap: 9px; }
+
+/* ── the body, and the only thing that scrolls ── */
+.tc-prop-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 13px 15px 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 13px;
+  scrollbar-width: thin;
+}
+.tc-prop-body::-webkit-scrollbar { width: 6px; }
+.tc-prop-body::-webkit-scrollbar-thumb { background: var(--rule); border-radius: 3px; }
+
 .tc-prop-foot {
-  margin-top: 11px;
-  padding-top: 9px;
+  position: relative;
+  flex: 0 0 auto;
+  padding: 9px 15px 11px;
   border-top: 1px solid var(--rule);
   font-family: var(--mono);
-  font-size: 9.5px;
-  color: var(--faint);
-  letter-spacing: 0.04em;
+  font-size: 10px;
+  color: var(--ink3);
+  letter-spacing: 0.06em;
 }
-.tc-prop-landed { font-size: 12.5px; color: var(--ink); line-height: 1.45; }
+/* A long tree is cut off by the card, not ended by it. The fade says so; a
+   scrollbar alone is easy to miss and this card is asking for consent. */
+.tc-prop-foot::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 100%;
+  height: 22px;
+  pointer-events: none;
+  background: linear-gradient(to bottom, transparent, var(--raise));
+}
+.tc-prop-landed { font-size: 13.5px; color: var(--ink); line-height: 1.45; }
 
-/* the objective / flow headline */
-.tc-goal { display: flex; align-items: baseline; gap: 8px; }
-.tc-goal-name {
-  font-size: 13.5px;
+/* ── register one · the decision ────────────────────────────────────
+   What they are being asked to say yes to. One per card, always first, and
+   the only thing on the card at heading weight, so a founder who reads three
+   words has read the right three words. */
+.tc-decision-t {
+  font-size: 16.5px;
   font-weight: 650;
-  letter-spacing: -0.012em;
+  letter-spacing: -0.022em;
+  line-height: 1.24;
   color: var(--ink);
-  line-height: 1.3;
+  text-wrap: balance;
 }
-.tc-sub { font-size: 11.5px; color: var(--ink3); line-height: 1.45; }
+.tc-decision-t.tc-path { font-size: 13px; font-weight: 600; letter-spacing: 0; }
+.tc-decision-s {
+  margin-top: 5px;
+  font-size: 12.5px;
+  line-height: 1.45;
+  color: var(--ink3);
+}
 
-/* key results, tasks, steps: one row shape for all three */
-.tc-rows { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 7px; }
-.tc-rows li {
+/* ── register two · the detail, grouped and labelled ── */
+.tc-group { display: flex; flex-direction: column; gap: 9px; }
+.tc-group-h {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink3);
+  padding-bottom: 7px;
+  border-bottom: 1px solid var(--rule);
+}
+.tc-group-n {
+  margin-left: auto;
+  color: var(--faint);
+  letter-spacing: 0.06em;
+  text-transform: none;
+  text-align: right;
+}
+
+/* One thing, two lines. `tc-item-meta` sits UNDER the sentence and never
+   beside it, which is the whole reason the card was unreadable with real
+   content in it: a nowrap, non-shrinking tag beside the text took the width it
+   asked for and left the sentence one word per line. */
+.tc-item { display: flex; flex-direction: column; gap: 2px; }
+.tc-item-main {
   display: flex;
   align-items: baseline;
   gap: 7px;
-  font-size: 12px;
-  color: var(--ink2);
+  font-size: 13.5px;
   line-height: 1.4;
+  color: var(--ink);
 }
-.tc-rows--steps li { align-items: flex-start; }
-.tc-row-name { flex: 1; min-width: 0; }
-.tc-bullet {
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  border: 1px solid var(--ink3);
-  flex-shrink: 0;
-  transform: translateY(-1px);
-}
-.tc-rows li.is-late .tc-bullet { border-color: var(--listen, #e63b2e); background: var(--listen, #e63b2e); }
-.tc-tag {
+.tc-item.is-late .tc-item-main { color: var(--ink); }
+.tc-item-meta {
   font-family: var(--mono);
-  font-size: 8.5px;
-  letter-spacing: 0.08em;
-  text-transform: lowercase;
-  color: var(--faint);
-  white-space: nowrap;
-  flex-shrink: 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--ink3);
+  /* Wraps. Nothing on this card is allowed to be unbreakable except a path. */
+  overflow-wrap: anywhere;
 }
-.tc-tag.is-late { color: var(--listen, #e63b2e); }
-.tc-never {
+.tc-item-meta b { color: var(--ink); font-weight: 500; font-variant-numeric: tabular-nums; }
+.tc-arrow { color: var(--faint); }
+.tc-missing { color: var(--hold-tx, #8a6206); }
+.tc-flag {
+  flex-shrink: 0;
   font-family: var(--mono);
   font-size: 9.5px;
   line-height: 1.5;
+  letter-spacing: 0.06em;
+  color: var(--faint);
+  min-width: 12px;
+}
+.tc-flag.is-late { color: var(--listen-tx, #c2301f); font-weight: 600; }
+.tc-more { font-family: var(--mono); font-size: 11px; color: var(--faint); }
+.tc-clause { font-size: 13px; line-height: 1.5; color: var(--ink2); }
+/* The clause lists are built by joining category phrases, so the first word is
+   lower case by construction. */
+.tc-clause::first-letter { text-transform: uppercase; }
+.tc-clause.is-no { color: var(--ink3); }
+.tc-because { font-size: 13px; line-height: 1.5; color: var(--ink2); }
+
+/* ── register three · the note ──────────────────────────────────────
+   The sentence that decides whether a reasonable person says yes: the line a
+   flow must never cross, what is not touched, what cannot be taken back. It
+   used to be 9.5px mono at --ink3, the smallest and palest thing on a card
+   whose entire job is informed consent. */
+.tc-note {
+  --note: var(--hold, #eaa40e);
+  --note-tx: var(--hold-tx, #8a6206);
+  border-left: 2px solid color-mix(in srgb, var(--note) 55%, transparent);
+  background: color-mix(in srgb, var(--note) 7%, transparent);
+  border-radius: 2px 9px 9px 2px;
+  padding: 8px 11px 9px;
+}
+/* The two notes that describe something already working are not asking for
+   anything, so they take the speaking blue rather than the held-breath amber. */
+.tc-note.is-run {
+  --note: var(--speak, #2d78ff);
+  --note-tx: var(--speak-tx, #1e5fd8);
+}
+.tc-note-k {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--note-tx);
+  margin-bottom: 3px;
+}
+.tc-note-b { font-size: 12.5px; line-height: 1.48; color: var(--ink2); }
+.tc-note-when {
+  display: block;
+  margin-top: 3px;
+  font-family: var(--mono);
+  font-size: 11px;
   color: var(--ink3);
-  padding-left: 9px;
-  border-left: 1px solid var(--rule);
 }
 
-/* frame 07 · the brief hour */
-.tc-brief { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; }
-.tc-brief-time {
-  font-size: 26px;
+/* frame 07 · both ends of the day, side by side because they are a pair */
+.tc-clocks { display: flex; gap: 10px; }
+.tc-clock {
+  flex: 1;
+  min-width: 0;
+  padding: 10px 11px 11px;
+  border: 1px solid var(--rule);
+  border-radius: var(--corner-sm, 9px 2px 9px 9px);
+  background: var(--panel2);
+}
+.tc-clock-t {
+  font-size: 25px;
   font-weight: 300;
-  letter-spacing: -0.03em;
+  letter-spacing: -0.04em;
+  line-height: 1;
   color: var(--ink);
   font-variant-numeric: tabular-nums;
 }
-.tc-brief-what { display: flex; flex-direction: column; font-size: 12.5px; color: var(--ink); }
-.tc-brief-what span { font-family: var(--mono); font-size: 9px; letter-spacing: 0.08em; color: var(--faint); }
-.tc-brief .tc-sub { width: 100%; }
+.tc-clock-t.is-blank { opacity: 0.32; }
+.tc-clock-k { margin-top: 7px; font-size: 12.5px; color: var(--ink); }
+.tc-clock-s { margin-top: 2px; font-family: var(--mono); font-size: 10px; color: var(--ink3); }
 
-/* frame 09 · the ladder */
+/* frame 09 · the number, then the ladder it sits on */
+.tc-level { display: flex; align-items: baseline; gap: 10px; }
+.tc-level-n {
+  font-size: 34px;
+  font-weight: 700;
+  letter-spacing: -0.05em;
+  line-height: 0.9;
+  color: var(--ink);
+  font-variant-numeric: tabular-nums;
+}
+.tc-level-k {
+  display: flex;
+  flex-direction: column;
+  font-size: 13px;
+  color: var(--ink);
+}
+.tc-level-k span { font-family: var(--mono); font-size: 10px; letter-spacing: 0.1em; color: var(--ink3); }
 .tc-ladder { display: flex; gap: 3px; }
 .tc-rung {
   flex: 1;
@@ -450,61 +614,61 @@
   border-radius: 3px;
   border: 1px solid var(--rule);
   font-family: var(--mono);
-  font-size: 9px;
-  color: var(--faint);
+  font-size: 9.5px;
+  color: var(--ink3);
 }
 /* Granted has to be visibly different from merely reachable, or the founder
    cannot read off the ladder what they are actually giving. */
 .tc-rung.is-granted {
-  background: color-mix(in srgb, var(--hold, #d08a1f) 18%, transparent);
-  border-color: color-mix(in srgb, var(--hold, #d08a1f) 34%, transparent);
+  background: color-mix(in srgb, var(--hold, #eaa40e) 18%, transparent);
+  border-color: color-mix(in srgb, var(--hold, #eaa40e) 34%, transparent);
   color: var(--ink2);
 }
 .tc-rung.is-here {
-  background: var(--hold, #d08a1f);
-  border-color: var(--hold, #d08a1f);
-  color: #fff;
+  background: var(--hold, #eaa40e);
+  border-color: var(--hold, #eaa40e);
+  color: #1a1400;
   font-weight: 700;
 }
 .tc-rung.is-shut { opacity: 0.34; border-style: dashed; }
-.tc-buys { display: flex; flex-direction: column; gap: 7px; }
-.tc-buys > div { display: flex; flex-direction: column; gap: 2px; font-size: 11.5px; color: var(--ink2); line-height: 1.42; }
-.tc-buys > div.is-no { color: var(--ink3); }
-.tc-buys-k {
-  font-family: var(--mono);
-  font-size: 8.5px;
-  letter-spacing: 0.1em;
-  text-transform: uppercase;
-  color: var(--faint);
-}
-
-@media (max-width: 1180px) {
-  /* Under the storyboard's width the card would sit on top of the room it is
-     describing. The room is the proof, so the card gives way. */
-  .tc-prop { width: 288px; top: 70px; }
-}
-@media (max-width: 900px) {
-  .tc-prop { display: none; }
-}
-
-/* ── the depth D41 added to the cards ── */
 
 /* A path is the one thing on these cards the founder has to be able to read
    character by character: it is where their files are, and where the copy is
    about to go. Monospaced, breakable, and never truncated with an ellipsis. */
 .tc-path {
   font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, monospace);
-  font-size: 11px;
-  line-height: 1.35;
   word-break: break-all;
   white-space: normal;
 }
+.tc-item-main .tc-path { font-size: 12px; color: var(--ink2); }
 
-/* The one task they chose to do first. Same treatment as `is-late`, in the
-   speaking blue rather than the vermilion: it is the thing to look at, not
-   the thing to worry about. */
-.tc-tag.is-first { color: #2d78ff; }
-:root[data-theme="dark"] .tc-tag.is-first { color: #8fb4ff; }
+/* ── the two widths this has to hold up at ── */
 
-/* Half a rhythm, drawn as half a rhythm rather than as a guess. */
-.tc-brief-time.is-blank { opacity: 0.35; }
+@media (max-width: 1180px) {
+  /* Under the storyboard's width the card would sit on top of the room it is
+     describing. The room is the proof, so the card gives way a little. */
+  .tc-prop { right: 16px; top: 68px; width: 300px; max-height: calc(100vh - 180px); }
+  .tc-decision-t { font-size: 15.5px; }
+}
+
+@media (max-width: 900px) {
+  /* It used to be `display: none` here, which meant a founder on a narrow
+     window was asked to approve a write into their own company with nothing on
+     screen to read. The room underneath is not usable at this width anyway, so
+     the card takes the top of the screen and the pebble keeps the bottom. */
+  .tc-prop {
+    right: 12px;
+    left: 12px;
+    top: 12px;
+    width: auto;
+    max-height: min(52vh, calc(100vh - 220px));
+    border-radius: var(--corner, 14px 3px 14px 14px);
+  }
+  .tc-prop-body { gap: 12px; }
+  .tc-decision-t { font-size: 17px; }
+  .tc-clocks { gap: 8px; }
+}
+
+@media (max-width: 380px) {
+  .tc-clocks { flex-direction: column; }
+}

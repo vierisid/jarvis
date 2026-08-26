@@ -15,6 +15,7 @@ import { TrialProposal } from "./TrialProposal";
 import { pebbleView, type PebbleBubble } from "./pebbleState";
 import { TRIAL_SESSION_RENEW_MS, renewTrialSession } from "./sessionRenew";
 import { formatTimeRemaining, type TrialStatus } from "./trialGate";
+import { isReviewMode } from "./reviewMode";
 import { openRoom, type RoomKey } from "../router";
 import "./TrialConductor.css";
 
@@ -420,7 +421,12 @@ function VaultTicker({ landed }: { landed: LandedEntity[] }) {
   );
 }
 
-/* ── The clock, and the seam. Neither counts down at the founder (D37). ── */
+/* ── The clock, and the two things that are not the founder's business ──
+
+   The clock stays: D3 and D9 make "48 hours, starting at your first word" a
+   thing the founder is told plainly, and the gate screen says it before they
+   speak. What went, on 26 August, is everything that told them HOW FAR ALONG
+   THEY WERE. See reviewMode.ts. */
 
 function TrialFooter({
   trial,
@@ -434,19 +440,27 @@ function TrialFooter({
   finished: boolean;
 }) {
   const remaining = formatTimeRemaining(trial?.ms_remaining ?? null);
+  // Read once: whether this browser is somebody reviewing a run or a founder
+  // living one. See reviewMode.ts for why the coverage counter is not the
+  // founder's business (D12), and why it was on their screen anyway.
+  const [review] = useState(isReviewMode);
   return (
     <div className="tc-foot">
       <span className="tc-foot-clock">
         {trial?.started_at ? `48 hours · ${remaining} left` : "48 hours · not started"}
       </span>
-      {/* Coverage is shown to whoever is REVIEWING the opening, never spoken
-          and never used to decide what Jarvis asks next. See D12. */}
-      <span className="tc-foot-fuel" title={fuel.map((f) => `${f.area}: ${f.summary}`).join("\n")}>
-        {fuel.length}/5
-      </span>
-      {finished
+      {review && (
+        <span className="tc-foot-fuel" title={fuel.map((f) => `${f.area}: ${f.summary}`).join("\n")}>
+          {fuel.length}/5 fuel
+        </span>
+      )}
+      {/* The seam is a fact about the session, not a position in it, and it is
+          only drawn for a reviewer for the same reason the counter is: a
+          founder who reads "opening complete" has been told there are stages
+          and that one of them is behind them (D12). */}
+      {review && (finished
         ? <span className="tc-foot-seam">set up</span>
-        : openingDone && <span className="tc-foot-seam">opening complete</span>}
+        : openingDone && <span className="tc-foot-seam">opening complete</span>)}
     </div>
   );
 }

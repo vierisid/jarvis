@@ -44,6 +44,7 @@ import {
 } from '../../trial/entitlement.ts';
 import type { RoomKey } from '../../voice/intent.ts';
 import type { FoundEntities } from './reader-tools.ts';
+import { detectHostShape, type HostShape } from './host-paths.ts';
 
 /**
  * How long to wait for a transcript of the founder's first utterance before
@@ -140,6 +141,8 @@ export class TrialConductorManager<W> {
   /** Sockets that asked for the conductor and passed the entitlement check. */
   private armed = new Set<W>();
   private entries = new Map<W, Entry<W>>();
+  /** WSL, Windows or Linux. See host-paths.ts; detected lazily, then kept. */
+  private host: HostShape | null = null;
 
   constructor(deps: ConductorManagerDeps<W>) {
     this.deps = deps;
@@ -234,6 +237,10 @@ export class TrialConductorManager<W> {
     };
     return {
       now: () => this.now(),
+      // Detected once and held for the life of the manager: what kind of
+      // machine this is does not change under a running daemon, and
+      // `detectHostShape` reads /proc and /etc every time it is asked.
+      host: () => (this.host ??= detectHostShape()),
       fuel: (): BeatFuel => {
         const out: BeatFuel = {};
         for (const [area, captured] of entry.session.coveredFuel) out[area] = captured.summary;

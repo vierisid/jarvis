@@ -81,6 +81,7 @@ import {
   surveyFolder,
   writeRevision,
 } from './founder-files.ts';
+import { detectHostShape, folderCandidates, sayPath, type HostShape } from './host-paths.ts';
 
 /** Vault `source` for everything the room beats write. Distinct from the
  *  opening's `trial_conductor` so the D38 debrief can tell "what it learned
@@ -256,6 +257,15 @@ export type FilesProposal = {
   beat: 'files';
   /** The folder they named, resolved. Absolute, because they should see it. */
   folder: string;
+  /**
+   * The same folder spelled the way the FOUNDER knows it.
+   *
+   * Under WSL those are two different strings for one place: the reader opens
+   * `/mnt/c/Users/vieri/Documents/Kestrel` and the founder has never seen that
+   * path in their life. The card shows theirs; everything that touches the
+   * disk uses `folder`.
+   */
+  says?: string;
   /** One sentence naming exactly what is in it. */
   what: string;
   /** A handful of the actual filenames, so the naming is concrete. */
@@ -276,6 +286,9 @@ export type WorkspaceProposal = {
   kind: 'workspace';
   destination: string;
   source: string;
+  /** Both of those, spelled the way the founder knows them. See `FilesProposal.says`. */
+  saysDestination?: string;
+  saysSource?: string;
   title: string;
   sections: { name: string; about: string; files: string[] }[];
 };
@@ -292,6 +305,28 @@ export type EditProposal = {
   as: string;
 };
 
+/**
+ * D15's finale, on screen.
+ *
+ * The second live run got to the end without this and the beat did not land:
+ * Jarvis asked for the question, said it was putting someone on it, and the
+ * founder never saw anything start. The finale is the one beat that keeps
+ * working after the talking stops, so it is the one beat that most needs to be
+ * visible while it happens (D22). It is also the only proposal that stays on
+ * screen after it commits, because the thing it describes is still running.
+ */
+export type AgentProposal = {
+  beat: 'agents';
+  /** Their question, in their words. */
+  question: string;
+  /** What a useful answer looks like for them. */
+  brief: string;
+  /** False while it is waiting on their yes, true once it is working. */
+  running?: boolean;
+  /** What the agent is called, once there is one. */
+  agentName?: string | null;
+};
+
 export type BeatProposal =
   | GoalProposal
   | TaskProposal
@@ -300,7 +335,8 @@ export type BeatProposal =
   | AuthorityProposal
   | FilesProposal
   | WorkspaceProposal
-  | EditProposal;
+  | EditProposal
+  | AgentProposal;
 
 /* ─────────────────────────── session state ─────────────────────────── */
 
@@ -544,7 +580,9 @@ Offer to read their own files: the folder where the company actually lives on th
 THIS IS THE MOST INVASIVE THING YOU WILL ASK THEM FOR, so ask for it properly and never assume it:
 
 - Ask them to name ONE folder. Not their home directory, not the whole disk. The folder where the startup's documents are.
-- Call \`propose_reading\` with what they said. It comes back with exactly what is in there, how many files, and how many you would open. Read that back to them and let them hear the number before they answer. It is on their screen too.
+- Call \`propose_reading\` with what they said, WORD FOR WORD. Whatever shape their path is, a Windows one, a Unix one, or just a folder name, pass it through untouched: working out where that is on this machine is the tool's job and not yours.
+- It comes back with exactly what is in there, how many files, and how many you would open. Read that back to them and let them hear the number before they answer. It is on their screen too.
+- If it comes back saying the folder is not there, you are NOT blind and you must not say you are. Call \`folders_i_can_see\` and offer them two or three real folders by name. Same if they ask what you have access to: look before you answer.
 - Nothing is read until they say yes and you call \`start_reading\`. The level they just granted you does not cover this and does not stand in for their answer. If they say no, say that is fine, and call \`move_on\`.
 
 Once it is running it runs in the background and you carry straight on talking. Do not narrate it and do not wait for it. Call \`reading_so_far\` silently as you go, the way you call \`remember\`, and when something real has landed, say what it found in their own terms: the people, the numbers, the things it now knows that they never said out loud. That is the moment this beat exists for.${quoted('their company', fuel.company)}`;
@@ -567,18 +605,68 @@ Do not offer anything you cannot do inside this conversation. A promise here is 
 export function agentsBrief(fuel: BeatFuel = {}): string {
   return `Last thing, and it is the only part of this that keeps working after you stop talking.
 
-They mentioned something about their market or their business they have never had time to answer. Put someone on it. Say what you are sending them off to find out, then call \`spawn_research_agent\` with the question in their words and a brief saying what a useful answer would look like for them specifically.
+They mentioned something about their market or their business they have never had time to answer. Put someone on it.
 
-If no such question ever came up, ask for one now, plainly: the thing about their market they would look into if they had a spare afternoon. Do not invent one for them, and do not settle for something you could answer yourself in a sentence. If reading their files threw up something nobody has an answer to, that is the best question available and you should use it.${quoted('the open question', fuel.open_question)}`;
+Call \`propose_research\` with the question in their words and a brief saying what a useful answer would look like for them specifically. That puts it on their screen. Say what you are sending someone off to find out, check with them that it is the right question, and then call \`spawn_research_agent\`. They watch it start in the agents room, which is the point of finishing here: it is the one thing still working when you stop talking.
+
+If no such question ever came up, ask for one now, plainly: the thing about their market they would look into if they had a spare afternoon. Do not invent one for them, and do not settle for something you could answer yourself in a sentence. If reading their files threw up something nobody has an answer to, that is the best question available and you should use it.
+
+And do not tell them to go and look into it themselves while it runs. That is the one sentence this whole beat exists to make unnecessary.${quoted('the open question', fuel.open_question)}`;
 }
 
+/**
+ * ── The closing, and the thing it must never do ──
+ *
+ * The second live run ended with Jarvis telling the founder to go and do the
+ * work. His words: *"he just said, oh go and post... it just seems like I have
+ * to go and do it."* That is the product thesis inverted. The page says Chief
+ * of Operations and D11 says co-founder, and both of those are claims about
+ * taking work OFF a founder; a session that ends by assigning them homework
+ * sells the opposite of the thing.
+ *
+ * The old closing said "they should go and do their day", which is the same
+ * sentence in a kinder coat: it hands the day back and takes nothing.
+ *
+ * So the close is built out of what is actually running, not out of an
+ * instruction to the founder. Every line of `closing` is a fact from the
+ * ledger about something Jarvis is doing while they are not there, and there
+ * is exactly one rule on top of it: the last thing they hear is what you are
+ * doing next, never what they should be doing next.
+ */
+export function closing(s: BeatsSession): string {
+  const doing: string[] = [];
+  if (s.agent) doing.push(`${s.agent.agentName} is working on "${s.agent.question}" and will be back with it`);
+  for (const flow of s.workflowsPublished) doing.push(`"${flow}" runs on its own from now on`);
+  if (s.briefAt) doing.push(`their brief lands at ${fmtTime(s.briefAt.hour, s.briefAt.minute)} tomorrow, before they start`);
+  if (s.eveningHour !== null) doing.push(`the day gets closed off and their quarter scored at ${fmtTime(s.eveningHour, 0)}`);
+  if (s.authorityLevel !== null) doing.push(`you are working at level ${s.authorityLevel} overnight, inside what they carved out`);
+
+  return (
+    'There is nothing left to build with them, and the conversation does not end here. Close the way a ' +
+    'co-founder closes.\n\n' +
+    'THE ONE RULE FOR THIS AND FOR EVERYTHING AFTER IT: the last thing they hear is what YOU are ' +
+    'doing next, never what they should be doing next. Do not tell them to go and do their day, do ' +
+    'not tell them to go and post anything, write anything, check anything or review anything, and ' +
+    'do not leave them a list. If there is something that needs doing and you can do it, offer to do ' +
+    'it. If you genuinely cannot, say what you will do about it and when.\n\n' +
+    (doing.length > 0
+      ? `What is actually running, in your own words and not as a list:\n${doing.map((d) => `- ${d}`).join('\n')}\n\n` +
+        'Pick the one or two that matter most to them and say those. Do not read all of it out, do not ' +
+        'inventory what the two of you built, and do not thank them for their time.\n\n'
+      : '') +
+    'Then stop setting things up. If they keep talking, you are simply their co-founder and the ' +
+    'conversation carries on.'
+  );
+}
+
+/** Kept as the no-session fallback for `nextBrief`, which can be called when
+ *  nothing is left and there is no agent to talk about. */
 export const FINALE_MESSAGE =
-  'Spawned, and it is working now. Close the way a co-founder closes: that is the ' +
-  'two of you set up, they should go and do their day, and the agent will be back ' +
-  'shortly with what it found. Your own words, not those, and do NOT list what you ' +
-  'built or thank them for their time. After that there is nothing left to set up: ' +
-  'if they keep talking, you are simply their co-founder and the conversation ' +
-  'carries on.';
+  'There is nothing left to set up. Close the way a co-founder closes: say what YOU are doing next, ' +
+  'never what they should be doing next. Do not hand them a task, a list, or their own day back. If ' +
+  'something needs doing and you can do it, offer to do it. Do NOT inventory what you built and do ' +
+  'not thank them for their time. If they keep talking, you are simply their co-founder and the ' +
+  'conversation carries on.';
 
 /**
  * The brief for the beat that comes after `beat`, or the finale message when
@@ -587,7 +675,7 @@ export const FINALE_MESSAGE =
  */
 export function nextBrief(s: BeatsSession, fuel: BeatFuel): string {
   const next = currentBeat(s);
-  if (!next) return FINALE_MESSAGE;
+  if (!next) return closing(s);
   switch (next) {
     case 'goals': return goalsBrief(fuel);
     case 'tasks': return tasksBrief(fuel);
@@ -879,6 +967,17 @@ export const ROOM_BEAT_TOOLS: LLMTool[] = [
     },
   },
   {
+    name: 'folders_i_can_see',
+    description:
+      'The folders on this machine that could plausibly be where their company lives, ' +
+      'with a count of what is in each. Reads NOTHING and lists nothing back to them ' +
+      'automatically: it is so you can OFFER two or three by name. Call it whenever ' +
+      'they ask what you can see or what you have access to, and whenever a folder ' +
+      'they named turns out not to be there. Never answer "I cannot see anything" ' +
+      'without calling this first.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
     name: 'propose_reading',
     description:
       'Beat 7 (D42): survey the ONE folder they named and put on screen exactly what ' +
@@ -891,8 +990,11 @@ export const ROOM_BEAT_TOOLS: LLMTool[] = [
         folder: {
           type: 'string',
           description:
-            'The folder they named, as they said it. An absolute path, or one starting ' +
-            'with ~. Ask them for it; never guess and never widen it.',
+            'The folder they named, EXACTLY as they said it. A Windows path like ' +
+            'C:\\Users\\them\\Documents, a Unix path, or one starting with ~, or just the ' +
+            'name of a folder. Pass their words through; the translation between what ' +
+            'they say and where this machine opens it is not your job. Ask them for it; ' +
+            'never guess and never widen it.',
         },
       },
       required: ['folder'],
@@ -993,11 +1095,11 @@ export const ROOM_BEAT_TOOLS: LLMTool[] = [
     },
   },
   {
-    name: 'spawn_research_agent',
+    name: 'propose_research',
     description:
-      'The last one: put a research agent on the open question the founder ' +
-      'has never had time to answer, and leave it running. It keeps working after ' +
-      'the conversation ends, which is the whole point of ending here.',
+      'Beat 9 (D15): put the open question you are about to send someone off to answer ' +
+      `on their screen, in their words. ${PROPOSE_NOTE} Nothing is spawned until they ` +
+      'answer and you call `spawn_research_agent`.',
     parameters: {
       type: 'object',
       properties: {
@@ -1014,6 +1116,15 @@ export const ROOM_BEAT_TOOLS: LLMTool[] = [
       },
       required: ['question', 'brief'],
     },
+  },
+  {
+    name: 'spawn_research_agent',
+    description:
+      'The last one: put a research agent on the question currently on their screen ' +
+      'and leave it running, after they have said yes. It keeps working after the ' +
+      'conversation ends, which is the whole point of ending here. The founder watches ' +
+      'it appear in the agents room as it starts.',
+    parameters: { type: 'object', properties: {} },
   },
   {
     name: 'move_on',
@@ -1056,6 +1167,7 @@ const TOOL_BEAT: Record<string, RoomBeat> = {
   create_workspace: 'workspace',
   propose_edit: 'workspace',
   make_edit: 'workspace',
+  propose_research: 'agents',
   spawn_research_agent: 'agents',
 };
 
@@ -1125,6 +1237,13 @@ export type BeatDeps = BeatSurfaces & BeatActions & {
    *  against. Injected rather than read here so the tests are not run against
    *  whoever's machine they happen to be on. */
   home?: () => string;
+  /**
+   * Which machine this is: WSL, Windows, or Linux/macOS. Injected for the same
+   * reason `home` is. The path translation in host-paths.ts is exactly the
+   * kind of thing that works on the box it was written on and silently does
+   * the wrong thing everywhere else, so the tests get to be all three.
+   */
+  host?: () => HostShape;
 };
 
 export type BeatToolResult = { message: string };
@@ -1152,6 +1271,19 @@ export async function executeBeatTool(
   if (name === 'move_on') {
     if (!s.open) return openingNotDone();
     return moveOn(s, args, deps);
+  }
+
+  // Not in TOOL_BEAT either, and for a reason worth writing down. Every other
+  // tool here belongs to a beat and is refused until that beat is open, which
+  // is right: a founder should not be asked for their disk during the goals
+  // conversation. But "what can you see?" is a question a founder can ask at
+  // any moment, it reads no file and names nothing outside their own account,
+  // and the whole reason this exists is that the answer was once "nothing".
+  // Gating it behind the files beat would reproduce that failure with a
+  // politer sentence.
+  if (name === 'folders_i_can_see') {
+    if (!s.open) return openingNotDone();
+    return whatCanYouSee(deps);
   }
 
   const beat = TOOL_BEAT[name];
@@ -1190,7 +1322,8 @@ export async function executeBeatTool(
     case 'create_workspace': return commitWorkspace(s, deps);
     case 'propose_edit': return proposeEdit(s, args, deps);
     case 'make_edit': return makeEdit(s, args, deps);
-    case 'spawn_research_agent': return spawnResearchAgent(s, args, deps);
+    case 'propose_research': return proposeResearch(s, args, deps);
+    case 'spawn_research_agent': return spawnResearchAgent(s, deps);
     default: return null;
   }
 }
@@ -1209,11 +1342,24 @@ function str(v: unknown): string {
 
 /** Nothing on their screen to say yes to. Same shape everywhere so the model
  *  always gets a next action rather than an error. */
+/** The tool that puts each beat's thing on screen, so a refusal can name it
+ *  rather than telling the model to go and find "the propose tool". */
+const PROPOSE_TOOL: Record<RoomBeat, string> = {
+  goals: 'propose_goals',
+  tasks: 'propose_tasks',
+  calendar: 'propose_daily_rhythm',
+  workflows: 'propose_workflow',
+  authority: 'propose_authority',
+  files: 'propose_reading',
+  workspace: 'propose_workspace',
+  agents: 'propose_research',
+};
+
 function nothingProposed(beat: RoomBeat, tool: string): BeatToolResult {
   return {
     message:
-      `Nothing is on their screen yet. Say the ${beat} out loud and call the propose ` +
-      `tool for it first, then \`${tool}\` once they have agreed.`,
+      `Nothing is on their screen yet. Say it out loud and call \`${PROPOSE_TOOL[beat]}\` first, ` +
+      `then \`${tool}\` once they have agreed.`,
   };
 }
 
@@ -1959,14 +2105,83 @@ function setAuthority(s: BeatsSession, args: Record<string, unknown>, deps: Beat
 
 /* ── D42 · the files beat: their own material, read by something else ── */
 
-function proposeReading(s: BeatsSession, args: Record<string, unknown>, deps: BeatDeps): BeatToolResult {
-  const asked = str(args.folder);
-  const verdict = resolveFounderFolder(asked, deps.home ? deps.home() : undefined);
-  if (!verdict.ok) {
+/**
+ * What Jarvis can offer when the folder they named is not there, and when they
+ * simply ask what it can see.
+ *
+ * The second live run died on exactly this: the founder named a folder, the
+ * reader found nothing, they asked "what folders do you have access to", and
+ * it could not name a single one. It had no way to look. This is the way to
+ * look, and it is deliberately a handful of suggestions rather than an
+ * inventory of their disk.
+ */
+function offerFolders(deps: BeatDeps, limit = 5): { lines: string[]; sentence: string } {
+  let found: ReturnType<typeof folderCandidates> = [];
+  try {
+    found = folderCandidates({ home: deps.home ? deps.home() : undefined, shape: hostShape(deps), limit });
+  } catch (err) {
+    console.warn('[TrialBeats] could not look for candidate folders', err);
+  }
+  const lines = found.map((c) => {
+    const readable = c.readable > 0 ? `${c.readable} readable` : 'nothing readable';
+    return `- ${c.says}: ${c.path} (${c.files}${c.more ? '+' : ''} files, ${readable})`;
+  });
+  const sentence = found.length === 0
+    ? ''
+    : found.map((c) => c.says).slice(0, 3).join(', ');
+  return { lines, sentence };
+}
+
+/** The machine this daemon is on, resolved once per session. */
+function hostShape(deps: BeatDeps): HostShape {
+  return deps.host ? deps.host() : detectHostShape();
+}
+
+function whatCanYouSee(deps: BeatDeps): BeatToolResult {
+  const { lines, sentence } = offerFolders(deps, 6);
+  const shape = hostShape(deps);
+  const wsl = shape.kind === 'wsl'
+    ? '\n\nThis machine runs Jarvis inside Linux and their documents on Windows, so both spellings of a ' +
+      'path work: they can say `C:\\Users\\...` the way they would type it into Explorer. Never make them ' +
+      'learn a second spelling of their own folder.'
+    : '';
+  if (lines.length === 0) {
     return {
       message:
-        `Not that: ${verdict.why}. Say that to them plainly and ask them to name the one folder where ` +
-        'the company actually lives on this machine. Do not widen it and do not guess at a path.',
+        'Nothing with anything in it turned up in the usual places. Say plainly that you cannot find their ' +
+        'documents from here and ask them to open the folder on their machine and read you the path from ' +
+        `the address bar. Do not say you have no access to their files; say you could not find them.${wsl}`,
+    };
+  }
+  return {
+    message:
+      `Folders on this machine with real content in them, best first:\n${lines.join('\n')}\n\n` +
+      `Offer them by NAME, two or three of them, not as paths: "${sentence}". Ask which one the company ` +
+      'lives in, or whether it is somewhere else. Do not read the list out and do not read out the paths ' +
+      `unless they ask. Nothing has been read.${wsl}`,
+  };
+}
+
+function proposeReading(s: BeatsSession, args: Record<string, unknown>, deps: BeatDeps): BeatToolResult {
+  const asked = str(args.folder);
+  const shape = hostShape(deps);
+  const verdict = resolveFounderFolder(asked, deps.home ? deps.home() : undefined, shape);
+  if (!verdict.ok) {
+    // "There is no folder at X" on its own is what made the founder think it
+    // was blind. So: what was actually tried, and what is actually there.
+    const tried = verdict.tried && verdict.tried.length > 0
+      ? `\n\nWhere this machine looked: ${verdict.tried.join(', ')}.`
+      : '';
+    const { lines, sentence } = offerFolders(deps);
+    const offer = lines.length > 0
+      ? `\n\nWhat IS on this machine, with content in it:\n${lines.join('\n')}\n\nSay you could not find ` +
+        `the one they named, then offer these by name: "${sentence}". One sentence, then ask.`
+      : '\n\nNothing else turned up in the usual places either, so ask them to open the folder on their ' +
+        'machine and read you the path out of the address bar.';
+    return {
+      message:
+        `Not that: ${verdict.why}.${tried}${offer}\n\nDo not tell them you have no access to their files, ` +
+        'because you do; you could not find that one. Do not widen it and do not guess at a path.',
     };
   }
 
@@ -1975,24 +2190,28 @@ function proposeReading(s: BeatsSession, args: Record<string, unknown>, deps: Be
     survey = surveyFolder(verdict.path, deps.now());
   } catch (err) {
     console.warn('[TrialBeats] failed to survey', verdict.path, err);
-    return { message: `${verdict.path} could not be opened. Say so and ask for a different folder.` };
+    return { message: `${sayPath(verdict.path, shape)} could not be opened. Say so and ask for a different folder.` };
   }
 
   // The degenerate cases, handled here rather than left to the model, because
   // "I read your company" said about an empty folder is the worst sentence in
   // the trial. Nothing is proposed and nothing is started in either case.
+  const says = sayPath(verdict.path, shape);
   if (survey.files.length === 0) {
+    const { sentence } = offerFolders(deps, 3);
     return {
       message:
-        `${verdict.path} has nothing in it${survey.truncated ? ' at the level worth reading' : ''}. Say that ` +
+        `${says} has nothing in it${survey.truncated ? ' at the level worth reading' : ''}. Say that ` +
         'out loud, because they probably think it does, and ask whether there is another folder or ' +
-        'whether the company mostly lives somewhere that is not this machine. Nothing has been read.',
+        'whether the company mostly lives somewhere that is not this machine.' +
+        (sentence ? ` You can also see ${sentence}, so offer those.` : '') +
+        ' Nothing has been read.',
     };
   }
   if (survey.shortlist.length === 0) {
     return {
       message:
-        `${verdict.path} has ${survey.files.length} files in it but none that can be opened as text: ` +
+        `${says} has ${survey.files.length} files in it but none that can be opened as text: ` +
         `${survey.kinds.slice(0, 4).map((k) => `${k.n} ${k.ext}`).join(', ')}. Tell them exactly that, ` +
         'say you can see the names but not the insides, and ask whether there is a folder with the ' +
         'written material in it. Do not pretend to have read a PDF.',
@@ -2002,6 +2221,7 @@ function proposeReading(s: BeatsSession, args: Record<string, unknown>, deps: Be
   const proposal: FilesProposal = {
     beat: 'files',
     folder: verdict.path,
+    says,
     what: describeSurvey(survey),
     sample: survey.shortlist.slice(0, 6).map((f) => f.rel),
     willRead: survey.shortlist.length,
@@ -2015,10 +2235,14 @@ function proposeReading(s: BeatsSession, args: Record<string, unknown>, deps: Be
 
   return {
     message:
-      `${verdict.path}: ${proposal.what}.\n\nThat is on their screen. Say the folder and the numbers out ` +
+      `${says}: ${proposal.what}.\n\nThat is on their screen. Say the folder and the numbers out ` +
       'loud, in one sentence, and then ASK. Nothing is read until they answer and you call ' +
       '`start_reading`. Their authority level does not cover this and does not stand in for their yes. ' +
-      'If they say no, or name a different folder, take it: `move_on`, or `propose_reading` again.',
+      'If they say no, or name a different folder, take it: `move_on`, or `propose_reading` again.' +
+      (says !== verdict.path
+        ? `\n\nSay it as ${says}, which is how they know it. Never say ${verdict.path} out loud: that is ` +
+          'where this machine opens it, not where they keep it.'
+        : ''),
   };
 }
 
@@ -2161,9 +2385,17 @@ function proposeWorkspace(s: BeatsSession, args: Record<string, unknown>, deps: 
     };
   }
 
+  const shape = hostShape(deps);
   const destination = str(args.destination) || defaultWorkspacePath(s.files.folder, title);
   const plan: WorkspaceProposal = {
-    beat: 'workspace', kind: 'workspace', destination, source: s.files.folder, title, sections,
+    beat: 'workspace',
+    kind: 'workspace',
+    destination,
+    source: s.files.folder,
+    saysDestination: sayPath(destination, shape),
+    saysSource: sayPath(s.files.folder, shape),
+    title,
+    sections,
   };
   const verdict = checkWorkspacePlan({ destination, source: s.files.folder, title, sections });
   if (!verdict.ok) {
@@ -2178,7 +2410,7 @@ function proposeWorkspace(s: BeatsSession, args: Record<string, unknown>, deps: 
   putOnScreen(s, plan, deps);
   return {
     message:
-      `On their screen: ${destination}, ${sections.length} sections, ${totalFiles} files copied into it.\n\n` +
+      `On their screen: ${plan.saysDestination}, ${sections.length} sections, ${totalFiles} files copied into it.\n\n` +
       'Say the sections out loud in their language, say WITHOUT being asked that nothing gets moved and ' +
       'nothing gets deleted and every original stays exactly where it is, and then ask. It is refusable ' +
       'and it is not worth pushing twice: if they say no, `move_on`.',
@@ -2193,8 +2425,13 @@ function commitWorkspace(s: BeatsSession, deps: BeatDeps): BeatToolResult {
   // Checked again at the moment of writing, not just when it went on screen:
   // the founder has been talking for a couple of minutes and the destination
   // may have appeared in between.
+  const shape = hostShape(deps);
   const verdict = checkWorkspacePlan({
-    destination: p.destination, source: p.source, title: p.title, sections: p.sections,
+    destination: p.destination,
+    source: p.source,
+    sourceLabel: p.saysSource ?? sayPath(p.source, shape),
+    title: p.title,
+    sections: p.sections,
   });
   if (!verdict.ok) {
     return {
@@ -2216,10 +2453,11 @@ function commitWorkspace(s: BeatsSession, deps: BeatDeps): BeatToolResult {
     };
   }
 
+  const saysDest = p.saysDestination ?? sayPath(result.destination, shape);
   s.workspace = { destination: result.destination, copied: result.copied, sections: result.sections };
   takeOffScreen(s);
   markDone(s, 'workspace');
-  deps.proposalLanded('workspace', `${result.destination} · ${result.copied} files copied`);
+  deps.proposalLanded('workspace', `${saysDest} · ${result.copied} files copied`);
   deps.refreshRoom('memory');
   deps.beatComplete('workspace', {
     destination: result.destination, copied: result.copied, skipped: result.skipped.length,
@@ -2231,7 +2469,7 @@ function commitWorkspace(s: BeatsSession, deps: BeatDeps): BeatToolResult {
     : '';
   return {
     message:
-      `Built: ${result.destination}, ${result.sections} sections, ${result.copied} files copied, and a ` +
+      `Built: ${saysDest}, ${result.sections} sections, ${result.copied} files copied, and a ` +
       `README saying where each one came from.${skipped} Every original is untouched.\n\n` +
       'Tell them where it is, in one sentence. Then the second half of this: offer ONE concrete piece of ' +
       'work on ONE file you have actually read. A page of the deck that undersells them, a README that ' +
@@ -2329,9 +2567,11 @@ function makeEdit(s: BeatsSession, args: Record<string, unknown>, deps: BeatDeps
   deps.proposalLanded('workspace', `${written.path.split(/[/\\]/).pop()} written`);
   return {
     message:
-      `Written: ${written.path}. Their ${p.file} is exactly as it was.\n\nTell them where it is and what ` +
-      `you changed, in a sentence, and say plainly that the original is untouched and they can throw ` +
-      `yours away.\n\n${nextBrief(s, deps.fuel())}`,
+      `Written: ${sayPath(written.path, hostShape(deps))}. Their ${p.file} is exactly as it was.\n\nTell ` +
+      'them where it is and what you changed, in a sentence, and say plainly that the original is ' +
+      'untouched and they can throw yours away. Then, if there is another file in the same state, OFFER ' +
+      'to do that one too rather than telling them what to fix in it. Do not tell them to go and read ' +
+      `it; ask if they want it read to them.\n\n${nextBrief(s, deps.fuel())}`,
   };
 }
 
@@ -2358,21 +2598,52 @@ function moveOn(s: BeatsSession, args: Record<string, unknown>, deps: BeatDeps):
 
 /* ── beat 12 · agents, the finale ── */
 
-async function spawnResearchAgent(
-  s: BeatsSession,
-  args: Record<string, unknown>,
-  deps: BeatDeps,
-): Promise<BeatToolResult> {
+/**
+ * The question goes on screen before anyone is sent off with it.
+ *
+ * Every other beat proposes, then commits. The finale used to do both in one
+ * call, and the second live run found what that costs: the founder heard "I am
+ * putting someone on it" and watched nothing happen, so the one beat that is
+ * supposed to prove the thing keeps working after the conversation was the one
+ * beat with nothing to look at. `enterRoom` fires here rather than at the
+ * spawn, so they are already standing in the agents room, watching it empty,
+ * when the agent appears in it.
+ */
+function proposeResearch(s: BeatsSession, args: Record<string, unknown>, deps: BeatDeps): BeatToolResult {
   const question = str(args.question);
   const brief = str(args.brief);
   if (!question) {
     return { message: 'Error: no question came through. Say the question they have never had time to answer, in their words.' };
   }
-
+  if (!brief) {
+    return {
+      message:
+        'Error: no brief came through. Say what a useful answer would look like FOR THEM specifically: ' +
+        'what to compare, what to ignore, what they would do with it.',
+    };
+  }
+  const proposal: AgentProposal = { beat: 'agents', question, brief, running: false, agentName: null };
   deps.enterRoom('agents', 'the agent');
+  putOnScreen(s, proposal, deps);
+  return {
+    message:
+      `On their screen: "${question}".\n\nSay what you are sending someone off to find out, in one ` +
+      'sentence, and check it is the right question before anyone starts. When they say yes, call ' +
+      '`spawn_research_agent`. If they want it changed, call `propose_research` again with their version.',
+  };
+}
+
+async function spawnResearchAgent(s: BeatsSession, deps: BeatDeps): Promise<BeatToolResult> {
+  const p = s.proposal;
+  if (!p || p.beat !== 'agents') return nothingProposed('agents', 'spawn_research_agent');
+  if (!founderHasAnswered(s)) return notAnsweredYet('spawn_research_agent');
+
+  // No `enterRoom` here: `propose_research` already led them into the agents
+  // room, and the whole point of the split is that they are standing in it,
+  // looking at it empty, when the agent lands in it.
   let spawned: { agentId: string; taskId: string | null; agentName: string };
   try {
-    spawned = await deps.spawnResearchAgent(question, brief);
+    spawned = await deps.spawnResearchAgent(p.question, p.brief);
   } catch (err) {
     console.warn('[TrialBeats] failed to spawn the research agent', err);
     return {
@@ -2382,16 +2653,22 @@ async function spawnResearchAgent(
     };
   }
 
-  s.agent = { ...spawned, question };
+  s.agent = { ...spawned, question: p.question };
   markDone(s, 'agents');
   s.finishedAt = deps.now();
+  // The card STAYS, unlike every other beat's, and turns into the thing it
+  // described. It is the last surface of the session and what it says is "this
+  // is still working", which is the whole of D15.
+  const running: AgentProposal = { ...p, running: true, agentName: spawned.agentName };
+  s.proposal = running;
+  deps.showProposal(running);
   deps.refreshRoom('agents');
   deps.roomIsTheirs('agents', 'whoever is working for you');
-  deps.beatComplete('agents', { question, agentId: spawned.agentId, agentName: spawned.agentName });
+  deps.beatComplete('agents', { question: p.question, agentId: spawned.agentId, agentName: spawned.agentName });
   try {
     deps.onFinished(s);
   } catch (err) {
     console.warn('[TrialBeats] finished listener failed', err);
   }
-  return { message: FINALE_MESSAGE };
+  return { message: `${spawned.agentName} is on it, and they can see it working in the agents room.\n\n${closing(s)}` };
 }

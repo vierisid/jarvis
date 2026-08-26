@@ -36,6 +36,7 @@ import {
   type RoomBeat,
   type WorkflowProposal,
 } from './beats.ts';
+import { UNIX_HOST } from './host-paths.ts';
 
 type Recorder = {
   deps: BeatDeps;
@@ -84,6 +85,10 @@ function recorder(over: Partial<BeatDeps> = {}): Recorder {
   r.deps = {
     now: clock,
     home: () => tmpHome,
+    // Every test in this file is a Linux box unless it says otherwise, so
+    // nothing here goes looking at whatever /mnt happens to hold on the
+    // machine running the suite. The WSL behaviour has its own tests.
+    host: () => UNIX_HOST,
     fuel: () => ({}),
     enterRoom: (beat) => { r.rooms.push(beat); },
     refreshRoom: (room) => { r.refreshed.push(room); },
@@ -611,27 +616,84 @@ describe('beat 11, authority', () => {
 /* ─────────────────────── beat 12 · the finale ─────────────────────── */
 
 describe('beat 12, the finale', () => {
-  test('the agent is spawned on their own question and left running', async () => {
+  const QUESTION = 'How the three closest competitors price their onboarding';
+  const BRIEF = 'Compare the published price and what is included.';
+
+  test('the question goes on their screen before anyone is sent off with it', async () => {
     const s = opened();
     const r = recorder();
     await walkTo(s, r, 'agents');
-    const res = await executeBeatTool(s, 'spawn_research_agent', {
-      question: 'How the three closest competitors price their onboarding',
-      brief: 'Compare the published price and what is included.',
-    }, r.deps);
-    expect(r.spawned).toHaveLength(1);
+    r.proposals.length = 0;
+    const res = await executeBeatTool(s, 'propose_research', { question: QUESTION, brief: BRIEF }, r.deps);
+    // Nothing spawned, and the founder is standing in the agents room looking
+    // at an empty one when it does.
+    expect(r.spawned).toHaveLength(0);
+    expect(r.rooms.at(-1)).toBe('agents');
+    expect(r.proposals.at(-1)).toMatchObject({ beat: 'agents', question: QUESTION, running: false });
+    expect(res!.message).toContain('spawn_research_agent');
+  });
+
+  test('nothing is spawned before they have answered, or without a proposal', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'agents');
+    const cold = await executeBeatTool(s, 'spawn_research_agent', {}, r.deps);
+    expect(cold!.message).toContain('propose_research');
+    expect(r.spawned).toHaveLength(0);
+
+    await executeBeatTool(s, 'propose_research', { question: QUESTION, brief: BRIEF }, r.deps);
+    const early = await executeBeatTool(s, 'spawn_research_agent', {}, r.deps);
+    expect(early!.message).toContain('They have not answered yet');
+    expect(r.spawned).toHaveLength(0);
+  });
+
+  test('the agent is spawned on their own question and left visible, running', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'agents');
+    await executeBeatTool(s, 'propose_research', { question: QUESTION, brief: BRIEF }, r.deps);
+    answers(s);
+    const res = await executeBeatTool(s, 'spawn_research_agent', {}, r.deps);
+    expect(r.spawned).toEqual([{ question: QUESTION, brief: BRIEF }]);
     expect(s.agent?.agentId).toBe('agent-1');
     expect(s.finishedAt).toBeGreaterThanOrEqual(NOW);
     expect(r.finished).toBe(1);
-    expect(res!.message).toContain('back shortly');
-    expect(res!.message).not.toContain('propose');
+    expect(r.refreshed).toContain('agents');
+    // D22: the card stays and becomes the running thing, rather than
+    // dissolving. It is the last surface of the session.
+    expect(r.proposals.at(-1)).toMatchObject({ beat: 'agents', running: true, agentName: 'Research Analyst' });
+    expect(s.proposal).toMatchObject({ beat: 'agents', running: true });
+    expect(res!.message).toContain('Research Analyst is on it');
+  });
+
+  test('the close says what IT is doing next, and never hands the founder a job', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'agents');
+    await executeBeatTool(s, 'propose_research', { question: QUESTION, brief: BRIEF }, r.deps);
+    answers(s);
+    const res = await executeBeatTool(s, 'spawn_research_agent', {}, r.deps);
+    const m = res!.message;
+    // The thing the second live run got wrong, in Vieri's words: "he just
+    // said, oh go and post... it just seems like I have to go and do it."
+    expect(m).toContain('what YOU are doing next, never what they should be doing next');
+    expect(m).toContain('go and do their day');   // as a prohibition
+    expect(m).not.toContain('they should go and do their day');
+    // Built out of the ledger, so it is what is actually running.
+    expect(m).toContain('Research Analyst is working on');
+    expect(m).toContain('runs on its own from now on');
+    expect(m).toContain('07:30');
+    expect(m).toContain('19:00');
+    expect(m).toContain('level 5');
   });
 
   test('a spawn that fails does not finish onboarding or claim an agent is running', async () => {
     const s = opened();
     const r = recorder({ spawnResearchAgent: async () => { throw new Error('no specialist installed'); } });
     await walkTo(s, r, 'agents');
-    const res = await executeBeatTool(s, 'spawn_research_agent', { question: 'anything', brief: '' }, r.deps);
+    await executeBeatTool(s, 'propose_research', { question: 'anything', brief: 'something' }, r.deps);
+    answers(s);
+    const res = await executeBeatTool(s, 'spawn_research_agent', {}, r.deps);
     expect(res!.message).toContain('Do not pretend it is running');
     expect(s.finishedAt).toBeNull();
     expect(r.finished).toBe(0);
@@ -641,7 +703,9 @@ describe('beat 12, the finale', () => {
     const s = opened();
     const r = recorder();
     await walkTo(s, r, 'agents');
-    await executeBeatTool(s, 'spawn_research_agent', { question: 'q', brief: 'b' }, r.deps);
+    await executeBeatTool(s, 'propose_research', { question: 'q', brief: 'b' }, r.deps);
+    answers(s);
+    await executeBeatTool(s, 'spawn_research_agent', {}, r.deps);
     expect(s.done).toEqual([...ROOM_BEATS]);
     expect(currentBeat(s)).toBeNull();
     expect(r.completed.map((c) => c.beat)).toEqual([...ROOM_BEATS]);
@@ -1022,7 +1086,9 @@ describe('D41, the founder comes out knowing where things live', () => {
     const s = opened();
     const r = recorder();
     await walkTo(s, r, 'agents');
-    await executeBeatTool(s, 'spawn_research_agent', { question: 'q', brief: 'b' }, r.deps);
+    await executeBeatTool(s, 'propose_research', { question: 'q', brief: 'b' }, r.deps);
+    answers(s);
+    await executeBeatTool(s, 'spawn_research_agent', {}, r.deps);
     expect(r.marked.map((m) => m.beat)).toEqual([
       'goals', 'tasks', 'calendar', 'workflows', 'authority', 'files', 'agents',
     ]);
@@ -1044,6 +1110,144 @@ describe('D41, the founder comes out knowing where things live', () => {
 });
 
 /* ══════════════ D42 · reading their own files ══════════════ */
+
+/* ══════════ the founder's files are on Windows and the daemon is not ══════════
+
+   The second live run: he named a folder, nothing was found, he asked what
+   folders it had access to, and it could not name one. Both halves of that are
+   tested here, on a WSL machine that is entirely made of temp directories, so
+   these run identically on Linux, on macOS and in CI. */
+
+describe('D42 on WSL: the path a founder actually says', () => {
+  let drive: string;
+  let winHome: string;
+  let winDocs: string;
+  let wsl: { kind: 'wsl'; driveRoot: string };
+  let wslDeps: Recorder;
+
+  beforeEach(() => {
+    drive = mkdtempSync(join(tmpdir(), 'beats-drive-'));
+    winHome = join(drive, 'c', 'Users', 'vieri');
+    winDocs = join(winHome, 'Documents', 'Kestrel');
+    mkdirSync(winDocs, { recursive: true });
+    writeFileSync(join(winDocs, 'deck.md'), '# Kestrel\nWe sell to studios.', 'utf-8');
+    writeFileSync(join(winDocs, 'pricing.md'), 'Starter 40 a seat.', 'utf-8');
+    wsl = { kind: 'wsl', driveRoot: drive };
+    wslDeps = recorder({ host: () => wsl });
+  });
+
+  afterEach(() => {
+    rmSync(drive, { recursive: true, force: true });
+  });
+
+  test('THE BUG: C:\\Users\\... resolves to the real folder instead of vanishing', async () => {
+    const s = opened();
+    await walkTo(s, wslDeps, 'files');
+    wslDeps.proposals.length = 0;
+    const res = await executeBeatTool(s, 'propose_reading', { folder: 'C:\\Users\\vieri\\Documents\\Kestrel' }, wslDeps.deps);
+    const card = wslDeps.proposals.at(-1) as { folder: string; says: string; willRead: number };
+    expect(card.folder).toBe(winDocs);
+    expect(card.willRead).toBe(2);
+    // And it is said back to them in the spelling they used, never as /mnt.
+    expect(card.says).toBe('C:\\Users\\vieri\\Documents\\Kestrel');
+    expect(res!.message).toContain('C:\\Users\\vieri\\Documents\\Kestrel');
+  });
+
+  test('forward slashes work too, because half of them type it that way', async () => {
+    const s = opened();
+    await walkTo(s, wslDeps, 'files');
+    await executeBeatTool(s, 'propose_reading', { folder: 'C:/Users/vieri/Documents/Kestrel' }, wslDeps.deps);
+    expect((wslDeps.proposals.at(-1) as { folder: string }).folder).toBe(winDocs);
+  });
+
+  test('a bare folder name is looked for on the Windows side as well', async () => {
+    const s = opened();
+    await walkTo(s, wslDeps, 'files');
+    await executeBeatTool(s, 'propose_reading', { folder: 'Documents/Kestrel' }, wslDeps.deps);
+    expect((wslDeps.proposals.at(-1) as { folder: string }).folder).toBe(winDocs);
+  });
+
+  test('the Windows side of the fence: the drive, the Users folder and a profile are all too broad', async () => {
+    const s = opened();
+    await walkTo(s, wslDeps, 'files');
+    wslDeps.proposals.length = 0;
+    for (const [said, why] of [
+      ['C:\\', 'the whole of that drive'],
+      ['C:\\Users', 'every account on this machine'],
+      ['C:\\Users\\vieri', 'your Windows home directory'],
+      ['C:\\Windows\\System32', 'a system directory'],
+    ] as const) {
+      const res = await executeBeatTool(s, 'propose_reading', { folder: said }, wslDeps.deps);
+      expect(res!.message).toContain(why);
+    }
+    expect(wslDeps.proposals).toHaveLength(0);
+  });
+
+  test('ON LINUX the same string is not translated, so nothing here changes for anyone else', async () => {
+    const s = opened();
+    const r = recorder();   // UNIX_HOST
+    await walkTo(s, r, 'files');
+    r.proposals.length = 0;
+    const res = await executeBeatTool(s, 'propose_reading', { folder: 'C:\\Users\\vieri\\Documents' }, r.deps);
+    expect(res!.message).toContain('Not that');
+    expect(r.proposals).toHaveLength(0);
+  });
+});
+
+describe('"what folders do you have access to?" has an answer', () => {
+  test('it offers real folders that exist and have something in them', async () => {
+    const s = opened();
+    const r = recorder();
+    mkdirSync(join(tmpHome, 'Projects', 'kestrel'), { recursive: true });
+    writeFileSync(join(tmpHome, 'Projects', 'kestrel', 'plan.md'), 'x', 'utf-8');
+    const res = await executeBeatTool(s, 'folders_i_can_see', {}, r.deps);
+    expect(res!.message).toContain('Projects');
+    expect(res!.message).toContain('Acme');
+    expect(res!.message).toContain('Nothing has been read');
+  });
+
+  test('it can be asked at any point after the opening, not only in the files beat', async () => {
+    const s = opened();
+    const r = recorder();
+    // Standing in the goals beat, which is where a founder is most likely to
+    // wonder out loud what this thing can see.
+    expect(currentBeat(s)).toBe('goals');
+    const res = await executeBeatTool(s, 'folders_i_can_see', {}, r.deps);
+    expect(res!.message).not.toContain('Not yet');
+    expect(res!.message).toContain('Acme');
+  });
+
+  test('before the opening concludes there is nothing to look at yet', async () => {
+    const s = createBeatsSession();
+    const r = recorder();
+    const res = await executeBeatTool(s, 'folders_i_can_see', {}, r.deps);
+    expect(res!.message).toContain('conclude_opening');
+  });
+
+  test('a folder that is not there comes back with what was tried and what IS there', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'files');
+    r.proposals.length = 0;
+    const res = await executeBeatTool(s, 'propose_reading', { folder: 'Kestrel' }, r.deps);
+    expect(res!.message).toContain('Where this machine looked');
+    expect(res!.message).toContain(join(tmpHome, 'Kestrel'));
+    expect(res!.message).toContain('What IS on this machine');
+    expect(res!.message).toContain('Acme');
+    // The sentence that made the founder think it was blind, now banned.
+    expect(res!.message).toContain('Do not tell them you have no access to their files');
+    expect(r.proposals).toHaveLength(0);
+  });
+
+  test('a folder named with the wrong capitals still resolves', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'files');
+    r.proposals.length = 0;
+    await executeBeatTool(s, 'propose_reading', { folder: 'acme' }, r.deps);
+    expect((r.proposals.at(-1) as { folder: string }).folder).toBe(tmpFolder);
+  });
+});
 
 describe('D42, the approval names what will be read', () => {
   test('the card carries the folder, the counts and real filenames', async () => {
@@ -1446,7 +1650,9 @@ describe('move_on: an offer they turn down does not stall the conversation', () 
     const s = opened();
     const r = recorder();
     await walkTo(s, r, 'agents');
-    await executeBeatTool(s, 'spawn_research_agent', { question: 'q', brief: 'b' }, r.deps);
+    await executeBeatTool(s, 'propose_research', { question: 'q', brief: 'b' }, r.deps);
+    answers(s);
+    await executeBeatTool(s, 'spawn_research_agent', {}, r.deps);
     const res = await executeBeatTool(s, 'move_on', { because: 'x' }, r.deps);
     expect(res!.message).toContain('nothing left to set up');
   });

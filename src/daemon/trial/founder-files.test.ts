@@ -25,6 +25,7 @@ import {
   surveyFolder,
   writeRevision,
 } from './founder-files.ts';
+import { UNIX_HOST } from './host-paths.ts';
 
 let home: string;
 let root: string;
@@ -96,6 +97,58 @@ describe('resolveFounderFolder', () => {
   test('an empty name is refused rather than resolving to the cwd', () => {
     expect(resolveFounderFolder('', home).ok).toBe(false);
     expect(resolveFounderFolder('   ', home).ok).toBe(false);
+  });
+});
+
+/* ───────── the same question asked on three different machines ───────── */
+
+describe('resolveFounderFolder knows which machine it is on', () => {
+  let drive: string;
+  let winDocs: string;
+
+  beforeEach(() => {
+    drive = mkdtempSync(join(tmpdir(), 'ff-drive-'));
+    winDocs = join(drive, 'c', 'Users', 'vieri', 'Documents', 'Kestrel');
+    mkdirSync(winDocs, { recursive: true });
+  });
+
+  afterEach(() => {
+    rmSync(drive, { recursive: true, force: true });
+  });
+
+  test('UNDER WSL a Windows path finds the real folder', () => {
+    const wsl = { kind: 'wsl' as const, driveRoot: drive };
+    expect(resolveFounderFolder('C:\\Users\\vieri\\Documents\\Kestrel', home, wsl))
+      .toEqual({ ok: true, path: winDocs });
+    expect(resolveFounderFolder('C:/Users/vieri/Documents/Kestrel', home, wsl))
+      .toEqual({ ok: true, path: winDocs });
+  });
+
+  test('ON LINUX it does not, and says where it looked', () => {
+    const v = resolveFounderFolder('C:\\Users\\vieri\\Documents\\Kestrel', home, UNIX_HOST);
+    expect(v.ok).toBe(false);
+    expect(v.ok === false && v.tried).toEqual([join(home, 'C:\\Users\\vieri\\Documents\\Kestrel')]);
+  });
+
+  test('a folder that is not there says every place it looked', () => {
+    const wsl = { kind: 'wsl' as const, driveRoot: drive };
+    const v = resolveFounderFolder('Nowhere', home, wsl);
+    expect(v.ok).toBe(false);
+    expect(v.ok === false && v.tried).toContain(join(home, 'Nowhere'));
+    expect(v.ok === false && v.tried).toContain(join(drive, 'c', 'Users', 'vieri', 'Nowhere'));
+  });
+
+  test('the fence still holds on the Windows side', () => {
+    const wsl = { kind: 'wsl' as const, driveRoot: drive };
+    for (const [said, why] of [
+      ['C:\\', 'whole of that drive'],
+      ['C:\\Users', 'every account'],
+      ['C:\\Users\\vieri', 'Windows home directory'],
+    ] as const) {
+      const v = resolveFounderFolder(said, home, wsl);
+      expect(v.ok).toBe(false);
+      expect(v.ok === false && v.why).toContain(why);
+    }
   });
 });
 

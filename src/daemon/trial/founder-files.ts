@@ -36,6 +36,14 @@ import {
 } from 'node:fs';
 import { basename, dirname, extname, join, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
+import {
+  candidatePaths,
+  detectHostShape,
+  isDriveRootPath,
+  nearMisses,
+  sayPath,
+  type HostShape,
+} from './host-paths.ts';
 
 /* ─────────────────────────── the fence ─────────────────────────── */
 
@@ -81,9 +89,12 @@ export const MAX_COPY_BYTES = 25 * 1024 * 1024;
  * loud. D42 is explicit: scoped to a folder the founder chooses, NOT the home
  * directory and not the whole disk.
  */
-function isForbiddenRoot(path: string, home: string): string | null {
+function isForbiddenRoot(path: string, home: string, shape: HostShape): string | null {
   const norm = path.replace(/[/\\]+$/, '') || sep;
   if (norm === sep || /^[A-Za-z]:\\?$/.test(norm)) return 'the whole disk';
+  // Under WSL, `C:\` has already become `/mnt/c` by the time it gets here, and
+  // `/mnt/c` is every bit as much the whole disk as `/` is.
+  if (isDriveRootPath(norm, shape)) return 'the whole of that drive';
   if (norm === home.replace(/[/\\]+$/, '')) return 'your home directory';
   for (const p of ['/etc', '/usr', '/var', '/bin', '/sbin', '/lib', '/opt', '/proc', '/sys', '/dev', '/boot', '/root']) {
     if (norm === p || norm.startsWith(p + sep)) return 'a system directory';
@@ -92,35 +103,99 @@ function isForbiddenRoot(path: string, home: string): string | null {
   // "what I found out about your company" would be a party trick and a leak.
   if (norm === join(home, '.jarvis') || norm.startsWith(join(home, '.jarvis') + sep)) return "Jarvis's own data directory";
   if (/(^|[/\\])\.ssh([/\\]|$)/.test(norm)) return 'your keys';
+  // The Windows side of a WSL machine has the same three shapes, and none of
+  // the checks above sees them: `/mnt/c/Users` is everybody on the machine,
+  // `/mnt/c/Users/vieri` is a home directory that is not `home`, and
+  // `/mnt/c/Windows` is a system directory spelled differently.
+  if (shape.kind === 'wsl') {
+    const lower = norm.toLowerCase();
+    const users = `${shape.driveRoot}/c/users`.toLowerCase();
+    if (lower === users) return 'every account on this machine';
+    if (lower.startsWith(users + '/') && !lower.slice(users.length + 1).includes('/')) {
+      return 'your Windows home directory';
+    }
+    for (const p of ['windows', 'program files', 'program files (x86)', 'programdata', '$recycle.bin']) {
+      const full = `${shape.driveRoot}/c/${p}`.toLowerCase();
+      if (lower === full || lower.startsWith(full + '/')) return 'a system directory';
+    }
+  }
   return null;
 }
 
 export type FolderVerdict =
   | { ok: true; path: string }
-  | { ok: false; why: string };
+  | {
+      ok: false;
+      why: string;
+      /** Every place this machine looked, in order. Empty when the input was
+       *  never a path at all. Said out loud so a founder who names a real
+       *  folder and is told it is not there can see WHY it was not found. */
+      tried?: string[];
+    };
 
 /**
  * Turn what the founder said into a folder, or into a sentence explaining why
  * it is not one. Never throws: every rejection is something Jarvis can say.
+ *
+ * ── Why this is a list of candidates rather than one `resolve` ──
+ *
+ * It used to be `resolve(home, whatTheySaid)`, which is correct on exactly one
+ * of the three machines this ships on. The daemon runs inside WSL and the
+ * founder's company is on Windows, so `C:\Users\vieri\Documents`, a folder
+ * they can open right now, became `/home/vieri/C:\Users\vieri\Documents` and
+ * came back as "there is no folder there". The founder concluded, reasonably,
+ * that it could not see their disk.
+ *
+ * So: every reading of what they said, best first, and the first one that is
+ * really a folder wins. The translation only exists under WSL (see
+ * host-paths.ts), so a native Windows install still resolves `C:\...` the way
+ * it always did and a Linux install is untouched.
  */
-export function resolveFounderFolder(raw: string, home = homedir()): FolderVerdict {
+export function resolveFounderFolder(
+  raw: string,
+  home = homedir(),
+  shape: HostShape = detectHostShape(),
+): FolderVerdict {
   const trimmed = (raw ?? '').trim();
   if (!trimmed) return { ok: false, why: 'they did not name a folder' };
-  const expanded = trimmed === '~' ? home : trimmed.startsWith('~/') ? join(home, trimmed.slice(2)) : trimmed;
-  const path = resolve(home, expanded);
 
-  const forbidden = isForbiddenRoot(path, home);
-  if (forbidden) return { ok: false, why: `that is ${forbidden}, which is too broad to hand over` };
-
-  if (!existsSync(path)) return { ok: false, why: `there is no folder at ${path}` };
-  let stat;
-  try {
-    stat = statSync(path);
-  } catch {
-    return { ok: false, why: `${path} could not be opened` };
+  const tried = candidatePaths(trimmed, home, shape);
+  // The fence first, across every reading of it: a founder who says `C:\` has
+  // asked for the whole disk however that path is spelled on this machine, and
+  // answering with some narrower interpretation of the same words would be
+  // agreeing to something they did not say.
+  for (const path of tried) {
+    const forbidden = isForbiddenRoot(path, home, shape);
+    if (forbidden) return { ok: false, why: `that is ${forbidden}, which is too broad to hand over`, tried };
   }
-  if (!stat.isDirectory()) return { ok: false, why: `${path} is a file, not a folder` };
-  return { ok: true, path };
+
+  let wasAFile: string | null = null;
+  for (const path of tried) {
+    if (!existsSync(path)) continue;
+    let stat;
+    try {
+      stat = statSync(path);
+    } catch {
+      return { ok: false, why: `${sayPath(path, shape)} could not be opened`, tried };
+    }
+    if (stat.isDirectory()) return { ok: true, path };
+    wasAFile ??= path;
+  }
+  if (wasAFile) return { ok: false, why: `${sayPath(wasAFile, shape)} is a file, not a folder`, tried };
+
+  // Nothing matched exactly. Before giving up, the same name with different
+  // capitals, which is how "documents" is spelled by everybody who has ever
+  // used Windows and by nobody who has ever used Linux.
+  for (const path of nearMisses(trimmed, home, shape)) {
+    if (isForbiddenRoot(path, home, shape)) continue;
+    try {
+      if (statSync(path).isDirectory()) return { ok: true, path };
+    } catch {
+      /* not that one either */
+    }
+  }
+
+  return { ok: false, why: `there is no folder at ${sayPath(tried[0]!, shape)}`, tried };
 }
 
 /** Is `candidate` inside `root`? The only path check the reader ever makes. */
@@ -324,6 +399,14 @@ export type WorkspacePlan = {
   destination: string;
   /** The folder the material came from. Untouched, always. */
   source: string;
+  /**
+   * `source` spelled the way the founder knows it, for the README they will
+   * open on their own machine. Under WSL the daemon copies out of
+   * `/mnt/c/Users/vieri/Documents/Kestrel` and the founder has only ever seen
+   * `C:\Users\vieri\Documents\Kestrel`; the file that tells them where their
+   * originals still are has to say the second one.
+   */
+  sourceLabel?: string;
   title: string;
   sections: WorkspaceSection[];
 };
@@ -391,13 +474,14 @@ export function createWorkspace(plan: WorkspacePlan, now = Date.now()): Workspac
   let copied = 0;
   mkdirSync(plan.destination, { recursive: true });
 
+  const from = plan.sourceLabel || plan.source;
   const index: string[] = [
     `# ${plan.title}`,
     '',
-    `Put together on ${new Date(now).toDateString()} from \`${plan.source}\`.`,
+    `Put together on ${new Date(now).toDateString()} from \`${from}\`.`,
     '',
     '**Nothing was moved and nothing was deleted.** Every file below is a copy;',
-    `the originals are exactly where they were, in \`${plan.source}\`.`,
+    `the originals are exactly where they were, in \`${from}\`.`,
     '',
   ];
 

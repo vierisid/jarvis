@@ -90,6 +90,10 @@ export interface AuthorityProposal {
 export interface FilesProposal {
   beat: "files";
   folder: string;
+  /** The same folder spelled the way the founder knows it. Under WSL the
+   *  daemon opens /mnt/c/Users/... and they have only ever seen C:\Users\...
+   *  See src/daemon/trial/host-paths.ts. */
+  says?: string;
   what: string;
   sample: string[];
   willRead: number;
@@ -104,6 +108,9 @@ export interface WorkspaceProposal {
   kind: "workspace";
   destination: string;
   source: string;
+  /** Both of those, the way the founder knows them. See FilesProposal.says. */
+  saysDestination?: string;
+  saysSource?: string;
   title: string;
   sections: { name: string; about: string; files: string[] }[];
 }
@@ -117,6 +124,16 @@ export interface EditProposal {
   as: string;
 }
 
+/** D15: the finale, on screen. The one card that stays after it commits,
+ *  because the thing it describes is still working. */
+export interface AgentProposal {
+  beat: "agents";
+  question: string;
+  brief: string;
+  running?: boolean;
+  agentName?: string | null;
+}
+
 export type BeatProposal =
   | GoalProposal
   | TaskProposal
@@ -125,7 +142,8 @@ export type BeatProposal =
   | AuthorityProposal
   | FilesProposal
   | WorkspaceProposal
-  | EditProposal;
+  | EditProposal
+  | AgentProposal;
 
 /** What just became real, for the card's last frame before it dissolves. */
 export interface ProposalLanded {
