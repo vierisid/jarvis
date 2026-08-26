@@ -118,6 +118,9 @@ export function TrialProposal({
   // question, and it moves out of the way of the Talk panel their keystroke
   // just opened. See `.tc-prop--kept`.
   const kept = p.beat === "handover" && p.handedOver === true;
+  const fromFiles =
+    (p.beat === "goals" || p.beat === "tasks" || p.beat === "calendar" || p.beat === "workflows") &&
+    p.fromFiles === true;
   return (
     <div className={`tc-prop${working ? " tc-prop--working" : ""}${kept ? " tc-prop--kept" : ""}`}>
       <div className="tc-prop-head">
@@ -129,7 +132,13 @@ export function TrialProposal({
                 : handover ? (p.handedOver ? "yours from here" : p.pressed ? "that is the one" : "how you get me back")
                   : p.beat === "files" ? "nothing read yet"
                     : p.beat === "workspace" ? "from what it read"
-                      : "from what you told me"}
+                      // D44 put the file beats first, so from here on most of
+                      // what is on this card came out of their own documents
+                      // rather than out of the conversation. Saying "from what
+                      // you told me" over a quarter built from their own plan
+                      // would undersell the one thing the reorder bought.
+                      : fromFiles ? "from your own files, and what you told me"
+                        : "from what you told me"}
         </span>
         {!working && <span className="tc-prop-wait">waiting on you</span>}
       </div>

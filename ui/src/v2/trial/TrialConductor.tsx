@@ -46,15 +46,17 @@ function isRoomKey(v: string): v is RoomKey {
      2. Everything after it. The gate DISSOLVES and the live shell is
         underneath, with the pebble and the captions floating over it. That is
         what lets the founder watch their vault fill while they are still
-        talking (D22, frame 04), and it is the surface the seven room beats
-        will need, since under D17 the rooms are things Jarvis does WHILE the
+        talking (D22, frame 04), and it is the surface the room beats will
+        need, since under D17 the rooms are things Jarvis does WHILE the
         conversation continues.
 
    There is no welcome screen, no bullet points and no "click to begin" (D10):
    the moment the microphone is on, the session opens and Jarvis speaks.
 
-   The seven room beats (D16) render on the SAME surface, over the same live
-   shell, while the same conversation carries on. Nothing about this component
+   The room beats (D16, reordered by D44) render on the SAME surface, over the
+   same live shell, while the same conversation carries on. The first of them
+   is now the file read, which means the first room the founder is ever led
+   into is the one their own documents land in. Nothing about this component
    changes phase when the opening ends: a proposal card appears on the right
    when something is waiting on the founder's yes, and the pebble occasionally
    leaves its corner to lead them to a room. That is the whole of the visible
@@ -756,9 +758,15 @@ function TrialFooter({
       <span className="tc-foot-clock">
         {trial?.started_at ? `48 hours · ${remaining} left` : "48 hours · not started"}
       </span>
+      {/* D44 resplit the five soft targets: the opening now goes looking for
+          `company` only, and the other four are asked for in the beat that
+          needs them, with the founder's own documents already open. So the bare
+          x/5 was about to start reading as a broken opening. What a reviewer
+          actually needs to know is whether the opening got the one thing it is
+          responsible for. See FUEL_AREAS in src/daemon/trial/conductor.ts. */}
       {review && (
         <span className="tc-foot-fuel" title={fuel.map((f) => `${f.area}: ${f.summary}`).join("\n")}>
-          {fuel.length}/5 fuel
+          {fuel.some((f) => f.area === "company") ? "company" : "no company yet"} · {fuel.length}/5 fuel
         </span>
       )}
       {/* The seam is a fact about the session, not a position in it, and it is

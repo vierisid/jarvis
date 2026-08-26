@@ -4,7 +4,7 @@
  *
  * Everything stateful about the session lives here rather than in ws-service:
  * which sockets are running a conductor session, what each has landed, how far
- * through D16's seven beats the two of them have got, and the one piece of
+ * through D16's beats the two of them have got, and the one piece of
  * timing the whole commercial model rests on, when the 48-hour clock starts.
  *
  * ws-service keeps a four-line branch and delegates.
@@ -238,7 +238,7 @@ export class TrialConductorManager<W> {
     return beat ? beat.message : null;
   }
 
-  /* ───────────────────── D16, the seven beats ───────────────────── */
+  /* ───────────────────── D16, the beats ───────────────────── */
 
   /** Read-only view of how far through the beats this socket is. Used by the
    *  tests and by whoever builds the day-one beats on top of this seam. */
@@ -265,6 +265,15 @@ export class TrialConductorManager<W> {
       fuel: (): BeatFuel => {
         const out: BeatFuel = {};
         for (const [area, captured] of entry.session.coveredFuel) out[area] = captured.summary;
+        // D44 made `company` load-bearing in a way it was not before: it is
+        // the only thing the opening goes looking for, and it is what the
+        // background reader is handed as `about` so it knows what it is
+        // looking for in a stranger's folder. A model that concluded the
+        // opening without calling `capture_fuel` would send the reader in
+        // blind, so `conclude_opening`'s own summary stands in. It is the
+        // model's words rather than the founder's, which is why it is only a
+        // fallback and never overwrites what was actually captured.
+        if (!out.company && entry.session.understanding) out.company = entry.session.understanding;
         return out;
       },
       enterRoom: (beat: RoomBeat, label: string) => this.enterRoom(entry, beat, label),
@@ -673,7 +682,7 @@ export class TrialConductorManager<W> {
   private publishOpeningComplete(entry: Entry<W>, handoff: TrialOpeningHandoff): void {
     markOpeningCompleted(handoff.concludedAt);
     // THE SEAM. This one line is the whole handover from the opening to the
-    // seven beats: a flag, set while the model is mid-sentence. No new session,
+    // beats: a flag, set while the model is mid-sentence. No new session,
     // no new prompt, no new socket, and nothing said to the founder (D17). The
     // model finds out by reading the tool result it is already waiting on.
     entry.beats.open = true;

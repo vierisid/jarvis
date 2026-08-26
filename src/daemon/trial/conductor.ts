@@ -37,7 +37,7 @@
  */
 
 import type { LLMTool } from '../../llm/provider.ts';
-import { goalsBrief, type BeatFuel } from './beats.ts';
+import { filesBrief, type BeatFuel } from './beats.ts';
 import {
   createEntity,
   findEntities,
@@ -72,28 +72,69 @@ export const TRIAL_OPENING_LINE =
   'I need to understand the company. Tell me about it.';
 
 /**
- * The soft extraction targets (D13). They are here because LATER BEATS NEED
- * THE FUEL, and for no other reason, each one is the input to a room Jarvis
- * is about to act in. They are not a checklist, are not ordered, and are not
- * enforced; the model decides when it knows enough.
+ * The soft extraction targets (D13), and how D44 resplit them.
+ *
+ * These were designed when talking was the only way to learn anything, so all
+ * five were the opening's job. D44 put the file reader first, and four of the
+ * five are now things the founder's own documents either answer better or
+ * should be asked for later, in the beat that needs them and with the
+ * documents already open. The keys are unchanged, the tool is unchanged, and
+ * `capture_fuel` still records any of them the moment it is genuinely known.
+ * What changed is which one the OPENING goes looking for.
+ *
+ * The split, and the reasoning for each:
+ *
+ *   company        STAYS, and is now the opening's only target, in a smaller
+ *                  form. The files answer this far better than a founder can
+ *                  in two minutes, but something has to be known before the
+ *                  folder can be asked for sensibly, and the reader is handed
+ *                  it as `about` so it knows what it is looking for.
+ *   goal           MOVES to the goals beat. A quarter's goal is a decision
+ *                  rather than a record, so the founder always has the last
+ *                  word on it, but their plans and updates carry the
+ *                  candidates. Proposing it from a document they wrote and
+ *                  being corrected is a better minute than asking for it cold.
+ *   drowning       MOVES to the workflows beat. Recurring work is the one
+ *                  thing a folder shows better than a person tells: it is the
+ *                  document that is in there twelve times. The founder is
+ *                  shown the pattern instead of being asked to summarise it.
+ *   next_days      MOVES to the tasks and calendar beats. Their documents hold
+ *                  dated commitments they will never think to mention, because
+ *                  as far as they are concerned it is already written down.
+ *                  What only they know is what slipped, and that is a better
+ *                  question asked while looking at a board.
+ *   open_question  MOVES to the agents beat. The best research question in the
+ *                  session is usually a contradiction between two of their own
+ *                  documents, which nobody could have volunteered.
+ *
+ * The failure this prevents is specific and it is the whole reason D44 exists:
+ * a founder asked to explain something Jarvis has just read.
  */
 export const FUEL_AREAS = {
   company:
     'The company and the people in it. Who they are, what it does, who works ' +
-    'on what, the clients that matter, the projects in flight. Feeds the vault.',
+    'on what, the clients that matter, the projects in flight. Feeds the vault, ' +
+    'and it is the one you go looking for.',
   goal:
     'The single main goal this quarter, and what measurable movement toward it ' +
-    'would look like. Feeds the goals beat.',
+    'would look like. Feeds the goals beat. Do not go looking for it here.',
   drowning:
     'What they are drowning in. The recurring manual work that eats their week, ' +
-    'and when it should happen. Feeds the workflows beat.',
+    'and when it should happen. Feeds the workflows beat. Do not go looking for ' +
+    'it here.',
   next_days:
     'What is coming up in the next few days, what is already late, and the ' +
-    'shape of their working days. Feeds the tasks and calendar beats.',
+    'shape of their working days. Feeds the tasks and calendar beats. Do not go ' +
+    'looking for it here.',
   open_question:
     'One open question about their market or their business they have not had ' +
-    'time to answer. Feeds the research agent that closes onboarding.',
+    'time to answer. Feeds the research agent that closes onboarding. Do not go ' +
+    'looking for it here.',
 } as const;
+
+/** The only one the opening is responsible for getting. The other four are
+ *  taken if the conversation hands them over and asked for later if not. */
+export const OPENING_FUEL: FuelArea = 'company';
 
 export type FuelArea = keyof typeof FUEL_AREAS;
 
@@ -173,23 +214,31 @@ The second is judgement. Nobody ever chose a co-founder because they agreed with
 - Do NOT close a turn with a summary of what they just told you and nothing else. Reflecting back is how you show you listened, not how you end your turn.
 - Do NOT give them homework. No task lists for them, no "in the meantime you can", no telling them to go and post, write, check, review or think about anything. Not once, and least of all at the end.
 
-# What you need to end up knowing
+# What you need to end up knowing, and it is less than you think
 
-These are things to KNOW by the end, not things to ask in order. They exist because of what you are about to do with them: each one is the input to real work you will do with the founder in the next few minutes. Get them the way a co-founder gets them, out of what the founder is already telling you, and if the conversation gives you one of them for free, take it and do not ask.
+ONE THING: what this company is and what it does. Enough to talk about it like someone who works there, not enough to write its history. That is all this part of the conversation is for.
+
+The reason it is one thing and not five is worth understanding, because it changes how you listen. The moment you have that, you are going to ask them for the folder their company lives in on this machine, and read it. Their own documents will tell you their clients, their numbers, their deadlines and their commitments in two minutes, and far more accurately than they can while talking. So do not spend twenty minutes extracting a description of a company that is sitting in a folder ten feet away, and never make them perform a summary of something you are about to read.
+
+These are the five things the rest of the session runs on. Only the first is yours to go and get. The other four have beats of their own later, where you will be looking at their real material while you ask, and asking for them now would be asking early and blind:
 
 ${fuel}
 
-If a subject never comes up naturally and you genuinely need it, ask for it the way you would ask a partner, once, in their language and not yours.
+Take any of them for free if the conversation hands it over, and call \`capture_fuel\` when it does. Do not go hunting for the last four and do not work through them as a list.
+
+When you have the company, stop asking about it.
 
 # Recording, silently, while they talk
 
 Call \`remember\` as you go, continuously, in the same turn as you speak. The founder can see their vault filling while they talk, so this must happen DURING the conversation and never in a batch at the end. Every person, client, project, decision, worry and number they mention is worth landing.
 
-Call \`capture_fuel\` when you have actually learned one of the five things above, in their own words. Both tools are silent: never mention them, never confirm them, never pause for them.
+Call \`capture_fuel\` when you have actually learned one of the five things above, in their own words. That includes the four you are not going looking for: if one of them turns up on its own, record it and move on. Both tools are silent: never mention them, never confirm them, never pause for them.
 
 # When you are done with the opening
 
-You decide. There is no fixed length. Call \`conclude_opening\` when you understand the company well enough to start doing real work with them. Not perfectly. Well enough.
+You decide, and it is sooner than it used to be. Call \`conclude_opening\` once you could describe their company back to them and have them recognise it. Not perfectly, not completely. Well enough to know what you are looking at when you open their files.
+
+That is usually a few minutes and a handful of turns, not twenty. Going long here is not thoroughness, it is asking a person to recite something you are about to read.
 
 Calling it does NOT end the conversation and does not hand them to anything. Do not sign off, do not say you have what you need, do not announce a next phase, do not thank them for their time. You keep talking. It is a marker for you, invisible to them, and the tool's result will tell you what to do next.`
     + (ctx.now ? `\n\nThe current time is ${ctx.now}.` : '');
@@ -283,10 +332,12 @@ export const CONDUCTOR_TOOLS: LLMTool[] = [
   {
     name: 'conclude_opening',
     description:
-      'Mark the opening of the session complete. Call it when you understand the ' +
-      'company well enough to start doing real work with the founder. This does ' +
-      'NOT end the conversation, does not hand them anywhere, and is invisible to ' +
-      'them: do not sign off or announce anything. Read the result and carry on.',
+      'Mark the opening of the session complete. Call it once you could describe ' +
+      'their company back to them and have them recognise it: enough to know what ' +
+      'you are looking at when you open their files, not a complete picture. A few ' +
+      'minutes, not twenty. This does NOT end the conversation, does not hand them ' +
+      'anywhere, and is invisible to them: do not sign off or announce anything. ' +
+      'Read the result and carry on.',
     parameters: {
       type: 'object',
       properties: {
@@ -636,17 +687,21 @@ function executeConcludeOpening(
  * THE SEAM, in words.
  *
  * This is what the model reads the instant the opening is done, and it is the
- * ONLY thing that changes at the join between the opening and the seven beats
- * (D16). No new session, no new prompt, no handover, nothing said out loud: it
- * finishes reading a tool result and carries on talking, now about their
- * quarter (D17).
+ * ONLY thing that changes at the join between the opening and the beats (D16).
+ * No new session, no new prompt, no handover, nothing said out loud: it
+ * finishes reading a tool result and carries on talking (D17).
+ *
+ * Under D44 what it carries on talking about is their FILES, not their
+ * quarter. That one word is most of the reorder as the model experiences it:
+ * the first thing that happens after "I understand the company" is Jarvis
+ * saying it would rather read the real thing than be told about it.
  *
  * The words themselves belong to the first beat, so they live in beats.ts with
- * the other six briefs. What stays here is the rule that the marker itself is
- * invisible, which `goalsBrief` opens by repeating.
+ * the other briefs. What stays here is the rule that the marker itself is
+ * invisible, which `filesBrief` opens by repeating.
  */
 export function concludeResultMessage(session: ConductorSession): string {
   const fuel: BeatFuel = {};
   for (const [area, captured] of session.coveredFuel) fuel[area] = captured.summary;
-  return goalsBrief(fuel);
+  return filesBrief(fuel);
 }

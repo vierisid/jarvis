@@ -89,31 +89,47 @@ import { detectHostShape, folderCandidates, sayPath, type HostShape } from './ho
 export const TRIAL_BEATS_SOURCE = 'trial_room_beats';
 
 /**
- * The beats that are stops, in D16's order. `memory` is D16's first beat and
- * is deliberately absent from the list: it is not a stop, it is `remember`
- * running underneath all of these.
+ * The beats that are stops, in D16's order as amended by D44. `memory` is
+ * D16's first beat and is deliberately absent from the list: it is not a stop,
+ * it is `remember` running underneath all of these.
  *
- * `files` and `workspace` are D42 and D43, added on 26 August, and they sit
- * between `authority` and `agents` on purpose:
+ * `files` and `workspace` are D42 and D43. They came in on 26 August between
+ * `authority` and `agents`, and D44 moved them to the FRONT the same day,
+ * directly after the founder has described their company. The reversal is
+ * recorded here rather than quietly applied, because the argument it overturns
+ * was a good one and somebody will make it again.
  *
- *   - AFTER authority, because reading a founder's disk is the most invasive
- *     thing in the whole trial and the beat immediately before it is the one
- *     where the two of them just negotiated what Jarvis may do. D16's own
- *     logic for putting authority sixth is "negotiate power once the founder
- *     can see what it will be used for", and there is no clearer thing it will
- *     be used for than this. Asking first would be asking for the biggest
- *     thing before the conversation about power had happened.
- *   - BEFORE agents, because agents is the finale (D15) and the finale has to
- *     be last: it is the only beat that keeps working after the talking stops.
- *     It also matters that the reader gets a few minutes of the conversation
- *     to run in (D17), which only exists if something comes after it.
- *   - `handover` is LAST and is the only beat whose subject is not the
- *     founder's company but the product itself. See `handoverBrief`: the
- *     conducted hour ends there, the trial does not, and the shell the founder
- *     has been watching all session finally becomes theirs to touch.
+ * THE ARGUMENT FOR THE OLD PLACEMENT, which was mine: reading a founder's disk
+ * is the most invasive thing in the trial, D16 puts authority sixth so that
+ * power is negotiated before it is used, and asking for a folder at minute
+ * three asks for the biggest thing on the least credit.
+ *
+ * WHY IT LOSES. The file read never depended on the authority beat and never
+ * could have: it has its own approval, which names the folder, the file count
+ * and six real filenames, and `start_reading` refuses without a spoken answer
+ * to THAT card (D42). Authority governs what Jarvis may do UNATTENDED, which
+ * is a different question from what a founder hands over deliberately while
+ * watching. Sequencing them implied a dependency the code does not have.
+ *
+ * WHAT MOVING IT BUYS, and this is the whole point: every beat below `files`
+ * used to be proposed out of ten minutes of talking. Now they are proposed out
+ * of the company's own documents. "It was actually listening" (D16.2) becomes
+ * "it already knows", and a founder is never asked to explain something Jarvis
+ * has just read.
+ *
+ * WHAT IT COSTS, so it is not discovered later as a surprise: the ask is much
+ * earlier and carries far less credit, so `filesBrief` does more work than any
+ * other brief here, and the refusal path stops being an edge case. A founder
+ * who says no at minute three spends the next forty in this same list, so
+ * every brief below has a second arm that asks for what the files would have
+ * answered. See `NO_FILES`.
+ *
+ * `agents` is still the finale (D15) and `handover` is still last. Moving the
+ * file reader does not move the researcher: it is the only beat that keeps
+ * working after the talking stops, and it has to be the one they leave on.
  */
 export const ROOM_BEATS = [
-  'goals', 'tasks', 'calendar', 'workflows', 'authority', 'files', 'workspace', 'agents',
+  'files', 'workspace', 'goals', 'tasks', 'calendar', 'workflows', 'authority', 'agents',
   'handover',
 ] as const;
 
@@ -128,10 +144,17 @@ export const BEAT_ROOM: Record<RoomBeat, RoomKey | null> = {
   workflows: 'workflows',
   authority: 'authority',
   // Both file beats happen in `memory`, which is where what the reader finds
-  // actually lands. D16.1 says the founder is never SHOWN the memory room
-  // during the opening; by the time these run it has an hour of their company
-  // in it and their own files are being added to it, which is the opposite of
-  // a tour. `enterRoom` is a no-op on an unchanged room, so the pebble makes
+  // actually lands.
+  //
+  // D44 makes this the FIRST room the founder is led into, and D16.1 says they
+  // are never SHOWN the memory room. The tension is real and it resolves like
+  // this: D16.1 forbids the memory room as a TOUR STOP, a thing pointed at and
+  // explained. Nothing is explained here. They are led there at the one moment
+  // it is not a room but an event, the seconds when their own documents start
+  // arriving in it, and the whole of D42 is that they watch a picture of their
+  // company assemble without having typed it. A ticker they have been watching
+  // out of the corner of their eye for two minutes becomes the thing on the
+  // screen. `enterRoom` is a no-op on an unchanged room, so the pebble makes
   // one gesture across both beats rather than twitching twice.
   files: 'memory',
   workspace: 'memory',
@@ -212,6 +235,14 @@ export type GoalProposal = {
    * about this week.
    */
   firstMove: { what: string; due: number | null; dueLabel: string | null; under: string } | null;
+  /**
+   * D44. True when the reader had landed something out of the founder's own
+   * documents by the time this went up, so the card can say where it came
+   * from. The whole claim the reorder makes is "it already knows", and a card
+   * that still says "from what you told me" while Jarvis is quoting their
+   * deck contradicts it on screen.
+   */
+  fromFiles?: boolean;
 };
 
 export type TaskProposal = {
@@ -229,6 +260,14 @@ export type TaskProposal = {
     /** The one thing they do first. Exactly one, and they choose it. */
     first: boolean;
   }[];
+  /**
+   * D44. True when the reader had landed something out of the founder's own
+   * documents by the time this went up, so the card can say where it came
+   * from. The whole claim the reorder makes is "it already knows", and a card
+   * that still says "from what you told me" while Jarvis is quoting their
+   * deck contradicts it on screen.
+   */
+  fromFiles?: boolean;
 };
 
 export type CalendarProposal = {
@@ -238,6 +277,14 @@ export type CalendarProposal = {
   because?: string;
   /** The other end of the day: when the evening review runs. */
   eveningHour: number | null;
+  /**
+   * D44. True when the reader had landed something out of the founder's own
+   * documents by the time this went up, so the card can say where it came
+   * from. The whole claim the reorder makes is "it already knows", and a card
+   * that still says "from what you told me" while Jarvis is quoting their
+   * deck contradicts it on screen.
+   */
+  fromFiles?: boolean;
 };
 
 export type WorkflowProposal = {
@@ -248,6 +295,14 @@ export type WorkflowProposal = {
   never?: string;
   /** Set while the composer is building it, so the silence is legible. */
   building?: boolean;
+  /**
+   * D44. True when the reader had landed something out of the founder's own
+   * documents by the time this went up, so the card can say where it came
+   * from. The whole claim the reorder makes is "it already knows", and a card
+   * that still says "from what you told me" while Jarvis is quoting their
+   * deck contradicts it on screen.
+   */
+  fromFiles?: boolean;
 };
 
 export type AuthorityProposal = {
@@ -404,6 +459,10 @@ export type BeatsSession = {
   /** D42: the folder the founder approved, and the reader working through it. */
   files: {
     folder: string;
+    /** Their spelling of that folder. Under WSL the daemon opens
+     *  /mnt/c/Users/... and the founder has only ever seen C:\\Users\\..., so a
+     *  brief that quotes the first is quoting somebody else's machine. */
+    says?: string;
     /** Files the reader was pointed at. */
     willRead: number;
     agentId: string | null;
@@ -414,11 +473,16 @@ export type BeatsSession = {
     /** Entities the reader has landed. Counted here so `reading_so_far` can
      *  answer honestly when the answer is "nothing yet". */
     found: number;
+    /** True once the model has been handed the workspace brief off the back of
+     *  a real landing. `reading_so_far` is called every turn or two, and a
+     *  brief repeated on every call is a beat restarted on every call. */
+    toldOfFindings?: boolean;
     /** What the reader said when it finished, or the reason it could not. */
     summary: string | null;
   } | null;
-  /** D43: where the organised copy went, once it exists. */
-  workspace: { destination: string; copied: number; sections: number } | null;
+  /** D43: where the organised copy went, once it exists. `saysDestination` is
+   *  their spelling of it, which under WSL is not the path this daemon used. */
+  workspace: { destination: string; saysDestination?: string; copied: number; sections: number } | null;
   /** D43: the one piece of real work it did, if they took it. */
   edit: { path: string; file: string } | null;
   /** Beat 12's output, and the seam into beat 14. */
@@ -492,10 +556,10 @@ function markDone(s: BeatsSession, beat: RoomBeat): void {
  * What the model is told, privately, the instant it arrives at a beat.
  *
  * These are the only place the beat ORDER is expressed to the model, and they
- * arrive one at a time as tool results. Handing the model all seven up front
+ * arrive one at a time as tool results. Handing the model all of them up front
  * would turn the opening into a rehearsal for the beats, which is exactly the
- * drift D12 exists to stop: it would start steering the founder toward the
- * goals room while it was still supposed to be listening.
+ * drift D12 exists to stop: it would start steering the founder toward their
+ * folder while it was still supposed to be listening.
  *
  * `fuel` is the founder's own words, captured in the opening. It is repeated
  * into the brief that needs it so a long session cannot lose it out of the
@@ -503,6 +567,76 @@ function markDone(s: BeatsSession, beat: RoomBeat): void {
  * rather than a paraphrase of a paraphrase.
  */
 export type BeatFuel = Partial<Record<'company' | 'goal' | 'drowning' | 'next_days' | 'open_question', string>>;
+
+/**
+ * What the founder's own documents turned out to say, as the later beats get
+ * to see it.
+ *
+ * This type is the entire mechanism of D44. Reordering the list above buys
+ * nothing on its own: `goals`, `tasks`, `calendar`, `workflows` and `agents`
+ * would still propose from ten minutes of talking, just later in the hour. The
+ * reorder only pays when the beats below can SEE what was read, so every brief
+ * that can use this takes one and says, in its own words, what to do with it.
+ *
+ * `found` is the reader's landings in the founder's own language, exactly the
+ * lines the memory ticker showed them: "Northwind (client)", "Rita: does the
+ * front end two days a week". It comes from `readerProgress`, which is fed by
+ * the same `remember` path the conversation uses, so it is already
+ * de-duplicated and already on their screen. Nothing here is a paraphrase of a
+ * paraphrase.
+ */
+export type FileFindings = {
+  /** The folder they approved, as this machine opens it. */
+  folder?: string;
+  /** How the founder says that folder. Under WSL these differ. */
+  says?: string;
+  /** What the reader has landed, oldest first. Empty until it lands something. */
+  found: string[];
+  /** The reader's closing paragraph on what the company is. */
+  summary?: string;
+  /** True once the reader has stopped, either way. */
+  finished: boolean;
+  /** D43's organised folder, once it exists. */
+  workspace?: string;
+};
+
+export const NO_FINDINGS: FileFindings = { found: [], finished: false };
+
+/**
+ * THE SECOND ARM, and the reason the refusal path is not an edge case.
+ *
+ * D44 moves the ask to minute three, which means a founder can decline it
+ * having heard nothing but a voice. That founder must not spend the next forty
+ * minutes in a visibly worse trial, so every brief that reads the files has to
+ * work identically when there are none: it asks for what the documents would
+ * have answered, the way the beat did before D42 existed. This sentence is
+ * what carries that, and it is deliberately the same sentence everywhere so a
+ * model cannot learn a different tone for the founder who said no.
+ */
+const NO_FILES =
+  'You have not read anything of theirs, so everything here comes out of what they tell you. Ask ' +
+  'for it plainly and do not refer back to the folder, do not sound short-changed, and never imply ' +
+  'this would be better if they had said yes.';
+
+/** What the reader found, rendered for a brief, or the second arm when there
+ *  is nothing. `limit` is per beat: the goals brief wants the lot, the
+ *  authority brief wants a reminder. */
+function fromTheirFiles(files: FileFindings, limit = 24): string {
+  if (files.found.length === 0) return `\n\n${NO_FILES}`;
+  const shown = files.found.slice(0, limit);
+  const more = files.found.length - shown.length;
+  return (
+    `\n\nWHAT YOU READ IN THEIR OWN FILES${files.says ? `, in ${files.says}` : ''}. This is theirs, not ` +
+    'yours, and they never said most of it out loud:\n' +
+    shown.map((f) => `- ${f}`).join('\n') +
+    (more > 0 ? `\n- and ${more} more` : '') +
+    (files.summary ? `\n\nWhat the whole folder amounted to: ${files.summary}` : '') +
+    '\n\nUse it. Name their actual clients, projects, numbers and dates rather than the shape of ' +
+    'them, and never ask them for something that is written in a document you have read. If you are ' +
+    'unsure whether a thing you read is still true, say the thing and ask whether it still holds. ' +
+    'That is a different question from asking them to tell you.'
+  );
+}
 
 const NOTHING_ABOUT_THIS =
   'Say nothing about this to them. It is not a step, a phase or a stage, and ' +
@@ -526,6 +660,8 @@ function quoted(label: string, text: string | undefined): string {
  * So the change is not "talk more". It is that a beat is finished when the
  * ROOM'S WORK is finished, and each brief now says what that means:
  *
+ *   files      their own material, read by something that is not them.
+ *   workspace  a real folder on their disk, and one real piece of work in it.
  *   goals      an objective with an end date, key results with a number AND
  *              where that number is today, and the first move under one of
  *              them. Three answers from the founder, not one nod.
@@ -534,53 +670,89 @@ function quoted(label: string, text: string | undefined): string {
  *   calendar   both ends of the day, not just the morning.
  *   workflows  two flows (D16.5), and the line each must never cross.
  *   authority  the number AND the carve-out they choose.
- *   files      their own material, read by something that is not them.
- *   workspace  a real folder on their disk, and one real piece of work in it.
  *
  * Every one of those is a row in their vault or a file on their disk
  * afterwards. None of them is a pause, a progress bar, or Jarvis saying more
  * words about the same thing.
+ *
+ * ── And why they now take a second argument ──
+ *
+ * D44 put the two file beats first, and the ONLY thing that makes that worth
+ * doing is what the five beats below them are then able to say. So each of
+ * them takes a `FileFindings` as well as the founder's words, and each one is
+ * explicit about what to draw from it:
+ *
+ *   goals      the targets and numbers already written down in their own
+ *              plans, so "where is this today" is a number Jarvis says and
+ *              they confirm, rather than a number they are asked to produce.
+ *   tasks      dated commitments sitting in client documents and proposals,
+ *              which are the tasks nobody says out loud because they are
+ *              already written down somewhere.
+ *   calendar   the same dates, read against their week. `read_week` gets them
+ *              directly, not just through the brief.
+ *   workflows  the recurring work, visible as REPETITION in the folder: the
+ *              twelve monthly updates, the invoice per client per month. The
+ *              founder does not have to describe the thing that eats their
+ *              week; it is sitting there in triplicate.
+ *   authority  a carve-out with something concrete behind it, because "changes
+ *              written to your files" now names a folder they have watched
+ *              Jarvis work in.
+ *   agents     the best question in the session, which is usually the
+ *              contradiction the reader found and nobody has resolved.
+ *
+ * Every one of them also has a second arm for the founder who said no, and it
+ * is the same arm in every brief. See `NO_FILES`.
  */
 
-export function goalsBrief(fuel: BeatFuel = {}): string {
+export function goalsBrief(fuel: BeatFuel = {}, files: FileFindings = NO_FINDINGS): string {
+  const read = files.found.length > 0;
   return `${NOTHING_ABOUT_THIS}
 
 Now the two of you start doing the work, and the first thing is their quarter. Do not rush this one. It is the first real thing you build together and it is worth several turns.
 
 Build it with them in three passes, and call \`propose_goals\` again after each so the card on their screen fills in as they answer.
 
-1. THE SHAPE. One objective and two to four key results under it, out of the sentences they actually said. Their words, their numbers, no OKR vocabulary and no invented metrics. Say it out loud and call \`propose_goals\` in the SAME turn so it is on their screen while you are still speaking. Then ask them to change something: what is missing, or which one of these is not really the point. A tree they edited is theirs. A tree they nodded at is yours.
+1. THE SHAPE. One objective and two to four key results under it. ${read
+    ? 'Build it out of what their own documents say they are chasing, not out of the two minutes they talked. If a plan, a deck or an update names a target, that is the objective and you should say so, naming the thing you read it in. Then ask them what it is missing, or which one of these is not really the point.'
+    : 'Build it out of the sentences they actually said. Their words, their numbers, no OKR vocabulary and no invented metrics. Then ask them to change something: what is missing, or which one of these is not really the point.'} Say it out loud and call \`propose_goals\` in the SAME turn so it is on their screen while you are still speaking. A tree they edited is theirs. A tree they nodded at is yours.
 
-2. THE NUMBERS. For every key result, ask where it is TODAY. This is the question they have to stop and work out, and it is the whole difference between a target and something either of you can track. If they do not know, ask them to guess and put the guess in. \`create_goals\` will not write the tree until every key result has one.
+2. THE NUMBERS. For every key result, you need where it is TODAY. This is the whole difference between a target and something either of you can track.${read
+    ? '\n\n   Here is what changes now you have read their files: WHERE A NUMBER IS ALREADY WRITTEN DOWN, SAY IT, do not ask for it. "Your last update has you at eleven customers. Still eleven?" is a check and takes them a second. "Where are you on customers?" is homework, and they will notice you have just read the document it is in. Only ask outright for the ones nothing you read could answer.'
+    : '\n\n   Ask them, one at a time, and if they do not know, ask them to guess and put the guess in.'} \`create_goals\` will not write the tree until every key result has one.
 
 3. THE FIRST MOVE. The quarter is three months and this week is this week. Ask what the first actual move is, name the key result it sits under, and give it a date inside the next two weeks. Say plainly if you think they have picked the wrong one, and why.
 
 When all three are on the card and they have said yes, call \`create_goals\`.
 
-If they never told you what this quarter is for, ask them now, once, in their language, and build it from their answer.${quoted('their goal', fuel.goal)}`;
+If neither their files nor their words ever said what this quarter is for, ask them now, once, in their language, and build it from their answer.${quoted('their goal', fuel.goal)}${fromTheirFiles(files)}`;
 }
 
-export function tasksBrief(fuel: BeatFuel = {}): string {
+export function tasksBrief(fuel: BeatFuel = {}, files: FileFindings = NO_FINDINGS): string {
+  const read = files.found.length > 0;
   return `Their tree is on the screen and it is real. Do not read it back to them.
 
 Now the things with dates on them, and this is a shorter beat than the last one but not a throwaway.
 
-Write their actual tasks out of what they told you: four to six, with real dates. If something is already late, put it first and say so.
+Write their actual tasks out: four to six, with real dates. If something is already late, put it first and say so.${read
+    ? '\n\nSTART FROM WHAT YOU READ, not from what they remember. Their documents are full of commitments with dates attached: a deliverable promised in a client document, a renewal, a date in a proposal, something a plan says happens this month. Those belong on this board and they are the ones the founder will not think to mention, because as far as they are concerned it is already written down. Say where each one came from, once, briefly, and then ask what is missing.'
+    : '\n\nBuild them out of what they have told you.'}
 
 Two things make this more than a list, and both need them to answer:
 
-- FOR EACH ONE, does it move the quarter or not? Put the key result it serves in \`toward\`, and leave \`toward\` off the ones that are just this week's noise. Then say out loud how many of their next few days actually point at the thing they told you matters. If the answer is none of them, say that; it is the most useful sentence in this beat.
+- FOR EACH ONE, does it move the quarter or not? Put the key result it serves in \`toward\`, and leave \`toward\` off the ones that are just this week's noise. Then say out loud how many of their next few days actually point at the thing that matters. If the answer is none of them, say that; it is the most useful sentence in this beat.
 - ONE OF THEM IS FIRST. Ask them which single thing they do next, and mark exactly that one \`first\`. \`create_tasks\` will not write the board until exactly one is marked.
 
 Also ask what they keep pushing: the thing that has moved three weeks running. Nobody volunteers that one, and it belongs on the board more than anything else on it.
 
-Call \`propose_tasks\` in the same turn as you say them, then \`create_tasks\` when they say yes.${quoted('the next few days', fuel.next_days)}`;
+Call \`propose_tasks\` in the same turn as you say them, then \`create_tasks\` when they say yes.${quoted('the next few days', fuel.next_days)}${fromTheirFiles(files, 16)}`;
 }
 
-export function calendarBrief(fuel: BeatFuel = {}): string {
+export function calendarBrief(fuel: BeatFuel = {}, files: FileFindings = NO_FINDINGS): string {
   return `Those are on their board. Now their week, and the rhythm the two of you will actually run on.
 
-Call \`read_week\` first and read the real shape of it back to them, briefly, including what the quarter needs and when it is due. Then find out when their day really starts and when it really ends.
+Call \`read_week\` first and read the real shape of it back to them, briefly, including what the quarter needs and when it is due.${files.found.length > 0
+    ? ' It also hands you the dates it found in their own documents, which is the half of their week nothing on their calendar knows about. If one of those collides with something they have already committed to, that collision is the most useful thing you will say in this beat.'
+    : ''} Then find out when their day really starts and when it really ends.
 
 You are setting BOTH ends, not just the morning:
 
@@ -590,45 +762,142 @@ You are setting BOTH ends, not just the morning:
 Call \`propose_daily_rhythm\` while you say the hours, and \`set_daily_rhythm\` when they agree. It refuses without both, because half a rhythm is a notification rather than a working relationship.${quoted('their days', fuel.next_days)}`;
 }
 
-export function workflowsBrief(fuel: BeatFuel = {}): string {
-  return `This is the heavy one, and the last three beats are what earned it. TWO flows come out of this beat, not one.
+export function workflowsBrief(fuel: BeatFuel = {}, files: FileFindings = NO_FINDINGS): string {
+  const read = files.found.length > 0;
+  return `This is the heavy one, and everything before it is what earned it. TWO flows come out of this beat, not one.
 
-The first comes from what they are drowning in. Take the biggest recurring piece of it and say plainly that it is yours now: what it will do, in steps, when it runs, and the line it must NEVER cross on its own. The never line is not optional and \`propose_workflow\` refuses without it: it is the sentence that makes a founder willing to let something run unattended, and it is the reason they will trust the next one.
+The first is the biggest recurring piece of what eats their week.${read
+    ? ' You do not have to ask them what that is, and you should not: recurring work is VISIBLE IN A FOLDER, because it is the thing that is in there twelve times. A monthly update written every month, an invoice per client, a report that has a version for every week. Name the repetition you actually saw, say what it must be costing them, and let them tell you if you have the wrong one. A founder who is shown the pattern in their own filing believes it in a way they never believe a question about it.'
+    : ' Ask them what it is: the thing they do every week or every month that a person should not be doing.'} Then say plainly that it is yours now: what it will do, in steps, when it runs, and the line it must NEVER cross on its own. The never line is not optional and \`propose_workflow\` refuses without it: it is the sentence that makes a founder willing to let something run unattended, and it is the reason they will trust the next one.
 
 The second comes from the tree you just built. Something has to keep their key results honest week to week, and nobody does that by hand for long. Propose the flow that does it.
 
 Call \`propose_workflow\` while you say each one. When they say yes, call \`publish_workflow\`. It takes a few seconds of real building, so say that you are building it BEFORE you call it, never after.
 
-If their week genuinely has only one recurring thing in it and you have asked properly, call \`no_second_workflow\` with the reason rather than inventing a second. Do not invent a second.${quoted('what they are drowning in', fuel.drowning)}`;
+If their week genuinely has only one recurring thing in it and you have asked properly, call \`no_second_workflow\` with the reason rather than inventing a second. Do not invent a second.${quoted('what they are drowning in', fuel.drowning)}${fromTheirFiles(files, 16)}`;
 }
 
-export function authorityBrief(): string {
+export function authorityBrief(files: FileFindings = NO_FINDINGS): string {
+  const worked = files.workspace ?? files.says ?? files.folder;
   return `Both of those will act while they are not watching, which is exactly why this comes now. There are two halves to it and the second half is the one that matters.
 
 FIRST, the number. Ask for level ${TRIAL_AUTHORITY_PROPOSED}, out loud, and say plainly what it buys and what it does not. At ${TRIAL_AUTHORITY_PROPOSED} you can read their things, write and change them, send them a message, run a command, open a browser, drive an app. You still cannot send email as them, install software, spend their money or delete anything. Say that you want it, and say they can pull you down.
 
-SECOND, and do not skip it: ask what they want to keep their hand on anyway. Whatever the number says, some things should still come to them first, and they get to name them. Offer the real ones and let them choose: messages sent as them, commands run on their machine, changes written to their files, a browser driving their accounts, apps being controlled. Say which one you would pick if you were them, and why.
+SECOND, and do not skip it: ask what they want to keep their hand on anyway. Whatever the number says, some things should still come to them first, and they get to name them. Offer the real ones and let them choose: messages sent as them, commands run on their machine, changes written to their files, a browser driving their accounts, apps being controlled. Say which one you would pick if you were them, and why.${worked
+    ? `\n\nThis beat is no longer abstract for them and you should not let it sound abstract. They have already watched you work in ${worked}, with their permission, one file at a time, and everything you did there they saw first. That is what the number is about: not whether you may touch their things, which they have now seen, but which of those things you may do while they are asleep. Say it in those terms.`
+    : `\n\nThey turned down the one concrete thing you asked for earlier, which means this number is the first real permission they have given you. Do not mention that, and do not treat it as a second attempt at the same question. It is not: that was about one folder now, this is about what happens while they are not there.`}
 
 Call \`propose_authority\` while you are saying it, and \`set_authority\` when they answer, passing the number they gave you and the categories they named. Seven and above does not exist for these 48 hours and you do not ask for it, not even if they offer.`;
 }
 
+/**
+ * ── D44: the ask, three minutes in ──
+ *
+ * This brief changed more than any other when the beat moved, and the reason
+ * is arithmetic rather than taste. At minute forty the founder had watched
+ * Jarvis build their quarter, put their week on a board and publish two flows
+ * that run without them. The folder was the next thing a colleague would ask
+ * for. At minute three they have heard a voice make a claim about itself, and
+ * the folder is the FIRST thing anyone has asked them for.
+ *
+ * Same card, same numbers, same six filenames, and about a tenth of the
+ * credit. So the sentence around it stops being an introduction to a feature
+ * and becomes an argument, with three parts:
+ *
+ *   THE TRADE, said plainly. Two minutes of reading instead of an hour of them
+ *   explaining, and Jarvis says which one it would rather have. This is the
+ *   only reason that is actually true, and it is worth more than any promise
+ *   about capability because the founder can check it against the two minutes
+ *   they just spent trying to describe their own company.
+ *
+ *   THE FENCE, volunteered rather than extracted. One folder they name, read
+ *   only, the exact list on screen before anything opens. A founder who has to
+ *   ask "what will you do with it" has already been sold something.
+ *
+ *   THE WAY OUT, in the same breath as the ask. This is the part that makes it
+ *   askable this early: an ask that costs nothing to refuse is a smaller ask,
+ *   and the refusal has to be offered by the person asking or it is not real.
+ *
+ * What it must NOT do is oversell, and the specific temptation is a promise
+ * about privacy that is not ours to make. The reader is a language model. It
+ * reads their documents the same way the realtime session hears their voice,
+ * and the honest claims are the three above: one folder, nothing changed,
+ * nothing opened without a yes. Anything shaped like "it never leaves your
+ * machine" is not in this brief and must not be improvised into it.
+ */
 export function filesBrief(fuel: BeatFuel = {}): string {
-  return `Everything they have told you so far, they told you. Now stop asking and go and look.
+  return `${NOTHING_ABOUT_THIS}
 
-Offer to read their own files: the folder where the company actually lives on this machine. Say why, in one line, and say it as the thing it is. You will come back knowing their company from their own material rather than from an interview.
+They have just told you what the company is. That is the two-minute version. Stop asking them for the rest and go and look at it instead.
 
-THIS IS THE MOST INVASIVE THING YOU WILL ASK THEM FOR, so ask for it properly and never assume it:
+This is the biggest thing you will ask them for in the whole session and you are asking it early, so ask for it as exactly that. Do not slide it in as a small favour and do not present it as a feature.
 
-- Ask them to name ONE folder. Not their home directory, not the whole disk. The folder where the startup's documents are.
+WHAT EARNS IT. Say this in your own words, in two or three sentences, not as a list:
+- What they just told you is the version a person can say out loud. Their files are the version with the names, the numbers and the dates in it.
+- Everything the two of you build next comes out of what you know, and you would rather build their quarter out of their own documents than out of a summary they had to perform for a stranger.
+- So say the trade out loud, because it is the honest one: a couple of minutes of you reading, instead of an hour of them explaining.
+
+WHAT YOU PROMISE, before they ask. A thing volunteered is worth more than a thing extracted:
+- One folder, the one they name. Not their home directory, not the whole disk.
+- You read. You do not move, rename, change or delete anything of theirs.
+- They see the exact list, and the count, before a single file is opened, and nothing opens until they say yes.
+Do not go further than those three. Do not tell them where anything is processed or that it stays on their machine; you do not know that and it is not yours to promise.
+
+AND GIVE THEM THE WAY OUT IN THE SAME BREATH, before they have to find it themselves: if they would rather not, you will do it the long way, which is them telling you. Then mean it. If they say no, say that is fine in one short sentence, do not ask a second time, do not tell them what they are missing, and call \`move_on\`. Everything after this works without it and they must never hear otherwise.
+
+HOW TO ACTUALLY DO IT:
+
+- Ask them to name ONE folder. The folder where the startup's documents are.
 - Call \`propose_reading\` with what they said, WORD FOR WORD. Whatever shape their path is, a Windows one, a Unix one, or just a folder name, pass it through untouched: working out where that is on this machine is the tool's job and not yours.
 - It comes back with exactly what is in there, how many files, and how many you would open. Read that back to them and let them hear the number before they answer. It is on their screen too.
 - If it comes back saying the folder is not there, you are NOT blind and you must not say you are. Call \`folders_i_can_see\` and offer them two or three real folders by name. Same if they ask what you have access to: look before you answer.
-- Nothing is read until they say yes and you call \`start_reading\`. The level they just granted you does not cover this and does not stand in for their answer. If they say no, say that is fine, and call \`move_on\`.
-
-Once it is running it runs in the background and you carry straight on talking. Do not narrate it and do not wait for it. Call \`reading_so_far\` silently as you go, the way you call \`remember\`, and when something real has landed, say what it found in their own terms: the people, the numbers, the things it now knows that they never said out loud. That is the moment this beat exists for.${quoted('their company', fuel.company)}`;
+- Nothing is read until they say yes and you call \`start_reading\`.${quoted('their company', fuel.company)}`;
 }
 
-export function workspaceBrief(): string {
+/**
+ * ── The two minutes the reader takes, and why they are not dead air ──
+ *
+ * `start_reading` used to hand back the workspace brief immediately, which was
+ * survivable when `files` sat sixth: the model had forty minutes of context to
+ * fill the gap with and one beat left to run. Under D44 it sits first, the
+ * model has had two minutes with this person, and the beat it would be handed
+ * cannot be done yet because there is nothing found to organise. A model
+ * holding a brief it cannot execute either stalls or invents, and inventing
+ * here means offering to file documents it has not read.
+ *
+ * So the reader's two minutes get a brief of their own, and it is not a hold.
+ * It is the conversation the opening no longer has time for.
+ *
+ * D44 shortened the opening to one target, the company and where its files
+ * are, on the grounds that the other four are things the documents answer
+ * better or things the beat that needs them should ask for in context. What
+ * that leaves is exactly the right thing to talk about while a background
+ * agent reads: subjects a founder enjoys, that no document can settle, and
+ * that Jarvis will want in twenty minutes. Nothing here is a checklist and the
+ * model is told so; they are things to take if the conversation offers them.
+ *
+ * The workspace brief arrives from `reading_so_far`, when there is something
+ * to organise. See `readingSoFar`.
+ */
+function whileItReadsBrief(fuel: BeatFuel = {}): string {
+  const missing: string[] = [];
+  if (!fuel.goal) missing.push('- What this quarter is actually for. Not a metric, the thing they are trying to make true by the end of it.');
+  if (!fuel.drowning) missing.push('- What is eating their week. The recurring thing they do by hand that a person should not be doing.');
+  if (!fuel.next_days) missing.push('- What the next few days look like, what is already late, and when their day really starts and stops.');
+  if (!fuel.open_question) missing.push('- The thing about their market they would look into if they had a spare afternoon and never do.');
+
+  return `It is reading in the background now and you are still mid-conversation. Carry on with them.
+
+Do NOT narrate it, do not wait for it, and do not fill the time with small talk about it. Call \`reading_so_far\` silently every turn or two, the way you call \`remember\`. The moment something real has landed you will be told, and that is when you say it back to them.
+
+${missing.length > 0
+    ? `While it works, these are the things their documents will not be able to tell you, so they are worth having from them. Not a list to work through and not in this order. Take whichever one the conversation is already near, and if it is near none of them, follow the thread they are on instead:\n\n${missing.join('\n')}\n\nCall \`capture_fuel\` when you actually get one.`
+    : 'You already have what you need from them, so just talk. Follow the thread they are on and go deeper into whatever they were saying when the reading started.'}
+
+Everything you were told about how to talk to them still holds: have a view, disagree if there is something worth disagreeing with, hand the floor back every turn, and never end a turn by giving them something to do.`;
+}
+
+export function workspaceBrief(files: FileFindings = NO_FINDINGS): string {
   return `You have read their files. Now do something about them, and this is where you stop being a conversation about a product.
 
 TWO things, in order.
@@ -639,19 +908,24 @@ TWO things, in order.
 
 Both of these are refusable and neither is worth pushing twice. If they say no to either, take it, say something honest about why you offered, and call \`move_on\`.
 
-Do not offer anything you cannot do inside this conversation. A promise here is worse than nothing.`;
+Do not offer anything you cannot do inside this conversation. A promise here is worse than nothing.
+
+Everything after this beat is the work itself: their quarter, their week, what runs without them. So do not linger here, and do not treat the folder as the destination. It is the filing cabinet you needed before you could start.${fromTheirFiles(files)}`;
 }
 
-export function agentsBrief(fuel: BeatFuel = {}): string {
+export function agentsBrief(fuel: BeatFuel = {}, files: FileFindings = NO_FINDINGS): string {
+  const read = files.found.length > 0;
   return `Last thing, and it is the only part of this that keeps working after you stop talking.
 
-They mentioned something about their market or their business they have never had time to answer. Put someone on it.
+There is something about their market or their business nobody has ever had time to answer. Put someone on it.${read
+    ? '\n\nTHE BEST QUESTION IN THIS SESSION IS ALMOST CERTAINLY ONE THEIR OWN FILES RAISED and nobody resolved: two documents that disagree, a price that is under review in one place and fixed in another, a competitor named once and never looked at, an assumption a plan rests on that nothing in the folder supports. You have been reading their material for the last hour. Use it, say which document it came out of, and let them tell you if there is a better one.'
+    : ''}
 
 Call \`propose_research\` with the question in their words and a brief saying what a useful answer would look like for them specifically. That puts it on their screen. Say what you are sending someone off to find out, check with them that it is the right question, and then call \`spawn_research_agent\`. They watch it start in the agents room, which is the point of finishing here: it is the one thing still working when you stop talking.
 
-If no such question ever came up, ask for one now, plainly: the thing about their market they would look into if they had a spare afternoon. Do not invent one for them, and do not settle for something you could answer yourself in a sentence. If reading their files threw up something nobody has an answer to, that is the best question available and you should use it.
+If no such question exists anywhere, ask for one now, plainly: the thing about their market they would look into if they had a spare afternoon. Do not invent one for them, and do not settle for something you could answer yourself in a sentence.
 
-And do not tell them to go and look into it themselves while it runs. That is the one sentence this whole beat exists to make unnecessary.${quoted('the open question', fuel.open_question)}`;
+And do not tell them to go and look into it themselves while it runs. That is the one sentence this whole beat exists to make unnecessary.${quoted('the open question', fuel.open_question)}${fromTheirFiles(files, 20)}`;
 }
 
 /**
@@ -757,20 +1031,54 @@ export const FINALE_MESSAGE =
  * `beat` was the last one. This is the whole of the "what happens next"
  * mechanism: no scheduler, no queue, one string handed back on a tool result.
  */
-export function nextBrief(s: BeatsSession, fuel: BeatFuel): string {
+export function nextBrief(s: BeatsSession, fuel: BeatFuel, files: FileFindings = NO_FINDINGS): string {
   const next = currentBeat(s);
   if (!next) return closing(s);
   switch (next) {
-    case 'goals': return goalsBrief(fuel);
-    case 'tasks': return tasksBrief(fuel);
-    case 'calendar': return calendarBrief(fuel);
-    case 'workflows': return workflowsBrief(fuel);
-    case 'authority': return authorityBrief();
     case 'files': return filesBrief(fuel);
-    case 'workspace': return workspaceBrief();
-    case 'agents': return agentsBrief(fuel);
+    case 'workspace': return workspaceBrief(files);
+    case 'goals': return goalsBrief(fuel, files);
+    case 'tasks': return tasksBrief(fuel, files);
+    case 'calendar': return calendarBrief(fuel, files);
+    case 'workflows': return workflowsBrief(fuel, files);
+    case 'authority': return authorityBrief(files);
+    case 'agents': return agentsBrief(fuel, files);
     case 'handover': return handoverBrief();
   }
+}
+
+/**
+ * What the reader has actually landed, as the briefs get to see it.
+ *
+ * One place, so that no beat can be handed a stale or invented version of what
+ * was read. It reads through `readerProgress`, which is the live list the
+ * memory ticker is drawing from, rather than through `s.files.found`, which is
+ * only a count. A founder who declined the read, or whose folder turned out to
+ * be empty, gets `NO_FINDINGS` here and every brief takes its second arm.
+ */
+function findingsOf(s: BeatsSession, deps: BeatDeps): FileFindings {
+  if (!s.files) return NO_FINDINGS;
+  let progress: { found: string[]; finished: boolean; summary: string | null };
+  try {
+    progress = deps.readerProgress();
+  } catch (err) {
+    console.warn('[TrialBeats] could not read the reader progress', err);
+    return NO_FINDINGS;
+  }
+  return {
+    folder: s.files.folder,
+    says: s.files.says,
+    found: progress.found,
+    summary: progress.summary ?? s.files.summary ?? undefined,
+    finished: progress.finished,
+    workspace: s.workspace?.saysDestination ?? s.workspace?.destination,
+  };
+}
+
+/** `nextBrief` with the reader's findings already attached. Every commit tool
+ *  hands the next brief back through this, so no call site can forget them. */
+function onward(s: BeatsSession, deps: BeatDeps): string {
+  return nextBrief(s, deps.fuel(), findingsOf(s, deps));
 }
 
 /* ─────────────────────────── the tools ─────────────────────────── */
@@ -1441,11 +1749,15 @@ export async function executeBeatTool(
   if (!s.open) return openingNotDone();
   if (!beatIsOpen(s, beat)) {
     const now = currentBeat(s);
-    return {
-      message:
-        `Not yet. You are in the ${now} part of the work, not ${beat}. Finish that with ` +
-        'them first; this will open when it does.',
-    };
+    // The one case worth spelling out, because under D44 it is the common one:
+    // the model has reached ahead to their quarter while the reader is still
+    // working. Telling it only "not yet" leaves it with nothing to do, which
+    // is how a conversation stalls at minute four.
+    const hint = now === 'workspace' && s.files && !beatIsDone(s, 'workspace')
+      ? ' Their files are still being read. Keep talking to them and call `reading_so_far` as you go; ' +
+        'it will hand you what comes next the moment there is something to say.'
+      : ' Finish that with them first; this will open when it does.';
+    return { message: `Not yet. You are in the ${now} part of the work, not ${beat}.${hint}` };
   }
 
   switch (name) {
@@ -1545,11 +1857,18 @@ function notAnsweredYet(tool: string): BeatToolResult {
   };
 }
 
-/** One place, so a proposal can never go up without arming the gate. */
+/** The beats whose card should say the founder's own documents are behind it. */
+const READS_FROM_FILES: ReadonlySet<RoomBeat> = new Set<RoomBeat>(['goals', 'tasks', 'calendar', 'workflows']);
+
+/** One place, so a proposal can never go up without arming the gate, and so
+ *  no propose function can forget to say where its contents came from. */
 function putOnScreen(s: BeatsSession, proposal: BeatProposal, deps: BeatDeps): void {
-  s.proposal = proposal;
+  const shown = READS_FROM_FILES.has(proposal.beat) && findingsOf(s, deps).found.length > 0
+    ? { ...proposal, fromFiles: true }
+    : proposal;
+  s.proposal = shown;
   s.proposalShownAt = deps.now();
-  deps.showProposal(proposal);
+  deps.showProposal(shown);
 }
 
 function takeOffScreen(s: BeatsSession): void {
@@ -1758,7 +2077,7 @@ function createGoals(s: BeatsSession, deps: BeatDeps): BeatToolResult {
       'ONE sentence about how it actually works, and only the part the tree cannot show them: the ' +
       'number on each key result is where they are TODAY, and it moves when the two of you score it ' +
       'at the evening review. Do not read the tree back to them and do not list its parts, they are ' +
-      'looking at it.\n\n' + nextBrief(s, deps.fuel()),
+      'looking at it.\n\n' + onward(s, deps),
   };
 }
 
@@ -1989,7 +2308,7 @@ function createTasks(s: BeatsSession, deps: BeatDeps): BeatToolResult {
   return {
     message:
       `On the board, ${created.length} of them, "${firsts[0]!.what}" at the top and ` +
-      `${towardCount} pointing at the quarter.\n\n${nextBrief(s, deps.fuel())}`,
+      `${towardCount} pointing at the quarter.\n\n${onward(s, deps)}`,
   };
 }
 
@@ -2026,12 +2345,56 @@ function readWeek(s: BeatsSession, deps: BeatDeps): BeatToolResult {
   const dated = datedTree(now);
   if (dated.length > 0) parts.push(`What the quarter has dates on:\n${dated.join('\n')}`);
 
+  // D44. The third source of dates, and the only one the founder has not
+  // already seen: the deadlines sitting inside their own documents. A renewal
+  // in a client agreement, a date in a proposal, a milestone in a plan. None
+  // of it is on any calendar, which is exactly why it is worth reading back.
+  const fromFiles = datedFindings(findingsOf(s, deps));
+  if (fromFiles.length > 0) {
+    parts.push(
+      `Dates written in their own documents, which are on no calendar:\n${fromFiles.join('\n')}`,
+    );
+  }
+
   return {
     message:
       `${parts.join('\n\n')}\n\nRead the shape of that back to them in one or two sentences, saying how ` +
-      'their week and their quarter line up or do not. Then ask when their day actually starts, and when ' +
-      'it actually ends.',
+      'their week and their quarter line up or do not.' +
+      (fromFiles.length > 0
+        ? ' Name at least one of the dates out of their own files, because that is the half of their ' +
+          'week nothing was tracking. If one of them collides with something already on the list, say so.'
+        : '') +
+      ' Then ask when their day actually starts, and when it actually ends.',
   };
+}
+
+/**
+ * The reader's findings that have a date in them.
+ *
+ * Deliberately a crude filter over what the reader wrote down rather than
+ * anything that tries to PARSE a date: the findings are sentences in the
+ * document's own words, and a parser that turned "renews in October" into a
+ * timestamp would be inventing the year. What this has to be right about is
+ * only which lines are worth reading back, and the model does the rest.
+ */
+const DATEISH = new RegExp(
+  [
+    // Month names, whole words only. Deliberately NOT `jan[a-z]*`, which
+    // matches "market" through `mar` and "deck" through `dec`, and "market" is
+    // the single most common word in a founder's own files.
+    '\\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|jul(?:y)?' +
+      '|aug(?:ust)?|sep(?:t|tember)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)\\b',
+    '\\bq[1-4]\\b',
+    '\\b20\\d{2}\\b',
+    '\\b\\d{1,2}[\\/.-]\\d{1,2}(?:[\\/.-]\\d{2,4})?\\b',
+    '\\b(?:deadline|due|renews?|renewal|expires?|ships?|launch(?:es)?|monthly|weekly' +
+      '|quarterly|annually|every (?:week|month|quarter))\\b',
+  ].join('|'),
+  'i',
+);
+
+export function datedFindings(files: FileFindings, limit = 8): string[] {
+  return files.found.filter((f) => DATEISH.test(f)).slice(0, limit).map((f) => `- ${f}`);
 }
 
 /** The goal tree's own deadlines, so `read_week` can say what is due. */
@@ -2112,7 +2475,7 @@ function setDailyRhythm(s: BeatsSession, deps: BeatDeps): BeatToolResult {
   return {
     message:
       `Set. Their brief lands at ${fmtTime(p.hour, p.minute)} and the day gets closed off at ` +
-      `${fmtTime(p.eveningHour, 0)}.\n\n${nextBrief(s, deps.fuel())}`,
+      `${fmtTime(p.eveningHour, 0)}.\n\n${onward(s, deps)}`,
   };
 }
 
@@ -2233,7 +2596,7 @@ async function publishWorkflow(s: BeatsSession, deps: BeatDeps): Promise<BeatToo
   markDone(s, 'workflows');
   deps.roomIsTheirs('workflows', 'what runs without you');
   deps.beatComplete('workflows', { flows: [...s.workflowsPublished], published: count });
-  return { message: `"${p.name}" is live too, ${count} flows now: ${outcome.detail}\n\n${nextBrief(s, deps.fuel())}` };
+  return { message: `"${p.name}" is live too, ${count} flows now: ${outcome.detail}\n\n${onward(s, deps)}` };
 }
 
 function noSecondWorkflow(s: BeatsSession, args: Record<string, unknown>, deps: BeatDeps): BeatToolResult {
@@ -2252,7 +2615,7 @@ function noSecondWorkflow(s: BeatsSession, args: Record<string, unknown>, deps: 
   return {
     message:
       `Recorded: one flow, because ${because || 'their week has one'}. That is the honest answer and ` +
-      `better than a second flow nobody asked for.\n\n${nextBrief(s, deps.fuel())}`,
+      `better than a second flow nobody asked for.\n\n${onward(s, deps)}`,
   };
 }
 
@@ -2331,7 +2694,7 @@ function setAuthority(s: BeatsSession, args: Record<string, unknown>, deps: Beat
   return {
     message:
       `Set to ${landed.level}, and ${kept} still needs their yes every time. ${capped}\n\n` +
-      nextBrief(s, deps.fuel()),
+      onward(s, deps),
   };
 }
 
@@ -2516,6 +2879,7 @@ async function startReading(s: BeatsSession, deps: BeatDeps): Promise<BeatToolRe
 
   s.files = {
     folder: pending.folder,
+    says: p.says,
     willRead: p.willRead,
     agentId: started.agentId,
     taskId: started.taskId,
@@ -2532,15 +2896,19 @@ async function startReading(s: BeatsSession, deps: BeatDeps): Promise<BeatToolRe
   deps.roomIsTheirs('files', 'everything I know about you');
   deps.beatComplete('files', { folder: pending.folder, willRead: p.willRead, agentId: started.agentId });
 
+  // Deliberately NOT `onward`. The next beat is `workspace` and it cannot be
+  // done until the reader has found something, so handing its brief over now
+  // would give the model an instruction it can only follow by inventing. The
+  // workspace brief arrives from `reading_so_far` instead, at the moment there
+  // is something to organise. See `whileItReadsBrief`.
   return {
     message:
       `It is reading ${p.willRead} of their files now, in the background, and it will be a couple of ` +
       'minutes. Do NOT wait for it and do not narrate it.\n\n' +
-      'Keep talking to them about their company while it runs, and call `reading_so_far` silently as ' +
-      'you go, the way you call `remember`. The first time something real has landed, stop whatever ' +
-      'you were saying and tell them what it found: the people, the numbers, the things you now know ' +
-      'that they never said out loud. That is the moment this is for.\n\n' +
-      nextBrief(s, deps.fuel()),
+      'The first time something real has landed, stop whatever you were saying and tell them what it ' +
+      'found: the people, the numbers, the things you now know that they never said out loud. That is ' +
+      'the moment this is for, and `reading_so_far` will tell you when it has come.\n\n' +
+      whileItReadsBrief(deps.fuel()),
   };
 }
 
@@ -2561,27 +2929,53 @@ function readingSoFar(s: BeatsSession, deps: BeatDeps): BeatToolResult {
     deps.showProposal(next);
   }
 
+  const says = s.files.says ?? s.files.folder;
+
   if (progress.found.length === 0) {
+    if (!progress.finished) {
+      return {
+        message:
+          'Nothing has landed yet. Say NOTHING about it and carry on with what you were talking about. ' +
+          'Call this again in a turn or two.',
+      };
+    }
+    // Finished and empty. There is nothing to organise, so `workspace` closes
+    // here rather than leaving the model holding a beat it cannot do, and the
+    // conversation goes straight on to their quarter. The ledger records it as
+    // what it was: not declined by them, just empty.
+    if (!beatIsDone(s, 'workspace')) {
+      markDone(s, 'workspace');
+      deps.beatComplete('workspace', { skipped: true, because: 'the reader found nothing to organise' });
+    }
     return {
-      message: progress.finished
-        ? `It has finished and found nothing about the company in ${s.files.folder}. ` +
-          (s.files.summary ? `It said: ${s.files.summary}\n\n` : '') +
-          'Say that straight, without dressing it up, and without inventing a finding. Ask whether the ' +
-          'real material is somewhere else. Then carry on.'
-        : 'Nothing has landed yet. Say NOTHING about it and carry on with what you were talking about.',
+      message:
+        `It has finished and found nothing about the company in ${says}. ` +
+        (s.files.summary ? `It said: ${s.files.summary}\n\n` : '') +
+        'Say that straight, without dressing it up, and without inventing a finding. Ask whether the ' +
+        'real material is somewhere else. Do NOT offer to organise a folder you learned nothing from.' +
+        `\n\n${onward(s, deps)}`,
     };
   }
 
-  return {
-    message:
-      `${progress.found.length} things about their company have landed from their own files` +
-      `${progress.finished ? ' and it has finished' : ' and it is still reading'}:\n` +
-      progress.found.slice(0, 30).map((f) => `- ${f}`).join('\n') +
-      (s.files.summary ? `\n\nWhat it made of the whole folder: ${s.files.summary}` : '') +
-      '\n\nIf you have not already, say some of this back to them now. Their words for their own things, ' +
-      'the specific ones, and the ones they never mentioned to you are the ones worth naming. Do not read ' +
-      'the whole list out and do not say where you got each one.',
-  };
+  const report =
+    `${progress.found.length} things about their company have landed from their own files` +
+    `${progress.finished ? ' and it has finished' : ' and it is still reading'}:\n` +
+    progress.found.slice(0, 30).map((f) => `- ${f}`).join('\n') +
+    (s.files.summary ? `\n\nWhat it made of the whole folder: ${s.files.summary}` : '') +
+    '\n\nIf you have not already, say some of this back to them now. Their words for their own things, ' +
+    'the specific ones, and the ones they never mentioned to you are the ones worth naming. Do not read ' +
+    'the whole list out and do not say where you got each one.';
+
+  // The first real landing is the event this beat exists for, and it is also
+  // the moment the NEXT beat becomes possible: there is finally something to
+  // organise. So the workspace brief is handed over here rather than at
+  // `start_reading`, once and never again, so the model is not re-briefed on
+  // the same beat every time it checks progress.
+  if (!s.files.toldOfFindings) {
+    s.files.toldOfFindings = true;
+    return { message: `${report}\n\n${onward(s, deps)}` };
+  }
+  return { message: report };
 }
 
 /* ── D43 · the workspace beat: acting on what it read ── */
@@ -2592,6 +2986,19 @@ function proposeWorkspace(s: BeatsSession, args: Record<string, unknown>, deps: 
       message:
         'There is nothing to organise: no folder was ever read. Do not offer to tidy files you have not ' +
         'seen. Call `move_on`.',
+    };
+  }
+  // The reader is still working and has landed nothing, so any sections named
+  // here would be invented. Under D44 this is a live risk rather than a
+  // theoretical one: the beat now starts three minutes into the session, and a
+  // model with nothing else to do will reach for the next tool it has.
+  if (findingsOf(s, deps).found.length === 0) {
+    return {
+      message:
+        'Nothing has come back from their files yet, so you do not know what is in them and you cannot ' +
+        'name the sections. Do not guess at a filing system for documents you have not read. Carry on ' +
+        'talking to them and call `reading_so_far` in a turn or two; it will tell you when there is ' +
+        'something to organise.',
     };
   }
   const title = str(args.title) || 'the company';
@@ -2686,7 +3093,9 @@ function commitWorkspace(s: BeatsSession, deps: BeatDeps): BeatToolResult {
   }
 
   const saysDest = p.saysDestination ?? sayPath(result.destination, shape);
-  s.workspace = { destination: result.destination, copied: result.copied, sections: result.sections };
+  s.workspace = {
+    destination: result.destination, saysDestination: saysDest, copied: result.copied, sections: result.sections,
+  };
   takeOffScreen(s);
   markDone(s, 'workspace');
   deps.proposalLanded('workspace', `${saysDest} · ${result.copied} files copied`);
@@ -2803,7 +3212,7 @@ function makeEdit(s: BeatsSession, args: Record<string, unknown>, deps: BeatDeps
       'them where it is and what you changed, in a sentence, and say plainly that the original is ' +
       'untouched and they can throw yours away. Then, if there is another file in the same state, OFFER ' +
       'to do that one too rather than telling them what to fix in it. Do not tell them to go and read ' +
-      `it; ask if they want it read to them.\n\n${nextBrief(s, deps.fuel())}`,
+      `it; ask if they want it read to them.\n\n${onward(s, deps)}`,
   };
 }
 
@@ -2821,10 +3230,26 @@ function moveOn(s: BeatsSession, args: Record<string, unknown>, deps: BeatDeps):
   deps.showProposal(null);
   markDone(s, beat);
   deps.beatComplete(beat, { declined: true, because });
+
+  // D44's refusal path. A founder who says no to the read has said no to the
+  // organised copy of it in the same breath, and making them refuse twice in
+  // ninety seconds is how a trial starts feeling like a salesman. `workspace`
+  // closes with them, silently, and the conversation goes to their quarter.
+  // Without this the model would be handed `workspaceBrief`, whose first
+  // sentence is "you have read their files".
+  if (beat === 'files' && !beatIsDone(s, 'workspace')) {
+    markDone(s, 'workspace');
+    deps.beatComplete('workspace', { skipped: true, because: 'they did not want their files read' });
+  }
+
   return {
     message:
       `Left alone, and that is theirs to decide. Do not raise it again and do not sound disappointed.` +
-      `\n\n${nextBrief(s, deps.fuel())}`,
+      (beat === 'files'
+        ? ' Do not offer to organise their folder either; that was the same question and they have ' +
+          'answered it. Everything after this works out of what they tell you, and it works.'
+        : '') +
+      `\n\n${onward(s, deps)}`,
   };
 }
 

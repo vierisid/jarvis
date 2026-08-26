@@ -35,10 +35,10 @@ export interface CapturedFuel {
   at: number;
 }
 
-/* ── the seven room beats (D16), as they arrive on the wire ── */
+/* ── the room beats (D16, reordered by D44), as they arrive on the wire ── */
 
 export type RoomBeat =
-  | "goals" | "tasks" | "calendar" | "workflows" | "authority" | "files" | "workspace" | "agents"
+  | "files" | "workspace" | "goals" | "tasks" | "calendar" | "workflows" | "authority" | "agents"
   | "handover";
 
 export interface GoalProposal {
@@ -49,6 +49,9 @@ export interface GoalProposal {
   deadlineLabel: string | null;
   keyResults: { title: string; measure?: string; target?: string; today?: string }[];
   firstMove: { what: string; due: number | null; dueLabel: string | null; under: string } | null;
+  /** D44: their own documents were behind this, not just the conversation.
+   *  Set on the daemon side in `putOnScreen`. */
+  fromFiles?: boolean;
 }
 
 export interface TaskProposal {
@@ -62,6 +65,9 @@ export interface TaskProposal {
     toward?: string;
     first: boolean;
   }[];
+  /** D44: their own documents were behind this, not just the conversation.
+   *  Set on the daemon side in `putOnScreen`. */
+  fromFiles?: boolean;
 }
 
 export interface CalendarProposal {
@@ -70,6 +76,9 @@ export interface CalendarProposal {
   minute: number;
   because?: string;
   eveningHour: number | null;
+  /** D44: their own documents were behind this, not just the conversation.
+   *  Set on the daemon side in `putOnScreen`. */
+  fromFiles?: boolean;
 }
 
 export interface WorkflowProposal {
@@ -79,6 +88,9 @@ export interface WorkflowProposal {
   steps: string[];
   never?: string;
   building?: boolean;
+  /** D44: their own documents were behind this, not just the conversation.
+   *  Set on the daemon side in `putOnScreen`. */
+  fromFiles?: boolean;
 }
 
 export interface AuthorityProposal {

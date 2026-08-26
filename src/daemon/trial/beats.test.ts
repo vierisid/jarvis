@@ -29,11 +29,15 @@ import {
   closing,
   createBeatsSession,
   currentBeat,
+  datedFindings,
   executeBeatTool,
+  filesBrief,
   goalsBrief,
+  tasksBrief,
   type BeatDeps,
   type BeatProposal,
   type BeatsSession,
+  type FileFindings,
   type RoomBeat,
   type WorkflowProposal,
 } from './beats.ts';
@@ -131,10 +135,29 @@ function recorder(over: Partial<BeatDeps> = {}): Recorder {
   return r;
 }
 
-/** An opened session, as it is the instant `conclude_opening` fires. */
+/** An opened session, as it is the instant `conclude_opening` fires. Under D44
+ *  the beat it is standing in is `files`. */
 function opened(): BeatsSession {
   const s = createBeatsSession();
   s.open = true;
+  return s;
+}
+
+/**
+ * An opened session standing at `beat`, with everything before it recorded as
+ * done rather than performed.
+ *
+ * For the tests that are about one beat's own behaviour, where walking the
+ * whole arc first would only add noise. D44 is what made this necessary:
+ * `goals` used to be the first beat, so `opened()` was enough to be standing
+ * in it, and now there are two beats in front of it.
+ */
+function standingAt(beat: RoomBeat): BeatsSession {
+  const s = opened();
+  for (const b of ROOM_BEATS) {
+    if (b === beat) break;
+    s.done.push(b);
+  }
   return s;
 }
 
@@ -181,35 +204,56 @@ let tmpHome: string;
 let tmpFolder: string;
 function folder(): string { return tmpFolder; }
 
-async function walkTo(s: BeatsSession, r: Recorder, beat: RoomBeat): Promise<void> {
-  const run = (n: string, a: Record<string, unknown> = {}) => executeBeatTool(s, n, a, r.deps);
+/**
+ * Walk the session up to `beat`, doing every beat before it for real.
+ *
+ * Written against ROOM_BEATS by name rather than by index since D44 moved the
+ * file beats to the front: an index-shaped version of this helper is a thing
+ * that keeps compiling and silently walks the wrong distance the next time
+ * somebody reorders the list.
+ */
+async function walkTo(s: BeatsSession, r: Recorder, beat: RoomBeat): Promise<string> {
+  let last = '';
+  const run = async (n: string, a: Record<string, unknown> = {}) => {
+    const res = await executeBeatTool(s, n, a, r.deps);
+    if (res) last = res.message;
+    return res;
+  };
   const upto = ROOM_BEATS.indexOf(beat);
-  if (upto > 0) { await run('propose_goals', GOALS_ARGS); answers(s); await run('create_goals'); }
-  if (upto > 1) { await run('propose_tasks', TASKS_ARGS); answers(s); await run('create_tasks'); }
-  if (upto > 2) {
+  // Skip anything already done, so a test can set a beat up by hand and then
+  // walk the rest of the arc on top of it without doing the first part twice.
+  const todo = (b: RoomBeat) => upto > ROOM_BEATS.indexOf(b) && !beatIsDone(s, b);
+
+  if (todo('files')) { await run('propose_reading', { folder: folder() }); answers(s); await run('start_reading'); }
+  if (todo('workspace')) { await run('move_on', { because: 'not now' }); }
+  if (todo('goals')) { await run('propose_goals', GOALS_ARGS); answers(s); await run('create_goals'); }
+  if (todo('tasks')) { await run('propose_tasks', TASKS_ARGS); answers(s); await run('create_tasks'); }
+  if (todo('calendar')) {
     await run('propose_daily_rhythm', { hour: 7, minute: 30, evening_hour: 19 });
     answers(s);
     await run('set_daily_rhythm');
   }
-  if (upto > 3) {
+  if (todo('workflows')) {
     await run('propose_workflow', WORKFLOW_ARGS);
     answers(s);
     await run('publish_workflow');
     // D16.5 wants two, and the beat no longer closes on one.
     await run('no_second_workflow', { because: 'the rest of their week is one-offs' });
   }
-  if (upto > 4) {
+  if (todo('authority')) {
     await run('propose_authority', { always_ask: ['send_message'] });
     answers(s);
     await run('set_authority', {});
   }
-  if (upto > 5) { await run('propose_reading', { folder: folder() }); answers(s); await run('start_reading'); }
-  if (upto > 6) { await run('move_on', { because: 'not now' }); }
-  if (upto > 7) {
+  if (todo('agents')) {
     await run('propose_research', { question: 'q', brief: 'b' });
     answers(s);
     await run('spawn_research_agent');
   }
+  // The last thing a commit hands back IS the next beat's brief: that is the
+  // whole "what happens next" mechanism, so a test that wants to see the brief
+  // for `beat` reads it here rather than calling the brief function.
+  return last;
 }
 
 beforeEach(() => {
@@ -243,8 +287,26 @@ describe('D16, the order the beats happen in', () => {
     const res = await executeBeatTool(s, 'propose_workflow', {
       name: 'x', runs_when: 'mondays', steps: ['a'],
     }, r.deps);
-    expect(res!.message).toContain('goals');
+    // D44: the beat they are standing in the instant the opening concludes is
+    // `files`, so that is the one the refusal has to name.
+    expect(res!.message).toContain('files');
     expect(r.proposals).toHaveLength(0);
+  });
+
+  test('reaching for their quarter while the reader is still working says what to do instead', async () => {
+    const s = opened();
+    const r = recorder();
+    await executeBeatTool(s, 'propose_reading', { folder: folder() }, r.deps);
+    answers(s);
+    await executeBeatTool(s, 'start_reading', {}, r.deps);
+    expect(currentBeat(s)).toBe('workspace');
+
+    const res = await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
+    // Not just "not yet". A model told only that stalls, and under D44 it
+    // stalls three minutes into the session.
+    expect(res!.message).toContain('reading_so_far');
+    expect(res!.message).toContain('Keep talking');
+    expect(findGoals({})).toHaveLength(0);
   });
 
   test('a finished beat stays open, so a task remembered later still lands', async () => {
@@ -258,9 +320,9 @@ describe('D16, the order the beats happen in', () => {
     expect(res!.message).toContain('On their screen');
   });
 
-  test('the order is D16, plus D42 and D43 between authority and the finale', () => {
+  test('D44: the two file beats come first, and the finale is still the finale', () => {
     expect([...ROOM_BEATS]).toEqual([
-      'goals', 'tasks', 'calendar', 'workflows', 'authority', 'files', 'workspace', 'agents',
+      'files', 'workspace', 'goals', 'tasks', 'calendar', 'workflows', 'authority', 'agents',
       'handover',
     ]);
     // `memory` is not a stop (D16.1), and `agents` is still the last beat in
@@ -270,8 +332,13 @@ describe('D16, the order the beats happen in', () => {
     expect((ROOM_BEATS as readonly string[]).includes('memory')).toBe(false);
     expect(ROOM_BEATS[ROOM_BEATS.length - 2]).toBe('agents');
     expect(ROOM_BEATS[ROOM_BEATS.length - 1]).toBe('handover');
-    // Reading their disk comes after the conversation about power, never before.
-    expect(ROOM_BEATS.indexOf('files')).toBeGreaterThan(ROOM_BEATS.indexOf('authority'));
+    // D44's whole point: everything the two of them build is built AFTER the
+    // real material has been read, not before it.
+    for (const built of ['goals', 'tasks', 'calendar', 'workflows', 'authority', 'agents'] as const) {
+      expect(ROOM_BEATS.indexOf(built)).toBeGreaterThan(ROOM_BEATS.indexOf('files'));
+    }
+    // And the organised copy still comes straight off the back of the read.
+    expect(ROOM_BEATS.indexOf('workspace')).toBe(ROOM_BEATS.indexOf('files') + 1);
   });
 });
 
@@ -281,6 +348,7 @@ describe('D18, nothing is written that they have not seen', () => {
   test('every commit refuses when nothing is on their screen', async () => {
     const s = opened();
     const r = recorder();
+    await walkTo(s, r, 'goals');
     const first = await executeBeatTool(s, 'create_goals', {}, r.deps);
     expect(first!.message).toContain('propose');
     expect(findGoals({})).toHaveLength(0);
@@ -293,7 +361,7 @@ describe('D18, nothing is written that they have not seen', () => {
   });
 
   test('a commit refuses when they have not said anything since it went up', async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
     // Proposed and committed in the same breath, which is the drift this gate
@@ -330,7 +398,7 @@ describe('D18, nothing is written that they have not seen', () => {
   });
 
   test('the gate is satisfied by the VAD alone, so a failed transcription cannot end the trial', async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
     // No transcript ever arrives; only `input_audio_buffer.speech_stopped`
@@ -355,7 +423,7 @@ describe('D18, nothing is written that they have not seen', () => {
   });
 
   test('a commit cannot be handed different content from what was proposed', async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
     answers(s);
@@ -372,7 +440,7 @@ describe('D18, nothing is written that they have not seen', () => {
 
 describe('beat 07, goals', () => {
   test('proposing writes nothing and puts it on their screen', async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     const res = await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
     expect(findGoals({})).toHaveLength(0);
@@ -382,7 +450,7 @@ describe('beat 07, goals', () => {
   });
 
   test('an objective with no key results is refused, not half-created', async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     const res = await executeBeatTool(s, 'propose_goals', { objective: 'Grow', key_results: [] }, r.deps);
     expect(res!.message).toContain('Error');
@@ -390,7 +458,7 @@ describe('beat 07, goals', () => {
   });
 
   test('committing builds the real tree and hands the model the next beat', async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
     answers(s);
@@ -730,10 +798,12 @@ describe('beat 12, the finale', () => {
     expect(s.done).toEqual([...ROOM_BEATS]);
     expect(currentBeat(s)).toBeNull();
     expect(r.completed.map((c) => c.beat)).toEqual([...ROOM_BEATS]);
-    // Every beat led them into its room, once each. `files` and `workspace`
-    // share the memory room, and `enterRoom` is a no-op on an unchanged room,
-    // so the pebble makes one gesture across the two of them rather than two.
-    expect(r.rooms).toEqual(['goals', 'tasks', 'calendar', 'workflows', 'authority', 'files', 'agents']);
+    // Every beat led them into its room, once each, and under D44 the first
+    // room the founder is ever led into is the one their own documents land
+    // in. `workspace` is declined on this walk, so it never enters anything;
+    // it shares the memory room with `files` in any case, and `enterRoom` is a
+    // no-op on an unchanged room.
+    expect(r.rooms).toEqual(['files', 'goals', 'tasks', 'calendar', 'workflows', 'authority', 'agents']);
   });
 });
 
@@ -822,7 +892,7 @@ describe('anything that is not a beat tool', () => {
 
 describe('D41, goals: a tree is not a plan until it has a starting line', () => {
   test('a shape with no numbers and no first move is refused, and nothing is written', async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     await executeBeatTool(s, 'propose_goals', SHALLOW_GOALS_ARGS, r.deps);
     answers(s);
@@ -837,7 +907,7 @@ describe('D41, goals: a tree is not a plan until it has a starting line', () => 
   });
 
   test('one key result is refused: an objective said twice is not a tree', async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     await executeBeatTool(s, 'propose_goals', {
       objective: 'Grow',
@@ -851,7 +921,7 @@ describe('D41, goals: a tree is not a plan until it has a starting line', () => 
   });
 
   test("a founder who does not know their number still gets past it: any answer counts", async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     await executeBeatTool(s, 'propose_goals', {
       ...SHALLOW_GOALS_ARGS,
@@ -869,7 +939,7 @@ describe('D41, goals: a tree is not a plan until it has a starting line', () => 
   });
 
   test('the propose result tells the model which pass it still owes', async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     const first = await executeBeatTool(s, 'propose_goals', SHALLOW_GOALS_ARGS, r.deps);
     expect(first!.message).toContain('Still owed');
@@ -880,7 +950,7 @@ describe('D41, goals: a tree is not a plan until it has a starting line', () => 
   });
 
   test('the tree that lands has an end date, a baseline score and a first move', async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
     answers(s);
@@ -905,7 +975,7 @@ describe('D41, goals: a tree is not a plan until it has a starting line', () => 
   });
 
   test('a first move under a key result nobody can find still lands, under the objective', async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     await executeBeatTool(s, 'propose_goals', {
       ...GOALS_ARGS,
@@ -941,7 +1011,7 @@ describe('D41, goals: a tree is not a plan until it has a starting line', () => 
   });
 
   test('the churn key result lands in the vault with the honest score on it', async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     await executeBeatTool(s, 'propose_goals', {
       objective: 'Keep the customers we win',
@@ -1091,7 +1161,7 @@ describe('D41, authority: the number is half of it', () => {
 
 describe('D41, the founder comes out knowing where things live', () => {
   test('every beat marks its room once the work in it is real, and not before', async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
     // The lead-in gesture has fired; the door has not been marked, because
@@ -1111,7 +1181,7 @@ describe('D41, the founder comes out knowing where things live', () => {
     answers(s);
     await executeBeatTool(s, 'spawn_research_agent', {}, r.deps);
     expect(r.marked.map((m) => m.beat)).toEqual([
-      'goals', 'tasks', 'calendar', 'workflows', 'authority', 'files', 'agents',
+      'files', 'goals', 'tasks', 'calendar', 'workflows', 'authority', 'agents',
     ]);
     // In the founder's terms, never in feature names, and never a tour.
     for (const m of r.marked) {
@@ -1230,8 +1300,10 @@ describe('"what folders do you have access to?" has an answer', () => {
   test('it can be asked at any point after the opening, not only in the files beat', async () => {
     const s = opened();
     const r = recorder();
-    // Standing in the goals beat, which is where a founder is most likely to
-    // wonder out loud what this thing can see.
+    // Standing in the goals beat, well past the one moment a folder is
+    // actually asked for, which is where a founder is most likely to wonder
+    // out loud what this thing can see.
+    await walkTo(s, r, 'goals');
     expect(currentBeat(s)).toBe('goals');
     const res = await executeBeatTool(s, 'folders_i_can_see', {}, r.deps);
     expect(res!.message).not.toContain('Not yet');
@@ -1458,6 +1530,13 @@ describe('D43, the organised folder', () => {
     await executeBeatTool(s, 'propose_reading', { folder: folder() }, r.deps);
     answers(s);
     await executeBeatTool(s, 'start_reading', {}, r.deps);
+    // The reader has to have actually found something before there is a
+    // folder to organise. `propose_workspace` refuses otherwise, which is the
+    // point: under D44 this beat starts three minutes in, and a model with
+    // nothing else to do will happily invent a filing system for documents it
+    // has not read.
+    r.reader = { found: ['Acme (company)', 'Northwind (client)'], finished: true, summary: 'Sells to studios.' };
+    await executeBeatTool(s, 'reading_so_far', {}, r.deps);
   }
 
   const SECTIONS = {
@@ -1553,6 +1632,8 @@ describe('D43, one real piece of work', () => {
     await executeBeatTool(s, 'propose_reading', { folder: folder() }, r.deps);
     answers(s);
     await executeBeatTool(s, 'start_reading', {}, r.deps);
+    r.reader = { found: ['Acme (company)'], finished: true, summary: 'Sells to studios.' };
+    await executeBeatTool(s, 'reading_so_far', {}, r.deps);
     await executeBeatTool(s, 'propose_workspace', {
       title: 'Acme',
       sections: [{ name: 'the pitch', about: 'what you tell people', files: ['pitch.md'] }],
@@ -1603,8 +1684,9 @@ describe('D43, one real piece of work', () => {
     expect(readFileSync(s.edit!.path, 'utf-8')).toBe('# Acme\nFor studios of three to ten.');
     expect(s.edit!.path.startsWith(s.workspace!.destination)).toBe(true);
     expect(res!.message).toContain('is exactly as it was');
-    // And the finale follows, because the workspace beat is done.
-    expect(res!.message).toContain('spawn_research_agent');
+    // And their quarter follows, because the workspace beat is done and under
+    // D44 everything the two of them build comes after the reading.
+    expect(res!.message).toContain('propose_goals');
   });
 
   test('an empty rewrite is refused rather than blanking a file', async () => {
@@ -1625,7 +1707,6 @@ describe('move_on: an offer they turn down does not stall the conversation', () 
   test('it closes the beat, writes nothing and hands over the next brief', async () => {
     const s = opened();
     const r = recorder();
-    await walkTo(s, r, 'files');
     await executeBeatTool(s, 'propose_reading', { folder: folder() }, r.deps);
     const res = await executeBeatTool(s, 'move_on', { because: 'they would rather not' }, r.deps);
 
@@ -1634,29 +1715,61 @@ describe('move_on: an offer they turn down does not stall the conversation', () 
     expect(r.readerStarts).toHaveLength(0);
     expect(s.proposal).toBeNull();
     expect(r.proposals.at(-1)).toBeNull();
-    // The brief for the NEXT beat, so the conversation has somewhere to go.
-    expect(res!.message).toContain('propose_workspace');
+    // The brief for the next beat they can actually do, so the conversation
+    // has somewhere to go.
+    expect(res!.message).toContain('propose_goals');
     expect(res!.message).toContain('Do not raise it again');
   });
 
   test('the refusal is recorded as declined, not as done with them', async () => {
     const s = opened();
     const r = recorder();
-    await walkTo(s, r, 'files');
     await executeBeatTool(s, 'move_on', { because: 'not comfortable with that' }, r.deps);
-    const done = r.completed.at(-1)!;
-    expect(done.beat).toBe('files');
-    expect(done.detail).toMatchObject({ declined: true, because: 'not comfortable with that' });
+    const files = r.completed.find((c) => c.beat === 'files')!;
+    expect(files.detail).toMatchObject({ declined: true, because: 'not comfortable with that' });
   });
 
-  test('declining both file beats still reaches the finale', async () => {
+  test('one no closes both file beats, so they are not asked the same thing twice', async () => {
     const s = opened();
     const r = recorder();
-    await walkTo(s, r, 'files');
+    await executeBeatTool(s, 'propose_reading', { folder: folder() }, r.deps);
+    const res = await executeBeatTool(s, 'move_on', { because: 'no' }, r.deps);
+
+    // D44's refusal path. `workspaceBrief` opens with "you have read their
+    // files", so handing it to a model that has read nothing is the exact
+    // failure this closes. It also spares the founder a second refusal ninety
+    // seconds after the first.
+    expect(beatIsDone(s, 'files')).toBe(true);
+    expect(beatIsDone(s, 'workspace')).toBe(true);
+    expect(currentBeat(s)).toBe('goals');
+    const workspace = r.completed.find((c) => c.beat === 'workspace')!;
+    expect(workspace.detail).toMatchObject({ skipped: true });
+    expect(workspace.detail.declined).toBeUndefined();
+    expect(res!.message).toContain('Do not offer to organise their folder either');
+    // Nothing was written and nothing was read.
+    expect(r.readerStarts).toHaveLength(0);
+    expect(s.workspace).toBeNull();
+  });
+
+  test('a founder who says no at minute three still reaches the finale, whole', async () => {
+    const s = opened();
+    const r = recorder();
     await executeBeatTool(s, 'move_on', { because: 'no' }, r.deps);
-    const second = await executeBeatTool(s, 'move_on', { because: 'no' }, r.deps);
-    expect(second!.message).toContain('spawn_research_agent');
-    expect(currentBeat(s)).toBe('agents');
+    await walkTo(s, r, 'agents');
+    await executeBeatTool(s, 'propose_research', { question: 'q', brief: 'b' }, r.deps);
+    answers(s);
+    const res = await executeBeatTool(s, 'spawn_research_agent', {}, r.deps);
+
+    // Every beat below the two they declined ran, wrote something real, and
+    // finished. The refusal costs them the reading, not the trial.
+    expect(s.objective).not.toBeNull();
+    expect(findCommitments({}).length).toBeGreaterThan(0);
+    expect(s.briefAt).not.toBeNull();
+    expect(s.workflowsPublished).toHaveLength(1);
+    expect(s.authorityLevel).toBe(TRIAL_AUTHORITY_PROPOSED);
+    expect(s.agent).not.toBeNull();
+    expect(s.finishedAt).not.toBeNull();
+    expect(res!.message).toContain('teach_summon');
   });
 
   test('it cannot be used before the opening is done', async () => {
@@ -1839,7 +1952,7 @@ describe('beat 13, the handover', () => {
 
 describe('the goal tree explains itself, through their own tree', () => {
   test('their objective is opened and the pebble walks its three levels', async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
     answers(s);
@@ -1870,7 +1983,7 @@ describe('the goal tree explains itself, through their own tree', () => {
   test('the walk comes before the door is marked, not after it', async () => {
     // Both are pebble gestures. Inside first, then the way back in: the door
     // is the last thing they see because it is the thing they will use next.
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     const order: string[] = [];
     r.deps = {
@@ -1885,7 +1998,7 @@ describe('the goal tree explains itself, through their own tree', () => {
   });
 
   test('the model is told to explain the mechanic, and NOT to read the tree out', async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
     answers(s);
@@ -1896,7 +2009,7 @@ describe('the goal tree explains itself, through their own tree', () => {
   });
 
   test('a tree with no first move still walks what there is', async () => {
-    const s = opened();
+    const s = standingAt('goals');
     const r = recorder();
     // Two key results with numbers, and a first move that lands under the
     // objective because its `under` matches nothing. It still exists, so it is
@@ -1973,5 +2086,307 @@ describe('the workflow explains itself, by being opened', () => {
     expect(res!.message).not.toContain('OPEN on their screen');
     expect(r.actions.filter((a) => a.action === 'open_flow')).toHaveLength(0);
     expect(s.workflowsPublished).toEqual(['Monday pipeline review']);
+  });
+});
+
+/* ══════════ D44 · the reorder, and what the beats below it now say ══════════ */
+
+describe('D44, the ask that has to earn itself three minutes in', () => {
+  const brief = filesBrief({ company: 'Two-person B2B SaaS selling to studios.' });
+
+  test('it names the trade, the fence and the way out, in that order', () => {
+    // THE TRADE. The only argument that is actually true, and the founder can
+    // check it against the two minutes they just spent describing themselves.
+    expect(brief).toContain('That is the two-minute version');
+    expect(brief).toContain('instead of an hour of them explaining');
+    // THE FENCE, volunteered rather than extracted.
+    expect(brief).toContain('One folder, the one they name');
+    expect(brief).toContain('do not move, rename, change or delete');
+    expect(brief).toContain('before a single file is opened');
+    // THE WAY OUT, in the same breath as the ask. An ask that costs nothing to
+    // refuse is a smaller ask, and it has to be offered by the one asking.
+    expect(brief).toContain('WAY OUT IN THE SAME BREATH');
+    expect(brief).toContain('do not ask a second time');
+    expect(brief.indexOf('WAY OUT IN THE SAME BREATH')).toBeGreaterThan(brief.indexOf('WHAT YOU PROMISE'));
+  });
+
+  test('it says plainly that this is the biggest thing it will ask for', () => {
+    expect(brief).toContain('biggest thing you will ask them for');
+    expect(brief).toContain('Do not slide it in as a small favour');
+  });
+
+  test('it does not make the one promise that is not ours to make', () => {
+    // The reader is a language model. "It never leaves your machine" is the
+    // sentence a model reaches for under this much pressure, and it is false.
+    expect(brief).not.toMatch(/never leaves|nothing is sent anywhere|nobody else sees/i);
+    // And the prohibition is stated, because a model under this much pressure
+    // will reach for that sentence if nothing stops it.
+    expect(brief).toContain('Do not tell them where anything is processed');
+    expect(brief).toContain('it is not yours to promise');
+  });
+
+  test('it still carries their own words, and still says nothing about a step', () => {
+    expect(brief).toContain('Two-person B2B SaaS selling to studios.');
+    expect(brief).toContain('Say nothing about this');
+    expect(brief).not.toMatch(/onboarding|wizard|next question/i);
+  });
+});
+
+describe('D44, the beats below the read use what was read', () => {
+  const FOUND = [
+    'Northwind (client)',
+    'Rita Alvarez (contractor): does the front end two days a week',
+    'Pricing: 240 a seat, under review since March',
+    'Northwind: renews in October',
+  ];
+
+  /**
+   * A session that has read a real folder and had real findings land, with the
+   * organised copy turned down, so what is left is exactly the thing under
+   * test: the beats below the read, holding what was read.
+   *
+   * Returns the tool result that closed the workspace beat, which IS the goals
+   * brief. That is the whole "what happens next" mechanism.
+   */
+  async function afterReading(s: BeatsSession, r: Recorder): Promise<string> {
+    await executeBeatTool(s, 'propose_reading', { folder: folder() }, r.deps);
+    answers(s);
+    await executeBeatTool(s, 'start_reading', {}, r.deps);
+    r.reader = { found: [...FOUND], finished: true, summary: 'A two-person studio tools business.' };
+    await executeBeatTool(s, 'reading_so_far', {}, r.deps);
+    const res = await executeBeatTool(s, 'move_on', { because: 'the folder is fine as it is' }, r.deps);
+    return res!.message;
+  }
+
+  test('the goals brief arrives carrying their own documents, not a summary of them', async () => {
+    const s = opened();
+    const r = recorder();
+    const goals = await afterReading(s, r);
+    expect(currentBeat(s)).toBe('goals');
+    for (const f of FOUND) expect(goals).toContain(f);
+    expect(goals).toContain('A two-person studio tools business.');
+    // And the instruction that makes it worth carrying: say the number, do not
+    // ask for it. This is the failure D44 exists to prevent.
+    expect(goals).toContain('WHERE A NUMBER IS ALREADY WRITTEN DOWN, SAY IT, do not ask for it');
+    expect(goals).toContain('never ask them for something that is written in a document you have read');
+  });
+
+  test('tasks draws the dated commitments nobody says out loud', async () => {
+    const s = opened();
+    const r = recorder();
+    await afterReading(s, r);
+    await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
+    answers(s);
+    const tasks = (await executeBeatTool(s, 'create_goals', {}, r.deps))!.message;
+    expect(tasks).toContain('START FROM WHAT YOU READ');
+    expect(tasks).toContain('already written down');
+    expect(tasks).toContain('Northwind: renews in October');
+  });
+
+  test('calendar reads the dates out of their documents alongside their week', async () => {
+    const s = opened();
+    const r = recorder();
+    await afterReading(s, r);
+    await walkTo(s, r, 'calendar');
+    const week = (await executeBeatTool(s, 'read_week', {}, r.deps))!.message;
+    expect(week).toContain('Dates written in their own documents, which are on no calendar');
+    expect(week).toContain('Northwind: renews in October');
+    // A line with nothing dated in it is not dressed up as a deadline.
+    expect(week).not.toContain('Rita Alvarez');
+  });
+
+  test('workflows is told to find the recurring work by its repetition, not by asking', async () => {
+    const s = opened();
+    const r = recorder();
+    await afterReading(s, r);
+    const flows = await walkTo(s, r, 'workflows');
+    expect(flows).toContain('VISIBLE IN A FOLDER');
+    expect(flows).toContain('in there twelve times');
+  });
+
+  test('authority stops being abstract, because they have watched it work in there', async () => {
+    const s = opened();
+    const r = recorder();
+    await afterReading(s, r);
+    const auth = await walkTo(s, r, 'authority');
+    expect(auth).toContain('already watched you work in');
+    expect(auth).toContain(s.files!.folder);
+  });
+
+  test('the finale is pointed at the contradiction the reader found', async () => {
+    const s = opened();
+    const r = recorder();
+    await afterReading(s, r);
+    const agents = await walkTo(s, r, 'agents');
+    expect(agents).toContain('THE BEST QUESTION IN THIS SESSION IS ALMOST CERTAINLY ONE THEIR OWN FILES RAISED');
+    expect(agents).toContain('Pricing: 240 a seat, under review since March');
+  });
+
+  test('their card says where it came from, and only for the beats that read', async () => {
+    const s = opened();
+    const r = recorder();
+    await afterReading(s, r);
+    await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
+    expect(r.proposals.at(-1)).toMatchObject({ beat: 'goals', fromFiles: true });
+
+    // The authority card is about what Jarvis may do, not about their
+    // documents, so it does not claim to have come out of them.
+    await walkTo(s, r, 'authority');
+    await executeBeatTool(s, 'propose_authority', { always_ask: ['send_message'] }, r.deps);
+    expect((r.proposals.at(-1) as { fromFiles?: boolean }).fromFiles).toBeUndefined();
+  });
+});
+
+describe('D44, the founder who says no is not left in a worse trial', () => {
+  test('every brief below has a second arm, and none of them sulks', () => {
+    const none: FileFindings = { found: [], finished: false };
+    for (const b of [goalsBrief({}, none), tasksBrief({}, none)]) {
+      expect(b).toContain('everything here comes out of what they tell you');
+      expect(b).toContain('never imply this would be better if they had said yes');
+      expect(b).not.toContain('WHAT YOU READ IN THEIR OWN FILES');
+    }
+  });
+
+  test('a declined read leaves the goals beat asking, not referring back', async () => {
+    const s = opened();
+    const r = recorder();
+    const goals = (await executeBeatTool(s, 'move_on', { because: 'rather not' }, r.deps))!.message;
+    expect(goals).toContain('Build it out of the sentences they actually said');
+    expect(goals).toContain('do not refer back to the folder');
+    expect(goals).not.toContain('WHERE A NUMBER IS ALREADY WRITTEN DOWN');
+  });
+
+  test('a card proposed with nothing read never claims their files are behind it', async () => {
+    const s = opened();
+    const r = recorder();
+    await executeBeatTool(s, 'move_on', { because: 'rather not' }, r.deps);
+    await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
+    expect((r.proposals.at(-1) as { fromFiles?: boolean }).fromFiles).toBeUndefined();
+  });
+});
+
+describe('D44, the two minutes the reader takes', () => {
+  test('start_reading hands over the conversation to have, not the beat it cannot do yet', async () => {
+    const s = opened();
+    const r = recorder();
+    await executeBeatTool(s, 'propose_reading', { folder: folder() }, r.deps);
+    answers(s);
+    const res = (await executeBeatTool(s, 'start_reading', {}, r.deps))!.message;
+
+    // Not the workspace brief: there is nothing found to organise, and a model
+    // handed a brief it can only follow by inventing will invent.
+    expect(res).not.toContain('propose_workspace');
+    expect(res).toContain('Carry on with them');
+    // The four things the opening stopped going looking for (D44's resplit).
+    expect(res).toContain('What this quarter is actually for');
+    expect(res).toContain('What is eating their week');
+    expect(res).toContain('capture_fuel');
+  });
+
+  test('what it suggests talking about is only what is not already known', async () => {
+    const s = opened();
+    const r = recorder({ fuel: () => ({ goal: 'Forty customers by Q3.', drowning: 'Invoices.' }) });
+    await executeBeatTool(s, 'propose_reading', { folder: folder() }, r.deps);
+    answers(s);
+    const res = (await executeBeatTool(s, 'start_reading', {}, r.deps))!.message;
+    expect(res).not.toContain('What this quarter is actually for');
+    expect(res).not.toContain('What is eating their week');
+    expect(res).toContain('what is already late');
+  });
+
+  test('the workspace brief arrives when there is something to organise, exactly once', async () => {
+    const s = opened();
+    const r = recorder();
+    await executeBeatTool(s, 'propose_reading', { folder: folder() }, r.deps);
+    answers(s);
+    await executeBeatTool(s, 'start_reading', {}, r.deps);
+
+    const quiet = (await executeBeatTool(s, 'reading_so_far', {}, r.deps))!.message;
+    expect(quiet).toContain('Nothing has landed yet');
+    expect(quiet).not.toContain('propose_workspace');
+
+    r.reader = { found: ['Northwind (client)'], finished: false, summary: null };
+    const first = (await executeBeatTool(s, 'reading_so_far', {}, r.deps))!.message;
+    expect(first).toContain('Northwind (client)');
+    expect(first).toContain('propose_workspace');
+
+    // Called again a turn later, as the model is told to: progress, not a
+    // second copy of the same beat.
+    r.reader = { found: ['Northwind (client)', 'Rita (contractor)'], finished: true, summary: 'x' };
+    const again = (await executeBeatTool(s, 'reading_so_far', {}, r.deps))!.message;
+    expect(again).toContain('Rita (contractor)');
+    expect(again).not.toContain('propose_workspace');
+  });
+
+  test('a folder that turns out to hold nothing does not leave a beat nobody can do', async () => {
+    const s = opened();
+    const r = recorder();
+    await executeBeatTool(s, 'propose_reading', { folder: folder() }, r.deps);
+    answers(s);
+    await executeBeatTool(s, 'start_reading', {}, r.deps);
+
+    r.reader = { found: [], finished: true, summary: 'Nothing about the company in there.' };
+    const res = (await executeBeatTool(s, 'reading_so_far', {}, r.deps))!.message;
+    expect(res).toContain('without inventing a finding');
+    expect(res).toContain('Do NOT offer to organise a folder you learned nothing from');
+    // The workspace beat closes as empty rather than as declined by them, and
+    // the conversation goes on to their quarter with the second arm.
+    expect(beatIsDone(s, 'workspace')).toBe(true);
+    const workspace = r.completed.find((c) => c.beat === 'workspace')!;
+    expect(workspace.detail).toMatchObject({ skipped: true });
+    expect(res).toContain('propose_goals');
+    expect(res).toContain('everything here comes out of what they tell you');
+  });
+
+  test('the folder cannot be filed before it has been read', async () => {
+    const s = opened();
+    const r = recorder();
+    await executeBeatTool(s, 'propose_reading', { folder: folder() }, r.deps);
+    answers(s);
+    await executeBeatTool(s, 'start_reading', {}, r.deps);
+    r.proposals.length = 0;
+    const res = await executeBeatTool(s, 'propose_workspace', {
+      title: 'Acme', sections: [{ name: 'the pitch', about: 'x', files: ['pitch.md'] }],
+    }, r.deps);
+    expect(res!.message).toContain('you do not know what is in them');
+    expect(r.proposals).toHaveLength(0);
+  });
+});
+
+describe('datedFindings, the crude filter that is only allowed to be crude', () => {
+  test('it keeps the lines with a date in them and drops the rest', () => {
+    const found = [
+      'Northwind: renews in October',
+      'Rita Alvarez (contractor)',
+      'Board pack due 14/09',
+      'Q3 target is forty customers',
+      'Raised in 2025',
+    ];
+    expect(datedFindings({ found, finished: true })).toEqual([
+      '- Northwind: renews in October',
+      '- Board pack due 14/09',
+      '- Q3 target is forty customers',
+      '- Raised in 2025',
+    ]);
+  });
+
+  test('the words a founder actually writes are not mistaken for months', () => {
+    // The first version of this matched month PREFIXES, so "market" was a date
+    // through `mar` and "the deck" was a date through `dec`. Both are in every
+    // founder's folder, and a Jarvis reading them back as deadlines is worse
+    // than one that says nothing about dates at all.
+    const found = [
+      'The market is three thousand studios',
+      'The deck undersells the pricing',
+      'Junior engineer starting soon',
+      'Decided against raising',
+      'Margin is 62 per cent',
+      'Separate repo for the website',
+    ];
+    expect(datedFindings({ found, finished: true })).toEqual([]);
+  });
+
+  test('nothing read is nothing dated', () => {
+    expect(datedFindings({ found: [], finished: false })).toEqual([]);
   });
 });

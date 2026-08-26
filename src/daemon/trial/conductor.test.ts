@@ -58,9 +58,18 @@ describe('the conductor is a role, not a script (D12)', () => {
     expect(prompt).toContain('There is no progress here');
   });
 
-  test('the five targets are described as things to KNOW, never an agenda', () => {
+  test('the five targets are named, and D44 says which one the opening owns', () => {
     for (const area of FUEL_AREA_KEYS) expect(prompt).toContain(area);
-    expect(prompt).toContain('These are things to KNOW by the end, not things to ask in order');
+    // D44 resplit them. The opening goes looking for the company and stops;
+    // the other four are asked for in the beat that needs them, with the
+    // founder's own documents already open. A prompt that still sent the model
+    // hunting for all five would make the founder recite what it is about to
+    // read, which is the exact failure the reorder exists to prevent.
+    expect(prompt).toContain('ONE THING: what this company is and what it does');
+    expect(prompt).toContain('Only the first is yours to go and get');
+    expect(prompt).toContain('Do not go hunting for the last four');
+    // And it must still not be a list to work through.
+    expect(prompt).toContain('do not work through them as a list');
   });
 
   test('every target says which later beat needs it (D13 works backwards)', () => {
@@ -274,7 +283,9 @@ describe('conclude_opening, the seam (D17)', () => {
     // hand the model straight into the first beat rather than into a pause.
     expect(r!.message).toContain('Say nothing about this');
     expect(r!.message).not.toContain('onboarding');
-    expect(r!.message).toContain('propose_goals');
+    // D44: the first beat on the other side of the seam is their files.
+    expect(r!.message).toContain('propose_reading');
+    expect(r!.message).not.toContain('propose_goals');
   });
 
   test('the seam carries the founder\'s own words into the first beat', () => {
@@ -283,12 +294,15 @@ describe('conclude_opening, the seam (D17)', () => {
     executeConductorTool(
       session,
       'capture_fuel',
-      { area: 'goal', summary: 'Forty paying customers by the end of Q3.' },
+      // D44 made `company` the opening's one target, and it is also the one
+      // the first beat needs: it is what the background reader is handed so it
+      // knows what it is looking for.
+      { area: 'company', summary: 'Two-person B2B SaaS selling to studios.' },
       {},
       1500,
     );
     const r = executeConductorTool(session, 'conclude_opening', { understanding: 'x' }, {}, 2000);
-    expect(r!.message).toContain('Forty paying customers by the end of Q3.');
+    expect(r!.message).toContain('Two-person B2B SaaS selling to studios.');
   });
 });
 

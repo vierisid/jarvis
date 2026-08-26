@@ -32,7 +32,7 @@ function harness(now = () => T0, clockGraceMs?: number, summonWaitMs = 25) {
     authority: null as number | null,
     alwaysAsk: [] as string[],
     spawned: [] as string[],
-    readerStarts: [] as { folder: string; shortlist: string[] }[],
+    readerStarts: [] as { folder: string; shortlist: string[]; about: string }[],
     readerFound: null as ((f: FoundEntities) => { landed: number; names: string[] }) | null,
     readerDone: null as ((summary: string | null) => void) | null,
   };
@@ -47,7 +47,7 @@ function harness(now = () => T0, clockGraceMs?: number, summonWaitMs = 25) {
       setDailyRhythm: (morning, eveningHour) => { actions.brief = morning; actions.evening = eveningHour; },
       setAuthority: (level, alwaysAsk) => { actions.authority = level; actions.alwaysAsk = alwaysAsk; return { level, alwaysAsk }; },
       startFolderReader: async (opts) => {
-        actions.readerStarts.push({ folder: opts.folder, shortlist: opts.shortlist });
+        actions.readerStarts.push({ folder: opts.folder, shortlist: opts.shortlist, about: opts.about });
         actions.readerFound = opts.onFound;
         actions.readerDone = opts.onDone;
         return { agentId: 'reader-1', taskId: 'read-1' };
@@ -251,7 +251,7 @@ describe('live surfaces', () => {
   });
 });
 
-/* ─────────────────── the seam, and the seven beats ─────────────────── */
+/* ─────────────────── the seam, and the beats ─────────────────── */
 
 describe('the join between the opening and the beats', () => {
   afterEach(() => closeDb());
@@ -269,9 +269,22 @@ describe('the join between the opening and the beats', () => {
     expect(early).toContain('conclude_opening');
     expect(manager.beatsOf(ws)!.open).toBe(false);
 
-    await manager.executeTool(ws, 'conclude_opening', { understanding: 'ok' });
+    const seam = await manager.executeTool(ws, 'conclude_opening', { understanding: 'ok' });
     expect(manager.beatsOf(ws)!.open).toBe(true);
+    // D44: the first thing on the other side of the seam is their files, not
+    // their quarter. This is the whole reorder as the model experiences it.
+    expect(seam).toContain('propose_reading');
+    expect(seam).not.toContain('propose_goals');
 
+    // And their quarter is refused until the file beats are closed one way or
+    // the other, which is what makes "it already knows" true rather than a
+    // sequencing accident.
+    const tooSoon = await manager.executeTool(ws, 'propose_goals', {
+      objective: '40 paying customers by the end of Q3', key_results: [{ title: '12 demos a month' }],
+    });
+    expect(tooSoon).toContain('Not yet');
+
+    await manager.executeTool(ws, 'move_on', { because: 'they would rather not' });
     const now = await manager.executeTool(ws, 'propose_goals', {
       objective: '40 paying customers by the end of Q3', key_results: [{ title: '12 demos a month' }],
     });
@@ -306,6 +319,11 @@ describe('what the founder sees during a beat', () => {
     h.manager.arm(h.ws);
     h.manager.begin(h.ws);
     await h.manager.executeTool(h.ws, 'conclude_opening', { understanding: 'ok' });
+    // D44 put the two file beats in front of everything else, and these tests
+    // are about what the founder SEES during a beat rather than about the
+    // reading. Declining is the shortest honest way past both: one `move_on`
+    // closes `files` and `workspace` together.
+    await h.manager.executeTool(h.ws, 'move_on', { because: 'not now' });
     h.broadcast.length = 0;
     return h;
   }
@@ -396,6 +414,12 @@ describe('the finale', () => {
     writeFileSync(join(folder, 'pitch.md'), '# Acme\nWe sell to studios.', 'utf-8');
 
     await run('conclude_opening', { understanding: 'Two-person B2B SaaS.' });
+    // D42 and D44: the folder is named and approved before anything is built.
+    await run('propose_reading', { folder });
+    yes();
+    await run('start_reading');
+    // D43: refusable, and a refusal does not stall the conversation.
+    await run('move_on', { because: 'they would rather leave their files alone' });
     await run('propose_goals', DEEP_GOALS);
     yes();
     await run('create_goals');
@@ -415,12 +439,6 @@ describe('the finale', () => {
     await run('propose_authority', { always_ask: ['send_message'] });
     yes();
     await run('set_authority', {});
-    // D42: the folder, named and approved, then read in the background.
-    await run('propose_reading', { folder });
-    yes();
-    await run('start_reading');
-    // D43: refusable, and a refusal does not stall the conversation.
-    await run('move_on', { because: 'they would rather leave their files alone' });
     await run('propose_research', { question: 'What the competitors charge', brief: 'Compare published prices.' });
     yes();
     await run('spawn_research_agent', {});
@@ -439,7 +457,7 @@ describe('the finale', () => {
     expect(done).toBeDefined();
     const payload = done!.payload as { beats: string[]; authorityLevel: number; agent: { agentId: string } };
     expect(payload.beats).toEqual([
-      'goals', 'tasks', 'calendar', 'workflows', 'authority', 'files', 'workspace', 'agents',
+      'files', 'workspace', 'goals', 'tasks', 'calendar', 'workflows', 'authority', 'agents',
     ]);
     expect(payload.authorityLevel).toBe(5);
     expect(payload.agent.agentId).toBe('a1');
@@ -458,6 +476,7 @@ describe('the finale', () => {
     manager.arm(ws);
     manager.begin(ws);
     await manager.executeTool(ws, 'conclude_opening', { understanding: 'ok' });
+    await manager.executeTool(ws, 'move_on', { because: 'not now' });
     await manager.executeTool(ws, 'propose_goals', DEEP_GOALS);
 
     expect(await manager.executeTool(ws, 'create_goals')).toContain('have not answered yet');
@@ -482,6 +501,7 @@ describe('the finale', () => {
     manager.arm(ws);
     manager.begin(ws);
     await manager.executeTool(ws, 'conclude_opening', { understanding: 'ok' });
+    await manager.executeTool(ws, 'move_on', { because: 'not now' });
     await manager.executeTool(ws, 'propose_goals', DEEP_GOALS);
     manager.onUserSpeechStopped(ws);
     await manager.executeTool(ws, 'create_goals');
@@ -515,19 +535,17 @@ describe('the reader lands its findings through the conversation, not beside it'
     writeFileSync(join(folder, 'pitch.md'), '# Acme', 'utf-8');
 
     await run('conclude_opening', { understanding: 'ok' });
-    await run('propose_goals', DEEP_GOALS); yes(); await run('create_goals');
-    await run('propose_tasks', { tasks: [{ what: 'a', first: true }] }); yes(); await run('create_tasks');
-    await run('propose_daily_rhythm', { hour: 7, minute: 30, evening_hour: 19 }); yes(); await run('set_daily_rhythm');
-    await run('propose_workflow', {
-      name: 'f', runs_when: 'mondays', steps: ['x'], never: 'send anything on its own',
-    });
-    yes();
-    await run('publish_workflow');
-    await run('no_second_workflow', { because: 'one thing' });
-    await run('propose_authority', { always_ask: ['send_message'] }); yes(); await run('set_authority', {});
     await run('propose_reading', { folder }); yes(); await run('start_reading');
     return { ...h, run, folder };
   }
+
+  test('D44: the reader is never sent in blind, even when no fuel was captured', async () => {
+    const { actions } = await readingManager();
+    // `conclude_opening`'s own summary stands in for the `company` fuel the
+    // model may never have called `capture_fuel` for. Under D44 the reading is
+    // the FIRST beat, so there is no later turn in which to notice the gap.
+    expect(actions.readerStarts[0]!.about).toBe('ok');
+  });
 
   test('a finding lands in the vault and reaches the founder as a memory push (D22)', async () => {
     const { manager, ws, broadcast, actions, folder } = await readingManager();
@@ -618,6 +636,8 @@ describe('the summon, and the stand-down it performs', () => {
     writeFileSync(join(folder, 'pitch.md'), '# Acme', 'utf-8');
 
     await run('conclude_opening', { understanding: 'ok' });
+    await run('propose_reading', { folder }); yes(); await run('start_reading');
+    await run('move_on', { because: 'no' });
     await run('propose_goals', DEEP_GOALS); yes(); await run('create_goals');
     await run('propose_tasks', { tasks: [{ what: 'a', first: true }] }); yes(); await run('create_tasks');
     await run('propose_daily_rhythm', { hour: 7, minute: 30, evening_hour: 19 }); yes(); await run('set_daily_rhythm');
@@ -625,8 +645,6 @@ describe('the summon, and the stand-down it performs', () => {
     yes(); await run('publish_workflow');
     await run('no_second_workflow', { because: 'one thing' });
     await run('propose_authority', { always_ask: ['send_message'] }); yes(); await run('set_authority', {});
-    await run('propose_reading', { folder }); yes(); await run('start_reading');
-    await run('move_on', { because: 'no' });
     await run('propose_research', { question: 'q', brief: 'b' }); yes(); await run('spawn_research_agent');
     rmSync(folder, { recursive: true, force: true });
     return { ...h, run };
@@ -720,6 +738,7 @@ describe('the rooms that explain themselves', () => {
     manager.arm(ws);
     manager.begin(ws);
     await manager.executeTool(ws, 'conclude_opening', { understanding: 'ok' });
+    await manager.executeTool(ws, 'move_on', { because: 'not now' });
     await manager.executeTool(ws, 'propose_goals', DEEP_GOALS);
     manager.onUserSpeechStopped(ws);
     await manager.executeTool(ws, 'create_goals');
