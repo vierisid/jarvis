@@ -2776,9 +2776,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const enablement = realtimeEnablement(ctx.config);
         const enabledNow = enablement !== 'off';
         let available = false;
+        let hostedRealtime = false;
         try {
           const res = resolveRealtimeVoice(ctx.config, enablement);
           available = res.ok && cachedRealtimeVerdict(res.resolved) !== false;
+          hostedRealtime = res.ok && res.resolved.provider === 'usejarvis_ai';
         } catch { available = false; }
         return json({
           wake_engine: voice?.wake_engine ?? 'openwakeword',
@@ -2804,6 +2806,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             // Same shape as blocked_categories_default above: the effective
             // value plus a flag saying whose answer it is.
             enabled_default: enablement === 'hosted-default',
+            // Who would actually SERVE a session, not merely whether this
+            // install is hosted. The tab's billing copy keys off this: saying
+            // "included in your plan" while a BYO key was about to be charged
+            // is the assurance that made the billing bug worse than silent.
+            served_by_plan: hostedRealtime,
             hosted: hasUsejarvisAi(ctx.config),
             // true when enabled AND an OpenAI provider key resolves (via
             // llm.providers or env) - reflects whether realtime would actually

@@ -116,10 +116,10 @@ describe('resolving a session from that decision', () => {
     expect(resolveRealtimeVoice(hosted({ voice: { realtime: { enabled: true } } })).ok).toBe(true);
   });
 
-  test('a BYO OpenAI key still wins over the hosted alias', () => {
-    // Their explicit choice, their own spend — unchanged by this work.
+  test('a SELF-HOSTED install still uses the BYO key', () => {
+    // Nothing else can serve it there, and it is their explicit choice.
     const res = resolveRealtimeVoice(
-      hosted({ llm: { providers: { openai: { api_key: 'sk-real' } } } }),
+      selfHosted({ llm: { providers: { openai: { api_key: 'sk-real' } } } }),
       'user-on',
     );
     expect(res.ok).toBe(true);
@@ -149,15 +149,37 @@ describe('the money boundary — a default-on session must never touch a BYO key
     expect(res.resolved.modelsUrl).toBeTruthy();
   });
 
-  test('but an EXPLICIT yes still lets their own key win', () => {
-    // Their choice, their spend — unchanged.
+  test('and an EXPLICIT yes does not re-open the door', () => {
+    // Scoping the rule to `hosted-default` alone left the harm one click away:
+    // toggling realtime off and on again makes the tenant `user-on`, and their
+    // own key would have won from then on — while the settings tab told them
+    // realtime was included in their plan. On a hosted install the plan serves
+    // it whoever asked.
     const cfg = hosted({
       voice: { realtime: { enabled: true } },
       llm: { providers: { openai: { api_key: 'sk-their-own' } } },
     });
     expect(realtimeEnablement(cfg, stored(undefined))).toBe('user-on');
     const res = resolveRealtimeVoice(cfg, 'user-on');
-    expect(res.ok && res.resolved.provider).toBe('openai');
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.resolved.provider).toBe('usejarvis_ai');
+    expect(res.resolved.apiKey).not.toBe('sk-their-own');
+    expect(res.resolved.modelsUrl).toBeTruthy(); // and the plan gate applies
+  });
+
+  test('a hosted tenant whose plan EXCLUDES realtime is refused, not billed', () => {
+    // The accepted cost of the rule above: their own key is not reached, so
+    // the gate refuses and they fall back to the standard pipeline. Losing a
+    // rare capability beats silently charging someone's personal card.
+    const cfg = hosted({
+      voice: { realtime: { enabled: true } },
+      llm: { providers: { openai: { api_key: 'sk-their-own' } } },
+    });
+    const res = resolveRealtimeVoice(cfg, 'user-on');
+    // Resolution succeeds; the CATALOG gate is what says no at session start,
+    // and it only applies because modelsUrl is present.
+    expect(res.ok && res.resolved.modelsUrl).toBeTruthy();
   });
 });
 

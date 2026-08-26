@@ -6,8 +6,9 @@ import { createApiRoutes, type ApiContext } from './api-routes.ts';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import { DEFAULT_CONFIG, type JarvisConfig } from '../config/types.ts';
 import { loadUserSection } from './user-settings.ts';
+import { setSetting } from '../vault/settings.ts';
 import { getSecret } from '../vault/keychain.ts';
-import { effectiveSttForBinding, effectiveTtsForBinding, realtimeEnablement } from './usejarvis-ai.ts';
+import { effectiveSttForBinding, effectiveTtsForBinding, realtimeEnablement, resetRealtimeVaultWarningForTest } from './usejarvis-ai.ts';
 
 /**
  * Route-level regressions for the voice-config persistence discipline.
@@ -333,5 +334,47 @@ describe('voice config routes: a save must not silently decline realtime', () =>
     const stored = loadUserSection('voice') as { realtime?: { enabled?: unknown } };
     expect(stored.realtime?.enabled).toBe(false);
     expect(realtimeEnablement(config)).toBe('off');
+  });
+});
+
+describe('a corrupt voice row is not an answer', () => {
+  let secretsDir: string;
+  let prevSecretsDir: string | undefined;
+  let prevEnv: string | undefined;
+
+  beforeEach(() => {
+    prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
+    prevEnv = process.env.JARVIS_REALTIME_VOICE;
+    delete process.env.JARVIS_REALTIME_VOICE;
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-rt-corrupt-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
+    closeDb();
+    initDatabase(':memory:');
+    resetRealtimeVaultWarningForTest();
+  });
+  afterEach(() => {
+    closeDb();
+    if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
+    if (prevEnv === undefined) delete process.env.JARVIS_REALTIME_VOICE;
+    else process.env.JARVIS_REALTIME_VOICE = prevEnv;
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
+
+  test('unparseable JSON fails CLOSED rather than reading as "never asked"', () => {
+    // Exercised against the real vault seam, not an injected fake: the default
+    // loader is where the distinction lives. loadUserSection swallows a parse
+    // error and returns undefined — which means "absent", which means "default
+    // it on". A tenant who declined, whose row later corrupts, would have had
+    // realtime switched back on.
+    setSetting('cfg.voice', '{ this is not json');
+    expect(realtimeEnablement(hostedConfig())).toBe('off');
+  });
+
+  test('a well-formed row still answers normally through the same seam', () => {
+    setSetting('cfg.voice', JSON.stringify({ realtime: { enabled: true } }));
+    expect(realtimeEnablement(hostedConfig())).toBe('user-on');
+    setSetting('cfg.voice', JSON.stringify({ wake_engine: 'openwakeword' }));
+    expect(realtimeEnablement(hostedConfig())).toBe('hosted-default');
   });
 });

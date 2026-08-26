@@ -88,13 +88,10 @@ export function resolveRealtimeVoice(
    * Whether realtime is switched on, and on WHOSE authority
    * (daemon/usejarvis-ai.ts realtimeEnablement).
    *
-   * The distinction is load-bearing, not bookkeeping. `hosted-default` means
-   * nobody asked for realtime — it is on only because the plan may include it —
-   * so such a session must resolve to the hosted alias and NEVER to a BYO
-   * OpenAI key. Without that, a hosted tenant who added a personal OpenAI
-   * provider for chat would have every voice turn billed to their own account
-   * at ~$0.30/min, ungated (the plan gate skips BYO sessions) and unbudgeted
-   * (they never set a monthly cap), having opted into none of it.
+   * Only `off` is read here now — a hosted install resolves to the plan's alias
+   * whether the tenant asked or not (see the key selection below), because
+   * scoping that rule to `hosted-default` left the same billing harm reachable
+   * by toggling realtime off and on again.
    *
    * Passed IN rather than read here so this stays a pure function of config —
    * the binding view needs the vault DB to tell an explicit "off" from the
@@ -114,9 +111,25 @@ export function resolveRealtimeVoice(
     return { ok: false, reason: 'Realtime voice disabled (voice.realtime.enabled is false)' };
   }
 
-  // A default-on session spends OUR money at the proxy or it does not happen.
-  // Reading the user's own key here is what would silently bill them.
-  const apiKey = enablement === 'hosted-default' ? '' : findOpenAIProviderKey(config).trim();
+  // On a HOSTED install the plan serves realtime, whoever asked for it.
+  //
+  // Gating this on `hosted-default` alone was not enough: a hosted tenant with
+  // a personal OpenAI key (allowed — hosted installs permit BYO providers for
+  // chat) who merely toggled realtime off and on again became `user-on`, at
+  // which point their own key won and every turn was billed to them at
+  // ~$0.30/min, ungated and unbudgeted — the same harm, one innocent click
+  // away, while the settings tab told them it was included in their plan.
+  //
+  // So BYO is read only where there is no hosted block to serve the session.
+  // The cost is a niche capability: a hosted tenant whose plan EXCLUDES
+  // realtime can no longer spend their own key on it. That is the right trade
+  // — losing a rare feature beats silently charging someone's personal card —
+  // and it makes one rule true everywhere: on a hosted install, realtime is
+  // either included in your plan or it does not run.
+  const hostedForRealtime = Boolean(
+    config.usejarvis_ai?.base_url?.trim() && config.usejarvis_ai?.api_key?.trim(),
+  );
+  const apiKey = hostedForRealtime ? '' : findOpenAIProviderKey(config).trim();
 
   // Hosted fallback: no BYO OpenAI key, but the platform block is live — the
   // proxy serves realtime under the plan-gated uj-realtime alias. A user's

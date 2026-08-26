@@ -9,6 +9,9 @@ import {
 } from './realtime-gate.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 
+/** Mirrors ADVISORY_TTL_MS in realtime-gate.ts (not exported). */
+const ADVISORY_TTL_MS = 30_000;
+
 /**
  * Warming exists because realtime is now on by default for hosted tenants, so
  * the plan gate runs for EVERY hosted install. With a cold cache the browser
@@ -129,17 +132,25 @@ describe('the cache is cleared more often than boot', () => {
     expect(cachedRealtimeVerdict(hosted())).toBe(false);
   });
 
-  test('a failed warm still heals, because a MISS starts its own fetch', async () => {
-    // The proxy-still-booting case: the warm leaves only an advisory entry
-    // that expires back to nothing, so warming alone would contribute nothing.
+  test('a failed re-warm does not blind the poll for ever', async () => {
+    // The production shape, with NO artificial clear: SIGHUP clears the cache
+    // and re-warms; the proxy is restarting (which is what correlates with a
+    // key-rotation SIGHUP) so that warm fails and parks an advisory entry.
+    //
+    // Entries are never deleted, so that advisory does not expire back to
+    // absent — it becomes a stale HIT. While the read treated a stale hit as
+    // "unknown, don't ask", every later poll answered available and never
+    // fetched again: on an excluded plan, the lost utterance permanently.
     globalThis.fetch = (async () => { throw new Error('proxy not up yet'); }) as unknown as typeof fetch;
     warmRealtimeGate(hosted());
     await settle();
-    clearRealtimeGateCache(); // stand in for the advisory entry expiring away
+    expect(cachedRealtimeVerdict(hosted())).toBe(true); // advisory-open, briefly
 
-    catalog(['uj-chat']);
-    expect(cachedRealtimeVerdict(hosted())).toBeNull();
+    ageRealtimeGateCacheForTest(ADVISORY_TTL_MS + 1_000);
+    const calls = catalog(['uj-chat']); // proxy is back
+    expect(cachedRealtimeVerdict(hosted())).toBeNull(); // stale ⇒ ask again
     await settle();
+    expect(calls()).toBe(1);
     expect(cachedRealtimeVerdict(hosted())).toBe(false);
   });
 
@@ -153,10 +164,18 @@ describe('the cache is cleared more often than boot', () => {
     await settle();
     expect(cachedRealtimeVerdict(hosted())).toBe(false);
 
-    ageRealtimeGateCacheForTest(60_000);
-    globalThis.fetch = (async () => { throw new Error('catalog down'); }) as unknown as typeof fetch;
+    // Past CACHE_TTL_MS (10 min), not merely a minute: a definitive entry is
+    // FRESH for ten, so ageing by 60s left it fresh, no refresh was kicked and
+    // this test passed with the guard reverted.
+    ageRealtimeGateCacheForTest(11 * 60_000);
+    let attempts = 0;
+    globalThis.fetch = (async () => {
+      attempts++;
+      throw new Error('catalog down');
+    }) as unknown as typeof fetch;
     expect(cachedRealtimeVerdict(hosted())).toBe(false); // kicks the refresh
     await settle();
+    expect(attempts).toBe(1); // the refresh really ran, and really failed
     expect(cachedRealtimeVerdict(hosted())).toBe(false); // still excluded
   });
 });

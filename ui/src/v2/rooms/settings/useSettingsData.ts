@@ -252,6 +252,10 @@ export interface VoiceConfig {
     enabled_default?: boolean;
     /** This install is hosted (a usejarvis_ai block is present). */
     hosted?: boolean;
+    /** A session would run on the platform proxy under the plan — so there is
+     *  nothing extra to pay. Distinct from `hosted`: the billing copy must
+     *  describe who would actually serve the session, not the install type. */
+    served_by_plan?: boolean;
   };
 }
 

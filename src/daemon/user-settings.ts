@@ -140,6 +140,15 @@ export function persistUserPatch(section: 'stt' | 'tts' | 'voice', patch: Record
   // it to injectSectionSecrets would not type-check, and there is nothing to
   // rehydrate. stt/tts rows ARE stripped, and merging over the bare row would
   // destroy every stored key the patch does not carry (it did, once).
+  // A row that will not parse reads as `undefined` here, indistinguishable
+  // from absent — so this save would quietly REPLACE it, erasing (for `voice`)
+  // an explicit realtime decline and reverting the tenant to the hosted
+  // default. The read path fails closed on corruption; the write path cannot
+  // do the same without locking someone out of their own settings, so it says
+  // so loudly instead and the operator has something to chase.
+  if (stored === undefined && getSetting(settingKey(section)) !== null) {
+    console.warn(`[UserSettings] cfg.${section} is unreadable and is being REPLACED by this save; any stored choice in it is lost`);
+  }
   const usable = typeof stored === 'object' && stored !== null && !Array.isArray(stored);
   const base = usable
     ? (isSecretSection(section) ? injectSectionSecrets(section, stored) : stored)

@@ -38,7 +38,7 @@ export function VoiceTab({
             <div className="v2-set__section-sub">
               Speech-to-speech - lower latency, natural turn-taking, reasons
               mid-conversation.{" "}
-              {rt?.hosted ? (
+              {rt?.served_by_plan ? (
                 <>
                   Included with your plan and billed as part of it, so there is no
                   separate key to add and nothing extra to pay.
@@ -74,7 +74,7 @@ export function VoiceTab({
           <>
             {!rt.available && (
               <p className="v2-set__hint" data-tone="warn">
-                {rt.hosted
+                {rt.served_by_plan
                   ? "Live voice is not included in your current plan. JARVIS uses the standard voice pipeline instead."
                   : "Enabled, but no OpenAI provider is configured. Add one under Settings > LLM. Until then JARVIS uses the standard voice pipeline."}
               </p>

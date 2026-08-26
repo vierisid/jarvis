@@ -94,6 +94,17 @@ function fetchVerdict(key: string, resolved: ResolvedRealtimeVoice): Promise<boo
   return p;
 }
 
+export function warmRealtimeGateFor(
+  resolve: () => { ok: true; resolved: ResolvedRealtimeVoice } | { ok: false; reason: string },
+): void {
+  try {
+    const res = resolve();
+    if (res.ok) warmRealtimeGate(res.resolved);
+  } catch (err) {
+    console.warn('[RealtimeGate] could not warm the plan verdict:', err);
+  }
+}
+
 /**
  * Prime the verdict before anyone speaks.
  *
@@ -132,17 +143,6 @@ function fetchVerdict(key: string, resolved: ResolvedRealtimeVoice): Promise<boo
  * enablement view — usejarvis-ai.ts already imports nothing from here, and the
  * reverse edge would close a cycle through config/realtime.ts.
  */
-export function warmRealtimeGateFor(
-  resolve: () => { ok: true; resolved: ResolvedRealtimeVoice } | { ok: false; reason: string },
-): void {
-  try {
-    const res = resolve();
-    if (res.ok) warmRealtimeGate(res.resolved);
-  } catch (err) {
-    console.warn('[RealtimeGate] could not warm the plan verdict:', err);
-  }
-}
-
 export function warmRealtimeGate(resolved: ResolvedRealtimeVoice): void {
   if (!resolved.modelsUrl) return; // BYO sessions are never gated
   const key = cacheKey(resolved);
@@ -200,17 +200,22 @@ export function cachedRealtimeVerdict(resolved: ResolvedRealtimeVoice): boolean 
   if (!resolved.modelsUrl) return true;
   const key = cacheKey(resolved);
   const hit = cache.get(key);
-  if (!hit) {
-    void fetchVerdict(key, resolved).catch(() => {});
-    // Still null for THIS read — the point is never to stall a poll. The next
-    // one, ~15s later, has an answer.
-    return null;
-  }
-  if (isFresh(hit)) return hit.verdict;
-  if (!hit.advisory && !hit.verdict) {
-    void fetchVerdict(key, resolved).catch(() => {});
-    return false;
-  }
+  if (hit && isFresh(hit)) return hit.verdict;
+  // Everything below is a miss or a STALE entry, and both start a fetch.
+  //
+  // Stale mattered more than it looked. Entries are never deleted, so an
+  // advisory one does not expire back to absent — it becomes a stale HIT, and
+  // returning null there without fetching was a dead end that swallowed the
+  // self-healing entirely: a re-warm whose fetch failed (the proxy restarting,
+  // which is exactly what correlates with a key-rotation SIGHUP) parked an
+  // advisory entry, and every poll from then on read "available" and never
+  // asked again. On an excluded plan that is the lost utterance, permanently.
+  void fetchVerdict(key, resolved).catch(() => {});
+  // A stale definitive EXCLUDED still answers excluded while that refresh
+  // runs — decaying it back to open would flip the browser into raw-PCM
+  // capture once per TTL and cost an utterance each time (see the header).
+  if (hit && !hit.advisory && !hit.verdict) return false;
+  // Never stall a poll: this read is unknown, the next one ~15s later is not.
   return null;
 }
 
