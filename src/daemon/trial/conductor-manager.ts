@@ -240,6 +240,7 @@ export class TrialConductorManager<W> {
         return out;
       },
       enterRoom: (beat: RoomBeat, label: string) => this.enterRoom(entry, beat, label),
+      roomIsTheirs: (beat: RoomBeat, label: string) => this.markRoom(beat, label),
       refreshRoom: (room: RoomKey) => this.refreshRoom(room),
       showProposal: (proposal: BeatProposal | null) => this.publishProposal(proposal),
       proposalLanded: (beat: RoomBeat, summary: string) => this.publishProposalLanded(beat, summary),
@@ -356,6 +357,25 @@ export class TrialConductorManager<W> {
     this.deps.broadcast({
       type: 'trial_point',
       payload: { target: `room:${room}`, label, room },
+      timestamp: this.now(),
+    });
+  }
+
+  /**
+   * The pebble goes back to this room's row in the Index and says what now
+   * lives there.
+   *
+   * Deliberately WITHOUT the `room` field the lead-in gesture carries, so the
+   * layer points and does not navigate: the founder is already standing in
+   * this room looking at the thing that just landed, and re-opening it under
+   * them would be a flicker rather than a gesture. It also always fires, where
+   * `enterRoom` is a no-op on an unchanged room, because the whole value of
+   * this one is that it happens AFTER the work rather than before it.
+   */
+  private markRoom(beat: RoomBeat, label: string): void {
+    this.deps.broadcast({
+      type: 'trial_point',
+      payload: { target: `room:${BEAT_ROOM[beat]}`, label },
       timestamp: this.now(),
     });
   }

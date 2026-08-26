@@ -43,6 +43,7 @@ type Recorder = {
   refreshed: string[];
   proposals: (BeatProposal | null)[];
   landed: { beat: RoomBeat; summary: string }[];
+  marked: { beat: RoomBeat; label: string }[];
   completed: { beat: RoomBeat; detail: Record<string, unknown> }[];
   brief: { hour: number; minute: number } | null;
   evening: number | null;
@@ -74,7 +75,7 @@ function answers(s: BeatsSession): void {
 
 function recorder(over: Partial<BeatDeps> = {}): Recorder {
   const r: Recorder = {
-    rooms: [], refreshed: [], proposals: [], landed: [], completed: [],
+    rooms: [], refreshed: [], proposals: [], landed: [], marked: [], completed: [],
     brief: null, evening: null, authority: null, alwaysAsk: [], spawned: [],
     readerStarts: [], reader: { found: [], finished: false, summary: null },
     readerFails: false, finished: 0, workflowOk: true,
@@ -88,6 +89,7 @@ function recorder(over: Partial<BeatDeps> = {}): Recorder {
     refreshRoom: (room) => { r.refreshed.push(room); },
     showProposal: (p) => { r.proposals.push(p); },
     proposalLanded: (beat, summary) => { r.landed.push({ beat, summary }); },
+    roomIsTheirs: (beat, label) => { r.marked.push({ beat, label }); },
     beatComplete: (beat, detail) => { r.completed.push({ beat, detail }); },
     publishWorkflow: async (p: WorkflowProposal) =>
       r.workflowOk
@@ -999,6 +1001,45 @@ describe('D41, authority: the number is half of it', () => {
     await executeBeatTool(s, 'set_authority', { level: 5, always_ask: ['execute_command', 'write_data'] }, r.deps);
     expect(r.alwaysAsk).toEqual(['execute_command', 'write_data']);
     expect(s.alwaysAsk).toEqual(['execute_command', 'write_data']);
+  });
+});
+
+describe('D41, the founder comes out knowing where things live', () => {
+  test('every beat marks its room once the work in it is real, and not before', async () => {
+    const s = opened();
+    const r = recorder();
+    await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
+    // The lead-in gesture has fired; the door has not been marked, because
+    // nothing of theirs is in there yet.
+    expect(r.rooms).toEqual(['goals']);
+    expect(r.marked).toHaveLength(0);
+    answers(s);
+    await executeBeatTool(s, 'create_goals', {}, r.deps);
+    expect(r.marked).toEqual([{ beat: 'goals', label: 'your quarter lives here' }]);
+  });
+
+  test('across the whole arc, each room is named for what it now holds', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'agents');
+    await executeBeatTool(s, 'spawn_research_agent', { question: 'q', brief: 'b' }, r.deps);
+    expect(r.marked.map((m) => m.beat)).toEqual([
+      'goals', 'tasks', 'calendar', 'workflows', 'authority', 'files', 'agents',
+    ]);
+    // In the founder's terms, never in feature names, and never a tour.
+    for (const m of r.marked) {
+      expect(m.label.length).toBeLessThan(40);
+      expect(m.label).not.toMatch(/room|dashboard|onboarding|step|setup/i);
+    }
+  });
+
+  test('a beat they declined does not claim its room is theirs', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'files');
+    r.marked.length = 0;
+    await executeBeatTool(s, 'move_on', { because: 'no' }, r.deps);
+    expect(r.marked).toHaveLength(0);
   });
 });
 

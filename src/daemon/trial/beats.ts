@@ -1064,6 +1064,19 @@ const TOOL_BEAT: Record<string, RoomBeat> = {
 export type BeatSurfaces = {
   /** Lead them to the room this beat happens in (D21, D22). */
   enterRoom: (beat: RoomBeat, label: string) => void;
+  /**
+   * The work in this room is done and something of theirs now lives in it, so
+   * the pebble goes back to its row in the Index and says what.
+   *
+   * D41's first axis is "more of the room actually shown: the founder should
+   * come out knowing what that room is for and roughly where things live in
+   * it". A tour would do that and is exactly what D12 and D16.1 forbid. This
+   * is the same fact delivered as the gesture D21 already established, at the
+   * one moment it means anything: they have just watched their own quarter
+   * land in there, and the pebble goes and stands next to the door they will
+   * use to come back to it.
+   */
+  roomIsTheirs: (beat: RoomBeat, label: string) => void;
   /** Something landed in that room; make it show now rather than on the poll. */
   refreshRoom: (room: RoomKey) => void;
   /** Put a proposal on the founder's screen, or take it off. */
@@ -1432,6 +1445,7 @@ function createGoals(s: BeatsSession, deps: BeatDeps): BeatToolResult {
   markDone(s, 'goals');
   deps.proposalLanded('goals', `${p.objective} · ${p.keyResults.length} key results, first move set`);
   deps.refreshRoom('goals');
+  deps.roomIsTheirs('goals', 'your quarter lives here');
   deps.beatComplete('goals', {
     objective: p.objective,
     keyResults: p.keyResults.length,
@@ -1616,6 +1630,7 @@ function createTasks(s: BeatsSession, deps: BeatDeps): BeatToolResult {
   markDone(s, 'tasks');
   deps.proposalLanded('tasks', `${created.length} on the board, "${firsts[0]!.what}" first`);
   deps.refreshRoom('tasks');
+  deps.roomIsTheirs('tasks', 'your week lives here');
   deps.beatComplete('tasks', {
     created: created.length,
     late: p.tasks.filter((t) => t.late).length,
@@ -1743,6 +1758,7 @@ function setDailyRhythm(s: BeatsSession, deps: BeatDeps): BeatToolResult {
   markDone(s, 'calendar');
   deps.proposalLanded('calendar', `brief ${fmtTime(p.hour, p.minute)}, review ${fmtTime(p.eveningHour, 0)}`);
   deps.refreshRoom('calendar');
+  deps.roomIsTheirs('calendar', 'tomorrow starts here');
   deps.beatComplete('calendar', { hour: p.hour, minute: p.minute, eveningHour: p.eveningHour });
   return {
     message:
@@ -1837,6 +1853,7 @@ async function publishWorkflow(s: BeatsSession, deps: BeatDeps): Promise<BeatToo
   }
 
   markDone(s, 'workflows');
+  deps.roomIsTheirs('workflows', 'what runs without you');
   deps.beatComplete('workflows', { flows: [...s.workflowsPublished], published: count });
   return { message: `"${p.name}" is live too, ${count} flows now: ${outcome.detail}\n\n${nextBrief(s, deps.fuel())}` };
 }
@@ -1852,6 +1869,7 @@ function noSecondWorkflow(s: BeatsSession, args: Record<string, unknown>, deps: 
   const because = str(args.because);
   s.onlyOneWorkflow = true;
   markDone(s, 'workflows');
+  deps.roomIsTheirs('workflows', 'what runs without you');
   deps.beatComplete('workflows', { flows: [...s.workflowsPublished], published: s.workflowsPublished.length, onlyOne: true, because });
   return {
     message:
@@ -1921,6 +1939,7 @@ function setAuthority(s: BeatsSession, args: Record<string, unknown>, deps: Beat
   markDone(s, 'authority');
   deps.proposalLanded('authority', `level ${landed.level}, ${landed.alwaysAsk.length} still yours`);
   deps.refreshRoom('authority');
+  deps.roomIsTheirs('authority', 'what I may do, and what I may not');
   deps.beatComplete('authority', { level: landed.level, asked, alwaysAsk: landed.alwaysAsk });
 
   const capped =
@@ -2054,6 +2073,7 @@ async function startReading(s: BeatsSession, deps: BeatDeps): Promise<BeatToolRe
   deps.showProposal(reading);
   markDone(s, 'files');
   deps.refreshRoom('memory');
+  deps.roomIsTheirs('files', 'everything I know about you');
   deps.beatComplete('files', { folder: pending.folder, willRead: p.willRead, agentId: started.agentId });
 
   return {
@@ -2366,6 +2386,7 @@ async function spawnResearchAgent(
   markDone(s, 'agents');
   s.finishedAt = deps.now();
   deps.refreshRoom('agents');
+  deps.roomIsTheirs('agents', 'whoever is working for you');
   deps.beatComplete('agents', { question, agentId: spawned.agentId, agentName: spawned.agentName });
   try {
     deps.onFinished(s);
