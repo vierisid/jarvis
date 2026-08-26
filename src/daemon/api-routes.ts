@@ -1218,8 +1218,29 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             return json({ error: 'No running trial entitlement on this install.' }, 409);
           }
           const body = (await req.json().catch(() => ({}))) as { type?: string; payload?: unknown };
-          const allowed = ['trial_proposal', 'trial_point', 'trial_beat', 'trial_onboarding_complete'];
-          if (!body.type || !allowed.includes(body.type)) {
+          // `trial_walk` and `trial_standdown` are here for the same reason
+          // the other four are: neither is reachable except through an hour of
+          // realtime conversation with a microphone, and an unreviewable
+          // surface is exactly how the trial ended up with two pebbles on
+          // screen in the first place. The handover is the highest-stakes of
+          // the lot, because getting it wrong strands the founder.
+          const allowed = [
+            'trial_proposal', 'trial_point', 'trial_beat', 'trial_onboarding_complete',
+            'trial_walk', 'trial_standdown',
+          ];
+          // The two room actions the beats drive, and ONLY those two. They are
+          // how the goal tree and the workflow explain themselves, and neither
+          // is reviewable without them: the walk that follows has nothing to
+          // point at until the thing it explains is open. Everything else that
+          // rides the room-action bus (settings toggles, navigation, the lot)
+          // stays refused, which is what the "cannot push arbitrary frames"
+          // rule was actually protecting.
+          const previewActions = ['focus_goal', 'open_flow'];
+          const action = (body.payload as { action?: unknown } | undefined)?.action;
+          const isPreviewAction = body.type === 'notification'
+            && (body.payload as { source?: unknown } | undefined)?.source === 'room_action'
+            && typeof action === 'string' && previewActions.includes(action);
+          if (!body.type || (!allowed.includes(body.type) && !isPreviewAction)) {
             return json({ error: `type must be one of ${allowed.join(', ')}` }, 400);
           }
           ctx.wsService?.broadcastRaw({

@@ -82,6 +82,35 @@ describe('/api/trial/preview', () => {
     expect(sent[0]!.type).toBe('trial_proposal');
   });
 
+  test('draws the two surfaces the handover added', async () => {
+    // A walk and a stand-down are each reachable only at the end of an hour of
+    // realtime conversation, so they are the two hardest frames in the trial
+    // to look at and the two it would be easiest to ship broken.
+    const sent: WSMessage[] = [];
+    issueTrialEntitlement({ now: Date.now() });
+    const h = handler(createApiRoutes(ctxWith(sent)), '/api/trial/preview');
+    expect((await post(h, { type: 'trial_walk', payload: { parts: [], kind: 'flow' } })).status).toBe(200);
+    expect((await post(h, { type: 'trial_standdown', payload: { pressed: true } })).status).toBe(200);
+    expect(sent.map((m) => m.type)).toEqual(['trial_walk', 'trial_standdown']);
+  });
+
+  test('opens the two objects that explain themselves, and nothing else', async () => {
+    const sent: WSMessage[] = [];
+    issueTrialEntitlement({ now: Date.now() });
+    const h = handler(createApiRoutes(ctxWith(sent)), '/api/trial/preview');
+    for (const action of ['focus_goal', 'open_flow']) {
+      const res = await post(h, { type: 'notification', payload: { source: 'room_action', room: 'goals', action, args: {} } });
+      expect(res.status).toBe(200);
+    }
+    // Everything else on the room-action bus stays refused. `open_room` and a
+    // settings toggle are the two that would matter if this were loose.
+    for (const action of ['refresh', 'set_filter', 'create_goal', 'toggle_tts', 'open_room']) {
+      const res = await post(h, { type: 'notification', payload: { source: 'room_action', room: 'settings', action, args: {} } });
+      expect(res.status).toBe(400);
+    }
+    expect(sent).toHaveLength(2);
+  });
+
   test('cannot be used to push anything other than a trial frame', async () => {
     const sent: WSMessage[] = [];
     issueTrialEntitlement({ now: Date.now() });
