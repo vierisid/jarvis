@@ -267,3 +267,36 @@ describe("manage_workflow: compose", () => {
     expect(out.rawResponse).toContain("truncated");
   });
 });
+
+describe("manage_workflow: the suggest-install wording follows the library index", () => {
+  const LIBRARY = [
+    {
+      id: "discord",
+      npmPackage: "@activepieces/piece-discord",
+      displayName: "Discord",
+      description: "Post messages to Discord.",
+    },
+  ];
+
+  test("with a library, the description tells the agent to relay suggestedInstalls", () => {
+    const t = createManageWorkflowTool({ library: LIBRARY });
+    expect(t.description).toContain("suggestedInstalls");
+    expect(t.description).toContain("Library page");
+  });
+
+  test("with NO library, that advice is gone entirely", () => {
+    // The host-managed case. The composer has no search_library tool there,
+    // so it can never return suggestedInstalls -- and the advice it replaced
+    // ("ask the user to install it from the dashboard's Library page") is a
+    // dead end on an install whose Library has no button and whose install
+    // API answers 403. Leaving the sentence in the prompt is how the agent
+    // ends up giving a hosted user an instruction they cannot follow.
+    for (const t of [createManageWorkflowTool(), createManageWorkflowTool({ library: [] })]) {
+      expect(t.description).not.toContain("suggestedInstalls");
+      expect(t.description).not.toContain("Library page");
+      // The rest of the compose contract must survive the excision.
+      expect(t.description).toContain("compose { name, description }");
+      expect(t.description).toContain("Composed flows are DISABLED");
+    }
+  });
+});

@@ -7,9 +7,22 @@
  * When `hasSidecars` is false, sidecar-related content (target params,
  * list_sidecars, sidecar section) is omitted entirely so the AI
  * doesn't waste tokens thinking about remote execution.
+ *
+ * When `piecesManaged` is true, the workflow section drops the advice to have
+ * the user install a piece: a host owns the catalog there, the Library page
+ * has no install button, and the API answers 403. This is the THIRD place
+ * that advice appears (with the manage_workflow tool description and the
+ * composer's prompts) — all three have to agree, or the agent reads one of
+ * them and sends a hosted user somewhere they cannot act.
  */
 
-export function buildToolGuide(hasSidecars: boolean): string {
+export type ToolGuideOptions = {
+  hasSidecars: boolean;
+  /** A host owns the pieces catalog: nothing here is installable by the user. */
+  piecesManaged: boolean;
+};
+
+export function buildToolGuide({ hasSidecars, piecesManaged }: ToolGuideOptions): string {
   const lines: string[] = [];
 
   lines.push('# Tool Guide');
@@ -177,9 +190,11 @@ export function buildToolGuide(hasSidecars: boolean): string {
   lines.push('The action calls the LLM under the hood, validates against the piece catalog, and either persists a');
   lines.push('DISABLED draft or returns `{ ok: false, errors, rawResponse }`. Treat failures as iterative: read the errors,');
   lines.push('refine the description with concrete piece/tool names from the messages, and call `compose` again.');
-  lines.push('A failure can also carry `suggestedInstalls: [{ id, displayName, reason }]` -- community-library pieces that');
-  lines.push('would make the request possible. Relay those to the user (installs happen from the dashboard\'s Library page)');
-  lines.push('and offer to compose again after installing; do not retry compose unchanged.');
+  if (!piecesManaged) {
+    lines.push('A failure can also carry `suggestedInstalls: [{ id, displayName, reason }]` -- community-library pieces that');
+    lines.push('would make the request possible. Relay those to the user (installs happen from the dashboard\'s Library page)');
+    lines.push('and offer to compose again after installing; do not retry compose unchanged.');
+  }
   lines.push('Do not surface raw error JSON to the user, translate it. After a successful compose, summarize what was');
   lines.push('built and confirm with the user before calling `publish` (which locks the draft and enables it).');
   lines.push('');

@@ -97,11 +97,25 @@ export interface ManageWorkflowDeps {
    * the composer's tool loop can search it and suggest installs (surfaced as
    * `suggestedInstalls` on a failed compose) instead of forcing a request
    * through the wrong piece when the right one just isn't installed yet.
+   *
+   * OMIT on a host-managed install: the whole catalog is already present, so
+   * the only pieces this index could ever surface as "not installed" are the
+   * ones whose metadata extraction failed on the HOST -- which the user
+   * cannot install and cannot fix. Omitting it also drops the suggest-install
+   * wording from this tool's description and from the composer's prompt.
    */
   library?: ComposerLibraryEntry[];
 }
 
 export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDefinition {
+  // No library index => the composer has no search_library tool and can never
+  // return suggestedInstalls, so the paragraph describing them is dropped
+  // rather than left as advice the agent cannot act on. A host-managed
+  // install is the case that matters: the daemon withholds the library there
+  // because the whole catalog is already present and the install API is gone,
+  // and "ask the user to install it from the Library page" would be a
+  // dead-end instruction.
+  const hasLibrary = (deps.library?.length ?? 0) > 0;
   return {
     name: "manage_workflow",
     description: [
@@ -123,10 +137,14 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       "                                      On success returns { ok: true, flow, versionId }.",
       "                                      On failure returns { ok: false, errors, rawResponse }: read the errors,",
       "                                      refine the description with concrete piece/tool names, and call again.",
-      "                                      A failure may also carry suggestedInstalls: [{ id, displayName, reason }] --",
-      "                                      community-library pieces that would make the request possible. Relay them",
-      "                                      to the user (pieces are installed from the dashboard's Library page) and",
-      "                                      offer to compose again after installing; do NOT retry compose unchanged.",
+      ...(hasLibrary
+        ? [
+            "                                      A failure may also carry suggestedInstalls: [{ id, displayName, reason }] --",
+            "                                      community-library pieces that would make the request possible. Relay them",
+            "                                      to the user (pieces are installed from the dashboard's Library page) and",
+            "                                      offer to compose again after installing; do NOT retry compose unchanged.",
+          ]
+        : []),
       "                                      Composed flows are DISABLED; follow up with `publish` once the user",
       "                                      confirms, then optionally `run` to test.",
       "  create { name, empty: true }        Create an EMPTY workflow with a manual trigger (no steps). The `empty: true`",

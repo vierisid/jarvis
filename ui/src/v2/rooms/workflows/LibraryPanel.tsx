@@ -1,19 +1,28 @@
 /**
- * Library panel: tiered list of activepieces community pieces a Jarvis user
- * can opt into installing. Rendered as two sections:
+ * Library panel: tiered list of activepieces community pieces. Two sections
+ * either way, and `lib.managed` decides what a row is FOR.
  *
  *   - Verified  -- hand-reviewed by a maintainer, no preamble needed.
  *   - Community -- pulled from npm; runs in the engine sandbox but has not
- *                  been individually reviewed. Collapsed by default behind
- *                  a one-line "third-party code" notice so users opt in
- *                  with their eyes open.
+ *                  been individually reviewed. Collapsed by default (it is
+ *                  the overwhelming majority of the catalog), and search
+ *                  auto-expands it.
  *
- * Each row shows piece metadata, vetted version, license, source link, and
- * an Install / Uninstall button. Search filters across both tiers.
+ * SELF-MANAGED -- a row is a decision. It shows the metadata that decision
+ * needs (resolved + vetted version, license, disk footprint, source link)
+ * and an Install / Uninstall button, and the Community section carries a
+ * "third-party code" notice so users opt in with their eyes open. Pieces
+ * install via npm at runtime into `~/.jarvis/pieces/`; this panel only
+ * triggers the install + reflects state, it doesn't bundle any piece code.
  *
- * Pieces install via npm at runtime into `~/.jarvis/pieces/`; this panel
- * only triggers the install/uninstall + reflects state, it doesn't bundle
- * any piece code itself.
+ * MANAGED -- a host installed the whole catalog once into a read-only tree
+ * every tenant shares, so a row is not a decision, it is a fact: this piece
+ * is here and it works. Name and description, nothing else. No install state
+ * (everything is installed, so the badge would be noise on every row), no
+ * versions or size (the user neither picks them nor pays for them), and no
+ * opt-in notice (there is nothing left to opt into -- the tier heading still
+ * says which pieces a maintainer reviewed, which is the part that stayed
+ * true).
  */
 
 import React, { useMemo, useState } from "react";
@@ -33,7 +42,9 @@ export function LibraryPanel(): React.ReactElement {
     window.setTimeout(() => setToast(null), 4000);
   };
 
-  const installedCount = lib.entries.filter((e) => e.installed !== null).length;
+  // Self-managed only: on a managed install every entry is installed, so the
+  // count would say the same thing as the total on every single render.
+  const installedCount = lib.entries.filter((e) => e.installed != null).length;
 
   // Filtered + tier-split view. Search is case-insensitive against
   // displayName + npmPackage + description so users typing "gmail" find
@@ -68,7 +79,9 @@ export function LibraryPanel(): React.ReactElement {
           <p className="wf-lib__subtitle">
             {lib.loading
               ? "loading..."
-              : `${installedCount} installed of ${lib.entries.length} available`}
+              : lib.managed
+                ? `${lib.entries.length} pieces available`
+                : `${installedCount} installed of ${lib.entries.length} available`}
             {lib.error ? ` - ${lib.error}` : null}
           </p>
         </div>
@@ -109,15 +122,19 @@ export function LibraryPanel(): React.ReactElement {
               </div>
             ) : (
               <ul className="wf-lib__list">
-                {verified.map((entry) => (
-                  <LibraryRowWired
-                    key={entry.id}
-                    entry={entry}
-                    actionState={lib.actionState[entry.id] ?? "idle"}
-                    lib={lib}
-                    flash={flash}
-                  />
-                ))}
+                {verified.map((entry) =>
+                  lib.managed ? (
+                    <ManagedLibraryRow key={entry.id} entry={entry} />
+                  ) : (
+                    <LibraryRowWired
+                      key={entry.id}
+                      entry={entry}
+                      actionState={lib.actionState[entry.id] ?? "idle"}
+                      lib={lib}
+                      flash={flash}
+                    />
+                  ),
+                )}
               </ul>
             )}
           </section>
@@ -143,26 +160,37 @@ export function LibraryPanel(): React.ReactElement {
             </button>
             {showCommunity ? (
               <>
-                <p className="wf-lib__section-hint wf-lib__section-hint--warn">
-                  Community pieces are installed from npm and run inside the engine
-                  sandbox. They haven't been individually reviewed by Jarvis -- check
-                  each piece's source link before opting in.
-                </p>
+                {/* The opt-in notice is addressed to someone about to
+                    install. On a managed install that decision was already
+                    made by the host, and there is no source link on the row
+                    to send them to, so the warning would ask for a judgement
+                    the user cannot act on. */}
+                {lib.managed ? null : (
+                  <p className="wf-lib__section-hint wf-lib__section-hint--warn">
+                    Community pieces are installed from npm and run inside the engine
+                    sandbox. They haven't been individually reviewed by Jarvis -- check
+                    each piece's source link before opting in.
+                  </p>
+                )}
                 {community.length === 0 ? (
                   <div className="wf-lib__empty-section">
                     {query ? "No community pieces match the search." : "No community pieces."}
                   </div>
                 ) : (
                   <ul className="wf-lib__list">
-                    {community.map((entry) => (
-                      <LibraryRowWired
-                        key={entry.id}
-                        entry={entry}
-                        actionState={lib.actionState[entry.id] ?? "idle"}
-                        lib={lib}
-                        flash={flash}
-                      />
-                    ))}
+                    {community.map((entry) =>
+                      lib.managed ? (
+                        <ManagedLibraryRow key={entry.id} entry={entry} />
+                      ) : (
+                        <LibraryRowWired
+                          key={entry.id}
+                          entry={entry}
+                          actionState={lib.actionState[entry.id] ?? "idle"}
+                          lib={lib}
+                          flash={flash}
+                        />
+                      ),
+                    )}
                   </ul>
                 )}
               </>
@@ -171,6 +199,28 @@ export function LibraryPanel(): React.ReactElement {
         </>
       )}
     </div>
+  );
+}
+
+/**
+ * A row on a MANAGED install: name + description, no chips, no meta line, no
+ * buttons. Deliberately a separate component rather than a pile of
+ * conditionals inside LibraryRow -- what the two rows have in common is a
+ * name and a sentence; everything else in LibraryRow exists to serve an
+ * install decision this row does not offer.
+ */
+function ManagedLibraryRow({ entry }: { entry: LibraryEntry }): React.ReactElement {
+  return (
+    <li className="wf-lib__row wf-lib__row--managed">
+      <div className="wf-lib__row-main">
+        <div className="wf-lib__row-title">
+          <span className="wf-lib__row-name">{entry.displayName}</span>
+        </div>
+        {entry.description ? (
+          <p className="wf-lib__row-desc">{entry.description}</p>
+        ) : null}
+      </div>
+    </li>
   );
 }
 
@@ -194,7 +244,7 @@ function LibraryRowWired({
       entry={entry}
       actionState={actionState}
       onInstall={async () => {
-        if (entry.estimatedSizeMb !== null && entry.estimatedSizeMb >= 100) {
+        if (entry.estimatedSizeMb != null && entry.estimatedSizeMb >= 100) {
           if (
             !await confirmDialog(
               `Installing ${entry.displayName} will use about ${entry.estimatedSizeMb}MB of disk. Continue?`,
@@ -237,18 +287,21 @@ function LibraryRow({
   onInstall: () => void;
   onUninstall: () => void;
 }): React.ReactElement {
-  const isInstalled = entry.installed !== null;
-  // Shared-catalog pieces are managed by the host, not the user: no install
-  // (it already works), no uninstall (the tree is read-only), no update chip
-  // (updates arrive with the host's version upgrades).
-  const isShared = entry.installed?.source === "shared";
+  // This row renders only on a SELF-MANAGED install, where the server sends
+  // every optional detail field. They are typed optional because ONE endpoint
+  // serves both shapes (see useLibrary) -- the fallbacks below are for the
+  // type, not for a case that happens: an entry reaching here without a
+  // version came from a managed payload routed to the wrong row, and an empty
+  // string renders as a blank chip instead of "undefined".
+  const vettedVersion = entry.vettedVersion ?? "";
+  const isInstalled = entry.installed != null;
   const busy = actionState !== "idle";
   // Compare resolved vs vetted to surface the right hint:
   //   resolved < vetted -> "Update available" (we vetted a newer version)
   //   resolved > vetted -> "Newer than vetted" (user upgraded past our audit)
   //   resolved == vetted -> no chip
-  const versionRel = isInstalled && !isShared
-    ? compareSemver(entry.installed!.resolvedVersion, entry.vettedVersion)
+  const versionRel = isInstalled
+    ? compareSemver(entry.installed!.resolvedVersion, vettedVersion)
     : 0;
   const updateAvailable = versionRel < 0;
   const newerThanVetted = versionRel > 0;
@@ -258,11 +311,7 @@ function LibraryRow({
       <div className="wf-lib__row-main">
         <div className="wf-lib__row-title">
           <span className="wf-lib__row-name">{entry.displayName}</span>
-          {isShared ? (
-            <Chip tone="ok" title="Included with this Jarvis install — ready to use, nothing to manage">
-              Included {entry.installed!.resolvedVersion}
-            </Chip>
-          ) : isInstalled ? (
+          {isInstalled ? (
             <Chip tone="ok">Installed {entry.installed!.resolvedVersion}</Chip>
           ) : (
             <Chip tone="neutral">{entry.versionRange}</Chip>
@@ -270,18 +319,18 @@ function LibraryRow({
           {updateAvailable ? (
             <Chip
               tone="warn"
-              title={`Installed ${entry.installed!.resolvedVersion} -- catalog vetted ${entry.vettedVersion}. Click Install again to upgrade.`}
+              title={`Installed ${entry.installed!.resolvedVersion} -- catalog vetted ${vettedVersion}. Click Install again to upgrade.`}
             >
-              {`Update -> ${entry.vettedVersion}`}
+              {`Update -> ${vettedVersion}`}
             </Chip>
           ) : null}
           {newerThanVetted ? (
-            <Chip tone="warn" title={`Tested with ${entry.vettedVersion}; you have a newer version`}>
-              ahead of vetted {entry.vettedVersion}
+            <Chip tone="warn" title={`Tested with ${vettedVersion}; you have a newer version`}>
+              ahead of vetted {vettedVersion}
             </Chip>
           ) : null}
           {entry.licenseSpdx ? <Chip tone="neutral">{entry.licenseSpdx}</Chip> : null}
-          {entry.estimatedSizeMb !== null ? (
+          {entry.estimatedSizeMb != null ? (
             <Chip tone="neutral" title="Approximate disk footprint after install">
               ~{entry.estimatedSizeMb}MB
             </Chip>
@@ -304,7 +353,7 @@ function LibraryRow({
         </div>
       </div>
       <div className="wf-lib__row-actions">
-        {isShared ? null : isInstalled ? (
+        {isInstalled ? (
           <>
             {updateAvailable ? (
               <Button variant="primary" size="sm" onClick={onInstall} disabled={busy}>

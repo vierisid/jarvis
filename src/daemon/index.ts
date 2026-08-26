@@ -71,7 +71,6 @@ import {
 } from "../workflows/runtime/engine-bootstrap.ts";
 import { CredentialResolver } from "../workflows/credentials/adapter.ts";
 import { metadataToCatalogEntry } from "../workflows/runtime/piece-catalog.ts";
-import { sharedPieceVersions } from "../workflows/pieces-library/shared.ts";
 import { resolveSharedRuntimePaths } from "../workflows/runtime/shared-runtime-paths.ts";
 import { DEFAULT_IDS } from "../workflows/db/schema.ts";
 import { apId } from "../workflows/db/ids.ts";
@@ -4301,22 +4300,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             kind: "installed" | "uninstalled";
             piece: { npmPackage: string; resolvedVersion: string };
           }) => {
-            // Uninstalling a piece the SHARED catalog also provides reverts
-            // to the shared copy (that's what the next restart would produce
-            // via discoverPieces, and what the Library reports as Included) —
-            // so re-extract at the shared version instead of dropping the
-            // entry and leaving the live catalog disagreeing with the
-            // Library until restart.
-            const sharedVersion =
-              event.kind === "uninstalled"
-                ? sharedPieceVersions(sharedRuntime.piecesDir).get(event.piece.npmPackage)
-                : undefined;
-            if (event.kind === "uninstalled" && sharedVersion === undefined) {
+            // Only ever reached on a SELF-MANAGED install: the Library
+            // mutations that fire this are refused when a host owns the
+            // catalog, and a host owning the catalog is exactly what having a
+            // shared tree means. So an uninstall here has no shared copy to
+            // fall back to — the piece is simply gone.
+            if (event.kind === "uninstalled") {
               workflowPieceCatalog.remove(event.piece.npmPackage);
               return;
             }
-            const extractVersion =
-              event.kind === "uninstalled" ? sharedVersion! : event.piece.resolvedVersion;
             // Unique runId per acquire so any future parallel installs
             // (today serialized by the API's library mutex) don't collide on
             // the engine's runId-keyed state.
@@ -4327,7 +4319,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             try {
               const meta = await handle.extractPieceMetadata({
                 pieceName: event.piece.npmPackage,
-                pieceVersion: extractVersion,
+                pieceVersion: event.piece.resolvedVersion,
               });
               workflowPieceCatalog.upsert(metadataToCatalogEntry(meta));
             } finally {
@@ -4483,13 +4475,26 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // Compact community-library index for the composer's search_library
       // tool: lets it suggest "install piece X first" when the user asks for
       // a service that isn't installed, instead of forcing a wrong fit.
+      //
+      // Withheld on a HOST-MANAGED install, where that suggestion is a
+      // dead end. The host installed the whole catalog, so every piece the
+      // engine could actually run is already in the registry list_pieces
+      // reads; the only ids this index could still flag "not installed" are
+      // ones whose metadata extraction failed on the host — which the tenant
+      // can neither install (the API answers 403) nor repair. Passing no
+      // library also strips search_library from the composer's tool loop and
+      // the suggest-install wording from both prompts, so the agent stops
+      // telling hosted users to visit a Library page that has no button.
       const { CATALOG: piecesLibraryCatalog } = await import('../workflows/pieces-library/catalog.ts');
-      const composerLibrary = piecesLibraryCatalog.map((e) => ({
-        id: e.id,
-        npmPackage: e.npmPackage,
-        displayName: e.displayName,
-        description: e.description,
-      }));
+      const { piecesManagedByHost } = await import('../workflows/pieces-library/shared.ts');
+      const composerLibrary = piecesManagedByHost(sharedRuntime.piecesDir)
+        ? []
+        : piecesLibraryCatalog.map((e) => ({
+            id: e.id,
+            npmPackage: e.npmPackage,
+            displayName: e.displayName,
+            description: e.description,
+          }));
       const composerToolRegistry = toolRegistry
         ? {
             listNames: (cat?: string) => toolRegistry.list(cat).map((t) => t.name),

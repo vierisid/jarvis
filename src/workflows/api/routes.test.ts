@@ -883,6 +883,147 @@ describe("workflow API: sample data", () => {
   });
 });
 
+describe("workflow API: pieces library on a MANAGED install", () => {
+  /**
+   * Managed = a host installed the whole catalog into a read-only shared
+   * tree. What these pin: the catalog is offered whole with no install state
+   * and no per-piece detail, and the two mutations are refused BEFORE they
+   * touch the tenant's own writable `~/.jarvis/pieces` -- which is the only
+   * thing stopping a hand-rolled POST, since that directory stays writable.
+   */
+  const MANAGED_DIR = "/opt/jarvis-pieces/1.2.3";
+
+  /** A temp JARVIS_PIECES_DIR, so a developer's own installs can't leak in. */
+  async function withTempPiecesDir<T>(fn: (dir: string) => Promise<T>): Promise<T> {
+    const { mkdtempSync, rmSync } = await import("node:fs");
+    const { tmpdir } = await import("node:os");
+    const { join } = await import("node:path");
+    const dir = mkdtempSync(join(tmpdir(), "jarvis-lib-managed-"));
+    const prev = process.env.JARVIS_PIECES_DIR;
+    process.env.JARVIS_PIECES_DIR = dir;
+    try {
+      return await fn(dir);
+    } finally {
+      if (prev === undefined) delete process.env.JARVIS_PIECES_DIR;
+      else process.env.JARVIS_PIECES_DIR = prev;
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  test("GET offers the WHOLE catalog, with no install state and no detail", async () => {
+    const { CATALOG } = await import("../pieces-library/catalog");
+    await withTempPiecesDir(async () => {
+      const r = createWorkflowRoutes({ sharedPiecesDir: MANAGED_DIR });
+      const get = r["/api/workflows/pieces/library"]?.GET;
+      const { status, body } = await callJson(
+        get,
+        plainReq("GET", "http://x/api/workflows/pieces/library"),
+      );
+      expect(status).toBe(200);
+      expect(body.managed).toBe(true);
+      // The whole catalog is available -- not the subset a user installed.
+      expect(body.entries.length).toBe(CATALOG.length);
+      for (const entry of body.entries) {
+        // What the UI still binds to.
+        expect(typeof entry.id).toBe("string");
+        expect(typeof entry.npmPackage).toBe("string");
+        expect(typeof entry.displayName).toBe("string");
+        expect(entry.tier === "verified" || entry.tier === "community").toBe(true);
+        // ...and what must not reach it. Absent on the WIRE, not merely
+        // unrendered: hiding these client-side would leave a stale cached
+        // bundle free to show them again.
+        for (const gone of [
+          "installed",
+          "versionRange",
+          "vettedVersion",
+          "vettedAt",
+          "estimatedSizeMb",
+          "licenseSpdx",
+          "sourceUrl",
+        ]) {
+          expect(Object.hasOwn(entry, gone)).toBe(false);
+        }
+      }
+    });
+  });
+
+  test("POST install is refused, and writes nothing to the tenant's pieces dir", async () => {
+    await withTempPiecesDir(async (dir) => {
+      const { readdirSync } = await import("node:fs");
+      const r = createWorkflowRoutes({ sharedPiecesDir: MANAGED_DIR });
+      const post = r["/api/workflows/pieces/library/:id/install"]?.POST;
+      const { status, body } = await callJson(
+        post,
+        // A REAL catalog id: a 403 that only ever fired for unknown ids
+        // would be the pre-existing 404 wearing a different number.
+        reqWithParams("POST", "http://x/api/workflows/pieces/library/gmail/install", {
+          id: "gmail",
+        }),
+      );
+      expect(status).toBe(403);
+      expect(body.error).toMatch(/managed by this install's host/);
+      // The guard has to come before the manifest write, not just before the
+      // bun install -- a written manifest would be reconciled onto disk at
+      // the next daemon start.
+      expect(readdirSync(dir)).toEqual([]);
+    });
+  });
+
+  test("DELETE is refused even for a piece the manifest really holds", async () => {
+    await withTempPiecesDir(async (dir) => {
+      // A leftover user install -- e.g. made before this instance became
+      // managed. Uninstall is still not the tenant's call, and the refusal
+      // must not depend on the manifest being empty.
+      const { writeManifest, readManifest } = await import("../pieces-library/installer");
+      const piece = {
+        id: "gmail",
+        npmPackage: "@activepieces/piece-gmail",
+        versionRange: "^0.12.2",
+        resolvedVersion: "0.12.3",
+        installedAt: 1,
+      };
+      await writeManifest({ version: 1, pieces: [piece] }, dir);
+
+      const r = createWorkflowRoutes({ sharedPiecesDir: MANAGED_DIR });
+      const del = r["/api/workflows/pieces/library/:id"]?.DELETE;
+      const { status, body } = await callJson(
+        del,
+        reqWithParams("DELETE", "http://x/api/workflows/pieces/library/gmail", { id: "gmail" }),
+      );
+      expect(status).toBe(403);
+      expect(body.error).toMatch(/managed by this install's host/);
+      expect((await readManifest(dir)).pieces).toEqual([piece]);
+    });
+  });
+
+  test("an EMPTY sharedPiecesDir is not managed -- install stays the user's", async () => {
+    // `null` means "definitively no shared tree"; the self-managed Library
+    // must survive it, or a self-hosted install would lose its only way to
+    // get a piece.
+    await withTempPiecesDir(async () => {
+      const r = createWorkflowRoutes({ sharedPiecesDir: null });
+      const { status, body } = await callJson(
+        r["/api/workflows/pieces/library"]?.GET,
+        plainReq("GET", "http://x/api/workflows/pieces/library"),
+      );
+      expect(status).toBe(200);
+      expect(body.managed).toBe(false);
+      expect(typeof body.entries[0].versionRange).toBe("string");
+      expect(body.entries[0].installed).toBeNull();
+    });
+  });
+});
+
+/**
+ * The self-managed Library. Every case here assumes the user owns the
+ * catalog, so the mode is pinned rather than inherited: without
+ * `sharedPiecesDir`, `piecesManagedByHost` consults JARVIS_SHARED_PIECES_DIR,
+ * and a developer or CI runner that happens to export it would flip this
+ * whole suite into managed mode and fail it with 403s that look like real
+ * regressions. The managed suite above pins its own side the same way.
+ */
+const SELF_MANAGED = { sharedPiecesDir: null } as const;
+
 describe("workflow API: pieces library", () => {
   test("GET /api/workflows/pieces/library returns the catalog with per-entry installed status", async () => {
     // Isolate from any pieces installed on the developer's machine.
@@ -893,7 +1034,7 @@ describe("workflow API: pieces library", () => {
     const prev = process.env.JARVIS_PIECES_DIR;
     process.env.JARVIS_PIECES_DIR = tempDir;
     try {
-      const r = createWorkflowRoutes();
+      const r = createWorkflowRoutes(SELF_MANAGED);
       const get = r["/api/workflows/pieces/library"]?.GET;
       const { status, body } = await callJson(get, plainReq("GET", "http://x/api/workflows/pieces/library"));
       expect(status).toBe(200);
@@ -915,7 +1056,7 @@ describe("workflow API: pieces library", () => {
   });
 
   test("POST /api/workflows/pieces/library/:id/install rejects an unknown piece id", async () => {
-    const r = createWorkflowRoutes();
+    const r = createWorkflowRoutes(SELF_MANAGED);
     const post = r["/api/workflows/pieces/library/:id/install"]?.POST;
     const { status, body } = await callJson(
       post,
@@ -930,7 +1071,7 @@ describe("workflow API: pieces library", () => {
   });
 
   test("DELETE on a never-installed piece returns 200 with alreadyAbsent (idempotent uninstall)", async () => {
-    const r = createWorkflowRoutes();
+    const r = createWorkflowRoutes(SELF_MANAGED);
     const del = r["/api/workflows/pieces/library/:id"]?.DELETE;
     const { status, body } = await callJson(
       del,
@@ -973,7 +1114,7 @@ describe("workflow API: pieces library", () => {
         tempDir,
       );
 
-      const r = createWorkflowRoutes();
+      const r = createWorkflowRoutes(SELF_MANAGED);
       const del = r["/api/workflows/pieces/library/:id"]?.DELETE;
       const { status, body } = await callJson(
         del,
@@ -1002,7 +1143,7 @@ describe("workflow API: pieces library", () => {
     const prev = process.env.JARVIS_PIECES_DIR;
     process.env.JARVIS_PIECES_DIR = tempDir;
     try {
-      const r = createWorkflowRoutes();
+      const r = createWorkflowRoutes(SELF_MANAGED);
       const del = r["/api/workflows/pieces/library/:id"]?.DELETE;
       const { status, body } = await callJson(
         del,

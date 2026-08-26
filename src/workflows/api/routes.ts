@@ -71,7 +71,7 @@ import type { CredentialResolver } from "../credentials/adapter";
 import type { TriggerManager } from "../runner/triggers/manager";
 import type { PieceLookup } from "../runtime/piece-catalog";
 import { CATALOG, findCatalogEntry } from "../pieces-library/catalog";
-import { sharedPieceVersions } from "../pieces-library/shared";
+import { piecesManagedByHost } from "../pieces-library/shared";
 import {
   installPiece,
   readManifest,
@@ -143,8 +143,10 @@ export interface CreateWorkflowRoutesOptions {
   pieceRegistry?: PieceLookup;
   /**
    * Config-resolved ready-made pieces dir (workflows.pieces_dir, ${version}
-   * expanded). `undefined` falls back to the env var inside
-   * sharedPieceVersions; `null` = definitively none.
+   * expanded). `undefined` falls back to the env var; `null` = definitively
+   * none. Same convention as `piecesManagedByHost`, which is the only thing
+   * these routes do with it: SET means this install's pieces are host-managed
+   * and the Library serves its managed shape.
    */
   sharedPiecesDir?: string | null;
   /**
@@ -198,8 +200,23 @@ function withLibraryLock<T>(fn: () => Promise<T>): Promise<T> {
   return release;
 }
 
+/**
+ * What the Library routes answer on a managed install. Says WHOSE decision it
+ * is and that nothing is missing, because the only two ways a client reaches
+ * a 403 here are a stale cached bundle and a hand-rolled request -- both of
+ * which are read by a person trying to work out what broke.
+ */
+const MANAGED_MESSAGE =
+  "pieces are managed by this install's host: the full catalog is already available, " +
+  "and it cannot be installed to or uninstalled from here";
+
 /** Build the workflow route map. Side-effect-free; spread into the daemon's main route table. */
 export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): WorkflowRouteMap {
+  // Resolved ONCE per route map rather than per request: the shared dir comes
+  // from config the daemon read at boot and cannot change under a running
+  // process, and one value means the GET's shape and the mutations' guard can
+  // never disagree about which mode this install is in.
+  const managed = piecesManagedByHost(opts.sharedPiecesDir);
   const refreshTrigger = (flowId: string): void => {
     if (!opts.triggerManager) return;
     // Fire-and-forget: API responses must not block on engine round-trips
@@ -262,33 +279,66 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     },
 
     // ------------------------------------------------------------- pieces library
-    // The Library tab in the dashboard renders this list. Each entry is a
-    // *curated* (Jarvis-vetted) community piece the user can opt into
-    // installing. Installed pieces are merged in with their resolved
-    // version + install timestamp so the UI can show "Installed" /
-    // "Update available" badges.
+    // The Library tab in the dashboard renders this list. It has two modes,
+    // and `managed` (a host-owned shared catalog) picks between them.
     //
-    // Install / uninstall mutate `~/.jarvis/pieces/` (manifest + bun
-    // install). They block until bun finishes -- typical first install of a
-    // single piece is 3-8s end to end. The UI shows a spinner during the
-    // wait. A `withLibraryLock` mutex serializes concurrent requests so a
-    // second install doesn't race the first one's bun-install.
+    // SELF-MANAGED -- each entry is a *curated* community piece the user can
+    // opt into installing. Installed pieces are merged in with their resolved
+    // version + install timestamp so the UI can show "Installed" / "Update
+    // available" badges. Install / uninstall mutate `~/.jarvis/pieces/`
+    // (manifest + bun install) and block until bun finishes -- a first
+    // install of a single piece is typically 3-8s end to end, and the UI
+    // shows a spinner for the wait. A `withLibraryLock` mutex serializes
+    // concurrent requests so a second install can't race the first one's
+    // bun-install.
+    //
+    // MANAGED -- the host installed the whole catalog once per version into a
+    // read-only tree every tenant shares, so every entry is already usable
+    // and install/uninstall are not the tenant's to make: both mutations are
+    // refused, and the list carries no install state and no per-piece detail.
+    // The refusal is the guarantee, not the hidden button: the tenant's own
+    // `~/.jarvis/pieces` is still writable, so nothing but this guard stops a
+    // hand-rolled POST from shadowing a shared piece with an unreviewed copy
+    // and spending the tenant's disk quota doing it.
     "/api/workflows/pieces/library": {
       GET: () =>
         trapErrors(async () => {
+          // MANAGED (a host owns the catalog): the whole catalog is already
+          // installed in the shared tree, so there is no install state to
+          // report and nothing the user could act on. Every entry is simply
+          // available, and the per-piece specifics an install decision needed
+          // -- resolved/vetted version, disk footprint, audit date, license,
+          // upstream link -- are dropped from the PAYLOAD rather than merely
+          // hidden by the client, so that no client can render them: not a
+          // stale cached bundle, not a future one that forgets to check
+          // `managed`, not curl.
+          if (managed) {
+            return ok({
+              managed: true,
+              entries: CATALOG.map((entry) => ({
+                id: entry.id,
+                // Kept because the Library's search matches on it -- users
+                // type "activepieces" or a package name as readily as a
+                // display name. It is not RENDERED on a managed row.
+                npmPackage: entry.npmPackage,
+                displayName: entry.displayName,
+                description: entry.description,
+                iconUrl: entry.iconUrl ?? null,
+                tier: entry.tier,
+              })),
+            });
+          }
+          // Reaching here means NO shared tree is configured -- that is the
+          // whole of what `managed` tests -- so every piece that exists on
+          // this install got there through the manifest. There is no shared
+          // baseline to merge in and no `source: "shared"` case: a
+          // deployment either owns the catalog (above) or the user does.
           const manifest = await readManifest();
           const installedById = new Map(
             manifest.pieces.map((p) => [p.id, p]),
           );
-          // Shared read-only catalog (multi-tenant hosting): pieces present
-          // there work with NO installation, so the Library reports them as
-          // included (`source: "shared"`). A user install shadows the shared
-          // copy (engine-bootstrap orders roots user-first), so the user's
-          // manifest wins when both exist.
-          const shared = sharedPieceVersions(opts.sharedPiecesDir);
           const entries = CATALOG.map((entry) => {
             const installed = installedById.get(entry.id) ?? null;
-            const sharedVersion = shared.get(entry.npmPackage) ?? null;
             return {
               id: entry.id,
               npmPackage: entry.npmPackage,
@@ -308,22 +358,17 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
                     installedAt: installed.installedAt,
                     source: "user" as const,
                   }
-                : sharedVersion
-                  ? {
-                      resolvedVersion: sharedVersion,
-                      installedAt: 0,
-                      source: "shared" as const,
-                    }
-                  : null,
+                : null,
             };
           });
-          return ok({ entries });
+          return ok({ managed: false, entries });
         }),
     },
 
     "/api/workflows/pieces/library/:id/install": {
       POST: (req) =>
         trapErrors(async () => {
+          if (managed) return err(MANAGED_MESSAGE, 403);
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           const entry = findCatalogEntry(id);
           if (!entry) return err(`unknown piece id "${id}"`, 404);
@@ -357,6 +402,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflows/pieces/library/:id": {
       DELETE: (req) =>
         trapErrors(async () => {
+          if (managed) return err(MANAGED_MESSAGE, 403);
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           // Check the manifest BEFORE the catalog. A piece can legitimately
           // be installed but not in the catalog -- we yank entries from the
