@@ -25,6 +25,7 @@ import { PebbleRealtimeManager } from "./pebble-realtime.ts";
 import { hostedRealtimeIncluded } from './realtime-gate.ts';
 import { resolveRealtimeVoice } from "../config/realtime.ts";
 import { effectiveRealtimeEnabled } from "./usejarvis-ai.ts";
+import { warmRealtimeGate } from "./realtime-gate.ts";
 import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
@@ -4182,6 +4183,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       canNotify: () => sidecarManager.getConnectedSidecars().length > 0,
     });
     usageAlerts.start();
+
+    // Prime the realtime plan verdict before anyone speaks. Realtime is now on
+    // by default for hosted tenants, so the gate decides for every hosted
+    // install — and with a cold cache GET /api/config/voice reports
+    // "available", which puts the browser into raw-PCM capture. On a plan
+    // WITHOUT realtime that first utterance is refused and its frames dropped,
+    // so the user speaks and nothing happens. One catalog request at boot
+    // removes it; a failure just expires in 30s.
+    try {
+      const rtCfg = agentService.getConfig();
+      const rtRes = resolveRealtimeVoice(rtCfg, effectiveRealtimeEnabled(rtCfg));
+      if (rtRes.ok) warmRealtimeGate(rtRes.resolved);
+    } catch (err) {
+      console.warn('[Daemon] could not warm the realtime plan gate:', err);
+    }
     // A pass with no sidecar connected leaves its flags unset on purpose, so
     // the warning survives — but it would then wait up to fifteen minutes for
     // the next tick. Re-check as soon as a machine appears, which is exactly

@@ -94,6 +94,39 @@ function fetchVerdict(key: string, resolved: ResolvedRealtimeVoice): Promise<boo
   return p;
 }
 
+/**
+ * Prime the verdict before anyone speaks.
+ *
+ * Realtime is now ON by default for hosted tenants (usejarvis-ai.ts
+ * effectiveRealtimeEnabled), so the plan gate decides for EVERY hosted install
+ * rather than the few that had opted in. That made the cold-cache path a
+ * user-visible cost rather than a rare one:
+ *
+ * `GET /api/config/voice` reports `available` from the CACHE only, and an
+ * unknown verdict reads as available (the gate's advisory-open stance). The
+ * browser captures raw PCM when `enabled && available` (ui useVoice.ts:431).
+ * So on a plan WITHOUT realtime, the first utterance after every boot is
+ * captured as PCM, refused by the gate, and DROPPED — raw frames are useless
+ * to the WAV pipeline, which is why ws-service deletes the buffer rather than
+ * feeding Whisper headerless audio. The user says something and nothing
+ * happens; only the second utterance works.
+ *
+ * Warming costs one catalog request per boot and removes that entirely: by the
+ * time the dashboard first asks, the verdict is definitive and the browser
+ * never enters PCM mode on a plan that cannot serve it.
+ *
+ * Fire-and-forget by design — it shares fetchVerdict's in-flight dedup, so a
+ * voice_start racing the warm waits on the SAME request rather than issuing a
+ * second, and a failure is simply an advisory entry that expires in 30s.
+ */
+export function warmRealtimeGate(resolved: ResolvedRealtimeVoice): void {
+  if (!resolved.modelsUrl) return; // BYO sessions are never gated
+  const key = cacheKey(resolved);
+  const hit = cache.get(key);
+  if (hit && isFresh(hit) && !hit.advisory) return;
+  void fetchVerdict(key, resolved).catch(() => {});
+}
+
 /** Allow, but remember it only briefly — see ADVISORY_TTL_MS. */
 function advisoryAllow(key: string): boolean {
   cache.set(key, { verdict: true, at: Date.now(), advisory: true });
