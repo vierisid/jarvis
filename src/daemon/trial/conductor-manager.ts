@@ -37,6 +37,7 @@ import {
   type WorkflowProposal,
 } from './beats.ts';
 import {
+  markConductorFinished,
   markOpeningCompleted,
   startTrialClock,
   trialSnapshot,
@@ -84,6 +85,16 @@ type Entry<W> = {
    * answer is "nothing yet".
    */
   reader: { found: string[]; finished: boolean; summary: string | null } | null;
+  /**
+   * D24's keystroke, latched.
+   *
+   * Latched rather than merely awaited because the founder is allowed to be
+   * quicker than the model: they can press control and J while the tool call
+   * that waits for it is still being emitted, and a press that arrived a
+   * moment early must not be lost. `pressedAt` survives; `waiting` is whoever
+   * is currently blocked on it.
+   */
+  summon: { pressedAt: number | null; waiting: ((v: 'pressed' | 'timeout') => void)[] };
 };
 
 /**
@@ -97,7 +108,9 @@ type Entry<W> = {
  */
 export type TrialBeatActions = {
   /** Compose + publish a flow from a proposal. Slow: it is a real LLM build. */
-  publishWorkflow: (p: WorkflowProposal) => Promise<{ ok: true; detail: string } | { ok: false; detail: string }>;
+  publishWorkflow: (p: WorkflowProposal) => Promise<
+    { ok: true; detail: string; flowId?: string } | { ok: false; detail: string }
+  >;
   /** Persist both ends of the day into the goal rhythm. */
   setDailyRhythm: (morning: { hour: number; minute: number }, eveningHour: number) => void;
   /** Persist the authority level and the founder's carve-out. Returns what
@@ -132,6 +145,10 @@ export type ConductorManagerDeps<W> = {
   now?: () => number;
   /** Backstop window, overridable so the fallback path is testable in ms. */
   clockGraceMs?: number;
+  /** How long to wait for D24's keystroke, overridable for the same reason:
+   *  the founder-never-pressed-it path is the one that matters most here and
+   *  a suite that took the real 45 seconds to reach it would not be run. */
+  summonWaitMs?: number;
   /** See TrialBeatActions. */
   beatActions?: TrialBeatActions;
 };
@@ -183,6 +200,7 @@ export class TrialConductorManager<W> {
       room: null,
       clockFallback: null,
       reader: null,
+      summon: { pressedAt: null, waiting: [] },
     });
     return session;
   }
@@ -191,6 +209,9 @@ export class TrialConductorManager<W> {
   end(ws: W): void {
     const entry = this.entries.get(ws);
     if (entry?.clockFallback) clearTimeout(entry.clockFallback);
+    // A socket that goes away mid-handover releases whoever was waiting on the
+    // keystroke rather than leaving a promise nobody will ever settle.
+    if (entry) this.settleSummon(entry, 'timeout');
     this.entries.delete(ws);
     this.armed.delete(ws);
   }
@@ -249,6 +270,10 @@ export class TrialConductorManager<W> {
       enterRoom: (beat: RoomBeat, label: string) => this.enterRoom(entry, beat, label),
       roomIsTheirs: (beat: RoomBeat, label: string) => this.markRoom(beat, label),
       refreshRoom: (room: RoomKey) => this.refreshRoom(room),
+      roomAction: (room: RoomKey, action: string, args: Record<string, unknown>) =>
+        this.roomAction(room, action, args),
+      showParts: (parts: { anchor: string; label?: string }[], opts?: { room?: RoomKey; kind?: string }) =>
+        this.showParts(parts, opts),
       showProposal: (proposal: BeatProposal | null) => this.publishProposal(proposal),
       proposalLanded: (beat: RoomBeat, summary: string) => this.publishProposalLanded(beat, summary),
       beatComplete: (beat: RoomBeat, detail: Record<string, unknown>) =>
@@ -277,7 +302,84 @@ export class TrialConductorManager<W> {
           ? actions.spawnResearchAgent(question, brief)
           : Promise.reject(new Error('Sub-agents are not available on this install.')),
       onFinished: (beats: BeatsSession) => this.publishOnboardingComplete(entry, beats),
+      awaitSummon: (timeoutMs: number) => this.awaitSummon(entry, timeoutMs),
+      standDown: (beats: BeatsSession) => this.publishStandDown(entry, beats),
     };
+  }
+
+  /* ─────────────────── D24, the founder's own keystroke ─────────────────── */
+
+  /**
+   * The founder pressed the summon. Latched, so a press that lands before the
+   * model gets round to waiting for it still counts.
+   *
+   * Only meaningful on a socket running a conductor; anywhere else it is a
+   * no-op, which is what keeps this from being a way to poke the daemon.
+   */
+  onSummonPressed(ws: W): void {
+    const entry = this.entries.get(ws);
+    if (!entry) return;
+    if (entry.summon.pressedAt === null) entry.summon.pressedAt = this.now();
+    this.settleSummon(entry, 'pressed');
+  }
+
+  private settleSummon(entry: Entry<W>, verdict: 'pressed' | 'timeout'): void {
+    const waiting = entry.summon.waiting;
+    entry.summon.waiting = [];
+    for (const resolve of waiting) resolve(verdict);
+  }
+
+  /** Resolves on the keystroke, or on the timeout. Never rejects. */
+  private awaitSummon(entry: Entry<W>, requested: number): Promise<'pressed' | 'timeout'> {
+    const timeoutMs = this.deps.summonWaitMs ?? requested;
+    if (entry.summon.pressedAt !== null) return Promise.resolve('pressed');
+    return new Promise((resolve) => {
+      let settled = false;
+      const once = (v: 'pressed' | 'timeout') => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        resolve(v);
+      };
+      const timer = setTimeout(() => {
+        entry.summon.waiting = entry.summon.waiting.filter((w) => w !== once);
+        once('timeout');
+      }, timeoutMs);
+      (timer as { unref?: () => void }).unref?.();
+      entry.summon.waiting.push(once);
+    });
+  }
+
+  /**
+   * THE STAND-DOWN. The conducted hour is over and the ordinary shell is theirs.
+   *
+   * Two things happen and they are deliberately different in kind:
+   *
+   *  - `markConductorFinished` persists it, so a reload at hour 20 gets the
+   *    shell rather than the conversation they already had. It touches nothing
+   *    else on the entitlement: the clock, the state and D1's realtime grant
+   *    are exactly as they were, because the TRIAL has not ended, only the
+   *    conductor.
+   *  - the broadcast tells the surface to hand back the pebble, Talk and the
+   *    palette. The surface does it at the next gap in the speech rather than
+   *    instantly, so the acknowledgement the founder just earned is not cut
+   *    off mid-word. See ui/src/v2/trial/standDown.ts.
+   */
+  private publishStandDown(entry: Entry<W>, beats: BeatsSession): void {
+    markConductorFinished(beats.handedOverAt ?? this.now());
+    console.log(
+      `[Trial] the conductor stood down, summon ${beats.summonPressed ? 'pressed' : 'not pressed'}; ` +
+      'the trial and its clock carry on',
+    );
+    this.deps.broadcast({
+      type: 'trial_standdown',
+      payload: {
+        pressed: beats.summonPressed,
+        at: beats.handedOverAt,
+        beats: [...beats.done],
+      },
+      timestamp: this.now(),
+    });
   }
 
   /* ─────────────────── D42, what the reader sends back ─────────────────── */
@@ -359,7 +461,8 @@ export class TrialConductorManager<W> {
    */
   private enterRoom(entry: Entry<W>, beat: RoomBeat, label: string): void {
     const room = BEAT_ROOM[beat];
-    if (entry.room === room) return;
+    // `handover` happens on the shell itself and has no room to lead them to.
+    if (room === null || entry.room === room) return;
     entry.room = room;
     this.deps.broadcast({
       type: 'trial_point',
@@ -380,18 +483,47 @@ export class TrialConductorManager<W> {
    * this one is that it happens AFTER the work rather than before it.
    */
   private markRoom(beat: RoomBeat, label: string): void {
+    const room = BEAT_ROOM[beat];
+    if (room === null) return;
     this.deps.broadcast({
       type: 'trial_point',
-      payload: { target: `room:${BEAT_ROOM[beat]}`, label },
+      payload: { target: `room:${room}`, label },
       timestamp: this.now(),
     });
   }
 
   /** D22: what just landed has to be visible NOW, not on the room's 8s poll. */
   private refreshRoom(room: RoomKey): void {
+    this.roomAction(room, 'refresh', {});
+  }
+
+  /**
+   * Drive the room the founder is standing in, over the bus it already has.
+   *
+   * The same envelope the voice nav tools use, so no room learns anything
+   * about the trial: `focus_goal` and `open_flow` are ordinary room actions
+   * that anything could send, and the two rooms handle them the way they
+   * handle `refresh` and `select`.
+   */
+  private roomAction(room: RoomKey, action: string, args: Record<string, unknown>): void {
     this.deps.broadcast({
       type: 'notification',
-      payload: { source: 'room_action', room, action: 'refresh', args: {} },
+      payload: { source: 'room_action', room, action, args },
+      timestamp: this.now(),
+    });
+  }
+
+  /**
+   * Walk the pebble across the parts of the thing that just landed.
+   *
+   * `parts` may be empty when `kind` is set: the flow walk is derived on the
+   * surface from the real graph, because the composer decides what the nodes
+   * are and the daemon proposed the flow in the founder's sentences.
+   */
+  private showParts(parts: { anchor: string; label?: string }[], opts?: { room?: RoomKey; kind?: string }): void {
+    this.deps.broadcast({
+      type: 'trial_walk',
+      payload: { parts, room: opts?.room ?? null, kind: opts?.kind ?? null },
       timestamp: this.now(),
     });
   }

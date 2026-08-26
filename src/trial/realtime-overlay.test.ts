@@ -19,6 +19,7 @@ function grant(over: Partial<TrialEntitlement> = {}): TrialEntitlement {
     state: 'issued',
     realtime: { enabled: true, max_session_minutes: TRIAL_MAX_SESSION_MINUTES },
     opening_completed_at: null,
+    conductor_finished_at: null,
     ...over,
   };
 }

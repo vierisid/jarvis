@@ -86,6 +86,23 @@ export type TrialEntitlement = {
    * the conversation does not end here.
    */
   opening_completed_at: number | null;
+  /**
+   * Stamped when the CONDUCTOR stands down and the founder is handed the
+   * ordinary shell.
+   *
+   * This is the only field on the record that shortens anything, and it
+   * shortens exactly one thing: the conducted hour. The trial is 48 hours and
+   * roughly one of them is conducted; the other 47 are the founder using
+   * Jarvis, which is what the whole design is selling and what they could not
+   * do while this was null. `started_at`, `expires_at` and `realtime` are
+   * untouched by it, so the entitlement, the clock and D1's uncapped realtime
+   * all carry on exactly as they were.
+   *
+   * Persisted rather than held per-socket because its whole job is to survive
+   * a reload: a founder who comes back at hour 20 gets their shell, not the
+   * conversation they already had.
+   */
+  conductor_finished_at: number | null;
 };
 
 /** What the UI and the daemon read. Derived, never stored. */
@@ -98,6 +115,8 @@ export type TrialSnapshot = {
   /** Milliseconds left, or null when the clock has not started. Never negative. */
   ms_remaining: number | null;
   opening_completed_at: number | null;
+  /** When the conductor stood down. The trial carries on; only it finished. */
+  conductor_finished_at: number | null;
 };
 
 /** Nothing here: the shape a non-trial install always reports. */
@@ -108,6 +127,7 @@ export const NO_TRIAL: TrialSnapshot = {
   expires_at: null,
   ms_remaining: null,
   opening_completed_at: null,
+  conductor_finished_at: null,
 };
 
 /* ─────────────────────────── pure logic ─────────────────────────── */
@@ -152,6 +172,7 @@ export function snapshotOf(e: TrialEntitlement | null, now: number): TrialSnapsh
     expires_at: e.expires_at,
     ms_remaining: e.expires_at === null ? null : Math.max(0, e.expires_at - now),
     opening_completed_at: e.opening_completed_at,
+    conductor_finished_at: e.conductor_finished_at,
   };
 }
 
@@ -216,6 +237,12 @@ export function parseTrialEntitlement(raw: unknown): TrialEntitlement | null {
     opening_completed_at: Number.isFinite(r.opening_completed_at)
       ? (r.opening_completed_at as number)
       : null,
+    // Absent on every record written before the stand-down existed, which
+    // reads as "the conductor has not finished". That is the right answer for
+    // an old row: those founders never got a handover.
+    conductor_finished_at: Number.isFinite(r.conductor_finished_at)
+      ? (r.conductor_finished_at as number)
+      : null,
   };
 }
 
@@ -278,6 +305,7 @@ export function issueTrialEntitlement(opts?: {
     state: 'issued',
     realtime: { enabled: true, max_session_minutes: TRIAL_MAX_SESSION_MINUTES },
     opening_completed_at: null,
+    conductor_finished_at: null,
   };
   writeTrialEntitlement(e);
   return e;
@@ -308,6 +336,23 @@ export function markOpeningCompleted(now = Date.now()): TrialEntitlement | null 
   if (!e) return null;
   if (e.opening_completed_at !== null) return e;
   const next = { ...e, opening_completed_at: now };
+  writeTrialEntitlement(next);
+  return next;
+}
+
+/**
+ * The conductor has stood down and the founder now has the ordinary shell.
+ *
+ * Idempotent, and deliberately NOT a state change on the entitlement: nothing
+ * here touches `state`, `started_at`, `expires_at` or the realtime grant. A
+ * founder whose conductor has finished is still very much on a running trial,
+ * which is the entire point of the handover.
+ */
+export function markConductorFinished(now = Date.now()): TrialEntitlement | null {
+  const e = readTrialEntitlement();
+  if (!e) return null;
+  if (e.conductor_finished_at !== null) return e;
+  const next = { ...e, conductor_finished_at: now };
   writeTrialEntitlement(next);
   return next;
 }

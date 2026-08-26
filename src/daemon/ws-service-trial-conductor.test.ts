@@ -130,10 +130,28 @@ describe('an install with no trial entitlement', () => {
     }
     // Named individually as well, so a rename cannot quietly empty the loop.
     for (const name of ['propose_reading', 'start_reading', 'reading_so_far',
-      'propose_workspace', 'create_workspace', 'propose_edit', 'make_edit', 'move_on']) {
+      'propose_workspace', 'create_workspace', 'propose_edit', 'make_edit', 'move_on',
+      'teach_summon', 'await_summon']) {
       expect(ROOM_BEAT_TOOLS.some((t) => t.name === name)).toBe(true);
       expect(await internals.trialConductor.executeTool(ws, name, {})).toBeNull();
     }
+    expect(broadcast).toHaveLength(0);
+  });
+
+  test('pressing the summon on a socket with no conductor does nothing at all', async () => {
+    // `trial_summon_pressed` is the one message in the trial the FOUNDER
+    // sends, so it is worth being explicit that it is not a lever: on a socket
+    // that never ran a conductor it is a no-op, nothing is broadcast, and no
+    // entitlement is touched.
+    initDatabase(':memory:');
+    const { ws, internals, broadcast } = makeService();
+
+    const reply = await internals.routeMessage(
+      { type: 'trial_summon_pressed', payload: {}, timestamp: Date.now() },
+      ws,
+    );
+
+    expect(reply).toBeUndefined();
     expect(broadcast).toHaveLength(0);
   });
 });
@@ -154,12 +172,12 @@ describe('an install with a running trial', () => {
     expect((status!.payload as { started_at: number | null }).started_at).toBeNull();
   });
 
-  test('the D1 overlay turns realtime on for the armed socket alone', async () => {
-    // The config here has realtime DISABLED. An unarmed socket resolves to
-    // nothing and never consults the plan catalog; an armed one gets past
-    // resolve and reaches the gate. That the catalog is asked at all is the
-    // proof that the overlay applied, and the refusal is what keeps this test
-    // from dialing OpenAI.
+  test('the D1 overlay turns realtime on for the conductor', async () => {
+    // The config here has realtime DISABLED. With no trial the socket resolves
+    // to nothing and never consults the plan catalog (the test above); with
+    // one, it gets past resolve and reaches the gate. That the catalog is
+    // asked at all is the proof that the overlay applied, and the refusal is
+    // what keeps this test from dialing OpenAI.
     initDatabase(':memory:');
     issueTrialEntitlement({});
     catalog(false);
@@ -172,6 +190,27 @@ describe('an install with a running trial', () => {
     expect((status?.payload as { reason?: string })?.reason).toBe('plan');
     // And no standard accumulator: the conductor is a PCM client.
     expect(internals.voiceSessions.has(ws)).toBe(false);
+  });
+
+  test('and for the founder\'s OWN socket, which is the point of the handover', async () => {
+    // Changed deliberately on 26 August. The overlay used to be gated on the
+    // socket being the conductor's, which was fine while the conducted hour
+    // was the only way a trial user ever spoke to Jarvis. It is not any more:
+    // once the conductor stands down, the founder talks through the shell's
+    // own pebble on the shell's own socket, and D1 grants them uncapped
+    // realtime for the whole 48 hours rather than for the first one of them.
+    //
+    // Nothing here is armed and no conductor is started.
+    initDatabase(':memory:');
+    issueTrialEntitlement({});
+    catalog(false);
+    const { ws, sent, internals } = makeService();
+
+    await internals.routeMessage(voiceStart(), ws);
+
+    expect(internals.trialConductor.isArmed(ws)).toBe(false);
+    const status = sent.find((m) => m.type === 'realtime_status');
+    expect((status?.payload as { reason?: string })?.reason).toBe('plan');
   });
 
   test('a second socket on the same install is not the conductor', async () => {

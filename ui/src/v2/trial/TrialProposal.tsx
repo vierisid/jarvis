@@ -7,6 +7,7 @@ import type {
   EditProposal,
   FilesProposal,
   GoalProposal,
+  HandoverProposal,
   ProposalLanded,
   TaskProposal,
   WorkflowProposal,
@@ -108,18 +109,27 @@ export function TrialProposal({
   // surface does not change under them, and count up instead of asking.
   const reading = p.beat === "files" && p.reading === true;
   const running = p.beat === "agents" && p.running === true;
-  const working = building || reading || running;
+  // The handover asks for nothing. It is the one card in the trial that is not
+  // waiting on a spoken yes: what it wants is a keystroke, and once that has
+  // happened it is a reference rather than a question (D28).
+  const handover = p.beat === "handover";
+  const working = building || reading || running || handover;
+  // Once the conductor has stood down the card is a reference rather than a
+  // question, and it moves out of the way of the Talk panel their keystroke
+  // just opened. See `.tc-prop--kept`.
+  const kept = p.beat === "handover" && p.handedOver === true;
   return (
-    <div className={`tc-prop${working ? " tc-prop--working" : ""}`}>
+    <div className={`tc-prop${working ? " tc-prop--working" : ""}${kept ? " tc-prop--kept" : ""}`}>
       <div className="tc-prop-head">
         <span className={`tc-prop-dot${working ? " is-run" : ""}`} />
         <span className="tc-prop-from">
           {building ? "building it now"
             : reading ? "reading your files now"
               : running ? "working now, and after you close this"
-                : p.beat === "files" ? "nothing read yet"
-                  : p.beat === "workspace" ? "from what it read"
-                    : "from what you told me"}
+                : handover ? (p.handedOver ? "yours from here" : p.pressed ? "that is the one" : "how you get me back")
+                  : p.beat === "files" ? "nothing read yet"
+                    : p.beat === "workspace" ? "from what it read"
+                      : "from what you told me"}
         </span>
         {!working && <span className="tc-prop-wait">waiting on you</span>}
       </div>
@@ -133,18 +143,24 @@ export function TrialProposal({
         {p.beat === "workspace" && p.kind === "workspace" && <WorkspaceCard p={p} />}
         {p.beat === "workspace" && p.kind === "edit" && <EditCard p={p} />}
         {p.beat === "agents" && <AgentCard p={p} />}
+        {p.beat === "handover" && <HandoverCard p={p} />}
       </div>
       <div className="tc-prop-foot">
         {building ? "give it a few seconds"
           : reading ? "it keeps going while you talk"
             : running ? "it does not stop when you do"
-              : 'or just say "yes"'}
+              : handover
+                ? (p.handedOver
+                    ? "the 48 hours keep running, and so do I"
+                    : p.pressed ? "one second" : "press it and I will get out of your way")
+                : 'or just say "yes"'}
       </div>
     </div>
   );
 }
 
 const LANDED_LABEL: Record<ProposalLanded["beat"], string> = {
+  handover: "yours now",
   goals: "created just now",
   tasks: "on the board just now",
   calendar: "set just now",
@@ -503,6 +519,61 @@ function EditCard({ p }: { p: EditProposal }) {
       <div className="tc-because">{p.change}</div>
       <Note label="beside yours">
         Written as <span className="tc-path">{p.as}</span>. Your file is not touched, and you can throw this one away.
+      </Note>
+    </>
+  );
+}
+
+/* ── D23, D24, D28 · the three keys, and the one they press ──
+
+   This is the last thing the trial's own surface ever draws, and it is doing
+   two jobs at once. It is D28's hotkey card, the reference the founder keeps.
+   And it is D24's lesson: one of the three is marked, they are asked to press
+   it, and it ticks the instant they do, because the acknowledgement is what
+   turns a keystroke into a small win.
+
+   ⌘ or Ctrl is decided here rather than by the daemon, which does not know
+   what is under the founder's hands. `ctrl+space` is written out as itself on
+   every platform because that is what the summon hotkey actually is
+   (`src/daemon/index.ts`, `summon_hotkey: 'ctrl+space'`). */
+
+const MOD = typeof navigator !== "undefined" && /mac|iphone|ipad/i.test(navigator.platform || navigator.userAgent)
+  ? "⌘"
+  : "Ctrl";
+
+function chordLabel(chord: string): string {
+  return chord
+    .split("+")
+    .map((part) => (part === "mod" ? MOD : part === "ctrl" ? "Ctrl" : part === "space" ? "Space" : part.toUpperCase()))
+    .join(" ");
+}
+
+function HandoverCard({ p }: { p: HandoverProposal }) {
+  const press = p.keys.find((k) => k.press);
+  return (
+    <>
+      <Decision
+        title={p.handedOver ? "This is yours now" : "Everything here is yours"}
+        sub={p.handedOver
+          ? "the 48 hours carry on, and so does everything you built"
+          : `press ${press ? chordLabel(press.chord) : "Ctrl J"} and I will step aside`}
+      />
+      <Group label="how you get me">
+        {p.keys.map((k) => (
+          <div className={`tc-keyrow${k.press ? " is-press" : ""}${k.press && p.pressed ? " is-done" : ""}`} key={k.chord}>
+            <kbd className="tc-kbd">{chordLabel(k.chord)}</kbd>
+            <div className="tc-keyrow-t">
+              <span className="tc-keyrow-what">{k.what}</span>
+              <span className="tc-keyrow-where">{k.where}</span>
+            </div>
+            {k.press && <span className="tc-keyrow-tick">{p.pressed ? "✓" : "press this"}</span>}
+          </div>
+        ))}
+      </Group>
+      <Note label={p.handedOver ? "still running" : "nothing ends here"} tone="run">
+        {p.handedOver
+          ? "Your quarter, your week, your flows and the agent are all where you left them, and I am still on for the rest of the 48 hours."
+          : "The trial does not stop. Only the setting-up does."}
       </Note>
     </>
   );

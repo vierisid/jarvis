@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { closeDb, initDatabase } from '../vault/schema.ts';
 import {
   NO_TRIAL,
@@ -12,6 +12,7 @@ import {
   readTrialEntitlement,
   resolveTrialState,
   seedTrialFromEnv,
+  markConductorFinished,
   snapshotOf,
   startTrialClock,
   startedEntitlement,
@@ -34,6 +35,7 @@ function anEntitlement(over: Partial<TrialEntitlement> = {}): TrialEntitlement {
     state: 'issued',
     realtime: { enabled: true, max_session_minutes: TRIAL_MAX_SESSION_MINUTES },
     opening_completed_at: null,
+    conductor_finished_at: null,
     ...over,
   };
 }
@@ -201,5 +203,73 @@ describe('the control-plane stub', () => {
     expect(readTrialEntitlement()?.issuer).toBe('local_stub');
     // A restart must not re-issue.
     expect(seedTrialFromEnv({ JARVIS_TRIAL: '1' })).toBe(false);
+  });
+});
+
+/* ══════════ the conductor's stand-down, at the persistence layer ══════════ */
+
+describe('markConductorFinished', () => {
+  beforeEach(() => initDatabase(':memory:'));
+  afterEach(() => closeDb());
+
+  test('stamps the moment, and nothing else', () => {
+    issueTrialEntitlement({ now: T0 });
+    startTrialClock(T0 + 1_000);
+    const before = readTrialEntitlement()!;
+
+    const after = markConductorFinished(T0 + 3_600_000)!;
+
+    expect(after.conductor_finished_at).toBe(T0 + 3_600_000);
+    // The trial is 48 hours and the conducted part is about one of them. This
+    // ends the one, and it must not touch the 48: the clock keeps running, the
+    // state is still active, and D1's realtime grant is exactly as it was.
+    expect(after.state).toBe(before.state);
+    expect(after.started_at).toBe(before.started_at);
+    expect(after.expires_at).toBe(before.expires_at);
+    expect(after.duration_ms).toBe(before.duration_ms);
+    expect(after.realtime).toEqual(before.realtime);
+    expect(after.opening_completed_at).toBe(before.opening_completed_at);
+  });
+
+  test('is idempotent, so a second handover cannot move the moment', () => {
+    issueTrialEntitlement({ now: T0 });
+    markConductorFinished(T0 + 100);
+    expect(markConductorFinished(T0 + 99_999)!.conductor_finished_at).toBe(T0 + 100);
+  });
+
+  test('is a no-op with no entitlement', () => {
+    expect(markConductorFinished(T0)).toBeNull();
+  });
+
+  test('the snapshot carries it, so a reload can read it', () => {
+    issueTrialEntitlement({ now: T0 });
+    startTrialClock(T0);
+    expect(trialSnapshot(T0 + 5).conductor_finished_at).toBeNull();
+    markConductorFinished(T0 + 10);
+    const snap = trialSnapshot(T0 + 20);
+    expect(snap.conductor_finished_at).toBe(T0 + 10);
+    // Still very much a running trial.
+    expect(snap.state).toBe('active');
+    expect(snap.ms_remaining).toBe(TRIAL_DURATION_MS - 20);
+  });
+
+  test('a stored record written before this existed reads as "not finished"', () => {
+    const parsed = parseTrialEntitlement({
+      version: 1, id: 'g', account_id: null, issuer: 'local_stub',
+      issued_at: T0, duration_ms: TRIAL_DURATION_MS, started_at: null,
+      state: 'issued', realtime: { enabled: true, max_session_minutes: 1 },
+      opening_completed_at: null,
+    });
+    expect(parsed!.conductor_finished_at).toBeNull();
+  });
+
+  test('a garbage value reads as "not finished" rather than as a number', () => {
+    const parsed = parseTrialEntitlement({
+      version: 1, id: 'g', account_id: null, issuer: 'local_stub',
+      issued_at: T0, duration_ms: TRIAL_DURATION_MS, started_at: null,
+      state: 'issued', realtime: { enabled: true, max_session_minutes: 1 },
+      opening_completed_at: null, conductor_finished_at: 'yesterday',
+    });
+    expect(parsed!.conductor_finished_at).toBeNull();
   });
 });

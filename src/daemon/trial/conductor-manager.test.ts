@@ -22,7 +22,7 @@ const T0 = 1_780_000_000_000;
 /** Stand-in for a socket. The manager only ever uses it as a map key. */
 type Sock = { id: string };
 
-function harness(now = () => T0, clockGraceMs?: number) {
+function harness(now = () => T0, clockGraceMs?: number, summonWaitMs = 25) {
   const sent: Array<{ ws: Sock; msg: WSMessage }> = [];
   const broadcast: WSMessage[] = [];
   const actions = {
@@ -41,6 +41,7 @@ function harness(now = () => T0, clockGraceMs?: number) {
     broadcast: (msg) => broadcast.push(msg),
     now,
     clockGraceMs,
+    summonWaitMs,
     beatActions: {
       publishWorkflow: async (p) => { actions.workflows.push(p.name); return { ok: true as const, detail: 'built' }; },
       setDailyRhythm: (morning, eveningHour) => { actions.brief = morning; actions.evening = eveningHour; },
@@ -57,6 +58,7 @@ function harness(now = () => T0, clockGraceMs?: number) {
       },
     },
   });
+
   return { manager, sent, broadcast, actions, ws: { id: 'a' } as Sock };
 }
 
@@ -594,5 +596,148 @@ describe('the reader lands its findings through the conversation, not beside it'
     expect(res).toContain('found nothing about the company');
     expect(res).toContain('without inventing a finding');
     rmSync(folder, { recursive: true, force: true });
+  });
+});
+
+/* ══════════ beat 13 · the keystroke, and the end of the conducted hour ══════════ */
+
+describe('the summon, and the stand-down it performs', () => {
+  afterEach(() => closeDb());
+
+  /** An arc walked to the point where the handover is the only thing left. */
+  async function readyToHandOver() {
+    initDatabase(':memory:');
+    issueTrialEntitlement({ now: T0 });
+    let t = T0;
+    const h = harness(() => t++);
+    h.manager.arm(h.ws);
+    h.manager.begin(h.ws);
+    const run = (n: string, a: Record<string, unknown> = {}) => h.manager.executeTool(h.ws, n, a);
+    const yes = () => h.manager.onUserSpeechStopped(h.ws);
+    const folder = mkdtempSync(join(tmpdir(), 'handover-'));
+    writeFileSync(join(folder, 'pitch.md'), '# Acme', 'utf-8');
+
+    await run('conclude_opening', { understanding: 'ok' });
+    await run('propose_goals', DEEP_GOALS); yes(); await run('create_goals');
+    await run('propose_tasks', { tasks: [{ what: 'a', first: true }] }); yes(); await run('create_tasks');
+    await run('propose_daily_rhythm', { hour: 7, minute: 30, evening_hour: 19 }); yes(); await run('set_daily_rhythm');
+    await run('propose_workflow', { name: 'f', runs_when: 'mondays', steps: ['x'], never: 'send anything on its own' });
+    yes(); await run('publish_workflow');
+    await run('no_second_workflow', { because: 'one thing' });
+    await run('propose_authority', { always_ask: ['send_message'] }); yes(); await run('set_authority', {});
+    await run('propose_reading', { folder }); yes(); await run('start_reading');
+    await run('move_on', { because: 'no' });
+    await run('propose_research', { question: 'q', brief: 'b' }); yes(); await run('spawn_research_agent');
+    rmSync(folder, { recursive: true, force: true });
+    return { ...h, run };
+  }
+
+  test('a press that arrives before the model waits for it still counts', async () => {
+    // The founder is allowed to be faster than the model. `teach_summon` puts
+    // the card up, they press it while the next tool call is still being
+    // emitted, and the latch is what stops that press being lost.
+    const { manager, ws, run } = await readyToHandOver();
+    await run('teach_summon');
+    manager.onSummonPressed(ws);
+    const res = await run('await_summon');
+    expect(res).toContain('pressed it');
+    expect(manager.beatsOf(ws)!.summonPressed).toBe(true);
+  });
+
+  test('a press that arrives while the model is waiting resolves the wait', async () => {
+    const { manager, ws, run } = await readyToHandOver();
+    await run('teach_summon');
+    const waiting = run('await_summon');
+    // Let the promise reach the waiter before the keystroke lands.
+    await new Promise((r) => setTimeout(r, 5));
+    manager.onSummonPressed(ws);
+    expect(await waiting).toContain('pressed it');
+  });
+
+  test('the stand-down is broadcast, and the TRIAL is untouched by it', async () => {
+    const { manager, ws, run, broadcast } = await readyToHandOver();
+    const before = readTrialEntitlement()!;
+    await run('teach_summon');
+    manager.onSummonPressed(ws);
+    await run('await_summon');
+
+    const stand = broadcast.find((m) => m.type === 'trial_standdown');
+    expect(stand).toBeDefined();
+    expect((stand!.payload as { pressed: boolean }).pressed).toBe(true);
+
+    // What it persists, and what it deliberately does not. This is the whole
+    // contract of the handover: the conducted hour finished, the 48 did not.
+    const after = readTrialEntitlement()!;
+    expect(after.conductor_finished_at).not.toBeNull();
+    expect(after.state).toBe(before.state);
+    expect(after.started_at).toBe(before.started_at);
+    expect(after.expires_at).toBe(before.expires_at);
+    expect(after.realtime).toEqual(before.realtime);
+    expect(after.duration_ms).toBe(TRIAL_DURATION_MS);
+
+    // And the conversation is still live: nothing here ends it (D17).
+    expect(manager.isRunning(ws)).toBe(true);
+  });
+
+  test('a founder who never presses it still gets their shell back', async () => {
+    const { manager, ws, run, broadcast } = await readyToHandOver();
+    await run('teach_summon');
+    // Nobody presses anything. The wait times out; the beat still finishes.
+    const res = await run('await_summon');
+    expect(res).toContain('did not press it');
+    expect(broadcast.some((m) => m.type === 'trial_standdown')).toBe(true);
+    expect(readTrialEntitlement()!.conductor_finished_at).not.toBeNull();
+    expect(manager.beatsOf(ws)!.summonPressed).toBe(false);
+  });
+
+  test('a socket that goes away mid-wait does not leave a promise hanging', async () => {
+    const { manager, ws, run } = await readyToHandOver();
+    await run('teach_summon');
+    const waiting = run('await_summon');
+    await new Promise((r) => setTimeout(r, 5));
+    manager.end(ws);
+    expect(await waiting).toContain('did not press it');
+  });
+
+  test('pressing on a socket with no conductor is a no-op', () => {
+    initDatabase(':memory:');
+    const { manager, broadcast } = harness();
+    manager.onSummonPressed({ id: 'nobody' });
+    expect(broadcast).toHaveLength(0);
+  });
+});
+
+/* ══════════ D41 · what the two rooms are told to do ══════════ */
+
+describe('the rooms that explain themselves', () => {
+  afterEach(() => closeDb());
+
+  test('the goals beat drives the room over the bus every room already has', async () => {
+    initDatabase(':memory:');
+    issueTrialEntitlement({ now: T0 });
+    let t = T0;
+    const { manager, ws, broadcast } = harness(() => t++);
+    manager.arm(ws);
+    manager.begin(ws);
+    await manager.executeTool(ws, 'conclude_opening', { understanding: 'ok' });
+    await manager.executeTool(ws, 'propose_goals', DEEP_GOALS);
+    manager.onUserSpeechStopped(ws);
+    await manager.executeTool(ws, 'create_goals');
+
+    // Ordinary room actions, in the ordinary envelope: no room learns anything
+    // about the trial from this.
+    const focus = broadcast.find(
+      (m) => m.type === 'notification'
+        && (m.payload as { action?: string }).action === 'focus_goal',
+    );
+    expect(focus).toBeDefined();
+    expect((focus!.payload as { source: string; room: string }).source).toBe('room_action');
+    expect((focus!.payload as { room: string }).room).toBe('goals');
+
+    const walk = broadcast.find((m) => m.type === 'trial_walk');
+    expect(walk).toBeDefined();
+    const parts = (walk!.payload as { parts: { anchor: string }[]; room: string }).parts;
+    expect((walk!.payload as { room: string }).room).toBe('goals');
+    expect(parts[0]!.anchor).toBe(`goal:${manager.beatsOf(ws)!.objective!.id}`);
   });
 });

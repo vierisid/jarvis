@@ -107,15 +107,21 @@ export const TRIAL_BEATS_SOURCE = 'trial_room_beats';
  *     be last: it is the only beat that keeps working after the talking stops.
  *     It also matters that the reader gets a few minutes of the conversation
  *     to run in (D17), which only exists if something comes after it.
+ *   - `handover` is LAST and is the only beat whose subject is not the
+ *     founder's company but the product itself. See `handoverBrief`: the
+ *     conducted hour ends there, the trial does not, and the shell the founder
+ *     has been watching all session finally becomes theirs to touch.
  */
 export const ROOM_BEATS = [
   'goals', 'tasks', 'calendar', 'workflows', 'authority', 'files', 'workspace', 'agents',
+  'handover',
 ] as const;
 
 export type RoomBeat = (typeof ROOM_BEATS)[number];
 
-/** Which dashboard room each beat happens in. */
-export const BEAT_ROOM: Record<RoomBeat, RoomKey> = {
+/** Which dashboard room each beat happens in, or null for the one beat that
+ *  happens in no room. */
+export const BEAT_ROOM: Record<RoomBeat, RoomKey | null> = {
   goals: 'goals',
   tasks: 'tasks',
   calendar: 'calendar',
@@ -130,6 +136,10 @@ export const BEAT_ROOM: Record<RoomBeat, RoomKey> = {
   files: 'memory',
   workspace: 'memory',
   agents: 'agents',
+  // The handover happens on the shell itself: the pebble that comes back, the
+  // panel that opens on their own keystroke, the palette. There is no room to
+  // lead them into and nothing to mark a door with, so neither gesture fires.
+  handover: null,
 };
 
 export function beatIndex(beat: RoomBeat): number {
@@ -327,6 +337,24 @@ export type AgentProposal = {
   agentName?: string | null;
 };
 
+/**
+ * D23, D24 and D28: the three keys, and the one they are about to press.
+ *
+ * The card is a reference (D28) and the press is the lesson (D24). It is the
+ * only card in the trial that is not asking the founder to approve a write:
+ * nothing lands because of it, and what changes when they press the key is
+ * that the conductor gets out of their way.
+ */
+export type HandoverProposal = {
+  beat: 'handover';
+  /** The three, in the order they are drawn. `press` marks the one to press. */
+  keys: { chord: string; what: string; where: string; press?: boolean }[];
+  /** True the moment the founder's keystroke is heard. */
+  pressed?: boolean;
+  /** True once the conductor has actually stood down. */
+  handedOver?: boolean;
+};
+
 export type BeatProposal =
   | GoalProposal
   | TaskProposal
@@ -336,7 +364,8 @@ export type BeatProposal =
   | FilesProposal
   | WorkspaceProposal
   | EditProposal
-  | AgentProposal;
+  | AgentProposal
+  | HandoverProposal;
 
 /* ─────────────────────────── session state ─────────────────────────── */
 
@@ -357,6 +386,9 @@ export type BeatsSession = {
   lastUserTurnAt: number;
   /** D16.5 wants two flows. Names, in publish order. */
   workflowsPublished: string[];
+  /** The first flow that actually built, so the room can open THAT one and
+   *  show the founder its nodes rather than a list with their name on it. */
+  firstFlow: { id: string; name: string } | null;
   /** Set when the model recorded that their week genuinely has only one. */
   onlyOneWorkflow: boolean;
   /** What the founder ended up granting. */
@@ -393,6 +425,11 @@ export type BeatsSession = {
   agent: { agentId: string; taskId: string | null; agentName: string; question: string } | null;
   /** When the last beat closed. Onboarding is over at this moment. */
   finishedAt: number | null;
+  /** D24: true once the founder has actually pressed the summon. */
+  summonPressed: boolean;
+  /** When the conductor stood down and the shell became theirs. The trial is
+   *  still running at this moment and for another 47 hours after it. */
+  handedOverAt: number | null;
 };
 
 export function createBeatsSession(): BeatsSession {
@@ -403,6 +440,7 @@ export function createBeatsSession(): BeatsSession {
     proposalShownAt: null,
     lastUserTurnAt: 0,
     workflowsPublished: [],
+    firstFlow: null,
     onlyOneWorkflow: false,
     authorityLevel: null,
     alwaysAsk: [],
@@ -414,6 +452,8 @@ export function createBeatsSession(): BeatsSession {
     edit: null,
     agent: null,
     finishedAt: null,
+    summonPressed: false,
+    handedOverAt: null,
   };
 }
 
@@ -654,9 +694,53 @@ export function closing(s: BeatsSession): string {
         'Pick the one or two that matter most to them and say those. Do not read all of it out, do not ' +
         'inventory what the two of you built, and do not thank them for their time.\n\n'
       : '') +
-    'Then stop setting things up. If they keep talking, you are simply their co-founder and the ' +
-    'conversation carries on.'
+    'Then stop setting things up.' +
+    (s.handedOverAt === null ? `\n\n${handoverBrief()}` : ' If they keep talking, you are simply their ' +
+      'co-founder and the conversation carries on.')
   );
+}
+
+/**
+ * ── The handover, and why the trial has one at all ──
+ *
+ * Vieri, after the third full run: *"it basically doesn't give me the
+ * opportunity to really use Jarvis because it stays on that onboarding thing.
+ * I can't click on the pebble to open it and chat to it."*
+ *
+ * He was right and it was ours. The conductor draws its own pebble over the
+ * live shell, so the shell's pebble and its Talk panel are suppressed while
+ * the conducted conversation runs, and NOTHING ever took that suppression off.
+ * The trial is 48 hours; the conducted part is about one. The other 47 are the
+ * founder using the product, which is the thing the whole design is selling,
+ * and they could not.
+ *
+ * So the conducted hour ends properly, and it ends the way a handover should:
+ * SAID, not just done. The founder is told this is theirs now and is shown how
+ * to get Jarvis back, and under D24 a shortcut is taught by making them press
+ * it rather than by being shown it. Their own keystroke is what performs the
+ * stand-down, which is as literal as "this is yours now" gets.
+ *
+ * Ctrl+J is the one they press because it is the one that works on the surface
+ * they are standing on: it summons Talk, which is where the pebble and the
+ * thread live. Ctrl+Space is the same idea from anywhere on the machine (the
+ * OS sidecar's summon, `src/daemon/index.ts`), and the browser never sees it,
+ * so teaching it by making them press it would have been teaching them a key
+ * that does nothing in front of them.
+ *
+ * The trial does NOT end here and the model is told so in as many words: the
+ * entitlement, the clock, the realtime grant and everything the two of them
+ * built are all untouched.
+ */
+export function handoverBrief(): string {
+  return `One last thing, and it is the handover.
+
+Everything the two of you set up is theirs and this stops being a session now. Say that plainly, in one sentence, in your own words: from here they have you the ordinary way, whenever they want you, and none of what you built goes anywhere.
+
+Then teach them ONE key, by making them press it. Call \`teach_summon\` while you say it so the three keys are in front of them, and ask them to hold control and press J. That is the one that brings you back. Then call \`await_summon\` and wait: it comes back the moment they press it.
+
+When it tells you they pressed it, say so warmly and briefly, the way you would to someone who just got something right. One sentence. Do not explain the other two keys, they can read them.
+
+Do NOT say this is the end of the trial, because it is not: they have the rest of the 48 hours and you are still theirs for all of it. Do not recap what you built. Do not give them anything to do.`;
 }
 
 /** Kept as the no-session fallback for `nextBrief`, which can be called when
@@ -685,6 +769,7 @@ export function nextBrief(s: BeatsSession, fuel: BeatFuel): string {
     case 'files': return filesBrief(fuel);
     case 'workspace': return workspaceBrief();
     case 'agents': return agentsBrief(fuel);
+    case 'handover': return handoverBrief();
   }
 }
 
@@ -1127,6 +1212,23 @@ export const ROOM_BEAT_TOOLS: LLMTool[] = [
     parameters: { type: 'object', properties: {} },
   },
   {
+    name: 'teach_summon',
+    description:
+      'The handover (D23, D24, D28): put the three keys on their screen and ask them ' +
+      'to press the one that brings you back, control and J. Writes nothing and takes ' +
+      'nothing away. Call it while you are saying it, then call `await_summon`.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
+    name: 'await_summon',
+    description:
+      'Wait for them to actually press it, then come back so you can acknowledge it. ' +
+      'Say nothing while this is running; it returns on their keystroke, or after a ' +
+      'while if they do not press it, and it tells you which happened. After this the ' +
+      'conducted part is over and their own pebble, Talk panel and palette come back.',
+    parameters: { type: 'object', properties: {} },
+  },
+  {
     name: 'move_on',
     description:
       'They said no to what you just offered, or it is not worth pushing. Closes ' +
@@ -1169,6 +1271,8 @@ const TOOL_BEAT: Record<string, RoomBeat> = {
   make_edit: 'workspace',
   propose_research: 'agents',
   spawn_research_agent: 'agents',
+  teach_summon: 'handover',
+  await_summon: 'handover',
 };
 
 /* ─────────────────────────── the executor ─────────────────────────── */
@@ -1191,6 +1295,32 @@ export type BeatSurfaces = {
   roomIsTheirs: (beat: RoomBeat, label: string) => void;
   /** Something landed in that room; make it show now rather than on the poll. */
   refreshRoom: (room: RoomKey) => void;
+  /**
+   * Reach into the room the founder is standing in and open the thing that
+   * just landed, by name.
+   *
+   * D41, one axis further. The pebble marking the door already says WHAT lives
+   * in a room. It does not say how the thing works, and Vieri's verdict on the
+   * third run was that the two objects nobody can read off a card are the goal
+   * tree and the workflow: *"it never explains how goals work... it would be
+   * good if it would actually press into the workflow, this specific workflow
+   * that it creates, to showcase the different nodes."*
+   *
+   * The answer is not a tour, which D12 and D16.1 forbid and which this is not:
+   * the subject is THEIR objective and THEIR flow, opened because they just
+   * made it, and nothing else in the product is shown. It rides the room action
+   * bus the rooms already have, so no room learns anything about the trial.
+   */
+  roomAction: (room: RoomKey, action: string, args: Record<string, unknown>) => void;
+  /**
+   * Walk the pebble across the parts of the thing that just landed, holding one
+   * short line at each.
+   *
+   * The same D21 gesture that marks a door, aimed one level in. It costs the
+   * beat a few seconds of showing rather than a paragraph of Jarvis talking,
+   * which is the constraint: explaining must not become more sentences.
+   */
+  showParts: (parts: { anchor: string; label?: string }[], opts?: { room?: RoomKey; kind?: string }) => void;
   /** Put a proposal on the founder's screen, or take it off. */
   showProposal: (proposal: BeatProposal | null) => void;
   /** A proposal just became real: what landed, for the card's last frame. */
@@ -1200,8 +1330,12 @@ export type BeatSurfaces = {
 };
 
 export type BeatActions = {
-  /** Compose + publish a flow. Returns a short human sentence, or throws. */
-  publishWorkflow: (p: WorkflowProposal) => Promise<{ ok: true; detail: string } | { ok: false; detail: string }>;
+  /** Compose + publish a flow. Returns a short human sentence, or throws.
+   *  `flowId` is the built flow, so the room can open THAT one and show its
+   *  nodes rather than a list row with its name on it. */
+  publishWorkflow: (p: WorkflowProposal) => Promise<
+    { ok: true; detail: string; flowId?: string } | { ok: false; detail: string }
+  >;
   /** Persist both ends of the day into the goal rhythm. */
   setDailyRhythm: (morning: { hour: number; minute: number }, eveningHour: number) => void;
   /** Persist the authority level and the founder's carve-out. Returns what
@@ -1228,6 +1362,18 @@ export type BeatActions = {
   ) => Promise<{ agentId: string; taskId: string | null; agentName: string }>;
   /** Onboarding is over. The conversation is not. */
   onFinished: (s: BeatsSession) => void;
+  /**
+   * D24. Resolve when the founder actually presses the summon, or when the
+   * wait runs out. Never rejects: a handover that throws would leave the
+   * conductor up, which is the bug this whole beat exists to fix.
+   */
+  awaitSummon: (timeoutMs: number) => Promise<'pressed' | 'timeout'>;
+  /**
+   * The conductor stands down and the ordinary shell comes back: its pebble,
+   * its Talk panel, its palette. The trial itself does not end, and nothing
+   * here touches the entitlement's clock, its state or its realtime grant.
+   */
+  standDown: (s: BeatsSession) => void;
 };
 
 export type BeatDeps = BeatSurfaces & BeatActions & {
@@ -1324,6 +1470,8 @@ export async function executeBeatTool(
     case 'make_edit': return makeEdit(s, args, deps);
     case 'propose_research': return proposeResearch(s, args, deps);
     case 'spawn_research_agent': return spawnResearchAgent(s, deps);
+    case 'teach_summon': return teachSummon(s, deps);
+    case 'await_summon': return awaitSummon(s, deps);
     default: return null;
   }
 }
@@ -1353,6 +1501,7 @@ const PROPOSE_TOOL: Record<RoomBeat, string> = {
   files: 'propose_reading',
   workspace: 'propose_workspace',
   agents: 'propose_research',
+  handover: 'teach_summon',
 };
 
 function nothingProposed(beat: RoomBeat, tool: string): BeatToolResult {
@@ -1569,16 +1718,17 @@ function createGoals(s: BeatsSession, deps: BeatDeps): BeatToolResult {
   // The first move, as a milestone under the key result they named. Falls back
   // to the objective rather than being dropped: the founder said it out loud.
   let milestone = 0;
+  let milestoneId: string | null = null;
   if (p.firstMove) {
     const parent = created.find((c) => sameish(c.title, p.firstMove!.under)) ?? null;
     try {
-      createGoal(p.firstMove.what, 'milestone', {
+      milestoneId = createGoal(p.firstMove.what, 'milestone', {
         parent_id: parent?.id ?? objective.id,
         status: 'active',
         time_horizon: 'weekly',
         ...(p.firstMove.due !== null ? { deadline: p.firstMove.due } : {}),
         tags: [TRIAL_BEATS_SOURCE],
-      });
+      }).id;
       made++;
       milestone = 1;
     } catch (err) {
@@ -1591,6 +1741,7 @@ function createGoals(s: BeatsSession, deps: BeatDeps): BeatToolResult {
   markDone(s, 'goals');
   deps.proposalLanded('goals', `${p.objective} · ${p.keyResults.length} key results, first move set`);
   deps.refreshRoom('goals');
+  showTheTree(p, { objective: objective.id, keyResults: created, milestone: milestoneId }, deps);
   deps.roomIsTheirs('goals', 'your quarter lives here');
   deps.beatComplete('goals', {
     objective: p.objective,
@@ -1603,8 +1754,60 @@ function createGoals(s: BeatsSession, deps: BeatDeps): BeatToolResult {
     message:
       `Created: the objective, ${created.length} key results with today's number on each, ` +
       `${milestone === 1 ? 'and the first move underneath' : 'but the first move did not save'}. ` +
-      'Live on their screen now.\n\n' + nextBrief(s, deps.fuel()),
+      'Their tree is open in front of them and the parts are being pointed at as you speak.\n\n' +
+      'ONE sentence about how it actually works, and only the part the tree cannot show them: the ' +
+      'number on each key result is where they are TODAY, and it moves when the two of you score it ' +
+      'at the evening review. Do not read the tree back to them and do not list its parts, they are ' +
+      'looking at it.\n\n' + nextBrief(s, deps.fuel()),
   };
+}
+
+/**
+ * D41, one axis in. Open their objective in the room and walk the pebble down
+ * the three levels of the thing they just built.
+ *
+ * Why this is explanation and not a tour: every stop is a node THEY dictated,
+ * created ten seconds ago, and the labels name the mechanic rather than the
+ * feature. Nothing else in the room is opened, no other room is shown, and the
+ * whole thing is over in about seven seconds. A tour would have started with
+ * "this is the goals room".
+ */
+function showTheTree(
+  p: GoalProposal,
+  ids: { objective: string; keyResults: { id: string; title: string }[]; milestone: string | null },
+  deps: BeatDeps,
+): void {
+  // Select it, so the room opens its detail panel on their objective rather
+  // than on whatever the room happened to be showing.
+  deps.roomAction('goals', 'focus_goal', { id: ids.objective, title: p.objective });
+
+  const parts: { anchor: string; label?: string }[] = [
+    { anchor: `goal:${ids.objective}`, label: 'the objective · where the quarter ends' },
+  ];
+  const firstKr = ids.keyResults[0];
+  if (firstKr) {
+    const kr = p.keyResults.find((k) => sameish(k.title, firstKr.title)) ?? p.keyResults[0];
+    const today = kr?.today ? short(kr.today, 22) : null;
+    parts.push({
+      anchor: `goal:${firstKr.id}`,
+      label: today ? `a key result · ${today} today` : 'a key result · how you will know',
+    });
+  }
+  if (ids.milestone) {
+    parts.push({
+      anchor: `goal:${ids.milestone}`,
+      label: p.firstMove?.dueLabel
+        ? `the first move · ${short(p.firstMove.dueLabel, 18)}`
+        : 'the first move · this week',
+    });
+  }
+  deps.showParts(parts, { room: 'goals' });
+}
+
+/** Pebble labels are one line of mono that must not wrap. */
+function short(text: string, max: number): string {
+  const t = text.trim();
+  return t.length <= max ? t : `${t.slice(0, max - 1).trimEnd()}…`;
 }
 
 /**
@@ -1958,7 +2161,7 @@ async function publishWorkflow(s: BeatsSession, deps: BeatDeps): Promise<BeatToo
   s.proposal = building;
   deps.showProposal(building);
 
-  let outcome: { ok: boolean; detail: string };
+  let outcome: { ok: boolean; detail: string; flowId?: string };
   try {
     outcome = await deps.publishWorkflow(p);
   } catch (err) {
@@ -1984,6 +2187,28 @@ async function publishWorkflow(s: BeatsSession, deps: BeatDeps): Promise<BeatToo
   deps.proposalLanded('workflows', `${p.name} · published`);
   deps.refreshRoom('workflows');
 
+  // D41 again, and this is the one Vieri asked for by name. A workflow is the
+  // most abstract object in the product and the one a founder is least likely
+  // to understand from a card: a card can list four sentences, but a flow is a
+  // trigger and a chain of steps, and until you have seen that you do not know
+  // what you own. So the FIRST one that builds is opened in the editor and the
+  // pebble walks its actual nodes.
+  //
+  // The first rather than the second, because this is the moment they first
+  // own a flow and the moment "what IS a workflow" is a live question; the
+  // second one then lands against an understanding rather than before one.
+  let opened = false;
+  if (count === 1 && outcome.flowId) {
+    s.firstFlow = { id: outcome.flowId, name: p.name };
+    deps.roomAction('workflows', 'open_flow', { id: outcome.flowId, name: p.name });
+    // No anchors from here: the daemon proposed the flow in the founder's
+    // sentences and the COMPOSER decided what the nodes are. The surface reads
+    // the real graph and walks whatever is actually in it, so the labels are
+    // the flow's own node names rather than a guess at them.
+    deps.showParts([], { room: 'workflows', kind: 'flow' });
+    opened = true;
+  }
+
   // D16.5 wants TWO, and the old version completed the beat on the first one,
   // which is why it never got a second: the model was handed the next brief
   // the instant it had a yes. The beat now stays open until there are two, or
@@ -1991,7 +2216,14 @@ async function publishWorkflow(s: BeatsSession, deps: BeatDeps): Promise<BeatToo
   if (count < 2) {
     return {
       message:
-        `"${p.name}" is live: ${outcome.detail}\n\nThat is one. The second one comes out of the tree the ` +
+        `"${p.name}" is live: ${outcome.detail}\n\n` +
+        (opened
+          ? 'It is OPEN on their screen as the thing it actually is: the trigger at the top, then ' +
+            'each step in order, and the pebble is going down them now. Say the one thing the ' +
+            'picture cannot say: the top of it is what wakes it up, and it runs the rest without ' +
+            'either of you. Two sentences at most, and do not read the steps out, they can see them.\n\n'
+          : '') +
+        'That is one. The second one comes out of the tree the ' +
         'two of you built: something has to keep those key results honest week to week and nobody does ' +
         'that by hand for long. Propose it now. If you ask properly and their week genuinely has only ' +
         'this one recurring thing in it, call `no_second_workflow` rather than inventing one.',
@@ -2671,4 +2903,105 @@ async function spawnResearchAgent(s: BeatsSession, deps: BeatDeps): Promise<Beat
     console.warn('[TrialBeats] finished listener failed', err);
   }
   return { message: `${spawned.agentName} is on it, and they can see it working in the agents room.\n\n${closing(s)}` };
+}
+
+/* ── beat 13 · the handover, and the end of the conducted hour ── */
+
+/**
+ * How long `await_summon` waits for the keystroke.
+ *
+ * Long enough that a founder who is mid-thought, or looking for the control
+ * key on a laptop they have had for a week, still gets there. Short enough
+ * that a founder who has walked away is not left with a live conductor sitting
+ * on top of the product they were promised. Either way it comes back and
+ * either way the conductor stands down, which is the property that matters:
+ * the fault being fixed here is a trial that never ends.
+ */
+export const SUMMON_WAIT_MS = 45_000;
+
+/**
+ * D28's card, and D24's lesson.
+ *
+ * `chord` is written with `mod` where the modifier differs by platform, and the
+ * surface renders it as ⌘ or Ctrl. The one they PRESS is the one that works on
+ * the surface they are standing on: ctrl+space is the OS sidecar's summon and a
+ * browser never sees it, so asking them to press that would be teaching a key
+ * that does nothing in front of them.
+ */
+export const HANDOVER_KEYS: HandoverProposal['keys'] = [
+  { chord: 'mod+J', what: 'brings me back', where: 'wherever you are in here', press: true },
+  { chord: 'ctrl+space', what: 'the same, from anywhere', where: 'even with this shut' },
+  { chord: 'mod+K', what: 'anything, by name', where: 'the command palette' },
+];
+
+function teachSummon(s: BeatsSession, deps: BeatDeps): BeatToolResult {
+  const proposal: HandoverProposal = { beat: 'handover', keys: HANDOVER_KEYS, pressed: false };
+  putOnScreen(s, proposal, deps);
+  return {
+    message:
+      'The three keys are on their screen. Ask them to hold control and press J, in your own words, ' +
+      'and say what it does: it brings you back, wherever they are. One sentence, no list, do not ' +
+      'read the other two out.\n\nThen call `await_summon` and stop talking. It comes back the moment ' +
+      'they press it.',
+  };
+}
+
+/**
+ * Wait for the keystroke, then stand the conductor down.
+ *
+ * THE STAND-DOWN IS NOT A SEPARATE TOOL, deliberately. A third tool the model
+ * had to remember to call would reintroduce the exact fault being fixed here:
+ * a founder left underneath a conductor that never finished, this time because
+ * a model got distracted rather than because nobody wrote the code. So the
+ * stand-down happens on the way out of this call, on both branches, and the
+ * founder gets their shell back whether or not they pressed anything.
+ *
+ * What it leaves running: the entitlement, the 48-hour clock, the realtime
+ * grant, everything in the vault, both flows, the rhythm, the authority level
+ * and the research agent. Only the conducted conversation finishes.
+ */
+async function awaitSummon(s: BeatsSession, deps: BeatDeps): Promise<BeatToolResult> {
+  const p = s.proposal;
+  if (!p || p.beat !== 'handover') return nothingProposed('handover', 'await_summon');
+
+  let outcome: 'pressed' | 'timeout';
+  try {
+    outcome = await deps.awaitSummon(SUMMON_WAIT_MS);
+  } catch (err) {
+    // A handover that throws would leave them where they started. It does not.
+    console.warn('[TrialBeats] waiting for the summon failed', err);
+    outcome = 'timeout';
+  }
+  const pressed = outcome === 'pressed';
+  s.summonPressed = pressed;
+  s.handedOverAt = deps.now();
+
+  // The card's last frame: the tick they earned, and the fact that the shell
+  // underneath is theirs now.
+  const done: HandoverProposal = { ...p, pressed, handedOver: true };
+  s.proposal = done;
+  s.proposalShownAt = null;
+  deps.showProposal(done);
+
+  markDone(s, 'handover');
+  try {
+    deps.standDown(s);
+  } catch (err) {
+    console.warn('[TrialBeats] the stand-down listener failed', err);
+  }
+  deps.beatComplete('handover', { pressed, keys: HANDOVER_KEYS.length });
+
+  return {
+    message: pressed
+      ? 'They pressed it, and their own pebble and panel are back on the screen in front of them. ' +
+        'Say so, warmly, in ONE sentence, the way you would to someone who just got something ' +
+        'right, and say that is how they get you from now on.\n\nThen you are done setting things ' +
+        'up. The 48 hours are still running and so are you: if they keep talking, you are simply ' +
+        'their co-founder and the conversation carries on. Do not recap and do not give them a list.'
+      : 'They did not press it, and that is fine. Their own pebble and panel are back on the screen ' +
+        'anyway. Say once, lightly, that it is control and J whenever they want you, and do not ' +
+        'ask them again.\n\nThen you are done setting things up. The 48 hours are still running and ' +
+        'so are you: if they keep talking, you are simply their co-founder and the conversation ' +
+        'carries on.',
+  };
 }

@@ -17,6 +17,8 @@ export interface TrialStatus {
   expires_at: number | null;
   ms_remaining: number | null;
   opening_completed_at: number | null;
+  /** When the conductor stood down. The trial carries on; only it finished. */
+  conductor_finished_at?: number | null;
 }
 
 export const NO_TRIAL: TrialStatus = {
@@ -26,6 +28,7 @@ export const NO_TRIAL: TrialStatus = {
   expires_at: null,
   ms_remaining: null,
   opening_completed_at: null,
+  conductor_finished_at: null,
 };
 
 /**
@@ -41,6 +44,32 @@ export const NO_TRIAL: TrialStatus = {
  * non-trial user is dropped into a microphone gate they cannot get past".
  */
 export function trialRunsConductor(trial: TrialStatus | null): boolean {
+  if (!trialIsLive(trial)) return false;
+  // THE HANDOVER, on a reload.
+  //
+  // The conducted part of the trial is about an hour of the 48. Once it has
+  // finished, coming back at hour 20 must give the founder their shell, not
+  // the conversation they already had: the arc is one-way (an OKR tree they
+  // built, a folder that has been read, an agent that came back), and running
+  // it again would ask them to build a quarter they already own while Jarvis
+  // pretended not to know them. Skipping a conducted hour they have already
+  // lived is the cheaper mistake by a wide margin.
+  //
+  // The trial itself is untouched by this: `trialIsLive` is still true, the
+  // clock is still running, D1's realtime is still on, and everything the two
+  // of them built is still in the vault.
+  return !trial!.conductor_finished_at;
+}
+
+/**
+ * Is there a running trial at all, conducted or not?
+ *
+ * The gate needs both questions answered separately now. A founder whose
+ * conductor has finished is still on a trial: they keep the countdown, they
+ * keep realtime, and they must never be dropped into the nine-step wizard the
+ * trial replaced.
+ */
+export function trialIsLive(trial: TrialStatus | null): boolean {
   if (!trial?.present) return false;
   return trial.state === "issued" || trial.state === "active";
 }

@@ -26,6 +26,7 @@ import {
   clampBriefHour,
   clampBriefMinute,
   baselineScore,
+  closing,
   createBeatsSession,
   currentBeat,
   executeBeatTool,
@@ -56,6 +57,13 @@ type Recorder = {
   readerFails: boolean;
   finished: number;
   workflowOk: boolean;
+  /** Room actions the beats drove: `focus_goal`, `open_flow`, `refresh`. */
+  actions: { room: string; action: string; args: Record<string, unknown> }[];
+  /** The pebble walks, in order. */
+  walks: { parts: { anchor: string; label?: string }[]; room?: string; kind?: string }[];
+  /** What the founder did with the summon, and how many stand-downs happened. */
+  summon: 'pressed' | 'timeout';
+  stoodDown: { pressed: boolean; handedOverAt: number | null }[];
 };
 
 const NOW = 1_800_000_000_000;
@@ -80,6 +88,7 @@ function recorder(over: Partial<BeatDeps> = {}): Recorder {
     brief: null, evening: null, authority: null, alwaysAsk: [], spawned: [],
     readerStarts: [], reader: { found: [], finished: false, summary: null },
     readerFails: false, finished: 0, workflowOk: true,
+    actions: [], walks: [], summon: 'pressed', stoodDown: [],
     deps: null as never,
   };
   r.deps = {
@@ -92,13 +101,15 @@ function recorder(over: Partial<BeatDeps> = {}): Recorder {
     fuel: () => ({}),
     enterRoom: (beat) => { r.rooms.push(beat); },
     refreshRoom: (room) => { r.refreshed.push(room); },
+    roomAction: (room, action, args) => { r.actions.push({ room, action, args }); },
+    showParts: (parts, opts) => { r.walks.push({ parts, room: opts?.room, kind: opts?.kind }); },
     showProposal: (p) => { r.proposals.push(p); },
     proposalLanded: (beat, summary) => { r.landed.push({ beat, summary }); },
     roomIsTheirs: (beat, label) => { r.marked.push({ beat, label }); },
     beatComplete: (beat, detail) => { r.completed.push({ beat, detail }); },
     publishWorkflow: async (p: WorkflowProposal) =>
       r.workflowOk
-        ? { ok: true as const, detail: `${p.steps.length} steps` }
+        ? { ok: true as const, detail: `${p.steps.length} steps`, flowId: `flow-${p.name.toLowerCase().replace(/\W+/g, '-')}` }
         : { ok: false as const, detail: 'no piece for that' },
     setDailyRhythm: (morning, eveningHour) => { r.brief = morning; r.evening = eveningHour; },
     setAuthority: (level, alwaysAsk) => { r.authority = level; r.alwaysAsk = alwaysAsk; return { level, alwaysAsk }; },
@@ -113,6 +124,8 @@ function recorder(over: Partial<BeatDeps> = {}): Recorder {
       return { agentId: 'agent-1', taskId: 'task-1', agentName: 'Research Analyst' };
     },
     onFinished: () => { r.finished++; },
+    awaitSummon: async () => r.summon,
+    standDown: (s) => { r.stoodDown.push({ pressed: s.summonPressed, handedOverAt: s.handedOverAt }); },
     ...over,
   };
   return r;
@@ -192,6 +205,11 @@ async function walkTo(s: BeatsSession, r: Recorder, beat: RoomBeat): Promise<voi
   }
   if (upto > 5) { await run('propose_reading', { folder: folder() }); answers(s); await run('start_reading'); }
   if (upto > 6) { await run('move_on', { because: 'not now' }); }
+  if (upto > 7) {
+    await run('propose_research', { question: 'q', brief: 'b' });
+    answers(s);
+    await run('spawn_research_agent');
+  }
 }
 
 beforeEach(() => {
@@ -243,11 +261,15 @@ describe('D16, the order the beats happen in', () => {
   test('the order is D16, plus D42 and D43 between authority and the finale', () => {
     expect([...ROOM_BEATS]).toEqual([
       'goals', 'tasks', 'calendar', 'workflows', 'authority', 'files', 'workspace', 'agents',
+      'handover',
     ]);
-    // `memory` is not a stop (D16.1), and `agents` is still last (D15): the
-    // finale is the only beat that keeps working after the talking ends.
+    // `memory` is not a stop (D16.1), and `agents` is still the last beat in
+    // which anything is BUILT (D15): the finale is the only one that keeps
+    // working after the talking ends. `handover` sits after it and builds
+    // nothing at all; what it does is give the founder back the shell.
     expect((ROOM_BEATS as readonly string[]).includes('memory')).toBe(false);
-    expect(ROOM_BEATS[ROOM_BEATS.length - 1]).toBe('agents');
+    expect(ROOM_BEATS[ROOM_BEATS.length - 2]).toBe('agents');
+    expect(ROOM_BEATS[ROOM_BEATS.length - 1]).toBe('handover');
     // Reading their disk comes after the conversation about power, never before.
     expect(ROOM_BEATS.indexOf('files')).toBeGreaterThan(ROOM_BEATS.indexOf('authority'));
   });
@@ -702,10 +724,9 @@ describe('beat 12, the finale', () => {
   test('the whole arc, in order, ends finished', async () => {
     const s = opened();
     const r = recorder();
-    await walkTo(s, r, 'agents');
-    await executeBeatTool(s, 'propose_research', { question: 'q', brief: 'b' }, r.deps);
-    answers(s);
-    await executeBeatTool(s, 'spawn_research_agent', {}, r.deps);
+    await walkTo(s, r, 'handover');
+    await executeBeatTool(s, 'teach_summon', {}, r.deps);
+    await executeBeatTool(s, 'await_summon', {}, r.deps);
     expect(s.done).toEqual([...ROOM_BEATS]);
     expect(currentBeat(s)).toBeNull();
     expect(r.completed.map((c) => c.beat)).toEqual([...ROOM_BEATS]);
@@ -1649,11 +1670,308 @@ describe('move_on: an offer they turn down does not stall the conversation', () 
   test('after the last beat it is a no-op, not a crash', async () => {
     const s = opened();
     const r = recorder();
+    await walkTo(s, r, 'handover');
+    await executeBeatTool(s, 'teach_summon', {}, r.deps);
+    await executeBeatTool(s, 'await_summon', {}, r.deps);
+    const res = await executeBeatTool(s, 'move_on', { because: 'x' }, r.deps);
+    expect(res!.message).toContain('nothing left to set up');
+  });
+});
+
+/* ══════════ beat 13 · the handover, and the end of the conducted hour ══════════
+
+   The fault this beat exists to fix: on 26 August the conductor never stopped
+   conducting. Its layer suppresses the shell's own pebble and Talk panel while
+   it owns the conversation, nothing took that off, and the founder spent the
+   other 47 hours of a 48-hour trial unable to use the product the first hour
+   had just sold them.
+
+   So the tests that matter here are the ones about it ALWAYS finishing. The
+   founder presses the key: it finishes. The founder walks away: it finishes.
+   The wait itself falls over: it finishes. */
+
+describe('beat 13, the handover', () => {
+  test('it is refused until the finale has actually happened', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'agents');
+    const res = await executeBeatTool(s, 'teach_summon', {}, r.deps);
+    expect(res!.message).toContain('agents part of the work');
+    expect(r.proposals).not.toContainEqual(expect.objectContaining({ beat: 'handover' }));
+  });
+
+  test('the finale hands the model straight into it, and says the trial is not over', async () => {
+    const s = opened();
+    const r = recorder();
     await walkTo(s, r, 'agents');
     await executeBeatTool(s, 'propose_research', { question: 'q', brief: 'b' }, r.deps);
     answers(s);
-    await executeBeatTool(s, 'spawn_research_agent', {}, r.deps);
-    const res = await executeBeatTool(s, 'move_on', { because: 'x' }, r.deps);
-    expect(res!.message).toContain('nothing left to set up');
+    const res = await executeBeatTool(s, 'spawn_research_agent', {}, r.deps);
+    expect(res!.message).toContain('teach_summon');
+    expect(res!.message).toContain('await_summon');
+    expect(res!.message).toContain('rest of the 48 hours');
+    // D28's card is the reference; D24's press is the lesson.
+    expect(res!.message).toContain('hold control and press J');
+  });
+
+  test('teach_summon puts three keys up and marks exactly one to press', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'handover');
+    await executeBeatTool(s, 'teach_summon', {}, r.deps);
+
+    const card = s.proposal as { beat: string; keys: { chord: string; press?: boolean }[] };
+    expect(card.beat).toBe('handover');
+    expect(card.keys).toHaveLength(3);
+    expect(card.keys.filter((k) => k.press)).toHaveLength(1);
+    // The one they press is the one that works where they are standing.
+    // ctrl+space is the OS sidecar's summon and a browser never sees it.
+    expect(card.keys.find((k) => k.press)!.chord).toBe('mod+J');
+    expect(card.keys.map((k) => k.chord)).toContain('ctrl+space');
+    expect(card.keys.map((k) => k.chord)).toContain('mod+K');
+  });
+
+  test('await_summon refuses before anything is on their screen', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'handover');
+    const res = await executeBeatTool(s, 'await_summon', {}, r.deps);
+    expect(res!.message).toContain('teach_summon');
+    expect(s.handedOverAt).toBeNull();
+    expect(r.stoodDown).toHaveLength(0);
+  });
+
+  test('they press it: the conductor stands down and the card ticks', async () => {
+    const s = opened();
+    const r = recorder({});
+    await walkTo(s, r, 'handover');
+    await executeBeatTool(s, 'teach_summon', {}, r.deps);
+    const res = await executeBeatTool(s, 'await_summon', {}, r.deps);
+
+    expect(s.summonPressed).toBe(true);
+    expect(s.handedOverAt).not.toBeNull();
+    expect(beatIsDone(s, 'handover')).toBe(true);
+    expect(r.stoodDown).toEqual([{ pressed: true, handedOverAt: s.handedOverAt }]);
+    const card = s.proposal as { pressed: boolean; handedOver: boolean };
+    expect(card.pressed).toBe(true);
+    expect(card.handedOver).toBe(true);
+    expect(res!.message).toContain('pressed it');
+    // And the model is told the relationship carries on (D17), not that the
+    // trial has ended, because it has not.
+    expect(res!.message).toContain('48 hours are still running');
+  });
+
+  test('THEY NEVER PRESS IT, and it stands down anyway', async () => {
+    // The whole point. A founder who has wandered off must not come back to a
+    // conductor still sitting on top of their product.
+    const s = opened();
+    const r = recorder();
+    r.summon = 'timeout';
+    await walkTo(s, r, 'handover');
+    await executeBeatTool(s, 'teach_summon', {}, r.deps);
+    const res = await executeBeatTool(s, 'await_summon', {}, r.deps);
+
+    expect(s.summonPressed).toBe(false);
+    expect(beatIsDone(s, 'handover')).toBe(true);
+    expect(r.stoodDown).toEqual([{ pressed: false, handedOverAt: s.handedOverAt }]);
+    expect(res!.message).toContain('did not press it');
+    expect(res!.message).toContain('do not ask them again');
+  });
+
+  test('the wait itself falling over does not keep the conductor up', async () => {
+    const s = opened();
+    const r = recorder({ awaitSummon: async () => { throw new Error('socket went away'); } });
+    await walkTo(s, r, 'handover');
+    await executeBeatTool(s, 'teach_summon', {}, r.deps);
+    const res = await executeBeatTool(s, 'await_summon', {}, r.deps);
+
+    expect(beatIsDone(s, 'handover')).toBe(true);
+    expect(r.stoodDown).toHaveLength(1);
+    expect(res!.message).toContain('did not press it');
+  });
+
+  test('a stand-down listener that throws still finishes the beat', async () => {
+    const s = opened();
+    const r = recorder({ standDown: () => { throw new Error('broadcast failed'); } });
+    await walkTo(s, r, 'handover');
+    await executeBeatTool(s, 'teach_summon', {}, r.deps);
+    const res = await executeBeatTool(s, 'await_summon', {}, r.deps);
+    expect(beatIsDone(s, 'handover')).toBe(true);
+    expect(res!.message).toContain('pressed it');
+  });
+
+  test('it happens in no room, so nothing is opened and no door is marked', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'handover');
+    const roomsBefore = [...r.rooms];
+    const markedBefore = [...r.marked];
+    await executeBeatTool(s, 'teach_summon', {}, r.deps);
+    await executeBeatTool(s, 'await_summon', {}, r.deps);
+    expect(r.rooms).toEqual(roomsBefore);
+    expect(r.marked).toEqual(markedBefore);
+  });
+
+  test('the close stops asking for a handover once one has happened', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'handover');
+    await executeBeatTool(s, 'teach_summon', {}, r.deps);
+    await executeBeatTool(s, 'await_summon', {}, r.deps);
+    // Anything that lands back in `closing` afterwards must not send the model
+    // round the handover a second time.
+    expect(closing(s)).not.toContain('teach_summon');
+    expect(closing(s)).toContain('conversation carries on');
+  });
+});
+
+/* ══════════ D41 · the two rooms that cannot explain themselves ══════════
+
+   Vieri, on the third run: *"for the goals it sets it up but it never explains
+   how goals work... it would be good if it would actually press into the
+   workflow, this specific workflow that it creates, to showcase the different
+   nodes and the actual workflow."*
+
+   The test of "explanation, not tour" is whether the subject is THEIR object.
+   Everything below asserts that it is: the anchors are the ids of the rows
+   that were just written, and the flow that opens is the flow that was just
+   built. */
+
+describe('the goal tree explains itself, through their own tree', () => {
+  test('their objective is opened and the pebble walks its three levels', async () => {
+    const s = opened();
+    const r = recorder();
+    await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
+    answers(s);
+    await executeBeatTool(s, 'create_goals', {}, r.deps);
+
+    const focus = r.actions.find((a) => a.action === 'focus_goal');
+    expect(focus).toBeDefined();
+    expect(focus!.room).toBe('goals');
+    // By ID, not by name: the objective's title is a sentence the founder said
+    // out loud, and matching on it is how you open the wrong thing.
+    expect(focus!.args.id).toBe(s.objective!.id);
+
+    const walk = r.walks.find((w) => w.room === 'goals');
+    expect(walk).toBeDefined();
+    const anchors = walk!.parts.map((p) => p.anchor);
+    expect(anchors[0]).toBe(`goal:${s.objective!.id}`);
+    expect(anchors[1]).toBe(`goal:${s.objective!.keyResults[0]!.id}`);
+    expect(anchors).toHaveLength(3); // objective, a key result, the first move
+
+    // The labels name the MECHANIC, on their own numbers. "12 booked demos a
+    // month" is at 4 today, and that is what the pebble says.
+    const labels = walk!.parts.map((p) => p.label);
+    expect(labels[0]).toContain('the objective');
+    expect(labels[1]).toContain('4 today');
+    expect(labels[2]).toContain('the first move');
+  });
+
+  test('the walk comes before the door is marked, not after it', async () => {
+    // Both are pebble gestures. Inside first, then the way back in: the door
+    // is the last thing they see because it is the thing they will use next.
+    const s = opened();
+    const r = recorder();
+    const order: string[] = [];
+    r.deps = {
+      ...r.deps,
+      showParts: (parts, opts) => { order.push('walk'); r.walks.push({ parts, room: opts?.room, kind: opts?.kind }); },
+      roomIsTheirs: (beat, label) => { order.push('door'); r.marked.push({ beat, label }); },
+    };
+    await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
+    answers(s);
+    await executeBeatTool(s, 'create_goals', {}, r.deps);
+    expect(order).toEqual(['walk', 'door']);
+  });
+
+  test('the model is told to explain the mechanic, and NOT to read the tree out', async () => {
+    const s = opened();
+    const r = recorder();
+    await executeBeatTool(s, 'propose_goals', GOALS_ARGS, r.deps);
+    answers(s);
+    const res = await executeBeatTool(s, 'create_goals', {}, r.deps);
+    expect(res!.message).toContain('ONE sentence');
+    expect(res!.message).toContain('evening review');
+    expect(res!.message).toContain('do not list its parts');
+  });
+
+  test('a tree with no first move still walks what there is', async () => {
+    const s = opened();
+    const r = recorder();
+    // Two key results with numbers, and a first move that lands under the
+    // objective because its `under` matches nothing. It still exists, so it is
+    // still walked; what must not happen is a walk with a hole in it.
+    await executeBeatTool(s, 'propose_goals', { ...GOALS_ARGS, first_move: { what: 'x', due: 'friday', under: 'nothing that exists' } }, r.deps);
+    answers(s);
+    await executeBeatTool(s, 'create_goals', {}, r.deps);
+    const walk = r.walks.find((w) => w.room === 'goals')!;
+    expect(walk.parts.every((p) => p.anchor.startsWith('goal:'))).toBe(true);
+    expect(walk.parts.every((p) => (p.label ?? '').length > 0)).toBe(true);
+  });
+});
+
+describe('the workflow explains itself, by being opened', () => {
+  async function publishOne(s: BeatsSession, r: Recorder, name: string) {
+    await executeBeatTool(s, 'propose_workflow', { ...WORKFLOW_ARGS, name }, r.deps);
+    answers(s);
+    return executeBeatTool(s, 'publish_workflow', {}, r.deps);
+  }
+
+  test('the FIRST flow that builds is opened in the editor and its nodes are walked', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'workflows');
+    const res = await publishOne(s, r, 'Monday pipeline review');
+
+    const open = r.actions.find((a) => a.action === 'open_flow');
+    expect(open).toBeDefined();
+    expect(open!.room).toBe('workflows');
+    expect(open!.args.id).toBe('flow-monday-pipeline-review');
+    expect(s.firstFlow).toEqual({ id: 'flow-monday-pipeline-review', name: 'Monday pipeline review' });
+
+    // No anchors from the daemon: the composer decided what the nodes are, so
+    // the surface reads the real graph rather than a guess at it.
+    const walk = r.walks.find((w) => w.kind === 'flow');
+    expect(walk).toBeDefined();
+    expect(walk!.parts).toEqual([]);
+    expect(res!.message).toContain('OPEN on their screen');
+    expect(res!.message).toContain('do not read the steps out');
+  });
+
+  test('the second flow does not do it again', async () => {
+    const s = opened();
+    const r = recorder();
+    await walkTo(s, r, 'workflows');
+    await publishOne(s, r, 'Monday pipeline review');
+    await publishOne(s, r, 'Friday check-in');
+    expect(r.actions.filter((a) => a.action === 'open_flow')).toHaveLength(1);
+    expect(r.walks.filter((w) => w.kind === 'flow')).toHaveLength(1);
+    expect(s.firstFlow!.name).toBe('Monday pipeline review');
+  });
+
+  test('a flow that does not build opens nothing', async () => {
+    const s = opened();
+    const r = recorder();
+    r.workflowOk = false;
+    await walkTo(s, r, 'workflows');
+    const res = await publishOne(s, r, 'Monday pipeline review');
+    expect(res!.message).toContain('did not build');
+    expect(r.actions.filter((a) => a.action === 'open_flow')).toHaveLength(0);
+    expect(r.walks.filter((w) => w.kind === 'flow')).toHaveLength(0);
+    expect(s.firstFlow).toBeNull();
+  });
+
+  test('a composer that returns no flow id publishes fine and opens nothing', async () => {
+    // An install whose workflow tool answers without an id is not a broken
+    // beat: the flow is live, the founder was told so, and the only thing
+    // missing is the thing that cannot be done without an id.
+    const s = opened();
+    const r = recorder({ publishWorkflow: async (p) => ({ ok: true as const, detail: `${p.steps.length} steps` }) });
+    await walkTo(s, r, 'workflows');
+    const res = await publishOne(s, r, 'Monday pipeline review');
+    expect(res!.message).toContain('is live');
+    expect(res!.message).not.toContain('OPEN on their screen');
+    expect(r.actions.filter((a) => a.action === 'open_flow')).toHaveLength(0);
+    expect(s.workflowsPublished).toEqual(['Monday pipeline review']);
   });
 });

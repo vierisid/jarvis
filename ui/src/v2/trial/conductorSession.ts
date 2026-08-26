@@ -38,7 +38,8 @@ export interface CapturedFuel {
 /* ── the seven room beats (D16), as they arrive on the wire ── */
 
 export type RoomBeat =
-  | "goals" | "tasks" | "calendar" | "workflows" | "authority" | "files" | "workspace" | "agents";
+  | "goals" | "tasks" | "calendar" | "workflows" | "authority" | "files" | "workspace" | "agents"
+  | "handover";
 
 export interface GoalProposal {
   beat: "goals";
@@ -134,6 +135,15 @@ export interface AgentProposal {
   agentName?: string | null;
 }
 
+/** D23, D24, D28: the three keys, and the one they are about to press. The
+ *  only card in the trial that is not asking them to approve a write. */
+export interface HandoverProposal {
+  beat: "handover";
+  keys: { chord: string; what: string; where: string; press?: boolean }[];
+  pressed?: boolean;
+  handedOver?: boolean;
+}
+
 export type BeatProposal =
   | GoalProposal
   | TaskProposal
@@ -143,7 +153,8 @@ export type BeatProposal =
   | FilesProposal
   | WorkspaceProposal
   | EditProposal
-  | AgentProposal;
+  | AgentProposal
+  | HandoverProposal;
 
 /** What just became real, for the card's last frame before it dissolves. */
 export interface ProposalLanded {
@@ -161,8 +172,34 @@ export interface PebblePoint {
    * shell open it as an inline window inside the hidden Talk panel.
    */
   room?: string;
+  /** How long to hold the label there. A door being marked is one gesture and
+   *  holds longer; a stop in a walk is one of several and holds less. */
+  hold?: number;
   /** Bumped per event so the same target twice still moves it. */
   ts: number;
+}
+
+/**
+ * D41: walk the pebble across the parts of the thing that just landed.
+ *
+ * `parts` is empty when `kind` is set, and the surface derives the walk from
+ * what is actually on screen. That is the whole point for a workflow: the
+ * composer decided what the nodes are, so the labels have to come off the real
+ * graph rather than off a guess the daemon made about it.
+ */
+export interface PebbleWalk {
+  parts: { anchor: string; label?: string }[];
+  room: string | null;
+  kind: string | null;
+  /** Bumped per event so the same walk twice still plays twice. */
+  ts: number;
+}
+
+/** The conducted hour is over. The trial is not: see standDown.ts. */
+export interface StandDown {
+  /** Whether the founder actually pressed the summon they were asked to press. */
+  pressed: boolean;
+  at: number | null;
 }
 
 export interface OnboardingComplete {
@@ -190,6 +227,10 @@ export interface ConductorCallbacks {
   onBeatComplete: (beat: RoomBeat, done: RoomBeat[]) => void;
   /** D21: lead their eye somewhere before the room opens. */
   onPoint: (point: PebblePoint) => void;
+  /** D41: walk the parts of the thing they just made. */
+  onWalk: (walk: PebbleWalk) => void;
+  /** The conductor is finished. Hand the shell back (D23, D24). */
+  onStandDown: (stand: StandDown) => void;
   /** The finale's agent is running. Onboarding is over, the talking is not. */
   onOnboardingComplete: (summary: OnboardingComplete) => void;
 }
@@ -327,6 +368,21 @@ export class ConductorSession {
         }
         return;
       }
+      case "trial_walk": {
+        const p = (msg.payload ?? {}) as { parts?: PebbleWalk["parts"]; room?: string | null; kind?: string | null };
+        this.cb.onWalk({
+          parts: Array.isArray(p.parts) ? p.parts : [],
+          room: p.room ?? null,
+          kind: p.kind ?? null,
+          ts: Date.now(),
+        });
+        return;
+      }
+      case "trial_standdown": {
+        const p = (msg.payload ?? {}) as { pressed?: boolean; at?: number | null };
+        this.cb.onStandDown({ pressed: Boolean(p.pressed), at: p.at ?? null });
+        return;
+      }
       case "trial_onboarding_complete": {
         this.cb.onOnboardingComplete((msg.payload ?? {}) as OnboardingComplete);
         return;
@@ -340,6 +396,21 @@ export class ConductorSession {
       }
       default:
         return;
+    }
+  }
+
+  /**
+   * D24. Tell the daemon the founder pressed the summon.
+   *
+   * Best-effort by design: a socket that has already gone is a socket whose
+   * conductor is gone with it, and the surface stands down on its own backstop
+   * in that case rather than waiting for a reply it will never get.
+   */
+  summonPressed(): void {
+    try {
+      this.ws?.send(JSON.stringify({ type: "trial_summon_pressed", payload: {}, timestamp: Date.now() }));
+    } catch {
+      /* socket already gone */
     }
   }
 

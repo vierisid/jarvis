@@ -9,13 +9,17 @@ import {
   type LandedEntity,
   type OnboardingComplete,
   type PebblePoint,
+  type PebbleWalk,
   type ProposalLanded,
+  type StandDown,
 } from "./conductorSession";
 import { TrialProposal } from "./TrialProposal";
 import { pebbleView, type PebbleBubble } from "./pebbleState";
 import { TRIAL_SESSION_RENEW_MS, renewTrialSession } from "./sessionRenew";
 import { formatTimeRemaining, type TrialStatus } from "./trialGate";
+import { TrialClock } from "./TrialClock";
 import { isReviewMode } from "./reviewMode";
+import { standDownVerdict } from "./standDown";
 import { openRoom, type RoomKey } from "../router";
 import "./TrialConductor.css";
 
@@ -69,14 +73,32 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
   const [openingDone, setOpeningDone] = useState(false);
   const [proposal, setProposal] = useState<BeatProposal | null>(null);
   const [landedProposal, setLandedProposal] = useState<ProposalLanded | null>(null);
-  const [point, setPoint] = useState<PebblePoint | null>(null);
   const [finished, setFinished] = useState<OnboardingComplete | null>(null);
+  /** The conducted hour is over and the shell is theirs. See standDown.ts. */
+  const [stoodDown, setStoodDown] = useState(false);
+  /** Set when the daemon asks for the stand-down; the moment it HAPPENS is
+   *  decided here, at the next gap in the speech. */
+  const [standAsked, setStandAsked] = useState(false);
   /** True once the page's credential could not be renewed, so the rooms under
    *  the conversation have stopped updating and the founder has to be told. */
   const [stale, setStale] = useState(false);
   const sessionRef = useRef<ConductorSession | null>(null);
   /** Streaming assistant deltas accumulate here until the turn is final. */
   const partialRef = useRef<string>("");
+  /* ── the four facts the stand-down is decided from, as refs ──
+     Refs rather than state because the decision is taken on a timer and must
+     see the CURRENT phase, not the phase at the render that armed the timer.
+     The rules themselves are pure and live in standDown.ts. */
+  const standAtRef = useRef<number | null>(null);
+  const finishedAtRef = useRef<number | null>(null);
+  const speakingRef = useRef(false);
+  const spokeSinceRequestRef = useRef(false);
+  const pressedRef = useRef(false);
+  /** True from the founder's keystroke onward, so the synthetic one we fire to
+   *  open Talk for them is not swallowed by the listener that caught theirs. */
+  const summonDoneRef = useRef(false);
+  const gestures = useGestureQueue();
+  const { push: pushGestures } = gestures;
 
   // Already granted from a previous run? Then there is nothing to ask and the
   // gate must not appear at all, D10's prompt exists only when it is needed.
@@ -114,6 +136,8 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
     const session = new ConductorSession({
       onPhase: (p, detail) => {
         setPhase(p);
+        speakingRef.current = p === "speaking";
+        if (p === "speaking") spokeSinceRequestRef.current = true;
         // Jarvis's turn is over the moment its audio stops. Drop the words with
         // it, so a half-finished sentence cannot be prefixed onto the next turn
         // after a barge-in cancelled the response that was producing it.
@@ -155,10 +179,16 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
       },
       onBeatComplete: () => { /* the room underneath is the surface for this */ },
       onPoint: (p) => {
-        setPoint(p);
+        // The gesture is QUEUED and the navigation is not. Two points used to
+        // clobber each other, which did not matter while there was only ever
+        // one in flight; a room that now explains itself sends a walk and then
+        // marks its door, and the door would have cut the walk off halfway.
+        pushGestures([p]);
         // The room opens BEHIND the gesture, not in front of it (D21): the
         // pebble leaves its corner first, and by the time the room is on the
-        // screen the founder is already looking at where it came from.
+        // screen the founder is already looking at where it came from. This
+        // stays immediate for that reason: it is the one part of a point that
+        // must not wait behind anything.
         //
         // Opened as the surface rather than through the shell's own
         // `navigate_room` handling, which from the home thread opens an inline
@@ -170,7 +200,21 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
           window.setTimeout(() => openRoom(key), ROOM_OPEN_DELAY_MS);
         }
       },
-      onOnboardingComplete: (summary) => setFinished(summary),
+      onWalk: (walk) => {
+        void resolveWalk(walk).then((parts) => {
+          if (parts.length > 0) pushGestures(parts);
+        });
+      },
+      onStandDown: (stand: StandDown) => {
+        pressedRef.current = stand.pressed;
+        standAtRef.current = Date.now();
+        spokeSinceRequestRef.current = false;
+        setStandAsked(true);
+      },
+      onOnboardingComplete: (summary) => {
+        finishedAtRef.current = Date.now();
+        setFinished(summary);
+      },
     });
     sessionRef.current = session;
     try {
@@ -196,14 +240,90 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
   // with the docked one: it carries a composer, and the trial has no typed
   // path through it (D10). The marker is what TrialConductor.css scopes that
   // suppression to, so no other surface loses its pebble.
+  //
+  // And this is where it is given BACK. The marker is set while the conductor
+  // is conducting and removed the moment it stands down, which is the whole of
+  // the fix: on 26 August nothing ever removed it, so the founder spent the
+  // other 47 hours of a 48-hour trial unable to reach their own pebble.
   useEffect(() => {
-    if (gate !== "live") return;
+    if (gate !== "live" || stoodDown) return;
     const root = document.documentElement;
     root.dataset.trialConductor = "live";
     return () => {
       delete root.dataset.trialConductor;
     };
-  }, [gate]);
+  }, [gate, stoodDown]);
+
+  /* ─────────────── D24 · the keystroke that performs the handover ───────────────
+     Capture phase, and it stops the event dead. The shell's own ⌘J listener
+     would open Talk, and Talk carries a second pebble: while the conductor
+     still owns the conversation there is exactly one pebble on screen, which
+     is the bug the suppression exists for. So their press is heard here, the
+     card ticks immediately (D24: acknowledged the moment it happens), the
+     daemon is told, and the panel opens for them a few seconds later as part
+     of the stand-down itself. Untrusted events are ignored, because the
+     stand-down fires a synthetic one to open Talk and this must not eat it. */
+  useEffect(() => {
+    if (gate !== "live" || stoodDown) return;
+    if (!proposal || proposal.beat !== "handover" || proposal.pressed) return;
+    const onKey = (e: KeyboardEvent) => {
+      if (!e.isTrusted) return;
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.key !== "j" && e.key !== "J") return;
+      e.preventDefault();
+      e.stopImmediatePropagation();
+      summonDoneRef.current = true;
+      pressedRef.current = true;
+      setProposal((p) => (p && p.beat === "handover" ? { ...p, pressed: true } : p));
+      sessionRef.current?.summonPressed();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [gate, stoodDown, proposal]);
+
+  /* ─────────────────────── the stand-down itself ───────────────────────
+     Polls the pure rules rather than reacting to one event, because the thing
+     it is waiting for is an ABSENCE: the gap after the sentence the founder
+     just earned. See standDown.ts for the three rules and why they conflict.
+     Armed by a request from the daemon OR by onboarding finishing at all, and
+     the second of those is what makes this unconditional: a model that never
+     calls `teach_summon` no longer strands anybody. */
+  useEffect(() => {
+    if (gate !== "live" || stoodDown) return;
+    if (!standAsked && finishedAtRef.current === null) return;
+    const id = window.setInterval(() => {
+      const verdict = standDownVerdict({
+        requestedAt: standAtRef.current,
+        finishedAt: finishedAtRef.current,
+        speaking: speakingRef.current,
+        spokeSinceRequest: spokeSinceRequestRef.current,
+        now: Date.now(),
+      });
+      if (!verdict.stand) return;
+      window.clearInterval(id);
+      console.log(`[Trial] the conductor is standing down: ${verdict.because}`);
+      setStoodDown(true);
+    }, STANDDOWN_POLL_MS);
+    return () => window.clearInterval(id);
+  }, [gate, stoodDown, standAsked, finished]);
+
+  /* The conversation itself ends here, and only here. One microphone, one
+     realtime session, one pebble: the founder's next conversation is the
+     shell's own, on the shell's own socket, which under D1 is also realtime
+     for as long as the entitlement is running (see ws-service's
+     `tryStartRealtimeVoice`). Then, if they pressed the key, the panel they
+     summoned actually opens: the reward for the keystroke is the thing the
+     keystroke does. */
+  useEffect(() => {
+    if (!stoodDown) return;
+    sessionRef.current?.dispose();
+    sessionRef.current = null;
+    if (!pressedRef.current) return;
+    const raf = requestAnimationFrame(() => {
+      window.dispatchEvent(new KeyboardEvent("keydown", { key: "j", ctrlKey: true, bubbles: true }));
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [stoodDown]);
 
   // D22, and the reason it was not true. The rooms under this conversation are
   // fetched over HTTP with a ten-minute credential; this conversation is an
@@ -231,11 +351,26 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
     return <MicGate phase={gate} onTurnOn={askForMic} />;
   }
 
+  /* ── after the handover ──
+     The conducted hour is over and everything that belonged to it is gone: the
+     pebble, the captions, the memory ticker, the microphone. What is left is
+     the clock, because the TRIAL has not ended, and the hotkey card for a
+     short while, because D28 makes it the reference they keep rather than a
+     thing that flashes past. Underneath it, the ordinary shell: their own
+     pebble, their own Talk panel, the palette, all of it. */
+  if (stoodDown) {
+    return (
+      <TrialClock trial={trial} slot={<HandoverReference proposal={proposal} />}>
+        {children}
+      </TrialClock>
+    );
+  }
+
   return (
     <>
       {children}
       <div className="tc-layer" aria-live="polite">
-        <ConductorPebble phase={phase} caption={caption} error={error} point={point} stale={stale} />
+        <ConductorPebble phase={phase} caption={caption} error={error} point={gestures.point} stale={stale} />
         <TrialProposal proposal={proposal} landed={landedProposal} />
         <VaultTicker landed={landedEntities} />
         <TrialFooter
@@ -247,6 +382,22 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
       </div>
     </>
   );
+}
+
+/** How long the hotkey card stays after the handover. D28 calls it "the
+ *  reference they keep"; a card that dissolved with the gesture would not be
+ *  one, and a card pinned to their screen for the next 47 hours would be
+ *  clutter in a product they have just been handed. */
+const HANDOVER_LINGER_MS = 20_000;
+
+function HandoverReference({ proposal }: { proposal: BeatProposal | null }) {
+  const [gone, setGone] = useState(false);
+  useEffect(() => {
+    const t = window.setTimeout(() => setGone(true), HANDOVER_LINGER_MS);
+    return () => window.clearTimeout(t);
+  }, []);
+  if (gone || !proposal || proposal.beat !== "handover") return null;
+  return <TrialProposal proposal={{ ...proposal, handedOver: true }} landed={null} />;
 }
 
 /* ─────────────────── Frame 02 · the microphone gate ─────────────────── */
@@ -339,6 +490,132 @@ const BUBBLE_CLASS: Record<PebbleBubble["kind"], string> = {
 const POINT_HOLD_MS = 2400;
 
 /**
+ * The beat between one gesture and the next.
+ *
+ * This is NOT a matter of taste, and getting it wrong was visible in the
+ * browser: the pebble's return to its dock is a 0.62s CSS transition, and the
+ * flight measures `getBoundingClientRect()` to work out how far to travel. Ask
+ * for the next stop before the return has finished and the measurement is
+ * taken mid-transition, so the pebble sets off from where it happens to be at
+ * that instant and lands nowhere near the thing it is pointing at. Measured:
+ * with a 320ms gap the first stop of a walk landed on its target and the rest
+ * did not.
+ */
+const GESTURE_GAP_MS = 760;
+
+/** How long a stop in a walk holds. Shorter than a door being marked: there
+ *  are several of them, each is one short line, and the whole walk has to fit
+ *  inside the sentence Jarvis is saying over it. */
+const WALK_HOLD_MS = 1500;
+
+/** How often the stand-down rules are re-read. It is waiting for a gap in the
+ *  speech, so it has to notice one within a fraction of a second. */
+const STANDDOWN_POLL_MS = 400;
+
+/** How long to wait for the thing that is about to be walked to exist. A flow
+ *  editor has to fetch the flow and mount a graph; a room has to render. */
+const ANCHOR_WAIT_MS = 6000;
+
+/**
+ * The pebble's gestures, one at a time and in order.
+ *
+ * Before this there was one `point` and each new one replaced it, which was
+ * fine while a beat only ever pointed once. It stopped being fine the moment a
+ * room started explaining itself: a walk down the three levels of their own
+ * objective, immediately followed by the pebble marking that room's door,
+ * would have played as one gesture and a flicker.
+ */
+function useGestureQueue(): {
+  point: PebblePoint | null;
+  push: (parts: { target: string; label: string; room?: string; hold?: number }[]) => void;
+} {
+  const queue = useRef<{ target: string; label: string; room?: string; hold?: number }[]>([]);
+  const timer = useRef<number | null>(null);
+  const [point, setPoint] = useState<PebblePoint | null>(null);
+
+  const drain = (): void => {
+    const next = queue.current.shift();
+    if (!next) {
+      timer.current = null;
+      setPoint(null);
+      return;
+    }
+    setPoint({ target: next.target, label: next.label, room: next.room, hold: next.hold, ts: Date.now() });
+    timer.current = window.setTimeout(drain, (next.hold ?? POINT_HOLD_MS) + GESTURE_GAP_MS);
+  };
+
+  const push = (parts: { target: string; label: string; room?: string; hold?: number }[]): void => {
+    if (parts.length === 0) return;
+    queue.current.push(...parts);
+    if (timer.current === null) drain();
+  };
+
+  useEffect(() => () => {
+    if (timer.current !== null) window.clearTimeout(timer.current);
+  }, []);
+
+  return { point, push };
+}
+
+/**
+ * Turn a walk into a list of things to point at.
+ *
+ * Two shapes, and the difference matters. A goal walk names its anchors: the
+ * daemon created those rows and knows their ids. A FLOW walk names none of
+ * them, because the daemon proposed the flow in the founder's own sentences
+ * and the composer decided what the nodes actually are, so the only honest
+ * source for "what is in this flow" is the flow on the screen.
+ *
+ * Either way it waits for the thing to exist first: the room action that opens
+ * the editor and the walk that follows it are broadcast in the same breath,
+ * and a graph takes a moment to fetch and mount.
+ */
+async function resolveWalk(walk: PebbleWalk): Promise<{ target: string; label: string; hold: number }[]> {
+  if (walk.kind === "flow") {
+    const nodes = await waitFor(() => {
+      const found = [...document.querySelectorAll<HTMLElement>('[data-trial-anchor^="flow-step:"]')];
+      return found.length > 0 ? found : null;
+    });
+    if (!nodes) return [];
+    // Top to bottom is the order it runs in: the trigger sits at the top of
+    // the graph and each step hangs below the one before it.
+    return nodes
+      .sort((a, b) => a.getBoundingClientRect().top - b.getBoundingClientRect().top)
+      .slice(0, 4)
+      .map((el) => ({
+        target: `part:${el.dataset.trialAnchor}`,
+        label: el.dataset.trialLabel || el.textContent?.trim().slice(0, 40) || "a step",
+        hold: WALK_HOLD_MS,
+      }));
+  }
+
+  if (walk.parts.length === 0) return [];
+  // Wait once, for the first one. If the room is up, the rest of it is up.
+  const first = await waitFor(() => document.querySelector<HTMLElement>(anchorSel(walk.parts[0]!.anchor)));
+  if (!first) return [];
+  return walk.parts
+    .filter((part) => document.querySelector(anchorSel(part.anchor)) !== null)
+    .map((part) => ({ target: `part:${part.anchor}`, label: part.label ?? "", hold: WALK_HOLD_MS }));
+}
+
+function anchorSel(anchor: string): string {
+  return `[data-trial-anchor="${CSS.escape(anchor)}"]`;
+}
+
+/** Poll for something to appear. Resolves null rather than throwing: a walk
+ *  that cannot find its subject simply does not happen, and nothing else in
+ *  the conversation depends on it. */
+async function waitFor<T>(get: () => T | null, timeoutMs = ANCHOR_WAIT_MS): Promise<T | null> {
+  const deadline = Date.now() + timeoutMs;
+  for (;;) {
+    const found = get();
+    if (found) return found;
+    if (Date.now() >= deadline) return null;
+    await new Promise((r) => setTimeout(r, 120));
+  }
+}
+
+/**
  * D21, in the browser.
  *
  * The shipping `pebble.point_at` flies the OS sidecar's pebble to a screen
@@ -361,10 +638,19 @@ function usePebbleFlight(
     if (!point) return;
     const el = ref.current;
     if (!el) return;
-    const room = point.target.startsWith("room:") ? point.target.slice(5) : point.target;
-    const target =
-      document.querySelector(`[data-nav-room="${room}"]`)
-      ?? document.querySelector(`[data-nav-cluster~="${room}"]`);
+    // Two kinds of target, and they are two different scales of the same
+    // gesture. `room:` points at a room's row in the Index, which is the door.
+    // `part:` points at something INSIDE what the founder just made: a key
+    // result on their own tree, a node in their own flow. D41's "more of the
+    // room actually shown", delivered without a tour.
+    const isPart = point.target.startsWith("part:");
+    const target = isPart
+      ? document.querySelector(anchorSel(point.target.slice(5)))
+      : (() => {
+          const room = point.target.startsWith("room:") ? point.target.slice(5) : point.target;
+          return document.querySelector(`[data-nav-room="${room}"]`)
+            ?? document.querySelector(`[data-nav-cluster~="${room}"]`);
+        })();
     if (!target) return;
 
     // Two steps, and the first one is not decoration. The pebble is anchored
@@ -379,16 +665,33 @@ function usePebbleFlight(
       raf2 = requestAnimationFrame(() => {
         const from = el.getBoundingClientRect();
         const to = target.getBoundingClientRect();
-        // Stand just to the RIGHT of the row rather than on top of it: the
-        // founder has to be able to read the name it is pointing at.
-        setFlight({
-          dx: to.right + 14 - from.left,
-          dy: to.top + to.height / 2 - (from.top + from.height / 2),
-          label: point.label,
-        });
+        // Two placements, because the two kinds of target have different things
+        // next to them.
+        //
+        // A room's row in the Index has nothing to its right, so the pebble
+        // stands there and the founder can still read the name it is pointing
+        // at. A PART is a node in a graph or a node in a tree, and both of
+        // those are laid out left to right: standing to the right of one means
+        // standing on top of the next one. Measured in the browser, on his own
+        // flow: the pebble covered the step after the trigger. So parts are
+        // approached from ABOVE, with the drop over the node's left edge and
+        // the label running right across empty space.
+        setFlight(
+          isPart
+            ? {
+                dx: to.left - from.left,
+                dy: to.top - 14 - from.bottom,
+                label: point.label,
+              }
+            : {
+                dx: to.right + 14 - from.left,
+                dy: to.top + to.height / 2 - (from.top + from.height / 2),
+                label: point.label,
+              },
+        );
       });
     });
-    const t = window.setTimeout(() => setFlight(null), POINT_HOLD_MS);
+    const t = window.setTimeout(() => setFlight(null), point.hold ?? POINT_HOLD_MS);
     return () => {
       cancelAnimationFrame(raf1);
       cancelAnimationFrame(raf2);

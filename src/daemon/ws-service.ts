@@ -1075,6 +1075,15 @@ export class WebSocketService implements Service {
         return undefined;
       }
 
+      case 'trial_summon_pressed': {
+        // D24. The founder held control and pressed J because Jarvis asked
+        // them to, and that keystroke is what ends the conducted hour. A
+        // no-op on any socket that is not running a conductor, so it is not a
+        // way to make the daemon do anything.
+        this.trialConductor.onSummonPressed(ws);
+        return undefined;
+      }
+
       default:
         return {
           type: 'error',
@@ -1569,10 +1578,16 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     const conductor = this.trialConductor.isArmed(ws);
     let resolved: ResolvedRealtimeVoice;
     try {
+      // Applied to EVERY socket, not only the conductor's. D1 grants the
+      // founder uncapped realtime for the length of the trial, and after the
+      // conductor stands down the founder talks to Jarvis through the shell's
+      // own pebble on the shell's own socket. Gating this on the conductor
+      // would have handed them back a product that whispers through
+      // speech-to-text for the remaining 47 hours, which is not the thing the
+      // trial is selling. Inert for everyone else by construction:
+      // `withTrialRealtime` returns THE SAME OBJECT when no trial is running.
       const res = resolveRealtimeVoice(
-        conductor
-          ? withTrialRealtime(this.agentService.getConfig(), readTrialEntitlement())
-          : this.agentService.getConfig(),
+        withTrialRealtime(this.agentService.getConfig(), readTrialEntitlement()),
       );
       if (!res.ok) return false;
       resolved = res.resolved;
@@ -1826,7 +1841,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    */
   private async trialPublishWorkflow(
     p: WorkflowProposal,
-  ): Promise<{ ok: true; detail: string } | { ok: false; detail: string }> {
+  ): Promise<{ ok: true; detail: string; flowId?: string } | { ok: false; detail: string }> {
     const registry = this.agentService.getOrchestrator().getToolRegistry();
     const tool = registry?.get('manage_workflow');
     if (!tool) return { ok: false, detail: 'the workflow builder is not running on this install' };
@@ -1868,7 +1883,11 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     } catch (err) {
       return { ok: false, detail: `it built but would not publish: ${err instanceof Error ? err.message : String(err)}` };
     }
-    return { ok: true, detail: `${p.steps.length} steps, ${p.runsWhen}` };
+    // The flow id goes back with the result so the beat can open THAT flow in
+    // the editor and show the founder its actual nodes, rather than a list row
+    // with its name on it. D41: a workflow is the most abstract object in the
+    // product and the one nobody can understand from a card.
+    return { ok: true, detail: `${p.steps.length} steps, ${p.runsWhen}`, flowId: composed.flow.id };
   }
 
   /**

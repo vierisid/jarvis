@@ -68,6 +68,10 @@ export type WSMessage = {
       // realtime session instead of an ordinary one. Refused when the socket's
       // install carries no running trial entitlement.
       | 'trial_conductor_start'
+      // Client → server, D24: the founder pressed the summon they were asked
+      // to press. It is the keystroke that performs the handover, so it is the
+      // one thing in the whole trial the founder does with their hands.
+      | 'trial_summon_pressed'
       // Server → client. `trial_status` carries the entitlement snapshot,
       // notably the moment the 48-hour clock started (D9). `trial_memory` is
       // broadcast as entities land in the vault DURING the conversation, which
@@ -84,7 +88,15 @@ export type WSMessage = {
       // plus what just landed. `trial_beat` fires as each of the six stops
       // completes, and `trial_onboarding_complete` when the finale's agent is
       // running. NONE of them ends the conversation (D17).
-      | 'trial_point' | 'trial_proposal' | 'trial_beat' | 'trial_onboarding_complete';
+      // `trial_walk` walks the pebble across the parts of the thing that just
+      // landed (their objective's three levels, their flow's real nodes), which
+      // is how the two rooms nobody can read off a card explain themselves.
+      // `trial_standdown` is the end of the conducted hour: the conductor's
+      // layer hands the pebble, the Talk panel and the palette back to the
+      // shell. The TRIAL does not end there, and nothing about the entitlement,
+      // the clock or D1's realtime grant changes because of it.
+      | 'trial_point' | 'trial_proposal' | 'trial_beat' | 'trial_onboarding_complete'
+      | 'trial_walk' | 'trial_standdown';
   payload: unknown;
   id?: string;
   priority?: 'urgent' | 'normal' | 'low';

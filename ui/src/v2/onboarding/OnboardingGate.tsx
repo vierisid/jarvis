@@ -3,14 +3,16 @@ import { OnboardingWizard } from "./OnboardingWizard";
 import { useOnboardingStatus } from "./useOnboardingStatus";
 import { RestartRequiredBanner, shouldShowRestartBanner } from "./RestartRequiredBanner";
 import { TrialConductor } from "../trial/TrialConductor";
-import { trialRunsConductor } from "../trial/trialGate";
+import { TrialClock } from "../trial/TrialClock";
+import { trialIsLive, trialRunsConductor } from "../trial/trialGate";
 import { useTrialStatus } from "../trial/useTrialStatus";
 
 /**
  * Phase A + B onboarding gate. Sits between AppShellV2's render and
  * the AppShell + RoomDispatcher pair. Render order:
  *
- *   0. a running trial entitlement      → <TrialConductor /> over the shell
+ *   0. a running trial, conductor unfinished → <TrialConductor /> over the shell
+ *   0b. a running trial, conductor finished  → the shell, plus the clock
  *   1. setup_completed === false        → <SetupRoom />
  *   2. profile_completed === false AND
  *      setup_skipped_profile === false  → <ProfileInterviewRoom />
@@ -45,6 +47,20 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
   // the existing path below, unchanged.
   if (trialRunsConductor(trial)) {
     return <TrialConductor>{children}</TrialConductor>;
+  }
+
+  // The conducted hour has finished and the other 47 have not. This is the
+  // reload-at-hour-20 path and it deliberately does NOT restart the conductor:
+  // the arc is one-way (a quarter they built, a folder that has been read, an
+  // agent that came back), so running it again would ask them to build a
+  // quarter they already own while Jarvis pretended not to know them.
+  //
+  // It also has to come BEFORE the wizard check. The trial replaced the wizard
+  // entirely (D10) and everything it knows about the founder was learned by
+  // voice; dropping them into a nine-step setup form halfway through their own
+  // trial would be the same bug wearing different clothes.
+  if (trialIsLive(trial)) {
+    return <TrialClock trial={trial}>{children}</TrialClock>;
   }
 
   // Any incomplete onboarding phase → the nine-screen wizard. It computes
