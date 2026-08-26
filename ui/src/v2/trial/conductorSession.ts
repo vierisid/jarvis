@@ -14,6 +14,9 @@
 
 import { RealtimeVoiceController } from "../../lib/RealtimeVoiceController";
 import type { TrialStatus } from "./trialGate";
+import type { ConductorPhase } from "./pebbleState";
+
+export type { ConductorPhase } from "./pebbleState";
 
 /** One entity as the daemon reports it landing. Mirrors `LandedEntity`. */
 export interface LandedEntity {
@@ -31,8 +34,6 @@ export interface CapturedFuel {
   quote?: string;
   at: number;
 }
-
-export type ConductorPhase = "connecting" | "speaking" | "listening" | "closed" | "error";
 
 /* ── the seven room beats (D16), as they arrive on the wire ── */
 
@@ -176,9 +177,17 @@ export class ConductorSession {
 
     ws.send(JSON.stringify({ type: "trial_conductor_start", payload: {}, timestamp: Date.now() }));
 
+    // `speaking` means output audio is playing in their speakers, and nothing
+    // else. Transcripts are not audio: assistant deltas arrive before the sound
+    // does, whisper's user transcript lands whenever it is ready (often while
+    // Jarvis is mid-sentence), and NOTHING is emitted when Jarvis stops
+    // talking. Driving the pebble off them left it blue through 491 seconds of
+    // silence and vermilion through Jarvis's own words. See pebbleState.ts.
     this.ctrl = new RealtimeVoiceController({
       ws,
       getCurrentRoom: () => "home",
+      onPlaybackStart: () => this.cb.onPhase("speaking"),
+      onPlaybackIdle: () => this.cb.onPhase("listening"),
       onError: (msg) => this.cb.onPhase("error", msg),
     });
     await this.ctrl.startStreaming();
@@ -200,7 +209,11 @@ export class ConductorSession {
     switch (msg.type) {
       case "realtime_status": {
         const p = (msg.payload ?? {}) as { state?: string; message?: string };
-        if (p.state === "live") this.cb.onPhase("speaking");
+        // Live means the socket is up, not that anyone is talking. Jarvis
+        // speaks first, but its first sound can be twenty seconds away
+        // (measured), and a blue pebble over twenty seconds of silence is the
+        // same lie as a vermilion one over a sentence.
+        if (p.state === "live") this.cb.onPhase("listening");
         else if (p.state === "error") this.cb.onPhase("error", p.message);
         else if (p.state === "closed") this.cb.onPhase("closed", p.message);
         return;
@@ -214,11 +227,11 @@ export class ConductorSession {
       case "tts_end": {
         // Barge-in: the founder started talking over Jarvis. Drop the audio
         // still queued locally so their voice is not fighting a speaker.
+        // `flushPlayback` fires `onPlaybackIdle` itself, which is what moves
+        // the pebble; there is deliberately no second path to "listening"
+        // here, so playback stays the only thing that decides.
         const p = (msg.payload ?? {}) as { bargeIn?: boolean };
-        if (p.bargeIn) {
-          this.ctrl?.flushPlayback();
-          this.cb.onPhase("listening");
-        }
+        if (p.bargeIn) this.ctrl?.flushPlayback();
         return;
       }
       case "trial_memory": {

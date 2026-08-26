@@ -12,6 +12,7 @@ import {
   type ProposalLanded,
 } from "./conductorSession";
 import { TrialProposal } from "./TrialProposal";
+import { pebbleView, type PebbleBubble } from "./pebbleState";
 import { formatTimeRemaining, type TrialStatus } from "./trialGate";
 import { openRoom, type RoomKey } from "../router";
 import "./TrialConductor.css";
@@ -108,6 +109,13 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
     const session = new ConductorSession({
       onPhase: (p, detail) => {
         setPhase(p);
+        // Jarvis's turn is over the moment its audio stops. Drop the words with
+        // it, so a half-finished sentence cannot be prefixed onto the next turn
+        // after a barge-in cancelled the response that was producing it.
+        if (p !== "speaking") {
+          partialRef.current = "";
+          setCaption("");
+        }
         // A closed session is a dead end in the opening, not a quiet return to
         // typing: voice is the only path through the trial (D10). The daemon's
         // own reason is used when it has one, a plan that excludes realtime
@@ -117,15 +125,15 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
         else if (p === "closed") setError(detail ?? "The conversation ended. Reload to pick it back up.");
         else setError(null);
       },
+      // Transcripts fill the caption and nothing else. They do NOT move the
+      // pebble: an assistant delta is not the sound arriving, and a final user
+      // transcript is whisper finishing, which routinely happens while Jarvis
+      // is already speaking again. See pebbleState.ts for the whole story.
       onTranscript: (role, text, final) => {
-        if (role === "assistant") {
-          partialRef.current = final ? text : partialRef.current + text;
-          setCaption(partialRef.current);
-          if (final) partialRef.current = "";
-          setPhase("speaking");
-        } else if (final) {
-          setPhase("listening");
-        }
+        if (role !== "assistant") return;
+        partialRef.current = final ? text : partialRef.current + text;
+        setCaption(partialRef.current);
+        if (final) partialRef.current = "";
       },
       onEntitiesLanded: (next) => {
         // Newest first: the founder is watching the top of this list.
@@ -273,34 +281,31 @@ function ConductorPebble({
   error: string | null;
   point: PebblePoint | null;
 }) {
-  const state = error ? "error" : phase;
   const ref = useRef<HTMLDivElement | null>(null);
   const pointing = usePebbleFlight(ref, point);
+  const view = pebbleView({ phase, caption, error, pointing: pointing?.label ?? null });
   return (
     <div
       ref={ref}
-      className={`tc-pebble tc-pebble--${state}${pointing ? " is-pointing" : ""}`}
+      className={`tc-pebble tc-pebble--${view.state}${pointing ? " is-pointing" : ""}`}
       style={pointing ? { transform: `translate(${pointing.dx}px, ${pointing.dy}px)` } : undefined}
     >
-      <div className={`tc-drop tc-drop--${state}`}>
+      <div className={`tc-drop tc-drop--${view.state}`}>
         <span className="in" />
       </div>
       <div className="tc-bubble">
-        {pointing ? (
-          <span className="tc-bubble-point">{pointing.label}</span>
-        ) : error ? (
-          <span className="tc-bubble-err">{error}</span>
-        ) : caption ? (
-          <span>{caption}</span>
-        ) : (
-          <span className="tc-bubble-hint">
-            {phase === "connecting" ? "…" : phase === "listening" ? "your turn" : "…"}
-          </span>
-        )}
+        <span className={BUBBLE_CLASS[view.bubble.kind]}>{view.bubble.text}</span>
       </div>
     </div>
   );
 }
+
+const BUBBLE_CLASS: Record<PebbleBubble["kind"], string> = {
+  caption: "",
+  point: "tc-bubble-point",
+  error: "tc-bubble-err",
+  hint: "tc-bubble-hint",
+};
 
 /** How long the pebble holds its label at the target before drifting back.
  *  Long enough to be a gesture, short enough not to hide the caption. */
