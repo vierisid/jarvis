@@ -378,3 +378,67 @@ describe('a corrupt voice row is not an answer', () => {
     expect(realtimeEnablement(hostedConfig())).toBe('hosted-default');
   });
 });
+
+describe('GET /api/config/voice tells the truth about who pays', () => {
+  let secretsDir: string;
+  let prevSecretsDir: string | undefined;
+  let prevEnv: string | undefined;
+
+  beforeEach(() => {
+    prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
+    prevEnv = process.env.JARVIS_REALTIME_VOICE;
+    delete process.env.JARVIS_REALTIME_VOICE;
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-rt-served-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
+    closeDb();
+    initDatabase(':memory:');
+  });
+  afterEach(() => {
+    closeDb();
+    if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
+    if (prevEnv === undefined) delete process.env.JARVIS_REALTIME_VOICE;
+    else process.env.JARVIS_REALTIME_VOICE = prevEnv;
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
+
+  const read = async (config: JarvisConfig) => {
+    const routes = createApiRoutes(makeCtx(config));
+    const res = await getHandler(routes, '/api/config/voice', 'GET')(
+      new Request('http://x/api/config/voice'),
+    );
+    return (await res.json()) as { realtime: { served_by_plan?: boolean; enabled: boolean } };
+  };
+
+  test('a hosted tenant who DECLINED is still told the plan would serve it', async () => {
+    // The regression: served_by_plan was derived from a resolution computed
+    // under the current enablement, so an off toggle made it false — and the
+    // tab then told them they would be "billed by OpenAI, ~$0.30/min", right
+    // next to the switch they were deciding whether to flip. Who would serve a
+    // session is a property of the install, not of whether one is running.
+    setSetting('cfg.voice', JSON.stringify({ realtime: { enabled: false } }));
+    const body = await read(hostedConfig());
+    expect(body.realtime.enabled).toBe(false);
+    expect(body.realtime.served_by_plan).toBe(true);
+  });
+
+  test('a hosted tenant with realtime on is told the same thing', async () => {
+    const body = await read(hostedConfig());
+    expect(body.realtime.enabled).toBe(true);
+    expect(body.realtime.served_by_plan).toBe(true);
+  });
+
+  test('a hosted tenant with a BYO OpenAI key is NOT told they pay for it', async () => {
+    // The whole point of the precedence inversion: their own key is not read
+    // on a hosted install, so the billing copy must not claim otherwise.
+    const config = hostedConfig();
+    config.llm = { providers: { openai: { api_key: 'sk-their-own' } } } as JarvisConfig['llm'];
+    expect((await read(config)).realtime.served_by_plan).toBe(true);
+  });
+
+  test('a self-hosted install says the opposite, because it IS their key', async () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.llm = { providers: { openai: { api_key: 'sk-their-own' } } } as JarvisConfig['llm'];
+    expect((await read(config)).realtime.served_by_plan).toBe(false);
+  });
+});

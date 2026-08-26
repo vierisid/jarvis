@@ -281,7 +281,9 @@ function storedProviderChoice(stored: unknown): boolean {
  * by construction.
  */
 export type RealtimeEnablement =
-  /** The user (or JARVIS_REALTIME_VOICE) said yes. Their BYO key may serve it. */
+  /** The user (or JARVIS_REALTIME_VOICE) said yes. On a SELF-HOSTED install
+   *  their own OpenAI key serves it; on a hosted one the plan does, whoever
+   *  asked — see realtimeServedByPlan in config/realtime.ts. */
   | 'user-on'
   /** Nobody asked for it; it is on because the hosted plan may include it. A
    *  session from this state MUST resolve to the hosted alias — see below. */

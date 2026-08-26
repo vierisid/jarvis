@@ -146,10 +146,15 @@ export function persistUserPatch(section: 'stt' | 'tts' | 'voice', patch: Record
   // default. The read path fails closed on corruption; the write path cannot
   // do the same without locking someone out of their own settings, so it says
   // so loudly instead and the operator has something to chase.
-  if (stored === undefined && getSetting(settingKey(section)) !== null) {
+  const usable = typeof stored === 'object' && stored !== null && !Array.isArray(stored);
+  // Keyed on "a row exists but is unusable", which covers both damage classes:
+  // JSON that will not parse (loadUserSection returns undefined) and JSON that
+  // parses to the wrong shape (an array, a number). A row legitimately holding
+  // `null` is NOT damage — saveUserSection writes that for an absent section —
+  // so it is excluded rather than warned about on every save.
+  if (!usable && getSetting(settingKey(section)) !== null && getSetting(settingKey(section)) !== 'null') {
     console.warn(`[UserSettings] cfg.${section} is unreadable and is being REPLACED by this save; any stored choice in it is lost`);
   }
-  const usable = typeof stored === 'object' && stored !== null && !Array.isArray(stored);
   const base = usable
     ? (isSecretSection(section) ? injectSectionSecrets(section, stored) : stored)
     : {};

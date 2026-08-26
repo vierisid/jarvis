@@ -50,6 +50,30 @@ const DEFAULT_MAX_SESSION_MINUTES = 10;
 const VALID_EFFORTS: RealtimeReasoningEffort[] = ['minimal', 'low', 'medium', 'high', 'xhigh'];
 
 /**
+ * Would a realtime session run on the PLAN rather than on a user's own key?
+ *
+ * The single predicate behind the money rule, exported so the settings route
+ * cannot drift from it. Deliberately a function of the hosted block ALONE —
+ * not of whether realtime is currently switched on, and not of whether the
+ * plan actually includes the alias:
+ *
+ *  - Independent of enablement, because the settings tab's billing copy renders
+ *    next to the toggle, i.e. to someone deciding whether to switch it ON.
+ *    Deriving it from the current resolution made it false for a hosted tenant
+ *    who had realtime off, so they were told they would be "billed by OpenAI,
+ *    ~$0.30/min" for something their plan would serve for nothing — the same
+ *    false-billing statement this rule exists to prevent, pointed the other way.
+ *  - Independent of the plan's contents, because "who would serve it" and "may
+ *    you have it" are different questions. The catalog gate answers the second,
+ *    and a tenant whose plan excludes realtime still is not billed personally —
+ *    they simply do not get it.
+ */
+export function realtimeServedByPlan(config: JarvisConfig): boolean {
+  const hosted = config.usejarvis_ai;
+  return Boolean(hosted?.base_url?.trim() && hosted?.api_key?.trim());
+}
+
+/**
  * Find the first OpenAI provider key in `llm.providers`. A provider entry's
  * effective kind is `entry.kind ?? name` (matches `instantiateProvider`), so a
  * user-named instance like `"openai-personal"` with `kind: 'openai'` is
@@ -71,16 +95,23 @@ function findOpenAIProviderKey(config: JarvisConfig): string {
 /**
  * Gate + resolve the premium realtime voice mode.
  *
- * Decision (see docs/GPT_REALTIME_2_INTEGRATION.md): entitlement is simply
- * "user has an OpenAI provider configured under llm.providers". The realtime
- * session reuses that key - there is no separate realtime credential. This
- * NEVER throws - when realtime is unavailable it returns `{ ok: false, reason }`
+ * Entitlement is no longer "the user has an OpenAI provider configured", which
+ * is what docs/GPT_REALTIME_2_INTEGRATION.md still describes. There are two
+ * answers now, and which applies is decided by the install:
+ *
+ *  - HOSTED (a complete `usejarvis_ai` block): the plan serves it through the
+ *    proxy's `uj-realtime` alias, and the user's own OpenAI key is never read —
+ *    see realtimeServedByPlan above for why that holds whoever asked for the
+ *    session. Whether the plan actually includes the alias is a separate
+ *    question, answered per session by daemon/realtime-gate.ts.
+ *  - SELF-HOSTED: unchanged. Scan `llm.providers` for a `kind: 'openai'` entry
+ *    and reuse its key (injected from the keychain at startup); LLM credentials
+ *    live only in the DB + keychain, with no config.yaml or env fallback. There
+ *    is no separate realtime credential.
+ *
+ * NEVER throws — when realtime is unavailable it returns `{ ok: false, reason }`
  * so the caller can log a warning and fall back to the standard STT -> LLM ->
  * TTS pipeline.
- *
- * Key resolution: scan `llm.providers` for a `kind: 'openai'` entry and reuse
- * its key (injected from the keychain at startup). LLM credentials live only
- * in the DB + keychain - there is no config.yaml or env fallback.
  */
 export function resolveRealtimeVoice(
   config: JarvisConfig,
@@ -126,17 +157,12 @@ export function resolveRealtimeVoice(
   // — losing a rare feature beats silently charging someone's personal card —
   // and it makes one rule true everywhere: on a hosted install, realtime is
   // either included in your plan or it does not run.
-  const hostedForRealtime = Boolean(
-    config.usejarvis_ai?.base_url?.trim() && config.usejarvis_ai?.api_key?.trim(),
-  );
-  const apiKey = hostedForRealtime ? '' : findOpenAIProviderKey(config).trim();
+  const apiKey = realtimeServedByPlan(config) ? '' : findOpenAIProviderKey(config).trim();
 
-  // Hosted fallback: no BYO OpenAI key, but the platform block is live — the
-  // proxy serves realtime under the plan-gated uj-realtime alias. A user's
-  // own OpenAI provider still wins (their explicit choice, their own spend).
+  // The platform block is live, so the proxy serves realtime under the
+  // plan-gated uj-realtime alias and the user's own key is never read.
   const hosted = config.usejarvis_ai;
-  const hostedReady = Boolean(hosted?.base_url?.trim() && hosted?.api_key?.trim());
-  if (!apiKey && hostedReady) {
+  if (realtimeServedByPlan(config)) {
     // Normalize through URL parsing rather than string surgery: the block is
     // provisioner-written, and each of these typo classes previously derailed
     // the ws(s) derivation into an undialable URL — an uppercase scheme

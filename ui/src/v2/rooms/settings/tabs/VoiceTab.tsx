@@ -40,8 +40,9 @@ export function VoiceTab({
               mid-conversation.{" "}
               {rt?.served_by_plan ? (
                 <>
-                  Included with your plan and billed as part of it, so there is no
-                  separate key to add and nothing extra to pay.
+                  Runs on your Usejarvis plan - no separate key to add, and never billed
+                  to an OpenAI account of your own. Whether it is included depends on
+                  your plan.
                 </>
               ) : (
                 <>

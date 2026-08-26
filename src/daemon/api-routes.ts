@@ -11,7 +11,7 @@ import { applyApprovalDecision } from './approval-decision.ts';
 import { SecretStorageError } from './section-secrets.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
-import { resolveRealtimeVoice, DEFAULT_BLOCKED_CATEGORIES } from '../config/realtime.ts';
+import { realtimeServedByPlan, resolveRealtimeVoice, DEFAULT_BLOCKED_CATEGORIES } from '../config/realtime.ts';
 import { hasUsejarvisAi, effectiveSttForBinding, effectiveTtsForBinding, realtimeEnablement, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
 import { cachedRealtimeVerdict } from './realtime-gate.ts';
 import type { EntityType } from '../vault/entities.ts';
@@ -2776,12 +2776,16 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const enablement = realtimeEnablement(ctx.config);
         const enabledNow = enablement !== 'off';
         let available = false;
-        let hostedRealtime = false;
         try {
           const res = resolveRealtimeVoice(ctx.config, enablement);
           available = res.ok && cachedRealtimeVerdict(res.resolved) !== false;
-          hostedRealtime = res.ok && res.resolved.provider === 'usejarvis_ai';
         } catch { available = false; }
+        // NOT derived from the resolution above: that is computed under the
+        // CURRENT enablement, so a tenant with realtime off resolves ok:false
+        // and would be told they are billed by OpenAI — next to the toggle
+        // they are deciding whether to flip. Who would serve a session is a
+        // property of the install, not of whether one is switched on.
+        const hostedRealtime = realtimeServedByPlan(ctx.config);
         return json({
           wake_engine: voice?.wake_engine ?? 'openwakeword',
           realtime: {

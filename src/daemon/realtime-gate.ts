@@ -94,6 +94,13 @@ function fetchVerdict(key: string, resolved: ResolvedRealtimeVoice): Promise<boo
   return p;
 }
 
+/**
+ * Warm from a config, resolving it first. The shape both callers need.
+ *
+ * `resolve` is injected because this module must not import the daemon's
+ * enablement view — usejarvis-ai.ts already imports nothing from here, and the
+ * reverse edge would close a cycle through config/realtime.ts.
+ */
 export function warmRealtimeGateFor(
   resolve: () => { ok: true; resolved: ResolvedRealtimeVoice } | { ok: false; reason: string },
 ): void {
@@ -109,7 +116,7 @@ export function warmRealtimeGateFor(
  * Prime the verdict before anyone speaks.
  *
  * Realtime is now ON by default for hosted tenants (usejarvis-ai.ts
- * effectiveRealtimeEnabled), so the plan gate decides for EVERY hosted install
+ * realtimeEnablement), so the plan gate decides for EVERY hosted install
  * rather than the few that had opted in. That made the cold-cache path a
  * user-visible cost rather than a rare one:
  *
@@ -136,13 +143,6 @@ export function warmRealtimeGateFor(
  * voice_start racing the warm waits on the SAME request rather than issuing a
  * second, and a failure is simply an advisory entry that expires in 30s.
  */
-/**
- * Warm from a config, resolving it first. The shape both callers need.
- *
- * `resolve` is injected because this module must not import the daemon's
- * enablement view — usejarvis-ai.ts already imports nothing from here, and the
- * reverse edge would close a cycle through config/realtime.ts.
- */
 export function warmRealtimeGate(resolved: ResolvedRealtimeVoice): void {
   if (!resolved.modelsUrl) return; // BYO sessions are never gated
   const key = cacheKey(resolved);
@@ -165,6 +165,15 @@ export function warmRealtimeGate(resolved: ResolvedRealtimeVoice): void {
  */
 function advisoryAllow(key: string): boolean {
   const hit = cache.get(key);
+  // A stale exclusion whose refresh keeps failing IS re-attempted on every
+  // read, and that is deliberate. Two tidier-looking options both break
+  // something: bumping `at` makes the entry fresh for the full CACHE_TTL_MS,
+  // so a plan UPGRADE would go unnoticed for ten minutes; marking it advisory
+  // gets the 30s retry cadence but then decays to "unknown", which reads as
+  // available and flips the browser into PCM capture — the exact flap the
+  // asymmetry at the top of this file exists to prevent. Retrying costs one
+  // 1.5s-timeout request per read against a catalog that is already down, and
+  // it stops the moment the catalog answers.
   if (hit && !hit.advisory && !hit.verdict) return false;
   cache.set(key, { verdict: true, at: Date.now(), advisory: true });
   return true;
@@ -194,7 +203,9 @@ function advisoryAllow(key: string): boolean {
  * those, and demotes the boot warm to an optimisation rather than the single
  * line of defence. It stays cheap: `fetchVerdict` dedups in flight, and a
  * result of any kind ends the misses, so the ceiling is one request per
- * cache-empty poll — not one per poll.
+ * cache-empty poll — not one per poll. The honest exception is a stale
+ * definitive exclusion whose refresh keeps failing: that one is re-attempted
+ * per read, for the reason spelled out on advisoryAllow.
  */
 export function cachedRealtimeVerdict(resolved: ResolvedRealtimeVoice): boolean | null {
   if (!resolved.modelsUrl) return true;
