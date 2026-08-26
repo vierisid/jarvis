@@ -3005,6 +3005,17 @@ function StepNode({ data }: NodeProps): React.ReactElement {
   }
   else { kindLabel = "Action"; }
 
+  // The one line the trial's pebble holds while it stands next to this node.
+  // A composed flow's steps are usually called `step_1`, `step_2`, so the
+  // step's own name is the worst thing to say out loud: what the founder needs
+  // to hear is what the node DOES. Same order the card body renders in.
+  const trialNodeName = step.displayName
+    ?? (isLoop ? `over ${String(step.settings?.items ?? "each item")}`
+      : isRouter ? `${step.settings?.branches?.length ?? 0} branches`
+        : subDisplayName
+          ?? (piece?.displayName ?? step.settings?.pieceName)
+          ?? (step.type === "EMPTY" ? "run on demand" : step.name));
+
   // ROUTER branches feed the right-edge source handles. The handle id
   // encodes the branch name so onConnect can route a connection straight
   // into the correct `children[i]` slot.
@@ -3080,6 +3091,15 @@ function StepNode({ data }: NodeProps): React.ReactElement {
   return (
     <div
       className={`wf-node ${selected ? "wf-node--selected" : ""} ${isUnconfigured ? "wf-node--unconfigured" : ""} ${depth > 0 ? "wf-node--nested" : ""} ${isOrphan ? "wf-node--orphan" : ""} ${runStatus ? `wf-node--run-${runStatus}` : ""}`}
+      /* An anchor and a one-line name for the trial's pebble, which walks the
+         nodes of the flow the founder has just published so they can see what
+         they own (D41). The label is read off the REAL graph here rather than
+         sent by the daemon, because the daemon proposed the flow in the
+         founder's own sentences and the composer decided what the nodes are.
+         Inert for everyone else: nothing reads these unless a trial is being
+         conducted. */
+      data-trial-anchor={`flow-step:${step.name}`}
+      data-trial-label={`${kindLabel.toLowerCase()} · ${trialNodeName}`}
     >
       {/* Target ("in"): left edge, every non-trigger node accepts an incoming
           connection from a preceding step's source handle. Orphans accept

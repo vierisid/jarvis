@@ -144,6 +144,21 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
         setSelectedId(g.id);
         return true;
       }
+      // Open one specific goal, by id, and put the room in the view that shows
+      // the tree. The trial's goals beat sends this the moment the founder's
+      // own objective lands, so the room opens ON their quarter rather than on
+      // whatever it happened to be showing, and the pebble then walks the three
+      // levels of it. `select` above cannot serve: it matches by name, and the
+      // objective's title is a sentence the founder said out loud.
+      case "focus_goal": {
+        const id = typeof args.id === "string" ? args.id : "";
+        const title = typeof args.title === "string" ? args.title : "";
+        const g = (id ? data.goals.find((x) => x.id === id) : null) ?? (title ? data.findByName(title) : null);
+        if (!g) return false;
+        setActiveTab("constellation");
+        setSelectedId(g.id);
+        return true;
+      }
       case "create_goal": {
         const title = typeof args.title === "string" ? args.title.trim() : "";
         if (!title) return false;
@@ -683,6 +698,11 @@ function ConstellationSky({
           key={n.goal.id}
           type="button"
           className="v2-goals__gnode"
+          /* An anchor the trial's pebble can fly to, so it can point at the
+             founder's own objective and their own key results rather than at
+             the room's door. Inert for everyone else: nothing reads it unless
+             a trial is being conducted. */
+          data-trial-anchor={`goal:${n.goal.id}`}
           data-level={n.goal.level}
           data-selected={selectedId === n.goal.id}
           data-critical={n.goal.health === "critical"}

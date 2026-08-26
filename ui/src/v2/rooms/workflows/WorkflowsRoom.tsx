@@ -121,6 +121,28 @@ export function WorkflowsRoomBody(): React.ReactElement {
     // next 8-second poll. The trial's room beats are what needed it: the
     // founder is watching the room while they say yes (D22).
     if (action === "refresh") { void data.refresh(); return true; }
+    // Open one flow in the editor, as the graph it actually is.
+    //
+    // D41, and the one Vieri asked for by name: a workflow is the most
+    // abstract object in the product and the one a founder is least likely to
+    // understand from a card. A card can list four sentences; a flow is a
+    // trigger and a chain of steps, and until you have seen that you do not
+    // know what you own. The trial sends this the moment their first flow
+    // publishes, and the pebble then walks its real nodes.
+    if (action === "open_flow") {
+      const id = typeof args?.id === "string" ? args.id : "";
+      const name = typeof args?.name === "string" ? args.name.trim().toLowerCase() : "";
+      const flow = (id ? data.flows.find((f) => f.id === id) : null)
+        ?? (name ? data.flows.find((f) => (f.displayName ?? "").trim().toLowerCase() === name) : null);
+      // The flow was published seconds ago and the list polls every 8s, so the
+      // id is often the only thing that is right yet. It is enough: the editor
+      // fetches the flow itself.
+      const flowId = flow?.id ?? id;
+      if (!flowId) return false;
+      data.setEditingFlowId(flowId);
+      void data.refresh();
+      return true;
+    }
     if (action !== "create_from_nl") return false;
     const prompt = typeof args?.prompt === "string" ? args.prompt.trim() : "";
     void (async () => {
