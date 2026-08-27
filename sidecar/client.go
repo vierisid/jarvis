@@ -563,6 +563,9 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		// regex-matches "jarvis". Pauses around Ctrl+Space session
 		// captures so it doesn't fight for the mic device.
 		wakeListener := NewWakeListenerService(audioSvc, sendFn, DefaultWakeListenerOpts())
+		// Start() itself consults micMuted(), so a reconnect while muted comes up
+		// with the device closed instead of silently re-arming always-on
+		// listening behind a menu that still says muted.
 		if err := wakeListener.Start(ctx); err != nil {
 			log.Printf("[wake] failed to start: %v", err)
 			wakeListener = nil
@@ -591,7 +594,42 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		// path (when the daemon dispatches `pebble.start_listening` after
 		// matching a wake phrase that had no trailing command).
 		var sessionInFlight atomic.Bool
-		runSessionCapture := func(sessionID string) {
+
+		// micRefused is the visible consequence of a mute-blocked mic. An early
+		// return with no feedback reads as a broken hotkey, so say it twice: on
+		// the pebble (local, immediate — mic state is sidecar-owned) and to the
+		// brain, which can explain it in conversation rather than waiting for
+		// audio that is never coming.
+		micRefused := func(source, sessionID string) {
+			log.Printf("[audio] %s refused — microphone muted (session=%s)", source, sessionID)
+			if c.pebble != nil {
+				flashMutedPebble(c.pebble)
+			}
+			evt := SidecarEvent{
+				Type:      "sidecar_event",
+				EventType: "pebble.mic_blocked",
+				Timestamp: time.Now().UnixMilli(),
+				Priority:  "normal",
+				Payload: map[string]any{
+					"reason":     "muted",
+					"source":     source,
+					"session_id": sessionID,
+				},
+			}
+			if err := sendFn(ctx, evt, nil); err != nil {
+				log.Printf("[audio] failed to emit mic_blocked event: %v", err)
+			}
+		}
+
+		runSessionCapture := func(sessionID, source string) {
+			// Mute is a gate, not a pause: checked here, where the mic is opened,
+			// rather than left to whoever paused the wake listener. Before the
+			// in-flight CAS and before audio.session_start, so a refused session
+			// leaves no state behind and the daemon never sees a start with no end.
+			if micMuted() {
+				micRefused(source, sessionID)
+				return
+			}
 			if !sessionInFlight.CompareAndSwap(false, true) {
 				log.Printf("[audio] session %s skipped — capture already in flight", sessionID)
 				return
@@ -619,6 +657,16 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			pcm, dur, err := pebbleCaptureWithVAD(audioSvc, sessionID, DefaultVADOpts())
 			if err != nil {
 				log.Printf("[audio] capture failed: %v", err)
+				return
+			}
+			// Muted mid-capture: the tray closure above already released the
+			// device, so this is whatever was recorded BEFORE the user muted.
+			// Drop it rather than ship it — mute has to mean the audio doesn't
+			// leave the machine, not just that the next capture is refused.
+			// micRefused also unwinds the summon the brain is holding.
+			if micMuted() {
+				log.Printf("[audio] session %s discarded (%d PCM bytes) — muted mid-capture", sessionID, len(pcm))
+				micRefused(source, sessionID)
 				return
 			}
 
@@ -738,20 +786,35 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			log.Printf("[realtime] dedicated audio channel open")
 			return writePCM, closeFn, true
 		}
-		rt := newRealtimeVoice(realtimeCapture, wakeListener, emit, setStream, setPebbleState, resumeWake, openAudio)
+		rt := newRealtimeVoice(realtimeCapture, wakeListener, emit, setStream, setPebbleState, resumeWake, openAudio,
+			func() { micRefused("realtime", "") })
 		c.realtime.Store(rt)
 		// Tear the session down when this connection ends.
 		defer rt.Stop(false)
 
-		// Tray "Mute microphone" toggle → gate the mic locally. Muting ends any
-		// live realtime session (which re-arms the wake listener), then releases
-		// the always-on wake mic and shows the muted pebble; unmuting re-arms the
-		// wake listener and clears the pebble. Note the Stop-then-Pause order:
-		// realtime.Stop() calls resumeWake internally, so Pause must come after.
+		// Tray "Mute microphone" toggle → apply the gate locally. The tray thread
+		// writes TrayStatus.Muted before this runs, so micMuted() is already
+		// authoritative and every path that would OPEN the mic is already closed.
+		// What's left for this closure is the mic that is open right now: end a
+		// live realtime session, cut off an in-flight one-shot capture, release
+		// the always-on wake mic, and show the muted pebble. Unmuting re-arms the
+		// wake listener and clears the pebble. (Stop() calls resumeWake
+		// internally, but that Resume is now refused by the mute gate rather than
+		// defeated by call ordering.)
 		setTrayApplyMute(func(muted bool) {
 			if muted {
 				if rt := c.realtime.Load(); rt != nil {
 					rt.Stop(true)
+				}
+				// A one-shot capture already holds the device — the gate below
+				// only stops the NEXT one. Cut this one off now rather than at
+				// the VAD's 15 s hard cap: wakeListener.Pause() won't do it (the
+				// capture already set paused, so its audioSvc.Stop() is skipped)
+				// and they share one AudioCaptureService. The capture's own
+				// post-mute check then drops whatever PCM it had.
+				if sessionInFlight.Load() {
+					log.Printf("[audio] mute during capture — releasing the device now")
+					_, _, _ = audioSvc.Stop()
 				}
 				if wakeListener != nil {
 					wakeListener.Pause()
@@ -765,6 +828,16 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			}
 		})
 		defer setTrayApplyMute(func(bool) {})
+
+		// A reconnect rebuilds the pebble, the wake listener and the realtime
+		// controller from scratch, none of which know about a mute set on the
+		// previous connection. Re-apply it through the closure just registered so
+		// the device and the menu agree from the first frame. Through trayCtlQ,
+		// and re-reading the flag inside the queued func: a toggle racing the
+		// reconnect must win, or we'd re-mute a mic the user just unmuted.
+		if micMuted() {
+			trayCtlAsync(func() { trayApplyMute(micMuted()) })
+		}
 
 		// Long-answer overflow — click on the "open full ↗" button emits
 		// pebble.open_answer with the answer id stored via SetAnswerOverflow.
@@ -812,17 +885,29 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 				return
 			}
 			sessionID := fmt.Sprintf("%d", time.Now().UnixMilli())
+			// The summon event goes out even when muted, because this hotkey is
+			// ALSO the dismiss gesture: the daemon's handler is a toggle, and a
+			// second press cancels an in-flight turn and cuts off TTS. Swallowing
+			// it here would leave a muted user unable to shut JARVIS up. The
+			// `muted` flag tells the daemon not to open a listening cycle it
+			// would then have to wait out.
+			muted := micMuted()
 			summonEvt := SidecarEvent{
 				Type:      "sidecar_event",
 				EventType: "pebble.summon",
 				Timestamp: time.Now().UnixMilli(),
 				Priority:  "normal",
-				Payload:   map[string]any{"session_id": sessionID},
+				Payload:   map[string]any{"session_id": sessionID, "muted": muted},
 			}
 			if err := sendFn(ctx, summonEvt, nil); err != nil {
 				log.Printf("[pebble] failed to emit summon event: %v", err)
 			}
-			go runSessionCapture(sessionID)
+			if muted {
+				log.Printf("[audio] summon refused — microphone muted (session=%s)", sessionID)
+				flashMutedPebble(c.pebble) // the brain is told by the event's muted flag
+				return
+			}
+			go runSessionCapture(sessionID, "summon")
 		})
 
 		// W4 — palette hotkey (Ctrl+K) emits a "pebble.palette" event with
@@ -939,7 +1024,19 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		c.mu.Lock()
 		c.handlers["pebble.start_listening"] = func(_ map[string]any) (*RPCResult, error) {
 			sessionID := fmt.Sprintf("listen-%d", time.Now().UnixMilli())
-			go runSessionCapture(sessionID)
+			// Muted: answer the daemon rather than silently dropping the request.
+			// It has already flipped the bubble to "listening" and armed a
+			// fallback timer; told no, it can reset immediately instead of
+			// waiting out audio that will never arrive.
+			if micMuted() {
+				micRefused("start_listening", sessionID)
+				return &RPCResult{Result: map[string]any{
+					"session_id": sessionID,
+					"started":    false,
+					"reason":     "muted",
+				}}, nil
+			}
+			go runSessionCapture(sessionID, "start_listening")
 			return &RPCResult{Result: map[string]any{"session_id": sessionID, "started": true}}, nil
 		}
 

@@ -676,7 +676,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // Per-sidecar in-flight summon control. Tracks whether a summon is
       // active and lets us cancel mid-flight when the user dismisses with
       // a second hotkey press.
-      const pendingSummons = new Map<string, { cancelled: boolean }>();
+      // `sessionId` is set only for hotkey summons (the sidecar mints it and
+      // stamps it on both `pebble.summon` and any later `pebble.mic_blocked`),
+      // so a mic refusal can unwind exactly the slot it belongs to and never a
+      // turn that happens to be in flight.
+      const pendingSummons = new Map<string, { cancelled: boolean; sessionId?: string }>();
 
       // Fallback timers for the bare-"Jarvis" listening state. If the sidecar's
       // session capture never produces an `audio.session_end` (dropped event,
@@ -1628,7 +1632,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           console.log(`[ambient-ui] pebble.summon (dismiss) on ${sidecarId}`);
           return;
         }
-        pendingSummons.set(sidecarId, { cancelled: false });
+        const payload = (event.payload as { session_id?: string; muted?: boolean } | undefined) ?? {};
+        if (payload.muted === true) {
+          // The sidecar sends the press even when the mic is muted, because
+          // this hotkey doubles as the dismiss gesture (handled above). With
+          // nothing to dismiss there's no cycle to open: claiming a summon slot
+          // here would strand the pebble in `listening` waiting on audio the
+          // sidecar has already refused to capture. No text argument — the
+          // sidecar's bubble already says why.
+          setState(sidecarId, 'muted');
+          console.log(`[ambient-ui] pebble.summon on ${sidecarId} — ignored, microphone muted`);
+          return;
+        }
+        pendingSummons.set(sidecarId, { cancelled: false, sessionId: payload.session_id });
         setState(sidecarId, 'listening', '');
         console.log(`[ambient-ui] pebble.summon on ${sidecarId} — listening for audio…`);
       });
@@ -3585,7 +3601,24 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // instant a session is actually consumed, so it never cuts a response).
           await setState(sidecarId, 'listening', '');
           try {
-            await sidecarManager.dispatchRPC(sidecarId, 'pebble.start_listening', {});
+            const res = (await sidecarManager.dispatchRPC(sidecarId, 'pebble.start_listening', {})) as
+              | { started?: boolean; reason?: string }
+              | undefined;
+            if (res?.started === false) {
+              // The sidecar refused to open the mic — the user muted it between
+              // the wake segment being captured and this call landing. Give the
+              // slot back now instead of holding `listening` until the fallback
+              // timer fires, and leave the pebble showing why.
+              console.log(`[ambient-ui] wake → start_listening refused (${res.reason ?? 'unknown'})`);
+              ctrl.cancelled = true;
+              clearSummon(sidecarId, ctrl);
+              // No text argument for the muted case: the sidecar has already
+              // put the reason in the bubble, and passing text here would
+              // overwrite it with the default per-state copy.
+              if (res.reason === 'muted') await setState(sidecarId, 'muted');
+              else await setState(sidecarId, 'idle', '');
+              return;
+            }
             console.log(`[ambient-ui] wake → listening (capture started)`);
             clearListenTimer(sidecarId);
             pendingListenTimers.set(sidecarId, setTimeout(() => {
@@ -3618,6 +3651,32 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         } finally {
           wakeInFlight.delete(sidecarId);
         }
+      });
+
+      // The sidecar turned a mic request away because the user has the mic muted
+      // from the tray. Mute is sidecar-owned local state, so mostly this is
+      // informational — the two paths that could open a cycle already handle
+      // their own refusal (`pebble.summon` carries a `muted` flag, and
+      // `pebble.start_listening` answers `started: false`).
+      //
+      // What's left is the narrow race: mute landing AFTER a press was reported
+      // unmuted, or mid-capture, which leaves a summon slot with no audio ever
+      // coming. Unwind it — but only when the session id matches the slot's, so
+      // an unrelated in-flight turn can't be interrupted by a stray event (the
+      // hazard the stray-region.captured comment below spells out).
+      sidecarManager.onEvent((sidecarId, event) => {
+        if (event.event_type !== 'pebble.mic_blocked') return;
+        const payload = (event.payload as { reason?: string; source?: string; session_id?: string } | undefined) ?? {};
+        console.log(
+          `[ambient-ui] mic blocked on ${sidecarId} ` +
+          `(source=${payload.source ?? '?'}, reason=${payload.reason ?? '?'})`,
+        );
+        const ctrl = pendingSummons.get(sidecarId);
+        if (!ctrl || !payload.session_id || ctrl.sessionId !== payload.session_id) return;
+        ctrl.cancelled = true;
+        clearListenTimer(sidecarId);
+        clearSummon(sidecarId, ctrl);
+        void setState(sidecarId, 'muted'); // no text — the sidecar's bubble already says why
       });
 
       // T19 — region.captured / region.cancelled. The user said "help

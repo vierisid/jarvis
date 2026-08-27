@@ -14,6 +14,11 @@ package main
 // The implementation lives in pebble_overlay_<os>.go behind build tags. This
 // file is the cross-platform interface + state types only.
 
+import (
+	"sync/atomic"
+	"time"
+)
+
 // PebbleState mirrors the React state machine used in the design mock.
 type PebbleState string
 
@@ -122,6 +127,41 @@ type PebbleService interface {
 	// the answer id that SetAnswerOverflow was called with. Threading:
 	// runs on a fresh goroutine.
 	OnAnswerOpen(callback func(answerID string))
+}
+
+// mutedNudgeGen serializes claims on the bubble text: a nudge only clears the
+// text it wrote, and any later writer (another nudge, or the brain via
+// pebble.set_state) takes ownership by bumping the counter.
+var mutedNudgeGen atomic.Int64
+
+// mutedNudgeDur is how long the "muted" explanation stays in the bubble before
+// the state's default copy comes back. A var so tests can shrink it.
+var mutedNudgeDur = 2500 * time.Millisecond
+
+// flashMutedPebble is the visible consequence of a mic request turned away by
+// mute. Re-asserting the muted state alone is invisible when the pebble is
+// already showing it, so the bubble carries the reason for a moment — a
+// silently ignored hotkey is indistinguishable from a broken one.
+// invalidateMutedNudge takes the bubble text away from any pending muted nudge.
+// Callers that set bubble text through some other route must call it, or a
+// nudge armed moments earlier will blank their text when it expires.
+func invalidateMutedNudge() { mutedNudgeGen.Add(1) }
+
+func flashMutedPebble(p PebbleService) {
+	if p == nil {
+		return
+	}
+	gen := mutedNudgeGen.Add(1)
+	_ = p.SetText("Microphone muted — unmute from the tray menu")
+	_ = p.SetState(PebbleMuted)
+	go func() {
+		time.Sleep(mutedNudgeDur)
+		// Only the most recent claim clears the text; if anything else has
+		// written to the bubble since (invalidateMutedNudge), it owns it now.
+		if mutedNudgeGen.Load() == gen {
+			_ = p.SetText("") // back to the per-state default copy
+		}
+	}()
 }
 
 // NewPebbleService returns the platform-specific implementation. Defined in

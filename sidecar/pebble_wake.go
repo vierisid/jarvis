@@ -21,6 +21,14 @@ package main
 // Resume() restarts the continuous capture once the session ends. The
 // daemon also gates wake_segment processing during TTS playback so JARVIS
 // saying his own name doesn't re-trigger the loop.
+//
+// Three independent reasons the mic can be off, deliberately kept apart:
+//   - paused        — a consumer borrowed the device and will hand it back
+//   - suppressDepth — the device stays open but chunks are dropped (TTS echo,
+//                     region-select chord); a counter, since sources overlap
+//   - micMuted()    — the USER turned the mic off, indefinitely, from the tray
+//
+// Only the user clears the last one. Pause/Resume must never lift it.
 
 import (
 	"context"
@@ -115,6 +123,17 @@ func (w *WakeListenerService) Start(ctx context.Context) error {
 	w.doneCh = make(chan struct{})
 	w.resetSegment()
 
+	// Muted: come up armed but with the device closed. A reconnect builds a
+	// fresh listener, and opening the mic here would re-arm always-on listening
+	// while the tray menu still says muted. The coordinator still runs so
+	// unmuting (Resume) recovers without a restart.
+	if micMuted() {
+		w.paused.Store(true)
+		log.Printf("[wake] listener started paused — microphone muted")
+		go w.coordinate(ctx)
+		return nil
+	}
+
 	// Hook the chunk listener BEFORE Start so we don't miss any audio.
 	w.audioSvc.SetChunkListener(w.onChunk)
 	if err := w.audioSvc.Start(fmt.Sprintf("wake-%d", time.Now().UnixMilli())); err != nil {
@@ -132,6 +151,12 @@ func (w *WakeListenerService) Start(ctx context.Context) error {
 
 // Pause releases the mic device so a session-capture or other consumer
 // can take over. Safe to call when not running. Use Resume() to restart.
+//
+// Pause/Resume is the CONSUMER's momentary device handoff: "off while I use
+// the mic, and I'll put it back". It is not the user's mute — mute is a gate
+// the user owns indefinitely (micMuted), and Resume refuses to lift it. Those
+// two intents used to share this single bit, so a session capture's deferred
+// Resume re-armed a mic the user had muted mid-capture.
 func (w *WakeListenerService) Pause() {
 	if !w.running.Load() {
 		return
@@ -144,10 +169,18 @@ func (w *WakeListenerService) Pause() {
 	log.Printf("[wake] paused (mic released)")
 }
 
-// Resume restarts capture after a Pause(). No-op if not paused or not
-// running.
+// Resume restarts capture after a Pause(). No-op if not paused, not running,
+// or while the user has the microphone muted.
+//
+// The mute check comes BEFORE the paused CAS on purpose: a refused resume must
+// leave paused set, so the listener stays consistently off and unmuting (which
+// calls Resume once the gate is clear) is what brings it back.
 func (w *WakeListenerService) Resume(ctx context.Context) {
 	if !w.running.Load() {
+		return
+	}
+	if micMuted() {
+		log.Printf("[wake] resume refused — microphone muted")
 		return
 	}
 	if !w.paused.CompareAndSwap(true, false) {

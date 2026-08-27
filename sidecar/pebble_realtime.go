@@ -6,6 +6,7 @@ package main
 // when the daemon has reported realtime is enabled (pebble.configure_realtime).
 // The sidecar is the audio DEVICE; the daemon runs the OpenAI realtime session.
 //
+//   gate:   refused outright while the user has the mic muted (micMuted)
 //   start:  pause wake listener → open streaming playback → stream 24 kHz mic
 //           PCM up as `pebble.audio_frame` events → emit `pebble.realtime_start`
 //   live:   daemon streams output PCM down via `pebble.play_pcm` (readLoop
@@ -43,6 +44,10 @@ type realtimeVoice struct {
 	setStream  func(*AudioStreamPlayer)                       // install/clear the readLoop's playback target
 	setState   func(PebbleState)                              // drive the pebble visual
 	resumeWake func()                                         // re-arm the wake listener (ctx-bound, self-guarded)
+	// micRefused reports a mic request turned away by mute — one shared path
+	// with the capture doors so the refusal is actually visible (pebble bubble)
+	// instead of a state re-assert the pebble is already showing.
+	micRefused func()
 	// openAudio dials the dedicated audio WebSocket; onBinary plays inbound PCM,
 	// onFlush is barge-in. Returns (writePCM, close, ok=false on dial failure).
 	openAudio func(onBinary func([]byte), onFlush func()) (func([]byte) error, func(), bool)
@@ -60,6 +65,7 @@ func newRealtimeVoice(
 	setState func(PebbleState),
 	resumeWake func(),
 	openAudio func(onBinary func([]byte), onFlush func()) (func([]byte) error, func(), bool),
+	micRefused func(),
 ) *realtimeVoice {
 	return &realtimeVoice{
 		capture:    capture,
@@ -69,6 +75,7 @@ func newRealtimeVoice(
 		setState:   setState,
 		resumeWake: resumeWake,
 		openAudio:  openAudio,
+		micRefused: micRefused,
 	}
 }
 
@@ -84,8 +91,23 @@ func (r *realtimeVoice) Toggle() {
 }
 
 // Start opens the local audio path and asks the daemon to open the session.
+// Refused while the microphone is muted — this is the second door into the mic
+// (the summon hotkey routes here instead of the one-shot capture when realtime
+// is enabled), so it has to check the same gate. Stop() is deliberately NOT
+// gated: ending a session that was already live must always work.
 func (r *realtimeVoice) Start() {
 	log.Printf("[realtime] Start() invoked (enabled=%v active=%v)", r.enabled.Load(), r.active.Load())
+	if micMuted() {
+		// Not just setState(PebbleMuted): the pebble is ALREADY muted-looking
+		// (the tray toggle put it there), so re-asserting it paints nothing and
+		// the hotkey reads as dead. micRefused puts the reason in the bubble and
+		// tells the brain.
+		log.Printf("[realtime] start refused — microphone muted")
+		if r.micRefused != nil {
+			r.micRefused()
+		}
+		return
+	}
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if !r.active.CompareAndSwap(false, true) {
