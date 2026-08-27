@@ -4,10 +4,10 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApiRoutes, type ApiContext } from './api-routes.ts';
 import { initDatabase, closeDb } from '../vault/schema.ts';
-import { DEFAULT_CONFIG, type JarvisConfig } from '../config/types.ts';
+import { DEFAULT_CONFIG, type JarvisConfig, type VoiceConfig } from '../config/types.ts';
 import { loadUserSection } from './user-settings.ts';
 import { getSetting, setSetting } from '../vault/settings.ts';
-import { persistUserPatch } from './user-settings.ts';
+import { persistUserPatch, saveUserSection } from './user-settings.ts';
 import { clearRealtimeGateCache } from './realtime-gate.ts';
 import { getSecret } from '../vault/keychain.ts';
 import { effectiveSttForBinding, effectiveTtsForBinding, realtimeEnablement, resetRealtimeVaultWarningForTest } from './usejarvis-ai.ts';
@@ -388,6 +388,22 @@ describe('a corrupt voice row is not an answer', () => {
     setSetting('cfg.voice', JSON.stringify({ realtime: { enabled: true } }));
     expect(realtimeEnablement(hostedConfig())).toBe('user-on');
     setSetting('cfg.voice', JSON.stringify({ wake_engine: 'openwakeword' }));
+    expect(realtimeEnablement(hostedConfig())).toBe('hosted-default');
+  });
+
+  test('the reader reads what the WRITER writes — no hardcoded key', () => {
+    // Written through saveUserSection rather than setSetting so the settings
+    // key is never spelled out on the read side. It once was, in a copy of the
+    // `cfg.` prefix: had that prefix changed, the reader would have missed the
+    // row, read it as "never asked", and switched realtime ON for a tenant who
+    // had explicitly declined — silently, and into billed audio sessions.
+    saveUserSection('voice', { realtime: { enabled: false } } as unknown as VoiceConfig);
+    expect(realtimeEnablement(hostedConfig())).toBe('off');
+
+    saveUserSection('voice', { realtime: { enabled: true } } as unknown as VoiceConfig);
+    expect(realtimeEnablement(hostedConfig())).toBe('user-on');
+
+    saveUserSection('voice', { wake_engine: 'openwakeword' } as unknown as VoiceConfig);
     expect(realtimeEnablement(hostedConfig())).toBe('hosted-default');
   });
 });

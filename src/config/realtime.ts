@@ -183,10 +183,12 @@ export function resolveRealtimeVoice(
   // whole money rule in one line.
   const apiKey = servedByPlan ? '' : findOpenAIProviderKey(config).trim();
 
-  // The platform block is live, so the proxy serves realtime under the
-  // plan-gated uj-realtime alias and the user's own key is never read.
-  const hosted = config.usejarvis_ai;
   if (servedByPlan) {
+    // The platform block is live (realtimeServedByPlan checked both fields are
+    // non-empty strings, which is what the assertions below rest on), so the
+    // proxy serves realtime under the plan-gated uj-realtime alias and the
+    // user's own key is never read.
+    const hosted = config.usejarvis_ai;
     // Normalize through URL parsing rather than string surgery: the block is
     // provisioner-written, and each of these typo classes previously derailed
     // the ws(s) derivation into an undialable URL — an uppercase scheme

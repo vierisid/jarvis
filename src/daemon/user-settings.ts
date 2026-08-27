@@ -134,27 +134,22 @@ export function persistUserPatch(section: 'stt' | 'tts' | 'voice', patch: Record
   // Cast, don't default: the merge helpers substitute a provider-carrying
   // default for an UNDEFINED base, which would stamp silence into the row.
   // A `{}` base merges cleanly and stays provider-free unless the patch
-  // itself carries a choice. Secrets are injected only when a row exists —
-  // same orphan rule as mergeUserSettingsIntoConfig.
-  // `voice` holds no credentials, so it skips the hydration entirely — passing
-  // it to injectSectionSecrets would not type-check, and there is nothing to
-  // rehydrate. stt/tts rows ARE stripped, and merging over the bare row would
-  // destroy every stored key the patch does not carry (it did, once).
-  // A row that will not parse reads as `undefined` here, indistinguishable
-  // from absent — so this save would quietly REPLACE it, erasing (for `voice`)
-  // an explicit realtime decline and reverting the tenant to the hosted
-  // default. The read path fails closed on corruption; the write path cannot
-  // do the same without locking someone out of their own settings, so it says
-  // so loudly instead and the operator has something to chase.
+  // itself carries a choice.
   const usable = typeof stored === 'object' && stored !== null && !Array.isArray(stored);
-  // Keyed on "a row exists but is unusable", which covers both damage classes:
-  // JSON that will not parse (loadUserSection returns undefined) and JSON that
-  // parses to the wrong shape (an array, a number). A row legitimately holding
-  // `null` is NOT damage — saveUserSection writes that for an absent section —
-  // so it is excluded rather than warned about on every save.
+  // An unusable row is about to be REPLACED, and for `voice` that erases an
+  // explicit realtime decline and reverts the tenant to the hosted default.
+  // The read path fails closed on corruption (loadUserSectionStrict); the write
+  // path cannot, without locking someone out of their own settings — so it is
+  // loud instead. Keyed on "exists but unusable" to catch both damage classes:
+  // JSON that will not parse, and JSON that parses to the wrong shape. A row
+  // legitimately holding `null` is not damage — saveUserSection writes that for
+  // an absent section — so it is excluded rather than warned about every save.
   if (!usable && getSetting(settingKey(section)) !== null && getSetting(settingKey(section)) !== 'null') {
     console.warn(`[UserSettings] cfg.${section} is unreadable and is being REPLACED by this save; any stored choice in it is lost`);
   }
+  // Secrets are injected only when a row exists (same orphan rule as
+  // mergeUserSettingsIntoConfig), and only for the sections that HAVE any:
+  // `voice` carries no credentials and would not even type-check here.
   const base = usable
     ? (isSecretSection(section) ? injectSectionSecrets(section, stored) : stored)
     : {};
@@ -217,6 +212,33 @@ export function loadUserSection(section: UserOwnedSection): unknown {
     console.warn(`[UserSettings] Corrupt JSON for ${settingKey(section)}; ignoring stored value`);
     return undefined;
   }
+}
+
+/**
+ * Like `loadUserSection`, but THROWS on a row that will not parse.
+ *
+ * The distinction matters wherever "absent" and "damaged" lead to different
+ * answers. `loadUserSection` maps both to `undefined`, which is right for a
+ * merge (there is nothing to merge either way) and wrong for a decision: the
+ * hosted realtime default reads an absent row as "never asked" and switches
+ * realtime ON, so a declining tenant whose row corrupted would have been opted
+ * back into billed audio sessions. Callers that must not make that mistake use
+ * this and fail closed on the throw.
+ *
+ * Lives HERE, beside settingKey, rather than at the call site: a copy of the
+ * `cfg.` prefix in another module reads the wrong key the day the prefix
+ * changes — silently, and in the direction that turns a feature on.
+ */
+export function loadUserSectionStrict(section: UserOwnedSection): unknown {
+  const raw = getSetting(settingKey(section));
+  if (raw === null) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`corrupt JSON in ${settingKey(section)}`);
+  }
+  return parsed === null ? undefined : parsed;
 }
 
 /** Meta row remembering the file value each section was last imported from. */

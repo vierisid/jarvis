@@ -25,7 +25,6 @@ import { PebbleRealtimeManager } from "./pebble-realtime.ts";
 import { hostedRealtimeIncluded, warmRealtimeGateFor } from './realtime-gate.ts';
 import { resolveRealtimeVoice } from "../config/realtime.ts";
 import { realtimeEnablement } from "./usejarvis-ai.ts";
-
 import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
@@ -4183,21 +4182,6 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       canNotify: () => sidecarManager.getConnectedSidecars().length > 0,
     });
     usageAlerts.start();
-
-    // Prime the realtime plan verdict before anyone speaks. Realtime is now on
-    // by default for hosted tenants, so the gate decides for every hosted
-    // install — and with a cold cache GET /api/config/voice reports
-    // "available", which puts the browser into raw-PCM capture. On a plan
-    // WITHOUT realtime that first utterance is refused and its frames dropped,
-    // so the user speaks and nothing happens. One catalog request at boot
-    // removes it; a failure just expires in 30s.
-    const warmRealtime = () => warmRealtimeGateFor(() => {
-      const rtCfg = agentService.getConfig();
-      return resolveRealtimeVoice(rtCfg, realtimeEnablement(rtCfg));
-    });
-    warmRealtime();
-    // And again after every SIGHUP reload, which clears the verdict cache.
-    settingsReload.setWarmRealtime(warmRealtime);
     // A pass with no sidecar connected leaves its flags unset on purpose, so
     // the warning survives — but it would then wait up to fifteen minutes for
     // the next tick. Re-check as soon as a machine appears, which is exactly
@@ -4207,6 +4191,25 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     sidecarManager.onSidecarConnected(() => {
       void usageAlerts?.check().catch(() => {});
     });
+
+    // Prime the realtime plan verdict before anyone speaks. Realtime is now on
+    // by default for hosted tenants, so the gate decides for every hosted
+    // install — and with a cold cache GET /api/config/voice reports
+    // "available", which puts the browser into raw-PCM capture. On a plan
+    // WITHOUT realtime that first utterance is refused and its frames dropped,
+    // so the user speaks and nothing happens. One catalog request at boot
+    // removes it, and it is issued here — well before registry.startAll()
+    // binds any listener — so the dashboard's first poll already has a verdict.
+    const warmRealtime = () => warmRealtimeGateFor(() => {
+      const rtCfg = agentService.getConfig();
+      return resolveRealtimeVoice(rtCfg, realtimeEnablement(rtCfg));
+    });
+    warmRealtime();
+    // And again after every SIGHUP reload, which clears the verdict cache. A
+    // reload arriving BEFORE this line is registered simply has no warm; the
+    // miss-triggered fetch in cachedRealtimeVerdict covers that gap, which is
+    // why that fetch exists rather than warming being the only defence.
+    settingsReload.setWarmRealtime(warmRealtime);
 
     // Bootstrap the workflow engine: build/locate the bundle, compile pieces,
     // start the loopback SandboxApi, construct the EngineRuntime, extract the

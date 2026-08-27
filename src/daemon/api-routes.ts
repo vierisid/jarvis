@@ -2761,20 +2761,23 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: () => {
         const voice = ctx.config.voice;
         const rt = voice?.realtime;
-        // Surface whether realtime would actually resolve (BYO key cascade),
-        // so the UI can show "active / no key" without exposing secrets.
-        // The plan gate is part of "available": this flag is what puts the
-        // browser into raw-PCM capture mode, so reporting true for a plan
-        // that excludes uj-realtime makes client and server disagree about
-        // the wire format for a whole utterance. Read the gate's CACHE only —
-        // the dashboard polls this route, and a fetching gate here would turn
-        // that poll into sustained catalog traffic. An unknown verdict stays
-        // available, matching the gate's own advisory-allow stance.
         // The BINDING view, not the raw field: on a hosted install a tenant who
         // never chose gets realtime on, and reporting the stored false here
         // would show an off toggle for a feature that is actually running.
         const enablement = realtimeEnablement(ctx.config);
         const enabledNow = enablement !== 'off';
+        // Whether realtime would actually resolve, so the UI can show its state
+        // without exposing secrets. The plan gate is part of "available": this
+        // flag is what puts the browser into raw-PCM capture mode, so reporting
+        // true for a plan that excludes uj-realtime makes client and server
+        // disagree about the wire format for a whole utterance.
+        //
+        // Read through the CACHE-ONLY gate, which never stalls this poll. It
+        // does now start a background fetch on a miss or a stale entry — that
+        // changed when the boot warm turned out not to cover a cache cleared by
+        // SIGHUP — but the entry it writes ends the misses, so the ceiling is
+        // one request per cache-empty poll rather than one per poll. An unknown
+        // verdict still reads as available, matching the gate's advisory stance.
         let available = false;
         try {
           const res = resolveRealtimeVoice(ctx.config, enablement);

@@ -1,7 +1,6 @@
 import type { JarvisConfig, LLMConfig, STTConfig, TTSConfig } from '../config/types.ts';
 import type { HostedVoiceCredentials } from '../comms/voice.ts';
-import { loadUserSection } from './user-settings.ts';
-import { getSetting } from '../vault/settings.ts';
+import { loadUserSection, loadUserSectionStrict } from './user-settings.ts';
 
 /**
  * Hosted "Usejarvis AI" wiring (the platform's LLM proxy).
@@ -303,7 +302,7 @@ export type RealtimeEnablement =
 
 export function realtimeEnablement(
   config: JarvisConfig,
-  loadStored: (section: 'voice') => unknown = loadStoredVoice,
+  loadStored: (section: 'voice') => unknown = loadUserSectionStrict,
 ): RealtimeEnablement {
   const configured = config.voice?.realtime?.enabled === true;
   if (!hasUsejarvisAi(config)) return configured ? 'user-on' : 'off';
@@ -311,10 +310,15 @@ export function realtimeEnablement(
   // DEFAULT_CONFIG says false, so a true in the merged config can only have
   // come from the user or from JARVIS_REALTIME_VOICE. Only FALSE is ambiguous.
   if (configured) return 'user-on';
-  // ...except when the env var is SET, where false is not ambiguous at all:
-  // loader.ts documents "0"/"false" as an explicit disable, and the daemon
-  // re-applies env last over every merge. This is the operator's kill switch
-  // for the fleet where realtime just became default-on, so it must survive.
+  // ...except when the env var is SET, where false is not ambiguous at all.
+  //
+  // Read it as: applyEnvOverrides runs LAST over every merge (boot and reload),
+  // so if the var were a truthy value `configured` would be true and we would
+  // have returned above. Reaching here with it set therefore means the loader
+  // turned it into an explicit false — "0" / "false" / "no" / "" per loader.ts.
+  // That is the operator's kill switch on exactly the fleet where realtime just
+  // became default-on, so it has to outrank the default. (The truthiness table
+  // is deliberately NOT duplicated here; the loader owns it.)
   if (process.env.JARVIS_REALTIME_VOICE !== undefined) return 'off';
   let choice: boolean | null = null;
   try {
@@ -325,7 +329,7 @@ export function realtimeEnablement(
     // merged config rather than the hosted default: turning realtime ON for
     // someone who may have switched it off is the worse of the two mistakes,
     // and it opens a billed audio session to do it. Corrupt JSON reaches here
-    // too (loadStoredVoice throws rather than reading as silence), because a
+    // too (loadUserSectionStrict throws rather than reading as silence), because a
     // damaged row is not an answer either.
     warnVaultOnce(err);
     return configured ? 'user-on' : 'off';
@@ -335,24 +339,6 @@ export function realtimeEnablement(
   return 'hosted-default';
 }
 
-/**
- * Corruption must not read as "never asked".
- *
- * `loadUserSection` swallows a JSON parse error and returns undefined, which is
- * indistinguishable from an absent row — and absent means "default it on". A
- * tenant who explicitly declined, whose row later corrupts, would have realtime
- * switched back on. Throwing routes it into the fail-closed catch instead.
- */
-function loadStoredVoice(section: 'voice'): unknown {
-  const raw = getSetting(`cfg.${section}`);
-  if (raw === null) return undefined;
-  try {
-    const parsed = JSON.parse(raw);
-    return parsed === null ? undefined : parsed;
-  } catch {
-    throw new Error(`corrupt JSON in cfg.${section}`);
-  }
-}
 
 /** Once, not per call: GET /api/config/voice is polled every 15s per dashboard
  *  and every voice_start reads this, so a broken vault would flood the log. */
