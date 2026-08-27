@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { hasUsejarvisAi, realtimeEnablement } from './usejarvis-ai.ts';
+import { hasUsejarvisAi, realtimeEnablement, resetRealtimeVaultWarningForTest } from './usejarvis-ai.ts';
 import { realtimeServedByPlan, resolveRealtimeVoice } from '../config/realtime.ts';
 import type { JarvisConfig } from '../config/types.ts';
 
@@ -249,4 +249,27 @@ describe('the two hosted predicates must never disagree', () => {
       expect(realtimeServedByPlan(cfg)).toBe(hasUsejarvisAi(cfg));
     });
   }
+});
+
+describe('a mistyped config block does not flood the log', () => {
+  test('the malformed-block warning fires ONCE, not per read', () => {
+    // A hosted dashboard polls GET /api/config/voice every ~15s and each read
+    // runs hasUsejarvisAi, so one unquoted YAML scalar would print four times
+    // a minute for the life of the daemon.
+    resetRealtimeVaultWarningForTest();
+    const warnings: string[] = [];
+    const realWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.join(' ')); };
+    try {
+      const cfg = {
+        llm: { providers: {} },
+        usejarvis_ai: { base_url: 8080, api_key: 'sk-uj-x' },
+      } as unknown as JarvisConfig;
+      for (let i = 0; i < 5; i++) hasUsejarvisAi(cfg);
+      expect(warnings.filter((w) => w.includes('malformed usejarvis_ai'))).toHaveLength(1);
+    } finally {
+      console.warn = realWarn;
+      resetRealtimeVaultWarningForTest();
+    }
+  });
 });

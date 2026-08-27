@@ -58,6 +58,15 @@ function normalizeBlockUrl(value: string): string {
  * e.g. an unquoted YAML scalar parsed as number/boolean) is reported once per
  * read and treated as absent rather than throwing from inside the boot merge.
  */
+let malformedBlockWarned = false;
+function warnMalformedBlockOnce(): void {
+  if (malformedBlockWarned) return;
+  malformedBlockWarned = true;
+  console.warn(
+    '[UsejarvisAI] Ignoring malformed usejarvis_ai config block: base_url and api_key must be strings (quote them in config.yaml).',
+  );
+}
+
 function readUsejarvisAiBlock(
   config: JarvisConfig,
 ): { base_url: string; api_key: string } | null {
@@ -68,9 +77,11 @@ function readUsejarvisAiBlock(
     (base_url !== undefined && typeof base_url !== 'string')
     || (api_key !== undefined && typeof api_key !== 'string')
   ) {
-    console.warn(
-      '[UsejarvisAI] Ignoring malformed usejarvis_ai config block: base_url and api_key must be strings (quote them in config.yaml).',
-    );
+    // ONCE. This used to be reached rarely; now a hosted dashboard polls
+    // GET /api/config/voice every ~15s and each read runs hasUsejarvisAi, so a
+    // single mistyped line would print four times a minute for the life of the
+    // daemon and bury everything else. Same latch as warnVaultOnce below.
+    warnMalformedBlockOnce();
     return null;
   }
   const url = typeof base_url === 'string' ? normalizeBlockUrl(base_url) : '';
@@ -352,9 +363,10 @@ function warnVaultOnce(err: unknown): void {
   console.warn('[UsejarvisAI] could not read the stored voice section; leaving realtime as configured:', err);
 }
 
-/** Test seam for the warn-once latch. */
+/** Test seam for the warn-once latches. */
 export function resetRealtimeVaultWarningForTest(): void {
   vaultWarned = false;
+  malformedBlockWarned = false;
 }
 
 /**
