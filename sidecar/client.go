@@ -51,14 +51,17 @@ type SidecarClient struct {
 	// and written by connectAndServe; Stop() clears it from the signal-handler
 	// goroutine. atomic.Pointer makes those cross-goroutine accesses race-free
 	// (c.mu intentionally does not cover conn).
-	conn            atomic.Pointer[websocket.Conn]
-	reconnectDelay  time.Duration
-	stopped         bool
-	incompatible    bool         // brain hard-blocked us (version < MIN); do not reconnect
-	connState       atomic.Int32 // connConnecting/connConnected/connError (tray icon + status)
-	alertOnce       sync.Once    // show the invalid-token pop-up at most once
-	availableCaps   []SidecarCapability
-	unavailableCaps []UnavailableCapability
+	conn           atomic.Pointer[websocket.Conn]
+	reconnectDelay time.Duration
+	stopped        bool
+	incompatible   bool         // brain hard-blocked us (version < MIN); do not reconnect
+	connState      atomic.Int32 // connConnecting/connConnected/connError (tray icon + status)
+	alertOnce      sync.Once    // show the invalid-token pop-up at most once
+	// openDashboardOnce gates the "Open dashboard at startup" preference to a
+	// single firing per process — see shouldOpenDashboardAtStartup.
+	openDashboardOnce sync.Once
+	availableCaps     []SidecarCapability
+	unavailableCaps   []UnavailableCapability
 
 	shutdown  func()             // full process-shutdown (client stop + ctx cancel); set by runWithTray
 	obsCancel context.CancelFunc // cancel function for running observers
@@ -369,6 +372,25 @@ func (c *SidecarClient) applyPebblePrefs() {
 	}
 }
 
+// shouldOpenDashboardAtStartup reports whether this connection should open the
+// dashboard window because of the "Open dashboard at startup" preference.
+//
+// True at most once per process, and only on the FIRST successful registration:
+// the panel needs a minted access token and the brain origin, so it cannot run
+// before we are connected, and a reconnect must never re-open a window the user
+// deliberately closed. The once-guard is consumed on the first call regardless
+// of the preference, so toggling the setting on mid-session does not retro-fire
+// on the next reconnect — it is a *startup* setting and takes effect on the
+// next launch.
+func (c *SidecarClient) shouldOpenDashboardAtStartup() bool {
+	first := false
+	c.openDashboardOnce.Do(func() { first = true })
+	if !first {
+		return false
+	}
+	return c.Preferences().OpenDashboardAtStartup
+}
+
 func (c *SidecarClient) reloadConfig() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -512,6 +534,19 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	c.mu.Unlock()
 
 	StartObservers(obsCtx, c.config, c.availableCaps, sendFn)
+
+	// "Open dashboard at startup" — the user asked to see the full window and
+	// not just the pebble. Placed after the c.mu block above so obsCtx is
+	// already published when OpenChat snapshots it, and on its own goroutine
+	// because minting the panel's access token is a network round-trip that
+	// must not stall this loop.
+	// OpenChat already handles every failure itself (no 'windows' capability,
+	// unknown brain origin, mint failure) and focuses the window instead of
+	// spawning a second one if it is somehow already open.
+	if c.shouldOpenDashboardAtStartup() {
+		log.Println("[sidecar] opening the dashboard (open-at-startup preference)")
+		go c.OpenChat()
+	}
 
 	// Wire the pebble's summon hotkey to the brain via a SidecarEvent.
 	// The daemon listens for "pebble.summon" and drives state transitions

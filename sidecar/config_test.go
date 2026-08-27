@@ -120,3 +120,64 @@ func TestSaveConfigRefusesSymlink(t *testing.T) {
 		t.Fatalf("decoy was overwritten: got %q, want %q", data, "innocent")
 	}
 }
+
+// TestOpenDashboardAtStartupDefaultsOff locks in the off-by-default contract
+// for the "Open dashboard at startup" preference: a config file written before
+// the key existed must load as false, not pop a window on the user's next
+// launch. Mirrors TestAwarenessOCRDefault, but the polarity is the point here —
+// the zero value IS the default, so unlike telemetry this needs no pointer.
+func TestOpenDashboardAtStartupDefaultsOff(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+		want bool
+	}{
+		{"no preferences block", "token: abc\n", false},
+		{"preferences without the key", "preferences:\n  start_at_startup: true\n", false},
+		{"explicit false", "preferences:\n  open_dashboard_at_startup: false\n", false},
+		{"explicit true", "preferences:\n  open_dashboard_at_startup: true\n", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := defaultConfig()
+			if cfg.Preferences.OpenDashboardAtStartup {
+				t.Fatal("defaultConfig must leave open_dashboard_at_startup off")
+			}
+			if err := yaml.Unmarshal([]byte(tc.yaml), &cfg); err != nil {
+				t.Fatalf("yaml: %v", err)
+			}
+			if cfg.Preferences.OpenDashboardAtStartup != tc.want {
+				t.Fatalf("OpenDashboardAtStartup = %v, want %v", cfg.Preferences.OpenDashboardAtStartup, tc.want)
+			}
+		})
+	}
+}
+
+// TestOpenDashboardAtStartupRoundTrips proves the toggle survives the on-disk
+// write/read cycle (SaveConfig -> LoadConfig).
+func TestOpenDashboardAtStartupRoundTrips(t *testing.T) {
+	originalConfigDir := configDir
+	originalConfigFile := configFile
+	t.Cleanup(func() {
+		configDir = originalConfigDir
+		configFile = originalConfigFile
+	})
+
+	configDir = filepath.Join(t.TempDir(), ".jarvis")
+	configFile = filepath.Join(configDir, "sidecar.yaml")
+
+	cfg := defaultConfig()
+	cfg.Preferences.OpenDashboardAtStartup = true
+	if err := SaveConfig(&cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if !loaded.Preferences.OpenDashboardAtStartup {
+		t.Fatal("OpenDashboardAtStartup did not survive the save/load round trip")
+	}
+}

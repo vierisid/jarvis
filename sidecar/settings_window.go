@@ -29,10 +29,11 @@ func (c *SidecarClient) OpenSettings() {
 type settingsState struct {
 	Status string `json:"status"` // "connected" | "connecting" | "error"
 	Prefs  struct {
-		StartAtStartup      bool `json:"start_at_startup"`
-		EtherealPebble      bool `json:"ethereal_pebble"`
-		EtherealIdleSeconds int  `json:"ethereal_idle_seconds"`
-		TelemetryEnabled    bool `json:"telemetry_enabled"`
+		StartAtStartup         bool `json:"start_at_startup"`
+		OpenDashboardAtStartup bool `json:"open_dashboard_at_startup"`
+		EtherealPebble         bool `json:"ethereal_pebble"`
+		EtherealIdleSeconds    int  `json:"ethereal_idle_seconds"`
+		TelemetryEnabled       bool `json:"telemetry_enabled"`
 	} `json:"prefs"`
 }
 
@@ -66,6 +67,7 @@ func (c *SidecarClient) runSettingsWindow() {
 			var st settingsState
 			st.Status = connStateString(c.ConnState())
 			st.Prefs.StartAtStartup = prefs.StartAtStartup
+			st.Prefs.OpenDashboardAtStartup = prefs.OpenDashboardAtStartup
 			st.Prefs.EtherealPebble = prefs.EtherealPebble
 			st.Prefs.EtherealIdleSeconds = prefs.EtherealIdleSeconds
 			if st.Prefs.EtherealIdleSeconds <= 0 {
@@ -142,6 +144,10 @@ func (c *SidecarClient) runSettingsWindow() {
 					return fmt.Errorf("Could not %s start-at-startup: %v", verb, err)
 				}
 				return c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.StartAtStartup = enabled })
+			case "open_dashboard_at_startup":
+				// Read once per launch (shouldOpenDashboardAtStartup), so there
+				// is no live state to apply here — just persist the choice.
+				return c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.OpenDashboardAtStartup = enabled })
 			case "ethereal_pebble":
 				if err := c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.EtherealPebble = enabled }); err != nil {
 					return err
@@ -283,6 +289,10 @@ const settingsWindowHTML = `<!doctype html>
       <div class="sl7"><div class="a">Start at system startup</div><div class="b">Launch the sidecar automatically when you log in.</div></div>
       <div class="sv7"><label class="sw"><input type="checkbox" id="start_at_startup" onchange="togglePref(this)"><span class="track"></span></label></div>
     </div>
+    <div class="srow">
+      <div class="sl7"><div class="a">Open dashboard at startup</div><div class="b">Show the full Jarvis window every time the sidecar starts, not just the pebble.</div></div>
+      <div class="sv7"><label class="sw"><input type="checkbox" id="open_dashboard_at_startup" onchange="togglePref(this)"><span class="track"></span></label></div>
+    </div>
   </div>
 
   <div class="sec">Style</div>
@@ -341,6 +351,7 @@ const settingsWindowHTML = `<!doctype html>
     var st = await window.getState();
     paintStatus(st.status);
     document.getElementById('start_at_startup').checked = !!st.prefs.start_at_startup;
+    document.getElementById('open_dashboard_at_startup').checked = !!st.prefs.open_dashboard_at_startup;
     document.getElementById('ethereal_pebble').checked = !!st.prefs.ethereal_pebble;
     document.getElementById('ethereal_idle_seconds').value = st.prefs.ethereal_idle_seconds || 5;
     document.getElementById('telemetry_enabled').checked = !!st.prefs.telemetry_enabled;

@@ -150,6 +150,12 @@ type TelemetryConfig struct {
 type PreferencesConfig struct {
 	// General
 	StartAtStartup bool `yaml:"start_at_startup"` // register the sidecar to launch on login
+	// OpenDashboardAtStartup opens the dashboard window on every sidecar
+	// startup (once the brain connection is up, since the panel needs a
+	// minted access token). Off by default: normally only the pebble appears.
+	// A plain bool is right here — false IS the default, so a config file
+	// written before this key existed reads correctly as off.
+	OpenDashboardAtStartup bool `yaml:"open_dashboard_at_startup"`
 	// Style
 	EtherealPebble      bool `yaml:"ethereal_pebble"`       // fade the pebble out while idle, pop it back on activity
 	EtherealIdleSeconds int  `yaml:"ethereal_idle_seconds"` // idle time before the pebble fades out (default 5)

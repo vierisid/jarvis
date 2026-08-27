@@ -49,6 +49,8 @@ import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { applyApprovalDecision } from "./approval-decision.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 import { SidecarManager, buildEnrollmentUrls } from "../sidecar/manager.ts";
+import { claimDashboardIntro } from "../sidecar/first-run.ts";
+import type { ConnectedSidecar } from "../sidecar/types.ts";
 import { resolveExternalOrigin } from "../util/external-origin.ts";
 import { ensureWorkflowSchema } from "../workflows/db/index.ts";
 import { Worker as WorkflowWorker } from "../workflows/queue/worker.ts";
@@ -1093,6 +1095,53 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return Buffer.concat([header, pcm]);
       };
 
+      // The very first sidecar ever to connect to THIS brain gets the dashboard
+      // opened alongside the pebble: a lone pebble on a fresh install reads as
+      // "nothing happened", and on Linux there is no tray to find the dashboard
+      // from. Scoped to the brain (claimDashboardIntro persists the flag in the
+      // vault), so a re-issued enrollment token or a second machine is NOT a
+      // first run. Distinct from the sidecar-local "Open dashboard at startup"
+      // preference, which the sidecar honours itself on every launch.
+      //
+      // Never throws: this is a nicety, and the caller's catch block owns the
+      // pebble's spawn bookkeeping — a failure here must not un-guard that.
+      const openFirstRunDashboard = async (sidecar: ConnectedSidecar): Promise<void> => {
+        // Everything lives inside the try — claimDashboardIntro() does
+        // synchronous SQLite I/O and can throw on a sick vault, and the caller's
+        // catch owns the pebble's spawn bookkeeping.
+        try {
+          // Without the 'windows' capability the sidecar has no panel service at
+          // all, so the spawn could only fail — leave the intro unclaimed for a
+          // capable sidecar instead of burning it here.
+          if (!sidecar.capabilities.includes('windows')) return;
+          if (!claimDashboardIntro()) return;
+          // The full dashboard SPA at '#/' — the same window (and the same
+          // panel id) the tray's "Open dashboard" opens, so this can never
+          // produce a duplicate. NOT dashboardURL(), which renders a single
+          // chrome-less room body.
+          await sidecarManager.dispatchRPC(sidecar.id, 'panel.spawn', {
+            id: 'tray:chat',
+            url: `${pebblePanelOrigin}/#/`,
+            title: 'JARVIS',
+            bounds: { x: -1, y: -1, w: 1100, h: 760 },
+            resizable: true,
+            multi_instance: false,
+          });
+          console.log(`[ambient-ui] first-run dashboard opened on ${sidecar.id}`);
+        } catch (err) {
+          // Losing the race for the 'tray:chat' id (the user clicked the tray, or
+          // the sidecar's own open-at-startup preference got there first) means
+          // the dashboard IS up — the intro's whole purpose is served. Not a
+          // failure; say so rather than crying wolf in the log.
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes('panel already exists')) {
+            console.log(`[ambient-ui] first-run dashboard already open on ${sidecar.id}`);
+            return;
+          }
+          console.warn(`[ambient-ui] first-run dashboard open failed on ${sidecar.id}:`, err);
+        }
+      };
+
       sidecarManager.onSidecarConnected(async (sidecar) => {
         if (!sidecar.capabilities.includes('pebble')) {
           console.log(`[ambient-ui] Sidecar ${sidecar.id} lacks 'pebble' capability — skipping native pebble spawn`);
@@ -1113,6 +1162,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           const awarenessEnabled = (jarvisConfig.awareness as { enabled?: boolean })?.enabled ?? true;
           sidecarManager.dispatchRPC(sidecar.id, 'pebble.set_blinded', { blinded: !awarenessEnabled })
             .catch(() => { /* sidecar might not have the cap yet */ });
+          // Deliberately last: the pebble comes up first, then the dashboard
+          // lands behind it. Note this ties the intro to the 'pebble'
+          // capability — unreachable today (both 'pebble' and 'windows' are
+          // defaults, and LoadConfig re-adds any default a config file drops),
+          // but if pebble ever becomes disableable, hoist this call out of the
+          // pebble gate or a windows-only sidecar will see nothing at all.
+          await openFirstRunDashboard(sidecar);
         } catch (err) {
           spawnedOn.delete(sidecar.id);
           console.warn(`[ambient-ui] Failed to spawn native pebble on ${sidecar.id}:`, err);
