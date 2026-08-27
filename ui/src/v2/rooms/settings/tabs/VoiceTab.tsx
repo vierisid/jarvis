@@ -23,11 +23,17 @@ export function VoiceTab({
   const voice = data.voiceCfg;
   const rt = voice?.realtime;
 
+  // Unavailable means two different things, and the chip used to name only
+  // one of them: on a hosted install there is no key for the user to add, so
+  // "No OpenAI key" both misdiagnosed the problem and implied a bill they do
+  // not pay. The hint below says the same thing at length; this is its label.
   const statusChip = !rt?.enabled
     ? { label: "Off", tone: undefined }
     : rt.available
       ? { label: "Active", tone: "ok" as const }
-      : { label: "No OpenAI key", tone: "warn" as const };
+      : rt.served_by_plan
+        ? { label: "Not in your plan", tone: "warn" as const }
+        : { label: "No OpenAI key", tone: "warn" as const };
 
   return (
     <div className="v2-set__tabpane">
@@ -82,8 +88,12 @@ export function VoiceTab({
             )}
             {rt.available && rt.enabled_default && (
               <p className="v2-set__hint">
-                On because your plan includes it. Switch it off here and JARVIS goes back
-                to the standard voice pipeline.
+                {/* "may include" rather than "includes": available is true for an
+                    UNKNOWN plan verdict too (the gate defaults open until the
+                    catalog answers), so claiming inclusion here can be wrong for
+                    the first few seconds after a restart. */}
+                On because your plan may include it. Switch it off here and JARVIS goes
+                back to the standard voice pipeline.
               </p>
             )}
 

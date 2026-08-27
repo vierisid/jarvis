@@ -6,7 +6,9 @@ import { createApiRoutes, type ApiContext } from './api-routes.ts';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import { DEFAULT_CONFIG, type JarvisConfig } from '../config/types.ts';
 import { loadUserSection } from './user-settings.ts';
-import { setSetting } from '../vault/settings.ts';
+import { getSetting, setSetting } from '../vault/settings.ts';
+import { persistUserPatch } from './user-settings.ts';
+import { clearRealtimeGateCache } from './realtime-gate.ts';
 import { getSecret } from '../vault/keychain.ts';
 import { effectiveSttForBinding, effectiveTtsForBinding, realtimeEnablement, resetRealtimeVaultWarningForTest } from './usejarvis-ai.ts';
 
@@ -33,9 +35,18 @@ function getHandler(routes: Record<string, unknown>, path: string, method: 'GET'
   return handler;
 }
 
+/**
+ * A hosted install pointed at a host that cannot resolve.
+ *
+ * Deliberately NOT the real `llm.usejarvis.host`: reading the realtime block
+ * misses the plan-gate cache and kicks a background catalog fetch, so a
+ * production hostname here means every unit-test run sends a bearer token at
+ * prod infra — and a 401 back would cache a DEFINITIVE "excluded" in the
+ * module-level gate cache, flaking any later test that asserts availability.
+ */
 function hostedConfig(): JarvisConfig {
   const config = structuredClone(DEFAULT_CONFIG);
-  config.usejarvis_ai = { base_url: 'https://llm.usejarvis.host', api_key: 'sk-uj-abc123' };
+  config.usejarvis_ai = { base_url: 'https://llm.invalid/v1', api_key: 'sk-uj-abc123' };
   return config;
 }
 
@@ -68,6 +79,7 @@ describe('voice config routes: persistence stays silence-preserving', () => {
     process.env.JARVIS_SECRETS_DIR = secretsDir;
     closeDb();
     initDatabase(':memory:');
+    clearRealtimeGateCache();
   });
   afterEach(() => {
     closeDb();
@@ -276,6 +288,7 @@ describe('voice config routes: a save must not silently decline realtime', () =>
     process.env.JARVIS_SECRETS_DIR = secretsDir;
     closeDb();
     initDatabase(':memory:');
+    clearRealtimeGateCache();
   });
   afterEach(() => {
     closeDb();
@@ -392,6 +405,7 @@ describe('GET /api/config/voice tells the truth about who pays', () => {
     process.env.JARVIS_SECRETS_DIR = secretsDir;
     closeDb();
     initDatabase(':memory:');
+    clearRealtimeGateCache();
   });
   afterEach(() => {
     closeDb();
@@ -440,5 +454,68 @@ describe('GET /api/config/voice tells the truth about who pays', () => {
     const config = structuredClone(DEFAULT_CONFIG);
     config.llm = { providers: { openai: { api_key: 'sk-their-own' } } } as JarvisConfig['llm'];
     expect((await read(config)).realtime.served_by_plan).toBe(false);
+  });
+});
+
+describe('replacing an unreadable settings row says so', () => {
+  let secretsDir: string;
+  let prevSecretsDir: string | undefined;
+  let warnings: string[];
+  let realWarn: typeof console.warn;
+
+  beforeEach(() => {
+    prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-rt-warn-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
+    closeDb();
+    initDatabase(':memory:');
+    warnings = [];
+    realWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.join(' ')); };
+  });
+  afterEach(() => {
+    console.warn = realWarn;
+    closeDb();
+    if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
+
+  const replaced = () => warnings.filter((w) => w.includes('is being REPLACED'));
+
+  test('warns when the row will not parse', () => {
+    // The read path fails closed on corruption; the write path cannot refuse
+    // without locking someone out of their own settings, so it is loud instead
+    // — an explicit realtime decline is about to be lost.
+    setSetting('cfg.voice', '{ not json');
+    persistUserPatch('voice', { wake_engine: 'webspeech' });
+    expect(replaced()).toHaveLength(1);
+  });
+
+  test('warns when the row parses to the WRONG SHAPE', () => {
+    // The earlier condition keyed on loadUserSection returning undefined, which
+    // this case does not: valid JSON of the wrong type parses fine and was
+    // replaced in silence.
+    setSetting('cfg.voice', '[1,2]');
+    persistUserPatch('voice', { wake_engine: 'webspeech' });
+    expect(replaced()).toHaveLength(1);
+  });
+
+  test('stays QUIET for an absent row and for a canonical null row', () => {
+    // saveUserSection writes 'null' for an absent section, so warning on it
+    // would fire on ordinary saves for anyone who has never set voice options.
+    persistUserPatch('voice', { wake_engine: 'webspeech' });
+    expect(replaced()).toHaveLength(0);
+    setSetting('cfg.voice', 'null');
+    persistUserPatch('voice', { wake_engine: 'openwakeword' });
+    expect(replaced()).toHaveLength(0);
+  });
+
+  test('stays quiet for a healthy row, and preserves it', () => {
+    setSetting('cfg.voice', JSON.stringify({ realtime: { enabled: false } }));
+    persistUserPatch('voice', { wake_engine: 'webspeech' });
+    expect(replaced()).toHaveLength(0);
+    const stored = JSON.parse(getSetting('cfg.voice')!) as { realtime?: { enabled?: boolean } };
+    expect(stored.realtime?.enabled).toBe(false); // the decline survived
   });
 });

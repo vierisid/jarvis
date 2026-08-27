@@ -52,6 +52,12 @@ const VALID_EFFORTS: RealtimeReasoningEffort[] = ['minimal', 'low', 'medium', 'h
 /**
  * Would a realtime session run on the PLAN rather than on a user's own key?
  *
+ * The twin of `readUsejarvisAiBlock` (daemon/usejarvis-ai.ts) and required to
+ * agree with it on every input — `realtime-enablement.test.ts` pins that over a
+ * table of block shapes. They are separate functions rather than one because
+ * this module must not take a runtime dependency on the daemon layer; the test
+ * is what keeps the duplication honest.
+ *
  * The single predicate behind the money rule, exported so the settings route
  * cannot drift from it. Deliberately a function of the hosted block ALONE —
  * not of whether realtime is currently switched on, and not of whether the
@@ -171,12 +177,16 @@ export function resolveRealtimeVoice(
   // — losing a rare feature beats silently charging someone's personal card —
   // and it makes one rule true everywhere: on a hosted install, realtime is
   // either included in your plan or it does not run.
-  const apiKey = realtimeServedByPlan(config) ? '' : findOpenAIProviderKey(config).trim();
+  const servedByPlan = realtimeServedByPlan(config);
+  // Read only where the plan cannot serve it. On a hosted install this stays
+  // '' and is never consulted — the branch below returns first — which is the
+  // whole money rule in one line.
+  const apiKey = servedByPlan ? '' : findOpenAIProviderKey(config).trim();
 
   // The platform block is live, so the proxy serves realtime under the
   // plan-gated uj-realtime alias and the user's own key is never read.
   const hosted = config.usejarvis_ai;
-  if (realtimeServedByPlan(config)) {
+  if (servedByPlan) {
     // Normalize through URL parsing rather than string surgery: the block is
     // provisioner-written, and each of these typo classes previously derailed
     // the ws(s) derivation into an undialable URL — an uppercase scheme
