@@ -1255,9 +1255,16 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           // surface is exactly how the trial ended up with two pebbles on
           // screen in the first place. The handover is the highest-stakes of
           // the lot, because getting it wrong strands the founder.
+          // `trial_day_one` is here for the strongest version of that reason.
+          // Beat 14 needs an hour of conversation, a handover, a sub-agent and
+          // five minutes before it draws anything, and beat 17 needs most of a
+          // working day. Reviewing either by waiting for one is not reviewing
+          // it. The route already refuses without a running entitlement, and
+          // broadcasting a card is a smaller thing than the `trial_standdown`
+          // already on this list, which strands the founder if it is wrong.
           const allowed = [
             'trial_proposal', 'trial_point', 'trial_beat', 'trial_onboarding_complete',
-            'trial_walk', 'trial_standdown',
+            'trial_walk', 'trial_standdown', 'trial_day_one',
           ];
           // The two room actions the beats drive, and ONLY those two. They are
           // how the goal tree and the workflow explain themselves, and neither

@@ -2184,9 +2184,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       if (!entitlement || !isTrialRunning(entitlement, Date.now())) return;
       if (entitlement.conductor_finished_at === null) return;
       const dir = this.ensureDayOne();
-      // `begin` keeps the handover time it restored from the ledger, so the
-      // windows day one is measured in do not move because of a restart.
-      dir.begin(this.readDayOneFoundation(), entitlement.conductor_finished_at);
+      // `resume`, not `begin`: everything on file wins, so a restart does not
+      // move the windows day one is measured in or refund its budget.
+      dir.resume(this.readDayOneFoundation(), entitlement.conductor_finished_at);
       console.log('[WSService] day one resumed after a restart');
     } catch (err) {
       console.warn('[WSService] could not resume day one:', err);

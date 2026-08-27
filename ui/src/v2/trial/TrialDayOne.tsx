@@ -210,7 +210,14 @@ export function TrialDayOne() {
             <ul className="td1-day">
               {card.data.summary.map((line, i) => <li key={i}>{line}</li>)}
             </ul>
-            <p className="td1-says">Let me take one of them off you.</p>
+            {/* A day it barely saw has no "them" to take one off, and the
+                spoken line already says so. The card matches it rather than
+                promising against a list that is not there. */}
+            <p className="td1-says">
+              {card.data.thin
+                ? "What I can do is take one thing off tomorrow."
+                : "Let me take one of them off you."}
+            </p>
           </>
         )}
 

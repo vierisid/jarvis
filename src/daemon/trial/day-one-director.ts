@@ -55,7 +55,52 @@ export const RETURN_SETTLE_MS = 45_000;
 /** How long the pebble stands over the finished row before drifting back. */
 export const RETURN_GESTURE_HOLD_MS = 4_000;
 
+/**
+ * How much later a handover has to be before it counts as a different day one
+ * rather than the same one being re-announced. An hour: longer than any gap
+ * between a stand-down and the daemon noticing it, far shorter than the gap
+ * between two walks of the arc.
+ */
+export const NEW_DAY_ONE_MS = 60 * 60_000;
+
+/**
+ * How late D30 can be and still be worth delivering.
+ *
+ * The close falls due while the daemon is down more often than it sounds: it
+ * is the one beat scheduled hours out, and a founder who quits the app at six
+ * for a close due at seven is the ordinary case, not the edge. Two hours is
+ * the window in which they are plausibly still in the same evening, so the
+ * close arrives late rather than not at all. Past it the day is genuinely
+ * over, and a proposal about "your day" delivered the following morning is
+ * worse than silence.
+ */
+export const CLOSE_GRACE_MS = 2 * 60 * 60_000;
+
 export type DayOneExecution = { ok: boolean; says: string };
+
+/**
+ * The half of the foundation that was learned by VOICE and lives nowhere else.
+ *
+ * The other half (their quarter, their board, the people the reader landed) is
+ * in the vault and can be re-read at any moment. These five cannot: they came
+ * out of the conducted hour and the beats session is the only record of them.
+ * So day one keeps its own copy, in its own ledger, and puts it back on every
+ * time the vault half is refreshed. See `refreshFoundation`.
+ */
+export type DayOneSessionHalf = Pick<
+  DayOneFoundation,
+  'workflows' | 'workspace' | 'authorityLevel' | 'agent' | 'eveningHour'
+>;
+
+export function sessionHalfOf(f: DayOneFoundation): DayOneSessionHalf {
+  return {
+    workflows: f.workflows,
+    workspace: f.workspace,
+    authorityLevel: f.authorityLevel,
+    agent: f.agent,
+    eveningHour: f.eveningHour,
+  };
+}
 
 export type DayOneDeps = {
   broadcast: (msg: WSMessage) => void;
@@ -100,6 +145,10 @@ type Persisted = {
   pending: AgentReturn | null;
   /** True once the pending return has actually been delivered. */
   returned: boolean;
+  /** D30's payload, held for the same reason and on the same terms. */
+  pendingClose: DayOneClose | null;
+  /** The five fields only the conducted hour knew. See DayOneSessionHalf. */
+  session: DayOneSessionHalf | null;
   closedAt: number | null;
 };
 
@@ -110,6 +159,10 @@ export class DayOneDirector {
   private lines: DayLine[] = [];
   private pending: AgentReturn | null = null;
   private returned = false;
+  /** A composed close nobody was there to receive. See `closeDay`. */
+  private pendingClose: DayOneClose | null = null;
+  /** What the conducted hour knew that the vault does not. */
+  private session: DayOneSessionHalf | null = null;
   private closedAt: number | null = null;
   private handedOverAt: number | null = null;
   /** Offers currently live on a surface, by id, so an accept can be executed. */
@@ -130,37 +183,111 @@ export class DayOneDirector {
   /* ───────────────────────────── the seam ───────────────────────────── */
 
   /**
-   * The conductor stood down and day one begins.
+   * A conductor just stood down. This is a NEW day one.
    *
-   * Idempotent, and deliberately so: a reload republishes nothing and a second
-   * call does not restart the day. `handedOverAt` is the anchor for every
-   * window in here and it is set once.
+   * Authoritative over anything in the ledger, and that is the difference from
+   * `resume`. Vieri walks the whole arc repeatedly on the same trial home, so
+   * a second handover a day after the first must not inherit yesterday's
+   * interruption budget, yesterday's day lines or yesterday's stranded agent
+   * result. A handover materially later than the one on file wipes the ledger
+   * and starts the day again.
+   *
+   * "Materially later" rather than "different" because the same handover can
+   * arrive twice: `resume` passes the entitlement's `conductor_finished_at`,
+   * which is stamped from the same moment but not always to the same
+   * millisecond, and a reload must not reset a founder's afternoon.
    */
   begin(foundation: DayOneFoundation, handedOverAt: number): void {
+    // The one call that arrives with the beats session behind it, and so the
+    // only one that can set the half of the foundation the vault never holds.
+    this.session = sessionHalfOf(foundation);
+    if (this.handedOverAt !== null && handedOverAt > this.handedOverAt + NEW_DAY_ONE_MS) {
+      console.log('[TrialDayOne] a new handover, well after the last one: starting day one again');
+      this.ambient = emptyAmbientState();
+      this.lines = [];
+      this.pending = null;
+      this.pendingClose = null;
+      this.returned = false;
+      this.closedAt = null;
+      this.offers.clear();
+      this.handedOverAt = null;
+      // Both timers, and the return one matters more than it looks. Yesterday's
+      // delivery timer left armed would fire into TODAY's pending return and
+      // hand it over early, before the settle window that keeps beat 14 off the
+      // end of the handover.
+      if (this.closeTimer) { clearTimeout(this.closeTimer); this.closeTimer = null; }
+      if (this.returnTimer) { clearTimeout(this.returnTimer); this.returnTimer = null; }
+    }
+    this.adopt(foundation, handedOverAt);
+  }
+
+  /**
+   * A daemon that restarted in the middle of a day one that is already
+   * running. Everything on file wins; nothing is reset.
+   */
+  resume(foundation: DayOneFoundation, handedOverAt: number): void {
+    this.adopt(foundation, handedOverAt);
+  }
+
+  private adopt(foundation: DayOneFoundation, handedOverAt: number): void {
     this.foundation = foundation;
     if (this.handedOverAt === null) {
       this.handedOverAt = handedOverAt;
-      this.foundation.handedOverAt = handedOverAt;
       console.log(`[TrialDayOne] day one begins, handover at ${new Date(handedOverAt).toISOString()}`);
-    } else {
-      this.foundation.handedOverAt = this.handedOverAt;
     }
+    this.foundation.handedOverAt = this.handedOverAt;
+    // Only `begin` carries the session half, and only the first time. Every
+    // other way in here (a resume, a re-announce) arrives with the vault half
+    // alone, so the retained copy is put back on.
+    this.wearSession();
     this.started = true;
     this.armClose();
     this.persist();
   }
 
-  /** Re-read the vault. Cheap, and it keeps the offers pointing at what is
-   *  actually there rather than at what was there at the handover. */
+  /**
+   * Re-read the vault, and keep the half of the foundation the vault does not
+   * hold.
+   *
+   * This used to replace the foundation outright, and that was quietly fatal
+   * to two of the beats it feeds. `readDayOneFoundation` reads goals, board
+   * and landed entities; it cannot know the flows they published, the folder
+   * they let be organised, the authority they granted, the question they gave
+   * the agent, or the evening hour they chose, because all five were learned
+   * by voice and live only in the beats session. Overwriting with a vault read
+   * therefore nulled all five, and `onAgentSettled` calls this immediately
+   * BEFORE composing beat 14. The result on every real run:
+   *
+   *  - the founder's own question came back empty, so the card had no question
+   *    on it and the agent was called "your agent";
+   *  - `floorOffers` saw no workspace and no authority level, so D27's OUTWARD
+   *    arm could never be offered at all;
+   *  - the close fell back to nine hours after the handover rather than the
+   *    evening hour they picked, and the governor lost two of its subjects.
+   *
+   * The tests did not catch it because the harness's `readFoundation` returns
+   * a complete foundation, which the daemon's never does.
+   */
   refreshFoundation(): void {
     if (!this.started) return;
     try {
       const next = this.deps.readFoundation();
       next.handedOverAt = this.handedOverAt;
       this.foundation = next;
+      this.wearSession();
     } catch (err) {
       console.warn('[TrialDayOne] could not re-read the foundation:', err);
     }
+  }
+
+  /** Put the retained session half back onto whatever the vault just gave us. */
+  private wearSession(): void {
+    if (!this.session) return;
+    this.foundation.workflows = this.session.workflows;
+    this.foundation.workspace = this.session.workspace;
+    this.foundation.authorityLevel = this.session.authorityLevel;
+    this.foundation.agent = this.session.agent;
+    this.foundation.eveningHour = this.session.eveningHour;
   }
 
   /** Is day one live? Everything in here is a no-op when it is not. */
@@ -230,6 +357,9 @@ export class DayOneDirector {
    * hears about it now, and it is the first thing said.
    */
   onSurfaceOpened(): void {
+    // A close that fired into an empty house comes first, and is checked
+    // before `running()` because day one has already ended by then.
+    this.deliverHeldClose();
     if (!this.running()) return;
     if (!this.pending || this.returned) return;
     if (this.returnTimer) return; // the push is still on its way
@@ -417,6 +547,14 @@ export class DayOneDirector {
     this.persist();
   }
 
+  /**
+   * The foundation as it currently stands, vault half and session half both.
+   * Read-only; the copy is shallow because nothing here mutates it in place.
+   */
+  previewFoundation(): DayOneFoundation {
+    return { ...this.foundation };
+  }
+
   /** What the close would say if it ran now. Exposed for the API and tests. */
   previewClose(): DayOneClose {
     return composeDayOneClose({ lines: this.lines, foundation: this.foundation, now: this.now() });
@@ -426,7 +564,7 @@ export class DayOneDirector {
     if (this.closeTimer || this.closedAt !== null || this.handedOverAt === null) return;
     const at = dayOneCloseAt(this.foundation, this.handedOverAt);
     const wait = at - this.now();
-    if (wait <= 0) return;
+    if (wait <= 0) { this.closeOverdue(at); return; }
     // setTimeout past ~24.8 days overflows; day one never is, but a corrupted
     // ledger could make it look like it.
     if (wait > 20 * 60 * 60_000) return;
@@ -439,13 +577,46 @@ export class DayOneDirector {
   }
 
   /**
+   * The close fell due while the daemon was down.
+   *
+   * Day one is the one beat scheduled hours out, so this is ordinary rather
+   * than exotic: a founder who quits the app at six for a close due at seven
+   * hits it every time. Before this, `armClose` simply declined to arm a timer
+   * for a moment already past, which left `closedAt` null forever. Day one
+   * then never ended: the governor went on holding every ambient suggestion
+   * against a budget already spent, and D30 never happened at all.
+   */
+  private closeOverdue(dueAt: number): void {
+    const late = this.now() - dueAt;
+    if (late <= CLOSE_GRACE_MS) {
+      console.log(`[TrialDayOne] the close fell due ${Math.round(late / 60_000)}m ago; delivering it late`);
+      const t = setTimeout(() => this.closeDay(), 2_000);
+      (t as unknown as { unref?: () => void }).unref?.();
+      return;
+    }
+    // Long past. The day is over and there is nobody in it to propose to.
+    console.log('[TrialDayOne] day one closed while the daemon was down; ending it without a word');
+    this.closedAt = dueAt;
+    this.persist();
+  }
+
+  /**
    * D30. A proposal, not a report.
    *
-   * Fires once. If nothing is on when it fires, it is held exactly the way
-   * beat 14 is held: nothing chases them, and the next surface to open gets
-   * it. Unlike the ambient interruptions it does not spend any of the day's
-   * budget, because it is not an interruption; it is the end of the day they
-   * were told about.
+   * Fires once. If nothing is on when it fires it is held exactly the way beat
+   * 14 is held: nothing chases them, and the next surface to open gets it.
+   * `decisions.md` is silent on a close with nobody home, so this takes the
+   * smallest reasonable thing and takes it from D26, which already answers the
+   * same question for beat 14: do not push, do not chase, say it first the
+   * next time they open something.
+   *
+   * `closedAt` is stamped either way. Day one is over at the moment it is over
+   * whether or not anybody was there to be told, and leaving the governor
+   * running until somebody opened a window would let the afternoon's budget
+   * follow them into the evening.
+   *
+   * Unlike the ambient interruptions it spends none of that budget, because it
+   * is not an interruption; it is the end of the day they were told about.
    */
   closeDay(): void {
     if (!this.running()) return;
@@ -454,14 +625,30 @@ export class DayOneDirector {
     this.closedAt = this.now();
     for (const offer of close.offers) this.offers.set(offer.id, offer);
 
+    if (this.deps.surfaceCount() === 0) {
+      console.log('[TrialDayOne] day one closed with nothing on. Holding the proposal for their next open.');
+      this.pendingClose = close;
+      this.persist();
+      return;
+    }
+    this.emitClose(close, 'push');
+  }
+
+  /** The close, put on a surface that is actually there. */
+  private emitClose(close: DayOneClose, via: 'push' | 'on_open'): void {
+    for (const offer of close.offers) this.offers.set(offer.id, offer);
+    const opener = via === 'on_open' ? 'Before you go, here is where your day went. ' : '';
     const spoken = close.thin
-      ? `${close.summary[0]} What I can do is take one thing off tomorrow.`
-      : `Here is where your day went. ${close.summary.join('. ')}. Let me take one of them off you.`;
+      ? `${opener}${close.summary[0]} What I can do is take one thing off tomorrow.`
+      : opener
+        ? `${opener}${close.summary.join('. ')}. Let me take one of them off you.`
+        : `Here is where your day went. ${close.summary.join('. ')}. Let me take one of them off you.`;
 
     this.deps.broadcast({
       type: 'trial_day_one',
       payload: {
         kind: 'day_close',
+        via,
         says: spoken,
         summary: close.summary,
         thin: close.thin,
@@ -473,6 +660,23 @@ export class DayOneDirector {
       void this.deps.speak(spoken).catch(() => { /* no audio is not a failure */ });
     }
     this.persist();
+  }
+
+  /**
+   * A held close, handed over the next time a surface appears.
+   *
+   * Deliberately outside the `running()` gate, because by this point day one
+   * has already ended: `closedAt` was stamped when the close fired. What is
+   * left is a message with nowhere to go, and the trial still being live is
+   * the only condition that matters for delivering it.
+   */
+  private deliverHeldClose(): void {
+    if (!this.pendingClose) return;
+    if (!this.deps.trialRunning()) { this.pendingClose = null; return; }
+    const close = this.pendingClose;
+    this.pendingClose = null;
+    const t = setTimeout(() => this.emitClose(close, 'on_open'), 1_500);
+    (t as unknown as { unref?: () => void }).unref?.();
   }
 
   /* ───────────────────────────── persistence ───────────────────────────── */
@@ -494,6 +698,8 @@ export class DayOneDirector {
         lines: this.lines,
         pending: this.pending,
         returned: this.returned,
+        pendingClose: this.pendingClose,
+        session: this.session,
         closedAt: this.closedAt,
       };
       mkdirSync(dirname(this.deps.statePath), { recursive: true });
@@ -518,10 +724,17 @@ export class DayOneDirector {
       this.lines = Array.isArray(raw.lines) ? raw.lines : [];
       this.pending = raw.pending ?? null;
       this.returned = raw.returned ?? false;
+      this.pendingClose = raw.pendingClose ?? null;
+      this.session = raw.session ?? null;
       this.closedAt = raw.closedAt ?? null;
       if (this.handedOverAt !== null) this.started = true;
       if (this.pending && !this.returned) {
         for (const offer of this.pending.offers) this.offers.set(offer.id, offer);
+      }
+      // A close held across a restart keeps its offers live too, or the
+      // founder gets a proposal with buttons that no longer do anything.
+      if (this.pendingClose) {
+        for (const offer of this.pendingClose.offers) this.offers.set(offer.id, offer);
       }
       console.log(
         `[TrialDayOne] restored: ${this.ambient.spoken} spoken, ${this.lines.length} day lines, ` +
