@@ -185,7 +185,7 @@ const onboardingWindowHTML = `<!doctype html>
 ` + brandTitlebarCSS + `
 </style>
 </head>
-<body>` + brandTitlebarHTML + `
+<body>
 <div class="pagebody" tabindex="-1">
   <div class="hero">
     <span class="bdrop" id="pebble"><span class="in"></span><span class="ring"></span></span>
@@ -226,7 +226,7 @@ const onboardingWindowHTML = `<!doctype html>
     <button class="sbtn pri" id="finishBtn" onclick="finish()">Finish setup</button>
   </div>
 
-</div>
+</div>` + brandTitlebarHTML + `
 <script>
   var rows = ['notifications', 'microphone', 'screen', 'accessibility'];
 

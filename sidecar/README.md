@@ -162,14 +162,14 @@ why CI compiles all three targets rather than trusting a Linux build.
 
 ### Custom window chrome (Windows)
 
-The local webview windows -- settings, logs, the first-run connect window and
-its token form, the onboarding slideshow -- draw their own title bar on
+The local webview windows — settings, logs, the first-run connect window and
+its token form, the onboarding slideshow — draw their own title bar on
 Windows instead of wearing the system one. `internal/winchrome` removes
 `WS_CAPTION` from the HWND and nothing else: the window keeps its overlapped
 frame, so resize borders, Aero Snap, the maximized rect, minimize/restore and
 the taskbar entry all stay native, and no window procedure is subclassed. The
 strip itself is shared markup in `internal/brand/titlebar.go`, rendered only
-when `winchrome.Install` has stamped `<html data-chrome="custom">` -- so the
+when `winchrome.Install` has stamped `<html data-chrome="custom">` — so the
 same page keeps its native title bar on macOS and Linux.
 
 The page moves the window through a binding rather than CSS: the WebView2
@@ -178,7 +178,7 @@ drag` does nothing and the drag is a `ReleaseCapture` +
 `WM_NCLBUTTONDOWN`/`HTCAPTION` handshake instead. Two consequences worth
 knowing: the Win11 Snap Layouts flyout does not appear on the page's maximize
 button (it needs `HTMAXBUTTON` from a window procedure we do not own), and
-custom chrome must never be given to a window showing REMOTE content -- those
+custom chrome must never be given to a window showing REMOTE content — those
 bindings move, minimize, maximize and close the window. That is why the
 account window (`account_window.go`, end-to-end remote) and the dashboard
 panels stay natively framed.
@@ -190,17 +190,22 @@ JARVIS_PAGE_DUMP_DIR=/tmp/pages go test -run TestDumpBrandPages .
 # then open /tmp/pages/chrome-*.html (and dark-chrome-*.html)
 ```
 
-The dumps cannot exercise the interaction layer -- the bindings do not exist
-in a browser -- and none of it is reachable from a Go test, so this much needs
-a real Windows box at least once per change to `winchrome` or the strip's
-script:
+`TestTitlebarGesture` covers the half of the interaction layer that is just
+DOM: it stubs the five bindings, drives real PointerEvents through headless
+Chromium, and asserts what the page would have asked the window to do (a click
+never drags, one drag per gesture, drag-then-regrab is not a double-click, a
+lost mouseup starts nothing). It skips when no Chromium is on PATH.
+
+What that cannot reach is Win32 itself — the modal move loop, snap, maximize
+geometry — so this much still needs a real Windows box at least once per change
+to `winchrome` or the strip's script:
 
 - [ ] Drag the strip: the window follows, and does not stay glued to the
       cursor after the drop.
 - [ ] Drag to a screen edge (snap), and drag a maximized window (it restores
       into the drag).
 - [ ] Double-click the strip maximizes, again restores. Then drag, drop, and
-      immediately press again -- that must NOT maximize.
+      immediately press again — that must NOT maximize.
 - [ ] Maximize: the taskbar stays visible and nothing is clipped, on a
       secondary monitor with a different resolution and DPI too.
 - [ ] The maximize glyph tracks the state after Win+Up/Down and a taskbar

@@ -12,9 +12,12 @@ import (
 )
 
 // customChromePages are the local pages that draw their own title bar on
-// Windows, keyed by the name the QA dump uses. Every window built from one of
-// these passes winchrome.CustomTitleBar; brand_pages_dump_test.go dumps a
-// chromed variant of exactly this set, so the two cannot drift.
+// Windows, keyed by the name the QA dump uses. Their windows get there two
+// ways: settings, logs and onboarding pass winchrome.CustomTitleBar to their
+// window host, while hosted and setup are shown by runFirstRunWindow, which
+// builds its webview itself and calls winchrome.Install directly.
+// brand_pages_dump_test.go dumps a chromed variant of exactly this set, so the
+// two cannot drift.
 var customChromePages = map[string]string{
 	"settings":   settingsWindowHTML,
 	"logs":       logViewerHTML,

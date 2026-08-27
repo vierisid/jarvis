@@ -5,7 +5,7 @@
 //
 // The trick is to remove ONLY WS_CAPTION. The window keeps its overlapped
 // frame, so Windows keeps computing the non-client area, the maximized rect
-// and the snap behaviour exactly as it does for any other app -- we never
+// and the snap behaviour exactly as it does for any other app — we never
 // touch WM_NCCALCSIZE and never subclass the window procedure the vendored
 // webview owns. What is left of the frame is the 1px system border.
 //
@@ -27,8 +27,8 @@ package winchrome
 import "strconv"
 
 // TitleBar says which title bar a window wears. It exists so the choice reads
-// as itself at a call site -- `winchrome.CustomTitleBar` rather than a bare
-// `true` six arguments deep -- because the choice carries a security
+// as itself at a call site — `winchrome.CustomTitleBar` rather than a bare
+// `true` six arguments deep — because the choice carries a security
 // invariant: custom chrome binds window controls into the document, so only a
 // window showing LOCAL html may ask for it. It also makes "which windows have
 // chrome bindings?" a one-line grep.
@@ -43,7 +43,7 @@ const (
 // panels_windows.go so this package stays self-contained (the installer binary
 // links it too, and the values are ABI constants that cannot drift).
 const (
-	wsCaption     = 0x00C00000 // WS_BORDER | WS_DLGFRAME -- the title bar
+	wsCaption     = 0x00C00000 // WS_BORDER | WS_DLGFRAME — the title bar
 	wsThickFrame  = 0x00040000 // sizing border: resize + Aero Snap eligibility
 	wsSysMenu     = 0x00080000 // Alt+Space menu, taskbar close entry
 	wsMinimizeBox = 0x00020000
@@ -58,7 +58,7 @@ const (
 // ShowWindow(SW_MINIMIZE) and the taskbar minimise as they would for a framed
 // window. Keeping the overlapped frame (i.e. NOT switching to WS_POPUP) is
 // deliberate: a maximized WS_POPUP covers the taskbar and needs a
-// WM_GETMINMAXINFO handler -- and a handler means a window procedure.
+// WM_GETMINMAXINFO handler — and a handler means a window procedure.
 //
 // WS_THICKFRAME (resize border, and with it Aero Snap eligibility) and
 // WS_MAXIMIZEBOX are deliberately NOT forced on: webview's own SetSize sets
@@ -85,18 +85,18 @@ func captionlessStyle(style uint32) uint32 {
 // It runs at document-creation time, before any page markup exists, so it
 // cannot assume document.documentElement is there yet: it stamps the attribute
 // immediately when it can and again on DOMContentLoaded, both idempotent. No
-// visible flash either way -- the window stays hidden until the reveal hook
+// visible flash either way — the window stays hidden until the reveal hook
 // fires on load (internal/webviewui.RevealOnLoad).
 // It also refuses navigating drops. Dropping a URL or a file onto a WebView2
-// document navigates it by default, and the window's bindings -- these window
-// controls, and whatever else the page's host bound -- survive into whatever
+// document navigates it by default, and the window's bindings — these window
+// controls, and whatever else the page's host bound — survive into whatever
 // lands there, since bind() re-injects its stubs on every document. Cancelling
 // the drag lets Chromium's default never run. Scoped to drags that actually
 // carry a URL or a file: a plain-text drag into the token form's textarea is
 // a different, harmless payload, and stays working.
 //
 // This is a guard for the windows that took on window-control bindings, not a
-// complete answer -- the real fix is refusing foreign origins in the engine
+// complete answer — the real fix is refusing foreign origins in the engine
 // (NavigationStarting, or AllowExternalDrop=false), which means a change to
 // the vendored webview and its patch file.
 func initJS(dblClickMs uint32) string {

@@ -19,6 +19,7 @@ import (
 // sidecar uses its piggybacking darwin runner instead (local_webview_darwin.go).
 // Standalone processes (the installer, the sidecar's pre-tray --setup mode)
 // call this from the main goroutine.
+//
 // titleBar chooses between the system title bar and one the page draws itself
 // (winchrome; custom is Windows-only and degrades to native elsewhere). Ask
 // for winchrome.CustomTitleBar only for a window showing LOCAL html: it binds

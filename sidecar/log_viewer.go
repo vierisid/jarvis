@@ -113,7 +113,7 @@ const logViewerHTML = `<!doctype html>
 ` + brandTitlebarCSS + `
 </style>
 </head>
-<body>` + brandTitlebarHTML + `
+<body>
   <div class="bar">
     <span class="eyebrow">Logs</span>
     <input id="q" placeholder="Search logs…" autofocus>
@@ -123,7 +123,7 @@ const logViewerHTML = `<!doctype html>
     <button class="primary" onclick="refresh()">Refresh</button>
   </div>
   <pre id="logs"></pre>
-  <div id="msg"></div>
+  <div id="msg"></div>` + brandTitlebarHTML + `
 <script>
   var raw = "";
   var pre = document.getElementById('logs');

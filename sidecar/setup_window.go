@@ -82,7 +82,7 @@ const setupWindowHTML = `<!doctype html>
 ` + brandTitlebarCSS + `
 </style>
 </head>
-<body>` + brandTitlebarHTML + `
+<body>
 <div class="pagebody" tabindex="-1">
   <div class="bhead"><span class="word"><span class="u">use</span>jarvis</span></div>
   <div class="center">
@@ -102,7 +102,7 @@ const setupWindowHTML = `<!doctype html>
       </div>
     </div>
   </div>
-</div>
+</div>` + brandTitlebarHTML + `
 <script>
   var tok = document.getElementById('tok');
   var err = document.getElementById('err');

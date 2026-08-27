@@ -82,8 +82,8 @@ type point struct {
 // page needs to replace it. Reports whether custom chrome is live; on false the
 // window keeps its native decoration and the page keeps its native title bar.
 //
-// Call it from the window HOST -- not from a build/setup callback, which both
-// hosts run after the reveal hook is already installed -- AFTER SetTitle and
+// Call it from the window HOST — not from a build/setup callback, which both
+// hosts run after the reveal hook is already installed — AFTER SetTitle and
 // SetSize (the size is re-derived from the new frame here) and BEFORE the
 // reveal hook and the first SetHtml/Navigate: the window is still hidden at
 // that point, so the native bar is never composited, and the injected marker
@@ -132,8 +132,8 @@ func Install(w webview.WebView) bool {
 func stripCaption(hwnd uintptr) bool {
 	style := getWindowLong(hwnd, gwlStyle)
 	if style == 0 {
-		// GetWindowLong failed. Ambiguous in principle -- WS_OVERLAPPED is 0,
-		// so a style-less window reads the same -- but webview always creates
+		// GetWindowLong failed. Ambiguous in principle — WS_OVERLAPPED is 0,
+		// so a style-less window reads the same — but webview always creates
 		// WS_OVERLAPPEDWINDOW, and treating the ambiguous case as failure only
 		// ever costs us the native title bar staying put.
 		return false
@@ -160,7 +160,7 @@ func stripCaption(hwnd uintptr) bool {
 // adjustWindowRect grows a client rect into the window rect that style needs,
 // at the window's own DPI where the OS can tell us (Win10 1607+). The
 // DPI-blind AdjustWindowRectEx is the fallback: it uses the system DPI, so on
-// a per-monitor-DPI setup it can be off by a few pixels of border -- visible
+// a per-monitor-DPI setup it can be off by a few pixels of border — visible
 // as a slightly wrong window size, never as broken chrome.
 func adjustWindowRect(hwnd uintptr, r *rect, style, exStyle uintptr) {
 	if procGetDpiForWindow.Find() == nil && procAdjustWindowRectExForDpi.Find() == nil {
@@ -198,7 +198,7 @@ func roundCorners(hwnd uintptr) {
 // them are live.
 //
 // Every one of them runs on the webview's UI thread (that is where bindings are
-// dispatched), which is the thread that owns the window -- so ReleaseCapture,
+// dispatched), which is the thread that owns the window — so ReleaseCapture,
 // the modal move loop entered by WM_NCLBUTTONDOWN, and ShowWindow all target
 // the right thread without a Dispatch hop.
 func bindControls(w webview.WebView, hwnd uintptr) bool {
@@ -214,7 +214,7 @@ func bindControls(w webview.WebView, hwnd uintptr) bool {
 	// the frame the press landed on its caption hands the gesture to Windows,
 	// which then gives us the real thing: snap to edges, snap-back off a
 	// maximised window, and multi-monitor drag. SendMessage (not Post) on
-	// purpose -- the modal move loop must start inside the user gesture.
+	// purpose — the modal move loop must start inside the user gesture.
 	// It returns when the drag ends, so the page must not await this.
 	bind("__jarvis_chrome_drag", func() {
 		procReleaseCapture.Call()
@@ -247,7 +247,7 @@ func bindControls(w webview.WebView, hwnd uintptr) bool {
 
 	// Right-click on the caption. DefWindowProc turns WM_NCRBUTTONUP/HTCAPTION
 	// into the system menu, so the menu, its item states and its commands are
-	// all the OS's -- we only say where. The position comes from GetCursorPos
+	// all the OS's — we only say where. The position comes from GetCursorPos
 	// rather than the page: the click just happened, and screen pixels from Go
 	// need no CSS-pixel-to-DPI conversion. Modal like the drag, and on the same
 	// thread, for the same reason.

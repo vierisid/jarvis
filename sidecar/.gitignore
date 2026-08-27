@@ -5,9 +5,10 @@ dist/
 /jarvis-test
 /jarvis-test.exe
 /sidecar
-# `go build .` with no -o names its output after the directory.
+# `go build .` with no -o names its output after the directory. Deliberately no
+# bare `/installer` entry: that is a TRACKED source directory, and ignoring it
+# would hide every new file added to the installer package from git status.
 /sidecar.exe
-/installer
 /installer.exe
 
 # npm platform package binaries (built by make npm-pack)

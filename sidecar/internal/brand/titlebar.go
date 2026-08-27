@@ -6,15 +6,21 @@ package brand
 // Markup contract, for every page that opts in:
 //
 //	<style> TokensCSS … page rules … TitlebarCSS </style>
-//	<body> TitlebarHTML … page … <script> TitlebarJS </script> </body>
+//	<body> … page … TitlebarHTML <script> TitlebarJS </script> </body>
+//
+// TitlebarHTML goes LAST in the body, after the page's content. It is fixed
+// positioned, so the position in the source costs it nothing visually — and it
+// puts the window controls at the end of the tab order, where chrome belongs.
+// A native caption's buttons are not tab stops at all; first Tab landing on
+// Minimize instead of the page is the next closest thing to wrong.
 //
 // Nothing here renders unless <html data-chrome="custom"> is set, and only
 // winchrome.Install sets it — so the same page keeps its native title bar on
 // macOS and Linux with no per-platform branching in the page itself.
 //
 // The strip is `position: fixed`, spanning the full window width the way a
-// real title bar does. Sticky was the tempting alternative -- it keeps the
-// viewport as the scroller, so keyboard scrolling comes free -- but next to a
+// real title bar does. Sticky was the tempting alternative — it keeps the
+// viewport as the scroller, so keyboard scrolling comes free — but next to a
 // classic scrollbar it stops ~15px short of the right edge, which reads as a
 // page element rather than as chrome.
 //
@@ -24,7 +30,7 @@ package brand
 //     leaving the first element flush against the bar). Page padding goes on
 //     an inner `.pagebody` wrapper.
 //   - `.pagebody` is the scroll container, so its scrollbar starts below the
-//     strip rather than running behind it -- and because a div is not
+//     strip rather than running behind it — and because a div is not
 //     focusable, the page must also carry PageBodyJS, which is what keeps
 //     Space/PageDown scrolling for someone without a mouse.
 
@@ -40,7 +46,7 @@ const TitlebarCSS = `
   }
   html[data-chrome="custom"] body {
     /* Specificity, not order, is what makes this win over a page's own
-       "body { padding: … }" -- which is why a chromed page must not have one.
+       "body { padding: … }" — which is why a chromed page must not have one.
        box-sizing:border-box (TokensCSS) means a 100%/100vh body keeps its
        height and gives the strip its share of it. */
     padding-top: var(--wchrome-h);
@@ -52,7 +58,7 @@ const TitlebarCSS = `
     user-select: none; -webkit-user-select: none; cursor: default;
   }
   /* The inner scroll container. Focusable, so a click inside it carries the
-     keyboard with it, but never ringed -- it is a viewport, not a control. */
+     keyboard with it, but never ringed — it is a viewport, not a control. */
   .pagebody:focus { outline: none; }
   /* The drag region is everything the controls don't claim. */
   .wchrome-drag {
@@ -253,7 +259,7 @@ const TitlebarJS = `
 // inner .pagebody wrapper rather than its body.
 //
 // A div does not take focus, and an unfocused container ignores Space,
-// PageUp/PageDown, the arrows, Home and End -- so without this, a window that
+// PageUp/PageDown, the arrows, Home and End — so without this, a window that
 // overflows (the 520x560 settings window does) is unreachable to anyone not
 // holding a mouse. Two halves: a click inside the container hands it focus, and
 // a document-level fallback forwards the paging keys whatever has focus, since
@@ -262,7 +268,7 @@ const TitlebarJS = `
 // It stays out of the way of the page: keys are ignored while a form control or
 // a button has focus (Space there belongs to the control), and it never steals
 // focus from a field the page autofocused. Not chrome-specific and not
-// Windows-specific -- the wrapper exists on every platform, so this ships with
+// Windows-specific — the wrapper exists on every platform, so this ships with
 // it.
 const PageBodyJS = `
 (function () {
@@ -271,7 +277,7 @@ const PageBodyJS = `
     if (!p) return;
     if (!p.hasAttribute('tabindex')) p.setAttribute('tabindex', '-1');
 
-    // A click into the content should carry the keyboard with it -- but not
+    // A click into the content should carry the keyboard with it — but not
     // away from whatever the user actually clicked.
     p.addEventListener('mousedown', function (e) {
       // p itself matches the selector (it carries the tabindex above), so the

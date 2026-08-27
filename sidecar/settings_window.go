@@ -270,7 +270,7 @@ const settingsWindowHTML = `<!doctype html>
 ` + brandTitlebarCSS + `
 </style>
 </head>
-<body>` + brandTitlebarHTML + `
+<body>
 <div class="pagebody" tabindex="-1">
   <h1>Sidecar Settings</h1>
   <p class="sub">Connection, enrollment, and how the pebble behaves on this machine.</p>
@@ -326,7 +326,7 @@ const settingsWindowHTML = `<!doctype html>
     </div>
   </div>
 
-</div>
+</div>` + brandTitlebarHTML + `
 <script>
   var dot = document.getElementById('dot');
   var statusText = document.getElementById('statusText');

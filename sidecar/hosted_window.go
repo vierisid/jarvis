@@ -97,7 +97,7 @@ const hostedShellHTML = `<!doctype html>
 ` + brandTitlebarCSS + `
 </style>
 </head>
-<body>` + brandTitlebarHTML + `
+<body>
 <div class="pagebody" tabindex="-1">
   <div class="bhead"><span class="word"><span class="u">use</span>jarvis</span></div>
   <div class="center">
@@ -116,7 +116,7 @@ const hostedShellHTML = `<!doctype html>
     </div>
   </div>
   <p class="footer">Self-hosting your own brain? <a onclick="window.chooseSelfHost()">Paste your enrollment token</a></p>
-</div>
+</div>` + brandTitlebarHTML + `
 <script>
   window.__setStatus = function (text) { document.getElementById('status').textContent = text; };
   window.__setError = function (text) {
