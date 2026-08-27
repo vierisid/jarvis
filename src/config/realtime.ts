@@ -69,8 +69,22 @@ const VALID_EFFORTS: RealtimeReasoningEffort[] = ['minimal', 'low', 'medium', 'h
  *    they simply do not get it.
  */
 export function realtimeServedByPlan(config: JarvisConfig): boolean {
-  const hosted = config.usejarvis_ai;
-  return Boolean(hosted?.base_url?.trim() && hosted?.api_key?.trim());
+  const block = config.usejarvis_ai;
+  if (!block || typeof block !== 'object') return false;
+  const { base_url, api_key } = block as Record<string, unknown>;
+  // Typed, not just present. The block is YAML the provisioner wrote, so a
+  // value can be any shape at runtime whatever the TS type says — an unquoted
+  // scalar parses as a number or a boolean, which is the exact case
+  // readUsejarvisAiBlock guards against and warns about. Reaching straight for
+  // `.trim()` threw a TypeError there, and this predicate is called from the
+  // settings route OUTSIDE its try/catch, so one mistyped line in config.yaml
+  // took the whole Voice tab down with a 500.
+  if (typeof base_url !== 'string' || typeof api_key !== 'string') return false;
+  // Trailing slashes stripped before the emptiness test, matching
+  // normalizeBlockUrl — otherwise a base_url of "///" reads as present here
+  // and as absent to hasUsejarvisAi, and the two must never disagree about
+  // whether this install is hosted.
+  return base_url.trim().replace(/\/+$/, '') !== '' && api_key.trim() !== '';
 }
 
 /**

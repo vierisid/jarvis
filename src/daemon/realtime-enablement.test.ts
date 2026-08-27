@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
-import { realtimeEnablement } from './usejarvis-ai.ts';
-import { resolveRealtimeVoice } from '../config/realtime.ts';
+import { hasUsejarvisAi, realtimeEnablement } from './usejarvis-ai.ts';
+import { realtimeServedByPlan, resolveRealtimeVoice } from '../config/realtime.ts';
 import type { JarvisConfig } from '../config/types.ts';
 
 /**
@@ -216,4 +216,37 @@ describe('the operator kill switch', () => {
       restore(before);
     }
   });
+});
+
+describe('the two hosted predicates must never disagree', () => {
+  // realtimeEnablement keys off hasUsejarvisAi; the resolver and the settings
+  // route key off realtimeServedByPlan. If they diverge, enablement can say
+  // "hosted, default it on" while the resolver reads a BYO key — which is the
+  // billing bug this series exists to close — or the reverse, where a hosted
+  // tenant is told they pay OpenAI for something the plan serves.
+  const cases: Array<[string, unknown]> = [
+    ['absent', undefined],
+    ['complete', { base_url: 'https://llm.example/v1', api_key: 'sk-uj-x' }],
+    ['empty api_key', { base_url: 'https://llm.example/v1', api_key: '' }],
+    ['whitespace api_key', { base_url: 'https://llm.example/v1', api_key: '   ' }],
+    ['empty base_url', { base_url: '', api_key: 'sk-uj-x' }],
+    ['whitespace base_url', { base_url: '  ', api_key: 'sk-uj-x' }],
+    ['slashes-only base_url', { base_url: '///', api_key: 'sk-uj-x' }],
+    ['missing api_key', { base_url: 'https://llm.example/v1' }],
+    // The documented YAML hazard: an unquoted scalar parses as a number or a
+    // boolean. Reaching for .trim() on those threw a TypeError, and the
+    // settings route calls this predicate outside its try/catch.
+    ['numeric base_url', { base_url: 8080, api_key: 'sk-uj-x' }],
+    ['boolean api_key', { base_url: 'https://llm.example/v1', api_key: true }],
+    ['null block', null],
+    ['array block', []],
+  ];
+
+  for (const [name, block] of cases) {
+    test(`agree on: ${name}`, () => {
+      const cfg = { llm: { providers: {} }, usejarvis_ai: block } as unknown as JarvisConfig;
+      expect(() => realtimeServedByPlan(cfg)).not.toThrow();
+      expect(realtimeServedByPlan(cfg)).toBe(hasUsejarvisAi(cfg));
+    });
+  }
 });
