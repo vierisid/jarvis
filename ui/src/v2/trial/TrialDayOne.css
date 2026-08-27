@@ -1,0 +1,164 @@
+/* The rest of day one. One card, bottom left, clear of the shell's own pebble
+   and of the Talk panel it opens, and clear of the 48-hour clock beneath it. */
+
+.td1 {
+  position: fixed;
+  left: 18px;
+  bottom: 54px;
+  z-index: 240;
+  width: min(420px, calc(100vw - 36px));
+  padding: 14px 15px 13px;
+  border-radius: 14px 14px 3px 14px;
+  background: color-mix(in srgb, var(--raise) 88%, transparent);
+  -webkit-backdrop-filter: blur(18px) saturate(1.4);
+  backdrop-filter: blur(18px) saturate(1.4);
+  border: 0.5px solid color-mix(in srgb, var(--ink) 9%, transparent);
+  box-shadow:
+    inset 0 1px 1px rgba(255, 255, 255, 0.5),
+    0 22px 48px -18px rgba(20, 30, 45, 0.45);
+  font-family: var(--sans);
+  color: var(--ink);
+  animation: td1-in 0.45s var(--ease) both;
+}
+
+@keyframes td1-in {
+  from { opacity: 0; transform: translateY(10px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+
+.td1-x {
+  position: absolute;
+  top: 10px;
+  right: 11px;
+  border: none;
+  background: none;
+  cursor: pointer;
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.08em;
+  color: var(--ink3);
+}
+.td1-x:hover { color: var(--ink2); }
+
+.td1-eyebrow {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ink3);
+  margin-bottom: 7px;
+}
+
+.td1-q {
+  font-size: 13.5px;
+  font-weight: 500;
+  line-height: 1.35;
+  margin-bottom: 8px;
+}
+
+.td1-says {
+  margin: 0 0 9px;
+  font-size: 12.5px;
+  line-height: 1.5;
+  color: var(--ink2);
+}
+
+.td1-finding {
+  max-height: 168px;
+  overflow-y: auto;
+  padding: 9px 10px;
+  margin-bottom: 9px;
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--ink) 4%, transparent);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  color: var(--ink);
+}
+
+.td1-home {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  color: var(--ink3);
+  margin-bottom: 10px;
+}
+
+.td1-day {
+  margin: 0 0 10px;
+  padding-left: 15px;
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--ink);
+}
+
+/* The offers. They are the point of the beat, so they are the loudest thing
+   on the card: a button per thing Jarvis will do, with where it lands under
+   it so nothing that happens next is a surprise. */
+.td1-offers { display: flex; flex-direction: column; gap: 6px; }
+
+.td1-offer {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  width: 100%;
+  padding: 9px 11px;
+  border-radius: 9px;
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  border: 0.5px solid color-mix(in srgb, var(--ink) 12%, transparent);
+  background: color-mix(in srgb, var(--raise) 70%, transparent);
+  transition: background 0.2s var(--ease), border-color 0.2s var(--ease);
+}
+.td1-offer:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--speak) 10%, var(--raise));
+  border-color: color-mix(in srgb, var(--speak) 42%, transparent);
+}
+.td1-offer:disabled { opacity: 0.5; cursor: default; }
+
+/* Outward is the bigger promise (it changes something of theirs), so it is
+   marked rather than left to be read off the wording. */
+.td1-offer--outward { border-left: 2px solid color-mix(in srgb, var(--speak) 60%, transparent); }
+
+.td1-offer-label { font-size: 12.5px; font-weight: 500; line-height: 1.35; }
+.td1-offer-where {
+  font-family: var(--mono);
+  font-size: 9.5px;
+  letter-spacing: 0.04em;
+  color: var(--ink3);
+  line-height: 1.4;
+}
+
+.td1-outcome {
+  margin-top: 9px;
+  font-size: 12px;
+  line-height: 1.45;
+  color: var(--ink2);
+}
+.td1-outcome--no { color: var(--hold-tx, var(--ink2)); }
+
+/* ── the label the pebble holds while it stands over the row ──
+   Drawn by the trial rather than by the shell, because the shell's pebble has
+   no bubble of its own: it carries a one-word status caption under it and
+   nothing else. Positioned in viewport coordinates next to wherever the
+   pebble came to rest. */
+.td1-label {
+  position: fixed;
+  z-index: 261;
+  transform: translateY(-50%);
+  pointer-events: none;
+  padding: 5px 9px;
+  border-radius: 9px;
+  background: var(--panel);
+  border: 0.5px solid color-mix(in srgb, var(--ink) 10%, transparent);
+  box-shadow: 0 8px 20px -10px rgba(20, 30, 45, 0.45);
+  font-family: var(--mono);
+  font-size: 10.5px;
+  letter-spacing: 0.04em;
+  color: var(--ink2);
+  white-space: nowrap;
+  animation: td1-in 0.3s var(--ease) both;
+}
+.td1-label--right { transform: translate(-100%, -50%); }

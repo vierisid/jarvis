@@ -60,7 +60,7 @@ export function OnboardingGate({ children }: { children: React.ReactNode }) {
   // voice; dropping them into a nine-step setup form halfway through their own
   // trial would be the same bug wearing different clothes.
   if (trialIsLive(trial)) {
-    return <TrialClock trial={trial}>{children}</TrialClock>;
+    return <TrialClock trial={trial} dayOne>{children}</TrialClock>;
   }
 
   // Any incomplete onboarding phase → the nine-screen wizard. It computes

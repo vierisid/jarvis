@@ -51,6 +51,23 @@ export class AwarenessService implements Service {
   private cleanupSidecarCaptures: ((cutoffMs: number) => Promise<void>) | null;
   private enabled: boolean;
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+  /**
+   * Fired once per session, the moment its topic and summary have been
+   * written. Null on every install that does not set it.
+   *
+   * It exists for the trial's day-one close (D30), which has to summarise a
+   * whole day against a retention policy that keeps full captures for one hour
+   * and key moments for twenty-four. The way out is not to raise retention: it
+   * is to take the line WHILE the captures that produced it still exist, which
+   * is exactly this moment, and keep the line somewhere retention does not
+   * reach.
+   */
+  private sessionSummarised: ((s: { sessionId: string; topic: string; summary: string; minutes: number; apps: string[]; endedAt: number }) => void) | null = null;
+
+  /** See `sessionSummarised`. Additive: unset, nothing changes for anyone. */
+  onSessionSummarised(cb: (s: { sessionId: string; topic: string; summary: string; minutes: number; apps: string[]; endedAt: number }) => void): void {
+    this.sessionSummarised = cb;
+  }
 
   constructor(
     jarvisConfig: JarvisConfig,
@@ -472,6 +489,13 @@ export class AwarenessService implements Service {
 
       updateSession(sessionId, { topic, summary });
       console.log(`[Awareness] Session topic: "${topic}" (${durationMinutes}min, ${apps.join(', ')})`);
+      try {
+        this.sessionSummarised?.({
+          sessionId, topic, summary, minutes: durationMinutes, apps, endedAt,
+        });
+      } catch (err) {
+        console.warn('[Awareness] session-summarised listener threw:', err);
+      }
     } catch (err) {
       console.error('[Awareness] Topic inference error:', err instanceof Error ? err.message : err);
     }

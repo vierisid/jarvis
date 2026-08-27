@@ -365,8 +365,13 @@ export function TrialConductor({ children }: { children: React.ReactNode }) {
      thing that flashes past. Underneath it, the ordinary shell: their own
      pebble, their own Talk panel, the palette, all of it. */
   if (stoodDown) {
+    // `dayOne` is set HERE as well as in the gate, and this is the path that
+    // actually matters: beat 14 fires about five minutes after the handover
+    // and the founder has not reloaded, so this is the mount they are sitting
+    // in when their agent comes back. The gate's copy covers the founder who
+    // comes back later, at hour six or hour twenty.
     return (
-      <TrialClock trial={trial} slot={<HandoverReference proposal={proposal} />}>
+      <TrialClock trial={trial} slot={<HandoverReference proposal={proposal} />} dayOne>
         {children}
       </TrialClock>
     );

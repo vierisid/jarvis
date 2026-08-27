@@ -96,7 +96,16 @@ export type WSMessage = {
       // shell. The TRIAL does not end there, and nothing about the entitlement,
       // the clock or D1's realtime grant changes because of it.
       | 'trial_point' | 'trial_proposal' | 'trial_beat' | 'trial_onboarding_complete'
-      | 'trial_walk' | 'trial_standdown';
+      | 'trial_walk' | 'trial_standdown'
+      // ─── The rest of day one (beats 14, 16, 17). Server → client. ───
+      // One message for all three, discriminated by `payload.kind`, because
+      // they are one conversation continuing after the conductor has gone and
+      // the surface that renders them is one component. `agent_back` carries
+      // the finding, the offer and the row to point the SHELL's pebble at;
+      // `offer_done` is what happened when the founder took one; `day_close`
+      // is D30's proposal. None of them ends the trial, which has another 47
+      // hours to run.
+      | 'trial_day_one';
   payload: unknown;
   id?: string;
   priority?: 'urgent' | 'normal' | 'low';

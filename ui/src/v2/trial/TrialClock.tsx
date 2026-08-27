@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { formatTimeRemaining, type TrialStatus } from "./trialGate";
 import { TRIAL_SESSION_RENEW_MS, renewTrialSession } from "./sessionRenew";
+import { TrialDayOne } from "./TrialDayOne";
 import "./TrialConductor.css";
 
 /**
@@ -38,6 +39,7 @@ export function TrialClock({
   children,
   slot,
   renew = true,
+  dayOne = false,
 }: {
   /** The snapshot the gate already fetched, so the first paint has no gap. */
   trial: TrialStatus | null;
@@ -52,6 +54,12 @@ export function TrialClock({
    * it ever did there.
    */
   renew?: boolean;
+  /**
+   * Whether the rest of day one is live on this surface. Off while the
+   * conductor is still running (it owns the founder's attention and its own
+   * pebble), on for the forty-seven hours after the handover.
+   */
+  dayOne?: boolean;
 }) {
   const [status, setStatus] = useState<TrialStatus | null>(trial);
   const [stale, setStale] = useState(false);
@@ -114,6 +122,12 @@ export function TrialClock({
   return (
     <>
       {children}
+      {/* D25 to D30. Mounted here because this component IS the trial after
+          the conductor has gone, and because day one has to survive a reload:
+          a founder who comes back at hour six still has an agent that landed
+          while they were away. `dayOne` renders nothing until the daemon
+          pushes something, so the cost of it being here is one socket. */}
+      {dayOne && <TrialDayOne />}
       <div className="tc-layer tc-layer--clock" aria-live="off">
         {slot}
         <div className="tc-foot">

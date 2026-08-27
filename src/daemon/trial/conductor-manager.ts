@@ -151,6 +151,21 @@ export type ConductorManagerDeps<W> = {
   summonWaitMs?: number;
   /** See TrialBeatActions. */
   beatActions?: TrialBeatActions;
+  /**
+   * The conductor stood down and the rest of day one begins.
+   *
+   * The seam for D25 to D30. It fires HERE rather than at
+   * `trial_onboarding_complete` because that one fires while the conversation
+   * is still going: the finale has spawned its agent and the handover has not
+   * happened yet. Everything after the handover is measured from the moment
+   * the founder actually got the product back, so this is the moment day one
+   * starts and the only one.
+   *
+   * Carries the finished session rather than a summary of it, because day one
+   * needs the agent, the objective, the flows and the evening hour, and the
+   * beats session is where all four already are.
+   */
+  onHandedOver?: (beats: BeatsSession, at: number) => void;
 };
 
 export class TrialConductorManager<W> {
@@ -389,6 +404,13 @@ export class TrialConductorManager<W> {
       },
       timestamp: this.now(),
     });
+    // Day one, from here. Never allowed to take the stand-down down with it:
+    // a founder whose ledger file is unwritable still gets their shell back.
+    try {
+      this.deps.onHandedOver?.(beats, beats.handedOverAt ?? this.now());
+    } catch (err) {
+      console.error('[Trial] day one could not begin:', err);
+    }
   }
 
   /* ─────────────────── D42, what the reader sends back ─────────────────── */

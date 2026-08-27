@@ -50,7 +50,21 @@ import {
   TRIAL_OPENING_LINE,
   buildConductorInstructions,
 } from './trial/conductor.ts';
-import { ROOM_BEAT_TOOLS, type WorkflowProposal } from './trial/beats.ts';
+import { ROOM_BEAT_TOOLS, type BeatsSession, type WorkflowProposal } from './trial/beats.ts';
+import { READER_AGENT_NAME, researchAgentName } from './trial/agent-names.ts';
+import { DayOneDirector } from './trial/day-one-director.ts';
+import { emptyFoundation as emptyDayOneFoundation, type DayOneFoundation, type DayOneOffer } from './trial/day-one.ts';
+import { agentSettledNotice, type AgentFailure } from '../agents/task-failure.ts';
+import { writeRevision } from './trial/founder-files.ts';
+import { findGoals, getGoal, addProgressEntry } from '../vault/goals.ts';
+import { findCommitments } from '../vault/commitments.ts';
+import { searchEntitiesByName } from '../vault/entities.ts';
+
+/** Everything day one writes to the vault carries this, so a founder (and the
+ *  D38 debrief) can tell what the two of them did during the hour from what
+ *  Jarvis did afterwards, on its own. */
+export const TRIAL_DAY_ONE_SOURCE = 'trial_day_one';
+import type { AsyncTask } from '../agents/task-manager.ts';
 import { buildReaderTools, readerContext, readerTask, type FoundEntities } from './trial/reader-tools.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { saveUserSection } from './user-settings.ts';
@@ -290,7 +304,14 @@ export class WebSocketService implements Service {
       startFolderReader: (opts) => this.trialStartFolderReader(opts),
       spawnResearchAgent: (question, brief) => this.trialSpawnResearchAgent(question, brief),
     },
+    onHandedOver: (beats, at) => this.beginDayOne(beats, at),
   });
+  /**
+   * D25 to D30. Built only when a conductor actually hands over, so an install
+   * with no trial never constructs one and never writes its ledger file. See
+   * trial/day-one-director.ts.
+   */
+  private dayOne: DayOneDirector | null = null;
   /**
    * Periodic sweep handle for `pendingVoiceConfirmations` TTL eviction.
    * Started in `start()`, cleared in `stop()` so the daemon shuts down
@@ -430,6 +451,10 @@ export class WebSocketService implements Service {
   async start(): Promise<void> {
     this._status = 'starting';
 
+    // A daemon that came up in the middle of somebody's day one. Inert on
+    // every install that is not in one. See resumeDayOne.
+    this.resumeDayOne();
+
     try {
       // Set up message handler
       this.wsServer.setHandler({
@@ -437,6 +462,10 @@ export class WebSocketService implements Service {
         onBinaryMessage: (data, ws) => this.handleVoiceAudio(data, ws),
         onConnect: (_ws) => {
           console.log('[WSService] Client connected');
+          // D26 path B. A founder who was not there when their agent landed
+          // hears about it the moment they open anything. No-op for everyone
+          // else: `dayOne` is null unless a conductor handed over.
+          this.dayOne?.onSurfaceOpened();
         },
         onDisconnect: (ws) => {
           this.cancelActiveChat(ws, 'disconnect', false);
@@ -948,6 +977,10 @@ export class WebSocketService implements Service {
   private async routeMessage(msg: WSMessage, ws: ServerWebSocket<unknown>): Promise<WSMessage | void> {
     switch (msg.type) {
       case 'chat':
+        // D29's allowance. The founder using Jarvis of their own accord is the
+        // only thing that buys more than the two interruptions day one starts
+        // with. A no-op outside a running day one.
+        this.dayOne?.noteEngagement();
         return this.handleChat(msg, ws);
 
       case 'cancel': {
@@ -1992,6 +2025,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       llmManager: this.agentService.getLLMManager(),
       toolRegistry: registry,
       onProgress: deps.onProgress,
+      // Named for the job, not the role. See trial/agent-names.ts: the finale
+      // spawns from the same specialist an hour later and two rows reading
+      // `Research Analyst` is the shape of a bug the founder cannot see past.
+      displayName: READER_AGENT_NAME,
       // Settles either way. A reader that fell over must not leave the
       // conversation waiting for a picture that is never coming, so the failure
       // is reported as a finish with nothing in it rather than as silence.
@@ -2033,29 +2070,309 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       taskManager,
       onProgress: (event: { type: 'text' | 'tool_call' | 'done'; agentName: string; agentId: string; data: unknown }) =>
         this.broadcastSubAgentProgress(event),
-      onTaskComplete: (task: { agentName: string; result?: { success?: boolean } }) => {
-        const ok = task.result?.success ?? false;
-        this.broadcastNotification(
-          ok
-            ? `**${task.agentName} finished its task.** Open the Agents room to read the result.`
-            : `**${task.agentName} could not complete its task.** Open the Agents room for details.`,
-          'normal',
-        );
+      // Beat 14 owns what the founder hears about this one. The ordinary
+      // notification stays as the floor for the case where day one is not
+      // running (a trial whose conductor never reached the finale), and it
+      // now names the cause when there is one rather than sending them to a
+      // room to work it out.
+      onTaskComplete: (task: AsyncTask) => {
+        const settled = {
+          taskId: task.id,
+          response: task.result?.success ? (task.result.response ?? null) : null,
+          failure: task.failure,
+        };
+        // Beat 14 owns this one. If the handover has not happened yet (a fast
+        // agent and a slow goodbye), it is held rather than dropped and
+        // replayed the moment day one begins.
+        if (this.dayOne) {
+          if (this.dayOne.claimsAgent(task.id)) {
+            this.dayOne.onAgentSettled(settled);
+            return;
+          }
+        } else {
+          this.dayOneHeldAgent = settled;
+          return;
+        }
+        this.broadcastNotification(agentSettledNotice(task), 'normal');
       },
     };
 
+    const displayName = researchAgentName(question);
     const { spawnPersistentAgent, assignPersistentAgentTask } = await import('../actions/tools/agents.ts');
     const spawned = spawnPersistentAgent(deps as never, specialistId);
     const assignment = await assignPersistentAgentTask(deps as never, {
       agentId: spawned.agent.id,
       task: question,
       context: brief,
+      displayName,
     });
     return {
       agentId: spawned.agent.id,
       taskId: assignment?.task_id ?? null,
-      agentName: spawned.summary.name,
+      agentName: displayName,
     };
+  }
+
+  /* ──────────────────── D25 to D30: the rest of day one ──────────────────── */
+
+  /**
+   * The conductor stood down. Everything after the handover starts here.
+   *
+   * Built lazily and only on this path, so an install with no trial has no
+   * director, writes no ledger and takes none of the branches below.
+   */
+  private beginDayOne(beats: BeatsSession, at: number): void {
+    const dir = this.ensureDayOne();
+    dir.begin(this.foundationFrom(beats), at);
+    // An agent that settled before the handover was held rather than dropped:
+    // beat 14 must not be lost just because the research was quicker than the
+    // conversation.
+    if (this.dayOneHeldAgent) {
+      const held = this.dayOneHeldAgent;
+      this.dayOneHeldAgent = null;
+      dir.onAgentSettled(held);
+    }
+  }
+
+  private ensureDayOne(): DayOneDirector {
+    if (!this.dayOne) {
+      const dataDir = this.agentService.getConfig().daemon?.data_dir || join(homedir(), '.jarvis');
+      this.dayOne = new DayOneDirector({
+        broadcast: (msg) => this.wsServer.broadcast(msg),
+        speak: (text) => this.broadcastProactiveVoice(text),
+        trialRunning: () => isTrialRunning(readTrialEntitlement(), Date.now()),
+        surfaceCount: () => this.wsServer.getClientCount(),
+        readFoundation: () => this.readDayOneFoundation(),
+        execute: (offer) => this.executeDayOneOffer(offer),
+        statePath: join(dataDir, 'trial-day-one.json'),
+        pointNativePebble: (label) => this.nativePebblePointer?.(label),
+      });
+    }
+    return this.dayOne;
+  }
+
+  /**
+   * How the OS pebble points at the agent strip panel, set by the daemon at
+   * boot because the sidecar manager and the saved window bounds both live
+   * there. Unset on any install without a sidecar, and the gesture in the
+   * browser happens either way.
+   */
+  private nativePebblePointer: ((label: string) => void) | null = null;
+
+  setNativePebblePointer(fn: (label: string) => void): void {
+    this.nativePebblePointer = fn;
+  }
+
+  /**
+   * A daemon that restarted in the middle of day one.
+   *
+   * Day one is eight or nine hours long and the director is built on the
+   * handover, so without this a restart at hour three would leave a founder
+   * with no governor (every ambient suggestion firing at the engine's own
+   * fifteen-second cadence for the rest of the afternoon), no day-one close,
+   * and an agent result stranded in a ledger nothing reads. It is the same
+   * shape as the reload decision the last worker recorded for the conductor,
+   * inverted: the conducted hour must NOT resume, and day one must.
+   *
+   * Called once at start-up. Does nothing at all unless an entitlement exists
+   * AND its conductor has already finished, which is false on every install
+   * that has never run a trial.
+   */
+  private resumeDayOne(): void {
+    try {
+      const entitlement = readTrialEntitlement();
+      if (!entitlement || !isTrialRunning(entitlement, Date.now())) return;
+      if (entitlement.conductor_finished_at === null) return;
+      const dir = this.ensureDayOne();
+      // `begin` keeps the handover time it restored from the ledger, so the
+      // windows day one is measured in do not move because of a restart.
+      dir.begin(this.readDayOneFoundation(), entitlement.conductor_finished_at);
+      console.log('[WSService] day one resumed after a restart');
+    } catch (err) {
+      console.warn('[WSService] could not resume day one:', err);
+    }
+  }
+
+  /** Reachable for the API route that takes an offer, and for the daemon's
+   *  awareness wiring, which needs the governor. Null on every install that
+   *  has never run a conductor to its handover. */
+  getDayOne(): DayOneDirector | null {
+    return this.dayOne;
+  }
+
+  /**
+   * D29's bar, as one call.
+   *
+   * TRUE means say it. It is true for everybody who is not inside a running
+   * trial day one, unconditionally and without reading the candidate, which is
+   * what makes it safe to put in front of the daemon's three ambient speech
+   * paths. Inside day one it is the governor, and most things do not come back
+   * from it. See trial/day-one.ts for the gates and why each one is there.
+   */
+  allowAmbientSpeech(candidate: {
+    type: string; title: string; body: string; appName?: string; wouldDo?: string;
+  }): boolean {
+    if (!this.dayOne) return true;
+    return this.dayOne.allowAmbient(candidate);
+  }
+
+  /** The founder did something themselves. Feeds D29's allowance and nothing
+   *  else; a no-op outside day one. */
+  noteDayOneEngagement(): void {
+    this.dayOne?.noteEngagement();
+  }
+
+  /** A settlement that arrived before there was anything to hand it to. */
+  private dayOneHeldAgent: { taskId: string; response: string | null; failure: AgentFailure | null } | null = null;
+
+  /**
+   * What the hour built, taken from the session that just ended.
+   *
+   * The board and the objective are read from the VAULT rather than from the
+   * session, because they are what the founder can actually see and because a
+   * restart hours later has to produce the same offers as the handover did.
+   */
+  private foundationFrom(beats: BeatsSession): DayOneFoundation {
+    const base = this.readDayOneFoundation();
+    return {
+      ...base,
+      handedOverAt: beats.handedOverAt,
+      workflows: [...beats.workflowsPublished],
+      workspace: beats.workspace
+        ? {
+            destination: beats.workspace.destination,
+            says: beats.workspace.saysDestination ?? beats.workspace.destination,
+          }
+        : null,
+      authorityLevel: beats.authorityLevel,
+      agent: beats.agent ? { ...beats.agent } : null,
+      eveningHour: beats.eveningHour,
+      objective: beats.objective ?? base.objective,
+    };
+  }
+
+  /**
+   * The vault half of the foundation: their quarter and their board.
+   *
+   * Everything here is read-only and every failure is swallowed to an empty
+   * value. Day one degrades to an inward offer against the objective; it never
+   * degrades to a crash in the middle of a founder's afternoon.
+   */
+  private readDayOneFoundation(): DayOneFoundation {
+    const out = emptyDayOneFoundation();
+    try {
+      const objectives = findGoals({ level: 'objective', status: 'active', limit: 5 });
+      const chosen = objectives[0];
+      if (chosen) {
+        out.objective = {
+          id: chosen.id,
+          title: chosen.title,
+          keyResults: findGoals({ parent_id: chosen.id, limit: 10 })
+            .filter((g) => g.level === 'key_result')
+            .map((g) => ({ id: g.id, title: g.title })),
+        };
+      }
+    } catch { /* no goals is a thinner offer, not an error */ }
+    try {
+      out.board = findCommitments({ status: 'pending' })
+        .slice(0, 12)
+        .map((c) => ({ id: c.id, what: c.what, first: (c.context ?? '').includes('first thing') }));
+    } catch { /* same */ }
+    try {
+      out.landed = searchEntitiesByName('').map((e) => e.name).filter(Boolean).slice(0, 40);
+    } catch { /* same */ }
+    return out;
+  }
+
+  /**
+   * D27, executed. The founder took an offer and something has to happen.
+   *
+   * Two of the three write to the vault and are done in a millisecond. The
+   * outward one writes a new file beside theirs, never over it, using the same
+   * `writeRevision` the `edit` beat used an hour earlier, and it needs a model
+   * to produce the body, so it is the one that can honestly fail.
+   */
+  private async executeDayOneOffer(offer: DayOneOffer): Promise<{ ok: boolean; says: string }> {
+    const what = String(offer.payload.what ?? offer.payload.subject ?? '').trim();
+    switch (offer.kind) {
+      case 'task':
+      case 'toward': {
+        if (!what) return { ok: false, says: 'There was nothing in that to carry. Nothing changed.' };
+        // Assigned to JARVIS, not to them. D27 asks for the finding to become a
+        // task; the rule that governs the whole trial decides whose. A task
+        // created on a founder's board with their own name on it is work
+        // handed back, and this beat exists to prove the opposite.
+        const created = createCommitment(`Follow through: ${what}`, {
+          priority: 'normal',
+          created_from: TRIAL_DAY_ONE_SOURCE,
+          assigned_to: 'jarvis',
+          ...(offer.target?.title ? { context: `toward: ${offer.target.title}` } : {}),
+        });
+        this.broadcastTaskUpdate(created, 'created');
+        if (offer.kind === 'toward' && typeof offer.payload.goalId === 'string') {
+          try {
+            const goal = getGoal(offer.payload.goalId);
+            if (goal) {
+              addProgressEntry(
+                goal.id, 'system', goal.score, goal.score,
+                `Day one: ${what}`, TRIAL_DAY_ONE_SOURCE,
+              );
+            }
+          } catch { /* the task is the substance; the note is the trimming */ }
+        }
+        return {
+          ok: true,
+          says: offer.target?.title
+            ? `Taken. It is on your board under my name, against ${offer.target.title}.`
+            : 'Taken. It is on your board under my name.',
+        };
+      }
+      case 'workspace_write': {
+        const intoDir = String(offer.payload.intoDir ?? '');
+        if (!intoDir) return { ok: false, says: 'I do not have a workspace to write into. Nothing changed.' };
+        try {
+          const body = await this.draftDayOneRevision(what);
+          if (!body) {
+            return { ok: false, says: 'I could not draft it just now. Nothing of yours changed and I still have it.' };
+          }
+          const written = writeRevision({
+            intoDir,
+            originalName: `${what.slice(0, 40) || 'note'}.md`,
+            label: 'from your agent',
+            body,
+          });
+          return { ok: true, says: `Written to ${written.path.split(/[/\\]/).pop()}. Your originals are exactly as they were.` };
+        } catch (err) {
+          console.warn('[TrialDayOne] workspace write failed:', err);
+          return { ok: false, says: 'It could not be written. Nothing of yours changed.' };
+        }
+      }
+      default:
+        return { ok: false, says: 'I do not know how to do that one, so I have not pretended to.' };
+    }
+  }
+
+  /** One shot at a document body. Returns null rather than prose on failure,
+   *  so the caller can say honestly that it did not happen. */
+  private async draftDayOneRevision(subject: string): Promise<string | null> {
+    try {
+      const llm = this.agentService.getLLMManager();
+      const reply = await llm.chat([
+        {
+          role: 'system',
+          content:
+            'You are writing a short working document for a founder, in their own working folder. ' +
+            'Markdown. No preamble, no sign-off, no offer to help. Open with a single-line title. ' +
+            'Under 500 words.',
+        },
+        { role: 'user', content: `Write it about: ${subject}` },
+      ]);
+      const text = (reply?.content ?? '').trim();
+      return text.length > 40 ? text : null;
+    } catch (err) {
+      console.warn('[TrialDayOne] could not draft a revision:', err);
+      return null;
+    }
   }
 
   /** Lazily build the monthly spend tracker, persisted under the data dir. */

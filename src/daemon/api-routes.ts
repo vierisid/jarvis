@@ -68,6 +68,7 @@ import {
   terminatePersistentAgent,
 } from '../actions/tools/agents.ts';
 import type { AsyncTask } from '../agents/task-manager.ts';
+import { agentSettledNotice } from '../agents/task-failure.ts';
 
 import { mkdirSync, existsSync } from 'node:fs';
 import path from 'node:path';
@@ -277,6 +278,8 @@ type AgentTaskSnapshot = {
     toolsUsed: string[];
     terminationReason: string;
   } | null;
+  /** Present, and only present, on a run that died. See agents/task-failure.ts. */
+  failure?: { kind: string; detail: string; says: string } | null;
 };
 
 /** List payloads cap the response so the 5s roster poll never ships a
@@ -305,6 +308,13 @@ function taskToJSON(task: AgentTaskSnapshot, opts: { full?: boolean } = {}) {
           tools_used: task.result.toolsUsed,
           termination_reason: task.result.terminationReason,
         }
+      : null,
+    // Null on everything that did not die. A caller that wants to know
+    // whether a run is trustworthy reads this rather than inferring from
+    // `success` plus the shape of the prose, which is what let a dead run
+    // read as a finished one for three sessions.
+    failure: task.failure
+      ? { kind: task.failure.kind, says: task.failure.says, detail: task.failure.detail }
       : null,
   };
 }
@@ -836,13 +846,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             // inside runSubAgent, so a failed task would never notify at
             // all -- and it carries no success flag to word the message by.
             onTaskComplete: (task: AsyncTask) => {
-              const ok = task.result?.success ?? false;
-              ctx.wsService?.broadcastNotification(
-                ok
-                  ? `**${task.agentName} finished its task.** Open the Agents room to read the result.`
-                  : `**${task.agentName} could not complete its task.** Open the Agents room for details.`,
-                'normal',
-              );
+              ctx.wsService?.broadcastNotification(agentSettledNotice(task), 'normal');
             },
           };
 
@@ -1053,6 +1057,33 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: () => {
         try {
           return json(trialSnapshot());
+        } catch (err) {
+          return errorFromException(err);
+        }
+      },
+    },
+
+    /**
+     * D27, taken. The founder pressed one of the offers that came back with
+     * their agent, or one that came with the close of day one.
+     *
+     * The daemon does the thing and says what happened. It answers with an
+     * honest failure rather than a silent success, because a button that looks
+     * like it worked and did not is the one outcome this beat cannot survive:
+     * the whole point of the offer is that Jarvis actually does it.
+     *
+     * 404 when day one is not running, which is every install that has never
+     * had a conductor hand over.
+     */
+    '/api/trial/day-one/offer': {
+      POST: async (req: Request) => {
+        const dayOne = ctx.wsService?.getDayOne();
+        if (!dayOne) return error('Day one is not running on this install.', 404);
+        try {
+          const body = (await req.json()) as { id?: unknown };
+          const id = typeof body?.id === 'string' ? body.id : '';
+          if (!id) return error('"id" is required.', 400);
+          return json(await dayOne.acceptOffer(id));
         } catch (err) {
           return errorFromException(err);
         }

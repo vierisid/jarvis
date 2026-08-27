@@ -1956,6 +1956,35 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // inventory above (palette + voice opens both register here).
       const windowState = await import('./window-state.ts');
       const { setRoomBounds } = windowState;
+
+      // D26 on a machine with the real pebble on it. The browser's day-one
+      // layer flies the SHELL's docked pebble to the finished agent's row; on
+      // the desktop the agent strip is a 290x440 always-on-top panel and the
+      // pebble that would point at it is the native one, so it points here.
+      //
+      // Deliberately does nothing when the strip has never been opened on this
+      // machine. `boundsForRoom` falls back to a sentinel x/y of -1, which
+      // tells the SIDECAR to place a new panel near the cursor; flying a
+      // pebble to (-1, -1) would send it to the corner of the screen and point
+      // at nothing, which is worse than not gesturing at all. The card and the
+      // spoken sentence carry the beat on their own.
+      wsService.setNativePebblePointer((label: string) => {
+        const bounds = windowState.getRoomBounds('agent_strip');
+        if (!bounds || bounds.x < 0 || bounds.y < 0) {
+          console.log('[TrialDayOne] no saved bounds for the agent strip; the native pebble stays put');
+          return;
+        }
+        // The left edge, a third of the way down: where the newest finished
+        // row sits in a strip that puts running first and freshest-completed
+        // next, and clear of the header.
+        const x = Math.round(bounds.x + 14);
+        const y = Math.round(bounds.y + bounds.h / 3);
+        for (const sc of sidecarManager.listConnected()) {
+          if (!sc.capabilities.includes('pebble')) continue;
+          sidecarManager.dispatchRPC(sc.id, 'pebble.point_at', { x, y, label, duration_ms: 4000 })
+            .catch((err) => console.warn('[TrialDayOne] pebble.point_at failed:', err));
+        }
+      });
       sidecarManager.onEvent((sidecarId, event) => {
         if (event.event_type !== 'panel.bounds_changed') return;
         const payload = (event.payload ?? {}) as { panel_id?: string; x?: number; y?: number; w?: number; h?: number };
@@ -4746,6 +4775,32 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               const title = String(event.data.title ?? '');
               const body = String(event.data.body ?? '');
               const text = `**${title}**\n${body}`;
+
+              // D29. During a trial's day one this is the ONLY way an ambient
+              // suggestion reaches a founder, and it is governed. Outside a
+              // running day one `allowAmbient` returns true without looking at
+              // anything, so every other install takes the same path it always
+              // did.
+              //
+              // `wouldDo` is what the governor's hardest gate reads: an
+              // interruption has to arrive with something Jarvis will DO. Only
+              // `automation` can answer that from here. `error` and `struggle`
+              // deliberately answer with nothing, because the doing happens in
+              // the auto-research below and announcing the intent to look
+              // would spend one of the day's two interruptions on a sentence
+              // with no help in it.
+              const suggestionOffers: Record<string, string> = {
+                automation: 'build the flow that does it',
+              };
+              if (!wsService.allowAmbientSpeech({
+                type: String(event.data.type ?? ''),
+                title,
+                body,
+                wouldDo: suggestionOffers[String(event.data.type ?? '')] ?? '',
+              })) {
+                return;
+              }
+
               console.log(`[Daemon] Awareness suggestion firing: "${title}"`);
 
               const hasWsClients = wsService.getServer().getClientCount() > 0;
@@ -4780,6 +4835,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                   'awareness'
                 ).then(solution => {
                   if (solution && solution.length > 10) {
+                    // Governed only inside a trial's day one, and governed
+                    // HERE rather than at the trigger: the fix is the offer,
+                    // so the budget is spent on an answer rather than on an
+                    // intention to look for one.
+                    if (!wsService.allowAmbientSpeech({
+                      type: 'error',
+                      title: `Fix for error in ${appName}`,
+                      body: `${errorText}\n${solution}`,
+                      appName,
+                      wouldDo: 'apply the fix',
+                    })) return;
                     const solutionText = `**Fix for error in ${appName}:**\n${solution.slice(0, 500)}`;
                     wsService.broadcastNotification(solutionText, 'urgent');
                     sendDesktopNotification(`JARVIS: Fix for ${appName}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
@@ -4826,6 +4892,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                   'awareness'
                 ).then(solution => {
                   if (solution && solution.length > 10) {
+                    if (!wsService.allowAmbientSpeech({
+                      type: 'struggle',
+                      title: `Help for ${sAppName}`,
+                      body: `${ocrPreview}\n${solution}`,
+                      appName: sAppName,
+                      wouldDo: 'do the thing they are stuck on',
+                    })) return;
                     const solutionText = `**Help for ${sAppName}:**\n${solution.slice(0, 500)}`;
                     wsService.broadcastNotification(solutionText, 'urgent');
                     sendDesktopNotification(`JARVIS: Help for ${sAppName}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
@@ -4919,6 +4992,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             }
           }
         );
+        // D30. One line per stretch of the founder's day, taken at the moment
+        // its topic is written and while the captures behind it still exist.
+        // That is the whole answer to the retention problem: awareness keeps
+        // full captures for an hour and key moments for a day, so a whole-day
+        // summary assembled in the evening out of raw captures would be a
+        // summary of the evening. Inert unless a trial has handed over.
+        svc.onSessionSummarised((line) => {
+          wsService.getDayOne()?.noteDayLine({
+            at: line.endedAt,
+            topic: line.topic,
+            minutes: line.minutes,
+            apps: line.apps,
+          });
+        });
+
         await svc.start();
         awarenessService = svc;
         apiContext.awarenessService = svc;
