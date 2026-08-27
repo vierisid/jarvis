@@ -11,6 +11,11 @@ type StripTask = {
   elapsed_seconds: number;
   completed_at: number | null;
   result_preview: string | null;
+  /** Set only on a failed run, and it says which way it died: billing, auth,
+   *  rate_limit, network, provider, timeout, tooling, unknown. The preview
+   *  beside it is the honest sentence, not the agent's output, because a dead
+   *  run has no output. See src/agents/task-failure.ts. */
+  failure_kind?: string | null;
 };
 
 type StripAgent = {
@@ -200,6 +205,11 @@ export function AgentStripRoom(_: { mode?: RoomBodyMode }) {
               key={task.task_id}
               role="listitem"
               className={`agent-strip__card agent-strip__card--${task.status}`}
+              /* Named so something outside this room can point AT this row
+                 without knowing how the row is drawn. The trial's day-one
+                 layer flies the shell's pebble here when the founder's own
+                 agent comes back (D26); everything else ignores it. */
+              data-trial-anchor={`agent:${task.task_id}`}
             >
               <div className="agent-strip__row">
                 <span
@@ -230,7 +240,7 @@ export function AgentStripRoom(_: { mode?: RoomBodyMode }) {
                   }`}
                 >
                   <div className="agent-strip__result-eyebrow">
-                    {isFailed ? "error" : "result"}
+                    {isFailed ? (task.failure_kind ?? "error") : "result"}
                   </div>
                   <div className="agent-strip__result-body">
                     {task.result_preview}

@@ -7,6 +7,7 @@
  */
 
 import { runSubAgent, type SubAgentResult, type ProgressCallback } from './sub-agent-runner.ts';
+import { classifyAgentFailure, type AgentFailure } from './task-failure.ts';
 import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
@@ -30,11 +31,31 @@ export type AsyncTask = {
    * Null until the summary lands (or if summarization failed).
    */
   summary: string | null;
+  /**
+   * Why the run died, when it did. Null on every `running` and `completed`
+   * task and never null on a `failed` one.
+   *
+   * It exists because `status: 'failed'` on its own cannot be reported
+   * honestly. See agents/task-failure.ts.
+   */
+  failure: AgentFailure | null;
 };
 
 export type LaunchOptions = {
   agent: AgentInstance;
   task: string;
+  /**
+   * What to call this run on the surfaces a person looks at, when the role's
+   * own name is not enough to tell it apart from another run of the same role.
+   *
+   * The case it was added for: the trial spawns two sub-agents from the same
+   * specialist within the hour, so the agent strip showed `Research Analyst`
+   * twice. To a founder that is indistinguishable from one agent that never
+   * started, which is exactly the wrong conclusion to make available.
+   *
+   * Defaults to the role name, so nothing that does not pass it changes.
+   */
+  displayName?: string;
   context: string;
   llmManager: LLMManager;
   toolRegistry: ToolRegistry;
@@ -80,7 +101,7 @@ export class AgentTaskManager {
     const asyncTask: AsyncTask = {
       id: taskId,
       agentId: agent.id,
-      agentName: agent.agent.role.name,
+      agentName: opts.displayName?.trim() || agent.agent.role.name,
       specialistId: agent.agent.role.id,
       task,
       status: 'running',
@@ -88,6 +109,7 @@ export class AgentTaskManager {
       completedAt: null,
       result: null,
       summary: null,
+      failure: null,
     };
 
     this.tasks.set(taskId, asyncTask);
@@ -102,24 +124,51 @@ export class AgentTaskManager {
       toolRegistry,
       onProgress,
     }).then((result) => {
-      asyncTask.status = 'completed';
       asyncTask.completedAt = Date.now();
       asyncTask.result = result;
-      console.log(`[TaskManager] Task ${taskId} completed (${asyncTask.agentName})`);
-      this.emit('complete', asyncTask);
+
+      // `runSubAgent` RESOLVES on a fatal error rather than rejecting: it
+      // catches, logs, and hands back `{ success: false, terminationReason:
+      // 'error' }`. So the resolve branch is not the happy path, it is BOTH
+      // paths, and stamping `completed` here was how a run that died on
+      // `credit_balance_exhausted` came out the far end reported as finished.
+      //
+      // `max_iterations` is deliberately NOT a failure. It carries a real
+      // answer that is merely partial, and calling it failed would throw away
+      // work the agent actually did.
+      if (result.success) {
+        asyncTask.status = 'completed';
+        console.log(`[TaskManager] Task ${taskId} completed (${asyncTask.agentName})`);
+        this.emit('complete', asyncTask);
+      } else {
+        asyncTask.status = 'failed';
+        asyncTask.failure = classifyAgentFailure(result.response);
+        console.error(
+          `[TaskManager] Task ${taskId} FAILED (${asyncTask.agentName}) ` +
+          `[${asyncTask.failure.kind}]: ${asyncTask.failure.detail}`,
+        );
+        this.emit('fail', asyncTask);
+      }
       onComplete?.(asyncTask);
     }).catch((err) => {
+      // Reached only when something escaped `runSubAgent`'s own catch, which
+      // is rare and is a bug somewhere. Handled identically so the two ways of
+      // dying cannot report differently.
       asyncTask.status = 'failed';
       asyncTask.completedAt = Date.now();
+      asyncTask.failure = classifyAgentFailure(err);
       asyncTask.result = {
         success: false,
-        response: `Task failed: ${err instanceof Error ? err.message : String(err)}`,
+        response: `Task failed: ${asyncTask.failure.detail}`,
         toolsUsed: [],
         tokensUsed: { input: 0, output: 0 },
         terminationReason: 'error',
         messages: [],
       };
-      console.error(`[TaskManager] Task ${taskId} failed (${asyncTask.agentName}):`, err);
+      console.error(
+        `[TaskManager] Task ${taskId} FAILED (${asyncTask.agentName}) ` +
+        `[${asyncTask.failure.kind}]: ${asyncTask.failure.detail}`,
+      );
       this.emit('fail', asyncTask);
       onComplete?.(asyncTask);
     });

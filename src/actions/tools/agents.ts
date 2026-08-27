@@ -84,9 +84,9 @@ export function spawnPersistentAgent(deps: AgentToolDeps, specialistId: string) 
 
 export async function assignPersistentAgentTask(
   deps: AgentToolDeps,
-  params: { agentId: string; task: string; context?: string }
+  params: { agentId: string; task: string; context?: string; displayName?: string }
 ) {
-  const { agentId, task, context = '' } = params;
+  const { agentId, task, context = '', displayName } = params;
   if (!agentId) throw new HttpError(400, '"agentId" is required');
   if (!task) throw new HttpError(400, '"task" is required');
 
@@ -117,6 +117,7 @@ export async function assignPersistentAgentTask(
     toolRegistry: scopedRegistry,
     onProgress: deps.onProgress,
     onComplete: deps.onTaskComplete,
+    displayName,
   });
 
   console.log(`[ManageAgents] Assigned task ${taskId} to ${agent.agent.role.name}`);
@@ -155,7 +156,13 @@ export function listPersistentAgents(deps: AgentToolDeps) {
       .replace(/[*_`]/g, '')
       .replace(/\s+/g, ' ')
       .trim();
-    const result_preview = cleaned ? cleaned.slice(0, 200) : null;
+    // A dead run's `response` is our own error prose ("Sub-agent error: 429
+    // ..."), which is the wrong thing to show someone who was waiting on an
+    // answer: it reads like output. The classified sentence goes in its place
+    // and the raw text stays available on /api/agents/tasks/:id.
+    const result_preview = t.failure
+      ? t.failure.says
+      : (cleaned ? cleaned.slice(0, 200) : null);
     return {
       task_id: t.id,
       agent_name: t.agentName,
@@ -164,6 +171,7 @@ export function listPersistentAgents(deps: AgentToolDeps) {
       elapsed_seconds: Math.round(((t.completedAt ?? Date.now()) - t.startedAt) / 1000),
       completed_at: t.completedAt ?? null,
       result_preview,
+      failure_kind: t.failure?.kind ?? null,
     };
   });
 
