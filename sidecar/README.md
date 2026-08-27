@@ -134,7 +134,7 @@ this is a map of **subsystems by filename prefix**, not a file list.
 
 | Directory | Contents |
 |---|---|
-| `internal/` | packages shared with the installer: `brand` (CSS), `webviewui` (window host), `autostart` (login items), `webview2` (runtime bootstrap) |
+| `internal/` | packages shared with the installer: `brand` (CSS + the custom title bar), `webviewui` (window host), `winchrome` (Windows custom window chrome), `autostart` (login items), `webview2` (runtime bootstrap) |
 | `installer/` | the standalone desktop installer — see its own package docs |
 | `npm/` | per-platform npm packages plus the `@usejarvis/sidecar` wrapper |
 | `packaging/` | macOS `.app` bundle assets; Windows manifest/icon resources |
@@ -159,6 +159,61 @@ compiles. Each set exports identical signatures, so callers are OS-agnostic:
 
 Anything compiled only for one OS is invisible to the others' builds — which is
 why CI compiles all three targets rather than trusting a Linux build.
+
+### Custom window chrome (Windows)
+
+The local webview windows -- settings, logs, the first-run connect window and
+its token form, the onboarding slideshow -- draw their own title bar on
+Windows instead of wearing the system one. `internal/winchrome` removes
+`WS_CAPTION` from the HWND and nothing else: the window keeps its overlapped
+frame, so resize borders, Aero Snap, the maximized rect, minimize/restore and
+the taskbar entry all stay native, and no window procedure is subclassed. The
+strip itself is shared markup in `internal/brand/titlebar.go`, rendered only
+when `winchrome.Install` has stamped `<html data-chrome="custom">` -- so the
+same page keeps its native title bar on macOS and Linux.
+
+The page moves the window through a binding rather than CSS: the WebView2
+child HWND covers the client area and swallows the mouse, so `app-region:
+drag` does nothing and the drag is a `ReleaseCapture` +
+`WM_NCLBUTTONDOWN`/`HTCAPTION` handshake instead. Two consequences worth
+knowing: the Win11 Snap Layouts flyout does not appear on the page's maximize
+button (it needs `HTMAXBUTTON` from a window procedure we do not own), and
+custom chrome must never be given to a window showing REMOTE content -- those
+bindings move, minimize, maximize and close the window. That is why the
+account window (`account_window.go`, end-to-end remote) and the dashboard
+panels stay natively framed.
+
+To eyeball the pages without a Windows machine:
+
+```sh
+JARVIS_PAGE_DUMP_DIR=/tmp/pages go test -run TestDumpBrandPages .
+# then open /tmp/pages/chrome-*.html (and dark-chrome-*.html)
+```
+
+The dumps cannot exercise the interaction layer -- the bindings do not exist
+in a browser -- and none of it is reachable from a Go test, so this much needs
+a real Windows box at least once per change to `winchrome` or the strip's
+script:
+
+- [ ] Drag the strip: the window follows, and does not stay glued to the
+      cursor after the drop.
+- [ ] Drag to a screen edge (snap), and drag a maximized window (it restores
+      into the drag).
+- [ ] Double-click the strip maximizes, again restores. Then drag, drop, and
+      immediately press again -- that must NOT maximize.
+- [ ] Maximize: the taskbar stays visible and nothing is clipped, on a
+      secondary monitor with a different resolution and DPI too.
+- [ ] The maximize glyph tracks the state after Win+Up/Down and a taskbar
+      snap, not just after the button.
+- [ ] Minimize and close; Alt+Space and Alt+F4; right-click the strip for the
+      system menu.
+- [ ] Resize from all four edges and corners.
+- [ ] Scroll settings and onboarding: the scrollbar starts below the strip and
+      its top arrow is clickable, and Space / PageDown / Home / End scroll the
+      window with nothing focused (the page scrolls an inner container, so this
+      is script, not the browser).
+- [ ] Drag a URL or a file onto the window: nothing navigates. Drag selected
+      text into the token form's textarea: it drops.
 
 ### Preflight checks
 

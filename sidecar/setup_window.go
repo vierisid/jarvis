@@ -26,10 +26,23 @@ const setupWindowHTML = `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
+<title>JARVIS - Connect</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>` + brandTokensCSS + brandPebbleCSS + `
-  body { min-height: 100vh; display: flex; flex-direction: column; padding: 26px 30px; }
+  html, body { height: 100%; }
+  /* No padding on body: the strip's offset would replace it, not add to it.
+     .pagebody carries the padding and the centred column, and is the scroll
+     container so its scrollbar starts below the strip — PageBodyJS is what
+     keeps it scrollable by keyboard. */
+  body { padding: 0; overflow: hidden; }
+  .pagebody {
+    height: 100%; overflow-y: auto;
+    display: flex; flex-direction: column; padding: 26px 30px;
+  }
   .bhead .word { font-size: 16px; }
+  /* Under custom chrome the strip already carries the mark and the window
+     name; a wordmark directly beneath it reads as a doubled header. */
+  html[data-chrome="custom"] .bhead { display: none; }
   .center { flex: 1; display: flex; align-items: center; justify-content: center; }
   .formbox {
     width: 100%; max-width: 440px; padding: 24px 24px 20px;
@@ -66,9 +79,11 @@ const setupWindowHTML = `<!doctype html>
   button:not(:disabled):hover { filter: brightness(1.08); }
   button:focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
   button:disabled { opacity: 0.5; cursor: default; }
+` + brandTitlebarCSS + `
 </style>
 </head>
-<body>
+<body>` + brandTitlebarHTML + `
+<div class="pagebody" tabindex="-1">
   <div class="bhead"><span class="word"><span class="u">use</span>jarvis</span></div>
   <div class="center">
     <div class="formbox">
@@ -87,6 +102,7 @@ const setupWindowHTML = `<!doctype html>
       </div>
     </div>
   </div>
+</div>
 <script>
   var tok = document.getElementById('tok');
   var err = document.getElementById('err');
@@ -119,6 +135,7 @@ const setupWindowHTML = `<!doctype html>
     if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') { e.preventDefault(); submit(); }
   });
   tok.focus();
+` + brandTitlebarJS + brandPageBodyJS + `
 </script>
 </body>
 </html>`

@@ -30,6 +30,8 @@ import (
 	"sync/atomic"
 
 	webview "github.com/webview/webview_go"
+
+	"github.com/jarvis/sidecar/internal/winchrome"
 )
 
 // hostedShellHTML is the local page shown while the handshake registers (and
@@ -44,10 +46,23 @@ const hostedShellHTML = `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
+<title>JARVIS - Connect</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>` + brandTokensCSS + brandPebbleCSS + `
-  body { min-height: 100vh; display: flex; flex-direction: column; padding: 26px 30px; }
+  html, body { height: 100%; }
+  /* No padding on body: the strip's offset would replace it, not add to it.
+     .pagebody carries the padding and the centred column, and is the scroll
+     container so its scrollbar starts below the strip — PageBodyJS is what
+     keeps it scrollable by keyboard. */
+  body { padding: 0; overflow: hidden; }
+  .pagebody {
+    height: 100%; overflow-y: auto;
+    display: flex; flex-direction: column; padding: 26px 30px;
+  }
   .bhead .word { font-size: 16px; }
+  /* Under custom chrome the strip already carries the mark and the window
+     name; a wordmark directly beneath it reads as a doubled header. */
+  html[data-chrome="custom"] .bhead { display: none; }
   .center { flex: 1; display: flex; align-items: center; justify-content: center; }
   .statusbox { width: 100%; max-width: 380px; text-align: center; position: relative; }
   .dropwrap { display: flex; justify-content: center; margin-bottom: 20px; position: relative; }
@@ -79,9 +94,11 @@ const hostedShellHTML = `<!doctype html>
   .btn:focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
   .footer { margin: 0; font-size: 11.5px; color: var(--faint); text-align: center; }
   .footer a { color: var(--listen-tx); cursor: pointer; text-decoration: underline; }
+` + brandTitlebarCSS + `
 </style>
 </head>
-<body>
+<body>` + brandTitlebarHTML + `
+<div class="pagebody" tabindex="-1">
   <div class="bhead"><span class="word"><span class="u">use</span>jarvis</span></div>
   <div class="center">
     <div class="statusbox">
@@ -99,6 +116,7 @@ const hostedShellHTML = `<!doctype html>
     </div>
   </div>
   <p class="footer">Self-hosting your own brain? <a onclick="window.chooseSelfHost()">Paste your enrollment token</a></p>
+</div>
 <script>
   window.__setStatus = function (text) { document.getElementById('status').textContent = text; };
   window.__setError = function (text) {
@@ -132,6 +150,7 @@ const hostedShellHTML = `<!doctype html>
     u.style.display = 'block';
   };
   /*__BOOT__*/
+` + brandTitlebarJS + brandPageBodyJS + `
 </script>
 </body>
 </html>`
@@ -540,6 +559,11 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 	}
 	defer dl.Close() // idempotent backstop for early returns (nil-safe)
 
+	// Custom chrome before the reveal hook: the window is still hidden, so the
+	// native title bar is never composited. Safe here because every document
+	// this window shows is LOCAL (the hosted connect page opens in the user's
+	// browser, not in here) — see winchrome.Install on why that matters.
+	winchrome.Install(w)
 	stopReveal := revealWebviewOnLoad(w)
 	// LIFO with the deferred Destroy at the top: joining the reveal-timeout
 	// goroutine before the engine is freed prevents its pending Dispatch from

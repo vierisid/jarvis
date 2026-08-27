@@ -7,6 +7,8 @@ import (
 	"runtime"
 
 	webview "github.com/webview/webview_go"
+
+	"github.com/jarvis/sidecar/internal/winchrome"
 )
 
 // runLocalWebview hosts a small local-HTML webview window (settings, logs) on
@@ -24,7 +26,10 @@ import (
 // goroutine a binding spawned. On macOS the engine is leaked, not freed (see
 // below), so a late Dispatch is not a use-after-free; the join still bounds
 // the goroutine's lifetime to the window's.
-func runLocalWebview(title string, width, height int, hint webview.Hint, build func(webview.WebView) (cleanup func())) {
+//
+// titleBar is accepted for signature parity with the other platforms and
+// ignored: macOS keeps its native title bar (winchrome is Windows-only).
+func runLocalWebview(title string, width, height int, hint webview.Hint, titleBar winchrome.TitleBar, build func(webview.WebView) (cleanup func())) {
 	runtime.LockOSThread()
 	wv := webview.New(false)
 	if wv == nil {

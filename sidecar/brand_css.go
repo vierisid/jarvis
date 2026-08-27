@@ -9,4 +9,16 @@ import "github.com/jarvis/sidecar/internal/brand"
 const (
 	brandTokensCSS = brand.TokensCSS
 	brandPebbleCSS = brand.PebbleCSS
+
+	// Custom window chrome (Windows): the title bar a page draws for itself
+	// once winchrome.Install has removed the native one. Inert everywhere
+	// else — see internal/brand/titlebar.go for the markup contract.
+	brandTitlebarCSS  = brand.TitlebarCSS
+	brandTitlebarHTML = brand.TitlebarHTML
+	brandTitlebarJS   = brand.TitlebarJS
+
+	// Keyboard scrolling for the pages whose scroll container is the inner
+	// .pagebody wrapper the custom title bar requires. Not Windows-specific:
+	// the wrapper is there on every platform.
+	brandPageBodyJS = brand.PageBodyJS
 )

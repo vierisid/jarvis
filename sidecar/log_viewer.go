@@ -14,6 +14,8 @@ import (
 	"time"
 
 	webview "github.com/webview/webview_go"
+
+	"github.com/jarvis/sidecar/internal/winchrome"
 )
 
 // OpenLogViewer opens the log viewer window on its own OS-locked goroutine
@@ -23,7 +25,7 @@ func (c *SidecarClient) OpenLogViewer() {
 }
 
 func runLogViewer(logPath string) {
-	runLocalWebview("JARVIS — Logs", 900, 600, webview.HintNone, func(w webview.WebView) func() {
+	runLocalWebview("JARVIS — Logs", 900, 600, webview.HintNone, winchrome.CustomTitleBar, func(w webview.WebView) func() {
 
 		// loadLogs returns the current log file contents.
 		_ = w.Bind("loadLogs", func() string {
@@ -58,6 +60,7 @@ const logViewerHTML = `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
+<title>JARVIS — Logs</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>` + brandTokensCSS + `
   /* Monochrome Lab (Brand Book III) — shared tokens from brand_css.go,
@@ -107,9 +110,10 @@ const logViewerHTML = `<!doctype html>
     min-height: 22px; color: var(--ink3); border-top: 1px solid var(--rule);
     background: var(--raise);
   }
+` + brandTitlebarCSS + `
 </style>
 </head>
-<body>
+<body>` + brandTitlebarHTML + `
   <div class="bar">
     <span class="eyebrow">Logs</span>
     <input id="q" placeholder="Search logs…" autofocus>
@@ -159,6 +163,7 @@ const logViewerHTML = `<!doctype html>
     setTimeout(function () { if (m.textContent === t) m.textContent = ""; }, 5000);
   }
   refresh();
+` + brandTitlebarJS + `
 </script>
 </body>
 </html>`

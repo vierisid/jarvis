@@ -16,6 +16,8 @@ import (
 	"sync/atomic"
 
 	webview "github.com/webview/webview_go"
+
+	"github.com/jarvis/sidecar/internal/winchrome"
 )
 
 // OpenSettings opens the local sidecar settings window on its own OS-locked
@@ -49,7 +51,7 @@ func connStateString(s int32) string {
 }
 
 func (c *SidecarClient) runSettingsWindow() {
-	runLocalWebview("JARVIS — Sidecar Settings", 520, 560, webview.HintNone, func(w webview.WebView) func() {
+	runLocalWebview("JARVIS — Sidecar Settings", 520, 560, webview.HintNone, winchrome.CustomTitleBar, func(w webview.WebView) func() {
 		// Lifecycle plumbing for the async token check (bindings run on the
 		// webview main thread, so the network probe must not run inline —
 		// it would freeze the window for up to the probe timeout).
@@ -205,6 +207,7 @@ const settingsWindowHTML = `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
+<title>JARVIS — Sidecar Settings</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>` + brandTokensCSS + `
   /* Monochrome Lab (Brand Book III) — sidecar settings, shared tokens from
@@ -212,7 +215,12 @@ const settingsWindowHTML = `<!doctype html>
      design: label + consequence left, control right, inside raised panels
      with the asymmetric corner. */
   html, body { height: 100%; }
-  body { padding: 24px 22px 28px; overflow-y: auto; font-size: 13px; }
+  /* No padding on body: the strip's offset would replace it, not add to it,
+     leaving the first element flush against the bar. The padding lives on
+     .pagebody, which is also the scroll container so its scrollbar starts
+     below the strip — and which PageBodyJS keeps scrollable by keyboard. */
+  body { padding: 0; overflow: hidden; font-size: 13px; }
+  .pagebody { height: 100%; overflow-y: auto; padding: 24px 22px 28px; }
   h1 { font-size: 19px; font-weight: 650; letter-spacing: -.01em; margin: 0 0 3px; }
   .sub { font-size: 12px; color: var(--ink3); margin: 0 0 18px; }
   .sec { font-family: var(--mono); font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink3); margin: 20px 4px 8px; }
@@ -259,9 +267,11 @@ const settingsWindowHTML = `<!doctype html>
   .unit { font-size: 12px; color: var(--ink3); }
   #prefMsg { font-size: 11.5px; min-height: 16px; padding: 2px 16px 12px; color: var(--ink3); }
   #prefMsg.err { color: var(--listen-tx); }
+` + brandTitlebarCSS + `
 </style>
 </head>
-<body>
+<body>` + brandTitlebarHTML + `
+<div class="pagebody" tabindex="-1">
   <h1>Sidecar Settings</h1>
   <p class="sub">Connection, enrollment, and how the pebble behaves on this machine.</p>
 
@@ -316,6 +326,7 @@ const settingsWindowHTML = `<!doctype html>
     </div>
   </div>
 
+</div>
 <script>
   var dot = document.getElementById('dot');
   var statusText = document.getElementById('statusText');
@@ -452,6 +463,7 @@ const settingsWindowHTML = `<!doctype html>
   }
 
   init();
+` + brandTitlebarJS + brandPageBodyJS + `
 </script>
 </body>
 </html>`

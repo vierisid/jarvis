@@ -21,6 +21,7 @@ import (
 
 	"github.com/jarvis/sidecar/internal/autostart"
 	"github.com/jarvis/sidecar/internal/webviewui"
+	"github.com/jarvis/sidecar/internal/winchrome"
 )
 
 // setupPermState is the wizard's poll snapshot (JSON via webview binding).
@@ -72,7 +73,7 @@ func runOnboarding(cfg *SidecarConfig) {
 		}
 	}()
 
-	if !webviewui.RunWindow("Welcome to JARVIS", 520, 620, webview.HintNone, func(w webview.WebView) {
+	if !webviewui.RunWindow("Welcome to JARVIS", 520, 620, webview.HintNone, winchrome.CustomTitleBar, func(w webview.WebView) {
 
 		_ = w.Bind("getPermissions", func() setupPermState {
 			permMu.Lock()
@@ -141,10 +142,16 @@ const onboardingWindowHTML = `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
+<title>Welcome to JARVIS</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>` + brandTokensCSS + brandPebbleCSS + `
   html, body { height: 100%; }
-  body { padding: 26px 22px 24px; overflow-y: auto; font-size: 13px; }
+  /* No padding on body: the strip's offset would replace it, not add to it,
+     leaving the first element flush against the bar. The padding lives on
+     .pagebody, which is also the scroll container so its scrollbar starts
+     below the strip — and which PageBodyJS keeps scrollable by keyboard. */
+  body { padding: 0; overflow: hidden; font-size: 13px; }
+  .pagebody { height: 100%; overflow-y: auto; padding: 26px 22px 24px; }
   .hero { display: flex; align-items: center; gap: 14px; margin-bottom: 4px; }
   .hero .bdrop { width: 34px; height: 34px; flex: 0 0 auto; }
   h1 { font-size: 19px; font-weight: 650; letter-spacing: -.01em; margin: 0; }
@@ -175,9 +182,11 @@ const onboardingWindowHTML = `<!doctype html>
   .foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 20px; }
   .msg { font-size: 11.5px; min-height: 16px; flex: 1; color: var(--ink3); }
   .msg.err { color: var(--listen-tx); }
+` + brandTitlebarCSS + `
 </style>
 </head>
-<body>
+<body>` + brandTitlebarHTML + `
+<div class="pagebody" tabindex="-1">
   <div class="hero">
     <span class="bdrop" id="pebble"><span class="in"></span><span class="ring"></span></span>
     <h1>Welcome to <span class="word"><span class="u">use</span>jarvis</span></h1>
@@ -217,6 +226,7 @@ const onboardingWindowHTML = `<!doctype html>
     <button class="sbtn pri" id="finishBtn" onclick="finish()">Finish setup</button>
   </div>
 
+</div>
 <script>
   var rows = ['notifications', 'microphone', 'screen', 'accessibility'];
 
@@ -281,6 +291,7 @@ const onboardingWindowHTML = `<!doctype html>
   }
 
   init();
+` + brandTitlebarJS + brandPageBodyJS + `
 </script>
 </body>
 </html>`

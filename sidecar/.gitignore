@@ -5,6 +5,10 @@ dist/
 /jarvis-test
 /jarvis-test.exe
 /sidecar
+# `go build .` with no -o names its output after the directory.
+/sidecar.exe
+/installer
+/installer.exe
 
 # npm platform package binaries (built by make npm-pack)
 npm/darwin-arm64/bin/

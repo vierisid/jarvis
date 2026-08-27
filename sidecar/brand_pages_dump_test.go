@@ -10,6 +10,23 @@ import (
 	"testing"
 )
 
+// withCustomChrome fakes what winchrome.Install does to a document on Windows.
+// It fails the test rather than returning the document unchanged: a silent
+// no-op here would hand visual QA an UNchromed page that looks fine, which is
+// the one outcome worse than no dump at all.
+func withCustomChrome(t *testing.T, name, html string) string {
+	t.Helper()
+	out := strings.Replace(html, "<html>", `<html data-chrome="custom">`, 1)
+	if out == html {
+		t.Fatalf("%s: no bare <html> tag to mark as custom-chromed", name)
+	}
+	marked := strings.Replace(out, "<body>", "<body><script>window.__jarvisCustomChrome=true;</script>", 1)
+	if marked == out {
+		t.Fatalf("%s: no bare <body> tag to inject the chrome flag into", name)
+	}
+	return marked
+}
+
 func TestDumpBrandPages(t *testing.T) {
 	dir := os.Getenv("JARVIS_PAGE_DUMP_DIR")
 	if dir == "" {
@@ -29,6 +46,16 @@ func TestDumpBrandPages(t *testing.T) {
 		"account.html":              accountShellHTML,
 		"settings.html":             settingsWindowHTML,
 		"logs.html":                 logViewerHTML,
+		"onboarding.html":           onboardingWindowHTML,
+	}
+	// Pages that draw their own title bar on Windows also dump a chromed
+	// variant: the strip is invisible without the marker winchrome.Install
+	// stamps, so without this the new chrome could never be eyeballed off
+	// Windows. The bindings are absent here — TitlebarJS guards every call.
+	// Driven off customChromePages (titlebar_pages_test.go) so the QA dump and
+	// the set of chromed windows cannot drift apart.
+	for name, html := range customChromePages {
+		pages["chrome-"+name+".html"] = withCustomChrome(t, name, html)
 	}
 	for name, html := range pages {
 		if err := os.WriteFile(filepath.Join(dir, name), []byte(html), 0644); err != nil {

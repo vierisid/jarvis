@@ -18,6 +18,8 @@ package main
 
 import (
 	webview "github.com/webview/webview_go"
+
+	"github.com/jarvis/sidecar/internal/winchrome"
 )
 
 // accountShellHTML is the local first document, shown while the hosted page
@@ -70,7 +72,7 @@ func (c *SidecarClient) runAccountWindow() {
 	base := resolveHostedBaseURL(c.config.HostedBaseURL)
 	c.mu.Unlock()
 
-	runLocalWebview("JARVIS — Account", 920, 720, webview.HintNone, func(w webview.WebView) func() {
+	runLocalWebview("JARVIS — Account", 920, 720, webview.HintNone, winchrome.NativeTitleBar, func(w webview.WebView) func() {
 		w.SetHtml(accountShellHTML)
 		// Dispatch rather than a direct call: the dispatch queue runs after
 		// SetHtml's string navigation has been issued, so the shell is the

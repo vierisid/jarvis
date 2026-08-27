@@ -5,6 +5,8 @@ import (
 	"runtime"
 
 	webview "github.com/webview/webview_go"
+
+	"github.com/jarvis/sidecar/internal/winchrome"
 )
 
 // RunWindow hosts a small local-HTML webview window, owning its creation,
@@ -17,9 +19,14 @@ import (
 // sidecar uses its piggybacking darwin runner instead (local_webview_darwin.go).
 // Standalone processes (the installer, the sidecar's pre-tray --setup mode)
 // call this from the main goroutine.
+// titleBar chooses between the system title bar and one the page draws itself
+// (winchrome; custom is Windows-only and degrades to native elsewhere). Ask
+// for winchrome.CustomTitleBar only for a window showing LOCAL html: it binds
+// window controls, which a remote document must never reach.
+//
 // Returns false when no window could be opened, so callers can degrade to a
 // non-GUI path instead of exiting silently.
-func RunWindow(title string, width, height int, hint webview.Hint, build func(webview.WebView)) bool {
+func RunWindow(title string, width, height int, hint webview.Hint, titleBar winchrome.TitleBar, build func(webview.WebView)) bool {
 	runtime.LockOSThread()
 	// Unlock on the way out: the sidecar's Windows --setup path returns here
 	// and continues into normal startup, and leaving the main goroutine pinned
@@ -41,6 +48,12 @@ func RunWindow(title string, width, height int, hint webview.Hint, build func(we
 	defer wv.Destroy()
 	wv.SetTitle(title)
 	wv.SetSize(width, height, hint)
+	if titleBar == winchrome.CustomTitleBar {
+		// Before RevealOnLoad and before build's SetHtml: the window is still
+		// hidden, so the native bar is never composited, and the marker script
+		// Install injects only reaches documents loaded after it.
+		winchrome.Install(wv)
+	}
 	stop := RevealOnLoad(wv)
 	// LIFO with the Destroy above: a window closed within the reveal timeout
 	// must join the timeout goroutine BEFORE the engine is freed, or its
