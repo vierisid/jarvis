@@ -33,7 +33,7 @@ export interface GeneratedCatalogEntry {
 }
 
 /** Timestamp of the last generation pass (ISO date). */
-export const GENERATED_AT = "2026-08-23";
+export const GENERATED_AT = "2026-08-30";
 
 /** Activepieces commit the script walked when generating this list. */
 export const GENERATED_FROM_SHA = "d04e6807c485ecd788a72af0d04abffba78563c7";
@@ -112,8 +112,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "ai",
     npmPackage: "@activepieces/piece-ai",
-    versionRange: "^0.6.1",
-    latestVersion: "0.6.1",
+    versionRange: "^0.9.0",
+    latestVersion: "0.9.0",
     displayName: "Ai",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/ai",
@@ -252,8 +252,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "amazon-s3",
     npmPackage: "@activepieces/piece-amazon-s3",
-    versionRange: "^0.6.7",
-    latestVersion: "0.6.7",
+    versionRange: "^0.6.8",
+    latestVersion: "0.6.8",
     displayName: "Amazon S3",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/amazon-s3",
@@ -302,8 +302,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "amazon-textract",
     npmPackage: "@activepieces/piece-amazon-textract",
-    versionRange: "^0.3.5",
-    latestVersion: "0.3.5",
+    versionRange: "^0.3.6",
+    latestVersion: "0.3.6",
     displayName: "Amazon Textract",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/amazon-textract",
@@ -372,8 +372,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "apitemplate-io",
     npmPackage: "@activepieces/piece-apitemplate-io",
-    versionRange: "^0.1.7",
-    latestVersion: "0.1.7",
+    versionRange: "^0.1.8",
+    latestVersion: "0.1.8",
     displayName: "Apitemplate Io",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/apitemplate-io",
@@ -462,8 +462,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "attio",
     npmPackage: "@activepieces/piece-attio",
-    versionRange: "^0.1.22",
-    latestVersion: "0.1.22",
+    versionRange: "^0.1.23",
+    latestVersion: "0.1.23",
     displayName: "Attio",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/attio",
@@ -492,8 +492,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "azure-blob-storage",
     npmPackage: "@activepieces/piece-azure-blob-storage",
-    versionRange: "^0.1.9",
-    latestVersion: "0.1.9",
+    versionRange: "^0.1.10",
+    latestVersion: "0.1.10",
     displayName: "Azure Blob Storage",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/azure-blob-storage",
@@ -822,8 +822,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "bumpups",
     npmPackage: "@activepieces/piece-bumpups",
-    versionRange: "^0.1.7",
-    latestVersion: "0.1.7",
+    versionRange: "^0.1.8",
+    latestVersion: "0.1.8",
     displayName: "Bumpups",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/bumpups",
@@ -1192,8 +1192,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "clickup",
     npmPackage: "@activepieces/piece-clickup",
-    versionRange: "^0.7.12",
-    latestVersion: "0.7.12",
+    versionRange: "^0.7.13",
+    latestVersion: "0.7.13",
     displayName: "Clickup",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/clickup",
@@ -1712,8 +1712,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "dropbox",
     npmPackage: "@activepieces/piece-dropbox",
-    versionRange: "^0.7.7",
-    latestVersion: "0.7.7",
+    versionRange: "^0.7.8",
+    latestVersion: "0.7.8",
     displayName: "Dropbox",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/dropbox",
@@ -1912,8 +1912,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "facebook-pages",
     npmPackage: "@activepieces/piece-facebook-pages",
-    versionRange: "^0.2.7",
-    latestVersion: "0.2.7",
+    versionRange: "^0.2.8",
+    latestVersion: "0.2.8",
     displayName: "Facebook Pages",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/facebook-pages",
@@ -2042,8 +2042,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "flow-helper",
     npmPackage: "@activepieces/piece-flow-helper",
-    versionRange: "^0.1.7",
-    latestVersion: "0.1.7",
+    versionRange: "^0.1.8",
+    latestVersion: "0.1.8",
     displayName: "Flow Helper",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/flow-helper",
@@ -2442,8 +2442,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "google-drive",
     npmPackage: "@activepieces/piece-google-drive",
-    versionRange: "^0.8.5",
-    latestVersion: "0.8.5",
+    versionRange: "^0.9.1",
+    latestVersion: "0.9.1",
     displayName: "Google Drive",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/google-drive",
@@ -2462,8 +2462,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "google-gemini",
     npmPackage: "@activepieces/piece-google-gemini",
-    versionRange: "^0.1.15",
-    latestVersion: "0.1.15",
+    versionRange: "^0.1.16",
+    latestVersion: "0.1.16",
     displayName: "Google Gemini",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/google-gemini",
@@ -2472,8 +2472,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "google-my-business",
     npmPackage: "@activepieces/piece-google-my-business",
-    versionRange: "^0.1.9",
-    latestVersion: "0.1.9",
+    versionRange: "^0.2.0",
+    latestVersion: "0.2.0",
     displayName: "Google My Business",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/google-my-business",
@@ -2632,8 +2632,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "grok-xai",
     npmPackage: "@activepieces/piece-grok-xai",
-    versionRange: "^0.1.7",
-    latestVersion: "0.1.7",
+    versionRange: "^0.1.8",
+    latestVersion: "0.1.8",
     displayName: "Grok Xai",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/grok-xai",
@@ -2972,8 +2972,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "jira-cloud",
     npmPackage: "@activepieces/piece-jira-cloud",
-    versionRange: "^0.3.11",
-    latestVersion: "0.3.11",
+    versionRange: "^0.3.12",
+    latestVersion: "0.3.12",
     displayName: "Jira Cloud",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/jira-cloud",
@@ -3262,8 +3262,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "line",
     npmPackage: "@activepieces/piece-line",
-    versionRange: "^0.1.7",
-    latestVersion: "0.1.7",
+    versionRange: "^0.1.8",
+    latestVersion: "0.1.8",
     displayName: "Line",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/line",
@@ -3742,8 +3742,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "microsoft-onedrive",
     npmPackage: "@activepieces/piece-microsoft-onedrive",
-    versionRange: "^0.4.6",
-    latestVersion: "0.4.6",
+    versionRange: "^0.4.7",
+    latestVersion: "0.4.7",
     displayName: "Microsoft Onedrive",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/microsoft-onedrive",
@@ -3792,8 +3792,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "microsoft-sharepoint",
     npmPackage: "@activepieces/piece-microsoft-sharepoint",
-    versionRange: "^0.3.7",
-    latestVersion: "0.3.7",
+    versionRange: "^0.3.8",
+    latestVersion: "0.3.8",
     displayName: "Microsoft Sharepoint",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/microsoft-sharepoint",
@@ -4212,8 +4212,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "openai",
     npmPackage: "@activepieces/piece-openai",
-    versionRange: "^0.10.4",
-    latestVersion: "0.10.4",
+    versionRange: "^0.10.5",
+    latestVersion: "0.10.5",
     displayName: "Openai",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/openai",
@@ -4252,8 +4252,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "oracle-database",
     npmPackage: "@activepieces/piece-oracle-database",
-    versionRange: "^0.1.12",
-    latestVersion: "0.1.12",
+    versionRange: "^0.1.13",
+    latestVersion: "0.1.13",
     displayName: "Oracle Database",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/oracle-database",
@@ -4502,8 +4502,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "pipedrive",
     npmPackage: "@activepieces/piece-pipedrive",
-    versionRange: "^0.8.10",
-    latestVersion: "0.8.10",
+    versionRange: "^0.8.11",
+    latestVersion: "0.8.11",
     displayName: "Pipedrive",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/pipedrive",
@@ -4552,8 +4552,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "pollybot-ai",
     npmPackage: "@activepieces/piece-pollybot-ai",
-    versionRange: "^0.1.7",
-    latestVersion: "0.1.7",
+    versionRange: "^0.2.0",
+    latestVersion: "0.2.0",
     displayName: "Pollybot Ai",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/pollybot-ai",
@@ -4672,8 +4672,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "pushbullet",
     npmPackage: "@activepieces/piece-pushbullet",
-    versionRange: "^0.1.7",
-    latestVersion: "0.1.7",
+    versionRange: "^0.1.8",
+    latestVersion: "0.1.8",
     displayName: "Pushbullet",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/pushbullet",
@@ -5152,8 +5152,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "sendinblue",
     npmPackage: "@activepieces/piece-sendinblue",
-    versionRange: "^0.2.9",
-    latestVersion: "0.2.9",
+    versionRange: "^0.3.0",
+    latestVersion: "0.3.0",
     displayName: "Sendinblue",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/sendinblue",
@@ -5942,8 +5942,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "twitch",
     npmPackage: "@activepieces/piece-twitch",
-    versionRange: "^0.0.9",
-    latestVersion: "0.0.9",
+    versionRange: "^0.0.10",
+    latestVersion: "0.0.10",
     displayName: "Twitch",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/twitch",
