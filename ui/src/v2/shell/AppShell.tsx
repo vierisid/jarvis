@@ -29,6 +29,7 @@ import { useRoomActionDispatcher } from "../rooms/useRoomActionBus";
 import { IndexSidebar, useIndexCollapsed } from "./IndexSidebar";
 import { TopBar } from "./TopBar";
 import { NowRoom } from "./NowRoom";
+import { deriveJarvisCoreState } from "../core/coreState";
 import "./AppShell.css";
 import "./roomShell.css";
 
@@ -863,6 +864,12 @@ function ShellLayout({
   const [arranging, setArranging] = useState(false);
   const [talkOpen, setTalkOpen] = useState(false);
   const [talkIn, setTalkIn] = useState(false);
+  const coreState = deriveJarvisCoreState({
+    connection,
+    voiceState,
+    hasActiveWork: composerResponding,
+    hasPendingApproval: voiceState === "awaiting-approval",
+  });
 
   // awaiting-approval renders as the "asking" (amber) pebble state.
   const dataState = voiceState === "awaiting-approval" ? "asking" : voiceState;
@@ -918,7 +925,7 @@ function ShellLayout({
 
       <TopBar
         connection={connection}
-        voiceState={voiceState}
+        coreState={coreState}
         arranging={arranging}
         onArrange={() => setArranging((a) => !a)}
         onOpenPalette={onOpenPalette}

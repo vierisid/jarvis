@@ -2,8 +2,9 @@ import React from "react";
 import { useV2Route } from "../router";
 import { ROOM_NAV_ENTRIES } from "../palette/types";
 import type { ConnectionState } from "./Header";
-import type { VoiceState } from "./VoiceRail";
 import { useTheme } from "./useTheme";
+import { JapaneseDateTime } from "../core/JapaneseDateTime";
+import type { JarvisCoreState } from "../core/coreState";
 
 /**
  * Top bar — 44px, never two rows. Left: room name + contextual actions
@@ -15,22 +16,16 @@ const ROOM_TITLES: Record<string, string> = Object.fromEntries(
   ROOM_NAV_ENTRIES.map((e) => [e.key, e.label]),
 );
 
-const STATE_LABEL: Record<VoiceState, string> = {
-  idle: "idle",
-  listening: "listening",
-  thinking: "thinking",
-  speaking: "speaking",
-  "awaiting-approval": "asking",
-  muted: "muted",
-};
-
-const STATE_HUE: Record<VoiceState, string> = {
-  idle: "var(--faint)",
-  listening: "var(--listen)",
-  thinking: "var(--ink2)",
-  speaking: "var(--speak)",
-  "awaiting-approval": "var(--hold)",
-  muted: "var(--faint)",
+const CORE_HUE: Record<JarvisCoreState, string> = {
+  SLEEPING: "var(--faint)",
+  AWAKENING: "var(--ink2)",
+  IDLE: "var(--faint)",
+  LISTENING: "var(--listen)",
+  THINKING: "var(--ink2)",
+  WORKING: "var(--speak)",
+  WAITING_APPROVAL: "var(--hold)",
+  SPEAKING: "var(--speak)",
+  ERROR: "var(--listen)",
 };
 
 const DAEMON: Record<ConnectionState, { cls: string; hue: string; label: string }> = {
@@ -41,7 +36,7 @@ const DAEMON: Record<ConnectionState, { cls: string; hue: string; label: string 
 
 export function TopBar({
   connection,
-  voiceState,
+  coreState,
   arranging,
   onArrange,
   onOpenPalette,
@@ -50,7 +45,7 @@ export function TopBar({
   onToggleNotifications,
 }: {
   connection: ConnectionState;
-  voiceState: VoiceState;
+  coreState: JarvisCoreState;
   arranging: boolean;
   onArrange: () => void;
   onOpenPalette: () => void;
@@ -75,6 +70,7 @@ export function TopBar({
       )}
 
       <div className="right">
+        <JapaneseDateTime />
         <span className={`rs-chip ${daemon.cls}`}>
           <span className="rs-dot" style={{ background: daemon.hue }} />
           {daemon.label}
@@ -82,8 +78,8 @@ export function TopBar({
 
         {connection !== "offline" && (
           <span className="rs-chip hold" aria-live="polite">
-            <span className="rs-dot" style={{ background: STATE_HUE[voiceState] }} />
-            <span className="rs-stl">{STATE_LABEL[voiceState]}</span>
+            <span className="rs-dot" style={{ background: CORE_HUE[coreState] }} />
+            <span className="rs-stl">CORE · {coreState}</span>
           </span>
         )}
 
