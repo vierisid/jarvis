@@ -38,6 +38,30 @@ func TestAwarenessOCRDefault(t *testing.T) {
 	}
 }
 
+func TestContinuousWakeRequiresExplicitOptIn(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+		want bool
+	}{
+		{"omitted", "preferences:\n  start_at_startup: true\n", false},
+		{"explicit false", "preferences:\n  continuous_wake: false\n", false},
+		{"explicit true", "preferences:\n  continuous_wake: true\n", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := defaultConfig()
+			if err := yaml.Unmarshal([]byte(tc.yaml), &cfg); err != nil {
+				t.Fatalf("yaml: %v", err)
+			}
+			if cfg.Preferences.ContinuousWake != tc.want {
+				t.Fatalf("ContinuousWake = %v, want %v", cfg.Preferences.ContinuousWake, tc.want)
+			}
+		})
+	}
+}
+
 func TestAwarenessCaptureDirDefault(t *testing.T) {
 	cfg := defaultConfig()
 	want := filepath.Join(homeDir(), ".jarvis", "captures")

@@ -30,6 +30,7 @@ type settingsState struct {
 	Status string `json:"status"` // "connected" | "connecting" | "error"
 	Prefs  struct {
 		StartAtStartup      bool `json:"start_at_startup"`
+		ContinuousWake      bool `json:"continuous_wake"`
 		EtherealPebble      bool `json:"ethereal_pebble"`
 		EtherealIdleSeconds int  `json:"ethereal_idle_seconds"`
 		TelemetryEnabled    bool `json:"telemetry_enabled"`
@@ -66,6 +67,7 @@ func (c *SidecarClient) runSettingsWindow() {
 			var st settingsState
 			st.Status = connStateString(c.ConnState())
 			st.Prefs.StartAtStartup = prefs.StartAtStartup
+			st.Prefs.ContinuousWake = prefs.ContinuousWake
 			st.Prefs.EtherealPebble = prefs.EtherealPebble
 			st.Prefs.EtherealIdleSeconds = prefs.EtherealIdleSeconds
 			if st.Prefs.EtherealIdleSeconds <= 0 {
@@ -142,6 +144,8 @@ func (c *SidecarClient) runSettingsWindow() {
 					return fmt.Errorf("Could not %s start-at-startup: %v", verb, err)
 				}
 				return c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.StartAtStartup = enabled })
+			case "continuous_wake":
+				return c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.ContinuousWake = enabled })
 			case "ethereal_pebble":
 				if err := c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.EtherealPebble = enabled }); err != nil {
 					return err
@@ -301,6 +305,10 @@ const settingsWindowHTML = `<!doctype html>
   <div class="sec">Privacy</div>
   <div class="panel">
     <div class="srow">
+      <div class="sl7"><div class="a">Continuous wake-word listening</div><div class="b">Keep the microphone open and send detected speech segments to your Brain to find “Jarvis”. Off by default. Takes effect after restarting the sidecar.</div></div>
+      <div class="sv7"><label class="sw"><input type="checkbox" id="continuous_wake" onchange="togglePref(this)"><span class="track"></span></label></div>
+    </div>
+    <div class="srow">
       <div class="sl7"><div class="a">Send anonymous usage metrics</div><div class="b">A small anonymous ping (hashed machine id, version, OS, capabilities) at startup and hourly, so the project can measure usage. No personal data or screen content. On by default; turn off here anytime.</div></div>
       <div class="sv7"><label class="sw"><input type="checkbox" id="telemetry_enabled" onchange="togglePref(this)"><span class="track"></span></label></div>
     </div>
@@ -341,6 +349,7 @@ const settingsWindowHTML = `<!doctype html>
     var st = await window.getState();
     paintStatus(st.status);
     document.getElementById('start_at_startup').checked = !!st.prefs.start_at_startup;
+    document.getElementById('continuous_wake').checked = !!st.prefs.continuous_wake;
     document.getElementById('ethereal_pebble').checked = !!st.prefs.ethereal_pebble;
     document.getElementById('ethereal_idle_seconds').value = st.prefs.ethereal_idle_seconds || 5;
     document.getElementById('telemetry_enabled').checked = !!st.prefs.telemetry_enabled;

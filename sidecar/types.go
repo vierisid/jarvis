@@ -150,6 +150,8 @@ type TelemetryConfig struct {
 type PreferencesConfig struct {
 	// General
 	StartAtStartup bool `yaml:"start_at_startup"` // register the sidecar to launch on login
+	// Privacy
+	ContinuousWake bool `yaml:"continuous_wake"` // continuously capture speech segments for wake-word detection; default off
 	// Style
 	EtherealPebble      bool `yaml:"ethereal_pebble"`       // fade the pebble out while idle, pop it back on activity
 	EtherealIdleSeconds int  `yaml:"ethereal_idle_seconds"` // idle time before the pebble fades out (default 5)

@@ -521,25 +521,28 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	if c.pebble != nil {
 		audioSvc := NewAudioCaptureService()
 
-		// Sidecar-native wake-word listener (T16). Always on whenever the
-		// pebble is — no separate config gate, since the pebble is the
-		// whole reason wake-word matters. Emits one `audio.wake_segment`
-		// per VAD-detected utterance to the daemon, which transcribes +
-		// regex-matches "jarvis". Pauses around Ctrl+Space session
-		// captures so it doesn't fight for the mic device.
-		wakeListener := NewWakeListenerService(audioSvc, sendFn, DefaultWakeListenerOpts())
-		if err := wakeListener.Start(ctx); err != nil {
-			log.Printf("[wake] failed to start: %v", err)
-			wakeListener = nil
+		// Sidecar-native wake-word listener (T16). This continuously captures
+		// speech segments, so it is privacy-sensitive and must be explicitly
+		// enabled. An omitted setting is intentionally false. Ctrl+Space remains
+		// available independently for deliberate, one-shot capture.
+		var wakeListener *WakeListenerService
+		if c.Preferences().ContinuousWake {
+			wakeListener = NewWakeListenerService(audioSvc, sendFn, DefaultWakeListenerOpts())
+			if err := wakeListener.Start(ctx); err != nil {
+				log.Printf("[wake] failed to start: %v", err)
+				wakeListener = nil
+			} else {
+				// Tear the listener down when this connection ends. audioSvc and
+				// wakeListener are constructed fresh per connectAndServe, so without
+				// this every reconnect leaked a coordinate() goroutine and a held mic
+				// device — after N reconnects, N listeners fight over the microphone.
+				// Stop() works via stopCh (not ctx), so it's safe that Start uses the
+				// parent ctx (reloadConfig cancels obsCtx and must NOT kill the wake
+				// listener). The receiver is bound now, while wakeListener is non-nil.
+				defer wakeListener.Stop()
+			}
 		} else {
-			// Tear the listener down when this connection ends. audioSvc and
-			// wakeListener are constructed fresh per connectAndServe, so without
-			// this every reconnect leaked a coordinate() goroutine and a held mic
-			// device — after N reconnects, N listeners fight over the microphone.
-			// Stop() works via stopCh (not ctx), so it's safe that Start uses the
-			// parent ctx (reloadConfig cancels obsCtx and must NOT kill the wake
-			// listener). The receiver is bound now, while wakeListener is non-nil.
-			defer wakeListener.Stop()
+			log.Printf("[wake] continuous listener disabled by privacy preference")
 		}
 
 		// Suppress wake captures while TTS is playing so JARVIS's own
