@@ -171,6 +171,54 @@ button.rs-chip:hover { color: var(--ink); border-color: var(--ink3); }
 .rs-surface.rs-room { display: block; padding: 0; background: var(--bg); position: relative; }
 .rs-surface.rs-room > * { min-height: 100%; }
 
+.jarvis-core-hero {
+  --core-hue: var(--speak);
+  grid-column: span 2;
+  min-height: 190px;
+  display: grid;
+  grid-template-columns: 170px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 26px;
+  padding: 24px 28px;
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--rule);
+  border-radius: var(--corner);
+  background:
+    radial-gradient(circle at 16% 50%, color-mix(in srgb, var(--core-hue) 12%, transparent), transparent 30%),
+    linear-gradient(135deg, var(--raise), var(--panel2));
+  box-shadow: var(--sh-md);
+}
+.jarvis-core-hero[data-core-state="SLEEPING"],
+.jarvis-core-hero[data-core-state="IDLE"] { --core-hue: var(--faint); }
+.jarvis-core-hero[data-core-state="LISTENING"],
+.jarvis-core-hero[data-core-state="ERROR"] { --core-hue: var(--listen); }
+.jarvis-core-hero[data-core-state="WAITING_APPROVAL"] { --core-hue: var(--hold); }
+.jarvis-core-hero[data-core-state="WORKING"],
+.jarvis-core-hero[data-core-state="SPEAKING"] { --core-hue: var(--speak); }
+
+.jarvis-core-visual { width: 150px; height: 150px; position: relative; display: grid; place-items: center; }
+.jarvis-core-orbit { position: absolute; inset: 14px; border: 1px solid color-mix(in srgb, var(--core-hue) 46%, transparent); border-radius: 50%; animation: core-spin 12s linear infinite; }
+.jarvis-core-orbit::after { content: ""; position: absolute; width: 6px; height: 6px; border-radius: 50%; background: var(--core-hue); top: 9px; left: 23px; box-shadow: 0 0 14px var(--core-hue); }
+.jarvis-core-orbit.orbit-b { inset: 27px; animation-duration: 8s; animation-direction: reverse; transform: rotate(58deg); }
+.jarvis-core-orbit.orbit-c { inset: 4px; border-style: dashed; opacity: .45; animation-duration: 22s; }
+.jarvis-core-sphere { width: 68px; height: 68px; border-radius: 50% 10% 50% 50%; transform: rotate(45deg); display: grid; place-items: center; background: color-mix(in srgb, var(--core-hue) 18%, var(--raise)); border: 1px solid color-mix(in srgb, var(--core-hue) 66%, transparent); box-shadow: 0 0 28px color-mix(in srgb, var(--core-hue) 28%, transparent), inset 0 0 22px color-mix(in srgb, var(--core-hue) 20%, transparent); animation: core-breathe 2.8s var(--ease) infinite; }
+.jarvis-core-sphere i { width: 24px; height: 24px; border-radius: 50%; background: var(--core-hue); box-shadow: 0 0 22px var(--core-hue); }
+.jarvis-core-copy .eyebrow, .jarvis-core-code { font: 500 9px/1 var(--mono); letter-spacing: .18em; color: var(--ink3); }
+.jarvis-core-copy strong { display: block; margin-top: 10px; font-size: clamp(26px, 3vw, 42px); line-height: 1; letter-spacing: -.04em; color: var(--ink); }
+.jarvis-core-copy p { margin: 9px 0 16px; color: var(--ink2); font-size: 13px; }
+.jarvis-core-activity { display: flex; align-items: center; gap: 8px; color: var(--ink3); font: 500 10px/1.4 var(--mono); }
+.jarvis-core-activity span { width: 6px; height: 6px; border-radius: 50%; background: var(--core-hue); box-shadow: 0 0 8px var(--core-hue); }
+.jarvis-core-code { align-self: start; padding-top: 2px; color: var(--core-hue); }
+@keyframes core-spin { to { transform: rotate(360deg); } }
+@keyframes core-breathe { 0%, 100% { scale: .96; opacity: .76; } 50% { scale: 1.04; opacity: 1; } }
+@media (prefers-reduced-motion: reduce) { .jarvis-core-orbit, .jarvis-core-sphere { animation: none; } }
+@media (max-width: 860px) {
+  .jarvis-core-hero { grid-column: span 1; grid-template-columns: 110px minmax(0, 1fr); min-height: 160px; padding: 20px; gap: 18px; }
+  .jarvis-core-visual { width: 104px; height: 104px; }
+  .jarvis-core-code { display: none; }
+}
+
 .rs-wid { border: 1px solid var(--rule); border-radius: var(--corner); background: var(--raise); box-shadow: var(--sh-sm); position: relative; overflow: hidden; }
 .rs-wid.w2 { grid-column: span 2; }
 .rs-ch {

@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { openRoom, type RoomKey } from "../router";
 import { useLiveData, type LiveData } from "./LiveDataContext";
 import type { ConnectionState } from "./Header";
+import type { JarvisCoreState } from "../core/coreState";
 
 /**
  * Now — the home surface you compose. A grid of widgets, each a room's
@@ -25,6 +26,44 @@ type WidgetDef = {
 };
 
 const LAYOUT_KEY = "jarvis-now-layout-v2";
+
+const CORE_JA: Record<JarvisCoreState, { label: string; message: string }> = {
+  SLEEPING: { label: "休止中", message: "呼びかけを待っています" },
+  AWAKENING: { label: "起動中", message: "システムを同期しています" },
+  IDLE: { label: "待機中", message: "いつでも指示をどうぞ" },
+  LISTENING: { label: "聞いています", message: "声を認識しています" },
+  THINKING: { label: "思考中", message: "最適な答えを組み立てています" },
+  WORKING: { label: "実行中", message: "タスクを進めています" },
+  WAITING_APPROVAL: { label: "承認待ち", message: "重要操作の確認が必要です" },
+  SPEAKING: { label: "応答中", message: "回答を伝えています" },
+  ERROR: { label: "要確認", message: "システム状態を確認してください" },
+};
+
+function CoreHero({ state, live }: { state: JarvisCoreState; live: LiveData }) {
+  const copy = CORE_JA[state];
+  const latest = [...live.agentActivity].sort((a, b) => b.timestamp - a.timestamp)[0];
+  const activity = latest
+    ? `${latest.agentName} · ${latest.eventType === "done" ? "完了" : latest.eventType === "tool_call" ? "ツール実行中" : "処理中"}`
+    : "アクティビティなし";
+
+  return (
+    <section className="jarvis-core-hero" data-core-state={state} aria-label={`JARVIS CORE ${copy.label}`}>
+      <div className="jarvis-core-visual" aria-hidden="true">
+        <span className="jarvis-core-orbit orbit-a" />
+        <span className="jarvis-core-orbit orbit-b" />
+        <span className="jarvis-core-orbit orbit-c" />
+        <span className="jarvis-core-sphere"><i /></span>
+      </div>
+      <div className="jarvis-core-copy">
+        <span className="eyebrow">JARVIS CORE</span>
+        <strong>{copy.label}</strong>
+        <p>{copy.message}</p>
+        <div className="jarvis-core-activity"><span />最新Activity　{activity}</div>
+      </div>
+      <span className="jarvis-core-code">{state}</span>
+    </section>
+  );
+}
 
 function rel(ts: number): string {
   const d = Date.now() - ts;
@@ -356,9 +395,10 @@ function loadLayout(): LayoutItem[] {
 }
 
 export function NowRoom({
-  connection, arranging, onApprove, onCancel,
+  connection, coreState, arranging, onApprove, onCancel,
 }: {
   connection: ConnectionState;
+  coreState: JarvisCoreState;
   arranging: boolean;
   onApprove: (id: string) => void;
   onCancel: (id: string) => void;
@@ -423,6 +463,8 @@ export function NowRoom({
           <span className="mono2">jarvis start</span>
         </div>
       )}
+
+      {!offline && !arranging && <CoreHero state={coreState} live={live} />}
 
       {items.map((item) => {
         const def = WIDGETS[item.id];

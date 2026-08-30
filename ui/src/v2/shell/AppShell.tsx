@@ -951,7 +951,7 @@ function ShellLayout({
             <RoomSurface roomKey={route.key} />
           </div>
         ) : (
-          <NowRoom connection={connection} arranging={arranging} onApprove={onApprove} onCancel={onCancel} />
+          <NowRoom connection={connection} coreState={coreState} arranging={arranging} onApprove={onApprove} onCancel={onCancel} />
         )}
       </div>
 
