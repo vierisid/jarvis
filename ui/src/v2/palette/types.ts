@@ -47,19 +47,19 @@ export type PaletteNavEntry = {
 };
 
 export const ROOM_NAV_ENTRIES: PaletteNavEntry[] = [
-  { key: "workflows", label: "Workflows", hint: "Run or edit saved agent flows" },
-  { key: "memory", label: "Memory", hint: "Recall what Jarvis knows" },
-  { key: "agents", label: "Agents", hint: "Roster, status, last run" },
-  { key: "authority", label: "Authority", hint: "Scopes, allowlists, approvals" },
-  { key: "tools", label: "Tools", hint: "Catalog + capability flags" },
-  { key: "logs", label: "Logs", hint: "Filterable event stream" },
-  { key: "calendar", label: "Calendar", hint: "This week + commitments" },
-  { key: "goals", label: "Goals", hint: "OKR hierarchy + scoring" },
-  { key: "tasks", label: "Tasks", hint: "Kanban + due dates + priority" },
-  { key: "content", label: "Content", hint: "Drafts, scheduled, published" },
-  { key: "workspaces", label: "Workspaces", hint: "Dev projects, git, dev servers" },
-  { key: "usage", label: "Usage", hint: "LLM token usage, filterable by tier/model/task/date" },
-  { key: "settings", label: "Settings", hint: "Providers, voice, shortcuts" },
+  { key: "workflows", label: "ワークフロー", hint: "保存したAIフローの実行と編集" },
+  { key: "memory", label: "メモリー", hint: "JARVISが記憶している情報" },
+  { key: "agents", label: "エージェント", hint: "担当・状態・直近の実行" },
+  { key: "authority", label: "権限と承認", hint: "操作範囲・許可リスト・承認" },
+  { key: "tools", label: "ツール", hint: "利用可能な機能と設定" },
+  { key: "logs", label: "アクティビティ", hint: "絞り込み可能なイベント履歴" },
+  { key: "calendar", label: "カレンダー", hint: "今週の予定とコミットメント" },
+  { key: "goals", label: "ゴール", hint: "目標の階層と進捗スコア" },
+  { key: "tasks", label: "タスク", hint: "期限・優先度・進行状況" },
+  { key: "content", label: "コンテンツ", hint: "下書き・予約・公開済み" },
+  { key: "workspaces", label: "ワークスペース", hint: "開発プロジェクトとGit状態" },
+  { key: "usage", label: "使用状況", hint: "モデル別のLLM利用状況" },
+  { key: "settings", label: "設定", hint: "AI・音声・ショートカット" },
 ];
 
 /**

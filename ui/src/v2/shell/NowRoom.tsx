@@ -81,10 +81,15 @@ function WHeader({ label, room, tone }: { label: string; room?: RoomKey; tone?: 
   return (
     <div className={`rs-ch${tone ? " " + tone : ""}`}>
       {label}
-      {room && <button className="lnk" onClick={() => openRoom(room)}>{room} →</button>}
+      {room && <button className="lnk" onClick={() => openRoom(room)}>{ROOM_JA[room]} →</button>}
     </div>
   );
 }
+const ROOM_JA: Record<RoomKey, string> = {
+  workflows: "ワークフロー", agents: "エージェント", agent_strip: "エージェント状況", tasks: "タスク", memory: "メモリー",
+  goals: "ゴール", calendar: "カレンダー", content: "コンテンツ", authority: "権限と承認",
+  logs: "履歴", usage: "使用状況", workspaces: "ワークスペース", tools: "ツール", settings: "設定",
+};
 function Empty({ children }: { children: React.ReactNode }) {
   return <div className="rs-empty">{children}</div>;
 }
@@ -102,7 +107,7 @@ function Row({ dot, room, children, tm }: { dot: string; room: RoomKey; children
 function agentRows(live: LiveData) {
   const byAgent = new Map<string, { name: string; what: string; ts: number; running: boolean }>();
   for (const e of live.agentActivity) {
-    const what = e.eventType === "tool_call" ? "running a tool" : e.eventType === "done" ? "finished" : "working";
+    const what = e.eventType === "tool_call" ? "ツール実行中" : e.eventType === "done" ? "完了" : "処理中";
     byAgent.set(e.agentName, { name: e.agentName, what, ts: e.timestamp, running: e.eventType !== "done" });
   }
   return [...byAgent.values()].sort((a, b) => b.ts - a.ts).slice(0, 4);
@@ -272,29 +277,29 @@ const WIDGETS: Record<string, WidgetDef> = {
     id: "right-now", group: "run", dot: "var(--speak)", desc: "Active agents and what each is doing.", defaultSize: 1,
     render: ({ live }) => {
       const a = agentRows(live);
-      return (<><WHeader label="right now" room="agents" />
+      return (<><WHeader label="現在の稼働状況" room="agents" />
         {a.length ? a.map((x) => <Row key={x.name} dot={x.running ? "var(--speak)" : "var(--faint)"} room="agents" tm={rel(x.ts)}><b>{x.name}</b> · {x.what}</Row>)
-          : <Empty>Nothing running yet. Say <b>“Hey Jarvis”</b> and hand it something, or start in <b>Workflows</b>.</Empty>}</>);
+          : <Empty>現在実行中の処理はありません。<b>“Hey Jarvis”</b> と呼びかけるか、ワークフローを開始してください。</Empty>}</>);
     },
   },
   waiting: {
     id: "waiting", group: "guard", dot: "var(--hold)", desc: "Pending approvals, resolvable in place. Pins to the top while amber.", defaultSize: 1,
-    render: ({ live, onApprove, onCancel }) => (<><WHeader label={`waiting on you · ${live.approvals.length}`} room="authority" tone="hold" />
+    render: ({ live, onApprove, onCancel }) => (<><WHeader label={`承認待ち · ${live.approvals.length}`} room="authority" tone="hold" />
       {live.approvals.length ? live.approvals.slice(0, 3).map((a) => (
         <div className="rs-apr" key={a.id}>
           <div className="t1"><span className="rs-dot" />{a.category} · {a.toolName}</div>
           <div className="t2">{a.intent}</div>
-          <div className="bs"><button className="b1" onClick={() => onApprove(a.id)}>Yes · approve</button><button className="b2" onClick={() => onCancel(a.id)}>Cancel</button></div>
+          <div className="bs"><button className="b1" onClick={() => onApprove(a.id)}>承認する</button><button className="b2" onClick={() => onCancel(a.id)}>キャンセル</button></div>
         </div>
-      )) : <Empty>Approvals land here when an action needs your yes. <span className="dim">Nothing waits right now.</span></Empty>}</>),
+      )) : <Empty>重要操作の確認が必要な場合、ここに表示されます。<span className="dim">現在、承認待ちはありません。</span></Empty>}</>),
   },
   today: {
     id: "today", group: "guard", dot: "var(--ok)", desc: "Runs and outcomes since midnight, tones included.", defaultSize: 2,
     render: ({ live }) => {
       const r = todayRows(live);
-      return (<><WHeader label="today" room="logs" />
+      return (<><WHeader label="今日" room="logs" />
         {r.length ? r.map((x) => <Row key={x.id} dot={x.dot} room="logs" tm={rel(x.ts)}>{x.text}</Row>)
-          : <Empty>Day one. The first morning brief is scheduled for <b>07:00 tomorrow</b>; it will report here.</Empty>}</>);
+          : <Empty>本日のアクティビティはまだありません。次回のモーニングブリーフは<b>明日07:00</b>です。</Empty>}</>);
     },
   },
   calendar: {
@@ -305,10 +310,10 @@ const WIDGETS: Record<string, WidgetDef> = {
     id: "vitals", group: "system", dot: "var(--faint)", desc: "Agents active, approvals waiting, events today.", defaultSize: 1,
     render: ({ live }) => {
       const active = agentRows(live).filter((a) => a.running).length;
-      return (<><WHeader label="vitals" /><div className="rs-vit">
-        <div className="v"><span className="k">agents</span><div className="n">{active}<span> active</span></div></div>
-        <div className="v"><span className="k">waiting</span><div className="n">{live.approvals.length}</div></div>
-        <div className="v"><span className="k">events</span><div className="n">{todayRows(live).length}<span> today</span></div></div>
+      return (<><WHeader label="システム状況" /><div className="rs-vit">
+        <div className="v"><span className="k">エージェント</span><div className="n">{active}<span> 稼働中</span></div></div>
+        <div className="v"><span className="k">承認待ち</span><div className="n">{live.approvals.length}</div></div>
+        <div className="v"><span className="k">イベント</span><div className="n">{todayRows(live).length}<span> 本日</span></div></div>
       </div></>);
     },
   },

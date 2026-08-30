@@ -29,9 +29,9 @@ const CORE_HUE: Record<JarvisCoreState, string> = {
 };
 
 const DAEMON: Record<ConnectionState, { cls: string; hue: string; label: string }> = {
-  live: { cls: "", hue: "var(--ok)", label: "daemon · online" },
-  degraded: { cls: "hold", hue: "var(--hold)", label: "daemon · degraded · reconnecting" },
-  offline: { cls: "bad", hue: "var(--listen)", label: "offline" },
+  live: { cls: "", hue: "var(--ok)", label: "システム · オンライン" },
+  degraded: { cls: "hold", hue: "var(--hold)", label: "システム · 再接続中" },
+  offline: { cls: "bad", hue: "var(--listen)", label: "オフライン" },
 };
 
 export function TopBar({
@@ -56,7 +56,7 @@ export function TopBar({
   const route = useV2Route();
   const [theme, toggleTheme] = useTheme();
   const isNow = route.kind !== "room";
-  const title = route.kind === "room" ? ROOM_TITLES[route.key] ?? route.key : "Now";
+  const title = route.kind === "room" ? ROOM_TITLES[route.key] ?? route.key : "現在";
   const daemon = DAEMON[connection];
   const count = notificationCount ?? 0;
 
@@ -65,7 +65,7 @@ export function TopBar({
       <span className="rm">{title}</span>
       {isNow && (
         <button className={`rs-abtn${arranging ? " on" : ""}`} onClick={onArrange} aria-pressed={arranging}>
-          {arranging ? "Done" : "Arrange"}
+          {arranging ? "完了" : "配置変更"}
         </button>
       )}
 
@@ -86,13 +86,13 @@ export function TopBar({
         <button
           className="rs-chip"
           onClick={() => toggleTheme()}
-          aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-          title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+          aria-label={`${theme === "dark" ? "ライト" : "ダーク"}モードへ切り替え`}
+          title={`${theme === "dark" ? "ライト" : "ダーク"}モードへ切り替え`}
         >
           {theme === "dark" ? "● dark" : "○ light"}
         </button>
 
-        <button className="rs-chip" onClick={onOpenPalette} aria-label="Quick open">⌘K</button>
+        <button className="rs-chip" onClick={onOpenPalette} aria-label="クイックオープン">⌘K</button>
 
         {onToggleNotifications && (
           <button
