@@ -4667,9 +4667,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       bgAgent = bgAgentService;
       console.log('[Daemon] Background agent started (separate browser for heartbeat/reactions)');
 
-		// 10c. Wire reactor + executor to background agent
-		// JARVIS_LOCAL: automatic EventReactor to BackgroundAgent disabled
-		executor.setAgentService(bgAgentService);
+      // 10c. Wire reactor + executor to background agent
+      // JARVIS_LOCAL: automatic EventReactor to BackgroundAgent disabled
+      executor.setAgentService(bgAgentService);
 
       // 10d. Wire executor broadcast (needs wsServer running) and start
       executor.setBroadcast((msg) => wsService.getServer().broadcast(msg));
