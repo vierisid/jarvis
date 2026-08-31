@@ -152,6 +152,7 @@ type PreferencesConfig struct {
 	StartAtStartup bool `yaml:"start_at_startup"` // register the sidecar to launch on login
 	// Privacy
 	ContinuousWake bool `yaml:"continuous_wake"` // continuously capture speech segments for wake-word detection; default off
+	DoubleClap     bool `yaml:"double_clap"`     // local double-clap summon; requires ContinuousWake and defaults off
 	// OpenDashboardAtStartup opens the dashboard window on every sidecar
 	// startup (once the brain connection is up, since the panel needs a
 	// minted access token). Off by default: normally only the pebble appears.

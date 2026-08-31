@@ -561,8 +561,19 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		// enabled. An omitted setting is intentionally false. Ctrl+Space remains
 		// available independently for deliberate, one-shot capture.
 		var wakeListener *WakeListenerService
-		if c.Preferences().ContinuousWake {
+		var clapDetector *DoubleClapDetector
+		prefs := c.Preferences()
+		if prefs.ContinuousWake {
 			wakeListener = NewWakeListenerService(audioSvc, sendFn, DefaultWakeListenerOpts())
+			if prefs.DoubleClap {
+				var clapErr error
+				clapDetector, clapErr = NewDoubleClapDetector(CalibratedDoubleClapOpts())
+				if clapErr != nil {
+					log.Printf("[clap] disabled — invalid calibration: %v", clapErr)
+				} else {
+					wakeListener.ConfigureDoubleClap(clapDetector, nil, doubleClapCooldown)
+				}
+			}
 			// Start() also consults micMuted(), so a reconnect while muted keeps
 			// the device closed even when continuous wake is opted in.
 			if err := wakeListener.Start(ctx); err != nil {
@@ -875,13 +886,13 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			}
 		})
 
-		c.pebble.OnSummon(func() {
+		handleSummon := func(source string) {
 			// When realtime voice is enabled, the summon hotkey toggles a
 			// perpetual speech-to-speech session (press again to end) instead
 			// of the one-shot capture → STT → LLM → TTS loop.
 			rt := c.realtime.Load()
 			rtEnabled := rt != nil && rt.enabled.Load()
-			log.Printf("[pebble] summon (realtime_enabled=%v)", rtEnabled)
+			log.Printf("[pebble] summon (source=%s realtime_enabled=%v)", source, rtEnabled)
 			if rtEnabled {
 				rt.Toggle()
 				return
@@ -899,7 +910,7 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 				EventType: "pebble.summon",
 				Timestamp: time.Now().UnixMilli(),
 				Priority:  "normal",
-				Payload:   map[string]any{"session_id": sessionID, "muted": muted},
+				Payload:   map[string]any{"session_id": sessionID, "muted": muted, "source": source},
 			}
 			if err := sendFn(ctx, summonEvt, nil); err != nil {
 				log.Printf("[pebble] failed to emit summon event: %v", err)
@@ -909,8 +920,16 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 				flashMutedPebble(c.pebble) // the brain is told by the event's muted flag
 				return
 			}
-			go runSessionCapture(sessionID, "summon")
-		})
+			go runSessionCapture(sessionID, source)
+		}
+		c.pebble.OnSummon(func() { handleSummon("hotkey") })
+		if wakeListener != nil && clapDetector != nil {
+			wakeListener.ConfigureDoubleClap(clapDetector, func() {
+				log.Printf("[clap] calibrated double clap detected locally")
+				handleSummon("double_clap")
+			}, doubleClapCooldown)
+			log.Printf("[clap] local double-clap summon enabled (cooldown=%s)", doubleClapCooldown)
+		}
 
 		// W4 — palette hotkey (Ctrl+K) emits a "pebble.palette" event with
 		// the current cursor position. The daemon owns the open/close

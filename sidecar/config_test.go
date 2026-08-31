@@ -62,6 +62,28 @@ func TestContinuousWakeRequiresExplicitOptIn(t *testing.T) {
 	}
 }
 
+func TestDoubleClapRequiresExplicitOptIn(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		yaml string
+		want bool
+	}{
+		{"omitted", "preferences:\n  continuous_wake: true\n", false},
+		{"explicit false", "preferences:\n  double_clap: false\n", false},
+		{"explicit true", "preferences:\n  double_clap: true\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := defaultConfig()
+			if err := yaml.Unmarshal([]byte(tc.yaml), &cfg); err != nil {
+				t.Fatalf("yaml: %v", err)
+			}
+			if cfg.Preferences.DoubleClap != tc.want {
+				t.Fatalf("DoubleClap = %v, want %v", cfg.Preferences.DoubleClap, tc.want)
+			}
+		})
+	}
+}
+
 func TestAwarenessCaptureDirDefault(t *testing.T) {
 	cfg := defaultConfig()
 	want := filepath.Join(homeDir(), ".jarvis", "captures")

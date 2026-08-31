@@ -61,6 +61,16 @@ type DoubleClapDetectorOpts struct {
 	MaxGap         time.Duration
 }
 
+// CalibratedDoubleClapOpts returns the locally verified MacBook profile.
+// It is used only after the user explicitly enables both continuous wake and
+// double-clap summon; there is no implicit always-listening path.
+func CalibratedDoubleClapOpts() DoubleClapDetectorOpts {
+	return DoubleClapDetectorOpts{
+		PeakThreshold: 5000, MinPeakAbs: 15000, ResetThreshold: 2500,
+		MinGap: 150 * time.Millisecond, MaxGap: 600 * time.Millisecond,
+	}
+}
+
 // DoubleClapDetector is a pure, local PCM classifier. It owns no microphone,
 // sends no audio, and performs no action. A caller may eventually feed it the
 // same chunks already captured by the Sidecar, but that wiring is intentionally
