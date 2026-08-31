@@ -11,6 +11,9 @@ import (
 type clapEnergySample struct {
 	Offset time.Duration
 	RMS    float64
+	Peak   float64
+	Crest  float64
+	ZCR    float64
 }
 
 type clapCalibrationSummary struct {
@@ -35,8 +38,12 @@ func runClapCalibration(duration time.Duration, out io.Writer) error {
 	var mu sync.Mutex
 	samples := make([]clapEnergySample, 0, int(duration/(30*time.Millisecond))+1)
 	svc.SetChunkListener(func(chunk []byte) {
+		features := pcmTransientFeatures(chunk)
 		mu.Lock()
-		samples = append(samples, clapEnergySample{Offset: time.Since(started), RMS: pcmRMSint16(chunk)})
+		samples = append(samples, clapEnergySample{
+			Offset: time.Since(started), RMS: features.RMS, Peak: features.PeakAbs,
+			Crest: features.CrestFactor, ZCR: features.ZeroCrossingRate,
+		})
 		mu.Unlock()
 	})
 	defer svc.SetChunkListener(nil)
@@ -64,7 +71,8 @@ func runClapCalibration(duration time.Duration, out io.Writer) error {
 		summary.Samples, summary.P50, summary.P95, summary.P99, summary.Max)
 	fmt.Fprint(out, "p99 peak times:")
 	for _, peak := range summary.P99Peaks {
-		fmt.Fprintf(out, " %.2fs=%.0f", peak.Offset.Seconds(), peak.RMS)
+		fmt.Fprintf(out, " %.2fs[rms=%.0f peak=%.0f crest=%.2f zcr=%.3f]",
+			peak.Offset.Seconds(), peak.RMS, peak.Peak, peak.Crest, peak.ZCR)
 	}
 	fmt.Fprintln(out)
 	return nil
@@ -85,13 +93,20 @@ func runClapVerification(duration time.Duration, opts DoubleClapDetectorOpts, ou
 	started := time.Now()
 	var mu sync.Mutex
 	detections := make([]time.Duration, 0, 4)
+	samples := make([]clapEnergySample, 0, int(duration/(30*time.Millisecond))+1)
 	svc.SetChunkListener(func(chunk []byte) {
 		now := time.Now()
-		if detector.ObservePCM(chunk, now) {
-			mu.Lock()
+		features := pcmTransientFeatures(chunk)
+		matched := detector.ObserveFeatures(features, now)
+		mu.Lock()
+		samples = append(samples, clapEnergySample{
+			Offset: now.Sub(started), RMS: features.RMS, Peak: features.PeakAbs,
+			Crest: features.CrestFactor, ZCR: features.ZeroCrossingRate,
+		})
+		if matched {
 			detections = append(detections, now.Sub(started))
-			mu.Unlock()
 		}
+		mu.Unlock()
 	})
 	defer svc.SetChunkListener(nil)
 
@@ -106,10 +121,20 @@ func runClapVerification(duration time.Duration, opts DoubleClapDetectorOpts, ou
 
 	mu.Lock()
 	snapshot := append([]time.Duration(nil), detections...)
+	metricSnapshot := append([]clapEnergySample(nil), samples...)
 	mu.Unlock()
 	fmt.Fprintf(out, "Double-clap detections: %d", len(snapshot))
 	for _, offset := range snapshot {
 		fmt.Fprintf(out, " %.2fs", offset.Seconds())
+	}
+	fmt.Fprintln(out)
+	summary := summarizeClapEnergy(metricSnapshot)
+	fmt.Fprintf(out, "Verification metrics: samples=%d p95=%.0f p99=%.0f max=%.0f\n",
+		summary.Samples, summary.P95, summary.P99, summary.Max)
+	fmt.Fprint(out, "Verification p99 peaks:")
+	for _, peak := range summary.P99Peaks {
+		fmt.Fprintf(out, " %.2fs[rms=%.0f peak=%.0f crest=%.2f zcr=%.3f]",
+			peak.Offset.Seconds(), peak.RMS, peak.Peak, peak.Crest, peak.ZCR)
 	}
 	fmt.Fprintln(out)
 	return nil

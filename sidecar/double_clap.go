@@ -1,15 +1,61 @@
 package main
 
 import (
+	"encoding/binary"
 	"errors"
+	"math"
 	"time"
 )
+
+type PCMTransientFeatures struct {
+	RMS              float64
+	PeakAbs          float64
+	CrestFactor      float64
+	ZeroCrossingRate float64
+}
+
+// pcmTransientFeatures reduces a PCM chunk to non-reversible numeric metrics.
+// No samples leave the callback and no audio is retained.
+func pcmTransientFeatures(pcm []byte) PCMTransientFeatures {
+	if len(pcm) < 2 {
+		return PCMTransientFeatures{}
+	}
+	n := len(pcm) / 2
+	var sumSq float64
+	var peak float64
+	var crossings int
+	var previous int16
+	for i := 0; i < n; i++ {
+		sample := int16(binary.LittleEndian.Uint16(pcm[i*2 : i*2+2]))
+		value := float64(sample)
+		abs := math.Abs(value)
+		if abs > peak {
+			peak = abs
+		}
+		sumSq += value * value
+		if i > 0 && ((sample >= 0 && previous < 0) || (sample < 0 && previous >= 0)) {
+			crossings++
+		}
+		previous = sample
+	}
+	rms := math.Sqrt(sumSq / float64(n))
+	crest := 0.0
+	if rms > 0 {
+		crest = peak / rms
+	}
+	zcr := 0.0
+	if n > 1 {
+		zcr = float64(crossings) / float64(n-1)
+	}
+	return PCMTransientFeatures{RMS: rms, PeakAbs: peak, CrestFactor: crest, ZeroCrossingRate: zcr}
+}
 
 // DoubleClapDetectorOpts contains calibration values supplied by the caller.
 // There are deliberately no production defaults yet: real microphone samples
 // must determine them before this detector is connected to capture or actions.
 type DoubleClapDetectorOpts struct {
 	PeakThreshold  float64
+	MinPeakAbs     float64
 	ResetThreshold float64
 	MinGap         time.Duration
 	MaxGap         time.Duration
@@ -26,7 +72,7 @@ type DoubleClapDetector struct {
 }
 
 func NewDoubleClapDetector(opts DoubleClapDetectorOpts) (*DoubleClapDetector, error) {
-	if opts.PeakThreshold <= 0 || opts.ResetThreshold < 0 {
+	if opts.PeakThreshold <= 0 || opts.MinPeakAbs < 0 || opts.ResetThreshold < 0 {
 		return nil, errors.New("clap thresholds must be non-negative and peak must be positive")
 	}
 	if opts.ResetThreshold >= opts.PeakThreshold {
@@ -42,7 +88,16 @@ func NewDoubleClapDetector(opts DoubleClapDetectorOpts) (*DoubleClapDetector, er
 // Hysteresis requires energy to fall below ResetThreshold before another peak
 // can count, so one sustained sound cannot masquerade as multiple claps.
 func (d *DoubleClapDetector) ObservePCM(pcm []byte, at time.Time) bool {
-	return d.ObserveEnergy(pcmRMSint16(pcm), at)
+	return d.ObserveFeatures(pcmTransientFeatures(pcm), at)
+}
+
+// ObserveFeatures applies the calibrated impulse floor before the existing
+// RMS hysteresis. A loud but non-impulsive chunk cannot become a clap peak.
+func (d *DoubleClapDetector) ObserveFeatures(features PCMTransientFeatures, at time.Time) bool {
+	if features.RMS >= d.opts.PeakThreshold && features.PeakAbs < d.opts.MinPeakAbs {
+		features.RMS = math.Nextafter(d.opts.PeakThreshold, 0)
+	}
+	return d.ObserveEnergy(features.RMS, at)
 }
 
 // ObserveEnergy is exposed for deterministic tests and later calibration.
