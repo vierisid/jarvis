@@ -70,6 +70,51 @@ func runClapCalibration(duration time.Duration, out io.Writer) error {
 	return nil
 }
 
+// runClapVerification feeds live PCM to an explicitly calibrated detector and
+// reports detections only. It does not retain PCM and has no action callback.
+func runClapVerification(duration time.Duration, opts DoubleClapDetectorOpts, out io.Writer) error {
+	if duration <= 0 {
+		return fmt.Errorf("duration must be positive")
+	}
+	detector, err := NewDoubleClapDetector(opts)
+	if err != nil {
+		return err
+	}
+
+	svc := NewStreamingCaptureService(pebbleAudioSampleRate)
+	started := time.Now()
+	var mu sync.Mutex
+	detections := make([]time.Duration, 0, 4)
+	svc.SetChunkListener(func(chunk []byte) {
+		now := time.Now()
+		if detector.ObservePCM(chunk, now) {
+			mu.Lock()
+			detections = append(detections, now.Sub(started))
+			mu.Unlock()
+		}
+	})
+	defer svc.SetChunkListener(nil)
+
+	fmt.Fprintf(out, "Local double-clap verification: %.1fs. No audio is saved or sent.\n", duration.Seconds())
+	if err := svc.Start("clap-verification"); err != nil {
+		return err
+	}
+	time.Sleep(duration)
+	if _, _, err := svc.Stop(); err != nil {
+		return err
+	}
+
+	mu.Lock()
+	snapshot := append([]time.Duration(nil), detections...)
+	mu.Unlock()
+	fmt.Fprintf(out, "Double-clap detections: %d", len(snapshot))
+	for _, offset := range snapshot {
+		fmt.Fprintf(out, " %.2fs", offset.Seconds())
+	}
+	fmt.Fprintln(out)
+	return nil
+}
+
 func summarizeClapEnergy(samples []clapEnergySample) clapCalibrationSummary {
 	if len(samples) == 0 {
 		return clapCalibrationSummary{}

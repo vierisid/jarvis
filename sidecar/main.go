@@ -38,6 +38,11 @@ func main() {
 	testMode := flag.Bool("test", false, "Run built-in platform tests (requires build with -tags sidecartest)")
 	setupMode := flag.Bool("setup", false, "Run first-launch onboarding (permissions, autostart), then start")
 	clapCalibration := flag.Duration("calibrate-clap", 0, "Measure local microphone RMS for clap calibration, then exit (for example 10s)")
+	clapVerification := flag.Duration("verify-clap", 0, "Run local double-clap detection without triggering actions, then exit")
+	clapPeak := flag.Float64("clap-peak", 0, "Verification peak RMS threshold (required with --verify-clap)")
+	clapReset := flag.Float64("clap-reset", 0, "Verification reset RMS threshold (required with --verify-clap)")
+	clapMinGap := flag.Duration("clap-min-gap", 0, "Verification minimum gap between claps")
+	clapMaxGap := flag.Duration("clap-max-gap", 0, "Verification maximum gap between claps")
 	flag.Parse()
 
 	if *showVersion {
@@ -55,6 +60,8 @@ Usage:
   jarvis --test <cmd>     Run a built-in platform test (test build only)
   jarvis --calibrate-clap=10s
                           Measure local clap RMS metrics, then exit (no audio saved or sent)
+  jarvis --verify-clap=10s --clap-peak=N --clap-reset=N --clap-min-gap=150ms --clap-max-gap=600ms
+                          Detect calibrated double claps locally without triggering actions
   jarvis --version        Print the sidecar version and exit
   jarvis --help           Show this help`)
 		os.Exit(0)
@@ -67,6 +74,17 @@ Usage:
 	if *clapCalibration > 0 {
 		if err := runClapCalibration(*clapCalibration, os.Stdout); err != nil {
 			fmt.Fprintf(os.Stderr, "Clap calibration failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
+	}
+	if *clapVerification > 0 {
+		opts := DoubleClapDetectorOpts{
+			PeakThreshold: *clapPeak, ResetThreshold: *clapReset,
+			MinGap: *clapMinGap, MaxGap: *clapMaxGap,
+		}
+		if err := runClapVerification(*clapVerification, opts, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Clap verification failed: %v\n", err)
 			os.Exit(1)
 		}
 		return
