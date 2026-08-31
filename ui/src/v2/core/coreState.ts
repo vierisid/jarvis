@@ -25,6 +25,28 @@ export interface JarvisCoreSignals {
   hasError?: boolean;
 }
 
+export interface JarvisAgentActivitySignal {
+  agentName: string;
+  eventType: string;
+  timestamp: number;
+}
+
+/**
+ * Agent activity is an append-only event stream. Only the newest event for
+ * each agent is authoritative; an older tool_call must not keep CORE in
+ * WORKING after that agent has emitted done.
+ */
+export function hasActiveAgentWork(events: JarvisAgentActivitySignal[]): boolean {
+  const latestByAgent = new Map<string, JarvisAgentActivitySignal>();
+  for (const event of events) {
+    const current = latestByAgent.get(event.agentName);
+    if (!current || event.timestamp > current.timestamp) {
+      latestByAgent.set(event.agentName, event);
+    }
+  }
+  return [...latestByAgent.values()].some((event) => event.eventType !== "done");
+}
+
 /**
  * One deterministic priority order for every CORE consumer. Keep this pure:
  * animation, copy, Activity and accessibility must never disagree about the

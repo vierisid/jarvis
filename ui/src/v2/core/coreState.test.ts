@@ -1,5 +1,5 @@
 import { describe, expect, test } from "bun:test";
-import { deriveJarvisCoreState } from "./coreState";
+import { deriveJarvisCoreState, hasActiveAgentWork } from "./coreState";
 
 const base = { connection: "live" as const, voiceState: "idle" as const };
 
@@ -20,5 +20,21 @@ describe("deriveJarvisCoreState", () => {
   test("represents lifecycle states without inventing activity", () => {
     expect(deriveJarvisCoreState({ ...base, isBooting: true })).toBe("AWAKENING");
     expect(deriveJarvisCoreState({ ...base, voiceState: "muted" })).toBe("SLEEPING");
+  });
+});
+
+describe("hasActiveAgentWork", () => {
+  test("uses only the newest event for each agent", () => {
+    expect(hasActiveAgentWork([
+      { agentName: "planner", eventType: "tool_call", timestamp: 10 },
+      { agentName: "planner", eventType: "done", timestamp: 20 },
+    ])).toBe(false);
+  });
+
+  test("stays active while any agent's newest event is unfinished", () => {
+    expect(hasActiveAgentWork([
+      { agentName: "planner", eventType: "done", timestamp: 20 },
+      { agentName: "executor", eventType: "tool_call", timestamp: 15 },
+    ])).toBe(true);
   });
 });

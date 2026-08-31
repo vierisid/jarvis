@@ -23,13 +23,13 @@ import type { LayoutRect } from "../rooms/useRoomLayout";
 import { useSpacebarPTT } from "../voice/useSpacebarPTT";
 import { useNotificationCenter } from "../../hooks/useNotificationCenter";
 import { NotificationDrawer } from "../notifications/NotificationDrawer";
-import { LiveDataProvider } from "./LiveDataContext";
+import { LiveDataProvider, useLiveData } from "./LiveDataContext";
 import { PausedTasksBanner } from "./PausedTasksBanner";
 import { useRoomActionDispatcher } from "../rooms/useRoomActionBus";
 import { IndexSidebar, useIndexCollapsed } from "./IndexSidebar";
 import { TopBar } from "./TopBar";
 import { NowRoom } from "./NowRoom";
-import { deriveJarvisCoreState } from "../core/coreState";
+import { deriveJarvisCoreState, hasActiveAgentWork } from "../core/coreState";
 import "./AppShell.css";
 import "./roomShell.css";
 import { modKey } from "../ui/platform";
@@ -865,11 +865,16 @@ function ShellLayout({
   const [arranging, setArranging] = useState(false);
   const [talkOpen, setTalkOpen] = useState(false);
   const [talkIn, setTalkIn] = useState(false);
+  const liveData = useLiveData();
+  const hasAgentWork = useMemo(
+    () => hasActiveAgentWork(liveData.agentActivity),
+    [liveData.agentActivity],
+  );
   const coreState = deriveJarvisCoreState({
     connection,
     voiceState,
-    hasActiveWork: composerResponding,
-    hasPendingApproval: voiceState === "awaiting-approval",
+    hasActiveWork: Boolean(composerResponding) || hasAgentWork,
+    hasPendingApproval: liveData.approvals.length > 0 || voiceState === "awaiting-approval",
   });
 
   // awaiting-approval renders as the "asking" (amber) pebble state.
