@@ -433,7 +433,6 @@ jobs:
       - name: Publish platform packages
         run: |
           FLAGS=""
-          if [ "$DRY_RUN" = "true" ]; then FLAGS="$FLAGS --dry-run"; fi
           if echo "${{ steps.version.outputs.VERSION }}" | grep -q '-'; then FLAGS="$FLAGS --tag next"; fi
           VERSION="${{ steps.version.outputs.VERSION }}"
 
@@ -441,8 +440,13 @@ jobs:
             pkg="@usejarvis/sidecar-${platform}"
             echo "Publishing ${pkg}@${VERSION}... ${FLAGS}"
             cd "sidecar/npm/${platform}"
-            if ! npm publish --access public $FLAGS; then
-              if [ "$DRY_RUN" != "true" ] && npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
+            if [ "$DRY_RUN" = "true" ]; then
+              # `npm publish --dry-run` still rejects versions that already
+              # exist on npm. `npm pack --dry-run` validates the exact package
+              # contents without consulting publish-version uniqueness.
+              npm pack --dry-run
+            elif ! npm publish --access public $FLAGS; then
+              if npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
                 echo "${pkg}@${VERSION} is already on npm; treating as success."
               else
                 exit 1
@@ -454,14 +458,15 @@ jobs:
       - name: Publish wrapper package
         run: |
           FLAGS=""
-          if [ "$DRY_RUN" = "true" ]; then FLAGS="$FLAGS --dry-run"; fi
           if echo "${{ steps.version.outputs.VERSION }}" | grep -q '-'; then FLAGS="$FLAGS --tag next"; fi
           VERSION="${{ steps.version.outputs.VERSION }}"
           pkg="@usejarvis/sidecar"
 
           cd sidecar/npm/jarvis-sidecar
-          if ! npm publish --access public $FLAGS; then
-            if [ "$DRY_RUN" != "true" ] && npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
+          if [ "$DRY_RUN" = "true" ]; then
+            npm pack --dry-run
+          elif ! npm publish --access public $FLAGS; then
+            if npm view "${pkg}@${VERSION}" version >/dev/null 2>&1; then
               echo "${pkg}@${VERSION} is already on npm; treating as success."
             else
               exit 1
