@@ -194,14 +194,23 @@ export async function enrollDevice(
 
   const db = getDb();
   let existing = db
-    .query('SELECT id FROM sidecars WHERE name = ? AND status = ?')
-    .get(trimmed, 'enrolled') as { id: string } | null;
+    .query('SELECT id, last_seen_at FROM sidecars WHERE name = ? AND status = ?')
+    .get(trimmed, 'enrolled') as { id: string; last_seen_at: string | null } | null;
 
   if (existing && options.onExisting === 'reject') {
     throw new Error(`Sidecar "${trimmed}" is already enrolled`);
   }
 
+  // Rotation replaces the CREDENTIAL, not the device: carry the old row's
+  // connection history onto the replacement so "has this brain ever had a
+  // sidecar connect?" stays answerable across a rotate. The first-run dashboard
+  // backfill (src/vault/schema.ts) reads exactly that, and without this a
+  // rotated device looks brand-new and re-triggers a first-run intro the user
+  // has already seen.
+  let rotatedLastSeenAt: string | null = null;
+
   if (existing && options.rotate) {
+    rotatedLastSeenAt = existing.last_seen_at;
     db.run('DELETE FROM sidecars WHERE id = ?', [existing.id]);
     existing = null; // fall through to a brand-new sid
   }
@@ -231,7 +240,13 @@ export async function enrollDevice(
     // strand a device that already received the earlier token.
     db.run('UPDATE sidecars SET token_id = ? WHERE id = ?', [tokenId, id]);
   } else {
-    db.run('INSERT INTO sidecars (id, name, token_id) VALUES (?, ?, ?)', [id, trimmed, tokenId]);
+    // last_seen_at is NULL for a genuinely new device and inherited on a rotate.
+    db.run('INSERT INTO sidecars (id, name, token_id, last_seen_at) VALUES (?, ?, ?, ?)', [
+      id,
+      trimmed,
+      tokenId,
+      rotatedLastSeenAt,
+    ]);
   }
 
   const sidecar = db.query('SELECT * FROM sidecars WHERE id = ?').get(id) as SidecarRecord;

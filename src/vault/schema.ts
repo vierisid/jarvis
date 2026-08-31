@@ -689,6 +689,20 @@ function createTables(db: Database): void {
     )
   `);
 
+  // Backfill for the first-run dashboard intro (src/sidecar/first-run.ts): a
+  // brain that has ALREADY had a sidecar connect is not a first run, so pre-set
+  // the flag rather than popping an unannounced window on an established
+  // install's next connect. A fresh brain has an empty sidecars table, inserts
+  // nothing, and lets the first real connection claim the intro. Runs at DB
+  // open — before any connection can be served — and INSERT OR IGNORE keeps it
+  // idempotent across daemon restarts. Must stay after the sidecars table above
+  // so the subquery resolves.
+  db.run(`
+    INSERT OR IGNORE INTO settings (key, value)
+    SELECT 'sidecar.dashboard_intro_shown', '1'
+    WHERE EXISTS (SELECT 1 FROM sidecars WHERE last_seen_at IS NOT NULL)
+  `);
+
   // Documents table: vault-stored documents created by JARVIS
   db.run(`
     CREATE TABLE IF NOT EXISTS documents (

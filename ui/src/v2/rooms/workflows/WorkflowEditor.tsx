@@ -53,6 +53,7 @@ import type { ConnectionMeta } from "./useConnections";
 import { useFlowRuns } from "./useFlowRuns";
 import type { FlowRun, FlowRunStatus } from "./useWorkflowsData";
 import "./WorkflowEditor.css";
+import { modKey } from "../../ui/platform";
 
 // Horizontal flow layout. Each step in the flattened chain advances the
 // cursor rightward by NODE_X_STEP; nested branches (loop body / router
@@ -677,7 +678,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
             disabled={!editor.canUndo}
             title={
               editor.canUndo
-                ? `Undo: ${editor.undoLabel ?? "last destructive change"} (Ctrl+Z)`
+                ? `Undo: ${editor.undoLabel ?? "last destructive change"} (${modKey("Z")})`
                 : "Nothing to undo"
             }
           >
@@ -900,6 +901,7 @@ export function WorkflowEditor({ flowId, onClose }: WorkflowEditorProps): React.
           anchor={libraryPicker.screen}
           catalog={editor.catalog}
           library={library.entries}
+          managed={library.managed}
           installingId={pendingInstall?.id ?? null}
           onPick={onPickFromLibrary}
           onClose={closeLibraryPicker}
@@ -2349,6 +2351,7 @@ function PieceLibraryPopover({
   anchor,
   catalog,
   library,
+  managed,
   installingId,
   onPick,
   onClose,
@@ -2363,6 +2366,15 @@ function PieceLibraryPopover({
    * safe fallback when the library endpoint is still loading.
    */
   library: InstallableLibraryEntry[];
+  /**
+   * True when a host owns the catalog. Suppresses the "installable" layer
+   * entirely: the whole catalog is already in the shared tree, so every piece
+   * that has usable metadata is already in `catalog` above WITH its actions,
+   * which is strictly more useful than a piece-level Install row. A leftover
+   * row here could only be a piece whose extraction failed on the host, and
+   * picking it would POST to an install route that answers 403.
+   */
+  managed: boolean;
   /**
    * Id of the piece currently being installed via this popover, or null
    * when no install is in flight. The row matching this id renders as a
@@ -2383,6 +2395,7 @@ function PieceLibraryPopover({
   //   1. Control-flow built-ins (top -- always-available, always visible)
   //   2. Installed pieces' actions (one row per action)
   //   3. Uninstalled curated pieces (one row per piece, "Install" chip)
+  //      -- self-managed only; see the `managed` prop.
   //
   // Installed pieces are matched against the library catalog by piece name
   // (`@activepieces/piece-<id>` vs the engine's piece.name). Any installed
@@ -2397,15 +2410,17 @@ function PieceLibraryPopover({
       }
     }
     const uninstalledEntries: LibraryEntry[] = [];
-    for (const lib of library) {
-      // Library ids are bare ("gmail"); the engine's piece.name is the
-      // full npm spec ("@activepieces/piece-gmail"). Match on the latter.
-      if (installedNames.has(lib.npmPackage)) continue;
-      if (lib.installed) continue; // belt + suspenders -- the library hook also tracks this
-      uninstalledEntries.push({ kind: "piece-uninstalled", catalogEntry: lib });
+    if (!managed) {
+      for (const lib of library) {
+        // Library ids are bare ("gmail"); the engine's piece.name is the
+        // full npm spec ("@activepieces/piece-gmail"). Match on the latter.
+        if (installedNames.has(lib.npmPackage)) continue;
+        if (lib.installed) continue; // belt + suspenders -- the library hook also tracks this
+        uninstalledEntries.push({ kind: "piece-uninstalled", catalogEntry: lib });
+      }
     }
     return [...CONTROL_FLOW_ENTRIES, ...pieceEntries, ...uninstalledEntries];
-  }, [catalog, library]);
+  }, [catalog, library, managed]);
 
   // Apply the category filter and search query. Same lowercased q is
   // reused across every entry so we don't pay for the per-iteration call.

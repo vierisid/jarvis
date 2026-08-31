@@ -39,6 +39,7 @@ import { recordAgentActivity } from '../vault/agent-activity.ts';
 import { WebSocketServer, type WSMessage } from '../comms/websocket.ts';
 import { StreamRelay } from '../comms/streaming.ts';
 import { resolveRealtimeVoice, type ResolvedRealtimeVoice } from '../config/realtime.ts';
+import { realtimeEnablement } from './usejarvis-ai.ts';
 import { BrowserAudioTransport } from '../comms/audio-transport.ts';
 import { RealtimeVoiceSession } from './realtime-voice.ts';
 import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from './realtime-nav-tools.ts';
@@ -1486,7 +1487,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
     let resolved: ResolvedRealtimeVoice;
     try {
-      const res = resolveRealtimeVoice(this.agentService.getConfig());
+      const cfg = this.agentService.getConfig();
+      const res = resolveRealtimeVoice(cfg, realtimeEnablement(cfg));
       if (!res.ok) return false;
       resolved = res.resolved;
     } catch (err) {

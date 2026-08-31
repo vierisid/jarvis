@@ -160,3 +160,17 @@
 .rk-check__bx { width: 13px; height: 13px; border-radius: 4px 1px 4px 4px; border: 1.5px solid var(--ink2); flex-shrink: 0; display: flex; align-items: center; justify-content: center; }
 .rk-check--on .rk-check__bx { background: var(--ink); border-color: var(--ink); }
 .rk-check--on .rk-check__bx::after { content: ""; width: 6px; height: 6px; border-radius: 2px; background: var(--bg); }
+
+/* ── meter: a labelled window gauge (usage §03) ── */
+.rk-meter { display: flex; flex-direction: column; gap: 5px; min-width: 0; }
+.rk-meter__top { display: flex; align-items: baseline; gap: 8px; }
+.rk-meter__label { font-family: var(--mono); font-size: 8px; letter-spacing: .1em; text-transform: uppercase; color: var(--ink3); }
+.rk-meter__val { margin-left: auto; font-family: var(--mono); font-size: 12px; font-variant-numeric: tabular-nums; color: var(--ink); }
+.rk-meter__val--hold { color: var(--hold-tx); }
+.rk-meter__val--fail { color: var(--listen-tx); }
+.rk-meter__track { height: 5px; border-radius: 3px; background: color-mix(in srgb, var(--ink) 10%, transparent); overflow: hidden; }
+.rk-meter__fill { display: block; height: 100%; border-radius: 3px; background: color-mix(in srgb, var(--ink) 45%, transparent); transition: width .4s ease; }
+.rk-meter__fill--hold { background: var(--hold); }
+.rk-meter__fill--fail { background: var(--listen); }
+.rk-meter__note { font-family: var(--mono); font-size: 9px; color: var(--ink3); font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) { .rk-meter__fill { transition: none; } }

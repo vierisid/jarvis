@@ -130,3 +130,43 @@ test('rotate: fresh sid, old tokens die with the old row', async () => {
     await rm(dir, { recursive: true, force: true });
   }
 });
+
+test('rotate: carries the old row\'s connection history onto the new sid', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'jarvis-rotate-seen-'));
+  initDatabase(':memory:');
+  try {
+    const first = await enrollDevice(dir, 'u1.vps1.usejarvis.host', 'desktop-A', { onExisting: 'upsert' });
+    // Simulate the device having actually connected once.
+    getDb().run('UPDATE sidecars SET last_seen_at = ? WHERE id = ?', ['2026-01-01 00:00:00', first.sidecar.id]);
+
+    const rotated = await enrollDevice(dir, 'u1.vps1.usejarvis.host', 'desktop-A', {
+      onExisting: 'upsert',
+      rotate: true,
+    });
+
+    // Rotation replaces the credential, not the device. Losing last_seen_at here
+    // would make a veteran brain look brand-new to the first-run dashboard
+    // backfill in src/vault/schema.ts and re-show an intro already seen.
+    expect(rotated.sidecar.last_seen_at).toBe('2026-01-01 00:00:00');
+  } finally {
+    closeDb();
+    await rm(dir, { recursive: true, force: true });
+  }
+});
+
+test('rotate: a device that never connected stays never-connected', async () => {
+  const dir = await mkdtemp(join(tmpdir(), 'jarvis-rotate-unseen-'));
+  initDatabase(':memory:');
+  try {
+    await enrollDevice(dir, 'u1.vps1.usejarvis.host', 'desktop-A', { onExisting: 'upsert' });
+    const rotated = await enrollDevice(dir, 'u1.vps1.usejarvis.host', 'desktop-A', {
+      onExisting: 'upsert',
+      rotate: true,
+    });
+
+    expect(rotated.sidecar.last_seen_at).toBeNull();
+  } finally {
+    closeDb();
+    await rm(dir, { recursive: true, force: true });
+  }
+});

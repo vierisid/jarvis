@@ -1,6 +1,6 @@
 import type { JarvisConfig, LLMConfig, STTConfig, TTSConfig } from '../config/types.ts';
 import type { HostedVoiceCredentials } from '../comms/voice.ts';
-import { loadUserSection } from './user-settings.ts';
+import { loadUserSection, loadUserSectionStrict } from './user-settings.ts';
 
 /**
  * Hosted "Usejarvis AI" wiring (the platform's LLM proxy).
@@ -57,6 +57,15 @@ function normalizeBlockUrl(value: string): string {
  * e.g. an unquoted YAML scalar parsed as number/boolean) is reported once per
  * read and treated as absent rather than throwing from inside the boot merge.
  */
+let malformedBlockWarned = false;
+function warnMalformedBlockOnce(): void {
+  if (malformedBlockWarned) return;
+  malformedBlockWarned = true;
+  console.warn(
+    '[UsejarvisAI] Ignoring malformed usejarvis_ai config block: base_url and api_key must be strings (quote them in config.yaml).',
+  );
+}
+
 function readUsejarvisAiBlock(
   config: JarvisConfig,
 ): { base_url: string; api_key: string } | null {
@@ -67,9 +76,11 @@ function readUsejarvisAiBlock(
     (base_url !== undefined && typeof base_url !== 'string')
     || (api_key !== undefined && typeof api_key !== 'string')
   ) {
-    console.warn(
-      '[UsejarvisAI] Ignoring malformed usejarvis_ai config block: base_url and api_key must be strings (quote them in config.yaml).',
-    );
+    // ONCE. This used to be reached rarely; now a hosted dashboard polls
+    // GET /api/config/voice every ~15s and each read runs hasUsejarvisAi, so a
+    // single mistyped line would print four times a minute for the life of the
+    // daemon and bury everything else. Same latch as warnVaultOnce below.
+    warnMalformedBlockOnce();
     return null;
   }
   const url = typeof base_url === 'string' ? normalizeBlockUrl(base_url) : '';
@@ -240,6 +251,127 @@ function storedProviderChoice(stored: unknown): boolean {
  * two. `loadStored` is injectable for tests; the default reads the vault DB
  * (open in every runtime caller: boot, reload appliers, API routes).
  */
+/**
+ * The BINDING view of `voice.realtime.enabled`.
+ *
+ * Realtime is a paid slot on a hosted plan (`llm_profile_slots.slot =
+ * 'realtime'` — the one slot REQUIRED_LLM_SLOTS leaves optional). A tenant
+ * whose plan includes it should get it; today they never do, because
+ * `voice.realtime.enabled` defaults to false, the only thing that flips it is
+ * the JARVIS_REALTIME_VOICE env var, and the provisioner sets neither. The
+ * hosted branch of resolveRealtimeVoice — which derives the wss:// endpoint and
+ * dials the uj-realtime alias — has therefore never run in production.
+ *
+ * Same three rules as effectiveSttForBinding above, and for the same reasons:
+ *  - not hosted → untouched. A BYO-key user keeps the explicit opt-in; realtime
+ *    spends THEIR OpenAI money and must never switch itself on.
+ *  - the user recorded a choice → it wins, in both directions.
+ *  - otherwise → on, and the PLAN decides per session.
+ *
+ * ## Why the plan is not read here
+ *
+ * It cannot be, and it should not be. The `usejarvis_ai` block is
+ * plan-INDEPENDENT by design (see the renderer in the control plane): per-plan
+ * resolution happens at the proxy via aliases, so a plan change never rewrites
+ * an instance's config. Encoding the entitlement in the file would break that
+ * and require new machinery to re-render and push a config on every upgrade and
+ * downgrade — with an instance left silently wrong whenever that push failed.
+ *
+ * The authority is `hostedRealtimeIncluded` (daemon/realtime-gate.ts), which
+ * asks the key-scoped catalog whether the plan includes uj-realtime. It is
+ * already written, cached, and deliberately conservative about its own
+ * failures. This function only decides whether to ASK.
+ *
+ * ## Why a binding view rather than a mutation
+ *
+ * Writing the default into `config.voice` would let a dashboard voice save
+ * read-modify-write it back as an explicit user choice — pinning realtime on
+ * for a tenant who later loses it. Same hazard the tier defaults are kept out
+ * of `config.llm` to avoid: runtime defaults stay out of every persistence path
+ * by construction.
+ */
+export type RealtimeEnablement =
+  /** The user (or JARVIS_REALTIME_VOICE) said yes. On a SELF-HOSTED install
+   *  their own OpenAI key serves it; on a hosted one the plan does, whoever
+   *  asked — see realtimeServedByPlan in config/realtime.ts. */
+  | 'user-on'
+  /** Nobody asked for it; it is on because the hosted plan may include it. A
+   *  session from this state MUST resolve to the hosted alias — see below. */
+  | 'hosted-default'
+  | 'off';
+
+export function realtimeEnablement(
+  config: JarvisConfig,
+  loadStored: (section: 'voice') => unknown = loadUserSectionStrict,
+): RealtimeEnablement {
+  const configured = config.voice?.realtime?.enabled === true;
+  if (!hasUsejarvisAi(config)) return configured ? 'user-on' : 'off';
+  // An explicit TRUE needs no disambiguation, and must not cost a vault read:
+  // DEFAULT_CONFIG says false, so a true in the merged config can only have
+  // come from the user or from JARVIS_REALTIME_VOICE. Only FALSE is ambiguous.
+  if (configured) return 'user-on';
+  // ...except when the env var is SET, where false is not ambiguous at all.
+  //
+  // Read it as: applyEnvOverrides runs LAST over every merge (boot and reload),
+  // so if the var were a truthy value `configured` would be true and we would
+  // have returned above. Reaching here with it set therefore means the loader
+  // turned it into an explicit false — "0" / "false" / "no" / "" per loader.ts.
+  // That is the operator's kill switch on exactly the fleet where realtime just
+  // became default-on, so it has to outrank the default. (The truthiness table
+  // is deliberately NOT duplicated here; the loader owns it.)
+  if (process.env.JARVIS_REALTIME_VOICE !== undefined) return 'off';
+  let choice: boolean | null = null;
+  try {
+    choice = storedRealtimeChoice(loadStored('voice'));
+  } catch (err) {
+    // The vault is the only place the user's answer lives, so an unreadable
+    // one means we cannot tell "declined" from "never asked". Fall back to the
+    // merged config rather than the hosted default: turning realtime ON for
+    // someone who may have switched it off is the worse of the two mistakes,
+    // and it opens a billed audio session to do it. Corrupt JSON reaches here
+    // too (loadUserSectionStrict throws rather than reading as silence), because a
+    // damaged row is not an answer either.
+    warnVaultOnce(err);
+    return configured ? 'user-on' : 'off';
+  }
+  if (choice === true) return 'user-on';
+  if (choice === false) return 'off';
+  return 'hosted-default';
+}
+
+
+/** Once, not per call: GET /api/config/voice is polled every 15s per dashboard
+ *  and every voice_start reads this, so a broken vault would flood the log. */
+let vaultWarned = false;
+function warnVaultOnce(err: unknown): void {
+  if (vaultWarned) return;
+  vaultWarned = true;
+  console.warn('[UsejarvisAI] could not read the stored voice section; leaving realtime as configured:', err);
+}
+
+/** Test seam for the warn-once latches. */
+export function resetRealtimeVaultWarningForTest(): void {
+  vaultWarned = false;
+  malformedBlockWarned = false;
+}
+
+/**
+ * The user's own answer, or null if they never gave one.
+ *
+ * Read from the STORED `cfg.voice` row, not the merged config: DEFAULT_CONFIG
+ * sets `enabled: false`, so the in-memory value cannot tell "turned it off"
+ * from "never touched" — the same trap effectiveTtsForBinding documents for
+ * Edge being the default TTS provider. Only a boolean actually persisted under
+ * `realtime.enabled` counts as an answer.
+ */
+function storedRealtimeChoice(stored: unknown): boolean | null {
+  if (typeof stored !== 'object' || stored === null || Array.isArray(stored)) return null;
+  const rt = (stored as Record<string, unknown>).realtime;
+  if (typeof rt !== 'object' || rt === null || Array.isArray(rt)) return null;
+  const enabled = (rt as Record<string, unknown>).enabled;
+  return typeof enabled === 'boolean' ? enabled : null;
+}
+
 export function effectiveSttForBinding(
   config: JarvisConfig,
   loadStored: (section: 'stt' | 'tts') => unknown = loadUserSection,

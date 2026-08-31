@@ -585,6 +585,10 @@
   border-radius: var(--radius-2, 6px);
   background: var(--surface-1);
 }
+/* Managed install: a row is a name and a sentence -- no chips, no meta line,
+   no action column. The full row padding was sized around a two-line control;
+   across the whole catalog it reads as a stack of cards rather than a list. */
+.wf-lib__row--managed { padding: var(--s-2) var(--s-3); }
 .wf-lib__row-main { display: flex; flex-direction: column; gap: 4px; flex: 1 1 auto; min-width: 0; }
 .wf-lib__row-title { display: flex; align-items: center; gap: var(--s-1); flex-wrap: wrap; }
 .wf-lib__row-name { font-weight: 600; color: var(--ink-1); }

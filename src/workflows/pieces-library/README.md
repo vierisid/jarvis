@@ -78,6 +78,60 @@ Docker: `~/.jarvis` should be mounted as a persistent volume. The manifest
 re-runs `bun install` on startup if any catalog-installed piece is missing
 from `node_modules`.
 
+## Managed installs: the host owns the catalog
+
+Everything above describes a **self-managed** install, where the user picks
+pieces one at a time. A multi-tenant host inverts that: it builds the WHOLE
+catalog once per brain version into a root-owned read-only tree and points
+every tenant at it with `workflows.pieces_dir` (or
+`JARVIS_SHARED_PIECES_DIR`). `piecesManagedByHost()` in `shared.ts` is the
+switch, and a configured shared dir is the whole condition — the question the
+Library asks is "does something other than this user decide which pieces
+exist here?", and that setting IS the deployment's answer.
+
+When it is set:
+
+- `GET /api/workflows/pieces/library` returns `managed: true` and the whole
+  catalog as plain entries — id, package, name, description, tier. No install
+  state (everything is installed, so the badge would be noise on every row)
+  and none of the install-decision detail: version, vetted date, size,
+  license, source. Those are dropped from the PAYLOAD, not hidden by the
+  client, so a stale cached bundle can't put them back.
+- `POST .../:id/install` and `DELETE .../:id` answer **403**, before touching
+  disk.
+
+The 403 is the guarantee, not the hidden button. The tenant's own
+`~/.jarvis/pieces` is still writable and still shadows the shared tree
+(engine-bootstrap orders the roots user-first), so without the guard a
+hand-rolled POST would happily shadow a reviewed shared piece with an
+unreviewed npm copy and spend the tenant's disk quota doing it.
+
+The agent side follows the same switch. A managed daemon passes the composer
+no library index, which drops its `search_library` tool and the
+"suggest installs" wording from both prompts — otherwise the assistant would
+answer "install Discord from the Library page first" on an install whose
+Library has no button and whose install API answers 403.
+
+Two known rough edges:
+
+- A piece installed into `~/.jarvis/pieces` BEFORE the instance became managed
+  keeps shadowing the shared copy and can no longer be uninstalled through the
+  product. Clearing one is an SSH-level chore. This wants no migration and no
+  startup pruning: the managed Library shipped before the hosted product had
+  users, so the only installs that can predate it are a developer's own. Do
+  not add a reconciler pass that deletes from a manifest the user did not ask
+  you to touch.
+- Managedness rides on the RESOLVED dir, so it fails OPEN if the path cannot
+  be resolved. A host writes `pieces_dir: /opt/jarvis-pieces/${version}`, and
+  `resolveSharedRuntimePaths` refuses to expand `${version}` unless
+  `JARVIS_VERSION` names a concrete version — which it does not if the
+  per-instance env file is missing and systemd falls back to its
+  `JARVIS_VERSION=current` default. That instance reads as self-managed: full
+  detail, working install API, bun installing into the tenant's own quota. It
+  degrades to the pre-feature status quo rather than breaking, and such a host
+  is already badly broken (it is also running the wrong brain), but the only
+  announcement is a `[shared-runtime] WARNING` in the daemon log.
+
 ## Catalog entry schema
 
 ```ts

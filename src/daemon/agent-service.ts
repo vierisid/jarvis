@@ -44,6 +44,8 @@ import { documentTool } from '../actions/tools/documents.ts';
 import { AgentTaskManager } from '../agents/task-manager.ts';
 import { discoverSpecialists, formatSpecialistList } from '../agents/role-discovery.ts';
 import { buildSystemPromptParts, type PromptContext, type SystemPromptParts } from '../roles/prompt-builder.ts';
+import { piecesManagedByHost } from '../workflows/pieces-library/shared.ts';
+import { resolveSharedRuntimePaths } from '../workflows/runtime/shared-runtime-paths.ts';
 import type { ProgressCallback } from '../agents/sub-agent-runner.ts';
 import {
   getPersonality,
@@ -834,6 +836,20 @@ export class AgentService implements Service, IAgentService {
     };
   }
 
+  /**
+   * Whether a host owns the pieces catalog. Resolved from config the daemon
+   * read at boot and memoized: the tool guide it feeds lands in the
+   * prompt-cached static section, so a value that moved between turns would
+   * silently break that cache for no reason.
+   */
+  private piecesManagedCache: boolean | null = null;
+  private piecesManaged(): boolean {
+    this.piecesManagedCache ??= piecesManagedByHost(
+      resolveSharedRuntimePaths(this.config).piecesDir,
+    );
+    return this.piecesManagedCache;
+  }
+
   private buildPromptContext(userMessage?: string, opts?: { slim?: boolean }): PromptContext {
     // Slim mode: voice channels skip the heavyweight context blocks
     // (observations, content pipeline, commitments) so the LLM has
@@ -851,6 +867,9 @@ export class AgentService implements Service, IAgentService {
       currentTime: new Date().toISOString(),
       availableSpecialists: this.specialistListText || undefined,
       hasSidecars,
+      // Derived from config, so it is stable turn over turn and safe to sit
+      // in the prompt-CACHED static section alongside hasSidecars.
+      piecesManaged: this.piecesManaged(),
     };
 
     try {

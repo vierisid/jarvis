@@ -1,4 +1,5 @@
-import type { JarvisConfig, RealtimeReasoningEffort } from './types.ts';
+import type { JarvisConfig, RealtimeReasoningEffort, RealtimeVoiceConfig } from './types.ts';
+import type { RealtimeEnablement } from '../daemon/usejarvis-ai.ts';
 import { IMPACT_MAP, type ActionCategory } from '../roles/authority.ts';
 
 /**
@@ -49,6 +50,50 @@ const DEFAULT_MAX_SESSION_MINUTES = 10;
 const VALID_EFFORTS: RealtimeReasoningEffort[] = ['minimal', 'low', 'medium', 'high', 'xhigh'];
 
 /**
+ * Would a realtime session run on the PLAN rather than on a user's own key?
+ *
+ * The twin of `readUsejarvisAiBlock` (daemon/usejarvis-ai.ts) and required to
+ * agree with it on every input — `realtime-enablement.test.ts` pins that over a
+ * table of block shapes. They are separate functions rather than one because
+ * this module must not take a runtime dependency on the daemon layer; the test
+ * is what keeps the duplication honest.
+ *
+ * The single predicate behind the money rule, exported so the settings route
+ * cannot drift from it. Deliberately a function of the hosted block ALONE —
+ * not of whether realtime is currently switched on, and not of whether the
+ * plan actually includes the alias:
+ *
+ *  - Independent of enablement, because the settings tab's billing copy renders
+ *    next to the toggle, i.e. to someone deciding whether to switch it ON.
+ *    Deriving it from the current resolution made it false for a hosted tenant
+ *    who had realtime off, so they were told they would be "billed by OpenAI,
+ *    ~$0.30/min" for something their plan would serve for nothing — the same
+ *    false-billing statement this rule exists to prevent, pointed the other way.
+ *  - Independent of the plan's contents, because "who would serve it" and "may
+ *    you have it" are different questions. The catalog gate answers the second,
+ *    and a tenant whose plan excludes realtime still is not billed personally —
+ *    they simply do not get it.
+ */
+export function realtimeServedByPlan(config: JarvisConfig): boolean {
+  const block = config.usejarvis_ai;
+  if (!block || typeof block !== 'object') return false;
+  const { base_url, api_key } = block as Record<string, unknown>;
+  // Typed, not just present. The block is YAML the provisioner wrote, so a
+  // value can be any shape at runtime whatever the TS type says — an unquoted
+  // scalar parses as a number or a boolean, which is the exact case
+  // readUsejarvisAiBlock guards against and warns about. Reaching straight for
+  // `.trim()` threw a TypeError there, and this predicate is called from the
+  // settings route OUTSIDE its try/catch, so one mistyped line in config.yaml
+  // took the whole Voice tab down with a 500.
+  if (typeof base_url !== 'string' || typeof api_key !== 'string') return false;
+  // Trailing slashes stripped before the emptiness test, matching
+  // normalizeBlockUrl — otherwise a base_url of "///" reads as present here
+  // and as absent to hasUsejarvisAi, and the two must never disagree about
+  // whether this install is hosted.
+  return base_url.trim().replace(/\/+$/, '') !== '' && api_key.trim() !== '';
+}
+
+/**
  * Find the first OpenAI provider key in `llm.providers`. A provider entry's
  * effective kind is `entry.kind ?? name` (matches `instantiateProvider`), so a
  * user-named instance like `"openai-personal"` with `kind: 'openai'` is
@@ -70,34 +115,80 @@ function findOpenAIProviderKey(config: JarvisConfig): string {
 /**
  * Gate + resolve the premium realtime voice mode.
  *
- * Decision (see docs/GPT_REALTIME_2_INTEGRATION.md): entitlement is simply
- * "user has an OpenAI provider configured under llm.providers". The realtime
- * session reuses that key - there is no separate realtime credential. This
- * NEVER throws - when realtime is unavailable it returns `{ ok: false, reason }`
+ * Entitlement is no longer "the user has an OpenAI provider configured", which
+ * is what docs/GPT_REALTIME_2_INTEGRATION.md still describes. There are two
+ * answers now, and which applies is decided by the install:
+ *
+ *  - HOSTED (a complete `usejarvis_ai` block): the plan serves it through the
+ *    proxy's `uj-realtime` alias, and the user's own OpenAI key is never read —
+ *    see realtimeServedByPlan above for why that holds whoever asked for the
+ *    session. Whether the plan actually includes the alias is a separate
+ *    question, answered per session by daemon/realtime-gate.ts.
+ *  - SELF-HOSTED: unchanged. Scan `llm.providers` for a `kind: 'openai'` entry
+ *    and reuse its key (injected from the keychain at startup); LLM credentials
+ *    live only in the DB + keychain, with no config.yaml or env fallback. There
+ *    is no separate realtime credential.
+ *
+ * NEVER throws — when realtime is unavailable it returns `{ ok: false, reason }`
  * so the caller can log a warning and fall back to the standard STT -> LLM ->
  * TTS pipeline.
- *
- * Key resolution: scan `llm.providers` for a `kind: 'openai'` entry and reuse
- * its key (injected from the keychain at startup). LLM credentials live only
- * in the DB + keychain - there is no config.yaml or env fallback.
  */
 export function resolveRealtimeVoice(
   config: JarvisConfig,
+  /**
+   * Whether realtime is switched on, and on WHOSE authority
+   * (daemon/usejarvis-ai.ts realtimeEnablement).
+   *
+   * Only `off` is read here now — a hosted install resolves to the plan's alias
+   * whether the tenant asked or not (see the key selection below), because
+   * scoping that rule to `hosted-default` left the same billing harm reachable
+   * by toggling realtime off and on again.
+   *
+   * Passed IN rather than read here so this stays a pure function of config —
+   * the binding view needs the vault DB to tell an explicit "off" from the
+   * default false, and this module is imported by paths that have no DB.
+   * Defaults to the raw config value, which is what a caller without the DB
+   * (and every existing test) should see.
+   */
+  enablement: RealtimeEnablement = config.voice?.realtime?.enabled === true ? 'user-on' : 'off',
 ): RealtimeVoiceResolution {
-  const rt = config.voice?.realtime;
+  // Every read below is defaulted, because the block can be legitimately
+  // ABSENT now: a hosted tenant who never opened the Voice tab has no stored
+  // `voice` section at all, and that is precisely the tenant this path exists
+  // to serve. Previously `!rt?.enabled` returned first and narrowed it away.
+  const rt: Partial<RealtimeVoiceConfig> = config.voice?.realtime ?? {};
 
-  if (!rt?.enabled) {
+  if (enablement === 'off') {
     return { ok: false, reason: 'Realtime voice disabled (voice.realtime.enabled is false)' };
   }
 
-  const apiKey = findOpenAIProviderKey(config).trim();
+  // On a HOSTED install the plan serves realtime, whoever asked for it.
+  //
+  // Gating this on `hosted-default` alone was not enough: a hosted tenant with
+  // a personal OpenAI key (allowed — hosted installs permit BYO providers for
+  // chat) who merely toggled realtime off and on again became `user-on`, at
+  // which point their own key won and every turn was billed to them at
+  // ~$0.30/min, ungated and unbudgeted — the same harm, one innocent click
+  // away, while the settings tab told them it was included in their plan.
+  //
+  // So BYO is read only where there is no hosted block to serve the session.
+  // The cost is a niche capability: a hosted tenant whose plan EXCLUDES
+  // realtime can no longer spend their own key on it. That is the right trade
+  // — losing a rare feature beats silently charging someone's personal card —
+  // and it makes one rule true everywhere: on a hosted install, realtime is
+  // either included in your plan or it does not run.
+  const servedByPlan = realtimeServedByPlan(config);
+  // Read only where the plan cannot serve it. On a hosted install this stays
+  // '' and is never consulted — the branch below returns first — which is the
+  // whole money rule in one line.
+  const apiKey = servedByPlan ? '' : findOpenAIProviderKey(config).trim();
 
-  // Hosted fallback: no BYO OpenAI key, but the platform block is live — the
-  // proxy serves realtime under the plan-gated uj-realtime alias. A user's
-  // own OpenAI provider still wins (their explicit choice, their own spend).
-  const hosted = config.usejarvis_ai;
-  const hostedReady = Boolean(hosted?.base_url?.trim() && hosted?.api_key?.trim());
-  if (!apiKey && hostedReady) {
+  if (servedByPlan) {
+    // The platform block is live (realtimeServedByPlan checked both fields are
+    // non-empty strings, which is what the assertions below rest on), so the
+    // proxy serves realtime under the plan-gated uj-realtime alias and the
+    // user's own key is never read.
+    const hosted = config.usejarvis_ai;
     // Normalize through URL parsing rather than string surgery: the block is
     // provisioner-written, and each of these typo classes previously derailed
     // the ws(s) derivation into an undialable URL — an uppercase scheme

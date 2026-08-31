@@ -11,8 +11,8 @@ import { applyApprovalDecision } from './approval-decision.ts';
 import { SecretStorageError } from './section-secrets.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
-import { resolveRealtimeVoice, DEFAULT_BLOCKED_CATEGORIES } from '../config/realtime.ts';
-import { hasUsejarvisAi, effectiveSttForBinding, effectiveTtsForBinding, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
+import { realtimeServedByPlan, resolveRealtimeVoice, DEFAULT_BLOCKED_CATEGORIES } from '../config/realtime.ts';
+import { hasUsejarvisAi, effectiveSttForBinding, effectiveTtsForBinding, realtimeEnablement, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
 import { cachedRealtimeVerdict } from './realtime-gate.ts';
 import type { EntityType } from '../vault/entities.ts';
 import type { CommitmentPriority, CommitmentStatus } from '../vault/commitments.ts';
@@ -1671,6 +1671,31 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     // call (the proxy filters per key, so there is no hardcoded list). The
     // provider is built from the system-owned config.yaml block — the route
     // takes no credentials and never echoes the base_url or key back.
+    /**
+     * This instance's hosted usage meter — % of each window used and when they
+     * reset (docs/LLM.md on the control plane, "Windows + meters").
+     *
+     * Hosted-only, like its neighbour below: a self-hosted install has no key,
+     * no plan and no windows, so 503 is the honest answer rather than zeros.
+     *
+     * Degrades to `{ ok: false }` rather than throwing, and never carries the
+     * upstream body — the control-plane host is withheld here for the same
+     * reason the catalog route withholds the proxy's.
+     */
+    '/api/llm/budget': {
+      GET: async () => {
+        const { hasUsejarvisAi } = await import('./usejarvis-ai.ts');
+        if (!hasUsejarvisAi(ctx.config)) {
+          return error('The usage meter is only available on hosted installs.', 503);
+        }
+        const { readHostedUsage } = await import('./hosted-usage.ts');
+        const meter = await readHostedUsage(ctx.config);
+        return meter
+          ? json({ ok: true, meter })
+          : json({ ok: false, error: 'Usage is unavailable right now' });
+      },
+    },
+
     '/api/config/llm/usejarvis/models': {
       GET: async () => {
         const { hasUsejarvisAi } = await import('./usejarvis-ai.ts');
@@ -2736,24 +2761,38 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: () => {
         const voice = ctx.config.voice;
         const rt = voice?.realtime;
-        // Surface whether realtime would actually resolve (BYO key cascade),
-        // so the UI can show "active / no key" without exposing secrets.
-        // The plan gate is part of "available": this flag is what puts the
-        // browser into raw-PCM capture mode, so reporting true for a plan
-        // that excludes uj-realtime makes client and server disagree about
-        // the wire format for a whole utterance. Read the gate's CACHE only —
-        // the dashboard polls this route, and a fetching gate here would turn
-        // that poll into sustained catalog traffic. An unknown verdict stays
-        // available, matching the gate's own advisory-allow stance.
+        // The BINDING view, not the raw field: on a hosted install a tenant who
+        // never chose gets realtime on, and reporting the stored false here
+        // would show an off toggle for a feature that is actually running.
+        const enablement = realtimeEnablement(ctx.config);
+        const enabledNow = enablement !== 'off';
+        // Whether realtime would actually resolve, so the UI can show its state
+        // without exposing secrets. The plan gate is part of "available": this
+        // flag is what puts the browser into raw-PCM capture mode, so reporting
+        // true for a plan that excludes uj-realtime makes client and server
+        // disagree about the wire format for a whole utterance.
+        //
+        // Read through the CACHE-ONLY gate, which never stalls this poll. It
+        // does now start a background fetch on a miss or a stale entry — that
+        // changed when the boot warm turned out not to cover a cache cleared by
+        // SIGHUP — but the entry it writes ends the misses, so the ceiling is
+        // one request per cache-empty poll rather than one per poll. An unknown
+        // verdict still reads as available, matching the gate's advisory stance.
         let available = false;
         try {
-          const res = resolveRealtimeVoice(ctx.config);
+          const res = resolveRealtimeVoice(ctx.config, enablement);
           available = res.ok && cachedRealtimeVerdict(res.resolved) !== false;
         } catch { available = false; }
+        // NOT derived from the resolution above: that is computed under the
+        // CURRENT enablement, so a tenant with realtime off resolves ok:false
+        // and would be told they are billed by OpenAI — next to the toggle
+        // they are deciding whether to flip. Who would serve a session is a
+        // property of the install, not of whether one is switched on.
+        const hostedRealtime = realtimeServedByPlan(ctx.config);
         return json({
           wake_engine: voice?.wake_engine ?? 'openwakeword',
           realtime: {
-            enabled: rt?.enabled ?? false,
+            enabled: enabledNow,
             model: rt?.model ?? 'gpt-realtime-2',
             voice: rt?.voice ?? null,
             reasoning_effort: rt?.reasoning_effort ?? 'low',
@@ -2767,6 +2806,19 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             // it is so a client can tell "using the default" from an explicit set.
             blocked_categories: rt?.blocked_categories ?? DEFAULT_BLOCKED_CATEGORIES,
             blocked_categories_default: rt?.blocked_categories === undefined,
+            // WHY it is on, so the tab can stop telling a hosted tenant they
+            // are billed by OpenAI at $0.30/min for something their plan
+            // includes, and can name the real reason it is unavailable ("not
+            // in your plan") instead of "no OpenAI provider is configured".
+            // Same shape as blocked_categories_default above: the effective
+            // value plus a flag saying whose answer it is.
+            enabled_default: enablement === 'hosted-default',
+            // Who would actually SERVE a session, not merely whether this
+            // install is hosted. The tab's billing copy keys off this: saying
+            // "included in your plan" while a BYO key was about to be charged
+            // is the assurance that made the billing bug worse than silent.
+            served_by_plan: hostedRealtime,
+            hosted: hasUsejarvisAi(ctx.config),
             // true when enabled AND an OpenAI provider key resolves (via
             // llm.providers or env) - reflects whether realtime would actually
             // start if voice_start arrived right now.
@@ -2777,15 +2829,20 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         try {
           const body = await req.json() as Record<string, unknown>;
-          const { saveUserSection } = await import('./user-settings.ts');
+          const { persistUserPatch } = await import('./user-settings.ts');
           const { mergeVoiceConfig, validateVoicePatch } = await import('./config-merge.ts');
 
           const validation = validateVoicePatch(body);
           if (!validation.ok) return error(validation.error, 400);
 
+          // Persist the PATCH over the stored row, never the merged in-memory
+          // section: the latter always carries DEFAULT_CONFIG's
+          // `realtime.enabled: false`, and writing that back reads as the user
+          // explicitly declining realtime. The in-memory config is still
+          // updated below for the next voice_start — the two differ on purpose.
+          persistUserPatch('voice', validation.patch as Record<string, unknown>);
           const freshConfig = ctx.config;
           freshConfig.voice = mergeVoiceConfig(freshConfig.voice, validation.patch);
-          saveUserSection('voice', freshConfig.voice);
           // Update in-memory config so the next voice_start resolves with the
           // new settings — resolveRealtimeVoice reads ctx.config live, so no
           // provider hot-reload is needed (unlike TTS/LLM).

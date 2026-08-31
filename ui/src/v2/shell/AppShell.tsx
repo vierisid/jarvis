@@ -32,6 +32,7 @@ import { NowRoom } from "./NowRoom";
 import { deriveJarvisCoreState } from "../core/coreState";
 import "./AppShell.css";
 import "./roomShell.css";
+import { modKey } from "../ui/platform";
 
 const PALETTE_TYPE_TO_OBJECT_TYPE: Record<PaletteResultType, ObjectType> = {
   workflow: "workflow",
@@ -986,7 +987,7 @@ function ShellLayout({
                 {voiceState === "idle" ? "tap the pebble to talk" : TALK_HINT[voiceState]}
               </span>
             </div>
-            <button className="esc" onClick={() => setTalkOpen(false)} aria-label="Close Talk">⌘J · esc</button>
+            <button className="esc" onClick={() => setTalkOpen(false)} aria-label="Close Talk">{modKey("J")} · esc</button>
           </div>
 
           <div className="rs-talk-thread">

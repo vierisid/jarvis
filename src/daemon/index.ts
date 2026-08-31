@@ -22,8 +22,9 @@ import { createObservation } from "../vault/observations.ts";
 import { ObserverService, mapEventType } from "./observer-service.ts";
 import { WebSocketService } from "./ws-service.ts";
 import { PebbleRealtimeManager } from "./pebble-realtime.ts";
-import { hostedRealtimeIncluded } from './realtime-gate.ts';
+import { hostedRealtimeIncluded, warmRealtimeGateFor } from './realtime-gate.ts';
 import { resolveRealtimeVoice } from "../config/realtime.ts";
+import { realtimeEnablement } from "./usejarvis-ai.ts";
 import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
@@ -49,6 +50,8 @@ import { DeferredExecutor } from "../authority/deferred-executor.ts";
 import { applyApprovalDecision } from "./approval-decision.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 import { SidecarManager, buildEnrollmentUrls } from "../sidecar/manager.ts";
+import { claimDashboardIntro } from "../sidecar/first-run.ts";
+import type { ConnectedSidecar } from "../sidecar/types.ts";
 import { resolveExternalOrigin } from "../util/external-origin.ts";
 import { ensureWorkflowSchema } from "../workflows/db/index.ts";
 import { Worker as WorkflowWorker } from "../workflows/queue/worker.ts";
@@ -71,7 +74,6 @@ import {
 } from "../workflows/runtime/engine-bootstrap.ts";
 import { CredentialResolver } from "../workflows/credentials/adapter.ts";
 import { metadataToCatalogEntry } from "../workflows/runtime/piece-catalog.ts";
-import { sharedPieceVersions } from "../workflows/pieces-library/shared.ts";
 import { resolveSharedRuntimePaths } from "../workflows/runtime/shared-runtime-paths.ts";
 import { DEFAULT_IDS } from "../workflows/db/schema.ts";
 import { apId } from "../workflows/db/ids.ts";
@@ -101,6 +103,7 @@ let workflowWorker: WorkflowWorker | null = null;
 let triggerManager: TriggerManager | null = null;
 let workflowEngineShutdown: (() => Promise<void>) | null = null;
 let systemCron: import('./system-cron.ts').SystemCronService | null = null;
+let usageAlerts: import('./usage-alerts-service.ts').UsageAlertsService | null = null;
 let timerScheduler: TimerWaitpointScheduler | null = null;
 let settingsReload: import('./settings-reload.ts').SettingsReloadCoordinator | null = null;
 /** Set once the sidecar manager is up; re-pushes the pebble realtime
@@ -221,6 +224,12 @@ async function handleShutdown(signal: string): Promise<void> {
     if (systemCron) {
       systemCron.stop();
       systemCron = null;
+    }
+
+    // Stop the hosted usage threshold check
+    if (usageAlerts) {
+      usageAlerts.stop();
+      usageAlerts = null;
     }
 
     // Stop commitment executor
@@ -667,7 +676,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // Per-sidecar in-flight summon control. Tracks whether a summon is
       // active and lets us cancel mid-flight when the user dismisses with
       // a second hotkey press.
-      const pendingSummons = new Map<string, { cancelled: boolean }>();
+      // `sessionId` is set only for hotkey summons (the sidecar mints it and
+      // stamps it on both `pebble.summon` and any later `pebble.mic_blocked`),
+      // so a mic refusal can unwind exactly the slot it belongs to and never a
+      // turn that happens to be in flight.
+      const pendingSummons = new Map<string, { cancelled: boolean; sessionId?: string }>();
 
       // Fallback timers for the bare-"Jarvis" listening state. If the sidecar's
       // session capture never produces an `audio.session_end` (dropped event,
@@ -801,7 +814,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         dispatchRPC: (sidecarId, method, params) => sidecarManager.dispatchRPC(sidecarId, method, params ?? {}),
         dispatchNotify: (sidecarId, method, params) => sidecarManager.dispatchNotify(sidecarId, method, params ?? {}),
         getAudioChannel: (sidecarId) => sidecarManager.getAudioChannel(sidecarId),
-        resolve: () => resolveRealtimeVoice(agentService.getConfig()),
+        resolve: () => {
+          const cfg = agentService.getConfig();
+          return resolveRealtimeVoice(cfg, realtimeEnablement(cfg));
+        },
         // Agent tools + the nav tools (open_dashboard_room, …) so realtime voice
         // can drive the desktop UI just like the one-shot path ("open settings").
         tools: () => [...agentService.getOrchestrator().getRealtimeTools(), ...REALTIME_NAV_TOOLS],
@@ -834,7 +850,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // Tell each pebble-capable sidecar whether realtime is available so its
       // summon hotkey knows to toggle a live session vs. the one-shot capture.
       const advertiseRealtime = async (sidecarId: string) => {
-        const res = resolveRealtimeVoice(agentService.getConfig());
+        const cfg = agentService.getConfig();
+        const res = resolveRealtimeVoice(cfg, realtimeEnablement(cfg));
         // The advertisement must agree with the starters' plan gate, or the
         // summon hotkey opens sessions the plan refuses at dial.
         const enabled = res.ok && (await hostedRealtimeIncluded(res.resolved));
@@ -1087,6 +1104,53 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         return Buffer.concat([header, pcm]);
       };
 
+      // The very first sidecar ever to connect to THIS brain gets the dashboard
+      // opened alongside the pebble: a lone pebble on a fresh install reads as
+      // "nothing happened", and on Linux there is no tray to find the dashboard
+      // from. Scoped to the brain (claimDashboardIntro persists the flag in the
+      // vault), so a re-issued enrollment token or a second machine is NOT a
+      // first run. Distinct from the sidecar-local "Open dashboard at startup"
+      // preference, which the sidecar honours itself on every launch.
+      //
+      // Never throws: this is a nicety, and the caller's catch block owns the
+      // pebble's spawn bookkeeping — a failure here must not un-guard that.
+      const openFirstRunDashboard = async (sidecar: ConnectedSidecar): Promise<void> => {
+        // Everything lives inside the try — claimDashboardIntro() does
+        // synchronous SQLite I/O and can throw on a sick vault, and the caller's
+        // catch owns the pebble's spawn bookkeeping.
+        try {
+          // Without the 'windows' capability the sidecar has no panel service at
+          // all, so the spawn could only fail — leave the intro unclaimed for a
+          // capable sidecar instead of burning it here.
+          if (!sidecar.capabilities.includes('windows')) return;
+          if (!claimDashboardIntro()) return;
+          // The full dashboard SPA at '#/' — the same window (and the same
+          // panel id) the tray's "Open dashboard" opens, so this can never
+          // produce a duplicate. NOT dashboardURL(), which renders a single
+          // chrome-less room body.
+          await sidecarManager.dispatchRPC(sidecar.id, 'panel.spawn', {
+            id: 'tray:chat',
+            url: `${pebblePanelOrigin}/#/`,
+            title: 'JARVIS',
+            bounds: { x: -1, y: -1, w: 1100, h: 760 },
+            resizable: true,
+            multi_instance: false,
+          });
+          console.log(`[ambient-ui] first-run dashboard opened on ${sidecar.id}`);
+        } catch (err) {
+          // Losing the race for the 'tray:chat' id (the user clicked the tray, or
+          // the sidecar's own open-at-startup preference got there first) means
+          // the dashboard IS up — the intro's whole purpose is served. Not a
+          // failure; say so rather than crying wolf in the log.
+          const msg = err instanceof Error ? err.message : String(err);
+          if (msg.includes('panel already exists')) {
+            console.log(`[ambient-ui] first-run dashboard already open on ${sidecar.id}`);
+            return;
+          }
+          console.warn(`[ambient-ui] first-run dashboard open failed on ${sidecar.id}:`, err);
+        }
+      };
+
       sidecarManager.onSidecarConnected(async (sidecar) => {
         if (!sidecar.capabilities.includes('pebble')) {
           console.log(`[ambient-ui] Sidecar ${sidecar.id} lacks 'pebble' capability — skipping native pebble spawn`);
@@ -1107,6 +1171,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           const awarenessEnabled = (jarvisConfig.awareness as { enabled?: boolean })?.enabled ?? true;
           sidecarManager.dispatchRPC(sidecar.id, 'pebble.set_blinded', { blinded: !awarenessEnabled })
             .catch(() => { /* sidecar might not have the cap yet */ });
+          // Deliberately last: the pebble comes up first, then the dashboard
+          // lands behind it. Note this ties the intro to the 'pebble'
+          // capability — unreachable today (both 'pebble' and 'windows' are
+          // defaults, and LoadConfig re-adds any default a config file drops),
+          // but if pebble ever becomes disableable, hoist this call out of the
+          // pebble gate or a windows-only sidecar will see nothing at all.
+          await openFirstRunDashboard(sidecar);
         } catch (err) {
           spawnedOn.delete(sidecar.id);
           console.warn(`[ambient-ui] Failed to spawn native pebble on ${sidecar.id}:`, err);
@@ -1561,7 +1632,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           console.log(`[ambient-ui] pebble.summon (dismiss) on ${sidecarId}`);
           return;
         }
-        pendingSummons.set(sidecarId, { cancelled: false });
+        const payload = (event.payload as { session_id?: string; muted?: boolean } | undefined) ?? {};
+        if (payload.muted === true) {
+          // The sidecar sends the press even when the mic is muted, because
+          // this hotkey doubles as the dismiss gesture (handled above). With
+          // nothing to dismiss there's no cycle to open: claiming a summon slot
+          // here would strand the pebble in `listening` waiting on audio the
+          // sidecar has already refused to capture. No text argument — the
+          // sidecar's bubble already says why.
+          setState(sidecarId, 'muted');
+          console.log(`[ambient-ui] pebble.summon on ${sidecarId} — ignored, microphone muted`);
+          return;
+        }
+        pendingSummons.set(sidecarId, { cancelled: false, sessionId: payload.session_id });
         setState(sidecarId, 'listening', '');
         console.log(`[ambient-ui] pebble.summon on ${sidecarId} — listening for audio…`);
       });
@@ -3518,7 +3601,24 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // instant a session is actually consumed, so it never cuts a response).
           await setState(sidecarId, 'listening', '');
           try {
-            await sidecarManager.dispatchRPC(sidecarId, 'pebble.start_listening', {});
+            const res = (await sidecarManager.dispatchRPC(sidecarId, 'pebble.start_listening', {})) as
+              | { started?: boolean; reason?: string }
+              | undefined;
+            if (res?.started === false) {
+              // The sidecar refused to open the mic — the user muted it between
+              // the wake segment being captured and this call landing. Give the
+              // slot back now instead of holding `listening` until the fallback
+              // timer fires, and leave the pebble showing why.
+              console.log(`[ambient-ui] wake → start_listening refused (${res.reason ?? 'unknown'})`);
+              ctrl.cancelled = true;
+              clearSummon(sidecarId, ctrl);
+              // No text argument for the muted case: the sidecar has already
+              // put the reason in the bubble, and passing text here would
+              // overwrite it with the default per-state copy.
+              if (res.reason === 'muted') await setState(sidecarId, 'muted');
+              else await setState(sidecarId, 'idle', '');
+              return;
+            }
             console.log(`[ambient-ui] wake → listening (capture started)`);
             clearListenTimer(sidecarId);
             pendingListenTimers.set(sidecarId, setTimeout(() => {
@@ -3551,6 +3651,32 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         } finally {
           wakeInFlight.delete(sidecarId);
         }
+      });
+
+      // The sidecar turned a mic request away because the user has the mic muted
+      // from the tray. Mute is sidecar-owned local state, so mostly this is
+      // informational — the two paths that could open a cycle already handle
+      // their own refusal (`pebble.summon` carries a `muted` flag, and
+      // `pebble.start_listening` answers `started: false`).
+      //
+      // What's left is the narrow race: mute landing AFTER a press was reported
+      // unmuted, or mid-capture, which leaves a summon slot with no audio ever
+      // coming. Unwind it — but only when the session id matches the slot's, so
+      // an unrelated in-flight turn can't be interrupted by a stray event (the
+      // hazard the stray-region.captured comment below spells out).
+      sidecarManager.onEvent((sidecarId, event) => {
+        if (event.event_type !== 'pebble.mic_blocked') return;
+        const payload = (event.payload as { reason?: string; source?: string; session_id?: string } | undefined) ?? {};
+        console.log(
+          `[ambient-ui] mic blocked on ${sidecarId} ` +
+          `(source=${payload.source ?? '?'}, reason=${payload.reason ?? '?'})`,
+        );
+        const ctrl = pendingSummons.get(sidecarId);
+        if (!ctrl || !payload.session_id || ctrl.sessionId !== payload.session_id) return;
+        ctrl.cancelled = true;
+        clearListenTimer(sidecarId);
+        clearSummon(sidecarId, ctrl);
+        void setState(sidecarId, 'muted'); // no text — the sidecar's bubble already says why
       });
 
       // T19 — region.captured / region.cancelled. The user said "help
@@ -4159,6 +4285,47 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     systemCron = new SystemCronService(sharedEventBus, jarvisConfig.cron);
     systemCron.start();
 
+    // Hosted usage warnings: three-quarters used, and used up, for each of the
+    // two windows the proxy enforces. Registered even on a self-hosted install
+    // — the reader answers null there, so the pass is a no-op and costs one
+    // config read every 15 minutes, which is cheaper than deciding whether to
+    // register it from a config that can change under SIGHUP.
+    const { UsageAlertsService } = await import('./usage-alerts-service.ts');
+    usageAlerts = new UsageAlertsService({
+      getConfig: () => jarvisConfig,
+      notify: notifyAll,
+      canNotify: () => sidecarManager.getConnectedSidecars().length > 0,
+    });
+    usageAlerts.start();
+    // A pass with no sidecar connected leaves its flags unset on purpose, so
+    // the warning survives — but it would then wait up to fifteen minutes for
+    // the next tick. Re-check as soon as a machine appears, which is exactly
+    // when someone is there to read it. The 60s reader cache makes a reconnect
+    // storm cost one upstream request, and the flags make a duplicate pass a
+    // no-op.
+    sidecarManager.onSidecarConnected(() => {
+      void usageAlerts?.check().catch(() => {});
+    });
+
+    // Prime the realtime plan verdict before anyone speaks. Realtime is now on
+    // by default for hosted tenants, so the gate decides for every hosted
+    // install — and with a cold cache GET /api/config/voice reports
+    // "available", which puts the browser into raw-PCM capture. On a plan
+    // WITHOUT realtime that first utterance is refused and its frames dropped,
+    // so the user speaks and nothing happens. One catalog request at boot
+    // removes it, and it is issued here — well before registry.startAll()
+    // binds any listener — so the dashboard's first poll already has a verdict.
+    const warmRealtime = () => warmRealtimeGateFor(() => {
+      const rtCfg = agentService.getConfig();
+      return resolveRealtimeVoice(rtCfg, realtimeEnablement(rtCfg));
+    });
+    warmRealtime();
+    // And again after every SIGHUP reload, which clears the verdict cache. A
+    // reload arriving BEFORE this line is registered simply has no warm; the
+    // miss-triggered fetch in cachedRealtimeVerdict covers that gap, which is
+    // why that fetch exists rather than warming being the only defence.
+    settingsReload.setWarmRealtime(warmRealtime);
+
     // Bootstrap the workflow engine: build/locate the bundle, compile pieces,
     // start the loopback SandboxApi, construct the EngineRuntime, extract the
     // canonical PieceCatalog. /v1/jarvis/* service backends are wired below
@@ -4301,22 +4468,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             kind: "installed" | "uninstalled";
             piece: { npmPackage: string; resolvedVersion: string };
           }) => {
-            // Uninstalling a piece the SHARED catalog also provides reverts
-            // to the shared copy (that's what the next restart would produce
-            // via discoverPieces, and what the Library reports as Included) —
-            // so re-extract at the shared version instead of dropping the
-            // entry and leaving the live catalog disagreeing with the
-            // Library until restart.
-            const sharedVersion =
-              event.kind === "uninstalled"
-                ? sharedPieceVersions(sharedRuntime.piecesDir).get(event.piece.npmPackage)
-                : undefined;
-            if (event.kind === "uninstalled" && sharedVersion === undefined) {
+            // Only ever reached on a SELF-MANAGED install: the Library
+            // mutations that fire this are refused when a host owns the
+            // catalog, and a host owning the catalog is exactly what having a
+            // shared tree means. So an uninstall here has no shared copy to
+            // fall back to — the piece is simply gone.
+            if (event.kind === "uninstalled") {
               workflowPieceCatalog.remove(event.piece.npmPackage);
               return;
             }
-            const extractVersion =
-              event.kind === "uninstalled" ? sharedVersion! : event.piece.resolvedVersion;
             // Unique runId per acquire so any future parallel installs
             // (today serialized by the API's library mutex) don't collide on
             // the engine's runId-keyed state.
@@ -4327,7 +4487,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             try {
               const meta = await handle.extractPieceMetadata({
                 pieceName: event.piece.npmPackage,
-                pieceVersion: extractVersion,
+                pieceVersion: event.piece.resolvedVersion,
               });
               workflowPieceCatalog.upsert(metadataToCatalogEntry(meta));
             } finally {
@@ -4483,13 +4643,26 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // Compact community-library index for the composer's search_library
       // tool: lets it suggest "install piece X first" when the user asks for
       // a service that isn't installed, instead of forcing a wrong fit.
+      //
+      // Withheld on a HOST-MANAGED install, where that suggestion is a
+      // dead end. The host installed the whole catalog, so every piece the
+      // engine could actually run is already in the registry list_pieces
+      // reads; the only ids this index could still flag "not installed" are
+      // ones whose metadata extraction failed on the host — which the tenant
+      // can neither install (the API answers 403) nor repair. Passing no
+      // library also strips search_library from the composer's tool loop and
+      // the suggest-install wording from both prompts, so the agent stops
+      // telling hosted users to visit a Library page that has no button.
       const { CATALOG: piecesLibraryCatalog } = await import('../workflows/pieces-library/catalog.ts');
-      const composerLibrary = piecesLibraryCatalog.map((e) => ({
-        id: e.id,
-        npmPackage: e.npmPackage,
-        displayName: e.displayName,
-        description: e.description,
-      }));
+      const { piecesManagedByHost } = await import('../workflows/pieces-library/shared.ts');
+      const composerLibrary = piecesManagedByHost(sharedRuntime.piecesDir)
+        ? []
+        : piecesLibraryCatalog.map((e) => ({
+            id: e.id,
+            npmPackage: e.npmPackage,
+            displayName: e.displayName,
+            description: e.description,
+          }));
       const composerToolRegistry = toolRegistry
         ? {
             listNames: (cat?: string) => toolRegistry.list(cat).map((t) => t.name),

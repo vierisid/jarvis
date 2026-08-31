@@ -5,6 +5,7 @@ import type { ConnectionState } from "./Header";
 import { useTheme } from "./useTheme";
 import { JapaneseDateTime } from "../core/JapaneseDateTime";
 import type { JarvisCoreState } from "../core/coreState";
+import { altKey, modKey } from "../ui/platform";
 
 /**
  * Top bar — 44px, never two rows. Left: room name + contextual actions
@@ -92,7 +93,7 @@ export function TopBar({
           {theme === "dark" ? "● dark" : "○ light"}
         </button>
 
-        <button className="rs-chip" onClick={onOpenPalette} aria-label="クイックオープン">⌘K</button>
+        <button className="rs-chip" onClick={onOpenPalette} aria-label="クイックオープン">{modKey("K")}</button>
 
         {onToggleNotifications && (
           <button
@@ -101,7 +102,7 @@ export function TopBar({
             aria-label={`Notifications${count > 0 ? `, ${count} unread` : ""}`}
             aria-expanded={notificationsOpen}
           >
-            <span className="bb">⌥N</span>
+            <span className="bb">{altKey("N")}</span>
             {count > 0 && <span className="bn">{count > 9 ? "9+" : count}</span>}
           </button>
         )}

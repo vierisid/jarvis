@@ -247,6 +247,15 @@ export interface VoiceConfig {
     blocked_categories: string[];
     /** true when enabled AND the OpenAI provider key resolves. */
     available: boolean;
+    /** On because the hosted PLAN may include it, not because anyone asked.
+     *  Such a session runs on the platform proxy, never on a BYO key. */
+    enabled_default?: boolean;
+    /** This install is hosted (a usejarvis_ai block is present). */
+    hosted?: boolean;
+    /** A session would run on the platform proxy under the plan — so there is
+     *  nothing extra to pay. Distinct from `hosted`: the billing copy must
+     *  describe who would actually serve the session, not the install type. */
+    served_by_plan?: boolean;
   };
 }
 

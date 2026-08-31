@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from "react";
+import { CTRL_LABEL } from "../v2/ui/platform";
 
 export type PebbleState =
   | "idle"
@@ -223,7 +224,9 @@ export function Pebble() {
             </button>
           </div>
           <div className="thread-hint">
-            <kbd>⌃</kbd>+click anywhere to summon · <kbd>esc</kbd> to dismiss
+            {/* ⌃ is a Mac keycap marking; a PC keyboard just says Ctrl. The
+                binding takes either modifier (see the mousedown handler). */}
+            <kbd>{CTRL_LABEL}</kbd>+click anywhere to summon · <kbd>esc</kbd> to dismiss
           </div>
         </div>
       )}

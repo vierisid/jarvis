@@ -116,7 +116,6 @@ select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
 .obw-choice.on .rad { border-color: var(--ink); }
 .obw-choice.on .rad::after { content: ""; position: absolute; inset: 3px; border-radius: 50%; background: var(--ink); }
 .obw-subctl { margin: 9px 0 2px; padding-left: 46px; display: flex; align-items: center; gap: 10px; }
-.obw-pill { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--ink3); background: var(--panel); border: 1px solid var(--rule); border-radius: 5px; padding: 2px 6px; }
 
 /* provider grid (LLM) */
 .obw-provgrid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; margin-top: 4px; }
@@ -149,6 +148,10 @@ select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
 .obw-rows { display: flex; flex-direction: column; gap: 8px; margin-top: 4px; }
 .obw-prow { display: flex; align-items: center; gap: 13px; padding: 13px 14px; border: 1px solid var(--rule); border-radius: 11px 2px 11px 11px; background: var(--raise); }
 .obw-prow .pg { width: 36px; height: 36px; flex-shrink: 0; border-radius: 9px 2px 9px 9px; background: var(--panel); display: grid; place-items: center; color: var(--ink2); }
+/* Every row glyph reads the same size. The set is not uniform at source —
+   `check` is drawn at 15px and the rest at 18px — which only showed once two
+   rows sat side by side using different ones. */
+.obw-prow .pg svg { width: 18px; height: 18px; }
 .obw-prow .pt { flex: 1; min-width: 0; }
 .obw-prow .pt .pn { font-size: 13px; font-weight: 600; color: var(--ink); }
 .obw-prow .pt .pn .req { font-family: var(--mono); font-size: 8px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--listen); margin-left: 7px; }
@@ -203,29 +206,56 @@ select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
     radial-gradient(65% 60% at 50% 42%, color-mix(in srgb, var(--ink) 5%, transparent), transparent),
     var(--panel2);
 }
-/* The mini-app is a contained *preview*, not the whole window — a fixed
-   frame centred in the stage so the spotlights land on their targets and
-   it never balloons into a broken-looking empty dashboard. */
+/* The mini-app previews the dashboard the user is about to meet, so it fills
+   the stage rather than sitting in the middle of it. It used to be pinned at
+   880x520 and centred, which on any ordinary window left it a small rectangle
+   adrift in empty space — it read as a screenshot of something else, not as
+   "this is your dashboard".
+   The old cap was there so the spotlights, which are positioned in pixels,
+   kept landing on their targets. That still holds: the two on the right are
+   anchored to the frame's own edges, and the three that point at the rail now
+   follow --mrail-w rather than a hardcoded 130px, so they track the rail at
+   any width. */
 .obw-tourframe {
   position: relative;
-  width: min(880px, 100%);
-  height: min(520px, 100%);
+  /* Consumed by the rail column AND by the rail spotlights, so the two cannot
+     drift apart. Grows with the frame, within bounds that keep it looking like
+     a sidebar rather than a stripe or a second pane. */
+  --mrail-w: clamp(118px, 15%, 200px);
+  /* Fills an ordinary window, and stops before a very large one. The mock's
+     type and rail rows are fixed-size, so past roughly here it grows without
+     scaling: a 200px rail of 10px type beside a 2000px pane reads as a mostly
+     empty panel — a different wrong answer from the small floating rectangle
+     this replaced, but still a wrong one. */
+  width: min(1400px, 100%);
+  height: min(860px, 100%);
   border: 1px solid var(--rule);
   border-radius: 14px 3px 14px 14px;
   overflow: hidden;
   background: var(--bg);
   box-shadow: 0 30px 70px -34px rgba(0, 0, 0, 0.65);
 }
-.obw-miniapp { position: absolute; inset: 0; display: grid; grid-template-columns: 118px 1fr; }
+.obw-miniapp { position: absolute; inset: 0; display: grid; grid-template-columns: var(--mrail-w) 1fr; }
 .obw-miniapp .mrail { border-right: 1px solid var(--rule); background: var(--bg); padding: 12px 10px; display: flex; flex-direction: column; gap: 5px; }
 .obw-miniapp .mrail .mh { font-family: var(--mono); font-size: 8px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--faint); margin: 7px 0 2px; }
 .obw-miniapp .mrail .mr { font-size: 10.5px; color: var(--ink2); padding: 3px 6px; border-radius: 5px; display: flex; align-items: center; gap: 6px; }
 .obw-miniapp .mrail .mr.on { background: var(--panel); color: var(--ink); font-weight: 600; }
 .obw-miniapp .mrail .mr .bd { margin-left: auto; font-family: var(--mono); font-size: 8px; color: var(--hold); }
-.obw-miniapp .mmain { padding: 14px; position: relative; }
+/* A grid so the cards take the height the top bar does not, instead of a fixed
+   block of them stranded under a tall frame. */
+.obw-miniapp .mmain { padding: 14px; position: relative; display: grid; grid-template-rows: auto 1fr; }
 .obw-miniapp .mtop { height: 30px; border: 1px solid var(--rule); border-radius: 8px; background: var(--bg); display: flex; align-items: center; padding: 0 11px; gap: 8px; font-family: var(--mono); font-size: 9px; color: var(--ink3); }
-.obw-miniapp .mgrid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; margin-top: 11px; }
-.obw-miniapp .mcard { height: 60px; border: 1px solid var(--rule); border-radius: 9px; background: var(--bg); }
+/* auto-fit, so a wide frame lays the four cards out across the space instead of
+   stretching two of them into slabs. */
+/* min() on the floor so a narrow frame SHRINKS the cards instead of overflowing
+   a track it cannot fit — the bare 180px minimum sheared a card against the
+   frame's overflow:hidden once the main pane fell below it.
+   Rows are capped rather than 1fr: letting them stretch made each card a
+   floor-to-ceiling rectangle on a large window, which is bigger without being
+   more convincing, and left `align-content: start` with nothing to do. A
+   dashboard has cards near the top and room beneath them. */
+.obw-miniapp .mgrid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(180px, 100%), 1fr)); grid-auto-rows: minmax(60px, 132px); gap: 9px; margin-top: 11px; align-content: start; }
+.obw-miniapp .mcard { min-height: 60px; border: 1px solid var(--rule); border-radius: 9px; background: var(--bg); }
 .obw-miniapp .mpeb { position: absolute; right: 16px; bottom: 14px; }
 .obw-tourdim { position: absolute; inset: 0; background: rgba(8, 10, 14, 0.52); z-index: 40; }
 :root[data-theme="dark"] .obw-tourdim { background: rgba(0, 0, 0, 0.62); }
@@ -248,7 +278,40 @@ select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
 .obw-themeseg button.on { background: var(--ink); color: var(--bg); }
 .obw-themelab { font-size: 11px; color: var(--ink3); margin-bottom: 7px; }
 
-@media (max-width: 760px) { .obw-provgrid { grid-template-columns: 1fr; } .obw-miniapp { grid-template-columns: 84px 1fr; } }
+/* The narrow rail is set through the VARIABLE, not by overriding the column.
+   Overriding the column moved the rail and left the three spotlights that
+   follow --mrail-w sitting where a 118px rail used to end — 46px adrift, in the
+   main area, pointing at nothing. One knob, both consumers. */
+@media (max-width: 760px) {
+  .obw-provgrid { grid-template-columns: 1fr; }
+  .obw-tourframe { --mrail-w: 84px; }
+}
+/* Short windows: pin the spotlight to the bottom of the frame instead of the
+   place its slide asked for.
+   The frame clips (overflow:hidden, for the mock), and slide 5's card starts
+   150px down and runs ~175px — so once the frame drops under roughly 330px it
+   was cut off, taking "Skip tour" and "Finish" with it and stranding the user
+   on the last slide with no way forward. Pinned to the bottom edge it is always
+   whole and its buttons always reachable; the callout stops pointing at a
+   specific row, which is the right thing to lose when the alternative is a
+   dead end. `!important` because each slide's position is an inline style, and
+   an important declaration in a stylesheet is the one thing that outranks one.
+   The breakpoint is derived, not guessed: the tour step renders no progress bar,
+   so the frame is about `viewport - 98px`, and slide 5's card runs to ~325px —
+   clipping starts near a 425px viewport. Pinning earlier than that only costs
+   the pointing, so there is a little headroom and no more. */
+@media (max-height: 470px) {
+  .obw-spot {
+    top: auto !important;
+    bottom: 12px !important;
+    left: 12px !important;
+    right: 12px !important;
+    /* Bounded, or a wide-short window stretches the callout into a 1300px
+       ribbon of 13px text with its buttons stranded at the far end. */
+    width: auto !important;
+    max-width: 420px !important;
+  }
+}
 @media (prefers-reduced-motion: reduce) {
   .obw-drop .in, .obw-drop .ring, .obw-spot .sh .sd .in, .obw-micbars b, .obw-wave b, .obw-voicepill .ld { animation: none !important; }
   .obw-drop .in { opacity: 1 !important; }

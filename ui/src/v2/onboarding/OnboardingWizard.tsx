@@ -3,6 +3,7 @@ import { useInterviewSession } from "./useInterviewSession";
 import type { OnboardingStatus } from "./useOnboardingStatus";
 import "./OnboardingWizard.css";
 import { modelForOnboardingTest, onboardingDefaultModelRef } from "./llm-setup";
+import { DESKTOP, modKey } from "../ui/platform";
 
 /* ═══════════════════ Onboarding · the nine-screen first-run flow ═══════════
    Faithful to the design (usejarvis-onboarding.html): Welcome · Permissions
@@ -70,9 +71,7 @@ const SVG: Record<string, string> = {
   vol: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M4 8h3l4-3v10l-4-3H4z"/><path d="M14 7a4 4 0 0 1 0 6"/></svg>',
   voloff: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l4-3v10l-4-3H4z"/><path d="M13.5 8l4 4M17.5 8l-4 4"/></svg>',
   calendar: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4.5" width="14" height="12.5" rx="2"/><path d="M3 8.5h14M7 3v3M13 3v3"/></svg>',
-  mail: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><rect x="3" y="5" width="14" height="10" rx="2"/><path d="M3.5 6l6.5 4.5L16.5 6"/></svg>',
   send: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M17 3L8.5 11.5M17 3l-5.5 14-3-6-6-3z"/></svg>',
-  chat: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M4 5h12a1 1 0 0 1 1 1v6.5a1 1 0 0 1-1 1H8l-4 3V6a1 1 0 0 1 1-1z"/></svg>',
   check: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 4.5 6.5 11.5 3 8"/></svg>',
 };
 const Glyph = ({ k }: { k: string }) => <span dangerouslySetInnerHTML={{ __html: SVG[k] ?? "" }} />;
@@ -119,14 +118,19 @@ const ELEVEN_PREMADE = [
   { voice_id: "TxGEqnHWrfWFTfGW9XjX", name: "Josh · deep" },
 ];
 
-const IS_MAC = typeof navigator !== "undefined" && /mac|iphone|ipad/i.test(navigator.userAgent || (navigator as { platform?: string }).platform || "");
-// Deep links to the OS privacy pane per permission. The app can't self-grant
-// (the OS forbids it), but it can open the exact place you grant it.
-const PERM_PANE: Record<string, { mac: string; win: string }> = {
-  access: { mac: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility", win: "ms-settings:easeofaccess" },
-  screen: { mac: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture", win: "ms-settings:privacy-general" },
-  auto: { mac: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation", win: "ms-settings:privacy-general" },
-  files: { mac: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles", win: "ms-settings:privacy-broadfilesystemaccess" },
+
+/**
+ * macOS panes only. The Windows column that used to live here pointed at
+ * `ms-settings:` pages that cannot grant any of this — `easeofaccess` is the
+ * accessibility *features* page, and `privacy-general` has no toggle for
+ * screen capture or automation — so it sent people somewhere that could not
+ * help them. Windows shows a different screen entirely now.
+ */
+const PERM_PANE: Record<string, string> = {
+  access: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
+  screen: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
+  auto: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
+  files: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
 };
 
 // Play MP3 bytes returned by /api/tts/preview in the dashboard itself.
@@ -140,10 +144,13 @@ async function playPreviewAudio(res: Response): Promise<void> {
 
 const TOUR = [
   { sm: "This is the Pebble, your companion. It lives at your cursor. Click it any time to talk to me.", t: "→ Click the Pebble to try", pos: { right: 18, bottom: 50 } },
-  { sm: "Press ⌘J to summon Talk, the conversation panel. Everything we say lives there, across sessions.", t: "→ Press ⌘J", pos: { right: 18, top: 60 } },
-  { sm: "The Index, on the left, is every room. Names spelled out, badges flag what needs you. Recognition over recall.", t: "", pos: { left: 130, top: 58 } },
-  { sm: "Now is your monitoring surface: what I’m doing and what’s waiting on you, at a glance.", t: "", pos: { left: 130, top: 104 } },
-  { sm: "Authority is your control panel, with a kill-switch. Nothing with real-world impact happens without your yes.", t: "", pos: { left: 130, top: 150 } },
+  // The shortcut takes either modifier (AppShell: metaKey || ctrlKey), so this
+  // is the LABEL being wrong, not the binding — which is why a hardcoded ⌘
+  // survived: it kept working for any Windows user who guessed Ctrl.
+  { sm: `Press ${modKey("J")} to summon Talk, the conversation panel. Everything we say lives there, across sessions.`, t: `→ Press ${modKey("J")}`, pos: { right: 18, top: 60 } },
+  { sm: "The Index, on the left, is every room. Names spelled out, badges flag what needs you. Recognition over recall.", t: "", pos: { left: "calc(var(--mrail-w) + 12px)", top: 58 } },
+  { sm: "Now is your monitoring surface: what I’m doing and what’s waiting on you, at a glance.", t: "", pos: { left: "calc(var(--mrail-w) + 12px)", top: 104 } },
+  { sm: "Authority is your control panel, with a kill-switch. Nothing with real-world impact happens without your yes.", t: "", pos: { left: "calc(var(--mrail-w) + 12px)", top: 150 } },
 ];
 
 type TestState = { status: "idle" | "testing" | "ok" | "err"; msg?: string; validatedModel?: string };
@@ -631,7 +638,7 @@ export function OnboardingWizard({
             if (d.is_authenticated || d.status === "connected") {
               stopGooglePoll();
               setGoogleState("connected");
-              setConnected((c) => new Set(c).add("google").add("gmail"));
+              setConnected((c) => new Set(c).add("google"));
             }
           } catch { /* ignore */ }
         }, 2000);
@@ -671,7 +678,7 @@ export function OnboardingWizard({
         if (d.is_authenticated || d.status === "connected") {
           stopGooglePoll();
           setGoogleState("connected");
-          setConnected((c) => new Set(c).add("google").add("gmail"));
+          setConnected((c) => new Set(c).add("google"));
         }
       } catch { /* ignore */ }
       if (tries > 150) { stopGooglePoll(); setGoogleState((g) => (g === "pending" ? "idle" : g)); } // ~5 min cap
@@ -820,7 +827,8 @@ export function OnboardingWizard({
       );
 
       case "perms": {
-        const rows: Array<[string, string, string, boolean]> = [
+        // macOS only — four strings that no other platform renders.
+        const macRows: Array<[string, string, string, boolean]> = [
           ["access", "Accessibility", "Click, type, and read on-screen controls so Jarvis can operate your apps.", true],
           ["screen", "Screen Recording", "See your screen for Awareness: OCR, and noticing when you’re stuck.", false],
           ["auto", "Automation", "Drive other apps directly: your calendar, browser, and mail.", false],
@@ -828,19 +836,66 @@ export function OnboardingWizard({
         ];
         return (
           <div className="obw-body"><div className="obw-wrap wide">
-            <h2>Let Jarvis reach your machine.</h2>
-            <div className="obw-sub">It acts on your computer through these. Jarvis can’t grant them itself (the OS won’t let it), so each one opens the exact settings pane. Grant what you’re comfortable with, or approve later when your {IS_MAC ? "Mac" : "PC"} asks.</div>
-            <div className="obw-rows" style={{ marginTop: 16 }}>
-              {rows.map(([id, name, body, req]) => (
-                <button key={id} type="button" className="obw-prow" style={{ cursor: "pointer", textAlign: "left", width: "100%", background: "var(--raise)" }}
-                  onClick={() => { try { window.open((IS_MAC ? PERM_PANE[id]?.mac : PERM_PANE[id]?.win) || "", "_blank"); } catch { /* webview may block the scheme */ } }}>
-                  <span className="pg"><Glyph k={id} /></span>
-                  <div className="pt"><div className="pn">{name}{req && <span className="req">required</span>}</div><div className="pb">{body}</div></div>
-                  <span className="obw-grant" style={{ pointerEvents: "none" }}>Open settings ↗</span>
-                </button>
-              ))}
-            </div>
-            <div className="obw-hint" style={{ marginTop: 12 }}>Review or revoke any of these anytime in {IS_MAC ? "System Settings → Privacy & Security" : "Windows Settings → Privacy & security"}, or from Settings → Permissions.</div>
+            {/* macOS gates each of these behind a pane the user must visit, and
+                Jarvis cannot grant them itself. Windows does not work that way:
+                the app already has what it needs, and the one thing it might
+                ask for later — the microphone, for the embedded browser window
+                — has no Settings toggle to pre-grant, so sending someone to
+                ms-settings: would be sending them somewhere that cannot help.
+                Same step either way, so the flow and the hosted setup POST
+                below are untouched; only what the screen says changes. */}
+            {DESKTOP === "mac" ? (
+              <>
+                <h2>Let Jarvis reach your machine.</h2>
+                <div className="obw-sub">It acts on your computer through these. Jarvis can’t grant them itself (the OS won’t let it), so each one opens the exact settings pane. Grant what you’re comfortable with, or approve later when your Mac asks.</div>
+                <div className="obw-rows" style={{ marginTop: 16 }}>
+                  {macRows.map(([id, name, body, req]) => (
+                    <button key={id} type="button" className="obw-prow" style={{ cursor: "pointer", textAlign: "left", width: "100%", background: "var(--raise)" }}
+                      onClick={() => { try { window.open(PERM_PANE[id] || "", "_blank"); } catch { /* webview may block the scheme */ } }}>
+                      <span className="pg"><Glyph k={id} /></span>
+                      <div className="pt"><div className="pn">{name}{req && <span className="req">required</span>}</div><div className="pb">{body}</div></div>
+                      <span className="obw-grant" style={{ pointerEvents: "none" }}>Open settings ↗</span>
+                    </button>
+                  ))}
+                </div>
+                <div className="obw-hint" style={{ marginTop: 12 }}>Review or revoke any of these anytime in System Settings → Privacy &amp; Security.</div>
+              </>
+            ) : (
+              <>
+                <h2>Nothing to set up here.</h2>
+                <div className="obw-sub">Jarvis already has the access it needs{DESKTOP === "windows" ? " on Windows" : ""} — none of it is gated behind a permission you have to grant first.</div>
+                <div className="obw-rows" style={{ marginTop: 16 }}>
+                  <div className="obw-prow">
+                    <span className="pg"><Glyph k="check" /></span>
+                    <div className="pt">
+                      <div className="pn">All set</div>
+                      <div className="pb">Nothing to switch on for Jarvis to act on your machine.</div>
+                    </div>
+                  </div>
+                  {DESKTOP === "windows" && (
+                    // The ONE pane that is real here. Windows has no per-app
+                    // permission model for a desktop app, so the microphone is
+                    // governed by a single global toggle — and with it off there
+                    // is no in-the-moment prompt to rescue you, the capture just
+                    // fails. The sidecar's own native wizard deep-links exactly
+                    // this page for exactly this reason.
+                    <button
+                      type="button"
+                      className="obw-prow"
+                      style={{ cursor: "pointer", textAlign: "left", width: "100%", background: "var(--raise)" }}
+                      onClick={() => { try { window.open("ms-settings:privacy-microphone", "_blank"); } catch { /* webview may block the scheme */ } }}
+                    >
+                      <span className="pg"><Glyph k="mic" /></span>
+                      <div className="pt">
+                        <div className="pn">Microphone</div>
+                        <div className="pb">Only needed if you want to talk to Jarvis. Windows keeps one switch for all desktop apps — check it is on if the mic stays silent.</div>
+                      </div>
+                      <span className="obw-grant" style={{ pointerEvents: "none" }}>Open settings ↗</span>
+                    </button>
+                  )}
+                </div>
+              </>
+            )}
             <div className="obw-btnrow">
               <button className="obw-btn obw-btn-ghost" onClick={back}>Back</button>
               <span className="grow" />
@@ -987,34 +1042,39 @@ export function OnboardingWizard({
       }
 
       case "connect": {
-        const rows: Array<[string, string, string, string, boolean]> = [
-          ["google", "calendar", "Google Calendar", "Read your schedule and add holds.", false],
-          ["gmail", "mail", "Gmail", "Triage and draft, with your approval.", false],
-          ["telegram", "send", "Telegram", "Talk to Jarvis from your phone.", false],
-          ["discord", "chat", "Discord", "In the code as a stub today.", true],
-          ["whatsapp", "chat", "WhatsApp", "In the code as a stub today.", true],
+        // ONE Google row, because there is one Google grant. Calendar and Gmail
+        // were listed separately while both buttons ran the same consent and
+        // both were satisfied by it — so connecting either flipped both to
+        // "Connected", which reads like a bug even though it was correct.
+        // Discord and WhatsApp are gone: they were stubs advertised as "Soon".
+        const rows: Array<[string, string, string, string]> = [
+          // READ-ONLY, and the copy says only what the grant allows. The scopes
+          // are gmail.readonly and calendar.readonly, so "add holds" and "draft
+          // mail" — inherited from the two rows this replaces — described things
+          // no token from this consent can do. A first-run screen that promises
+          // more than the consent grants is a promise broken later, quietly.
+          ["google", "calendar", "Google", "Read-only access to your calendar and Gmail, so Jarvis can plan around your day and flag what needs you."],
+          ["telegram", "send", "Telegram", "Talk to Jarvis from your phone."],
         ];
         return (
           <div className="obw-body"><div className="obw-wrap wide">
             <h2>Connect your world.</h2>
             <div className="obw-sub">Hook up the apps Jarvis should know about. All optional, all revocable from Settings.</div>
             <div className="obw-rows" style={{ marginTop: 14 }}>
-              {rows.map(([id, ic, nm, bd, soon]) => {
-                const isGoogle = id === "google" || id === "gmail";
+              {rows.map(([id, ic, nm, bd]) => {
                 const isConnected = connected.has(id);
                 return (
                   <div key={id} className="obw-prow" style={{ flexWrap: "wrap" }}>
                     <span className="pg"><Glyph k={ic} /></span>
                     <div className="pt"><div className="pn">{nm}</div><div className="pb">{bd}</div></div>
-                    {soon ? <span className="obw-pill">Soon</span>
-                      : isConnected ? <span className="obw-granted"><Glyph k="check" />Connected</span>
-                      : isGoogle ? (
+                    {isConnected ? <span className="obw-granted"><Glyph k="check" />Connected</span>
+                      : id === "google" ? (
                         googleState === "pending"
                           ? <button className="obw-grant" onClick={cancelGoogle} title="Stop waiting for the sign-in">Connecting… ✕</button>
                           : <button className="obw-grant" onClick={connectGoogle}>Connect</button>
                       )
                       : id === "telegram" ? <button className="obw-grant" onClick={() => setTgOpen((o) => !o)}>Connect</button>
-                      : <span className="obw-pill">Soon</span>}
+                      : null}
                     {id === "telegram" && tgOpen && !isConnected && (
                       <div style={{ flexBasis: "100%", display: "flex", gap: 8, marginTop: 10 }}>
                         <input className="obw-inp" style={{ flex: 1 }} placeholder="Bot token from @BotFather" value={tgToken} onChange={(e) => setTgToken(e.target.value)} />

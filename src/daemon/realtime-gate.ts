@@ -94,8 +94,87 @@ function fetchVerdict(key: string, resolved: ResolvedRealtimeVoice): Promise<boo
   return p;
 }
 
-/** Allow, but remember it only briefly — see ADVISORY_TTL_MS. */
+/**
+ * Warm from a config, resolving it first. The shape both callers need.
+ *
+ * `resolve` is injected because this module must not import the daemon's
+ * enablement view — usejarvis-ai.ts already imports nothing from here, and the
+ * reverse edge would close a cycle through config/realtime.ts.
+ */
+export function warmRealtimeGateFor(
+  resolve: () => { ok: true; resolved: ResolvedRealtimeVoice } | { ok: false; reason: string },
+): void {
+  try {
+    const res = resolve();
+    if (res.ok) warmRealtimeGate(res.resolved);
+  } catch (err) {
+    console.warn('[RealtimeGate] could not warm the plan verdict:', err);
+  }
+}
+
+/**
+ * Prime the verdict before anyone speaks.
+ *
+ * Realtime is now ON by default for hosted tenants (usejarvis-ai.ts
+ * realtimeEnablement), so the plan gate decides for EVERY hosted install
+ * rather than the few that had opted in. That made the cold-cache path a
+ * user-visible cost rather than a rare one:
+ *
+ * `GET /api/config/voice` reports `available` from the CACHE only, and an
+ * unknown verdict reads as available (the gate's advisory-open stance). The
+ * browser captures raw PCM when `enabled && available` (ui useVoice.ts:431).
+ * So on a plan WITHOUT realtime, the first utterance after every boot is
+ * captured as PCM, refused by the gate, and DROPPED — raw frames are useless
+ * to the WAV pipeline, which is why ws-service deletes the buffer rather than
+ * feeding Whisper headerless audio. The user says something and nothing
+ * happens; only the second utterance works.
+ *
+ * What warming actually guarantees, stated precisely because the next reader
+ * will rely on it: the request is ISSUED before the daemon binds its listener,
+ * so when the proxy answers within FETCH_TIMEOUT_MS the first
+ * `GET /api/config/voice` already has a definitive verdict and the browser
+ * never enters PCM mode on a plan that cannot serve it. It is not a guarantee
+ * for a proxy that is slow or still booting — there the entry is advisory and
+ * expires. That gap is covered separately: `cachedRealtimeVerdict` starts a
+ * fetch on a cache miss, so the dashboard poll heals it ~15s later. Warming is
+ * the fast path, not the only one.
+ *
+ * Fire-and-forget by design — it shares fetchVerdict's in-flight dedup, so a
+ * voice_start racing the warm waits on the SAME request rather than issuing a
+ * second, and a failure is simply an advisory entry that expires in 30s.
+ */
+export function warmRealtimeGate(resolved: ResolvedRealtimeVoice): void {
+  if (!resolved.modelsUrl) return; // BYO sessions are never gated
+  const key = cacheKey(resolved);
+  const hit = cache.get(key);
+  if (hit && isFresh(hit) && !hit.advisory) return;
+  void fetchVerdict(key, resolved).catch(() => {});
+}
+
+/**
+ * Allow, but remember it only briefly — see ADVISORY_TTL_MS.
+ *
+ * NEVER over a definitive "excluded". Both the session starter and the
+ * cache-only read kick a background refresh when a definitive exclusion goes
+ * stale; if that refresh fails, overwriting would replace a known exclusion
+ * with advisory-true and read as OPEN for the next 30 seconds — flipping the
+ * browser into raw-PCM capture and costing an utterance. That is precisely the
+ * flap the asymmetric decay at the top of this file exists to prevent, reached
+ * through the back door. A failed refresh teaches us nothing, so the old
+ * answer stands.
+ */
 function advisoryAllow(key: string): boolean {
+  const hit = cache.get(key);
+  // A stale exclusion whose refresh keeps failing IS re-attempted on every
+  // read, and that is deliberate. Two tidier-looking options both break
+  // something: bumping `at` makes the entry fresh for the full CACHE_TTL_MS,
+  // so a plan UPGRADE would go unnoticed for ten minutes; marking it advisory
+  // gets the 30s retry cadence but then decays to "unknown", which reads as
+  // available and flips the browser into PCM capture — the exact flap the
+  // asymmetry at the top of this file exists to prevent. Retrying costs one
+  // 1.5s-timeout request per read against a catalog that is already down, and
+  // it stops the moment the catalog answers.
+  if (hit && !hit.advisory && !hit.verdict) return false;
   cache.set(key, { verdict: true, at: Date.now(), advisory: true });
   return true;
 }
@@ -109,17 +188,45 @@ function advisoryAllow(key: string): boolean {
  * "excluded" still reads as excluded (with a background refresh) for the same
  * reason as in hostedRealtimeIncluded: this flag is what flips the browser
  * into raw-PCM capture, and a TTL flap would cost the user an utterance.
+ *
+ * ## A MISS starts a fetch too
+ *
+ * Answering null forever on an empty cache made the boot warm the only defence
+ * against the cold-cache lost utterance, and there are several ways back to an
+ * empty cache that boot does not cover: `reloadAll` calls
+ * clearRealtimeGateCache on every SIGHUP (settings-reload.ts) — which hosted
+ * ops do routinely, including the key rotation that delivers a plan change —
+ * and a warm issued while the proxy was still coming up leaves only an
+ * advisory entry that expires back to nothing.
+ *
+ * Kicking a background fetch here makes the poll SELF-HEALING for every one of
+ * those, and demotes the boot warm to an optimisation rather than the single
+ * line of defence. It stays cheap: `fetchVerdict` dedups in flight, and a
+ * result of any kind ends the misses, so the ceiling is one request per
+ * cache-empty poll — not one per poll. The honest exception is a stale
+ * definitive exclusion whose refresh keeps failing: that one is re-attempted
+ * per read, for the reason spelled out on advisoryAllow.
  */
 export function cachedRealtimeVerdict(resolved: ResolvedRealtimeVoice): boolean | null {
   if (!resolved.modelsUrl) return true;
   const key = cacheKey(resolved);
   const hit = cache.get(key);
-  if (!hit) return null;
-  if (isFresh(hit)) return hit.verdict;
-  if (!hit.advisory && !hit.verdict) {
-    void fetchVerdict(key, resolved).catch(() => {});
-    return false;
-  }
+  if (hit && isFresh(hit)) return hit.verdict;
+  // Everything below is a miss or a STALE entry, and both start a fetch.
+  //
+  // Stale mattered more than it looked. Entries are never deleted, so an
+  // advisory one does not expire back to absent — it becomes a stale HIT, and
+  // returning null there without fetching was a dead end that swallowed the
+  // self-healing entirely: a re-warm whose fetch failed (the proxy restarting,
+  // which is exactly what correlates with a key-rotation SIGHUP) parked an
+  // advisory entry, and every poll from then on read "available" and never
+  // asked again. On an excluded plan that is the lost utterance, permanently.
+  void fetchVerdict(key, resolved).catch(() => {});
+  // A stale definitive EXCLUDED still answers excluded while that refresh
+  // runs — decaying it back to open would flip the browser into raw-PCM
+  // capture once per TTL and cost an utterance each time (see the header).
+  if (hit && !hit.advisory && !hit.verdict) return false;
+  // Never stall a poll: this read is unknown, the next one ~15s later is not.
   return null;
 }
 
@@ -127,6 +234,19 @@ export function cachedRealtimeVerdict(resolved: ResolvedRealtimeVoice): boolean 
 export function clearRealtimeGateCache(): void {
   cache.clear();
   inFlight.clear();
+}
+
+/**
+ * Test seam: await whatever fetches are in flight.
+ *
+ * Tests of the fire-and-forget paths (warming, the miss-triggered refresh) must
+ * not settle them with a bare `setTimeout(0)` — that works only while the
+ * mocked body happens to resolve within one macrotask flush, and it fails
+ * SILENTLY the other way: an assertion that the cache is still empty passes
+ * just as well against a fetch that has not finished.
+ */
+export function settleRealtimeGateForTest(): Promise<unknown> {
+  return Promise.all([...inFlight.values()]);
 }
 
 /** Test seam: age every cached verdict by `ms` so TTL decay is testable

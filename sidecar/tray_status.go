@@ -77,6 +77,20 @@ func setTrayStatus(s TrayStatus) {
 	trayRefresh()
 }
 
+// micMuted reports whether the user has muted the microphone from the tray.
+//
+// This is THE gate every path that opens the mic must consult — one-shot
+// session capture, realtime voice, and the always-on wake listener. Mute is a
+// gate the user owns indefinitely, not a momentary pause a consumer restores
+// on its way out; representing it in one place is what keeps the menu, the
+// pebble and the device from drifting apart. Cheaper than getTrayStatus()
+// (no Recent copy) and safe to call from any goroutine.
+func micMuted() bool {
+	trayStatusMu.RLock()
+	defer trayStatusMu.RUnlock()
+	return trayStatusCur.Muted
+}
+
 func getTrayStatus() TrayStatus {
 	trayStatusMu.RLock()
 	defer trayStatusMu.RUnlock()
@@ -122,9 +136,13 @@ func trayStatusFromParams(params map[string]any) TrayStatus {
 	if v, ok := params["paused"].(bool); ok {
 		s.Paused = v
 	}
-	if v, ok := params["muted"].(bool); ok {
-		s.Muted = v
-	}
+	// NOTE: `muted` is deliberately NOT read from this payload. The microphone
+	// is sidecar-owned local state (the brain's own tray heartbeat says as
+	// much) and micMuted() is now the authoritative gate on every mic-opening
+	// path — so honoring a `muted` field here would turn a best-effort status
+	// heartbeat into remote mic control, and a brain that echoed muted:false
+	// would silently un-gate a mic the user muted. Mute changes only via the
+	// tray toggle.
 	if v, ok := params["brain_online"].(bool); ok {
 		s.BrainOnline = v
 	}

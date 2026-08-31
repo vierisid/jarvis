@@ -2,6 +2,7 @@ import React from "react";
 import { Bell, Search } from "lucide-react";
 import { Button, Icon, KBD } from "../ui";
 import "./Header.css";
+import { modKey } from "../ui/platform";
 
 export type ConnectionState = "live" | "degraded" | "offline";
 /**
@@ -74,7 +75,7 @@ export function Header({
             <Icon icon={Search} size="sm" />
           </span>
           <span className="v2-header__palette-label">Quick open</span>
-          <KBD>⌘K</KBD>
+          <KBD>{modKey("K")}</KBD>
         </button>
 
         <span className="v2-header__notif-anchor">

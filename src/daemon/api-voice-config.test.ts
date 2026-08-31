@@ -4,10 +4,13 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createApiRoutes, type ApiContext } from './api-routes.ts';
 import { initDatabase, closeDb } from '../vault/schema.ts';
-import { DEFAULT_CONFIG, type JarvisConfig } from '../config/types.ts';
+import { DEFAULT_CONFIG, type JarvisConfig, type VoiceConfig } from '../config/types.ts';
 import { loadUserSection } from './user-settings.ts';
+import { getSetting, setSetting } from '../vault/settings.ts';
+import { persistUserPatch, saveUserSection } from './user-settings.ts';
+import { clearRealtimeGateCache } from './realtime-gate.ts';
 import { getSecret } from '../vault/keychain.ts';
-import { effectiveSttForBinding, effectiveTtsForBinding } from './usejarvis-ai.ts';
+import { effectiveSttForBinding, effectiveTtsForBinding, realtimeEnablement, resetRealtimeVaultWarningForTest } from './usejarvis-ai.ts';
 
 /**
  * Route-level regressions for the voice-config persistence discipline.
@@ -32,9 +35,18 @@ function getHandler(routes: Record<string, unknown>, path: string, method: 'GET'
   return handler;
 }
 
+/**
+ * A hosted install pointed at a host that cannot resolve.
+ *
+ * Deliberately NOT the real `llm.usejarvis.host`: reading the realtime block
+ * misses the plan-gate cache and kicks a background catalog fetch, so a
+ * production hostname here means every unit-test run sends a bearer token at
+ * prod infra — and a 401 back would cache a DEFINITIVE "excluded" in the
+ * module-level gate cache, flaking any later test that asserts availability.
+ */
 function hostedConfig(): JarvisConfig {
   const config = structuredClone(DEFAULT_CONFIG);
-  config.usejarvis_ai = { base_url: 'https://llm.usejarvis.host', api_key: 'sk-uj-abc123' };
+  config.usejarvis_ai = { base_url: 'https://llm.invalid/v1', api_key: 'sk-uj-abc123' };
   return config;
 }
 
@@ -67,6 +79,7 @@ describe('voice config routes: persistence stays silence-preserving', () => {
     process.env.JARVIS_SECRETS_DIR = secretsDir;
     closeDb();
     initDatabase(':memory:');
+    clearRealtimeGateCache();
   });
   afterEach(() => {
     closeDb();
@@ -259,5 +272,266 @@ describe('voice config routes: persistence stays silence-preserving', () => {
     expect(body.provider).toBe('usejarvis');
     expect(body.usejarvis_available).toBe(true);
     expect(JSON.stringify(body)).not.toContain('sk-uj-abc123');
+  });
+});
+
+describe('voice config routes: a save must not silently decline realtime', () => {
+  let secretsDir: string;
+  let prevSecretsDir: string | undefined;
+  let prevEnv: string | undefined;
+
+  beforeEach(() => {
+    prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
+    prevEnv = process.env.JARVIS_REALTIME_VOICE;
+    delete process.env.JARVIS_REALTIME_VOICE;
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-api-rt-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
+    closeDb();
+    initDatabase(':memory:');
+    clearRealtimeGateCache();
+  });
+  afterEach(() => {
+    closeDb();
+    if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
+    if (prevEnv === undefined) delete process.env.JARVIS_REALTIME_VOICE;
+    else process.env.JARVIS_REALTIME_VOICE = prevEnv;
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
+
+  test('changing the WAKE ENGINE does not turn realtime off', async () => {
+    // The regression: the route merged the patch over the in-memory section,
+    // which always carries DEFAULT_CONFIG's `realtime.enabled: false`, and
+    // saved the whole thing. That false then reads as an explicit decline.
+    const config = hostedConfig();
+    expect(realtimeEnablement(config)).toBe('hosted-default');
+
+    const routes = createApiRoutes(makeCtx(config));
+    const res = await post(getHandler(routes, '/api/config/voice', 'POST'), '/api/config/voice', {
+      wake_engine: 'webspeech',
+    });
+    expect(res.status).toBe(200);
+
+    const stored = loadUserSection('voice') as { wake_engine?: string; realtime?: { enabled?: unknown } };
+    expect(stored.wake_engine).toBe('webspeech');
+    // The patch never mentioned realtime, so the row must not claim an answer.
+    expect(stored.realtime?.enabled).toBeUndefined();
+    expect(realtimeEnablement(config)).toBe('hosted-default');
+  });
+
+  test('picking a realtime VOICE does not turn realtime off', async () => {
+    // The cruellest version: the user is configuring realtime at the moment it
+    // switches itself off, because the partial patch merges over a base that
+    // carries the default false.
+    const config = hostedConfig();
+    const routes = createApiRoutes(makeCtx(config));
+    const res = await post(getHandler(routes, '/api/config/voice', 'POST'), '/api/config/voice', {
+      realtime: { voice: 'cedar' },
+    });
+    expect(res.status).toBe(200);
+
+    const stored = loadUserSection('voice') as { realtime?: { voice?: string; enabled?: unknown } };
+    expect(stored.realtime?.voice).toBe('cedar');
+    expect(stored.realtime?.enabled).toBeUndefined();
+    expect(realtimeEnablement(config)).toBe('hosted-default');
+  });
+
+  test('an EXPLICIT off is still recorded and still wins', async () => {
+    // The flip side: the discipline must not make the toggle unusable.
+    const config = hostedConfig();
+    const routes = createApiRoutes(makeCtx(config));
+    const res = await post(getHandler(routes, '/api/config/voice', 'POST'), '/api/config/voice', {
+      realtime: { enabled: false },
+    });
+    expect(res.status).toBe(200);
+    const stored = loadUserSection('voice') as { realtime?: { enabled?: unknown } };
+    expect(stored.realtime?.enabled).toBe(false);
+    expect(realtimeEnablement(config)).toBe('off');
+  });
+});
+
+describe('a corrupt voice row is not an answer', () => {
+  let secretsDir: string;
+  let prevSecretsDir: string | undefined;
+  let prevEnv: string | undefined;
+
+  beforeEach(() => {
+    prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
+    prevEnv = process.env.JARVIS_REALTIME_VOICE;
+    delete process.env.JARVIS_REALTIME_VOICE;
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-rt-corrupt-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
+    closeDb();
+    initDatabase(':memory:');
+    resetRealtimeVaultWarningForTest();
+  });
+  afterEach(() => {
+    closeDb();
+    if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
+    if (prevEnv === undefined) delete process.env.JARVIS_REALTIME_VOICE;
+    else process.env.JARVIS_REALTIME_VOICE = prevEnv;
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
+
+  test('unparseable JSON fails CLOSED rather than reading as "never asked"', () => {
+    // Exercised against the real vault seam, not an injected fake: the default
+    // loader is where the distinction lives. loadUserSection swallows a parse
+    // error and returns undefined — which means "absent", which means "default
+    // it on". A tenant who declined, whose row later corrupts, would have had
+    // realtime switched back on.
+    setSetting('cfg.voice', '{ this is not json');
+    expect(realtimeEnablement(hostedConfig())).toBe('off');
+  });
+
+  test('a well-formed row still answers normally through the same seam', () => {
+    setSetting('cfg.voice', JSON.stringify({ realtime: { enabled: true } }));
+    expect(realtimeEnablement(hostedConfig())).toBe('user-on');
+    setSetting('cfg.voice', JSON.stringify({ wake_engine: 'openwakeword' }));
+    expect(realtimeEnablement(hostedConfig())).toBe('hosted-default');
+  });
+
+  test('the reader reads what the WRITER writes — no hardcoded key', () => {
+    // Written through saveUserSection rather than setSetting so the settings
+    // key is never spelled out on the read side. It once was, in a copy of the
+    // `cfg.` prefix: had that prefix changed, the reader would have missed the
+    // row, read it as "never asked", and switched realtime ON for a tenant who
+    // had explicitly declined — silently, and into billed audio sessions.
+    saveUserSection('voice', { realtime: { enabled: false } } as unknown as VoiceConfig);
+    expect(realtimeEnablement(hostedConfig())).toBe('off');
+
+    saveUserSection('voice', { realtime: { enabled: true } } as unknown as VoiceConfig);
+    expect(realtimeEnablement(hostedConfig())).toBe('user-on');
+
+    saveUserSection('voice', { wake_engine: 'openwakeword' } as unknown as VoiceConfig);
+    expect(realtimeEnablement(hostedConfig())).toBe('hosted-default');
+  });
+});
+
+describe('GET /api/config/voice tells the truth about who pays', () => {
+  let secretsDir: string;
+  let prevSecretsDir: string | undefined;
+  let prevEnv: string | undefined;
+
+  beforeEach(() => {
+    prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
+    prevEnv = process.env.JARVIS_REALTIME_VOICE;
+    delete process.env.JARVIS_REALTIME_VOICE;
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-rt-served-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
+    closeDb();
+    initDatabase(':memory:');
+    clearRealtimeGateCache();
+  });
+  afterEach(() => {
+    closeDb();
+    if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
+    if (prevEnv === undefined) delete process.env.JARVIS_REALTIME_VOICE;
+    else process.env.JARVIS_REALTIME_VOICE = prevEnv;
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
+
+  const read = async (config: JarvisConfig) => {
+    const routes = createApiRoutes(makeCtx(config));
+    const res = await getHandler(routes, '/api/config/voice', 'GET')(
+      new Request('http://x/api/config/voice'),
+    );
+    return (await res.json()) as { realtime: { served_by_plan?: boolean; enabled: boolean } };
+  };
+
+  test('a hosted tenant who DECLINED is still told the plan would serve it', async () => {
+    // The regression: served_by_plan was derived from a resolution computed
+    // under the current enablement, so an off toggle made it false — and the
+    // tab then told them they would be "billed by OpenAI, ~$0.30/min", right
+    // next to the switch they were deciding whether to flip. Who would serve a
+    // session is a property of the install, not of whether one is running.
+    setSetting('cfg.voice', JSON.stringify({ realtime: { enabled: false } }));
+    const body = await read(hostedConfig());
+    expect(body.realtime.enabled).toBe(false);
+    expect(body.realtime.served_by_plan).toBe(true);
+  });
+
+  test('a hosted tenant with realtime on is told the same thing', async () => {
+    const body = await read(hostedConfig());
+    expect(body.realtime.enabled).toBe(true);
+    expect(body.realtime.served_by_plan).toBe(true);
+  });
+
+  test('a hosted tenant with a BYO OpenAI key is NOT told they pay for it', async () => {
+    // The whole point of the precedence inversion: their own key is not read
+    // on a hosted install, so the billing copy must not claim otherwise.
+    const config = hostedConfig();
+    config.llm = { providers: { openai: { api_key: 'sk-their-own' } } } as JarvisConfig['llm'];
+    expect((await read(config)).realtime.served_by_plan).toBe(true);
+  });
+
+  test('a self-hosted install says the opposite, because it IS their key', async () => {
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.llm = { providers: { openai: { api_key: 'sk-their-own' } } } as JarvisConfig['llm'];
+    expect((await read(config)).realtime.served_by_plan).toBe(false);
+  });
+});
+
+describe('replacing an unreadable settings row says so', () => {
+  let secretsDir: string;
+  let prevSecretsDir: string | undefined;
+  let warnings: string[];
+  let realWarn: typeof console.warn;
+
+  beforeEach(() => {
+    prevSecretsDir = process.env.JARVIS_SECRETS_DIR;
+    secretsDir = mkdtempSync(join(tmpdir(), 'jarvis-rt-warn-'));
+    process.env.JARVIS_SECRETS_DIR = secretsDir;
+    closeDb();
+    initDatabase(':memory:');
+    warnings = [];
+    realWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(args.join(' ')); };
+  });
+  afterEach(() => {
+    console.warn = realWarn;
+    closeDb();
+    if (prevSecretsDir === undefined) delete process.env.JARVIS_SECRETS_DIR;
+    else process.env.JARVIS_SECRETS_DIR = prevSecretsDir;
+    rmSync(secretsDir, { recursive: true, force: true });
+  });
+
+  const replaced = () => warnings.filter((w) => w.includes('is being REPLACED'));
+
+  test('warns when the row will not parse', () => {
+    // The read path fails closed on corruption; the write path cannot refuse
+    // without locking someone out of their own settings, so it is loud instead
+    // — an explicit realtime decline is about to be lost.
+    setSetting('cfg.voice', '{ not json');
+    persistUserPatch('voice', { wake_engine: 'webspeech' });
+    expect(replaced()).toHaveLength(1);
+  });
+
+  test('warns when the row parses to the WRONG SHAPE', () => {
+    // The earlier condition keyed on loadUserSection returning undefined, which
+    // this case does not: valid JSON of the wrong type parses fine and was
+    // replaced in silence.
+    setSetting('cfg.voice', '[1,2]');
+    persistUserPatch('voice', { wake_engine: 'webspeech' });
+    expect(replaced()).toHaveLength(1);
+  });
+
+  test('stays QUIET for an absent row and for a canonical null row', () => {
+    // saveUserSection writes 'null' for an absent section, so warning on it
+    // would fire on ordinary saves for anyone who has never set voice options.
+    persistUserPatch('voice', { wake_engine: 'webspeech' });
+    expect(replaced()).toHaveLength(0);
+    setSetting('cfg.voice', 'null');
+    persistUserPatch('voice', { wake_engine: 'openwakeword' });
+    expect(replaced()).toHaveLength(0);
+  });
+
+  test('stays quiet for a healthy row, and preserves it', () => {
+    setSetting('cfg.voice', JSON.stringify({ realtime: { enabled: false } }));
+    persistUserPatch('voice', { wake_engine: 'webspeech' });
+    expect(replaced()).toHaveLength(0);
+    const stored = JSON.parse(getSetting('cfg.voice')!) as { realtime?: { enabled?: boolean } };
+    expect(stored.realtime?.enabled).toBe(false); // the decline survived
   });
 });

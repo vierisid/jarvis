@@ -42,7 +42,12 @@ func (c *SidecarClient) openRoom(id PanelID, route, title string, w, h int) {
 	// never the long-lived enrollment JWT (c.config.Token) — so injecting the
 	// enrollment JWT here returns a 401. Mirrors the brain-driven panel.spawn
 	// path, which mints via this same provider (NewHandlerRegistry(..., c.tokenProvider.Token)).
+	// Snapshot obsCtx under the lock: connectAndServe re-writes it under c.mu on
+	// every reconnect, and openRoom runs on a tray / startup goroutine — an
+	// unlocked read of the interface value races a reconnect that lands mid-open.
+	c.mu.Lock()
 	ctx := c.obsCtx
+	c.mu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
 	}

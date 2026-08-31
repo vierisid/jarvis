@@ -27,7 +27,7 @@
 import { createHash } from 'node:crypto';
 import { getSetting, setSetting } from '../vault/settings.ts';
 import { deepMerge } from '../config/loader.ts';
-import { mergeSTTConfig, mergeTTSConfig } from './config-merge.ts';
+import { mergeSTTConfig, mergeTTSConfig, mergeVoiceConfig } from './config-merge.ts';
 import {
   SECRET_SECTIONS,
   SecretStorageError,
@@ -43,6 +43,7 @@ import {
   WORKFLOW_SYSTEM_KEYS,
   type JarvisConfig,
   type STTConfig,
+  type VoiceConfig,
   type TTSConfig,
   type UserOwnedSection,
 } from '../config/types.ts';
@@ -128,20 +129,43 @@ export function saveUserSection<K extends UserOwnedSection>(
  * absent credential as "delete it". Merging over the bare stripped row would
  * therefore destroy every stored key the patch does not carry (it did, once).
  */
-export function persistUserPatch(section: 'stt' | 'tts', patch: Record<string, unknown>): void {
+export function persistUserPatch(section: 'stt' | 'tts' | 'voice', patch: Record<string, unknown>): void {
   const stored = loadUserSection(section);
   // Cast, don't default: the merge helpers substitute a provider-carrying
   // default for an UNDEFINED base, which would stamp silence into the row.
   // A `{}` base merges cleanly and stays provider-free unless the patch
-  // itself carries a choice. Secrets are injected only when a row exists —
-  // same orphan rule as mergeUserSettingsIntoConfig.
-  const base = (typeof stored === 'object' && stored !== null && !Array.isArray(stored))
-    ? injectSectionSecrets(section, stored)
+  // itself carries a choice.
+  const usable = typeof stored === 'object' && stored !== null && !Array.isArray(stored);
+  // An unusable row is about to be REPLACED, and for `voice` that erases an
+  // explicit realtime decline and reverts the tenant to the hosted default.
+  // The read path fails closed on corruption (loadUserSectionStrict); the write
+  // path cannot, without locking someone out of their own settings — so it is
+  // loud instead. Keyed on "exists but unusable" to catch both damage classes:
+  // JSON that will not parse, and JSON that parses to the wrong shape. A row
+  // legitimately holding `null` is not damage — saveUserSection writes that for
+  // an absent section — so it is excluded rather than warned about every save.
+  if (!usable && getSetting(settingKey(section)) !== null && getSetting(settingKey(section)) !== 'null') {
+    console.warn(`[UserSettings] cfg.${section} is unreadable and is being REPLACED by this save; any stored choice in it is lost`);
+  }
+  // Secrets are injected only when a row exists (same orphan rule as
+  // mergeUserSettingsIntoConfig), and only for the sections that HAVE any:
+  // `voice` carries no credentials and would not even type-check here.
+  const base = usable
+    ? (isSecretSection(section) ? injectSectionSecrets(section, stored) : stored)
     : {};
   if (section === 'stt') {
     saveUserSection('stt', mergeSTTConfig(base as STTConfig, patch));
-  } else {
+  } else if (section === 'tts') {
     saveUserSection('tts', mergeTTSConfig(base as TTSConfig, patch));
+  } else {
+    // `voice` joined this rule when hosted installs started defaulting
+    // realtime ON for a silent user (usejarvis-ai.ts realtimeEnablement).
+    // Merging a patch over the in-memory section stamps DEFAULT_CONFIG's
+    // `realtime.enabled: false` into the row, which then reads as an explicit
+    // decline — so changing the wake engine, or picking a realtime VOICE from
+    // the dropdown, silently switched realtime off while the user was in the
+    // middle of configuring it.
+    saveUserSection('voice', mergeVoiceConfig(base as VoiceConfig, patch));
   }
 }
 
@@ -188,6 +212,33 @@ export function loadUserSection(section: UserOwnedSection): unknown {
     console.warn(`[UserSettings] Corrupt JSON for ${settingKey(section)}; ignoring stored value`);
     return undefined;
   }
+}
+
+/**
+ * Like `loadUserSection`, but THROWS on a row that will not parse.
+ *
+ * The distinction matters wherever "absent" and "damaged" lead to different
+ * answers. `loadUserSection` maps both to `undefined`, which is right for a
+ * merge (there is nothing to merge either way) and wrong for a decision: the
+ * hosted realtime default reads an absent row as "never asked" and switches
+ * realtime ON, so a declining tenant whose row corrupted would have been opted
+ * back into billed audio sessions. Callers that must not make that mistake use
+ * this and fail closed on the throw.
+ *
+ * Lives HERE, beside settingKey, rather than at the call site: a copy of the
+ * `cfg.` prefix in another module reads the wrong key the day the prefix
+ * changes — silently, and in the direction that turns a feature on.
+ */
+export function loadUserSectionStrict(section: UserOwnedSection): unknown {
+  const raw = getSetting(settingKey(section));
+  if (raw === null) return undefined;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(raw);
+  } catch {
+    throw new Error(`corrupt JSON in ${settingKey(section)}`);
+  }
+  return parsed === null ? undefined : parsed;
 }
 
 /** Meta row remembering the file value each section was last imported from. */

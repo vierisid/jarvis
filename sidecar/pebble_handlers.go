@@ -52,6 +52,9 @@ func makePebbleSetStateHandler(svc PebbleService) RPCHandler {
 		// body line — avoids one frame of stale "speaking…" placeholder.
 		if rawText, hasText := params["text"]; hasText {
 			text, _ := rawText.(string)
+			// The brain owns the bubble from here: cancel any pending muted
+			// nudge so its expiry doesn't blank this text a second later.
+			invalidateMutedNudge()
 			if err := svc.SetText(text); err != nil {
 				return nil, err
 			}

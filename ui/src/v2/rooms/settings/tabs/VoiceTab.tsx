@@ -1,4 +1,11 @@
 import React from "react";
+import {
+  realtimeBillingCopy,
+  realtimeChip,
+  realtimeUnavailableReason,
+  showsPlanDefaultHint,
+  type RealtimeCopyInput,
+} from "./voice-realtime-copy";
 import type { RealtimeReasoningEffort, SettingsHook } from "../useSettingsData";
 import { Chip } from "../../../ui";
 
@@ -23,11 +30,18 @@ export function VoiceTab({
   const voice = data.voiceCfg;
   const rt = voice?.realtime;
 
-  const statusChip = !rt?.enabled
-    ? { label: "Off", tone: undefined }
-    : rt.available
-      ? { label: "Active", tone: "ok" as const }
-      : { label: "No OpenAI key", tone: "warn" as const };
+  // Every "who pays" decision below comes from voice-realtime-copy.ts, where it
+  // is testable — this suite has no DOM, and each of these was a JSX ternary
+  // that a review round caught asserting the wrong billing model.
+  const copy: RealtimeCopyInput | null = rt
+    ? {
+        enabled: Boolean(rt.enabled),
+        available: Boolean(rt.available),
+        servedByPlan: Boolean(rt.served_by_plan),
+        enabledDefault: Boolean(rt.enabled_default),
+      }
+    : null;
+  const statusChip = realtimeChip(copy);
 
   return (
     <div className="v2-set__tabpane">
@@ -36,10 +50,21 @@ export function VoiceTab({
           <div>
             <h3 className="v2-set__section-title">Premium Realtime Voice</h3>
             <div className="v2-set__section-sub">
-              Speech-to-speech via OpenAI&apos;s gpt-realtime-2 - lower latency, natural
-              turn-taking, reasons mid-conversation. Reuses the OpenAI provider key from
-              Settings &gt; LLM (you are billed by OpenAI, ~$0.30/min). Off by default;
-              the standard voice pipeline is unaffected.
+              Speech-to-speech - lower latency, natural turn-taking, reasons
+              mid-conversation.{" "}
+              {realtimeBillingCopy(copy) === "plan" ? (
+                <>
+                  Runs on your Usejarvis plan - no separate key to add, and never billed
+                  to an OpenAI account of your own. Whether it is included depends on
+                  your plan.
+                </>
+              ) : (
+                <>
+                  Reuses the OpenAI provider key from Settings &gt; LLM (you are billed by
+                  OpenAI, ~$0.30/min). Off by default.
+                </>
+              )}{" "}
+              The standard voice pipeline is unaffected.
             </div>
           </div>
           <Chip tone={statusChip.tone}>{statusChip.label}</Chip>
@@ -64,8 +89,19 @@ export function VoiceTab({
           <>
             {!rt.available && (
               <p className="v2-set__hint" data-tone="warn">
-                Enabled, but no OpenAI provider is configured. Add one under Settings &gt; LLM.
-                Until then JARVIS uses the standard voice pipeline.
+                {realtimeUnavailableReason(copy!) === "plan"
+                  ? "Live voice is not included in your current plan. JARVIS uses the standard voice pipeline instead."
+                  : "Enabled, but no OpenAI provider is configured. Add one under Settings > LLM. Until then JARVIS uses the standard voice pipeline."}
+              </p>
+            )}
+            {showsPlanDefaultHint(copy!) && (
+              <p className="v2-set__hint">
+                {/* "may include" rather than "includes": available is true for an
+                    UNKNOWN plan verdict too (the gate defaults open until the
+                    catalog answers), so claiming inclusion here can be wrong for
+                    the first few seconds after a restart. */}
+                On because your plan may include it. Switch it off here and JARVIS goes
+                back to the standard voice pipeline.
               </p>
             )}
 
@@ -138,9 +174,11 @@ export function VoiceTab({
             </div>
 
             <p className="v2-set__hint" data-tone="warn">
-              Continuous audio is streamed to OpenAI while a realtime session is live. Tool calls
-              are auto-approved during realtime sessions (hard denies still apply). Monitor usage
-              at platform.openai.com.
+              Continuous audio is streamed while a realtime session is live. Tool calls are
+              auto-approved during realtime sessions (hard denies still apply).{" "}
+              {realtimeBillingCopy(copy) === "plan"
+                ? "Sessions count against your plan's usage - the Usage room shows how much of the window is left."
+                : "Audio goes to OpenAI on your own key; monitor usage at platform.openai.com."}
             </p>
           </>
         )}

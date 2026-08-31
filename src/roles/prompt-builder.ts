@@ -14,6 +14,17 @@ export type PromptContext = {
   authorityRules?: string;
   activeGoals?: string;
   hasSidecars?: boolean;
+  /**
+   * A host owns the pieces catalog (see `piecesManagedByHost`). Drops the
+   * "have the user install it from the Library page" advice from the tool
+   * guide, which is a dead end on such an install.
+   *
+   * Defaults to false, i.e. the self-managed guide. That is the safe
+   * direction for a MISSING value: the worst case is advice that does not
+   * apply, whereas defaulting the other way would withhold a real, working
+   * remedy from a self-hosted user.
+   */
+  piecesManaged?: boolean;
   effectiveAuthorityLevel?: number;
 };
 
@@ -178,12 +189,17 @@ export function buildSystemPromptParts(role: RoleDefinition, context?: PromptCon
   sections.push('');
 
   // Tool Guide (static reference, sidecar section conditional)
-  sections.push(buildToolGuide(context?.hasSidecars ?? false));
+  sections.push(
+    buildToolGuide({
+      hasSidecars: context?.hasSidecars ?? false,
+      piecesManaged: context?.piecesManaged ?? false,
+    }),
+  );
   sections.push('');
 
   // ── Static/dynamic boundary ─────────────────────────────────────────────
   // Everything above depends only on the role (+ process-stable context like
-  // authorityRules / effectiveAuthorityLevel / hasSidecars). Everything below
+  // authorityRules / effectiveAuthorityLevel / hasSidecars / piecesManaged). Everything below
   // changes per turn and must not sit inside the cacheable prefix.
   const staticPrompt = sections.join('\n');
   const dynamicSections: string[] = [];

@@ -217,9 +217,28 @@ describe('resolveRealtimeVoice', () => {
     }
   });
 
-  test("a user's own OpenAI key still wins over the hosted path", () => {
+  test('on a HOSTED install the plan serves realtime, not the user\'s own key', () => {
+    // This precedence was deliberately inverted. It used to be "the user's own
+    // key wins", which was safe only while realtime needed an opt-in almost
+    // nobody had. Now that hosted tenants get it by default, that rule billed
+    // a personal OpenAI account at ~$0.30/min — ungated, since a BYO session
+    // carries no modelsUrl and the plan gate skips it, and unbudgeted — for
+    // someone who had merely toggled the feature on.
     const config = withOpenAIProvider(makeConfig(), 'sk-user-own');
     config.usejarvis_ai = { base_url: 'https://llm.usejarvis.host', api_key: 'sk-uj-abc' };
+    config.voice!.realtime = { enabled: true };
+    const res = resolveRealtimeVoice(config);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.resolved.provider).toBe('usejarvis_ai');
+      expect(res.resolved.apiKey).not.toBe('sk-user-own');
+      expect(res.resolved.modelsUrl).toBeTruthy(); // so the plan gate applies
+    }
+  });
+
+  test("a SELF-HOSTED install still uses the user's own OpenAI key", () => {
+    // Nothing else can serve it there, and it is their explicit choice.
+    const config = withOpenAIProvider(makeConfig(), 'sk-user-own');
     config.voice!.realtime = { enabled: true };
     const res = resolveRealtimeVoice(config);
     expect(res.ok).toBe(true);

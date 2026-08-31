@@ -1,10 +1,12 @@
 import React, { useMemo } from "react";
 import { BarChart3, Calendar, RefreshCw, type LucideIcon } from "lucide-react";
 import { Icon } from "../../ui";
-import { Select, FilterChip, Check, Table, Row, Cell, HCell } from "../../ui/roomkit";
+import { Select, FilterChip, Check, Table, Row, Cell, HCell, Meter } from "../../ui/roomkit";
 import { RoomShell } from "../RoomShell";
 import { MultiSelectDropdown } from "./MultiSelectDropdown";
 import { useUsageData, type UsageGroupBy, type UsagePeriod, type UsageRawRow } from "./useUsageData";
+import { useHostedBudget } from "./useHostedBudget";
+import { bannerFor, formatResetIn, meterTone } from "./hosted-budget";
 import "./UsageRoom.css";
 
 const PERIOD_LABELS: Record<UsagePeriod, string> = {
@@ -36,6 +38,7 @@ export function UsageRoomBody({ mode = "expanded" }: { mode?: RoomBodyMode } = {
   return (
     <div className="rk-usage">
       <FilterBar data={data} />
+      <HostedBudgetStrip />
       <TotalsStrip totals={total} />
       <div className="rk-usage__main">
         {data.error && <div className="rk-usage__empty">{data.error}</div>}
@@ -101,6 +104,49 @@ function FilterBar({ data }: { data: ReturnType<typeof useUsageData> }) {
         <MultiSelectDropdown label="Provider" options={options?.providers ?? []} selected={filters.providers} onToggle={(v) => toggleListFilter("providers", v)} onClear={() => setFilter("providers", [])} />
         <Check on={filters.errorsOnly} onClick={() => setFilter("errorsOnly", !filters.errorsOnly)}>errors only</Check>
         {anyFilter && <FilterChip onClick={clearFilters}>✕ clear filters</FilterChip>}
+      </div>
+    </div>
+  );
+}
+
+// ─── Hosted budget strip ──────────────────────────────────────────────────
+/**
+ * The two enforced windows, on a hosted install only.
+ *
+ * Separate from TotalsStrip below on purpose: that one counts what THIS
+ * instance recorded locally, while these are the control plane's own numbers
+ * for the budgets the proxy actually enforces. They will not tie out — local
+ * telemetry misses nothing but prices nothing either — and presenting them as
+ * one strip would invite exactly that comparison.
+ */
+function HostedBudgetStrip() {
+  const { state, meter, readAt } = useHostedBudget();
+  // Re-rendered on every completed read — including a failed one, which is the
+  // case that matters: a control-plane outage keeps the last good meter on
+  // screen, and without a re-render its countdowns would freeze with it.
+  void readAt;
+  const now = Date.now();
+  // Renders NOTHING while unknown and on a self-hosted install. An entitled
+  // flag that is false means a hosted user with no active plan; there is no
+  // window to meter, and a pair of empty bars would read as "all used up".
+  if (state !== "hosted" || !meter || !meter.entitled) return null;
+  const banner = bannerFor(meter);
+  return (
+    <div className="rk-usage__budget">
+      {banner && <div className={`rk-usage__banner rk-usage__banner--${banner.tone}`}>{banner.text}</div>}
+      <div className="rk-usage__meters">
+        <Meter
+          label="6-hour window"
+          value={meter.sessionPct}
+          tone={meterTone(meter.sessionPct)}
+          note={formatResetIn(meter.sessionResetsAt, now)}
+        />
+        <Meter
+          label="this week"
+          value={meter.weekPct}
+          tone={meterTone(meter.weekPct)}
+          note={formatResetIn(meter.weekResetsAt, now)}
+        />
       </div>
     </div>
   );

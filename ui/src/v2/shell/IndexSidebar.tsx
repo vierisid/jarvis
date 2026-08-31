@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { closeRoom, openRoom, useV2Route, type RoomKey } from "../router";
 import { useLiveData } from "./LiveDataContext";
+import { modKey } from "../ui/platform";
 
 /**
  * The Index — Brand Book III room-centric sidebar. Three states:
@@ -18,7 +19,7 @@ type Row =
   | { kind: "now"; label: string; kbd: string };
 
 const ROWS: Row[] = [
-  { kind: "now", label: "現在", kbd: "⌘1" },
+  { kind: "now", label: "現在", kbd: modKey("1") },
   { kind: "heading", label: "実行" },
   { kind: "room", key: "workflows", label: "ワークフロー", kbd: "⌘2" },
   { kind: "room", key: "agents", label: "エージェント", kbd: "⌘3" },
@@ -35,7 +36,7 @@ const ROWS: Row[] = [
   { kind: "heading", label: "構築" },
   { kind: "room", key: "workspaces", label: "ワークスペース" },
   { kind: "room", key: "tools", label: "ツール" },
-  { kind: "room", key: "settings", label: "設定", kbd: "⌘9", spaced: true },
+  { kind: "room", key: "settings", label: "設定", kbd: modKey("9"), spaced: true },
 ];
 
 /** Cluster → its rooms, for collapsed tiles + hover-peek. */
