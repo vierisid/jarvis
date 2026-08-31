@@ -37,6 +37,7 @@ func main() {
 	showVersion := flag.Bool("version", false, "Print the sidecar version and exit")
 	testMode := flag.Bool("test", false, "Run built-in platform tests (requires build with -tags sidecartest)")
 	setupMode := flag.Bool("setup", false, "Run first-launch onboarding (permissions, autostart), then start")
+	clapCalibration := flag.Duration("calibrate-clap", 0, "Measure local microphone RMS for clap calibration, then exit (for example 10s)")
 	flag.Parse()
 
 	if *showVersion {
@@ -52,6 +53,8 @@ Usage:
   jarvis                  Start using saved token
   jarvis --setup          Run first-launch onboarding (permissions, autostart), then start
   jarvis --test <cmd>     Run a built-in platform test (test build only)
+  jarvis --calibrate-clap=10s
+                          Measure local clap RMS metrics, then exit (no audio saved or sent)
   jarvis --version        Print the sidecar version and exit
   jarvis --help           Show this help`)
 		os.Exit(0)
@@ -59,6 +62,14 @@ Usage:
 
 	if *testMode {
 		os.Exit(runTests(flag.Args()))
+	}
+
+	if *clapCalibration > 0 {
+		if err := runClapCalibration(*clapCalibration, os.Stdout); err != nil {
+			fmt.Fprintf(os.Stderr, "Clap calibration failed: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
 
 	// Route logs to ~/.jarvis/sidecar.log so the GUI-subsystem Windows build runs
