@@ -199,11 +199,22 @@ export class SidecarManager implements Service {
       for (const type of sidecarEventTypes) {
         this.scheduler.on(type, sidecarEventHandler);
       }
-      // Realtime voice events bypass the 1-per-tick queue: realtime_start must
-      // open the session before mic frames arrive, and audio_frame streams at
-      // ~25/s (faster than the queue drains). Direct dispatch keeps them
-      // real-time and in receive order.
-      this.scheduler.setDirectTypes(['pebble.realtime_start', 'pebble.realtime_stop', 'pebble.audio_frame']);
+      // Voice-control events bypass the shared observer queue. Besides realtime
+      // mic frames, the one-shot summon transaction must remain contiguous:
+      // pebble.summon claims the turn, session_start establishes its audio
+      // buffer, and session_end starts STT -> LLM -> TTS. File/process/wake
+      // observer bursts can otherwise leave these events behind seconds of
+      // unrelated work, making a correctly captured command appear ignored.
+      // Direct dispatch starts handlers synchronously and preserves receive
+      // order, while the expensive async response cycle continues normally.
+      this.scheduler.setDirectTypes([
+        'pebble.summon',
+        'audio.session_start',
+        'audio.session_end',
+        'pebble.realtime_start',
+        'pebble.realtime_stop',
+        'pebble.audio_frame',
+      ]);
 
       this.rpcTracker.onDetachedComplete((rpcId, result, error) => {
         if (error) {

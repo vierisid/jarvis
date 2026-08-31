@@ -26,12 +26,17 @@ const (
 
 // AwarenessConfig controls screen and window observer behavior.
 type AwarenessConfig struct {
+	Enabled            *bool   `yaml:"enabled,omitempty"`
 	ScreenIntervalMs   int     `yaml:"screen_interval_ms"`
 	WindowIntervalMs   int     `yaml:"window_interval_ms"`
 	MinChangeThreshold float64 `yaml:"min_change_threshold"`
 	StuckThresholdMs   int     `yaml:"stuck_threshold_ms"`
 	OCREnabled         bool    `yaml:"ocr_enabled"`
 	CaptureDir         string  `yaml:"capture_dir"`
+}
+
+func (c AwarenessConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // SidecarTokenClaims is the JWT payload from the brain.

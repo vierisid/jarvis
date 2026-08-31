@@ -12,6 +12,9 @@ type UnavailableCapability struct {
 // unavailable along with a human-readable reason.
 func CheckCapabilities(cfg *SidecarConfig) (available []SidecarCapability, unavailable []UnavailableCapability) {
 	for _, cap := range cfg.Capabilities {
+		if !cfg.Awareness.IsEnabled() && (cap == CapScreenshot || cap == CapAwareness || cap == CapOCR) {
+			continue
+		}
 		reason := ""
 		switch cap {
 		case CapTerminal:
