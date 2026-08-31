@@ -14,11 +14,12 @@ type clapEnergySample struct {
 }
 
 type clapCalibrationSummary struct {
-	Samples int
-	P50     float64
-	P95     float64
-	P99     float64
-	Max     float64
+	Samples  int
+	P50      float64
+	P95      float64
+	P99      float64
+	Max      float64
+	P99Peaks []clapEnergySample
 }
 
 // runClapCalibration is an explicit, terminal-only mic session. The capture
@@ -61,6 +62,11 @@ func runClapCalibration(duration time.Duration, out io.Writer) error {
 	}
 	fmt.Fprintf(out, "RMS metrics only: samples=%d p50=%.0f p95=%.0f p99=%.0f max=%.0f\n",
 		summary.Samples, summary.P50, summary.P95, summary.P99, summary.Max)
+	fmt.Fprint(out, "p99 peak times:")
+	for _, peak := range summary.P99Peaks {
+		fmt.Fprintf(out, " %.2fs=%.0f", peak.Offset.Seconds(), peak.RMS)
+	}
+	fmt.Fprintln(out)
 	return nil
 }
 
@@ -77,11 +83,17 @@ func summarizeClapEnergy(samples []clapEnergySample) clapCalibrationSummary {
 		index := int(float64(len(values)-1) * p)
 		return values[index]
 	}
-	return clapCalibrationSummary{
+	summary := clapCalibrationSummary{
 		Samples: len(values),
 		P50:     percentile(0.50),
 		P95:     percentile(0.95),
 		P99:     percentile(0.99),
 		Max:     values[len(values)-1],
 	}
+	for _, sample := range samples {
+		if sample.RMS >= summary.P99 {
+			summary.P99Peaks = append(summary.P99Peaks, sample)
+		}
+	}
+	return summary
 }
