@@ -58,7 +58,7 @@ function CoreHero({ state, live }: { state: JarvisCoreState; live: LiveData }) {
         <span className="eyebrow">JARVIS CORE</span>
         <strong>{copy.label}</strong>
         <p>{copy.message}</p>
-        <div className="jarvis-core-activity"><span />最新Activity　{activity}</div>
+        <div className="jarvis-core-activity"><span />最新アクティビティ　{activity}</div>
       </div>
       <span className="jarvis-core-code">{state}</span>
     </section>
@@ -69,11 +69,11 @@ function rel(ts: number): string {
   const d = Date.now() - ts;
   if (d < 0) return "";
   const m = Math.floor(d / 60000);
-  if (m < 1) return "now";
-  if (m < 60) return `${m}m`;
+  if (m < 1) return "たった今";
+  if (m < 60) return `${m}分前`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
+  if (h < 24) return `${h}時間前`;
+  return `${Math.floor(h / 24)}日前`;
 }
 
 /* ── shared header + empty-state helpers ── */
@@ -155,17 +155,17 @@ function useWidgetData<T>(url: string, pollMs = 15000): { data: T | null; loaded
 
 function relPast(ts: number): string {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (s < 60) return "just now";
-  const m = Math.round(s / 60); if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60); if (h < 24) return `${h}h ago`;
-  return `${Math.round(h / 24)}d ago`;
+  if (s < 60) return "たった今";
+  const m = Math.round(s / 60); if (m < 60) return `${m}分前`;
+  const h = Math.round(m / 60); if (h < 24) return `${h}時間前`;
+  return `${Math.round(h / 24)}日前`;
 }
 function relSoon(ts: number): string {
   const s = Math.round((ts - Date.now()) / 1000);
-  if (s < 60) return "now";
-  const m = Math.round(s / 60); if (m < 60) return `in ${m}m`;
-  const h = Math.round(m / 60); if (h < 24) return `in ${h}h`;
-  return `in ${Math.round(h / 24)}d`;
+  if (s < 60) return "まもなく";
+  const m = Math.round(s / 60); if (m < 60) return `${m}分後`;
+  const h = Math.round(m / 60); if (h < 24) return `${h}時間後`;
+  return `${Math.round(h / 24)}日後`;
 }
 const deslug = (s: string) => s.replace(/[_-]+/g, " ").trim();
 
@@ -177,7 +177,7 @@ function Stat({ n, unit, sub }: { n: React.ReactNode; unit?: string; sub?: React
     </div>
   );
 }
-function Loading() { return <Empty><span className="dim">Loading…</span></Empty>; }
+function Loading() { return <Empty><span className="dim">読み込み中…</span></Empty>; }
 
 function CalendarWidget() {
   const now = Date.now();
@@ -185,18 +185,18 @@ function CalendarWidget() {
     `/api/calendar?range_start=${now}&range_end=${now + 7 * 86400000}`);
   const up = Array.isArray(data) ? data.filter((e) => e.timestamp >= now).sort((a, b) => a.timestamp - b.timestamp) : [];
   const next = up[0];
-  return (<><WHeader label="calendar · next" room="calendar" />
-    {next ? <Stat n={up.length} unit={up.length === 1 ? "commitment" : "commitments"} sub={<>Next: <b>{next.title}</b> · {relSoon(next.timestamp)}</>} />
-      : loaded ? <Empty>No commitments this week. <span className="dim">Connect a calendar in Settings.</span></Empty> : <Loading />}</>);
+  return (<><WHeader label="カレンダー · 次の予定" room="calendar" />
+    {next ? <Stat n={up.length} unit="件の予定" sub={<>次: <b>{next.title}</b> · {relSoon(next.timestamp)}</>} />
+      : loaded ? <Empty>今週の予定はありません。<span className="dim">設定からカレンダーを接続できます。</span></Empty> : <Loading />}</>);
 }
 
 function MemoryWidget() {
   const { data, loaded } = useWidgetData<Array<{ predicate: string; object: string; created_at: number }>>("/api/vault/facts");
   const facts = Array.isArray(data) ? [...data].sort((a, b) => b.created_at - a.created_at) : [];
   const newest = facts[0];
-  return (<><WHeader label="memory · new" room="memory" />
-    {newest ? <Stat n={facts.length} unit={facts.length === 1 ? "fact" : "facts"} sub={<>Newest: {deslug(newest.predicate)} <b>{newest.object}</b></>} />
-      : loaded ? <Empty>New facts Jarvis learns surface here. <span className="dim">Browse the vault in Memory.</span></Empty> : <Loading />}</>);
+  return (<><WHeader label="メモリー · 最新" room="memory" />
+    {newest ? <Stat n={facts.length} unit="件の記憶" sub={<>最新: {deslug(newest.predicate)} <b>{newest.object}</b></>} />
+      : loaded ? <Empty>JARVISが学習した新しい情報がここに表示されます。<span className="dim">メモリーで確認できます。</span></Empty> : <Loading />}</>);
 }
 
 function GoalsWidget() {
@@ -204,18 +204,18 @@ function GoalsWidget() {
   const goals = Array.isArray(data) ? data : [];
   const active = goals.filter((g) => g.status === "active");
   const onTrack = active.filter((g) => g.health === "on_track").length;
-  return (<><WHeader label="goals · health" room="goals" />
-    {goals.length ? <Stat n={active.length} unit={active.length === 1 ? "active goal" : "active goals"} sub={active.length ? <>{onTrack} on track · {active.length - onTrack} need attention</> : "None active"} />
-      : loaded ? <Empty>No goals set yet. <span className="dim">Define objectives in Goals to track them here.</span></Empty> : <Loading />}</>);
+  return (<><WHeader label="ゴール · 状況" room="goals" />
+    {goals.length ? <Stat n={active.length} unit="件が進行中" sub={active.length ? <>順調 {onTrack}件 · 要確認 {active.length - onTrack}件</> : "進行中なし"} />
+      : loaded ? <Empty>ゴールはまだありません。<span className="dim">ゴールを設定すると進捗を確認できます。</span></Empty> : <Loading />}</>);
 }
 
 function WorkflowsWidget() {
   const { data, loaded } = useWidgetData<Array<Record<string, unknown>>>("/api/workflows");
   const flows = Array.isArray(data) ? data : [];
   const live = flows.filter((f) => f.enabled === true || f.published === true || f.status === "published").length;
-  return (<><WHeader label="workflows" room="workflows" />
-    {flows.length ? <Stat n={flows.length} unit={flows.length === 1 ? "workflow" : "workflows"} sub={live ? `${live} enabled` : "None enabled yet"} />
-      : loaded ? <Empty>Saved automations show their status here. <span className="dim">Open Workflows to build one.</span></Empty> : <Loading />}</>);
+  return (<><WHeader label="ワークフロー" room="workflows" />
+    {flows.length ? <Stat n={flows.length} unit="件" sub={live ? `${live}件が有効` : "有効なものはありません"} />
+      : loaded ? <Empty>保存した自動化の状態がここに表示されます。<span className="dim">ワークフローから作成できます。</span></Empty> : <Loading />}</>);
 }
 
 function AuthorityAuditWidget() {
