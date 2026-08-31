@@ -529,6 +529,7 @@ function AppShellLive() {
             : "Waiting for daemon…"
         }
         composerResponding={live.isResponding || live.thinking || voice.voiceState === "speaking"}
+        hasCoreError={voice.voiceState === "error"}
         onStopResponse={stopCurrentResponse}
         onSubmit={handleChatSubmit}
         onApprove={handleApprove}
@@ -780,6 +781,8 @@ interface ShellLayoutProps {
   composerDisabled?: boolean;
   composerPlaceholder?: string;
   composerResponding?: boolean;
+  /** Raw runtime error signal kept separate from the simplified rail state. */
+  hasCoreError?: boolean;
   onStopResponse?: () => void;
   onSubmit: (text: string) => void;
   onApprove: (id: string) => void;
@@ -834,6 +837,7 @@ function ShellLayout({
   composerDisabled,
   composerPlaceholder,
   composerResponding,
+  hasCoreError = false,
   onStopResponse,
   onSubmit,
   onApprove,
@@ -865,14 +869,20 @@ function ShellLayout({
   const [arranging, setArranging] = useState(false);
   const [talkOpen, setTalkOpen] = useState(false);
   const [talkIn, setTalkIn] = useState(false);
+  // The existing outage grace period doubles as CORE's AWAKENING window.
+  // A stable outage still becomes ERROR and triggers the takeover below.
+  const offlineStable = useStableOffline(connection === "offline");
+  const coreConnection: ConnectionState =
+    connection === "offline" && !offlineStable ? "degraded" : connection;
   const liveData = useLiveData();
   const hasAgentWork = useMemo(
     () => hasActiveAgentWork(liveData.agentActivity),
     [liveData.agentActivity],
   );
   const coreState = deriveJarvisCoreState({
-    connection,
+    connection: coreConnection,
     voiceState,
+    hasError: hasCoreError,
     hasActiveWork: Boolean(composerResponding) || hasAgentWork,
     hasPendingApproval: liveData.approvals.length > 0 || voiceState === "awaiting-approval",
   });
@@ -910,7 +920,6 @@ function ShellLayout({
   // connection has been down for a few seconds — a WS blip (or the initial
   // pre-connect state on mount) must not flash a takeover.
   const sysOverride = useSystemStateOverride();
-  const offlineStable = useStableOffline(connection === "offline");
   const takeover: TakeoverKind | null = offlineStable ? "offline" : sysOverride.takeover;
   const sysHandlers = useMemo(
     () => ({
