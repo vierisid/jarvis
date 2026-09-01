@@ -87,6 +87,12 @@ COPY --from=build /app/ui/public ./ui/public
 COPY --from=build /app/package.json ./
 COPY tsconfig.json ./
 
+# NAS shared folders may provide a restrictive source umask. Ensure the
+# runtime user can traverse and read every copied application asset while
+# preserving the non-root container boundary.
+RUN chmod -R a+rX /app/src /app/bin /app/roles /app/ui && \
+    chmod a+r /app/package.json /app/tsconfig.json
+
 # Install jarvis as a global command
 # Note: `bun link` can't be used here — it symlinks through /root/.bun/ which
 # is inaccessible to the non-root jarvis user. Direct symlink works because
@@ -114,7 +120,7 @@ VOLUME ["/data"]
 USER jarvis
 
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
-    CMD bun -e "fetch('http://localhost:3142/api/health').then(r=>{if(!r.ok)process.exit(1)}).catch(()=>process.exit(1))"
+    CMD bun -e "fetch('http://localhost:3142/api/health').then(r=>{if(r.status!==200&&r.status!==401)process.exit(1)}).catch(()=>process.exit(1))"
 
 ENTRYPOINT ["jarvis"]
 CMD ["start", "--no-open", "--data-dir", "/data", "--no-local-tools"]
