@@ -194,7 +194,14 @@ JARVIS_PAGE_DUMP_DIR=/tmp/pages go test -run TestDumpBrandPages .
 DOM: it stubs the five bindings, drives real PointerEvents through headless
 Chromium, and asserts what the page would have asked the window to do (a click
 never drags, one drag per gesture, drag-then-regrab is not a double-click, a
-lost mouseup starts nothing). It skips when no Chromium is on PATH.
+lost mouseup starts nothing). It is opt-in, because a headless browser is not a
+dependency this suite relies on:
+
+```sh
+JARVIS_BROWSER_TESTS=1 go test -run TestTitlebarGesture .
+```
+
+Run it after any change to `TitlebarJS`.
 
 What that cannot reach is Win32 itself — the modal move loop, snap, maximize
 geometry — so this much still needs a real Windows box at least once per change

@@ -11,16 +11,25 @@ package main
 // drives real PointerEvents through Chromium, and reads back what the page
 // would have asked the window to do.
 //
-// Skips when no Chromium is installed, so it costs a CI runner nothing.
+// OPT-IN: set JARVIS_BROWSER_TESTS=1 to run it, the same shape of gate as the
+// page dump's JARVIS_PAGE_DUMP_DIR. It is not in the default suite because a
+// headless browser is not a dependency this suite can rely on: on a CI runner
+// Chrome was found, launched, and then never exited, taking the whole package
+// to its 10-minute timeout. The hard timeout below means the worst case is now
+// a failed test rather than a wedged suite, but the gate is what keeps a
+// browser out of CI entirely.
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // gestureDriver stubs the window-control bindings, then plays each scenario and
@@ -147,6 +156,9 @@ type gestureResults struct {
 }
 
 func TestTitlebarGesture(t *testing.T) {
+	if os.Getenv("JARVIS_BROWSER_TESTS") == "" {
+		t.Skip("set JARVIS_BROWSER_TESTS=1 to drive the title bar in a real browser")
+	}
 	chrome := findChromium()
 	if chrome == "" {
 		t.Skip("no chromium/chrome on PATH — the gesture machine is browser-driven")
@@ -160,14 +172,26 @@ func TestTitlebarGesture(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := exec.Command(chrome,
+	// The driver needs a few seconds of virtual time; anything beyond this is a
+	// browser that is not going to finish, and it must not become the suite's
+	// problem.
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, chrome,
 		"--headless=new", "--disable-gpu", "--no-sandbox",
+		"--disable-dev-shm-usage", "--no-first-run", "--disable-extensions",
 		"--user-data-dir="+filepath.Join(dir, "profile"),
 		"--virtual-time-budget=8000", "--window-size=520,560",
 		"--dump-dom", "file://"+path,
-	).Output()
+	)
+	var stderr strings.Builder
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		t.Fatalf("%s never exited within 90s; stderr:\n%s", chrome, stderr.String())
+	}
 	if err != nil {
-		t.Fatalf("chromium: %v", err)
+		t.Fatalf("%s: %v; stderr:\n%s", chrome, err, stderr.String())
 	}
 	m := gestureProbe.FindSubmatch(out)
 	if m == nil {
