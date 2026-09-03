@@ -2,9 +2,10 @@
 
 This is a local copy of `github.com/webview/webview_go` (the pinned version is
 in `UPSTREAM_VERSION`), wired in via a `replace` directive in `sidecar/go.mod`,
-with **four patches**, all carried by `jarvis.patch`: a Win32 one for the open
+with **five patches**, all carried by `jarvis.patch`: a Win32 one for the open
 flash, a Cocoa one to create the window on the main thread, a `webview_create`
-check that rejects a half-built engine, and a NULL-handle guard in `webview.go`.
+check that rejects a half-built engine, a NULL-handle guard in `webview.go`,
+and a browser-controller accessor in a file of our own, `jarvis_native.go`.
 
 `jarvis.patch` must carry EVERY vendored edit. `vendor-webview.sh` deletes the
 vendor directory and copies pristine upstream over it, keeping only
@@ -141,3 +142,37 @@ The stray WM_QUIT that made this reachable came from the sidecar calling
 `Terminate()` (`PostQuitMessage(0)`, which targets the *calling* thread) from
 a foreign goroutine; `panels_runtime.go` now dispatches it onto the engine's
 own thread. This patch is the backstop for any other source.
+
+## The browser-controller accessor (`jarvis_native.go`)
+
+Upstream's C library has implemented `webview_get_native_handle` since 0.11,
+but its Go binding never bound it: `Window()` hands out the HWND and nothing
+else. That leaves the engine's own object graph — and with it every WebView2
+setting the library does not already set inside `embed()` — unreachable from
+Go.
+
+`internal/winchrome` needs exactly one of those settings.
+`AreBrowserAcceleratorKeysEnabled` is what stops F5 and Ctrl+R from reloading a
+document loaded with `SetHtml`; such a reload lands on `about:blank`, and on a
+window that draws its own title bar that means no page AND no caption. Reaching
+`ICoreWebView2Settings3` to turn it off starts from the controller pointer this
+accessor returns.
+
+Two shape decisions worth keeping:
+
+- **A new file, not a hunk in `webview.go` or `webview.h`.** It touches no
+  upstream source, so it has nothing to conflict with when the monthly bot
+  re-vendors — unlike `webview.h`, which already carries five hunks and whose
+  win32 constructor context this file explicitly warns about above. `patch`
+  creates it from a `--- /dev/null` hunk, and it must NOT go in `KEEP_FILES`:
+  the whole point is that the patch carries it.
+- **A free function, not a method on the `WebView` interface.** Nothing in this
+  repo implements that interface today, but upstream may well add its own
+  `NativeHandle` with a different signature, and a package-level function has
+  a far smaller collision surface.
+
+Unlike the other four, this patch cannot be silently reverted: `internal/winchrome`
+*calls* `webview.BrowserController`, so losing it is a **build failure** on the
+Windows cross-build in `test.yml` and `update-webview.yml`, not a green PR that
+quietly dropped a behavior. The sanity grep in `vendor-webview.sh` is kept
+anyway, both for consistency and because it names the intent.

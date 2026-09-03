@@ -75,6 +75,20 @@ func captionlessStyle(style uint32) uint32 {
 	return style
 }
 
+// captionedStyle is the inverse of captionlessStyle: it puts WS_CAPTION back.
+//
+// It does NOT take WS_SYSMENU and WS_MINIMIZEBOX away again. Those are not
+// ours to remove — captionlessStyle adds them because a captionless window
+// needs them to behave, and a framed window wants them just as much. So the
+// pair round-trips for any window webview actually creates (WS_SYSMENU and
+// WS_MINIMIZEBOX are in WS_OVERLAPPEDWINDOW, and SetSize's HintFixed strips
+// neither), which is what the round-trip test pins.
+//
+// Pure, so it can be unit-tested on any host.
+func captionedStyle(style uint32) uint32 {
+	return style | wsCaption
+}
+
 // initJS marks the document as custom-chromed so the shared title bar CSS
 // (internal/brand) can reveal itself only where the native bar is gone, and
 // hands the page the user's real double-click speed: the strip times
@@ -99,6 +113,38 @@ func captionlessStyle(style uint32) uint32 {
 // complete answer — the real fix is refusing foreign origins in the engine
 // (NavigationStarting, or AllowExternalDrop=false), which means a change to
 // the vendored webview and its patch file.
+//
+// Finally it keeps the WINDOW'S CAPTION IN SYNC WITH THE DOCUMENT, which is
+// what stops a reload from trapping the window. Reloading a document loaded
+// with SetHtml lands on about:blank: no strip, and — since the caption was
+// removed once at Install time — no way to move or close the window either.
+// So every document reports whether our strip is in it, and the host puts the
+// native caption back when it is not (syncCaption). Three details are load
+// bearing:
+//
+//   - It asks for '#wchrome', not for location. A NavigateToString document
+//     ALREADY reports about:blank as its URI, identical to the blank one a
+//     reload leaves behind, so the URL cannot tell the two apart. The strip
+//     is the only honest discriminator.
+//   - It waits for DOMContentLoaded. The strip is the last element in <body>
+//     (internal/brand's markup contract), so at document-creation time — when
+//     this script runs — it does not exist yet. Waiting for `load` instead
+//     would hang on a page with a stalled subresource, which is the same
+//     reason webviewui.RevealOnLoad carries a timeout. Deferring is also what
+//     guarantees the binding stub is there: bind() registers each stub as its
+//     own document-created script, and WebView2 does not promise those run in
+//     registration order.
+//   - Top frame only. init_impl is AddScriptToExecuteOnDocumentCreated, which
+//     WebView2 injects into EVERY frame. No chromed page has an iframe today,
+//     but the day one does, a subframe with no strip of its own would
+//     otherwise tell the host to un-chrome a perfectly good window.
+//
+// It is a two-way sync rather than a one-way restore on purpose. The first-run
+// window swaps documents from a goroutine (hosted_window.go's showShellError /
+// showSelfHostHint), so a reload mid-handshake is followed by a fresh chromed
+// document — and a host that only ever restored would leave that window
+// wearing two title bars. Syncing both ways is also idempotent, so a second
+// reload of an already-blank document changes nothing.
 func initJS(dblClickMs uint32) string {
 	if dblClickMs == 0 {
 		dblClickMs = 500 // the Windows default, if the OS would not say
@@ -112,5 +158,11 @@ func initJS(dblClickMs uint32) string {
 		`for(var i=0;i<t.length;i++){if(t[i]==='Files'||t[i]==='text/uri-list')return true;}return false;};` +
 		`var block=function(e){if(navigating(e)){e.preventDefault();}};` +
 		`document.addEventListener('dragover',block,true);document.addEventListener('drop',block,true);` +
+		`if(window.top===window){var done=false,tries=0;` +
+		`var chk=function(){if(done)return;` +
+		`if(!window.__jarvis_chrome_sync){if(tries++<20)setTimeout(chk,0);return;}` +
+		`done=true;try{window.__jarvis_chrome_sync(!!document.getElementById('wchrome'));}catch(e){}};` +
+		`if(document.readyState==='loading'){document.addEventListener('DOMContentLoaded',chk);}` +
+		`else{setTimeout(chk,0);}}` +
 		`}catch(e){}})();`
 }

@@ -16,6 +16,7 @@ const gwlExStyle = -20
 
 // SetWindowPos flags.
 const (
+	swpNoSize       = 0x0001
 	swpNoMove       = 0x0002
 	swpNoZOrder     = 0x0004
 	swpNoActivate   = 0x0010
@@ -96,6 +97,29 @@ type point struct {
 // Custom chrome implies a resizable window: it does not add WS_THICKFRAME, so
 // pairing it with SetSize(..., HintFixed) leaves a page whose maximize button
 // the OS will refuse.
+//
+// The caption is SYNCED PER DOCUMENT, not stripped once. Reloading a document
+// that was loaded with SetHtml lands on about:blank, and a captionless window
+// with no page to draw a strip is one the user cannot move or close. So every
+// document reports whether our strip is in it (initJS) and syncCaption puts
+// the native caption back when it is not. Install still does the first strip
+// itself, before anything is loaded, so the native bar is never composited.
+//
+// It also turns WebView2's browser accelerator keys off, so the reload never
+// happens in the first place. That switch is a FAMILY switch, and the cost is
+// accepted deliberately: Ctrl+F, Alt+←/→, Ctrl+P and keyboard zoom
+// (Ctrl +/−/0) go with it. These are small fixed-purpose task windows rather
+// than documents, Windows display scaling still applies and the windows size
+// themselves at their own DPI, and the one page anyone would search — the log
+// viewer — has its own search box. Ctrl+A/C/V/X are untouched.
+//
+// The default context menu — whose Reload is the other way to land on a blank
+// document — is left ALONE on purpose. Turning it off is cheaper than the
+// engine-level fix and would close that route, but it also takes away
+// right-click→Paste in the token form's textarea and right-click→Copy on a log
+// line, which people use. The caption sync already covers the route, and
+// leaving it reachable is what keeps that recovery path exercised instead of
+// rotting.
 func Install(w webview.WebView) bool {
 	if w == nil {
 		return false
@@ -116,6 +140,16 @@ func Install(w webview.WebView) bool {
 		return false
 	}
 	roundCorners(hwnd)
+	// Success path only. A window whose caption could not be removed is an
+	// ordinary framed window that was never at risk, and taking F5, Ctrl+F and
+	// keyboard zoom away from it would be a regression bought for nothing.
+	//
+	// After the strip and before Init/SetHtml: WebView2 applies a settings
+	// change from the next navigation onward, and Install's contract already
+	// puts it ahead of the first SetHtml.
+	disableBrowserAccelerators(w)
+	// Init last, after every Bind: the sync script gives up if its binding is
+	// not there, and this ordering means it never has to.
 	w.Init(initJS(doubleClickTime()))
 	return true
 }
@@ -155,6 +189,49 @@ func stripCaption(hwnd uintptr) bool {
 		swpNoMove|swpNoZOrder|swpNoActivate|swpFrameChanged,
 	)
 	return true
+}
+
+// syncCaption makes the window's caption match the document that just loaded:
+// present when the page draws no strip of its own, gone when it does.
+//
+// Unlike stripCaption this does NOT re-derive the size, and must not. That
+// dance exists to honour the size the CALLER asked for, once, at Install time;
+// running it on every document would accumulate the DPI fallback's few pixels
+// of error across each strip→restore→strip cycle, and would fight the OS over
+// a maximized window's rect. SWP_NOSIZE|SWP_NOMOVE keeps the window rect
+// exactly where it is and lets the client area gain or lose the caption's
+// height — which is the right answer for a document that is either empty or
+// about to lay itself out anyway.
+func syncCaption(hwnd uintptr, custom bool) {
+	style := getWindowLong(hwnd, gwlStyle)
+	if style == 0 {
+		// GetWindowLong failed; same ambiguity (and same conservative
+		// reading) as stripCaption.
+		return
+	}
+	want := uintptr(captionedStyle(uint32(style)))
+	if custom {
+		want = uintptr(captionlessStyle(uint32(style)))
+	}
+	if want == style {
+		// The steady state: every normal document of a chromed window lands
+		// here, so the whole mechanism costs one binding round trip and one
+		// GetWindowLong per page.
+		return
+	}
+	setWindowLong(hwnd, gwlStyle, want)
+	procSetWindowPos.Call(
+		hwnd, 0,
+		0, 0, 0, 0,
+		swpNoMove|swpNoSize|swpNoZOrder|swpNoActivate|swpFrameChanged,
+	)
+	// Only on a real transition, and say which way: this is what turns "the
+	// settings window went weird" into something diagnosable from a log.
+	if custom {
+		log.Printf("[chrome] document draws its own title bar; caption removed")
+		return
+	}
+	log.Printf("[chrome] document has no title bar of its own (a reload lands on about:blank); native caption restored")
 }
 
 // adjustWindowRect grows a client rect into the window rect that style needs,
@@ -244,6 +321,12 @@ func bindControls(w webview.WebView, hwnd uintptr) bool {
 	bind("__jarvis_chrome_close", func() {
 		procPostMessageW.Call(hwnd, wmClose, 0, 0)
 	})
+
+	// The caption sync (see initJS). Deliberately inside the same `ok`
+	// accumulator as the window controls: a window whose recovery net could
+	// not be installed must keep its native title bar rather than have it
+	// taken away with nothing able to give it back.
+	bind("__jarvis_chrome_sync", func(custom bool) { syncCaption(hwnd, custom) })
 
 	// Right-click on the caption. DefWindowProc turns WM_NCRBUTTONUP/HTCAPTION
 	// into the system menu, so the menu, its item states and its commands are

@@ -3,6 +3,8 @@ package winchrome
 import (
 	"strings"
 	"testing"
+
+	"github.com/jarvis/sidecar/internal/brand"
 )
 
 // WS_OVERLAPPEDWINDOW, as webview creates its window and as its SetSize leaves
@@ -48,6 +50,42 @@ func TestCaptionlessStyleKeepsAFixedWindowFixed(t *testing.T) {
 	// minimize button needs WS_MINIMIZEBOX to do anything.
 	if got&wsSysMenu == 0 || got&wsMinimizeBox == 0 {
 		t.Errorf("WS_SYSMENU/WS_MINIMIZEBOX missing from %#08x", got)
+	}
+}
+
+// The caption sync is only as good as its inverse: a window that could not get
+// its caption back is exactly the trap the sync exists to prevent.
+func TestCaptionedStyleRestoresWhatCaptionlessStyleRemoved(t *testing.T) {
+	for name, style := range map[string]uint32{
+		// HintNone, as webview's SetSize leaves it.
+		"resizable": wsOverlappedWindow,
+		// HintFixed: SetSize strips the resize border and the maximize box.
+		"fixed": wsOverlappedWindow &^ (wsThickFrame | wsMaximizeBox),
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := captionedStyle(captionlessStyle(style)); got != style {
+				t.Errorf("round trip gave %#08x, want %#08x", got, style)
+			}
+			// The sync calls whichever direction the document asks for, on a
+			// style that may already be in that state, so both halves must be
+			// no-ops the second time.
+			once := captionedStyle(style)
+			if twice := captionedStyle(once); twice != once {
+				t.Errorf("captionedStyle not idempotent: %#08x then %#08x", once, twice)
+			}
+		})
+	}
+}
+
+func TestCaptionedStyleAddsTheCaption(t *testing.T) {
+	got := captionedStyle(captionlessStyle(wsOverlappedWindow))
+	if got&wsCaption == 0 {
+		t.Fatalf("WS_CAPTION not restored: %#08x", got)
+	}
+	// It must not take back what captionlessStyle added: a restored window
+	// still wants Alt+Space and a working taskbar minimise.
+	if got&wsSysMenu == 0 || got&wsMinimizeBox == 0 {
+		t.Errorf("WS_SYSMENU/WS_MINIMIZEBOX lost on the way back: %#08x", got)
 	}
 }
 
@@ -114,5 +152,42 @@ func TestInitJSCarriesTheDoubleClickTime(t *testing.T) {
 	}
 	if !strings.Contains(initJS(0), "window.__jarvisDblClickMs=500;") {
 		t.Error("initJS must fall back to the Windows default of 500ms")
+	}
+}
+
+// The caption sync's JS half. The Go half (syncCaption) is Windows-only; this
+// is what pins the contract between them.
+func TestChromeInitJSSyncsTheCaptionToTheDocument(t *testing.T) {
+	js := initJS(500)
+	for _, want := range []string{
+		// The discriminator. Not location: a NavigateToString document already
+		// reports about:blank, exactly like the blank one a reload leaves.
+		"getElementById('wchrome')",
+		"window.__jarvis_chrome_sync",
+		// Deferred, because the strip is the last element in <body> and does
+		// not exist when this script runs.
+		"DOMContentLoaded",
+		// Top frame only: init runs in every frame, and a subframe without a
+		// strip of its own must not un-chrome the window.
+		"window.top===window",
+	} {
+		if !strings.Contains(js, want) {
+			t.Errorf("initJS is missing %q — the caption sync would not work", want)
+		}
+	}
+}
+
+// initJS asks for '#wchrome' and internal/brand's markup is what provides it.
+// Nothing else couples those two strings: rename the id in the strip's markup
+// and every chromed document starts reporting "no title bar here", so the sync
+// hands back a native caption on top of a page that is already drawing its own.
+// Test-only import, so no production dependency and no cycle.
+func TestTheIDInitJSLooksForIsTheOneTheStripDefines(t *testing.T) {
+	const id = "wchrome"
+	if !strings.Contains(initJS(500), "getElementById('"+id+"')") {
+		t.Fatalf("initJS no longer looks for #%s", id)
+	}
+	if !strings.Contains(brand.TitlebarHTML, `id="`+id+`"`) {
+		t.Errorf("the title bar markup has no id=%q — the caption sync would fire on every chromed document", id)
 	}
 }

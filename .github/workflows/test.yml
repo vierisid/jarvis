@@ -226,6 +226,17 @@ jobs:
           # The installer's wizard is webview-backed (cgo, same toolchain as
           # the sidecar) — cross-build it too so it can't rot unchecked.
           go build -o /tmp/jarvis-setup.exe ./installer/
+          # vet, not just build: internal/winchrome calls WebView2 through raw
+          # COM vtables, and `unsafeptr` is the only automatic check on that.
+          # Nothing else in CI vets GOOS=windows — the linux and darwin jobs
+          # never compile these files.
+          #
+          # Scoped to the package rather than ./... on purpose: notify_windows.go
+          # and tray_windows.go convert an incoming WM_COPYDATA LPARAM to a
+          # struct pointer, which is correct (it is a real address from another
+          # process) but is a known unsafeptr false positive. Widening this is a
+          # separate decision, not a side effect of the chrome work.
+          go vet ./internal/winchrome/
 
   # The windows-tagged tests (pebble draw-bounds crop invariant) are pure Go
   # but can only RUN on a Windows runner — the mingw cross-build above only

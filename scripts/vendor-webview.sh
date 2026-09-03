@@ -91,6 +91,7 @@ grep -q "ShowWindow(m_window, SW_HIDE)" "$HEADER"           # win32: no open fla
 grep -q "isMainThread" "$HEADER"                            # cocoa: main-thread window
 grep -q "w->browser_controller()" "$HEADER"                 # reject half-built engines
 grep -q "PATCHED (jarvis)" "$VENDOR_DIR/webview.go"         # nil WebView on NULL handle
+grep -q "PATCHED (jarvis)" "$VENDOR_DIR/jarvis_native.go"   # browser controller accessor
 
 # Record the pinned version (single source of truth for the update workflow).
 printf '%s\n' "$VERSION" > "$VENDOR_DIR/UPSTREAM_VERSION"

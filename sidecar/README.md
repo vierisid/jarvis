@@ -172,6 +172,16 @@ strip itself is shared markup in `internal/brand/titlebar.go`, rendered only
 when `winchrome.Install` has stamped `<html data-chrome="custom">` — so the
 same page keeps its native title bar on macOS and Linux.
 
+The caption is synced per document, not stripped once. Reloading a page that
+was loaded with `SetHtml` lands on `about:blank`, which on a captionless window
+leaves nothing to close it with — so every document reports whether the strip is
+in it and `syncCaption` puts the native caption back when it is not. On top of
+that `Install` turns WebView2's browser accelerator keys off for the window, so
+F5 and Ctrl+R never fire; that switch also takes Ctrl+F, Alt+arrows, Ctrl+P and
+keyboard zoom, which is accepted for windows this small. The default context
+menu keeps its Reload on purpose — killing it would cost right-click paste in
+the token form, and leaving it is what keeps the caption sync exercised.
+
 The page moves the window through a binding rather than CSS: the WebView2
 child HWND covers the client area and swallows the mouse, so `app-region:
 drag` does nothing and the drag is a `ReleaseCapture` +
@@ -219,7 +229,10 @@ dependency this suite relies on:
 JARVIS_BROWSER_TESTS=1 go test -run TestTitlebarGesture .
 ```
 
-Run it after any change to `TitlebarJS`.
+Run it after any change to `TitlebarJS`. Note that the caption sync lives in
+`winchrome`'s injected `initJS`, not in `TitlebarJS`, and that
+`JARVIS_BROWSER_TESTS` is never set in CI — these browser tests are a developer
+tool, not a gate.
 
 What that cannot reach is Win32 itself — the modal move loop, snap, maximize
 geometry — so this much still needs a real Windows box at least once per change
@@ -244,6 +257,21 @@ to `winchrome` or the strip's script:
       is script, not the browser).
 - [ ] Drag a URL or a file onto the window: nothing navigates. Drag selected
       text into the token form's textarea: it drops.
+- [ ] F5, Ctrl+R, Ctrl+Shift+R and Ctrl+F5 do nothing. The log viewer's own
+      Refresh and the connect window's Try again still work.
+- [ ] Right-click the page and choose Reload — that route is deliberately left
+      open, so the document DOES go blank: the native title bar must come back
+      and the window must be movable and closable. Do it twice: still one title
+      bar, no crash.
+- [ ] Same reload on a maximized window: caption returns, window stays
+      maximized.
+- [ ] On the connect window, reload and then force an error document (pull the
+      network): exactly ONE title bar, not two.
+- [ ] Ctrl+A/C/V/X still work in the token textarea and the log search box.
+      Ctrl+F and Ctrl +/-/0 are inert — that is the accepted cost of switching
+      the browser accelerator keys off.
+- [ ] Negative control: F5 still reloads the account window and a dashboard
+      panel normally.
 
 ### Preflight checks
 
