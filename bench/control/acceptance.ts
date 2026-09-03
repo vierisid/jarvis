@@ -400,7 +400,7 @@ function writeReport(opts: Opts, meta: Record<string, string>) {
   for (const c of checks) {
     lines.push(`| ${c.name} | ${c.pass ? '✅' : '❌'} | ${c.ms ?? ''} | ${c.detail.replace(/\|/g, '\\|')} |`);
   }
-  lines.push('', '> Latency/token numbers are single-run; average across a few runs before recording in PHASE1_ADOPT_VS_BUILD.md.');
+  lines.push('', '> Latency/token numbers are single-run; average across a few runs before recording in docs/control-plane/PHASE1_ADOPT_VS_BUILD.md.');
   const text = lines.join('\n');
   try {
     Bun.write(opts.out, text);

@@ -2,7 +2,7 @@
 
 Drives the paired Go sidecar through the daemon's gated debug-RPC endpoint to
 check the Phase 0 (honesty/reliability) and Phase 1 (structural) exit criteria
-from `STRUCTURAL_RUNTIME_ROADMAP.md`. It bypasses the LLM and calls sidecar
+from `docs/control-plane/STRUCTURAL_RUNTIME_ROADMAP.md`. It bypasses the LLM and calls sidecar
 RPCs directly, so a failure is attributable to the control stack, not model
 choices.
 
@@ -49,7 +49,7 @@ Options: `--base` (default `http://127.0.0.1:3142`), `--target`, `--suite`
 Prints PASS/FAIL per check and writes a markdown table to
 `bench/control/last-report.md`. Latency and payload-size numbers are
 single-run — run a few times and average before recording them in
-`PHASE1_ADOPT_VS_BUILD.md`'s decision matrix.
+`docs/control-plane/PHASE1_ADOPT_VS_BUILD.md`'s decision matrix.
 
 ## What it checks (maps to roadmap exit criteria)
 
