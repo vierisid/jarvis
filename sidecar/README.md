@@ -163,8 +163,8 @@ why CI compiles all three targets rather than trusting a Linux build.
 ### Custom window chrome (Windows)
 
 The local webview windows — settings, logs, the first-run connect window and
-its token form, the onboarding slideshow — draw their own title bar on
-Windows instead of wearing the system one. `internal/winchrome` removes
+its token form, the onboarding slideshow, and the installer's wizard — draw
+their own title bar on Windows instead of wearing the system one. `internal/winchrome` removes
 `WS_CAPTION` from the HWND and nothing else: the window keeps its overlapped
 frame, so resize borders, Aero Snap, the maximized rect, minimize/restore and
 the taskbar entry all stay native, and no window procedure is subclassed. The
@@ -188,6 +188,24 @@ To eyeball the pages without a Windows machine:
 ```sh
 JARVIS_PAGE_DUMP_DIR=/tmp/pages go test -run TestDumpBrandPages .
 # then open /tmp/pages/chrome-*.html (and dark-chrome-*.html)
+```
+
+The installer is its own package and dumps separately — one file per wizard
+STATE (the plan screen alone has four), with the bindings stubbed, since the
+whole visible output of that window is a single status panel:
+
+```sh
+JARVIS_PAGE_DUMP_DIR=/tmp/wizard go test -run TestDumpWizardPage ./installer/
+```
+
+The same states are asserted rather than eyeballed by
+`TestWizardPanelSaysWhatIsOnTheMachine`, which renders the wizard through
+headless Chromium and reads the status row, subtitle and button back out of
+the DOM — the panel is fed from a snapshot, so what it SAYS is not something
+the Go tests can see:
+
+```sh
+JARVIS_BROWSER_TESTS=1 go test -run TestWizardPanel ./installer/
 ```
 
 `TestTitlebarGesture` covers the half of the interaction layer that is just

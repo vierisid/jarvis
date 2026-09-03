@@ -22,19 +22,66 @@ func guiSupported() bool {
 }
 
 // wizardState is the page's poll snapshot.
+//
+// No version numbers cross into the page, by design. This installer only ever
+// fetches the `latest` dist-tag, so the version is not something the user
+// chooses or can act on — two hex-ish numbers to compare are a decision they
+// were never given. What they need to know is the state: whether a sidecar is
+// on this machine, and whether an update is waiting.
 type wizardState struct {
-	Phase        string `json:"phase"` // "resolving" | "plan" | "running" | "done" | "failed"
-	Stage        string `json:"stage"`
-	Detail       string `json:"detail"`
-	Error        string `json:"error"`
-	Installed    string `json:"installed_version"`
-	Latest       string `json:"latest_version"`
+	Phase  string `json:"phase"` // "resolving" | "plan" | "running" | "done" | "failed"
+	Stage  string `json:"stage"`
+	Detail string `json:"detail"`
+	Error  string `json:"error"`
+	// Detected says a plan actually inspected this machine. Without it the
+	// page cannot tell "no sidecar here" from "we never got to look" — and a
+	// registry failure would have it report "Not installed" to someone whose
+	// sidecar is sitting right there.
+	Detected  bool `json:"detected"`
+	Installed bool `json:"installed"`
+	// NpmManaged/UpToDate/FirstInstall describe the machine, not a release.
+	// FirstInstall keeps its plan-time meaning after the install completes —
+	// "this run was the first one" — which is what the macOS done screen and
+	// the autostart row are asking about.
 	NpmManaged   bool   `json:"npm_managed"`
 	UpToDate     bool   `json:"up_to_date"`
 	FirstInstall bool   `json:"first_install"`
 	Platform     string `json:"platform"`
 	// AutostartDefault seeds the wizard's checkbox (--no-autostart clears it).
 	AutostartDefault bool `json:"autostart_default"`
+}
+
+// applyPlan folds what detection found into the page's state. Pure, and split
+// out of the plan goroutine so the mapping from "what is on this machine" to
+// "what the panel says" is testable without a registry or a window.
+func applyPlan(s *wizardState, inst installedSidecar, latestVersion string) {
+	s.Phase = "plan"
+	s.Detected = true
+	s.Installed = inst.Version != ""
+	s.NpmManaged = inst.ManagedByNpm
+	s.UpToDate = inst.Version != "" && !versionLess(inst.Version, latestVersion)
+	// Updates must not re-apply autostart: the user's own choice is
+	// authoritative once installed.
+	s.FirstInstall = inst.Version == ""
+}
+
+// applyOutcome folds a finished install into the page's state.
+//
+// Installed = true is the point of it: the panel is fed from the PLAN
+// snapshot, so a first install that succeeded went on reporting "not
+// installed" on its own done screen until the state said otherwise.
+func applyOutcome(s *wizardState, out installOutcome) {
+	s.Phase = "done"
+	s.Detected = true
+	// The stage line is progress, and there is none left. Kept on the failed
+	// path (it says which step died, which is worth having beside the error);
+	// here it would leave "Installing to C:\…—" sitting under "Installed".
+	s.Stage, s.Detail = "", ""
+	// True on every path that gets here: we installed it, npm already had, or
+	// it was current to begin with.
+	s.Installed = true
+	s.NpmManaged = out.NpmManaged
+	s.UpToDate = out.UpToDate
 }
 
 func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
@@ -73,10 +120,14 @@ func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 		return st
 	}
 
-	// NativeTitleBar on purpose: this is the first window a user ever sees from
-	// this project, run before anything is installed, so it wears the system's
-	// chrome rather than asking for trust with a title bar of our own.
-	opened := webviewui.RunWindow("Install Jarvis", 480, 560, webview.HintNone, winchrome.NativeTitleBar, func(w webview.WebView) {
+	// The same title bar the sidecar's own local windows draw (internal/brand +
+	// internal/winchrome, Windows-only; native everywhere else). This window is
+	// the first thing a user ever sees from the project, so it is the last one
+	// that should look like it belongs to a different product than the app it
+	// installs. Safe here for the same reason it is safe there: the page is
+	// local HTML compiled into this binary, and the window controls it binds
+	// are never reachable by a remote document.
+	opened := webviewui.RunWindow("Install Jarvis", 480, 560, webview.HintNone, winchrome.CustomTitleBar, func(w webview.WebView) {
 
 		// startPlan resolves versions on a goroutine. Bindings run ON the UI
 		// thread, so doing the (up to 60s) registry fetch inline would block
@@ -97,7 +148,7 @@ func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 				rel, err := fetchLatestRelease(registryURL)
 				if err != nil {
 					set(func(s *wizardState) {
-						if gen != planGen {
+						if gen != planGen || started {
 							return
 						}
 						s.Phase = "failed"
@@ -105,25 +156,33 @@ func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 					})
 					return
 				}
+				// A superseded (or overtaken-by-install) goroutine must not
+				// clobber the current phase — otherwise a double Retry can
+				// bounce a running install back to the plan screen.
+				stale := func(s *wizardState) bool { return gen != planGen || started }
+
 				inst, ierr := detectInstalled()
+				if ierr != nil {
+					// Fail rather than plan. A plan we could not verify has
+					// nothing honest to put in the panel — the page would
+					// have to either claim "not installed" or admit it is
+					// still checking, next to a live Install button — and
+					// performInstall would refuse this machine anyway
+					// (flow.go returns exitOther on the same error).
+					set(func(s *wizardState) {
+						if stale(s) {
+							return
+						}
+						s.Phase = "failed"
+						s.Error = fmt.Sprintf("could not inspect the existing installation: %v", ierr)
+					})
+					return
+				}
 				set(func(s *wizardState) {
-					// A superseded (or overtaken-by-install) goroutine must
-					// not clobber the current phase — otherwise a double
-					// Retry can bounce a running install back to the plan
-					// screen.
-					if gen != planGen || started {
+					if stale(s) {
 						return
 					}
-					s.Phase = "plan"
-					s.Latest = rel.Version
-					if ierr == nil {
-						s.Installed = inst.Version
-						s.NpmManaged = inst.ManagedByNpm
-						s.UpToDate = inst.Version != "" && !versionLess(inst.Version, rel.Version)
-						// Updates must not re-apply autostart: the user's own
-						// choice is authoritative once installed.
-						s.FirstInstall = inst.Version == ""
-					}
+					applyPlan(s, inst, rel.Version)
 				})
 			}()
 		}
@@ -188,14 +247,7 @@ func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 				mu.Lock()
 				exitCode = exitOK
 				mu.Unlock()
-				set(func(s *wizardState) {
-					s.Phase = "done"
-					s.NpmManaged = res.NpmManaged
-					s.UpToDate = res.UpToDate
-					if res.Rel != nil {
-						s.Latest = res.Rel.Version
-					}
-				})
+				set(func(s *wizardState) { applyOutcome(s, res) })
 			}()
 		})
 
@@ -237,8 +289,9 @@ func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 		return runInstall(registryURL, false, noLaunch, autostartDefault)
 	}
 
-	// The window can be closed with its native close button at any time,
-	// including mid-install (the JS only disables our own Cancel button).
+	// The window can be closed at any time — the native X on macOS, the strip's
+	// own close button on Windows — including mid-install, since the JS
+	// disables Cancel but never the window controls.
 	// Returning here would os.Exit the process — potentially between the two
 	// renames of the binary swap, leaving the machine with a .old and no
 	// installed binary — so let the install finish first.
@@ -258,10 +311,23 @@ const wizardHTML = `<!doctype html>
 <html>
 <head>
 <meta charset="utf-8">
+<title>Install Jarvis</title>
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <style>` + brand.TokensCSS + brand.PebbleCSS + `
   html, body { height: 100%; }
-  body { padding: 30px 26px 24px; font-size: 13px; display: flex; flex-direction: column; }
+  /* No padding on body: under custom chrome the strip's offset REPLACES it,
+     which would leave the hero flush against the bar. The padding and the
+     column live on .pagebody, which is also the scroll container so its
+     scrollbar starts below the strip (PageBodyJS keeps it keyboard-scrollable
+     — a div takes no focus of its own). */
+  body { padding: 0; overflow: hidden; font-size: 13px; }
+  .pagebody {
+    height: 100%; overflow-y: auto;
+    padding: 30px 26px 24px; display: flex; flex-direction: column;
+  }
+  /* The strip already puts 34px of chrome above the hero; the full 30px on
+     top of that reads as a gap rather than as breathing room. */
+  html[data-chrome="custom"] .pagebody { padding-top: 20px; }
   .hero { display: flex; align-items: center; gap: 14px; }
   .hero .bdrop { width: 38px; height: 38px; flex: 0 0 auto; }
   h1 { font-size: 19px; font-weight: 650; letter-spacing: -.01em; margin: 0; }
@@ -288,18 +354,19 @@ const wizardHTML = `<!doctype html>
   .sbtn.pri:hover { filter: brightness(1.08); }
   .sbtn:disabled { opacity: .5; cursor: default; }
   .hidden { display: none !important; }
+` + brand.TitlebarCSS + `
 </style>
 </head>
 <body>
+<div class="pagebody" tabindex="-1">
   <div class="hero">
     <span class="bdrop" id="pebble"><span class="in"></span><span class="ring"></span></span>
     <h1><span class="word"><span class="u">use</span>jarvis</span> sidecar</h1>
   </div>
-  <p class="sub" id="subtitle">Checking versions…</p>
+  <p class="sub" id="subtitle">Checking for the latest sidecar…</p>
 
   <div class="panel">
-    <div class="kv"><span class="k">Installed</span><span class="v" id="vInstalled">…</span></div>
-    <div class="kv"><span class="k">Latest</span><span class="v" id="vLatest">…</span></div>
+    <div class="kv"><span class="k">Sidecar</span><span class="v" id="vStatus">…</span></div>
     <div class="stage" id="stage"></div>
     <div class="err hidden" id="error"></div>
   </div>
@@ -313,14 +380,41 @@ const wizardHTML = `<!doctype html>
     <button class="sbtn" id="btnCancel" onclick="window.closeInstaller(false)">Cancel</button>
     <button class="sbtn pri" id="btnMain" disabled>Install</button>
   </div>
+</div>` + brand.TitlebarHTML + `
 
 <script>
   var el = function (id) { return document.getElementById(id); };
   var autostartSeeded = false;
 
+  // The panel's one factual line. It says what this machine's sidecar IS, not
+  // which release it is pinned to: the installer always fetches the latest, so
+  // the version was never the user's decision to make.
+  //
+  // Every branch reads the CURRENT snapshot, which is why the done screen
+  // corrects itself — the plan said "Not installed", and the state that
+  // arrives with the finished install says otherwise.
+  function statusText(st) {
+    // Nothing was inspected yet (or the registry never answered): "Not
+    // installed" would be a claim we cannot make.
+    if (!st.detected) { return st.phase === 'failed' ? '—' : 'Checking…'; }
+    if (st.npm_managed) { return 'Managed by npm'; }
+    // Not "Installing…": the subtitle above already says that, and the stage
+    // line below says which part. What must NOT appear here mid-install is the
+    // plan's "Not installed" — true until the swap lands, and indistinguishable
+    // from the label having got stuck.
+    if (st.phase === 'running') { return 'In progress'; }
+    // "Updated", not "Installed", when the run replaced something: the button
+    // that started it said Update.
+    if (st.phase === 'done') {
+      if (st.up_to_date) { return 'Up to date'; }
+      return st.first_install ? 'Installed' : 'Updated';
+    }
+    if (!st.installed) { return 'Not installed'; }
+    return st.up_to_date ? 'Up to date' : 'Update available';
+  }
+
   function render(st) {
-    el('vInstalled').textContent = st.installed_version || 'not installed';
-    el('vLatest').textContent = st.latest_version || '…';
+    el('vStatus').textContent = statusText(st);
     el('stage').textContent = st.detail || '';
     el('error').classList.toggle('hidden', !st.error);
     el('error').textContent = st.error || '';
@@ -371,7 +465,7 @@ const wizardHTML = `<!doctype html>
         el('subtitle').textContent = st.up_to_date ? 'Already up to date.'
           : (st.platform === 'darwin' && st.first_install)
             ? 'Installed. Jarvis will now ask for its permissions.'
-            : 'Installed.';
+            : st.first_install ? 'Installed.' : 'Updated.';
         main.textContent = 'Launch Jarvis';
         main.onclick = function () { window.launchAndClose(); };
       }
@@ -389,10 +483,13 @@ const wizardHTML = `<!doctype html>
       main.textContent = 'Close';
       main.onclick = function () { window.closeInstaller(true); };
     } else {
-      el('subtitle').textContent = st.installed_version
-        ? 'An update is available.'
+      // The panel row is where "there is an update" is announced; saying it
+      // again here would leave the two lines of the screen agreeing with each
+      // other instead of telling the user two things.
+      el('subtitle').textContent = st.installed
+        ? 'This updates the Jarvis sidecar on this machine.'
         : 'This installs the Jarvis sidecar on this machine.';
-      main.textContent = st.installed_version ? 'Update' : 'Install';
+      main.textContent = st.installed ? 'Update' : 'Install';
       main.onclick = function () { window.startInstall(el('autostart').checked); };
     }
   }
@@ -405,5 +502,11 @@ const wizardHTML = `<!doctype html>
   window.startPlan();
   poll();
 </script>
+
+<!-- The chrome gets its own <script> on purpose. Everything above opens by
+     calling bindings, and a throw there would abort the rest of ITS block —
+     which, under custom chrome, is a window left with no title bar at all and
+     no native one to fall back on. A separate block still runs. -->
+<script>` + brand.TitlebarJS + brand.PageBodyJS + `</script>
 </body>
 </html>`

@@ -87,7 +87,10 @@ func performInstall(registryURL string, silent bool, progress progressFn) instal
 	}
 	defer os.RemoveAll(workDir)
 
-	progress("download", fmt.Sprintf("Downloading sidecar %s…", rel.Version))
+	// No version in the detail line: it is what the wizard's stage row shows,
+	// and that row is not the place for a number the user did not pick. The
+	// console path still names the resolved version on its final line.
+	progress("download", "Downloading the latest sidecar…")
 	tgz, err := downloadTarball(rel, workDir)
 	if err != nil {
 		return fail(exitNetwork, err)
