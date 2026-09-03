@@ -47,6 +47,46 @@ describe('UsejarvisAIProvider', () => {
     expect(auth ?? '').toBe('Bearer sk-uj-abc');
   });
 
+  it('never sends a custom temperature — the uj-* aliases resolve to reasoning models that reject it', async () => {
+    // The base OpenAIProvider skips temperature only for names it recognises as
+    // reasoning models; the hosted aliases are opaque, so without the override a
+    // temperature=0.4 reached the proxy and 400'd ("claude-opus-5 does not
+    // support temperature=0.4"). This proves the override strips it on the wire.
+    let sent: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (_input: any, init?: any) => {
+      sent = JSON.parse(String(init?.body));
+      return jsonResponse(200, {
+        id: 'x',
+        object: 'chat.completion',
+        model: 'uj-high',
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'hi' } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+    }) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    await provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-high', temperature: 0.4 });
+    expect(sent!.model).toBe('uj-high');
+    expect('temperature' in sent!).toBe(false);
+  });
+
+  it('never sends a custom temperature on the STREAM path either', async () => {
+    // The stream() builder carries its own copy of the temperature guard, so it
+    // gets its own wire-level assertion — a regression in just one path would
+    // otherwise slip through.
+    let sent: Record<string, unknown> | null = null;
+    globalThis.fetch = (async (_input: any, init?: any) => {
+      sent = JSON.parse(String(init?.body));
+      return new Response('data: [DONE]\n\n', { status: 200, headers: { 'Content-Type': 'text/event-stream' } });
+    }) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    try {
+      for await (const _ of provider.stream([{ role: 'user', content: 'hi' }], { model: 'uj-high', temperature: 0.4 })) { /* drain */ }
+    } catch { /* the body is captured before any stream parsing */ }
+    expect(sent!.model).toBe('uj-high');
+    expect(sent!.stream).toBe(true);
+    expect('temperature' in sent!).toBe(false);
+  });
+
   it('rewrites budget-exceeded into actionable copy, keeping the (status) marker', async () => {
     globalThis.fetch = (async () =>
       jsonResponse(400, { error: { message: 'ExceededBudget: budget has been exceeded for this key' } })) as unknown as typeof fetch;

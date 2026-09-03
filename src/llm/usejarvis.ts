@@ -47,6 +47,18 @@ export class UsejarvisAIProvider extends OpenAIProvider {
     return true;
   }
 
+  /** Every hosted chat alias (uj-chat / uj-low / uj-medium / uj-high) resolves
+   * to a premium REASONING model (gpt-5.6-*, claude-opus-*) that accepts only
+   * the default temperature (1). The aliases are vendor-opaque by design, so the
+   * base class's by-name check can never see it — the brain must assume the
+   * strictest rule and never send a custom temperature. Confirmed live: `uj-high`
+   * + temperature 0.4 → 400 "claude-opus-5 does not support temperature=0.4;
+   * only temperature=1 is supported". If a future plan adds a non-reasoning
+   * alias, this becomes model-aware; today omitting it is always correct. */
+  protected override rejectsCustomTemperature(_model: string): boolean {
+    return true;
+  }
+
   /**
    * Attach Anthropic prompt-cache breakpoints, in OpenAI wire format.
    *

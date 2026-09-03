@@ -154,6 +154,15 @@ export class OpenAIProvider implements LLMProvider {
     return false;
   }
 
+  /** Whether to omit a caller-supplied `temperature` for this model. Delegates
+   * to the by-name check by default; overridable because a provider whose model
+   * ids are OPAQUE (the hosted proxy's `uj-*` aliases) cannot tell from the name
+   * that the alias resolves to a reasoning model, so the name check never fires
+   * and every request 400s with "temperature does not support …". */
+  protected rejectsCustomTemperature(model: string): boolean {
+    return modelRejectsCustomTemperature(model);
+  }
+
   constructor(apiKey: string, defaultModel = 'gpt-4o', baseUrl = 'https://api.openai.com/v1', authHeader = 'Authorization') {
     this.apiKey = apiKey;
     this.defaultModel = defaultModel;
@@ -199,7 +208,7 @@ export class OpenAIProvider implements LLMProvider {
       messages: this.convertMessages(compactedMessages),
     };
 
-    if (temperature !== undefined && !modelRejectsCustomTemperature(model)) {
+    if (temperature !== undefined && !this.rejectsCustomTemperature(model)) {
       body.temperature = temperature;
     }
     if (max_tokens !== undefined) body.max_completion_tokens = max_tokens;
@@ -233,7 +242,7 @@ export class OpenAIProvider implements LLMProvider {
     };
     if (this.streamIncludeUsage) body.stream_options = { include_usage: true };
 
-    if (temperature !== undefined && !modelRejectsCustomTemperature(model)) {
+    if (temperature !== undefined && !this.rejectsCustomTemperature(model)) {
       body.temperature = temperature;
     }
     if (max_tokens !== undefined) body.max_completion_tokens = max_tokens;
