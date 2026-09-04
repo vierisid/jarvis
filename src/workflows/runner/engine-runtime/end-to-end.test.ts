@@ -149,6 +149,73 @@ describe("Engine end-to-end (F gate)", () => {
   );
 
   test.skipIf(skipE2eTests)(
+    "a trigger with NO triggerName (e.g. a schedule run manually) still runs its steps, not TriggerNameNotSetError",
+    async () => {
+      // Regression: running a workflow MANUALLY whose trigger is not the manual
+      // one (a SCHEDULE trigger came through with a nil triggerName) used to die
+      // at engine start with `TriggerNameNotSetError` / "FAILED at engine, no
+      // per-step trace". The engine now short-circuits executeOnStart when there
+      // is no triggerName and walks straight into the action chain.
+      const flow = createFlow({ projectId: DEFAULT_IDS.project });
+      const trigger: FlowTriggerNode = {
+        name: "trigger",
+        type: "PIECE_TRIGGER",
+        displayName: "Schedule",
+        settings: {
+          pieceName: PIECE_TEST_NAME,
+          pieceVersion: PIECE_VERSION,
+          // triggerName DELIBERATELY absent — the exact shape a manual run of a
+          // non-manual trigger produced.
+          input: {},
+        },
+        nextAction: {
+          name: "step_1",
+          type: "PIECE",
+          displayName: "Echo",
+          settings: {
+            pieceName: PIECE_TEST_NAME,
+            pieceVersion: PIECE_VERSION,
+            actionName: "echo",
+            input: { value: { from: "schedule-manual" } },
+          },
+        },
+      };
+      const v = createDraftVersion({
+        flowId: flow.id,
+        displayName: "schedule-manual-echo",
+        trigger,
+      });
+      updateDraftVersion(v.id, { trigger, valid: true });
+      lockVersion(v.id);
+
+      const run = createFlowRun({
+        flowId: flow.id,
+        flowVersionId: v.id,
+        environment: "TESTING",
+      });
+      const handle = await runtime!.acquire({
+        runId: run.id,
+        projectId: DEFAULT_IDS.project,
+      });
+      let stderrBuf = "";
+      handle.stderr?.on("data", (d) => { stderrBuf += d.toString(); });
+      try {
+        const finalRun = await handle.executeFlow({
+          flowVersion: getFlowVersion(v.id)!,
+        });
+        if (finalRun.status !== "SUCCEEDED") {
+          console.error(`[engine stderr]\n${stderrBuf.slice(0, 4000)}`);
+        }
+        expect(finalRun.status).toBe("SUCCEEDED");
+      } finally {
+        await handle.release();
+      }
+      expect(getFlowRun(run.id)?.status).toBe("SUCCEEDED");
+    },
+    45_000,
+  );
+
+  test.skipIf(skipE2eTests)(
     "manual trigger + jarvis-ask action calls daemon's /v1/jarvis/llm/chat",
     async () => {
       llmCalls = [];

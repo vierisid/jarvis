@@ -401,23 +401,29 @@ const PATCH_INSERTIONS: Record<
     },
   ],
   // Upstream's `flow-executor.executeFromTrigger` always calls
-  // `triggerHelper.executeOnStart`, which throws `TriggerNameNotSetError`
-  // when the trigger has no piece (the EMPTY / "Manual" type). Without this
-  // patch, manually-triggered runs from the editor's Run button fail
-  // before step 1. Anchor on the `BEGIN` branch's opening brace and insert
-  // an EMPTY-trigger short-circuit that runs the bookkeeping (initial
-  // backup + sendUpdate) and then walks straight into the action chain.
+  // `triggerHelper.executeOnStart`, which reads `settings.triggerName` and
+  // throws `TriggerNameNotSetError` when it is nil. That is nil for the EMPTY
+  // "Manual" trigger AND for a non-manual trigger (e.g. SCHEDULE) invoked
+  // MANUALLY from the Run button — both must run anyway. Without this patch
+  // those runs fail before step 1. Anchor on the `BEGIN` branch's opening
+  // brace and insert a no-triggerName short-circuit that runs the bookkeeping
+  // (initial backup + sendUpdate) and then walks straight into the action chain.
   "packages/server/engine/src/lib/handler/flow-executor.ts": [
     {
       anchor: /^\s*if \(input\.executionType === ExecutionType\.BEGIN\) \{\s*$/,
       insert:
-        "            // === JARVIS PATCH: short-circuit for manual (EMPTY) triggers ===\n" +
+        "            // === JARVIS PATCH: short-circuit when there is no piece trigger to start ===\n" +
         "            // Upstream unconditionally calls `triggerHelper.executeOnStart`,\n" +
-        "            // which throws `TriggerNameNotSetError` whenever the trigger has\n" +
-        "            // no piece (i.e. type === 'EMPTY' -- our user-facing \"Manual\"\n" +
-        "            // trigger). Replicate the surrounding bookkeeping (initial-state\n" +
-        "            // backup + progress update) and skip straight into the action chain.\n" +
-        "            if ((trigger as { type?: string }).type === 'EMPTY') {\n" +
+        "            // which reads `settings.triggerName` and throws\n" +
+        "            // `TriggerNameNotSetError` whenever it is nil -- true for the EMPTY\n" +
+        "            // \"Manual\" trigger AND for a non-manual trigger (e.g. SCHEDULE)\n" +
+        "            // invoked MANUALLY from the Run button. Both must run: skip straight\n" +
+        "            // into the action chain after the same bookkeeping (backup +\n" +
+        "            // sendUpdate). A real trigger firing carries a triggerName and still\n" +
+        "            // runs executeOnStart below, unchanged.\n" +
+        "            const jarvisTriggerName = (trigger as { settings?: { triggerName?: unknown } }).settings\n" +
+        "                ?.triggerName\n" +
+        "            if (isNil(jarvisTriggerName)) {\n" +
         "                void runProgressService.backup({\n" +
         "                    engineConstants: constants,\n" +
         "                    flowExecutorContext: executionState,\n" +

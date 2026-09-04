@@ -219,6 +219,13 @@ const PATCHED_VENDOR_SOURCES = [
   // doesn't ship the OLD operator list / executor.
   "shared/src/lib/automation/flows/actions/action.ts",
   "server/engine/src/lib/handler/router-executor.ts",
+  // Jarvis: the executeFromTrigger short-circuit that runs a flow's steps when
+  // its trigger has no piece to start (the EMPTY "Manual" trigger, AND a
+  // non-manual trigger — e.g. SCHEDULE — invoked manually from the Run button).
+  // Without registering it here, editing that patch left the OLD engine cached
+  // and the fix never shipped — which is exactly how a stale bundle kept
+  // throwing TriggerNameNotSetError after the patch was generalized.
+  "server/engine/src/lib/handler/flow-executor.ts",
   // Jarvis: upstream sets process.env.NODE_TLS_REJECT_UNAUTHORIZED='0'
   // on every HTTP-node request, which disables TLS verification for the
   // entire Node process (not just the one request). We strip that line
@@ -226,6 +233,15 @@ const PATCHED_VENDOR_SOURCES = [
   // it, the file content here changes and the bundle hash invalidates so
   // the cached engine doesn't keep shipping the OLD bypass.
   "pieces/common/src/lib/http/axios/axios-http-client.ts",
+  // The remaining files sync-activepieces.ts patches (STUB_FILES / STRIP_LINES /
+  // PATCH_INSERTIONS) — registered so ANY of them changing invalidates the
+  // bundle, closing the same stale-engine gap flow-executor.ts hit. Keep this
+  // set in sync with the sync script's patch tables; a file it patches but this
+  // list omits is served stale from cache.
+  "server/engine/src/lib/core/code/v8-isolate-code-sandbox.ts", // STUB_FILES
+  "pieces/framework/src/lib/context/index.ts", // PATCH_INSERTIONS
+  "shared/src/index.ts", // STRIP_LINES
+  "pieces/framework/src/lib/index.ts", // STRIP_LINES
 ] as const;
 
 /**

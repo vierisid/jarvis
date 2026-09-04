@@ -39,16 +39,18 @@ export const flowExecutor = {
     }): Promise<FlowExecutorContext> {
         const trigger = input.flowVersion.trigger
         if (input.executionType === ExecutionType.BEGIN) {
-            // === JARVIS PATCH: short-circuit for manual (EMPTY) triggers ===
+            // === JARVIS PATCH: short-circuit when there is no piece trigger to start ===
             // Upstream unconditionally calls `triggerHelper.executeOnStart`,
-            // which throws `TriggerNameNotSetError` whenever the trigger has
-            // no piece (i.e. type === 'EMPTY' — our user-facing "Manual"
-            // trigger). Replicate the surrounding bookkeeping (initial-state
-            // backup + progress update) and skip straight into the action
-            // chain. The mirror of this patch lives in PATCH_INSERTIONS in
-            // `scripts/sync-activepieces.ts` so future upstream re-syncs
-            // restore it automatically.
-            if ((trigger as { type?: string }).type === 'EMPTY') {
+            // which reads `settings.triggerName` and throws
+            // `TriggerNameNotSetError` whenever it is nil -- true for the EMPTY
+            // "Manual" trigger AND for a non-manual trigger (e.g. SCHEDULE)
+            // invoked MANUALLY from the Run button. Both must run: skip straight
+            // into the action chain after the same bookkeeping (backup +
+            // sendUpdate). A real trigger firing carries a triggerName and still
+            // runs executeOnStart below, unchanged.
+            const jarvisTriggerName = (trigger as { settings?: { triggerName?: unknown } }).settings
+                ?.triggerName
+            if (isNil(jarvisTriggerName)) {
                 void runProgressService.backup({
                     engineConstants: constants,
                     flowExecutorContext: executionState,
