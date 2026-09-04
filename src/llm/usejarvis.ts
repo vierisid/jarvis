@@ -1,5 +1,5 @@
 import { OpenAIProvider, type OpenAIMessage } from './openai.ts';
-import type { LLMMessage } from './provider.ts';
+import type { LLMMessage, LLMOptions } from './provider.ts';
 import { hostedProxyError, isBudgetExhaustion } from '../util/hosted-error.ts';
 import { redactSecrets } from '../util/redact.ts';
 
@@ -201,12 +201,73 @@ export class UsejarvisAIProvider extends OpenAIProvider {
    * unreachable so tier pickers degrade instead of hanging or throwing. */
   static readonly FALLBACK_MODELS = ['uj-chat', 'uj-high', 'uj-low', 'uj-medium'] as const;
 
+  /** A hosted tier that resolves to a reasoning/thinking model rejects a
+   * `max_tokens` smaller than its thinking budget — Anthropic answers 400
+   * "`max_tokens` must be greater than `thinking.budget_tokens`" (observed
+   * budgets ~2–4k for reasoning_effort medium/high). Small structured calls
+   * (awareness deltas at max_tokens:200, one-word classifiers, etc.) hit this
+   * whenever an operator sets reasoning_effort on such a tier — which broke
+   * every awareness call once one was set on a Claude tier. Matched on the
+   * stable substring, not a status: the body arrives inside a wrapped message. */
+  private static isThinkingBudgetError(err: unknown): boolean {
+    const msg = err instanceof Error ? err.message : String(err);
+    return msg.includes('thinking.budget_tokens');
+  }
+  /** What to retry a budget-collision call with. Well above the thinking
+   * budgets litellm's reasoning_effort maps to (tops out ~4k for high), and
+   * inside every thinking-capable hosted model's output cap (>=32k), so the
+   * bump clears the budget without itself 400ing as too large. NOTE this
+   * REMOVES the caller's output cap: a call that asked for <=200 completion
+   * tokens can now return up to this many — unavoidable, since Anthropic
+   * requires max_tokens > budget and the budget is invisible behind the opaque
+   * alias. Downstream code must not rely on a tiny max_tokens as a hard length
+   * bound on a hosted tier; constrain via the prompt instead. */
+  private static readonly THINKING_RETRY_MAX_TOKENS = 16384;
+
+  /** Models already warned about this misconfig — one line per process, not
+   * per call (the awareness loop hits this constantly). */
+  private static readonly warnedThinkingTiers = new Set<string>();
+
+  /** Retry options with max_tokens raised above the thinking budget, or null
+   * when the caller already sent >= the floor — retrying identically is
+   * pointless (a custom proxy budget above the floor degrades cleanly to the
+   * rewritten throw). Warns ONCE per model: the retry hides a persistent
+   * misconfiguration (every small call then pays a doomed first request plus a
+   * thinking completion billed as output), so the operator needs a signal to
+   * drop reasoning_effort from a tier that runs short structured calls. */
+  private static bumpForThinkingBudget(options: LLMOptions | undefined): LLMOptions | null {
+    const current = options?.max_tokens ?? 0;
+    if (current >= UsejarvisAIProvider.THINKING_RETRY_MAX_TOKENS) return null;
+    const model = options?.model ?? '(default)';
+    if (!UsejarvisAIProvider.warnedThinkingTiers.has(model)) {
+      UsejarvisAIProvider.warnedThinkingTiers.add(model);
+      console.warn(
+        `[usejarvis] ${model} rejected max_tokens=${current || '(unset)'} below its thinking budget; ` +
+          `retried with ${UsejarvisAIProvider.THINKING_RETRY_MAX_TOKENS}. If this tier runs short ` +
+          `structured calls, drop reasoning_effort from its model.`,
+      );
+    }
+    return { ...options, max_tokens: UsejarvisAIProvider.THINKING_RETRY_MAX_TOKENS };
+  }
+
   override async chat(
     ...args: Parameters<OpenAIProvider['chat']>
   ): ReturnType<OpenAIProvider['chat']> {
     try {
       return await super.chat(...args);
     } catch (error) {
+      if (UsejarvisAIProvider.isThinkingBudgetError(error)) {
+        const [messages, options] = args;
+        const bumped = UsejarvisAIProvider.bumpForThinkingBudget(options);
+        if (bumped) {
+          try {
+            // super.chat, not this.chat: one retry only, no re-entry.
+            return await super.chat(messages, bumped);
+          } catch (retryError) {
+            throw await this.rewrite(retryError);
+          }
+        }
+      }
       throw await this.rewrite(error);
     }
   }
@@ -219,12 +280,32 @@ export class UsejarvisAIProvider extends OpenAIProvider {
     // rewrite must intercept EVENTS; a try/catch here is dead code, and the
     // raw proxy body — which can echo the bearer we presented — would reach
     // the chat bubble on the very path users talk through.
-    for await (const event of super.stream(...args)) {
-      if (event.type === 'error' && typeof event.error === 'string') {
-        yield { ...event, error: await this.rewriteText(event.error) };
-      } else {
-        yield event;
+    const [messages] = args;
+    let options = args[1];
+    let retried = false;
+    // Loop so a pre-stream thinking-budget 400 (see chat()) can restart the
+    // stream once with a max_tokens that clears the budget. Only BEFORE any
+    // content has been yielded — a mid-stream restart would replay output — but
+    // that error is always the first event, so the guard holds.
+    restart: for (;;) {
+      let yieldedContent = false;
+      for await (const event of super.stream(messages, options)) {
+        if (event.type === 'error' && typeof event.error === 'string') {
+          if (!retried && !yieldedContent && UsejarvisAIProvider.isThinkingBudgetError(event.error)) {
+            const bumped = UsejarvisAIProvider.bumpForThinkingBudget(options);
+            if (bumped) {
+              retried = true;
+              options = bumped;
+              continue restart;
+            }
+          }
+          yield { ...event, error: await this.rewriteText(event.error) };
+        } else {
+          yieldedContent = true;
+          yield event;
+        }
       }
+      break;
     }
   }
 

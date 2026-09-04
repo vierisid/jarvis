@@ -87,6 +87,117 @@ describe('UsejarvisAIProvider', () => {
     expect('temperature' in sent!).toBe(false);
   });
 
+  it('retries a thinking-budget 400 once with a max_tokens that clears the budget (chat)', async () => {
+    // A tier that resolves to a thinking model rejects a max_tokens below its
+    // thinking budget; the small structured calls (awareness deltas etc.) hit
+    // this. The provider retries once with room, so the call succeeds.
+    const sent: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: any, init?: any) => {
+      sent.push(JSON.parse(String(init?.body)));
+      if (sent.length === 1) {
+        return jsonResponse(400, {
+          error: { message: 'litellm.BadRequestError: AnthropicException - `max_tokens` must be greater than `thinking.budget_tokens`.' },
+        });
+      }
+      return jsonResponse(200, {
+        id: 'x', object: 'chat.completion', model: 'uj-medium',
+        choices: [{ index: 0, finish_reason: 'stop', message: { role: 'assistant', content: 'ok' } }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+    }) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    const res = await provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-medium', max_tokens: 200 });
+    expect(res.content).toBe('ok');
+    expect(sent.length).toBe(2); // one retry, no more
+    expect(sent[0]!.max_completion_tokens).toBe(200); // first call kept the caller's tiny cap
+    expect(sent[1]!.max_completion_tokens as number).toBeGreaterThanOrEqual(16384); // retry cleared the budget
+  });
+
+  it('does NOT retry a 400 that is not a thinking-budget error', async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return jsonResponse(400, { error: { message: 'some other invalid_request_error' } });
+    }) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    await expect(provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-low', max_tokens: 5 })).rejects.toThrow();
+    expect(calls).toBe(1); // no retry — a tiny cap on a non-thinking tier is respected
+  });
+
+  it('restarts the STREAM once on a pre-stream thinking-budget 400, with a cleared max_tokens', async () => {
+    const sent: Array<Record<string, unknown>> = [];
+    globalThis.fetch = (async (_input: any, init?: any) => {
+      sent.push(JSON.parse(String(init?.body)));
+      if (sent.length === 1) {
+        return jsonResponse(400, {
+          error: { message: 'AnthropicException - `max_tokens` must be greater than `thinking.budget_tokens`.' },
+        });
+      }
+      return new Response(
+        'data: {"choices":[{"delta":{"content":"ok"}}]}\n\ndata: [DONE]\n\n',
+        { status: 200, headers: { 'Content-Type': 'text/event-stream' } },
+      );
+    }) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    let text = '';
+    let sawError = false;
+    for await (const ev of provider.stream([{ role: 'user', content: 'hi' }], { model: 'uj-medium', max_tokens: 200 })) {
+      if (ev.type === 'error') sawError = true;
+      if (ev.type === 'text') text += ev.text;
+    }
+    expect(sawError).toBe(false); // the pre-stream error was swallowed by the restart
+    expect(text).toBe('ok');
+    expect(sent.length).toBe(2);
+    expect(sent[1]!.max_completion_tokens as number).toBeGreaterThanOrEqual(16384);
+  });
+
+  it('retries a thinking-budget 400 at most ONCE — a still-failing retry rejects, no loop (chat)', async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return jsonResponse(400, {
+        error: { message: 'AnthropicException - `max_tokens` must be greater than `thinking.budget_tokens`.' },
+      });
+    }) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    await expect(
+      provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-medium', max_tokens: 200 }),
+    ).rejects.toThrow();
+    expect(calls).toBe(2); // original + exactly one retry — the termination guard
+  });
+
+  it('does NOT retry when the caller already sent max_tokens >= the floor (retry would be identical)', async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return jsonResponse(400, {
+        error: { message: 'AnthropicException - `max_tokens` must be greater than `thinking.budget_tokens`.' },
+      });
+    }) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    await expect(
+      provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-medium', max_tokens: 32000 }),
+    ).rejects.toThrow();
+    expect(calls).toBe(1); // 32000 >= floor -> bumping wouldn't change the request, so no wasted retry
+  });
+
+  it('retries the STREAM at most once — a still-failing restart surfaces one error, no loop', async () => {
+    let calls = 0;
+    globalThis.fetch = (async () => {
+      calls++;
+      return jsonResponse(400, {
+        error: { message: 'AnthropicException - `max_tokens` must be greater than `thinking.budget_tokens`.' },
+      });
+    }) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    let errorEvents = 0;
+    for await (const ev of provider.stream([{ role: 'user', content: 'hi' }], { model: 'uj-medium', max_tokens: 200 })) {
+      if (ev.type === 'error') errorEvents++;
+    }
+    expect(calls).toBe(2); // original + one restart
+    expect(errorEvents).toBe(1); // the second failure surfaces, rewritten, exactly once
+  });
+
   it('rewrites budget-exceeded into actionable copy, keeping the (status) marker', async () => {
     globalThis.fetch = (async () =>
       jsonResponse(400, { error: { message: 'ExceededBudget: budget has been exceeded for this key' } })) as unknown as typeof fetch;
