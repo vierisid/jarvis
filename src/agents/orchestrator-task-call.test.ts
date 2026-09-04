@@ -55,6 +55,20 @@ function toolCall(name: string, args: Record<string, unknown>): LLMResponse {
   };
 }
 
+function response(
+  content: string,
+  finish: LLMResponse['finish_reason'],
+  calls: LLMToolCall[] = [],
+): LLMResponse {
+  return {
+    content,
+    tool_calls: calls,
+    usage: { input_tokens: 10, output_tokens: 5 },
+    model: 'scripted',
+    finish_reason: finish,
+  };
+}
+
 function makeOrchestrator(provider: LLMProvider): AgentOrchestrator {
   const m = new LLMManager();
   m.registerProvider(provider);
@@ -155,6 +169,96 @@ describe('AgentOrchestrator.processTaskCall', () => {
     if (result.kind === 'completed') {
       expect(result.text).toBe('I am still about to get on that.');
     }
+  });
+
+  it('does not push back on a resumed task that already ran tools', async () => {
+    // The pre-pause buffer carries the tool results. Pushing back here would
+    // tell a model that already sent the mail that nothing has been done.
+    const provider = new ScriptedProvider([text('Already done - Notepad is open.')]);
+    const orch = makeOrchestrator(provider);
+
+    const result = await orch.processTaskCall({
+      systemPrompt: 'task system',
+      userMessage: 'yes, go ahead',
+      tier: 'medium',
+      subsystem: 'task_test',
+      requireToolUse: true,
+      history: [
+        { role: 'system', content: 'task system' },
+        { role: 'user', content: 'open notepad' },
+        { role: 'assistant', content: '', tool_calls: [{ id: 'c1', name: 'open_app', arguments: {} }] },
+        { role: 'tool', content: 'opened', tool_call_id: 'c1' },
+      ],
+    });
+
+    expect(result.kind).toBe('completed');
+    if (result.kind === 'completed') {
+      expect(result.text).toBe('Already done - Notepad is open.');
+    }
+  });
+
+  it('does not push back when the provider reported calls without a tool_use finish', async () => {
+    // Gemini marks every function call STOP, so its calls arrive here.
+    const provider = new ScriptedProvider([
+      response('Opening notepad.', 'stop', [{ id: 'c1', name: 'open_app', arguments: { name: 'notepad' } }]),
+      text('SHOULD NOT BE REACHED'),
+    ]);
+    const orch = makeOrchestrator(provider);
+
+    const result = await orch.processTaskCall({
+      systemPrompt: 'task system',
+      userMessage: 'open notepad',
+      tier: 'medium',
+      subsystem: 'task_test',
+      requireToolUse: true,
+    });
+    expect(result.kind).toBe('completed');
+    if (result.kind === 'completed') expect(result.text).toBe('Opening notepad.');
+  });
+
+  it('does not push back on a truncated answer', async () => {
+    const provider = new ScriptedProvider([
+      response('A very long draft that ran out of', 'length'),
+      text('SHOULD NOT BE REACHED'),
+    ]);
+    const orch = makeOrchestrator(provider);
+
+    const result = await orch.processTaskCall({
+      systemPrompt: 'task system',
+      userMessage: 'summarise the vault',
+      tier: 'medium',
+      subsystem: 'task_test',
+      requireToolUse: true,
+    });
+    expect(result.kind).toBe('completed');
+    if (result.kind === 'completed') {
+      expect(result.text).toContain('A very long draft that ran out of');
+      expect(result.text).toContain('truncated');
+    }
+  });
+
+  it('never re-sends an empty assistant message when pushing back', async () => {
+    // Providers reject empty assistant content once the buffer is re-sent.
+    const provider = new ScriptedProvider([
+      response('', 'stop'),
+      toolCall('open_app', { name: 'notepad' }),
+      text('Notepad is open.'),
+    ]);
+    const orch = makeOrchestrator(provider);
+
+    const result = await orch.processTaskCall({
+      systemPrompt: 'task system',
+      userMessage: 'open notepad',
+      tier: 'medium',
+      subsystem: 'task_test',
+      requireToolUse: true,
+    });
+    expect(result.kind).toBe('completed');
+    if (result.kind !== 'completed') return;
+    expect(result.text).toBe('Notepad is open.');
+    const empties = (result.conversation as { role: string; content: string }[])
+      .filter((m) => m.role === 'assistant' && !m.content?.trim() && !('tool_calls' in m));
+    expect(empties.length).toBe(0);
   });
 
   it('returns paused when LLM calls ask_for_clarification', async () => {

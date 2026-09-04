@@ -508,7 +508,12 @@ export class AgentOrchestrator {
     const tools: LLMTool[] = [...baseTools, ASK_FOR_CLARIFICATION_TOOL];
 
     let finalText = '';
-    let toolsExecuted = 0;
+    // Seeded from the resumed buffer, not 0: a task that ran tools before it
+    // paused HAS done work, and the push-back below would otherwise tell it
+    // "nothing has been done yet ... do the work now" - an instruction to
+    // re-run side-effecting tools it already ran (re-send the mail, re-create
+    // the workflow).
+    let toolsExecuted = opts.history?.some((m) => m.role === 'tool') ? 1 : 0;
     let nudges = 0;
 
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
@@ -570,9 +575,32 @@ export class AgentOrchestrator {
       // Bounded, and only when the caller asked for it: a task that
       // legitimately needs no tools (drafting prose) must still be able to
       // answer in a single call.
-      if (opts.requireToolUse && toolsExecuted === 0 && nudges < MAX_NO_WORK_NUDGES) {
+      const strandedToolCalls = (llmResponse.tool_calls?.length ?? 0) > 0;
+      if (
+        opts.requireToolUse
+        && toolsExecuted === 0
+        && nudges < MAX_NO_WORK_NUDGES
+        // Calls the provider reported without a `tool_use` finish reason land
+        // here (Gemini marks every function call `STOP` - see its
+        // `tool_calls_present`). The model DID call a tool, so telling it that
+        // it did not is both false and destructive: the push-back would drop
+        // the calls from the buffer it re-sends.
+        && !strandedToolCalls
+        // A truncated or filtered turn is not an announcement. Nudging burns
+        // two more expensive generations and loses the truncation marker
+        // appended below.
+        && llmResponse.finish_reason !== 'length'
+        && llmResponse.finish_reason !== 'error'
+      ) {
         nudges++;
-        messages.push({ role: 'assistant', content: llmResponse.content });
+        // Only when it actually said something: an empty assistant message is
+        // re-sent on the next iteration, and providers reject empty content
+        // (AnthropicProvider.convertMessages passes assistant turns through
+        // verbatim). Before this loop re-sent the buffer, an empty final
+        // message was harmless.
+        if (llmResponse.content.trim()) {
+          messages.push({ role: 'assistant', content: llmResponse.content });
+        }
         messages.push({ role: 'user', content: NO_WORK_NUDGE });
         continue;
       }

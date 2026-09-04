@@ -194,9 +194,12 @@ export class TaskDispatcher {
       // log it loudly rather than letting it look like a normal completion.
       // `grep 'completed without using any tool'` on the daemon log is the
       // fastest check after changing which model backs a tier.
+      // `write` is exempt: it drafts prose and is dispatched with
+      // requireToolUse off, so a tool-less completion is the expected shape -
+      // warning on it would bury the real signal in the log.
       const usedTools = (result.conversation as { role?: string }[])
         .some((m) => m?.role === 'tool');
-      if (!usedTools) {
+      if (!usedTools && request.template !== 'write') {
         console.warn(
           `[TaskDispatcher] task ${record.id} (${request.template}, tier=${request.tier}) ` +
           `completed without using any tool - the model answered with text only. ` +
