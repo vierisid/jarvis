@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"gopkg.in/yaml.v3"
@@ -179,5 +180,222 @@ func TestOpenDashboardAtStartupRoundTrips(t *testing.T) {
 	}
 	if !loaded.Preferences.OpenDashboardAtStartup {
 		t.Fatal("OpenDashboardAtStartup did not survive the save/load round trip")
+	}
+}
+
+// withTempConfig points configDir/configFile at a temp dir for one test.
+func withTempConfig(t *testing.T) {
+	t.Helper()
+	originalConfigDir := configDir
+	originalConfigFile := configFile
+	t.Cleanup(func() {
+		configDir = originalConfigDir
+		configFile = originalConfigFile
+	})
+	configDir = filepath.Join(t.TempDir(), ".jarvis")
+	configFile = filepath.Join(configDir, "sidecar.yaml")
+}
+
+// A saved config must not spell out values that still match the defaults.
+// Writing them is what freezes an install at whatever the defaults were on the
+// day it enrolled, so a later change to a default can never reach it.
+func TestSaveConfigOmitsDefaults(t *testing.T) {
+	withTempConfig(t)
+
+	cfg := defaultConfig()
+	if err := SaveConfig(&cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+
+	for _, key := range []string{
+		"screen_interval_ms", "window_interval_ms", "min_change_threshold",
+		"stuck_threshold_ms", "capture_dir", "timeout_ms", "max_file_size_kb", "cdp_port",
+	} {
+		if strings.Contains(string(data), key) {
+			t.Errorf("saved config pins default %q:\n%s", key, data)
+		}
+	}
+}
+
+// The flip side: a deliberate non-default choice must survive the round trip.
+func TestSaveConfigKeepsDeliberateValues(t *testing.T) {
+	withTempConfig(t)
+
+	cfg := defaultConfig()
+	cfg.Awareness.ScreenIntervalMs = 3000
+	cfg.Awareness.OCREnabled = false
+	if err := SaveConfig(&cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	loaded, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if loaded.Awareness.ScreenIntervalMs != 3000 {
+		t.Errorf("screen interval = %d, want 3000", loaded.Awareness.ScreenIntervalMs)
+	}
+	// A false bool is why OCREnabled is not omitempty: omitting it would read
+	// back as the true default and silently switch OCR on again.
+	if loaded.Awareness.OCREnabled {
+		t.Error("ocr_enabled false did not survive the round trip")
+	}
+	// Untouched values still resolve to the current defaults.
+	if loaded.Awareness.WindowIntervalMs != defaultWindowIntervalMs {
+		t.Errorf("window interval = %d, want %d", loaded.Awareness.WindowIntervalMs, defaultWindowIntervalMs)
+	}
+}
+
+// An install enrolled before the defaults changed has the old values written
+// out verbatim. Those must read as "not specified" so the new default applies.
+func TestLoadConfigIgnoresSupersededDefaults(t *testing.T) {
+	withTempConfig(t)
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Exactly what a pre-0.9.4 sidecar.yaml carried.
+	old := "awareness:\n  screen_interval_ms: 7000\n  window_interval_ms: 2000\n  min_change_threshold: 0.02\n  stuck_threshold_ms: 120000\n  ocr_enabled: true\n"
+	if err := os.WriteFile(configFile, []byte(old), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Awareness.ScreenIntervalMs != defaultScreenIntervalMs {
+		t.Errorf("screen interval = %d, want %d", cfg.Awareness.ScreenIntervalMs, defaultScreenIntervalMs)
+	}
+	if cfg.Awareness.WindowIntervalMs != defaultWindowIntervalMs {
+		t.Errorf("window interval = %d, want %d", cfg.Awareness.WindowIntervalMs, defaultWindowIntervalMs)
+	}
+	if !cfg.Awareness.OCREnabled {
+		t.Error("unrelated stored values must be untouched")
+	}
+}
+
+// A value that happens to be non-default is never confused with a superseded
+// one, even when it sits between the old and new defaults.
+func TestLoadConfigKeepsNonDefaultIntervals(t *testing.T) {
+	withTempConfig(t)
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(configFile, []byte("awareness:\n  screen_interval_ms: 9000\n"), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Awareness.ScreenIntervalMs != 9000 {
+		t.Errorf("screen interval = %d, want 9000", cfg.Awareness.ScreenIntervalMs)
+	}
+}
+
+// Loading a legacy file and saving it back leaves the file carrying no pinned
+// defaults at all, so the next default change reaches this install too.
+func TestLegacyConfigHealsOnSave(t *testing.T) {
+	withTempConfig(t)
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	if err := os.WriteFile(configFile, []byte("awareness:\n  screen_interval_ms: 7000\n  window_interval_ms: 2000\n"), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if err := SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if strings.Contains(string(data), "screen_interval_ms") || strings.Contains(string(data), "window_interval_ms") {
+		t.Errorf("rewritten config still pins intervals:\n%s", data)
+	}
+}
+
+// The migration must not fire on a versioned file. 7000 is a legitimate choice
+// today; once the file carries a stamp, that choice has to survive restarts.
+func TestSupersededMigrationRunsOnlyOnUnversionedFiles(t *testing.T) {
+	withTempConfig(t)
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	stamped := "config_version: 1\nawareness:\n  screen_interval_ms: 7000\n"
+	if err := os.WriteFile(configFile, []byte(stamped), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if cfg.Awareness.ScreenIntervalMs != 7000 {
+		t.Errorf("screen interval = %d, want 7000 (deliberate choice on a stamped file)", cfg.Awareness.ScreenIntervalMs)
+	}
+}
+
+// Choosing the old default through the settings UI has to stick: save stamps
+// the file, so the next load leaves it alone.
+func TestDeliberateLegacyValueSurvivesRoundTrip(t *testing.T) {
+	withTempConfig(t)
+	if err := os.MkdirAll(configDir, 0700); err != nil {
+		t.Fatalf("mkdir: %v", err)
+	}
+	// Start from an unversioned file, as an existing install would.
+	if err := os.WriteFile(configFile, []byte("awareness:\n  screen_interval_ms: 7000\n"), 0600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+
+	cfg, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	// Migrated to the new default on this first load.
+	if cfg.Awareness.ScreenIntervalMs != defaultScreenIntervalMs {
+		t.Fatalf("screen interval = %d, want %d", cfg.Awareness.ScreenIntervalMs, defaultScreenIntervalMs)
+	}
+
+	// Now the user deliberately picks 7s in the settings UI.
+	cfg.Awareness.ScreenIntervalMs = 7000
+	if err := SaveConfig(cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+
+	reloaded, err := LoadConfig()
+	if err != nil {
+		t.Fatalf("LoadConfig: %v", err)
+	}
+	if reloaded.Awareness.ScreenIntervalMs != 7000 {
+		t.Errorf("deliberate 7000 reverted to %d", reloaded.Awareness.ScreenIntervalMs)
+	}
+}
+
+// Every save stamps the version, including one that pins nothing else.
+func TestSaveConfigStampsVersion(t *testing.T) {
+	withTempConfig(t)
+	cfg := defaultConfig()
+	if err := SaveConfig(&cfg); err != nil {
+		t.Fatalf("SaveConfig: %v", err)
+	}
+	data, err := os.ReadFile(configFile)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(data), "config_version: 1") {
+		t.Errorf("saved config carries no version stamp:\n%s", data)
 	}
 }

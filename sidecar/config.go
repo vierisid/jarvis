@@ -25,6 +25,71 @@ func homeDir() string {
 	return h
 }
 
+// Built-in defaults for every value the user can override.
+//
+// Two rules keep these live rather than frozen into each install's config file
+// at enrollment:
+//
+//  1. SaveConfig never writes a value that still equals its default
+//     (sparseForSave), so sidecar.yaml only ever pins deliberate choices.
+//  2. Values a previous release baked into every config file are listed in
+//     supersededDefaults and treated as "not specified" on load, so the new
+//     default applies to installs that already have the old one on disk.
+//
+// When you change a default here, add the value you are replacing to
+// supersededDefaults. Without that, every existing install keeps the old
+// behavior forever and the change only reaches fresh installs.
+const (
+	defaultTerminalTimeoutMs  = 30000
+	defaultMaxFileSizeKB      = 100
+	defaultCDPPort            = 9222
+	defaultScreenIntervalMs   = 15000
+	defaultWindowIntervalMs   = 5000
+	defaultMinChangeThreshold = 0.02
+	defaultStuckThresholdMs   = 120000
+)
+
+// currentConfigVersion is the number stamped into every config this build
+// writes. Bump it when adding a migration below.
+const currentConfigVersion = 1
+
+// Defaults that shipped in an earlier release and were therefore written into
+// existing sidecar.yaml files verbatim. Within a file that predates
+// versioning, a stored value matching one of these is indistinguishable from
+// "the installer wrote the default here", so it is read as unset and the
+// current default wins.
+//
+// This applies ONLY to unversioned files, and only once — the load that
+// migrates a file also stamps it, and every save from this build onward writes
+// the stamp. Without that guard a user who deliberately picks the old value
+// today (7s screen sampling is a perfectly reasonable choice) would find it
+// silently reverted on the next restart.
+//
+// The residual trade-off is confined to unversioned files: someone who had
+// deliberately chosen the old default before this build existed gets moved to
+// the new one. There is no way to tell those two apart, and leaving every
+// install pinned to enrollment-day defaults is the worse failure.
+var supersededDefaults = struct {
+	ScreenIntervalMs []int
+	WindowIntervalMs []int
+}{
+	ScreenIntervalMs: []int{7000},
+	WindowIntervalMs: []int{2000},
+}
+
+func isSuperseded(value int, superseded []int) bool {
+	for _, v := range superseded {
+		if value == v {
+			return true
+		}
+	}
+	return false
+}
+
+func defaultCaptureDir() string {
+	return filepath.Join(homeDir(), ".jarvis", "captures")
+}
+
 func defaultConfig() SidecarConfig {
 	return SidecarConfig{
 		Capabilities: []SidecarCapability{
@@ -33,22 +98,26 @@ func defaultConfig() SidecarConfig {
 		},
 		Terminal: TerminalConfig{
 			BlockedCommands: []string{},
-			TimeoutMs:       30000,
+			TimeoutMs:       defaultTerminalTimeoutMs,
 		},
 		Filesystem: FilesystemConfig{
 			BlockedPaths:  []string{},
-			MaxFileSizeKB: 100,
+			MaxFileSizeKB: defaultMaxFileSizeKB,
 		},
 		Browser: BrowserConfig{
-			CDPPort: 9222,
+			CDPPort: defaultCDPPort,
 		},
 		Awareness: AwarenessConfig{
-			ScreenIntervalMs:   7000,
-			WindowIntervalMs:   2000,
-			MinChangeThreshold: 0.02,
-			StuckThresholdMs:   120000,
+			// Sampling rates are a cost knob, not just a CPU one: every capture
+			// feeds the brain's awareness pipeline, and window polls emit a
+			// context_changed event on every title change. 15s/5s keeps the
+			// event stream legible without losing anything the brain acts on.
+			ScreenIntervalMs:   defaultScreenIntervalMs,
+			WindowIntervalMs:   defaultWindowIntervalMs,
+			MinChangeThreshold: defaultMinChangeThreshold,
+			StuckThresholdMs:   defaultStuckThresholdMs,
 			OCREnabled:         true,
-			CaptureDir:         filepath.Join(homeDir(), ".jarvis", "captures"),
+			CaptureDir:         defaultCaptureDir(),
 		},
 	}
 }
@@ -59,6 +128,7 @@ func LoadConfig() (*SidecarConfig, error) {
 	data, err := os.ReadFile(configFile)
 	if err != nil {
 		if os.IsNotExist(err) {
+			cfg.ConfigVersion = currentConfigVersion
 			return &cfg, nil
 		}
 		return nil, err
@@ -96,24 +166,84 @@ func LoadConfig() (*SidecarConfig, error) {
 		}
 	}
 
+	// Read the stamp off the raw file rather than off cfg: cfg was seeded from
+	// defaultConfig(), so an absent key there is indistinguishable from a
+	// current one.
+	var probe struct {
+		ConfigVersion int `yaml:"config_version"`
+	}
+	_ = yaml.Unmarshal(data, &probe)
+
+	if probe.ConfigVersion < 1 {
+		// Unversioned file: a value matching a superseded default is only there
+		// because an older release wrote it, so read it as unset.
+		if isSuperseded(cfg.Awareness.ScreenIntervalMs, supersededDefaults.ScreenIntervalMs) {
+			cfg.Awareness.ScreenIntervalMs = 0
+		}
+		if isSuperseded(cfg.Awareness.WindowIntervalMs, supersededDefaults.WindowIntervalMs) {
+			cfg.Awareness.WindowIntervalMs = 0
+		}
+	}
+	cfg.ConfigVersion = currentConfigVersion
+
 	// Awareness defaults
 	if cfg.Awareness.ScreenIntervalMs == 0 {
-		cfg.Awareness.ScreenIntervalMs = 7000
+		cfg.Awareness.ScreenIntervalMs = defaultScreenIntervalMs
 	}
 	if cfg.Awareness.WindowIntervalMs == 0 {
-		cfg.Awareness.WindowIntervalMs = 2000
+		cfg.Awareness.WindowIntervalMs = defaultWindowIntervalMs
 	}
 	if cfg.Awareness.MinChangeThreshold == 0 {
-		cfg.Awareness.MinChangeThreshold = 0.02
+		cfg.Awareness.MinChangeThreshold = defaultMinChangeThreshold
 	}
 	if cfg.Awareness.StuckThresholdMs == 0 {
-		cfg.Awareness.StuckThresholdMs = 120000
+		cfg.Awareness.StuckThresholdMs = defaultStuckThresholdMs
 	}
 	if cfg.Awareness.CaptureDir == "" {
-		cfg.Awareness.CaptureDir = filepath.Join(homeDir(), ".jarvis", "captures")
+		cfg.Awareness.CaptureDir = defaultCaptureDir()
 	}
 
 	return &cfg, nil
+}
+
+// sparseForSave strips every value that still matches the built-in default so
+// it is left out of the file (the tunables are tagged omitempty).
+//
+// Writing the fully-resolved config back is what pins an install to whatever
+// the defaults happened to be on the day it enrolled: the file then specifies
+// every value explicitly, and a later change to a default can never reach it.
+// Callers keep working with the fully-populated in-memory config; only the
+// on-disk form is sparse.
+func sparseForSave(cfg *SidecarConfig) SidecarConfig {
+	out := *cfg
+	// Always stamped, never stripped: this is the record of which migrations
+	// have run, not a tunable.
+	out.ConfigVersion = currentConfigVersion
+	if out.Terminal.TimeoutMs == defaultTerminalTimeoutMs {
+		out.Terminal.TimeoutMs = 0
+	}
+	if out.Filesystem.MaxFileSizeKB == defaultMaxFileSizeKB {
+		out.Filesystem.MaxFileSizeKB = 0
+	}
+	if out.Browser.CDPPort == defaultCDPPort {
+		out.Browser.CDPPort = 0
+	}
+	if out.Awareness.ScreenIntervalMs == defaultScreenIntervalMs {
+		out.Awareness.ScreenIntervalMs = 0
+	}
+	if out.Awareness.WindowIntervalMs == defaultWindowIntervalMs {
+		out.Awareness.WindowIntervalMs = 0
+	}
+	if out.Awareness.MinChangeThreshold == defaultMinChangeThreshold {
+		out.Awareness.MinChangeThreshold = 0
+	}
+	if out.Awareness.StuckThresholdMs == defaultStuckThresholdMs {
+		out.Awareness.StuckThresholdMs = 0
+	}
+	if out.Awareness.CaptureDir == defaultCaptureDir() {
+		out.Awareness.CaptureDir = ""
+	}
+	return out
 }
 
 func SaveConfig(cfg *SidecarConfig) error {
@@ -123,7 +253,8 @@ func SaveConfig(cfg *SidecarConfig) error {
 	if err := os.Chmod(configDir, 0700); err != nil {
 		return err
 	}
-	data, err := yaml.Marshal(cfg)
+	sparse := sparseForSave(cfg)
+	data, err := yaml.Marshal(&sparse)
 	if err != nil {
 		return err
 	}

@@ -31,6 +31,7 @@ import {
   markSuggestionDismissed,
   markSuggestionActedOn,
   getRecentSuggestions,
+  captureGapCapFor,
 } from '../vault/awareness.ts';
 import { createObservation } from '../vault/observations.ts';
 import { getUpcoming } from '../vault/commitments.ts';
@@ -68,10 +69,16 @@ export class AwarenessService implements Service {
     this.cleanupSidecarCaptures = cleanupSidecarCaptures ?? null;
     this.enabled = cfg.enabled;
 
+    // How much elapsed time a single gap between captures may account for.
+    // Derived from the sampling interval so a slowly-sampling install does not
+    // silently report a fraction of the time the user actually spent.
+    const maxGapMs = captureGapCapFor(cfg.capture_interval_ms);
+
     this.contextTracker = new ContextTracker(cfg);
     this.intelligence = new AwarenessIntelligence(
       llm,
-      cfg.cloud_vision_enabled ? cfg.cloud_vision_cooldown_ms : Infinity
+      cfg.cloud_vision_enabled ? cfg.cloud_vision_cooldown_ms : Infinity,
+      cfg.cloud_vision_enabled ? cfg.cloud_vision_ambient_cooldown_ms : Infinity
     );
     this.suggestionEngine = new SuggestionEngine(cfg.suggestion_rate_limit_ms, {
       googleAuth: googleAuth ?? null,
@@ -80,9 +87,9 @@ export class AwarenessService implements Service {
         when_due: c.when_due,
         priority: c.priority,
       })),
-    });
+    }, maxGapMs);
     this.contextGraph = new ContextGraph();
-    this.analytics = new BehaviorAnalytics(llm);
+    this.analytics = new BehaviorAnalytics(llm, maxGapMs);
   }
 
   async start(): Promise<void> {
@@ -157,7 +164,9 @@ export class AwarenessService implements Service {
       capturesPerHour,
       estimatedVisionCallsPerHour,
       estimatedTokensPerHour: estimatedVisionCallsPerHour * 1400,
-      note: 'Estimate is a worst-case approximation based on your capture rate and cloud-vision cooldown.',
+      note: 'Worst case, assuming every cooldown window carries a locally detected error, stuck or struggle signal. ' +
+        'With no such signal, vision only fires on an app switch at most once per ' +
+        `${Math.round(this.config.cloud_vision_ambient_cooldown_ms / 60000)} minutes, and runs on the low tier.`,
     };
   }
 
@@ -332,15 +341,16 @@ export class AwarenessService implements Service {
 
       const windowTitle = data.windowTitle || this.contextTracker.getLastWindowTitle();
 
-      const { context, events } = this.contextTracker.processCapture(
+      const { context, events, isRedundant } = this.contextTracker.processCapture(
         data.captureId,
         ocrText,
         windowTitle,
         data.capturedAt
       );
 
-      this.contextGraph.linkCaptureToEntities(context);
-
+      // The capture row itself is the activity ledger analytics measures time
+      // from, so it is written unconditionally. Everything derived from it is
+      // skipped when the capture carried no new information.
       createCapture({
         timestamp: context.timestamp,
         sessionId: context.sessionId,
@@ -354,36 +364,51 @@ export class AwarenessService implements Service {
         filePath: context.filePath ?? undefined,
       });
 
-      const keyMomentEventTypes = ['error_detected', 'stuck_detected', 'context_changed'];
-      if (events.some(e => keyMomentEventTypes.includes(e.type))) {
-        try { updateCaptureRetention(data.captureId, 'key_moment'); } catch { /* best-effort */ }
+      // Per-capture bookkeeping derived from the capture's *content*. A
+      // redundant capture repeats content we already indexed and logged, and
+      // this is what dominates awareness's write volume, so it is skipped.
+      // Note this deliberately does not skip the rest of the pipeline:
+      // suggestions include time-based nudges (a commitment coming due, a
+      // calendar event, a break) that have nothing to do with whether the
+      // screen changed — a user reading a static page must still get them.
+      if (!isRedundant) {
+        this.contextGraph.linkCaptureToEntities(context);
+
+        const keyMomentEventTypes = ['error_detected', 'stuck_detected', 'context_changed'];
+        if (events.some(e => keyMomentEventTypes.includes(e.type))) {
+          try { updateCaptureRetention(data.captureId, 'key_moment'); } catch { /* best-effort */ }
+        }
+
+        try {
+          createObservation('screen_capture', {
+            captureId: data.captureId,
+            appName: context.appName,
+            windowTitle: context.windowTitle,
+            ocrPreview: ocrText.slice(0, 200),
+          });
+        } catch { /* observation storage is best-effort */ }
       }
 
-      try {
-        createObservation('screen_capture', {
-          captureId: data.captureId,
-          appName: context.appName,
-          windowTitle: context.windowTitle,
-          ocrPreview: ocrText.slice(0, 200),
-        });
-      } catch { /* observation storage is best-effort */ }
-
       let cloudAnalysis: string | undefined;
-      if (
-        this.config.cloud_vision_enabled &&
-        this.fetchCapture &&
-        this.intelligence.shouldEscalateToCloud(context, events)
-      ) {
-        const imageBuffer = await this.fetchCapture(data.sidecarId, data.imagePath).catch(err => {
+      const escalation = this.config.cloud_vision_enabled && this.fetchCapture
+        ? this.intelligence.claimEscalation(context, events)
+        : null;
+
+      if (escalation) {
+        const imageBuffer = await this.fetchCapture!(data.sidecarId, data.imagePath).catch(err => {
           console.error('[Awareness] fetch_capture failed:', err instanceof Error ? err.message : err);
           return null;
         });
 
-        if (imageBuffer) {
+        if (!imageBuffer) {
+          // Nothing was billed, so hand the cooldown back rather than letting
+          // a missing file swallow the next real signal.
+          this.intelligence.releaseEscalation(escalation.token);
+        } else {
           const base64 = imageBuffer.toString('base64');
-
           const struggleEvent = events.find(e => e.type === 'struggle_detected');
-          if (struggleEvent) {
+
+          if (escalation.kind === 'struggle' && struggleEvent) {
             cloudAnalysis = await this.intelligence.analyzeStruggle(
               base64,
               context,
@@ -391,7 +416,7 @@ export class AwarenessService implements Service {
               (struggleEvent.data.signals as Array<{ name: string; score: number; detail: string }>) ?? [],
               String(struggleEvent.data.ocrPreview ?? context.ocrText.slice(0, 500))
             );
-          } else if (context.isSignificantChange) {
+          } else if (escalation.kind === 'delta') {
             cloudAnalysis = await this.intelligence.analyzeDelta(
               base64,
               context,

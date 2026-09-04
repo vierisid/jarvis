@@ -1,71 +1,169 @@
 /**
  * Awareness Intelligence — Cloud Vision Analysis
  *
- * Escalates screenshots to LLM vision when local OCR detects errors,
- * stuck states, or significant context changes. Rate-limited to avoid
- * excessive API calls.
+ * Escalates screenshots to LLM vision when local OCR detects errors, stuck
+ * states, or struggle. Vision calls carry a full screenshot on every request,
+ * so they are the single most expensive thing awareness can do — the gate is
+ * deliberately narrow and double rate-limited:
+ *
+ *   - A *signal* escalation (error / stuck / struggle detected locally) is
+ *     what cloud vision exists for. It runs on `cooldownMs`.
+ *   - An *ambient* escalation ("what is the user up to now?") has no local
+ *     signal behind it, only an app switch. It is capped separately by
+ *     `ambientCooldownMs`, which is much longer, because otherwise it fires
+ *     every cooldown window for as long as the daemon is up.
+ *
+ * Both run on the `low` tier: these are short, bounded screen descriptions,
+ * not reasoning work. On a single-LLM config `low` falls up to `medium`, so
+ * this stays correct without any tier wiring — but see visionChat() for the
+ * case where `low` is configured with a model that cannot see.
  */
 
 import type { LLMManager } from '../llm/manager.ts';
 import type { ContentBlock } from '../llm/provider.ts';
-import { guardImageSize } from '../llm/provider.ts';
+import { guardImageSize, LLMProviderError } from '../llm/provider.ts';
+import type { Tier } from '../llm/tiers.ts';
 import type { ScreenContext, AwarenessEvent } from './types.ts';
+
+/** Which analysis a claimed escalation should run. */
+export type EscalationKind = 'struggle' | 'delta' | 'general';
+
+/** A granted escalation: what to run, plus the token needed to give it back. */
+export type EscalationClaim = { kind: EscalationKind; token: number };
+
+const SIGNAL_EVENTS = ['error_detected', 'stuck_detected', 'struggle_detected'];
 
 export class AwarenessIntelligence {
   private llm: LLMManager;
   private lastCloudCallAt = 0;
+  private lastAmbientCallAt = 0;
   private cooldownMs: number;
+  private ambientCooldownMs: number;
+  private visionTier: Tier = 'low';
+  /**
+   * The one outstanding claim, if any. Captures are processed concurrently
+   * (the daemon does not await handleSidecarEvent, and several sidecars can
+   * share one instance), so a release has to prove it owns the claim it is
+   * undoing — otherwise a slow capture's failed fetch rolls back a *later*
+   * capture's claim and reopens the gate while that call is still in flight.
+   */
+  private outstandingClaim: { token: number; cloud: number; ambient: number } | null = null;
+  private nextClaimToken = 1;
 
-  constructor(llm: LLMManager, cooldownMs: number = 30000) {
+  constructor(llm: LLMManager, cooldownMs: number = 30000, ambientCooldownMs: number = 900000) {
     this.llm = llm;
     this.cooldownMs = cooldownMs;
+    // An ambient look-around must never be more frequent than a signal one.
+    this.ambientCooldownMs = Math.max(ambientCooldownMs, cooldownMs);
   }
 
   /**
-   * Determine if a capture warrants cloud vision analysis.
+   * Decide whether this capture warrants a cloud vision call and, if so, which
+   * analysis to run. Claiming *stamps the cooldown immediately* rather than
+   * when the analysis starts: the caller has to await an image fetch between
+   * the decision and the call, and without the stamp two concurrent captures
+   * both pass the gate and both bill.
+   *
+   * Returns null when nothing should escalate.
    */
-  shouldEscalateToCloud(context: ScreenContext, events: AwarenessEvent[]): boolean {
+  claimEscalation(context: ScreenContext, events: AwarenessEvent[]): EscalationClaim | null {
     const now = Date.now();
 
-    // Rate limit
     if (now - this.lastCloudCallAt < this.cooldownMs) {
-      return false;
+      return null;
     }
 
-    // Escalate for error detection
-    if (events.some(e => e.type === 'error_detected')) {
-      return true;
+    const hasSignal = events.some(e => SIGNAL_EVENTS.includes(e.type));
+
+    if (!hasSignal) {
+      // Ambient path. `isAppSwitch` (not `isSignificantChange`) on purpose:
+      // significant-change is true for any window *title* change, and browser
+      // tabs, editors and media players retitle constantly, so it is true on
+      // nearly every capture.
+      if (!context.isAppSwitch) return null;
+      if (now - this.lastAmbientCallAt < this.ambientCooldownMs) return null;
+      const token = this.stampClaim(now);
+      this.lastAmbientCallAt = now;
+      return { kind: 'delta', token };
     }
 
-    // Escalate for stuck detection
-    if (events.some(e => e.type === 'stuck_detected')) {
-      return true;
-    }
+    const token = this.stampClaim(now);
+    if (events.some(e => e.type === 'struggle_detected')) return { kind: 'struggle', token };
+    return { kind: context.isAppSwitch ? 'delta' : 'general', token };
+  }
 
-    // Escalate for struggle detection (needs vision for deep analysis)
-    if (events.some(e => e.type === 'struggle_detected')) {
-      return true;
-    }
+  private stampClaim(now: number): number {
+    const token = this.nextClaimToken++;
+    this.outstandingClaim = { token, cloud: this.lastCloudCallAt, ambient: this.lastAmbientCallAt };
+    this.lastCloudCallAt = now;
+    return token;
+  }
 
-    // Escalate for significant context changes
-    if (context.isSignificantChange) {
-      return true;
-    }
+  /**
+   * Give back the most recent claim. The caller has to fetch the screenshot
+   * between claiming and calling, and that fetch can fail (sidecar restarted,
+   * file already pruned). Nothing was billed in that case, so holding the
+   * cooldown would swallow the next real error or struggle for no reason.
+   *
+   * Ignored unless `token` is the claim currently outstanding: a claim that has
+   * already been superseded by a newer one must not roll the cooldown back
+   * underneath it, and a second release of the same token is a no-op.
+   */
+  releaseEscalation(token: number): void {
+    if (!this.outstandingClaim || this.outstandingClaim.token !== token) return;
+    this.lastCloudCallAt = this.outstandingClaim.cloud;
+    this.lastAmbientCallAt = this.outstandingClaim.ambient;
+    this.outstandingClaim = null;
+  }
 
-    // Escalate for very short/empty OCR (image-heavy screen)
-    if (context.ocrText.trim().length < 20) {
-      return true;
-    }
+  /**
+   * Run one vision call on the cheapest tier that works.
+   *
+   * The tier map records which model serves a tier, not whether that model can
+   * see, and `low` is exactly where someone wires a cheap text-only model. A
+   * tier is only fallen up from when it is *unconfigured*, and a "this model
+   * does not support images" 400 is a `bad_request` that LLMManager
+   * deliberately will not fail over on — so a text-only `low` model would fail
+   * every call forever and the caller would see nothing but empty analyses.
+   * On the first failure, drop to `medium` for the life of the process.
+   */
+  private async visionChat(
+    subsystem: string,
+    content: ContentBlock[],
+    maxTokens: number,
+  ): Promise<string> {
+    const messages = [{ role: 'user' as const, content }];
+    try {
+      const response = await this.llm.chatTier(this.visionTier, subsystem, messages, { max_tokens: maxTokens });
+      return response.content;
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (this.visionTier !== 'low' || !looksLikeVisionRefusal(err)) {
+        // A rate limit, timeout or 5xx says nothing about what the model can
+        // do. Downgrading on those would hand the whole subsystem to the
+        // expensive tier after one blip — the opposite of the point.
+        console.error(`[Intelligence] ${subsystem} failed:`, msg);
+        return '';
+      }
 
-    return false;
+      console.warn(
+        `[Intelligence] the low tier cannot accept images (${msg}) — using the medium tier for awareness vision from here on.`,
+      );
+      this.visionTier = 'medium';
+      try {
+        const response = await this.llm.chatTier('medium', subsystem, messages, { max_tokens: maxTokens });
+        return response.content;
+      } catch (retryErr) {
+        console.error(`[Intelligence] ${subsystem} failed:`, retryErr instanceof Error ? retryErr.message : retryErr);
+        return '';
+      }
+    }
   }
 
   /**
    * General screen analysis — what is the user doing?
    */
   async analyzeGeneral(imageBase64: string, context: ScreenContext): Promise<string> {
-    this.lastCloudCallAt = Date.now();
-
     const imageBlock: ContentBlock = guardImageSize({
       type: 'image',
       source: { type: 'base64', media_type: 'image/png', data: imageBase64 },
@@ -87,18 +185,7 @@ Be brief and direct. No preamble.`,
       },
     ];
 
-    try {
-      const response = await this.llm.chatTier(
-        'medium',
-        'awareness_general',
-        [{ role: 'user', content }],
-        { max_tokens: 300 },
-      );
-      return response.content;
-    } catch (err) {
-      console.error('[Intelligence] General analysis failed:', err instanceof Error ? err.message : err);
-      return '';
-    }
+    return this.visionChat('awareness_general', content, 300);
   }
 
   /**
@@ -109,8 +196,6 @@ Be brief and direct. No preamble.`,
     current: ScreenContext,
     previous: ScreenContext | null
   ): Promise<string> {
-    this.lastCloudCallAt = Date.now();
-
     const imageBlock: ContentBlock = guardImageSize({
       type: 'image',
       source: { type: 'base64', media_type: 'image/png', data: imageBase64 },
@@ -140,18 +225,7 @@ Be concise. 2-3 sentences max.`,
       },
     ];
 
-    try {
-      const response = await this.llm.chatTier(
-        'medium',
-        'awareness_delta',
-        [{ role: 'user', content }],
-        { max_tokens: 200 },
-      );
-      return response.content;
-    } catch (err) {
-      console.error('[Intelligence] Delta analysis failed:', err instanceof Error ? err.message : err);
-      return '';
-    }
+    return this.visionChat('awareness_delta', content, 200);
   }
 
   /**
@@ -165,8 +239,6 @@ Be concise. 2-3 sentences max.`,
     signals: Array<{ name: string; score: number; detail: string }>,
     ocrPreview: string
   ): Promise<string> {
-    this.lastCloudCallAt = Date.now();
-
     const imageBlock: ContentBlock = guardImageSize({
       type: 'image',
       source: { type: 'base64', media_type: 'image/png', data: imageBase64 },
@@ -175,18 +247,7 @@ Be concise. 2-3 sentences max.`,
     const prompt = this.buildStrugglePrompt(context, appCategory, signals, ocrPreview);
     const content: ContentBlock[] = [imageBlock, { type: 'text', text: prompt }];
 
-    try {
-      const response = await this.llm.chatTier(
-        'medium',
-        'awareness_struggle',
-        [{ role: 'user', content }],
-        { max_tokens: 600 },
-      );
-      return response.content;
-    } catch (err) {
-      console.error('[Intelligence] Struggle analysis failed:', err instanceof Error ? err.message : err);
-      return '';
-    }
+    return this.visionChat('awareness_struggle', content, 600);
   }
 
   private buildStrugglePrompt(
@@ -327,4 +388,19 @@ Respond in JSON: { "topic": "short topic (3-5 words)", "summary": "1-2 sentence 
       };
     }
   }
+}
+
+/**
+ * Whether an error means "this model cannot see", as opposed to "this call
+ * went wrong". Only the former justifies giving up on the tier permanently.
+ *
+ * A provider that rejects an image answers with a 400/404 — never a 429 or a
+ * 5xx, which are about the request, not the model. The message check narrows
+ * it further, since a bad_request can also mean a malformed prompt.
+ */
+function looksLikeVisionRefusal(err: unknown): boolean {
+  const code = err instanceof LLMProviderError ? err.code : undefined;
+  if (code !== undefined && code !== 'bad_request' && code !== 'not_found') return false;
+  const msg = err instanceof Error ? err.message : String(err);
+  return /\b(image|images|vision|multimodal|image_url|media type)\b/i.test(msg);
 }

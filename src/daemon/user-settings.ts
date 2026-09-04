@@ -170,6 +170,37 @@ export function persistUserPatch(section: 'stt' | 'tts' | 'voice', patch: Record
 }
 
 /**
+ * Sections with no credentials whose saves go through persistPlainUserPatch.
+ * Deliberately narrow — add one only after checking it holds no secrets and
+ * that a shallow merge is the right shape for it.
+ */
+type PlainPatchSection = 'awareness' | 'desktop';
+
+/**
+ * Persist a partial patch for a credential-free section, merged over the
+ * STORED row rather than over the in-memory section.
+ *
+ * Same rule as persistUserPatch above, for a different consequence. The
+ * in-memory section is DEFAULT_CONFIG deep-merged with whatever the row holds,
+ * so handing it back to saveUserSection stamps today's defaults into the row as
+ * though the user had chosen every one of them. From then on the row out-ranks
+ * DEFAULT_CONFIG and changing a default can never reach that install — the same
+ * way a fully-materialised sidecar.yaml used to pin its own defaults.
+ *
+ * A one-key toggle must therefore persist that one key, not the whole section
+ * it happens to live in.
+ */
+export function persistPlainUserPatch<K extends PlainPatchSection>(
+  section: K,
+  patch: Partial<NonNullable<JarvisConfig[K]>>,
+): void {
+  const stored = loadUserSection(section);
+  const usable = typeof stored === 'object' && stored !== null && !Array.isArray(stored);
+  const base = usable ? (stored as Record<string, unknown>) : {};
+  saveUserSection(section, { ...base, ...patch } as JarvisConfig[K]);
+}
+
+/**
  * Drop the user's explicit provider choice for a voice section, restoring
  * SILENCE — which is what the hosted defaults key off (effectiveSttForBinding
  * / effectiveTtsForBinding fill a provider-free row with the included uj

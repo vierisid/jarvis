@@ -210,7 +210,10 @@ export type AwarenessConfig = {
   capture_interval_ms: number;
   min_change_threshold: number;       // 0.0-1.0 pixel diff percentage
   cloud_vision_enabled: boolean;
+  /** Min gap between vision calls backed by a local signal (error/stuck/struggle). */
   cloud_vision_cooldown_ms: number;
+  /** Min gap between signal-less "what's on screen now" vision calls. */
+  cloud_vision_ambient_cooldown_ms: number;
   stuck_threshold_ms: number;
   struggle_grace_ms: number;          // min time before struggle fires
   struggle_cooldown_ms: number;       // min gap between struggle detections
@@ -642,10 +645,11 @@ export const DEFAULT_CONFIG: JarvisConfig = {
   },
   awareness: {
     enabled: true,
-    capture_interval_ms: 7000,
+    capture_interval_ms: 15000,
     min_change_threshold: 0.02,
     cloud_vision_enabled: true,
     cloud_vision_cooldown_ms: 30000,
+    cloud_vision_ambient_cooldown_ms: 900000,
     stuck_threshold_ms: 120000,
     struggle_grace_ms: 45000,
     struggle_cooldown_ms: 90000,

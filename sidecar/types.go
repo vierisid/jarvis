@@ -25,13 +25,22 @@ const (
 )
 
 // AwarenessConfig controls screen and window observer behavior.
+//
+// The tunables carry `omitempty` so SaveConfig can leave a value out of the
+// file entirely when it still matches the built-in default — see
+// sparseForSave in config.go for why that matters. In memory these fields are
+// always the effective values; only the on-disk form is sparse.
+//
+// OCREnabled is deliberately NOT omitempty: it defaults to true, and a false
+// with omitempty is indistinguishable from an absent key, so "OCR off" would
+// silently turn itself back on at the next load.
 type AwarenessConfig struct {
-	ScreenIntervalMs   int     `yaml:"screen_interval_ms"`
-	WindowIntervalMs   int     `yaml:"window_interval_ms"`
-	MinChangeThreshold float64 `yaml:"min_change_threshold"`
-	StuckThresholdMs   int     `yaml:"stuck_threshold_ms"`
+	ScreenIntervalMs   int     `yaml:"screen_interval_ms,omitempty"`
+	WindowIntervalMs   int     `yaml:"window_interval_ms,omitempty"`
+	MinChangeThreshold float64 `yaml:"min_change_threshold,omitempty"`
+	StuckThresholdMs   int     `yaml:"stuck_threshold_ms,omitempty"`
 	OCREnabled         bool    `yaml:"ocr_enabled"`
-	CaptureDir         string  `yaml:"capture_dir"`
+	CaptureDir         string  `yaml:"capture_dir,omitempty"`
 }
 
 // SidecarTokenClaims is the JWT payload from the brain.
@@ -119,8 +128,12 @@ type SidecarCapabilitiesUpdate struct {
 
 // SidecarConfig is the YAML config file structure.
 type SidecarConfig struct {
-	Token string `yaml:"token"`
-	Brain string `yaml:"brain"`
+	// ConfigVersion records which one-time migrations this file has already
+	// been through (see supersededDefaults in config.go). Absent means the
+	// file predates versioning and every migration still applies to it.
+	ConfigVersion int    `yaml:"config_version,omitempty"`
+	Token         string `yaml:"token"`
+	Brain         string `yaml:"brain"`
 	// HostedBaseURL overrides the usejarvis connect origin for the first-run
 	// handshake. Honored ONLY in `-tags jarvisdebug` builds (see hosted.go);
 	// release binaries always use the production origin.
@@ -164,12 +177,12 @@ type PreferencesConfig struct {
 type TerminalConfig struct {
 	BlockedCommands []string `yaml:"blocked_commands"`
 	DefaultShell    string   `yaml:"default_shell"`
-	TimeoutMs       int      `yaml:"timeout_ms"`
+	TimeoutMs       int      `yaml:"timeout_ms,omitempty"`
 }
 
 type FilesystemConfig struct {
 	BlockedPaths  []string `yaml:"blocked_paths"`
-	MaxFileSizeKB int      `yaml:"max_file_size_kb"`
+	MaxFileSizeKB int      `yaml:"max_file_size_kb,omitempty"`
 }
 
 type BrowserConfig struct {
@@ -183,7 +196,7 @@ type BrowserConfig struct {
 	// CDPPort is retained for backward-compatible config files but is no longer
 	// used: the sidecar drives the browser over an inherited CDP pipe
 	// (--remote-debugging-pipe), not a TCP port.
-	CDPPort int `yaml:"cdp_port"`
+	CDPPort int `yaml:"cdp_port,omitempty"`
 }
 
 // RPCResult is returned by handlers.

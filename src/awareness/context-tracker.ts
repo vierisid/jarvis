@@ -40,6 +40,9 @@ export class ContextTracker {
   private lastActivityTimestamp: number = 0;
   private lastErrorText: string = '';
   private lastErrorTimestamp: number = 0;
+  private stuckReported: boolean = false;
+  /** Full-text OCR hash, used only for redundancy (see processCapture). */
+  private lastFullOcrHash: string = '';
   private pendingWindowInfo: { appName: string; windowTitle: string } | null = null;
   private struggleDetector: StruggleDetector;
 
@@ -57,9 +60,19 @@ export class ContextTracker {
   processCapture(captureId: string, ocrText: string, rawWindowTitle?: string, capturedAt?: number): {
     context: ScreenContext;
     events: AwarenessEvent[];
+    /**
+     * True when this capture told us nothing new: same window, byte-identical
+     * OCR text, no events. The sidecar only sends captures whose pixels moved,
+     * so these are cursor blinks, clocks and video frames — real screen churn
+     * with no change in what the user is doing. Callers skip the derived
+     * writes (entity graph, observation log, suggestion eval) for these.
+     */
+    isRedundant: boolean;
   } {
     const now = capturedAt ?? Date.now();
     const events: AwarenessEvent[] = [];
+    const priorFullOcrHash = this.lastFullOcrHash;
+    const fullOcrHash = simpleHash(ocrText, ocrText.length);
 
     // Use pending window info from sidecar context_changed if no rawWindowTitle provided
     const effectiveWindowTitle = rawWindowTitle || this.pendingWindowInfo?.windowTitle;
@@ -75,6 +88,13 @@ export class ContextTracker {
       (this.currentContext.appName !== appName || this.currentContext.windowTitle !== windowTitle);
 
     const isSignificantChange = isAppChange || this.currentContext === null;
+
+    // A narrower signal than isSignificantChange: the *application* changed,
+    // not just its window title. Title churn (browser tabs, editor files,
+    // media players) makes isSignificantChange true on nearly every capture,
+    // which is useless as a "something happened" gate.
+    const isAppSwitch = this.currentContext === null ||
+      this.currentContext.appName !== appName;
 
     // Session management
     const idleGap = this.lastActivityTimestamp > 0 ? (now - this.lastActivityTimestamp) : 0;
@@ -122,6 +142,7 @@ export class ContextTracker {
       });
       this.sameWindowSince = now;
       this.lastOcrTextHash = '';
+      this.stuckReported = false;
       this.struggleDetector.reset();
     }
 
@@ -136,23 +157,35 @@ export class ContextTracker {
       const ocrHash = simpleHash(ocrText);
       const textUnchanged = ocrHash === this.lastOcrTextHash;
 
+      // Fire once per stuck episode, not once per capture. Without this the
+      // event repeats on every capture for as long as the window stays put,
+      // and because stuck is an escalation signal that means a billed vision
+      // call every cooldown — indefinitely, for a screen that is merely
+      // showing a video or a progress bar.
       if (sameWindowDuration > this.config.stuck_threshold_ms && textUnchanged) {
-        events.push({
-          type: 'stuck_detected',
-          data: {
-            windowTitle,
-            appName,
-            durationMs: sameWindowDuration,
-            ocrPreview: ocrText.slice(0, 200),
-          },
-          timestamp: now,
-        });
+        if (!this.stuckReported) {
+          this.stuckReported = true;
+          events.push({
+            type: 'stuck_detected',
+            data: {
+              windowTitle,
+              appName,
+              durationMs: sameWindowDuration,
+              ocrPreview: ocrText.slice(0, 200),
+            },
+            timestamp: now,
+          });
+        }
+      } else if (!textUnchanged) {
+        // The user did something — the next stall is a new episode.
+        this.stuckReported = false;
       }
 
       this.lastOcrTextHash = ocrHash;
     } else {
       this.sameWindowSince = now;
       this.lastOcrTextHash = simpleHash(ocrText);
+      this.stuckReported = false;
     }
 
     // Struggle detection (behavioral analysis beyond simple stuck)
@@ -221,6 +254,7 @@ export class ContextTracker {
       ocrText,
       sessionId: this.currentSessionId!,
       isSignificantChange,
+      isAppSwitch,
     };
 
     // Update state
@@ -228,7 +262,18 @@ export class ContextTracker {
     this.currentContext = context;
     this.lastActivityTimestamp = now;
 
-    return { context, events };
+    // Hashed in full, not through simpleHash: that one samples the first 2000
+    // characters, which for an IDE sidebar, a persistent nav or a long
+    // document header is fixed chrome. Treating those captures as redundant
+    // would drop the body the user is actually reading out of the entity graph
+    // and the observation log.
+    const isRedundant = !isAppChange &&
+      priorFullOcrHash !== '' &&
+      priorFullOcrHash === fullOcrHash &&
+      events.length === 0;
+    this.lastFullOcrHash = fullOcrHash;
+
+    return { context, events, isRedundant };
   }
 
   getCurrentContext(): ScreenContext | null {
@@ -337,9 +382,9 @@ export class ContextTracker {
 /**
  * Simple string hash for quick comparison (not cryptographic).
  */
-function simpleHash(str: string): string {
+function simpleHash(str: string, sampleLength: number = 2000): string {
   let hash = 0;
-  const sample = str.slice(0, 2000); // Only hash first 2000 chars
+  const sample = str.slice(0, sampleLength);
   for (let i = 0; i < sample.length; i++) {
     const char = sample.charCodeAt(i);
     hash = ((hash << 5) - hash) + char;

@@ -355,3 +355,33 @@ describe('user-settings', () => {
     expect(config.personality.core_traits).toEqual(DEFAULT_CONFIG.personality.core_traits);
   });
 });
+
+describe('persistPlainUserPatch', () => {
+  beforeEach(() => initDatabase(':memory:'));
+  afterEach(() => closeDb());
+
+  test('persists only the patched key, not the merged defaults', () => {
+    const { persistPlainUserPatch, loadUserSection } = require('./user-settings.ts');
+
+    // What the pebble blind-toggle used to hand over: the whole in-memory
+    // section, DEFAULT_CONFIG fills and all.
+    persistPlainUserPatch('awareness', { enabled: false });
+
+    const stored = loadUserSection('awareness') as Record<string, unknown>;
+    expect(stored.enabled).toBe(false);
+    // Nothing else may be stamped: a row carrying today's interval out-ranks
+    // DEFAULT_CONFIG forever, so a later default change could never reach it.
+    expect(Object.keys(stored)).toEqual(['enabled']);
+  });
+
+  test('merges over an existing row instead of replacing it', () => {
+    const { persistPlainUserPatch, loadUserSection } = require('./user-settings.ts');
+
+    persistPlainUserPatch('awareness', { capture_interval_ms: 3000 });
+    persistPlainUserPatch('awareness', { enabled: false });
+
+    const stored = loadUserSection('awareness') as Record<string, unknown>;
+    expect(stored.capture_interval_ms).toBe(3000);
+    expect(stored.enabled).toBe(false);
+  });
+});

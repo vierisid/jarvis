@@ -518,11 +518,69 @@ export class AgentOrchestrator {
   }
 
   /**
+   * Stream one tier call, retrying on `fallbackTier` if the requested tier
+   * fails before emitting any content.
+   *
+   * `streamTier` reports total failure as a terminal `error` event rather than
+   * throwing, and it only crosses the provider boundary for errors that name
+   * model availability — a "this model does not support images" 400 is not one
+   * of them. Combined with `TIER_FALLBACK.conversation` being empty, a
+   * conv-tier model that cannot see would otherwise dead-end the caller with
+   * no recourse. Retrying only when nothing has been emitted keeps a mid-
+   * stream failure honest instead of silently restarting a partial answer.
+   */
+  private async *streamTierWithFallback(
+    tier: Tier,
+    fallbackTier: Tier | undefined,
+    subsystem: string,
+    messages: LLMMessage[],
+    options: import('../llm/provider.ts').LLMOptions,
+    onFallback?: () => void,
+  ): AsyncIterable<LLMStreamEvent> {
+    if (!this.llmManager) return;
+    if (!fallbackTier || fallbackTier === tier) {
+      yield* this.llmManager.streamTier(tier, subsystem, messages, options);
+      return;
+    }
+
+    let emittedContent = false;
+    for await (const event of this.llmManager.streamTier(tier, subsystem, messages, options)) {
+      if (event.type === 'error' && !emittedContent) {
+        console.warn(
+          `[Orchestrator] ${tier} tier failed for ${subsystem} before any output (${event.error}) — retrying on ${fallbackTier}.`,
+        );
+        onFallback?.();
+        yield* this.llmManager.streamTier(fallbackTier, subsystem, messages, options);
+        return;
+      }
+      if (event.type === 'text' || event.type === 'tool_call') emittedContent = true;
+      yield event;
+    }
+  }
+
+  /**
    * Stream a message through the primary agent with tool execution loop.
    * Yields text/tool_call events through all iterations.
    * Only emits 'done' when the final response is complete.
+   *
+   * @param tier Which tier runs the stream. Defaults to 'medium' — the classic
+   *   single-orchestrator mode runs the full ReAct loop here, and that is task
+   *   work. Callers that are really carrying a *dialogue* turn (the pebble
+   *   image path, which bypasses the conv orchestrator because it has no
+   *   image route) pass 'conversation' so those turns bill the chat model
+   *   instead of the task model.
+   * @param subsystem Usage-tracking label for the tier call.
+   * @param fallbackTier Tier to retry on when `tier` dies before producing any
+   *   output. Needed because `conversation` has an empty fallback chain — see
+   *   streamTierWithFallback().
    */
-  async *streamMessage(systemPrompt: string | SystemPromptParts, message: string | import('../llm/provider.ts').ContentBlock[]): AsyncIterable<LLMStreamEvent> {
+  async *streamMessage(
+    systemPrompt: string | SystemPromptParts,
+    message: string | import('../llm/provider.ts').ContentBlock[],
+    tier: Tier = 'medium',
+    subsystem: string = 'chat_orchestrator_stream',
+    fallbackTier?: Tier,
+  ): AsyncIterable<LLMStreamEvent> {
     const primary = this.getPrimary();
     if (!primary) {
       throw new Error('No primary agent exists. Create one first.');
@@ -561,6 +619,11 @@ export class AgentOrchestrator {
     let finalText = '';
     let responseModel = 'unknown';
     let acknowledgedWork = false;
+    // Once a tier has proved it cannot handle this conversation, stay off it.
+    // The tool loop re-enters the stream per iteration with the SAME messages
+    // (image included), so without this a blind conv model would be re-asked —
+    // and re-billed — on every iteration.
+    let activeTier = tier;
 
     // Tool execution loop
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
@@ -569,7 +632,14 @@ export class AgentOrchestrator {
       let doneResponse: LLMResponse | null = null;
 
       // Stream from LLM
-      for await (const event of this.llmManager.streamTier('medium', 'chat_orchestrator_stream', messages, { tools })) {
+      for await (const event of this.streamTierWithFallback(
+        activeTier,
+        fallbackTier,
+        subsystem,
+        messages,
+        { tools },
+        () => { activeTier = fallbackTier!; },
+      )) {
         if (event.type === 'text') {
           accumulatedText += event.text;
           yield event; // Forward text chunks to client

@@ -17,7 +17,10 @@ export type ScreenContext = {
   filePath: string | null;
   ocrText: string;
   sessionId: string;
+  /** App OR window title changed (or this is the first capture). */
   isSignificantChange: boolean;
+  /** The application itself changed (or this is the first capture). */
+  isAppSwitch: boolean;
 };
 
 // ── Events ──

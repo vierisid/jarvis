@@ -449,7 +449,23 @@ export class AgentService implements Service, IAgentService {
         { type: 'image', source: { type: 'base64', media_type: mediaType, data: imageBase64 } },
         { type: 'text', text },
       ];
-      const stream = this.orchestrator.streamMessage(systemPrompt, content);
+      // This is the one dialogue path that cannot go through the conv
+      // orchestrator — it has no image route — so it runs the classic
+      // orchestrator directly. Without this, a router-first install pays the
+      // task-tier model for every pebble image turn even though the user is
+      // just talking. Route it at the conv tier when one is configured; in
+      // classic mode there is none and 'medium' stays correct. Nothing records
+      // whether a model accepts images and the conv tier has no fallback
+      // chain, so a text-only conv model falls back to the task tier rather
+      // than dead-ending the turn.
+      const useConvTier = this.llmManager.hasConversationTier();
+      const stream = this.orchestrator.streamMessage(
+        systemPrompt,
+        content,
+        useConvTier ? 'conversation' : 'medium',
+        'chat_orchestrator_image',
+        useConvTier ? 'medium' : undefined,
+      );
 
       const onComplete = async (fullText: string): Promise<void> => {
         await Promise.allSettled([

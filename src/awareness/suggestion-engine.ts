@@ -7,7 +7,7 @@
  */
 
 import type { ScreenContext, AwarenessEvent, Suggestion, SuggestionType } from './types.ts';
-import { createSuggestion, getSuggestionCountSince, getCaptureCountSince } from '../vault/awareness.ts';
+import { createSuggestion, getSuggestionCountSince, getActivityInRange, MAX_CAPTURE_GAP_MS } from '../vault/awareness.ts';
 import { searchEntitiesByName } from '../vault/entities.ts';
 import { findFacts } from '../vault/facts.ts';
 
@@ -32,6 +32,7 @@ const TYPE_RATE_LIMITS: Record<string, number> = {
 
 export class SuggestionEngine {
   private defaultRateLimitMs: number;
+  private maxGapMs: number;
   private lastSuggestionByType = new Map<string, number>();
   private recentHashes: Set<string> = new Set();
   private hashQueue: string[] = [];
@@ -47,9 +48,16 @@ export class SuggestionEngine {
   private lastScheduleCheckAt = 0;
   private lastScheduleEventId = '';
 
-  constructor(rateLimitMs: number = 60000, scheduleDeps?: ScheduleDeps) {
+  /**
+   * @param maxGapMs How much elapsed time one gap between captures may count
+   *   for, derived from the configured capture interval. checkBreak measures
+   *   time this way, so a fixed cap would under-report on a slow sampler and
+   *   the break nudge would never fire.
+   */
+  constructor(rateLimitMs: number = 60000, scheduleDeps?: ScheduleDeps, maxGapMs: number = MAX_CAPTURE_GAP_MS) {
     this.defaultRateLimitMs = rateLimitMs;
     this.scheduleDeps = scheduleDeps ?? null;
+    this.maxGapMs = maxGapMs;
   }
 
   /**
@@ -408,16 +416,25 @@ export class SuggestionEngine {
    */
   private checkBreak(context: ScreenContext): Suggestion | null {
     try {
-      const ninetyMinAgo = Date.now() - 90 * 60 * 1000;
+      const now = Date.now();
+      const ninetyMinAgo = now - 90 * 60 * 1000;
 
       // Don't suggest a break if we already suggested one recently
       const recentBreakSuggestions = getSuggestionCountSince(ninetyMinAgo);
       if (recentBreakSuggestions > 2) return null;
 
-      // Check if user has been continuously active for 90+ minutes
-      // At ~7s per capture, 90 min = ~770 captures
-      const captureCount = getCaptureCountSince(ninetyMinAgo);
-      if (captureCount < 700) return null;
+      // "Continuously active" is elapsed time between captures, not a capture
+      // count: the capture interval is configurable and unchanged screens are
+      // not recorded, so any count threshold silently stops firing the moment
+      // either changes. The bar is 70 of the last 90 minutes, not 90: the
+      // sidecar sends nothing while the screen is static, and each such stretch
+      // is credited only MAX_CAPTURE_GAP_MS, so someone reading at their desk
+      // legitimately loses minutes they never left for.
+      // Aggregated in SQL: this runs on every capture, and the row-fetching
+      // equivalent would re-read 90 minutes of OCR text each time.
+      const { activeMs, captureCount } = getActivityInRange(ninetyMinAgo, now, this.maxGapMs);
+      const activeMinutes = Math.round(activeMs / 60000);
+      if (activeMinutes < 70) return null;
 
       return {
         id: '',
@@ -425,7 +442,7 @@ export class SuggestionEngine {
         title: 'Time for a break?',
         body: `You've been working for over 90 minutes straight. A short break can boost focus and creativity.`,
         triggerCaptureId: context.captureId,
-        context: { captureCount, minutesActive: Math.round((captureCount * 7) / 60) },
+        context: { captureCount, minutesActive: activeMinutes },
       };
     } catch { /* ignore */ }
 

@@ -95,24 +95,138 @@ export function getCapturesInRange(startTime: number, endTime: number): ScreenCa
   ).all(startTime, endTime) as ScreenCaptureRow[];
 }
 
-export function getAppUsageStats(startTime: number, endTime: number): AppUsageStat[] {
+/**
+ * A capture row means "the user was here at time T", nothing more. Elapsed
+ * time is therefore the sum of the gaps between consecutive captures, not the
+ * capture count times a fixed interval: the capture interval is configurable,
+ * captures the sidecar considers unchanged never arrive, and the user walks
+ * away from the machine. Any gap longer than this is away-from-keyboard and
+ * contributes nothing.
+ */
+export const MAX_CAPTURE_GAP_MS = 60_000;
+
+/**
+ * The gap cap has to sit above the sampling interval, or every ordinary
+ * inter-capture gap is clipped and the whole accounting reads low. 60s covers
+ * the default 15s sampling with room to spare, but the interval is
+ * user-configurable and unbounded, so callers that know it derive the cap
+ * from it instead of assuming.
+ */
+export function captureGapCapFor(captureIntervalMs: number): number {
+  return Math.max(MAX_CAPTURE_GAP_MS, captureIntervalMs * 3);
+}
+
+/**
+ * Active milliseconds represented by a time-ordered series of captures. Each
+ * gap is credited to the capture that opened it, capped at MAX_CAPTURE_GAP_MS.
+ * A lone capture represents no measurable elapsed time and returns 0.
+ */
+export function activeMsFrom(
+  captures: Array<{ timestamp: number }>,
+  maxGapMs: number = MAX_CAPTURE_GAP_MS,
+): number {
+  let total = 0;
+  for (let i = 1; i < captures.length; i++) {
+    const gap = captures[i]!.timestamp - captures[i - 1]!.timestamp;
+    if (gap > 0) total += Math.min(gap, maxGapMs);
+  }
+  return total;
+}
+
+/** Convenience wrapper: whole minutes of active time for a capture series. */
+export function activeMinutesFrom(
+  captures: Array<{ timestamp: number }>,
+  maxGapMs: number = MAX_CAPTURE_GAP_MS,
+): number {
+  return Math.round(activeMsFrom(captures, maxGapMs) / 60000);
+}
+
+export function getAppUsageStats(
+  startTime: number,
+  endTime: number,
+  maxGapMs: number = MAX_CAPTURE_GAP_MS,
+): AppUsageStat[] {
   const db = getDb();
+  // Each capture's gap to the next one is credited to the app that was on
+  // screen when the gap opened, capped at MAX_CAPTURE_GAP_MS. Aggregated in
+  // SQL rather than JS: a week-wide range spans tens of thousands of rows and
+  // only the per-app totals are wanted.
+  // The window runs over EVERY capture in range, and app_name is filtered
+  // only afterwards. Filtering first would delete captures whose app could not
+  // be parsed and hand their whole span to the previous app as one capped gap,
+  // so per-app minutes would not add up to the range's own active time.
   const rows = db.prepare(`
-    SELECT app_name, COUNT(*) as capture_count
-    FROM screen_captures
-    WHERE timestamp >= ? AND timestamp <= ? AND app_name IS NOT NULL
+    WITH gaps AS (
+      SELECT app_name,
+             LEAD(timestamp) OVER (ORDER BY timestamp) - timestamp AS gap
+      FROM screen_captures
+      WHERE timestamp >= ? AND timestamp <= ?
+    )
+    SELECT app_name,
+           COUNT(*) AS capture_count,
+           SUM(CASE
+                 WHEN gap IS NULL OR gap <= 0 THEN 0
+                 WHEN gap > ? THEN ?
+                 ELSE gap
+               END) AS active_ms
+    FROM gaps
+    WHERE app_name IS NOT NULL
     GROUP BY app_name
-    ORDER BY capture_count DESC
-  `).all(startTime, endTime) as Array<{ app_name: string; capture_count: number }>;
+  `).all(startTime, endTime, maxGapMs, maxGapMs) as Array<{
+    app_name: string;
+    capture_count: number;
+    active_ms: number;
+  }>;
 
-  const totalCaptures = rows.reduce((sum, r) => sum + r.capture_count, 0);
+  const totalMs = rows.reduce((sum, r) => sum + (r.active_ms ?? 0), 0);
 
-  return rows.map(r => ({
-    app: r.app_name,
-    captureCount: r.capture_count,
-    minutes: Math.round((r.capture_count * 7) / 60),  // ~7s per capture
-    percentage: totalCaptures > 0 ? Math.round((r.capture_count / totalCaptures) * 100) : 0,
-  }));
+  // Rank on raw elapsed time, not the rounded minutes: over a short window
+  // every app rounds to 0 and a capture-count tiebreak would put the noisiest
+  // app first — the exact sampling-density bias this accounting removes.
+  return rows
+    .sort((a, b) => (b.active_ms ?? 0) - (a.active_ms ?? 0))
+    .map(r => ({
+      app: r.app_name,
+      captureCount: r.capture_count,
+      minutes: Math.round((r.active_ms ?? 0) / 60000),
+      percentage: totalMs > 0 ? Math.round(((r.active_ms ?? 0) / totalMs) * 100) : 0,
+    }));
+}
+
+/**
+ * Active milliseconds and capture count for a range, aggregated in SQL.
+ *
+ * The JS equivalent (getCapturesInRange + activeMsFrom) is a `SELECT *` that
+ * drags every row's ocr_text into memory. That is fine for a report built once;
+ * it is not fine on a path that runs on every capture.
+ */
+export function getActivityInRange(
+  startTime: number,
+  endTime: number,
+  maxGapMs: number = MAX_CAPTURE_GAP_MS,
+): {
+  activeMs: number;
+  captureCount: number;
+} {
+  const db = getDb();
+  const row = db.prepare(`
+    WITH gaps AS (
+      SELECT LEAD(timestamp) OVER (ORDER BY timestamp) - timestamp AS gap
+      FROM screen_captures
+      WHERE timestamp >= ? AND timestamp <= ?
+    )
+    SELECT COUNT(*) AS capture_count,
+           SUM(CASE
+                 WHEN gap IS NULL OR gap <= 0 THEN 0
+                 WHEN gap > ? THEN ?
+                 ELSE gap
+               END) AS active_ms
+    FROM gaps
+  `).get(startTime, endTime, maxGapMs, maxGapMs) as {
+    capture_count: number;
+    active_ms: number | null;
+  };
+  return { activeMs: row.active_ms ?? 0, captureCount: row.capture_count };
 }
 
 export function getCaptureCountSince(timestamp: number): number {

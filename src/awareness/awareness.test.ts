@@ -23,7 +23,11 @@ import {
   markSuggestionActedOn,
   getSuggestionStats,
   getSuggestionCountSince,
+  activeMsFrom,
+  activeMinutesFrom,
+  MAX_CAPTURE_GAP_MS,
 } from '../vault/awareness.ts';
+import { AwarenessIntelligence } from './intelligence.ts';
 
 const testConfig: AwarenessConfig = {
   enabled: true,
@@ -31,6 +35,7 @@ const testConfig: AwarenessConfig = {
   min_change_threshold: 0.02,
   cloud_vision_enabled: false,
   cloud_vision_cooldown_ms: 30000,
+  cloud_vision_ambient_cooldown_ms: 900000,
   stuck_threshold_ms: 5000, // 5s for tests
   suggestion_rate_limit_ms: 100, // fast for tests
   retention: { full_hours: 1, key_moment_hours: 24 },
@@ -108,20 +113,51 @@ describe('Vault — Screen Captures', () => {
     expect(range[0]!.app_name).toBe('B');
   });
 
-  test('getAppUsageStats', () => {
-    const now = Date.now();
-    for (let i = 0; i < 5; i++) {
-      createCapture({ timestamp: now - i * 1000, pixelChangePct: 0.1, appName: 'Chrome' });
+  test('getAppUsageStats attributes elapsed time, not capture count', () => {
+    const start = Date.now() - 60 * 60 * 1000;
+    // 20 min in Chrome, then 10 min in VS Code, sampled every 30s.
+    let t = start;
+    for (; t < start + 20 * 60 * 1000; t += 30000) {
+      createCapture({ timestamp: t, pixelChangePct: 0.1, appName: 'Chrome' });
     }
-    for (let i = 0; i < 3; i++) {
-      createCapture({ timestamp: now - i * 1000, pixelChangePct: 0.1, appName: 'VS Code' });
+    for (; t < start + 30 * 60 * 1000; t += 30000) {
+      createCapture({ timestamp: t, pixelChangePct: 0.1, appName: 'VS Code' });
     }
 
-    const stats = getAppUsageStats(now - 10000, now + 1000);
+    const stats = getAppUsageStats(start - 1000, t);
     expect(stats.length).toBe(2);
     expect(stats[0]!.app).toBe('Chrome');
-    expect(stats[0]!.captureCount).toBe(5);
+    expect(stats[0]!.minutes).toBe(20);
     expect(stats[1]!.app).toBe('VS Code');
+    expect(stats[1]!.minutes).toBe(10);
+    // The switch-over gap is credited to the app that was on screen when it
+    // opened, so Chrome holds 20min of 29.5min measured.
+    expect(stats[0]!.percentage).toBe(68);
+  });
+
+  test('getAppUsageStats is unmoved by a denser sampling rate', () => {
+    const start = Date.now() - 60 * 60 * 1000;
+    // Same 10 minutes of Chrome, sampled 3x more often. Counting rows would
+    // report 3x the time; counting elapsed gaps reports the same 10 minutes.
+    for (let t = start; t <= start + 10 * 60 * 1000; t += 10000) {
+      createCapture({ timestamp: t, pixelChangePct: 0.1, appName: 'Chrome' });
+    }
+
+    const stats = getAppUsageStats(start - 1000, start + 11 * 60 * 1000);
+    expect(stats[0]!.minutes).toBe(10);
+  });
+
+  test('activeMsFrom caps away-from-keyboard gaps', () => {
+    const t0 = Date.now();
+    // Two 30s gaps around a 4h absence: the absence must not count as work.
+    const captures = [
+      { timestamp: t0 },
+      { timestamp: t0 + 30000 },
+      { timestamp: t0 + 30000 + 4 * 60 * 60 * 1000 },
+      { timestamp: t0 + 60000 + 4 * 60 * 60 * 1000 },
+    ];
+    expect(activeMsFrom(captures)).toBe(30000 + MAX_CAPTURE_GAP_MS + 30000);
+    expect(activeMinutesFrom([{ timestamp: t0 }])).toBe(0);
   });
 });
 
@@ -307,6 +343,7 @@ describe('SuggestionEngine', () => {
       ocrText: 'TypeError: undefined',
       sessionId: 'sess-1',
       isSignificantChange: false,
+      isAppSwitch: false,
     };
 
     const events: AwarenessEvent[] = [{
@@ -334,6 +371,7 @@ describe('SuggestionEngine', () => {
       ocrText: 'error',
       sessionId: 'sess-1',
       isSignificantChange: false,
+      isAppSwitch: false,
     };
 
     const events: AwarenessEvent[] = [{
@@ -368,6 +406,7 @@ describe('ContextGraph', () => {
       ocrText: 'some code here',
       sessionId: 'sess-1',
       isSignificantChange: false,
+      isAppSwitch: false,
     };
 
     graph.linkCaptureToEntities(context);
@@ -375,5 +414,357 @@ describe('ContextGraph', () => {
     const entities = searchEntitiesByName('Visual Studio Code');
     expect(entities.length).toBeGreaterThan(0);
     expect(entities[0].type).toBe('tool');
+  });
+});
+
+describe('AwarenessIntelligence — escalation gate', () => {
+  const ctx = (over: Partial<ScreenContext> = {}): ScreenContext => ({
+    captureId: 'cap-1',
+    timestamp: Date.now(),
+    appName: 'Chrome',
+    windowTitle: 'Some page — Chrome',
+    url: null,
+    filePath: null,
+    ocrText: 'a screen with plenty of text on it',
+    sessionId: 'sess-1',
+    isSignificantChange: false,
+    isAppSwitch: false,
+    ...over,
+  });
+
+  const ev = (type: AwarenessEvent['type']): AwarenessEvent => ({ type, data: {}, timestamp: Date.now() });
+
+  // No LLM calls happen in claimEscalation, so the manager is never touched.
+  const intel = (cooldownMs: number, ambientMs: number) =>
+    new AwarenessIntelligence(null as never, cooldownMs, ambientMs);
+
+  test('a quiet capture never escalates', () => {
+    const i = intel(0, 0);
+    expect(i.claimEscalation(ctx(), [])).toBeNull();
+  });
+
+  test('a window title change alone never escalates', () => {
+    // isSignificantChange is true for title-only churn (browser tabs, editor
+    // files). That used to be enough to bill a vision call every cooldown.
+    const i = intel(0, 0);
+    expect(i.claimEscalation(ctx({ isSignificantChange: true }), [])).toBeNull();
+  });
+
+  test('short OCR alone never escalates', () => {
+    const i = intel(0, 0);
+    expect(i.claimEscalation(ctx({ ocrText: '' }), [])).toBeNull();
+  });
+
+  test('local signals escalate and pick the matching analysis', () => {
+    expect(intel(0, 0).claimEscalation(ctx(), [ev('struggle_detected')])?.kind).toBe('struggle');
+    expect(intel(0, 0).claimEscalation(ctx(), [ev('error_detected')])?.kind).toBe('general');
+    expect(intel(0, 0).claimEscalation(ctx(), [ev('stuck_detected')])?.kind).toBe('general');
+    expect(
+      intel(0, 0).claimEscalation(ctx({ isAppSwitch: true }), [ev('error_detected')])?.kind
+    ).toBe('delta');
+  });
+
+  test('an app switch escalates ambiently, then is silenced by its own cooldown', () => {
+    const i = intel(0, 60_000);
+    expect(i.claimEscalation(ctx({ isAppSwitch: true }), [])?.kind).toBe('delta');
+    expect(i.claimEscalation(ctx({ isAppSwitch: true }), [])).toBeNull();
+  });
+
+  test('a claim stamps the cooldown immediately, before any analysis runs', () => {
+    // The service awaits an image fetch between claiming and calling. Two
+    // captures racing through that gap must not both bill.
+    const i = intel(60_000, 60_000);
+    expect(i.claimEscalation(ctx(), [ev('error_detected')])?.kind).toBe('general');
+    expect(i.claimEscalation(ctx(), [ev('error_detected')])).toBeNull();
+  });
+
+  test('an ambient claim also holds off signal escalations', () => {
+    const i = intel(60_000, 900_000);
+    expect(i.claimEscalation(ctx({ isAppSwitch: true }), [])?.kind).toBe('delta');
+    expect(i.claimEscalation(ctx(), [ev('struggle_detected')])).toBeNull();
+  });
+
+  test('cloud vision disabled (Infinity cooldown) never escalates', () => {
+    const i = intel(Infinity, Infinity);
+    expect(i.claimEscalation(ctx({ isAppSwitch: true }), [ev('struggle_detected')])).toBeNull();
+  });
+
+  test('releasing an unused claim frees the cooldown again', () => {
+    // The screenshot fetch can fail after the claim (sidecar gone, file
+    // pruned). Nothing was billed, so the next real signal must not be eaten.
+    const i = intel(60_000, 900_000);
+    const first = i.claimEscalation(ctx(), [ev('error_detected')]);
+    expect(first?.kind).toBe('general');
+    i.releaseEscalation(first!.token);
+    expect(i.claimEscalation(ctx(), [ev('error_detected')])?.kind).toBe('general');
+  });
+
+  test('releasing restores the ambient cooldown too, and only once', () => {
+    const i = intel(0, 900_000);
+    const first = i.claimEscalation(ctx({ isAppSwitch: true }), []);
+    expect(first?.kind).toBe('delta');
+    i.releaseEscalation(first!.token);
+    i.releaseEscalation(first!.token); // second release is a no-op, not a second rollback
+    expect(i.claimEscalation(ctx({ isAppSwitch: true }), [])?.kind).toBe('delta');
+    expect(i.claimEscalation(ctx({ isAppSwitch: true }), [])).toBeNull();
+  });
+
+  test('a stale release cannot reopen a newer claim', () => {
+    // Captures are processed concurrently: a slow fetch can fail long after a
+    // later capture has claimed and is mid-call. Rolling the cooldown back
+    // there would let a third capture bill inside the same window.
+    const i = intel(60_000, 900_000);
+    const stale = i.claimEscalation(ctx(), [ev('error_detected')]);
+    expect(stale?.kind).toBe('general');
+    i.releaseEscalation(stale!.token); // its fetch failed, cooldown handed back
+    const current = i.claimEscalation(ctx(), [ev('error_detected')]);
+    expect(current?.kind).toBe('general');
+
+    // The stale token must no longer own anything.
+    i.releaseEscalation(stale!.token);
+    expect(i.claimEscalation(ctx(), [ev('error_detected')])).toBeNull();
+  });
+
+  test('a low tier that cannot see falls back to medium, then stays there', async () => {
+    const calls: string[] = [];
+    const llm = {
+      chatTier: async (tier: string) => {
+        calls.push(tier);
+        if (tier === 'low') throw new Error('400 model does not support image input');
+        return { content: 'a description of the screen' };
+      },
+    };
+    const i = new AwarenessIntelligence(llm as never, 0, 0);
+
+    expect(await i.analyzeGeneral('aGk=', ctx())).toBe('a description of the screen');
+    expect(calls).toEqual(['low', 'medium']);
+
+    // The tier is sticky — no second doomed low-tier attempt.
+    expect(await i.analyzeGeneral('aGk=', ctx())).toBe('a description of the screen');
+    expect(calls).toEqual(['low', 'medium', 'medium']);
+  });
+
+  test('a vision failure on both tiers degrades to an empty analysis', async () => {
+    const llm = { chatTier: async () => { throw new Error('upstream down'); } };
+    const i = new AwarenessIntelligence(llm as never, 0, 0);
+    expect(await i.analyzeGeneral('aGk=', ctx())).toBe('');
+  });
+});
+
+describe('ContextTracker — redundant captures', () => {
+  beforeEach(() => initDatabase(':memory:'));
+
+  test('flags a repeat capture with identical OCR text as redundant', () => {
+    const tracker = new ContextTracker(testConfig);
+    const t0 = Date.now();
+
+    const first = tracker.processCapture('c1', 'the same screen text', 'Notes — Bear', t0);
+    expect(first.isRedundant).toBe(false); // first capture in a window
+
+    const second = tracker.processCapture('c2', 'the same screen text', 'Notes — Bear', t0 + 1000);
+    expect(second.isRedundant).toBe(true);
+
+    const changed = tracker.processCapture('c3', 'now it says something else', 'Notes — Bear', t0 + 2000);
+    expect(changed.isRedundant).toBe(false);
+  });
+
+  test('a window change is never redundant', () => {
+    const tracker = new ContextTracker(testConfig);
+    const t0 = Date.now();
+
+    tracker.processCapture('c1', 'identical text', 'Notes — Bear', t0);
+    const switched = tracker.processCapture('c2', 'identical text', 'index.ts — Visual Studio Code', t0 + 1000);
+    expect(switched.isRedundant).toBe(false);
+    expect(switched.context.isAppSwitch).toBe(true);
+  });
+
+  test('isAppSwitch ignores title-only churn', () => {
+    const tracker = new ContextTracker(testConfig);
+    const t0 = Date.now();
+
+    tracker.processCapture('c1', 'first tab', 'Docs — Google Chrome', t0);
+    const retitled = tracker.processCapture('c2', 'second tab', 'Mail — Google Chrome', t0 + 1000);
+    expect(retitled.context.isSignificantChange).toBe(true);
+    expect(retitled.context.isAppSwitch).toBe(false);
+  });
+});
+
+describe('SuggestionEngine — break nudge', () => {
+  beforeEach(() => initDatabase(':memory:'));
+
+  const quietContext = (): ScreenContext => ({
+    captureId: 'cap-break',
+    timestamp: Date.now(),
+    appName: 'Figma',
+    windowTitle: 'Untitled — Figma',
+    url: null,
+    filePath: null,
+    ocrText: 'a canvas with some shapes on it',
+    sessionId: 'sess-break',
+    isSignificantChange: false,
+    isAppSwitch: false,
+  });
+
+  test('fires after 90 minutes of activity regardless of capture rate', async () => {
+    const now = Date.now();
+    // 90 minutes sampled every 30s — far fewer rows than the old count
+    // threshold (700) expected, but the same 90 minutes of elapsed work.
+    for (let t = now - 90 * 60 * 1000; t <= now; t += 30000) {
+      createCapture({ timestamp: t, pixelChangePct: 0.1, appName: 'Figma' });
+    }
+
+    const engine = new SuggestionEngine(0);
+    const suggestion = await engine.evaluate(quietContext(), []);
+    expect(suggestion).not.toBeNull();
+    expect(suggestion!.type).toBe('break');
+    expect(suggestion!.context!.minutesActive).toBeGreaterThanOrEqual(70);
+  });
+
+  test('does not fire for a short stretch of work', async () => {
+    const now = Date.now();
+    for (let t = now - 20 * 60 * 1000; t <= now; t += 30000) {
+      createCapture({ timestamp: t, pixelChangePct: 0.1, appName: 'Figma' });
+    }
+
+    const engine = new SuggestionEngine(0);
+    expect(await engine.evaluate(quietContext(), [])).toBeNull();
+  });
+
+  test('still fires for a reader whose screen goes static in stretches', async () => {
+    const now = Date.now();
+    // 90 minutes at the desk, but three 5-minute stretches of a static screen
+    // send no captures at all. Each is credited only MAX_CAPTURE_GAP_MS, so
+    // ~12 minutes of real desk time is uncountable — the threshold has to
+    // leave room for that or the nudge never reaches anyone who reads.
+    const start = now - 90 * 60 * 1000;
+    const staticFrom = [20, 45, 70].map(m => start + m * 60 * 1000);
+    const isStatic = (t: number) => staticFrom.some(s => t > s && t < s + 5 * 60 * 1000);
+    for (let t = start; t <= now; t += 30000) {
+      if (isStatic(t)) continue;
+      createCapture({ timestamp: t, pixelChangePct: 0.1, appName: 'Preview' });
+    }
+
+    const engine = new SuggestionEngine(0);
+    const suggestion = await engine.evaluate(quietContext(), []);
+    expect(suggestion).not.toBeNull();
+    expect(suggestion!.type).toBe('break');
+    // Pins the scenario: countable time really is short of the 90 it spans.
+    expect(suggestion!.context!.minutesActive as number).toBeLessThan(80);
+  });
+
+  test('does not count an idle stretch as work', async () => {
+    const now = Date.now();
+    // Two brief bursts three hours apart: elapsed wall-clock is long, actual
+    // time at the machine is not.
+    for (let t = now - 3 * 60 * 60 * 1000; t <= now - 3 * 60 * 60 * 1000 + 60000; t += 30000) {
+      createCapture({ timestamp: t, pixelChangePct: 0.1, appName: 'Figma' });
+    }
+    for (let t = now - 60000; t <= now; t += 30000) {
+      createCapture({ timestamp: t, pixelChangePct: 0.1, appName: 'Figma' });
+    }
+
+    const engine = new SuggestionEngine(0);
+    expect(await engine.evaluate(quietContext(), [])).toBeNull();
+  });
+});
+
+describe('Vision tier downgrade is only for a real refusal', () => {
+  const ctx = (): ScreenContext => ({
+    captureId: 'c', timestamp: Date.now(), appName: 'Chrome', windowTitle: 'w',
+    url: null, filePath: null, ocrText: 'text', sessionId: 's',
+    isSignificantChange: false, isAppSwitch: false,
+  });
+
+  test('a transient failure does not abandon the low tier', async () => {
+    const { LLMProviderError } = require('../llm/provider.ts');
+    const calls: string[] = [];
+    let failNext = true;
+    const llm = {
+      chatTier: async (tier: string) => {
+        calls.push(tier);
+        if (failNext) {
+          failNext = false;
+          throw new LLMProviderError('429 rate limit exceeded', 'rate_limit');
+        }
+        return { content: 'ok' };
+      },
+    };
+    const i = new AwarenessIntelligence(llm as never, 0, 0);
+
+    // The blip degrades this one call...
+    expect(await i.analyzeGeneral('aGk=', ctx())).toBe('');
+    // ...but must not hand every future call to the expensive tier.
+    expect(await i.analyzeGeneral('aGk=', ctx())).toBe('ok');
+    expect(calls).toEqual(['low', 'low']);
+  });
+
+  test('a 500 does not abandon the low tier either', async () => {
+    const { LLMProviderError } = require('../llm/provider.ts');
+    const calls: string[] = [];
+    const llm = {
+      chatTier: async (tier: string) => {
+        calls.push(tier);
+        throw new LLMProviderError('500 internal error', 'server');
+      },
+    };
+    const i = new AwarenessIntelligence(llm as never, 0, 0);
+    await i.analyzeGeneral('aGk=', ctx());
+    await i.analyzeGeneral('aGk=', ctx());
+    expect(calls).toEqual(['low', 'low']);
+  });
+});
+
+describe('ContextTracker — stuck fires once per episode', () => {
+  beforeEach(() => initDatabase(':memory:'));
+
+  const stuckConfig = { ...testConfig, stuck_threshold_ms: 1000 };
+
+  test('a motionless window does not re-fire stuck on every capture', () => {
+    const tracker = new ContextTracker(stuckConfig);
+    const t0 = Date.now();
+    tracker.processCapture('c1', 'frozen text', 'Player — VLC', t0);
+
+    const stuckCounts: number[] = [];
+    for (let n = 1; n <= 6; n++) {
+      const { events } = tracker.processCapture(`c${n + 1}`, 'frozen text', 'Player — VLC', t0 + n * 2000);
+      stuckCounts.push(events.filter(e => e.type === 'stuck_detected').length);
+    }
+
+    // Exactly one stuck event across the whole stall. Re-firing would mean a
+    // billed vision call every cooldown for as long as the window is up.
+    expect(stuckCounts.reduce((a, b) => a + b, 0)).toBe(1);
+  });
+
+  test('a new stall after activity is a new episode', () => {
+    const tracker = new ContextTracker(stuckConfig);
+    const t0 = Date.now();
+    tracker.processCapture('c1', 'frozen text', 'Player — VLC', t0);
+    tracker.processCapture('c2', 'frozen text', 'Player — VLC', t0 + 2000); // fires
+
+    // The user does something.
+    tracker.processCapture('c3', 'the user typed something', 'Player — VLC', t0 + 4000);
+
+    // Then stalls again — that is a fresh episode and must be reported.
+    const { events } = tracker.processCapture('c4', 'the user typed something', 'Player — VLC', t0 + 6000);
+    expect(events.some(e => e.type === 'stuck_detected')).toBe(true);
+  });
+});
+
+describe('ContextTracker — redundancy uses the full OCR text', () => {
+  beforeEach(() => initDatabase(':memory:'));
+
+  test('content changing under a long static header is not redundant', () => {
+    const tracker = new ContextTracker(testConfig);
+    const t0 = Date.now();
+    // 2500 characters of unchanging chrome — a file tree, a nav bar, a header.
+    const chrome = 'sidebar item '.repeat(200);
+    expect(chrome.length).toBeGreaterThan(2000);
+
+    tracker.processCapture('c1', chrome + 'first page of the document', 'Docs — Editor', t0);
+    const next = tracker.processCapture('c2', chrome + 'a completely different page', 'Docs — Editor', t0 + 1000);
+
+    // Hashing only the first 2000 chars would call this redundant and drop the
+    // body out of the entity graph and observation log.
+    expect(next.isRedundant).toBe(false);
   });
 });

@@ -13,15 +13,26 @@ import {
   getAppUsageStats,
   getRecentSessions,
   getCaptureCountSince,
+  activeMsFrom,
+  activeMinutesFrom,
+  MAX_CAPTURE_GAP_MS,
 } from '../vault/awareness.ts';
 import { getSuggestionStats, getSuggestionCountSince } from '../vault/awareness.ts';
 import type { ContextTracker } from './context-tracker.ts';
 
 export class BehaviorAnalytics {
   private llm: LLMManager;
+  private maxGapMs: number;
 
-  constructor(llm: LLMManager) {
+  /**
+   * @param maxGapMs How much elapsed time a single gap between captures may
+   *   contribute. Derived from the configured capture interval by the service
+   *   — a fixed cap would clip every ordinary gap on a slowly-sampling install
+   *   and silently report a fraction of the real time.
+   */
+  constructor(llm: LLMManager, maxGapMs: number = MAX_CAPTURE_GAP_MS) {
     this.llm = llm;
+    this.maxGapMs = maxGapMs;
   }
 
   /**
@@ -35,7 +46,7 @@ export class BehaviorAnalytics {
 
     // Get captures and compute stats
     const captures = getCapturesInRange(dayStart, dayEnd);
-    const appBreakdown = getAppUsageStats(dayStart, dayEnd);
+    const appBreakdown = getAppUsageStats(dayStart, dayEnd, this.maxGapMs);
     const suggestionStats = getSuggestionStats(dayStart, dayEnd);
 
     // Get sessions for the day
@@ -47,7 +58,7 @@ export class BehaviorAnalytics {
       i > 0 && c.app_name !== captures[i - 1]!.app_name
     ).length;
 
-    const totalActiveMinutes = Math.round((captures.length * 7) / 60); // ~7s per capture
+    const totalActiveMinutes = activeMinutesFrom(captures, this.maxGapMs);
 
     // Focus score: fewer context switches per hour = higher focus
     const activeHours = Math.max(totalActiveMinutes / 60, 0.1);
@@ -55,19 +66,17 @@ export class BehaviorAnalytics {
     // Score: 100 for 0 switches/hr, ~50 for 10, ~20 for 30+
     const focusScore = Math.max(0, Math.min(100, Math.round(100 * Math.exp(-switchesPerHour / 15))));
 
-    // Longest continuous focus (same app streak)
-    let longestStreak = 0;
-    let currentStreak = 1;
-    for (let i = 1; i < captures.length; i++) {
-      if (captures[i]!.app_name === captures[i - 1]!.app_name) {
-        currentStreak++;
-      } else {
-        longestStreak = Math.max(longestStreak, currentStreak);
-        currentStreak = 1;
-      }
+    // Longest continuous focus: the longest run of same-app captures, measured
+    // in the elapsed time those captures span rather than how many there are.
+    let longestStreakMs = 0;
+    let streakStart = 0;
+    for (let i = 1; i <= captures.length; i++) {
+      const sameApp = i < captures.length && captures[i]!.app_name === captures[i - 1]!.app_name;
+      if (sameApp) continue;
+      longestStreakMs = Math.max(longestStreakMs, activeMsFrom(captures.slice(streakStart, i), this.maxGapMs));
+      streakStart = i;
     }
-    longestStreak = Math.max(longestStreak, currentStreak);
-    const longestFocusMinutes = Math.round((longestStreak * 7) / 60);
+    const longestFocusMinutes = Math.round(longestStreakMs / 60000);
 
     // Build session summaries
     const sessions = daySessions.map(s => {
@@ -107,7 +116,7 @@ export class BehaviorAnalytics {
    * Get app usage stats for a time range.
    */
   getAppUsage(startTime: number, endTime: number): AppUsageStat[] {
-    return getAppUsageStats(startTime, endTime);
+    return getAppUsageStats(startTime, endTime, this.maxGapMs);
   }
 
   /**
@@ -138,7 +147,7 @@ export class BehaviorAnalytics {
     const tenMinAgo = Date.now() - 10 * 60 * 1000;
     let recentApps: string[] = [];
     try {
-      const stats = getAppUsageStats(tenMinAgo, Date.now());
+      const stats = getAppUsageStats(tenMinAgo, Date.now(), this.maxGapMs);
       recentApps = stats.map(s => s.app);
     } catch { /* ignore */ }
 
@@ -201,7 +210,7 @@ export class BehaviorAnalytics {
       const dayEnd = new Date(dateStr + 'T23:59:59.999').getTime();
 
       const captures = getCapturesInRange(dayStart, dayEnd);
-      const activeMinutes = Math.round((captures.length * 7) / 60);
+      const activeMinutes = activeMinutesFrom(captures, this.maxGapMs);
 
       const contextSwitches = captures.filter((c, i) =>
         i > 0 && c.app_name !== captures[i - 1]!.app_name
@@ -230,7 +239,7 @@ export class BehaviorAnalytics {
     // Get aggregated top apps for the week
     const weekStartMs = monday.getTime();
     const weekEndMs = sunday.getTime() + 24 * 60 * 60 * 1000 - 1;
-    const topApps = getAppUsageStats(weekStartMs, weekEndMs);
+    const topApps = getAppUsageStats(weekStartMs, weekEndMs, this.maxGapMs);
 
     // Compare with previous week for trends
     const prevWeekStartMs = prevMonday.getTime();
@@ -247,7 +256,7 @@ export class BehaviorAnalytics {
       const dayStart = new Date(dateStr + 'T00:00:00').getTime();
       const dayEnd = new Date(dateStr + 'T23:59:59.999').getTime();
       const captures = getCapturesInRange(dayStart, dayEnd);
-      const mins = Math.round((captures.length * 7) / 60);
+      const mins = activeMinutesFrom(captures, this.maxGapMs);
       const switches = captures.filter((c, i) => i > 0 && c.app_name !== captures[i - 1]!.app_name).length;
       const hrs = Math.max(mins / 60, 0.1);
       const focus = captures.length > 0
@@ -310,8 +319,8 @@ export class BehaviorAnalytics {
     const currentCaptures = getCapturesInRange(currentStart, now);
     const prevCaptures = getCapturesInRange(prevStart, currentStart);
 
-    const currentMinutes = Math.round((currentCaptures.length * 7) / 60);
-    const prevMinutes = Math.round((prevCaptures.length * 7) / 60);
+    const currentMinutes = activeMinutesFrom(currentCaptures, this.maxGapMs);
+    const prevMinutes = activeMinutesFrom(prevCaptures, this.maxGapMs);
 
     // Active time comparison
     if (currentMinutes > 0 || prevMinutes > 0) {
@@ -327,10 +336,11 @@ export class BehaviorAnalytics {
     }
 
     // Focus comparison
-    const computeFocus = (captures: Array<{ app_name: string | null }>) => {
+    const maxGapMs = this.maxGapMs;
+    const computeFocus = (captures: Array<{ app_name: string | null; timestamp: number }>) => {
       if (captures.length === 0) return 0;
       const switches = captures.filter((c, i) => i > 0 && c.app_name !== captures[i - 1]!.app_name).length;
-      const hours = Math.max((captures.length * 7) / 3600, 0.1);
+      const hours = Math.max(activeMsFrom(captures, maxGapMs) / 3600000, 0.1);
       return Math.max(0, Math.min(100, Math.round(100 * Math.exp(-(switches / hours) / 15))));
     };
 
@@ -350,7 +360,7 @@ export class BehaviorAnalytics {
     }
 
     // Top app identification
-    const currentApps = getAppUsageStats(currentStart, now);
+    const currentApps = getAppUsageStats(currentStart, now, this.maxGapMs);
     if (currentApps.length > 0) {
       const topApp = currentApps[0]!;
       insights.push({
