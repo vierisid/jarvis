@@ -570,7 +570,7 @@ export class AgentService implements Service, IAgentService {
     const parts: string[] = [];
     const name = this.config.user?.name;
     if (name) parts.push(`Name: ${name}`);
-    parts.push(`Local time: ${new Date().toLocaleString()}`);
+    parts.push(`Local date and time (authoritative): ${new Date().toString()}`);
     return parts.join('. ');
   }
 

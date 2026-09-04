@@ -38,6 +38,85 @@ func TestAwarenessOCRDefault(t *testing.T) {
 	}
 }
 
+func TestAwarenessEnabledDefaultsOnAndCanBeDisabled(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		yaml string
+		want bool
+	}{
+		{"omitted", "awareness:\n  screen_interval_ms: 7000\n", true},
+		{"explicit true", "awareness:\n  enabled: true\n", true},
+		{"explicit false", "awareness:\n  enabled: false\n", false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := defaultConfig()
+			if err := yaml.Unmarshal([]byte(tc.yaml), &cfg); err != nil {
+				t.Fatalf("yaml: %v", err)
+			}
+			if got := cfg.Awareness.IsEnabled(); got != tc.want {
+				t.Fatalf("Awareness.IsEnabled() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestDisabledAwarenessRemovesScreenCapabilitiesBeforePreflight(t *testing.T) {
+	off := false
+	cfg := defaultConfig()
+	cfg.Awareness.Enabled = &off
+	cfg.Capabilities = []SidecarCapability{CapScreenshot, CapAwareness, CapOCR}
+	available, unavailable := CheckCapabilities(&cfg)
+	if len(available) != 0 || len(unavailable) != 0 {
+		t.Fatalf("disabled awareness capabilities must be skipped: available=%v unavailable=%v", available, unavailable)
+	}
+}
+
+func TestContinuousWakeRequiresExplicitOptIn(t *testing.T) {
+	cases := []struct {
+		name string
+		yaml string
+		want bool
+	}{
+		{"omitted", "preferences:\n  start_at_startup: true\n", false},
+		{"explicit false", "preferences:\n  continuous_wake: false\n", false},
+		{"explicit true", "preferences:\n  continuous_wake: true\n", true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := defaultConfig()
+			if err := yaml.Unmarshal([]byte(tc.yaml), &cfg); err != nil {
+				t.Fatalf("yaml: %v", err)
+			}
+			if cfg.Preferences.ContinuousWake != tc.want {
+				t.Fatalf("ContinuousWake = %v, want %v", cfg.Preferences.ContinuousWake, tc.want)
+			}
+		})
+	}
+}
+
+func TestDoubleClapRequiresExplicitOptIn(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		yaml string
+		want bool
+	}{
+		{"omitted", "preferences:\n  continuous_wake: true\n", false},
+		{"explicit false", "preferences:\n  double_clap: false\n", false},
+		{"explicit true", "preferences:\n  double_clap: true\n", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := defaultConfig()
+			if err := yaml.Unmarshal([]byte(tc.yaml), &cfg); err != nil {
+				t.Fatalf("yaml: %v", err)
+			}
+			if cfg.Preferences.DoubleClap != tc.want {
+				t.Fatalf("DoubleClap = %v, want %v", cfg.Preferences.DoubleClap, tc.want)
+			}
+		})
+	}
+}
+
 func TestAwarenessCaptureDirDefault(t *testing.T) {
 	cfg := defaultConfig()
 	want := filepath.Join(homeDir(), ".jarvis", "captures")

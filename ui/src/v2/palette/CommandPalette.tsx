@@ -223,7 +223,7 @@ export function CommandPalette({
               setActiveIdx(0);
             }}
             onKeyDown={onKeyDown}
-            placeholder="Search workflows, memory, tools, agents, authority, logs…"
+            placeholder="ワークフロー、メモリー、ツール、エージェントを検索…"
             aria-label="Palette search"
           />
           <KBD>Esc</KBD>
@@ -238,7 +238,7 @@ export function CommandPalette({
 
           {/* Rooms group */}
           {navEntries.length > 0 && (
-            <Group label="Rooms">
+            <Group label="ルーム">
               {navEntries.map((entry, i) => {
                 const idx = i;
                 return (
@@ -251,7 +251,7 @@ export function CommandPalette({
                     icon={NAV_ICON[entry.key]}
                     title={entry.label}
                     hint={entry.hint}
-                    typeLabel="Open Room"
+                    typeLabel="ルームを開く"
                   />
                 );
               })}
@@ -300,16 +300,16 @@ export function CommandPalette({
         <div className="v2-palette__foot">
           <span className="v2-palette__hint">
             <KBD>↑</KBD>
-            <KBD>↓</KBD> navigate
+            <KBD>↓</KBD> 移動
           </span>
           <span className="v2-palette__hint">
-            <KBD>↵</KBD> insert as card
+            <KBD>↵</KBD> カードとして追加
           </span>
           <span className="v2-palette__hint">
-            <KBD>⇧↵</KBD> open Room
+            <KBD>⇧↵</KBD> ルームを開く
           </span>
           <span className="v2-palette__hint v2-palette__hint--right">
-            <KBD>Esc</KBD> close
+            <KBD>Esc</KBD> 閉じる
           </span>
         </div>
       </div>

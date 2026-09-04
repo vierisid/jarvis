@@ -19,24 +19,24 @@ type Row =
   | { kind: "now"; label: string; kbd: string };
 
 const ROWS: Row[] = [
-  { kind: "now", label: "Now", kbd: modKey("1") },
-  { kind: "heading", label: "run" },
-  { kind: "room", key: "workflows", label: "Workflows", kbd: modKey("2") },
-  { kind: "room", key: "agents", label: "Agents", kbd: modKey("3") },
-  { kind: "room", key: "tasks", label: "Tasks", kbd: modKey("4") },
-  { kind: "heading", label: "know" },
-  { kind: "room", key: "memory", label: "Memory", kbd: modKey("5") },
-  { kind: "room", key: "goals", label: "Goals", kbd: modKey("6") },
-  { kind: "room", key: "calendar", label: "Calendar", kbd: modKey("7") },
-  { kind: "room", key: "content", label: "Content", kbd: modKey("8") },
-  { kind: "heading", label: "guard" },
-  { kind: "room", key: "authority", label: "Authority" },
-  { kind: "room", key: "logs", label: "Logs" },
-  { kind: "room", key: "usage", label: "Usage" },
-  { kind: "heading", label: "build" },
-  { kind: "room", key: "workspaces", label: "Workspaces" },
-  { kind: "room", key: "tools", label: "Tools" },
-  { kind: "room", key: "settings", label: "Settings", kbd: modKey("9"), spaced: true },
+  { kind: "now", label: "現在", kbd: modKey("1") },
+  { kind: "heading", label: "実行" },
+  { kind: "room", key: "workflows", label: "ワークフロー", kbd: "⌘2" },
+  { kind: "room", key: "agents", label: "エージェント", kbd: "⌘3" },
+  { kind: "room", key: "tasks", label: "タスク", kbd: "⌘4" },
+  { kind: "heading", label: "知識" },
+  { kind: "room", key: "memory", label: "メモリー", kbd: "⌘5" },
+  { kind: "room", key: "goals", label: "ゴール", kbd: "⌘6" },
+  { kind: "room", key: "calendar", label: "カレンダー", kbd: "⌘7" },
+  { kind: "room", key: "content", label: "コンテンツ", kbd: "⌘8" },
+  { kind: "heading", label: "安全" },
+  { kind: "room", key: "authority", label: "権限と承認" },
+  { kind: "room", key: "logs", label: "アクティビティ" },
+  { kind: "room", key: "usage", label: "使用状況" },
+  { kind: "heading", label: "構築" },
+  { kind: "room", key: "workspaces", label: "ワークスペース" },
+  { kind: "room", key: "tools", label: "ツール" },
+  { kind: "room", key: "settings", label: "設定", kbd: modKey("9"), spaced: true },
 ];
 
 /** Cluster → its rooms, for collapsed tiles + hover-peek. */
@@ -182,7 +182,7 @@ export function IndexSidebar({
           );
         })}
         <div style={{ flex: 1 }} />
-        <button className="rs-clps" onClick={onToggleCollapse}>« collapse</button>
+        <button className="rs-clps" onClick={onToggleCollapse}>« 折りたたむ</button>
       </div>
 
       {/* Collapsed cluster tiles */}

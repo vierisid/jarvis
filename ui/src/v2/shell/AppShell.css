@@ -39,3 +39,18 @@
   display: flex;
   flex-direction: column;
 }
+.rs-jp-clock {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 8px;
+  color: var(--ink2);
+  font: 500 11px/1 var(--mono);
+  white-space: nowrap;
+}
+
+.rs-jp-clock b {
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: .04em;
+}

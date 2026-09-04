@@ -81,11 +81,11 @@ export class EventScheduler {
 
   /**
    * Mark event types that bypass the round-robin queue and dispatch
-   * synchronously on enqueue, in receive order. The queue drains only one
-   * event per ~50 ms tick — fine for discrete events, but it would back up a
-   * high-rate stream (e.g. realtime mic audio at ~25 frames/s) into seconds of
-   * latency. Direct types skip the queue entirely so they stay real-time and
-   * in order.
+   * synchronously on enqueue, in receive order. The queue drains a bounded
+   * batch per ~50 ms tick — fine for discrete events, but observer bursts can
+   * still back up a latency-sensitive transaction (or a high-rate realtime mic
+   * stream) into seconds of delay. Direct types skip the queue entirely so
+   * they stay real-time and in order.
    */
   setDirectTypes(types: string[]): void {
     for (const t of types) this.directTypes.add(t);

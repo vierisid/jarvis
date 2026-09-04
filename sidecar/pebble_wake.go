@@ -87,6 +87,12 @@ type WakeListenerService struct {
 	paused        atomic.Bool
 	suppressDepth atomic.Int32
 
+	clapMu            sync.Mutex
+	clapDetector      *DoubleClapDetector
+	clapCallback      func()
+	clapCooldown      time.Duration
+	clapCooldownUntil time.Time
+
 	stopCh chan struct{}
 	doneCh chan struct{}
 
@@ -101,6 +107,8 @@ type WakeListenerService struct {
 	segStartedAt    time.Time
 }
 
+const doubleClapCooldown = 2 * time.Second
+
 // NewWakeListenerService wires up a wake listener that uses the given
 // audio service for capture and the given sender to emit segments. The
 // listener does NOT start automatically — call Start() once the websocket
@@ -111,6 +119,43 @@ func NewWakeListenerService(audioSvc *AudioCaptureService, sender EventSender, o
 		sender:   sender,
 		opts:     opts,
 	}
+}
+
+// ConfigureDoubleClap attaches a local-only detector to this listener's
+// existing PCM stream. It never opens a second microphone device.
+func (w *WakeListenerService) ConfigureDoubleClap(detector *DoubleClapDetector, callback func(), cooldown time.Duration) {
+	w.clapMu.Lock()
+	defer w.clapMu.Unlock()
+	w.clapDetector = detector
+	w.clapCallback = callback
+	w.clapCooldown = cooldown
+	w.clapCooldownUntil = time.Time{}
+}
+
+func (w *WakeListenerService) resetDoubleClap() {
+	w.clapMu.Lock()
+	defer w.clapMu.Unlock()
+	if w.clapDetector != nil {
+		w.clapDetector.Reset()
+	}
+}
+
+func (w *WakeListenerService) observeDoubleClap(features PCMTransientFeatures, now time.Time) (bool, func()) {
+	w.clapMu.Lock()
+	defer w.clapMu.Unlock()
+	if w.clapDetector == nil {
+		return false, nil
+	}
+	if now.Before(w.clapCooldownUntil) {
+		w.clapDetector.Reset()
+		return false, nil
+	}
+	if !w.clapDetector.ObserveFeatures(features, now) {
+		return false, nil
+	}
+	w.clapDetector.Reset()
+	w.clapCooldownUntil = now.Add(w.clapCooldown)
+	return true, w.clapCallback
 }
 
 // Start kicks off the continuous capture + segmentation loop. Idempotent.
@@ -165,6 +210,7 @@ func (w *WakeListenerService) Pause() {
 		return
 	}
 	w.audioSvc.SetChunkListener(nil)
+	w.resetDoubleClap()
 	_, _, _ = w.audioSvc.Stop()
 	log.Printf("[wake] paused (mic released)")
 }
@@ -235,6 +281,7 @@ func (w *WakeListenerService) Suppress(yes bool) {
 	if yes {
 		if w.suppressDepth.Add(1) == 1 {
 			w.resetSegment() // 0 -> 1 edge
+			w.resetDoubleClap()
 		}
 		return
 	}
@@ -258,11 +305,15 @@ func (w *WakeListenerService) Suppress(yes bool) {
 // 30 ms buffer is ~480 multiplies. Keep work here minimal so we don't
 // stall the audio thread.
 func (w *WakeListenerService) onChunk(buf []byte) {
-	if w.paused.Load() || w.suppressDepth.Load() > 0 {
+	if w.paused.Load() || w.suppressDepth.Load() > 0 || micMuted() {
 		return
 	}
-	rms := pcmRMSint16(buf)
+	features := pcmTransientFeatures(buf)
+	rms := features.RMS
 	now := time.Now()
+	if detected, callback := w.observeDoubleClap(features, now); detected && callback != nil {
+		go callback()
+	}
 
 	w.mu.Lock()
 	defer w.mu.Unlock()

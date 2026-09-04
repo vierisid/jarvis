@@ -32,6 +32,8 @@ type settingsState struct {
 	Status string `json:"status"` // "connected" | "connecting" | "error"
 	Prefs  struct {
 		StartAtStartup         bool `json:"start_at_startup"`
+		ContinuousWake         bool `json:"continuous_wake"`
+		DoubleClap             bool `json:"double_clap"`
 		OpenDashboardAtStartup bool `json:"open_dashboard_at_startup"`
 		EtherealPebble         bool `json:"ethereal_pebble"`
 		EtherealIdleSeconds    int  `json:"ethereal_idle_seconds"`
@@ -69,6 +71,8 @@ func (c *SidecarClient) runSettingsWindow() {
 			var st settingsState
 			st.Status = connStateString(c.ConnState())
 			st.Prefs.StartAtStartup = prefs.StartAtStartup
+			st.Prefs.ContinuousWake = prefs.ContinuousWake
+			st.Prefs.DoubleClap = prefs.DoubleClap
 			st.Prefs.OpenDashboardAtStartup = prefs.OpenDashboardAtStartup
 			st.Prefs.EtherealPebble = prefs.EtherealPebble
 			st.Prefs.EtherealIdleSeconds = prefs.EtherealIdleSeconds
@@ -146,6 +150,18 @@ func (c *SidecarClient) runSettingsWindow() {
 					return fmt.Errorf("Could not %s start-at-startup: %v", verb, err)
 				}
 				return c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.StartAtStartup = enabled })
+			case "continuous_wake":
+				return c.editConfig(func(cfg *SidecarConfig) {
+					cfg.Preferences.ContinuousWake = enabled
+					if !enabled {
+						cfg.Preferences.DoubleClap = false
+					}
+				})
+			case "double_clap":
+				if enabled && !c.Preferences().ContinuousWake {
+					return fmt.Errorf("Enable continuous wake-word listening first.")
+				}
+				return c.editConfig(func(cfg *SidecarConfig) { cfg.Preferences.DoubleClap = enabled })
 			case "open_dashboard_at_startup":
 				// Read once per launch (shouldOpenDashboardAtStartup), so there
 				// is no live state to apply here — just persist the choice.
@@ -321,6 +337,14 @@ const settingsWindowHTML = `<!doctype html>
   <div class="sec">Privacy</div>
   <div class="panel">
     <div class="srow">
+      <div class="sl7"><div class="a">Continuous wake-word listening</div><div class="b">Keep the microphone open and send detected speech segments to your Brain to find “Jarvis”. Off by default. Takes effect after restarting the sidecar.</div></div>
+      <div class="sv7"><label class="sw"><input type="checkbox" id="continuous_wake" onchange="togglePref(this)"><span class="track"></span></label></div>
+    </div>
+    <div class="srow">
+      <div class="sl7"><div class="a">ダブルクラップで呼び出す</div><div class="b">継続待機のマイクを共有し、2回の拍手を端末内で判定します。初期値はOFF。判定器は音声を保存せず、再起動後に有効になります。</div></div>
+      <div class="sv7"><label class="sw"><input type="checkbox" id="double_clap" onchange="togglePref(this)"><span class="track"></span></label></div>
+    </div>
+    <div class="srow">
       <div class="sl7"><div class="a">Send anonymous usage metrics</div><div class="b">A small anonymous ping (hashed machine id, version, OS, capabilities) at startup and hourly, so the project can measure usage. No personal data or screen content. On by default; turn off here anytime.</div></div>
       <div class="sv7"><label class="sw"><input type="checkbox" id="telemetry_enabled" onchange="togglePref(this)"><span class="track"></span></label></div>
     </div>
@@ -362,6 +386,8 @@ const settingsWindowHTML = `<!doctype html>
     var st = await window.getState();
     paintStatus(st.status);
     document.getElementById('start_at_startup').checked = !!st.prefs.start_at_startup;
+    document.getElementById('continuous_wake').checked = !!st.prefs.continuous_wake;
+    document.getElementById('double_clap').checked = !!st.prefs.double_clap;
     document.getElementById('open_dashboard_at_startup').checked = !!st.prefs.open_dashboard_at_startup;
     document.getElementById('ethereal_pebble').checked = !!st.prefs.ethereal_pebble;
     document.getElementById('ethereal_idle_seconds').value = st.prefs.ethereal_idle_seconds || 5;

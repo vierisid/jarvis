@@ -126,4 +126,32 @@ describe('EventScheduler queue bounds', () => {
     await drainOnce(scheduler);
     expect(seen).toEqual(['c1', 'h1', 'n1', 'n2']);
   });
+
+  test('direct voice transaction bypasses observer backlog in receive order', () => {
+    const scheduler = new EventScheduler();
+    const seen: string[] = [];
+    scheduler.on('*', async (_id, event) => {
+      seen.push(event.event_type);
+    });
+    scheduler.setDirectTypes([
+      'pebble.summon',
+      'audio.session_start',
+      'audio.session_end',
+    ]);
+
+    for (let i = 0; i < 100; i++) {
+      scheduler.enqueue('sc-1', makeEvent('file_change'));
+    }
+    scheduler.enqueue('sc-1', makeEvent('pebble.summon'));
+    scheduler.enqueue('sc-1', makeEvent('audio.session_start'));
+    scheduler.enqueue('sc-1', makeEvent('audio.session_end'));
+
+    expect(seen).toEqual([
+      'pebble.summon',
+      'audio.session_start',
+      'audio.session_end',
+    ]);
+    const queues = (scheduler as unknown as { queues: Map<string, unknown[]> }).queues;
+    expect(queues.get('sc-1')!.length).toBe(100);
+  });
 });

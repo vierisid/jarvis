@@ -26,12 +26,17 @@ const (
 
 // AwarenessConfig controls screen and window observer behavior.
 type AwarenessConfig struct {
+	Enabled            *bool   `yaml:"enabled,omitempty"`
 	ScreenIntervalMs   int     `yaml:"screen_interval_ms"`
 	WindowIntervalMs   int     `yaml:"window_interval_ms"`
 	MinChangeThreshold float64 `yaml:"min_change_threshold"`
 	StuckThresholdMs   int     `yaml:"stuck_threshold_ms"`
 	OCREnabled         bool    `yaml:"ocr_enabled"`
 	CaptureDir         string  `yaml:"capture_dir"`
+}
+
+func (c AwarenessConfig) IsEnabled() bool {
+	return c.Enabled == nil || *c.Enabled
 }
 
 // SidecarTokenClaims is the JWT payload from the brain.
@@ -150,6 +155,9 @@ type TelemetryConfig struct {
 type PreferencesConfig struct {
 	// General
 	StartAtStartup bool `yaml:"start_at_startup"` // register the sidecar to launch on login
+	// Privacy
+	ContinuousWake bool `yaml:"continuous_wake"` // continuously capture speech segments for wake-word detection; default off
+	DoubleClap     bool `yaml:"double_clap"`     // local double-clap summon; requires ContinuousWake and defaults off
 	// OpenDashboardAtStartup opens the dashboard window on every sidecar
 	// startup (once the brain connection is up, since the panel needs a
 	// minted access token). Off by default: normally only the pebble appears.

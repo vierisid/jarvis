@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from "react"
 import { openRoom, type RoomKey } from "../router";
 import { useLiveData, type LiveData } from "./LiveDataContext";
 import type { ConnectionState } from "./Header";
+import type { JarvisCoreState } from "../core/coreState";
 
 /**
  * Now — the home surface you compose. A grid of widgets, each a room's
@@ -26,15 +27,53 @@ type WidgetDef = {
 
 const LAYOUT_KEY = "jarvis-now-layout-v2";
 
+const CORE_JA: Record<JarvisCoreState, { label: string; message: string }> = {
+  SLEEPING: { label: "休止中", message: "呼びかけを待っています" },
+  AWAKENING: { label: "起動中", message: "システムを同期しています" },
+  IDLE: { label: "待機中", message: "いつでも指示をどうぞ" },
+  LISTENING: { label: "聞いています", message: "声を認識しています" },
+  THINKING: { label: "思考中", message: "最適な答えを組み立てています" },
+  WORKING: { label: "実行中", message: "タスクを進めています" },
+  WAITING_APPROVAL: { label: "承認待ち", message: "重要操作の確認が必要です" },
+  SPEAKING: { label: "応答中", message: "回答を伝えています" },
+  ERROR: { label: "要確認", message: "システム状態を確認してください" },
+};
+
+function CoreHero({ state, live }: { state: JarvisCoreState; live: LiveData }) {
+  const copy = CORE_JA[state];
+  const latest = [...live.agentActivity].sort((a, b) => b.timestamp - a.timestamp)[0];
+  const activity = latest
+    ? `${latest.agentName} · ${latest.eventType === "done" ? "完了" : latest.eventType === "tool_call" ? "ツール実行中" : "処理中"}`
+    : "アクティビティなし";
+
+  return (
+    <section className="jarvis-core-hero" data-core-state={state} aria-label={`JARVIS CORE ${copy.label}`}>
+      <div className="jarvis-core-visual" aria-hidden="true">
+        <span className="jarvis-core-orbit orbit-a" />
+        <span className="jarvis-core-orbit orbit-b" />
+        <span className="jarvis-core-orbit orbit-c" />
+        <span className="jarvis-core-sphere"><i /></span>
+      </div>
+      <div className="jarvis-core-copy">
+        <span className="eyebrow">JARVIS CORE</span>
+        <strong>{copy.label}</strong>
+        <p>{copy.message}</p>
+        <div className="jarvis-core-activity"><span />最新アクティビティ　{activity}</div>
+      </div>
+      <span className="jarvis-core-code">{state}</span>
+    </section>
+  );
+}
+
 function rel(ts: number): string {
   const d = Date.now() - ts;
   if (d < 0) return "";
   const m = Math.floor(d / 60000);
-  if (m < 1) return "now";
-  if (m < 60) return `${m}m`;
+  if (m < 1) return "たった今";
+  if (m < 60) return `${m}分前`;
   const h = Math.floor(m / 60);
-  if (h < 24) return `${h}h`;
-  return `${Math.floor(h / 24)}d`;
+  if (h < 24) return `${h}時間前`;
+  return `${Math.floor(h / 24)}日前`;
 }
 
 /* ── shared header + empty-state helpers ── */
@@ -42,10 +81,15 @@ function WHeader({ label, room, tone }: { label: string; room?: RoomKey; tone?: 
   return (
     <div className={`rs-ch${tone ? " " + tone : ""}`}>
       {label}
-      {room && <button className="lnk" onClick={() => openRoom(room)}>{room} →</button>}
+      {room && <button className="lnk" onClick={() => openRoom(room)}>{ROOM_JA[room]} →</button>}
     </div>
   );
 }
+const ROOM_JA: Record<RoomKey, string> = {
+  workflows: "ワークフロー", agents: "エージェント", agent_strip: "エージェント状況", tasks: "タスク", memory: "メモリー",
+  goals: "ゴール", calendar: "カレンダー", content: "コンテンツ", authority: "権限と承認",
+  logs: "履歴", usage: "使用状況", workspaces: "ワークスペース", tools: "ツール", settings: "設定",
+};
 function Empty({ children }: { children: React.ReactNode }) {
   return <div className="rs-empty">{children}</div>;
 }
@@ -63,7 +107,7 @@ function Row({ dot, room, children, tm }: { dot: string; room: RoomKey; children
 function agentRows(live: LiveData) {
   const byAgent = new Map<string, { name: string; what: string; ts: number; running: boolean }>();
   for (const e of live.agentActivity) {
-    const what = e.eventType === "tool_call" ? "running a tool" : e.eventType === "done" ? "finished" : "working";
+    const what = e.eventType === "tool_call" ? "ツール実行中" : e.eventType === "done" ? "完了" : "処理中";
     byAgent.set(e.agentName, { name: e.agentName, what, ts: e.timestamp, running: e.eventType !== "done" });
   }
   return [...byAgent.values()].sort((a, b) => b.ts - a.ts).slice(0, 4);
@@ -111,17 +155,17 @@ function useWidgetData<T>(url: string, pollMs = 15000): { data: T | null; loaded
 
 function relPast(ts: number): string {
   const s = Math.max(0, Math.round((Date.now() - ts) / 1000));
-  if (s < 60) return "just now";
-  const m = Math.round(s / 60); if (m < 60) return `${m}m ago`;
-  const h = Math.round(m / 60); if (h < 24) return `${h}h ago`;
-  return `${Math.round(h / 24)}d ago`;
+  if (s < 60) return "たった今";
+  const m = Math.round(s / 60); if (m < 60) return `${m}分前`;
+  const h = Math.round(m / 60); if (h < 24) return `${h}時間前`;
+  return `${Math.round(h / 24)}日前`;
 }
 function relSoon(ts: number): string {
   const s = Math.round((ts - Date.now()) / 1000);
-  if (s < 60) return "now";
-  const m = Math.round(s / 60); if (m < 60) return `in ${m}m`;
-  const h = Math.round(m / 60); if (h < 24) return `in ${h}h`;
-  return `in ${Math.round(h / 24)}d`;
+  if (s < 60) return "まもなく";
+  const m = Math.round(s / 60); if (m < 60) return `${m}分後`;
+  const h = Math.round(m / 60); if (h < 24) return `${h}時間後`;
+  return `${Math.round(h / 24)}日後`;
 }
 const deslug = (s: string) => s.replace(/[_-]+/g, " ").trim();
 
@@ -133,7 +177,7 @@ function Stat({ n, unit, sub }: { n: React.ReactNode; unit?: string; sub?: React
     </div>
   );
 }
-function Loading() { return <Empty><span className="dim">Loading…</span></Empty>; }
+function Loading() { return <Empty><span className="dim">読み込み中…</span></Empty>; }
 
 function CalendarWidget() {
   const now = Date.now();
@@ -141,18 +185,18 @@ function CalendarWidget() {
     `/api/calendar?range_start=${now}&range_end=${now + 7 * 86400000}`);
   const up = Array.isArray(data) ? data.filter((e) => e.timestamp >= now).sort((a, b) => a.timestamp - b.timestamp) : [];
   const next = up[0];
-  return (<><WHeader label="calendar · next" room="calendar" />
-    {next ? <Stat n={up.length} unit={up.length === 1 ? "commitment" : "commitments"} sub={<>Next: <b>{next.title}</b> · {relSoon(next.timestamp)}</>} />
-      : loaded ? <Empty>No commitments this week. <span className="dim">Connect a calendar in Settings.</span></Empty> : <Loading />}</>);
+  return (<><WHeader label="カレンダー · 次の予定" room="calendar" />
+    {next ? <Stat n={up.length} unit="件の予定" sub={<>次: <b>{next.title}</b> · {relSoon(next.timestamp)}</>} />
+      : loaded ? <Empty>今週の予定はありません。<span className="dim">設定からカレンダーを接続できます。</span></Empty> : <Loading />}</>);
 }
 
 function MemoryWidget() {
   const { data, loaded } = useWidgetData<Array<{ predicate: string; object: string; created_at: number }>>("/api/vault/facts");
   const facts = Array.isArray(data) ? [...data].sort((a, b) => b.created_at - a.created_at) : [];
   const newest = facts[0];
-  return (<><WHeader label="memory · new" room="memory" />
-    {newest ? <Stat n={facts.length} unit={facts.length === 1 ? "fact" : "facts"} sub={<>Newest: {deslug(newest.predicate)} <b>{newest.object}</b></>} />
-      : loaded ? <Empty>New facts Jarvis learns surface here. <span className="dim">Browse the vault in Memory.</span></Empty> : <Loading />}</>);
+  return (<><WHeader label="メモリー · 最新" room="memory" />
+    {newest ? <Stat n={facts.length} unit="件の記憶" sub={<>最新: {deslug(newest.predicate)} <b>{newest.object}</b></>} />
+      : loaded ? <Empty>JARVISが学習した新しい情報がここに表示されます。<span className="dim">メモリーで確認できます。</span></Empty> : <Loading />}</>);
 }
 
 function GoalsWidget() {
@@ -160,18 +204,18 @@ function GoalsWidget() {
   const goals = Array.isArray(data) ? data : [];
   const active = goals.filter((g) => g.status === "active");
   const onTrack = active.filter((g) => g.health === "on_track").length;
-  return (<><WHeader label="goals · health" room="goals" />
-    {goals.length ? <Stat n={active.length} unit={active.length === 1 ? "active goal" : "active goals"} sub={active.length ? <>{onTrack} on track · {active.length - onTrack} need attention</> : "None active"} />
-      : loaded ? <Empty>No goals set yet. <span className="dim">Define objectives in Goals to track them here.</span></Empty> : <Loading />}</>);
+  return (<><WHeader label="ゴール · 状況" room="goals" />
+    {goals.length ? <Stat n={active.length} unit="件が進行中" sub={active.length ? <>順調 {onTrack}件 · 要確認 {active.length - onTrack}件</> : "進行中なし"} />
+      : loaded ? <Empty>ゴールはまだありません。<span className="dim">ゴールを設定すると進捗を確認できます。</span></Empty> : <Loading />}</>);
 }
 
 function WorkflowsWidget() {
   const { data, loaded } = useWidgetData<Array<Record<string, unknown>>>("/api/workflows");
   const flows = Array.isArray(data) ? data : [];
   const live = flows.filter((f) => f.enabled === true || f.published === true || f.status === "published").length;
-  return (<><WHeader label="workflows" room="workflows" />
-    {flows.length ? <Stat n={flows.length} unit={flows.length === 1 ? "workflow" : "workflows"} sub={live ? `${live} enabled` : "None enabled yet"} />
-      : loaded ? <Empty>Saved automations show their status here. <span className="dim">Open Workflows to build one.</span></Empty> : <Loading />}</>);
+  return (<><WHeader label="ワークフロー" room="workflows" />
+    {flows.length ? <Stat n={flows.length} unit="件" sub={live ? `${live}件が有効` : "有効なものはありません"} />
+      : loaded ? <Empty>保存した自動化の状態がここに表示されます。<span className="dim">ワークフローから作成できます。</span></Empty> : <Loading />}</>);
 }
 
 function AuthorityAuditWidget() {
@@ -233,29 +277,29 @@ const WIDGETS: Record<string, WidgetDef> = {
     id: "right-now", group: "run", dot: "var(--speak)", desc: "Active agents and what each is doing.", defaultSize: 1,
     render: ({ live }) => {
       const a = agentRows(live);
-      return (<><WHeader label="right now" room="agents" />
+      return (<><WHeader label="現在の稼働状況" room="agents" />
         {a.length ? a.map((x) => <Row key={x.name} dot={x.running ? "var(--speak)" : "var(--faint)"} room="agents" tm={rel(x.ts)}><b>{x.name}</b> · {x.what}</Row>)
-          : <Empty>Nothing running yet. Say <b>“Hey Jarvis”</b> and hand it something, or start in <b>Workflows</b>.</Empty>}</>);
+          : <Empty>現在実行中の処理はありません。<b>“Hey Jarvis”</b> と呼びかけるか、ワークフローを開始してください。</Empty>}</>);
     },
   },
   waiting: {
     id: "waiting", group: "guard", dot: "var(--hold)", desc: "Pending approvals, resolvable in place. Pins to the top while amber.", defaultSize: 1,
-    render: ({ live, onApprove, onCancel }) => (<><WHeader label={`waiting on you · ${live.approvals.length}`} room="authority" tone="hold" />
+    render: ({ live, onApprove, onCancel }) => (<><WHeader label={`承認待ち · ${live.approvals.length}`} room="authority" tone="hold" />
       {live.approvals.length ? live.approvals.slice(0, 3).map((a) => (
         <div className="rs-apr" key={a.id}>
           <div className="t1"><span className="rs-dot" />{a.category} · {a.toolName}</div>
           <div className="t2">{a.intent}</div>
-          <div className="bs"><button className="b1" onClick={() => onApprove(a.id)}>Yes · approve</button><button className="b2" onClick={() => onCancel(a.id)}>Cancel</button></div>
+          <div className="bs"><button className="b1" onClick={() => onApprove(a.id)}>承認する</button><button className="b2" onClick={() => onCancel(a.id)}>キャンセル</button></div>
         </div>
-      )) : <Empty>Approvals land here when an action needs your yes. <span className="dim">Nothing waits right now.</span></Empty>}</>),
+      )) : <Empty>重要操作の確認が必要な場合、ここに表示されます。<span className="dim">現在、承認待ちはありません。</span></Empty>}</>),
   },
   today: {
     id: "today", group: "guard", dot: "var(--ok)", desc: "Runs and outcomes since midnight, tones included.", defaultSize: 2,
     render: ({ live }) => {
       const r = todayRows(live);
-      return (<><WHeader label="today" room="logs" />
+      return (<><WHeader label="今日" room="logs" />
         {r.length ? r.map((x) => <Row key={x.id} dot={x.dot} room="logs" tm={rel(x.ts)}>{x.text}</Row>)
-          : <Empty>Day one. The first morning brief is scheduled for <b>07:00 tomorrow</b>; it will report here.</Empty>}</>);
+          : <Empty>本日のアクティビティはまだありません。次回のモーニングブリーフは<b>明日07:00</b>です。</Empty>}</>);
     },
   },
   calendar: {
@@ -266,10 +310,10 @@ const WIDGETS: Record<string, WidgetDef> = {
     id: "vitals", group: "system", dot: "var(--faint)", desc: "Agents active, approvals waiting, events today.", defaultSize: 1,
     render: ({ live }) => {
       const active = agentRows(live).filter((a) => a.running).length;
-      return (<><WHeader label="vitals" /><div className="rs-vit">
-        <div className="v"><span className="k">agents</span><div className="n">{active}<span> active</span></div></div>
-        <div className="v"><span className="k">waiting</span><div className="n">{live.approvals.length}</div></div>
-        <div className="v"><span className="k">events</span><div className="n">{todayRows(live).length}<span> today</span></div></div>
+      return (<><WHeader label="システム状況" /><div className="rs-vit">
+        <div className="v"><span className="k">エージェント</span><div className="n">{active}<span> 稼働中</span></div></div>
+        <div className="v"><span className="k">承認待ち</span><div className="n">{live.approvals.length}</div></div>
+        <div className="v"><span className="k">イベント</span><div className="n">{todayRows(live).length}<span> 本日</span></div></div>
       </div></>);
     },
   },
@@ -356,9 +400,10 @@ function loadLayout(): LayoutItem[] {
 }
 
 export function NowRoom({
-  connection, arranging, onApprove, onCancel,
+  connection, coreState, arranging, onApprove, onCancel,
 }: {
   connection: ConnectionState;
+  coreState: JarvisCoreState;
   arranging: boolean;
   onApprove: (id: string) => void;
   onCancel: (id: string) => void;
@@ -423,6 +468,8 @@ export function NowRoom({
           <span className="mono2">jarvis start</span>
         </div>
       )}
+
+      {!offline && !arranging && <CoreHero state={coreState} live={live} />}
 
       {items.map((item) => {
         const def = WIDGETS[item.id];

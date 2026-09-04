@@ -2,8 +2,9 @@ import React from "react";
 import { useV2Route } from "../router";
 import { ROOM_NAV_ENTRIES } from "../palette/types";
 import type { ConnectionState } from "./Header";
-import type { VoiceState } from "./VoiceRail";
 import { useTheme } from "./useTheme";
+import { JapaneseDateTime } from "../core/JapaneseDateTime";
+import type { JarvisCoreState } from "../core/coreState";
 import { altKey, modKey } from "../ui/platform";
 
 /**
@@ -16,33 +17,27 @@ const ROOM_TITLES: Record<string, string> = Object.fromEntries(
   ROOM_NAV_ENTRIES.map((e) => [e.key, e.label]),
 );
 
-const STATE_LABEL: Record<VoiceState, string> = {
-  idle: "idle",
-  listening: "listening",
-  thinking: "thinking",
-  speaking: "speaking",
-  "awaiting-approval": "asking",
-  muted: "muted",
-};
-
-const STATE_HUE: Record<VoiceState, string> = {
-  idle: "var(--faint)",
-  listening: "var(--listen)",
-  thinking: "var(--ink2)",
-  speaking: "var(--speak)",
-  "awaiting-approval": "var(--hold)",
-  muted: "var(--faint)",
+const CORE_HUE: Record<JarvisCoreState, string> = {
+  SLEEPING: "var(--faint)",
+  AWAKENING: "var(--ink2)",
+  IDLE: "var(--faint)",
+  LISTENING: "var(--listen)",
+  THINKING: "var(--ink2)",
+  WORKING: "var(--speak)",
+  WAITING_APPROVAL: "var(--hold)",
+  SPEAKING: "var(--speak)",
+  ERROR: "var(--listen)",
 };
 
 const DAEMON: Record<ConnectionState, { cls: string; hue: string; label: string }> = {
-  live: { cls: "", hue: "var(--ok)", label: "daemon · online" },
-  degraded: { cls: "hold", hue: "var(--hold)", label: "daemon · degraded · reconnecting" },
-  offline: { cls: "bad", hue: "var(--listen)", label: "offline" },
+  live: { cls: "", hue: "var(--ok)", label: "システム · オンライン" },
+  degraded: { cls: "hold", hue: "var(--hold)", label: "システム · 再接続中" },
+  offline: { cls: "bad", hue: "var(--listen)", label: "オフライン" },
 };
 
 export function TopBar({
   connection,
-  voiceState,
+  coreState,
   arranging,
   onArrange,
   onOpenPalette,
@@ -51,7 +46,7 @@ export function TopBar({
   onToggleNotifications,
 }: {
   connection: ConnectionState;
-  voiceState: VoiceState;
+  coreState: JarvisCoreState;
   arranging: boolean;
   onArrange: () => void;
   onOpenPalette: () => void;
@@ -62,7 +57,7 @@ export function TopBar({
   const route = useV2Route();
   const [theme, toggleTheme] = useTheme();
   const isNow = route.kind !== "room";
-  const title = route.kind === "room" ? ROOM_TITLES[route.key] ?? route.key : "Now";
+  const title = route.kind === "room" ? ROOM_TITLES[route.key] ?? route.key : "現在";
   const daemon = DAEMON[connection];
   const count = notificationCount ?? 0;
 
@@ -71,11 +66,12 @@ export function TopBar({
       <span className="rm">{title}</span>
       {isNow && (
         <button className={`rs-abtn${arranging ? " on" : ""}`} onClick={onArrange} aria-pressed={arranging}>
-          {arranging ? "Done" : "Arrange"}
+          {arranging ? "完了" : "配置変更"}
         </button>
       )}
 
       <div className="right">
+        <JapaneseDateTime />
         <span className={`rs-chip ${daemon.cls}`}>
           <span className="rs-dot" style={{ background: daemon.hue }} />
           {daemon.label}
@@ -83,21 +79,21 @@ export function TopBar({
 
         {connection !== "offline" && (
           <span className="rs-chip hold" aria-live="polite">
-            <span className="rs-dot" style={{ background: STATE_HUE[voiceState] }} />
-            <span className="rs-stl">{STATE_LABEL[voiceState]}</span>
+            <span className="rs-dot" style={{ background: CORE_HUE[coreState] }} />
+            <span className="rs-stl">CORE · {coreState}</span>
           </span>
         )}
 
         <button
           className="rs-chip"
           onClick={() => toggleTheme()}
-          aria-label={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
-          title={`Switch to ${theme === "dark" ? "light" : "dark"} mode`}
+          aria-label={`${theme === "dark" ? "ライト" : "ダーク"}モードへ切り替え`}
+          title={`${theme === "dark" ? "ライト" : "ダーク"}モードへ切り替え`}
         >
           {theme === "dark" ? "● dark" : "○ light"}
         </button>
 
-        <button className="rs-chip" onClick={onOpenPalette} aria-label="Quick open">{modKey("K")}</button>
+        <button className="rs-chip" onClick={onOpenPalette} aria-label="クイックオープン">{modKey("K")}</button>
 
         {onToggleNotifications && (
           <button
