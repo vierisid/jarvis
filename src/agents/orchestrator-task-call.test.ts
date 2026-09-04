@@ -94,6 +94,69 @@ describe('AgentOrchestrator.processTaskCall', () => {
     }
   });
 
+  it('accepts a tool-less answer unchanged when requireToolUse is off', async () => {
+    const provider = new ScriptedProvider([text('done')]);
+    const orch = makeOrchestrator(provider);
+
+    const result = await orch.processTaskCall({
+      systemPrompt: 'task system',
+      userMessage: 'draft a thank-you note',
+      tier: 'medium',
+      subsystem: 'task_test',
+    });
+    expect(result.kind).toBe('completed');
+    if (result.kind === 'completed') expect(result.text).toBe('done');
+  });
+
+  it('pushes back once when the model announces work instead of doing it', async () => {
+    // What the hosted medium tier actually did: an announcement, no tool call,
+    // ~2s. Without the push-back this string becomes the task's result and the
+    // conversation tier reads it to the user as a progress note.
+    const provider = new ScriptedProvider([
+      text("On it - I'll open Notepad, then verify it's in the foreground."),
+      toolCall('open_app', { name: 'notepad' }),
+      text('Notepad is open and focused (PID 16672).'),
+    ]);
+    const orch = makeOrchestrator(provider);
+
+    const result = await orch.processTaskCall({
+      systemPrompt: 'task system',
+      userMessage: 'open notepad',
+      tier: 'medium',
+      subsystem: 'task_test',
+      requireToolUse: true,
+    });
+
+    expect(result.kind).toBe('completed');
+    if (result.kind !== 'completed') return;
+    expect(result.text).toBe('Notepad is open and focused (PID 16672).');
+    // The announcement and the push-back are both in the buffer, so a resume
+    // replays why the model was told to act.
+    const roles = (result.conversation as { role: string }[]).map((m) => m.role);
+    expect(roles.filter((r) => r === 'user').length).toBe(2);
+  });
+
+  it('gives up after a bounded number of push-backs', async () => {
+    const provider = new ScriptedProvider([
+      text('I will get right on that.'),
+      text('Getting on it now.'),
+      text('I am still about to get on that.'),
+    ]);
+    const orch = makeOrchestrator(provider);
+
+    const result = await orch.processTaskCall({
+      systemPrompt: 'task system',
+      userMessage: 'open notepad',
+      tier: 'medium',
+      subsystem: 'task_test',
+      requireToolUse: true,
+    });
+    expect(result.kind).toBe('completed');
+    if (result.kind === 'completed') {
+      expect(result.text).toBe('I am still about to get on that.');
+    }
+  });
+
   it('returns paused when LLM calls ask_for_clarification', async () => {
     const provider = new ScriptedProvider([
       toolCall('ask_for_clarification', { question: 'Which Sarah?' }),

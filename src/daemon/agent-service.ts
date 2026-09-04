@@ -707,6 +707,11 @@ export class AgentService implements Service, IAgentService {
           subsystem,
           history: history as import('../llm/provider.ts').LLMMessage[] | undefined,
           signal,
+          // Every template but `write` exists to DO something, so a final
+          // answer that ran no tools is a model that announced its plan and
+          // stopped - push back once rather than storing the announcement as
+          // the result. `write` drafts prose and legitimately needs no tools.
+          requireToolUse: template !== 'write',
         });
         return result;
       };

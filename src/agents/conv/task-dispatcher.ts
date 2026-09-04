@@ -22,7 +22,9 @@ import type { TaskRegistry } from './task-registry.ts';
 // the summarizer stripping identifiers.
 const SUMMARY_THRESHOLD_CHARS = 3000;
 
-const TOOL_USE_INSTRUCTION = `IMPORTANT: You have access to real tools listed in your context. USE THEM to do the work - do not just describe what someone could do. If the user asked to create a workflow, use the workflow tools. If they asked to browse the web, use the browser. If they asked to read a file, use file-ops. Generic textual answers about "you could write a Python script" or "here is the general approach" are wrong when the right tool exists in your registry.`;
+const TOOL_USE_INSTRUCTION = `IMPORTANT: You have access to real tools listed in your context. USE THEM to do the work - do not just describe what someone could do. If the user asked to create a workflow, use the workflow tools. If they asked to browse the web, use the browser. If they asked to read a file, use file-ops. Generic textual answers about "you could write a Python script" or "here is the general approach" are wrong when the right tool exists in your registry.
+
+NEVER answer by announcing what you are about to do ("On it - I'll open Notepad, then verify it's in the foreground"). You are a background executor: nobody reads your text while you work, so an announcement reaches the user as the finished result and the work never happens. Call the tools first; your reply is the report of what they actually returned.`;
 
 const TEMPLATE_PROMPTS: Record<TaskTemplate, string> = {
   research: `[TASK TEMPLATE: RESEARCH] Gather information using your tools (web search, vault, docs). Stay on the user's intent. Cite sources where it matters. End with a clear conclusion the conversation agent can quote.\n\n${TOOL_USE_INSTRUCTION}`,
@@ -183,6 +185,23 @@ export class TaskDispatcher {
         };
         this.registry.transition(record.id, 'needs_input', envelope);
         return envelope;
+      }
+
+      // A task that finished without touching a single tool is the signature
+      // of a model that announced its plan instead of executing it - the
+      // result the conversation tier then reads out as a progress note. It is
+      // model-family dependent, so it can reappear on any upstream swap:
+      // log it loudly rather than letting it look like a normal completion.
+      // `grep 'completed without using any tool'` on the daemon log is the
+      // fastest check after changing which model backs a tier.
+      const usedTools = (result.conversation as { role?: string }[])
+        .some((m) => m?.role === 'tool');
+      if (!usedTools) {
+        console.warn(
+          `[TaskDispatcher] task ${record.id} (${request.template}, tier=${request.tier}) ` +
+          `completed without using any tool - the model answered with text only. ` +
+          `Result: ${JSON.stringify(result.text.slice(0, 160))}`,
+        );
       }
 
       const summary = await this.summarize(record, request, result.text);

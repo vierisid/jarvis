@@ -73,6 +73,52 @@ const ASK_FOR_CLARIFICATION_TOOL: LLMTool = {
 };
 
 /**
+ * Prepended to the task tier's own system prompt (fresh calls only, and only
+ * when the caller sets `requireToolUse`). The task tier is handed the FULL
+ * conversational role prompt - persona included - and some model families
+ * anchor on that persona and answer the way a chat assistant would: by
+ * acknowledging the request. This says, at the position closest to the user
+ * message, that there is nobody to acknowledge.
+ */
+const TASK_EXECUTOR_FRAMING =
+  'You are not talking to anyone right now. You are running as a BACKGROUND ' +
+  'TASK EXECUTOR: the text you produce is stored as this task\'s result and is ' +
+  'read only once you stop. Nothing you merely announce gets carried out ' +
+  'afterwards - if you end your turn without calling a tool, the task ends ' +
+  'having done nothing at all. Call the tools you need first; your final ' +
+  'message reports what they actually returned. If one detail is genuinely ' +
+  'missing, call ask_for_clarification.';
+
+/**
+ * Pushed back at a task-tier model that answered without calling a single
+ * tool while nothing had been done yet. Such an answer is almost always an
+ * ANNOUNCEMENT of intent ("On it - I'll open Notepad, then verify it's in the
+ * foreground"), and `processTaskCall` would otherwise hand it to the
+ * dispatcher as the task's result - which the conversation tier then reads
+ * back to the user as a progress note instead of an outcome.
+ *
+ * Measured against the hosted medium tier while its upstream was swapped
+ * between families: across 25 tasks the split is clean and model-determined,
+ * not random. Every GPT-era task returned an announcement after ONE call in
+ * 1.9-6.4s; every task on the other families ran a real tool loop (3 or more
+ * calls, 7-147s) on the same intents, including the same "open notepad"
+ * wording. So the tools, the prompt and the wire format are all fine - the
+ * behaviour has to be corrected in the loop rather than assumed away.
+ */
+const NO_WORK_NUDGE =
+  'You replied with a message and did not call a single tool, so nothing has ' +
+  'been done yet. You are running as a BACKGROUND TASK EXECUTOR: nobody sees ' +
+  'this text while the task runs and there is no one to reply to it - it is ' +
+  'stored verbatim as the task result. Do the work now using the tools in ' +
+  'your registry, then report only what actually happened (what you called, ' +
+  'what came back). If one detail is genuinely missing, call ' +
+  'ask_for_clarification instead. If your previous message really was the ' +
+  'complete final result and no tool was needed, repeat it as your answer.';
+
+/** How many times a single task may be pushed back before its answer stands. */
+const MAX_NO_WORK_NUDGES = 2;
+
+/**
  * Result of a task-tier call. Either completed (final assistant text +
  * the whole conversation buffer) or paused (the LLM called the
  * `ask_for_clarification` tool; the conversation is captured so the task
@@ -431,6 +477,14 @@ export class AgentOrchestrator {
     /** When resuming, pass the conversation captured at the pause + the new user reply. */
     history?: LLMMessage[];
     signal?: AbortSignal;
+    /**
+     * Opt in to the two anti-announcement layers: TASK_EXECUTOR_FRAMING on
+     * the way in, and the bounded NO_WORK_NUDGE push-back when the model
+     * still produces final text before any tool has run. Off by default so
+     * callers that expect a pure text answer keep their single-call
+     * behaviour.
+     */
+    requireToolUse?: boolean;
   }): Promise<TaskCallResult> {
     if (!this.llmManager) {
       return { kind: 'completed', text: '[No LLM configured]', conversation: [] };
@@ -443,6 +497,9 @@ export class AgentOrchestrator {
       ? [...opts.history, { role: 'user', content: opts.userMessage }]
       : [
           ...toSystemMessages(opts.systemPrompt),
+          ...(opts.requireToolUse
+            ? [{ role: 'system', content: TASK_EXECUTOR_FRAMING } satisfies LLMMessage]
+            : []),
           { role: 'user', content: opts.userMessage },
         ];
 
@@ -451,6 +508,8 @@ export class AgentOrchestrator {
     const tools: LLMTool[] = [...baseTools, ASK_FOR_CLARIFICATION_TOOL];
 
     let finalText = '';
+    let toolsExecuted = 0;
+    let nudges = 0;
 
     for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration++) {
       if (opts.signal?.aborted) {
@@ -497,12 +556,24 @@ export class AgentOrchestrator {
 
         for (const tc of llmResponse.tool_calls) {
           const result = await this.executeTool(tc, opts.signal);
+          toolsExecuted++;
           messages.push({
             role: 'tool',
             content: result,
             tool_call_id: tc.id,
           });
         }
+        continue;
+      }
+
+      // Final text before anything was actually done - see NO_WORK_NUDGE.
+      // Bounded, and only when the caller asked for it: a task that
+      // legitimately needs no tools (drafting prose) must still be able to
+      // answer in a single call.
+      if (opts.requireToolUse && toolsExecuted === 0 && nudges < MAX_NO_WORK_NUDGES) {
+        nudges++;
+        messages.push({ role: 'assistant', content: llmResponse.content });
+        messages.push({ role: 'user', content: NO_WORK_NUDGE });
         continue;
       }
 
