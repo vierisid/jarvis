@@ -53,13 +53,24 @@ function looksLikeVersion(s: string): boolean {
   return /^v?\d+\.\d+/.test(s);
 }
 
+/**
+ * Pick the version to report, preferring the most specific git source that
+ * actually looks like one.
+ *
+ * BOTH git sources are validated, not just `describedVersion`. This repo also
+ * carries tags that are not bare versions - the installer releases as
+ * `installer-v0.1.1` - and an unvalidated exact match returned the whole tag
+ * name, so a checkout sitting on such a tag printed `vinstaller-v0.1.1` from
+ * `jarvis --version` (the caller adds the `v`). package.json is the right
+ * answer there.
+ */
 export function selectInstalledVersion(
   exactTag: string | null,
   describedVersion: string | null,
   packageVersion: string,
 ): string {
-  if (exactTag) return stripLeadingV(exactTag);
-  if (describedVersion) return stripLeadingV(describedVersion);
+  if (exactTag && looksLikeVersion(exactTag)) return stripLeadingV(exactTag);
+  if (describedVersion && looksLikeVersion(describedVersion)) return stripLeadingV(describedVersion);
   return packageVersion;
 }
 
@@ -71,11 +82,12 @@ export function getInstalledVersion(packageRoot: string): string {
   }
 
   const exactTag = runGit(['describe', '--tags', '--exact-match'], packageRoot);
-  if (exactTag) {
+  if (exactTag && looksLikeVersion(exactTag)) {
     return selectInstalledVersion(exactTag, null, pkgVersion);
   }
 
+  // A non-version exact tag falls through: describe returns that same tag,
+  // selectInstalledVersion rejects it in turn, and package.json wins.
   const describedRaw = runGit(['describe', '--tags', '--always'], packageRoot);
-  const described = describedRaw && looksLikeVersion(describedRaw) ? describedRaw : null;
-  return selectInstalledVersion(null, described, pkgVersion);
+  return selectInstalledVersion(null, describedRaw, pkgVersion);
 }

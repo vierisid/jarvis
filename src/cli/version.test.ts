@@ -88,6 +88,26 @@ fi`,
     );
   });
 
+  test('ignores an exact tag that is not a version and uses package.json', async () => {
+    // The state that made `jarvis --version` print `vinstaller-v0.1.1`: HEAD
+    // sitting exactly on the installer's release tag. Both git probes return
+    // it, so both must reject it.
+    await withFakeGit(
+      'non-version-exact-tag',
+      `if [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--exact-match" ]; then
+  printf 'installer-v0.1.1\\n'
+  exit 0
+fi
+if [ "$3" = "describe" ] && [ "$4" = "--tags" ] && [ "$5" = "--always" ]; then
+  printf 'installer-v0.1.1\\n'
+  exit 0
+fi`,
+      async (dir) => {
+        expect(getInstalledVersion(dir)).toBe('0.4.0');
+      },
+    );
+  });
+
   test('falls back to git describe when HEAD is ahead of the last tag', async () => {
     await withFakeGit(
       'described-version',
@@ -163,6 +183,16 @@ fi`,
 
   test('selectInstalledVersion: described wins when no exact tag (v stripped)', () => {
     expect(selectInstalledVersion(null, 'v1.2.3-1-gabc123', '0.4.0')).toBe('1.2.3-1-gabc123');
+  });
+
+  test('selectInstalledVersion: a non-version exact tag falls back to package.json', () => {
+    // The installer releases as `installer-v0.1.1`; reporting the tag verbatim
+    // printed `vinstaller-v0.1.1`.
+    expect(selectInstalledVersion('installer-v0.1.1', null, '0.13.0')).toBe('0.13.0');
+  });
+
+  test('selectInstalledVersion: a non-version describe result falls back to package.json', () => {
+    expect(selectInstalledVersion(null, 'installer-v0.1.1-2-gabc123', '0.13.0')).toBe('0.13.0');
   });
 
   test('selectInstalledVersion: package.json wins when neither git source resolves', () => {
