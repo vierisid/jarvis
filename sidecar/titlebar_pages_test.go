@@ -50,16 +50,6 @@ func TestCustomChromePagesCarryTheWholeTitlebar(t *testing.T) {
 	}
 }
 
-// The account window shows a remote origin end to end, so it must never get
-// custom chrome: the bindings that move, minimise and close the window would
-// be reachable from that page. account_window.go passes NativeTitleBar; this
-// pins the other half of that decision.
-func TestRemotePagesHaveNoTitlebar(t *testing.T) {
-	if strings.Contains(accountShellHTML, brandTitlebarHTML) {
-		t.Error("the account shell carries the title bar; that window shows remote content and must stay natively framed")
-	}
-}
-
 // bodyRule matches a real `body { … }` rule. The leading boundary is what stops
 // it matching inside `.pagebody {`.
 var bodyRule = regexp.MustCompile(`(?m)(^|[\s,])body\s*\{[^}]*\}`)

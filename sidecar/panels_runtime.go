@@ -323,6 +323,13 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 				}
 			}
 
+			// Send the dashboard's window.open / target=_blank OAuth "connect"
+			// flows to the system browser instead of a nested embedded window
+			// (Google/Clerk refuse OAuth inside an embedded webview). Installed
+			// on the UI thread before the first navigation. No-op where
+			// unsupported; failures leave the old behaviour, never break the panel.
+			installPanelExternalNav(wv)
+
 			if spec.URL != "" {
 				wv.Navigate(spec.URL)
 				log.Printf("[panels] spawn(%s): navigated to %s", spec.ID, redactPanelURL(spec.URL))
