@@ -84,6 +84,21 @@ func applyOutcome(s *wizardState, out installOutcome) {
 	s.UpToDate = out.UpToDate
 }
 
+// launchHomeSpot names, for the current OS, where the sidecar lives once
+// running, plus how to open it by hand — used in the launch-failure alert so a
+// user of this Dock/taskbar-less app isn't left with a vanished window and no
+// Jarvis. Mirrors the JS `homeSpot` phrasing in the done screen.
+func launchHomeSpot() string {
+	switch runtime.GOOS {
+	case "darwin":
+		return "the menu bar at the top-right of your screen (open Jarvis from your Applications folder)"
+	case "windows":
+		return "the system tray near the clock (open Jarvis from the Start menu)"
+	default:
+		return "the menu bar"
+	}
+}
+
 func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 	// The wizard itself is WebView2-backed on Windows; internal/webview2
 	// prompts + waits when the runtime is missing (no-op elsewhere). The
@@ -184,6 +199,18 @@ func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 					}
 					applyPlan(s, inst, rel.Version)
 				})
+				// Already current: no install goroutine will run to populate
+				// `out`, but the up-to-date screen offers a Launch button (a
+				// menu-bar-only app the user re-ran the installer to find).
+				// Seed the launch target from the plan so launchAndClose can
+				// start the existing install.
+				if inst.Version != "" && !versionLess(inst.Version, rel.Version) {
+					mu.Lock()
+					if gen == planGen && !started {
+						out = installOutcome{Rel: rel, Inst: inst, InstallDir: inst.InstallDir, UpToDate: true}
+					}
+					mu.Unlock()
+				}
 			}()
 		}
 		_ = w.Bind("startPlan", startPlan)
@@ -261,6 +288,15 @@ func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 				firstInstall := res.Inst.Version == ""
 				if err := launchInstalled(res.InstallDir, res.Rel.Version, firstInstall); err != nil {
 					logf("warning: could not launch the sidecar: %v", err)
+					// A GUI user never sees the log: without this the window
+					// just closes and Jarvis never appears — the same
+					// "nothing happened" the rest of this work fixes. Say so,
+					// and point them at where to start it by hand. Leave the
+					// window open (no Terminate) so the Launch button retries.
+					notify("Jarvis could not start",
+						"Jarvis is installed but could not be started automatically. Open it yourself — it runs in "+launchHomeSpot()+".",
+						true)
+					return
 				}
 			}
 			w.Dispatch(w.Terminate)
@@ -420,6 +456,12 @@ const wizardHTML = `<!doctype html>
     el('error').textContent = st.error || '';
     var pebble = el('pebble');
     var main = el('btnMain');
+    // Where Jarvis lives after it starts. It has no Dock/taskbar presence and
+    // no persistent window — only a menu-bar (macOS) / system-tray (Windows)
+    // icon — so a done screen that doesn't say this reads as "nothing happened".
+    var homeSpot = st.platform === 'darwin' ? 'the menu bar, at the top-right of your screen'
+      : st.platform === 'windows' ? 'the system tray, near the clock'
+      : 'the menu bar';
     // Autostart applies on first install only; on updates the user's own
     // choice (Jarvis settings / setup wizard) stands.
     var showAutostart = st.phase === 'plan' && st.platform === 'windows' &&
@@ -462,10 +504,11 @@ const wizardHTML = `<!doctype html>
         main.textContent = 'Close';
         main.onclick = function () { window.closeInstaller(true); };
       } else {
-        el('subtitle').textContent = st.up_to_date ? 'Already up to date.'
+        el('subtitle').textContent = st.up_to_date ? 'Already up to date. Jarvis lives in ' + homeSpot + '.'
           : (st.platform === 'darwin' && st.first_install)
-            ? 'Installed. Jarvis will now ask for its permissions.'
-            : st.first_install ? 'Installed.' : 'Updated.';
+            ? 'Installed. Jarvis will ask for its permissions, then live in ' + homeSpot + '.'
+            : st.first_install ? 'Installed. Jarvis lives in ' + homeSpot + '.'
+              : 'Updated. Jarvis lives in ' + homeSpot + '.';
         main.textContent = 'Launch Jarvis';
         main.onclick = function () { window.launchAndClose(); };
       }
@@ -479,9 +522,11 @@ const wizardHTML = `<!doctype html>
       main.textContent = 'Close';
       main.onclick = function () { window.closeInstaller(true); };
     } else if (st.up_to_date) {
-      el('subtitle').textContent = 'You already have the latest sidecar.';
-      main.textContent = 'Close';
-      main.onclick = function () { window.closeInstaller(true); };
+      // Menu-bar-only app: a user who re-ran the installer to "get Jarvis
+      // back" needs a way to start it, not just a dead-end Close. Launch it.
+      el('subtitle').textContent = 'You already have the latest sidecar — it runs in ' + homeSpot + '.';
+      main.textContent = 'Launch Jarvis';
+      main.onclick = function () { window.launchAndClose(); };
     } else {
       // The panel row is where "there is an update" is announced; saying it
       // again here would leave the two lines of the screen agreeing with each

@@ -123,8 +123,8 @@ func TestWizardPanelSaysWhatIsOnTheMachine(t *testing.T) {
 			name:     "already current",
 			st:       with(func(s *wizardState) { s.Phase, s.Detected, s.Installed, s.UpToDate = "plan", true, true, true }),
 			status:   "Up to date",
-			subtitle: "You already have the latest sidecar.",
-			button:   "Close",
+			subtitle: "You already have the latest sidecar — it runs in the system tray, near the clock.",
+			button:   "Launch Jarvis",
 		},
 		{
 			name:   "npm owns it",
@@ -143,14 +143,14 @@ func TestWizardPanelSaysWhatIsOnTheMachine(t *testing.T) {
 			name:     "a first install that finished",
 			st:       with(func(s *wizardState) { s.Phase, s.Detected, s.Installed, s.FirstInstall = "done", true, true, true }),
 			status:   "Installed",
-			subtitle: "Installed.",
+			subtitle: "Installed. Jarvis lives in the system tray, near the clock.",
 			button:   "Launch Jarvis",
 		},
 		{
 			name:     "an update that finished",
 			st:       with(func(s *wizardState) { s.Phase, s.Detected, s.Installed = "done", true, true }),
 			status:   "Updated",
-			subtitle: "Updated.",
+			subtitle: "Updated. Jarvis lives in the system tray, near the clock.",
 			button:   "Launch Jarvis",
 		},
 		{
