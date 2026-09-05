@@ -43,7 +43,6 @@ func TestDumpBrandPages(t *testing.T) {
 		"hosted-err.html":           hostedShellWithError("Could not reach usejarvis. Check your connection and try again."),
 		"hosted-selfhost-hint.html": hostedShellWithSelfHostHint(),
 		"setup.html":                setupWindowHTML,
-		"account.html":              accountShellHTML,
 		"settings.html":             settingsWindowHTML,
 		"logs.html":                 logViewerHTML,
 		"onboarding.html":           onboardingWindowHTML,
