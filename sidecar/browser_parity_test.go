@@ -3,9 +3,11 @@ package main
 import (
 	"fmt"
 	"net/url"
+	"os"
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Integration test: drives the real browser RPC handlers against a headless
@@ -80,9 +82,29 @@ func TestBrowserHandlerParityIntegration(t *testing.T) {
 	if _, err := findChromiumExecutable(cfg); err != nil {
 		t.Skipf("no Chromium available: %v", err)
 	}
-	cfg.Browser.ProfileDir = t.TempDir()
+	// Not t.TempDir(): its RemoveAll cleanup fails the test if Chromium's
+	// children are still releasing profile files. Remove with retries instead,
+	// and only warn if the dir survives — leftover tmp files are not a test
+	// failure.
+	profileDir, err := os.MkdirTemp("", "jarvis-parity-profile-*")
+	if err != nil {
+		t.Fatalf("create profile dir: %v", err)
+	}
+	t.Cleanup(func() {
+		var rmErr error
+		for i := 0; i < 20; i++ {
+			if rmErr = os.RemoveAll(profileDir); rmErr == nil {
+				return
+			}
+			time.Sleep(100 * time.Millisecond)
+		}
+		t.Logf("warning: profile dir cleanup failed after retries: %v", rmErr)
+	})
+	cfg.Browser.ProfileDir = profileDir
 
 	// All handlers share the process-global activeCDP; launch headless.
+	// The deferred close runs before the cleanup above, so the browser is
+	// dead (and reaped) before the profile dir is removed.
 	defer closeActiveCDP()
 	headless := map[string]any{"headless": true}
 	withHeadless := func(extra map[string]any) map[string]any {

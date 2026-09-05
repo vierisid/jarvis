@@ -15,72 +15,9 @@ import (
 // ── list_windows ──────────────────────────────────────────────────────
 
 func handleListWindows(params map[string]any) (*RPCResult, error) {
-	script := `
-Add-Type @'
-using System;
-using System.Collections.Generic;
-using System.Runtime.InteropServices;
-using System.Text;
-using System.Diagnostics;
-public class WinEnum {
-    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumWindowsProc lpEnumFunc, IntPtr lParam);
-    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr hWnd);
-    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr hWnd, StringBuilder sb, int nMaxCount);
-    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr hWnd, out uint pid);
-    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetClassName(IntPtr hWnd, StringBuilder sb, int nMaxCount);
-    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
-    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
-    public delegate bool EnumWindowsProc(IntPtr hWnd, IntPtr lParam);
-    [StructLayout(LayoutKind.Sequential)] public struct RECT { public int Left, Top, Right, Bottom; }
-    public static List<Dictionary<string,object>> List() {
-        var result = new List<Dictionary<string,object>>();
-        var fg = GetForegroundWindow();
-        EnumWindows((hWnd, _) => {
-            if (!IsWindowVisible(hWnd)) return true;
-            var sb = new StringBuilder(256);
-            GetWindowText(hWnd, sb, 256);
-            var title = sb.ToString();
-            if (string.IsNullOrWhiteSpace(title)) return true;
-            uint pid; GetWindowThreadProcessId(hWnd, out pid);
-            var cls = new StringBuilder(256);
-            GetClassName(hWnd, cls, 256);
-            RECT r; GetWindowRect(hWnd, out r);
-            string procName = "";
-            try { procName = Process.GetProcessById((int)pid).ProcessName; } catch {}
-            var d = new Dictionary<string,object>();
-            d["hwnd"] = (long)hWnd;
-            d["title"] = title;
-            d["pid"] = pid;
-            d["process_name"] = procName;
-            d["class_name"] = cls.ToString();
-            d["left"] = r.Left; d["top"] = r.Top; d["right"] = r.Right; d["bottom"] = r.Bottom;
-            d["is_foreground"] = hWnd == fg;
-            result.Add(d);
-            return true;
-        }, IntPtr.Zero);
-        return result;
-    }
-}
-'@
-[WinEnum]::List() | ConvertTo-Json -Depth 3 -Compress
-`
-	out, err := runPS(script, 10*time.Second)
-	if err != nil {
-		return nil, fmt.Errorf("list_windows failed: %w", err)
-	}
-
-	var windows []map[string]any
-	if err := json.Unmarshal([]byte(out), &windows); err != nil {
-		// Single window comes as object, not array
-		var single map[string]any
-		if err2 := json.Unmarshal([]byte(out), &single); err2 == nil {
-			windows = []map[string]any{single}
-		} else {
-			return nil, fmt.Errorf("parse windows: %w", err)
-		}
-	}
-
-	return &RPCResult{Result: map[string]any{"windows": windows}}, nil
+	// Native EnumWindows — the previous implementation recompiled embedded
+	// C# in a fresh PowerShell on every call (~0.7-1.5s); this is ~1ms.
+	return &RPCResult{Result: map[string]any{"windows": enumTopWindows()}}, nil
 }
 
 // ── get_window_tree (desktop_snapshot) — uses UIAutomation COM ───────
@@ -151,25 +88,13 @@ func handleTypeText(params map[string]any) (*RPCResult, error) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	// Use SendKeys for typing
-	escaped := strings.ReplaceAll(text, "'", "''")
-
-	script := fmt.Sprintf(`
-Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.SendKeys]::SendWait('%s')
-Write-Output '{"success":true}'
-`, escapeSendKeys(escaped))
-
-	out, err := runPS(script, 5*time.Second)
-	if err != nil {
+	// Native SendInput — replaces a per-call PowerShell spawn running
+	// SendKeys, which was slow (~250-500ms overhead), lossy on long/fast
+	// text, and required metacharacter escaping.
+	if err := typeTextNative(text); err != nil {
 		return nil, fmt.Errorf("type_text failed: %w", err)
 	}
-
-	var result map[string]any
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
-		return &RPCResult{Result: map[string]any{"success": true}}, nil
-	}
-	return &RPCResult{Result: result}, nil
+	return &RPCResult{Result: map[string]any{"success": true, "chars": len([]rune(text))}}, nil
 }
 
 // ── press_keys ───────────────────────────────────────────────────────
@@ -180,24 +105,13 @@ func handlePressKeys(params map[string]any) (*RPCResult, error) {
 		return nil, fmt.Errorf("missing required parameter: keys")
 	}
 
-	sendKeysStr := convertToSendKeys(keys)
-
-	script := fmt.Sprintf(`
-Add-Type -AssemblyName System.Windows.Forms
-[System.Windows.Forms.SendKeys]::SendWait('%s')
-Write-Output '{"success":true,"keys":"%s"}'
-`, sendKeysStr, strings.ReplaceAll(keys, `"`, `\"`))
-
-	out, err := runPS(script, 5*time.Second)
-	if err != nil {
+	// Native SendInput chords — replaces per-call PowerShell SendKeys. This
+	// also makes the `win` modifier a real Windows-key chord (SendKeys had
+	// no Windows key; the old code sent an approximate ctrl+esc).
+	if err := pressKeysNative(keys); err != nil {
 		return nil, fmt.Errorf("press_keys failed: %w", err)
 	}
-
-	var result map[string]any
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
-		return &RPCResult{Result: map[string]any{"success": true, "keys": keys}}, nil
-	}
-	return &RPCResult{Result: result}, nil
+	return &RPCResult{Result: map[string]any{"success": true, "keys": keys}}, nil
 }
 
 // ── launch_app ───────────────────────────────────────────────────────
@@ -220,7 +134,7 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 
 	script := fmt.Sprintf(`
 $p = Start-Process -FilePath '%s' %s -PassThru
-@{ success=$true; pid=$p.Id; name=$p.ProcessName } | ConvertTo-Json -Compress
+@{ pid=$p.Id; name=$p.ProcessName } | ConvertTo-Json -Compress
 `, escaped, argsClause)
 
 	out, err := runPS(script, 10*time.Second)
@@ -231,6 +145,31 @@ $p = Start-Process -FilePath '%s' %s -PassThru
 	var result map[string]any
 	if err := json.Unmarshal([]byte(out), &result); err != nil {
 		return nil, fmt.Errorf("parse result: %w", err)
+	}
+
+	// A spawned process is not an open app. The old handler returned success
+	// immediately, so the very next tool call ("type into it") raced the
+	// window and failed with "no window found for PID". Wait for a visible
+	// window before declaring success — matching by PID first, then by
+	// process name (packaged apps hand the window to a broker process, e.g.
+	// calc.exe -> Calculator.exe).
+	pid := toInt(result["pid"])
+	win, matchedBy := waitForWindow(pid, executable, 5*time.Second)
+	if win == nil {
+		result["success"] = false
+		result["window_visible"] = false
+		result["note"] = fmt.Sprintf(
+			"process started (pid %d) but no window appeared within 5s — the app may still be starting, be windowless, or have exited. Run desktop_list_windows to check before interacting; do NOT assume it is open.",
+			pid)
+		return &RPCResult{Result: result}, nil
+	}
+
+	result["success"] = true
+	result["window_visible"] = true
+	result["window_title"] = win.Title
+	result["window_pid"] = win.Pid // may differ from launch pid for packaged apps
+	if matchedBy == "process_name" {
+		result["note"] = fmt.Sprintf("window belongs to pid %d (matched by process name; the launcher pid %d handed off) — use pid %d with desktop_snapshot/desktop_focus_window", win.Pid, pid, win.Pid)
 	}
 	return &RPCResult{Result: result}, nil
 }
@@ -244,36 +183,17 @@ func handleFocusWindow(params map[string]any) (*RPCResult, error) {
 	}
 	pid := int(pidF)
 
-	script := fmt.Sprintf(`
-Add-Type @'
-using System;
-using System.Runtime.InteropServices;
-using System.Diagnostics;
-public class Focuser {
-    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
-    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr hWnd, int nCmdShow);
-    public static bool Focus(int pid) {
-        var p = Process.GetProcessById(pid);
-        if (p == null || p.MainWindowHandle == IntPtr.Zero) return false;
-        ShowWindow(p.MainWindowHandle, 9); // SW_RESTORE
-        return SetForegroundWindow(p.MainWindowHandle);
-    }
-}
-'@
-$ok = [Focuser]::Focus(%d)
-@{ success=$ok; pid=%d } | ConvertTo-Json -Compress
-`, pid, pid)
-
-	out, err := runPS(script, 5*time.Second)
+	// Native — the previous implementation recompiled embedded C# in a fresh
+	// PowerShell per call, and returned a bare boolean with no explanation.
+	win, err := focusWindowNative(pid)
 	if err != nil {
 		return nil, fmt.Errorf("focus_window failed: %w", err)
 	}
-
-	var result map[string]any
-	if err := json.Unmarshal([]byte(out), &result); err != nil {
-		return &RPCResult{Result: map[string]any{"success": true, "pid": pid}}, nil
-	}
-	return &RPCResult{Result: result}, nil
+	return &RPCResult{Result: map[string]any{
+		"success": true,
+		"pid":     pid,
+		"title":   win.Title,
+	}}, nil
 }
 
 // ── find_element — uses UIAutomation COM ─────────────────────────────
@@ -313,98 +233,6 @@ func runPS(script string, timeout time.Duration) (string, error) {
 		return "", err
 	}
 	return strings.TrimSpace(string(out)), nil
-}
-
-// convertToSendKeys converts "ctrl,s" → "^s", "alt,f4" → "%{F4}", etc.
-func convertToSendKeys(keys string) string {
-	parts := strings.Split(strings.ToLower(strings.TrimSpace(keys)), ",")
-	for i := range parts {
-		parts[i] = strings.TrimSpace(parts[i])
-	}
-
-	modifiers := ""
-	keyParts := []string{}
-
-	for _, part := range parts {
-		switch part {
-		case "ctrl", "control":
-			modifiers += "^"
-		case "alt":
-			modifiers += "%"
-		case "shift":
-			modifiers += "+"
-		case "win":
-			modifiers += "^{ESC}" // approximate
-		default:
-			keyParts = append(keyParts, part)
-		}
-	}
-
-	if len(keyParts) == 0 {
-		return modifiers
-	}
-
-	key := keyParts[0]
-	mapped := mapKey(key)
-
-	return modifiers + mapped
-}
-
-func mapKey(key string) string {
-	switch strings.ToLower(key) {
-	case "enter", "return":
-		return "{ENTER}"
-	case "tab":
-		return "{TAB}"
-	case "escape", "esc":
-		return "{ESC}"
-	case "backspace", "bs":
-		return "{BACKSPACE}"
-	case "delete", "del":
-		return "{DELETE}"
-	case "up":
-		return "{UP}"
-	case "down":
-		return "{DOWN}"
-	case "left":
-		return "{LEFT}"
-	case "right":
-		return "{RIGHT}"
-	case "home":
-		return "{HOME}"
-	case "end":
-		return "{END}"
-	case "pageup", "pgup":
-		return "{PGUP}"
-	case "pagedown", "pgdn":
-		return "{PGDN}"
-	case "space":
-		return " "
-	case "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12":
-		return "{" + strings.ToUpper(key) + "}"
-	default:
-		if len(key) == 1 {
-			return key
-		}
-		return "{" + strings.ToUpper(key) + "}"
-	}
-}
-
-// escapeSendKeys escapes special SendKeys characters in user text.
-func escapeSendKeys(text string) string {
-	r := strings.NewReplacer(
-		"+", "{+}",
-		"^", "{^}",
-		"%", "{%}",
-		"~", "{~}",
-		"(", "{(}",
-		")", "{)}",
-		"{", "{{}",
-		"}", "{}}",
-		"[", "{[}",
-		"]", "{]}",
-	)
-	return r.Replace(text)
 }
 
 func toInt(v any) int {
