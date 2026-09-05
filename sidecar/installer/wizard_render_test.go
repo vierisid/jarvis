@@ -146,6 +146,18 @@ func TestWizardPanelSaysWhatIsOnTheMachine(t *testing.T) {
 			subtitle: "Installed. Jarvis lives in the system tray, near the clock.",
 			button:   "Launch Jarvis",
 		},
+		// The one macOS case: the done screen there routes through the
+		// permissions handoff AND names the menu bar, and both live on this
+		// exact-string surface, so pin the darwin homeSpot too.
+		{
+			name: "a first install that finished, on macOS",
+			st: with(func(s *wizardState) {
+				s.Phase, s.Detected, s.Installed, s.FirstInstall, s.Platform = "done", true, true, true, "darwin"
+			}),
+			status:   "Installed",
+			subtitle: "Installed. Jarvis will ask for its permissions, then live in the menu bar, at the top-right of your screen.",
+			button:   "Launch Jarvis",
+		},
 		{
 			name:     "an update that finished",
 			st:       with(func(s *wizardState) { s.Phase, s.Detected, s.Installed = "done", true, true }),

@@ -198,19 +198,22 @@ func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 						return
 					}
 					applyPlan(s, inst, rel.Version)
-				})
-				// Already current: no install goroutine will run to populate
-				// `out`, but the up-to-date screen offers a Launch button (a
-				// menu-bar-only app the user re-ran the installer to find).
-				// Seed the launch target from the plan so launchAndClose can
-				// start the existing install.
-				if inst.Version != "" && !versionLess(inst.Version, rel.Version) {
-					mu.Lock()
-					if gen == planGen && !started {
+					// Already current: no install goroutine will run to set
+					// `out`/exitCode, but the up-to-date screen offers a Launch
+					// button (a menu-bar-only app the user re-ran the installer
+					// to find). Seed the launch target so launchAndClose can
+					// start the installed sidecar, and mark exit 0 — "already
+					// current" is a benign terminal state however the window is
+					// closed (matches the console flow and closeInstaller's
+					// contract). This runs inside set()'s mu-held section, past
+					// the stale() guard, so it can neither clobber nor be
+					// clobbered by a real install, and there is no window in
+					// which the Launch button is live before `out` is seeded.
+					if s.UpToDate {
 						out = installOutcome{Rel: rel, Inst: inst, InstallDir: inst.InstallDir, UpToDate: true}
+						exitCode = exitOK
 					}
-					mu.Unlock()
-				}
+				})
 			}()
 		}
 		_ = w.Bind("startPlan", startPlan)
@@ -304,7 +307,9 @@ func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 
 		// closeInstaller ends a run the user is done with. success=true for
 		// benign terminal states (already current, npm-managed) which exit 0;
-		// Cancel passes false and keeps the non-zero "did not install" code.
+		// Cancel passes false and keeps the non-zero "did not install" code —
+		// except on the up-to-date screen, where the plan already seeded exitOK
+		// (the machine is in the desired state however this window is closed).
 		_ = w.Bind("closeInstaller", func(success bool) {
 			if success {
 				mu.Lock()
