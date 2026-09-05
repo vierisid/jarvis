@@ -116,7 +116,7 @@ const hostedShellHTML = `<!doctype html>
       <div id="retry"><button class="btn" onclick="window.retryHosted()">Try again</button></div>
     </div>
   </div>
-  <p class="footer">Self-hosting your own brain? <a onclick="window.chooseSelfHost()">Paste your enrollment token</a></p>
+  <p class="footer" id="footer">Self-hosting your own brain? <a onclick="window.chooseSelfHost()">Paste your enrollment token</a></p>
 </div>` + brandTitlebarHTML + `
 <script>
   window.__setStatus = function (text) { document.getElementById('status').textContent = text; };
@@ -133,6 +133,9 @@ const hostedShellHTML = `<!doctype html>
     document.getElementById('retry').style.display = 'none';
     document.getElementById('reopen').style.display = 'none';
     document.getElementById('url').style.display = 'none';
+    // The token is already stored; don't offer the self-host form during the
+    // dwell only to Terminate it out from under the user mid-typing.
+    document.getElementById('footer').style.display = 'none';
   };
   window.__setError = function (text) {
     document.getElementById('drop').className = text ? 'bdrop s-err' : 'bdrop';
@@ -184,14 +187,14 @@ func hostedShellWithSelfHostHint() string {
 	return strings.Replace(hostedShellHTML, "/*__BOOT__*/", "window.__setSelfHostHint();", 1)
 }
 
-// runFirstRunWindow drives the no-token first run: hosted connect by default,
-// self-host token form one click away. Returns the enrollment JWT ("" if the
-// user closed the window). Blocks; must run on the main OS thread.
 // connectedDwell is how long the Connect window holds the "Jarvis lives in
 // your menu bar" success message before it closes and the sidecar re-execs.
 // Long enough to read one sentence, short enough not to feel stuck.
 const connectedDwell = 3500 * time.Millisecond
 
+// runFirstRunWindow drives the no-token first run: hosted connect by default,
+// self-host token form one click away. Returns the enrollment JWT ("" if the
+// user closed the window). Blocks; must run on the main OS thread.
 func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -292,7 +295,14 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 			}
 			w.Eval("window.__setConnected && window.__setConnected()")
 		})
-		time.Sleep(connectedDwell)
+		// Cancellable dwell: if the user closes the window (or teardown fires)
+		// mid-message, ctx is cancelled before the post-Run handshakeWG.Wait(),
+		// so waking here immediately keeps runFirstRunWindow from stalling the
+		// re-exec for the full dwell. The Terminate below is torndown-guarded.
+		select {
+		case <-time.After(connectedDwell):
+		case <-ctx.Done():
+		}
 		w.Dispatch(func() {
 			if torndown.Load() {
 				return
