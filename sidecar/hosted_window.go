@@ -28,6 +28,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	webview "github.com/webview/webview_go"
 
@@ -119,6 +120,20 @@ const hostedShellHTML = `<!doctype html>
 </div>` + brandTitlebarHTML + `
 <script>
   window.__setStatus = function (text) { document.getElementById('status').textContent = text; };
+  // Success terminus: the token arrived and is stored; the window is about to
+  // close and the sidecar re-execs into its menu-bar-only self (no Dock icon,
+  // no window). Tell the user WHERE Jarvis went so the disappearance doesn't
+  // read as "nothing happened" — the whole reason for this state.
+  window.__setConnected = function () {
+    document.getElementById('drop').className = 'bdrop s-done';
+    document.getElementById('phase').textContent = 'Connected';
+    document.getElementById('status').textContent =
+      'Jarvis now lives in your menu bar, at the top-right of your screen. Click its drop up there any time to open it.';
+    document.getElementById('err').textContent = '';
+    document.getElementById('retry').style.display = 'none';
+    document.getElementById('reopen').style.display = 'none';
+    document.getElementById('url').style.display = 'none';
+  };
   window.__setError = function (text) {
     document.getElementById('drop').className = text ? 'bdrop s-err' : 'bdrop';
     document.getElementById('phase').textContent = text ? 'Setup failed' : 'Connecting';
@@ -172,6 +187,11 @@ func hostedShellWithSelfHostHint() string {
 // runFirstRunWindow drives the no-token first run: hosted connect by default,
 // self-host token form one click away. Returns the enrollment JWT ("" if the
 // user closed the window). Blocks; must run on the main OS thread.
+// connectedDwell is how long the Connect window holds the "Jarvis lives in
+// your menu bar" success message before it closes and the sidecar re-execs.
+// Long enough to read one sentence, short enough not to feel stuck.
+const connectedDwell = 3500 * time.Millisecond
+
 func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 	runtime.LockOSThread()
 	defer runtime.UnlockOSThread()
@@ -258,6 +278,28 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 	// this flag instead (same pattern as webview_reveal's stopped flag).
 	// Atomic because the later loop may run on a different OS thread.
 	var torndown atomic.Bool
+
+	// connectedThenClose paints the "you're in the menu bar" success state and
+	// holds it briefly before closing, so the user learns where Jarvis went
+	// before the window vanishes and the sidecar re-execs into its menu-bar-only
+	// self. The token is already stored by the caller (correctness); this is
+	// best-effort UI, so a torn-down window just skips both steps. Runs on the
+	// caller's goroutine — the Sleep never touches the Cocoa run loop.
+	connectedThenClose := func() {
+		w.Dispatch(func() {
+			if torndown.Load() {
+				return
+			}
+			w.Eval("window.__setConnected && window.__setConnected()")
+		})
+		time.Sleep(connectedDwell)
+		w.Dispatch(func() {
+			if torndown.Load() {
+				return
+			}
+			w.Terminate()
+		})
+	}
 
 	// Self-host path: swap to the classic token form (its submitToken binding
 	// is installed below and only accepts input while this form is active).
@@ -482,7 +524,7 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 				token = jwt
 				tokenMu.Unlock()
 			}
-			w.Dispatch(func() { w.Terminate() })
+			connectedThenClose()
 		}()
 	}
 
@@ -546,12 +588,7 @@ func runFirstRunWindow(cfg *SidecarConfig) (string, error) {
 			tokenMu.Lock()
 			token = tok
 			tokenMu.Unlock()
-			w.Dispatch(func() {
-				if torndown.Load() {
-					return
-				}
-				w.Terminate()
-			})
+			connectedThenClose()
 		}()
 	})
 	if dlErr != nil {
