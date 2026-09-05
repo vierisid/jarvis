@@ -84,3 +84,12 @@ func goTrayWaiting() {
 		go trayOpenChatDarwin()
 	}
 }
+
+//export goTrayReopen
+func goTrayReopen() {
+	// Cocoa main thread (reopen event); the handler opens a panel (mint token +
+	// spawn webview), so run it off-thread like the menu actions.
+	if trayOnReopenDarwin != nil {
+		go trayOnReopenDarwin()
+	}
+}

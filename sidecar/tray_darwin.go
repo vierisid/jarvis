@@ -40,6 +40,7 @@ extern void goTrayOpenLogs(void);
 extern void goTrayPause(void);
 extern void goTrayMute(void);
 extern void goTrayWaiting(void);
+extern void goTrayReopen(void);
 
 // Menu action target: forwards clicks back into Go. Also acts as the
 // NSApplication delegate (set in jarvisTraySetup) so that webview_go's panel
@@ -56,6 +57,7 @@ extern void goTrayWaiting(void);
 - (void)onPause:(id)sender;
 - (void)onMute:(id)sender;
 - (void)onWaiting:(id)sender;
+- (BOOL)applicationShouldHandleReopen:(NSApplication*)sender hasVisibleWindows:(BOOL)flag;
 @end
 @implementation JarvisTrayTarget
 - (void)onClose:(id)sender    { (void)sender; goTrayClose(); }
@@ -66,6 +68,23 @@ extern void goTrayWaiting(void);
 - (void)onPause:(id)sender    { (void)sender; goTrayPause(); }
 - (void)onMute:(id)sender     { (void)sender; goTrayMute(); }
 - (void)onWaiting:(id)sender  { (void)sender; goTrayWaiting(); }
+// A LSUIElement/Accessory app has no windows and no Dock icon, so when the user
+// re-launches Jarvis.app (or double-clicks it after "You're connected"),
+// LaunchServices sends this reopen event instead of starting a new process.
+// Without a handler AppKit does nothing and the app looks dead — the #1 "I
+// connected and nothing happened" report. Bring ourselves to the front first:
+// an Accessory app is not auto-activated on reopen, so a panel opened here can
+// otherwise order in BEHIND the frontmost app — the softer version of the same
+// bug. Then forward to Go, which opens the dashboard (or local settings when
+// the brain is unreachable). Return NO — we fully handled the reopen; an
+// Accessory app has no default windows for AppKit to restore, and the comment/
+// contract must not claim otherwise (NO = "handled, do nothing further").
+- (BOOL)applicationShouldHandleReopen:(NSApplication*)sender hasVisibleWindows:(BOOL)flag {
+    (void)sender; (void)flag;
+    [NSApp activateIgnoringOtherApps:YES];
+    goTrayReopen();
+    return NO;
+}
 @end
 
 static NSStatusItem*     gStatusItem = nil;
@@ -308,6 +327,7 @@ var (
 	trayOpenAccountDarwin  func()
 	trayOpenSettingsDarwin func()
 	trayOpenLogsDarwin     func()
+	trayOnReopenDarwin     func()                                         // Jarvis.app re-launched / double-clicked (Dock-less reopen)
 	trayEmitDarwin         func(eventType string, payload map[string]any) // tray → brain (pause/mute)
 	trayClientDarwin       *SidecarClient
 )
@@ -396,6 +416,17 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 	trayOpenAccountDarwin = client.OpenAccount
 	trayOpenSettingsDarwin = client.OpenSettings
 	trayOpenLogsDarwin = client.OpenLogViewer
+	// Re-launch/double-click of the Dock-less app: bring the user somewhere
+	// visible. The dashboard when the brain is up; local settings when it is not
+	// (openRoom would otherwise fail to mint a panel token and, again, show
+	// nothing — see openRoom's brain-origin/token guards).
+	trayOnReopenDarwin = func() {
+		if client.Connected() {
+			client.OpenChat()
+		} else {
+			client.OpenSettings()
+		}
+	}
 	trayClientDarwin = client
 	trayEmitDarwin = func(et string, p map[string]any) {
 		_ = client.sendEvent(context.Background(), SidecarEvent{
