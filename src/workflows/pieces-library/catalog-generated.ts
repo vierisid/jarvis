@@ -33,7 +33,7 @@ export interface GeneratedCatalogEntry {
 }
 
 /** Timestamp of the last generation pass (ISO date). */
-export const GENERATED_AT = "2026-08-30";
+export const GENERATED_AT = "2026-09-06";
 
 /** Activepieces commit the script walked when generating this list. */
 export const GENERATED_FROM_SHA = "d04e6807c485ecd788a72af0d04abffba78563c7";
@@ -112,8 +112,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "ai",
     npmPackage: "@activepieces/piece-ai",
-    versionRange: "^0.9.0",
-    latestVersion: "0.9.0",
+    versionRange: "^0.10.1",
+    latestVersion: "0.10.1",
     displayName: "Ai",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/ai",
@@ -242,8 +242,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "amazon-bedrock",
     npmPackage: "@activepieces/piece-amazon-bedrock",
-    versionRange: "^0.2.3",
-    latestVersion: "0.2.3",
+    versionRange: "^0.3.0",
+    latestVersion: "0.3.0",
     displayName: "Amazon Bedrock",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/amazon-bedrock",
@@ -252,8 +252,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "amazon-s3",
     npmPackage: "@activepieces/piece-amazon-s3",
-    versionRange: "^0.6.8",
-    latestVersion: "0.6.8",
+    versionRange: "^0.7.0",
+    latestVersion: "0.7.0",
     displayName: "Amazon S3",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/amazon-s3",
@@ -262,8 +262,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "amazon-secrets-manager",
     npmPackage: "@activepieces/piece-amazon-secrets-manager",
-    versionRange: "^0.1.3",
-    latestVersion: "0.1.3",
+    versionRange: "^0.2.0",
+    latestVersion: "0.2.0",
     displayName: "Amazon Secrets Manager",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/amazon-secrets-manager",
@@ -612,8 +612,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "bettermode",
     npmPackage: "@activepieces/piece-bettermode",
-    versionRange: "^0.1.8",
-    latestVersion: "0.1.8",
+    versionRange: "^0.1.9",
+    latestVersion: "0.1.9",
     displayName: "Bettermode",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/bettermode",
@@ -1432,8 +1432,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "cryptolens",
     npmPackage: "@activepieces/piece-cryptolens",
-    versionRange: "^0.0.8",
-    latestVersion: "0.0.8",
+    versionRange: "^0.1.0",
+    latestVersion: "0.1.0",
     displayName: "Cryptolens",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/cryptolens",
@@ -1982,8 +1982,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "fillout-forms",
     npmPackage: "@activepieces/piece-fillout-forms",
-    versionRange: "^0.1.8",
-    latestVersion: "0.1.8",
+    versionRange: "^0.1.10",
+    latestVersion: "0.1.10",
     displayName: "Fillout Forms",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/fillout-forms",
@@ -2222,8 +2222,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "front",
     npmPackage: "@activepieces/piece-front",
-    versionRange: "^0.1.6",
-    latestVersion: "0.1.6",
+    versionRange: "^0.2.0",
+    latestVersion: "0.2.0",
     displayName: "Front",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/front",
@@ -2372,8 +2372,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "gmail",
     npmPackage: "@activepieces/piece-gmail",
-    versionRange: "^0.13.0",
-    latestVersion: "0.13.0",
+    versionRange: "^0.14.0",
+    latestVersion: "0.14.0",
     displayName: "Gmail",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/gmail",
@@ -2502,8 +2502,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "google-sheets",
     npmPackage: "@activepieces/piece-google-sheets",
-    versionRange: "^0.16.9",
-    latestVersion: "0.16.9",
+    versionRange: "^0.16.11",
+    latestVersion: "0.16.11",
     displayName: "Google Sheets",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/google-sheets",
@@ -2772,8 +2772,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "hubspot",
     npmPackage: "@activepieces/piece-hubspot",
-    versionRange: "^0.8.10",
-    latestVersion: "0.8.10",
+    versionRange: "^0.9.0",
+    latestVersion: "0.9.0",
     displayName: "Hubspot",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/hubspot",
@@ -2782,8 +2782,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "hugging-face",
     npmPackage: "@activepieces/piece-hugging-face",
-    versionRange: "^0.1.7",
-    latestVersion: "0.1.7",
+    versionRange: "^0.1.8",
+    latestVersion: "0.1.8",
     displayName: "Hugging Face",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/hugging-face",
@@ -3262,8 +3262,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "line",
     npmPackage: "@activepieces/piece-line",
-    versionRange: "^0.1.8",
-    latestVersion: "0.1.8",
+    versionRange: "^0.1.9",
+    latestVersion: "0.1.9",
     displayName: "Line",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/line",
@@ -3472,8 +3472,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "mailer-lite",
     npmPackage: "@activepieces/piece-mailer-lite",
-    versionRange: "^0.6.8",
-    latestVersion: "0.6.8",
+    versionRange: "^0.7.0",
+    latestVersion: "0.7.0",
     displayName: "Mailer Lite",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/mailer-lite",
@@ -3902,8 +3902,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "monday",
     npmPackage: "@activepieces/piece-monday",
-    versionRange: "^0.3.7",
-    latestVersion: "0.3.7",
+    versionRange: "^0.3.8",
+    latestVersion: "0.3.8",
     displayName: "Monday",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/monday",
@@ -3972,8 +3972,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "moxie-crm",
     npmPackage: "@activepieces/piece-moxie-crm",
-    versionRange: "^0.1.8",
-    latestVersion: "0.1.8",
+    versionRange: "^0.2.0",
+    latestVersion: "0.2.0",
     displayName: "Moxie Crm",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/moxie-crm",
@@ -5142,8 +5142,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "sendgrid",
     npmPackage: "@activepieces/piece-sendgrid",
-    versionRange: "^0.5.6",
-    latestVersion: "0.5.6",
+    versionRange: "^0.5.7",
+    latestVersion: "0.5.7",
     displayName: "Sendgrid",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/sendgrid",
@@ -5552,8 +5552,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "stripe",
     npmPackage: "@activepieces/piece-stripe",
-    versionRange: "^0.6.13",
-    latestVersion: "0.6.13",
+    versionRange: "^0.6.14",
+    latestVersion: "0.6.14",
     displayName: "Stripe",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/stripe",
@@ -5662,8 +5662,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "tally",
     npmPackage: "@activepieces/piece-tally",
-    versionRange: "^0.4.6",
-    latestVersion: "0.4.6",
+    versionRange: "^0.5.0",
+    latestVersion: "0.5.0",
     displayName: "Tally",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/tally",
@@ -6322,8 +6322,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "woocommerce",
     npmPackage: "@activepieces/piece-woocommerce",
-    versionRange: "^0.1.8",
-    latestVersion: "0.1.8",
+    versionRange: "^0.2.0",
+    latestVersion: "0.2.0",
     displayName: "Woocommerce",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/woocommerce",
@@ -6442,8 +6442,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "youtube",
     npmPackage: "@activepieces/piece-youtube",
-    versionRange: "^0.4.14",
-    latestVersion: "0.4.14",
+    versionRange: "^0.5.0",
+    latestVersion: "0.5.0",
     displayName: "Youtube",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/youtube",
