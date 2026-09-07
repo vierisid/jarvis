@@ -116,8 +116,40 @@ daemon: {
   data_dir: string;      // Data directory path (default: ~/.jarvis)
   db_path: string;       // SQLite database path (default: ~/.jarvis/jarvis.db)
   public_url?: string;   // Public HTTPS origin behind a reverse proxy
+  log_file_path?: string;      // Mirror stdout/stderr to this file (unset = none)
+  log_file_max_bytes?: number; // Ring size for that file (default: 1 MiB)
 }
 ```
+
+#### `log_file_path`
+
+Jarvis only ever wrote a log file under `jarvis start -d` (the CLI redirects the
+detached child's file descriptors) and under launchd. Under systemd - how hosted
+instances run - and under Docker there is no file at all, so the only record is
+journald or the container runtime. Setting `log_file_path` installs an
+in-process sink (`src/util/log-file.ts`) that gives every launch mode the same
+file:
+
+- `~` is expanded on load; the parent directory is created if missing.
+- Every line is stripped of ANSI escapes, passed through `src/util/redact.ts`,
+  and prefixed with an ISO-8601 timestamp, so the file carries no credentials
+  and is safe for an operator to read.
+- The file is a ring capped at `log_file_max_bytes` (default 1 MiB, minimum
+  4 KiB). Past the cap the oldest lines are dropped from the top on line
+  boundaries; the rewrite is atomic (temp file + `rename`), which is why
+  `jarvis logs -f` uses `tail -F`.
+- A path that cannot be opened or written degrades to "no file sink" with one
+  warning. The daemon never dies over its log file.
+- Subprocesses spawned with `stdio: 'inherit'` write to the inherited
+  descriptors from another process, so their output reaches the terminal and
+  journald but not this file.
+
+Both keys live under `daemon:` rather than in a section of their own because
+`loadConfig` discards everything outside the system-owned sections - a
+top-level `logging:` block would be dropped on every load. Neither has an entry
+in `DEFAULT_CONFIG` (same as `drain_deadline_ms`): absent has to stay
+distinguishable from "set to the default", and the fallback is applied where
+the value is consumed.
 
 ### `llm`
 

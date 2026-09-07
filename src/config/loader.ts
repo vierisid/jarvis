@@ -108,6 +108,12 @@ export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
     const config = structuredClone(DEFAULT_CONFIG);
     config.daemon.data_dir = expandTilde(config.daemon.data_dir);
     config.daemon.db_path = expandTilde(config.daemon.db_path);
+    // log_file_path has no default, so there is nothing to expand here - but
+    // the two branches must stay symmetrical or the next key added to one of
+    // them gets expanded in only half the cases.
+    if (config.daemon.log_file_path) {
+      config.daemon.log_file_path = expandTilde(config.daemon.log_file_path);
+    }
     applyEnvOverrides(config);
     return config;
   }
@@ -134,6 +140,10 @@ export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
   // Expand tilde in paths
   config.daemon.data_dir = expandTilde(config.daemon.data_dir);
   config.daemon.db_path = expandTilde(config.daemon.db_path);
+  // The sink opens this with openSync, which does not understand `~`.
+  if (config.daemon.log_file_path) {
+    config.daemon.log_file_path = expandTilde(config.daemon.log_file_path);
+  }
 
   // Apply environment variable overrides
   applyEnvOverrides(config);

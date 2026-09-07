@@ -191,6 +191,35 @@ google:
     expect(loaded.google?.client_id).toBe('company-client.apps.googleusercontent.com');
   });
 
+  test('log_file_path / log_file_max_bytes survive the user-section discard', async () => {
+    // They live under `daemon:` precisely because of that discard - a
+    // top-level `logging:` block would be dropped on every load (docs/LOGS.md,
+    // "The brain's side").
+    await Bun.write(
+      TEST_CONFIG_PATH,
+      'daemon:\n  log_file_path: /home/u_abc123/.jarvis/logs/jarvis.log\n  log_file_max_bytes: 2097152\n',
+    );
+    const loaded = await loadConfig(TEST_CONFIG_PATH);
+    expect(loaded.daemon.log_file_path).toBe('/home/u_abc123/.jarvis/logs/jarvis.log');
+    expect(loaded.daemon.log_file_max_bytes).toBe(2097152);
+  });
+
+  test('log_file_path is absent by default (no DEFAULT_CONFIG entry, no file written)', async () => {
+    expect(DEFAULT_CONFIG.daemon.log_file_path).toBeUndefined();
+    expect(DEFAULT_CONFIG.daemon.log_file_max_bytes).toBeUndefined();
+    await Bun.write(TEST_CONFIG_PATH, 'daemon:\n  port: 3142\n');
+    const loaded = await loadConfig(TEST_CONFIG_PATH);
+    expect(loaded.daemon.log_file_path).toBeUndefined();
+  });
+
+  test('expands ~ in log_file_path (openSync does not understand it)', async () => {
+    await Bun.write(TEST_CONFIG_PATH, 'daemon:\n  log_file_path: "~/.jarvis/logs/jarvis.log"\n');
+    const loaded = await loadConfig(TEST_CONFIG_PATH);
+    expect(loaded.daemon.log_file_path).not.toContain('~');
+    expect(isAbsolute(loaded.daemon.log_file_path!)).toBe(true);
+    expect(loaded.daemon.log_file_path).toEndWith('/.jarvis/logs/jarvis.log');
+  });
+
   test('loadConfig does not mutate DEFAULT_CONFIG', async () => {
     // Regression test: a previous implementation of deepMerge returned
     // DEFAULT_CONFIG by reference when the parsed YAML was empty/null, so

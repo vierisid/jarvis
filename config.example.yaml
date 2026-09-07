@@ -15,6 +15,17 @@ daemon:
   # Bind a unix domain socket INSTEAD of a TCP port (for a reverse proxy on
   # the same host). When set, nothing listens on TCP. See docs/SELF_HOSTING.md.
   # listen: "unix:/run/jarvis/jarvis.sock"
+  # Mirror stdout/stderr into a log file. Unset = no file, which is the
+  # default: `jarvis start -d` already redirects into ~/.jarvis/logs/jarvis.log,
+  # but under systemd or Docker there is no file at all and the only record is
+  # journald / the container runtime. Set this to get the same file in every
+  # launch mode. `~` is expanded. Lines are stripped of ANSI escapes and passed
+  # through the credential redactor before they are written.
+  # The file is a RING: once it passes log_file_max_bytes (default 1 MiB) the
+  # oldest lines are dropped from the top, so it settles at roughly that size
+  # and never grows without bound. `jarvis logs -f` follows it either way.
+  # log_file_path: "~/.jarvis/logs/jarvis.log"
+  # log_file_max_bytes: 1048576
 
 # IANA timezone for cron triggers and morning/evening routines. Set this when
 # the server clock is not your local time (e.g. a UTC-hosted VPS).

@@ -308,6 +308,33 @@ morning/evening routines fire at your wall-clock time:
 timezone: "Europe/Rome"
 ```
 
+### Logs
+
+`jarvis start -d` redirects the detached daemon's output into
+`~/.jarvis/logs/jarvis.log`, and `jarvis logs [-f]` tails it. Under **systemd**
+or **Docker** that redirection does not happen: output goes to journald
+(`journalctl -u jarvis`) or `docker logs`, and there is no file. To get the same
+file in every launch mode, point the daemon at one:
+
+```yaml
+daemon:
+  log_file_path: "~/.jarvis/logs/jarvis.log"
+  log_file_max_bytes: 1048576   # optional, defaults to 1 MiB
+```
+
+The daemon then mirrors its own stdout and stderr into that file, on top of
+whatever the terminal or the service manager already receives. Lines are
+stripped of ANSI escapes, run through the credential redactor, and stamped with
+an ISO-8601 timestamp. The file is a ring: past `log_file_max_bytes` the oldest
+lines are dropped from the top, so it settles at roughly that size and never
+fills the disk. Leave `log_file_path` unset and no file is written.
+
+Two caveats. Set it to the SAME path `jarvis start -d` uses and the CLI notices
+and disables the sink in the child, so lines are not written twice - but any
+other duplicate redirection (a `StandardOutput=append:` in your own unit file,
+say) will double up. And output from subprocesses that inherit the daemon's file
+descriptors reaches the terminal and journald but not this file.
+
 ## Quick reference
 
 | | Single machine | LAN via IP | VPS + domain |

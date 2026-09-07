@@ -16,8 +16,8 @@
  * after `jarvis start` — there is no longer a CLI wizard.
  */
 
-import { join } from 'node:path';
-import { existsSync, openSync } from 'node:fs';
+import { basename, dirname, join, resolve as resolvePath } from 'node:path';
+import { existsSync, openSync, realpathSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { acquireLock, releaseLock, releaseLockIfUnheld, isLocked, getLogPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
@@ -89,6 +89,40 @@ function assertSupportedPlatform(): void {
   console.error(c.dim('Use WSL2 for the Bun install, or run JARVIS with Docker on Windows.'));
   console.error(c.dim('The Windows sidecar is still supported separately.'));
   process.exit(1);
+}
+
+/**
+ * Resolve `p` to an absolute real path for comparison. Falls back to resolving
+ * the parent and re-joining the basename, because the file we are asking about
+ * may not exist yet (nothing has written it) while its directory does.
+ */
+function realPathForCompare(p: string): string {
+  const abs = resolvePath(p);
+  try {
+    return realpathSync(abs);
+  } catch {
+    try {
+      return join(realpathSync(dirname(abs)), basename(abs));
+    } catch {
+      return abs;
+    }
+  }
+}
+
+function samePath(a: string | null, b: string | null): boolean {
+  if (!a || !b) return false;
+  return realPathForCompare(a) === realPathForCompare(b);
+}
+
+/** `daemon.log_file_path` as the daemon would see it, or null if unset. */
+async function configuredLogFilePath(): Promise<string | null> {
+  try {
+    const cfg = await loadConfig();
+    return cfg.daemon.log_file_path?.trim() || null;
+  } catch {
+    // A broken config is the child's problem to report, not ours.
+    return null;
+  }
 }
 
 async function cmdStart(args: string[]): Promise<void> {
@@ -163,16 +197,26 @@ async function cmdStart(args: string[]): Promise<void> {
     console.log(c.cyan('Starting J.A.R.V.I.S. daemon...'));
 
     const logPath = getLogPath();
-    const logFile = Bun.file(logPath);
 
     const daemonArgs = [join(PACKAGE_ROOT, 'bin/jarvis.ts'), 'start', '--no-open'];
     if (port) daemonArgs.push('--port', String(port));
+
+    // We redirect the child's stdout AND stderr into logPath below. If the
+    // child then also installs its own file sink (daemon.log_file_path) on the
+    // same file, every line lands twice - once through the fd we handed it,
+    // once through the sink. Compare RESOLVED paths, not the configured
+    // strings: `~/.jarvis/logs/jarvis.log`, `$JARVIS_HOME/logs/jarvis.log` and
+    // a symlinked home are all the same file with three spellings.
+    const childEnv: Record<string, string | undefined> = { ...process.env };
+    if (existsSync(cfgPath) && samePath(await configuredLogFilePath(), logPath)) {
+      childEnv.JARVIS_NO_LOG_FILE_SINK = '1';
+    }
 
     const logFd = openSync(logPath, 'a');
     const child = spawn('bun', daemonArgs, {
       detached: true,
       stdio: ['ignore', logFd, logFd],
-      env: { ...process.env },
+      env: childEnv,
     });
     child.unref();
 
@@ -402,7 +446,10 @@ function cmdLogs(args: string[]): void {
 
   if (follow) {
     // tail -f equivalent
-    const tailProc = Bun.spawn(['tail', '-f', '-n', String(lines), logPath], {
+    // -F, not -f: the daemon's file sink caps the log by rewriting it through
+    // a temp file + rename, so the inode changes and a plain `tail -f` would
+    // keep following a deleted inode and go silent. -F follows by NAME.
+    const tailProc = Bun.spawn(['tail', '-F', '-n', String(lines), logPath], {
       stdio: ['ignore', 'inherit', 'inherit'],
     });
 
