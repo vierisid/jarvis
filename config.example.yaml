@@ -23,7 +23,12 @@ daemon:
   # through the credential redactor before they are written.
   # The file is a RING: once it passes log_file_max_bytes (default 1 MiB) the
   # oldest lines are dropped from the top, so it settles at roughly that size
-  # and never grows without bound. `jarvis logs -f` follows it either way.
+  # and never grows without bound. `jarvis logs -f` follows it either way -
+  # expect it to reprint the window each time the cap is enforced, since the
+  # file is replaced and `tail -F` reopens it.
+  # The ring is held IN MEMORY as well as on disk, so this is an RSS budget
+  # too. Clamped to 4 KiB..64 MiB; anything outside that (`.inf` included) is
+  # brought back into range with a warning.
   # log_file_path: "~/.jarvis/logs/jarvis.log"
   # log_file_max_bytes: 1048576
 

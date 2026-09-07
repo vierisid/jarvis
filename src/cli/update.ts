@@ -83,6 +83,12 @@ function defaultSpawn(cmd: string[], options: { cwd?: string } = {}): SpawnResul
  * Spawn the daemon in a detached process, same pattern as `jarvis start -d`.
  * Not in daemon-control.ts because it's update-specific: we only need to
  * restart after a successful update.
+ *
+ * The child gets fds 1/2 on getLogPath(). If daemon.log_file_path names that
+ * same file, the daemon compares the inode behind those fds with the configured
+ * path and skips its in-process sink (src/daemon/index.ts) - otherwise the
+ * sink's first compaction would rename a new file over the path and leave this
+ * descriptor appending to an unlinked inode forever.
  */
 function restartDaemonDetached(packageRoot: string): void {
   const logPath = getLogPath();

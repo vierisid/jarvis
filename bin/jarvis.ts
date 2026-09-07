@@ -16,8 +16,8 @@
  * after `jarvis start` — there is no longer a CLI wizard.
  */
 
-import { basename, dirname, join, resolve as resolvePath } from 'node:path';
-import { existsSync, openSync, realpathSync } from 'node:fs';
+import { join } from 'node:path';
+import { existsSync, openSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { acquireLock, releaseLock, releaseLockIfUnheld, isLocked, getLogPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
@@ -89,40 +89,6 @@ function assertSupportedPlatform(): void {
   console.error(c.dim('Use WSL2 for the Bun install, or run JARVIS with Docker on Windows.'));
   console.error(c.dim('The Windows sidecar is still supported separately.'));
   process.exit(1);
-}
-
-/**
- * Resolve `p` to an absolute real path for comparison. Falls back to resolving
- * the parent and re-joining the basename, because the file we are asking about
- * may not exist yet (nothing has written it) while its directory does.
- */
-function realPathForCompare(p: string): string {
-  const abs = resolvePath(p);
-  try {
-    return realpathSync(abs);
-  } catch {
-    try {
-      return join(realpathSync(dirname(abs)), basename(abs));
-    } catch {
-      return abs;
-    }
-  }
-}
-
-function samePath(a: string | null, b: string | null): boolean {
-  if (!a || !b) return false;
-  return realPathForCompare(a) === realPathForCompare(b);
-}
-
-/** `daemon.log_file_path` as the daemon would see it, or null if unset. */
-async function configuredLogFilePath(): Promise<string | null> {
-  try {
-    const cfg = await loadConfig();
-    return cfg.daemon.log_file_path?.trim() || null;
-  } catch {
-    // A broken config is the child's problem to report, not ours.
-    return null;
-  }
 }
 
 async function cmdStart(args: string[]): Promise<void> {
@@ -201,22 +167,18 @@ async function cmdStart(args: string[]): Promise<void> {
     const daemonArgs = [join(PACKAGE_ROOT, 'bin/jarvis.ts'), 'start', '--no-open'];
     if (port) daemonArgs.push('--port', String(port));
 
-    // We redirect the child's stdout AND stderr into logPath below. If the
-    // child then also installs its own file sink (daemon.log_file_path) on the
-    // same file, every line lands twice - once through the fd we handed it,
-    // once through the sink. Compare RESOLVED paths, not the configured
-    // strings: `~/.jarvis/logs/jarvis.log`, `$JARVIS_HOME/logs/jarvis.log` and
-    // a symlinked home are all the same file with three spellings.
-    const childEnv: Record<string, string | undefined> = { ...process.env };
-    if (existsSync(cfgPath) && samePath(await configuredLogFilePath(), logPath)) {
-      childEnv.JARVIS_NO_LOG_FILE_SINK = '1';
-    }
-
+    // We redirect the child's stdout AND stderr into logPath. If
+    // daemon.log_file_path names this same file the child does NOT install its
+    // in-process sink on top: it fstats fds 1/2 against the configured path and
+    // skips (src/daemon/index.ts). That check lives in the daemon rather than
+    // here because it is the only place that covers every launcher - this one,
+    // `jarvis update`'s restart, and the launchd plist - and because comparing
+    // inodes catches spellings a string compare cannot.
     const logFd = openSync(logPath, 'a');
     const child = spawn('bun', daemonArgs, {
       detached: true,
       stdio: ['ignore', logFd, logFd],
-      env: childEnv,
+      env: { ...process.env },
     });
     child.unref();
 
@@ -449,6 +411,14 @@ function cmdLogs(args: string[]): void {
     // -F, not -f: the daemon's file sink caps the log by rewriting it through
     // a temp file + rename, so the inode changes and a plain `tail -f` would
     // keep following a deleted inode and go silent. -F follows by NAME.
+    //
+    // The cost of that, and it is visible: on every compaction GNU tail says
+    // "has been replaced; following new file" and reprints the ENTIRE new
+    // file, so a follower sees ~1 MiB of already-seen lines about every
+    // 256 KiB of new output at the default cap. Inherent to capping one file
+    // in place - rotation and truncate-in-place restart a tailer too - and
+    // documented in README.md / docs/SELF_HOSTING.md rather than worked
+    // around, because every workaround costs more than the noise does.
     const tailProc = Bun.spawn(['tail', '-F', '-n', String(lines), logPath], {
       stdio: ['ignore', 'inherit', 'inherit'],
     });

@@ -237,6 +237,16 @@ credential redactor, so the file is safe to hand to someone debugging. It is
 capped: past `log_file_max_bytes` the oldest lines are dropped, so it settles at
 roughly that size instead of filling the disk. Unset means no file.
 
+The cap is an in-memory ring as well as a file size, so `log_file_max_bytes` is
+an RSS budget too - 1 MiB of log is 1 MiB of daemon memory. It is clamped to
+4 KiB..64 MiB.
+
+One thing to expect from `jarvis logs -f`: it runs `tail -F`, and every time the
+cap is enforced the file is replaced, so `tail` reopens it and reprints the
+whole window. At the default size that is ~1 MiB of already-seen lines about
+every 256 KiB of new output. That is inherent to capping one file in place, not
+a bug.
+
 ### Updating
 
 `jarvis update` detects how you installed JARVIS and runs the right update command. Equivalent manual commands per install method:

@@ -260,6 +260,12 @@ export function generateLaunchdPlist(): string {
   // getLogDir() so the plist's StandardOutPath matches where the daemon itself
   // resolves its log file (both honor JARVIS_HOME) — and the plist exports the
   // var below, so the launched daemon agrees with this path.
+  //
+  // launchd opens these two paths and hands the daemon the descriptors as fds
+  // 1/2. If daemon.log_file_path names the same file, the daemon detects that
+  // by inode (src/daemon/index.ts) and skips its in-process sink: the sink caps
+  // by renaming a fresh file over the path, which would leave launchd's
+  // descriptors appending to an unlinked inode that grows without bound.
   const logDir = getLogDir();
 
   return `<?xml version="1.0" encoding="UTF-8"?>

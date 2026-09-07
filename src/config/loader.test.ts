@@ -220,6 +220,19 @@ google:
     expect(loaded.daemon.log_file_path).toEndWith('/.jarvis/logs/jarvis.log');
   });
 
+  test('a non-string log_file_path is dropped, not fatal', async () => {
+    // `log_file_path: true` made expandTilde throw "filepath.startsWith is not
+    // a function", and the daemon then exited reporting "Failed to parse config
+    // file" - which is not what was wrong with it.
+    for (const value of ['true', '42', '[a, b]']) {
+      await Bun.write(TEST_CONFIG_PATH, `daemon:\n  log_file_path: ${value}\n`);
+      const loaded = await loadConfig(TEST_CONFIG_PATH);
+      expect(loaded.daemon.log_file_path).toBeUndefined();
+      // And the rest of the config still loads.
+      expect(loaded.daemon.port).toBe(DEFAULT_CONFIG.daemon.port);
+    }
+  });
+
   test('loadConfig does not mutate DEFAULT_CONFIG', async () => {
     // Regression test: a previous implementation of deepMerge returned
     // DEFAULT_CONFIG by reference when the parsed YAML was empty/null, so

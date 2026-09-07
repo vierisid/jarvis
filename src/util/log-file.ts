@@ -27,6 +27,10 @@
  * the stream (node, and bun's own test reporter) that suppression is what
  * keeps a line from being recorded twice.
  *
+ * The cap is an IN-MEMORY ring, not a file scan: `log_file_max_bytes` is an
+ * RSS budget as much as a disk budget, which is why it is clamped at both ends
+ * (see MIN/MAX_LOG_FILE_MAX_BYTES).
+ *
  * KNOWN LIMITATION: the ~80 subprocess spawns that use `stdio: 'inherit'` hand
  * the child our raw file descriptors, and the child then writes to them from
  * another process. No JS-level patch can observe that, so subprocess output
@@ -34,8 +38,21 @@
  * scope: capturing it would mean piping and re-emitting every spawn site.
  */
 
-import { closeSync, mkdirSync, openSync, renameSync, statSync, unlinkSync, writeFileSync, writeSync } from 'node:fs';
-import { dirname } from 'node:path';
+import {
+  closeSync,
+  fstatSync,
+  lstatSync,
+  mkdirSync,
+  openSync,
+  readSync,
+  readdirSync,
+  renameSync,
+  statSync,
+  unlinkSync,
+  writeFileSync,
+  writeSync,
+} from 'node:fs';
+import { basename, dirname, join } from 'node:path';
 import { StringDecoder } from 'node:string_decoder';
 import { format } from 'node:util';
 import { redactSecrets } from './redact.ts';
@@ -50,6 +67,16 @@ export const DEFAULT_LOG_FILE_MAX_BYTES = 1024 * 1024;
 const MIN_LOG_FILE_MAX_BYTES = 4096;
 
 /**
+ * Ceiling for the cap. The window is held in memory, so the cap is an RSS
+ * budget: `log_file_max_bytes: .inf` (legal YAML, and what a `.inf` typo
+ * produces) gave `maxBytes = Infinity`, which means the ring never compacts
+ * and grows until the daemon is OOM-killed, and `1e12` asks for a 1 TB
+ * resident buffer. 64 MiB is far past any useful debugging window and still
+ * survivable on the 1 GB hosted boxes.
+ */
+const MAX_LOG_FILE_MAX_BYTES = 64 * 1024 * 1024;
+
+/**
  * How far past the cap the file is allowed to grow before it is rewritten.
  * The slack is what makes appends O(1): without it every line past the cap
  * would rewrite the whole file. At 1.25 the file settles at ~1 MiB, never
@@ -58,23 +85,102 @@ const MIN_LOG_FILE_MAX_BYTES = 4096;
 const COMPACT_RATIO = 1.25;
 
 /**
+ * A single line may take at most this fraction of the window. Without it one
+ * `console.log(JSON.stringify(bigObject))` or one long stack trace evicts
+ * EVERY other line (the eviction loop stops at `ring.length > 1`), so the file
+ * ends up holding that one line and nothing else, and the line after it leaves
+ * the file at 37 bytes. Truncating instead keeps the surrounding context,
+ * which is the part an operator actually needs.
+ */
+const MAX_LINE_FRACTION = 4;
+
+/**
+ * How often to retry a file that went away under us. A failed write used to
+ * disable the sink for the life of the process, so an `rm -rf ~/.jarvis/logs`
+ * or a transient ENOSPC meant no log file until the next restart. Retrying on
+ * every line would turn a permanently broken path into a syscall storm, so the
+ * retry is throttled to one attempt per this many lines.
+ */
+const RECOVER_EVERY_LINES = 200;
+
+/**
+ * Force a "line" out at this size even with no terminator in sight. A writer
+ * that only ever emits `\r` (progress redraws) or one that streams a huge
+ * payload with no newline used to grow `pending` without bound: 20k `\r`
+ * frames built a single 649 KB string, +52 MB of heap and 2.1s of repeated
+ * scanning, with nothing written to the file the whole time.
+ */
+const MAX_PENDING_CHARS = 64 * 1024;
+
+/**
  * ANSI escape sequences: CSI (colours, cursor moves) and OSC (title sets,
  * hyperlinks). src/cli/helpers.ts exports `c` with hardcoded escapes and no
  * TTY detection, so anything routed through the CLI helpers carries them even
  * when stdout is a file - they would otherwise land in the log as mojibake an
  * operator has to read around.
+ *
+ * Every quantifier is bounded on purpose. The obvious pattern here is the
+ * `ansi-regex` one, which is CVE-2021-3807: its nested unbounded groups make
+ * `ESC` followed by 10-20k `;` cost 200-400ms per line, and log lines are
+ * attacker-influenced (anything jarvis echoes back). Bounded repetition over
+ * character classes that cannot overlap gives linear scanning instead.
  */
 const ANSI_PATTERN =
-  /[\u001B\u009B][[\]()#;?]*(?:(?:[a-zA-Z\d]*(?:;[-a-zA-Z\d/#&.:=?%@~_]*)*)?\u0007|(?:\d{1,4}(?:;\d{0,4})*)?[\dA-PR-TZcf-nq-uy=><~])/g;
+  /\u001B\][^\u0007\u001B]{0,2048}(?:\u0007|\u001B\\)|[\u001B\u009B]\[[0-9;:<=>?]{0,64}[ -\/]{0,8}[@-~]|\u009B[0-9;:<=>?]{0,64}[ -\/]{0,8}[@-~]|\u001B[ -\/]{1,4}[0-~]|\u001B[0-9A-Za-z=><]/g;
+
+/** Matches the `<pid>.tmp` suffix compaction leaves on its sibling temp file. */
+const TMP_SUFFIX_PATTERN = /^\.(\d+)\.tmp$/;
 
 export type LogFileSinkOptions = {
   /** Absolute path of the file to write. Its parent is created if missing. */
   path: string;
-  /** Ring size in bytes. Defaults to 1 MiB; values under 4 KiB are raised. */
+  /**
+   * Ring size in bytes, held in memory as well as on disk. Defaults to 1 MiB;
+   * values under 4 KiB are raised, values over 64 MiB (and non-finite ones)
+   * are lowered.
+   */
   maxBytes?: number;
 };
 
 type StreamWrite = typeof process.stdout.write;
+
+/**
+ * True when one of `fds` is already open on the very file `path` names.
+ *
+ * This is the guard against the worst failure this sink can cause. A launcher
+ * that redirects the daemon's fds 1/2 into the log file (`jarvis start -d`,
+ * `restartDaemonDetached` in src/cli/update.ts, the launchd plist's
+ * `StandardOutPath`, a `StandardOutput=append:` in someone's unit file) hands
+ * the process a descriptor bound to an INODE. The first compaction renames a
+ * fresh file over that path, so the descriptor keeps pointing at the old,
+ * now-unlinked inode: it grows forever, `ls` cannot see it, and only a reboot
+ * or a restart frees the space. Confirmed - after 2000 lines through a 4 KiB
+ * cap the named file was 4 KB and the orphan behind fd 1 was 226 KB with
+ * nlink=0.
+ *
+ * Checking dev+ino here rather than comparing path strings in each launcher is
+ * what makes it total: it catches every launcher, including ones added later
+ * and ones written by the operator, and it is immune to symlinks, bind mounts
+ * and `$JARVIS_HOME` spellings of the same file.
+ */
+export function logFileIsProcessStdio(path: string, fds: readonly number[] = [1, 2]): boolean {
+  let target: ReturnType<typeof statSync>;
+  try {
+    target = statSync(path);
+  } catch {
+    // Nothing at that path yet, so nothing can already be open on it.
+    return false;
+  }
+  for (const fd of fds) {
+    try {
+      const st = fstatSync(fd);
+      if (st.dev === target.dev && st.ino === target.ino) return true;
+    } catch {
+      // Closed or not a real descriptor. Not our file either way.
+    }
+  }
+  return false;
+}
 
 /**
  * Only one sink can be installed at a time: a second patch over the first
@@ -102,12 +208,9 @@ export function installLogFileSink(opts: LogFileSinkOptions): () => void {
   const originalStdoutWrite = process.stdout.write as StreamWrite;
   const originalStderrWrite = process.stderr.write as StreamWrite;
 
-  let warned = false;
-  const warnOnce = (message: string): void => {
-    if (warned) return;
-    warned = true;
-    // Straight to the original write: console.warn would route through the
-    // patched stderr and recurse back into the code that is already failing.
+  // Straight to the original write: console.warn would route through the
+  // patched stderr and recurse back into the code that is already failing.
+  const say = (message: string): void => {
     try {
       originalStderrWrite.call(process.stderr, `[LogFile] ${message}\n`);
     } catch {
@@ -115,32 +218,91 @@ export function installLogFileSink(opts: LogFileSinkOptions): () => void {
     }
   };
 
-  const maxBytes = Math.max(
-    MIN_LOG_FILE_MAX_BYTES,
-    Math.floor(opts.maxBytes && opts.maxBytes > 0 ? opts.maxBytes : DEFAULT_LOG_FILE_MAX_BYTES),
-  );
+  let warned = false;
+  const warnOnce = (message: string): void => {
+    if (warned) return;
+    warned = true;
+    say(message);
+  };
+
+  // Validate before clamping so the operator is told their value was ignored.
+  // `.inf` and `1e12` are both legal YAML and both used to sail straight
+  // through: `Math.floor(Infinity)` is Infinity, so the ring never compacted.
+  const requested = opts.maxBytes;
+  const usable = typeof requested === 'number' && Number.isFinite(requested) && requested > 0;
+  const maxBytes = usable
+    ? Math.min(MAX_LOG_FILE_MAX_BYTES, Math.max(MIN_LOG_FILE_MAX_BYTES, Math.floor(requested)))
+    : DEFAULT_LOG_FILE_MAX_BYTES;
+  if (requested !== undefined && (!usable || maxBytes !== Math.floor(requested as number))) {
+    say(
+      `log_file_max_bytes=${String(requested)} is out of range (${MIN_LOG_FILE_MAX_BYTES}..${MAX_LOG_FILE_MAX_BYTES} bytes, held in memory); using ${maxBytes}`,
+    );
+  }
   const compactAt = Math.floor(maxBytes * COMPACT_RATIO);
+  const maxLineBytes = Math.max(1024, Math.floor(maxBytes / MAX_LINE_FRACTION));
   const filePath = opts.path;
   const tmpPath = `${filePath}.${process.pid}.tmp`;
 
-  let fd: number;
-  let fileBytes = 0;
+  // A FIFO at this path hangs the whole daemon: `openSync(fifo, 'a')` blocks
+  // until a reader shows up, and it is called before anything else boots, so
+  // startDaemon simply never returns and no supervisor restarts it because
+  // nothing crashed. Jarvis runs shell commands as its own user, so
+  // `mkfifo ~/.jarvis/logs/jarvis.log` is inside the threat model. lstat (not
+  // stat) so a symlink is refused too, matching the hosting side's reader
+  // (infra/vps-scripts/bin/fetch-logs --source instance), which will not
+  // follow one either.
   try {
-    mkdirSync(dirname(filePath), { recursive: true });
-    // 0600: the lines are redacted, but a log still describes what the user
-    // did and nothing else on the box needs to read it.
-    fd = openSync(filePath, 'a', 0o600);
-    try {
-      // Append, so a restart adds to what is there. The size counts toward the
-      // cap from the start: an already-oversized file left by a previous run
-      // is rewritten down to this session's lines on the first compaction,
-      // which is the point of a cap.
-      fileBytes = statSync(filePath).size;
-    } catch {
-      fileBytes = 0;
+    const existing = lstatSync(filePath);
+    if (!existing.isFile()) {
+      warnOnce(`${filePath} is not a regular file; continuing without a log file`);
+      return () => {};
     }
   } catch (err) {
-    warnOnce(`could not open ${filePath}: ${err instanceof Error ? err.message : String(err)}; continuing without a log file`);
+    if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+      warnOnce(`could not stat ${filePath}: ${err instanceof Error ? err.message : String(err)}; continuing without a log file`);
+      return () => {};
+    }
+  }
+
+  /** -1 means "no open descriptor": either not opened yet, or lost mid-run. */
+  let fd = -1;
+  let fileBytes = 0;
+
+  const closeFd = (): void => {
+    if (fd < 0) return;
+    // Clear FIRST. `compact` closes the fd and then may throw on the reopen,
+    // and the error path used to close the same NUMBER a second time - by
+    // which point bun's helper threads can have handed it to something else.
+    const doomed = fd;
+    fd = -1;
+    try {
+      closeSync(doomed);
+    } catch {
+      // Already closed, or the fd went away with the file. Nothing to do.
+    }
+  };
+
+  const openFile = (): Error | null => {
+    try {
+      mkdirSync(dirname(filePath), { recursive: true });
+      // 0600: the lines are redacted, but a log still describes what the user
+      // did and nothing else on the box needs to read it.
+      fd = openSync(filePath, 'a', 0o600);
+      try {
+        fileBytes = statSync(filePath).size;
+      } catch {
+        fileBytes = 0;
+      }
+      return null;
+    } catch (err) {
+      fd = -1;
+      return err instanceof Error ? err : new Error(String(err));
+    }
+  };
+
+  const openErr = openFile();
+  if (openErr) {
+    warnOnce(`could not open ${filePath}: ${openErr.message}; continuing without a log file`);
     return () => {};
   }
 
@@ -152,7 +314,109 @@ export function installLogFileSink(opts: LogFileSinkOptions): () => void {
   let ring: Buffer[] = [];
   let ringBytes = 0;
 
+  /**
+   * Seed the ring from the tail of whatever is already on disk.
+   *
+   * Without this the ring started empty while `fileBytes` started at the
+   * existing file's size, so the FIRST compaction after a restart replaced the
+   * file with only the current session's lines. A crash loop therefore erased
+   * the healthy run's log - the one thing an operator needs - within a few
+   * restarts (confirmed: gone by restart 4).
+   */
+  const seedRing = (): void => {
+    let rfd = -1;
+    try {
+      const size = statSync(filePath).size;
+      if (size <= 0) return;
+      const want = Math.min(size, maxBytes);
+      const buf = Buffer.alloc(want);
+      rfd = openSync(filePath, 'r');
+      let got = 0;
+      while (got < want) {
+        const n = readSync(rfd, buf, got, want - got, size - want + got);
+        if (n <= 0) break;
+        got += n;
+      }
+      let start = 0;
+      if (want < size) {
+        // We cut into the middle of a line. Drop the fragment: the ring holds
+        // whole lines only, and the file is rewritten from it.
+        const nl = buf.indexOf(0x0a, 0);
+        if (nl === -1) return;
+        start = nl + 1;
+      }
+      let from = start;
+      for (let i = start; i < got; i++) {
+        if (buf[i] !== 0x0a) continue;
+        const line = buf.subarray(from, i + 1);
+        ring.push(line);
+        ringBytes += line.length;
+        from = i + 1;
+      }
+      if (from < got) {
+        // Previous run died mid-line. Terminate it so the ring stays line-shaped.
+        const line = Buffer.concat([buf.subarray(from, got), Buffer.from('\n')]);
+        ring.push(line);
+        ringBytes += line.length;
+      }
+      while (ringBytes > maxBytes && ring.length > 1) {
+        ringBytes -= ring.shift()!.length;
+      }
+    } catch {
+      // Unreadable history is not worth failing a boot over. Start empty.
+      ring = [];
+      ringBytes = 0;
+    } finally {
+      if (rfd >= 0) {
+        try {
+          closeSync(rfd);
+        } catch {
+          // Nothing to do.
+        }
+      }
+    }
+  };
+  seedRing();
+
+  /**
+   * Remove `<path>.<pid>.tmp` siblings left by a crash between the temp write
+   * and the rename. Nothing ever cleaned them up, so a box that OOM-killed the
+   * daemon mid-compaction accumulated one near-full-window file per crash. A
+   * tmp file whose pid is still alive belongs to a running process, so leave it.
+   */
+  const cleanStaleTmp = (): void => {
+    try {
+      const dir = dirname(filePath);
+      const base = basename(filePath);
+      for (const name of readdirSync(dir)) {
+        if (!name.startsWith(base) || name.length === base.length) continue;
+        const m = TMP_SUFFIX_PATTERN.exec(name.slice(base.length));
+        if (!m) continue;
+        const pid = Number(m[1]);
+        if (pid !== process.pid) {
+          let alive = true;
+          try {
+            process.kill(pid, 0);
+          } catch (err) {
+            // EPERM means it exists and is someone else's; ESRCH means gone.
+            alive = (err as NodeJS.ErrnoException).code === 'EPERM';
+          }
+          if (alive) continue;
+        }
+        try {
+          unlinkSync(join(dir, name));
+        } catch {
+          // Raced with another cleaner, or not ours to delete.
+        }
+      }
+    } catch {
+      // Directory listing is a nicety; never let it stop the sink.
+    }
+  };
+  cleanStaleTmp();
+
   let disabled = false;
+  let recoverIn = 0;
   /**
    * Re-entrancy guard. Anything this sink writes itself (a warning, a stray
    * console.* from a dependency reached through our own stack) must pass
@@ -173,18 +437,16 @@ export function installLogFileSink(opts: LogFileSinkOptions): () => void {
    */
   const decoders = { out: new StringDecoder('utf8'), err: new StringDecoder('utf8') };
 
-  const closeFd = (): void => {
-    try {
-      closeSync(fd);
-    } catch {
-      // Already closed, or the fd went away with the file. Nothing to do.
-    }
-  };
-
-  const fail = (what: string, err: unknown): void => {
-    disabled = true;
+  /**
+   * Lose the file but keep the sink. This used to set a permanent "disabled"
+   * flag, so one transient failure - `rm -rf ~/.jarvis/logs`, a full disk that
+   * emptied a minute later - meant no log file until the daemon restarted.
+   * The ring keeps filling in memory and `writeLine` retries the open.
+   */
+  const degrade = (what: string, err: unknown): void => {
     closeFd();
-    warnOnce(`${what}: ${err instanceof Error ? err.message : String(err)}; continuing without a log file`);
+    recoverIn = RECOVER_EVERY_LINES;
+    warnOnce(`${what}: ${err instanceof Error ? err.message : String(err)}; retrying in the background`);
   };
 
   const appendToFile = (buf: Buffer): void => {
@@ -202,10 +464,12 @@ export function installLogFileSink(opts: LogFileSinkOptions): () => void {
    * rename it over the target. rename(2) is atomic, so a reader (the host's
    * `fetch-logs`, or `tail`) sees either the old file or the new one, never a
    * half-truncated one. The inode changes, which is why `jarvis logs -f` uses
-   * `tail -F` rather than `tail -f`.
+   * `tail -F` rather than `tail -f` - and why the sink refuses to install when
+   * a launcher already has fds 1/2 open on this file (logFileIsProcessStdio).
    */
   const compact = (): void => {
     try {
+      mkdirSync(dirname(filePath), { recursive: true });
       writeFileSync(tmpPath, ring.length === 1 ? ring[0]! : Buffer.concat(ring, ringBytes), { mode: 0o600 });
       renameSync(tmpPath, filePath);
       closeFd();
@@ -217,12 +481,24 @@ export function installLogFileSink(opts: LogFileSinkOptions): () => void {
       } catch {
         // The temp file may never have been created. Either way we are done.
       }
-      fail(`could not rewrite ${filePath}`, err);
+      degrade(`could not rewrite ${filePath}`, err);
     }
   };
 
+  /**
+   * Cap one line's contribution to the window. Cut on the buffer, not the
+   * string, and decode the head with a StringDecoder so a multi-byte character
+   * straddling the cut is dropped rather than turned into U+FFFD.
+   */
+  const truncateLine = (line: string): string => {
+    if (Buffer.byteLength(line, 'utf8') <= maxLineBytes) return line;
+    const buf = Buffer.from(line, 'utf8');
+    const head = new StringDecoder('utf8').write(buf.subarray(0, maxLineBytes));
+    return `${head}... [truncated by the log sink: ${buf.length - maxLineBytes} more bytes]`;
+  };
+
   const writeLine = (line: string): void => {
-    const clean = redactSecrets(line.replace(ANSI_PATTERN, ''));
+    const clean = truncateLine(redactSecrets(line.replace(ANSI_PATTERN, '')));
     const buf = Buffer.from(`${new Date().toISOString()} ${clean}\n`, 'utf8');
 
     ring.push(buf);
@@ -231,29 +507,57 @@ export function installLogFileSink(opts: LogFileSinkOptions): () => void {
       ringBytes -= ring.shift()!.length;
     }
 
-    appendToFile(buf);
+    if (fd < 0) {
+      // File is gone. Retry occasionally; a successful reopen replays the ring
+      // through `compact`, so the recovered file carries what it missed.
+      if (--recoverIn > 0) return;
+      recoverIn = RECOVER_EVERY_LINES;
+      compact();
+      return;
+    }
+
+    try {
+      appendToFile(buf);
+    } catch (err) {
+      degrade(`could not write to ${filePath}`, err);
+      return;
+    }
     if (fileBytes > compactAt) compact();
   };
 
   const consume = (stream: 'out' | 'err', text: string): void => {
     if (!text) return;
     const buffered = pending[stream] + text;
+    pending[stream] = '';
+
+    // `\r` terminates a line too. Progress renderers redraw with a bare `\r`
+    // and never emit `\n`, and holding those forever meant a growing `pending`
+    // string and nothing on disk. Both indices are tracked and only the
+    // consumed one is re-searched, so the whole scan stays linear.
     let nl = buffered.indexOf('\n');
-    if (nl === -1) {
-      // No terminator yet. Hold it: the rest of this line is coming in a
-      // later write (process.stdout.write callers chunk mid-line freely).
-      pending[stream] = buffered;
-      return;
-    }
+    let cr = buffered.indexOf('\r');
     let start = 0;
-    while (nl !== -1) {
-      // \r\n and a bare \r-driven progress redraw both leave a stray \r.
-      writeLine(buffered.slice(start, nl).replace(/\r$/, ''));
-      if (disabled) return;
-      start = nl + 1;
-      nl = buffered.indexOf('\n', start);
+    while (nl !== -1 || cr !== -1) {
+      const at = nl === -1 ? cr : cr === -1 ? nl : Math.min(nl, cr);
+      const isCr = at === cr;
+      const crlf = isCr && buffered.charCodeAt(at + 1) === 10;
+      const segment = buffered.slice(start, at);
+      // A bare `\r` with nothing before it is a redraw of an empty frame, not
+      // a blank line the process logged. `\r\n` and `\n` keep their blanks.
+      if (segment.length > 0 || !isCr || crlf) writeLine(segment);
+      start = crlf ? at + 2 : at + 1;
+      if (nl !== -1 && nl < start) nl = buffered.indexOf('\n', start);
+      if (cr !== -1 && cr < start) cr = buffered.indexOf('\r', start);
     }
-    pending[stream] = buffered.slice(start);
+
+    let rest = buffered.slice(start);
+    if (rest.length > MAX_PENDING_CHARS) {
+      // No terminator in sight and the buffer is past its budget. Flush it as
+      // a line rather than growing forever.
+      writeLine(rest);
+      rest = '';
+    }
+    pending[stream] = rest;
   };
 
   const patch = (stream: 'out' | 'err', original: StreamWrite): StreamWrite => {
@@ -274,7 +578,7 @@ export function installLogFileSink(opts: LogFileSinkOptions): () => void {
               : null;
         if (text !== null) consume(stream, text);
       } catch (err) {
-        fail('log sink write failed', err);
+        degrade('log sink write failed', err);
       } finally {
         inSink = false;
       }
@@ -323,7 +627,7 @@ export function installLogFileSink(opts: LogFileSinkOptions): () => void {
         // inspection), so the file records the same text the terminal shows.
         consume(stream, `${format(...(args as [unknown, ...unknown[]]))}\n`);
       } catch (err) {
-        fail('log sink write failed', err);
+        degrade('log sink write failed', err);
       } finally {
         inSink = false;
       }

@@ -577,7 +577,15 @@ export type JarvisConfig = {
      * Ring size for `log_file_path`, in bytes. Default 1 MiB, which is also
      * the control plane's per-read cap. Once the file passes the cap the
      * oldest lines are dropped from the top, so it settles at roughly this
-     * size and never grows without bound. Values under 4 KiB are raised.
+     * size and never grows without bound.
+     *
+     * The ring is held IN MEMORY - that is what the file is rewritten from -
+     * so this is an RSS budget as much as a disk budget. Clamped to
+     * 4 KiB..64 MiB at the point of use: below the floor a rewrite costs more
+     * than it saves, and above the ceiling the daemon pays for a window nobody
+     * reads. Non-finite values fall back to the default, because
+     * `log_file_max_bytes: .inf` is legal YAML and used to mean "never
+     * compact, grow until the OOM killer arrives".
      */
     log_file_max_bytes?: number;
   };

@@ -14,7 +14,7 @@ import { flushWindowState } from "./window-state.ts";
 import { ServiceRegistry } from "./services.ts";
 import { HealthMonitor } from "./health.ts";
 import { loadConfig } from "../config/loader.ts";
-import { installLogFileSink } from "../util/log-file.ts";
+import { installLogFileSink, logFileIsProcessStdio } from "../util/log-file.ts";
 import { resolveEngineIdleTtlMs } from "./config-merge.ts";
 import { activeTurns } from "./active-turns.ts";
 import { writeLockedPort } from "./pid.ts";
@@ -383,10 +383,24 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
   // there is no per-instance file for the control plane to read (docs/LOGS.md).
   // Unset log_file_path = no file, which is the self-host default.
   const logFilePath = jarvisConfig.daemon.log_file_path?.trim();
-  if (logFilePath && process.env.JARVIS_NO_LOG_FILE_SINK !== '1') {
-    installLogFileSink({ path: logFilePath, maxBytes: jarvisConfig.daemon.log_file_max_bytes });
-    // Logged AFTER the install so the file's own first line says where it is.
-    console.log(`[Daemon] Log file: ${logFilePath}`);
+  if (logFilePath) {
+    // Skip the sink when the launcher ALREADY has our stdout/stderr open on
+    // that exact file - `jarvis start -d`, `jarvis update`'s restart, the
+    // launchd plist's StandardOutPath, a StandardOutput=append: someone put in
+    // their own unit. Those hand us a descriptor bound to an inode, and the
+    // sink's first compaction renames a new file over the path, leaving fds
+    // 1/2 writing into an unlinked inode that grows without bound and that
+    // `ls` cannot show (measured: 4 KB visible, 226 KB orphaned, nlink=0).
+    // fstat on dev+ino rather than a string compare in each launcher, so this
+    // covers launchers we have not written yet and is immune to symlinks,
+    // bind mounts and $JARVIS_HOME spellings of the same file.
+    if (logFileIsProcessStdio(logFilePath)) {
+      console.log(`[Daemon] Log file: ${logFilePath} (written directly by the launcher; in-process sink not needed)`);
+    } else {
+      installLogFileSink({ path: logFilePath, maxBytes: jarvisConfig.daemon.log_file_max_bytes });
+      // Logged AFTER the install so the file's own first line says where it is.
+      console.log(`[Daemon] Log file: ${logFilePath}`);
+    }
   }
 
   // Drain budget: default 75s; a non-positive value falls back; cap at 85s so a

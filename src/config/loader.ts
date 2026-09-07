@@ -5,10 +5,36 @@ import type { JarvisConfig } from './types.ts';
 import { DEFAULT_CONFIG, USER_OWNED_SECTIONS, WORKFLOW_SYSTEM_KEYS } from './types.ts';
 
 function expandTilde(filepath: string): string {
+  // YAML happily produces a boolean, a number or null for a key that LOOKS
+  // like a path (`log_file_path: true`, `log_file_path: 42`), and this used to
+  // throw `filepath.startsWith is not a function` from inside loadConfig - so
+  // the daemon died reporting "Failed to parse config file", which is not what
+  // went wrong. Hand a non-string straight back and let the caller decide.
+  if (typeof filepath !== 'string') return filepath;
   if (filepath.startsWith('~/')) {
     return join(homedir(), filepath.slice(2));
   }
   return filepath;
+}
+
+/**
+ * Drop `daemon.log_file_path` unless it is actually a string. Everything
+ * downstream calls `.trim()` and `openSync()` on it, and a YAML `true` or `42`
+ * would take the daemon down at boot with a misleading parse error.
+ */
+function normalizeLogFilePath(config: JarvisConfig): void {
+  const value = config.daemon.log_file_path as unknown;
+  if (value === undefined || value === null) {
+    config.daemon.log_file_path = undefined;
+    return;
+  }
+  if (typeof value !== 'string') {
+    console.warn(`daemon.log_file_path must be a string, got ${typeof value}; ignoring it (no log file will be written)`);
+    config.daemon.log_file_path = undefined;
+    return;
+  }
+  // The sink opens this with openSync, which does not understand `~`.
+  config.daemon.log_file_path = expandTilde(value);
 }
 
 export function deepMerge(target: any, source: any): any {
@@ -111,9 +137,7 @@ export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
     // log_file_path has no default, so there is nothing to expand here - but
     // the two branches must stay symmetrical or the next key added to one of
     // them gets expanded in only half the cases.
-    if (config.daemon.log_file_path) {
-      config.daemon.log_file_path = expandTilde(config.daemon.log_file_path);
-    }
+    normalizeLogFilePath(config);
     applyEnvOverrides(config);
     return config;
   }
@@ -140,10 +164,7 @@ export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
   // Expand tilde in paths
   config.daemon.data_dir = expandTilde(config.daemon.data_dir);
   config.daemon.db_path = expandTilde(config.daemon.db_path);
-  // The sink opens this with openSync, which does not understand `~`.
-  if (config.daemon.log_file_path) {
-    config.daemon.log_file_path = expandTilde(config.daemon.log_file_path);
-  }
+  normalizeLogFilePath(config);
 
   // Apply environment variable overrides
   applyEnvOverrides(config);
