@@ -151,6 +151,33 @@ func chromiumLaunchArgs(profileDir string, headless bool) []string {
 	return args
 }
 
+// profileDirWriteGrace bounds how long a browser that IS using the profile may
+// take to put something in it. A browser answering CDP has long since created
+// its profile, so this is insurance against a filesystem lag, not a real wait:
+// the honest case returns on the first look. It exists because the cost of a
+// false negative here is refusing a browser that works.
+const profileDirWriteGrace = 2 * time.Second
+
+// profileDirUsed reports whether the browser actually wrote into the profile
+// directory it was pointed at. Empty (or absent) after the grace period means
+// it went somewhere else -- almost certainly the user's own profile.
+func profileDirUsed(profileDir string) (bool, error) {
+	deadline := time.Now().Add(profileDirWriteGrace)
+	for {
+		entries, err := os.ReadDir(profileDir)
+		if err != nil && !os.IsNotExist(err) {
+			return false, err
+		}
+		if len(entries) > 0 {
+			return true, nil
+		}
+		if time.Now().After(deadline) {
+			return false, nil
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+}
+
 // browserReadyTimeout bounds how long a freshly-spawned browser may take to
 // start answering CDP at all. Generous on purpose: it is a ceiling for a cold
 // start on a throttled CI runner, not a latency budget -- waitForBrowserReady
@@ -197,6 +224,30 @@ func launchCDP(cfg *SidecarConfig, headless bool) (*cdpClient, error) {
 	if err := c.waitForBrowserReady(browserReadyTimeout); err != nil {
 		c.shutdown()
 		return nil, fmt.Errorf("launch browser %q: %w", exe, err)
+	}
+
+	// The browser is answering CDP -- but is it OUR browser, in the throwaway
+	// profile, or the user's own logged-in one?
+	//
+	// Everything downstream assumes the former: the LLM navigates, clicks and
+	// fills forms in whatever session this pipe reaches. A Chromium build that
+	// ignored --user-data-dir would put all of that inside the user's real
+	// profile, with their cookies and their logins, and nothing else in this
+	// code path would notice. That is a privacy failure rather than an
+	// availability one, so it is worth a stat call to turn it into the latter.
+	//
+	// The test is deliberately filename-agnostic: any build that honoured the
+	// flag has written SOMETHING here by the time it serves CDP (Chromium
+	// creates the profile before the DevTools pipe comes up). Requiring a
+	// specific file would risk failing a browser that works.
+	if used, err := profileDirUsed(profileDir); err != nil || !used {
+		c.shutdown()
+		if err != nil {
+			return nil, fmt.Errorf("launch browser %q: could not verify it used the automation profile %s: %w", exe, profileDir, err)
+		}
+		return nil, fmt.Errorf("launch browser %q: it ignored --user-data-dir and left %s empty, "+
+			"so it is driving some other profile -- refusing to automate it. Point browser.executable_path "+
+			"at a stock Chromium build (Chrome, Chromium, Edge, Brave, Vivaldi)", exe, profileDir)
 	}
 
 	if err := c.attachToPage(); err != nil {
