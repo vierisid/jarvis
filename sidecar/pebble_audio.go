@@ -35,6 +35,20 @@ const (
 	pebbleAudioSampleRate = 16000
 	pebbleAudioChannels   = 1
 	pebbleAudioBitsPer    = 16
+
+	// pebbleCaptureReserveSeconds is how much audio a one-shot session's PCM
+	// accumulator reserves at Start. Comfortably above the VAD hard cap (15 s)
+	// so the audio thread never has to grow it. See the reservation in Start.
+	pebbleCaptureReserveSeconds = 20
+
+	// pebbleCapturePeriodMs / pebbleCapturePeriods size the capture buffer.
+	// miniaudio's default low-latency profile picked 10 ms x 3 on the host that
+	// reported this bug ("Buffer Size: 160*3"), leaving ~30 ms before a GC pause
+	// costs microphone frames. Doubling the period is a cheap win and still well
+	// inside the VAD's 350 ms silence cutoff and the realtime path's 40 ms
+	// upstream frames, so neither wake latency nor barge-in feel changes.
+	pebbleCapturePeriodMs = 20
+	pebbleCapturePeriods  = 4
 )
 
 // AudioSession represents a single capture session. Spawned on pebble.summon,
@@ -42,8 +56,25 @@ const (
 type AudioSession struct {
 	id        string
 	startedAt time.Time
-	pcm       *bytes.Buffer
-	mu        sync.Mutex
+	// pcm is nil for a session that does not accumulate. See StartStreaming.
+	pcm *bytes.Buffer
+	mu  sync.Mutex
+}
+
+// newAudioSession builds a session, reserving the PCM accumulator up front when
+// the caller wants one.
+//
+// bytes.Buffer grows by doubling, and that realloc-and-copy would run inside the
+// miniaudio data callback, on the audio thread, where stalling past the device
+// period is an underrun. The VAD's hard cap bounds an accumulating session well
+// below the reservation, so in practice the callback never grows the buffer at
+// all; a streaming session allocates nothing to grow.
+func newAudioSession(sessionID string, rate int, accumulate bool) *AudioSession {
+	var pcmBuf *bytes.Buffer
+	if accumulate {
+		pcmBuf = bytes.NewBuffer(make([]byte, 0, rate*pebbleAudioChannels*2*pebbleCaptureReserveSeconds))
+	}
+	return &AudioSession{id: sessionID, startedAt: time.Now(), pcm: pcmBuf}
 }
 
 // AudioCaptureService is the cross-platform mic capture API. The
@@ -83,9 +114,28 @@ func NewStreamingCaptureService(rate int) *AudioCaptureService {
 	return &AudioCaptureService{sampleRate: rate, streamOnly: true}
 }
 
-// Start begins a new capture session. Returns an error if a session is
-// already in progress or if the audio device couldn't be opened.
+// Start begins a new capture session that ACCUMULATES the captured PCM for
+// Stop() to return.
 func (s *AudioCaptureService) Start(sessionID string) error {
+	return s.start(sessionID, !s.streamOnly)
+}
+
+// StartStreaming begins a session that keeps no PCM: chunks reach the chunk
+// listener and nothing else.
+//
+// This is what an open-ended consumer must use. The wake listener holds one
+// session open for as long as it is armed, which is hours, and it discards
+// Stop()'s buffer. Accumulating there grows a bytes.Buffer without bound at
+// ~115 MB an hour, and every doubling is a realloc-and-copy inside the
+// miniaudio data callback, on the audio thread, which is exactly the stall
+// this file is otherwise careful to avoid.
+func (s *AudioCaptureService) StartStreaming(sessionID string) error {
+	return s.start(sessionID, false)
+}
+
+// start opens the device. Returns an error if a session is already in progress
+// or if the audio device couldn't be opened.
+func (s *AudioCaptureService) start(sessionID string, accumulate bool) error {
 	if !s.active.CompareAndSwap(false, true) {
 		return fmt.Errorf("audio capture already in progress")
 	}
@@ -107,25 +157,24 @@ func (s *AudioCaptureService) Start(sessionID string) error {
 		s.ctx = ctx
 	}
 
-	session := &AudioSession{
-		id:        sessionID,
-		startedAt: time.Now(),
-		pcm:       &bytes.Buffer{},
-	}
-	s.session = session
-
 	rate := s.sampleRate
 	if rate <= 0 {
 		rate = pebbleAudioSampleRate
 	}
+
+	session := newAudioSession(sessionID, rate, accumulate)
+	s.session = session
+
 	deviceConfig := malgo.DefaultDeviceConfig(malgo.Capture)
 	deviceConfig.Capture.Format = malgo.FormatS16
 	deviceConfig.Capture.Channels = pebbleAudioChannels
 	deviceConfig.SampleRate = uint32(rate)
+	deviceConfig.PeriodSizeInMilliseconds = pebbleCapturePeriodMs
+	deviceConfig.Periods = pebbleCapturePeriods
 	deviceConfig.Alsa.NoMMap = 1
 
 	onRecv := func(_, input []byte, _ uint32) {
-		if !s.streamOnly {
+		if session.pcm != nil {
 			session.mu.Lock()
 			session.pcm.Write(input)
 			session.mu.Unlock()
@@ -176,9 +225,12 @@ func (s *AudioCaptureService) Stop() ([]byte, time.Duration, error) {
 	// guaranteed to have joined an in-flight onRecv callback on every malgo
 	// backend, and bytes.Buffer is not safe for concurrent Write/Bytes. Copy so
 	// the returned slice is independent of the buffer's backing array too.
-	s.session.mu.Lock()
-	pcm := append([]byte(nil), s.session.pcm.Bytes()...)
-	s.session.mu.Unlock()
+	var pcm []byte
+	if s.session.pcm != nil {
+		s.session.mu.Lock()
+		pcm = append([]byte(nil), s.session.pcm.Bytes()...)
+		s.session.mu.Unlock()
+	}
 	id := s.session.id
 	s.session = nil
 	log.Printf("[audio] capture session %q stopped (%d PCM bytes, %.2fs)", id, len(pcm), dur.Seconds())

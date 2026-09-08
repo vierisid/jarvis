@@ -4,6 +4,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"log"
 )
 
 // pebble.spawn — show the native pebble overlay on the desktop.
@@ -62,6 +63,22 @@ func makePebbleSetStateHandler(svc PebbleService) RPCHandler {
 		if err := svc.SetState(PebbleState(s)); err != nil {
 			return nil, err
 		}
+		// The daemon drives this for the whole turn, on every path into the
+		// voice loop, including the single-shot wake ("Jarvis, do X"), which
+		// never runs a local session capture and so has no other early hook.
+		// Hold ambient screen awareness off from the first non-idle state
+		// rather than waiting for the first TTS clip to land, so a capture tick
+		// can't already be mid-OCR when playback opens its device.
+		// Deliberately not PebbleWorking: a backgrounded agent task can sit in
+		// that state for minutes and has no audio to protect.
+		switch PebbleState(s) {
+		case PebbleListening, PebbleThinking, PebbleSpeaking:
+			ambientHoldFor(voiceTurnAmbientHold)
+		case PebbleIdle:
+			// Unscoped: the daemon is the authority on the turn being over, and
+			// this handler has no hold of its own to pair the end against.
+			ambientEndHoldAfter(ambientHoldUnscoped, pebbleStateAmbientTail)
+		}
 		return &RPCResult{Result: map[string]any{"state": s}}, nil
 	}
 }
@@ -74,10 +91,18 @@ func makePebbleSetStateHandler(svc PebbleService) RPCHandler {
 //   "data":      base64-encoded audio bytes (MP3 or WAV — sniffed at decode),
 //   "mime_type": optional hint ("audio/mp3" / "audio/wav"); used as a
 //                fallback when the magic-byte sniff is ambiguous,
-//   "blocking":  optional bool — if true, the RPC waits until playback
-//                finishes; otherwise it returns immediately and playback
-//                runs in the background.
+//   "blocking":  optional bool, accepted for backwards compatibility. It
+//                only changes the shape of the result: this RPC has never
+//                waited for playback to finish, and returns as soon as the
+//                clip is queued either way.
 // }
+//
+// The clip is queued on the calling goroutine, NOT handed to a new one.
+// Queueing is a channel send that cannot block (a full queue is an error), and
+// the daemon dispatches one sentence per RPC and awaits each result before
+// sending the next. Spawning a goroutine here broke that ordering: the two
+// clips raced to the queue, so a long answer could speak its sentences out of
+// sequence.
 func makePebblePlayAudioHandler(svc *AudioPlaybackService) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
 		rawData, ok := params["data"]
@@ -102,23 +127,21 @@ func makePebblePlayAudioHandler(svc *AudioPlaybackService) RPCHandler {
 			blocking = v
 		}
 
-		if blocking {
-			if err := svc.Play(audio, mime); err != nil {
+		if err := svc.Play(audio, mime); err != nil {
+			if blocking {
 				return nil, err
 			}
+			// The daemon's voice cycle fires these and moves on, so a failure
+			// here is logged rather than returned.
+			log.Printf("[playback] enqueue failed: %v", err)
+		}
+
+		if blocking {
 			return &RPCResult{Result: map[string]any{
 				"played": true,
 				"bytes":  len(audio),
 			}}, nil
 		}
-
-		// Fire-and-forget — daemon's voice cycle calls this and continues.
-		// Sidecar logs (not RPC-returns) any decode/playback failure.
-		go func(buf []byte, m string) {
-			if err := svc.Play(buf, m); err != nil {
-				fmt.Printf("[playback] error: %v\n", err)
-			}
-		}(audio, mime)
 
 		return &RPCResult{Result: map[string]any{
 			"queued": true,

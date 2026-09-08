@@ -82,6 +82,50 @@ type SidecarClient struct {
 	// threads read it — a plain field is a data race.
 	streamPlayer atomic.Pointer[AudioStreamPlayer]
 	realtime     atomic.Pointer[realtimeVoice]
+
+	// wakeSuppress is the current connection's wake-listener suppression hook,
+	// published here so the playback state hook can find it. The wake listener
+	// is per-connection but the playback service outlives a reconnect (and is
+	// rebuilt by reloadConfig), so the two can't be captured in one closure.
+	wakeSuppress atomic.Pointer[func(playing bool)]
+}
+
+// installPlayStateHook wires a playback service's state callback. Two jobs on
+// each edge:
+//
+//   - Suppress wake captures while TTS is playing, so JARVIS's own voice
+//     through the speakers doesn't trigger a self-wake.
+//   - Hold ambient screen awareness off, so a screenshot + OCR tick can't stall
+//     the cgo audio callback with a GC pause, or make the brain pull a
+//     multi-megabyte capture down the same connection the TTS clips arrive on.
+//     This half is deliberately NOT gated on the wake listener: it matters even
+//     when there is no wake listener to suppress.
+//
+// Called from connectAndServe and from reloadConfig, since either can be the
+// point at which a live playback service first exists.
+func (c *SidecarClient) installPlayStateHook(pb *AudioPlaybackService) {
+	if pb == nil {
+		return
+	}
+	// Sequence number of the hold this hook took when playback started, so the
+	// matching end event can't shorten a hold that a NEWER turn has since
+	// taken. The worker debounces its idle announcement by over a second, which
+	// is easily long enough for the next turn to have started.
+	var holdSeq atomic.Uint64
+	pb.SetPlayStateListener(func(playing bool) {
+		if h := c.wakeSuppress.Load(); h != nil {
+			(*h)(playing)
+		}
+		if playing {
+			holdSeq.Store(ambientHoldFor(voiceTurnAmbientHold))
+			return
+		}
+		// Not a hard release: streaming TTS idles the queue for the 300-800 ms
+		// it takes to synthesize the next sentence, and the next clip
+		// re-extends. The tail keeps the observer out of those gaps while still
+		// recovering promptly at the end of the answer.
+		ambientEndHoldAfter(holdSeq.Load(), voiceTurnAmbientTail)
+	})
 }
 
 func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
@@ -424,6 +468,10 @@ func (c *SidecarClient) reloadConfig() {
 		c.pebble = NewPebbleService()
 		c.pebble.SetEthereal(c.config.Preferences.EtherealPebble, c.config.Preferences.EtherealIdleSeconds)
 		c.playback = NewAudioPlaybackService()
+		// This service was born mid-connection, so connectAndServe's install
+		// already ran against the old (nil) one. Without this, wake suppression
+		// and the ambient hold stay dead until the next reconnect.
+		c.installPlayStateHook(c.playback)
 		c.regions = NewRegionSelectionService()
 	} else if !hasPebble && c.pebble != nil {
 		_ = c.pebble.Close()
@@ -580,14 +628,17 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 			defer wakeListener.Stop()
 		}
 
-		// Suppress wake captures while TTS is playing so JARVIS's own
-		// voice through the speakers doesn't trigger a self-wake. Hooked
-		// via the playback service's state-change callback.
-		if wakeListener != nil && c.playback != nil {
-			c.playback.SetPlayStateListener(func(playing bool) {
-				wakeListener.Suppress(playing)
-			})
+		// Publish this connection's wake listener so the playback state hook can
+		// suppress it. The hook itself is installed on whichever playback
+		// service is live (see installPlayStateHook), which is not necessarily
+		// the one this connection started with: reloadConfig rebuilds the
+		// service when the pebble capability toggles.
+		if wakeListener != nil {
+			suppress := func(playing bool) { wakeListener.Suppress(playing) }
+			c.wakeSuppress.Store(&suppress)
+			defer c.wakeSuppress.Store(nil)
 		}
+		c.installPlayStateHook(c.playback)
 
 		// runSessionCapture handles one summon→capture→stream cycle. Used
 		// by both the Ctrl+Space hotkey path and the wake-word follow-up
@@ -635,6 +686,14 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 				return
 			}
 			defer sessionInFlight.Store(false)
+
+			// The turn starts here and ends somewhere in the daemon (STT, then
+			// the LLM, then TTS), so hold ambient screen awareness off on a
+			// deadline rather than a balanced pair: if the response never comes
+			// back, the hold expires on its own instead of stranding the
+			// observer off. Each clip the playback service renders pushes the
+			// deadline back out, so a long answer stays covered.
+			ambientHoldFor(voiceTurnAmbientHold)
 
 			startEvt := SidecarEvent{
 				Type:      "sidecar_event",

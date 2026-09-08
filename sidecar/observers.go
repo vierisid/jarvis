@@ -5,7 +5,6 @@ import (
 	"log"
 	"runtime/debug"
 	"sync"
-	"sync/atomic"
 	"time"
 )
 
@@ -24,13 +23,131 @@ func goSafeObserver(name string, fn func()) {
 	}()
 }
 
-// ambientSuppressed pauses the heavy ambient screen observer (2.4 MB capture +
-// OCR every tick) while the native pebble holds a realtime voice session. During
-// a focused conversation we don't want screen monitoring competing with the
-// audio stream on the sidecar's single WebSocket, nor the reactor it triggers
-// (set_eye flood, proactive narration, autonomous agent actions). The realtime
-// controller toggles this in Start/Stop.
-var ambientSuppressed atomic.Bool
+// Ambient suppression pauses the heavy screen observer while the pebble is in
+// the middle of a voice turn. A tick allocates a full-resolution screenshot
+// (5 MB on a real host), diffs it against the previous one, writes a PNG and
+// shells out to OCR (~1.6 s observed). Two reasons to hold it off:
+//
+//   - The audio device callback is a Go function entered from the C audio
+//     thread through cgo, and it cannot run during a GC stop-the-world. A
+//     missed render deadline is a buffer underrun, audible as a harsh,
+//     high-pitched glitch in the middle of TTS.
+//   - The capture event makes the brain turn around and pull the image with a
+//     fetch_capture RPC, and that multi-megabyte reply shares the sidecar's
+//     control WebSocket with the TTS clips (pebble.play_audio), so the audio
+//     for the next sentence queues behind it.
+//
+// Two kinds of hold, because the two callers know different things:
+//
+//   - ambientHold / ambientRelease: a balanced counter, for a consumer that
+//     owns a well-defined span (the realtime session).
+//   - ambientHoldFor / ambientEndHoldAfter: a deadline, for the one-shot voice
+//     cycle, where the sidecar starts the turn but the daemon owns the middle
+//     of it (STT, then the LLM, then TTS) and may never come back. A deadline
+//     self-heals: a dropped response un-suppresses on its own instead of
+//     stranding screen awareness off forever.
+//
+// Known limit of the deadline: a turn whose silent middle runs longer than
+// voiceTurnAmbientHold (a slow tool call, a very slow first token) expires and
+// lets one tick through before the answer arrives. That is the deliberate
+// price of self-healing, and it is bounded to a single tick because the first
+// TTS clip re-extends the hold.
+//
+// Suppressed iff the counter is up OR the deadline is still in the future.
+// Both live under one mutex rather than in atomics: it keeps the deadline and
+// its sequence number consistent with each other, and it lets the deadline be
+// a time.Time, which carries a monotonic reading. Wall-clock millis would let
+// an NTP correction or a laptop resume, on exactly the two platforms this bug
+// was reported on, either extend a hold indefinitely or end it early.
+var (
+	ambientMu        sync.Mutex
+	ambientDepth     int
+	ambientHoldUntil time.Time
+	ambientHoldSeq   uint64
+)
+
+const (
+	// voiceTurnAmbientHold is the ceiling on one deadline-held voice turn. It
+	// only has to outlast the local capture plus the RPC that follows it: the
+	// daemon re-extends on every pebble state change, and playback re-extends
+	// for as long as JARVIS is actually speaking. So this is really "how long
+	// we stay quiet after the daemon goes silent on us", not the length of a
+	// turn. Short enough that a dropped response costs about one screen tick
+	// (the observer's default interval is 15 s).
+	voiceTurnAmbientHold = 20 * time.Second
+	// voiceTurnAmbientTail keeps the observer out of the gap between two
+	// streamed TTS sentences (synthesizing the next one takes 300-800 ms)
+	// without extending the hold past the end of the answer.
+	voiceTurnAmbientTail = 1500 * time.Millisecond
+	// pebbleStateAmbientTail is the release once the daemon puts the pebble
+	// back to idle: the turn is over, just past the render buffer's tail.
+	pebbleStateAmbientTail = 500 * time.Millisecond
+)
+
+// ambientHoldUnscoped is the sequence number a caller passes to
+// ambientEndHoldAfter when it has no hold of its own to pair with and is
+// simply reporting that the turn is over (the daemon putting the pebble back
+// to idle). Real sequence numbers start at 1.
+const ambientHoldUnscoped uint64 = 0
+
+// ambientSuppressedNow reports whether the ambient screen observer should skip
+// this tick.
+func ambientSuppressedNow() bool {
+	ambientMu.Lock()
+	defer ambientMu.Unlock()
+	return ambientDepth > 0 || time.Now().Before(ambientHoldUntil)
+}
+
+// ambientHold raises the suppression counter. Every call must be paired with
+// exactly one ambientRelease.
+func ambientHold() {
+	ambientMu.Lock()
+	ambientDepth++
+	ambientMu.Unlock()
+}
+
+// ambientRelease lowers the suppression counter, clamped at zero so an
+// unbalanced caller can't drive it negative and wedge suppression on.
+func ambientRelease() {
+	ambientMu.Lock()
+	if ambientDepth <= 0 {
+		ambientMu.Unlock()
+		log.Printf("[observer] ambientRelease with depth already 0, ignoring (unbalanced caller)")
+		return
+	}
+	ambientDepth--
+	ambientMu.Unlock()
+}
+
+// ambientHoldFor pushes the suppression deadline out to now+d and returns a
+// sequence number identifying this hold. The deadline only ever moves forward,
+// so a short hold can't cut a longer one short.
+func ambientHoldFor(d time.Duration) uint64 {
+	ambientMu.Lock()
+	defer ambientMu.Unlock()
+	ambientHoldSeq++
+	if until := time.Now().Add(d); until.After(ambientHoldUntil) {
+		ambientHoldUntil = until
+	}
+	return ambientHoldSeq
+}
+
+// ambientEndHoldAfter pulls the suppression deadline in to now+d, releasing a
+// hold early because the turn finished. It only ever moves the deadline
+// backward, and only when `seq` is still the newest hold: an end event can be
+// seconds late (the playback worker debounces its idle announcement), and by
+// then a NEW turn may have taken a hold that this stale event must not cut
+// short. Pass ambientHoldUnscoped to end whichever hold is current.
+func ambientEndHoldAfter(seq uint64, d time.Duration) {
+	ambientMu.Lock()
+	defer ambientMu.Unlock()
+	if seq != ambientHoldUnscoped && seq != ambientHoldSeq {
+		return // a newer hold owns the deadline now
+	}
+	if until := time.Now().Add(d); until.Before(ambientHoldUntil) {
+		ambientHoldUntil = until
+	}
+}
 
 // EventSender sends sidecar events to the brain.
 // If binaryData is provided and exceeds the ref threshold, the transport
@@ -160,9 +277,15 @@ func (o *ScreenObserver) Run(ctx context.Context, send EventSender) {
 }
 
 func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
-	// Paused during a realtime voice session (focus mode) — skip the heavy
-	// capture+OCR+send so it doesn't stutter the audio stream.
-	if ambientSuppressed.Load() {
+	// Paused for the duration of a voice turn (realtime session, or a one-shot
+	// summon, STT, LLM, then TTS cycle): skip the heavy capture+OCR+send so it
+	// can't stall the audio callback or queue in front of the TTS clips.
+	// Re-checked at each expensive stage below, not just here: a tick that has
+	// already started is 6-9 seconds of work on Windows (the OCR helper is a
+	// PowerShell subprocess), so a voice turn beginning one tick later would
+	// otherwise land right on top of a screenshot, a pixel diff and an OCR
+	// subprocess. Aborting mid-capture costs one skipped observation.
+	if ambientSuppressedNow() {
 		return
 	}
 	imageData, err := captureScreenBytes()
@@ -172,6 +295,9 @@ func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
 	}
 	if len(imageData) == 0 {
 		return
+	}
+	if ambientSuppressedNow() {
+		return // a voice turn started while we were grabbing the screen
 	}
 
 	changePct := o.computePixelDiff(imageData)
@@ -199,7 +325,7 @@ func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
 
 	var ocrText string
 	var ocrDurationMs int64
-	if o.ocrEnabled {
+	if o.ocrEnabled && !ambientSuppressedNow() {
 		ocr, err := platformOCR(imagePath)
 		if err != nil {
 			log.Printf("[screen] OCR failed: %v", err)
@@ -230,6 +356,13 @@ func (o *ScreenObserver) capture(ctx context.Context, send EventSender) {
 		},
 	}
 
+	if ambientSuppressedNow() {
+		// A voice turn started while we were capturing. Dropping the event here
+		// matters as much as skipping the capture: the brain answers one by
+		// pulling the image back with a fetch_capture RPC, and that multi-
+		// megabyte reply would land on the connection mid-conversation.
+		return
+	}
 	if err := send(ctx, event, nil); err != nil {
 		log.Printf("[screen] Failed to send event: %v", err)
 	}

@@ -130,7 +130,7 @@ func (r *realtimeVoice) Start() {
 	// per tick) so it doesn't contend with the audio stream on the shared WS,
 	// and so its reactor (set_eye flood, proactive narration, autonomous agent
 	// actions) stays quiet during the conversation.
-	ambientSuppressed.Store(true)
+	ambientHold()
 
 	// Open the dedicated audio channel (isolated from the bulk control
 	// connection). Inbound binary plays through this session's stream player;
@@ -180,7 +180,10 @@ func (r *realtimeVoice) Start() {
 	}()
 
 	const frameBytes = realtimeInputSampleRate * 2 * realtimeFrameMs / 1000 // s16 mono
-	var acc []byte
+	// Reserved once, and only ever sliced in place below: this accumulator is
+	// filled from the miniaudio capture callback, i.e. the audio thread, where a
+	// realloc-and-copy costs microphone frames.
+	acc := make([]byte, 0, frameBytes*2)
 	gated := false
 	r.capture.SetChunkListener(func(chunk []byte) {
 		// Half-duplex echo guard: while the assistant is speaking through the
@@ -203,11 +206,17 @@ func (r *realtimeVoice) Start() {
 		}
 		acc = append(acc, chunk...)
 		for len(acc) >= frameBytes {
+			// This one allocation is unavoidable: the frame is handed to the
+			// sender goroutine and outlives the callback. It is a fixed 1920
+			// bytes, unlike the accumulator it used to drag along.
 			out := append([]byte(nil), acc[:frameBytes]...)
-			acc = acc[frameBytes:]
+			// Compact in place rather than re-slicing from the front: acc =
+			// acc[frameBytes:] walks the start pointer forward and shrinks the
+			// capacity, so the next append reallocated on the audio thread.
+			acc = acc[:copy(acc, acc[frameBytes:])]
 			select {
 			case frameCh <- out:
-			default: // network backed up — drop, keep capture real-time
+			default: // network backed up, drop and keep capture real-time
 			}
 		}
 	})
@@ -236,7 +245,7 @@ func (r *realtimeVoice) Start() {
 		r.setStream(nil)
 		player.Stop()
 		r.player = nil
-		ambientSuppressed.Store(false) // Stop() won't run (active already false) — resume screen awareness here
+		ambientRelease() // Stop() won't run (active already false); resume screen awareness here
 		r.resumeWake()
 		r.active.Store(false)
 		return
@@ -279,7 +288,7 @@ func (r *realtimeVoice) Stop(emit bool) {
 		r.player.Stop()
 		r.player = nil
 	}
-	ambientSuppressed.Store(false) // resume ambient screen awareness
+	ambientRelease() // resume ambient screen awareness
 	r.resumeWake()
 	r.setState(PebbleIdle)
 
