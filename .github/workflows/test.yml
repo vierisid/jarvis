@@ -239,15 +239,17 @@ jobs:
           go vet ./internal/winchrome/
 
   # The windows-tagged tests (pebble draw-bounds crop invariant, global hotkey
-  # registration) are pure Go but can only RUN on a Windows runner — the mingw
-  # cross-build above only proves the package compiles. `go test` also compiles
-  # every _test.go under GOOS=windows, which the cross-build (build-only) never
-  # checks. Scoped to a named few to keep runtime bounded; the full logic suite
-  # is covered on linux. The TestHotkeys* prefix is matched as a group so a new
-  # hotkey test runs without editing this file; they live here rather than on
-  # linux because the file is windows-tagged and one of them needs the real
-  # RegisterHotKey — a refused registration is exactly what has to surface as an
-  # error, and no other platform can produce one.
+  # registration, desktop-control helpers) are pure Go but can only RUN on a
+  # Windows runner: the mingw cross-build above only proves the package
+  # compiles. `go test` also compiles every _test.go under GOOS=windows, which
+  # the cross-build (build-only) never checks. Scoped to a named few to keep
+  # runtime bounded; the full logic suite is covered on linux. Each group is
+  # matched as a prefix so a new sibling test runs without editing this file.
+  # They live here rather than on linux because the files are windows-tagged:
+  # one hotkey test needs the real RegisterHotKey, since a refused
+  # registration is exactly what has to surface as an error and no other
+  # platform can produce one, and the UIA and SendInput helpers do not exist
+  # in a linux build at all.
   sidecar-test-windows:
     runs-on: windows-latest
     steps:
@@ -256,7 +258,7 @@ jobs:
         with:
           go-version-file: sidecar/go.mod
           cache-dependency-path: sidecar/go.sum
-      - name: Run windows-tagged pebble tests (amd64, cgo)
+      - name: Run windows-tagged unit tests (amd64, cgo)
         working-directory: sidecar
         shell: bash
         env:
@@ -264,15 +266,15 @@ jobs:
         run: |
           set -euo pipefail
           export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
-          pattern='^(TestMainPebbleDrawStaysInsideCrop|TestHotkeys.*)$'
+          pattern='^(TestMainPebbleDrawStaysInsideCrop|TestHotkeys.*|TestHresultText.*)$'
           # Same reason as the parity test above: `go test -run` with no match
           # prints "no tests to run" and exits 0. A floor rather than an exact
-          # count, so the TestHotkeys.* group can grow without editing this, but
-          # a rename that empties it still fails here instead of quietly
-          # skipping every windows-only test we have.
+          # count, so each group can grow without editing this, but a rename
+          # that empties one still fails here instead of quietly skipping every
+          # windows-only test we have.
           listed=$(go test -list "$pattern" . | grep -c '^Test' || true)
-          if [ "$listed" -lt 5 ]; then
-            echo "::error::windows test pattern matched $listed tests, expected at least 5"
+          if [ "$listed" -lt 7 ]; then
+            echo "::error::windows test pattern matched $listed tests, expected at least 7"
             exit 1
           fi
           go test -count=1 -run "$pattern" -v .

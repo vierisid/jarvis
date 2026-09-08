@@ -25,6 +25,13 @@ func uiaOpError(op string, hr uintptr) error {
 
 func hresultText(hr uintptr) string {
 	switch uint32(hr) {
+	case 0:
+		// Reached via uiaElementGetPattern, which also fails when UIA
+		// answers S_OK with a null pattern - its way of saying the control
+		// does not implement it. That is the single most common failure
+		// here, and rendering it as "HRESULT 0x00000000, retry once" told
+		// the model to keep retrying something that can never work.
+		return "the control does not expose this pattern, so this action is not available on it - take a desktop_snapshot and use one of the actions it lists for this element, or pick a different element"
 	case 0x80040201: // UIA_E_ELEMENTNOTAVAILABLE
 		return "the element no longer exists — the UI changed or the window closed since the last snapshot; take a fresh desktop_snapshot and use a new element id"
 	case 0x80040200: // UIA_E_ELEMENTNOTENABLED

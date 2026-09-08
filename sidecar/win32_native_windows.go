@@ -198,7 +198,7 @@ func windowInventoryHint() string {
 // half the timeout it also accepts a window whose process name matches
 // exeBase. Returns the window and how it was matched, or nil.
 func waitForWindow(pid int, exeBase string, timeout time.Duration) (*windowInfo, string) {
-	exeBase = strings.TrimSuffix(strings.ToLower(strings.TrimSpace(exeBase)), ".exe")
+	exeBase = processBaseNameOf(exeBase)
 	deadline := time.Now().Add(timeout)
 	half := time.Now().Add(timeout / 2)
 
@@ -223,10 +223,10 @@ func waitForWindow(pid int, exeBase string, timeout time.Duration) (*windowInfo,
 // ── SendInput keyboard injection ─────────────────────────────────────
 
 const (
-	inputKeyboard         = 1
-	keyeventfExtendedKey  = 0x0001
-	keyeventfKeyUp        = 0x0002
-	keyeventfUnicode      = 0x0004
+	inputKeyboard        = 1
+	keyeventfExtendedKey = 0x0001
+	keyeventfKeyUp       = 0x0002
+	keyeventfUnicode     = 0x0004
 )
 
 // kbdInput is the Win32 INPUT struct specialized for keyboard events on
@@ -347,7 +347,7 @@ var modifierKeys = map[string]uint16{
 	"ctrl": vkControl, "control": vkControl,
 	"alt":   vkMenu,
 	"shift": vkShift,
-	"win": vkLWin, "windows": vkLWin, "meta": vkLWin, "super": vkLWin,
+	"win":   vkLWin, "windows": vkLWin, "meta": vkLWin, "super": vkLWin,
 }
 
 // resolveVk maps a key name to a virtual-key code.
