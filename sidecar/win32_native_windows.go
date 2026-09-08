@@ -477,9 +477,12 @@ func resolveVk(key string) (uint16, []uint16, error) {
 	return 0, nil, fmt.Errorf("unknown key %q - use a single character, f1-f24, or one of: %s", key, strings.Join(known, ", "))
 }
 
-// pressKeysNative presses a modifier+key combination (e.g. ctrl+s, alt+f4,
-// win+r) via SendInput. This makes the previously-broken `win` modifier a
-// real Windows-key chord.
+// pressKeysNative presses a key combination via SendInput. The parts are
+// comma-separated, which is the format desktop_press_keys documents and the
+// one the other platforms accept: "ctrl,s", "alt,f4", "win,r".
+//
+// This makes the previously-broken `win` modifier a real Windows-key chord;
+// SendKeys had no Windows key and the old code sent ctrl+esc instead.
 func pressKeysNative(keys string) error {
 	parts := strings.Split(keys, ",")
 

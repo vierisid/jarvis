@@ -98,9 +98,10 @@ function describeMachine(sidecar: SidecarInfo): string {
  * so "it works sometimes" was untraceable after the fact. One line per call
  * names the stack that answered.
  *
- * An explicit target is returned verbatim rather than trimmed, because it is
- * matched by name downstream and quietly rewriting it would hide a typo
- * rather than surface it. Blank is treated as absent.
+ * An explicit target is passed through verbatim; findSidecar trims before
+ * matching, so there is nothing to gain by doing it twice, and the log line
+ * then shows exactly what the caller asked for. A blank string counts as no
+ * target at all and falls through to auto-selection.
  */
 export function resolveToolTarget(
   explicit: unknown,
