@@ -30,7 +30,7 @@ func platformDefaultShell() string {
 // findChromiumExecutable locates a Chromium-based browser to drive: the
 // configured override, else a trusted install under /Applications or
 // ~/Applications, else a PATH fallback (e.g. a Homebrew chromium), else a
-// last-resort browser (see browser_candidates_darwin_data.go for why that stage
+// last-resort browser (see browser_candidates_data.go for why that stage
 // is separate and why it must come after every other one).
 func findChromiumExecutable(cfg *SidecarConfig) (string, error) {
 	if p := cfg.Browser.ExecutablePath; p != "" {
@@ -43,22 +43,10 @@ func findChromiumExecutable(cfg *SidecarConfig) (string, error) {
 		return "", fmt.Errorf("configured browser executable not found: %s", p)
 	}
 
-	for _, c := range darwinBundlePaths(darwinBrowserBundles) {
-		if isExecutableFile(c) {
-			return c, nil
-		}
-	}
-	for _, c := range []string{"google-chrome", "chromium"} {
-		if path, err := exec.LookPath(c); err == nil {
-			return path, nil
-		}
-	}
-	// AFTER the PATH fallback, not merely last in the bundle list: a Chromium
-	// reachable only through PATH is still a browser we trust, and must win.
-	for _, c := range darwinBundlePaths(darwinLastResortBundles) {
-		if isExecutableFile(c) {
-			return c, nil
-		}
+	// The stage order (trusted bundles, PATH, then last resort) lives in
+	// browser_candidates_data.go so it can be tested off macOS.
+	if p := pickDarwinBrowser(isExecutableFile, exec.LookPath); p != "" {
+		return p, nil
 	}
 	return "", fmt.Errorf("no Chromium-based browser found (install Chrome, Chromium, Edge, Brave, Vivaldi or Arc, " +
 		"or point browser.executable_path at one)")

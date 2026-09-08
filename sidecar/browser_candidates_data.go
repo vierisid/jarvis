@@ -56,18 +56,61 @@ var darwinLastResortBundles = []string{
 // darwinBundlePaths expands bundle-relative paths across every Applications
 // directory, preserving bundle order within each directory.
 func darwinBundlePaths(bundles []string) []string {
-	out := make([]string, 0, len(bundles)*len(darwinApplicationDirs))
-	for _, b := range bundles {
-		for _, dir := range darwinApplicationDirs {
-			if strings.HasPrefix(dir, "~/") {
-				home, err := os.UserHomeDir()
-				if err != nil {
-					continue
-				}
-				dir = filepath.Join(home, strings.TrimPrefix(dir, "~/"))
+	// Resolved once: os.UserHomeDir is a syscall and the answer cannot change
+	// between bundles. An unresolvable home drops only the ~/ entries.
+	dirs := make([]string, 0, len(darwinApplicationDirs))
+	for _, dir := range darwinApplicationDirs {
+		if rest, ok := strings.CutPrefix(dir, "~/"); ok {
+			home, err := os.UserHomeDir()
+			if err != nil {
+				continue
 			}
+			dir = filepath.Join(home, rest)
+		}
+		dirs = append(dirs, dir)
+	}
+
+	// Bundle in the OUTER loop: preference between browsers outranks preference
+	// between directories, so a Chrome in ~/Applications beats a Vivaldi in
+	// /Applications. Inverting these two loops is a silent regression, which is
+	// why the test asserts the full expansion rather than relative positions.
+	out := make([]string, 0, len(bundles)*len(dirs))
+	for _, b := range bundles {
+		for _, dir := range dirs {
 			out = append(out, filepath.Join(dir, b))
 		}
 	}
 	return out
+}
+
+// darwinPathFallbacks are looked up on PATH when no bundle matched -- a
+// Homebrew chromium, say. Still a browser we trust, so it outranks the
+// last-resort bundles.
+var darwinPathFallbacks = []string{"google-chrome", "chromium"}
+
+// pickDarwinBrowser is the whole selection order, as a pure function so it can
+// be tested off macOS: trusted bundles, then PATH, then last resort. Returns ""
+// when nothing matched.
+//
+// The stage order is the guarantee this file exists to make -- a last-resort
+// browser must lose to every trusted one, wherever that one is installed -- and
+// it lives here rather than in the darwin-tagged file precisely so a Linux test
+// run can hold it to that.
+func pickDarwinBrowser(exists func(string) bool, lookPath func(string) (string, error)) string {
+	for _, c := range darwinBundlePaths(darwinBrowserBundles) {
+		if exists(c) {
+			return c
+		}
+	}
+	for _, c := range darwinPathFallbacks {
+		if p, err := lookPath(c); err == nil {
+			return p
+		}
+	}
+	for _, c := range darwinBundlePaths(darwinLastResortBundles) {
+		if exists(c) {
+			return c
+		}
+	}
+	return ""
 }

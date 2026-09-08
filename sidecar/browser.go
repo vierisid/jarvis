@@ -156,7 +156,7 @@ func chromiumLaunchArgs(profileDir string, headless bool) []string {
 // its profile, so this is insurance against a filesystem lag, not a real wait:
 // the honest case returns on the first look. It exists because the cost of a
 // false negative here is refusing a browser that works.
-const profileDirWriteGrace = 2 * time.Second
+var profileDirWriteGrace = 2 * time.Second
 
 // profileDirUsed reports whether the browser actually wrote into the profile
 // directory it was pointed at. Empty (or absent) after the grace period means
@@ -177,6 +177,11 @@ func profileDirUsed(profileDir string) (bool, error) {
 		time.Sleep(50 * time.Millisecond)
 	}
 }
+
+// browserCloseGrace bounds the polite Browser.close attempted before tearing
+// down a browser that failed the profile check. Short: it is a courtesy to a
+// browser we are about to kill anyway.
+const browserCloseGrace = 3 * time.Second
 
 // browserReadyTimeout bounds how long a freshly-spawned browser may take to
 // start answering CDP at all. Generous on purpose: it is a ceiling for a cold
@@ -238,16 +243,40 @@ func launchCDP(cfg *SidecarConfig, headless bool) (*cdpClient, error) {
 	//
 	// The test is deliberately filename-agnostic: any build that honoured the
 	// flag has written SOMETHING here by the time it serves CDP (Chromium
-	// creates the profile before the DevTools pipe comes up). Requiring a
-	// specific file would risk failing a browser that works.
+	// creates the user-data-dir in its main delegate and the initial profile
+	// synchronously, both before the DevTools pipe handler starts serving).
+	// Requiring a specific file would risk failing a browser that works --
+	// Local State in particular is written on a delayed commit and can be
+	// absent for seconds on a cold profile.
+	//
+	// What this does NOT prove: the directory is deterministic per executable
+	// and reused, and browser.profile_dir accepts any path, so a pre-populated
+	// directory passes trivially. It catches a browser that ignored the flag on
+	// a cold profile, which is the case that matters; read it as that and not
+	// as "verified safe".
 	if used, err := profileDirUsed(profileDir); err != nil || !used {
+		// Hand it a chance to close itself before killing it. On this path the
+		// browser is, by hypothesis, the user's OWN: SIGKILLing the process
+		// group records a crash, so their next launch offers to restore pages
+		// and any in-flight profile write is lost. Best-effort and short --
+		// shutdown still runs regardless.
+		if _, cerr := c.sendOnTimeout("", "Browser.close", nil, browserCloseGrace); cerr != nil {
+			log.Printf("[browser] Browser.close before teardown failed (killing instead): %v", cerr)
+		}
 		c.shutdown()
 		if err != nil {
 			return nil, fmt.Errorf("launch browser %q: could not verify it used the automation profile %s: %w", exe, profileDir, err)
 		}
-		return nil, fmt.Errorf("launch browser %q: it ignored --user-data-dir and left %s empty, "+
-			"so it is driving some other profile -- refusing to automate it. Point browser.executable_path "+
-			"at a stock Chromium build (Chrome, Chromium, Edge, Brave, Vivaldi)", exe, profileDir)
+		// Two different causes, and the advice differs. A browser that ignores
+		// the switch is the browser's fault; a profile dir it could not create
+		// or write is ours (or the environment's) and swapping browsers fixes
+		// nothing -- Chromium silently falls back to the real profile in that
+		// case, which is exactly what this guard caught.
+		return nil, fmt.Errorf("launch browser %q: it is not using the automation profile %s, "+
+			"so it is driving some other profile (probably yours) -- refusing to automate it. "+
+			"Check that directory can be created and written by the user running the sidecar "+
+			"(browser.profile_dir), and that browser.executable_path points at a stock Chromium "+
+			"build (Chrome, Chromium, Edge, Brave, Vivaldi)", exe, profileDir)
 	}
 
 	if err := c.attachToPage(); err != nil {
