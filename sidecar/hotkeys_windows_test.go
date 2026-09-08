@@ -46,8 +46,14 @@ func TestStartHotkeyListenerReportsARefusedRegistration(t *testing.T) {
 // translating before they reach a log a person has to act on.
 func TestRegisterHotKeyErrorIsActionable(t *testing.T) {
 	contended := registerHotKeyError("ctrl+space", errHotkeyAlreadyRegistered)
-	if !strings.Contains(contended.Error(), "another application") {
-		t.Fatalf("a contended combination should say who is holding it, got: %v", contended)
+	if !strings.Contains(contended.Error(), "already held") {
+		t.Fatalf("a contended combination should say the key is taken, got: %v", contended)
+	}
+
+	// A nil error is not reachable through LazyProc.Call (it always hands back
+	// an Errno), but the formatting verb must not be the thing that finds out.
+	if got := registerHotKeyError("ctrl+space", nil).Error(); strings.Contains(got, "%!w") {
+		t.Fatalf("a nil errno should still format cleanly, got: %v", got)
 	}
 
 	// A zero errno formats as "The operation completed successfully.", which as

@@ -30,8 +30,11 @@ const (
 	wmQuit   = 0x0012
 )
 
-// ERROR_HOTKEY_ALREADY_REGISTERED — another process (an IME, a launcher, a
-// window manager) owns this combination, so ours will never fire.
+// ERROR_HOTKEY_ALREADY_REGISTERED — some other hot key already owns this
+// combination, so ours will never fire. Usually another app (an IME, a
+// launcher, a window manager), but not always ours to blame elsewhere: a
+// previous sidecar instance that has not finished exiting still holds its
+// hotkeys, which is exactly the window relaunch.go waits out.
 const errHotkeyAlreadyRegistered = syscall.Errno(1409)
 
 // Win32 message struct layout.
@@ -63,8 +66,9 @@ var (
 // "summon hotkey 'ctrl+space' registered" for a key that did nothing, which is
 // the worst possible thing for it to say when someone is trying to work out why
 // their hotkey is dead. Ctrl+Space in particular is contended on Windows (IMEs
-// and other launchers take it), and RegisterHotKey refuses a combination that
-// another process already holds.
+// and other launchers take it), and RegisterHotKey refuses any combination that
+// another hot key already holds -- including one held by a previous instance of
+// this sidecar that has not finished exiting.
 //
 // keyspec is parsed by parseHotkey; only "ctrl+space" is supported in W2-T2.
 // Mac/Linux will plug in here when their hotkey backends land.
@@ -112,12 +116,21 @@ func startHotkeyListener(keyspec string, onFire func()) (stop func(), err error)
 				uintptr(unsafe.Pointer(&msg)),
 				0, 0, 0,
 			)
+			if r == 0 {
+				return // WM_QUIT: stop() asked for it
+			}
 			// GetMessage returns a 32-bit BOOL, and -1 is its error return. The
 			// upper half of the register is not part of that value, so compare
 			// as int32: `r == ^uintptr(0)` only ever matched a sign-extended
 			// -1, and on the error path that never matches the loop would spin
 			// on a failing call forever.
-			if r == 0 || int32(r) == -1 {
+			//
+			// Said out loud, because this is the listener going deaf for the
+			// rest of the process's life. A silent return here would put us
+			// straight back to the thing this file exists to stop: a hotkey
+			// that does nothing and a log with no trace of why.
+			if int32(r) == -1 {
+				log.Printf("[hotkeys] GetMessage failed for %s; listener stopping (hotkey is now dead)", keyspec)
 				return
 			}
 			if msg.Message == wmHotkey && msg.WParam == hotkeyID {
@@ -142,16 +155,21 @@ func startHotkeyListener(keyspec string, onFire func()) (stop func(), err error)
 }
 
 // registerHotKeyError turns RegisterHotKey's failure into something a user can
-// act on. The common case by far is another process already owning the
-// combination, and "the operation completed successfully" -- which is what a
-// zero errno formats as -- is not an error message.
+// act on. The common case by far is the combination already being taken, and
+// "the operation completed successfully" -- which is what a zero errno formats
+// as -- is not an error message.
+//
+// Deliberately does NOT name a culprit: the holder can be another app or a
+// previous instance of this sidecar, and we cannot tell which from here.
 func registerHotKeyError(keyspec string, e error) error {
 	errno, ok := e.(syscall.Errno)
 	switch {
 	case ok && errno == errHotkeyAlreadyRegistered:
-		return fmt.Errorf("RegisterHotKey(%s): already registered by another application", keyspec)
+		return fmt.Errorf("RegisterHotKey(%s): already held by another hot key (another app, or a sidecar that has not exited)", keyspec)
 	case ok && errno == 0:
 		return fmt.Errorf("RegisterHotKey(%s): refused with no error code", keyspec)
+	case e == nil:
+		return fmt.Errorf("RegisterHotKey(%s): refused", keyspec)
 	}
 	return fmt.Errorf("RegisterHotKey(%s): %w", keyspec, e)
 }
