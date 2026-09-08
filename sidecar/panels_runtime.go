@@ -328,7 +328,23 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 			// (Google/Clerk refuse OAuth inside an embedded webview). Installed
 			// on the UI thread before the first navigation. No-op where
 			// unsupported; failures leave the old behaviour, never break the panel.
-			installPanelExternalNav(wv)
+			if installPanelExternalNav(wv) {
+				// Tell the page, because it cannot tell on its own and the
+				// difference matters to what it says next.
+				//
+				// The handler opens the URL in the system browser and returns
+				// no view, which is what window.open evaluating to null means
+				// here -- indistinguishable from a blocked popup. The dashboard
+				// reads null as failure and prints "open this link yourself",
+				// which is wrong the moment we DID open it, and is the more
+				// confusing half of the bug: the browser comes up and the page
+				// still tells you it didn't.
+				//
+				// Set before the first Navigate and re-injected on every
+				// navigation (Init), so a page that reads it during module init
+				// sees it.
+				wv.Init("window.__jarvisOpensExternally = true;")
+			}
 
 			if spec.URL != "" {
 				wv.Navigate(spec.URL)

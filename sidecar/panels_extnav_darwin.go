@@ -60,13 +60,33 @@ static int jarvisInstallPanelExtNav(void* wkwebview) {
         });
         class_addMethod(cls, sel, imp, "@@:@@@@");
     }
-    // Pin the engine's (weak, autoreleased) delegate to the view's lifetime.
     if (wkwebview) {
         // ARC is on for this package (cgo merges every file's CFLAGS, and the
         // other darwin files pass -fobjc-arc), so the void* the engine hands
         // back needs an explicit bridge. __bridge, not __bridge_transfer: the
         // controller is owned by the engine, we must not take a reference.
         WKWebView* v = (__bridge WKWebView*)wkwebview;
+
+        // Let a DEFERRED window.open reach the delegate above.
+        //
+        // This preference defaults to NO, which refuses any window.open not
+        // tied to a live user gesture -- and WebKit refuses it OUTRIGHT, without
+        // consulting the UI delegate, so the method added above never runs and
+        // no browser opens. The onboarding wizard's Google step is exactly that
+        // shape: it awaits /api/auth/google/status for the connect URL and only
+        // then calls window.open, by which point the click's gesture window has
+        // closed. The Integrations tab works because it uses a plain <a>.
+        //
+        // Popup blocking earns nothing here: every new window this engine is
+        // asked for is handed to the system browser and none is ever rendered,
+        // so the preference only decides whether the user's browser opens or
+        // nothing happens at all.
+        //
+        // PER-VIEW, unlike the delegate method above, which lands on the shared
+        // engine class. Each panel sets it for itself.
+        v.configuration.preferences.javaScriptCanOpenWindowsAutomatically = YES;
+
+        // Pin the engine's (weak, autoreleased) delegate to the view's lifetime.
         id d = v.UIDelegate;
         if (d) {
             objc_setAssociatedObject(v, &kJarvisPanelDelegateKey, d,
@@ -84,15 +104,17 @@ import (
 	webview "github.com/webview/webview_go"
 )
 
-func installPanelExternalNav(wv webview.WebView) {
+func installPanelExternalNav(wv webview.WebView) bool {
 	// Gate on the engine being up (the delegate class is registered when it
 	// builds its webview); the method is added to the class, not this view.
 	ctrl := webview.BrowserController(wv)
 	if ctrl == nil {
 		log.Printf("[panels] no browser controller; window.open will not route to the system browser")
-		return
+		return false
 	}
 	if C.jarvisInstallPanelExtNav(ctrl) != 0 {
 		log.Printf("[panels] WebviewWKUIDelegate class not found; window.open will not route to the system browser")
+		return false
 	}
+	return true
 }

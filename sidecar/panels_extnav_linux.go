@@ -41,11 +41,12 @@ import (
 	webview "github.com/webview/webview_go"
 )
 
-func installPanelExternalNav(wv webview.WebView) {
+func installPanelExternalNav(wv webview.WebView) bool {
 	ctrl := webview.BrowserController(wv)
 	if ctrl == nil {
 		log.Printf("[panels] no browser controller; window.open will not route to the system browser")
-		return
+		return false
 	}
 	C.jarvisInstallPanelExtNav(ctrl)
+	return true
 }

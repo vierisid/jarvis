@@ -111,11 +111,11 @@ func nwInvoke(this uintptr, sender, args *comObject) uintptr {
 // installPanelExternalNav registers the NewWindowRequested handler on the
 // panel's WebView2. Best-effort: every failure leaves window.open behaving as
 // before (a nested window) rather than breaking the panel.
-func installPanelExternalNav(wv webview.WebView) {
+func installPanelExternalNav(wv webview.WebView) bool {
 	c := webview.BrowserController(wv)
 	if c == nil {
 		log.Printf("[panels] no browser controller; window.open will not route to the system browser")
-		return
+		return false
 	}
 	ctrl := (*comObject)(c)
 
@@ -127,7 +127,7 @@ func installPanelExternalNav(wv webview.WebView) {
 	)
 	if hr != 0 || core == nil {
 		log.Printf("[panels] get_CoreWebView2 failed (hr=%#x); window.open will not route to the system browser", hr)
-		return
+		return false
 	}
 	coreObj := (*comObject)(core)
 	defer syscall.SyscallN(coreObj.vtbl[idxPanelIUnknownRelease], uintptr(unsafe.Pointer(coreObj)))
@@ -141,5 +141,7 @@ func installPanelExternalNav(wv webview.WebView) {
 	)
 	if hr != 0 {
 		log.Printf("[panels] add_NewWindowRequested failed (hr=%#x)", hr)
+		return false
 	}
+	return true
 }
