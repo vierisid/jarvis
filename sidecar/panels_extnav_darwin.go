@@ -30,7 +30,7 @@ package main
 // runtime check that window.open actually reaches the browser.
 
 /*
-#cgo darwin CFLAGS: -x objective-c
+#cgo darwin CFLAGS: -x objective-c -fobjc-arc
 #cgo darwin LDFLAGS: -framework Cocoa -framework WebKit
 #import <Cocoa/Cocoa.h>
 #import <WebKit/WebKit.h>
@@ -62,7 +62,11 @@ static int jarvisInstallPanelExtNav(void* wkwebview) {
     }
     // Pin the engine's (weak, autoreleased) delegate to the view's lifetime.
     if (wkwebview) {
-        WKWebView* v = (WKWebView*)wkwebview;
+        // ARC is on for this package (cgo merges every file's CFLAGS, and the
+        // other darwin files pass -fobjc-arc), so the void* the engine hands
+        // back needs an explicit bridge. __bridge, not __bridge_transfer: the
+        // controller is owned by the engine, we must not take a reference.
+        WKWebView* v = (__bridge WKWebView*)wkwebview;
         id d = v.UIDelegate;
         if (d) {
             objc_setAssociatedObject(v, &kJarvisPanelDelegateKey, d,
