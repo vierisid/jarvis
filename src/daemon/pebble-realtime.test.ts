@@ -2,6 +2,7 @@ import { test, expect, describe, afterEach } from 'bun:test';
 import { PebbleRealtimeManager, foldTranscript, newTranscriptAccumulator } from './pebble-realtime.ts';
 import { clearRealtimeGateCache } from './realtime-gate.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
+import type { RealtimeVoiceSession, RealtimeVoiceDeps } from './realtime-voice.ts';
 
 const originalFetch = globalThis.fetch;
 afterEach(() => {
@@ -101,6 +102,74 @@ describe('start/stop race across the plan gate', () => {
     // Surfaced as a lifecycle close (informative), not an error flash.
     expect(statuses.some((s) => s.status === 'closed')).toBe(true);
     expect(statuses.some((s) => s.status === 'error')).toBe(false);
+  });
+});
+
+// The Windows report behind this: realtime was advertised as available (the
+// plan gate says the alias is included), the summon hotkey opened a session,
+// and the server dropped it half a second later. Every press did the same thing
+// -- the pebble flashed listening and fell back to idle -- so Ctrl+Space looked
+// dead while the wake word kept working. A press has to fall back to one-shot
+// capture instead of re-opening a session the server will not serve.
+describe('a session that never becomes usable downgrades the summon hotkey', () => {
+  /** The plan gate says the alias IS included, so start() reaches the dial. */
+  const planAllows = () => {
+    globalThis.fetch = (async () => new Response(JSON.stringify({ data: [{ id: 'uj-realtime' }] }), {
+      status: 200, headers: { 'Content-Type': 'application/json' },
+    })) as unknown as typeof fetch;
+  };
+
+  /** Stand-in for the websocket session, so no test ever dials for real. */
+  const fakeSession = (connect: () => Promise<void>) => {
+    let voiceDeps: RealtimeVoiceDeps | null = null;
+    const createSession = ((_r: unknown, _t: unknown, deps: RealtimeVoiceDeps) => {
+      voiceDeps = deps;
+      return { connect, close: () => {}, interrupt: () => {} } as unknown as RealtimeVoiceSession;
+    }) as NonNullable<ConstructorParameters<typeof PebbleRealtimeManager>[0]['createSession']>;
+    return { createSession, deps: () => voiceDeps! };
+  };
+
+  test('a refused dial downgrades the sidecar to one-shot capture', async () => {
+    planAllows();
+    const unusable: Array<{ id: string; detail: string }> = [];
+    const fake = fakeSession(async () => {
+      throw new Error('realtime socket closed before it opened (code 1008: not in plan)');
+    });
+    const mgr = makeManager({
+      createSession: fake.createSession,
+      onUnusableSession: (id, detail) => { unusable.push({ id, detail }); },
+    });
+    await mgr.start('sidecar-1');
+    expect(mgr.isActive('sidecar-1')).toBe(false);
+    expect(unusable).toHaveLength(1);
+    // The close code is the server's only explanation; it has to reach the log.
+    expect(unusable[0]!.detail).toContain('1008');
+  });
+
+  test('a session that opens and dies before a single word also downgrades', async () => {
+    planAllows();
+    const unusable: string[] = [];
+    const fake = fakeSession(async () => {});
+    const mgr = makeManager({ createSession: fake.createSession, onUnusableSession: (id) => { unusable.push(id); } });
+    await mgr.start('sidecar-1');
+    expect(mgr.isActive('sidecar-1')).toBe(true);
+    fake.deps().onClose?.('code 1011: upstream closed');
+    expect(unusable).toEqual(['sidecar-1']);
+    expect(mgr.isActive('sidecar-1')).toBe(false);
+  });
+
+  test('a conversation that ran does NOT downgrade when it ends', async () => {
+    planAllows();
+    const unusable: string[] = [];
+    const fake = fakeSession(async () => {});
+    const mgr = makeManager({ createSession: fake.createSession, onUnusableSession: (id) => { unusable.push(id); } });
+    await mgr.start('sidecar-1');
+    // One real turn is the whole difference: the server served this session, so
+    // its ending says nothing about whether the next one can open.
+    fake.deps().onTranscript?.({ role: 'user', text: 'what time is it', final: true });
+    fake.deps().onClose?.('code 1000');
+    expect(unusable).toEqual([]);
+    expect(mgr.isActive('sidecar-1')).toBe(false);
   });
 });
 

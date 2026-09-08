@@ -76,8 +76,11 @@ class FakeSocket implements RealtimeSocket {
 function makeSession() {
   const socket = new FakeSocket();
   const dialed: string[] = [];
+  // connect() resolves on OPEN now, so a dial that never opens is a dial that
+  // failed. Fire onopen a microtask later, the way a real socket would.
   const factory: RealtimeSocketFactory = (url) => {
     dialed.push(String(url));
+    queueMicrotask(() => socket.onopen?.());
     return socket;
   };
   const sentAudio: Buffer[] = [];
@@ -105,14 +108,58 @@ describe('RealtimeSession lifecycle', () => {
   test('sends session.update on open', async () => {
     const { socket, session } = makeSession();
     await session.connect();
-    socket.onopen!();
     expect(socket.sentTypes()).toContain('session.update');
+  });
+
+  // The pebble bug: a proxy that refuses the upgrade (revoked key, a plan that
+  // does not serve realtime, wrong endpoint) closes the socket without ever
+  // sending an `error` event. connect() used to resolve regardless, so callers
+  // announced the session `live`, flipped the pebble to listening, and dropped
+  // back to idle when the close landed -- with the reason nowhere in sight.
+  test('connect() rejects when the socket closes before it opens', async () => {
+    const socket = new FakeSocket();
+    const session = new RealtimeSession({
+      resolved: RESOLVED,
+      tools: [],
+      instructions: 'x',
+      transport: new BrowserAudioTransport({ sendAudio: () => {}, inputSampleRate: 24000 }),
+      socketFactory: () => {
+        queueMicrotask(() => socket.onclose?.({ code: 1008, reason: 'model not in plan' }));
+        return socket;
+      },
+    });
+    // The close code and reason are the server's only explanation, so they have
+    // to survive into the error the caller logs.
+    await expect(session.connect()).rejects.toThrow(/closed before it opened.*1008.*model not in plan/);
+  });
+
+  test('connect() rejects when the socket errors before it opens', async () => {
+    const socket = new FakeSocket();
+    const session = new RealtimeSession({
+      resolved: RESOLVED,
+      tools: [],
+      instructions: 'x',
+      transport: new BrowserAudioTransport({ sendAudio: () => {}, inputSampleRate: 24000 }),
+      socketFactory: () => {
+        queueMicrotask(() => socket.onerror?.({}));
+        return socket;
+      },
+    });
+    await expect(session.connect()).rejects.toThrow(/while connecting/);
+  });
+
+  test('a close AFTER open reports the code/reason to onClose, not to connect()', async () => {
+    const { socket, session } = makeSession();
+    const closes: Array<string | undefined> = [];
+    session.onClose((detail) => closes.push(detail));
+    await session.connect();
+    socket.onclose!({ code: 1011, reason: 'upstream error' });
+    expect(closes).toEqual(['code 1011: upstream error']);
   });
 
   test('mic chunks become input_audio_buffer.append', async () => {
     const { socket, session, transport } = makeSession();
     await session.connect();
-    socket.onopen!();
     (transport as BrowserAudioTransport).pushMicChunk(Buffer.from([1, 2, 3, 4]));
     const appendMsg = socket.sent.map((s) => JSON.parse(s)).find((m) => m.type === 'input_audio_buffer.append');
     expect(appendMsg).toBeTruthy();
@@ -122,7 +169,6 @@ describe('RealtimeSession lifecycle', () => {
   test('output audio delta is decoded and routed to transport playback', async () => {
     const { socket, session, sentAudio } = makeSession();
     await session.connect();
-    socket.onopen!();
     const pcm = Buffer.from([9, 8, 7, 6]);
     socket.emit({ type: 'response.output_audio.delta', delta: pcm.toString('base64') });
     expect(sentAudio).toHaveLength(1);
@@ -134,7 +180,6 @@ describe('RealtimeSession lifecycle', () => {
     const got: Array<{ role: string; text: string; final: boolean }> = [];
     session.onTranscript((t) => got.push(t));
     await session.connect();
-    socket.onopen!();
     socket.emit({ type: 'conversation.item.input_audio_transcription.completed', transcript: 'hello' });
     socket.emit({ type: 'response.output_audio_transcript.done', transcript: 'hi there' });
     expect(got).toEqual([
@@ -148,7 +193,6 @@ describe('RealtimeSession lifecycle', () => {
     const calls: any[] = [];
     session.onFunctionCall((c) => calls.push(c));
     await session.connect();
-    socket.onopen!();
     socket.emit({ type: 'response.output_item.added', item: { type: 'function_call', call_id: 'c1', name: 'read_file' } });
     socket.emit({ type: 'response.function_call_arguments.done', call_id: 'c1', arguments: '{"path":"/etc/hosts"}' });
     expect(calls).toEqual([{ callId: 'c1', name: 'read_file', args: { path: '/etc/hosts' } }]);
@@ -157,7 +201,6 @@ describe('RealtimeSession lifecycle', () => {
   test('sendFunctionResult emits function_call_output + response.create', async () => {
     const { socket, session } = makeSession();
     await session.connect();
-    socket.onopen!();
     socket.sent = [];
     session.sendFunctionResult('c1', { ok: true });
     expect(socket.sentTypes()).toEqual(['conversation.item.create', 'response.create']);
@@ -171,7 +214,6 @@ describe('RealtimeSession lifecycle', () => {
     const orig = transport.stopPlayback.bind(transport);
     transport.stopPlayback = () => { stopped++; orig(); };
     await session.connect();
-    socket.onopen!();
     socket.emit({ type: 'input_audio_buffer.speech_started' });
     expect(stopped).toBe(1);
   });
@@ -179,7 +221,6 @@ describe('RealtimeSession lifecycle', () => {
   test('barge-in cancels the active response and suppresses its trailing audio', async () => {
     const { socket, session, sentAudio } = makeSession();
     await session.connect();
-    socket.onopen!();
     // A response is in flight and producing audio.
     socket.emit({ type: 'response.created' });
     socket.emit({ type: 'response.output_audio.delta', delta: Buffer.from([1, 2]).toString('base64') });
@@ -202,7 +243,6 @@ describe('RealtimeSession lifecycle', () => {
     const events: Array<{ input_tokens: number; output_tokens: number; latency_ms: number }> = [];
     session.onUsage((u) => events.push(u));
     await session.connect();
-    socket.onopen!();
     socket.emit({ type: 'response.created' });
     socket.emit({
       type: 'response.done',
@@ -219,7 +259,6 @@ describe('RealtimeSession lifecycle', () => {
     const events: unknown[] = [];
     session.onUsage((u) => events.push(u));
     await session.connect();
-    socket.onopen!();
     socket.emit({ type: 'response.created' });
     socket.emit({ type: 'response.done', response: {} });
     expect(events).toHaveLength(0);
@@ -228,7 +267,6 @@ describe('RealtimeSession lifecycle', () => {
   test('barge-in with no active response does not send response.cancel', async () => {
     const { socket, session } = makeSession();
     await session.connect();
-    socket.onopen!();
     socket.sent = [];
     socket.emit({ type: 'input_audio_buffer.speech_started' });
     expect(socket.sentTypes()).not.toContain('response.cancel');
@@ -239,7 +277,6 @@ describe('RealtimeSession lifecycle', () => {
     const errs: string[] = [];
     session.onError((e) => errs.push(e));
     await session.connect();
-    socket.onopen!();
     socket.emit({ type: 'error', error: { message: 'boom' } });
     expect(errs).toEqual(['boom']);
   });
@@ -249,7 +286,6 @@ describe('RealtimeSession lifecycle', () => {
     const errs: string[] = [];
     session.onError((e) => errs.push(e));
     await session.connect();
-    socket.onopen!();
     // Both the message form and the code form must be swallowed.
     socket.emit({ type: 'error', error: { message: 'Cancellation failed: no active response found' } });
     socket.emit({ type: 'error', error: { code: 'response_cancel_not_active', message: 'x' } });
@@ -267,7 +303,10 @@ describe('RealtimeSession lifecycle', () => {
       tools: [],
       instructions: 'x',
       transport,
-      socketFactory: () => socket,
+      socketFactory: () => {
+        queueMicrotask(() => socket.onopen?.());
+        return socket;
+      },
     });
     const errs: string[] = [];
     session.onError((e) => errs.push(e));

@@ -148,12 +148,22 @@ var mutedNudgeDur = 2500 * time.Millisecond
 func invalidateMutedNudge() { mutedNudgeGen.Add(1) }
 
 func flashMutedPebble(p PebbleService) {
+	flashPebbleNudge(p, PebbleMuted, "Microphone muted — unmute from the tray menu")
+}
+
+// flashPebbleNudge is the general form: assert `state` and hold `text` in the
+// bubble for mutedNudgeDur, then hand the bubble back to the state's default
+// copy. Used for every "your key press went nowhere, and here is why" moment:
+// mute, and a live-voice session the server would not open. Silence there is
+// indistinguishable from a broken hotkey, which is precisely how a refused
+// realtime dial used to read.
+func flashPebbleNudge(p PebbleService, state PebbleState, text string) {
 	if p == nil {
 		return
 	}
 	gen := mutedNudgeGen.Add(1)
-	_ = p.SetText("Microphone muted — unmute from the tray menu")
-	_ = p.SetState(PebbleMuted)
+	_ = p.SetText(text)
+	_ = p.SetState(state)
 	go func() {
 		time.Sleep(mutedNudgeDur)
 		// Only the most recent claim clears the text; if anything else has

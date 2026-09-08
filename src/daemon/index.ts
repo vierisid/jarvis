@@ -873,6 +873,23 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             console.warn('[pebble-realtime] post-refusal re-advertisement failed:', err),
           );
         },
+        // The session never became usable. Re-advertising would not help here:
+        // the advertisement is computed from the plan gate, and the plan gate is
+        // exactly what said yes. Switch this sidecar off realtime directly and
+        // let the summon hotkey do a one-shot capture instead. Without it every
+        // press opened a session the server dropped a moment later: the pebble
+        // flashed listening, went back to idle with nothing captured, and the
+        // reason lived only in the daemon log. Scoped to the connection, since
+        // a reconnect and a settings reload both re-advertise -- so a transient
+        // outage heals itself.
+        onUnusableSession: (sidecarId, detail) => {
+          console.warn(
+            `[pebble-realtime] ${sidecarId} got no usable live session (${detail}) - ` +
+            'falling back to one-shot voice capture for this connection',
+          );
+          void sidecarManager.dispatchRPC(sidecarId, 'pebble.configure_realtime', { enabled: false })
+            .catch((err) => console.warn('[pebble-realtime] fallback downgrade failed:', err));
+        },
       });
 
       // Tell each pebble-capable sidecar whether realtime is available so its

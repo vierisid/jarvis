@@ -17,7 +17,7 @@
  */
 
 import { PebbleAudioTransport } from '../comms/pebble-audio-transport.ts';
-import { RealtimeVoiceSession } from './realtime-voice.ts';
+import { RealtimeVoiceSession, type RealtimeVoiceDeps } from './realtime-voice.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import { hostedRealtimeIncluded } from './realtime-gate.ts';
 import type { LLMTool } from '../llm/provider.ts';
@@ -54,6 +54,21 @@ export type PebbleRealtimeDeps = {
    *  and re-advertising with the now-cached definitive verdict flips the
    *  hotkey back to one-shot capture instead of an error dead-end. */
   readvertise?: (sidecarId: string) => void;
+  /** The session was never usable: the dial was refused (dead key, wrong
+   *  endpoint, a plan that does not serve realtime), or it opened and died
+   *  before the user got a word in. The advertisement that routed the summon
+   *  key here was a guess (the plan gate advisory-allows when the catalog is
+   *  unreachable), so the caller downgrades this sidecar to the one-shot
+   *  capture path rather than letting every press open a session that dies
+   *  half a second later. `detail` is for the log, not the user. */
+  onUnusableSession?: (sidecarId: string, detail: string) => void;
+  /** Injectable voice-session factory (tests), mirroring the seam
+   *  RealtimeVoiceSession itself offers. Defaults to the real session. */
+  createSession?: (
+    resolved: ResolvedRealtimeVoice,
+    transport: PebbleAudioTransport,
+    deps: RealtimeVoiceDeps,
+  ) => RealtimeVoiceSession;
 };
 
 type Entry = {
@@ -63,6 +78,10 @@ type Entry = {
   startedAt: number;
   lastState?: PebbleRealtimeState; // dedupe textless set_state so repeats don't flood RPCs
   transcript: TranscriptAccumulator;
+  /** Set on the first transcript from either side. A session that closes
+   *  without one carried no conversation, which is what separates "the server
+   *  would not serve this" from "the conversation ended". */
+  used?: boolean;
 };
 
 /** Accumulator for assistant transcript deltas (incremental fragments). */
@@ -103,6 +122,13 @@ export function foldTranscript(
   acc.lastEmitAt = 0;
   return { state: 'listening' };
 }
+
+/**
+ * A session that closes within this window without a single transcript never
+ * became a conversation. Generous enough to cover a slow first turn on a cold
+ * proxy, short enough that a real conversation's ending never trips it.
+ */
+const UNUSABLE_SESSION_MS = 8_000;
 
 export class PebbleRealtimeManager {
   private sessions = new Map<string, Entry>(); // sidecarId -> entry
@@ -188,7 +214,7 @@ export class PebbleRealtimeManager {
       outputSampleRate: 24000,
     });
 
-    const session = new RealtimeVoiceSession(resolved, transport, {
+    const voiceDeps: RealtimeVoiceDeps = {
       tools: this.deps.tools(),
       instructions: this.deps.instructions(),
       executeToolCall: (name, args) => this.deps.executeToolCall(sidecarId, name, args, resolved.blockedCategories),
@@ -198,6 +224,7 @@ export class PebbleRealtimeManager {
         // fragments and throttles the pushes so RPCs stay bounded.
         const entry = this.sessions.get(sidecarId);
         if (!entry) return;
+        entry.used = true; // a real turn happened; this session was serviceable
         const out = foldTranscript(entry.transcript, t, Date.now());
         if (!out) return;
         // Textless pushes are only worth an RPC when the state actually flips.
@@ -207,10 +234,19 @@ export class PebbleRealtimeManager {
       },
       onError: (err) => {
         this.deps.onStatus?.(sidecarId, 'error', err);
+        this.reportIfUnusable(sidecarId, err);
         this.stop(sidecarId);
       },
-      onClose: () => this.stop(sidecarId),
-    });
+      onClose: (detail) => {
+        // A socket that drops this early carried no conversation. Checked
+        // before stop() deletes the entry it reads.
+        this.reportIfUnusable(sidecarId, detail ?? 'the session closed');
+        this.stop(sidecarId, detail);
+      },
+    };
+    const session = this.deps.createSession
+      ? this.deps.createSession(resolved, transport, voiceDeps)
+      : new RealtimeVoiceSession(resolved, transport, voiceDeps);
 
     // Cost guard: the session is otherwise perpetual, so cap wall-clock.
     const timeout = setTimeout(() => {
@@ -221,13 +257,36 @@ export class PebbleRealtimeManager {
     this.sessions.set(sidecarId, { session, transport, timeout, startedAt: Date.now(), transcript: newTranscriptAccumulator() });
 
     try {
+      // Resolves only once the socket is OPEN (comms/realtime.ts connect), so
+      // `live` and the listening pebble now mean the session really is up.
       await session.connect();
       this.deps.onStatus?.(sidecarId, 'live', resolved.model);
       this.deps.onState?.(sidecarId, 'listening'); // mic hot, awaiting the user
     } catch (err) {
-      this.deps.onStatus?.(sidecarId, 'error', `Realtime connect failed: ${String(err)}`);
+      const detail = err instanceof Error ? err.message : String(err);
+      this.deps.onStatus?.(sidecarId, 'error', `Realtime connect failed: ${detail}`);
       this.stop(sidecarId);
+      // Stop the summon key opening a session the server will not serve.
+      this.deps.onUnusableSession?.(sidecarId, detail);
     }
+  }
+
+  /**
+   * Report a session that ended without ever being usable, so the caller can
+   * stop routing the summon hotkey into it.
+   *
+   * The window matters: a conversation that ran and then dropped says nothing
+   * about whether the next one can open, and downgrading on that would cost the
+   * user live voice for the rest of the connection over a normal ending. A
+   * socket that dies within seconds having carried no transcript is a different
+   * animal -- that is a server refusing the session, and repeating it on every
+   * press is what makes the hotkey look broken.
+   */
+  private reportIfUnusable(sidecarId: string, detail: string): void {
+    const entry = this.sessions.get(sidecarId);
+    if (!entry || entry.used) return;
+    if (Date.now() - entry.startedAt > UNUSABLE_SESSION_MS) return;
+    this.deps.onUnusableSession?.(sidecarId, detail);
   }
 
   /** Feed one mic PCM frame (s16/mono/24 kHz) from the sidecar into the session. */
@@ -235,8 +294,10 @@ export class PebbleRealtimeManager {
     this.sessions.get(sidecarId)?.transport.pushMicChunk(pcm);
   }
 
-  /** Close the session and return the pebble to idle (idempotent). */
-  stop(sidecarId: string): void {
+  /** Close the session and return the pebble to idle (idempotent).
+   *  `detail` explains an involuntary close (the socket's code/reason) so the
+   *  sidecar log and the pebble can say why the conversation ended. */
+  stop(sidecarId: string, detail?: string): void {
     // A start parked on the gate await has no session entry yet — cancel the
     // token so it aborts instead of opening a session for a peer that's gone.
     const pending = this.pendingStarts.get(sidecarId);
@@ -248,7 +309,7 @@ export class PebbleRealtimeManager {
     try { entry.session.close(); } catch {/* ignore */}
     try { entry.transport.stop(); } catch {/* ignore */}
     this.deps.onState?.(sidecarId, 'idle');
-    this.deps.onStatus?.(sidecarId, 'closed');
+    this.deps.onStatus?.(sidecarId, 'closed', detail);
   }
 
   stopAll(): void {

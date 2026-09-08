@@ -1077,10 +1077,30 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		})
 		c.handlers["pebble.realtime_status"] = func(params map[string]any) (*RPCResult, error) {
 			state, _ := params["state"].(string)
+			detail, _ := params["detail"].(string)
+			// Logged, not swallowed: the daemon owns the realtime session, so
+			// this line is the ONLY place its outcome reaches the machine the
+			// user is sitting at. Dropping the detail is what made a refused
+			// session look like a dead hotkey: a pebble that flashed and went
+			// back to idle, with the reason on the other end of the wire.
+			if detail != "" {
+				log.Printf("[realtime] daemon says %s: %s", state, detail)
+			} else {
+				log.Printf("[realtime] daemon says %s", state)
+			}
 			// Daemon-initiated teardown (budget / timeout / error): stop the
 			// local audio without re-emitting realtime_stop (its side is gone).
 			if rt := c.realtime.Load(); rt != nil && (state == "closed" || state == "error") {
+				wasActive := rt.active.Load()
 				rt.Stop(false)
+				// Say it on the pebble too, but only when a press actually went
+				// nowhere: a `closed` for a conversation that ran its course
+				// needs no explanation, and Stop() has already put the pebble
+				// back to idle. AFTER Stop, whose setState would otherwise
+				// paint over the nudge.
+				if state == "error" && wasActive {
+					flashPebbleNudge(c.pebble, PebbleIdle, "Live voice unavailable - press Ctrl+Space to talk")
+				}
 			}
 			return &RPCResult{Result: map[string]any{"ok": true}}, nil
 		}

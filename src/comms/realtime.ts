@@ -133,6 +133,25 @@ export function buildSessionUpdate(
   return { type: 'session.update', session };
 }
 
+/**
+ * How long to wait for the realtime socket to open before calling the dial
+ * failed. Generous (a cold proxy can take seconds) but bounded, because the
+ * caller is holding the user's microphone open while it waits.
+ */
+const CONNECT_TIMEOUT_MS = 15_000;
+
+/**
+ * Render a close event as `code 1008: reason` for logs. A refused realtime
+ * upgrade says everything it is going to say here, so this is usually the only
+ * evidence of WHY a session would not open.
+ */
+function describeSocketClose(ev: unknown): string {
+  const e = ev as { code?: unknown; reason?: unknown } | undefined;
+  const code = typeof e?.code === 'number' ? e.code : undefined;
+  const reason = typeof e?.reason === 'string' ? e.reason.trim() : '';
+  return [code !== undefined ? `code ${code}` : '', reason].filter(Boolean).join(': ');
+}
+
 function defaultSocketFactory(url: string, opts: { headers: Record<string, string> }): RealtimeSocket {
   // Bun's WebSocket accepts a headers option (non-standard but supported).
   return new WebSocket(url, opts as unknown as string[]) as unknown as RealtimeSocket;
@@ -153,7 +172,7 @@ export class RealtimeSession {
   private usageCb: ((u: RealtimeUsage) => void) | null = null;
   private errorCb: ((err: string) => void) | null = null;
   private openCb: (() => void) | null = null;
-  private closeCb: (() => void) | null = null;
+  private closeCb: ((detail?: string) => void) | null = null;
   private speechStartedCb: (() => void) | null = null;
   // Response-latency instrumentation (user-stopped → first audio).
   private turnEndedAt = 0;
@@ -180,12 +199,27 @@ export class RealtimeSession {
   onUsage(cb: (u: RealtimeUsage) => void): void { this.usageCb = cb; }
   onError(cb: (err: string) => void): void { this.errorCb = cb; }
   onOpen(cb: () => void): void { this.openCb = cb; }
-  onClose(cb: () => void): void { this.closeCb = cb; }
+  /** Fired when the socket closes. `detail` carries the close code/reason
+   *  when the server gave one: the only explanation a refused session ever
+   *  produces, since a rejected upgrade sends no `error` event. */
+  onClose(cb: (detail?: string) => void): void { this.closeCb = cb; }
   /** Fired when the model detects the user started speaking (barge-in). */
   onSpeechStarted(cb: () => void): void { this.speechStartedCb = cb; }
 
-  /** Connect, send session.update, and wire the transport's mic + playback. */
-  async connect(): Promise<void> {
+  /**
+   * Connect, send session.update, and wire the transport's mic + playback.
+   *
+   * Resolves only once the socket is OPEN, and rejects when the dial fails.
+   * That matters more than it looks: this used to resolve the moment the socket
+   * object existed, so every caller announced a session as `live` before the
+   * server had accepted it. A refused upgrade (revoked key, a plan that does
+   * not serve realtime, a wrong endpoint) arrives as a bare `close` with no
+   * `error` event, so the pebble went to `listening` on a socket that was
+   * already gone and dropped back to idle half a second later with the reason
+   * nowhere in either log. Any close or socket error BEFORE open is the dial
+   * failing, and it is reported as such.
+   */
+  connect(): Promise<void> {
     const { resolved, safetyIdentifier, socketFactory, transport } = this.opts;
     const url = `${resolved.url}?model=${encodeURIComponent(resolved.model)}`;
     const headers: Record<string, string> = {
@@ -205,26 +239,64 @@ export class RealtimeSession {
     const ws = factory(url, { headers });
     this.ws = ws;
 
-    ws.onopen = () => {
-      this.send(buildSessionUpdate(resolved, this.opts.tools, this.opts.instructions, transport.inputSampleRate, transport.outputSampleRate));
-      // Route mic audio straight into the realtime input buffer.
-      transport.onMicChunk((pcm) => this.pushAudio(pcm));
-      // Route realtime output audio to the speaker.
-      this.onAudio((chunk) => transport.playback(chunk));
-      // Barge-in: stop playback the moment the user starts talking.
-      this.onSpeechStarted(() => transport.stopPlayback());
-      this.openCb?.();
-    };
-    ws.onmessage = (ev) => {
-      try {
-        const data = typeof ev.data === 'string' ? ev.data : String(ev.data);
-        this.handleServerEvent(JSON.parse(data));
-      } catch (err) {
-        this.errorCb?.(`Failed to parse realtime event: ${err}`);
-      }
-    };
-    ws.onerror = () => this.errorCb?.('Realtime WebSocket error');
-    ws.onclose = () => { this.closed = true; this.closeCb?.(); };
+    return new Promise<void>((resolve, reject) => {
+      let settled = false;
+      const timer = setTimeout(() => {
+        if (settled) return;
+        settled = true;
+        // Close the half-open socket ourselves: without this a proxy that
+        // accepts the TCP connection and then never completes the upgrade
+        // leaves a dangling socket per press.
+        this.close();
+        reject(new Error(`realtime socket did not open within ${CONNECT_TIMEOUT_MS}ms`));
+      }, CONNECT_TIMEOUT_MS);
+      const settle = (err?: Error) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        if (err) reject(err);
+        else resolve();
+      };
+
+      ws.onopen = () => {
+        this.send(buildSessionUpdate(resolved, this.opts.tools, this.opts.instructions, transport.inputSampleRate, transport.outputSampleRate));
+        // Route mic audio straight into the realtime input buffer.
+        transport.onMicChunk((pcm) => this.pushAudio(pcm));
+        // Route realtime output audio to the speaker.
+        this.onAudio((chunk) => transport.playback(chunk));
+        // Barge-in: stop playback the moment the user starts talking.
+        this.onSpeechStarted(() => transport.stopPlayback());
+        this.openCb?.();
+        settle();
+      };
+      ws.onmessage = (ev) => {
+        try {
+          const data = typeof ev.data === 'string' ? ev.data : String(ev.data);
+          this.handleServerEvent(JSON.parse(data));
+        } catch (err) {
+          this.errorCb?.(`Failed to parse realtime event: ${err}`);
+        }
+      };
+      ws.onerror = () => {
+        // Before open this IS the dial failing, so reject rather than fire the
+        // live-session error sink, which the caller reads as "a live session
+        // hit a problem" and answers by tearing down a session that never was.
+        if (!settled) {
+          settle(new Error('realtime WebSocket error while connecting'));
+          return;
+        }
+        this.errorCb?.('Realtime WebSocket error');
+      };
+      ws.onclose = (ev) => {
+        this.closed = true;
+        const detail = describeSocketClose(ev);
+        if (!settled) {
+          settle(new Error(`realtime socket closed before it opened${detail ? ` (${detail})` : ''}`));
+          return;
+        }
+        this.closeCb?.(detail || undefined);
+      };
+    });
   }
 
   /** Append a PCM s16/mono frame to the realtime input buffer. */

@@ -32,8 +32,9 @@ export type RealtimeVoiceDeps = {
   onTranscript?: (t: RealtimeTranscript) => void;
   /** Error sink. */
   onError?: (err: string) => void;
-  /** Fired when the underlying session closes (for ws-service cleanup). */
-  onClose?: () => void;
+  /** Fired when the underlying session closes (for ws-service cleanup).
+   *  `detail` is the socket's close code/reason when the server gave one. */
+  onClose?: (detail?: string) => void;
   /** Hashed user id for OpenAI abuse monitoring. */
   safetyIdentifier?: string;
   /** Injectable session factory (tests). Defaults to a real `RealtimeSession`. */
@@ -63,9 +64,9 @@ export class RealtimeVoiceSession {
 
     this.session.onTranscript((t) => this.deps.onTranscript?.(t));
     this.session.onError((e) => this.deps.onError?.(e));
-    this.session.onClose(() => {
+    this.session.onClose((detail) => {
       this.closed = true;
-      this.deps.onClose?.();
+      this.deps.onClose?.(detail);
     });
 
     // Fold realtime token usage into the shared llm_usage table so the Usage
