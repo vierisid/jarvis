@@ -238,12 +238,14 @@ jobs:
           # separate decision, not a side effect of the chrome work.
           go vet ./internal/winchrome/
 
-  # The windows-tagged tests (pebble draw-bounds crop invariant) are pure Go
-  # but can only RUN on a Windows runner — the mingw cross-build above only
-  # proves the package compiles. `go test` also compiles every _test.go under
-  # GOOS=windows, which the cross-build (build-only) never checks. Scoped to
-  # the draw-bounds test to keep runtime bounded; the full logic suite is
-  # covered on linux.
+  # The windows-tagged tests (pebble draw-bounds crop invariant, global hotkey
+  # registration) are pure Go but can only RUN on a Windows runner — the mingw
+  # cross-build above only proves the package compiles. `go test` also compiles
+  # every _test.go under GOOS=windows, which the cross-build (build-only) never
+  # checks. Scoped to a named few to keep runtime bounded; the full logic suite
+  # is covered on linux. The hotkey tests need the real RegisterHotKey — a
+  # refused registration is exactly what has to surface as an error, and no
+  # other platform can produce one.
   sidecar-test-windows:
     runs-on: windows-latest
     steps:
@@ -260,7 +262,7 @@ jobs:
         run: |
           set -euo pipefail
           export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
-          go test -run '^TestMainPebbleDrawStaysInsideCrop$' -v .
+          go test -run '^(TestMainPebbleDrawStaysInsideCrop|TestStartHotkeyListenerReportsARefusedRegistration|TestRegisterHotKeyErrorIsActionable)$' -v .
 
   # Compile gate for the darwin cgo files (deeplink_darwin.go, the *_darwin
   # bridges): build tags hide them from the linux job, so without this their
