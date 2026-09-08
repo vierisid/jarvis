@@ -67,9 +67,10 @@ interface Window {
   SpeechRecognition?: SpeechRecognitionConstructor;
   webkitSpeechRecognition?: SpeechRecognitionConstructor;
   /**
-   * Injected by the sidecar's panel runtime (panels_extnav.go) when it has
-   * actually installed new-window routing to the system browser. Absent in an
-   * ordinary browser, and absent in a panel where the install failed.
+   * Injected by the sidecar's panel runtime (sidecar/panels_runtime.go) when
+   * installPanelExternalNav reports that new-window routing to the system
+   * browser is genuinely installed, deferred opens included. Absent in an
+   * ordinary browser, and absent in a panel where any part of that failed.
    *
    * Read it before treating a null from `window.open` as a failure: the host's
    * handler opens the URL externally and returns no view, which is

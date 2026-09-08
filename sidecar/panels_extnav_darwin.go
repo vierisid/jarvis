@@ -15,7 +15,9 @@ package main
 // PROCESS-WIDE, unlike the per-view Windows/Linux hooks: the method lands on the
 // shared engine class, so EVERY webview the vendored engine builds (panels, and
 // also the settings / log / hosted windows) gains this window.open behaviour
-// once any panel has opened. That is an improvement — it also un-breaks
+// once any panel has opened. The popup SETTING added below is per-view, though,
+// so those other windows still route only a gestured window.open -- and they are
+// never told otherwise, since only panels_runtime.go injects the page flag. That is an improvement — it also un-breaks
 // window.open in the hosted sign-in shell — but it is not panel-scoped; don't
 // assume parity with the other two platforms.
 //
@@ -40,8 +42,12 @@ extern void goPanelOpenExternal(char* url);
 
 static const char kJarvisPanelDelegateKey;
 
-// Returns 0 on success, 1 if the engine's UI-delegate class is not registered
-// yet (a re-vendor that renamed it would surface here rather than silently).
+// Returns 0 when the view will route a DEFERRED window.open to the system
+// browser, non-zero when it will not: 1 the engine's UI-delegate class is not
+// registered (a re-vendor that renamed it surfaces here rather than silently),
+// 2 the view has no UI delegate to route through, 3 the popup setting did not
+// take. Every non-zero case must stop the caller telling the page we handle
+// its new windows, because a page that believes that shows the user nothing.
 static int jarvisInstallPanelExtNav(void* wkwebview) {
     Class cls = objc_getClass("WebviewWKUIDelegate");
     if (!cls) return 1;
@@ -84,14 +90,27 @@ static int jarvisInstallPanelExtNav(void* wkwebview) {
         //
         // PER-VIEW, unlike the delegate method above, which lands on the shared
         // engine class. Each panel sets it for itself.
+        //
+        // READ BACK, not fire-and-forget. -[WKWebView configuration] is
+        // documented to return a COPY, so whether this write reaches the live
+        // page depends on that copy sharing its WKPreferences by reference. It
+        // does today, but if it ever stops, the write lands on a throwaway
+        // object, macOS behaves exactly as it did before the fix, and the flag
+        // the caller injects would suppress the fallback message on top of it --
+        // turning a visible bug into a silent one. Reading it back through a
+        // fresh `configuration` costs nothing and makes that case reportable.
         v.configuration.preferences.javaScriptCanOpenWindowsAutomatically = YES;
+        if (!v.configuration.preferences.javaScriptCanOpenWindowsAutomatically) {
+            return 3;
+        }
 
         // Pin the engine's (weak, autoreleased) delegate to the view's lifetime.
+        // No delegate means nothing to route through, whatever the class has:
+        // say so rather than reporting a hand-off that cannot happen.
         id d = v.UIDelegate;
-        if (d) {
-            objc_setAssociatedObject(v, &kJarvisPanelDelegateKey, d,
-                                     OBJC_ASSOCIATION_RETAIN_NONATOMIC);
-        }
+        if (!d) return 2;
+        objc_setAssociatedObject(v, &kJarvisPanelDelegateKey, d,
+                                 OBJC_ASSOCIATION_RETAIN_NONATOMIC);
     }
     return 0;
 }
@@ -112,9 +131,15 @@ func installPanelExternalNav(wv webview.WebView) bool {
 		log.Printf("[panels] no browser controller; window.open will not route to the system browser")
 		return false
 	}
-	if C.jarvisInstallPanelExtNav(ctrl) != 0 {
+	switch C.jarvisInstallPanelExtNav(ctrl) {
+	case 0:
+		return true
+	case 1:
 		log.Printf("[panels] WebviewWKUIDelegate class not found; window.open will not route to the system browser")
-		return false
+	case 2:
+		log.Printf("[panels] panel webview has no UI delegate; window.open will not route to the system browser")
+	case 3:
+		log.Printf("[panels] could not allow automatic window.open; deferred opens will not route to the system browser")
 	}
-	return true
+	return false
 }

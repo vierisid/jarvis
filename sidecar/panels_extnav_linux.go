@@ -27,10 +27,29 @@ static GtkWidget* jarvisPanelOnCreate(WebKitWebView* web_view,
     return NULL;
 }
 
-static void jarvisInstallPanelExtNav(void* webkit_view) {
-    if (!webkit_view) return;
-    g_signal_connect(WEBKIT_WEB_VIEW(webkit_view), "create",
-                     G_CALLBACK(jarvisPanelOnCreate), NULL);
+// Returns 1 when the view will actually route a DEFERRED window.open, 0 when
+// it will only route a gestured one. See the settings note below.
+static int jarvisInstallPanelExtNav(void* webkit_view) {
+    if (!webkit_view) return 0;
+    WebKitWebView* view = WEBKIT_WEB_VIEW(webkit_view);
+    g_signal_connect(view, "create", G_CALLBACK(jarvisPanelOnCreate), NULL);
+
+    // Let a DEFERRED window.open reach the "create" handler above.
+    //
+    // WebKitGTK shares WebCore's allowPopUp check with Cocoa: a window.open is
+    // refused outright, before any chrome client is consulted, unless it is
+    // inside a user gesture or this setting is on. It defaults to FALSE. The
+    // onboarding wizard's Google step awaits a fetch for the connect URL and
+    // only then opens it, by which point the click's gesture window has closed
+    // -- so without this the handler never runs, exactly as on macOS.
+    WebKitSettings* settings = webkit_web_view_get_settings(view);
+    if (!settings) return 0;
+    webkit_settings_set_javascript_can_open_windows_automatically(settings, TRUE);
+    // Read back rather than trust the write: the caller injects a flag telling
+    // the page that a null from window.open means "the host took it", and a
+    // setting that did not stick would turn that into a lie the user sees as
+    // nothing happening at all.
+    return webkit_settings_get_javascript_can_open_windows_automatically(settings) ? 1 : 0;
 }
 */
 import "C"
@@ -47,6 +66,13 @@ func installPanelExternalNav(wv webview.WebView) bool {
 		log.Printf("[panels] no browser controller; window.open will not route to the system browser")
 		return false
 	}
-	C.jarvisInstallPanelExtNav(ctrl)
+	if C.jarvisInstallPanelExtNav(ctrl) == 0 {
+		// Gestured opens still route (the "create" handler is connected); it is
+		// only the deferred ones that will not. Report false so the caller does
+		// NOT tell the page we handle its new windows -- a page that believes
+		// that stops showing the user the link it could not open.
+		log.Printf("[panels] could not allow automatic window.open; deferred opens will not route to the system browser")
+		return false
+	}
 	return true
 }

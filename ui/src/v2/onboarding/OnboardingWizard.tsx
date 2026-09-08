@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { openExternal, openedOrHandedOff } from "./external-open";
 import { useInterviewSession } from "./useInterviewSession";
 import type { OnboardingStatus } from "./useOnboardingStatus";
 import "./OnboardingWizard.css";
@@ -600,23 +601,6 @@ export function OnboardingWizard({
     }
   }, [elevenKey, elevenVoice, elevenModel]);
 
-/**
- * Does the host hand new windows to the system browser?
- *
- * Injected by the sidecar's panel runtime when its new-window routing is
- * actually installed (panels_extnav.go). It exists because `window.open` cannot
- * answer the question on its own: the host's handler opens the URL externally
- * and returns no view, and "no view" is exactly what a BLOCKED popup returns
- * too. Without this flag the page reads a successful hand-off as a failure and
- * tells the user to open the link themselves while their browser is already
- * opening it.
- *
- * Absent in an ordinary browser, and absent in a panel whose routing failed to
- * install -- in both of those a null really does mean nothing opened.
- */
-const hostOpensExternally = () =>
-  typeof window !== "undefined" && window.__jarvisOpensExternally === true;
-
   /* — connect actions — */
   // Google: real OAuth. Open the consent URL, then poll status until the
   // round-trip completes (covers both Calendar + Gmail — one Google grant).
@@ -640,8 +624,8 @@ const hostOpensExternally = () =>
         // starting the poll. A user who opened the link by hand and connected
         // successfully watched this step sit unfinished forever. (The hosted
         // account panel hit the identical bug and fixed it the same way.)
-        const acct = window.open(managed.connect_url, "_blank");
-        if (!acct && !hostOpensExternally()) {
+        const acct = openExternal(managed.connect_url);
+        if (!openedOrHandedOff(acct)) {
           // Genuinely blocked, or a webview that refuses window.open. Tell the
           // user where to go, but KEEP POLLING: completing it over there is what
           // finishes this step, and that works whether or not we opened the tab.
@@ -677,13 +661,13 @@ const hostOpensExternally = () =>
         );
         return;
       }
-      // NO `noopener` here either, for the reason spelled out in the managed
-      // branch above: with it, window.open returns null BY SPECIFICATION, so
-      // this check fired on every single click and told the user their popup
-      // was blocked while the consent screen opened perfectly well behind the
-      // message. Same bug, same fix, one branch later.
-      const win = window.open(d.auth_url, "_blank");
-      if (!win && !hostOpensExternally()) {
+      // Via openExternal for the reason spelled out in the managed branch
+      // above: `window.open` with `noopener` returns null BY SPECIFICATION, so
+      // the check below fired on every single click and told the user their
+      // popup was blocked while the consent screen opened perfectly well behind
+      // the message. Same bug, same fix, one branch later.
+      const win = openExternal(d.auth_url);
+      if (!openedOrHandedOff(win)) {
         // No popup → no sign-in in flight; don't sit in "Connecting…" polling.
         setGoogleState("idle");
         setConnectErr("Your browser blocked the sign-in window. Allow pop-ups, or open Settings → Integrations to connect.");
