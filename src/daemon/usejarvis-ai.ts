@@ -95,6 +95,38 @@ export function hasUsejarvisAi(config: JarvisConfig): boolean {
 }
 
 /**
+ * Is this install HOSTED -- provisioned and owned by the control plane -- as
+ * opposed to someone's own machine?
+ *
+ * Deliberately the union of two signals, and deliberately different from
+ * `hasUsejarvisAi` above. That one answers "is the hosted LLM available", which
+ * is a FEATURE question: a missing block means the feature is off, and off is a
+ * safe answer for a feature.
+ *
+ * This one is asked by security gates, where the safe answer is the opposite.
+ * `usejarvis_ai` is renderable as null -- the control plane emits no block when
+ * it has no LLM proxy configured (LLM_PROXY_URL is optional by design), so a
+ * proxy-less or DR-rehydrated deployment would read as self-hosted and reopen
+ * whatever the gate was closing. `daemon.listen: unix:` cannot be absent: the
+ * renderer emits it for every instance unconditionally, and a hosted brain is
+ * unreachable without it because Caddy is the only way in.
+ *
+ * So they are OR'd. Disagreement between them resolves toward "hosted", which
+ * for a deny-gate is the direction that fails safe.
+ *
+ * The cost, stated plainly: a self-hoster who fronts their own brain with a
+ * reverse proxy over a unix socket reads as hosted here. That is affordable
+ * because no gate using this may be the only path to what it guards -- device
+ * enrollment, for instance, remains available from the CLI (`jarvis enroll`),
+ * which docs/SELF_HOSTING.md already calls the primary route.
+ */
+export function isHostedInstall(config: JarvisConfig): boolean {
+  if (hasUsejarvisAi(config)) return true;
+  const listen = config.daemon?.listen;
+  return typeof listen === 'string' && listen.trim().startsWith('unix:');
+}
+
+/**
  * Inject the hosted provider entry. Providers only — tier defaults live in
  * effectiveLlmForBinding and never touch the config object.
  */

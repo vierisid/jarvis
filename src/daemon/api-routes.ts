@@ -12,7 +12,7 @@ import { SecretStorageError } from './section-secrets.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import { realtimeServedByPlan, resolveRealtimeVoice, DEFAULT_BLOCKED_CATEGORIES } from '../config/realtime.ts';
-import { hasUsejarvisAi, effectiveSttForBinding, effectiveTtsForBinding, realtimeEnablement, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
+import { hasUsejarvisAi, isHostedInstall, effectiveSttForBinding, effectiveTtsForBinding, realtimeEnablement, usejarvisVoiceCredentials } from './usejarvis-ai.ts';
 import { cachedRealtimeVerdict } from './realtime-gate.ts';
 import type { EntityType } from '../vault/entities.ts';
 import type { CommitmentPriority, CommitmentStatus } from '../vault/commitments.ts';
@@ -4144,10 +4144,55 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
+    /**
+     * Enroll a device from the dashboard. SELF-HOSTED ONLY.
+     *
+     * This mints a long-lived enrollment JWT and hands it to the page, which
+     * shows it once and tells the user to run `jarvis --token <jwt>` on the
+     * target machine. That is one self-hosted way to add a device -- the other,
+     * and the one docs/SELF_HOSTING.md calls primary, is `jarvis enroll <name>`
+     * on the brain host. Refusing here therefore never strands anyone.
+     *
+     * On a hosted install it is neither needed nor wanted:
+     *
+     *  - It is not the flow. A hosted user adds a device by installing Jarvis
+     *    there and signing in; the control plane runs `jarvis enroll` over SSH
+     *    on their behalf (ONBOARDING.md). Nobody is meant to copy a JWT, and
+     *    the copy here tells them to run a CLI flag they never touch.
+     *  - It is an escalation. Every route under /api is authorized by a PANEL
+     *    SESSION -- a cookie in a webview, bounded by that session's cap. This
+     *    one turns that cookie into a permanent enrollment credential under a
+     *    NEW sid, which revoking the original device does not touch. It is the
+     *    only route on the data plane that can do that.
+     *
+     * Refusing here removes the escalation without costing a hosted user
+     * anything: their device list and revoke live in the hosting dashboard,
+     * authorized by their ACCOUNT rather than by a cookie.
+     *
+     * Gated on `isHostedInstall`, NOT on `hasUsejarvisAi` alone. The feature
+     * paths in this file ask the latter because a missing hosted-LLM block just
+     * means the feature is off. A deny-gate needs the opposite bias, and that
+     * block is renderable as null: a hosting deployment with no LLM proxy
+     * configured would read as self-hosted and reopen this route on every
+     * tenant it re-rendered. `daemon.listen: unix:` cannot be absent on a
+     * hosted instance, so the predicate ORs the two.
+     */
     '/api/sidecars/enroll': {
       POST: async (req: Request) => {
         try {
           if (!ctx.sidecarManager) return error('Sidecar manager not available', 503);
+          if (isHostedInstall(ctx.config)) {
+            // 403 rather than 409: the request is well-formed and the route
+            // exists, the caller simply may not do this here. 409 already means
+            // two other things on this route (name taken, name invalid), so it
+            // would carry no information.
+            return error(
+              'Adding a device from the dashboard is disabled on hosted installs. '
+                + 'Install Jarvis on the new device and sign in there with your Usejarvis '
+                + 'account -- it enrols itself. On a self-hosted brain, run: jarvis enroll <name>',
+              403,
+            );
+          }
           const body = await req.json() as { name?: string };
           if (!body.name) return error('Missing "name" field');
           const result = await ctx.sidecarManager.enrollSidecar(body.name);
