@@ -1,4 +1,5 @@
 import { test, expect, beforeEach, afterEach } from 'bun:test';
+import { PanelSessionStore, PANEL_SESSION_CLOSED_CODE } from '../sidecar/panel-sessions.ts';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -280,11 +281,53 @@ test('WebSocketServer - sendBinary reaches client', async () => {
 // JWT-only by default: non-public routes require a valid short-lived sidecar
 // access token; auth.insecure_open_access is the sole (loud) escape hatch.
 
-/** Minimal stand-in for the SidecarManager's access-token verification. */
+/**
+ * Backed by the REAL PanelSessionStore, so these exercise the actual bootstrap
+ * -> session -> cookie path rather than a stub of it. `revoke()` drops the
+ * bootstrap credential WITHOUT touching the store, which is how a test
+ * reproduces the thing this design fixes: the access token going invalid
+ * (expiry, in production) while the panel is mid-use.
+ */
 function fakeSidecarManager(validToken: string) {
-  return {
-    verifyAccessToken: async (tok: string) => (tok === validToken ? { sid: 's1' } : null),
-  } as unknown as import('../sidecar/manager.ts').SidecarManager;
+  const sessions = new PanelSessionStore();
+  let accepted: string | null = validToken;
+  // Typed as a Pick of the REAL class, with no `unknown` hop, so a SHAPE change
+  // to any of these five stops compiling instead of silently passing while the
+  // real code takes a different branch. A sync `resolvePanelSession` that
+  // became async would otherwise return a Promise, which `if (!session)` treats
+  // as authorized -- an auth bypass no test here could see.
+  //
+  // It does not catch the server calling a SIXTH method: the final assertion
+  // widens this to the full class, so that surfaces as a TypeError at test
+  // time rather than a compile error. Still a failing test, just later.
+  const impl: Pick<
+    import('../sidecar/manager.ts').SidecarManager,
+    'verifyAccessToken' | 'openPanelSession' | 'resolvePanelSession' | 'panelSocketOpened' | 'panelSocketClosed'
+  > = {
+    verifyAccessToken: async (tok: string) => (tok === accepted ? { sid: 's1' } : null),
+    openPanelSession: async (tok: string) => (tok === accepted ? sessions.create('s1') : null),
+    resolvePanelSession: (id: string) => sessions.get(id),
+    panelSocketOpened: (id: string, socket: { close(code?: number, reason?: string): void }) =>
+      sessions.socketOpened(id, socket),
+    panelSocketClosed: (id: string, socket: { close(code?: number, reason?: string): void }) =>
+      sessions.socketClosed(id, socket),
+  };
+  return Object.assign(impl as import('../sidecar/manager.ts').SidecarManager, {
+    /** Make the BOOTSTRAP credential stop verifying, which is what expiry does
+     *  in production. Not revocation: that also kills live sessions, and is
+     *  covered against the real manager in src/sidecar/manager.test.ts. */
+    expireToken: () => {
+      accepted = null;
+    },
+    sessions,
+  });
+}
+
+/** Pull the session id out of a Set-Cookie header. */
+function sessionCookie(setCookie: string | null): string {
+  const m = /panel_session=([^;]+)/.exec(setCookie ?? '');
+  if (!m) throw new Error(`no panel_session in Set-Cookie: ${setCookie}`);
+  return `panel_session=${m[1]}`;
 }
 
 test('WebSocketServer - JWT-only by DEFAULT: unauthenticated requests are blocked', async () => {
@@ -317,7 +360,7 @@ test('WebSocketServer - JWT-only by DEFAULT: unauthenticated requests are blocke
   }
 });
 
-test('WebSocketServer - a valid sidecar access token authorizes via ?token= then cookie', async () => {
+test('WebSocketServer - ?token= is exchanged for a panel session, and the session is what the cookie carries', async () => {
   const authServer = new WebSocketServer(3151);
   authServer.setSidecarManager(fakeSidecarManager('valid-access-token'));
   authServer.setApiRoutes({
@@ -328,23 +371,58 @@ test('WebSocketServer - a valid sidecar access token authorizes via ?token= then
   authServer.start();
 
   try {
-    // Query param with a valid access token → 302 + Set-Cookie
+    // Query param with a valid access token -> 302 + a session cookie.
     const withToken = await fetch('http://localhost:3151/?token=valid-access-token', { redirect: 'manual' });
     expect(withToken.status).toBe(302);
-    expect(withToken.headers.get('Set-Cookie')).toContain('token=valid-access-token');
     expect(withToken.headers.get('Location')).toBe('/');
+    const setCookie = withToken.headers.get('Set-Cookie');
+    expect(setCookie).toContain('panel_session=');
+    expect(setCookie).toContain('HttpOnly');
+    // The whole point: the credential is NOT what ends up in the cookie.
+    expect(setCookie).not.toContain('valid-access-token');
 
-    // Cookie authorizes API requests
+    // The session authorizes API requests.
     const res = await fetch('http://localhost:3151/api/health', {
-      headers: { Cookie: 'token=valid-access-token' },
+      headers: { Cookie: sessionCookie(setCookie) },
     });
     expect(res.ok).toBe(true);
     const data = await res.json() as any;
     expect(data.status).toBe('ok');
 
-    // Wrong tokens stay out
+    // A bad bootstrap token opens nothing, and the old scheme's cookie (the
+    // access token itself) is not a session id and buys nothing either.
     expect((await fetch('http://localhost:3151/?token=wrong', { redirect: 'manual' })).status).toBe(401);
-    expect((await fetch('http://localhost:3151/api/health', { headers: { Cookie: 'token=wrong' } })).status).toBe(401);
+    expect((await fetch('http://localhost:3151/api/health', { headers: { Cookie: 'panel_session=wrong' } })).status).toBe(401);
+    expect((await fetch('http://localhost:3151/api/health', { headers: { Cookie: 'token=valid-access-token' } })).status).toBe(401);
+  } finally {
+    authServer.stop();
+  }
+});
+
+test('WebSocketServer - a panel session outlives the expiry of the bootstrap token that opened it', async () => {
+  // THE REGRESSION THIS PHASE EXISTS FOR. The access token used to BE the
+  // cookie, so when it expired (10 minutes) the panel was dead mid-use with no
+  // way back. Here the token goes invalid right after bootstrap and the panel
+  // carries on, which is exactly the production sequence.
+  const authServer = new WebSocketServer(3157);
+  const mgr = fakeSidecarManager('valid-access-token');
+  authServer.setSidecarManager(mgr);
+  authServer.setApiRoutes({
+    '/api/health': { GET: () => Response.json({ status: 'ok' }) },
+  });
+  authServer.start();
+
+  try {
+    const boot = await fetch('http://localhost:3157/?token=valid-access-token', { redirect: 'manual' });
+    const cookie = sessionCookie(boot.headers.get('Set-Cookie'));
+
+    mgr.expireToken();
+
+    // The bootstrap credential is gone, so no NEW panel can open...
+    expect((await fetch('http://localhost:3157/?token=valid-access-token', { redirect: 'manual' })).status).toBe(401);
+    // ...but the one already open keeps working.
+    const res = await fetch('http://localhost:3157/api/health', { headers: { Cookie: cookie } });
+    expect(res.ok).toBe(true);
   } finally {
     authServer.stop();
   }
@@ -357,6 +435,9 @@ test('WebSocketServer - there is NO shared-token backdoor without a sidecar mana
   authServer.start();
 
   try {
+    expect((await fetch('http://localhost:3152/api/health', { headers: { Cookie: 'panel_session=anything' } })).status).toBe(401);
+    // ...and with the cookie the previous scheme used, which is now just a
+    // string that names no session.
     expect((await fetch('http://localhost:3152/api/health', { headers: { Cookie: 'token=anything' } })).status).toBe(401);
     expect((await fetch('http://localhost:3152/?token=anything', { redirect: 'manual' })).status).toBe(401);
   } finally {
@@ -399,14 +480,18 @@ test('WebSocketServer - auth.insecure_open_access opens the dashboard (setup esc
   }
 });
 
-test('WebSocketServer - WebSocket upgrade allowed with a valid access-token cookie', async () => {
+test('WebSocketServer - WebSocket upgrade allowed with a valid panel-session cookie', async () => {
   const authServer = new WebSocketServer(3155);
-  authServer.setSidecarManager(fakeSidecarManager('valid-access-token'));
+  const mgr = fakeSidecarManager('valid-access-token');
+  authServer.setSidecarManager(mgr);
   authServer.start();
+
+  const sessionId = mgr.sessions.create('s1').id;
+  const cookie = `panel_session=${sessionId}`;
 
   try {
     const ws = new WebSocket('ws://localhost:3155/ws', {
-      headers: { Cookie: 'token=valid-access-token' },
+      headers: { Cookie: cookie },
     } as any);
 
     const connected = await new Promise<boolean>((resolve) => {
@@ -416,8 +501,57 @@ test('WebSocketServer - WebSocket upgrade allowed with a valid access-token cook
     });
 
     expect(connected).toBe(true);
+    // The plumbing this phase IS: upgrade stamps the session onto ws.data, and
+    // open/close move the store's socket count. Without this assertion the
+    // whole liveness mechanism could be unwired and every store-level test
+    // would still pass.
+    expect(mgr.sessions.socketsOpen(sessionId)).toBe(1);
+
     ws.close();
     await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(mgr.sessions.socketsOpen(sessionId)).toBe(0);
+  } finally {
+    authServer.stop();
+  }
+});
+
+test('WebSocketServer - tearing down a session hangs up on its live socket and refuses the reconnect', async () => {
+  // The end-to-end shape of `jarvis revoke` against an open panel: not just
+  // "the map entry is gone" but "the socket the attacker already had is
+  // closed, and the reconnect it will immediately attempt is refused". A
+  // socket is authorized ONCE, at the upgrade, and never re-checked.
+  const authServer = new WebSocketServer(3158);
+  const mgr = fakeSidecarManager('valid-access-token');
+  authServer.setSidecarManager(mgr);
+  authServer.start();
+
+  const sessionId = mgr.sessions.create('s1').id;
+  const cookie = `panel_session=${sessionId}`;
+
+  try {
+    const ws = new WebSocket('ws://localhost:3158/ws', { headers: { Cookie: cookie } } as any);
+    const closed = new Promise<number>((resolve) => {
+      ws.onclose = (e) => resolve(e.code);
+    });
+    await new Promise<void>((resolve, reject) => {
+      ws.onopen = () => resolve();
+      ws.onerror = () => reject(new Error('did not connect'));
+      setTimeout(() => reject(new Error('connect timed out')), 2000);
+    });
+    expect(mgr.sessions.socketsOpen(sessionId)).toBe(1);
+
+    mgr.sessions.deleteBySid('s1');
+
+    expect(await closed).toBe(PANEL_SESSION_CLOSED_CODE);
+
+    // And the cookie it still holds buys nothing on the way back in.
+    const retry = new WebSocket('ws://localhost:3158/ws', { headers: { Cookie: cookie } } as any);
+    const reconnected = await new Promise<boolean>((resolve) => {
+      retry.onopen = () => resolve(true);
+      retry.onerror = () => resolve(false);
+      setTimeout(() => resolve(false), 1500);
+    });
+    expect(reconnected).toBe(false);
   } finally {
     authServer.stop();
   }

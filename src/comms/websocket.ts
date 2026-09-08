@@ -3,6 +3,7 @@ import { timingSafeEqual } from 'node:crypto';
 import path from 'node:path';
 import { isWithin } from '../util/path.ts';
 import type { SidecarManager } from '../sidecar/manager.ts';
+import { PANEL_SESSION_COOKIE } from '../sidecar/panel-sessions.ts';
 
 /** Constant-time string comparison to prevent timing attacks */
 export type WSMessage = {
@@ -88,7 +89,16 @@ function getCookie(req: Request, name: string): string | null {
   const cookies = req.headers.get('Cookie');
   if (!cookies) return null;
   const match = cookies.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
-  return match ? decodeURIComponent(match[1]!) : null;
+  if (!match) return null;
+  try {
+    return decodeURIComponent(match[1]!);
+  } catch {
+    // A malformed escape (`%E0%A4%A`) makes decodeURIComponent throw, which
+    // would unwind out of fetch() as a 500. This value is attacker-controlled
+    // and read on the authentication path, so an unusable cookie has to read
+    // as "no cookie" (401) rather than as a server fault.
+    return null;
+  }
 }
 
 function isPublicRoute(pathname: string, method: string): boolean {
@@ -147,9 +157,10 @@ export class WebSocketServer {
   private publicDir: string | null = null;
   private sidecarManager: SidecarManager | null = null;
   /**
-   * JWT-only by default: every non-public route requires a valid short-lived
-   * sidecar access token (minted from an enrollment JWT). The ONLY way to
-   * open the dashboard without one is the explicit config escape hatch
+   * Authenticated by default: every non-public route requires a live PANEL
+   * SESSION (src/sidecar/panel-sessions.ts), which is opened by exchanging an
+   * access token that was itself minted from an enrollment JWT. The ONLY way
+   * to open the dashboard without one is the explicit config escape hatch
    * `auth.insecure_open_access: true` (pre-enrollment setup; see docs).
    */
   private insecureOpenAccess = false;
@@ -234,13 +245,16 @@ export class WebSocketServer {
     // one variant, so the pair is cast to the port variant; at runtime Bun
     // receives exactly one of the two keys.
     const listenOpts = (this.unixPath ? { unix: this.unixPath } : { port: this.port }) as { port: number };
-    this.server = Bun.serve<{ sidecar_id?: string; channel?: string; proxy_target?: string; _proxyUpstream?: WebSocket }>({
+    this.server = Bun.serve<{ sidecar_id?: string; channel?: string; proxy_target?: string; panel_session?: string; _proxyUpstream?: WebSocket }>({
       ...listenOpts,
       idleTimeout: 30, // seconds — prevent timeout during heavy processing (OCR, PowerShell)
 
       async fetch(req, server) {
         const url = new URL(req.url);
         const pathname = url.pathname;
+        /** Set by the auth block when this request carried a live panel
+         *  session; read by the /ws upgrade to bind the socket to it. */
+        let panelSessionId: string | null = null;
 
         // 0. Sidecar WebSocket upgrade (has its own JWT auth)
         if (pathname === '/sidecar/connect' && self.sidecarManager) {
@@ -270,9 +284,10 @@ export class WebSocketServer {
         // 0b. Sidecar access-token mint. Authenticated by the long-lived
         //     enrollment JWT (Authorization: Bearer) — this and /sidecar/connect
         //     are the ONLY places that credential is accepted. Returns a
-        //     short-lived access token the sidecar injects into its panel
-        //     webviews; everything on the data plane (/api, /ws) authenticates
-        //     with that access token, never the enrollment JWT.
+        //     short-lived access token the sidecar puts in a panel's spawn
+        //     URL, where it is exchanged for a panel session; the data plane
+        //     (/api, /ws) then authenticates with that SESSION, never with
+        //     this token and never with the enrollment JWT.
         if (pathname === '/sidecar/token' && req.method === 'POST' && self.sidecarManager) {
           const authHeader = req.headers.get('Authorization');
           const enrollTok = authHeader?.startsWith('Bearer ') ? authHeader.slice(7) : null;
@@ -287,35 +302,53 @@ export class WebSocketServer {
           return Response.json({ access_token: minted.token, expires_in: minted.expiresIn });
         }
 
-        // 1. Auth check. JWT-only by default: a request is authorized by a
-        // valid short-lived sidecar ACCESS token (minted from the enrollment
-        // JWT via /sidecar/token) - the sidecar's panel webviews carry one.
-        // The long-lived enrollment JWT is deliberately NOT accepted here —
-        // only on /sidecar/connect and the mint endpoint — so a leaked panel
-        // credential is bounded to the access-token TTL instead of forever.
-        // There is NO shared dashboard token: enroll a device or (setup only)
-        // set auth.insecure_open_access.
+        // 1. Auth check. A request is authorized by a PANEL SESSION cookie
+        // (panel-sessions.ts). The access token minted from the enrollment JWT
+        // is now a bootstrap credential only: it arrives as ?token= on a freshly
+        // spawned panel, is exchanged here for a session, and is never the thing
+        // the cookie carries. The exchange is not single-use and cannot cheaply
+        // be made so; panel-sessions.ts records what that costs.
+        //
+        // It used to BE the cookie, which made the token's 10-minute TTL the
+        // session's lifetime: the panel died mid-use and no amount of retrying
+        // could revive it, because only the sidecar may mint and the cookie is
+        // HttpOnly. A session is refreshed by nothing and outlives no
+        // revocation -- see the resolver, which re-checks enrollment.
+        //
+        // The long-lived enrollment JWT is still NOT accepted here, only on
+        // /sidecar/connect and the mint endpoint. There is NO shared dashboard
+        // token: enroll a device or (setup only) set auth.insecure_open_access.
         if (!self.insecureOpenAccess && !isPublicRoute(pathname, req.method)) {
-          const accepts = async (tok: string | null): Promise<boolean> => {
-            if (!tok) return false;
-            if (self.sidecarManager && (await self.sidecarManager.verifyAccessToken(tok))) return true;
-            return false;
-          };
-          const cookieToken = getCookie(req, 'token');
-          if (!(await accepts(cookieToken))) {
-            // Check ?token= query param — set cookie via Set-Cookie and redirect
+          const cookie = getCookie(req, PANEL_SESSION_COOKIE);
+          const session = cookie && self.sidecarManager
+            ? self.sidecarManager.resolvePanelSession(cookie)
+            : null;
+          if (session) {
+            // Remembered for the /ws upgrade below, which binds the socket to
+            // the session so an open panel counts as live (panel-sessions.ts).
+            panelSessionId = session.id;
+          }
+          if (!session) {
+            // No session yet (a freshly spawned panel) or a dead one. Bootstrap
+            // from ?token=, then redirect to the same URL WITHOUT it so the
+            // credential does not survive in the address bar or history.
             const queryToken = url.searchParams.get('token');
-            if (await accepts(queryToken)) {
+            const opened = queryToken && self.sidecarManager
+              ? await self.sidecarManager.openPanelSession(queryToken)
+              : null;
+            if (opened) {
               const cleanParams = new URLSearchParams(url.searchParams);
               cleanParams.delete('token');
               const qs = cleanParams.toString();
               const redirectTo = pathname + (qs ? '?' + qs : '');
               // Mark the cookie Secure whenever the connection is TLS (directly,
-              // or terminated upstream and forwarded) so the token can't leak
-              // over a downgraded http request to the same host.
+              // or terminated upstream and forwarded) so the session id can't
+              // leak over a downgraded http request to the same host.
               const xfProto = (req.headers.get('x-forwarded-proto') ?? '').split(',')[0]?.trim();
               const isHttps = url.protocol === 'https:' || xfProto === 'https';
-              const cookie = `token=${queryToken}; Path=/; SameSite=Lax; HttpOnly` +
+              // No Max-Age on purpose: the cookie dies with the webview, and
+              // the store's absolute cap is what bounds it server-side.
+              const cookie = `${PANEL_SESSION_COOKIE}=${opened.id}; Path=/; SameSite=Lax; HttpOnly` +
                 (isHttps ? '; Secure' : '');
               return new Response(null, {
                 status: 302,
@@ -356,7 +389,7 @@ export class WebSocketServer {
               return new Response('Forbidden: origin mismatch', { status: 403 });
             }
           }
-          const success = server.upgrade(req, { data: {} });
+          const success = server.upgrade(req, { data: { panel_session: panelSessionId ?? undefined } });
           if (success) return undefined;
           return new Response('WebSocket upgrade failed', { status: 500 });
         }
@@ -394,7 +427,10 @@ export class WebSocketServer {
                 return new Response('Dev server not running', { status: 502 });
               }
               const success = server.upgrade(req, {
-                data: { proxy_target: targetUrl },
+                // panel_session so a revoked device's dev-server bridge is hung
+                // up on like any other panel socket; it passed the same auth
+                // block to get here.
+                data: { proxy_target: targetUrl, panel_session: panelSessionId ?? undefined },
               });
               if (success) return undefined;
               return new Response('WebSocket upgrade failed', { status: 500 });
@@ -517,7 +553,11 @@ export class WebSocketServer {
           if (req.headers.get('upgrade')?.toLowerCase() === 'websocket') {
             const targetUrl = self.siteProxy.getWebSocketTargetFromCookie(req, pathname);
             if (targetUrl) {
-              const success = server.upgrade(req, { data: { proxy_target: targetUrl } });
+              const success = server.upgrade(req, {
+                // panel_session so a revoked device's dev-server bridge is hung up on
+                // like any other panel socket; it passed the same auth block.
+                data: { proxy_target: targetUrl, panel_session: panelSessionId ?? undefined },
+              });
               if (success) return undefined;
             }
           }
@@ -534,6 +574,13 @@ export class WebSocketServer {
         maxPayloadLength: 16 * 1024 * 1024,
 
         open(ws) {
+          // Before any branch: every socket that carried a panel session is
+          // tracked, including the HMR bridge below, which returns early. An
+          // untracked socket is one no teardown can hang up on.
+          if (ws.data?.panel_session) {
+            self.sidecarManager?.panelSocketOpened(ws.data.panel_session, ws);
+          }
+
           // HMR proxy WebSocket — bridge to dev server
           const proxyTarget = (ws.data as any)?.proxy_target as string | undefined;
           if (proxyTarget) {
@@ -636,6 +683,14 @@ export class WebSocketServer {
         },
 
         close(ws) {
+          // Mirrors open(): before any early return. A panel's window going
+          // away takes its sockets with it, on every platform and every spawn
+          // path, and that is what marks the session collectable
+          // (PANEL_SESSION_IDLE_MS).
+          if (ws.data?.panel_session) {
+            self.sidecarManager?.panelSocketClosed(ws.data.panel_session, ws);
+          }
+
           // HMR proxy cleanup
           const proxyUpstream = (ws.data as any)?._proxyUpstream as WebSocket | undefined;
           if (proxyUpstream) {

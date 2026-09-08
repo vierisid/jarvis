@@ -54,6 +54,14 @@ export function initDatabase(dbPath: string = ":memory:", opts?: { quiet?: boole
     // Enable foreign key constraints
     dbInstance.exec("PRAGMA foreign_keys=ON");
 
+    // Wait rather than fail on a locked write. This file is written by MORE
+    // than the daemon: `jarvis enroll` and `jarvis revoke` run in their own
+    // processes against the same WAL database. Without a busy timeout a
+    // collision surfaces as an immediate SQLITE_BUSY throw, and a write that
+    // is swallowed by a best-effort path (panel_sessions teardown) would leave
+    // a row on disk that a later start reads back as a live session.
+    dbInstance.exec("PRAGMA busy_timeout=5000");
+
     // Create all tables
     createTables(dbInstance);
 
@@ -673,6 +681,39 @@ function createTables(db: Database): void {
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_sidecars_name ON sidecars(name)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_sidecars_token_id ON sidecars(token_id)`);
+
+  // Panel webview sessions (src/sidecar/panel-sessions.ts). Persisted rather
+  // than held only in memory because the brain is RESTARTED routinely -- every
+  // hosted update does `systemctl restart` on the instance unit -- and an
+  // in-memory-only session would strand every open panel on a permanent 401
+  // that nothing in the page could recover from. That is the same failure this
+  // whole change exists to remove, arriving from a different direction: the
+  // access-token cookie it replaces survived a restart, because the key that
+  // signs it is loaded from disk.
+  //
+  // Times are epoch ms (not the datetime('now') text the older tables use), so
+  // an age check is integer arithmetic instead of string parsing on the
+  // authentication path.
+  //
+  // ON DELETE CASCADE (foreign_keys is ON above) is what makes this table
+  // self-cleaning across PROCESSES: `jarvis revoke` deletes the sidecars row
+  // from its own process, which the daemon only learns about by looking, and
+  // the cascade closes that device's panel rows in the same transaction rather
+  // than leaving them to be read back as live sessions on the next start.
+  // Nothing legitimate inserts without an enrolled row -- openPanelSession
+  // checks enrollment first -- so the constraint refuses no real create except
+  // in one harmless race: a CLI revoke landing between that check and the
+  // INSERT fails the FK, which the store's best-effort persist swallows,
+  // leaving an in-memory session that the next request refuses anyway.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS panel_sessions (
+      id TEXT PRIMARY KEY,
+      sidecar_id TEXT NOT NULL REFERENCES sidecars(id) ON DELETE CASCADE,
+      created_at INTEGER NOT NULL,
+      last_seen_at INTEGER NOT NULL
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_panel_sessions_sidecar ON panel_sessions(sidecar_id)`);
   // Sidecar's own (brain-decoupled) version, reported on register. Added later;
   // ALTER in try/catch is the migration pattern used throughout this file.
   try { db.run('ALTER TABLE sidecars ADD COLUMN version TEXT'); } catch { /* already present */ }

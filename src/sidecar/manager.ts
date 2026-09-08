@@ -25,6 +25,7 @@ import { EventScheduler, type DroppedEventsStats } from './scheduler.ts';
 import { RPCTracker } from './rpc.ts';
 import { BinarySpool, type BinarySpoolStats } from './binary-spool.ts';
 import { SidecarConnection } from './connection.ts';
+import { PanelSessionStore, vaultPanelSessionSink, type PanelSession, type PanelSocket } from './panel-sessions.ts';
 import { classifySidecarVersion, SIDECAR_MIN_VERSION, SIDECAR_RECOMMENDED_VERSION } from './compat.ts';
 import { chmodWithWarning, secureDirectory, secureWriteFile } from '../util/fs-secure.ts';
 import { computeAnonId } from '../telemetry/anon-id.ts';
@@ -39,11 +40,15 @@ const PUBLIC_KEY_FILE = 'public.pem';
 
 // Short-lived access tokens. The enrollment JWT is a long-lived REFRESH-style
 // credential that never leaves the sidecar except as an Authorization: Bearer
-// header to /sidecar/connect and the token-mint endpoint. Everything on the
-// data plane (panel /api fetches, the /ws control socket) authenticates with
-// one of these instead: minted on demand from the enrollment JWT, signed with
-// the same ES256 key, scoped by audience, and verified statelessly (signature +
-// exp + aud, no DB hit) so a leak is bounded to the TTL rather than forever.
+// header to /sidecar/connect and the token-mint endpoint.
+//
+// An access token is the BOOTSTRAP for a panel webview: minted on demand from
+// the enrollment JWT, signed with the same ES256 key, scoped by audience, and
+// verified statelessly (signature + exp + aud, no DB hit). It is presented
+// once, as ?token= on a panel's spawn URL, and exchanged for a panel session
+// (panel-sessions.ts) -- the session, not this token, is what authenticates
+// the data plane afterwards, and the TTL below therefore bounds the bootstrap
+// and nothing else.
 const ACCESS_TOKEN_AUDIENCE = 'brain-api';
 const ACCESS_TOKEN_TTL_SECONDS = 600; // 10 minutes
 
@@ -88,6 +93,9 @@ export class SidecarManager implements Service {
   private binarySpool: BinarySpool;
   private sidecarConnections = new Map<string, SidecarConnection>();
   private revocationSweepTimer: ReturnType<typeof setInterval> | null = null;
+  /** Panel webview sessions (panel-sessions.ts). Owned here because this is
+   *  what knows about enrollment and revocation, which is what bounds them. */
+  private panelSessions = new PanelSessionStore({ sink: vaultPanelSessionSink(getDb) });
   private progressListeners = new Set<(sidecarId: string, rpcId: string, progress: number, message?: string) => void>();
   private eventListeners = new Set<(sidecarId: string, event: SidecarEvent) => void>();
   // Two parallel notify APIs:
@@ -157,6 +165,15 @@ export class SidecarManager implements Service {
     try {
       await this.loadOrGenerateKeys();
 
+      // Panels open across a restart present their cookie immediately, so this
+      // has to happen before the server takes a request. Without it a hosted
+      // update (`systemctl restart` on the instance unit) would stand every
+      // open panel down onto a permanent 401.
+      const restored = this.panelSessions.hydrate();
+      if (restored > 0) {
+        console.log(`[SidecarManager] Restored ${restored} panel session(s)`);
+      }
+
       // CLI revocations happen in another process; sweep so they take
       // effect on live sessions within ~30s, not only at the next connect.
       this.revocationSweepTimer = setInterval(() => {
@@ -164,6 +181,17 @@ export class SidecarManager implements Service {
           this.sweepRevokedConnections();
         } catch (err) {
           console.error('[SidecarManager] Revocation sweep failed:', err);
+        }
+        // Panel windows are revoked on the same beat as connections, in a
+        // SEPARATE pass with its own try: a panel session can outlive the
+        // connection that spawned it (a sidecar that reconnects after a blip
+        // leaves its windows open on purpose), so sweeping connections alone
+        // would miss the panels of a device revoked while briefly offline --
+        // and a throw in that sweep must not be what skips this one.
+        try {
+          this.sweepPanelSessions();
+        } catch (err) {
+          console.error('[SidecarManager] Panel session sweep failed:', err);
         }
       }, 30_000);
 
@@ -231,6 +259,11 @@ export class SidecarManager implements Service {
       clearInterval(this.revocationSweepTimer);
       this.revocationSweepTimer = null;
     }
+
+    // Forget panel sessions in memory. They stay on disk, which is what lets a
+    // panel survive the restart this stop is usually half of; what must not
+    // survive is a stopped manager still resolving cookies.
+    this.panelSessions.clear();
 
     // Stop scheduler
     this.scheduler.stop();
@@ -353,6 +386,16 @@ export class SidecarManager implements Service {
       // RPCs indefinitely (stolen-device scenario).
       this.handleSidecarDisconnect(id);
       this.connected.delete(id);
+      // And the device's open PANEL windows, which authenticate with a session
+      // of their own (panel-sessions.ts). Both halves of the data plane have to
+      // go: an HTTP request is refused by `resolvePanelSession` on its own, but
+      // a panel's WebSocket is authorized once at the upgrade and never
+      // re-checked, so deleting the session alone would leave a revoked laptop
+      // chatting over the socket it already had. deleteBySid hangs up.
+      const panels = this.panelSessions.deleteBySid(id);
+      if (panels > 0) {
+        console.log(`[SidecarManager] Closed ${panels} panel session(s) for revoked sidecar ${id}`);
+      }
       console.log(`[SidecarManager] Revoked and removed sidecar ${id}`);
       return true;
     }
@@ -377,6 +420,49 @@ export class SidecarManager implements Service {
       }
     }
     return severed;
+  }
+
+  /**
+   * Hygiene pass over panel sessions: drop what has aged past the store's cap,
+   * what has been idle long enough to have no window left (gated on the
+   * sidecar being connected, see below), and what belongs to a sidecar that is
+   * no longer enrolled.
+   *
+   * NOT the correctness boundary. `resolvePanelSession` re-checks enrollment
+   * and age on every single request, so a session that should be dead is
+   * already refused before this ever runs. This is what stops an abandoned
+   * panel's entry from sitting in the map until the process restarts, and what
+   * closes a revoked device's panels when the revocation happened in the CLI
+   * process (which the daemon only learns about by looking).
+   *
+   * Enrollment is queried once per DISTINCT sidecar rather than once per
+   * session, so a device with six panels open costs one lookup.
+   */
+  sweepPanelSessions(): number {
+    // Only a CONNECTED sidecar's sessions may be idle-collected. A machine that
+    // is asleep or partitioned still has its panel windows on screen and its
+    // sockets died with the connection, so without this gate the sweep would
+    // collect a live user's session and strand them on a 401 they cannot
+    // recover from.
+    //
+    // The gate alone is not enough, because it only says "connected NOW" while
+    // lastSeenAt may be hours stale: handleSidecarConnect refreshes this
+    // device's sessions on the way in, so the idle clock genuinely measures
+    // time spent connected-with-no-panel rather than time since the last
+    // fetch. Even then a socketless page (the onboarding wizard, the
+    // task/answer/palette rooms) is a real open window with no socket at all,
+    // which is why the window is hours rather than minutes.
+    let closed = this.panelSessions.sweep((sid) => this.sidecarConnections.has(sid));
+    const enrolled = new Map<string, boolean>();
+    for (const session of this.panelSessions.list()) {
+      let ok = enrolled.get(session.sid);
+      if (ok === undefined) {
+        ok = this.isEnrolled(session.sid);
+        enrolled.set(session.sid, ok);
+      }
+      if (!ok && this.panelSessions.delete(session.id)) closed++;
+    }
+    return closed;
   }
 
   /** Check if a sidecar ID is enrolled (not revoked) */
@@ -519,12 +605,19 @@ export class SidecarManager implements Service {
   }
 
   /**
-   * Mint a short-lived access token for an enrolled sidecar. This is the only
-   * credential that authenticates the data plane (panel /api fetches + /ws); the
-   * enrollment JWT is never accepted there. Enrollment is checked here at mint
-   * time, so a revoked sidecar can't obtain new tokens (and existing ones expire
-   * within the TTL). Returns null if the sidecar isn't enrolled or keys aren't
-   * loaded.
+   * Mint a short-lived access token for an enrolled sidecar.
+   *
+   * This is the BOOTSTRAP credential for a panel webview, not what
+   * authenticates it: the page presents this once as ?token=, the brain
+   * exchanges it for a panel session, and the session is what authenticates
+   * the data plane from then on (see openPanelSession and panel-sessions.ts).
+   * The enrollment JWT is never accepted on the data plane at all.
+   *
+   * Enrollment is checked here at mint time, so a revoked sidecar can't obtain
+   * new tokens. Note this no longer bounds much on its own: a session opened
+   * with a token outlives that token, and it is the session's own cap and
+   * enrollment re-check that bound it. Returns null if the sidecar isn't
+   * enrolled or keys aren't loaded.
    */
   async issueAccessToken(sid: string): Promise<{ token: string; expiresIn: number } | null> {
     if (!this.privateKey) return null;
@@ -541,9 +634,16 @@ export class SidecarManager implements Service {
 
   /**
    * Verify a short-lived access token. Returns { sid } if the signature,
-   * audience, and expiry all check out, else null. Deliberately stateless (no
-   * DB / isEnrolled lookup): the short TTL is the revocation mechanism, which
-   * also keeps this cheap on every authenticated request.
+   * audience, and expiry all check out, else null.
+   *
+   * Deliberately stateless (no DB / isEnrolled lookup). That USED to be safe
+   * because this gated every authenticated request and the short TTL was
+   * therefore the revocation mechanism. It no longer gates them: it runs once,
+   * at bootstrap, and the callers that took over the data plane
+   * (openPanelSession, resolvePanelSession) do their own isEnrolled check
+   * precisely because a session outlives one TTL. Keep this stateless, but do
+   * not reintroduce it as a per-request gate on the strength of the old
+   * comment.
    */
   async verifyAccessToken(token: string): Promise<{ sid: string } | null> {
     if (!this.publicKey) return null;
@@ -560,10 +660,83 @@ export class SidecarManager implements Service {
     }
   }
 
+  // --------------- Panel sessions ---------------
+
+  /**
+   * Exchange a bootstrap access token for a panel session (panel-sessions.ts).
+   *
+   * This is the ONLY way a session is created, and it is what keeps the new
+   * scheme's trust anchored where the old one had it: the token can only have
+   * come from `issueAccessToken`, which mints solely for the /sidecar/token
+   * endpoint, which accepts solely the enrollment JWT. So a session still
+   * traces back to a device that proved possession of that credential -- the
+   * cookie simply stops BEING the credential.
+   *
+   * One token can open MORE than one session, by design (the sidecar reuses a
+   * cached token across spawns). See panel-sessions.ts for what that means for
+   * a leaked spawn URL.
+   *
+   * Returns null for anything unverifiable, expired, or belonging to a sidecar
+   * that has since been revoked. The enrollment re-check is not redundant with
+   * `verifyAccessToken`, which is deliberately stateless.
+   */
+  async openPanelSession(accessToken: string): Promise<PanelSession | null> {
+    const verified = await this.verifyAccessToken(accessToken);
+    if (!verified) return null;
+    if (!this.isEnrolled(verified.sid)) return null;
+    return this.panelSessions.create(verified.sid);
+  }
+
+  /**
+   * Resolve a panel-session cookie to its sidecar, or null.
+   *
+   * The enrollment lookup runs on EVERY authenticated request. That is the
+   * trade this design makes knowingly: `verifyAccessToken` skipped it because
+   * a 10-minute TTL was the revocation mechanism, and a session that outlives
+   * one TTL has to pay for what that bought. On a single-user brain it is a
+   * local prepared query, not a per-tenant round trip.
+   */
+  resolvePanelSession(sessionId: string): PanelSession | null {
+    const session = this.panelSessions.get(sessionId);
+    if (!session) return null;
+    if (!this.isEnrolled(session.sid)) {
+      // Revoked out from under a live panel. Drop it here rather than waiting
+      // for a sweep, so the very request that noticed is also the one refused.
+      this.panelSessions.delete(session.id);
+      return null;
+    }
+    return session;
+  }
+
+  /** A panel's WebSocket opened on this session. An open socket is liveness:
+   *  a healthy panel makes no HTTP requests, so without this an idle-but-open
+   *  window would look abandoned. */
+  panelSocketOpened(sessionId: string, socket: PanelSocket): void {
+    this.panelSessions.socketOpened(sessionId, socket);
+  }
+
+  /** A panel's WebSocket closed. When the last one goes the session becomes
+   *  idle-collectable, which is how a closed window is cleaned up without
+   *  threading panel ids through every spawn path. */
+  panelSocketClosed(sessionId: string, socket: PanelSocket): void {
+    this.panelSessions.socketClosed(sessionId, socket);
+  }
+
+  /** Live panel sessions. For tests and ops surfaces. */
+  listPanelSessions(): PanelSession[] {
+    return this.panelSessions.list();
+  }
+
   // --------------- Protocol: WebSocket Handlers ---------------
 
   /** Called when a sidecar WebSocket connects (after JWT validation) */
   handleSidecarConnect(ws: ServerWebSocket<unknown>, sidecarId: string): void {
+    // This device's panels get a fresh idle window. Its own socket comes back
+    // a second or two before theirs do (their reconnect loop retries every
+    // ~2s), and without this a sweep landing in that gap would collect a panel
+    // that is still on the user's screen -- see touchBySid.
+    this.panelSessions.touchBySid(sidecarId);
+
     const connection = new SidecarConnection(
       sidecarId,
       ws,
@@ -663,7 +836,21 @@ export class SidecarManager implements Service {
     }
   }
 
-  /** Called when a sidecar WebSocket disconnects */
+  /**
+   * Called when a sidecar WebSocket disconnects.
+   *
+   * Deliberately does NOT close the device's panel sessions, and that omission
+   * is the design, not an oversight. A disconnect is not a security event: it
+   * is a network blip, a brain restart, a laptop lid. The panels are native
+   * windows owned by the sidecar PROCESS, so if that process is gone its
+   * windows went with it and there is nothing to protect; if it is merely
+   * offline for eight seconds, the windows are still on screen in front of a
+   * working user, and standing them down onto a 401 they cannot recover from
+   * would recreate the exact failure panel sessions were introduced to remove.
+   *
+   * Revocation is the event that closes panels -- see revokeSidecar and
+   * sweepPanelSessions.
+   */
   handleSidecarDisconnect(sidecarId: string): void {
     const conn = this.sidecarConnections.get(sidecarId);
     if (conn) {

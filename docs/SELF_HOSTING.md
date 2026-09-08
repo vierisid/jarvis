@@ -31,11 +31,18 @@ jarvis enroll "my-desktop"
 This mints a long-lived enrollment token (ES256 JWT) and prints it. The
 enrollment token is accepted on exactly two endpoints: `/sidecar/connect`
 (the sidecar WebSocket) and `POST /sidecar/token`, which exchanges it for a
-short-lived access token (10 minutes). Everything else - dashboard, API,
-`/ws` - requires an access token. The desktop sidecar app handles this
-automatically: paste the enrollment token into it once, and it connects,
-re-mints access tokens as needed, and opens dashboard panels that are already
-authenticated.
+short-lived access token (10 minutes). That access token is a bootstrap, not
+the thing the dashboard runs on: a panel opens with it in the URL, the brain
+trades it for a panel session, and everything else - dashboard, API, `/ws` -
+is authorized by that session's cookie. The desktop sidecar app handles all of
+it: paste the enrollment token into it once, and it connects, mints as needed,
+and opens dashboard panels that are already authenticated.
+
+A panel session lasts until whichever comes first: the device is revoked, the
+panel has been closed for 4 hours while that device's sidecar is connected, or
+an absolute 12-hour cap. A sleeping or offline machine accrues no idle time at
+all, so closing the lid over lunch does not cost you your open windows, and
+neither does a brain restart - sessions are persisted.
 
 The only public (unauthenticated) routes are `/health`, `/sidecar/connect`,
 the JWKS endpoint (`/api/sidecars/.well-known/jwks.json`), and
@@ -160,10 +167,10 @@ secure and the sidecar will try `wss://` and fail to connect.
 
 ### What works over plain HTTP on a LAN
 
-Auth works: the login cookie is intentionally not marked `Secure` on plain
-HTTP, so the token flow functions. Chat, tools, workflows - all fine.
-Sending tokens in cleartext across your own LAN is the accepted tradeoff
-here; don't do it on a network you don't trust.
+Auth works: the session cookie is intentionally not marked `Secure` on plain
+HTTP, so the flow functions. Chat, tools, workflows - all fine. Sending a
+credential in cleartext across your own LAN is the accepted tradeoff here;
+don't do it on a network you don't trust.
 
 What does NOT work from a `http://192.168.x.x` dashboard is anything the
 browser gates behind secure contexts. That is browser policy and cannot be
