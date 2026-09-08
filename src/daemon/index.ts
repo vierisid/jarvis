@@ -43,6 +43,7 @@ import { ApprovalManager } from "../authority/approval.ts";
 import { AuditTrail } from "../authority/audit.ts";
 import { impactFromCategory } from "../roles/authority.ts";
 import { SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
+import { containsWakePhrase, hasSpokenContent, wakeCommandFrom } from "../voice/wake-phrase.ts";
 import { AuthorityLearner } from "../authority/learning.ts";
 import { EmergencyController } from "../authority/emergency.ts";
 import { ApprovalDelivery } from "../authority/approval-delivery.ts";
@@ -3499,8 +3500,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           }
           if (ctrl.cancelled) return;
 
-          if (!transcript) {
-            console.log('[ambient-ui] empty transcript — returning to idle');
+          // `hasSpokenContent`, not a bare truthiness check: STT renders a
+          // captured silence as "." or "?!" often enough, and those used to
+          // run as the user's whole turn.
+          if (!hasSpokenContent(transcript)) {
+            console.log(
+              `[ambient-ui] no speech in transcript${transcript ? ` (${JSON.stringify(transcript)})` : ''}` +
+              ` — returning to idle`,
+            );
             await setState(session.sidecarId, 'idle', '');
             clearSummon(session.sidecarId, ctrl);
             return;
@@ -3521,25 +3528,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // transcribe and word-search for "jarvis"; on a hit, we either
       //   - run the LLM directly with the trailing command (single-shot,
       //     "Jarvis play music" works without saying it twice), or
-      //   - if only "jarvis" alone, fire a normal listening summon so the
-      //     user can speak the command after the bubble pops up.
+      //   - if only "jarvis" alone (bare, or trailed by nothing but
+      //     punctuation), fire a normal listening summon so the user can
+      //     speak the command after the bubble pops up.
       // Suppressed when a summon cycle is already running so the
       // continuous wake stream doesn't fight with the active turn.
-      const wakePhrase = /\bjarvis\b/i;
-      const stripWakePrefix = (text: string): string => {
-        // Pull out the segment after the LAST occurrence of "jarvis" so
-        // "I'm at home, Jarvis play music" → "play music". Trailing
-        // punctuation/whitespace removed; if nothing follows, returns "".
-        const re = /\bjarvis\b[\s,.\-—:]*/gi;
-        let last: RegExpExecArray | null = null;
-        let m: RegExpExecArray | null;
-        while ((m = re.exec(text)) !== null) {
-          last = m;
-        }
-        if (!last) return '';
-        return text.slice(last.index + last[0].length).trim();
-      };
-
       sidecarManager.onEvent(async (sidecarId, event) => {
         if (event.event_type !== 'audio.wake_segment') return;
         // Suppress while an active summon is in flight — the user already
@@ -3576,13 +3569,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
         const sttMs = Date.now() - sttStart;
         if (!transcript) return;
-        if (!wakePhrase.test(transcript)) {
+        if (!containsWakePhrase(transcript)) {
           // Most segments — user talking about other things. Quietly drop.
           return;
         }
         console.log(`[ambient-ui] wake-segment matched (${sttMs}ms STT, ${transcript.length} chars)`);
 
-        const command = stripWakePrefix(transcript);
+        const command = wakeCommandFrom(transcript);
         // Re-check: a manual summon (Ctrl+Space) may have claimed the slot while
         // we were transcribing (the entry guard at the top ran before the STT
         // await). The deliberate press wins, so bail rather than clobber its ctrl
@@ -3593,7 +3586,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         pendingSummons.set(sidecarId, ctrl);
 
         if (!command) {
-          // Just "Jarvis" alone — flip to listening and trigger a fresh
+          // Just "Jarvis" alone, "Hey Jarvis!" included (`wakeCommandFrom`
+          // won't hand back bare punctuation): flip to listening and trigger a fresh
           // session capture on the sidecar so the user's next utterance
           // gets transcribed + run through the LLM. The session_end
           // event will land in `audioSessions.onComplete` above, which
