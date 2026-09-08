@@ -270,10 +270,12 @@ static void jarvisTrayRebuild(const char* header, int waiting, int paused, int m
     });
 }
 
-// gTrayShouldQuit is set true only by jarvisTrayQuit. webview_go stops the app
-// run loop when a panel window closes (on_window_destroyed -> terminate ->
-// [NSApp stop]); that must NOT end the sidecar. So jarvisTrayRun re-enters the
-// run loop after any stop and only returns when we actually want to quit.
+// gTrayShouldQuit is set true only by jarvisTrayQuit. A webview window closing
+// must NOT end the sidecar, and the patched Cocoa terminate_impl is what stops
+// it trying: once webview_set_host_owns_run_loop(1) is raised below, a window
+// close no longer calls [NSApp stop] at all (see JARVIS_PATCH.md). This
+// re-enter loop is the BACKSTOP for anything that stops the loop anyway, not
+// the mechanism -- it only returns when we actually want to quit.
 static volatile int gTrayShouldQuit = 0;
 
 // jarvisTrayRun runs the Cocoa main loop (blocks until jarvisTrayQuit).

@@ -29,7 +29,7 @@
  
  namespace webview {
  namespace detail {
-@@ -1551,6 +1566,19 @@
+@@ -1551,6 +1566,26 @@
    return objc::msg_send<id>("NSString"_cls, "stringWithUTF8String:"_sel, s);
  }
  
@@ -37,19 +37,26 @@
 + * PATCHED (jarvis): does something OTHER than a webview window own the Cocoa
 + * run loop right now? See webview_set_host_owns_run_loop.
 + *
-+ * Function-local static rather than a namespace-scope global: this header is
-+ * included by more than one translation unit (the cgo preamble includes it too)
-+ * and a plain global would be a duplicate symbol at link time.
++ * Function-local static in an inline function, not a namespace-scope global:
++ * this is a header-only library, so a plain definition here would be a
++ * duplicate symbol the moment a second C++ translation unit included the
++ * implementation section. The ODR merges this one.
++ *
++ * Atomic because `terminate()` is documented as callable from any thread. Every
++ * caller in this codebase reaches it on the main thread (window close is
++ * dispatched there, and the Go binding wraps Terminate in Dispatch), so there is
++ * no live race today -- but the guarantee costs nothing and the class already
++ * uses the same pattern for `first` below.
 + */
-+inline bool &jarvis_host_owns_run_loop() {
-+  static bool owns = false;
++inline std::atomic<bool> &jarvis_host_owns_run_loop() {
++  static std::atomic<bool> owns{false};
 +  return owns;
 +}
 +
  class cocoa_wkwebview_engine : public engine_base {
  public:
    cocoa_wkwebview_engine(bool debug, void *window)
-@@ -1634,7 +1662,31 @@
+@@ -1634,7 +1669,31 @@
    void *window_impl() override { return (void *)m_window; }
    void *widget_impl() override { return (void *)m_webview; }
    void *browser_controller_impl() override { return (void *)m_webview; };
@@ -82,7 +89,7 @@
    void run_impl() override {
      auto app = get_shared_application();
      objc::msg_send<void>(app, "run"_sel);
-@@ -1895,6 +1947,19 @@
+@@ -1895,6 +1954,19 @@
      dispatch([this] { on_window_destroyed(); });
    }
    void set_up_window() {
@@ -102,7 +109,7 @@
      objc::autoreleasepool arp;
  
      // Main window
-@@ -2022,23 +2087,14 @@
+@@ -2022,23 +2094,14 @@
  
    // Blocks while depleting the run loop of events.
    void deplete_run_loop_event_queue() {
@@ -134,7 +141,7 @@
    }
  
    bool m_debug{};
-@@ -3179,9 +3235,10 @@
+@@ -3179,9 +3242,10 @@
                      nullptr, hInstance, this);
  
      if (m_owns_window) {
@@ -148,7 +155,7 @@
      }
  
      auto cb =
-@@ -3500,7 +3557,16 @@
+@@ -3500,7 +3564,16 @@
  
  WEBVIEW_API webview_t webview_create(int debug, void *wnd) {
    auto w = new webview::webview(debug, wnd);
@@ -166,7 +173,7 @@
      delete w;
      return nullptr;
    }
-@@ -3519,6 +3585,17 @@
+@@ -3519,6 +3592,17 @@
    static_cast<webview::webview *>(w)->terminate();
  }
  

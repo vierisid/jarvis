@@ -96,7 +96,10 @@ grep -q "w->browser_controller()" "$HEADER"                 # reject half-built 
 # onboarding windows hand control back to main(). Losing either silently is a
 # hang, not a build failure, so assert both.
 grep -q "webview_set_host_owns_run_loop" "$HEADER"          # cocoa: host-owned loop flag
-grep -q "jarvis_host_owns_run_loop()) {" "$HEADER"          # cocoa: terminate still stops a window-owned loop
+# The whole guard, not just its condition: an inverted `if (` or an emptied body
+# both leave the string "jarvis_host_owns_run_loop()) {" in place while breaking
+# it in the direction where first run hangs.
+grep -A1 'if (!jarvis_host_owns_run_loop()) {' "$HEADER" | grep -q 'stop_run_loop();'
 grep -q "PATCHED (jarvis)" "$VENDOR_DIR/webview.go"         # nil WebView on NULL handle
 grep -q "PATCHED (jarvis)" "$VENDOR_DIR/jarvis_native.go"   # browser controller accessor
 grep -q "SetHostOwnsRunLoop" "$VENDOR_DIR/jarvis_native.go" # cocoa: the flag's Go binding

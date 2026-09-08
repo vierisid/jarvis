@@ -1570,12 +1570,19 @@ inline id operator"" _str(const char *s, std::size_t) {
  * PATCHED (jarvis): does something OTHER than a webview window own the Cocoa
  * run loop right now? See webview_set_host_owns_run_loop.
  *
- * Function-local static rather than a namespace-scope global: this header is
- * included by more than one translation unit (the cgo preamble includes it too)
- * and a plain global would be a duplicate symbol at link time.
+ * Function-local static in an inline function, not a namespace-scope global:
+ * this is a header-only library, so a plain definition here would be a
+ * duplicate symbol the moment a second C++ translation unit included the
+ * implementation section. The ODR merges this one.
+ *
+ * Atomic because `terminate()` is documented as callable from any thread. Every
+ * caller in this codebase reaches it on the main thread (window close is
+ * dispatched there, and the Go binding wraps Terminate in Dispatch), so there is
+ * no live race today -- but the guarantee costs nothing and the class already
+ * uses the same pattern for `first` below.
  */
-inline bool &jarvis_host_owns_run_loop() {
-  static bool owns = false;
+inline std::atomic<bool> &jarvis_host_owns_run_loop() {
+  static std::atomic<bool> owns{false};
   return owns;
 }
 

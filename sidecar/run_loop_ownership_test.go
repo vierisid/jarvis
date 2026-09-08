@@ -1,6 +1,7 @@
 package main
 
 import (
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,26 +26,40 @@ import (
 // once. These are cheap and they run on every platform, unlike the Cocoa code
 // they protect.
 func TestHostOwnsRunLoopIsDeclaredOnlyByTheTray(t *testing.T) {
-	entries, err := filepath.Glob("*.go")
-	if err != nil {
-		t.Fatalf("glob: %v", err)
-	}
-	for _, path := range entries {
-		if strings.HasSuffix(path, "_test.go") {
-			continue
-		}
-		src, err := os.ReadFile(path)
+	// Walked, not globbed: a glob of the package directory would miss a call
+	// added under internal/, which is a real place for one to appear.
+	// third_party is upstream's tree and defines the binding itself.
+	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			t.Fatalf("read %s: %v", path, err)
+			return err
 		}
-		if !strings.Contains(string(src), "SetHostOwnsRunLoop") {
-			continue
+		if d.IsDir() {
+			if d.Name() == "third_party" || d.Name() == "node_modules" || d.Name() == "dist" {
+				return filepath.SkipDir
+			}
+			return nil
 		}
-		if path != "tray_darwin.go" {
+		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+			return nil
+		}
+		src, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return rerr
+		}
+		// A CALL, not a mention: the identifier appears in prose in more than
+		// one comment, and flagging those would train people to ignore this.
+		if !strings.Contains(string(src), "SetHostOwnsRunLoop(") {
+			return nil
+		}
+		if filepath.ToSlash(path) != "tray_darwin.go" {
 			t.Errorf("%s calls SetHostOwnsRunLoop; only the tray may, and only as it "+
 				"enters the shared run loop. Anything earlier makes Terminate a no-op "+
 				"for the pre-tray first-run windows, which then never return from Run().", path)
 		}
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("walk: %v", err)
 	}
 }
 
@@ -110,8 +125,12 @@ func TestRunLoopBindingSurvivesReVendoring(t *testing.T) {
 			"without the jarvis patch?)")
 	}
 	// The half that a silent revert would take: without this, terminate is an
-	// unconditional no-op again and first run hangs.
-	if !strings.Contains(text, "jarvis_host_owns_run_loop()) {") {
+	// unconditional no-op again and first run hangs. Assert the whole guard,
+	// not just its condition -- `if (jarvis_host_owns_run_loop()) {` (inverted)
+	// and an empty body both read as "present" to a looser check, and both
+	// break it in the direction that hangs.
+	guard := "if (!jarvis_host_owns_run_loop()) {\n      stop_run_loop();\n    }"
+	if !strings.Contains(text, guard) {
 		t.Fatal("webview.h's Cocoa terminate_impl no longer stops a window-owned " +
 			"run loop; the pre-tray first-run windows will hang in Run()")
 	}

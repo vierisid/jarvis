@@ -163,7 +163,7 @@ Two shape decisions worth keeping:
 
 - **A new file, not a hunk in `webview.go` or `webview.h`.** It touches no
   upstream source, so it has nothing to conflict with when the monthly bot
-  re-vendors — unlike `webview.h`, which already carries five hunks and whose
+  re-vendors — unlike `webview.h`, which already carries several hunks and whose
   win32 constructor context this file explicitly warns about above. `patch`
   creates it from a `--- /dev/null` hunk, and it must NOT go in `KEEP_FILES`:
   the whole point is that the patch carries it.
@@ -172,7 +172,7 @@ Two shape decisions worth keeping:
   `NativeHandle` with a different signature, and a package-level function has
   a far smaller collision surface.
 
-Unlike the other four, this patch cannot be silently reverted: `internal/winchrome`
+Unlike the others, this patch cannot be silently reverted: `internal/winchrome`
 *calls* `webview.BrowserController`, so losing it is a **build failure** on the
 Windows cross-build in `test.yml` and `update-webview.yml`, not a green PR that
 quietly dropped a behavior. The sanity grep in `vendor-webview.sh` is kept
