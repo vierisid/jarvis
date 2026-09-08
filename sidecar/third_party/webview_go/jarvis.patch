@@ -1,6 +1,27 @@
 --- a/libs/webview/include/webview.h
 +++ b/libs/webview/include/webview.h
-@@ -1471,6 +1471,7 @@
+@@ -215,6 +215,20 @@
+ WEBVIEW_API void webview_terminate(webview_t w);
+ 
+ /**
++ * PATCHED (jarvis): declare that a HOST-OWNED run loop is running, so a
++ * window's terminate must not stop it.
++ *
++ * Cocoa only; a no-op elsewhere. The sidecar's tray runs one shared [NSApp run]
++ * loop that every later window (panels, settings, logs) lives under, and a
++ * window closing must not take the app down with it. But the FIRST-RUN windows
++ * open before the tray exists and own the loop themselves, so for those
++ * terminate has to work exactly as upstream intends.
++ *
++ * Set it to 1 immediately before entering the shared loop and leave it there.
++ */
++WEBVIEW_API void webview_set_host_owns_run_loop(int owns);
++
++/**
+  * Schedules a function to be invoked on the thread with the run/event loop.
+  * Use this function e.g. to interact with the library or native handles.
+  *
+@@ -1471,6 +1485,7 @@
  #include <CoreGraphics/CoreGraphics.h>
  #include <objc/NSObjCRuntime.h>
  #include <objc/objc-runtime.h>
@@ -8,26 +29,60 @@
  
  namespace webview {
  namespace detail {
-@@ -1634,7 +1635,17 @@
+@@ -1551,6 +1566,19 @@
+   return objc::msg_send<id>("NSString"_cls, "stringWithUTF8String:"_sel, s);
+ }
+ 
++/**
++ * PATCHED (jarvis): does something OTHER than a webview window own the Cocoa
++ * run loop right now? See webview_set_host_owns_run_loop.
++ *
++ * Function-local static rather than a namespace-scope global: this header is
++ * included by more than one translation unit (the cgo preamble includes it too)
++ * and a plain global would be a duplicate symbol at link time.
++ */
++inline bool &jarvis_host_owns_run_loop() {
++  static bool owns = false;
++  return owns;
++}
++
+ class cocoa_wkwebview_engine : public engine_base {
+ public:
+   cocoa_wkwebview_engine(bool debug, void *window)
+@@ -1634,7 +1662,31 @@
    void *window_impl() override { return (void *)m_window; }
    void *widget_impl() override { return (void *)m_webview; }
    void *browser_controller_impl() override { return (void *)m_webview; };
 -  void terminate_impl() override { stop_run_loop(); }
 +  void terminate_impl() override {
-+    // PATCHED (jarvis): no-op on Cocoa. The sidecar runs every webview window
-+    // (panels, settings, logs) under the tray's single shared [NSApp run] loop.
-+    // on_window_destroyed() calls terminate() when the LAST webview window
-+    // closes; the upstream behavior here is stop_run_loop() -> [NSApp stop],
-+    // which stops the tray's loop. Re-entering [NSApp run] afterwards leaves the
-+    // main dispatch queue unserviced, so the next webview.New()'s dispatch_sync
-+    // to the main thread hangs forever (and the pebble's main-queue paint stalls
-+    // + tray quit can't post). The app must only ever quit via the tray's own
-+    // jarvisTrayQuit ([NSApp stop] + gTrayShouldQuit), never on a window close.
++    // PATCHED (jarvis): no-op on Cocoa ONCE THE TRAY OWNS THE LOOP. The sidecar
++    // runs every webview window (panels, settings, logs) under the tray's
++    // single shared [NSApp run] loop. on_window_destroyed() calls terminate()
++    // when the LAST webview window closes; the upstream behavior here is
++    // stop_run_loop() -> [NSApp stop], which stops the tray's loop. Re-entering
++    // [NSApp run] afterwards leaves the main dispatch queue unserviced, so the
++    // next webview.New()'s dispatch_sync to the main thread hangs forever (and
++    // the pebble's main-queue paint stalls + tray quit can't post). The app must
++    // only ever quit via the tray's own jarvisTrayQuit ([NSApp stop] +
++    // gTrayShouldQuit), never on a window close.
++    //
++    // The GUARD is the whole point, and skipping it cost a paid user their
++    // first run: the connect and onboarding windows open BEFORE the tray, own
++    // this loop themselves, and end by calling terminate() to hand control back
++    // to main(). Made unconditionally no-op, that call did nothing, run()
++    // never returned, and the window sat open on its "connected" screen with
++    // the enrollment token captured but never saved -- so the sidecar never
++    // dialled the brain and the hosted setup page waited for a device that
++    // would never phone home. Before the tray there is no shared loop to
++    // protect, and terminate must mean terminate.
++    if (!jarvis_host_owns_run_loop()) {
++      stop_run_loop();
++    }
 +  }
    void run_impl() override {
      auto app = get_shared_application();
      objc::msg_send<void>(app, "run"_sel);
-@@ -1895,6 +1906,19 @@
+@@ -1895,6 +1947,19 @@
      dispatch([this] { on_window_destroyed(); });
    }
    void set_up_window() {
@@ -47,7 +102,7 @@
      objc::autoreleasepool arp;
  
      // Main window
-@@ -2022,23 +2046,14 @@
+@@ -2022,23 +2087,14 @@
  
    // Blocks while depleting the run loop of events.
    void deplete_run_loop_event_queue() {
@@ -79,7 +134,7 @@
    }
  
    bool m_debug{};
-@@ -3179,9 +3194,10 @@
+@@ -3179,9 +3235,10 @@
                      nullptr, hInstance, this);
  
      if (m_owns_window) {
@@ -93,7 +148,7 @@
      }
  
      auto cb =
-@@ -3500,7 +3516,16 @@
+@@ -3500,7 +3557,16 @@
  
  WEBVIEW_API webview_t webview_create(int debug, void *wnd) {
    auto w = new webview::webview(debug, wnd);
@@ -111,6 +166,24 @@
      delete w;
      return nullptr;
    }
+@@ -3519,6 +3585,17 @@
+   static_cast<webview::webview *>(w)->terminate();
+ }
+ 
++WEBVIEW_API void webview_set_host_owns_run_loop(int owns) {
++#if defined(WEBVIEW_COCOA)
++  webview::detail::jarvis_host_owns_run_loop() = owns != 0;
++#else
++  // Windows and GTK stop their loops per window and have no shared host loop
++  // to protect, so there is nothing to declare. Present on every platform
++  // anyway, so the Go caller needs no build tag of its own.
++  (void)owns;
++#endif
++}
++
+ WEBVIEW_API void webview_dispatch(webview_t w, void (*fn)(webview_t, void *),
+                                   void *arg) {
+   static_cast<webview::webview *>(w)->dispatch([=]() { fn(w, arg); });
 --- a/webview.go
 +++ b/webview.go
 @@ -155,6 +155,16 @@
@@ -132,7 +205,7 @@
  
 --- /dev/null
 +++ b/jarvis_native.go
-@@ -0,0 +1,44 @@
+@@ -0,0 +1,65 @@
 +package webview
 +
 +/*
@@ -176,4 +249,25 @@
 +		return nil
 +	}
 +	return unsafe.Pointer(C.webview_get_native_handle(iw.w, C.WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER))
++}
++
++// PATCHED (jarvis): declare that a host-owned run loop is running.
++//
++// Cocoa only; a no-op on Windows and GTK, which stop their loops per window.
++//
++// The sidecar's tray runs ONE shared [NSApp run] loop that every window opened
++// afterwards (panels, settings, logs) lives under, so a window closing must not
++// stop it -- see terminate_impl in webview.h for what breaks if it does. The
++// first-run windows are the exception that makes this a flag rather than an
++// unconditional no-op: they open before the tray, own the loop themselves, and
++// call Terminate to hand control back to main().
++//
++// Call with true once, immediately before entering the shared loop. There is no
++// matching false: the tray owns the loop until the process exits.
++func SetHostOwnsRunLoop(owns bool) {
++	v := C.int(0)
++	if owns {
++		v = C.int(1)
++	}
++	C.webview_set_host_owns_run_loop(v)
 +}

@@ -42,3 +42,24 @@ func BrowserController(w WebView) unsafe.Pointer {
 	}
 	return unsafe.Pointer(C.webview_get_native_handle(iw.w, C.WEBVIEW_NATIVE_HANDLE_KIND_BROWSER_CONTROLLER))
 }
+
+// PATCHED (jarvis): declare that a host-owned run loop is running.
+//
+// Cocoa only; a no-op on Windows and GTK, which stop their loops per window.
+//
+// The sidecar's tray runs ONE shared [NSApp run] loop that every window opened
+// afterwards (panels, settings, logs) lives under, so a window closing must not
+// stop it -- see terminate_impl in webview.h for what breaks if it does. The
+// first-run windows are the exception that makes this a flag rather than an
+// unconditional no-op: they open before the tray, own the loop themselves, and
+// call Terminate to hand control back to main().
+//
+// Call with true once, immediately before entering the shared loop. There is no
+// matching false: the tray owns the loop until the process exits.
+func SetHostOwnsRunLoop(owns bool) {
+	v := C.int(0)
+	if owns {
+		v = C.int(1)
+	}
+	C.webview_set_host_owns_run_loop(v)
+}

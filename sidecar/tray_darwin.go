@@ -315,6 +315,8 @@ import (
 	"strings"
 	"time"
 	"unsafe"
+
+	webview "github.com/webview/webview_go"
 )
 
 // Pin the main goroutine to the process's main OS thread (thread 0) for the
@@ -468,5 +470,11 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 		<-ctx.Done()
 		C.jarvisTrayQuit()
 	}()
+	// From here the tray owns the Cocoa run loop, so a window closing must not
+	// stop it (webview.h terminate_impl explains what breaks if it does). Set
+	// LAST, immediately before entering the loop: everything before this point
+	// -- the first-run connect window, the onboarding wizard -- owns the loop
+	// itself and needs Terminate to actually terminate.
+	webview.SetHostOwnsRunLoop(true)
 	C.jarvisTrayRun() // blocks on [NSApp run]
 }

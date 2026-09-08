@@ -90,8 +90,16 @@ grep -q "PATCHED (jarvis)" "$HEADER"
 grep -q "ShowWindow(m_window, SW_HIDE)" "$HEADER"           # win32: no open flash
 grep -q "isMainThread" "$HEADER"                            # cocoa: main-thread window
 grep -q "w->browser_controller()" "$HEADER"                 # reject half-built engines
+# The cocoa terminate guard, in BOTH directions. It had no marker until a lost
+# first run made the case for one: the no-op half protects the tray's shared
+# loop, and the stop_run_loop half is what lets the pre-tray connect and
+# onboarding windows hand control back to main(). Losing either silently is a
+# hang, not a build failure, so assert both.
+grep -q "webview_set_host_owns_run_loop" "$HEADER"          # cocoa: host-owned loop flag
+grep -q "jarvis_host_owns_run_loop()) {" "$HEADER"          # cocoa: terminate still stops a window-owned loop
 grep -q "PATCHED (jarvis)" "$VENDOR_DIR/webview.go"         # nil WebView on NULL handle
 grep -q "PATCHED (jarvis)" "$VENDOR_DIR/jarvis_native.go"   # browser controller accessor
+grep -q "SetHostOwnsRunLoop" "$VENDOR_DIR/jarvis_native.go" # cocoa: the flag's Go binding
 
 # Record the pinned version (single source of truth for the update workflow).
 printf '%s\n' "$VERSION" > "$VENDOR_DIR/UPSTREAM_VERSION"

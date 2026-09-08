@@ -2,10 +2,11 @@
 
 This is a local copy of `github.com/webview/webview_go` (the pinned version is
 in `UPSTREAM_VERSION`), wired in via a `replace` directive in `sidecar/go.mod`,
-with **five patches**, all carried by `jarvis.patch`: a Win32 one for the open
+with **six patches**, all carried by `jarvis.patch`: a Win32 one for the open
 flash, a Cocoa one to create the window on the main thread, a `webview_create`
 check that rejects a half-built engine, a NULL-handle guard in `webview.go`,
-and a browser-controller accessor in a file of our own, `jarvis_native.go`.
+a browser-controller accessor in a file of our own, `jarvis_native.go`, and a
+Cocoa `terminate` that stops the run loop only when a window actually owns it.
 
 `jarvis.patch` must carry EVERY vendored edit. `vendor-webview.sh` deletes the
 vendor directory and copies pristine upstream over it, keeping only
@@ -176,3 +177,45 @@ Unlike the other four, this patch cannot be silently reverted: `internal/winchro
 Windows cross-build in `test.yml` and `update-webview.yml`, not a green PR that
 quietly dropped a behavior. The sanity grep in `vendor-webview.sh` is kept
 anyway, both for consistency and because it names the intent.
+
+## The Cocoa terminate guard
+
+The sidecar's tray runs ONE shared `[NSApp run]` loop, and every window opened
+afterwards (panels, settings, logs) lives under it. Upstream's
+`on_window_destroyed()` calls `terminate()` when the last webview window closes,
+whose Cocoa implementation is `stop_run_loop()` -> `[NSApp stop]` -- which would
+stop the tray's loop. Re-entering `[NSApp run]` afterwards leaves the main
+dispatch queue unserviced, so the next `webview.New()`'s `dispatch_sync` to the
+main thread hangs forever, the pebble's main-queue paint stalls, and the tray
+can't post its own quit. So `terminate_impl` must not stop that loop.
+
+It was first patched to be an unconditional no-op, and that broke the other
+half of the story. The first-run windows -- the hosted connect window
+(`hosted_window.go`) and the onboarding wizard (`setup_onboarding.go`) -- open
+BEFORE the tray exists and own the run loop themselves. They end by calling
+`Terminate()` to return from `Run()` and hand control back to `main()`. Made a
+no-op, that call did nothing: `Run()` never returned, the window sat open on its
+"connected" screen, and the enrollment token it had already captured was never
+saved. The user had paid, the brain was provisioned, and the sidecar never
+dialled it -- so the hosted setup page waited forever on a device that would
+never phone home. There was no crash and no error, on either side.
+
+The fix is a flag rather than a no-op:
+
+```cpp
+  void terminate_impl() override {
+    if (!jarvis_host_owns_run_loop()) {
+      stop_run_loop();
+    }
+  }
+```
+
+`webview_set_host_owns_run_loop(1)` (Go: `webview.SetHostOwnsRunLoop(true)`) is
+called once, from `tray_darwin.go`, immediately before entering
+`jarvisTrayRun()`. Everything before that point owns the loop and terminates
+normally; everything after is under the tray's loop and cannot stop it. The C
+entry point exists on every platform and is a no-op off Cocoa, so the Go caller
+needs no build tag.
+
+Both halves have their own sanity grep in `vendor-webview.sh`. Neither is
+detectable by the build: losing either one is a hang, not a compile error.
