@@ -162,6 +162,14 @@ export interface LLMConfig {
    */
   hosted_llm?: boolean;
   /**
+   * True when this install is HOSTED at all, which is wider than `hosted_llm`:
+   * a hosted deployment with no LLM proxy configured has no usejarvis_ai block
+   * and so `hosted_llm` is false while this stays true. Anything the daemon
+   * gates on `isHostedInstall` -- device enrolment -- must read THIS, or the UI
+   * offers a control the server refuses.
+   */
+  hosted_install?: boolean;
+  /**
    * Routing reality, computed by the daemon from the SAME per-slot resolution
    * the binding paths use (explicit ref → llm.default → plan alias). The UI
    * renders THIS for "what will actually run", never a re-derivation — the
@@ -417,7 +425,19 @@ async function postJson<T>(
   });
   if (!r.ok) {
     const text = await r.text();
-    throw new Error(text || `HTTP ${r.status}`);
+    // The daemon's error routes answer `{"error": "..."}`. Throwing the raw
+    // body put the braces and quotes straight into a toast, which is how a
+    // deliberately explanatory refusal (the hosted enrolment 403, say) reached
+    // the user as JSON.
+    let message = text;
+    try {
+      const parsed = JSON.parse(text) as { error?: unknown; message?: unknown };
+      const field = parsed.error ?? parsed.message;
+      if (typeof field === "string" && field) message = field;
+    } catch {
+      // Not JSON. The body is the message.
+    }
+    throw new Error(message || `HTTP ${r.status}`);
   }
   return (await r.json()) as T;
 }
@@ -1026,12 +1046,16 @@ export function useSettingsData() {
       name: string,
     ): Promise<{ ok: true; token: string; name: string } | { ok: false; message: string }> => {
       try {
-        const r = await postJson<{ token: string; name: string }>(
+        // The route returns { token, sidecar: { name, ... } } -- enrollSidecar's
+        // own shape. Reading a top-level `name` made every success toast say
+        // `Enrolled "undefined"`; fall back to what was asked for so a future
+        // shape change degrades to the typed name rather than to nothing.
+        const r = await postJson<{ token: string; sidecar?: { name?: string } }>(
           "/api/sidecars/enroll",
           { name },
         );
         await refresh();
-        return { ok: true, token: r.token, name: r.name };
+        return { ok: true, token: r.token, name: r.sidecar?.name ?? name };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : "Failed" };
       }

@@ -7,6 +7,7 @@ import { confirmDialog } from "../../../ui/ConfirmDialog";
 // power-user surface. The retheme cascade on .v2-set__legacy-embed
 // remaps --j-* → v2 tokens.
 import { SidecarConfigEditor } from "../../../../components/settings/SidecarConfigEditor";
+import { addDeviceMode, noDevicesCopy } from "./sidecar-add-device";
 
 export function SidecarTab({
   data,
@@ -16,6 +17,9 @@ export function SidecarTab({
   onToast: (text: string, tone?: "ok" | "warn") => void;
 }) {
   const { sidecars } = data;
+  // Which "add a device" section belongs here, and why: sidecar-add-device.ts.
+  const mode = addDeviceMode(data.llm);
+
   const [enrollName, setEnrollName] = useState("");
   const [enrolling, setEnrolling] = useState(false);
   const [enrollResult, setEnrollResult] = useState<{ token: string; name: string } | null>(null);
@@ -58,7 +62,31 @@ export function SidecarTab({
 
   return (
     <div>
-      {/* Enroll new sidecar */}
+      {/* Add a device. Hosted installs are told how; self-hosted get the form. */}
+      {mode === "unknown" ? (
+        <section className="v2-set__section">
+          <div className="v2-set__section-head">
+            <div>
+              <h3 className="v2-set__section-title">Add a device</h3>
+              <div className="v2-set__section-sub">
+                Checking how this install adds devices…
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : mode === "hosted" ? (
+        <section className="v2-set__section">
+          <div className="v2-set__section-head">
+            <div>
+              <h3 className="v2-set__section-title">Add a device</h3>
+              <div className="v2-set__section-sub">
+                Install Jarvis on the new device and sign in with your account — it enrolls itself
+                and appears below. There is no token to copy.
+              </div>
+            </div>
+          </div>
+        </section>
+      ) : (
       <section className="v2-set__section">
         <div className="v2-set__section-head">
           <div>
@@ -112,6 +140,7 @@ export function SidecarTab({
           </div>
         )}
       </section>
+      )}
 
       {/* Enrolled sidecars list */}
       <section className="v2-set__section">
@@ -127,7 +156,7 @@ export function SidecarTab({
         </div>
 
         {sidecars.length === 0 ? (
-          <div className="v2-set__empty">Enroll one above to get started.</div>
+          <div className="v2-set__empty">{noDevicesCopy(mode)}</div>
         ) : (
           <ul className="v2-set__sidecar-list" role="list">
             {sidecars.map((sc) => (

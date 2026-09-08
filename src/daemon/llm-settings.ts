@@ -23,6 +23,7 @@ import {
   hasUsejarvisAi,
   USEJARVIS_PROVIDER_NAME,
   validateHostedModelRef,
+  isHostedInstall,
 } from './usejarvis-ai.ts';
 import { getSetting, setSetting } from '../vault/settings.ts';
 import { getSecret, setSecret, deleteSecret, hasSecret } from '../vault/keychain.ts';
@@ -116,6 +117,10 @@ export type LLMSettingsResponse = {
   available_kinds: LLMProviderKind[];
   /** True on hosted installs (the system-owned usejarvis_ai block is live). */
   hosted_llm?: boolean;
+  /** True when the install is HOSTED at all -- see isHostedInstall. Wider than
+   *  `hosted_llm`, and the field a client must use for anything the daemon
+   *  gates on the same predicate (device enrolment). */
+  hosted_install?: boolean;
   /** Provider-side prompt caching. Defaults to true; only explicit false disables. */
   prompt_cache: boolean;
   /**
@@ -253,6 +258,14 @@ export function getLLMSettings(config: JarvisConfig): LLMSettingsResponse {
     // Derived from the config.yaml block — the single source of hostedness —
     // never from provider-map key presence, which a legacy row can fake.
     hosted_llm: hasUsejarvisAi(config),
+    // The WIDER signal, for decisions the daemon gates on `isHostedInstall`
+    // rather than on the hosted-LLM block alone -- device enrolment being the
+    // first. Shipped alongside rather than replacing `hosted_llm`, because the
+    // two answer different questions: this one is "is this install ours", that
+    // one is "is the hosted LLM available", and a hosted deployment with no LLM
+    // proxy configured is the case where they differ. A client that gated a
+    // device decision on `hosted_llm` would show a button the daemon 403s.
+    hosted_install: isHostedInstall(config),
   };
 }
 
