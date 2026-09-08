@@ -243,9 +243,11 @@ jobs:
   # cross-build above only proves the package compiles. `go test` also compiles
   # every _test.go under GOOS=windows, which the cross-build (build-only) never
   # checks. Scoped to a named few to keep runtime bounded; the full logic suite
-  # is covered on linux. The hotkey tests need the real RegisterHotKey — a
-  # refused registration is exactly what has to surface as an error, and no
-  # other platform can produce one.
+  # is covered on linux. The TestHotkeys* prefix is matched as a group so a new
+  # hotkey test runs without editing this file; they live here rather than on
+  # linux because the file is windows-tagged and one of them needs the real
+  # RegisterHotKey — a refused registration is exactly what has to surface as an
+  # error, and no other platform can produce one.
   sidecar-test-windows:
     runs-on: windows-latest
     steps:
@@ -262,7 +264,18 @@ jobs:
         run: |
           set -euo pipefail
           export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
-          go test -run '^(TestMainPebbleDrawStaysInsideCrop|TestStartHotkeyListenerReportsARefusedRegistration|TestRegisterHotKeyErrorIsActionable)$' -v .
+          pattern='^(TestMainPebbleDrawStaysInsideCrop|TestHotkeys.*)$'
+          # Same reason as the parity test above: `go test -run` with no match
+          # prints "no tests to run" and exits 0. A floor rather than an exact
+          # count, so the TestHotkeys.* group can grow without editing this, but
+          # a rename that empties it still fails here instead of quietly
+          # skipping every windows-only test we have.
+          listed=$(go test -list "$pattern" . | grep -c '^Test' || true)
+          if [ "$listed" -lt 5 ]; then
+            echo "::error::windows test pattern matched $listed tests, expected at least 5"
+            exit 1
+          fi
+          go test -count=1 -run "$pattern" -v .
 
   # Compile gate for the darwin cgo files (deeplink_darwin.go, the *_darwin
   # bridges): build tags hide them from the linux job, so without this their
