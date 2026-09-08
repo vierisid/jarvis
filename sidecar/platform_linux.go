@@ -59,7 +59,8 @@ func findChromiumExecutable(cfg *SidecarConfig) (string, error) {
 			return path, nil
 		}
 	}
-	return "", fmt.Errorf("no Chromium-based browser found (install Chrome, Chromium, Edge or Brave)")
+	return "", fmt.Errorf("no Chromium-based browser found (install Chrome, Chromium, Edge, Brave, Vivaldi or Opera, " +
+		"or point browser.executable_path at one)")
 }
 
 // linuxDefaultBrowser returns the executable name of the XDG default web

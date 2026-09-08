@@ -47,6 +47,17 @@ func findChromiumExecutable(cfg *SidecarConfig) (string, error) {
 		"/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
 		"/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
 		"/Applications/Vivaldi.app/Contents/MacOS/Vivaldi",
+		// Arc is Chromium, but it is the most heavily customized shell in this
+		// list and nobody here has confirmed it honours the two flags that
+		// matter: --remote-debugging-pipe (or the whole capability is dead) and
+		// --user-data-dir (or automation lands in the user's own session
+		// instead of the throwaway profile). So it goes LAST, where it can only
+		// be picked when no browser we trust is installed -- an Arc-only
+		// machine, which today gets no browser capability at all. That user
+		// trades a fast "unavailable" for a chance it works and a slow launch
+		// error if it does not; anyone with Chrome alongside is unaffected.
+		// Promote it once someone has driven it.
+		"/Applications/Arc.app/Contents/MacOS/Arc",
 	}
 	for _, c := range candidates {
 		if isExecutableFile(c) {
@@ -58,7 +69,8 @@ func findChromiumExecutable(cfg *SidecarConfig) (string, error) {
 			return path, nil
 		}
 	}
-	return "", fmt.Errorf("no Chromium-based browser found (install Chrome, Chromium, Edge or Brave)")
+	return "", fmt.Errorf("no Chromium-based browser found (install Chrome, Chromium, Edge, Brave, Vivaldi or Arc, " +
+		"or point browser.executable_path at one)")
 }
 
 func isExecutableFile(p string) bool {

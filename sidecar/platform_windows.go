@@ -65,7 +65,8 @@ func findChromiumExecutable(cfg *SidecarConfig) (string, error) {
 			return c, nil
 		}
 	}
-	return "", fmt.Errorf("no Chromium-based browser found (install Chrome, Edge or Brave)")
+	return "", fmt.Errorf("no Chromium-based browser found (install Chrome, Edge, Brave or Vivaldi, " +
+		"or point browser.executable_path at one)")
 }
 
 func isExecutableFile(p string) bool {
