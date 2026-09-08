@@ -29,14 +29,14 @@ var (
 
 // UIAutomation property IDs
 const (
-	UIA_BoundingRectanglePropertyId  = 30001
-	UIA_ProcessIdPropertyId          = 30002
-	UIA_ControlTypePropertyId        = 30003
-	UIA_NamePropertyId               = 30005
+	UIA_BoundingRectanglePropertyId   = 30001
+	UIA_ProcessIdPropertyId           = 30002
+	UIA_ControlTypePropertyId         = 30003
+	UIA_NamePropertyId                = 30005
 	UIA_IsKeyboardFocusablePropertyId = 30009
-	UIA_IsEnabledPropertyId          = 30010
-	UIA_AutomationIdPropertyId       = 30011
-	UIA_ClassNamePropertyId          = 30012
+	UIA_IsEnabledPropertyId           = 30010
+	UIA_AutomationIdPropertyId        = 30011
+	UIA_ClassNamePropertyId           = 30012
 )
 
 // UIAutomation pattern IDs
@@ -737,29 +737,76 @@ func uiaFindElements(state *uiaState, pid int, automationId, name, className, co
 		// blindly retry the same query). Surface the closest-named elements
 		// in the window so it can fix its search terms — exact-match Name
 		// conditions miss "Save As…" when asked for "Save".
-		if similar := collectNearMisses(state, window, name, controlType); len(similar) > 0 {
+		similar, truncated := collectNearMisses(state, window, name, controlType)
+		switch {
+		case len(similar) > 0:
 			out["similar"] = similar
-			out["hint"] = "no exact match; 'similar' lists close elements in this window — Name matching is exact and case-sensitive, so retry with one of those exact names, or use desktop_snapshot to see everything"
-		} else {
-			out["hint"] = "no match and nothing similar found in this window — the target may not exist yet (still loading?) or lives in another window; run desktop_list_windows and desktop_snapshot to orient"
+			out["hint"] = "no exact match; 'similar' lists close elements in this window - Name matching is exact and case-sensitive, so retry with one of those exact names, or use desktop_snapshot to see everything"
+		case truncated:
+			// Only part of a large window was scanned, so "nothing similar"
+			// is not something we are in a position to say.
+			out["hint"] = "no exact match, and the search for similar elements stopped partway through a large window without finding one - that is not the same as there being none; run desktop_snapshot to see what this window actually contains"
+		default:
+			out["hint"] = "no match and nothing similar found in this window - the target may not exist yet (still loading?) or lives in another window; run desktop_list_windows and desktop_snapshot to orient"
 		}
 	}
 	return out, nil
 }
 
+// nearMissCondition narrows the near-miss walk where doing so cannot change
+// the answer.
+//
+// Only the nameless search qualifies. With no name, scoring keeps an element
+// solely for having the requested control type, so asking UIA for that type
+// up front returns the same candidates over a fraction of the tree. As soon
+// as a name is in play the walk has to stay wide: "you asked for a button
+// called Save, but there is a menu item called Save As" is the single most
+// useful correction this can offer, and filtering by control type first is
+// exactly what would throw it away.
+func nearMissCondition(state *uiaState, wantName, wantType string) (*ole.IDispatch, error) {
+	if wantName == "" && wantType != "" {
+		if ctrlID := controlTypeIdFromName(wantType); ctrlID > 0 {
+			if cond, err := uiaCreatePropertyCondition(state.automation, UIA_ControlTypePropertyId, ctrlID); err == nil {
+				return cond, nil
+			}
+		}
+	}
+	return uiaCreateTrueCondition(state.automation)
+}
+
 // collectNearMisses walks the window subtree and returns up to 8 elements
 // whose name loosely matches the requested one (or whose control type
 // matches when no name was given). Read-only: nothing is cached.
-func collectNearMisses(state *uiaState, window *ole.IDispatch, wantName, wantType string) []map[string]any {
-	trueCond, err := uiaCreateTrueCondition(state.automation)
-	if err != nil {
-		return nil
-	}
-	defer trueCond.Release()
+//
+// This runs on the failure path, and the walk is not free: FindAll over a
+// window's descendants materialises the whole subtree before any of the
+// scoring below happens, which is the real cost here (scanCap only bounds
+// what we then inspect). So the search is narrowed as far as the caller's
+// own criteria allow, and skipped outright when they leave nothing to score
+// against.
+// The second return says whether the scan was cut short by scanCap. An
+// empty result then means "nothing similar in the part we looked at", which
+// is not the same claim as "nothing similar in this window", and the caller
+// has to phrase its hint accordingly.
+func collectNearMisses(state *uiaState, window *ole.IDispatch, wantName, wantType string) ([]map[string]any, bool) {
+	want := strings.ToLower(strings.TrimSpace(wantName))
 
-	arr, err := uiaElementFindAll(window, TreeScope_Descendants, trueCond)
+	// Scoring needs either a name to be near or a control type to share.
+	// Searches by automation_id or class_name alone give neither, and every
+	// candidate would score zero after a full-tree walk.
+	if want == "" && wantType == "" {
+		return nil, false
+	}
+
+	cond, err := nearMissCondition(state, want, wantType)
+	if err != nil {
+		return nil, false
+	}
+	defer cond.Release()
+
+	arr, err := uiaElementFindAll(window, TreeScope_Descendants, cond)
 	if err != nil || arr == nil {
-		return nil
+		return nil, false
 	}
 	defer arr.Release()
 
@@ -767,13 +814,13 @@ func collectNearMisses(state *uiaState, window *ole.IDispatch, wantName, wantTyp
 		info  map[string]any
 		score int
 	}
-	want := strings.ToLower(strings.TrimSpace(wantName))
 	wantTokens := strings.Fields(want)
 
 	var candidates []scored
 	length := uiaArrayLength(arr)
 	const scanCap = 500 // bound the walk on huge trees
-	if length > scanCap {
+	truncated := length > scanCap
+	if truncated {
 		length = scanCap
 	}
 	for i := 0; i < length; i++ {
@@ -823,7 +870,7 @@ func collectNearMisses(state *uiaState, window *ole.IDispatch, wantName, wantTyp
 	for i, c := range candidates {
 		out[i] = c.info
 	}
-	return out
+	return out, truncated
 }
 
 // controlTypeIdFromName maps a human-readable control type name to its UIAutomation ID.
@@ -839,15 +886,15 @@ func controlTypeIdFromName(name string) int {
 // ── Win32 helpers ────────────────────────────────────────────────────
 
 var (
-	user32                   = syscall.NewLazyDLL("user32.dll")
-	kernel32                 = syscall.NewLazyDLL("kernel32.dll")
-	procGetForegroundWindow  = user32.NewProc("GetForegroundWindow")
+	user32                    = syscall.NewLazyDLL("user32.dll")
+	kernel32                  = syscall.NewLazyDLL("kernel32.dll")
+	procGetForegroundWindow   = user32.NewProc("GetForegroundWindow")
 	procGetWindowThreadProcId = user32.NewProc("GetWindowThreadProcessId")
-	procSetCursorPos         = user32.NewProc("SetCursorPos")
-	procMouseEvent           = user32.NewProc("mouse_event")
-	procSetForegroundWindow  = user32.NewProc("SetForegroundWindow")
-	procShowWindow           = user32.NewProc("ShowWindow")
-	procSleep                = kernel32.NewProc("Sleep")
+	procSetCursorPos          = user32.NewProc("SetCursorPos")
+	procMouseEvent            = user32.NewProc("mouse_event")
+	procSetForegroundWindow   = user32.NewProc("SetForegroundWindow")
+	procShowWindow            = user32.NewProc("ShowWindow")
+	procSleep                 = kernel32.NewProc("Sleep")
 )
 
 func win32GetForegroundWindow() uintptr {

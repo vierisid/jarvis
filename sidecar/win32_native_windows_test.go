@@ -43,3 +43,54 @@ func TestHresultTextMapsKnownUiaFailures(t *testing.T) {
 		t.Errorf("an unmapped HRESULT should still be reported verbatim: %s", got)
 	}
 }
+
+// The process-name fallback exists because packaged apps hand their window
+// to a broker, but it is also the one match that can pick up a window this
+// launch had nothing to do with. Reporting a window from an instance the
+// user already had open is a false success, and worse, it hands back a PID
+// the model will then try to drive.
+func TestPickLaunchedWindowIgnoresWindowsThatWereAlreadyOpen(t *testing.T) {
+	existing := windowInfo{Hwnd: 0x100, Title: "Calculator", Pid: 900, ProcessName: "Calculator"}
+	fresh := windowInfo{Hwnd: 0x200, Title: "Calculator", Pid: 901, ProcessName: "Calculator"}
+	ownWindow := windowInfo{Hwnd: 0x300, Title: "Notepad", Pid: 42, ProcessName: "notepad"}
+	preexisting := map[uintptr]bool{existing.Hwnd: true}
+
+	t.Run("a window owned by the launched pid wins outright", func(t *testing.T) {
+		got, how := pickLaunchedWindow([]windowInfo{existing, ownWindow}, 42, "notepad", true, preexisting)
+		if got == nil || got.Hwnd != ownWindow.Hwnd {
+			t.Fatalf("got %+v, want the pid-owned window", got)
+		}
+		if how != "pid" {
+			t.Errorf("matched by %q, want \"pid\"", how)
+		}
+	})
+
+	t.Run("an already-open window is never claimed as the launch result", func(t *testing.T) {
+		got, how := pickLaunchedWindow([]windowInfo{existing}, 42, "calc", true, preexisting)
+		if got != nil {
+			t.Fatalf("claimed a pre-existing window %+v (matched by %q)", got, how)
+		}
+	})
+
+	t.Run("a new window from the broker process is claimed", func(t *testing.T) {
+		got, how := pickLaunchedWindow([]windowInfo{existing, fresh}, 42, "calculator", true, preexisting)
+		if got == nil || got.Hwnd != fresh.Hwnd {
+			t.Fatalf("got %+v, want the newly opened window", got)
+		}
+		if how != "process_name" {
+			t.Errorf("matched by %q, want \"process_name\"", how)
+		}
+	})
+
+	t.Run("the name fallback stays shut until it is allowed", func(t *testing.T) {
+		if got, _ := pickLaunchedWindow([]windowInfo{fresh}, 42, "calculator", false, preexisting); got != nil {
+			t.Fatalf("name matching ran before its turn: %+v", got)
+		}
+	})
+
+	t.Run("no executable name means no name matching", func(t *testing.T) {
+		if got, _ := pickLaunchedWindow([]windowInfo{fresh}, 42, "", true, preexisting); got != nil {
+			t.Fatalf("matched %+v with nothing to match against", got)
+		}
+	})
+}

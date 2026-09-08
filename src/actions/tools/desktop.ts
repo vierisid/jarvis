@@ -474,7 +474,7 @@ export const desktopPressKeysTool: ToolDefinition = {
 
 export const desktopLaunchAppTool: ToolDefinition = {
   name: 'desktop_launch_app',
-  description: 'Launch an application by name or executable path. Use the name as it exists on the TARGET machine\'s OS -- e.g. "notepad" on Windows, "TextEdit" on macOS, "gedit" on Linux. Call list_sidecars first if you are unsure which OS the target runs. Returns the PID of the launched process.',
+  description: 'Launch an application by name or executable path. Use the name as it exists on the TARGET machine\'s OS -- e.g. "notepad" on Windows, "TextEdit" on macOS, "gedit" on Linux. Call list_sidecars first if you are unsure which OS the target runs. Returns the PID plus what is known about the app\'s window. When routed to a sidecar, "success" answers "is the app on screen?", not "did a process start?": success true with window_visible true means a window was seen and you can interact with it; success false with window_visible false means the process started but no window appeared (still loading, windowless, or it exited) - read the "note" and check desktop_list_windows rather than launching again; window_visible null means the window could NOT be checked on this machine, which is not a failure - the app may well be open, so verify with desktop_list_windows instead of relaunching.',
   category: 'desktop',
   parameters: {
     target: {

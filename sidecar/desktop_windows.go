@@ -137,6 +137,11 @@ $p = Start-Process -FilePath '%s' %s -PassThru
 @{ pid=$p.Id; name=$p.ProcessName } | ConvertTo-Json -Compress
 `, escaped, argsClause)
 
+	// Snapshot what is on screen before starting anything, so the
+	// process-name fallback below cannot hand back a window that belongs to
+	// an instance the user already had open.
+	preexisting := visibleWindowHandles()
+
 	out, err := runPS(script, 10*time.Second)
 	if err != nil {
 		return nil, fmt.Errorf("launch_app failed: %w", err)
@@ -154,12 +159,12 @@ $p = Start-Process -FilePath '%s' %s -PassThru
 	// process name (packaged apps hand the window to a broker process, e.g.
 	// calc.exe -> Calculator.exe).
 	pid := toInt(result["pid"])
-	win, matchedBy := waitForWindow(pid, executable, 5*time.Second)
+	win, matchedBy := waitForWindow(pid, executable, 5*time.Second, preexisting)
 	if win == nil {
 		result["success"] = false
 		result["window_visible"] = false
 		result["note"] = fmt.Sprintf(
-			"process started (pid %d) but no window appeared within 5s — the app may still be starting, be windowless, or have exited. Run desktop_list_windows to check before interacting; do NOT assume it is open.",
+			"process started (pid %d) but no window appeared within 5s - the app may still be starting, be windowless, or have exited. Run desktop_list_windows to check before interacting; do NOT assume it is open.",
 			pid)
 		return &RPCResult{Result: result}, nil
 	}
@@ -169,7 +174,7 @@ $p = Start-Process -FilePath '%s' %s -PassThru
 	result["window_title"] = win.Title
 	result["window_pid"] = win.Pid // may differ from launch pid for packaged apps
 	if matchedBy == "process_name" {
-		result["note"] = fmt.Sprintf("window belongs to pid %d (matched by process name; the launcher pid %d handed off) — use pid %d with desktop_snapshot/desktop_focus_window", win.Pid, pid, win.Pid)
+		result["note"] = fmt.Sprintf("window belongs to pid %d (matched by process name; the launcher pid %d handed off) - use pid %d with desktop_snapshot/desktop_focus_window", win.Pid, pid, win.Pid)
 	}
 	return &RPCResult{Result: result}, nil
 }

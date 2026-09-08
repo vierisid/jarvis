@@ -505,46 +505,6 @@ func (c *cdpClient) waitForBrowserReady(budget time.Duration) error {
 	}
 }
 
-// evalJSON evaluates a page script that returns a JSON string and unmarshals
-// it, surfacing page exceptions as errors instead of swallowing them.
-func (c *cdpClient) evalJSON(script string) (map[string]any, error) {
-	raw, err := c.send("Runtime.evaluate", map[string]any{
-		"expression":    script,
-		"returnByValue": true,
-	})
-	if err != nil {
-		return nil, err
-	}
-	var res struct {
-		Result struct {
-			Value string `json:"value"`
-		} `json:"result"`
-		ExceptionDetails *struct {
-			Text      string `json:"text"`
-			Exception struct {
-				Description string `json:"description"`
-			} `json:"exception"`
-		} `json:"exceptionDetails"`
-	}
-	if err := json.Unmarshal(raw, &res); err != nil {
-		return nil, fmt.Errorf("unexpected evaluate reply: %w", err)
-	}
-	if res.ExceptionDetails != nil {
-		desc := res.ExceptionDetails.Exception.Description
-		if desc == "" {
-			desc = res.ExceptionDetails.Text
-		}
-		return nil, fmt.Errorf("page script threw: %s", desc)
-	}
-	out := map[string]any{}
-	if res.Result.Value != "" {
-		if err := json.Unmarshal([]byte(res.Result.Value), &out); err != nil {
-			return nil, fmt.Errorf("page script returned non-JSON result: %q", res.Result.Value)
-		}
-	}
-	return out, nil
-}
-
 // shutdown tears down the connection and the browser process. Idempotent. Does
 // NOT touch activeCDP, so it is safe to call while holding activeCDP.mu.
 func (c *cdpClient) shutdown() {

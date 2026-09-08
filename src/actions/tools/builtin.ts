@@ -662,7 +662,7 @@ export const browserClickTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_click');
     if (target) {
       return routeToSidecar(target, 'browser_click', {
         element_id: params.element_id,
@@ -731,7 +731,7 @@ export const browserPressKeyTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_press_key');
     if (target) {
       return routeToSidecar(target, 'browser_press_key', { key: params.key }, 'browser');
     }

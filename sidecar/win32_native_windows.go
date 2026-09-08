@@ -192,32 +192,69 @@ func windowInventoryHint() string {
 	return "visible windows are: " + strings.Join(parts, ", ")
 }
 
+// visibleWindowHandles snapshots which windows are already on screen.
+// Taken before a launch, it is what lets the process-name fallback below
+// tell a window this launch produced from one that was already there.
+func visibleWindowHandles() map[uintptr]bool {
+	open := map[uintptr]bool{}
+	for _, w := range enumTopWindows() {
+		open[w.Hwnd] = true
+	}
+	return open
+}
+
 // waitForWindow polls for a visible window owned by pid, up to timeout.
 // Modern Windows apps often hand the real window to a different process
-// (packaged apps, brokers — e.g. calc.exe spawns Calculator.exe), so after
+// (packaged apps, brokers, e.g. calc.exe spawns Calculator.exe), so after
 // half the timeout it also accepts a window whose process name matches
 // exeBase. Returns the window and how it was matched, or nil.
-func waitForWindow(pid int, exeBase string, timeout time.Duration) (*windowInfo, string) {
+//
+// preexisting holds the windows that were already open when the launch
+// started, and the name fallback skips them. Without that, launching an app
+// that is already running and then fails to open a second window hands back
+// the window from the first instance, and the caller reports a success it
+// had no part in - against a PID the model will then try to drive.
+func waitForWindow(pid int, exeBase string, timeout time.Duration, preexisting map[uintptr]bool) (*windowInfo, string) {
 	exeBase = processBaseNameOf(exeBase)
 	deadline := time.Now().Add(timeout)
 	half := time.Now().Add(timeout / 2)
 
 	for {
-		if wins := windowsForPid(pid); len(wins) > 0 {
-			return &wins[0], "pid"
-		}
-		if exeBase != "" && time.Now().After(half) {
-			for _, w := range enumTopWindows() {
-				if strings.ToLower(w.ProcessName) == exeBase {
-					return &w, "process_name"
-				}
-			}
+		// One enumeration per poll feeds both matches; asking twice was pure
+		// duplicated work.
+		if w, how := pickLaunchedWindow(enumTopWindows(), pid, exeBase, time.Now().After(half), preexisting); w != nil {
+			return w, how
 		}
 		if time.Now().After(deadline) {
 			return nil, ""
 		}
 		time.Sleep(150 * time.Millisecond)
 	}
+}
+
+// pickLaunchedWindow chooses, from the windows currently on screen, the one
+// a launch produced. Split out from the polling so the matching rules can be
+// tested without a desktop.
+func pickLaunchedWindow(wins []windowInfo, pid int, exeBase string, allowNameMatch bool, preexisting map[uintptr]bool) (*windowInfo, string) {
+	// A window owned by the PID we just started is ours by construction, so
+	// this match needs no pre-existing guard.
+	for i := range wins {
+		if int(wins[i].Pid) == pid {
+			return &wins[i], "pid"
+		}
+	}
+	if !allowNameMatch || exeBase == "" {
+		return nil, ""
+	}
+	for i := range wins {
+		if preexisting[wins[i].Hwnd] {
+			continue
+		}
+		if strings.ToLower(wins[i].ProcessName) == exeBase {
+			return &wins[i], "process_name"
+		}
+	}
+	return nil, ""
 }
 
 // ── SendInput keyboard injection ─────────────────────────────────────
