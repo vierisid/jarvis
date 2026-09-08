@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { RealtimeVoiceController } from "../lib/RealtimeVoiceController";
 import { uuid } from "../lib/uuid";
+import { withWakeMicConstraints } from "../lib/wakeMic";
 
 const SPEECH_WAKE_INTERRUPT_COMMANDS = new Set([
   "stop",
@@ -141,12 +142,23 @@ export function classifySpeechWakeError(code: SpeechRecognitionErrorCode): "expe
 export function selectActiveWakeEngine(inputs: {
   isMicAvailable: boolean;
   wakeWordEnabled: boolean;
+  /**
+   * True when the machine's sidecar is already listening for the wake word
+   * natively, which makes a second detector in the browser pure duplication.
+   * See the note in AppShell for why this is currently always true.
+   */
+  nativeWakeActive: boolean;
   wakeEngine: WakeEngineChoice;
   speechRecognitionAvailable: boolean;
   speechWakeFatal: boolean;
 }): ActiveWakeEngine {
-  const { isMicAvailable, wakeWordEnabled, wakeEngine, speechRecognitionAvailable, speechWakeFatal } = inputs;
+  const { isMicAvailable, wakeWordEnabled, nativeWakeActive, wakeEngine, speechRecognitionAvailable, speechWakeFatal } = inputs;
   if (!isMicAvailable || !wakeWordEnabled) return "none";
+  // Defer to the sidecar. Its listener releases the microphone for a capture
+  // session and suppresses itself while the assistant speaks; this one holds
+  // the microphone open regardless, and holding it with Chromium's default
+  // constraints degraded playback for every process on the output device.
+  if (nativeWakeActive) return "none";
   if (wakeEngine === "openwakeword") return "openwakeword";
   const speechUsable = speechRecognitionAvailable && !speechWakeFatal;
   if (wakeEngine === "webspeech") return speechUsable ? "webspeech" : "none";
@@ -161,14 +173,17 @@ export function selectActiveWakeEngine(inputs: {
 export function shouldSpeechWakeBeRunning(inputs: {
   isMicAvailable: boolean;
   wakeWordEnabled: boolean;
+  /** See selectActiveWakeEngine: the sidecar already does this. */
+  nativeWakeActive: boolean;
   voiceState: VoiceState;
   wakeEngine: WakeEngineChoice;
   speechRecognitionAvailable: boolean;
   /** True once the recognizer has hit a non-recoverable error. */
   speechWakeFatal?: boolean;
 }): boolean {
-  const { isMicAvailable, wakeWordEnabled, voiceState, wakeEngine, speechRecognitionAvailable, speechWakeFatal } = inputs;
+  const { isMicAvailable, wakeWordEnabled, nativeWakeActive, voiceState, wakeEngine, speechRecognitionAvailable, speechWakeFatal } = inputs;
   if (speechWakeFatal) return false;
+  if (nativeWakeActive) return false;
   if (!isMicAvailable || !wakeWordEnabled || !speechRecognitionAvailable) return false;
   // Run in every state except active recording (which owns the mic for the
   // live transcript recognizer). Includes processing/wake_detected/speaking
@@ -230,6 +245,8 @@ export type UseVoiceOptions = {
   wakeWordEnabled?: boolean;
   /** Default "openwakeword" (local). "webspeech" uses Chromium's cloud STT. */
   wakeEngine?: WakeEngineChoice;
+  /** The sidecar on this machine already listens for the wake word. */
+  nativeWakeActive?: boolean;
   /**
    * Phase 6.7.C — Optional getter for the current Room key (or null when
    * on the home thread). Included in every voice_start/voice_text payload
@@ -280,7 +297,7 @@ export type UseVoiceReturn = {
   forceIdle: () => void;
 };
 
-export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwakeword", getCurrentRoom, speakingTailCooldownMs = 700 }: UseVoiceOptions): UseVoiceReturn {
+export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = false, wakeEngine = "openwakeword", getCurrentRoom, speakingTailCooldownMs = 700 }: UseVoiceOptions): UseVoiceReturn {
   const [voiceState, setVoiceState] = useState<VoiceState>("idle");
   const [isMicAvailable, setIsMicAvailable] = useState(false);
   const [isWakeWordReady, setIsWakeWordReady] = useState(false);
@@ -323,6 +340,9 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   const lastWakeAtRef = useRef(0);
   const isMicAvailableRef = useRef(false);
   const configuredWakeEngineRef = useRef<WakeEngineChoice>(wakeEngine);
+  // Read through a ref: shouldSpeechWakeRun is memoized on an identity that
+  // does not include this prop, so a direct closure would go stale.
+  const nativeWakeActiveRef = useRef(nativeWakeActive);
   // Timestamp of the most recent transition OUT of the "speaking" state.
   // Used to apply a short cooldown before re-arming the speech wake
   // recognizer so trailing TTS audio (and any speaker reverb) doesn't
@@ -361,6 +381,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   useEffect(() => { wakeWordEnabledRef.current = wakeWordEnabled; }, [wakeWordEnabled]);
   useEffect(() => { isMicAvailableRef.current = isMicAvailable; }, [isMicAvailable]);
   useEffect(() => { configuredWakeEngineRef.current = wakeEngine; }, [wakeEngine]);
+  useEffect(() => { nativeWakeActiveRef.current = nativeWakeActive; }, [nativeWakeActive]);
   useEffect(() => { speechWakeFatalRef.current = speechWakeFatal; }, [speechWakeFatal]);
   useEffect(() => { mutedRef.current = muted; }, [muted]);
 
@@ -534,7 +555,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
   // --- Wake word engine ---
   const startWakeWordEngine = useCallback(async () => {
     if (wakeEngineRef.current) {
-      try { await wakeEngineRef.current.start(); } catch {}
+      try { await withWakeMicConstraints(() => wakeEngineRef.current.start()); } catch {}
       return;
     }
 
@@ -577,7 +598,11 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
 
       await engine.load();
       wakeEngineRef.current = engine;
-      await engine.start();
+      // Opened without echo cancellation and friends: see browserWakeWord.ts.
+      // Chromium's defaults attach the page to the OUTPUT endpoint, which
+      // degraded playback for every process on that device, the sidecar's own
+      // speech included.
+      await withWakeMicConstraints(() => engine.start());
       setIsWakeWordReady(true);
       console.log("[Voice] Wake word engine ready — say 'Hey JARVIS'");
     } catch (err) {
@@ -620,6 +645,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     return shouldSpeechWakeBeRunning({
       isMicAvailable: isMicAvailableRef.current,
       wakeWordEnabled: wakeWordEnabledRef.current,
+      nativeWakeActive: nativeWakeActiveRef.current,
       voiceState: voiceStateRef.current,
       wakeEngine: configuredWakeEngineRef.current,
       speechRecognitionAvailable: isSpeechRecognitionAvailable(),
@@ -834,6 +860,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     const active = (muted || blockedBySpeaking) ? "none" : selectActiveWakeEngine({
       isMicAvailable,
       wakeWordEnabled,
+      nativeWakeActive,
       wakeEngine,
       speechRecognitionAvailable: isSpeechRecognitionAvailable(),
       speechWakeFatal,
@@ -841,7 +868,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     setActiveWakeEngine(active);
     if (active === "openwakeword") startWakeWordEngine();
     else stopWakeWordEngine();
-  }, [muted, isMicAvailable, wakeWordEnabled, wakeEngine, voiceState, speechWakeFatal, startWakeWordEngine, stopWakeWordEngine, isSpeechRecognitionAvailable]);
+  }, [muted, isMicAvailable, wakeWordEnabled, nativeWakeActive, wakeEngine, voiceState, speechWakeFatal, startWakeWordEngine, stopWakeWordEngine, isSpeechRecognitionAvailable]);
 
   // Single reconcile effect for the Web Speech recognizer. Computes desired
   // running state from inputs and nudges the state machine toward it. Has no
@@ -858,6 +885,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     const shouldRun = !muted && !blockedBySpeaking && shouldSpeechWakeBeRunning({
       isMicAvailable,
       wakeWordEnabled,
+      nativeWakeActive,
       voiceState,
       wakeEngine,
       speechRecognitionAvailable: isSpeechRecognitionAvailable(),
@@ -865,21 +893,21 @@ export function useVoice({ wsRef, wakeWordEnabled = true, wakeEngine = "openwake
     });
     if (shouldRun) startSpeechWakeIfNeeded();
     else stopSpeechWakeIfNeeded();
-  }, [muted, isMicAvailable, wakeWordEnabled, voiceState, wakeEngine, speechWakeFatal, startSpeechWakeIfNeeded, stopSpeechWakeIfNeeded, isSpeechRecognitionAvailable]);
+  }, [muted, isMicAvailable, wakeWordEnabled, nativeWakeActive, voiceState, wakeEngine, speechWakeFatal, startSpeechWakeIfNeeded, stopSpeechWakeIfNeeded, isSpeechRecognitionAvailable]);
 
   // Restart wake word listening when returning to idle (with delay for mic release)
   useEffect(() => {
     if (voiceState === "idle" && wakeWordEnabledRef.current && wakeEngineRef.current) {
       const timer = setTimeout(() => {
         if (voiceStateRef.current !== "idle") return;
-        wakeEngineRef.current?.start()
+        withWakeMicConstraints(() => wakeEngineRef.current!.start())
           .then(() => console.log("[Voice] Wake word engine restarted"))
           .catch((err: Error) => {
             console.error("[Voice] Wake word engine restart failed:", err);
             // Retry once after a longer delay
             setTimeout(() => {
               if (voiceStateRef.current === "idle" && wakeEngineRef.current) {
-                wakeEngineRef.current.start()
+                withWakeMicConstraints(() => wakeEngineRef.current!.start())
                   .then(() => console.log("[Voice] Wake word engine restarted (retry)"))
                   .catch((e: Error) => console.error("[Voice] Wake word restart retry failed:", e));
               }

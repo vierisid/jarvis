@@ -141,6 +141,18 @@ function AppShellLive() {
   const voice = useVoice({
     wsRef: live.wsRef,
     wakeWordEnabled: true,
+    // Always true, because a dashboard session always has a sidecar behind it:
+    // the only credential this app is served with is a short-lived access token
+    // minted by an enrolled sidecar, so there is no way to reach the brain
+    // without one. Its native listener already handles the wake word, and it
+    // does so properly, releasing the microphone for a capture session and
+    // suppressing itself while the assistant speaks.
+    //
+    // A second detector here bought nothing and cost real damage: it held the
+    // microphone open for as long as the page was, with Chromium's default
+    // constraints, which degraded audio played by every process on the output
+    // device, the sidecar's own speech included.
+    nativeWakeActive: true,
     getCurrentRoom,
   });
 
