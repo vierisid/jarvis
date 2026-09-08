@@ -110,14 +110,14 @@ func parseWmctrlOutput(output, activeWID string) ([]map[string]any, error) {
 		}
 
 		windows = append(windows, map[string]any{
-			"hwnd":          widInt,
-			"title":         title,
-			"pid":           pid,
-			"process_name":  procName,
-			"left":          x,
-			"top":           y,
-			"right":         x + w,
-			"bottom":        y + h,
+			"hwnd":         widInt,
+			"title":        title,
+			"pid":          pid,
+			"process_name": procName,
+			"left":         x,
+			"top":          y,
+			"right":        x + w,
+			"bottom":       y + h,
 			"is_foreground": wid == activeWID || fmt.Sprintf("%d", widInt) == activeWID,
 		})
 	}
@@ -846,3 +846,5 @@ func mapKeyToXdotool(key string) string {
 		return key
 	}
 }
+
+

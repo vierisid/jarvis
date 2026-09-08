@@ -280,6 +280,16 @@ type kbdInput struct {
 	_         [8]byte
 }
 
+// The layout above is the 64-bit INPUT union. SendInput rejects any cbSize
+// that is not the real size of the struct, so a build whose layout differs
+// would fail on every single call at runtime. These fail to compile instead:
+// both are [0]byte when the size is right, and one or the other blows up
+// when it is not (a 32-bit windows build packs the union to 28 bytes).
+var (
+	_ [unsafe.Sizeof(kbdInput{}) - 40]byte
+	_ [40 - unsafe.Sizeof(kbdInput{})]byte
+)
+
 func sendInputs(inputs []kbdInput) error {
 	if len(inputs) == 0 {
 		return nil
@@ -295,43 +305,68 @@ func sendInputs(inputs []kbdInput) error {
 	return nil
 }
 
-// typeTextNative types arbitrary text into the focused window as Unicode
-// key events. No SendKeys metacharacters, no escaping, full Unicode
-// (surrogate pairs included).
-func typeTextNative(text string) error {
-	units := utf16.Encode([]rune(text))
-	inputs := make([]kbdInput, 0, len(units)*2)
-	for _, u := range units {
-		// '\n' arrives as a Unicode LF which most controls ignore; send a
-		// real Enter keypress instead so multi-line text works.
-		if u == '\n' {
-			inputs = append(inputs,
-				kbdInput{inputType: inputKeyboard, vk: vkReturn},
-				kbdInput{inputType: inputKeyboard, vk: vkReturn, flags: keyeventfKeyUp},
-			)
-			continue
-		}
-		if u == '\r' {
-			continue
-		}
-		inputs = append(inputs,
+// keyEventsForRune renders one source character as SendInput events,
+// appended to dst.
+func keyEventsForRune(dst []kbdInput, r rune) []kbdInput {
+	// '\n' arrives as a Unicode LF which most controls ignore; send a real
+	// Enter keypress instead so multi-line text works.
+	if r == '\n' {
+		return append(dst,
+			kbdInput{inputType: inputKeyboard, vk: vkReturn},
+			kbdInput{inputType: inputKeyboard, vk: vkReturn, flags: keyeventfKeyUp},
+		)
+	}
+	if r == '\r' {
+		return dst
+	}
+	for _, u := range utf16.Encode([]rune{r}) {
+		dst = append(dst,
 			kbdInput{inputType: inputKeyboard, scan: u, flags: keyeventfUnicode},
 			kbdInput{inputType: inputKeyboard, scan: u, flags: keyeventfUnicode | keyeventfKeyUp},
 		)
 	}
-	// Inject in bounded chunks: a single huge SendInput call is atomic and
-	// can starve the receiving app's input queue.
-	const chunk = 256
-	for i := 0; i < len(inputs); i += chunk {
-		end := i + chunk
-		if end > len(inputs) {
-			end = len(inputs)
+	return dst
+}
+
+// typeTextNative types arbitrary text into the focused window as Unicode
+// key events. No SendKeys metacharacters, no escaping, full Unicode
+// (surrogate pairs included).
+//
+// The text goes out in bounded chunks because a single huge SendInput call
+// is atomic and can starve the receiving app's input queue. Chunk boundaries
+// fall between source characters, never inside one: anything outside the BMP
+// is a UTF-16 surrogate pair, and Windows expects both halves to arrive in
+// the same SendInput call. Splitting one across two calls is how an emoji
+// turns into a pair of replacement characters.
+func typeTextNative(text string) error {
+	const chunkTarget = 256
+
+	inputs := make([]kbdInput, 0, chunkTarget+4)
+	flush := func() error {
+		if len(inputs) == 0 {
+			return nil
 		}
-		if err := sendInputs(inputs[i:end]); err != nil {
+		if err := sendInputs(inputs); err != nil {
 			return err
 		}
+		inputs = inputs[:0]
+		return nil
 	}
-	return nil
+
+	var events []kbdInput
+	for _, r := range text {
+		events = keyEventsForRune(events[:0], r)
+		if len(events) == 0 {
+			continue
+		}
+		if len(inputs)+len(events) > chunkTarget {
+			if err := flush(); err != nil {
+				return err
+			}
+		}
+		inputs = append(inputs, events...)
+	}
+	return flush()
 }
 
 // Virtual-key codes for named keys.
@@ -387,30 +422,59 @@ var modifierKeys = map[string]uint16{
 	"win":   vkLWin, "windows": vkLWin, "meta": vkLWin, "super": vkLWin,
 }
 
-// resolveVk maps a key name to a virtual-key code.
-func resolveVk(key string) (uint16, error) {
+// vkScanShiftState decodes the modifier bits VkKeyScanW packs into the high
+// byte of its result.
+func vkScanShiftState(state uint16) []uint16 {
+	var implied []uint16
+	if state&0x01 != 0 {
+		implied = append(implied, vkShift)
+	}
+	if state&0x02 != 0 {
+		implied = append(implied, vkControl)
+	}
+	if state&0x04 != 0 {
+		implied = append(implied, vkMenu)
+	}
+	return implied
+}
+
+// resolveVk maps a key name to a virtual-key code, plus any modifiers the
+// current keyboard layout needs held to produce it.
+//
+// There is no virtual key for "?" on a US layout: it is shift and the "/"
+// key. VkKeyScanW says so in the high byte of its result, and dropping that
+// byte is why asking for "?" used to press "/" - the wrong key, with no
+// error to say so. Layouts differ in which characters need this, so the
+// answer has to come from the layout rather than a table.
+//
+// The character is lowercased first, which is what keeps this from changing
+// what a chord means. press_keys names keys, not text: "ctrl,S" is the same
+// shortcut as "ctrl,s", so an uppercase letter must not quietly acquire the
+// shift its capital form would need. Lowercasing leaves symbols untouched,
+// so "?" still reports the shift it genuinely requires.
+func resolveVk(key string) (uint16, []uint16, error) {
 	k := strings.ToLower(strings.TrimSpace(key))
 	if vk, ok := winNamedKeys[k]; ok {
-		return vk, nil
+		return vk, nil, nil
 	}
 	if len(k) >= 2 && k[0] == 'f' {
 		var n int
 		if _, err := fmt.Sscanf(k, "f%d", &n); err == nil && n >= 1 && n <= 24 {
-			return uint16(vkF1 + n - 1), nil
+			return uint16(vkF1 + n - 1), nil, nil
 		}
 	}
 	if runes := []rune(k); len(runes) == 1 {
 		res, _, _ := procVkKeyScanW.Call(uintptr(uint16(runes[0])))
 		if low := uint16(res & 0xFF); low != 0xFF {
-			return low, nil
+			return low, vkScanShiftState(uint16(res>>8) & 0xFF), nil
 		}
-		return 0, fmt.Errorf("no virtual key for character %q on the current keyboard layout", key)
+		return 0, nil, fmt.Errorf("no virtual key for character %q on the current keyboard layout", key)
 	}
 	known := make([]string, 0, len(winNamedKeys))
 	for name := range winNamedKeys {
 		known = append(known, name)
 	}
-	return 0, fmt.Errorf("unknown key %q — use a single character, f1-f24, or one of: %s", key, strings.Join(known, ", "))
+	return 0, nil, fmt.Errorf("unknown key %q - use a single character, f1-f24, or one of: %s", key, strings.Join(known, ", "))
 }
 
 // pressKeysNative presses a modifier+key combination (e.g. ctrl+s, alt+f4,
@@ -421,18 +485,31 @@ func pressKeysNative(keys string) error {
 
 	var mods []uint16
 	var mains []uint16
-	for _, part := range parts {
-		p := strings.ToLower(strings.TrimSpace(part))
-		if p == "" {
-			continue
-		}
-		if vk, ok := modifierKeys[p]; ok {
+	held := map[uint16]bool{}
+	addMod := func(vk uint16) {
+		if !held[vk] {
+			held[vk] = true
 			mods = append(mods, vk)
+		}
+	}
+
+	for _, part := range parts {
+		raw := strings.TrimSpace(part)
+		if raw == "" {
 			continue
 		}
-		vk, err := resolveVk(p)
+		if vk, ok := modifierKeys[strings.ToLower(raw)]; ok {
+			addMod(vk)
+			continue
+		}
+		vk, implied, err := resolveVk(raw)
 		if err != nil {
 			return err
+		}
+		// A character that needs shift on this layout brings its own
+		// modifier; an explicitly named one must not be pressed twice.
+		for _, m := range implied {
+			addMod(m)
 		}
 		mains = append(mains, vk)
 	}

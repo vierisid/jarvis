@@ -266,15 +266,15 @@ jobs:
         run: |
           set -euo pipefail
           export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
-          pattern='^(TestMainPebbleDrawStaysInsideCrop|TestHotkeys.*|TestHresultText.*|TestPickLaunchedWindow.*)$'
+          pattern='^(TestMainPebbleDrawStaysInsideCrop|TestHotkeys.*|TestHresultText.*|TestPickLaunchedWindow.*|TestVkScanShiftState.*|TestKeyEventsForRune.*)$'
           # Same reason as the parity test above: `go test -run` with no match
           # prints "no tests to run" and exits 0. A floor rather than an exact
           # count, so each group can grow without editing this, but a rename
           # that empties one still fails here instead of quietly skipping every
           # windows-only test we have.
           listed=$(go test -list "$pattern" . | grep -c '^Test' || true)
-          if [ "$listed" -lt 8 ]; then
-            echo "::error::windows test pattern matched $listed tests, expected at least 8"
+          if [ "$listed" -lt 10 ]; then
+            echo "::error::windows test pattern matched $listed tests, expected at least 10"
             exit 1
           fi
           go test -count=1 -run "$pattern" -v .

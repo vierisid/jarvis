@@ -73,13 +73,13 @@ end tell`
 		isFG := strings.TrimSpace(parts[7]) == "true"
 
 		windows = append(windows, map[string]any{
-			"title":         title,
-			"pid":           pid,
-			"process_name":  procName,
-			"left":          left,
-			"top":           top,
-			"right":         left + width,
-			"bottom":        top + height,
+			"title":        title,
+			"pid":          pid,
+			"process_name": procName,
+			"left":         left,
+			"top":          top,
+			"right":        left + width,
+			"bottom":       top + height,
 			"is_foreground": isFG,
 		})
 	}
@@ -722,36 +722,36 @@ func convertKeysToOsascript(keys string) string {
 // Returns (keyCode, true) for known special keys, (0, false) otherwise.
 func osascriptKeyCode(key string) (int, bool) {
 	keyCodes := map[string]int{
-		"enter":     36,
-		"return":    36,
-		"tab":       48,
-		"escape":    53,
-		"esc":       53,
-		"delete":    51,
+		"enter":    36,
+		"return":   36,
+		"tab":      48,
+		"escape":   53,
+		"esc":      53,
+		"delete":   51,
 		"backspace": 51,
-		"space":     49,
-		"up":        126,
-		"down":      125,
-		"left":      123,
-		"right":     124,
-		"home":      115,
-		"end":       119,
-		"pageup":    116,
-		"pgup":      116,
-		"pagedown":  121,
-		"pgdn":      121,
-		"f1":        122,
-		"f2":        120,
-		"f3":        99,
-		"f4":        118,
-		"f5":        96,
-		"f6":        97,
-		"f7":        98,
-		"f8":        100,
-		"f9":        101,
-		"f10":       109,
-		"f11":       103,
-		"f12":       111,
+		"space":    49,
+		"up":       126,
+		"down":     125,
+		"left":     123,
+		"right":    124,
+		"home":     115,
+		"end":      119,
+		"pageup":   116,
+		"pgup":     116,
+		"pagedown": 121,
+		"pgdn":     121,
+		"f1":       122,
+		"f2":       120,
+		"f3":       99,
+		"f4":       118,
+		"f5":       96,
+		"f6":       97,
+		"f7":       98,
+		"f8":       100,
+		"f9":       101,
+		"f10":      109,
+		"f11":      103,
+		"f12":      111,
 	}
 	if code, ok := keyCodes[strings.ToLower(key)]; ok {
 		return code, true
@@ -772,3 +772,5 @@ func toInt(v any) int {
 	}
 	return 0
 }
+
+

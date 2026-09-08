@@ -90,6 +90,34 @@ function describeMachine(sidecar: SidecarInfo): string {
 }
 
 /**
+ * Pick the stack that will serve one tool call, and say which it was.
+ *
+ * Two implementations back every desktop_* and browser_* tool: the Go
+ * sidecar, and the daemon's own local controllers. Which one runs depends on
+ * whether a sidecar is connected, and the choice used to be made in silence,
+ * so "it works sometimes" was untraceable after the fact. One line per call
+ * names the stack that answered.
+ *
+ * An explicit target is returned verbatim rather than trimmed, because it is
+ * matched by name downstream and quietly rewriting it would hide a typo
+ * rather than surface it. Blank is treated as absent.
+ */
+export function resolveToolTarget(
+  explicit: unknown,
+  capability: SidecarCapability,
+  tool: string,
+): string | null {
+  const named = typeof explicit === 'string' && explicit.trim() ? explicit : null;
+  const target = named ?? autoTargetForCapability(capability);
+  console.log(
+    target
+      ? `[${capability}] ${tool} -> sidecar stack (target=${target}, ${named ? 'explicit' : 'auto'})`
+      : `[${capability}] ${tool} -> local stack`,
+  );
+  return target;
+}
+
+/**
  * Find a sidecar by name or ID.
  * Priority: exact ID → exact name (case-insensitive) → contains match.
  */

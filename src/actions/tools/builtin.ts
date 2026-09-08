@@ -15,7 +15,7 @@ import { WSLBridge } from '../terminal/wsl-bridge.ts';
 import { BrowserController, type PageSnapshot } from '../browser/session.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
-import { routeToSidecar, autoTargetForCapability } from './sidecar-route.ts';
+import { routeToSidecar, autoTargetForCapability, resolveToolTarget } from './sidecar-route.ts';
 import { WebappTemplateDelivery, globalWebappTemplateDelivery } from './webapp-template-injection.ts';
 import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS } from './desktop.ts';
@@ -552,21 +552,11 @@ function formatSnapshot(snap: PageSnapshot): string {
 // --- Browser Tool Implementations ---
 
 /**
- * Resolve which browser stack serves this call and log the decision.
- * Two divergent implementations exist (Go sidecar over CDP pipe vs local
- * TS over CDP websocket) and selection was previously silent, which made
- * "sometimes works, sometimes doesn't" undiagnosable. One line per call
- * names the stack so failures can be attributed.
+ * Resolve which browser stack serves this call and log the decision. Thin
+ * wrapper over the shared resolver so each call site names only its tool.
  */
 function resolveBrowserTarget(params: Record<string, unknown>, tool: string): string | null {
-  const explicit = (params.target as string | undefined)?.trim() || null;
-  const target = explicit || autoTargetForCapability('browser');
-  if (target) {
-    console.log(`[browser] ${tool} → sidecar stack (target=${target}${explicit ? ', explicit' : ', auto'})`);
-  } else {
-    console.log(`[browser] ${tool} → local TS stack`);
-  }
-  return target;
+  return resolveToolTarget(params.target, 'browser', tool);
 }
 
 export const browserNavigateTool: ToolDefinition = {

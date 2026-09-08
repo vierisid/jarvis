@@ -2,7 +2,7 @@ import { afterEach, describe, expect, test } from "bun:test";
 import type { SidecarManager } from "../../sidecar/manager.ts";
 import type { SidecarInfo } from "../../sidecar/types.ts";
 import { setNoLocalTools } from "./local-tools-guard.ts";
-import { collectExecutionTargets, routeToSidecar, setSidecarManagerRef } from "./sidecar-route.ts";
+import { collectExecutionTargets, resolveToolTarget, routeToSidecar, setSidecarManagerRef } from "./sidecar-route.ts";
 
 const mac: SidecarInfo = {
   id: "sc-mac",
@@ -155,5 +155,59 @@ describe("routeToSidecar detached handling", () => {
     setSidecarManagerRef(stubManager([pc], async () => ({ success: true, pid: 42 })));
     const out = await routeToSidecar("sc-pc", "launch_app", {}, "desktop");
     expect(JSON.parse(out)).toEqual({ success: true, pid: 42 });
+  });
+});
+
+/**
+ * Every desktop_* and browser_* tool is backed by two implementations - the
+ * Go sidecar and the daemon's local controllers - and which one answers used
+ * to be decided in silence.
+ */
+describe("resolveToolTarget", () => {
+  const pc: SidecarInfo = {
+    ...mac,
+    id: "sc-pc",
+    name: "Desk PC",
+    os: "windows",
+    platform: "amd64",
+    capabilities: ["terminal", "desktop", "browser"],
+  };
+
+  test("passes an explicit target through verbatim", () => {
+    setSidecarManagerRef(stubManager([pc]));
+    expect(resolveToolTarget("  Desk PC  ", "desktop", "desktop_click")).toBe("  Desk PC  ");
+  });
+
+  test("treats a blank target as no target and auto-selects", () => {
+    setSidecarManagerRef(stubManager([pc]));
+    expect(resolveToolTarget("   ", "desktop", "desktop_click")).toBe("sc-pc");
+    expect(resolveToolTarget(undefined, "desktop", "desktop_click")).toBe("sc-pc");
+  });
+
+  test("resolves against the capability the RPC needs, not a default", () => {
+    // pc advertises desktop/browser/terminal but not screenshot. Resolving a
+    // screenshot call against 'desktop' would pick it and then hard-fail in
+    // routeToSidecar with a "do NOT retry" error, so it must fall through to
+    // the local stack instead.
+    setSidecarManagerRef(stubManager([pc]));
+    expect(resolveToolTarget(undefined, "screenshot", "desktop_screenshot")).toBeNull();
+  });
+
+  test("names the stack that served the call", () => {
+    setSidecarManagerRef(stubManager([pc]));
+    const lines: string[] = [];
+    const original = console.log;
+    console.log = (...args: unknown[]) => {
+      lines.push(args.join(" "));
+    };
+    try {
+      resolveToolTarget(undefined, "browser", "browser_click");
+      resolveToolTarget(undefined, "screenshot", "desktop_screenshot");
+    } finally {
+      console.log = original;
+    }
+    expect(lines[0]).toContain("browser_click -> sidecar stack");
+    expect(lines[0]).toContain("auto");
+    expect(lines[1]).toContain("desktop_screenshot -> local stack");
   });
 });
