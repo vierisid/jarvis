@@ -405,6 +405,20 @@ export interface BuildCatalogOptions {
    */
   overallTimeoutMs?: number;
   /**
+   * Give up after this many extractions fail BACK TO BACK. A wedged engine
+   * fails every remaining piece at `pieceTimeoutMs` each, so without this the
+   * cost of one broken engine is the whole catalog times that timeout -- on
+   * the hosted shared-runtime build that is 659 pieces x 30s, about five and a
+   * half hours, against an install op that gives up after thirty minutes. The
+   * build then reports nothing at all: it is killed mid-loop, so even the
+   * failures never surface.
+   *
+   * Consecutive rather than total, so a handful of genuinely broken pieces
+   * scattered through a healthy catalog never trips it. Reset by any success.
+   * Default 5.
+   */
+  maxConsecutiveFailures?: number;
+  /**
    * Optional reporter for `discoverPieces` conflicts and per-piece extraction
    * failures. Defaults to `console.warn`. Pass a noop in tests.
    */
@@ -487,6 +501,16 @@ export function readCachedEntries(
  * logged via `reporter`, and surfaced on `failures[]`. The catalog still
  * boots with whichever pieces succeeded; the daemon can log/UI-display the
  * failures without blocking startup.
+ *
+ * A failure also ENDS THAT ENGINE. The loop cannot tell a hung piece from a
+ * poisoned process, and both were observed: our per-piece race abandons an
+ * operation the engine is still running (nothing cancels it), and on the
+ * hosted shared-runtime build a single piece that threw while loading left
+ * every one of the 658 pieces after it timing out against a process that was
+ * still alive. So each failure is followed by a fresh engine, and
+ * `maxConsecutiveFailures` back-to-back failures end the build with the
+ * remainder reported as unattempted rather than paying `pieceTimeoutMs` on
+ * every one of them.
  */
 export async function buildPieceCatalog(
   opts: BuildCatalogOptions,
@@ -494,6 +518,7 @@ export async function buildPieceCatalog(
   const reporter = opts.reporter ?? ((m) => console.warn(`[piece-catalog] ${m}`));
   const pieceTimeoutMs = opts.pieceTimeoutMs ?? 10_000;
   const overallTimeoutMs = opts.overallTimeoutMs ?? 60_000;
+  const maxConsecutiveFailures = opts.maxConsecutiveFailures ?? 5;
 
   const { entries: discovered, conflicts } = discoverPieces(opts.pieceRoots);
   for (const c of conflicts) {
@@ -543,11 +568,17 @@ export async function buildPieceCatalog(
   let extracted = 0;
   if (misses.length > 0) {
     const projectId = opts.projectId ?? DEFAULT_IDS.project;
-    const runId = "metadata-extract-" + SandboxRegistry.newSandboxId();
+    // A FRESH run id per engine: the loop below replaces the engine after a
+    // failure, and two live sandboxes must not share one.
+    const newRunId = () => "metadata-extract-" + SandboxRegistry.newSandboxId();
 
-    const handle = await opts.runtime.acquire({ runId, projectId });
+    let handle = await opts.runtime.acquire({ runId: newRunId(), projectId });
+    /** Set while `handle` has already been released and not yet replaced, so
+     * the `finally` below cannot release the same engine twice. */
+    let handleReleased = false;
     const overallDeadline = Date.now() + overallTimeoutMs;
     let processed = 0;
+    let consecutiveFailures = 0;
     try {
       for (const { piece, contentHash } of misses) {
         if (Date.now() > overallDeadline) {
@@ -580,6 +611,7 @@ export async function buildPieceCatalog(
           out.push(entry);
           userEntries[`${piece.name}@${piece.version}`] = { contentHash, entry };
           extracted++;
+          consecutiveFailures = 0;
         } catch (e) {
           const reason = e instanceof Error ? e.message : String(e);
           failures.push({
@@ -588,10 +620,78 @@ export async function buildPieceCatalog(
             reason,
           });
           reporter(`extract ${piece.name}@${piece.version} failed: ${reason}`);
+          consecutiveFailures++;
+
+          // REPLACE THE ENGINE, do not carry on with it.
+          //
+          // Two different ways this loop can leave an engine unusable, and it
+          // cannot tell them apart from here:
+          //
+          //  - a TIMEOUT above is OUR race, not the engine's. `withTimeout`
+          //    stops waiting; nothing cancels the operation, and there is no
+          //    cancel message in EngineContract. The engine is still working
+          //    on the piece we gave up on, so the next operation queues behind
+          //    it and times out too. The transport has its own deadline that
+          //    marks such an engine abandoned -- but it is
+          //    `CONTROL_OPERATION_TIMEOUT_S` (60s) plus a 30s margin, and this
+          //    loop's default budget is well under that, so our race always
+          //    fires first and that machinery never gets to run.
+          //  - an ERROR REPLY means the engine answered and is idle. It should
+          //    be reusable. In prod it was not: on the hosted build the first
+          //    piece failed with a real INTERNAL_ERROR and every one of the 658
+          //    after it timed out, on an engine still alive at 486MB. A module
+          //    that throws while loading stays cached as broken, so one bad
+          //    piece poisoned the process for the rest of the catalog.
+          //
+          // So: replace on ANY failure. `release()` already does the right
+          // thing -- it kills rather than pools an engine with `abandoned` set
+          // or work still in flight, which is exactly the timeout case -- and a
+          // spawn costs seconds against a per-piece timeout we would otherwise
+          // pay on every remaining piece.
+          handleReleased = true;
+          await handle.release().catch(() => {
+            // A failed release is a leaked engine, not a reason to abandon the
+            // build; the run id is dead either way.
+          });
+
+          if (consecutiveFailures >= maxConsecutiveFailures) {
+            const pending = misses.length - processed;
+            reporter(
+              `${consecutiveFailures} extractions failed back to back; giving up with ` +
+                `${pending} piece(s) unattempted (a wedged engine fails every remaining ` +
+                `piece at ${pieceTimeoutMs}ms each)`,
+            );
+            for (const skipped of misses.slice(processed)) {
+              failures.push({
+                pieceName: skipped.piece.name,
+                pieceVersion: skipped.piece.version,
+                reason: `not attempted: gave up after ${consecutiveFailures} consecutive extraction failures`,
+              });
+            }
+            break;
+          }
+
+          try {
+            handle = await opts.runtime.acquire({ runId: newRunId(), projectId });
+            handleReleased = false;
+          } catch (spawnErr) {
+            // No engine, no catalog. Report the rest rather than throwing away
+            // the entries that already extracted successfully.
+            const why = spawnErr instanceof Error ? spawnErr.message : String(spawnErr);
+            reporter(`could not start a replacement engine: ${why}`);
+            for (const skipped of misses.slice(processed)) {
+              failures.push({
+                pieceName: skipped.piece.name,
+                pieceVersion: skipped.piece.version,
+                reason: `not attempted: replacement engine could not start (${why})`,
+              });
+            }
+            break;
+          }
         }
       }
     } finally {
-      await handle.release();
+      if (!handleReleased) await handle.release();
     }
   }
 

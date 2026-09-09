@@ -564,6 +564,198 @@ describe("PieceCatalog (unit)", () => {
     }
   });
 
+  /**
+   * The engine-replacement contract.
+   *
+   * A failed extraction leaves the engine in one of two states this loop
+   * cannot distinguish, and BOTH are unusable: a timeout is our own race, so
+   * the engine is still working on the piece we walked away from (nothing
+   * cancels it), and an error reply was observed in prod to poison the process
+   * anyway -- one piece threw while loading and every one of the 658 after it
+   * timed out on an engine that was still alive. So the loop must not carry an
+   * engine across a failure.
+   */
+  function pieceTree(prefix: string, names: readonly string[]) {
+    const { path: root, cleanup } = tmp(prefix);
+    names.forEach((name, i) => {
+      mkdirSync(resolve(root, `p${i}`), { recursive: true });
+      writeFileSync(
+        resolve(root, `p${i}`, "package.json"),
+        JSON.stringify({ name, version: "0.0.1" }),
+      );
+    });
+    return { root, cleanup };
+  }
+
+  const okMetadata = (pieceName: string) => ({
+    name: pieceName,
+    displayName: "OK",
+    description: "ok",
+    actions: { ping: { name: "ping", displayName: "Ping", description: "", props: {} } },
+  });
+
+  test("buildPieceCatalog REPLACES the engine after a failure instead of reusing it", async () => {
+    // The whole bug in one assertion: without this, one broken piece is served
+    // by the same engine as every piece after it.
+    const { root, cleanup } = pieceTree("build-replace", [
+      "@scope/piece-bad",
+      "@scope/piece-a",
+      "@scope/piece-b",
+    ]);
+    let acquires = 0;
+    let releases = 0;
+    const fakeRuntime = {
+      acquire: async () => {
+        acquires++;
+        return {
+          async extractPieceMetadata(o: { pieceName: string }) {
+            if (o.pieceName === "@scope/piece-bad") throw new Error("boom");
+            return okMetadata(o.pieceName);
+          },
+          async release() {
+            releases++;
+          },
+        } as unknown as EngineHandle;
+      },
+    } as unknown as EngineRuntime;
+    try {
+      const { catalog, failures } = await buildPieceCatalog({
+        runtime: fakeRuntime,
+        pieceRoots: [root],
+        reporter: () => {},
+      });
+      // One engine to start, one more after the single failure.
+      expect(acquires).toBe(2);
+      // Every engine handed out is released exactly once -- the replacement
+      // path must not leak the old one, and the `finally` must not double-free
+      // the new one.
+      expect(releases).toBe(acquires);
+      // And the pieces AFTER the failure still extract, on the fresh engine.
+      expect(catalog.list().length).toBe(2);
+      expect(failures.length).toBe(1);
+      expect(failures[0]?.pieceName).toBe("@scope/piece-bad");
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("buildPieceCatalog gives up after N consecutive failures instead of paying the timeout on every piece", async () => {
+    // The cost this bounds: on the hosted build a wedged engine meant 659
+    // pieces x 30s, about five and a half hours, inside an install op that
+    // gives up at thirty minutes -- so the build was killed and reported
+    // nothing at all.
+    const names = Array.from({ length: 12 }, (_, i) => `@scope/piece-${i}`);
+    const { root, cleanup } = pieceTree("build-giveup", names);
+    let attempts = 0;
+    const fakeRuntime = {
+      acquire: async () =>
+        ({
+          async extractPieceMetadata() {
+            attempts++;
+            throw new Error("wedged");
+          },
+          async release() { /* noop */ },
+        }) as unknown as EngineHandle,
+    } as unknown as EngineRuntime;
+    const reports: string[] = [];
+    try {
+      const { catalog, failures } = await buildPieceCatalog({
+        runtime: fakeRuntime,
+        pieceRoots: [root],
+        maxConsecutiveFailures: 3,
+        reporter: (m) => reports.push(m),
+      });
+      expect(attempts).toBe(3);
+      expect(catalog.list().length).toBe(0);
+      // Every piece is still ACCOUNTED FOR: the ones tried, and the ones the
+      // build declined to try. Silence about the remainder is what made this
+      // undiagnosable from the outside.
+      expect(failures.length).toBe(names.length);
+      expect(failures.filter((f) => /not attempted/.test(f.reason)).length).toBe(names.length - 3);
+      expect(reports.some((m) => m.includes("failed back to back"))).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("a success resets the streak, so scattered broken pieces never trip the give-up", async () => {
+    // Consecutive, not total. A catalog with a few genuinely broken pieces
+    // must still build completely.
+    // Named so the SORTED discovery order interleaves: a-bad, b-ok, c-bad,
+    // d-ok, e-bad. Grouping the bad ones (bad-1, bad-2, bad-3 ... ok-1) would
+    // put three failures back to back and correctly trip the limit, which is a
+    // different test than this one.
+    const names = [
+      "@scope/piece-a-bad",
+      "@scope/piece-b-ok",
+      "@scope/piece-c-bad",
+      "@scope/piece-d-ok",
+      "@scope/piece-e-bad",
+    ];
+    const { root, cleanup } = pieceTree("build-streak", names);
+    const fakeRuntime = {
+      acquire: async () =>
+        ({
+          async extractPieceMetadata(o: { pieceName: string }) {
+            if (o.pieceName.includes("bad")) throw new Error("nope");
+            return okMetadata(o.pieceName);
+          },
+          async release() { /* noop */ },
+        }) as unknown as EngineHandle,
+    } as unknown as EngineRuntime;
+    try {
+      const { catalog, failures } = await buildPieceCatalog({
+        runtime: fakeRuntime,
+        pieceRoots: [root],
+        maxConsecutiveFailures: 3,
+        reporter: () => {},
+      });
+      expect(catalog.list().length).toBe(2);
+      expect(failures.length).toBe(3);
+      expect(failures.every((f) => !/not attempted/.test(f.reason))).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
+  test("a replacement engine that cannot start ends the build with the rest reported, not thrown", async () => {
+    // Losing the engine must not throw away the entries that already
+    // extracted, and must not surface as an unhandled rejection.
+    const { root, cleanup } = pieceTree("build-nospawn", [
+      "@scope/piece-a",
+      "@scope/piece-bad",
+      "@scope/piece-c",
+    ]);
+    let acquires = 0;
+    const fakeRuntime = {
+      acquire: async () => {
+        acquires++;
+        if (acquires > 1) throw new Error("no engine for you");
+        return {
+          async extractPieceMetadata(o: { pieceName: string }) {
+            if (o.pieceName === "@scope/piece-bad") throw new Error("boom");
+            return okMetadata(o.pieceName);
+          },
+          async release() { /* noop */ },
+        } as unknown as EngineHandle;
+      },
+    } as unknown as EngineRuntime;
+    const reports: string[] = [];
+    try {
+      const { catalog, failures } = await buildPieceCatalog({
+        runtime: fakeRuntime,
+        pieceRoots: [root],
+        reporter: (m) => reports.push(m),
+      });
+      expect(catalog.list().length).toBe(1);
+      expect(failures.length).toBe(2);
+      expect(failures.some((f) => /replacement engine could not start/.test(f.reason))).toBe(true);
+      expect(reports.some((m) => m.includes("could not start a replacement engine"))).toBe(true);
+    } finally {
+      cleanup();
+    }
+  });
+
   test("buildPieceCatalog enforces per-piece timeout and surfaces the timeout reason", async () => {
     const { path: root, cleanup } = tmp("build-timeout");
     mkdirSync(resolve(root, "slow"), { recursive: true });
