@@ -1308,15 +1308,36 @@ function MicLevelCheck() {
 const IV_PHASE_CLASS: Record<string, string> = { thinking: "s-think", speaking: "s-speak", done: "s-done" };
 const IV_PHASE_LABEL: Record<string, string> = { connecting: "connecting…", ready: "ready", error: "reconnecting…", thinking: "thinking", speaking: "speaking", listening: "listening", done: "done" };
 
+/** Why the interview can't listen, in the user's terms. */
+const MIC_REASON_COPY: Record<string, string> = {
+  muted: "Your microphone is muted — unmute it from the tray, or just type.",
+  "no-stt": "Speech to text isn't set up yet, so type your answers for now.",
+  "no-pebble": "No microphone on this machine yet — type your answers for now.",
+  default: "I can't hear you right now — type your answers instead.",
+};
+
+/** Browser speech recognition, when the daemon has no microphone to lend. */
+function hasBrowserSpeech(): boolean {
+  const w = window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown };
+  return Boolean(w.SpeechRecognition || w.webkitSpeechRecognition);
+}
+
 function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onComplete: () => void }) {
   const session = useInterviewSession({ ttsDisabled });
   const [composerText, setComposerText] = useState("");
   const recognizerRef = useRef<{ stop: () => void } | null>(null);
 
-  // Auto-arm browser SpeechRecognition while the orb is "listening" (voice
-  // input), unless the user opted into text-only. Mirrors the old room.
+  // Voice input is the daemon's job first: it captures the answer on the
+  // pebble and feeds it straight to the interviewer (otherwise the pebble
+  // hears the answer and the assistant, not the interview, replies). Browser
+  // SpeechRecognition is only the fallback for when the daemon has no mic to
+  // offer — no pebble connected, no STT configured, mic muted.
   useEffect(() => {
     if (session.textOnly) return;
+    if (session.micStatus !== "unavailable") {
+      if (recognizerRef.current) { try { recognizerRef.current.stop(); } catch { /* ignore */ } recognizerRef.current = null; }
+      return;
+    }
     if (session.phase !== "listening") {
       if (recognizerRef.current) { try { recognizerRef.current.stop(); } catch { /* ignore */ } recognizerRef.current = null; }
       return;
@@ -1345,7 +1366,7 @@ function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onCo
     try { rec.start(); recognizerRef.current = rec; } catch { /* ignore */ }
     return () => { try { rec.stop(); } catch { /* ignore */ } recognizerRef.current = null; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.phase, session.textOnly]);
+  }, [session.phase, session.textOnly, session.micStatus]);
 
   const sendTyped = () => { const t = composerText.trim(); if (!t) return; setComposerText(""); session.sendUserMessage(t); };
   const [skipErr, setSkipErr] = useState<string | null>(null);
@@ -1376,6 +1397,12 @@ function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onCo
     );
   }
 
+  // No mic anywhere: the daemon has none to lend and the browser can't
+  // transcribe either. Say so once instead of showing a "Listening" pill that
+  // nothing is feeding.
+  const voiceOff = session.micStatus === "unavailable" && !hasBrowserSpeech();
+  const micNote = voiceOff ? MIC_REASON_COPY[session.micReason ?? ""] ?? MIC_REASON_COPY.default : null;
+
   const msgs = session.messages;
   const lastAsstIdx = msgs.map((m) => m.role).lastIndexOf("assistant");
   const currentQ = lastAsstIdx >= 0 ? msgs[lastAsstIdx]!.text : (session.phase === "connecting" ? "Getting ready to chat…" : "…");
@@ -1403,15 +1430,16 @@ function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onCo
             {history.map((m, i) => <div key={i} className={`obw-bub ${m.role === "assistant" ? "jv" : "me"}`}>{m.text}</div>)}
           </div>
         )}
+        {micNote && <div className="obw-ivphase" style={{ textTransform: "none", letterSpacing: 0 }}>{micNote}</div>}
         {session.partialUserText && (
           <div className="obw-ivphase" style={{ fontStyle: "italic", color: "var(--ink2)", textTransform: "none", letterSpacing: 0 }}>“{session.partialUserText}”</div>
         )}
       </div>
       <div className="obw-ivcomposer">
-        <input className="obw-inp" placeholder="Type your answer, or just talk" value={composerText}
+        <input className="obw-inp" placeholder={voiceOff ? "Type your answer" : "Type your answer, or just talk"} value={composerText}
           onChange={(e) => setComposerText(e.target.value)}
           onKeyDown={(e) => { if (e.key === "Enter") sendTyped(); }} />
-        {session.phase === "listening" && !session.textOnly && <span className="obw-voicepill"><span className="ld" />Listening</span>}
+        {session.phase === "listening" && !session.textOnly && !voiceOff && <span className="obw-voicepill"><span className="ld" />Listening</span>}
         <button type="button" className="obw-btn obw-btn-pri sm" onClick={sendTyped}>Send</button>
       </div>
     </div>

@@ -708,7 +708,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // stamps it on both `pebble.summon` and any later `pebble.mic_blocked`),
       // so a mic refusal can unwind exactly the slot it belongs to and never a
       // turn that happens to be in flight.
-      const pendingSummons = new Map<string, { cancelled: boolean; sessionId?: string }>();
+      // `interview` marks a slot the onboarding interview opened for itself,
+      // so it can take that capture back when the turn moves on. Where the
+      // transcript GOES is decided by `interviewActive` — an interview in
+      // progress gets every utterance, however the capture started.
+      const pendingSummons = new Map<string, { cancelled: boolean; sessionId?: string; interview?: boolean }>();
+
+      // True while an onboarding profile interview is running. The interview
+      // is its own agent loop in its own window, so for as long as it lasts
+      // the user's voice belongs to it and not to the assistant.
+      let interviewActive = false;
 
       // Fallback timers for the bare-"Jarvis" listening state. If the sidecar's
       // session capture never produces an `audio.session_end` (dropped event,
@@ -895,6 +904,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // Tell each pebble-capable sidecar whether realtime is available so its
       // summon hotkey knows to toggle a live session vs. the one-shot capture.
       const advertiseRealtime = async (sidecarId: string) => {
+        // The onboarding interview owns the mic while it runs. A realtime
+        // session would answer as the assistant, in its own full-duplex audio
+        // loop the interview can neither see nor steer — so keep every pebble
+        // on one-shot capture, whose transcript we can route. Re-advertised
+        // for real when the interview finishes.
+        if (interviewActive) {
+          await sidecarManager.dispatchRPC(sidecarId, 'pebble.configure_realtime', { enabled: false })
+            .catch((err) => console.warn('[pebble-realtime] interview downgrade failed:', err));
+          return;
+        }
         const cfg = agentService.getConfig();
         const res = resolveRealtimeVoice(cfg, realtimeEnablement(cfg));
         // The advertisement must agree with the starters' plan gate, or the
@@ -935,6 +954,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       const pebbleMicFrames = new Map<string, number>(); // sidecarId -> frame count (diagnostic)
       sidecarManager.onEvent((sidecarId, event) => {
         if (event.event_type === 'pebble.realtime_start') {
+          if (interviewActive) {
+            // Raced the downgrade (the press landed before configure_realtime
+            // reached the sidecar). Refuse it and re-push the downgrade so the
+            // next press does a one-shot capture into the interview.
+            console.log(`[pebble-realtime] realtime_start from ${sidecarId} refused — onboarding interview owns the mic`);
+            void sidecarManager.dispatchRPC(sidecarId, 'pebble.configure_realtime', { enabled: false }).catch(() => {});
+            return;
+          }
           console.log(`[pebble-realtime] realtime_start from ${sidecarId} — opening session`);
           pebbleMicFrames.set(sidecarId, 0);
           void pebbleRealtime.start(sidecarId);
@@ -1790,6 +1817,149 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (pendingRegionByPebble.get(sidecarId)?.ctrl === ctrl) return;
         pendingSummons.delete(sidecarId);
       };
+
+      // ─────────────────── Onboarding interview voice ───────────────────
+      // The dashboard hasn't held the microphone since the wake word moved
+      // into the sidecar, so the onboarding interview borrows the pebble's:
+      // the interview UI asks for the mic when it reaches its "listening"
+      // beat, we capture one utterance, and the transcript goes to the
+      // interviewer. Without this the user's answers were captured by the
+      // pebble and answered by the assistant — the interview only ever heard
+      // what was typed into its composer.
+
+      // Which machine's pebble should the interview listen on? The one the
+      // user last spoke to, else the only connected one (guessing between
+      // several would put the mic on the wrong desk).
+      const pickPebbleSidecar = (): string | null => {
+        const capable: string[] = [];
+        for (const sc of sidecarManager.listSidecars()) {
+          if (sc.connected && (sc.capabilities ?? []).includes('pebble')) capable.push(sc.id);
+        }
+        if (capable.length === 0) return null;
+        if (activePebbleSidecar && capable.includes(activePebbleSidecar)) return activePebbleSidecar;
+        return capable.length === 1 ? capable[0]! : null;
+      };
+
+      // Hand a captured utterance to the interview instead of the assistant.
+      // Returns false when no interview is running, so callers fall through
+      // to their normal response cycle.
+      const routeToInterview = async (sidecarId: string, transcript: string): Promise<boolean> => {
+        // The session map is the authority on whether an interview is live —
+        // `interviewActive` mirrors it for the realtime advertisement, which
+        // has to be decided before any transcript exists.
+        if (!wsService.hasActiveInterview()) return false;
+        if (!wsService.deliverInterviewVoice(transcript)) return false;
+        clearInterviewMicWatchdog();
+        console.log(`[ambient-ui] transcript → onboarding interview (${transcript.length} chars)`);
+        // The interview window renders and speaks the reply; the pebble has
+        // nothing to say and steps back to idle.
+        await setState(sidecarId, 'idle', '');
+        return true;
+      };
+
+      // A capture the interview did NOT open (a summon already in flight when
+      // it asked for the mic) can end without ever reaching us. We can't
+      // cancel someone else's slot, but this makes sure the interview stops
+      // waiting on a turn that is never coming.
+      let interviewMicWatchdog: ReturnType<typeof setTimeout> | null = null;
+      const clearInterviewMicWatchdog = () => {
+        if (interviewMicWatchdog === null) return;
+        clearTimeout(interviewMicWatchdog);
+        interviewMicWatchdog = null;
+      };
+
+      wsService.setInterviewVoiceBridge({
+        setActive: (active: boolean) => {
+          if (interviewActive === active) return;
+          interviewActive = active;
+          console.log(
+            `[ambient-ui] onboarding interview ${active ? 'started — voice routes to the interview' : 'finished — voice back to the assistant'}`,
+          );
+          // Flip every pebble between one-shot capture (interview) and its
+          // real realtime verdict. advertiseRealtime reads `interviewActive`,
+          // so this single call does both directions; stopping the live
+          // sessions first makes sure an open one ends now rather than after
+          // the sidecar's own teardown.
+          if (active) {
+            for (const sc of sidecarManager.listSidecars()) {
+              if (sc.connected && (sc.capabilities ?? []).includes('pebble')) pebbleRealtime.stop(sc.id);
+            }
+          }
+          void readvertiseRealtime?.().catch((err: unknown) =>
+            console.warn('[ambient-ui] interview realtime re-advertisement failed:', err),
+          );
+        },
+
+        arm: async (): Promise<{ armed: boolean; reason?: string }> => {
+          if (!pebbleSTT) return { armed: false, reason: 'no-stt' };
+          const sidecarId = pickPebbleSidecar();
+          if (!sidecarId) return { armed: false, reason: 'no-pebble' };
+          clearInterviewMicWatchdog();
+          const existing = pendingSummons.get(sidecarId);
+          if (existing && !existing.cancelled) {
+            // A capture is already open on this pebble (the user pressed
+            // Ctrl+Space, or a wake phrase fired). Let it run — its transcript
+            // comes to the interview anyway — rather than opening a second mic
+            // on the same machine. The slot isn't ours to cancel, so the
+            // watchdog is all we arm here.
+            interviewMicWatchdog = setTimeout(() => {
+              interviewMicWatchdog = null;
+              wsService.notifyInterviewListenEnded('timeout');
+            }, WAKE_LISTEN_FALLBACK_MS);
+            return { armed: true };
+          }
+          const ctrl = { cancelled: false, interview: true };
+          pendingSummons.set(sidecarId, ctrl);
+          await setState(sidecarId, 'listening', '');
+          try {
+            const res = (await sidecarManager.dispatchRPC(sidecarId, 'pebble.start_listening', {})) as
+              | { started?: boolean; reason?: string }
+              | undefined;
+            if (res?.started === false) {
+              // Muted, most likely. Give the slot back and tell the UI, which
+              // falls back to typing instead of holding a listening orb.
+              ctrl.cancelled = true;
+              clearSummon(sidecarId, ctrl);
+              if (res.reason === 'muted') await setState(sidecarId, 'muted');
+              else await setState(sidecarId, 'idle', '');
+              return { armed: false, reason: res.reason ?? 'refused' };
+            }
+          } catch (err) {
+            console.warn('[ambient-ui] interview start_listening failed:', err);
+            ctrl.cancelled = true;
+            clearSummon(sidecarId, ctrl);
+            await setState(sidecarId, 'idle', '');
+            return { armed: false, reason: 'unavailable' };
+          }
+          // Same fallback the wake path uses: a dropped `audio.session_end`
+          // would otherwise leave the interview waiting on a turn that never
+          // arrives. Cleared the moment a session IS consumed.
+          clearListenTimer(sidecarId);
+          pendingListenTimers.set(sidecarId, setTimeout(() => {
+            pendingListenTimers.delete(sidecarId);
+            if (pendingSummons.get(sidecarId) !== ctrl) return; // already consumed
+            console.warn('[ambient-ui] interview capture: no session_end within fallback window');
+            ctrl.cancelled = true;
+            clearSummon(sidecarId, ctrl);
+            void setState(sidecarId, 'idle', '');
+            wsService.notifyInterviewListenEnded('timeout');
+          }, WAKE_LISTEN_FALLBACK_MS));
+          return { armed: true };
+        },
+
+        disarm: () => {
+          clearInterviewMicWatchdog();
+          // Only captures the interview opened itself: a summon the user
+          // started is not ours to cancel.
+          for (const [sidecarId, ctrl] of pendingSummons) {
+            if (!ctrl.interview) continue;
+            ctrl.cancelled = true;
+            clearListenTimer(sidecarId);
+            clearSummon(sidecarId, ctrl);
+            void setState(sidecarId, 'idle', '');
+          }
+        },
+      });
 
       const tryHandleRegionIntent = async (
         sidecarId: string,
@@ -3554,9 +3724,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             );
             await setState(session.sidecarId, 'idle', '');
             clearSummon(session.sidecarId, ctrl);
+            // The interview is waiting on this turn — tell it the capture came
+            // back empty so it re-arms instead of holding a listening orb.
+            if (wsService.hasActiveInterview()) wsService.notifyInterviewListenEnded('no-speech');
             return;
           }
           console.log(`[ambient-ui] user said (${transcript.length} chars)`);
+
+          // An interview in progress gets the utterance first — answers to
+          // its questions are not requests to the assistant.
+          if (await routeToInterview(session.sidecarId, transcript)) {
+            clearSummon(session.sidecarId, ctrl);
+            return;
+          }
 
           await runResponseCycle(session.sidecarId, transcript, ctrl);
           clearSummon(session.sidecarId, ctrl);
@@ -3681,6 +3861,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
         try {
           console.log(`[ambient-ui] wake → command: "${command}"`);
+          // "Hey Jarvis, I work in product design" during the interview is an
+          // answer, not an instruction — route it like any other capture.
+          if (await routeToInterview(sidecarId, command)) return;
           await runResponseCycle(sidecarId, command, ctrl);
         } catch (err) {
           console.warn('[ambient-ui] wake voice cycle error:', err);
