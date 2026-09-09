@@ -1,8 +1,10 @@
 import { describe, expect, test } from "bun:test";
 import { HOSTED_PROVISIONED, STEPS, stepsFor, stepGatedOnProbe, resolveStepKey } from "./OnboardingWizard";
 
-/** Pure-function test (the LLMTab.models.test.ts precedent — this repo has no
- * DOM test infrastructure). The step list is the feature: on a hosted install
+/** Pure-function test (the LLMTab.models.test.ts precedent). The step list is
+ * decidable without rendering, so it is tested without rendering; the tour's
+ * spotlight is not, and OnboardingWizard.tour.test.tsx mounts it for real.
+ * The step list is the feature: on a hosted install
  * the platform already answers brain/hearing/speaking, and ASKING is not the
  * only cost — answering writes intent that pins the account off its own plan. */
 describe("stepsFor", () => {

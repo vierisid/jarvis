@@ -87,7 +87,9 @@
     "yaml": "^2.7.0"
   },
   "devDependencies": {
+    "@happy-dom/global-registrator": "^20.14.0",
     "@types/bun": "latest",
+    "happy-dom": "^20.14.0",
     "socket.io-client": "^4.8.3"
   },
   "peerDependencies": {

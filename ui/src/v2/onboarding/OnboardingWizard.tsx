@@ -287,6 +287,19 @@ export function OnboardingWizard({
   const [tgBusy, setTgBusy] = useState(false);
   // tour
   const [tourI, setTourI] = useState(0);
+  // The spotlight is remounted per slide (see renderTour), and a remount drops
+  // keyboard focus to <body> - so a keyboard user who advanced with Enter had
+  // to Tab back into the card on every slide, and a screen reader lost its
+  // place. Put focus back on the button they just used, but ONLY when they
+  // actually used it: on the tour's first paint nothing has been activated
+  // yet, and grabbing focus there would be its own bug.
+  const tourNextRef = useRef<HTMLButtonElement | null>(null);
+  const tourAdvanced = useRef(false);
+  useLayoutEffect(() => {
+    if (!tourAdvanced.current) return;
+    tourAdvanced.current = false;
+    tourNextRef.current?.focus();
+  }, [tourI]);
   // flow
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1226,14 +1239,33 @@ export function OnboardingWizard({
             </div>
           </div>
           <div className="obw-tourdim" />
-          <div className="obw-spot" style={pos}>
-            <div className="sh"><span className="sd"><span className="in" /></span><span className="sl">Jarvis · tour</span><span className="sc">{tourI + 1} of 5</span></div>
+          {/* Keyed by slide so each step mounts a NEW node instead of mutating
+              one in place. React's output was always right - the DOM carried
+              slide 4's copy, counter and `top` in the same commit - but the
+              card is a stacking context (z-index) wrapping a descendant with
+              an infinite transform+opacity animation (the pulsing dot), so the
+              compositor hands it its own layer. Slides 3->4 and 4->5 change
+              ONLY `top`; WebKit re-positioned that cached layer without
+              re-rasterising it, and the user read slide 3's text over slide
+              4's position. Slides 1->2->3 swap right/bottom for left/top, a
+              big enough change to force a repaint, which is why only the tail
+              of the tour showed it. A fresh node cannot be a stale one. */}
+          <div key={tourI} className="obw-spot" style={pos}>
+            <div className="sh"><span className="sd"><span className="in" /></span><span className="sl">Jarvis · tour</span><span className="sc">{tourI + 1} of {TOUR.length}</span></div>
             <div className="sm">{T.sm}</div>
             {T.t && <div className="stry">{T.t}</div>}
             {error && <div className="stry" style={{ color: "var(--listen)" }}>{error}</div>}
             <div className="sb">
               <button className="obw-skip" onClick={skipTour}>Skip tour</button><span className="grow" />
-              <button className="obw-btn obw-btn-pri sm" onClick={() => (tourI === TOUR.length - 1 ? finishTour() : setTourI(tourI + 1))}>{tourI === TOUR.length - 1 ? "Finish" : "Next"}</button>
+              <button
+                ref={tourNextRef}
+                className="obw-btn obw-btn-pri sm"
+                onClick={() => {
+                  if (tourI === TOUR.length - 1) { finishTour(); return; }
+                  tourAdvanced.current = true;
+                  setTourI(tourI + 1);
+                }}
+              >{tourI === TOUR.length - 1 ? "Finish" : "Next"}</button>
             </div>
           </div>
         </div>
