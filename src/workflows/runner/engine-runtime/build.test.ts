@@ -12,11 +12,13 @@ import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } 
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
+import { createHash } from "node:crypto";
 import {
   buildEngineBundle,
   bundleHash,
   findCachedBundle,
   ENGINE_BUILD_PATHS,
+  ENGINE_ESBUILD_CONFIG,
   ENGINE_REQUEST_BASE_SHIM,
 } from "./build";
 
@@ -66,15 +68,29 @@ describe("engine bundle build", () => {
       ).toBe("true");
     });
 
-    test("the shim is part of the bundle cache key", () => {
-      // A banner that does not invalidate the hash is served stale from every
+    test("the banner is WIRED IN, not merely defined", () => {
+      // The previous version of this test grepped bundleHash's source for the
+      // constant's name. It passed with the hashing removed as long as the
+      // name survived in a comment, and it could not see the banner being
+      // unwired from the esbuild call at all -- which is the failure that
+      // matters, because it changes the bytes the engine runs.
+      expect(ENGINE_ESBUILD_CONFIG.banner.js).toBe(ENGINE_REQUEST_BASE_SHIM);
+    });
+
+    test("the build config is part of the bundle cache key", () => {
+      // A config change that does not move the hash is served stale from every
       // host that already has a bundle -- the same trap PATCHED_VENDOR_SOURCES
-      // exists to close, and the reason that list carries so many comments.
+      // exists to close. Asserted on the VALUE: two configs differing only in
+      // the banner must not hash alike.
+      const digest = (cfg: unknown) =>
+        createHash("sha256").update(JSON.stringify(cfg)).digest("hex");
+      const withBanner = { ...ENGINE_ESBUILD_CONFIG, banner: ENGINE_ESBUILD_CONFIG.banner };
+      const withoutBanner = { ...ENGINE_ESBUILD_CONFIG, banner: undefined };
+      expect(digest(withBanner)).not.toBe(digest(withoutBanner));
+      // And the real key actually consumes it.
       const src = readFileSync(resolve(import.meta.dir, "build.ts"), "utf8");
-      const hashBody = src.slice(src.indexOf("export function bundleHash"));
-      expect(hashBody.slice(0, hashBody.indexOf("\n}")).includes("ENGINE_REQUEST_BASE_SHIM")).toBe(
-        true,
-      );
+      const body = src.slice(src.indexOf("export function bundleHash"));
+      expect(body.slice(0, body.indexOf("\n}"))).toContain("ENGINE_ESBUILD_CONFIG");
     });
   });
 

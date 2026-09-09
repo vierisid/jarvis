@@ -275,6 +275,35 @@ const PATCHED_VENDOR_SOURCES = [
  * constructor so `x instanceof Request` stays true for Requests built by
  * fetch internals.
  */
+/**
+ * The path-free half of the esbuild configuration: everything that changes the
+ * OUTPUT rather than where it lands. `bundleHash` hashes this whole object, so
+ * adding a define, changing the target, or removing the banner below all
+ * invalidate cached bundles by themselves.
+ *
+ * Hashing the banner CONSTANT instead would not: deleting the `banner:` line
+ * while leaving the constant in the file changes what the engine executes and
+ * leaves the key untouched, which is the same stale-bundle trap
+ * PATCHED_VENDOR_SOURCES exists to close. Paths stay out because they differ
+ * per machine and must not fragment the cache.
+ */
+export const ENGINE_ESBUILD_CONFIG = {
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "cjs",
+  sourcemap: true,
+  minifySyntax: true,
+  minifyWhitespace: true,
+  metafile: true,
+  // isolated-vm intentionally excluded -- we only run SANDBOX_PROCESS mode
+  // (see SPIKE-SANDBOXING.md). utf-8-validate / bufferutil are optional ws deps.
+  external: ["isolated-vm", "utf-8-validate", "bufferutil"],
+  get banner() {
+    return { js: ENGINE_REQUEST_BASE_SHIM };
+  },
+} as const;
+
 export const ENGINE_REQUEST_BASE_SHIM = `(() => {
   const NativeRequest = globalThis.Request;
   if (typeof NativeRequest !== "function") return;
@@ -312,16 +341,17 @@ export function bundleHash(): string {
     const content = readFileSync(resolve(VENDOR_PACKAGES, rel), "utf8");
     hasher.update("\0").update(rel).update("\0").update(content);
   }
-  // The banner is a patch too. It changes the bytes the engine executes, just
-  // from our build config rather than a vendored file, so leaving it out of
+  // The build CONFIG is a patch too: it changes the bytes the engine executes,
+  // just from our own options rather than a vendored file. Leaving it out of
   // the key would serve the OLD engine from cache to every host that already
   // has a bundle for this hash -- the exact stale-engine trap the list above
-  // exists to close.
+  // exists to close -- and hashing only the banner constant would miss the
+  // banner being UNWIRED, or the target changing.
   hasher
     .update("\0")
-    .update("banner:request-base-shim")
+    .update("esbuild-config")
     .update("\0")
-    .update(ENGINE_REQUEST_BASE_SHIM);
+    .update(JSON.stringify(ENGINE_ESBUILD_CONFIG));
   return hasher.digest("hex").slice(0, 16);
 }
 
@@ -399,26 +429,17 @@ export async function buildEngineBundle(opts?: {
   };
 
   const result = await esbuild.build({
+    // The hashed config first, then only the path-dependent options. Anything
+    // that changes the output must live in ENGINE_ESBUILD_CONFIG or it is
+    // outside the cache key.
+    ...ENGINE_ESBUILD_CONFIG,
     entryPoints: [resolve(ENGINE_DIR, "src/main.ts")],
-    // Runs before the bundle body, and so before any piece import.
-    banner: { js: ENGINE_REQUEST_BASE_SHIM },
-    bundle: true,
-    platform: "node",
-    target: "node20",
     outfile: bundlePath,
-    format: "cjs",
-    sourcemap: true,
-    minifySyntax: true,
-    minifyWhitespace: true,
-    metafile: true,
     alias: {
       "@activepieces/shared": resolve(VENDOR_PACKAGES, "shared/src"),
       "@activepieces/pieces-framework": resolve(VENDOR_PACKAGES, "pieces/framework/src"),
       "@activepieces/pieces-common": resolve(VENDOR_PACKAGES, "pieces/common/src"),
     },
-    // isolated-vm intentionally excluded -- we only run SANDBOX_PROCESS mode
-    // (see SPIKE-SANDBOXING.md). utf-8-validate / bufferutil are optional ws deps.
-    external: ["isolated-vm", "utf-8-validate", "bufferutil"],
     nodePaths: [resolve(STAGING_DIR, "node_modules")],
     logLevel: "warning",
   });

@@ -515,17 +515,19 @@ export function readCachedEntries(
  * the remainder reported as unattempted rather than paying `pieceTimeoutMs` on
  * every one of them.
  *
- * WHAT PROMPTED THIS, and what is still unexplained: on the hosted
- * shared-runtime build one piece failed with an error reply and every one of
- * the 658 after it timed out, against an engine process still alive at 486MB.
- * Why an answered error was followed by a permanently unresponsive engine is
- * NOT established -- "the failed module stayed cached" does not survive
- * scrutiny, since a rejected import re-throws immediately rather than hanging,
- * and the later pieces are different modules. A likelier candidate is the
- * worker-rpc socket: `engineClient` is bound to one connection and a reconnect
- * replaces it without the live handle noticing, which would strand every
- * later send on a dead socket while the engine sits idle. Worth confirming
- * before anyone treats the timeout handling here as the whole answer.
+ * WHAT PROMPTED THIS, now established: on the hosted shared-runtime build a
+ * single piece got NO reply and every one of the 658 after it timed out,
+ * against an engine process still alive. The cause was not the engine at all.
+ * `@activepieces/piece-ampeco@0.2.8` replies with 2.68MB of metadata, over
+ * socket.io's 1MB default frame limit, which CLOSES the connection rather than
+ * erroring; the reply never came, and the handle went on emitting into a dead
+ * socket. The limit is raised in sandbox-api/worker-rpc.ts and the handle now
+ * re-resolves its client per send.
+ *
+ * This loop is what stands behind those: an engine that stops answering for
+ * ANY reason -- an oversized frame, a piece that blocks the event loop, a
+ * future cause nobody has met yet -- costs one piece instead of the rest of
+ * the catalog.
  */
 export async function buildPieceCatalog(
   opts: BuildCatalogOptions,
