@@ -305,6 +305,14 @@ export class WorkerRpcServer {
     }
 
     socket.on("disconnect", () => {
+      // ONLY if this socket is still the registered one. A reconnecting engine
+      // registers its new socket under the same sandbox id, and if the old
+      // socket's disconnect fires after that (a server ping timeout racing a
+      // completed re-handshake), an unconditional delete drops the LIVE entry.
+      // Callers then see "no connection" for an engine that is connected and
+      // healthy -- which used to cost a 90s timeout and now, since the handle
+      // re-resolves per send, would destroy that engine instead.
+      if (this.connections.get(sandboxId)?.socket !== socket) return;
       this.connections.delete(sandboxId);
     });
   }

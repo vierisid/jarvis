@@ -85,13 +85,13 @@ describe("a live engine that stops answering", () => {
   }
 
   test.skipIf(skipWedgeTests)(
-    "a socket reconnect does not strand the handle: it fails in milliseconds, not at the ack deadline",
+    "a disconnected engine fails in milliseconds rather than at the ack deadline",
     async () => {
       const handle = await runtime!.acquire({
         runId: "wedge-" + SandboxRegistry.newSandboxId(),
         projectId: "wedge-project",
       });
-
+      try {
       // Prove the pipe works first. A non-existent piece answers with an error
       // REPLY, which is all this needs -- it means the round trip completed.
       await expect(
@@ -116,13 +116,70 @@ describe("a live engine that stops answering", () => {
       const started = Date.now();
       await expect(
         handle.extractPieceMetadata({ pieceName: "@activepieces/piece-nope", pieceVersion: "0.0.1" }),
-      ).rejects.toThrow(/not connected/);
+      ).rejects.toThrow(/no live connection/);
       expect(Date.now() - started).toBeLessThan(5_000);
 
       // And the engine is not fit to be reused, for the same reason a
       // transport failure makes one unfit.
       expect(handle.isAbandoned).toBe(true);
-      await handle.release();
+      } finally {
+        // An acquired-but-unreleased engine survives `runtime.shutdown()` --
+        // that only clears the warm slot -- and then reconnect-loops against a
+        // closed port forever. A failed assertion must not leak one.
+        await handle.release();
+      }
+    },
+    60_000,
+  );
+
+  test.skipIf(skipWedgeTests)(
+    "a RECONNECTING engine is picked up by the handle that was built before it",
+    async () => {
+      // The half the fix exists for, and the half a DISCONNECT cannot show:
+      // socket.io-client treats a server-side `disconnect` packet as final and
+      // never reconnects, so that path only ever proves the fail-fast branch.
+      // Closing the underlying transport is what a dropped connection actually
+      // looks like, and the client reconnects from it -- registering a NEW
+      // client under the same sandbox id, which a handle holding the old one
+      // would never see.
+      const handle = await runtime!.acquire({
+        runId: "reconn-" + SandboxRegistry.newSandboxId(),
+        projectId: "reconn-project",
+      });
+      try {
+        const conns = (
+          api.workerRpc as unknown as {
+            connections: Map<string, { id: string; socket: { conn: { close: () => void } } }>;
+          }
+        ).connections;
+        const before = conns.get(handle.sandboxId)!.socket;
+        (before as unknown as { conn: { close: () => void } }).conn.close();
+
+        // Wait for a DIFFERENT socket object under the same sandbox id.
+        let reconnected = false;
+        for (let i = 0; i < 60; i++) {
+          const now = conns.get(handle.sandboxId)?.socket;
+          if (now && now !== before) {
+            reconnected = true;
+            break;
+          }
+          await new Promise((r) => setTimeout(r, 250));
+        }
+        expect(reconnected).toBe(true);
+
+        // The SAME handle must now talk to the new socket. An engine REPLY
+        // (this piece does not exist, so an error reply) proves the round trip;
+        // `not connected` would mean the handle never picked the new one up.
+        await expect(
+          handle.extractPieceMetadata({
+            pieceName: "@activepieces/piece-nope",
+            pieceVersion: "0.0.1",
+          }),
+        ).rejects.toThrow(/-> (INTERNAL_ERROR|USER_FAILURE)/);
+        expect(handle.isAbandoned).toBe(false);
+      } finally {
+        await handle.release();
+      }
     },
     60_000,
   );
@@ -150,8 +207,9 @@ describe("a live engine that stops answering", () => {
       // in prod that ran for 658 consecutive pieces.
       const after = reasonFor("b-after");
       expect(after).not.toContain("timed out");
-      expect(after.length).toBeGreaterThan(0);
-      expect(after).toContain("b-after");
+      // An engine REPLY, not merely "some string": every reason begins with the
+      // piece name, so asserting that would pass without the engine answering.
+      expect(after).toMatch(/-> (INTERNAL_ERROR|USER_FAILURE)/);
     },
     120_000,
   );

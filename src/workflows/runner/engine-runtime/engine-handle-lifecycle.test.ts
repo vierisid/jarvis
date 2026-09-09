@@ -114,7 +114,7 @@ describe("EngineHandle operation lifecycle", () => {
       proc,
       registry,
       5,
-      { baseUrl: "http://127.0.0.1:1234" } as never,
+      { baseUrl: "http://127.0.0.1:1234", workerRpc: { engineClient: () => engine } } as never,
       baseCodeDir,
       releaseImpl,
     );

@@ -220,28 +220,24 @@ export class EngineHandle {
    * there healthy and idle. Measured before this existed: after a forced
    * disconnect the handle simply never got another reply.
    *
-   * Re-resolving per send makes a reconnect self-healing, and makes a genuinely
-   * absent connection fail in milliseconds instead of ninety seconds. The
-   * captured `engineClient` field stays for the warm pool and tests; nothing
-   * on the operation path reads it any more.
+   * Re-resolving per send makes a reconnect self-healing for the NEXT
+   * operation, and makes an absent connection fail in milliseconds instead of
+   * ninety seconds. It cannot rescue an operation already in flight when the
+   * socket dropped: socket.io leaves that ack pending, so it still waits out
+   * its own deadline.
    */
   private liveEngineClient(): EngineContract {
-    // No rpc server to ask means this handle was not built from an rpc
-    // connection at all -- it was handed a client directly, which is how the
-    // fake-EngineContract lifecycle tests drive it. There is nothing to
-    // re-resolve against, so honour what the caller gave us. A real SandboxApi
-    // always has one, so production never takes this branch.
-    const rpc = this.api?.workerRpc;
-    if (!rpc) return this.engineClient;
     try {
-      return rpc.engineClient(this.sandboxId);
+      return this.api.workerRpc.engineClient(this.sandboxId);
     } catch {
-      // No live connection. The engine's state is unknown for exactly the same
-      // reason a transport failure makes it unknown, so mark it abandoned and
-      // let `release()` destroy it rather than parking it for the next caller.
-      this.abandoned = true;
+      // No live connection. Throwing here rather than emitting into a dead
+      // socket is the whole point; `send()`'s catch marks the handle abandoned,
+      // so `release()` destroys the engine instead of parking it for the next
+      // caller. Note this covers "disconnected" AND "has not finished
+      // reconnecting", which are indistinguishable from here -- the operation
+      // was never sent either way.
       throw new Error(
-        `engine for sandbox ${this.sandboxId} is not connected (it disconnected mid-run)`,
+        `no live connection for sandbox ${this.sandboxId}; the engine disconnected and has not reconnected`,
       );
     }
   }
