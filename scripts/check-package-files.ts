@@ -85,36 +85,40 @@ export function parseBunPack(output: string): string[] {
 /**
  * Parse the file list out of `npm pack --dry-run --json`.
  *
- * The envelope is NOT stable across npm majors: npm 11 emits an array of pack
- * entries, npm 12 an object keyed by package name. Both wrap the same
+ * The envelope is NOT stable across npm majors: npm 10 and 11 emit an array of
+ * pack entries, npm 12 an object keyed by package name. Both wrap the same
  * `{ files: [{ path }] }`, so normalize to "all entry objects" and read the
  * paths out of whichever arrived. The release job installs `npm@latest`, so
  * the shape can change under this repo without anything here being edited --
  * hence tolerating both rather than pinning to the one seen today.
+ *
+ * npm also prefixes warnings, and a warning can itself contain a bracket, so
+ * every candidate start offset is tried rather than just the first. Returning
+ * [] is a normal outcome, not an error: the caller falls back to another
+ * packer rather than failing the build over an output quirk.
  */
 export function parseNpmPack(output: string): string[] {
-  // npm may prepend notices to the stream; start at the first JSON delimiter
-  // rather than assuming the whole thing parses.
-  const start = output.search(/[[{]/);
-  if (start < 0) return [];
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(output.slice(start));
-  } catch {
-    return [];
-  }
-  if (typeof parsed !== "object" || parsed === null) return [];
-  const entries = Array.isArray(parsed) ? parsed : Object.values(parsed);
-  const paths: string[] = [];
-  for (const entry of entries) {
-    const files = (entry as { files?: unknown } | null)?.files;
-    if (!Array.isArray(files)) continue;
-    for (const f of files) {
-      const path = (f as { path?: unknown } | null)?.path;
-      if (typeof path === "string") paths.push(path);
+  for (const m of output.matchAll(/[[{]/g)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(output.slice(m.index));
+    } catch {
+      continue;
     }
+    if (typeof parsed !== "object" || parsed === null) continue;
+    const entries = Array.isArray(parsed) ? parsed : Object.values(parsed);
+    const paths: string[] = [];
+    for (const entry of entries) {
+      const files = (entry as { files?: unknown } | null)?.files;
+      if (!Array.isArray(files)) continue;
+      for (const f of files) {
+        const path = (f as { path?: unknown } | null)?.path;
+        if (typeof path === "string") paths.push(path);
+      }
+    }
+    if (paths.length > 0) return paths;
   }
-  return paths;
+  return [];
 }
 
 /** Requirements not satisfied by `packed`. */
@@ -128,43 +132,69 @@ export function missingFrom(packed: string[], required = REQUIRED): Requirement[
  * `files` semantics. A guard that models the rules instead of running them can
  * agree with itself while disagreeing with the packer.
  *
- * npm is preferred because npm is what actually publishes (release-exec.yml),
- * so on the release path this asserts against the true artifact; bun is the
- * fallback for checkouts and hooks where npm is not installed. Today the two
- * agree file-for-file, and a future divergence is precisely the thing worth
- * catching at the point of publish.
+ * npm is tried first because npm is what actually publishes (release-exec.yml),
+ * so on the release path this asserts against the true artifact. bun is the
+ * fallback, and it is a FALLBACK rather than an alternative: this guard exists
+ * to fail when a shipped-by-path file goes missing, and failing instead because
+ * some npm build printed something the parser did not expect would be a check
+ * that cries wolf -- which is how a guard gets deleted. It only gives up when
+ * NO packer produced a file list, which really is a broken check.
  *
  * `--ignore-scripts` keeps `prepublishOnly` out of a read-only check. It does
  * not change which paths are eligible, only whether build outputs happen to
  * exist on disk (see the REQUIRED note about piece `dist/`).
  */
-function packedPaths(): { packer: string; paths: string[] } {
+function packedPaths(): { packer: string; paths: string[]; notes: string[] } {
   const cwd = fileURLToPath(new URL("..", import.meta.url));
   const haveNpm = spawnSync("npm", ["--version"], { encoding: "utf8" }).status === 0;
-  const [cmd, args, parse] = haveNpm
-    ? (["npm", ["pack", "--dry-run", "--json", "--ignore-scripts"], parseNpmPack] as const)
-    : (["bun", ["pm", "pack", "--dry-run", "--ignore-scripts"], parseBunPack] as const);
+  const attempts: Array<{ cmd: string; args: string[]; parse: (out: string) => string[] }> = [
+    ...(haveNpm
+      ? [
+          {
+            cmd: "npm",
+            args: ["pack", "--dry-run", "--json", "--ignore-scripts"],
+            parse: parseNpmPack,
+          },
+        ]
+      : []),
+    { cmd: "bun", args: ["pm", "pack", "--dry-run", "--ignore-scripts"], parse: parseBunPack },
+  ];
 
-  const res = spawnSync(cmd, [...args], { cwd, encoding: "utf8" });
-  if (res.error) throw new Error(`${cmd} pack failed to run: ${res.error.message}`);
-  if (res.status !== 0) {
-    throw new Error(`${cmd} pack exited ${res.status}: ${(res.stderr || res.stdout || "").trim()}`);
+  const notes: string[] = [];
+  for (const a of attempts) {
+    const res = spawnSync(a.cmd, a.args, { cwd, encoding: "utf8" });
+    if (res.error) {
+      notes.push(`${a.cmd}: could not run (${res.error.message})`);
+      continue;
+    }
+    if (res.status !== 0) {
+      notes.push(`${a.cmd}: exited ${res.status} (${(res.stderr || res.stdout || "").trim().slice(0, 200)})`);
+      continue;
+    }
+    // npm writes its JSON to stdout and bun writes its listing to stderr, so
+    // feed each parser both rather than encoding which stream one happens to
+    // use today.
+    const paths = a.parse(`${res.stdout ?? ""}\n${res.stderr ?? ""}`);
+    if (paths.length > 0) return { packer: a.cmd, paths, notes };
+    notes.push(`${a.cmd}: ran cleanly but produced no parseable file list`);
   }
-  // bun writes the listing to stderr and npm to stdout; feed the parser both
-  // rather than encoding which stream each one happens to use.
-  return { packer: cmd, paths: parse(`${res.stdout ?? ""}\n${res.stderr ?? ""}`) };
+  return { packer: "none", paths: [], notes };
 }
 
 function main(): void {
-  const { packer, paths } = packedPaths();
-  // An empty list means the parse broke (an output format change), not a
-  // package with no files. Failing here beats reporting every requirement as
-  // missing and sending someone to edit `files` for no reason.
+  const { packer, paths, notes } = packedPaths();
+  // No packer produced a list at all: the CHECK is broken, not the package.
+  // Failing here beats reporting every requirement as missing and sending
+  // someone to edit `files` for no reason.
   if (paths.length === 0) {
-    console.error(`[check-package-files] FAILED -- could not read any packed path from ${packer}.`);
-    console.error("Has its output format changed? Update the parser.");
+    console.error("[check-package-files] FAILED -- no packer produced a file list:");
+    for (const n of notes) console.error(`  ${n}`);
+    console.error("\nThis is a broken check, not a broken package. Fix the parser.");
     process.exit(1);
   }
+  // Say which packer answered, and why any earlier one did not. A silent
+  // fallback would hide npm breaking on the very path that publishes.
+  for (const n of notes) console.warn(`[check-package-files] note: ${n}`);
 
   const missing = missingFrom(paths);
   if (missing.length === 0) {

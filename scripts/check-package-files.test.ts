@@ -49,10 +49,20 @@ describe("check-package-files parseNpmPack", () => {
     expect(parseNpmPack(`npm warn config foo\n${asObject}`)).toEqual(want);
   });
 
+  test("a notice containing a BRACKET does not defeat it", () => {
+    // CI failed exactly here: npm ran cleanly, the parser found a bracket that
+    // was not the payload, and the whole check reported the package broken.
+    // Every candidate offset is tried now, not just the first.
+    expect(parseNpmPack(`npm warn config [deprecated] ignored\n${asArray}`)).toEqual(want);
+    expect(parseNpmPack(`npm warn {weird}\n${asObject}`)).toEqual(want);
+  });
+
   test("yields nothing rather than throwing on any shape it does not recognize", () => {
     for (const bad of ["", "not json at all", "[", "[{}]", '[{"files":"nope"}]', "{}", "null", '"s"']) {
       expect(parseNpmPack(bad)).toEqual([]);
     }
+    // An empty list is a NORMAL answer that makes the runner fall back to
+    // another packer -- never a reason to fail the build on its own.
     // Entries without a string path are dropped, not coerced.
     expect(parseNpmPack('[{"files":[{"path":"a"},{"size":1}]}]')).toEqual(["a"]);
   });
