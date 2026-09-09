@@ -40,7 +40,9 @@ describe("WorkerRpcServer (B4: socket.io engine <-> daemon)", () => {
   let signer: EngineTokenSigner;
   let registry: SandboxRegistry;
 
-  async function makeSandbox(): Promise<TestSandbox> {
+  async function makeSandbox(opts?: {
+    transports?: Array<"polling" | "websocket">;
+  }): Promise<TestSandbox> {
     const flow = createFlow({ projectId: DEFAULT_IDS.project });
     const v = createDraftVersion({ flowId: flow.id, displayName: "wsf" });
     lockVersion(v.id);
@@ -65,7 +67,7 @@ describe("WorkerRpcServer (B4: socket.io engine <-> daemon)", () => {
     });
 
     const client = socketIoClient(`http://127.0.0.1:${api.sandboxWsPort}`, {
-      transports: ["websocket"],
+      transports: opts?.transports ?? ["websocket"],
       path: "/worker/ws",
       auth: { sandboxId },
       reconnection: false,
@@ -118,6 +120,47 @@ describe("WorkerRpcServer (B4: socket.io engine <-> daemon)", () => {
     await api.stop();
     closeWorkflowDb();
   });
+
+  test("an engine reply larger than socket.io's 1MB default still arrives", async () => {
+    // THE ROOT CAUSE of a halted shared-runtime build. socket.io closes a
+    // connection carrying an oversized frame -- silently: no error, no reply,
+    // just a dropped socket. Piece metadata outgrows the 1MB default:
+    // @activepieces/piece-ampeco@0.2.8 replies with 2.68MB (377 actions is
+    // 0.75MB; 8 bundled i18n files add 2.2MB). The extraction then waited out
+    // its whole budget for a reply that could never come, and every later
+    // operation on that handle went to a dead socket.
+    // POLLING is not incidental, it is the whole test. socket.io negotiates
+    // polling first and enforces maxHttpBufferSize there as an HTTP body
+    // limit, which is the path the real build hit. Over websocket this runtime
+    // does NOT enforce it, so a websocket-only version of this test passes
+    // with the 1MB default still in place -- measured, and it is how the first
+    // draft of this test came out green against the bug it was written for.
+    const sb = await makeSandbox({ transports: ["polling"] });
+    try {
+      // Answer executeOperation the way the engine does, with a payload the
+      // default would have refused.
+      const big = "x".repeat(3 * 1024 * 1024);
+      sb.client.on(
+        "rpc",
+        (msg: { method: string }, ack: (result: unknown) => void) => {
+          if (msg.method !== "executeOperation") return;
+          ack({ status: "OK", response: { blob: big } });
+        },
+      );
+
+      const engine = api.workerRpc.engineClient(sb.sandboxId);
+      const reply = (await engine.executeOperation(
+        { operationType: "EXTRACT_PIECE_METADATA", operation: {} } as never,
+        { timeoutMs: 15_000 },
+      )) as { response?: { blob?: string } };
+
+      expect(reply.response?.blob?.length).toBe(big.length);
+      // And the socket survived: a refused frame would have closed it.
+      expect(sb.client.connected).toBe(true);
+    } finally {
+      sb.client.close();
+    }
+  }, 30_000);
 
   test("connection is rejected without a sandboxId", async () => {
     const client = socketIoClient(`http://127.0.0.1:${api.sandboxWsPort}`, {

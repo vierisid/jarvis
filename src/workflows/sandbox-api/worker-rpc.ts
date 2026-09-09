@@ -110,6 +110,22 @@ export class WorkerRpcServer {
       // both transports so the upstream client connects without a config
       // override on its side.
       transports: ["polling", "websocket"],
+      // 64MB, because socket.io's 1MB default SILENTLY CLOSES the connection
+      // on an oversized frame -- no error, no reply, just a dropped socket.
+      //
+      // Piece metadata is the payload that outgrows it. Measured:
+      // @activepieces/piece-ampeco@0.2.8 replies with 2.68MB (377 actions is
+      // 0.75MB, and 8 bundled i18n files add 2.2MB more). That killed the
+      // socket mid-extraction, the caller waited out its budget for a reply
+      // that could never arrive, and every later operation on that handle went
+      // to a dead client -- which is how one oversized piece took a whole
+      // shared-runtime build with it.
+      //
+      // Safe to raise here: this server listens on loopback only and its sole
+      // client is an engine WE spawned, so the ceiling bounds our own memory
+      // rather than an untrusted peer's. Generous on purpose -- the next
+      // 3MB piece must not repeat this.
+      maxHttpBufferSize: 64 * 1024 * 1024,
       path: "/worker/ws",
       // Auth check happens in the connection handler below; the middleware
       // form rejects with a generic error, which is harder to debug.
