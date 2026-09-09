@@ -66,11 +66,7 @@ import { TriggerManager } from "../workflows/runner/triggers/manager.ts";
 import { AWARENESS_EVENT_TYPE_MAP, OBSERVER_EVENT_TYPE_MAP } from "../workflows/runtime/event-types.ts";
 import { WorkflowEventBus } from "../workflows/runtime/event-bus.ts";
 import { WorkflowEventBuffer } from "../workflows/runtime/event-buffer.ts";
-import type {
-  ComposerChatMessage,
-  ComposerChatReply,
-  ComposerToolDef,
-} from "../actions/tools/workflow-composer.ts";
+import { createComposerLlmClient } from "../actions/tools/composer-llm.ts";
 import {
   bootstrapWorkflowEngine,
   type BootstrapWorkflowEngineResult,
@@ -4818,58 +4814,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // earlier in step 10.1) is in scope and refreshes happen on enable /
       // disable / publish / delete.
       const { createManageWorkflowTool } = await import('../actions/tools/manage-workflow.ts');
-      // Build a minimal piece-side LLM client + tool-registry shim for the
-      // composer. Both are tiny structural wrappers; we no longer need the
-      // legacy `JarvisLlmClient`/`JarvisToolRegistryAdapter` classes since
-      // the engine path is the production runtime.
+      // Build the composer's LLM client + a tool-registry shim. The client
+      // lives in its own module (composer-llm.ts) so the tier it runs on is a
+      // reviewable, testable decision rather than a line buried in boot.
       const llmManager = agentService.getLLMManager();
-      const composeLlm = {
-        async chat(input: { prompt: string; system?: string }): Promise<{ text: string }> {
-          const messages: Array<{ role: "system" | "user"; content: string }> = [];
-          if (input.system !== undefined) messages.push({ role: "system", content: input.system });
-          messages.push({ role: "user", content: input.prompt });
-          // Composer expects a complete JSON tree describing the flow.
-          // A realistic flow is 500-2000 output tokens; we ask for 8192
-          // to leave room for verbose pieces (long input schemas, many
-          // steps) without surprise truncation -- kept consistent with the
-          // chatTools cap below. Ollama's default `num_predict` is 128 --
-          // truncates every compose reply mid-JSON and crashes parsing with
-          // "Unexpected EOF". Other providers either have higher defaults or
-          // ignore the cap.
-          const reply = await llmManager.chat(messages, { max_tokens: 8192 });
-          // `LLMResponse.content` is the assistant-text field; an earlier
-          // version of this adapter read `reply.text` which doesn't
-          // exist on the provider response shape, so every compose
-          // returned "" and JSON.parse crashed with EOF. Stay strict
-          // here -- if the provider ever returns ContentBlock[] for
-          // text-only completions we want to know.
-          const content = typeof reply.content === "string" ? reply.content : "";
-          return { text: content };
-        },
-        // Tool-loop entrypoint: the composer discovers pieces via tools
-        // (list_pieces / get_piece_details / ...) instead of a full catalog
-        // dump. ComposerChatMessage / ComposerToolDef alias LLMMessage /
-        // LLMTool, so this is a passthrough. If the provider rejects the tools
-        // parameter, the composer catches the error and falls back to the
-        // one-shot `chat` path above. `finish_reason` is surfaced so the loop
-        // can detect a reply truncated at the token cap (a dropped submit_flow)
-        // rather than misreading it as prose.
-        async chatTools(
-          messages: ComposerChatMessage[],
-          tools: ComposerToolDef[],
-        ): Promise<ComposerChatReply> {
-          const reply = await llmManager.chat(messages, {
-            max_tokens: 8192,
-            tools,
-            tool_choice: 'auto',
-          });
-          return {
-            content: typeof reply.content === 'string' ? reply.content : '',
-            tool_calls: reply.tool_calls ?? [],
-            finish_reason: reply.finish_reason,
-          };
-        },
-      };
+      const composeLlm = createComposerLlmClient(llmManager);
       // Compact community-library index for the composer's search_library
       // tool: lets it suggest "install piece X first" when the user asks for
       // a service that isn't installed, instead of forcing a wrong fit.
