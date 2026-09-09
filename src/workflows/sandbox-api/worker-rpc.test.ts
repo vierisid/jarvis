@@ -8,7 +8,7 @@
  * the WS layer. Step D adds an end-to-end test against the real bundle.
  */
 
-import { test, expect, describe, beforeAll, afterAll } from "bun:test";
+import { test, expect, describe, beforeAll, afterAll, afterEach } from "bun:test";
 import { io as socketIoClient } from "socket.io-client";
 import { closeWorkflowDb, initWorkflowDb } from "../db";
 import { createFlow } from "../db/repos/flow";
@@ -18,6 +18,7 @@ import { DEFAULT_IDS } from "../db/schema";
 import { CredentialResolver } from "../credentials/adapter";
 import { EngineTokenSigner } from "./engine-token";
 import { SandboxRegistry } from "./sandbox-registry";
+import { WorkerRpcServer } from "./worker-rpc";
 import { SandboxApi } from "./server";
 import { createNotifyClient, createRpcClient } from "./rpc";
 import type { WorkerContract, WorkerNotifyContract } from "./contracts";
@@ -355,5 +356,170 @@ describe("WorkerRpcServer (B4: socket.io engine <-> daemon)", () => {
     } finally {
       sb.client.close();
     }
+  });
+});
+
+/**
+ * Connection-path diagnostics. These cover the log output rather than the RPC
+ * contracts: when an engine fails to reach the daemon, that log is the only
+ * evidence available, and each of these cases used to be silent.
+ */
+describe("WorkerRpcServer: connection diagnostics", () => {
+  let server: WorkerRpcServer | null = null;
+  let client: ReturnType<typeof socketIoClient> | null = null;
+
+  afterEach(async () => {
+    client?.close();
+    client = null;
+    await server?.stop();
+    server = null;
+  });
+
+  const noopWorkerHandlers = {
+    async updateRunProgress() {},
+    async updateStepProgress() {},
+    async uploadRunLog() {},
+    async sendFlowResponse() {},
+  } as unknown as ConstructorParameters<typeof WorkerRpcServer>[0]["workerHandlers"];
+
+  const noopNotifyHandlers = {
+    stdout() {},
+    stderr() {},
+  } as unknown as ConstructorParameters<typeof WorkerRpcServer>[0]["notifyHandlers"];
+
+  async function startServer(registry: SandboxRegistry): Promise<WorkerRpcServer> {
+    const s = new WorkerRpcServer({
+      registry,
+      workerHandlers: noopWorkerHandlers,
+      notifyHandlers: noopNotifyHandlers,
+    });
+    server = s;
+    await s.start();
+    return s;
+  }
+
+  function connect(port: number, auth?: { sandboxId: string }): ReturnType<typeof socketIoClient> {
+    const socket = socketIoClient(`ws://127.0.0.1:${port}`, {
+      path: "/worker/ws",
+      ...(auth ? { auth } : {}),
+      reconnection: false,
+      transports: ["websocket"],
+    });
+    client = socket;
+    return socket;
+  }
+
+  function registerSandbox(registry: SandboxRegistry, sandboxId: string): void {
+    registry.register({
+      sandboxId,
+      runId: "run_diag",
+      projectId: DEFAULT_IDS.project,
+      engineToken: "token",
+      expiresAt: Date.now() + 60_000,
+      terminatedAt: null,
+    });
+  }
+
+  /** Run `fn` with console.warn captured. */
+  async function captureWarnings(fn: () => Promise<void>): Promise<string[]> {
+    const lines: string[] = [];
+    const original = console.warn;
+    console.warn = (...args: unknown[]) => {
+      lines.push(args.join(" "));
+    };
+    try {
+      await fn();
+    } finally {
+      console.warn = original;
+    }
+    return lines;
+  }
+
+  const settle = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms));
+
+  test("binds the RPC socket to loopback only, not every interface", async () => {
+    const s = await startServer(new SandboxRegistry());
+    const port = s.getPort();
+    expect(port).toBeGreaterThan(0);
+    const { execSync } = await import("node:child_process");
+    const listening = execSync(`ss -ltn 2>/dev/null | grep ":${port} " || true`).toString();
+    if (listening.trim() === "") return; // no `ss` on this host; nothing to assert
+    // Match the LOCAL address column specifically -- `ss` prints "0.0.0.0:*"
+    // as the peer of every listening socket, loopback-bound ones included.
+    expect(listening).toContain(`127.0.0.1:${port}`);
+    expect(listening).not.toContain(`0.0.0.0:${port}`);
+    expect(listening).not.toContain(`*:${port}`);
+  });
+
+  test("an engine that connects after the wait timed out is reported as late, not lost", async () => {
+    const registry = new SandboxRegistry();
+    const s = await startServer(registry);
+    const sandboxId = "sandbox-late";
+    registerSandbox(registry, sandboxId);
+
+    const warnings = await captureWarnings(async () => {
+      await expect(s.waitForConnection(sandboxId, 30)).rejects.toThrow(
+        "did not connect within 30ms",
+      );
+      const socket = connect(s.getPort(), { sandboxId });
+      await new Promise<void>((res, rej) => {
+        socket.on("connect", () => res());
+        socket.on("connect_error", rej);
+      });
+      await settle(50);
+    });
+
+    expect(
+      warnings.some(
+        (w) => w.includes("AFTER the daemon") && w.includes("JARVIS_ENGINE_HANDSHAKE_TIMEOUT_MS"),
+      ),
+    ).toBe(true);
+  });
+
+  test("a connection for an unknown sandbox is logged, not silently dropped", async () => {
+    const s = await startServer(new SandboxRegistry());
+
+    const warnings = await captureWarnings(async () => {
+      const socket = connect(s.getPort(), { sandboxId: "sandbox-nobody-knows" });
+      await new Promise<void>((res) => {
+        socket.on("disconnect", () => res());
+        socket.on("connect_error", () => res());
+        setTimeout(res, 500);
+      });
+      await settle(20);
+    });
+
+    expect(warnings.some((w) => w.includes("unknown or terminated sandbox"))).toBe(true);
+  });
+
+  test("a connection with no sandboxId in auth is logged", async () => {
+    const s = await startServer(new SandboxRegistry());
+
+    const warnings = await captureWarnings(async () => {
+      const socket = connect(s.getPort());
+      await new Promise<void>((res) => {
+        socket.on("disconnect", () => res());
+        socket.on("connect_error", () => res());
+        setTimeout(res, 500);
+      });
+      await settle(20);
+    });
+
+    expect(warnings.some((w) => w.includes("missing sandboxId in auth"))).toBe(true);
+  });
+
+  test("a normal connection resolves a pending waiter with no warning", async () => {
+    const registry = new SandboxRegistry();
+    const s = await startServer(registry);
+    const sandboxId = "sandbox-ok";
+    registerSandbox(registry, sandboxId);
+
+    const warnings = await captureWarnings(async () => {
+      const pending = s.waitForConnection(sandboxId, 2_000);
+      connect(s.getPort(), { sandboxId });
+      await pending;
+    });
+
+    expect(warnings).toEqual([]);
   });
 });

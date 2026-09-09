@@ -20,6 +20,7 @@
  * endpoints (AP_SANDBOX_WS_PORT vs internalApiUrl).
  */
 
+import { createServer } from "node:http";
 import { Server, type Socket } from "socket.io";
 import type { SandboxRegistry } from "./sandbox-registry";
 import { createNotifyServer, createRpcClient, createRpcServer } from "./rpc";
@@ -60,6 +61,9 @@ interface ConnectedSandbox {
   engineClient: EngineContract;
 }
 
+/** How long a timed-out sandboxId stays eligible for late-arrival reporting. */
+const ABANDONED_RETENTION_MS = 5 * 60_000;
+
 type ConnectionWaiter = {
   resolve: (engineClient: EngineContract) => void;
   reject: (err: Error) => void;
@@ -70,6 +74,14 @@ export class WorkerRpcServer {
   private io: Server | null = null;
   private readonly connections = new Map<string, ConnectedSandbox>();
   private readonly waiters = new Map<string, ConnectionWaiter[]>();
+  /**
+   * sandboxId -> when we stopped waiting for it. An engine that dials in
+   * after the deadline is the single most useful thing to know when acquires
+   * time out: it separates "the host is too slow for the budget" (raise the
+   * budget) from "the engine never dialed at all" (something upstream of the
+   * socket is broken). Without this the two look identical in the log.
+   */
+  private readonly abandoned = new Map<string, number>();
   private readonly registry: SandboxRegistry;
   private readonly workerHandlers: WorkerContractHandlers;
   private readonly notifyHandlers: NotifyContractHandlers;
@@ -105,28 +117,41 @@ export class WorkerRpcServer {
 
     this.io.on("connection", (socket) => this.onConnection(socket));
 
+    // Bind the HTTP server ourselves rather than via `io.listen(port)`: that
+    // helper ignores the bind host and listens on every interface, which on a
+    // shared host exposes the engine RPC channel (and the sandboxIds flowing
+    // over it) to anything that can reach the box. The engine always dials
+    // 127.0.0.1, so loopback is the only address it needs.
+    const httpServer = createServer();
+    this.io.attach(httpServer);
+
     await new Promise<void>((res, rej) => {
-      try {
-        const httpServer = this.io!.listen(this.desiredPort).httpServer;
-        const onListening = () => {
-          httpServer?.off("error", onError);
-          const addr = httpServer?.address();
-          if (addr && typeof addr === "object") this.actualPort = addr.port;
-          res();
-        };
-        const onError = (err: Error) => {
-          httpServer?.off("listening", onListening);
-          rej(err);
-        };
-        if (httpServer?.listening) {
-          onListening();
-        } else {
-          httpServer?.once("listening", onListening);
-          httpServer?.once("error", onError);
-        }
-      } catch (e) {
-        rej(e);
-      }
+      const onListening = () => {
+        httpServer.off("error", onError);
+        const addr = httpServer.address();
+        if (addr && typeof addr === "object") this.actualPort = addr.port;
+        res();
+      };
+      const onError = (err: Error) => {
+        httpServer.off("listening", onListening);
+        rej(err);
+      };
+      httpServer.once("listening", onListening);
+      httpServer.once("error", onError);
+      httpServer.listen(this.desiredPort, this.host);
+    });
+
+    // Keep listening for errors past startup. A server-level error after bind
+    // (EMFILE when the daemon has exhausted its file descriptors, for
+    // instance) stops new engines from being accepted while every other part
+    // of the daemon keeps running -- engines then dial, get nothing, and
+    // silently retry until their acquire times out. Unhandled, that error is
+    // invisible; logged, it names the problem outright.
+    httpServer.on("error", (err: NodeJS.ErrnoException) => {
+      console.error(
+        `[worker-rpc] engine RPC server error (${err.code ?? "unknown"}): ${err.message}. ` +
+          `Engines cannot connect while this persists.`,
+      );
     });
   }
 
@@ -142,6 +167,7 @@ export class WorkerRpcServer {
       }
     }
     this.waiters.clear();
+    this.abandoned.clear();
     // socket.io's close(cb) doesn't always invoke the callback under Bun's
     // node:http shim when there are no remaining clients (observed during
     // teardown of test cases that never connected). Cap the wait so a stuck
@@ -187,6 +213,7 @@ export class WorkerRpcServer {
           if (idx !== -1) queue.splice(idx, 1);
           if (queue.length === 0) this.waiters.delete(sandboxId);
         }
+        this.markAbandoned(sandboxId);
         reject(new Error(`engine ${sandboxId} did not connect within ${timeoutMs}ms`));
       }, timeoutMs);
       const waiter: ConnectionWaiter = { resolve, reject, timer };
@@ -196,16 +223,52 @@ export class WorkerRpcServer {
     });
   }
 
+  /**
+   * Note that we stopped waiting on a sandbox, so a late connection can be
+   * reported. Entries are pruned by age -- an engine that never arrives must
+   * not leave one behind forever.
+   */
+  private markAbandoned(sandboxId: string): void {
+    const cutoff = Date.now() - ABANDONED_RETENTION_MS;
+    for (const [id, at] of this.abandoned) {
+      if (at < cutoff) this.abandoned.delete(id);
+    }
+    this.abandoned.set(sandboxId, Date.now());
+  }
+
   private onConnection(socket: Socket): void {
     const auth = socket.handshake.auth as { sandboxId?: string } | undefined;
     const sandboxId = auth?.sandboxId;
     if (!sandboxId || typeof sandboxId !== "string") {
+      // Never expected from our own engine bundle, so say so rather than
+      // dropping the socket in silence.
+      console.warn("[worker-rpc] rejected engine connection: missing sandboxId in auth");
       socket.emit("worker_error", "missing sandboxId in auth");
       socket.disconnect(true);
       return;
     }
+    // Report a late arrival before the registry check: by the time an engine
+    // dials in past its deadline, `EngineRuntime` has already terminated the
+    // sandbox, so the rejection below would otherwise be the only trace and
+    // it would look like a different problem entirely.
+    const abandonedAt = this.abandoned.get(sandboxId);
+    if (abandonedAt !== undefined) {
+      this.abandoned.delete(sandboxId);
+      console.warn(
+        `[worker-rpc] engine ${sandboxId} connected ${Date.now() - abandonedAt}ms AFTER the daemon ` +
+          `gave up waiting for it. The engine works; the handshake budget is too small for this ` +
+          `host -- raise JARVIS_ENGINE_HANDSHAKE_TIMEOUT_MS.`,
+      );
+    }
     const record = this.registry.get(sandboxId);
     if (!record) {
+      // The engine's socket.io client reconnects forever, so a sandbox that
+      // is rejected here keeps dialing while its acquire waits out the full
+      // deadline -- indistinguishable from an engine that never booted unless
+      // we log the rejection.
+      console.warn(
+        `[worker-rpc] rejected engine connection for sandbox ${sandboxId}: unknown or terminated sandbox`,
+      );
       socket.emit("worker_error", "unknown or terminated sandbox");
       socket.disconnect(true);
       return;
