@@ -16,42 +16,31 @@
  * infrastructure. Pure functions, tested directly.
  */
 
-export type PermStatus = "granted" | "denied" | "undetermined" | "na";
+/**
+ * The wire contract, imported rather than restated. The daemon owns these
+ * shapes (src/daemon/system-permissions.ts) and the dashboard already reaches
+ * into src/ for shared logic (TasksRoom's parseRelativeDate). Two hand-kept
+ * copies of a response type drift the moment either side gains a field, and
+ * the drift shows up as a row that silently stops rendering.
+ */
+export type {
+  PermissionGrantMode as PermGrant,
+  PermissionRow as PermRow,
+  PermissionStatus as PermStatus,
+  PermissionsHostInfo as PermHost,
+  PermissionsResult as PermReport,
+  PermissionsUnavailable as PermUnavailable,
+  PermissionRequestResult as PermRequestResult,
+} from "../../../../src/daemon/system-permissions";
 
-/** How a row is obtained: "prompt" finishes in the app, "pane" needs the user
- *  to flip a toggle in System Settings, "none" means nothing to do here. */
-export type PermGrant = "prompt" | "pane" | "none";
-
-export interface PermRow {
-  name: string;
-  status: PermStatus;
-  grant: PermGrant;
-}
-
-export interface PermHost {
-  id: string;
-  name: string;
-  hostname: string;
-  source: "panel" | "only_connected";
-}
-
-export type PermUnavailable =
-  | "no_sidecar"
-  | "offline"
-  | "ambiguous"
-  | "unsupported"
-  | "refused"
-  | "unreachable";
-
-export type PermReport =
-  | {
-      available: true;
-      host: PermHost;
-      platform: string;
-      bundled: boolean;
-      permissions: PermRow[];
-    }
-  | { available: false; reason: PermUnavailable; detail?: string };
+import type {
+  PermissionGrantMode as PermGrant,
+  PermissionRow as PermRow,
+  PermissionStatus as PermStatus,
+  PermissionsResult as PermReport,
+  PermissionsUnavailable as PermUnavailable,
+  PermissionRequestResult as PermRequestResult,
+} from "../../../../src/daemon/system-permissions";
 
 export interface PermCopy {
   label: string;
@@ -89,7 +78,7 @@ export const PERM_COPY: Record<string, PermCopy> = {
     label: "Accessibility",
     glyph: "access",
     required: true,
-    body: "Global hotkeys like Ctrl+Space, and letting Jarvis operate your apps. macOS never asks for this one, so without it the shortcuts quietly do nothing.",
+    body: "Global hotkeys like Ctrl+Space, and letting Jarvis operate your apps. macOS won't grant this from a dialog, so until you switch it on the shortcuts quietly do nothing.",
   },
   screen: {
     label: "Screen Recording",
@@ -183,6 +172,37 @@ export function displayRows(report: PermReport): DisplayRow[] {
   return rows;
 }
 
+/**
+ * What a request attempt should say, if anything.
+ *
+ * Extracted as a pure function because this is where the screen's whole point
+ * lives: the route answers HTTP 200 for every `available: false` outcome, so
+ * a wedged sidecar, a machine that just disconnected, and a refusal all arrive
+ * as a successful fetch. Reading only `r.ok` leaves the button resetting to
+ * its label with nothing said - which is precisely the silent click this
+ * change exists to delete. Pure, so a test can fail on it; the hook itself has
+ * no DOM harness to be tested in.
+ */
+export function requestFeedback(result: PermRequestResult | null, label: string): string | null {
+  if (!result) return "Jarvis sent an answer this page couldn't read.";
+
+  if (!result.available) {
+    const copy = unavailableCopy(result.reason);
+    return result.detail ? `${copy.title} ${result.detail}` : copy.title;
+  }
+
+  // A pane that did not open is the original bug wearing a new hat: the user
+  // is told to flip a switch in a window that never appeared. Name the pane so
+  // the trip is still makeable by hand.
+  if (result.grant === "pane" && !result.paneOpened) {
+    const where = `System Settings \u203A Privacy & Security \u203A ${label}`;
+    return result.paneError
+      ? `Jarvis couldn't open ${where} (${result.paneError}). Open it yourself.`
+      : `Jarvis couldn't open ${where}. Open it yourself.`;
+  }
+  return null;
+}
+
 /** The required rows still not granted. Drives the summary line, not a block:
  *  a machine under MDM may never be able to grant these, and onboarding that
  *  cannot be finished is worse than a feature that is off. */
@@ -232,7 +252,7 @@ export function unavailableCopy(reason: PermUnavailable): { title: string; body:
     case "unreachable":
       return {
         title: "The desktop app didn't answer.",
-        body: "It may have just quit or gone to sleep. You can carry on -- Jarvis asks for what it needs as it goes -- or reopen it and come back.",
+        body: "It may have just quit or gone to sleep. You can carry on — Jarvis asks for what it needs as it goes — or reopen it and come back.",
       };
     case "no_sidecar":
     default:

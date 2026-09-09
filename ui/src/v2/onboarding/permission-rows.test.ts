@@ -5,10 +5,12 @@ import {
   needsRestartNote,
   outstandingRequired,
   PERM_COPY,
+  requestFeedback,
   unavailableCopy,
   type PermReport,
   type PermRow,
   type PermUnavailable,
+  type PermRequestResult,
 } from "./permission-rows";
 
 /** Pure-function tests, the LLMTab.models.test.ts / OnboardingWizard.steps.test.ts
@@ -96,18 +98,19 @@ describe("displayRows", () => {
     expect(displayRows({ available: false, reason: "no_sidecar" })).toEqual([]);
   });
 
-  test("neither Automation nor Files & Folders can appear", () => {
-    // They were on the old screen and could not work: their TCC panes are
-    // empty until the app has already asked, so the link showed a list Jarvis
-    // was not in. Even if a sidecar started reporting them, this screen must
-    // not offer them.
-    const rows = displayRows(report("darwin", [
-      { name: "auto", status: "denied", grant: "pane" },
-      { name: "files", status: "denied", grant: "pane" },
-    ]));
-    expect(rows).toEqual([]);
-    expect(PERM_COPY.auto).toBeUndefined();
-    expect(PERM_COPY.files).toBeUndefined();
+  test("the screen offers exactly four permissions, and required is exactly two", () => {
+    // Automation and Files & Folders were on the old screen and could not
+    // work: their TCC panes are empty until the app has already asked, so the
+    // link showed a list Jarvis was not in. "required" is narrower still --
+    // it means the OS never asks and never will, so skipping it kills a
+    // feature silently. Widening either set is a product decision, not a
+    // refactor, and should have to come through this test.
+    expect(Object.keys(PERM_COPY).sort()).toEqual([
+      "accessibility", "microphone", "notifications", "screen",
+    ]);
+    expect(
+      Object.entries(PERM_COPY).filter(([, c]) => c.required).map(([k]) => k).sort(),
+    ).toEqual(["accessibility", "screen"]);
   });
 });
 
@@ -187,5 +190,68 @@ describe("unavailableCopy", () => {
     // completely different places; collapsing them is what the fallback bug
     // in the daemon resolver would have done.
     expect(unavailableCopy("offline").body).not.toBe(unavailableCopy("no_sidecar").body);
+  });
+});
+
+describe("requestFeedback", () => {
+  const rows: PermRow[] = [];
+  const host = HOST;
+
+  test("a granted-by-dialog request says nothing", () => {
+    const ok: PermRequestResult = {
+      available: true, host, name: "microphone", grant: "prompt", paneOpened: false, permissions: rows,
+    };
+    expect(requestFeedback(ok, "Microphone")).toBeNull();
+  });
+
+  test("a pane that opened says nothing", () => {
+    const ok: PermRequestResult = {
+      available: true, host, name: "screen", grant: "pane", paneOpened: true, permissions: rows,
+    };
+    expect(requestFeedback(ok, "Screen Recording")).toBeNull();
+  });
+
+  test("an available:false answer is never silent", () => {
+    // THE bug this guards. The route answers HTTP 200 for every one of these,
+    // so a hook that checks only response.ok resets the button to its label
+    // and says nothing -- the exact silent click this screen exists to fix.
+    const reasons: PermUnavailable[] = ["no_sidecar", "offline", "ambiguous", "unsupported", "refused", "unreachable"];
+    for (const reason of reasons) {
+      const msg = requestFeedback({ available: false, reason }, "Screen Recording");
+      expect(msg).toBeTruthy();
+      expect(msg).toBe(unavailableCopy(reason).title);
+    }
+  });
+
+  test("a refusal carries the reason the desktop app gave", () => {
+    const msg = requestFeedback(
+      { available: false, reason: "refused", detail: "not running as an app bundle" },
+      "Screen Recording",
+    );
+    expect(msg).toContain("not running as an app bundle");
+  });
+
+  test("a pane that did not open names where to go by hand", () => {
+    const msg = requestFeedback(
+      { available: true, host, name: "screen", grant: "pane", paneOpened: false, permissions: rows },
+      "Screen Recording",
+    );
+    expect(msg).toContain("Privacy & Security");
+    expect(msg).toContain("Screen Recording");
+  });
+
+  test("a launcher error is passed through, not swallowed", () => {
+    const msg = requestFeedback(
+      {
+        available: true, host, name: "screen", grant: "pane", paneOpened: false,
+        paneError: 'exec: "open": not found', permissions: rows,
+      },
+      "Screen Recording",
+    );
+    expect(msg).toContain('exec: "open": not found');
+  });
+
+  test("an unreadable body is reported rather than treated as success", () => {
+    expect(requestFeedback(null, "Screen Recording")).toBeTruthy();
   });
 });

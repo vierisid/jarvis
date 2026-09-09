@@ -908,9 +908,11 @@ export function OnboardingWizard({
               <>
                 <h2>Let Jarvis reach your machine.</h2>
                 <div className="obw-sub">
-                  {mac
-                    ? "It acts on your computer through these. Jarvis can't switch them on itself, so each button asks the OS or opens the exact settings pane. Rows turn green as you go."
-                    : "One switch to check before Jarvis can hear you."}
+                  {unbundled
+                    ? "Here is what this machine currently allows. None of it can be granted from here yet, for the reason below."
+                    : mac
+                      ? "It acts on your computer through these. Jarvis can't switch them on itself, so each button asks the OS or opens the exact settings pane. Rows turn green as you go."
+                      : "One switch to check before Jarvis can hear you."}
                 </div>
                 {unbundled && (
                   // A bare binary has no bundle identity, so macOS attaches
@@ -938,16 +940,27 @@ export function OnboardingWizard({
                           </div>
                           <div className="pb">{row.body}</div>
                         </div>
-                        {granted ? (
+                        {/* Nothing to offer, and nothing honest to claim: an
+                            unbundled process reads the LAUNCHING app's grants,
+                            so a "Granted" chip here would be reporting the
+                            user's terminal as Jarvis. */}
+                        {unbundled ? null : granted ? (
                           <span className="obw-granted"><Glyph k="check" />Granted</span>
                         ) : (
                           <button
                             type="button"
                             className="obw-grant"
+                            aria-label={`${row.grant === "pane" ? "Open settings for" : "Allow"} ${row.label}`}
+                            aria-busy={busyRow}
                             disabled={!row.actionable || busyRow || unbundled}
                             onClick={() => {
-                              if (row.name === "screen") setScreenPaneVisited(true);
-                              void perms.request(row.name);
+                              void perms.request(row.name, row.label).then((opened) => {
+                                // Only once the pane genuinely came up. Setting
+                                // this on the click would tell a user whose
+                                // System Settings never opened to go and check
+                                // a toggle they could not reach.
+                                if (opened && row.name === "screen") setScreenPaneVisited(true);
+                              });
                             }}
                           >
                             {busyRow
@@ -967,10 +980,10 @@ export function OnboardingWizard({
                 {needsRestartNote(rows, screenPaneVisited) && (
                   <div className="obw-hint" style={{ marginTop: 10 }}>
                     Switched Screen Recording on and this row is still amber? macOS keeps
-                    handing a running app its old answer -- quit Jarvis and open it again.
+                    handing a running app its old answer — quit Jarvis and open it again.
                   </div>
                 )}
-                {allSettled(rows) && (
+                {rows.some((r) => r.hasState) && allSettled(rows) && (
                   <div className="obw-hint" style={{ marginTop: 10, color: "var(--ok)" }}>
                     That's everything this machine can be asked for.
                   </div>
@@ -988,7 +1001,7 @@ export function OnboardingWizard({
               <button className="obw-btn obw-btn-ghost" onClick={back}>Back</button>
               <span className="grow" />
               {/* Hosted skips brain/hearing/speaking, so this is the last
-                  setup screen - the setup POST (which normally fires when
+                  setup screen — the setup POST (which normally fires when
                   leaving Speaking) has to run here instead, or onboarding is
                   never marked complete and the wizard replays next launch. */}
               <button
@@ -1007,13 +1020,13 @@ export function OnboardingWizard({
               <div className="obw-hint" style={{ marginTop: 8 }}>
                 You can continue without {outstanding.map((r) => r.label).join(" and ")}. Until
                 {outstanding.length > 1 ? " they are" : " it is"} granted, the features above stay
-                off and nothing will ask you again -- switch
+                off and nothing will ask you again — switch
                 {outstanding.length > 1 ? " them" : " it"} on any time in System Settings,
                 Privacy &amp; Security.
               </div>
             )}
             {/* The hosted setup POST fires from THIS screen, so its failure
-                has to surface here - otherwise the button just settles back
+                has to surface here — otherwise the button just settles back
                 to "Continue" with no explanation and onboarding replays. */}
             {error && (
               <div className="obw-hint" style={{ color: "var(--listen)", marginTop: 8 }}>{error}</div>
