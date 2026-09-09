@@ -79,7 +79,19 @@ export interface EngineRuntimeOptions {
   customPiecesPaths?: string[];
   /** CSV of dev-piece names exposed via AP_DEV_PIECES. Default: jarvis pieces. */
   devPieces?: string[];
-  /** Engine WS handshake deadline. Default 10s. */
+  /**
+   * Engine WS handshake deadline. Default 30s, overridable per-deployment
+   * via `JARVIS_ENGINE_HANDSHAKE_TIMEOUT_MS`.
+   *
+   * The handshake is ~200ms on an idle machine, but the budget has to cover
+   * the worst case, not the median: a small/loaded VPS that is swapping while
+   * the daemon streams audio and runs LLM calls can take several seconds just
+   * to exec Bun and parse the ~2MB bundle. Blowing the deadline is not a
+   * degraded run -- the acquire throws, so ON_ENABLE never registers the
+   * trigger and RUN_FLOW jobs fail outright. A too-generous deadline only
+   * costs latency on a genuinely broken engine, and that case now fails fast
+   * on process exit anyway (see `spawnFresh`).
+   */
   handshakeTimeoutMs?: number;
   /** Graceful kill deadline before SIGKILL. Default 2s. */
   killGraceMs?: number;
@@ -477,6 +489,31 @@ function discoverJarvisDevPieces(): string[] {
   return out;
 }
 
+/** Handshake latency past which we tell the operator the host is the problem. */
+const SLOW_HANDSHAKE_WARN_MS = 5_000;
+
+/** How many engine stderr lines to retain for failure diagnostics. */
+const ENGINE_STDERR_TAIL_LINES = 5;
+
+/**
+ * Per-deployment handshake budget. Hosted installs on small VPSes need a
+ * bigger one than a dev laptop; this is the escape hatch that avoids a
+ * redeploy. Invalid / non-positive values are ignored so a typo can't
+ * silently disable the deadline.
+ */
+function envHandshakeTimeoutMs(): number | undefined {
+  const raw = process.env["JARVIS_ENGINE_HANDSHAKE_TIMEOUT_MS"]?.trim();
+  if (!raw) return undefined;
+  const parsed = Number.parseInt(raw, 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    console.warn(
+      `[engine-runtime] ignoring invalid JARVIS_ENGINE_HANDSHAKE_TIMEOUT_MS="${raw}"`,
+    );
+    return undefined;
+  }
+  return parsed;
+}
+
 export class EngineRuntime {
   private readonly api: SandboxApi;
   private readonly bundlePath: string;
@@ -519,7 +556,8 @@ export class EngineRuntime {
       opts.customPiecesPaths ?? [
         resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, "pieces"),
       ];
-    this.handshakeTimeoutMs = opts.handshakeTimeoutMs ?? 10_000;
+    this.handshakeTimeoutMs =
+      opts.handshakeTimeoutMs ?? envHandshakeTimeoutMs() ?? 30_000;
     this.killGraceMs = opts.killGraceMs ?? 2_000;
     this.spawnEnvOverride = opts.spawnEnvOverride;
     this.runtime = opts.runtime;
@@ -643,18 +681,39 @@ export class EngineRuntime {
     // streams differentiate by prefix; production daemons that want to
     // suppress this can pipe their output through a filter.
     bindEngineStream(proc.stdout, "stdout", sandboxId);
-    bindEngineStream(proc.stderr, "stderr", sandboxId);
+    // Keep the last few stderr lines around: when the handshake fails they
+    // are the only evidence of WHY, and by then the process is gone.
+    const stderrTail: string[] = [];
+    bindEngineStream(proc.stderr, "stderr", sandboxId, stderrTail);
 
-    let earlyExitMessage: string | null = null;
-    const earlyExitWatcher = proc.exited.then(({ code, signal }) => {
-      earlyExitMessage = `engine exited before handshake (code=${code}, signal=${signal})`;
+    // Fail fast when the engine dies instead of sitting out the full
+    // handshake deadline: a bundle that can't load exits in milliseconds, and
+    // its exit reason is far more useful than "did not connect in time".
+    const exitedFirst = proc.exited.then(({ code, signal }): never => {
+      throw new Error(`engine exited before handshake (code=${code}, signal=${signal})`);
     });
+    // Whichever loses the race below is still "handled" by Promise.race, so a
+    // post-handshake exit never surfaces as an unhandled rejection.
+    void exitedFirst.catch(() => {});
 
+    const handshakeStartedAt = Date.now();
     try {
-      const engineClient = await this.api.workerRpc.waitForConnection(
-        sandboxId,
-        this.handshakeTimeoutMs,
-      );
+      const engineClient = await Promise.race([
+        this.api.workerRpc.waitForConnection(sandboxId, this.handshakeTimeoutMs),
+        exitedFirst,
+        // An exec that never got off the ground (EAGAIN / ENOMEM under fork
+        // pressure) reports its errno here instead of masquerading as a
+        // handshake timeout.
+        proc.spawnFailed,
+      ]);
+      const handshakeMs = Date.now() - handshakeStartedAt;
+      if (handshakeMs > SLOW_HANDSHAKE_WARN_MS) {
+        console.warn(
+          `[engine-runtime] engine ${sandboxId.slice(0, 8)} handshake took ${handshakeMs}ms ` +
+            `(budget ${this.handshakeTimeoutMs}ms). The host is slow or loaded; raise ` +
+            `JARVIS_ENGINE_HANDSHAKE_TIMEOUT_MS if acquires start timing out.`,
+        );
+      }
       const warm: WarmEngine = { sandboxId, proc, engineClient };
       const releaseImpl = this.poolEnabled
         ? () => this.returnToPoolOrKill(warm)
@@ -673,17 +732,21 @@ export class EngineRuntime {
         releaseImpl,
       );
     } catch (e) {
-      // Make sure the subprocess is gone before bubbling. If it already exited,
-      // surface that reason; otherwise SIGKILL.
-      if (earlyExitMessage === null) {
-        proc.kill("SIGKILL");
-      }
+      // Make sure the subprocess is gone before bubbling. A timed-out engine
+      // is still running (it just never dialed back), so it needs the kill;
+      // one that already exited does not.
+      const stillRunning = proc.alive();
+      if (stillRunning) proc.kill("SIGKILL");
       this.api.registry.terminate(sandboxId);
-      const reason = earlyExitMessage ?? (e instanceof Error ? e.message : String(e));
-      throw new Error(`EngineRuntime.acquire failed: ${reason}`);
-    } finally {
-      // Don't leak the watcher Promise.
-      void earlyExitWatcher;
+      const reason = e instanceof Error ? e.message : String(e);
+      const context = [
+        stillRunning ? `engine pid ${proc.pid} was still running` : null,
+        stderrTail.length > 0 ? `last engine stderr: ${stderrTail.join(" | ")}` : null,
+      ].filter((s): s is string => s !== null);
+      throw new Error(
+        `EngineRuntime.acquire failed: ${reason}` +
+          (context.length > 0 ? ` (${context.join("; ")})` : ""),
+      );
     }
   }
 
@@ -791,6 +854,7 @@ function bindEngineStream(
   stream: NodeJS.ReadableStream | null,
   kind: "stdout" | "stderr",
   sandboxId: string,
+  tail?: string[],
 ): void {
   if (!stream) return;
   const prefix = `[engine ${sandboxId.slice(0, 8)} ${kind}]`;
@@ -802,6 +866,10 @@ function bindEngineStream(
     const text = chunk.toString("utf8").replace(/\n$/, "");
     if (text.length === 0) return;
     sink.write(`${prefix} ${text}\n`);
+    if (tail) {
+      tail.push(text.length > 300 ? text.slice(0, 300) + "..." : text);
+      while (tail.length > ENGINE_STDERR_TAIL_LINES) tail.shift();
+    }
   });
   // Errors on the pipe itself (rare: e.g. the proc exited mid-read) are
   // ignored -- the spawned process is gone, nothing to do about it.

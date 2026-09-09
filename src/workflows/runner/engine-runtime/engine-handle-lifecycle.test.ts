@@ -59,6 +59,8 @@ function fakeProc(): SpawnedEngine & { killed: NodeJS.Signals[] } {
     stderr: null,
     child: {} as SpawnedEngine["child"],
     exited,
+    // This fake never fails to spawn, so the promise just stays pending.
+    spawnFailed: new Promise<never>(() => {}),
     alive: () => alive,
     kill(signal = "SIGTERM") {
       killed.push(signal);

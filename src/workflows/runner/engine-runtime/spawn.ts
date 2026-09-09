@@ -38,6 +38,15 @@ export interface SpawnedEngine {
    * against `exited` (which only resolves on the next microtask).
    */
   alive(): boolean;
+  /**
+   * Rejects if the child emits `error` (failed exec, EAGAIN under fork
+   * pressure, killed by the OS before exec). Never resolves otherwise.
+   *
+   * This also exists to KEEP a listener on the child's `error` event:
+   * unhandled, that event is thrown, and an async one would take the whole
+   * daemon down rather than failing one acquire.
+   */
+  spawnFailed: Promise<never>;
 }
 
 export interface SpawnEngineOptions {
@@ -124,12 +133,27 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
     },
   );
 
+  const spawnFailed = new Promise<never>((_res, rej) => {
+    child.on("error", (err: NodeJS.ErrnoException) => {
+      isAlive = false;
+      rej(
+        new Error(
+          `engine process failed to start (${err.code ?? "unknown"}): ${err.message}`,
+        ),
+      );
+    });
+  });
+  // The caller races this; swallow the rejection so a failure it never got
+  // around to observing doesn't surface as an unhandled rejection.
+  void spawnFailed.catch(() => {});
+
   return {
     pid: child.pid ?? -1,
     stdout: child.stdout,
     stderr: child.stderr,
     child,
     exited,
+    spawnFailed,
     kill: (signal = "SIGTERM") => child.kill(signal),
     alive: () => isAlive,
   };

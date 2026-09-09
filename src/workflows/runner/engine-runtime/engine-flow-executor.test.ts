@@ -388,3 +388,50 @@ describe("EngineFlowExecutor", () => {
     }
   });
 });
+
+describe("EngineFlowExecutor: engine acquire", () => {
+  test("a transient acquire failure is retried and the run still executes", async () => {
+    const { runId, ctx } = setupRun();
+    let attempts = 0;
+    const fakeRuntime = {
+      acquire: async () => {
+        attempts++;
+        if (attempts < 3) {
+          throw new Error("EngineRuntime.acquire failed: engine abc did not connect within 30000ms");
+        }
+        return {
+          async executeFlow() {
+            updateRun(runId, { status: "SUCCEEDED" });
+          },
+          async release() {},
+        } as unknown as EngineHandle;
+      },
+    } as unknown as EngineRuntime;
+
+    const exec = new EngineFlowExecutor(fakeRuntime, {
+      terminalTimeoutMs: 2_000,
+      terminalPollIntervalMs: 10,
+    });
+    await exec.execute(ctx);
+    expect(attempts).toBe(3);
+    expect(getFlowRun(runId)?.status).toBe("SUCCEEDED");
+  }, 15_000);
+
+  test("a persistently failing acquire surfaces the engine error", async () => {
+    const { ctx } = setupRun();
+    let attempts = 0;
+    const fakeRuntime = {
+      acquire: async () => {
+        attempts++;
+        throw new Error("EngineRuntime.acquire failed: engine abc did not connect within 30000ms");
+      },
+    } as unknown as EngineRuntime;
+
+    const exec = new EngineFlowExecutor(fakeRuntime, {
+      terminalTimeoutMs: 2_000,
+      terminalPollIntervalMs: 10,
+    });
+    await expect(exec.execute(ctx)).rejects.toThrow("did not connect within 30000ms");
+    expect(attempts).toBe(3);
+  }, 15_000);
+});

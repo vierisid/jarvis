@@ -23,7 +23,7 @@ import { FlowExecutionError } from "../handler";
 import { getFlowRun, type FlowRunStatus } from "../../db/repos/flow-run";
 import type { FlowTriggerNode } from "../../db/repos/flow-version";
 import { DEFAULT_IDS } from "../../db/schema";
-import type { EngineRuntime } from "./engine-runtime";
+import type { EngineHandle, EngineRuntime } from "./engine-runtime";
 import { loadExecutionStateFromLog } from "./execution-state-loader";
 
 /**
@@ -53,6 +53,14 @@ const NON_SUCCESS_STATUSES = new Set<FlowRunStatus>([
   "MEMORY_LIMIT_EXCEEDED",
   "SCHEDULE_FAILURE",
 ]);
+
+/**
+ * Engine-acquire attempts per run, and the pause between them. Three tries
+ * about a second apart rides out a spawn that lost a race with a loaded host
+ * without keeping a queue worker busy for long when the engine is really down.
+ */
+const ACQUIRE_ATTEMPTS = 3;
+const ACQUIRE_RETRY_DELAY_MS = 1_000;
 
 /**
  * How long the executor waits for the engine's `uploadRunLog` to flip the
@@ -114,11 +122,43 @@ export class EngineFlowExecutor implements FlowExecutor {
     this.loaderBaseDir = opts.loaderBaseDir;
   }
 
-  async execute(ctx: FlowExecutorContext): Promise<FlowExecutorResult> {
-    const handle = await this.runtime.acquire({
+  /**
+   * Acquire an engine, retrying a couple of times on failure.
+   *
+   * Getting an engine is side-effect free -- no step has run, nothing has been
+   * sent anywhere -- so unlike a mid-flow failure this is safe to retry, and
+   * the failures worth retrying (handshake timeout on a loaded host, engine
+   * killed mid-spawn) are exactly the transient kind. The alternative is what
+   * the user sees today: a run marked FAILED with no per-step trace because
+   * the engine never came up.
+   *
+   * Deliberately short and bounded: RUN_FLOW jobs are queued, so a genuinely
+   * dead engine should fail the job quickly rather than tie up a worker slot.
+   */
+  private async acquireWithRetry(ctx: FlowExecutorContext): Promise<EngineHandle> {
+    const opts = {
       runId: ctx.run.id,
       projectId: ctx.run.projectId ?? DEFAULT_IDS.project,
-    });
+    };
+    let lastError: unknown;
+    for (let attempt = 0; attempt < ACQUIRE_ATTEMPTS; attempt++) {
+      try {
+        return await this.runtime.acquire(opts);
+      } catch (e) {
+        lastError = e;
+        if (attempt === ACQUIRE_ATTEMPTS - 1) break;
+        console.warn(
+          `[engine-executor] run ${ctx.run.id}: engine acquire failed ` +
+            `(attempt ${attempt + 1}/${ACQUIRE_ATTEMPTS}): ${(e as Error).message}`,
+        );
+        await new Promise((r) => setTimeout(r, ACQUIRE_RETRY_DELAY_MS));
+      }
+    }
+    throw lastError;
+  }
+
+  async execute(ctx: FlowExecutorContext): Promise<FlowExecutorResult> {
+    const handle = await this.acquireWithRetry(ctx);
     try {
       // streamStepProgress: WEBSOCKET makes the engine emit per-step
       // `updateRunProgress({ step })` calls to the daemon -- the
