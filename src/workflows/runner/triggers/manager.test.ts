@@ -783,10 +783,107 @@ describe("TriggerManager: engine-managed triggers (Phase J)", () => {
       engineRuntime: fakeEngine,
       cronScheduler: new FakeCronScheduler() as unknown as import("./cron").CronScheduler,
       log: (line) => logs.push(line),
+      // No retries: this test asserts the immediate failure handling.
+      enableRetryDelaysMs: [],
     });
 
     await tm.start();
     expect(tm.list()).toEqual([]);
     expect(logs.some((l) => l.includes("engine ON_ENABLE failed"))).toBe(true);
+    await tm.stop();
+  });
+
+  test("a transient ON_ENABLE failure is retried on the backoff and the flow ends up registered", async () => {
+    const { flowId } = publishFlowWithTrigger("engine-flaky", {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      settings: {
+        pieceName: "jarvis-trigger",
+        triggerName: "on_event",
+        input: { eventType: "observer.clipboard_changed" },
+      },
+    });
+
+    // Fails the first acquire (host too loaded to hand back an engine), then
+    // recovers -- exactly the shape of the engine-handshake timeout.
+    let acquires = 0;
+    const fakeEngine = {
+      acquire: async () => {
+        acquires++;
+        if (acquires === 1) {
+          throw new Error("EngineRuntime.acquire failed: engine abc did not connect within 30000ms");
+        }
+        return {
+          async executeTriggerHook() {
+            return { scheduleOptions: { cronExpression: "* * * * *" } };
+          },
+          async release() {},
+        };
+      },
+    } as unknown as import("../engine-runtime/engine-runtime").EngineRuntime;
+
+    const cron = new FakeCronScheduler();
+    const logs: string[] = [];
+    const tm = new TriggerManager({
+      eventBus: new WorkflowEventBus(),
+      engineRuntime: fakeEngine,
+      cronScheduler: cron as unknown as import("./cron").CronScheduler,
+      log: (line) => logs.push(line),
+      enableRetryDelaysMs: [10, 20],
+    });
+
+    await tm.start();
+    // First attempt failed: nothing registered yet, but a retry is armed.
+    expect(tm.list()).toEqual([]);
+    expect(logs.some((l) => l.includes("retrying in"))).toBe(true);
+
+    await settle(120);
+    expect(acquires).toBe(2);
+    expect(tm.list()).toEqual([{ flowId, kind: "engine" }]);
+    expect(cron.has(`flow:${flowId}`)).toBe(true);
+    await tm.stop();
+  });
+
+  test("retries stop once the schedule is exhausted, and a disabled flow cancels its pending retry", async () => {
+    const { flowId } = publishFlowWithTrigger("engine-dead", {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      settings: {
+        pieceName: "jarvis-trigger",
+        triggerName: "on_event",
+        input: { eventType: "observer.clipboard_changed" },
+      },
+    });
+
+    let acquires = 0;
+    const fakeEngine = {
+      acquire: async () => {
+        acquires++;
+        throw new Error("engine down");
+      },
+    } as unknown as import("../engine-runtime/engine-runtime").EngineRuntime;
+
+    const logs: string[] = [];
+    const tm = new TriggerManager({
+      eventBus: new WorkflowEventBus(),
+      engineRuntime: fakeEngine,
+      cronScheduler: new FakeCronScheduler() as unknown as import("./cron").CronScheduler,
+      log: (line) => logs.push(line),
+      enableRetryDelaysMs: [10, 10],
+    });
+
+    await tm.start();
+    await settle(150);
+    // Initial attempt + two retries, then it gives up loudly.
+    expect(acquires).toBe(3);
+    expect(logs.some((l) => l.includes("giving up after 2 retries"))).toBe(true);
+
+    // A flow disabled while a retry is pending must not be resurrected.
+    updateFlowStatus(flowId, "DISABLED");
+    await tm.refresh(flowId);
+    const before = acquires;
+    await settle(60);
+    expect(acquires).toBe(before);
+    await tm.stop();
   });
 });

@@ -97,6 +97,12 @@ export interface TriggerManagerDeps {
   engineRuntime?: EngineRuntime;
   /** Optional logger; defaults to console. */
   log?: (line: string) => void;
+  /**
+   * Backoff schedule for retrying a failed engine ON_ENABLE, in ms. One entry
+   * per retry; the flow is given up on after the last one. Tests override it
+   * to keep the clock out of the assertions.
+   */
+  enableRetryDelaysMs?: number[];
 }
 
 export class TriggerManager {
@@ -120,6 +126,18 @@ export class TriggerManager {
    * otherwise stack overlapping engine spawns).
    */
   private readonly pollingInFlight: Set<string> = new Set();
+  /**
+   * Pending ON_ENABLE retries, keyed by flow id. An engine acquire can fail
+   * for reasons that have nothing to do with the flow (loaded host, engine
+   * mid-restart), and without a retry the flow stays silently unregistered
+   * until someone toggles it or the daemon restarts -- the failure looks
+   * exactly like "my trigger never fires".
+   */
+  private readonly enableRetries: Map<
+    string,
+    { attempt: number; timer: ReturnType<typeof setTimeout> }
+  > = new Map();
+  private readonly enableRetryDelaysMs: number[];
 
   constructor(deps: TriggerManagerDeps) {
     this.bus = deps.eventBus;
@@ -127,6 +145,12 @@ export class TriggerManager {
     this.webhooks = deps.webhookManager ?? new WebhookManager();
     this.engineRuntime = deps.engineRuntime;
     this.log = deps.log ?? ((line) => console.log(`[trigger-manager] ${line}`));
+    // 5s / 15s / 1m / 5m / 15m -- covers a brief engine hiccup within seconds
+    // and a longer host-level problem (swap storm, restart loop) over ~21min
+    // without spawning engines in a tight loop.
+    this.enableRetryDelaysMs = deps.enableRetryDelaysMs ?? [
+      5_000, 15_000, 60_000, 300_000, 900_000,
+    ];
 
     this.webhooks.setTriggerCallback((flowId, payload) => {
       void this.fire(flowId, payload, "webhook");
@@ -149,6 +173,9 @@ export class TriggerManager {
 
   /** Tear down all subscriptions. */
   async stop(): Promise<void> {
+    for (const flowId of Array.from(this.enableRetries.keys())) {
+      this.clearEnableRetry(flowId);
+    }
     for (const sub of this.subs.values()) {
       try {
         await sub.teardown();
@@ -266,6 +293,10 @@ export class TriggerManager {
   }
 
   private async unregister(flowId: string): Promise<void> {
+    // Cancel any pending ON_ENABLE retry first: a flow being disabled (or
+    // republished) must not be resurrected by a timer armed for the old
+    // version.
+    this.clearEnableRetry(flowId);
     const sub = this.subs.get(flowId);
     if (!sub) return;
     try {
@@ -355,6 +386,10 @@ export class TriggerManager {
    * a prior enable), we skip the engine round-trip and just rewire the cron.
    * On_disable refreshes always go through the engine to give the trigger a
    * chance to clean up upstream state.
+   *
+   * A failed ON_ENABLE is retried on a backoff (`scheduleEnableRetry`) rather
+   * than dropped: the engine round-trip can fail for host-level reasons, and
+   * an unregistered flow gives the user no signal beyond "it never fires".
    */
   private async registerEngineTrigger(
     flow: FlowRow,
@@ -391,9 +426,7 @@ export class TriggerManager {
           await handle.release();
         }
       } catch (e) {
-        this.log(
-          `flow ${flow.id}: engine ON_ENABLE failed: ${(e as Error).message} -- skipping registration this cycle; next refresh will retry`,
-        );
+        this.scheduleEnableRetry(flow.id, (e as Error).message);
         return;
       }
     }
@@ -441,6 +474,51 @@ export class TriggerManager {
       teardown: () => this.teardownEngineTrigger(flow.id, version.id, cronTearDown, webhookTearDown),
     };
     this.subs.set(flow.id, sub);
+    this.clearEnableRetry(flow.id);
+  }
+
+  /**
+   * Arm the next ON_ENABLE retry for a flow whose engine round-trip failed.
+   * The retry goes through `refresh()`, so it re-reads the flow first and
+   * quietly does nothing if the user disabled or republished it meanwhile.
+   *
+   * Attempts escalate along `enableRetryDelaysMs` and reset once the flow
+   * registers, so a flow that fails, recovers, and fails again next week gets
+   * the full schedule again rather than the tail of the old one.
+   */
+  private scheduleEnableRetry(flowId: string, reason: string): void {
+    const prior = this.enableRetries.get(flowId);
+    if (prior) clearTimeout(prior.timer);
+    const attempt = prior ? prior.attempt + 1 : 0;
+    const total = this.enableRetryDelaysMs.length;
+    const delay = this.enableRetryDelaysMs[attempt];
+    if (delay === undefined) {
+      this.enableRetries.delete(flowId);
+      this.log(
+        `flow ${flowId}: engine ON_ENABLE failed: ${reason} -- giving up after ${total} ` +
+          `retries; the flow is NOT firing. Re-enable it (or restart the daemon) once the engine is healthy`,
+      );
+      return;
+    }
+    const timer = setTimeout(() => {
+      void this.refresh(flowId).catch((e) => {
+        this.log(`flow ${flowId}: ON_ENABLE retry failed: ${(e as Error).message}`);
+      });
+    }, delay);
+    // Don't hold the daemon open just for a pending retry.
+    (timer as unknown as { unref?: () => void }).unref?.();
+    this.enableRetries.set(flowId, { attempt, timer });
+    this.log(
+      `flow ${flowId}: engine ON_ENABLE failed: ${reason} -- retrying in ${Math.round(delay / 1000)}s ` +
+        `(attempt ${attempt + 1}/${total}); the flow will not fire until it registers`,
+    );
+  }
+
+  private clearEnableRetry(flowId: string): void {
+    const pending = this.enableRetries.get(flowId);
+    if (!pending) return;
+    clearTimeout(pending.timer);
+    this.enableRetries.delete(flowId);
   }
 
   private async teardownEngineTrigger(
