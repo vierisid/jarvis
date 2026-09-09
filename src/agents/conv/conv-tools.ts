@@ -15,6 +15,15 @@
  * Conversation also has direct knowledge of in-flight tasks via the system
  * prompt's "In-flight tasks" section, so it doesn't need to "discover" what's
  * running - it just decides what to do about it.
+ *
+ * The `delegate` description names workflow authoring as a `high` case. That
+ * is the ROUTING half of a pair: the model that WRITES the flow is pinned to
+ * `high` in composer-llm.ts regardless of what gets chosen here, so this only
+ * decides which model runs the turn that calls `manage_workflow` -- the one
+ * that phrases the request, reads compose errors back, and decides whether to
+ * refine and retry. Left at "medium for general tool work" the conv model
+ * reads "automate my mornings" as ordinary tool work and hands that judgement
+ * to the weaker model.
  */
 
 import type { LLMTool } from '../../llm/provider.ts';
@@ -23,7 +32,7 @@ export const CONV_TOOLS: LLMTool[] = [
   {
     name: 'delegate',
     description:
-      "Delegate work to a task tier. Use this when the user's request needs real action (research, code, planning, writing, tool execution). The task tier will run with its own tools and return a result envelope you can verbalize to the user. Pick the smallest tier that can handle the work: low for trivial extraction/classification, medium for general tool work, high for complex multi-step reasoning. Returns a task_id you can reference for status checks. Fold any constraints (budget, tone, format, scope) directly into the `intent` sentence.",
+      "Delegate work to a task tier. Use this when the user's request needs real action (research, code, planning, writing, tool execution). The task tier will run with its own tools and return a result envelope you can verbalize to the user. Pick the smallest tier that can handle the work: low for trivial extraction/classification, medium for general tool work, high for complex multi-step reasoning and for building or changing a workflow. Returns a task_id you can reference for status checks. Fold any constraints (budget, tone, format, scope) directly into the `intent` sentence.",
     parameters: {
       type: 'object',
       required: ['tier', 'template', 'intent'],
@@ -31,7 +40,7 @@ export const CONV_TOOLS: LLMTool[] = [
         tier: {
           type: 'string',
           enum: ['low', 'medium', 'high'],
-          description: 'Which task tier should run this. Default to "medium" unless you have a clear reason.',
+          description: 'Which task tier should run this. Default to "medium" unless you have a clear reason. Building or changing a workflow ("automate X", "make a workflow that ...") is a clear reason for "high": it is authoring, not tool work, and the weaker model gets the piece wiring wrong.',
         },
         template: {
           type: 'string',
