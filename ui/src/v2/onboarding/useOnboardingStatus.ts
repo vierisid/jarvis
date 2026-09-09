@@ -56,7 +56,7 @@ interface HookValue {
   /** Re-fetch the status. UI calls this after `/api/onboarding/setup`
    *  succeeds so the gate can flip from setup screens to the live
    *  shell without a hard reload. */
-  refresh: () => Promise<void>;
+  refresh: () => Promise<OnboardingStatus | null>;
 }
 
 /**
@@ -96,17 +96,13 @@ export function useOnboardingStatus(): HookValue {
         return json;
       });
       setError(null);
+      return json;
     } catch (err) {
-      // The status endpoint is one of the few routes that should
-      // ALWAYS work — even in setup mode. After retries are exhausted
-      // we treat failure as "not yet onboarded" rather than blocking
-      // the user behind a permanent error screen. The OnboardingGate's
-      // render path checks `status === null` to mean "still loading";
-      // we set a sentinel below so the gate falls through to setup
-      // screens. (The retries above keep a daemon that's mid-restart
-      // from flashing the setup flow at an already-onboarded user.)
+      // Keep the last valid snapshot on a background refresh failure. This
+      // preserves the user's interview/activation or unsent Talk draft.
+      // The initial-load fallback remains available for a new install.
       setError(err instanceof Error ? err.message : String(err));
-      setStatus({
+      setStatus((previous) => previous ?? {
         setup_completed: false,
         setup_completed_at: null,
         setup_skipped_profile: false,
@@ -117,6 +113,7 @@ export function useOnboardingStatus(): HookValue {
         tutorial_progress_step: null,
         last_reset_at: null,
       });
+      return null;
     } finally {
       setLoading(false);
     }

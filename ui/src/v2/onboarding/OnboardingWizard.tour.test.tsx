@@ -118,14 +118,20 @@ const focusLabel = () => {
 
 /** The five slides, in the order the tour walks them. */
 const SLIDES = [
-  { counter: "1 of 5", pos: /bottom: 50px/, copy: /Pebble/ },
-  { counter: "2 of 5", pos: /top: 60px/, copy: /summon Talk/ },
-  { counter: "3 of 5", pos: /top: 58px/, copy: /The Index/ },
-  { counter: "4 of 5", pos: /top: 104px/, copy: /monitoring surface/ },
+  { counter: "1 of 5", pos: /top: 58px/, copy: /programmatic steps/ },
+  { counter: "2 of 5", pos: /bottom: 50px/, copy: /Describe a routine in Talk/ },
+  { counter: "3 of 5", pos: /top: 104px/, copy: /Awareness.*Memory and goals/ },
+  { counter: "4 of 5", pos: /bottom: 50px/, copy: /paired computer awake, connected and permitted/ },
   { counter: "5 of 5", pos: /top: 150px/, copy: /Authority/ },
 ];
 
 describe("tour slides", () => {
+  test("labels the static dashboard as a preview", async () => {
+    await mountTour();
+    expect(host!.querySelector(".obw-preview-label")?.textContent).toBe("Dashboard preview");
+    expect(host!.querySelector(".obw-miniapp")?.getAttribute("aria-hidden")).toBe("true");
+    expect(host!.textContent).not.toContain("Click the Pebble to try");
+  });
   test("copy, counter and position always describe the SAME slide", async () => {
     await mountTour();
     for (const [i, want] of SLIDES.entries()) {
@@ -170,6 +176,8 @@ describe("tour slides", () => {
     expect(advance().textContent).toBe("Finish");
     await act(async () => advance().click());
     expect(posted).toContain("/api/onboarding/tutorial/complete");
+    expect(host!.textContent).not.toContain("profile saved to your Vault");
+    expect(host!.querySelector(".obw-activation")).not.toBeNull();
   });
 
   test("Skip tour dismisses rather than completing", async () => {

@@ -10,6 +10,9 @@ export interface ComposerProps {
   disabled?: boolean;
   responding?: boolean;
   onStop?: () => void;
+  value?: string;
+  onValueChange?: (value: string) => void;
+  autoFocus?: boolean;
 }
 
 export function Composer({
@@ -19,9 +22,26 @@ export function Composer({
   disabled,
   responding = false,
   onStop,
+  value: controlledValue,
+  onValueChange,
+  autoFocus = false,
 }: ComposerProps) {
-  const [value, setValue] = useState("");
+  const [localValue, setLocalValue] = useState("");
+  const value = controlledValue ?? localValue;
+  const setValue = onValueChange ?? setLocalValue;
   const inputRef = useRef<HTMLTextAreaElement>(null);
+
+  React.useEffect(() => {
+    const el = inputRef.current;
+    if (el) {
+      el.style.height = "auto";
+      el.style.height = el.scrollHeight + "px";
+    }
+  }, [value]);
+
+  React.useEffect(() => {
+    if (autoFocus && !disabled) inputRef.current?.focus();
+  }, [autoFocus, disabled]);
 
   // Global `/` opens the command palette directly. Suppressed inside any
   // editable element so it doesn't hijack normal typing — typing `/` in

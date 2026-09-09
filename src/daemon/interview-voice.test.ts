@@ -1,27 +1,10 @@
-import { describe, expect, test } from 'bun:test';
+import { beforeEach, describe, expect, test } from 'bun:test';
 import { WebSocketService } from './ws-service.ts';
+import { initDatabase } from '../vault/schema.ts';
 import type { JarvisConfig } from '../config/types.ts';
+import type { InterviewSession } from './onboarding-interviewer.ts';
 
-/**
- * The onboarding interview owns the user's voice while it runs.
- *
- * Before this, speech during the first interview was captured by the pebble
- * and answered by the assistant — the interview only ever heard what was
- * typed into its composer. These tests pin the hand-off: the interview claims
- * the mic when it starts, a transcript captured off-socket is delivered to
- * the interviewer, and the mic goes back to the assistant when it ends.
- *
- * The second suite pins the other half of that hand-off: because speech can
- * now arrive at any moment, turns have to be serialized — the interviewer
- * mutates one message history across awaits.
- *
- * The service is constructed but never start()ed (no port bound);
- * routeMessage and the public bridge entry points are exercised directly.
- * Where the LLM is irrelevant the stub reports no providers, so each turn
- * stops at `interview_error` instead of calling a model — the session
- * lifecycle under test is identical either way.
- */
-
+/** Exercise the actual WS message boundary without binding a port. */
 const makeService = (llmManager?: unknown) => {
   const fakeAgent = {
     setDelegationCallback: () => {},
@@ -31,259 +14,215 @@ const makeService = (llmManager?: unknown) => {
   const svc = new WebSocketService(0, fakeAgent);
   const makeClient = () => {
     const sent: Array<Record<string, unknown>> = [];
+    const binary: unknown[] = [];
     const ws = {
       send: (raw: string) => { sent.push(JSON.parse(raw) as Record<string, unknown>); },
-      sendBinary: () => {},
+      sendBinary: (chunk: unknown) => { binary.push(chunk); },
     } as never;
     (svc as unknown as { wsServer: { getClients: () => Set<unknown> } }).wsServer.getClients().add(ws);
-    return { ws, sent };
+    return { ws, sent, binary };
   };
   const internals = svc as unknown as {
     routeMessage: (msg: unknown, ws: unknown) => Promise<unknown>;
-    interviewSessions: Map<unknown, unknown>;
+    interviewSessions: Map<unknown, InterviewSession>;
+    interviewPendingText: Map<unknown, string>;
+    interviewTurnsInFlight: Set<unknown>;
+    voiceSessions: Map<unknown, unknown>;
+    endInterviewSession: (ws: unknown) => void;
   };
   return { svc, internals, makeClient };
 };
 
-/** Records what the daemon's pebble bridge was asked to do. */
-const makeBridge = (arm: { armed: boolean; reason?: string } = { armed: true }) => {
+const makeBridge = () => {
   const calls: string[] = [];
   return {
     calls,
     bridge: {
-      arm: async () => { calls.push('arm'); return arm; },
+      arm: async () => { calls.push('arm'); return { armed: true }; },
       disarm: () => { calls.push('disarm'); },
       setActive: (active: boolean) => { calls.push(`setActive:${active}`); },
     },
   };
 };
 
-const startInterview = async (
+const tick = () => new Promise<void>(resolve => setTimeout(resolve, 0));
+const send = async (
   internals: ReturnType<typeof makeService>['internals'],
   ws: unknown,
+  type: string,
+  payload: Record<string, unknown> = {},
 ) => {
-  await internals.routeMessage({ type: 'interview_start', payload: {}, timestamp: Date.now() }, ws);
-  // The handler is fire-and-forget; let it run.
-  await new Promise<void>(r => setTimeout(r, 0));
+  await internals.routeMessage({ type, payload, timestamp: Date.now() }, ws);
+  await tick();
 };
-
 const lastOfType = (sent: Array<Record<string, unknown>>, type: string) =>
   [...sent].reverse().find(m => m.type === type);
 
-describe('interview voice hand-off', () => {
-  test('starting an interview takes the microphone off the assistant', async () => {
-    const { svc, internals, makeClient } = makeService();
+const makeLLM = (done = false) => ({
+  getProviderNames: () => ['stub'],
+  hasConversationTier: () => false,
+  chatTier: async () => ({
+    content: done ? 'You can ask for a workflow draft after setup.' : 'What are you building?',
+    tool_calls: done
+      ? [{ id: 'wrap', name: 'wrap_interview', arguments: { farewell: 'Thanks for the context.' } }]
+      : [],
+  }),
+});
+
+describe('written interview transport', () => {
+  beforeEach(() => initDatabase(':memory:'));
+
+  test('opening and replying never activate the microphone or synthesize audio, even for legacy speakReply requests', async () => {
+    const { svc, internals, makeClient } = makeService(makeLLM());
     const { calls, bridge } = makeBridge();
     svc.setInterviewVoiceBridge(bridge);
-    const { ws } = makeClient();
+    let synthesisCalls = 0;
+    svc.setTTSProvider({
+      synthesizeStream: async function* () {
+        synthesisCalls++;
+        yield Buffer.from('unexpected interview audio');
+      },
+    } as never);
+    const { ws, sent, binary } = makeClient();
 
-    expect(svc.hasActiveInterview()).toBe(false);
-    await startInterview(internals, ws);
+    await send(internals, ws, 'interview_start', { speakReply: true });
+    await send(internals, ws, 'interview_user_message', { text: 'I am building a studio.', speakReply: true });
 
     expect(svc.hasActiveInterview()).toBe(true);
-    expect(calls).toContain('setActive:true');
+    expect(calls).toEqual([]);
+    expect(synthesisCalls).toBe(0);
+    expect(binary).toEqual([]);
+    const replies = sent.filter(m => m.type === 'interview_assistant');
+    expect(replies).toHaveLength(2);
+    expect(replies.every(m => (m.payload as { will_speak: boolean }).will_speak === false)).toBe(true);
+    expect(sent.some(m => m.type === 'tts_start' || m.type === 'tts_end')).toBe(false);
+    expect(internals.interviewSessions.get(ws)?.messages.some(m => m.role === 'user' && m.content === 'I am building a studio.')).toBe(true);
   });
 
-  test('a pebble transcript is delivered to the interview, not the assistant', async () => {
-    const { svc, internals, makeClient } = makeService();
-    const { bridge } = makeBridge();
-    svc.setInterviewVoiceBridge(bridge);
-    const { ws, sent } = makeClient();
-    await startInterview(internals, ws);
-
-    expect(svc.deliverInterviewVoice('  I design products in Milan  ')).toBe(true);
-    const echoed = lastOfType(sent, 'interview_user_transcript');
-    expect(echoed).toBeDefined();
-    expect((echoed!.payload as { text: string }).text).toBe('I design products in Milan');
-  });
-
-  test('with no interview running the transcript is refused so the assistant answers', () => {
-    const { svc } = makeService();
-    svc.setInterviewVoiceBridge(makeBridge().bridge);
-    expect(svc.deliverInterviewVoice('what is the weather')).toBe(false);
-  });
-
-  test('a blank transcript is refused rather than sent as a turn', async () => {
-    const { svc, internals, makeClient } = makeService();
-    svc.setInterviewVoiceBridge(makeBridge().bridge);
-    const { ws, sent } = makeClient();
-    await startInterview(internals, ws);
-
-    expect(svc.deliverInterviewVoice('   ')).toBe(false);
-    expect(lastOfType(sent, 'interview_user_transcript')).toBeUndefined();
-  });
-
-  test('interview_listen arms the pebble and tells the UI it worked', async () => {
+  test('legacy microphone requests receive text-only without touching ordinary voice capture', async () => {
     const { svc, internals, makeClient } = makeService();
     const { calls, bridge } = makeBridge();
     svc.setInterviewVoiceBridge(bridge);
     const { ws, sent } = makeClient();
-    await startInterview(internals, ws);
+    await send(internals, ws, 'interview_start');
+    await send(internals, ws, 'voice_start', { requestId: 'normal-voice', mode: 'wav' });
+    const normalCapture = internals.voiceSessions.get(ws);
+    expect(normalCapture).toBeDefined();
 
-    await internals.routeMessage({ type: 'interview_listen', payload: {}, timestamp: Date.now() }, ws);
-    await new Promise<void>(r => setTimeout(r, 0));
+    await send(internals, ws, 'interview_listen', { speakReply: true });
+    await send(internals, ws, 'interview_listen_stop');
 
-    expect(calls).toContain('arm');
-    expect(lastOfType(sent, 'interview_listen_state')?.payload).toEqual({ armed: true });
+    expect(lastOfType(sent, 'interview_listen_state')?.payload).toEqual({ armed: false, reason: 'text-only' });
+    expect(calls).toEqual([]);
+    expect(internals.voiceSessions.get(ws)).toBe(normalCapture);
   });
 
-  test('a refused mic is reported with its reason so the UI can fall back', async () => {
-    const { svc, internals, makeClient } = makeService();
-    const { bridge } = makeBridge({ armed: false, reason: 'muted' });
-    svc.setInterviewVoiceBridge(bridge);
+  test('a stale client receives text-only even without a running interview or bridge', async () => {
+    const { internals, makeClient } = makeService();
     const { ws, sent } = makeClient();
-    await startInterview(internals, ws);
-
-    await internals.routeMessage({ type: 'interview_listen', payload: {}, timestamp: Date.now() }, ws);
-    await new Promise<void>(r => setTimeout(r, 0));
-
-    expect(lastOfType(sent, 'interview_listen_state')?.payload).toEqual({ armed: false, reason: 'muted' });
+    await send(internals, ws, 'interview_listen');
+    expect(lastOfType(sent, 'interview_listen_state')?.payload).toEqual({ armed: false, reason: 'text-only' });
+    expect(internals.interviewSessions.size).toBe(0);
   });
 
-  test('with no bridge wired the UI is told at once instead of waiting on a mic', async () => {
-    const { svc, internals, makeClient } = makeService();
-    const { ws, sent } = makeClient();
-    await startInterview(internals, ws);
-
-    await internals.routeMessage({ type: 'interview_listen', payload: {}, timestamp: Date.now() }, ws);
-    await new Promise<void>(r => setTimeout(r, 0));
-
-    expect(lastOfType(sent, 'interview_listen_state')?.payload).toEqual({ armed: false, reason: 'no-pebble' });
-  });
-
-  test('interview_listen_stop hands the microphone back', async () => {
-    const { svc, internals, makeClient } = makeService();
-    const { calls, bridge } = makeBridge();
-    svc.setInterviewVoiceBridge(bridge);
-    const { ws } = makeClient();
-    await startInterview(internals, ws);
-    await internals.routeMessage({ type: 'interview_listen', payload: {}, timestamp: Date.now() }, ws);
-    await new Promise<void>(r => setTimeout(r, 0));
-
-    await internals.routeMessage({ type: 'interview_listen_stop', payload: {}, timestamp: Date.now() }, ws);
-    expect(calls).toContain('disarm');
-  });
-
-  test('an abandoned interview releases the mic — the assistant is not left mute', async () => {
-    const { svc, internals, makeClient } = makeService();
-    const { calls, bridge } = makeBridge();
-    svc.setInterviewVoiceBridge(bridge);
-    const { ws } = makeClient();
-    await startInterview(internals, ws);
-    await internals.routeMessage({ type: 'interview_listen', payload: {}, timestamp: Date.now() }, ws);
-    await new Promise<void>(r => setTimeout(r, 0));
-
-    // What the WS server's onDisconnect does: sweep the maps, then release.
-    internals.interviewSessions.delete(ws);
-    (svc as unknown as { endInterviewVoice: (ws: unknown) => void }).endInterviewVoice(ws);
-
-    expect(calls).toContain('disarm');
-    expect(calls).toContain('setActive:false');
-    expect(svc.hasActiveInterview()).toBe(false);
-  });
-
-  test('an empty capture is reported so the interview can re-arm', async () => {
-    const { svc, internals, makeClient } = makeService();
-    svc.setInterviewVoiceBridge(makeBridge().bridge);
-    const { ws, sent } = makeClient();
-    await startInterview(internals, ws);
-
-    svc.notifyInterviewListenEnded('no-speech');
-    expect(lastOfType(sent, 'interview_listen_state')?.payload).toEqual({ armed: false, reason: 'no-speech' });
-  });
-
-  test('the newest interview window owns the mic', async () => {
-    const { svc, internals, makeClient } = makeService();
-    svc.setInterviewVoiceBridge(makeBridge().bridge);
+  test('Pebble speech is never consumed as an interview answer, including with multiple windows', async () => {
+    const { svc, internals, makeClient } = makeService(makeLLM());
     const first = makeClient();
     const second = makeClient();
-    await startInterview(internals, first.ws);
-    await startInterview(internals, second.ws);
+    expect(svc.deliverInterviewVoice('Before setup')).toBe(false);
+    await send(internals, first.ws, 'interview_start');
+    await send(internals, second.ws, 'interview_start');
+    const histories = [...internals.interviewSessions.values()].map(session => [...session.messages]);
 
-    expect(svc.deliverInterviewVoice('hello')).toBe(true);
-    expect(lastOfType(second.sent, 'interview_user_transcript')).toBeDefined();
-    expect(lastOfType(first.sent, 'interview_user_transcript')).toBeUndefined();
+    expect(svc.deliverInterviewVoice('I design products in Milan')).toBe(false);
+    expect(svc.deliverInterviewVoice('   ')).toBe(false);
+    svc.notifyInterviewListenEnded('no-speech');
+    await tick();
+
+    expect([...internals.interviewSessions.values()].map(session => session.messages)).toEqual(histories);
+    expect([...first.sent, ...second.sent].some(m => m.type === 'interview_user_transcript' || m.type === 'interview_listen_state')).toBe(false);
+  });
+
+  test('wrapping sends written completion and clears the session without changing normal voice', async () => {
+    const { svc, internals, makeClient } = makeService(makeLLM(true));
+    const { calls, bridge } = makeBridge();
+    svc.setInterviewVoiceBridge(bridge);
+    const { ws, sent } = makeClient();
+    await send(internals, ws, 'interview_start', { speakReply: true });
+
+    expect(lastOfType(sent, 'interview_done')).toBeDefined();
+    expect(svc.hasActiveInterview()).toBe(false);
+    expect(internals.interviewTurnsInFlight.size).toBe(0);
+    expect(internals.interviewPendingText.size).toBe(0);
+    expect(calls).toEqual([]);
   });
 });
 
-/**
- * A stub LLM whose turns finish only when the test says so. Records the
- * message history each turn was handed, which is what the serialization
- * claim is really about.
- */
+/** Hold each model call so overlapping typed input and disconnects are testable. */
 const makeSlowLLM = () => {
   const seen: Array<Array<{ role: string; content: string }>> = [];
   let release: (() => void) | null = null;
   return {
     seen,
-    /** Let the turn that is currently blocked finish. */
     finishTurn: async () => {
       const go = release;
       release = null;
       go?.();
-      await new Promise<void>(r => setTimeout(r, 0));
+      await tick();
     },
     llm: {
       getProviderNames: () => ['stub'],
       hasConversationTier: () => false,
-      chatTier: async (
-        _tier: string,
-        _caller: string,
-        messages: Array<{ role: string; content: string }>,
-      ) => {
+      chatTier: async (_tier: string, _caller: string, messages: Array<{ role: string; content: string }>) => {
         seen.push(messages.map(m => ({ role: m.role, content: m.content })));
-        await new Promise<void>(r => { release = r; });
-        return { content: 'And what do you do?', tool_calls: [] };
+        await new Promise<void>(resolve => { release = resolve; });
+        return { content: 'What work do you repeat?', tool_calls: [] };
       },
     },
   };
 };
 
-describe('interview turns are serialized', () => {
-  test('speech arriving mid-turn runs next instead of interleaving', async () => {
+describe('written interview turn lifecycle', () => {
+  test('typed replies arriving mid-turn run next in order, while speech stays outside the interview', async () => {
     const slow = makeSlowLLM();
     const { svc, internals, makeClient } = makeService(slow.llm);
-    svc.setInterviewVoiceBridge(makeBridge().bridge);
     const { ws, sent } = makeClient();
-
-    // Opening turn — blocked inside the LLM call.
-    void internals.routeMessage({ type: 'interview_start', payload: {}, timestamp: Date.now() }, ws);
-    await new Promise<void>(r => setTimeout(r, 0));
-    expect(slow.seen.length).toBe(1);
-
-    // Two utterances land while that turn is still running.
-    expect(svc.deliverInterviewVoice("I'm a designer")).toBe(true);
-    expect(svc.deliverInterviewVoice('in Milan')).toBe(true);
-    // Still one turn in flight: neither raced into the shared history.
-    expect(slow.seen.length).toBe(1);
-
-    await slow.finishTurn();      // opening turn completes → queued text runs
-    expect(slow.seen.length).toBe(2);
-    const second = slow.seen[1]!;
-    // Both utterances arrived as ONE user turn, in order.
-    expect(second.filter(m => m.role === 'user').at(-1)!.content).toBe("I'm a designer in Milan");
-    // …and the history is still strictly alternating, never user-after-user.
-    const roles = second.map(m => m.role).filter(r => r === 'user' || r === 'assistant');
-    expect(roles.some((r, i) => i > 0 && r === roles[i - 1])).toBe(false);
+    await send(internals, ws, 'interview_start');
+    await send(internals, ws, 'interview_user_message', { text: "I'm a designer" });
+    await send(internals, ws, 'interview_user_message', { text: 'in Milan' });
+    expect(svc.deliverInterviewVoice('Unrelated voice conversation')).toBe(false);
+    expect(slow.seen).toHaveLength(1);
 
     await slow.finishTurn();
-    expect(sent.filter(m => m.type === 'interview_assistant').length).toBe(2);
+    expect(slow.seen).toHaveLength(2);
+    const nextTurn = slow.seen[1]!;
+    expect(nextTurn.filter(m => m.role === 'user').at(-1)?.content).toBe("I'm a designer in Milan");
+    expect(nextTurn.some(m => m.content === 'Unrelated voice conversation')).toBe(false);
+    const roles = nextTurn.map(m => m.role).filter(role => role === 'user' || role === 'assistant');
+    expect(roles.some((role, index) => index > 0 && role === roles[index - 1])).toBe(false);
+    await slow.finishTurn();
+    expect(sent.filter(m => m.type === 'interview_assistant')).toHaveLength(2);
   });
 
-  test('a mid-turn transcript is never handed back to the assistant', async () => {
+  test('disconnect drops queued input and ignores the late reply', async () => {
     const slow = makeSlowLLM();
     const { svc, internals, makeClient } = makeService(slow.llm);
-    svc.setInterviewVoiceBridge(makeBridge().bridge);
-    const { ws } = makeClient();
-    void internals.routeMessage({ type: 'interview_start', payload: {}, timestamp: Date.now() }, ws);
-    await new Promise<void>(r => setTimeout(r, 0));
+    const { calls, bridge } = makeBridge();
+    svc.setInterviewVoiceBridge(bridge);
+    const { ws, sent } = makeClient();
+    await send(internals, ws, 'interview_start');
+    await send(internals, ws, 'interview_user_message', { text: 'A queued answer' });
 
-    // `true` is what tells the daemon "handled — do not run a response
-    // cycle". Returning false here would put the answer to an interview
-    // question through the assistant, which is the bug this all fixes.
-    expect(svc.deliverInterviewVoice('mid-turn answer')).toBe(true);
+    // The disconnect handler sweeps the session map before its lifecycle cleanup.
+    internals.interviewSessions.delete(ws);
+    internals.endInterviewSession(ws);
+    await slow.finishTurn();
 
-    await slow.finishTurn();
-    await slow.finishTurn();
+    expect(slow.seen).toHaveLength(1);
+    expect(sent.some(m => m.type === 'interview_assistant')).toBe(false);
+    expect(internals.interviewTurnsInFlight.size).toBe(0);
+    expect(internals.interviewPendingText.size).toBe(0);
+    expect(svc.hasActiveInterview()).toBe(false);
+    expect(calls).toEqual([]);
   });
 });

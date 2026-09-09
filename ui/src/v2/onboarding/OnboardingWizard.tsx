@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { openExternal, openedOrHandedOff } from "./external-open";
 import { useInterviewSession } from "./useInterviewSession";
+import { WorkflowActivation } from "./WorkflowActivation";
 import type { OnboardingStatus } from "./useOnboardingStatus";
 import "./OnboardingWizard.css";
 import { modelForOnboardingTest, onboardingDefaultModelRef } from "./llm-setup";
@@ -145,14 +146,11 @@ async function playPreviewAudio(res: Response): Promise<void> {
 }
 
 const TOUR = [
-  { sm: "This is the Pebble, your companion. It lives at your cursor. Click it any time to talk to me.", t: "→ Click the Pebble to try", pos: { right: 18, bottom: 50 } },
-  // The shortcut takes either modifier (AppShell: metaKey || ctrlKey), so this
-  // is the LABEL being wrong, not the binding — which is why a hardcoded ⌘
-  // survived: it kept working for any Windows user who guessed Ctrl.
-  { sm: `Press ${modKey("J")} to summon Talk, the conversation panel. Everything we say lives there, across sessions.`, t: `→ Press ${modKey("J")}`, pos: { right: 18, top: 60 } },
-  { sm: "The Index, on the left, is every room. Names spelled out, badges flag what needs you. Recognition over recall.", t: "", pos: { left: "calc(var(--mrail-w) + 12px)", top: 58 } },
-  { sm: "Now is your monitoring surface: what I’m doing and what’s waiting on you, at a glance.", t: "", pos: { left: "calc(var(--mrail-w) + 12px)", top: 104 } },
-  { sm: "Authority is your control panel, with a kill-switch. Nothing with real-world impact happens without your yes.", t: "", pos: { left: "calc(var(--mrail-w) + 12px)", top: 150 } },
+  { title: "Give the repetition a workflow", sm: "Turn repeated work into steps you can inspect and steer. Use programmatic steps for known operations, and AI where judgment is needed.", t: "Workflows is where you review and manage those steps.", focus: "workflows", pos: { left: "calc(var(--mrail-w) + 12px)", top: 58 } },
+  { title: "Build it together", sm: "Describe a routine in Talk. Jarvis can draft its steps, prompts and variables with you. Review the workflow before testing and enabling it.", t: `After setup, open Talk with ${modKey("J")} or the Pebble.`, focus: "talk", pos: { right: 18, bottom: 50 } },
+  { title: "A cofounder with context", sm: "Awareness can surface patterns worth automating. Memory and goals help Jarvis understand what matters to you, and why a workflow would help.", t: "Give Jarvis context as you work together.", focus: "context", pos: { left: "calc(var(--mrail-w) + 12px)", top: 104 } },
+  { title: "Work across your apps", sm: "Workflows can use connected tools, browser control and desktop control. Computer actions need that paired computer awake, connected and permitted.", t: "The Pebble keeps the conversation nearby.", focus: "apps", pos: { right: 18, bottom: 50 } },
+  { title: "Decide where approval belongs", sm: "Set action permissions and approval rules in Authority. Inspect your workflow, test the result, then deliberately publish and enable it when ready.", t: "Your preferences in the interview are context. Set the rules in Authority.", focus: "authority", pos: { left: "calc(var(--mrail-w) + 12px)", top: 150 } },
 ];
 
 type TestState = { status: "idle" | "testing" | "ok" | "err"; msg?: string; validatedModel?: string };
@@ -162,7 +160,7 @@ export function OnboardingWizard({
   onComplete,
 }: {
   status: OnboardingStatus | null;
-  onComplete: () => void;
+  onComplete: (prompt?: string) => void | Promise<void>;
 }) {
   const startKey = useMemo<StepKey>(() => {
     if (!status?.setup_completed) return "welcome";
@@ -596,7 +594,7 @@ export function OnboardingWizard({
     try {
       const r = await fetch("/api/onboarding/skip", { method: "POST" });
       if (!r.ok) throw new Error((await r.text().catch(() => "")) || `HTTP ${r.status}`);
-      onComplete();
+      await onComplete();
     } catch (e) {
       // Closing anyway would replay onboarding next launch — surface it instead.
       setError(e instanceof Error && e.message ? `Couldn't save the skip: ${e.message}` : "Couldn't reach the daemon — try again.");
@@ -801,7 +799,7 @@ export function OnboardingWizard({
       {progress}
 
       {key === "interview" ? (
-        <InterviewStep ttsDisabled={tts === "off"} onComplete={() => goKey("tour")} />
+        <InterviewStep onComplete={() => goKey("tour")} />
       ) : key === "tour" ? (
         renderTour()
       ) : (
@@ -841,11 +839,16 @@ export function OnboardingWizard({
             {drop("", 60)}
           </div>
           <div className="obw-word" style={{ fontSize: 15, marginBottom: 11 }}><span className="u">use</span>jarvis</div>
-          <h2>This is your Jarvis.</h2>
-          <div className="obw-sub" style={{ maxWidth: "34ch", margin: "9px auto 0" }}>
+          <h2>Your AI cofounder.<br />Let’s make room to build.</h2>
+          <div className="obw-sub" style={{ maxWidth: "40ch", margin: "9px auto 0" }}>
+            Give repetitive work a workflow. Jarvis helps you find what to automate,
+            build the steps, and use AI where judgment matters. First, let’s connect
+            your tools and learn how you work.
+          </div>
+          <div className="obw-hint" style={{ maxWidth: "44ch", margin: "12px auto 0" }}>
             {hosted
-              ? "Let’s spend a couple of minutes setting it up: what it can touch, and a little about you. The AI and voice are included with your plan — Jarvis will speak its replies out loud from the start, and you can change the voice or turn it off any time in Settings → Channels."
-              : "Let’s spend about five minutes setting it up: what it can touch, the brain and voice it runs on, and a little about you. You can skip anything and finish later."}
+              ? "AI and voice are included with your plan. The interview is written. After setup, voice replies start enabled; change or turn them off in Settings → Channels."
+              : "Choose your AI and optional voice, then tell Jarvis a little about your work. You can skip optional steps and return later."}
           </div>
           <div style={{ marginTop: 22, display: "flex", flexDirection: "column", gap: 11, alignItems: "center" }}>
             <div className="obw-themelab">Choose your look</div>
@@ -919,12 +922,12 @@ export function OnboardingWizard({
               </>
             ) : (
               <>
-                <h2>Let Jarvis reach your machine.</h2>
+                <h2>Connect Jarvis to this computer.</h2>
                 <div className="obw-sub">
                   {unbundled
                     ? "Here is what this machine currently allows. None of it can be granted from here yet, for the reason below."
                     : mac
-                      ? "It acts on your computer through these. Jarvis can't switch them on itself, so each button asks the OS or opens the exact settings pane. Rows turn green as you go."
+                      ? "These permissions let Jarvis understand your screen and operate your apps. Each button asks the OS or opens its settings. You choose action approval rules separately in Authority."
                       : "One switch to check before Jarvis can hear you."}
                 </div>
                 {unbundled && (
@@ -1052,6 +1055,7 @@ export function OnboardingWizard({
         <div className="obw-body"><div className="obw-wrap wide">
           <h2>Pick a brain for Jarvis.</h2>
           <div className="obw-sub">
+            Use AI to help design workflows and handle the steps that need judgment.{" "}
             {hosted
               ? "Jarvis AI is included with your plan — nothing to configure. Prefer your own? Ollama runs locally with no key, or add an API key for Anthropic, OpenAI, and more. Change it anytime in Settings."
               : "Bring your own: Ollama runs locally with no key, or add an API key for Anthropic, OpenAI, and more. Jarvis AI, our hosted brain, is coming soon. Change it anytime in Settings."}
@@ -1089,7 +1093,7 @@ export function OnboardingWizard({
         return (
           <div className="obw-body"><div className="obw-wrap wide">
             <h2>How should Jarvis hear you?</h2>
-            <div className="obw-sub">Speech to text powers voice messages and the mic button. Skip if you only plan to type; wire it up later in Settings.</div>
+            <div className="obw-sub">Describe your work by voice when it suits you. The interview uses written answers. Skip voice setup if you only plan to type; add it later in Settings.</div>
             <div className="obw-choices" style={{ marginTop: 14 }}>
               {opts.map(([v, ic, nm, bd]) => (
                 <button key={v} className={`obw-choice ${stt === v ? "on" : ""}`} onClick={() => setStt(v)}>
@@ -1180,13 +1184,13 @@ export function OnboardingWizard({
           // mail" — inherited from the two rows this replaces — described things
           // no token from this consent can do. A first-run screen that promises
           // more than the consent grants is a promise broken later, quietly.
-          ["google", "calendar", "Google", "Read-only access to your calendar and Gmail, so Jarvis can plan around your day and flag what needs you."],
+          ["google", "calendar", "Google", "Read-only access to your calendar and Gmail, giving Jarvis context for your day and the routines you want to automate."],
           ["telegram", "send", "Telegram", "Talk to Jarvis from your phone."],
         ];
         return (
           <div className="obw-body"><div className="obw-wrap wide">
-            <h2>Connect your world.</h2>
-            <div className="obw-sub">Hook up the apps Jarvis should know about. All optional, all revocable from Settings.</div>
+            <h2>Connect your everyday tools.</h2>
+            <div className="obw-sub">Start with the tools involved in your daily work. All optional, all revocable from Settings.</div>
             <div className="obw-rows" style={{ marginTop: 14 }}>
               {rows.map(([id, ic, nm, bd]) => {
                 const isConnected = connected.has(id);
@@ -1224,9 +1228,9 @@ export function OnboardingWizard({
             <span className="obw-bloom ok" style={{ width: 150, height: 150, left: "50%", top: "50%", transform: "translate(-50%,-52%)" }} />
             <span className="obw-drop s-done" style={{ width: 58, height: 58 }}><span className="in" /></span>
           </div>
-          <h2>You’re all set.</h2>
+          <h2>Let’s make room for your work.</h2>
           <div className="obw-sub" style={{ maxWidth: "33ch", margin: "9px auto 0" }}>
-            {recapLine()} Bringing your dashboard online now.
+            {recapLine()} You can add more context as you work together.
           </div>
           <div className="obw-recap">
             {configuredThisSession && hosted ? (
@@ -1234,7 +1238,6 @@ export function OnboardingWizard({
               // plan provides rather than this component's untouched state.
               <>
                 <div><span className="ok">✓</span> AI &amp; voice · included with your plan</div>
-                <div><span className="ok">✓</span> profile saved to your Vault</div>
               </>
             ) : configuredThisSession ? (
               <>
@@ -1244,15 +1247,14 @@ export function OnboardingWizard({
                 {droppedSections.includes("tts") || droppedSections.includes("stt")
                   ? <div><span className="ok">✓</span> voice · included with your plan (your provider entries weren’t needed and weren’t saved)</div>
                   : <div><span className="ok">✓</span> voice · {tts === "off" ? "text only" : tts === "edge" ? `Edge (${EDGE_VOICES.find((v) => v.id === edgeVoice)?.label.split(" ")[0]})` : "ElevenLabs"}{stt !== "skip" ? " + Whisper" : ""}</div>}
-                <div><span className="ok">✓</span> profile saved to your Vault</div>
               </>
             ) : (
               // Resumed past the setup steps: this session never touched
               // brain/voice, so don't print their defaults as saved config.
-              <div><span className="ok">✓</span> profile saved to your Vault</div>
+              <div><span className="ok">✓</span> setup complete</div>
             )}
           </div>
-          <div style={{ marginTop: 22 }}><button className="obw-btn obw-btn-pri" style={{ minWidth: 208 }} onClick={onComplete}>Open Jarvis</button></div>
+          <WorkflowActivation onContinue={onComplete} />
         </div></div>
       );
 
@@ -1261,9 +1263,9 @@ export function OnboardingWizard({
   }
 
   function recapLine() {
-    if (!configuredThisSession) return "Your brain is wired up, and I know a little about you.";
-    if (hosted) return "Your plan's AI and voice are wired up, and I know a little about you.";
-    return `${prov.name} is wired up${tts !== "off" ? ", voice is on" : ""}, and I know a little about you.`;
+    if (!configuredThisSession) return "Jarvis is ready for your next step.";
+    if (hosted) return "Your plan’s AI and voice are ready.";
+    return `${prov.name} is connected${tts !== "off" ? ", and voice is on" : ""}.`;
   }
 
   function renderProvDetail() {
@@ -1330,11 +1332,12 @@ export function OnboardingWizard({
     return (
       <div className="obw-tourstage">
         <div className="obw-tourframe">
-          <div className="obw-miniapp">
+          <div className="obw-preview-label">Dashboard preview</div>
+          <div className="obw-miniapp" aria-hidden="true">
             <div className="mrail">
-              <div className="mh">Run</div><div className="mr">Workflows</div><div className="mr">Agents</div><div className="mr">Tasks</div>
-              <div className="mh">Know</div><div className="mr">Memory</div><div className="mr">Goals</div>
-              <div className="mh">Guard</div><div className="mr">Authority <span className="bd">2</span></div><div className="mr on">Now</div>
+              <div className="mh">Run</div><div className={`mr${T.focus === "workflows" || T.focus === "apps" ? " on" : ""}`}>Workflows</div><div className="mr">Agents</div><div className="mr">Tasks</div>
+              <div className="mh">Know</div><div className={`mr${T.focus === "context" ? " on" : ""}`}>Memory</div><div className={`mr${T.focus === "context" ? " on" : ""}`}>Goals</div>
+              <div className="mh">Guard</div><div className={`mr${T.focus === "authority" ? " on" : ""}`}>Authority <span className="bd">2</span></div><div className="mr">Now</div>
             </div>
             <div className="mmain">
               <div className="mtop">Now · good morning</div>
@@ -1356,6 +1359,7 @@ export function OnboardingWizard({
               of the tour showed it. A fresh node cannot be a stale one. */}
           <div key={tourI} className="obw-spot" style={pos}>
             <div className="sh"><span className="sd"><span className="in" /></span><span className="sl">Jarvis · tour</span><span className="sc">{tourI + 1} of {TOUR.length}</span></div>
+            <h3>{T.title}</h3>
             <div className="sm">{T.sm}</div>
             {T.t && <div className="stry">{T.t}</div>}
             {error && <div className="stry" style={{ color: "var(--listen)" }}>{error}</div>}
@@ -1438,75 +1442,22 @@ function MicLevelCheck() {
 }
 
 /* ─────────── The interview (step 7) ───────────
-   The design's ivstage, driven by the real useInterviewSession hook — the WS
-   lifecycle, TTS playback, live STT, facts counter, skip and done are all
-   preserved; only the presentation is rebuilt to Monochrome Lab. */
-const IV_PHASE_CLASS: Record<string, string> = { thinking: "s-think", speaking: "s-speak", done: "s-done" };
-const IV_PHASE_LABEL: Record<string, string> = { connecting: "connecting…", ready: "ready", error: "reconnecting…", thinking: "thinking", speaking: "speaking", listening: "listening", done: "done" };
+   Written answers keep the interview separate from normal assistant voice. */
+const IV_PHASE_CLASS: Record<string, string> = { thinking: "s-think", done: "s-done" };
+const IV_PHASE_LABEL: Record<string, string> = { connecting: "connecting…", ready: "your turn", error: "needs attention", thinking: "thinking", done: "done" };
 
-/** Why the interview can't listen, in the user's terms. */
-const MIC_REASON_COPY: Record<string, string> = {
-  muted: "Your microphone is muted — unmute it from the tray, or just type.",
-  "no-stt": "Speech to text isn't set up yet, so type your answers for now.",
-  "no-pebble": "No microphone on this machine yet — type your answers for now.",
-  default: "I can't hear you right now — type your answers instead.",
-};
-
-/** Browser speech recognition, when the daemon has no microphone to lend. */
-function hasBrowserSpeech(): boolean {
-  const w = window as unknown as { SpeechRecognition?: unknown; webkitSpeechRecognition?: unknown };
-  return Boolean(w.SpeechRecognition || w.webkitSpeechRecognition);
-}
-
-function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onComplete: () => void }) {
-  const session = useInterviewSession({ ttsDisabled });
+function InterviewStep({ onComplete }: { onComplete: () => void }) {
+  const session = useInterviewSession();
   const [composerText, setComposerText] = useState("");
-  const recognizerRef = useRef<{ stop: () => void } | null>(null);
-
-  // Voice input is the daemon's job first: it captures the answer on the
-  // pebble and feeds it straight to the interviewer (otherwise the pebble
-  // hears the answer and the assistant, not the interview, replies). Browser
-  // SpeechRecognition is only the fallback for when the daemon has no mic to
-  // offer — no pebble connected, no STT configured, mic muted.
-  useEffect(() => {
-    if (session.textOnly) return;
-    if (session.micStatus !== "unavailable") {
-      if (recognizerRef.current) { try { recognizerRef.current.stop(); } catch { /* ignore */ } recognizerRef.current = null; }
-      return;
-    }
-    if (session.phase !== "listening") {
-      if (recognizerRef.current) { try { recognizerRef.current.stop(); } catch { /* ignore */ } recognizerRef.current = null; }
-      return;
-    }
-    const Ctor = (window as unknown as { SpeechRecognition?: new () => never; webkitSpeechRecognition?: new () => never }).SpeechRecognition
-      || (window as unknown as { webkitSpeechRecognition?: new () => never }).webkitSpeechRecognition;
-    if (!Ctor) return;
-    const rec = new (Ctor as unknown as new () => {
-      continuous: boolean; interimResults: boolean; lang: string;
-      onresult: (e: { resultIndex: number; results: ArrayLike<{ 0: { transcript: string }; isFinal: boolean }> }) => void;
-      onend: () => void; onerror: () => void; start: () => void; stop: () => void;
-    })();
-    rec.continuous = false; rec.interimResults = true; rec.lang = "en-US";
-    let finalText = "";
-    rec.onresult = (event) => {
-      let interim = "", captured = "";
-      for (let i = event.resultIndex; i < event.results.length; i++) {
-        const r = event.results[i]!; const t = String(r?.[0]?.transcript ?? "");
-        if (r?.isFinal) captured += t; else interim += t;
-      }
-      if (captured) finalText += captured;
-      session.setPartialUserText((finalText + interim).trim());
-    };
-    rec.onend = () => { const text = finalText.trim(); recognizerRef.current = null; if (text) session.sendUserMessage(text); };
-    rec.onerror = () => { recognizerRef.current = null; };
-    try { rec.start(); recognizerRef.current = rec; } catch { /* ignore */ }
-    return () => { try { rec.stop(); } catch { /* ignore */ } recognizerRef.current = null; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [session.phase, session.textOnly, session.micStatus]);
-
-  const sendTyped = () => { const t = composerText.trim(); if (!t) return; setComposerText(""); session.sendUserMessage(t); };
+  const canSend = session.phase === "ready" || session.phase === "error";
+  const sendTyped = () => {
+    if (session.sendUserMessage(composerText)) setComposerText("");
+  };
   const [skipErr, setSkipErr] = useState<string | null>(null);
+  const [skipping, setSkipping] = useState(false);
   const skip = async () => {
+    if (skipping) return;
+    setSkipping(true);
     setSkipErr(null);
     try {
       const r = await fetch("/api/onboarding/profile/skip", { method: "POST" });
@@ -1514,7 +1465,9 @@ function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onCo
       onComplete();
     } catch {
       // Completing anyway would replay the interview next launch.
-      setSkipErr("Couldn't reach the daemon — try again.");
+      setSkipErr("Couldn't reach the daemon. Try again.");
+    } finally {
+      setSkipping(false);
     }
   };
 
@@ -1533,25 +1486,20 @@ function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onCo
     );
   }
 
-  // No mic anywhere: the daemon has none to lend and the browser can't
-  // transcribe either. Say so once instead of showing a "Listening" pill that
-  // nothing is feeding.
-  const voiceOff = session.micStatus === "unavailable" && !hasBrowserSpeech();
-  const micNote = voiceOff ? MIC_REASON_COPY[session.micReason ?? ""] ?? MIC_REASON_COPY.default : null;
-
   const msgs = session.messages;
   const lastAsstIdx = msgs.map((m) => m.role).lastIndexOf("assistant");
   const currentQ = lastAsstIdx >= 0 ? msgs[lastAsstIdx]!.text : (session.phase === "connecting" ? "Getting ready to chat…" : "…");
-  const history = (lastAsstIdx >= 0 ? msgs.slice(0, lastAsstIdx) : msgs).slice(-4);
+  // Keep the newest written answer visible while Jarvis is thinking, too.
+  const history = msgs.filter((_, i) => i !== lastAsstIdx).slice(-4);
 
   return (
     <div className="obw-iv">
       <div className="obw-ivhead">
-        <span className="l">Jarvis · getting to know you</span>
+        <span className="l">Jarvis · your work, in your words</span>
         <span className="r">
           <span className="facts"><b>{session.factsRecorded}</b> facts</span>
           {skipErr && <span className="obw-hint" style={{ color: "var(--listen)" }}>{skipErr}</span>}
-          <button type="button" className="obw-skip" onClick={skip}>Skip</button>
+          <button type="button" className="obw-skip" disabled={skipping} onClick={skip}>{skipping ? "Skipping…" : "Skip"}</button>
         </span>
       </div>
       <div className="obw-ivstage">
@@ -1559,24 +1507,21 @@ function InterviewStep({ ttsDisabled, onComplete }: { ttsDisabled: boolean; onCo
         <span className={`obw-drop iv-peb ${IV_PHASE_CLASS[session.phase] ?? ""}`} style={{ width: 54, height: 54 }}>
           <span className="in" /><span className="ring" />
         </span>
-        <div className="obw-ivphase">{IV_PHASE_LABEL[session.phase] ?? session.phase}</div>
-        <div className="obw-ivq">{currentQ}</div>
+        <div className="obw-ivphase" role="status">{IV_PHASE_LABEL[session.phase] ?? session.phase}</div>
+        <div className="obw-ivq" aria-live="polite">{currentQ}</div>
+        <div className="obw-ivhelp">A few written answers about what you’re building, what repeats, and where you want help.</div>
         {history.length > 0 && (
           <div className="obw-ivtrans">
             {history.map((m, i) => <div key={i} className={`obw-bub ${m.role === "assistant" ? "jv" : "me"}`}>{m.text}</div>)}
           </div>
         )}
-        {micNote && <div className="obw-ivphase" style={{ textTransform: "none", letterSpacing: 0 }}>{micNote}</div>}
-        {session.partialUserText && (
-          <div className="obw-ivphase" style={{ fontStyle: "italic", color: "var(--ink2)", textTransform: "none", letterSpacing: 0 }}>“{session.partialUserText}”</div>
-        )}
+        {session.error && <div className="obw-iverror" role="alert">{session.error}</div>}
       </div>
       <div className="obw-ivcomposer">
-        <input className="obw-inp" placeholder={voiceOff ? "Type your answer" : "Type your answer, or just talk"} value={composerText}
+        <textarea className="obw-inp" aria-label="Your written answer" placeholder="Type your answer" rows={2} value={composerText}
           onChange={(e) => setComposerText(e.target.value)}
-          onKeyDown={(e) => { if (e.key === "Enter") sendTyped(); }} />
-        {session.phase === "listening" && !session.textOnly && !voiceOff && <span className="obw-voicepill"><span className="ld" />Listening</span>}
-        <button type="button" className="obw-btn obw-btn-pri sm" onClick={sendTyped}>Send</button>
+          onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); sendTyped(); } }} />
+        <button type="button" className="obw-btn obw-btn-pri sm" disabled={!canSend || !composerText.trim()} onClick={sendTyped}>Send</button>
       </div>
     </div>
   );
