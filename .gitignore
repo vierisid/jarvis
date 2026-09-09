@@ -15,6 +15,9 @@ coverage
 
 # logs
 /logs
+# Piece extraction runs the real pieces, and some write log files next to the
+# vendored tree (scrapeless does). Build residue, never ours to commit.
+src/workflows/activepieces/logs/
 _.log
 report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 
