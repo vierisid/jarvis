@@ -18,14 +18,23 @@ describe("the delegate tool's tier guidance", () => {
 
   test("still offers all three task tiers", () => {
     // The hint must not narrow the choice: plenty of delegated work is
-    // genuinely low or medium.
+    // genuinely low or medium. Asserted on the enum, not on the prose --
+    // wording locks would only break the next person who rewords the prompt.
     expect(tierParam.enum).toEqual(["low", "medium", "high"]);
-    expect(delegate.description).toContain("low for trivial");
-    expect(delegate.description).toContain("medium for general tool work");
   });
 
-  test("keeps medium as the stated default", () => {
-    expect(tierParam.description).toContain('Default to "medium"');
+  test("keeps running an existing workflow on the cheaper tier", () => {
+    // "building or changing a workflow" would otherwise swallow "run the
+    // daily brief" and "disable my morning flow", which are one-call tool
+    // work.
+    const guidance = (tierParam.description ?? "").toLowerCase();
+    expect(guidance).toContain("running, listing, enabling or disabling");
+  });
+
+  test("steers workflow tasks away from the plan template", () => {
+    // template=plan makes the task agent write a prose plan instead of
+    // calling manage_workflow at all.
+    expect(tierParam.description).toContain('never "plan"');
   });
 });
 

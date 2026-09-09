@@ -447,7 +447,13 @@ export class ConvOrchestrator {
     parts.push('# Delegation Catalog');
     parts.push('Use the `delegate` tool when:');
     parts.push('- The user asks you to FIND or LOOK UP something - tier=medium, template=research');
-    parts.push('- The user asks about real Jarvis state (workflows, files, vault, calendar) - tier=medium, template=general');
+    parts.push('- The user asks about real Jarvis state (existing workflows, files, vault, calendar) - tier=medium, template=general');
+    // Authoring a workflow is not the same errand as reading one. Without its
+    // own row, "automate my mornings" matches the state row and the
+    // tool-execution catch-all below (both medium), or the PLAN row -- whose
+    // template makes the task agent write a prose plan instead of calling
+    // manage_workflow at all. This row is the one the model reads first.
+    parts.push('- The user asks to BUILD or CHANGE a workflow ("automate X", "make a workflow that ...") - tier=high, template=general');
     parts.push('- The user asks you to WRITE or REFACTOR code - tier=medium, template=code');
     parts.push('- The user asks for a PLAN, schedule, or decomposition - tier=high, template=plan');
     parts.push('- The user asks to DRAFT prose (email, doc, summary) - tier=medium, template=write');
