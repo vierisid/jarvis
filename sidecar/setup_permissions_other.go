@@ -25,9 +25,26 @@ func setupRequestPermission(string) {}
 // pane to open elsewhere.
 func setupOpenPane(name string) error {
 	if runtime.GOOS == "windows" && name == "microphone" {
-		return exec.Command("rundll32", "url.dll,FileProtocolHandler", "ms-settings:privacy-microphone").Start()
+		return startPaneLauncher(exec.Command("rundll32", "url.dll,FileProtocolHandler", "ms-settings:privacy-microphone"))
 	}
 	return fmt.Errorf("no settings pane for %q on this platform", name)
 }
+
+// setupPermissionGrant: the Windows microphone page is the ONE thing there is
+// to open here, and it is worth opening precisely because its status is
+// unreadable. Windows governs desktop-app mic access with a single global
+// switch, and with it off the capture just fails - no in-the-moment prompt
+// arrives to rescue the user, which is why a link they can visit beforehand
+// earns its place even though no row can ever go green.
+func setupPermissionGrant(name string) string {
+	if runtime.GOOS == "windows" && name == "microphone" {
+		return grantPane
+	}
+	return grantNone
+}
+
+// setupProcessBundled: no bundle identity anywhere but macOS, so there is
+// nothing here that could be missing. Always true.
+func setupProcessBundled() bool { return true }
 
 const setupPlatform = runtime.GOOS

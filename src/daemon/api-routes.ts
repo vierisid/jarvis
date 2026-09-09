@@ -8,6 +8,9 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type { HealthMonitor } from './health.ts';
 import { applyApprovalDecision } from './approval-decision.ts';
+import { isPermissionName, readSystemPermissions, requestSystemPermission } from './system-permissions.ts';
+import { PANEL_SESSION_COOKIE } from '../sidecar/panel-sessions.ts';
+import { getCookie } from '../util/cookie.ts';
 import { SecretStorageError } from './section-secrets.ts';
 import type { AgentService } from './agent-service.ts';
 import type { JarvisConfig } from '../config/types.ts';
@@ -1533,6 +1536,68 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const msg = err instanceof Error ? err.message : String(err);
           return error(`Settings reload failed: ${msg}`, 500);
         }
+      },
+    },
+
+    /**
+     * What the desktop app on this machine has been granted, and how to ask
+     * for what it has not. Feeds the onboarding wizard's Permissions screen,
+     * which before this could neither read a status nor open a settings pane
+     * (see system-permissions.ts for why both halves were broken).
+     *
+     * Answers about ONE machine, resolved from the panel session this request
+     * carries. `available: false` with a reason is a normal answer, not an
+     * error: a brain with no desktop app connected, or one that cannot tell
+     * which of several is being looked at, genuinely has nothing to say, and
+     * the screen renders that case rather than dead buttons.
+     */
+    '/api/system/permissions': {
+      GET: async (req: Request) => {
+        if (!ctx.sidecarManager) return error('Sidecar manager not available', 503);
+        const result = await readSystemPermissions(
+          ctx.sidecarManager,
+          getCookie(req, PANEL_SESSION_COOKIE),
+        );
+        return json(result);
+      },
+    },
+
+    '/api/system/permissions/request': {
+      POST: async (req: Request) => {
+        if (!ctx.sidecarManager) return error('Sidecar manager not available', 503);
+        // This route's visible effect is a dialog and a System Settings window
+        // on the user's desktop, which makes it the one worth hardening against
+        // a drive-by POST. Under auth.insecure_open_access -- the setup-time
+        // configuration, i.e. exactly when this screen is on -- there is no
+        // cookie to withhold, and a body posted as text/plain is a CORS
+        // "simple request" that needs no preflight, so any page the user is
+        // browsing could pop TCC prompts. Demanding a JSON content type forces
+        // a preflight, which the configured allow-origin then bounds; the
+        // Sec-Fetch-Site check catches a browser that sends it.
+        if (!(req.headers.get('content-type') ?? '').toLowerCase().includes('application/json')) {
+          return error('Content-Type: application/json required', 415);
+        }
+        if (req.headers.get('sec-fetch-site') === 'cross-site') {
+          return error('Cross-site requests are not accepted here', 403);
+        }
+        let body: unknown;
+        try {
+          body = await req.json();
+        } catch {
+          return error('Invalid JSON body');
+        }
+        const name = (body as { name?: unknown } | null)?.name;
+        // The name reaches an `open` in the sidecar. It is checked there too;
+        // this is the edge of the system and the cheaper place to refuse.
+        if (!isPermissionName(name)) {
+          return error(`Unknown permission: ${String(name)}`);
+        }
+        const result = await requestSystemPermission(
+          ctx.sidecarManager,
+          getCookie(req, PANEL_SESSION_COOKIE),
+          name,
+        );
+        return json(result);
       },
     },
 

@@ -12,6 +12,10 @@ package main
 // Status legend used across the C bridges:
 //   0 = undetermined (never asked)   1 = granted
 //   2 = denied/restricted            3 = not applicable (e.g. not bundled)
+//
+// COMPILE-UNVERIFIED: CGO/ObjC, built only on macOS - it cannot be compiled or
+// run on a Linux dev box and must be checked on a Mac, the same caveat as
+// tray_darwin.go and panels_extnav_darwin.go carry.
 
 /*
 #cgo CFLAGS: -x objective-c
@@ -23,12 +27,19 @@ package main
 #import <ApplicationServices/ApplicationServices.h>
 #import <UserNotifications/UserNotifications.h>
 
+// Does this process have a bundle identity for TCC to hang grants on?
+// A bare binary has none: the grants attach to whatever launched it (the
+// terminal), so every row would describe a different app's permissions.
+static int setup_bundled(void) {
+    return [NSBundle mainBundle].bundleIdentifier ? 1 : 0;
+}
+
 // Notifications. UNUserNotificationCenter throws when the process has no
 // bundle identifier (bare binary), so guard like notify_darwin.m's bundled().
 // The settings read is async; wait briefly so the wizard's poll gets a real
 // answer (completion normally lands in well under a second).
 static int setup_notif_status(void) {
-    if (![NSBundle mainBundle].bundleIdentifier) return 3;
+    if (!setup_bundled()) return 3;
     __block int result = 0;
     dispatch_semaphore_t sem = dispatch_semaphore_create(0);
     [[UNUserNotificationCenter currentNotificationCenter]
@@ -51,7 +62,7 @@ static int setup_notif_status(void) {
 }
 
 static void setup_notif_request(void) {
-    if (![NSBundle mainBundle].bundleIdentifier) return;
+    if (!setup_bundled()) return;
     [[UNUserNotificationCenter currentNotificationCenter]
         requestAuthorizationWithOptions:(UNAuthorizationOptionAlert | UNAuthorizationOptionSound | UNAuthorizationOptionBadge)
                       completionHandler:^(BOOL granted, NSError *error) { (void)granted; (void)error; }];
@@ -152,12 +163,37 @@ var setupPaneURLs = map[string]string{
 }
 
 // setupOpenPane deep-links the System Settings pane for a permission row.
+// Through startPaneLauncher so a launcher that fails after fork is reported
+// rather than counted as a window, and so the child is reaped: the RPC path
+// runs this in a process that lives for weeks, not one about to re-exec.
 func setupOpenPane(name string) error {
 	url, ok := setupPaneURLs[name]
 	if !ok {
 		return fmt.Errorf("unknown permission %q", name)
 	}
-	return exec.Command("open", url).Start()
+	return startPaneLauncher(exec.Command("open", url))
 }
+
+// setupPermissionGrant says HOW each row is obtained on macOS.
+//
+// The split is the OS's, not ours: notifications and the microphone have a
+// real dialog, so requesting them can finish inside the app. Screen Recording
+// and Accessibility have none - the request only registers Jarvis in the
+// pane's list, and the user has to flip the toggle themselves. A wizard that
+// treats the two the same either waits forever for a dialog that never comes
+// or sends someone to a pane they didn't need.
+func setupPermissionGrant(name string) string {
+	switch name {
+	case "notifications", "microphone":
+		return grantPrompt
+	case "screen", "accessibility":
+		return grantPane
+	}
+	return grantNone
+}
+
+// setupProcessBundled reports whether TCC has an app identity to attach grants
+// to. False when the sidecar runs as a bare binary instead of Jarvis.app.
+func setupProcessBundled() bool { return C.setup_bundled() == 1 }
 
 const setupPlatform = "darwin"

@@ -4,7 +4,11 @@ import { useInterviewSession } from "./useInterviewSession";
 import type { OnboardingStatus } from "./useOnboardingStatus";
 import "./OnboardingWizard.css";
 import { modelForOnboardingTest, onboardingDefaultModelRef } from "./llm-setup";
-import { DESKTOP, modKey } from "../ui/platform";
+import { modKey } from "../ui/platform";
+import { useSystemPermissions } from "./useSystemPermissions";
+import {
+  allSettled, displayRows, needsRestartNote, outstandingRequired, unavailableCopy,
+} from "./permission-rows";
 
 /* ═══════════════════ Onboarding · the nine-screen first-run flow ═══════════
    Faithful to the design (usejarvis-onboarding.html): Welcome · Permissions
@@ -73,6 +77,7 @@ const SVG: Record<string, string> = {
   voloff: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M4 8h3l4-3v10l-4-3H4z"/><path d="M13.5 8l4 4M17.5 8l-4 4"/></svg>',
   calendar: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5"><rect x="3" y="4.5" width="14" height="12.5" rx="2"/><path d="M3 8.5h14M7 3v3M13 3v3"/></svg>',
   send: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"><path d="M17 3L8.5 11.5M17 3l-5.5 14-3-6-6-3z"/></svg>',
+  bell: '<svg width="18" height="18" viewBox="0 0 20 20" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M5.5 8a4.5 4.5 0 0 1 9 0c0 3 1 4.5 1.5 5.2H4c.5-.7 1.5-2.2 1.5-5.2z"/><path d="M8.2 16a2 2 0 0 0 3.6 0"/></svg>',
   check: '<svg viewBox="0 0 16 16" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M13 4.5 6.5 11.5 3 8"/></svg>',
 };
 const Glyph = ({ k }: { k: string }) => <span dangerouslySetInnerHTML={{ __html: SVG[k] ?? "" }} />;
@@ -121,18 +126,14 @@ const ELEVEN_PREMADE = [
 
 
 /**
- * macOS panes only. The Windows column that used to live here pointed at
- * `ms-settings:` pages that cannot grant any of this — `easeofaccess` is the
- * accessibility *features* page, and `privacy-general` has no toggle for
- * screen capture or automation — so it sent people somewhere that could not
- * help them. Windows shows a different screen entirely now.
+ * The System Settings deep links used to live here, and the rows opened them
+ * with window.open. That could never work: a panel routes window.open to the
+ * sidecar host, which allowlists http(s) (isExternallyOpenable in
+ * sidecar/panels_extnav.go), so the custom scheme was dropped with a log line
+ * and no window appeared; an ordinary browser blocks the scheme too. The pane
+ * is opened by the sidecar process now, over POST /api/system/permissions/
+ * request, which is the only place an `open` can actually run.
  */
-const PERM_PANE: Record<string, string> = {
-  access: "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-  screen: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture",
-  auto: "x-apple.systempreferences:com.apple.preference.security?Privacy_Automation",
-  files: "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles",
-};
 
 // Play MP3 bytes returned by /api/tts/preview in the dashboard itself.
 async function playPreviewAudio(res: Response): Promise<void> {
@@ -189,7 +190,6 @@ export function OnboardingWizard({
     try { localStorage.setItem("jarvis-theme", t); } catch { /* ignore */ }
   };
 
-  // permissions
   // brain
   // Hosted install? GET /api/config/llm reports hosted_llm when the
   // system-owned usejarvis_ai block is live. TRI-state on purpose: a slow or
@@ -243,6 +243,17 @@ export function OnboardingWizard({
   // better, flashing Welcome's "I'll do this later".
   const key = resolveStepKey(steps, stepKey);
   const step = steps.findIndex(([k]) => k === key);
+
+  // Live permission state for the Permissions screen. Polled ONLY while that
+  // screen is the one on show: the two macOS rows with no dialog are granted
+  // by the user leaving for System Settings and coming back, and a row turning
+  // green while they watch is the only feedback the OS makes possible. A user
+  // parked on a later step for ten minutes should not be paying for that.
+  const perms = useSystemPermissions(key === "perms");
+  // Whether the user has been sent to the Screen Recording pane in this
+  // session, which is the only moment the "macOS keeps handing a running app
+  // its old answer" note is useful rather than noise.
+  const [screenPaneVisited, setScreenPaneVisited] = useState(false);
 
   // If the probe resolves while the user is standing on a now-hidden screen,
   // send them BACK to Permissions, not forward. Permissions is where the
@@ -837,80 +848,147 @@ export function OnboardingWizard({
       );
 
       case "perms": {
-        // macOS only — four strings that no other platform renders.
-        const macRows: Array<[string, string, string, boolean]> = [
-          ["access", "Accessibility", "Click, type, and read on-screen controls so Jarvis can operate your apps.", true],
-          ["screen", "Screen Recording", "See your screen for Awareness: OCR, and noticing when you’re stuck.", false],
-          ["auto", "Automation", "Drive other apps directly: your calendar, browser, and mail.", false],
-          ["files", "Files & Folders", "Read and write the files and folders you point it at.", false],
-        ];
+        // Everything on this screen comes from the machine itself now (see
+        // permission-rows.ts for what the old static version could not do).
+        // The platform comes from the sidecar's runtime.GOOS rather than the
+        // user agent, which is what platform.ts's own comment asks for: a
+        // WebKit build on Linux can carry a mac-shaped agent string, and this
+        // screen is the one place that would have handed such a user a button
+        // opening an Apple settings pane.
+        const rows = displayRows(perms.report ?? { available: false, reason: "no_sidecar" });
+        const outstanding = outstandingRequired(rows);
+        const unavailable = perms.report && !perms.report.available ? perms.report : null;
+        const mac = perms.report?.available && perms.report.platform === "darwin";
+        const unbundled = perms.report?.available === true && perms.report.bundled === false;
+
         return (
           <div className="obw-body"><div className="obw-wrap wide">
-            {/* macOS gates each of these behind a pane the user must visit, and
-                Jarvis cannot grant them itself. Windows does not work that way:
-                the app already has what it needs, and the one thing it might
-                ask for later — the microphone, for the embedded browser window
-                — has no Settings toggle to pre-grant, so sending someone to
-                ms-settings: would be sending them somewhere that cannot help.
-                Same step either way, so the flow and the hosted setup POST
-                below are untouched; only what the screen says changes. */}
-            {DESKTOP === "mac" ? (
+            {perms.phase === "loading" ? (
               <>
-                <h2>Let Jarvis reach your machine.</h2>
-                <div className="obw-sub">It acts on your computer through these. Jarvis can’t grant them itself (the OS won’t let it), so each one opens the exact settings pane. Grant what you’re comfortable with, or approve later when your Mac asks.</div>
-                <div className="obw-rows" style={{ marginTop: 16 }}>
-                  {macRows.map(([id, name, body, req]) => (
-                    <button key={id} type="button" className="obw-prow" style={{ cursor: "pointer", textAlign: "left", width: "100%", background: "var(--raise)" }}
-                      onClick={() => { try { window.open(PERM_PANE[id] || "", "_blank"); } catch { /* webview may block the scheme */ } }}>
-                      <span className="pg"><Glyph k={id} /></span>
-                      <div className="pt"><div className="pn">{name}{req && <span className="req">required</span>}</div><div className="pb">{body}</div></div>
-                      <span className="obw-grant" style={{ pointerEvents: "none" }}>Open settings ↗</span>
-                    </button>
-                  ))}
+                <h2>Checking this machine…</h2>
+                <div className="obw-sub">Asking the Jarvis desktop app what it already has.</div>
+              </>
+            ) : perms.phase === "error" ? (
+              // The BRAIN could not be reached, which is a different thing
+              // from a report saying there is no machine to ask. Without this
+              // branch a failed first fetch leaves report null, rows empty,
+              // and the screen cheerfully announcing "nothing to set up" --
+              // the confident wrong answer this whole change exists to delete.
+              <>
+                <h2>Couldn't check this machine.</h2>
+                <div className="obw-sub">
+                  Jarvis couldn't be asked what it already has. You can carry on and grant
+                  things later, or try again.
                 </div>
-                <div className="obw-hint" style={{ marginTop: 12 }}>Review or revoke any of these anytime in System Settings → Privacy &amp; Security.</div>
+                {perms.error && <div className="obw-hint" style={{ marginTop: 10 }}>{perms.error}</div>}
+                <div style={{ marginTop: 14 }}>
+                  <button className="obw-btn" onClick={perms.refresh}>Try again</button>
+                </div>
+              </>
+            ) : unavailable ? (
+              <>
+                <h2>{unavailableCopy(unavailable.reason).title}</h2>
+                <div className="obw-sub">{unavailableCopy(unavailable.reason).body}</div>
+                {unavailable.detail && (
+                  <div className="obw-hint" style={{ marginTop: 10 }}>{unavailable.detail}</div>
+                )}
+                <div style={{ marginTop: 14 }}>
+                  <button className="obw-btn" onClick={perms.refresh}>Check again</button>
+                </div>
+              </>
+            ) : rows.length === 0 ? (
+              <>
+                <h2>Nothing to set up here.</h2>
+                <div className="obw-sub">
+                  Jarvis already has the access it needs on this machine. Nothing is gated
+                  behind a permission you have to grant first.
+                </div>
               </>
             ) : (
               <>
-                <h2>Nothing to set up here.</h2>
-                <div className="obw-sub">Jarvis already has the access it needs{DESKTOP === "windows" ? " on Windows" : ""} — none of it is gated behind a permission you have to grant first.</div>
-                <div className="obw-rows" style={{ marginTop: 16 }}>
-                  <div className="obw-prow">
-                    <span className="pg"><Glyph k="check" /></span>
-                    <div className="pt">
-                      <div className="pn">All set</div>
-                      <div className="pb">Nothing to switch on for Jarvis to act on your machine.</div>
-                    </div>
-                  </div>
-                  {DESKTOP === "windows" && (
-                    // The ONE pane that is real here. Windows has no per-app
-                    // permission model for a desktop app, so the microphone is
-                    // governed by a single global toggle — and with it off there
-                    // is no in-the-moment prompt to rescue you, the capture just
-                    // fails. The sidecar's own native wizard deep-links exactly
-                    // this page for exactly this reason.
-                    <button
-                      type="button"
-                      className="obw-prow"
-                      style={{ cursor: "pointer", textAlign: "left", width: "100%", background: "var(--raise)" }}
-                      onClick={() => { try { window.open("ms-settings:privacy-microphone", "_blank"); } catch { /* webview may block the scheme */ } }}
-                    >
-                      <span className="pg"><Glyph k="mic" /></span>
-                      <div className="pt">
-                        <div className="pn">Microphone</div>
-                        <div className="pb">Only needed if you want to talk to Jarvis. Windows keeps one switch for all desktop apps — check it is on if the mic stays silent.</div>
-                      </div>
-                      <span className="obw-grant" style={{ pointerEvents: "none" }}>Open settings ↗</span>
-                    </button>
-                  )}
+                <h2>Let Jarvis reach your machine.</h2>
+                <div className="obw-sub">
+                  {mac
+                    ? "It acts on your computer through these. Jarvis can't switch them on itself, so each button asks the OS or opens the exact settings pane. Rows turn green as you go."
+                    : "One switch to check before Jarvis can hear you."}
                 </div>
+                {unbundled && (
+                  // A bare binary has no bundle identity, so macOS attaches
+                  // grants to whatever launched it. Granting from here would
+                  // permission the user's terminal and tell them Jarvis had
+                  // it. The rows stay visible as information; the buttons are
+                  // gone, and the server refuses the request too.
+                  <div className="obw-hint" style={{ marginTop: 12, color: "var(--listen)" }}>
+                    Jarvis is running as a bare binary rather than an installed app, so macOS
+                    would attach these grants to whatever launched it. Install Jarvis.app and
+                    run setup again to grant them properly.
+                  </div>
+                )}
+                <div className="obw-rows" style={{ marginTop: 16 }}>
+                  {rows.map((row) => {
+                    const granted = row.status === "granted";
+                    const busyRow = perms.pending === row.name;
+                    return (
+                      <div key={row.name} className="obw-prow">
+                        <span className="pg"><Glyph k={row.glyph} /></span>
+                        <div className="pt">
+                          <div className="pn">
+                            {row.label}
+                            {row.required && !granted && <span className="req">required</span>}
+                          </div>
+                          <div className="pb">{row.body}</div>
+                        </div>
+                        {granted ? (
+                          <span className="obw-granted"><Glyph k="check" />Granted</span>
+                        ) : (
+                          <button
+                            type="button"
+                            className="obw-grant"
+                            disabled={!row.actionable || busyRow || unbundled}
+                            onClick={() => {
+                              if (row.name === "screen") setScreenPaneVisited(true);
+                              void perms.request(row.name);
+                            }}
+                          >
+                            {busyRow
+                              ? (row.grant === "pane" ? "Opening…" : "Asking…")
+                              : row.grant === "pane" ? "Open settings ↗" : "Allow"}
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+                {perms.requestError && (
+                  <div className="obw-hint" style={{ marginTop: 10, color: "var(--listen)" }}>
+                    {perms.requestError}
+                  </div>
+                )}
+                {needsRestartNote(rows, screenPaneVisited) && (
+                  <div className="obw-hint" style={{ marginTop: 10 }}>
+                    Switched Screen Recording on and this row is still amber? macOS keeps
+                    handing a running app its old answer -- quit Jarvis and open it again.
+                  </div>
+                )}
+                {allSettled(rows) && (
+                  <div className="obw-hint" style={{ marginTop: 10, color: "var(--ok)" }}>
+                    That's everything this machine can be asked for.
+                  </div>
+                )}
+                {mac && (
+                  <div className="obw-hint" style={{ marginTop: 10 }}>
+                    macOS asks about your files and about controlling other apps in the
+                    moment, the first time Jarvis needs them. Review or revoke any of this
+                    later in System Settings, Privacy &amp; Security.
+                  </div>
+                )}
               </>
             )}
             <div className="obw-btnrow">
               <button className="obw-btn obw-btn-ghost" onClick={back}>Back</button>
               <span className="grow" />
               {/* Hosted skips brain/hearing/speaking, so this is the last
-                  setup screen — the setup POST (which normally fires when
+                  setup screen - the setup POST (which normally fires when
                   leaving Speaking) has to run here instead, or onboarding is
                   never marked complete and the wizard replays next launch. */}
               <button
@@ -921,8 +999,21 @@ export function OnboardingWizard({
                 {busy ? "Setting up…" : "Continue"}
               </button>
             </div>
+            {/* Continue is never blocked on a grant. A managed Mac may refuse
+                these outright, and onboarding you cannot finish is worse than
+                a feature that is off - so say what will not work and let the
+                user decide. */}
+            {outstanding.length > 0 && (
+              <div className="obw-hint" style={{ marginTop: 8 }}>
+                You can continue without {outstanding.map((r) => r.label).join(" and ")}. Until
+                {outstanding.length > 1 ? " they are" : " it is"} granted, the features above stay
+                off and nothing will ask you again -- switch
+                {outstanding.length > 1 ? " them" : " it"} on any time in System Settings,
+                Privacy &amp; Security.
+              </div>
+            )}
             {/* The hosted setup POST fires from THIS screen, so its failure
-                has to surface here — otherwise the button just settles back
+                has to surface here - otherwise the button just settles back
                 to "Continue" with no explanation and onboarding replays. */}
             {error && (
               <div className="obw-hint" style={{ color: "var(--listen)", marginTop: 8 }}>{error}</div>

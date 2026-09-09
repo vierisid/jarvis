@@ -114,6 +114,23 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 	registry["get_config"] = makeGetConfigHandler(cfg)
 	registry["update_config"] = makeUpdateConfigHandler(cfg, cfgMu, onReloaded)
 
+	// OS permissions (permissions_rpc.go). Dotted like the other daemon-driven
+	// UI services (panel.*, pebble.*) rather than bare like the brain's tool
+	// handlers, because that is what these are: the onboarding wizard asking
+	// about the machine it is being looked at on.
+	//
+	// Ungated on purpose. The report is about the MACHINE, not a capability,
+	// and it matters most exactly when a capability is missing - a denied
+	// Screen Recording grant is WHY awareness isn't working, and a wizard that
+	// couldn't ask because the capability was off would be silent about the
+	// reason. The request half was weighed separately, since it can pop an OS
+	// dialog with no local gesture and a declined notification prompt is
+	// one-shot on macOS: left ungated because the brain can already do
+	// strictly more through update_config, and because the daemon only
+	// forwards it in response to a click on that screen.
+	registry["system.permissions"] = handleSystemPermissions
+	registry["system.request_permission"] = handleSystemRequestPermission
+
 	return registry
 }
 

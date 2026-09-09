@@ -4,6 +4,7 @@ import path from 'node:path';
 import { isWithin } from '../util/path.ts';
 import type { SidecarManager } from '../sidecar/manager.ts';
 import { PANEL_SESSION_COOKIE } from '../sidecar/panel-sessions.ts';
+import { getCookie } from '../util/cookie.ts';
 
 /** Constant-time string comparison to prevent timing attacks */
 export type WSMessage = {
@@ -89,21 +90,6 @@ const AUTH_ERROR_HTML = await Bun.file(path.join(import.meta.dir, 'auth-error.ht
 /** Inline script injected into authed HTML pages — strips ?token= from the hash. */
 const TOKEN_STRIP_SCRIPT = `<script>(function(){var h=location.hash,i=h.indexOf('?');if(i===-1)return;var p=new URLSearchParams(h.slice(i));if(!p.has('token'))return;p.delete('token');var c=h.slice(0,i),r=p.toString();if(r)c+='?'+r;location.replace(location.pathname+location.search+c)})()</script>`;
 
-function getCookie(req: Request, name: string): string | null {
-  const cookies = req.headers.get('Cookie');
-  if (!cookies) return null;
-  const match = cookies.match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`));
-  if (!match) return null;
-  try {
-    return decodeURIComponent(match[1]!);
-  } catch {
-    // A malformed escape (`%E0%A4%A`) makes decodeURIComponent throw, which
-    // would unwind out of fetch() as a 500. This value is attacker-controlled
-    // and read on the authentication path, so an unusable cookie has to read
-    // as "no cookie" (401) rather than as a server fault.
-    return null;
-  }
-}
 
 function isPublicRoute(pathname: string, method: string): boolean {
   return (
