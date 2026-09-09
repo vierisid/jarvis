@@ -8,13 +8,76 @@
  */
 
 import { test, expect, describe, afterEach } from "bun:test";
-import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import { spawn } from "node:child_process";
-import { buildEngineBundle, bundleHash, findCachedBundle, ENGINE_BUILD_PATHS } from "./build";
+import {
+  buildEngineBundle,
+  bundleHash,
+  findCachedBundle,
+  ENGINE_BUILD_PATHS,
+  ENGINE_REQUEST_BASE_SHIM,
+} from "./build";
 
 describe("engine bundle build", () => {
+  describe("Request base-URL shim (banner)", () => {
+    /**
+     * Runs the shim in a child bun process, because it replaces a global and
+     * the test runner has to keep its own.
+     */
+    const inChild = async (body: string): Promise<string> => {
+      const proc = Bun.spawn(["bun", "-e", `${ENGINE_REQUEST_BASE_SHIM}\n${body}`], {
+        stdout: "pipe",
+        stderr: "pipe",
+      });
+      const [out, err] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      await proc.exited;
+      return (out + err).trim();
+    };
+
+    test("an empty URL resolves instead of throwing, which is what a browser does", async () => {
+      // The exact probe abortcontroller-polyfill runs at module load, reached
+      // through the airtable SDK. Unpatched, Bun answers
+      // `Failed to construct 'Request': url is required` and the piece import
+      // dies before any of our code runs.
+      expect(await inChild(`console.log("signal" in new Request(""))`)).toBe("true");
+    });
+
+    test("a URL that already works is passed through untouched", async () => {
+      // The shim must be strictly additive: only inputs that would have THROWN
+      // are resolved, so nothing that builds a Request today changes.
+      expect(await inChild(`console.log(new Request("https://example.test/x?a=1").url)`)).toBe(
+        "https://example.test/x?a=1",
+      );
+    });
+
+    test("instanceof still recognises Requests built by fetch internals", async () => {
+      // Subclassing would otherwise make `nativeRequest instanceof Request`
+      // false, which is a subtle way to break piece code that type-checks.
+      expect(
+        await inChild(`
+          const native = Reflect.construct(Object.getPrototypeOf(Request), ["https://example.test/"]);
+          console.log(native instanceof Request);
+        `),
+      ).toBe("true");
+    });
+
+    test("the shim is part of the bundle cache key", () => {
+      // A banner that does not invalidate the hash is served stale from every
+      // host that already has a bundle -- the same trap PATCHED_VENDOR_SOURCES
+      // exists to close, and the reason that list carries so many comments.
+      const src = readFileSync(resolve(import.meta.dir, "build.ts"), "utf8");
+      const hashBody = src.slice(src.indexOf("export function bundleHash"));
+      expect(hashBody.slice(0, hashBody.indexOf("\n}")).includes("ENGINE_REQUEST_BASE_SHIM")).toBe(
+        true,
+      );
+    });
+  });
+
   test("staging dir lives outside the repo", () => {
     expect(ENGINE_BUILD_PATHS.STAGING_DIR.startsWith(ENGINE_BUILD_PATHS.REPO_ROOT)).toBe(false);
     expect(ENGINE_BUILD_PATHS.BUNDLE_ROOT.startsWith(ENGINE_BUILD_PATHS.REPO_ROOT)).toBe(false);
