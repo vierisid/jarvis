@@ -209,6 +209,44 @@ export class EngineHandle {
   }
 
   /**
+   * The RPC client for THIS sandbox as of right now, rather than the one
+   * captured when the handle was built.
+   *
+   * `engineClient` is bound to a single socket.io connection. If that
+   * connection drops, worker-rpc deletes it and a reconnecting engine gets a
+   * NEW client stored under the same sandbox id -- which a handle holding the
+   * old one never sees. It would then emit into a dead socket and wait out the
+   * full ack deadline on every subsequent operation, while the engine sat
+   * there healthy and idle. Measured before this existed: after a forced
+   * disconnect the handle simply never got another reply.
+   *
+   * Re-resolving per send makes a reconnect self-healing, and makes a genuinely
+   * absent connection fail in milliseconds instead of ninety seconds. The
+   * captured `engineClient` field stays for the warm pool and tests; nothing
+   * on the operation path reads it any more.
+   */
+  private liveEngineClient(): EngineContract {
+    // No rpc server to ask means this handle was not built from an rpc
+    // connection at all -- it was handed a client directly, which is how the
+    // fake-EngineContract lifecycle tests drive it. There is nothing to
+    // re-resolve against, so honour what the caller gave us. A real SandboxApi
+    // always has one, so production never takes this branch.
+    const rpc = this.api?.workerRpc;
+    if (!rpc) return this.engineClient;
+    try {
+      return rpc.engineClient(this.sandboxId);
+    } catch {
+      // No live connection. The engine's state is unknown for exactly the same
+      // reason a transport failure makes it unknown, so mark it abandoned and
+      // let `release()` destroy it rather than parking it for the next caller.
+      this.abandoned = true;
+      throw new Error(
+        `engine for sandbox ${this.sandboxId} is not connected (it disconnected mid-run)`,
+      );
+    }
+  }
+
+  /**
    * Send one operation to the engine, bounding the wait by the budget we
    * told the engine to honour rather than by the RPC client's default.
    *
@@ -220,7 +258,7 @@ export class EngineHandle {
   private async send(operation: EngineOperationEnvelope): Promise<EngineResponse<unknown>> {
     this.inFlight++;
     try {
-      return await this.engineClient.executeOperation(operation, {
+      return await this.liveEngineClient().executeOperation(operation, {
         timeoutMs: ackTimeoutMsForOperation(operation),
       });
     } catch (e) {
