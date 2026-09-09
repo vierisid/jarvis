@@ -37,6 +37,7 @@ import { classifyGoogle, googleIdentity, makeGoogleAuth } from "../integrations/
 import { ResearchQueue } from "./research-queue.ts";
 import { researchQueueTool, setResearchQueueRef } from "../actions/tools/research.ts";
 import { spawnPersistentAgent, assignPersistentAgentTask } from "../actions/tools/agents.ts";
+import { collectExecutionTargets } from "../actions/tools/sidecar-route.ts";
 import { ChannelService } from "./channel-service.ts";
 import { BackgroundAgentService } from "./background-agent-service.ts";
 import { AuthorityEngine } from "../authority/engine.ts";
@@ -4546,6 +4547,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         sharedPiecesDir: sharedRuntime.piecesDir,
         ...(onPieceLibraryChanged ? { onPieceLibraryChanged } : {}),
         getEventBufferDropped: () => workflowEventBuffer.dropped(),
+        // Lets the editor's publish (version lock) report a step whose
+        // command can't run on any machine it could land on -- the one OS
+        // check a hand-drawn flow gets, since it never meets the composer.
+        // A thunk: sidecars enroll and report their OS long after boot.
+        executionTargets: () => collectExecutionTargets(),
       }),
     };
     wsService.setApiRoutes(apiRoutes);
@@ -4742,6 +4748,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             description: r.description,
           })),
         library: composerLibrary,
+        // Give the composer the machine inventory (sidecars + this host, each
+        // with its OS and arch) so it writes commands for the machine the step
+        // actually lands on. Without it the model guesses -- "open notepad"
+        // composed as `notepad.exe` for a fleet whose only machine is a Mac,
+        // failing on the first run. A thunk: sidecars enroll and report their
+        // OS long after this tool is built.
+        executionTargets: () => collectExecutionTargets(),
       });
       if (!toolRegistry.has('manage_workflow')) {
         toolRegistry.register(manageWorkflowTool);

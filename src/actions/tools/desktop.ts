@@ -474,7 +474,7 @@ export const desktopPressKeysTool: ToolDefinition = {
 
 export const desktopLaunchAppTool: ToolDefinition = {
   name: 'desktop_launch_app',
-  description: 'Launch an application by executable path or name (e.g., "notepad.exe", "calc.exe"). Returns the PID of the launched process.',
+  description: 'Launch an application by name or executable path. Use the name as it exists on the TARGET machine\'s OS -- e.g. "notepad" on Windows, "TextEdit" on macOS, "gedit" on Linux. Call list_sidecars first if you are unsure which OS the target runs. Returns the PID of the launched process.',
   category: 'desktop',
   parameters: {
     target: {
@@ -484,7 +484,7 @@ export const desktopLaunchAppTool: ToolDefinition = {
     },
     executable: {
       type: 'string',
-      description: 'Application executable path or name',
+      description: "Application name or executable path, spelled for the target machine's OS",
       required: true,
     },
     args: {

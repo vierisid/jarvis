@@ -62,7 +62,7 @@ export function toolDefToLLMTool(tool: ToolDefinition): LLMTool {
 
 export const runCommandTool: ToolDefinition = {
   name: 'run_command',
-  description: 'Execute a shell command and return the output. Use this to run terminal commands, scripts, or system utilities. Optionally specify a "target" sidecar name/ID to run the command on a remote machine instead of locally.',
+  description: 'Execute a shell command and return the output. Use this to run terminal commands, scripts, or system utilities. Optionally specify a "target" sidecar name/ID to run the command on a remote machine instead of locally. The command must be valid for the OS of the machine it runs on -- the target machine is often not the same OS as the brain; check list_sidecars when unsure.',
   category: 'terminal',
   parameters: {
     command: {

@@ -305,6 +305,53 @@ describe("workflow API: versions", () => {
       ),
     );
     expect(body.state).toBe("LOCKED");
+    // No inventory injected -> no verdict to give.
+    expect(body.osWarnings).toBeUndefined();
+  });
+
+  test("POST .../lock reports a step that cannot run on any machine it could land on", async () => {
+    // The editor's only OS check: a hand-drawn flow never meets the composer,
+    // where the same rules run for a composed one.
+    const withTargets = createWorkflowRoutes({
+      executionTargets: () => [
+        { id: "sc-mac", name: "Lapo's MacBook", os: "darwin", arch: "arm64", connected: true },
+      ],
+    });
+    const post = withTargets["/api/workflows"]?.POST;
+    const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
+    const { id: flowId } = created.body.flow;
+    const versionId = created.body.version.id;
+
+    const patch = withTargets["/api/workflows/:id/versions/:versionId"]?.PATCH;
+    await callJson(
+      patch,
+      reqWithParams("PATCH", `http://x/api/workflows/${flowId}/versions/${versionId}`, { id: flowId, versionId }, {
+        trigger: {
+          name: "trigger",
+          type: "EMPTY",
+          nextAction: {
+            name: "step_1",
+            type: "PIECE",
+            settings: {
+              pieceName: "jarvis-tool",
+              actionName: "invoke",
+              input: { toolName: "run_command", params: { command: "notepad.exe" } },
+            },
+          },
+        },
+      }),
+    );
+
+    const lock = withTargets["/api/workflows/:id/versions/:versionId/lock"]?.POST;
+    const { status, body } = await callJson(
+      lock,
+      reqWithParams("POST", `http://x/api/workflows/${flowId}/versions/${versionId}/lock`, { id: flowId, versionId }),
+    );
+    // Advisory: the lock still succeeds. A draft may legitimately target a
+    // machine that is not enrolled yet.
+    expect(status).toBe(200);
+    expect(body.state).toBe("LOCKED");
+    expect(body.osWarnings[0]).toContain("notepad.exe");
   });
 
   test("POST .../publish locks the draft, ENABLES the flow, sets published_version_id", async () => {

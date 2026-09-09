@@ -8,6 +8,12 @@
  * list_sidecars, sidecar section) is omitted entirely so the AI
  * doesn't waste tokens thinking about remote execution.
  *
+ * `machines` lists the machines commands can land on and the OS each runs.
+ * It is process-stable on purpose (see ToolGuideOptions) so it can live in the
+ * cacheable prefix; the same inventory feeds the workflow composer's prompts
+ * via `collectExecutionTargets`, so chat and composed workflows agree on what
+ * OS they are writing commands for.
+ *
  * When `piecesManaged` is true, the workflow section drops the advice to have
  * the user install a piece: a host owns the catalog there, the Library page
  * has no install button, and the API answers 403. This is the THIRD place
@@ -20,9 +26,32 @@ export type ToolGuideOptions = {
   hasSidecars: boolean;
   /** A host owns the pieces catalog: nothing here is installable by the user. */
   piecesManaged: boolean;
+  /**
+   * The machines commands can land on (enrolled sidecars + this host), with
+   * the OS each one runs. Rendered as a fixed inventory so the AI writes
+   * `open -a TextEdit` for a Mac instead of `notepad.exe` -- the brain is
+   * routinely a Linux box while the user's actual machine is something else.
+   *
+   * Only process-stable fields are used (name / OS / arch, never live
+   * connection state): this block sits in the prompt-CACHED static section,
+   * and a value that moved between turns would break that cache every turn.
+   * Connection state is what `list_sidecars` is for.
+   */
+  machines?: ToolGuideMachine[];
 };
 
-export function buildToolGuide({ hasSidecars, piecesManaged }: ToolGuideOptions): string {
+/** One machine in the tool guide's inventory. */
+export type ToolGuideMachine = {
+  name: string;
+  /** Human OS label ("macOS", "Windows", "Linux"), or null when never connected. */
+  os: string | null;
+  /** CPU architecture as reported (arm64, x64, ...). */
+  arch?: string | null;
+  /** True for the brain's own host. */
+  isHost?: boolean;
+};
+
+export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGuideOptions): string {
   const lines: string[] = [];
 
   lines.push('# Tool Guide');
@@ -34,6 +63,26 @@ export function buildToolGuide({ hasSidecars, piecesManaged }: ToolGuideOptions)
 
   if (hasSidecars) {
     lines.push('These tools work locally by default. To run on a remote machine, pass the `target` parameter with a sidecar name or ID.');
+    lines.push('');
+  }
+
+  if (machines?.length) {
+    lines.push('### Machines and their OS');
+    lines.push('');
+    for (const m of machines) {
+      const os = m.os ?? 'OS unknown (never connected)';
+      const arch = m.arch ? `, ${m.arch}` : '';
+      const role = m.isHost
+        ? 'this brain; used when no `target` is given and no sidecar can serve the call'
+        : 'sidecar; reach it with `target`';
+      lines.push(`- **${m.name}** — ${os}${arch} (${role})`);
+    }
+    lines.push('');
+    lines.push('Commands, executable names, and file paths MUST match the OS of the machine you send them to.');
+    lines.push('Do not send Windows syntax (`notepad.exe`, `powershell`, `C:\\Users\\...`) to a macOS or Linux machine, macOS syntax (`open -a`, `osascript`, `/Applications/...`) to Windows or Linux, or Linux syntax (`xdg-open`, `apt-get`, `systemctl`) to Windows or macOS.');
+    lines.push('App names differ per OS too: Notepad / TextEdit / gedit; calc / Calculator / gnome-calculator; File Explorer / Finder / Nautilus.');
+    lines.push('So do keyboard shortcuts: macOS uses Cmd where Windows and Linux use Ctrl — spell `desktop_press_keys` combos for the machine you are sending them to.');
+    lines.push('This list is the enrolled inventory, not live status — call `list_sidecars` for connection state.');
     lines.push('');
   }
 

@@ -75,6 +75,55 @@ describe("manage_workflow tool", () => {
     expect(published.publishedVersionId).not.toBeNull();
   });
 
+  test("publish warns about a hand-built step that cannot run where it lands", async () => {
+    // The editor path: a flow whose steps this composer never wrote. Publish is
+    // the only gate it passes through, and the warning must not block it.
+    const { getLatestDraft, updateDraftVersion } = await import("../../workflows/db/repos/flow-version.ts");
+    const created = (await call("create", { name: "handmade", empty: true })) as { id: string };
+    // Exactly what the editor does: PATCH the draft's trigger tree in place.
+    updateDraftVersion(getLatestDraft(created.id)!.id, {
+      trigger: {
+        name: "trigger",
+        type: "EMPTY",
+        nextAction: {
+          name: "step_1",
+          type: "PIECE",
+          settings: {
+            pieceName: "jarvis-tool",
+            actionName: "invoke",
+            input: { toolName: "desktop_launch_app", params: { executable: "notepad.exe" } },
+          },
+        },
+      },
+    });
+    const withTargets = createManageWorkflowTool({
+      executionTargets: () => [
+        { id: "sc-mac", name: "Lapo's MacBook", os: "darwin", arch: "arm64", connected: true },
+      ],
+    });
+    const published = JSON.parse(
+      (await withTargets.execute({ action: "publish", flow: "handmade" })) as string,
+    ) as { status: string; warnings?: string[] };
+
+    expect(published.status).toBe("ENABLED");
+    expect(published.warnings?.[0]).toContain("notepad.exe");
+    // Advisory only: the version still locked and the flow still published.
+    expect(getLatestDraft(created.id)).toBeNull();
+  });
+
+  test("publish stays silent when the flow fits the machines it will run on", async () => {
+    await call("create", { name: "fine", empty: true });
+    const withTargets = createManageWorkflowTool({
+      executionTargets: () => [
+        { id: "sc-mac", name: "Lapo's MacBook", os: "darwin", connected: true },
+      ],
+    });
+    const published = JSON.parse(
+      (await withTargets.execute({ action: "publish", flow: "fine" })) as string,
+    ) as { warnings?: string[] };
+    expect(published.warnings).toBeUndefined();
+  });
+
   test("delete removes the flow", async () => {
     const created = (await call("create", { name: "doomed", empty: true })) as { id: string };
     const out = (await call("delete", { flow: "doomed" })) as { id: string; deleted: boolean };

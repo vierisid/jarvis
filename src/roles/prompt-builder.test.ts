@@ -97,3 +97,46 @@ describe("tool guide: install advice follows who owns the pieces catalog", () =>
     }
   });
 });
+
+describe("tool guide: machines and their OS", () => {
+  const machines = [
+    { name: "Lapo's MacBook", os: "macOS", arch: "arm64" },
+    { name: "Jarvis host (this brain)", os: "Linux", arch: "x64", isHost: true },
+  ];
+
+  it("lists each machine with its OS so commands are written for the right one", () => {
+    // Without this the model writes for whichever OS its priors favour -- the
+    // reported bug was `notepad.exe` sent to a fleet of one MacBook.
+    const g = buildToolGuide({ hasSidecars: true, piecesManaged: false, machines });
+    expect(g).toContain("### Machines and their OS");
+    expect(g).toContain("**Lapo's MacBook** — macOS, arm64");
+    expect(g).toContain("**Jarvis host (this brain)** — Linux, x64");
+    expect(g).toContain("MUST match the OS of the machine");
+  });
+
+  it("points at list_sidecars for live status, since this block is cached", () => {
+    const g = buildToolGuide({ hasSidecars: true, piecesManaged: false, machines });
+    expect(g).toContain("not live status");
+  });
+
+  it("is byte-identical across builds with the same inventory (prompt cache)", () => {
+    const a = buildToolGuide({ hasSidecars: true, piecesManaged: false, machines });
+    const b = buildToolGuide({ hasSidecars: true, piecesManaged: false, machines: [...machines] });
+    expect(a).toBe(b);
+  });
+
+  it("says so when a machine never reported its OS", () => {
+    const g = buildToolGuide({
+      hasSidecars: true,
+      piecesManaged: false,
+      machines: [{ name: "New laptop", os: null }],
+    });
+    expect(g).toContain("OS unknown (never connected)");
+  });
+
+  it("omits the section entirely without an inventory", () => {
+    expect(buildToolGuide({ hasSidecars: true, piecesManaged: false })).not.toContain(
+      "### Machines and their OS",
+    );
+  });
+});

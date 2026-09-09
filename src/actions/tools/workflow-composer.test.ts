@@ -11,6 +11,7 @@ import type {
   ComposerToolDef,
   ComposerToolSpec,
 } from "./workflow-composer";
+import type { ExecutionTarget } from "../../util/execution-environment";
 
 class StubLlm implements ComposerLlmClient {
   public calls: Array<{ prompt: string; system?: string }> = [];
@@ -793,6 +794,252 @@ describe("composeFlow", () => {
       const result = await composeFlow(
         { llm, pieceRegistry: toolCatalog(), toolNames: ["content_pipeline"] },
         { name: "Tooly", description: "x" },
+      );
+      expect(result.ok).toBe(true);
+    });
+  });
+
+  describe("execution-environment (OS) awareness", () => {
+    // The reported failure: on a brain whose only machine is a MacBook, "make a
+    // workflow that opens notepad" composed `notepad.exe`, and nothing noticed
+    // until the run failed. The composer now knows which machines exist and
+    // what OS each runs.
+    function osToolCatalog(): PieceLookup {
+      return new PieceCatalog([
+        {
+          name: "@jarvispieces/piece-jarvis-tool",
+          displayName: "Jarvis: Tool",
+          description: "Invoke a registered Jarvis tool.",
+          actions: {
+            invoke: {
+              name: "invoke",
+              displayName: "Invoke",
+              description: "Call a tool.",
+              inputSchema: {
+                fields: [
+                  { name: "toolName", label: "Tool", type: "string", required: true },
+                  { name: "params", label: "Params", type: "json", required: false },
+                ],
+              },
+            },
+          },
+        },
+      ]);
+    }
+
+    const mac: ExecutionTarget = {
+      id: "sc-mac",
+      name: "Lapo's MacBook",
+      os: "darwin",
+      arch: "arm64",
+      connected: true,
+      capabilities: ["terminal", "desktop"],
+    };
+    const win: ExecutionTarget = {
+      id: "sc-win",
+      name: "Desk PC",
+      os: "windows",
+      arch: "amd64",
+      connected: true,
+      capabilities: ["terminal", "desktop"],
+    };
+    const linuxHost: ExecutionTarget = {
+      id: "",
+      name: "Jarvis host (this brain)",
+      os: "linux",
+      arch: "x64",
+      connected: true,
+      isHost: true,
+    };
+
+    const invoke = (toolName: string, params: Record<string, unknown>) =>
+      JSON.stringify({
+        displayName: "Opener",
+        trigger: {
+          name: "trigger",
+          type: "EMPTY",
+          nextAction: {
+            name: "step_1",
+            type: "PIECE",
+            settings: { pieceName: "jarvis-tool", actionName: "invoke", input: { toolName, params } },
+          },
+        },
+      });
+
+    test("puts the machine inventory in the system prompt", async () => {
+      const llm = new StubLlm(JSON.stringify({ displayName: "X", trigger: { name: "trigger", type: "EMPTY" } }));
+      await composeFlow(
+        { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, linuxHost] },
+        { name: "X", description: "x" },
+      );
+      const sys = llm.calls[0]?.system ?? "";
+      expect(sys).toContain("Execution environment");
+      expect(sys).toContain("Lapo's MacBook");
+      expect(sys).toContain("macOS, arm64");
+    });
+
+    test("omits the block entirely when no inventory is supplied", async () => {
+      const llm = new StubLlm(JSON.stringify({ displayName: "X", trigger: { name: "trigger", type: "EMPTY" } }));
+      await composeFlow({ llm, pieceRegistry: osToolCatalog() }, { name: "X", description: "x" });
+      expect(llm.calls[0]?.system ?? "").not.toContain("Execution environment");
+    });
+
+    test("rejects notepad.exe when the only machine is a Mac", async () => {
+      const llm = new StubLlm(invoke("desktop_launch_app", { executable: "notepad.exe" }));
+      const result = await composeFlow(
+        { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, linuxHost], maxAttempts: 1 },
+        { name: "Opener", description: "open notepad" },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        const err = result.errors.join(" ");
+        expect(err).toContain("notepad.exe");
+        expect(err).toContain("Windows");
+        expect(err).toContain("Lapo's MacBook");
+        // The equivalent app is named so the retry has somewhere to go.
+        expect(err).toContain("TextEdit");
+      }
+    });
+
+    test("self-corrects on the retry with the macOS equivalent", async () => {
+      const llm = new StubLlm([
+        invoke("desktop_launch_app", { executable: "notepad.exe" }),
+        invoke("desktop_launch_app", { executable: "TextEdit" }),
+      ]);
+      const result = await composeFlow(
+        { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, linuxHost], maxAttempts: 4 },
+        { name: "Opener", description: "open notepad" },
+      );
+      expect(result.ok).toBe(true);
+      expect(llm.calls).toHaveLength(2);
+      expect(llm.calls[1]?.prompt).toContain("notepad.exe");
+    });
+
+    test("accepts the same step when the only machine is a Windows one", async () => {
+      const llm = new StubLlm(invoke("desktop_launch_app", { executable: "notepad.exe" }));
+      const result = await composeFlow(
+        { llm, pieceRegistry: osToolCatalog(), executionTargets: [win, linuxHost], maxAttempts: 1 },
+        { name: "Opener", description: "open notepad" },
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    test("on a mixed fleet an OS-specific step must name the machine it means", async () => {
+      // Not wrong -- undecided. An untargeted call goes to whichever connected
+      // sidecar answers for the capability, so `notepad.exe` on a Mac+PC fleet
+      // is a coin flip, and the run that loses fails exactly like the original
+      // bug did.
+      const llm = new StubLlm(invoke("desktop_launch_app", { executable: "notepad.exe" }));
+      const result = await composeFlow(
+        { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, win, linuxHost], maxAttempts: 1 },
+        { name: "Opener", description: "open notepad" },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.errors.join(" ")).toContain("set params.target to the one you mean");
+      }
+    });
+
+    test("...and passes once it does", async () => {
+      const llm = new StubLlm(invoke("desktop_launch_app", { executable: "notepad.exe", target: "Desk PC" }));
+      const result = await composeFlow(
+        { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, win, linuxHost], maxAttempts: 1 },
+        { name: "Opener", description: "open notepad on the PC" },
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    test("a portable command needs no target even on a mixed fleet", async () => {
+      // The rule fires on OS-BOUND values only -- it must not turn every
+      // untargeted step on a heterogeneous fleet into an error.
+      const llm = new StubLlm(invoke("run_command", { command: "git pull && bun test" }));
+      const result = await composeFlow(
+        { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, win, linuxHost], maxAttempts: 1 },
+        { name: "Opener", description: "pull and test" },
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    test("judges an explicit target against THAT machine, not the fleet", async () => {
+      // A Windows machine exists, but the step was pinned to the Mac.
+      const llm = new StubLlm(
+        invoke("run_command", { command: "notepad.exe", target: "Lapo's MacBook" }),
+      );
+      const result = await composeFlow(
+        { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, win, linuxHost], maxAttempts: 1 },
+        { name: "Opener", description: "open notepad on my laptop" },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.errors.join(" ")).toContain("runs macOS");
+      }
+    });
+
+    test("checks paths as well as commands", async () => {
+      const llm = new StubLlm(invoke("write_file", { path: "C:\\Users\\lapo\\notes.txt" }));
+      const result = await composeFlow(
+        { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, linuxHost], maxAttempts: 1 },
+        { name: "Opener", description: "save a note" },
+      );
+      expect(result.ok).toBe(false);
+      if (!result.ok) expect(result.errors.join(" ")).toContain("Windows");
+    });
+
+    test("passes an OS-correct command through untouched", async () => {
+      const llm = new StubLlm(invoke("run_command", { command: "open -a TextEdit" }));
+      const result = await composeFlow(
+        { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, linuxHost] },
+        { name: "Opener", description: "open TextEdit" },
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    test("ignores OS syntax that only appears inside a {{template}}", async () => {
+      // The template resolves at run time to a value we cannot see; only the
+      // literal text around it is ours to judge.
+      const llm = new StubLlm(invoke("run_command", { command: "cat {{trigger.payload.notepad.exe}}" }));
+      const result = await composeFlow(
+        { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, linuxHost] },
+        { name: "Opener", description: "read a file" },
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    test("skips the check when a machine never reported its OS", async () => {
+      const unknown: ExecutionTarget = { id: "sc-new", name: "New laptop", os: null };
+      const llm = new StubLlm(invoke("desktop_launch_app", { executable: "notepad.exe" }));
+      const result = await composeFlow(
+        { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, unknown, linuxHost] },
+        { name: "Opener", description: "open notepad" },
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    test("skips the check for a templated target", async () => {
+      const llm = new StubLlm(
+        invoke("run_command", { command: "notepad.exe", target: "{{trigger.payload.machine}}" }),
+      );
+      const result = await composeFlow(
+        { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, linuxHost] },
+        { name: "Opener", description: "open notepad somewhere" },
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    test("leaves tools that carry no OS-bound params alone", async () => {
+      const llm = new StubLlm(invoke("vault_search", { query: "notepad.exe" }));
+      const result = await composeFlow(
+        { llm, pieceRegistry: osToolCatalog(), executionTargets: [mac, linuxHost] },
+        { name: "Opener", description: "search the vault" },
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    test("composes unchanged when no inventory is supplied (back-compat)", async () => {
+      const llm = new StubLlm(invoke("desktop_launch_app", { executable: "notepad.exe" }));
+      const result = await composeFlow(
+        { llm, pieceRegistry: osToolCatalog() },
+        { name: "Opener", description: "open notepad" },
       );
       expect(result.ok).toBe(true);
     });

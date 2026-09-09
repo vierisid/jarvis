@@ -78,6 +78,11 @@ import {
   uninstallPiece,
   type InstalledPiece,
 } from "../pieces-library/installer";
+import {
+  flowOsWarnings,
+  osCheckContextFor,
+  type ExecutionTarget,
+} from "../../util/execution-environment";
 
 type RequestWithParams<P extends Record<string, string> = Record<string, string>> = Request & {
   params: P;
@@ -150,6 +155,18 @@ export interface CreateWorkflowRoutesOptions {
    */
   sharedPiecesDir?: string | null;
   /**
+   * Optional inventory of the machines a step can run on (sidecars + this
+   * host, each with its OS). When provided, locking a version returns
+   * `osWarnings` for steps whose command / executable / path cannot run on
+   * any machine that could receive them.
+   *
+   * This is the editor's only OS check: a flow drawn by hand never passes
+   * through the composer, which is where the same rules run for a composed
+   * one. Advisory by design -- the lock still succeeds, because a draft may
+   * legitimately target a machine that is not enrolled yet.
+   */
+  executionTargets?: () => ExecutionTarget[];
+  /**
    * Optional credential resolver. When provided, the connections route can
    * report which `JarvisConnectionSource` adapters are registered (e.g.
    * `jarvis:google` is wired) so the dashboard's piece-side auth picker
@@ -217,6 +234,15 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
   // process, and one value means the GET's shape and the mutations' guard can
   // never disagree about which mode this install is in.
   const managed = piecesManagedByHost(opts.sharedPiecesDir);
+  // OS-fit warnings for a version being locked -- the last point a
+  // hand-drawn flow can be told its command will never run where it lands.
+  // Empty whenever the verdict would be a guess (no inventory, or a machine
+  // that never reported its OS).
+  const lockOsWarnings = (trigger: unknown): string[] => {
+    if (!opts.executionTargets) return [];
+    const ctx = osCheckContextFor(opts.executionTargets());
+    return ctx ? flowOsWarnings(trigger, ctx) : [];
+  };
   const refreshTrigger = (flowId: string): void => {
     if (!opts.triggerManager) return;
     // Fire-and-forget: API responses must not block on engine round-trips
@@ -831,7 +857,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // Lock mutates the same row state DRAFT -> LOCKED, so the sidecar
           // (keyed on versionId) already follows. No copy needed; mentioned
           // here so future readers know that's by design.
-          return ok(lockVersion(versionId));
+          const locked = lockVersion(versionId);
+          const osWarnings = lockOsWarnings(locked.trigger);
+          return ok(osWarnings.length > 0 ? { ...locked, osWarnings } : locked);
         }),
     },
 

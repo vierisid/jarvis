@@ -65,6 +65,11 @@ import {
 import { enqueue } from "../../workflows/db/repos/job-queue.ts";
 import { RUN_FLOW } from "../../workflows/runner/handler.ts";
 import {
+  flowOsWarnings,
+  osCheckContextFor,
+  type ExecutionTarget,
+} from "../../util/execution-environment.ts";
+import {
   composeFlow,
   type ComposedFlow,
   type ComposerLibraryEntry,
@@ -105,6 +110,15 @@ export interface ManageWorkflowDeps {
    * wording from this tool's description and from the composer's prompt.
    */
   library?: ComposerLibraryEntry[];
+  /**
+   * Optional. The machines a composed step can execute on -- the enrolled
+   * sidecars plus the brain's own host. When provided, the composer knows
+   * which OS it is writing commands for instead of guessing (the `notepad.exe`
+   * composed for a Mac-only fleet), and rejects a step bound to an OS nothing
+   * here runs. A thunk, not a snapshot: sidecars enroll, connect, and report
+   * their OS long after this tool is constructed.
+   */
+  executionTargets?: () => ExecutionTarget[];
 }
 
 export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDefinition {
@@ -398,12 +412,36 @@ function actPublish(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unk
     }
     throw new Error("no draft version to publish");
   }
+  // Publish is the last gate before a flow starts running for real, and it is
+  // the ONLY one a hand-built flow passes through -- a flow drawn in the
+  // visual editor never meets the composer's validation. Re-check OS fit here
+  // so a `notepad.exe` step someone typed by hand is called out before it
+  // starts failing on a schedule.
+  //
+  // Warnings, not a refusal: the draft may deliberately target a machine that
+  // is not enrolled yet, and blocking someone's publish over a heuristic would
+  // be worse than the mismatch it prevents.
+  const warnings = publishOsWarnings(target.trigger, deps);
   if (target.state !== "LOCKED") target = lockVersion(target.id);
   setPublishedVersion(flow.id, target.id);
   updateFlowStatus(flow.id, "ENABLED");
   void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
   const updated = getFlow(flow.id);
-  return updated ? summarizeFlow(updated) : { error: "flow vanished after publish" };
+  if (!updated) return { error: "flow vanished after publish" };
+  return warnings.length > 0
+    ? { ...summarizeFlow(updated), warnings }
+    : summarizeFlow(updated);
+}
+
+/**
+ * OS-fit warnings for a version about to be published. Empty whenever the
+ * check can't be trusted -- no machine inventory, or a machine whose OS was
+ * never reported.
+ */
+function publishOsWarnings(trigger: unknown, deps: ManageWorkflowDeps): string[] {
+  if (!deps.executionTargets) return [];
+  const ctx = osCheckContextFor(deps.executionTargets());
+  return ctx ? flowOsWarnings(trigger, ctx) : [];
 }
 
 function actDelete(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unknown> {
@@ -457,6 +495,10 @@ async function actCompose(
     if (roles.length > 0) composeDeps.specialistRoles = roles;
   }
   if (deps.library && deps.library.length > 0) composeDeps.library = deps.library;
+  if (deps.executionTargets) {
+    const targets = deps.executionTargets();
+    if (targets.length > 0) composeDeps.executionTargets = targets;
+  }
   const result = await composeFlow(composeDeps, { name, description });
 
   if (!result.ok) {

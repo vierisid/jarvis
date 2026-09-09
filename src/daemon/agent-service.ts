@@ -70,7 +70,9 @@ import { getUserProfile } from '../vault/user-profile.ts';
 import type { ResearchQueue } from './research-queue.ts';
 import type { IAgentService } from './agent-service-interface.ts';
 import type { AuthorityEngine } from '../authority/engine.ts';
-import { getSidecarManager } from '../actions/tools/sidecar-route.ts';
+import { familyLabel, osFamily } from '../util/execution-environment.ts';
+import { collectExecutionTargets } from '../actions/tools/sidecar-route.ts';
+import type { ToolGuideMachine } from '../roles/tool-guide.ts';
 import { ConvOrchestrator } from '../agents/conv/conv-orchestrator.ts';
 import { TaskRegistry } from '../agents/conv/task-registry.ts';
 import { TaskDispatcher } from '../agents/conv/task-dispatcher.ts';
@@ -876,11 +878,32 @@ export class AgentService implements Service, IAgentService {
     // (observations, content pipeline, commitments) so the LLM has
     // hundreds fewer prompt tokens to chew through before first response.
     const slim = opts?.slim === true;
-    // Check if any sidecars are enrolled (cheap DB query, controls tool guide content)
+    // Check if any sidecars are enrolled (cheap DB query, controls tool guide
+    // content) and build the machine inventory the tool guide renders: which
+    // machines exist and what OS each runs. Same source the workflow composer
+    // uses, so chat and composed workflows agree on the target OS instead of
+    // both defaulting to the model's priors. Live connection state is
+    // deliberately left out -- this lands in the prompt-CACHED static section,
+    // and `list_sidecars` is what reports who is online right now.
     let hasSidecars = false;
+    let machines: ToolGuideMachine[] | undefined;
     try {
-      const mgr = getSidecarManager();
-      if (mgr) hasSidecars = mgr.listSidecars().length > 0;
+      // One registry read for both: `collectExecutionTargets` already lists the
+      // enrolled sidecars, and it appends the brain host, so anything that is
+      // not the host answers "are there sidecars".
+      const targets = collectExecutionTargets();
+      hasSidecars = targets.some((t) => !t.isHost);
+      if (targets.length > 0) {
+        machines = targets.map((t) => {
+          const fam = osFamily(t.os);
+          return {
+            name: t.name,
+            os: fam ? familyLabel(fam) : t.os,
+            ...(t.arch ? { arch: t.arch } : {}),
+            ...(t.isHost ? { isHost: true } : {}),
+          };
+        });
+      }
     } catch { /* ignore */ }
 
     const context: PromptContext = {
@@ -888,6 +911,7 @@ export class AgentService implements Service, IAgentService {
       currentTime: new Date().toISOString(),
       availableSpecialists: this.specialistListText || undefined,
       hasSidecars,
+      ...(machines ? { machines } : {}),
       // Derived from config, so it is stable turn over turn and safe to sit
       // in the prompt-CACHED static section alongside hasSidecars.
       piecesManaged: this.piecesManaged(),

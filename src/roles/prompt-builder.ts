@@ -1,5 +1,5 @@
 import type { RoleDefinition } from './types.ts';
-import { buildToolGuide } from './tool-guide.ts';
+import { buildToolGuide, type ToolGuideMachine } from './tool-guide.ts';
 
 export type PromptContext = {
   userName?: string;
@@ -14,6 +14,13 @@ export type PromptContext = {
   authorityRules?: string;
   activeGoals?: string;
   hasSidecars?: boolean;
+  /**
+   * The machines commands can land on (enrolled sidecars + this host) and the
+   * OS each runs, so the AI stops writing commands for whichever OS its priors
+   * favour. Process-stable fields only -- this lands in the cacheable static
+   * prefix alongside hasSidecars.
+   */
+  machines?: ToolGuideMachine[];
   /**
    * A host owns the pieces catalog (see `piecesManagedByHost`). Drops the
    * "have the user install it from the Library page" advice from the tool
@@ -193,13 +200,14 @@ export function buildSystemPromptParts(role: RoleDefinition, context?: PromptCon
     buildToolGuide({
       hasSidecars: context?.hasSidecars ?? false,
       piecesManaged: context?.piecesManaged ?? false,
+      ...(context?.machines ? { machines: context.machines } : {}),
     }),
   );
   sections.push('');
 
   // ── Static/dynamic boundary ─────────────────────────────────────────────
   // Everything above depends only on the role (+ process-stable context like
-  // authorityRules / effectiveAuthorityLevel / hasSidecars / piecesManaged). Everything below
+  // authorityRules / effectiveAuthorityLevel / hasSidecars / machines / piecesManaged). Everything below
   // changes per turn and must not sit inside the cacheable prefix.
   const staticPrompt = sections.join('\n');
   const dynamicSections: string[] = [];

@@ -64,6 +64,13 @@ export type ComposerToolDef = LLMTool;
 export type ComposerChatReply = Pick<LLMResponse, "content" | "tool_calls"> & {
   finish_reason?: LLMResponse["finish_reason"];
 };
+import {
+  osCheckContextFor,
+  renderExecutionEnvironment,
+  stepOsIssues,
+  type ExecutionTarget,
+  type OsCheckContext,
+} from "../../util/execution-environment.ts";
 import type { FlowTriggerNode } from "../../workflows/db/repos/flow-version.ts";
 import { WORKFLOW_EVENT_TYPES } from "../../workflows/runtime/event-types.ts";
 
@@ -251,6 +258,18 @@ export interface ComposeDeps {
    */
   library?: ComposerLibraryEntry[];
   /**
+   * Optional inventory of the machines a step can execute on: the enrolled
+   * sidecars plus the brain's own host. When present the composer (a) renders
+   * an execution-environment block in both prompts so the model knows which
+   * OS it is writing commands for, and (b) rejects a step whose command,
+   * executable, or path is bound to an OS no reachable machine runs.
+   *
+   * Without it the model defaults to whatever OS its training leans towards --
+   * the reported failure was `notepad.exe` composed for a fleet whose only
+   * machine was a Mac, which only surfaced when the run failed.
+   */
+  executionTargets?: ExecutionTarget[];
+  /**
    * Cap on the LLM attempts inside one compose call. Each failed parse or
    * validation feeds back into the next attempt so the model can self-correct
    * without round-tripping through the calling agent. Default 4. Tests can
@@ -347,9 +366,11 @@ async function composeOneShot(
   const catalogText = renderCatalog(deps.pieceRegistry);
   const toolsText = renderTools(deps.tools, deps.toolNames);
   const rolesText = renderSpecialistRoles(deps.specialistRoles);
-  const system = buildSystemPrompt(catalogText, toolsText, rolesText);
+  const envText = renderExecutionEnvironment(deps.executionTargets ?? []).join("\n");
+  const system = buildSystemPrompt(catalogText, toolsText, rolesText, envText);
   const toolSpecs = toolSpecMap(deps);
   const validRoleIds = validRoleIdSet(deps);
+  const osCheck = osCheckContextFor(deps.executionTargets ?? []);
 
   // Initial prompt: the user's description verbatim. Retry prompts
   // replace this with a feedback patch derived from the previous
@@ -400,7 +421,7 @@ async function composeOneShot(
       continue;
     }
 
-    const validation = validateComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs);
+    const validation = validateComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);
     if (validation.ok) {
       if (attempt > 1) logAttempt(attempt, "success-after-retry", null);
       return { ok: true, flow: validation.flow, rawResponse: raw };
@@ -470,10 +491,12 @@ async function composeWithTools(
 ): Promise<ComposeResult | null> {
   const toolSpecs = toolSpecMap(deps);
   const validRoleIds = validRoleIdSet(deps);
+  const osCheck = osCheckContextFor(deps.executionTargets ?? []);
   const rolesText = renderSpecialistRoles(deps.specialistRoles);
   const hasLibrary = (deps.library?.length ?? 0) > 0;
   const toolDefs = buildComposerToolDefs(toolSpecs !== null, hasLibrary);
-  const system = buildToolLoopSystemPrompt(rolesText, hasLibrary);
+  const envText = renderExecutionEnvironment(deps.executionTargets ?? []).join("\n");
+  const system = buildToolLoopSystemPrompt(rolesText, hasLibrary, envText);
 
   const messages: ComposerChatMessage[] = [
     { role: "system", content: system },
@@ -542,7 +565,7 @@ async function composeWithTools(
       if (text) {
         try {
           const parsed = JSON.parse(stripJsonFence(text));
-          const validation = validateComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs);
+          const validation = validateComposedFlow(parsed, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);
           if (validation.ok) {
             logAttempt(turn, "tool-loop-inline-json", null);
             return { ok: true, flow: validation.flow, rawResponse: text };
@@ -593,7 +616,7 @@ async function composeWithTools(
         submits++;
         const flowArg = unwrapSubmittedFlow(call.arguments);
         lastRaw = safeStringify(flowArg);
-        const validation = validateComposedFlow(flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs);
+        const validation = validateComposedFlow(flowArg, deps.pieceRegistry, req.name, validRoleIds, toolSpecs, osCheck);
         if (validation.ok) {
           if (submits > 1) logAttempt(submits, "tool-loop-success-after-retry", null);
           return { ok: true, flow: validation.flow, rawResponse: lastRaw };
@@ -1130,10 +1153,16 @@ const EXAMPLE_SECTION_LINES = [
   "The event payload is read via {{trigger.payload.*}} (envelope rule); children[0] pairs with the 'invoice' branch; the null child makes the fallback branch do nothing.",
 ];
 
-function buildSystemPrompt(catalog: string, toolsText: string, rolesText: string): string {
+function buildSystemPrompt(
+  catalog: string,
+  toolsText: string,
+  rolesText: string,
+  envText: string,
+): string {
   return [
     "You are the Jarvis workflow composer. Convert the user's description into a workflow definition.",
     "",
+    envText,
     ...sharedRuleSections("one-shot", rolesText.length > 0),
     "",
     "## Output contract",
@@ -1153,7 +1182,11 @@ function buildSystemPrompt(catalog: string, toolsText: string, rolesText: string
  * report_blocked. Specialist roles stay inline -- the listing is small and
  * the verbatim-id rule needs the ids next to it.
  */
-function buildToolLoopSystemPrompt(rolesText: string, hasLibrary: boolean): string {
+function buildToolLoopSystemPrompt(
+  rolesText: string,
+  hasLibrary: boolean,
+  envText: string,
+): string {
   return [
     "You are the Jarvis workflow composer. Convert the user's description into a workflow definition.",
     "You interact ONLY through tools; the ONLY ways to finish are the submit_flow and report_blocked tools.",
@@ -1169,6 +1202,7 @@ function buildToolLoopSystemPrompt(rolesText: string, hasLibrary: boolean): stri
       : "  4. If no installed piece or Jarvis tool covers the request, call report_blocked explaining what is missing.\n     Never force a wrong piece to fit.",
     "  Keep detail lookups targeted -- fetch the pieces you shortlisted, not the whole catalog.",
     "",
+    envText,
     ...sharedRuleSections("tools", rolesText.length > 0),
     rolesText,
   ].filter((s) => s !== "").join("\n");
@@ -1430,6 +1464,7 @@ function validateComposedFlow(
   fallbackName: string,
   validRoleIds: Set<string> | null,
   toolSpecs: Map<string, ComposerToolSpec> | null,
+  osCheck: OsCheckContext | null,
 ): ValidationOk | ValidationFail {
   if (typeof raw !== "object" || raw === null) {
     return { ok: false, errors: ["expected an object at the top level"] };
@@ -1442,7 +1477,7 @@ function validateComposedFlow(
   }
   const errors: string[] = [];
   const knownNames = new Set<string>();
-  const trigger = validateStep(triggerRaw as Record<string, unknown>, errors, knownNames, true, registry, validRoleIds, toolSpecs);
+  const trigger = validateStep(triggerRaw as Record<string, unknown>, errors, knownNames, true, registry, validRoleIds, toolSpecs, osCheck);
   if (!trigger) return { ok: false, errors };
 
   // Walk subsequent actions.
@@ -1456,7 +1491,7 @@ function validateComposedFlow(
       errors.push("flow exceeds 100 steps");
       break;
     }
-    const step = validateStep(cursor, errors, knownNames, false, registry, validRoleIds, toolSpecs);
+    const step = validateStep(cursor, errors, knownNames, false, registry, validRoleIds, toolSpecs, osCheck);
     if (!step) break;
     last.nextAction = step;
     last = step;
@@ -1475,6 +1510,7 @@ function validateStep(
   registry: PieceLookup,
   validRoleIds: Set<string> | null,
   toolSpecs: Map<string, ComposerToolSpec> | null,
+  osCheck: OsCheckContext | null,
 ): ComposedStep | null {
   const name = typeof raw.name === "string" ? raw.name : null;
   if (!name) {
@@ -1532,7 +1568,7 @@ function validateStep(
     // bug) left every composed loop with no firstLoopAction -- the engine ran
     // an empty loop and the editor showed the flow "stopping" at the loop node.
     if (inner) {
-      const body = buildInnerChain(inner, errors, knownNames, registry, validRoleIds, toolSpecs);
+      const body = buildInnerChain(inner, errors, knownNames, registry, validRoleIds, toolSpecs, osCheck);
       if (body) step.firstLoopAction = body;
     }
     return step;
@@ -1563,7 +1599,7 @@ function validateStep(
     if (Array.isArray(raw.children)) {
       step.children = (raw.children as Array<unknown>).map((child) =>
         child && typeof child === "object"
-          ? buildInnerChain(child as Record<string, unknown>, errors, knownNames, registry, validRoleIds, toolSpecs)
+          ? buildInnerChain(child as Record<string, unknown>, errors, knownNames, registry, validRoleIds, toolSpecs, osCheck)
           : null,
       );
     }
@@ -1711,6 +1747,21 @@ function validateStep(
       }
     }
   }
+
+  // OS-fit check: a step that shells out, launches an app, or names a path has
+  // to speak the OS of the machine it lands on. The brain is routinely a Linux
+  // box while the user's only real machine is a Mac or a PC, so a model left to
+  // its own priors composes `notepad.exe` for a MacBook and the mismatch is
+  // only discovered when the run fails. Independent of `toolSpecs` -- this
+  // needs the machine inventory, not the tool schemas.
+  if (
+    !isTrigger &&
+    subName === INVOKE_ACTION &&
+    osCheck &&
+    (piece.name === TOOL_PIECE_SHORT || piece.name.endsWith(`/piece-${TOOL_PIECE_SHORT}`))
+  ) {
+    errors.push(...stepOsIssues(name, input, osCheck));
+  }
   return step;
 }
 
@@ -1770,6 +1821,7 @@ function buildInnerChain(
   registry: PieceLookup,
   validRoleIds: Set<string> | null,
   toolSpecs: Map<string, ComposerToolSpec> | null,
+  osCheck: OsCheckContext | null,
 ): ComposedStep | null {
   let cursor: Record<string, unknown> | null = head;
   let first: ComposedStep | null = null;
@@ -1780,7 +1832,7 @@ function buildInnerChain(
       errors.push("inner subgraph exceeds 100 steps");
       break;
     }
-    const step = validateStep(cursor, errors, knownNames, false, registry, validRoleIds, toolSpecs);
+    const step = validateStep(cursor, errors, knownNames, false, registry, validRoleIds, toolSpecs, osCheck);
     if (!step) break;
     if (!first) first = step;
     if (last) last.nextAction = step;

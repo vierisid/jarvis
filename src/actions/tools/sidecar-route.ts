@@ -8,6 +8,13 @@
 
 import type { SidecarManager } from '../../sidecar/manager.ts';
 import type { SidecarCapability, SidecarInfo } from '../../sidecar/types.ts';
+import {
+  familyLabel,
+  hostTarget,
+  osFamily,
+  type ExecutionTarget,
+} from '../../util/execution-environment.ts';
+import { isNoLocalTools } from './local-tools-guard.ts';
 
 let sidecarManager: SidecarManager | null = null;
 
@@ -37,6 +44,49 @@ export function autoTargetForCapability(cap: SidecarCapability): string | null {
     if (s.capabilities && s.capabilities.includes(cap)) return s.id;
   }
   return null;
+}
+
+/**
+ * The live execution inventory: every enrolled sidecar plus the brain's own
+ * host, each with the OS it runs. Feeds the workflow composer's prompts and
+ * the agent's tool guide, so both write commands for the machine a step
+ * actually lands on instead of whichever OS the model's priors favour.
+ *
+ * Offline sidecars stay in the list: a workflow composed today runs on a
+ * schedule tomorrow, and the laptop asleep right now is still the machine the
+ * user means. Dropping it would leave the composer writing commands for the
+ * Linux server the brain happens to live on.
+ *
+ * The host is omitted under --no-local-tools, where it refuses every call --
+ * counting it would let a hosted brain's own OS excuse commands that can only
+ * ever run on the user's sidecar.
+ */
+export function collectExecutionTargets(): ExecutionTarget[] {
+  const targets: ExecutionTarget[] = [];
+  try {
+    for (const s of sidecarManager?.listSidecars() ?? []) {
+      targets.push({
+        id: s.id,
+        name: s.name,
+        os: s.os ?? null,
+        // SidecarInfo.platform carries GOARCH, not an OS. See ExecutionTarget.
+        arch: s.platform ?? null,
+        connected: s.connected,
+        ...(s.capabilities ? { capabilities: [...s.capabilities] } : {}),
+      });
+    }
+  } catch {
+    // Registry unavailable (DB not open yet, sidecars disabled). Report what
+    // we can rather than nothing.
+  }
+  if (!isNoLocalTools()) targets.push(hostTarget());
+  return targets;
+}
+
+/** A machine's name plus its OS, for an error a human has to act on. */
+function describeMachine(sidecar: SidecarInfo): string {
+  const fam = osFamily(sidecar.os);
+  return fam ? `${sidecar.name}, ${familyLabel(fam)}` : sidecar.name;
 }
 
 /**
@@ -88,7 +138,7 @@ export async function routeToSidecar(
   }
 
   if (!sidecar.connected) {
-    return `Error: Sidecar "${sidecar.name}" is offline.`;
+    return `Error: Sidecar "${describeMachine(sidecar)}" is offline.`;
   }
 
   // Check if capability is enabled but unavailable (missing system dependencies)
@@ -114,9 +164,12 @@ export async function routeToSidecar(
 
     // METHOD_NOT_FOUND means the capability is disabled — tell the LLM not to retry
     if (msg.includes('METHOD_NOT_FOUND')) {
-      return `Error [${sidecar.name}]: Method "${method}" is not available. The "${requiredCapability}" capability is not enabled on this sidecar. Do NOT retry this call — ask the user to enable the capability in the sidecar's config if needed.`;
+      return `Error [${describeMachine(sidecar)}]: Method "${method}" is not available. The "${requiredCapability}" capability is not enabled on this sidecar. Do NOT retry this call — ask the user to enable the capability in the sidecar's config if needed.`;
     }
 
-    return `Error [${sidecar.name}]: ${msg}`;
+    // The OS goes in the message on purpose: the commonest remote failure is
+    // a command written for the wrong platform (`notepad.exe` sent to a Mac),
+    // and "command not found" alone tells neither the model nor the user why.
+    return `Error [${describeMachine(sidecar)}]: ${msg}`;
   }
 }
