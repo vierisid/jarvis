@@ -190,9 +190,9 @@ export async function routeToSidecar(
       // for anything interactive. Only run_command keeps fire-and-forget
       // semantics; everything else reports an honest timeout.
       if (method === 'run_command') {
-        return `Command dispatched to "${sidecar.name}" and still running in the background. Its output will NOT be reported back — verify its effect yourself if it matters.`;
+        return `Command dispatched to "${describeMachine(sidecar)}" and still running in the background. Its output will NOT be reported back — verify its effect yourself if it matters.`;
       }
-      return `Error [${sidecar.name}]: "${method}" did not complete within the timeout. The action may or may not have taken effect — do NOT assume it succeeded; verify the current state (e.g. take a snapshot) before continuing.`;
+      return `Error [${describeMachine(sidecar)}]: "${method}" did not complete within the timeout. The action may or may not have taken effect — do NOT assume it succeeded; verify the current state (e.g. take a snapshot) before continuing.`;
     }
 
     return typeof result === 'string' ? result : JSON.stringify(result, null, 2);

@@ -388,8 +388,13 @@ const (
 	vkInsert   = 0x2D
 	vkDelete   = 0x2E
 	vkLWin     = 0x5B
-	vkF1       = 0x70
 )
+
+// vkSpace, vkControl and vkF1 are deliberately not repeated here: they are
+// declared by hotkeys_windows.go and mouse_hook_windows.go, which are part of
+// the same package, so a second declaration is a build error rather than a
+// shadow. This file has already collided that way twice (namedKeys, then
+// vkF1), so borrow rather than redeclare.
 
 // extendedKeys need KEYEVENTF_EXTENDEDKEY for correct behavior.
 var extendedKeys = map[uint16]bool{
