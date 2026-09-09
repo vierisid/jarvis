@@ -405,19 +405,21 @@ export interface BuildCatalogOptions {
    */
   overallTimeoutMs?: number;
   /**
-   * Give up after this many extractions fail BACK TO BACK. A wedged engine
-   * fails every remaining piece at `pieceTimeoutMs` each, so without this the
-   * cost of one broken engine is the whole catalog times that timeout -- on
-   * the hosted shared-runtime build that is 659 pieces x 30s, about five and a
-   * half hours, against an install op that gives up after thirty minutes. The
-   * build then reports nothing at all: it is killed mid-loop, so even the
-   * failures never surface.
+   * Give up after this many extractions in a row get NO ANSWER from the
+   * engine. A wedged engine burns `pieceTimeoutMs` on every remaining piece,
+   * so without this one broken engine costs the whole catalog times that
+   * timeout -- on the hosted shared-runtime build that is 659 pieces x 30s,
+   * about five and a half hours, against an install op that gives up after
+   * thirty minutes. The build then reports nothing at all: it is killed
+   * mid-loop, so even the failures never surface.
    *
-   * Consecutive rather than total, so a handful of genuinely broken pieces
-   * scattered through a healthy catalog never trips it. Reset by any success.
-   * Default 5.
+   * TIMEOUTS ONLY. An error REPLY proves the engine is alive and answering, so
+   * counting those would end a healthy build on a run of legitimately broken
+   * pieces -- and discovery is sorted, which groups families (piece-google-*
+   * and friends), so a shared broken dependency produces exactly such a run.
+   * Reset by a success; an error reply leaves it alone. Default 5.
    */
-  maxConsecutiveFailures?: number;
+  maxConsecutiveTimeouts?: number;
   /**
    * Optional reporter for `discoverPieces` conflicts and per-piece extraction
    * failures. Defaults to `console.warn`. Pass a noop in tests.
@@ -502,15 +504,28 @@ export function readCachedEntries(
  * boots with whichever pieces succeeded; the daemon can log/UI-display the
  * failures without blocking startup.
  *
- * A failure also ENDS THAT ENGINE. The loop cannot tell a hung piece from a
- * poisoned process, and both were observed: our per-piece race abandons an
- * operation the engine is still running (nothing cancels it), and on the
- * hosted shared-runtime build a single piece that threw while loading left
- * every one of the 658 pieces after it timing out against a process that was
- * still alive. So each failure is followed by a fresh engine, and
- * `maxConsecutiveFailures` back-to-back failures end the build with the
- * remainder reported as unattempted rather than paying `pieceTimeoutMs` on
+ * An extraction that gets NO ANSWER also ends that engine. Our per-piece race
+ * abandons an operation the engine is still running (nothing cancels it), so
+ * the next piece would queue behind it; the following one gets a fresh engine
+ * instead. An error REPLY is left alone -- the engine answered, so it is alive
+ * and reusable, and destroying it would be churn (and a no-op under a pooled
+ * runtime, which would simply park and re-hand the same process).
+ *
+ * `maxConsecutiveTimeouts` unanswered extractions in a row end the build, with
+ * the remainder reported as unattempted rather than paying `pieceTimeoutMs` on
  * every one of them.
+ *
+ * WHAT PROMPTED THIS, and what is still unexplained: on the hosted
+ * shared-runtime build one piece failed with an error reply and every one of
+ * the 658 after it timed out, against an engine process still alive at 486MB.
+ * Why an answered error was followed by a permanently unresponsive engine is
+ * NOT established -- "the failed module stayed cached" does not survive
+ * scrutiny, since a rejected import re-throws immediately rather than hanging,
+ * and the later pieces are different modules. A likelier candidate is the
+ * worker-rpc socket: `engineClient` is bound to one connection and a reconnect
+ * replaces it without the live handle noticing, which would strand every
+ * later send on a dead socket while the engine sits idle. Worth confirming
+ * before anyone treats the timeout handling here as the whole answer.
  */
 export async function buildPieceCatalog(
   opts: BuildCatalogOptions,
@@ -518,7 +533,7 @@ export async function buildPieceCatalog(
   const reporter = opts.reporter ?? ((m) => console.warn(`[piece-catalog] ${m}`));
   const pieceTimeoutMs = opts.pieceTimeoutMs ?? 10_000;
   const overallTimeoutMs = opts.overallTimeoutMs ?? 60_000;
-  const maxConsecutiveFailures = opts.maxConsecutiveFailures ?? 5;
+  const maxConsecutiveTimeouts = opts.maxConsecutiveTimeouts ?? 5;
 
   const { entries: discovered, conflicts } = discoverPieces(opts.pieceRoots);
   for (const c of conflicts) {
@@ -578,7 +593,7 @@ export async function buildPieceCatalog(
     let handleReleased = false;
     const overallDeadline = Date.now() + overallTimeoutMs;
     let processed = 0;
-    let consecutiveFailures = 0;
+    let consecutiveTimeouts = 0;
     try {
       for (const { piece, contentHash } of misses) {
         if (Date.now() > overallDeadline) {
@@ -611,7 +626,7 @@ export async function buildPieceCatalog(
           out.push(entry);
           userEntries[`${piece.name}@${piece.version}`] = { contentHash, entry };
           extracted++;
-          consecutiveFailures = 0;
+          consecutiveTimeouts = 0;
         } catch (e) {
           const reason = e instanceof Error ? e.message : String(e);
           failures.push({
@@ -620,52 +635,59 @@ export async function buildPieceCatalog(
             reason,
           });
           reporter(`extract ${piece.name}@${piece.version} failed: ${reason}`);
-          consecutiveFailures++;
 
-          // REPLACE THE ENGINE, do not carry on with it.
+          // An error REPLY means the engine answered: it is alive, idle and
+          // reusable, so keep it. Only a timeout is grounds for destroying it.
           //
-          // Two different ways this loop can leave an engine unusable, and it
-          // cannot tell them apart from here:
+          // This distinction is what stops the give-up below from ending a
+          // healthy build. Discovery is sorted, which groups piece families
+          // (piece-google-*, piece-microsoft-*), and the shared-runtime build
+          // installs with --ignore-scripts, so one broken dependency across a
+          // family yields a run of error replies from engines that answered
+          // promptly every time. Counting those as evidence of a wedge would
+          // abandon the remaining hundreds of pieces over a handful of bad
+          // ones.
+          if (!(e instanceof PieceExtractionTimeoutError)) continue;
+
+          consecutiveTimeouts++;
+
+          // NO ANSWER: replace the engine. `withTimeout` above stopped waiting
+          // but nothing cancelled the operation -- there is no cancel message
+          // in EngineContract -- so this engine is still working on the piece
+          // we gave up on, and the next one would queue behind it and time out
+          // too. That is the shape the hosted build hit: one failure, then 658
+          // timeouts against a process still alive at 486MB.
           //
-          //  - a TIMEOUT above is OUR race, not the engine's. `withTimeout`
-          //    stops waiting; nothing cancels the operation, and there is no
-          //    cancel message in EngineContract. The engine is still working
-          //    on the piece we gave up on, so the next operation queues behind
-          //    it and times out too. The transport has its own deadline that
-          //    marks such an engine abandoned -- but it is
-          //    `CONTROL_OPERATION_TIMEOUT_S` (60s) plus a 30s margin, and this
-          //    loop's default budget is well under that, so our race always
-          //    fires first and that machinery never gets to run.
-          //  - an ERROR REPLY means the engine answered and is idle. It should
-          //    be reusable. In prod it was not: on the hosted build the first
-          //    piece failed with a real INTERNAL_ERROR and every one of the 658
-          //    after it timed out, on an engine still alive at 486MB. A module
-          //    that throws while loading stays cached as broken, so one bad
-          //    piece poisoned the process for the rest of the catalog.
+          // `release()` is the right call and not a shortcut: it kills rather
+          // than pools an engine with work still in flight, and the send() we
+          // abandoned is exactly that (`inFlight` is still 1 here, because it
+          // is decremented in send()'s own finally, which has not run). On an
+          // error reply it would instead PARK the process under `pool: true`
+          // and hand the same one back on the next acquire -- another reason
+          // the two cases are not interchangeable.
           //
-          // So: replace on ANY failure. `release()` already does the right
-          // thing -- it kills rather than pools an engine with `abandoned` set
-          // or work still in flight, which is exactly the timeout case -- and a
-          // spawn costs seconds against a per-piece timeout we would otherwise
-          // pay on every remaining piece.
+          // The transport has its own deadline that marks such an engine
+          // abandoned, but it is CONTROL_OPERATION_TIMEOUT_S (60s) plus a 30s
+          // margin, always later than this loop's budget, so it never fires
+          // first and that machinery never runs.
           handleReleased = true;
           await handle.release().catch(() => {
             // A failed release is a leaked engine, not a reason to abandon the
             // build; the run id is dead either way.
           });
 
-          if (consecutiveFailures >= maxConsecutiveFailures) {
+          if (consecutiveTimeouts >= maxConsecutiveTimeouts) {
             const pending = misses.length - processed;
             reporter(
-              `${consecutiveFailures} extractions failed back to back; giving up with ` +
-                `${pending} piece(s) unattempted (a wedged engine fails every remaining ` +
-                `piece at ${pieceTimeoutMs}ms each)`,
+              `${consecutiveTimeouts} extractions in a row got no answer from the engine; ` +
+                `giving up with ${pending} piece(s) unattempted (a wedged engine costs ` +
+                `${pieceTimeoutMs}ms on every remaining piece)`,
             );
             for (const skipped of misses.slice(processed)) {
               failures.push({
                 pieceName: skipped.piece.name,
                 pieceVersion: skipped.piece.version,
-                reason: `not attempted: gave up after ${consecutiveFailures} consecutive extraction failures`,
+                reason: `not attempted: gave up after ${consecutiveTimeouts} consecutive extraction timeouts`,
               });
             }
             break;
@@ -713,12 +735,22 @@ export async function buildPieceCatalog(
   return { catalog: new PieceCatalog(out), failures };
 }
 
+/**
+ * Thrown when an extraction outruns its per-piece budget.
+ *
+ * A distinct type because the two failure shapes need opposite handling and a
+ * substring match on a message is not a fact: an engine that ANSWERED with an
+ * error is alive and reusable, an engine that did not answer is still working
+ * on the piece we walked away from and must be destroyed.
+ */
+export class PieceExtractionTimeoutError extends Error {}
+
 /** Race a promise against a timeout; rejects with `message` on timeout. */
 function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
   return Promise.race([
     p,
     new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(message)), ms),
+      setTimeout(() => reject(new PieceExtractionTimeoutError(message)), ms),
     ),
   ]);
 }

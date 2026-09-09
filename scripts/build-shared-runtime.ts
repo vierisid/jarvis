@@ -186,3 +186,26 @@ const summary =
   });
 if (summaryPath) writeFileSync(resolve(summaryPath), summary + "\n");
 console.log(summary);
+
+// 6. A build that GAVE UP must not look like a build that finished.
+//
+// buildPieceCatalog ends early when the engine stops answering, and marks the
+// pieces it never tried. Exiting 0 here would publish that partial cache under
+// a cacheKey that MATCHES the daemon's, so every consumer treats it as
+// complete: install-version moves it into place, the tenant-side
+// "does not match this daemon's catalog key" warning never fires, and every
+// instance on the host silently re-extracts the hundreds of missing pieces at
+// its own boot -- the fleet-wide storm that shared cache exists to prevent.
+//
+// Failing is the loud option, and the summary above already names every piece
+// and why. Individual broken pieces stay non-fatal: a catalog is expected to
+// carry some, and `failures` reports them.
+const unattempted = failures.filter((f) => f.reason.startsWith("not attempted"));
+if (unattempted.length > 0) {
+  log(
+    `REFUSING to publish: the catalog build gave up with ${unattempted.length} of ` +
+      `${catalog.length} piece(s) never attempted. The metadata cache would be partial ` +
+      `but indistinguishable from a complete one. See failures[] in the summary.`,
+  );
+  process.exit(1);
+}
