@@ -69,6 +69,13 @@ jobs:
       - uses: ./.github/actions/bun-setup
       - run: bun run scripts/check-no-ee-imports.ts
       - run: bun run scripts/check-migrations.ts
+      # The published tarball is the ONLY interface the hosting fleet has to
+      # this repo, and package.json's `files` allowlist is invisible from the
+      # code that depends on it -- a shipped-by-path file can be dropped from
+      # the package without a single test here noticing (it happened; see the
+      # script's header). Re-run just before `npm publish` too, in
+      # release-exec.yml, where the real artifact is built.
+      - run: bun run scripts/check-package-files.ts
       # --retry=2 (3 attempts per test), NOT a retry around the whole step.
       # Every flake this suite has produced in CI is a per-test hook timing out
       # on a loaded runner -- a headless Chromium slow to answer CDP

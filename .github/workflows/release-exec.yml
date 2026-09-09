@@ -135,6 +135,15 @@ jobs:
       - name: Build UI
         run: bun run prepublishOnly
 
+      # Assert the tarball ABOUT TO BE PUBLISHED still contains every file an
+      # out-of-repo consumer resolves by path. The PR gate runs this too, but
+      # only this job holds the real artifact: a `files` edit merged after CI,
+      # or an npm/bun disagreement about `files`, is caught here or not at all.
+      # npm is on PATH in this job, so the check runs npm's own packer.
+      # npm versions are immutable -- one minute here beats a fix-forward.
+      - name: Check published tarball contents
+        run: bun run scripts/check-package-files.ts
+
       - name: Publish to npm
         run: |
           FLAGS=""

@@ -10,6 +10,9 @@ bun run scripts/check-migrations.ts
 echo "[pre-commit] Linting webapp templates..."
 bun run scripts/lint-webapp-templates.ts
 
+echo "[pre-commit] Checking the published tarball still ships what consumers read..."
+bun run scripts/check-package-files.ts
+
 # Bound the test step with a wall-clock timeout. A test that spawns the
 # engine subprocess and forgets to reap it can hang `bun test --bail`
 # indefinitely (observed once in late-May 2026, never reproduced). 240s
