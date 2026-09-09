@@ -160,6 +160,19 @@
 .wf-editor__overlay-banner--accent .wf-editor__overlay-banner-icon { color: var(--accent); }
 .wf-editor__overlay-banner-text {
   flex: 1 1 auto;
+  min-width: 0;
+}
+/* Engine-level failure reason. Own line, single line, clipped -- these
+   messages can be long and must not push the banner into a wall of text.
+   Full text stays available via the title attribute. */
+.wf-editor__overlay-banner-reason {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: 0.72rem;
+  color: var(--ink-2);
 }
 .wf-editor__overlay-banner-clear {
   display: inline-flex;

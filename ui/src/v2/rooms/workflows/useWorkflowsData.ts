@@ -39,7 +39,7 @@ export interface FlowRun {
   finishTime: number | null;
   stepsCount: number | null;
   steps: Record<string, unknown> | null;
-  failedStep: { name: string; displayName: string } | null;
+  failedStep: { name: string; displayName: string; errorMessage?: string } | null;
   triggeredBy: string | null;
   created: number;
   updated: number;

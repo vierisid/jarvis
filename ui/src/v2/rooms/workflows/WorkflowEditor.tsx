@@ -5631,6 +5631,14 @@ function OverlayBanner({
             {" "}-- no per-step trace recorded for this run
           </em>
         ) : null}
+        {/* Without this the only clue to a run that died before any step ran
+            (engine never came up, RPC timeout) is the daemon log. The reason
+            is already persisted on the run -- show it. */}
+        {run.failedStep?.errorMessage ? (
+          <span className="wf-editor__overlay-banner-reason" title={run.failedStep.errorMessage}>
+            {run.failedStep.errorMessage}
+          </span>
+        ) : null}
       </span>
       <button
         type="button"
