@@ -355,8 +355,9 @@ describe('ConvOrchestrator', () => {
       // conv model pattern-matches on, so it outranks the `delegate` tool
       // description; the two must not disagree. It lives in the static half,
       // so it costs nothing per turn.
-      expect(staticText).toContain('BUILD or CHANGE a workflow');
-      expect(staticText).toContain('("automate X", "make a workflow that ...") - tier=high, template=general');
+      // The decision, not the phrasing: a workflow-authoring row that routes
+      // to high with the general template.
+      expect(staticText).toMatch(/BUILD a workflow.*tier=high, template=general/);
       expect(staticText).not.toContain('Alice');
       expect(staticText).not.toContain('Weather');
       // message[1]: dynamic system prompt, NOT cache-marked

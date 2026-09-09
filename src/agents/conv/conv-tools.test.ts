@@ -24,17 +24,20 @@ describe("the delegate tool's tier guidance", () => {
   });
 
   test("keeps running an existing workflow on the cheaper tier", () => {
-    // "building or changing a workflow" would otherwise swallow "run the
-    // daily brief" and "disable my morning flow", which are one-call tool
-    // work.
+    // The authoring rule would otherwise swallow "run the daily brief" and
+    // "disable my morning flow", which are one-call tool work. Asserted as
+    // tokens, not as a phrase, so a reword does not fail the test.
     const guidance = (tierParam.description ?? "").toLowerCase();
-    expect(guidance).toContain("running, listing, enabling or disabling");
+    for (const verb of ["running", "listing", "enabling", "disabling"]) {
+      expect(guidance).toContain(verb);
+    }
+    expect(guidance).toContain('"medium"');
   });
 
   test("steers workflow tasks away from the plan template", () => {
     // template=plan makes the task agent write a prose plan instead of
     // calling manage_workflow at all.
-    expect(tierParam.description).toContain('never "plan"');
+    expect(tierParam.description).toMatch(/never\s+"plan"/);
   });
 });
 

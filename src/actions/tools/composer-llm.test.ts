@@ -70,6 +70,9 @@ beforeEach(() => {
 
 afterEach(() => {
   closeDb();
+  // Leave no resolver pointing at a closed handle for the next file, the way
+  // usage.test.ts / provider.test.ts / realtime-voice.test.ts each finish.
+  setUsageDatabase(() => null);
 });
 
 describe("createComposerLlmClient: which model writes the workflow", () => {
@@ -243,6 +246,7 @@ describe("createComposerLlmClient: errors the composer depends on", () => {
     const client = createComposerLlmClient(managerWith({ high, medium }));
 
     expect(await client.chat({ prompt: "x" })).toEqual({ text: "{}" });
+    expect(high.calls).toHaveLength(1); // tried first, once, then handed over
     expect(medium.calls).toHaveLength(1);
   });
 });

@@ -6,8 +6,8 @@
  * decision this consequential disappears, and inline it could not be tested
  * at all -- which is how it went unnoticed that workflow composition was
  * running on the deprecated `LLMManager.chat()`, i.e. whatever `medium`
- * resolved to (or, with no tier map at all, the legacy primary-provider
- * chain), billed to the subsystem label `legacy`.
+ * resolved to, billed to the subsystem label `legacy` -- or, with no tier map
+ * at all, the legacy primary-provider chain, which records no usage whatever.
  *
  * Composing now runs on `high`, labelled `workflow_composer` -- see the two
  * constants below for why.
@@ -67,13 +67,22 @@ const COMPOSER_MAX_TOKENS = 8192;
  *
  * The other thing `high` changes is wall time. `LLMManager.REQUEST_TIMEOUT_MS`
  * is a fixed 90s with no per-call override, and both paths here ask for up to
- * 8192 output tokens. A slow high-tier model (a reasoning model, or a large
- * local one) is likelier to cross that than a medium one was; a timeout
- * classifies as `network`, which is retried up to three times per provider,
- * and which the tool loop refuses to fall back to one-shot on. If composes
- * start dying after minutes rather than seconds, that ceiling is where to
- * look -- raising it means giving LLMOptions a timeout, which is a change to
- * shared LLM infrastructure and deliberately not made here.
+ * 8192 output tokens, so a slow high-tier model (a reasoning model, or a
+ * large local one) is likelier to cross it than a medium one was.
+ *
+ * What happens then, precisely, because it is not what the manager's own
+ * retry policy suggests: `withTimeout` rejects with "... timed out after
+ * 90000ms", and both `classifyErrorString` and `shouldRetry` look for the
+ * substring "timeout", which that message does not contain. So the failure
+ * classifies as `unknown`: it is NOT retried, and on tool-loop turn 1 the
+ * composer treats it as a tools-unsupported signal and falls back to the
+ * one-shot prompt, which can burn another 90s before failing. Budget ~180s
+ * worst case, and do not expect to see it retried.
+ *
+ * (That "timed out" / "timeout" mismatch is a latent bug in the manager
+ * affecting every subsystem, not something this module should paper over.
+ * Raising the ceiling would mean giving LLMOptions a timeout, which is a
+ * change to shared LLM infrastructure and deliberately not made here.)
  *
  * `high` falls up to `medium` on its own (see TIER_FALLBACK in
  * src/llm/tiers.ts). That matters for an install that configures only
@@ -113,7 +122,8 @@ function textOf(content: unknown): string {
   if (typeof content === "string") return content;
   console.warn(
     `[composer] LLM returned a non-string content body (${typeof content}); ` +
-      `treating it as empty. The compose will fail its JSON parse.`,
+      `dropping the assistant text. A one-shot compose will now fail its JSON ` +
+      `parse; a tool-loop turn carries on if it also returned tool_calls.`,
   );
   return "";
 }

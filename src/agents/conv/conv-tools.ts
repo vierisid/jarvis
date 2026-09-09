@@ -18,8 +18,9 @@
  *
  * The `delegate` description names workflow authoring as a `high` case. That
  * is the ROUTING half of a pair: the model that WRITES the flow is pinned to
- * `high` in composer-llm.ts whatever gets chosen here (subject only to that
- * tier's own config fall-up), so this decides which model runs the turn that
+ * `high` in composer-llm.ts whatever gets chosen here (subject to that tier's
+ * config fall-up, and to LLMManager failing over on a rate limit or a model
+ * the provider says is gone), so this decides which model runs the turn that
  * CALLS `manage_workflow` -- the one that phrases the request, reads compose
  * errors back, and decides whether to refine and retry. Left at "medium for
  * general tool work" the conv model reads "automate my mornings" as ordinary
@@ -44,7 +45,7 @@ export const CONV_TOOLS: LLMTool[] = [
         tier: {
           type: 'string',
           enum: ['low', 'medium', 'high'],
-          description: 'Which task tier should run this. Default to "medium" unless you have a clear reason. Authoring a workflow -- building one or editing its steps ("automate X", "make a workflow that ...") -- is a clear reason for "high"; it is authoring rather than tool work, and the model has to phrase the request precisely and read compose errors back. Merely running, listing, enabling or disabling an existing workflow is ordinary tool work: keep those on "medium". Pair a workflow task with template "general", never "plan" -- "plan" makes the task agent write a prose plan instead of building anything.',
+          description: 'Which task tier should run this. Default to "medium" unless you have a clear reason. Authoring a workflow -- building one, or composing it again to change what it does ("automate X", "make a workflow that ...") -- is a clear reason for "high"; it is authoring rather than tool work, and the model has to phrase the request precisely and read compose errors back. Merely running, listing, enabling or disabling an existing workflow is ordinary tool work: keep those on "medium". Pair a workflow task with template "general", never "plan" -- "plan" makes the task agent write a prose plan instead of building anything.',
         },
         template: {
           type: 'string',
