@@ -30,6 +30,7 @@ func maybeRemoveConfig(silent bool) {
 	}
 	removeIgnoreMissing(filepath.Join(cfgDir, "sidecar.yaml"))
 	removeIgnoreMissing(filepath.Join(cfgDir, "sidecar.log"))
+	removeIgnoreMissing(filepath.Join(cfgDir, "sidecar.log.1")) // the generation the sidecar rotates to
 	logf("removed sidecar enrollment + log (kept %s itself — the brain shares it)", cfgDir)
 }
 

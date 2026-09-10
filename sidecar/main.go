@@ -99,8 +99,10 @@ Usage:
 		// wrong-URL token used to be saved blind and fail invisibly in the
 		// reconnect loop. Errors go to stderr as well as the log — --token is
 		// typically run from a terminal, and logs already go to the file.
-		// On Windows setupLogging has pointed stderr AT the log file, so the
-		// two land together there (the same line twice, once timestamped).
+		// Where setupLogging has pointed stderr AT the log file (always on
+		// Windows; on macOS/Linux only when stderr was /dev/null, so no terminal
+		// or pipe was reading it) the two land together there (the same line
+		// twice, once timestamped).
 		tok := trimToken(*token)
 		if err := verifyBrainToken(context.Background(), tok, cfg.Brain); err != nil {
 			log.Printf("[sidecar] enrollment token check failed: %v", err)

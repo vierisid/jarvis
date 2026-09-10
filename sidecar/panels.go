@@ -202,6 +202,10 @@ func resolveSpec(spec PanelSpec) PanelSpec {
 // ErrPanelUnknown is returned by Close/Focus when the id is not registered.
 var ErrPanelUnknown = errors.New("panel not found")
 
+// errPanelWindowClosed is returned by Focus/SetWindowState when the id is still
+// registered but its window has already closed (see panelImpl.windowClosed).
+var errPanelWindowClosed = errors.New("window already closed")
+
 // ErrPanelExists is returned by Spawn when a non-multi-instance panel with
 // the same id is already open. Callers should Focus(id) instead.
 var ErrPanelExists = errors.New("panel already exists")
