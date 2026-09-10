@@ -329,6 +329,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
   const ttsQueueRef = useRef<ArrayBuffer[]>([]);
   const ttsPlayingRef = useRef(false);
   const ttsRequestIdRef = useRef<string | null>(null);
+  const ttsPlaybackGenerationRef = useRef(0);
   const voiceStateRef = useRef<VoiceState>("idle");
   const wakeEngineRef = useRef<any>(null);
   const wakeWordEnabledRef = useRef(wakeWordEnabled);
@@ -369,11 +370,12 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
   const autoStopRef = useRef(false);
   const cancelTTSRef = useRef<() => void>(() => {});
   const forceIdleRef = useRef<() => void>(() => {});
-  // Premium realtime voice (gpt-realtime-2). When enabled+keyed, recording and
-  // playback take a continuous 24kHz PCM path via RealtimeVoiceController
-  // instead of the push-to-talk WAV flow. Defaults off; only flips true after
-  // /api/config/voice reports the realtime mode is available.
-  const realtimeActiveRef = useRef(false);
+  // Availability chooses how to START a recording. It says nothing about the
+  // format of incoming audio: ordinary replies/proactive TTS still use MP3/WAV.
+  const realtimeAvailableRef = useRef(false);
+  // Only this socket's actual PCM session permits unframed realtime playback.
+  // Keep it active until close/error, including after mic capture stops.
+  const realtimeSessionActiveRef = useRef(false);
   const realtimeCtrlRef = useRef<RealtimeVoiceController | null>(null);
 
   // Keep refs in sync with state for use inside callbacks
@@ -449,7 +451,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
         if (!res.ok) return;
         const cfg = await res.json();
         if (!cancelled) {
-          realtimeActiveRef.current = Boolean(cfg?.realtime?.enabled && cfg?.realtime?.available);
+          realtimeAvailableRef.current = Boolean(cfg?.realtime?.enabled && cfg?.realtime?.available);
         }
       } catch { /* leave previous value; default false */ }
     };
@@ -478,12 +480,16 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
       realtimeCtrlRef.current = new RealtimeVoiceController({
         ws,
         getCurrentRoom: () => getCurrentRoom?.() ?? "home",
+        onSessionStart: () => { realtimeSessionActiveRef.current = true; },
         onPlaybackStart: () => setVoiceState("speaking"),
         onPlaybackIdle: () => {
           // Only fall to idle if we're not actively capturing the next turn.
-          if (!realtimeCtrlRef.current?.isStreaming) setVoiceState("idle");
+          if (!realtimeCtrlRef.current?.isStreaming && !ttsRequestIdRef.current && !ttsPlayingRef.current) {
+            setVoiceState("idle");
+          }
         },
         onError: (msg) => {
+          realtimeSessionActiveRef.current = false;
           console.error("[Voice] realtime error:", msg);
           setVoiceState("error");
           setTimeout(() => setVoiceState("idle"), 3000);
@@ -688,7 +694,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
         // interrupt match here would cancelTTS → send voice_end → kill the
         // session, forcing a re-wake mid-conversation. Ignore browser-SR matches
         // during any active realtime turn. (Idle wake still works to start one.)
-        if (realtimeActiveRef.current && sNow !== "idle") return;
+        if (realtimeSessionActiveRef.current && sNow !== "idle") return;
         // Strict matcher during speaking to keep TTS echo from self-triggering;
         // loose prefix matcher when idle so "hey jarvis <command>" wakes in one breath.
         const matcher = voiceStateRef.current === "speaking"
@@ -856,7 +862,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     // owns turn-taking, so a local engine here only self-triggers on TTS echo.
     const blockedBySpeaking =
       (voiceState === "speaking" && ttsContainsWakeRef.current) ||
-      (realtimeActiveRef.current && voiceState !== "idle");
+      (realtimeSessionActiveRef.current && voiceState !== "idle");
     const active = (muted || blockedBySpeaking) ? "none" : selectActiveWakeEngine({
       isMicAvailable,
       wakeWordEnabled,
@@ -881,7 +887,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     // owns turn-taking, so a local engine here only self-triggers on TTS echo.
     const blockedBySpeaking =
       (voiceState === "speaking" && ttsContainsWakeRef.current) ||
-      (realtimeActiveRef.current && voiceState !== "idle");
+      (realtimeSessionActiveRef.current && voiceState !== "idle");
     const shouldRun = !muted && !blockedBySpeaking && shouldSpeechWakeBeRunning({
       isMicAvailable,
       wakeWordEnabled,
@@ -946,39 +952,44 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
 
     ttsPlayingRef.current = true;
     const ctx = getAudioContext();
+    const generation = ttsPlaybackGenerationRef.current;
     ctx.decodeAudioData(chunk.slice(0)) // slice to avoid detached buffer issues
       .then(buffer => {
+        // Decoding can finish after cancel, unmount, or a replacement TTS turn.
+        if (generation !== ttsPlaybackGenerationRef.current) return;
         const source = ctx.createBufferSource();
         source.buffer = buffer;
         source.connect(ctx.destination);
-        source.onended = () => playNextTTSChunk();
+        source.onended = () => {
+          if (generation === ttsPlaybackGenerationRef.current) playNextTTSChunk();
+        };
         source.start();
       })
       .catch(err => {
+        if (generation !== ttsPlaybackGenerationRef.current) return;
         console.error("[Voice] Audio decode error:", err);
         playNextTTSChunk(); // skip bad chunk, continue
       });
   }, [getAudioContext]);
 
   const handleTTSBinary = useCallback((data: ArrayBuffer) => {
-    // Realtime output is raw PCM s16 24kHz (no WAV/MP3 header) — route to the
-    // streaming player, not decodeAudioData.
-    if (realtimeActiveRef.current) {
-      getRealtimeController()?.enqueuePlayback(data);
+    // A tts_start envelope identifies encoded MP3/WAV, even when realtime is
+    // available or a PCM session exists. Never reinterpret these bytes as PCM.
+    if (ttsRequestIdRef.current) {
+      ttsQueueRef.current.push(data);
+      if (!ttsPlayingRef.current) playNextTTSChunk();
       return;
     }
-    // Cancellation clears the request id immediately. The server/provider may
-    // still have one buffered frame in flight; discard it instead of letting
-    // speech restart after the user pressed Stop.
-    if (!ttsRequestIdRef.current) return;
-    ttsQueueRef.current.push(data);
-    if (!ttsPlayingRef.current) {
-      playNextTTSChunk();
+    // Unframed PCM belongs only to a session this dashboard actually started.
+    // A settings poll must never create a player or revive a closed session.
+    if (realtimeSessionActiveRef.current) {
+      realtimeCtrlRef.current?.enqueuePlayback(data);
     }
-  }, [playNextTTSChunk, getRealtimeController]);
+  }, [playNextTTSChunk]);
 
   const handleTTSStart = useCallback((requestId: string, containsWake = false, containsStop = false) => {
     console.log("[Voice] TTS start:", requestId, containsWake ? "(contains wake)" : "");
+    ttsPlaybackGenerationRef.current++;
     // Stop any lingering playback from a previous TTS session
     if (ttsPlayingRef.current || ttsQueueRef.current.length > 0) {
       audioContextRef.current?.close();
@@ -1025,8 +1036,8 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
   const handleTTSEnd = useCallback((requestId?: string, bargeIn = false) => {
     // Realtime: tts_end is used by the server only as a barge-in signal
     // (user started speaking) — flush queued output so we stop talking over them.
-    if (realtimeActiveRef.current) {
-      if (bargeIn) realtimeCtrlRef.current?.flushPlayback();
+    if (bargeIn && !requestId) {
+      realtimeCtrlRef.current?.flushPlayback();
       return;
     }
     if (requestId && ttsRequestIdRef.current && requestId !== ttsRequestIdRef.current) {
@@ -1054,13 +1065,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
         timestamp: Date.now(),
       }));
     }
-    if (realtimeActiveRef.current) {
-      // Realtime: "stop talking" is a local flush (barge-in), NOT a session
-      // teardown. Keep the mic streaming so the conversation continues — calling
-      // stopStreaming here was sending voice_end and killing the session.
-      realtimeCtrlRef.current?.flushPlayback();
-      return;
-    }
+    ttsPlaybackGenerationRef.current++;
     ttsQueueRef.current = [];
     ttsPlayingRef.current = false;
     ttsRequestIdRef.current = null;
@@ -1069,8 +1074,13 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     // Close and recreate AudioContext to stop current playback
     audioContextRef.current?.close();
     audioContextRef.current = null;
-    setVoiceState("idle");
     setTtsAudioPlaying(false);
+    if (realtimeSessionActiveRef.current) {
+      // Barge-in flushes output without ending the actual realtime session.
+      realtimeCtrlRef.current?.flushPlayback();
+      return;
+    }
+    setVoiceState("idle");
   }, [wsRef]);
 
   useEffect(() => {
@@ -1089,17 +1099,19 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     // utterance uses the standard WAV pipeline — "say that again" must work
     // immediately, not after the next 15s poll tick.
     if (reason === "plan") void refreshRealtimeAvailabilityRef.current();
-    if (!realtimeActiveRef.current) return;
+    realtimeSessionActiveRef.current = false;
     realtimeCtrlRef.current?.stopStreaming();
     realtimeCtrlRef.current?.flushPlayback();
-    setVoiceState("idle");
+    if (!ttsRequestIdRef.current && !ttsPlayingRef.current) setVoiceState("idle");
   }, []);
 
   const handleError = useCallback(() => {
-    if (realtimeActiveRef.current && realtimeCtrlRef.current) {
+    realtimeSessionActiveRef.current = false;
+    if (realtimeCtrlRef.current) {
       realtimeCtrlRef.current.stopStreaming();
       realtimeCtrlRef.current.flushPlayback();
     }
+    ttsPlaybackGenerationRef.current++;
     ttsQueueRef.current = [];
     ttsPlayingRef.current = false;
     ttsRequestIdRef.current = null;
@@ -1204,7 +1216,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
   const stopRecordingInternal = useCallback(() => {
     // Realtime path: stop streaming the mic (session stays open server-side).
     // Output may still arrive; playback callbacks drive the state to idle.
-    if (realtimeActiveRef.current && realtimeCtrlRef.current?.isStreaming) {
+    if (realtimeCtrlRef.current?.isStreaming) {
       realtimeCtrlRef.current.stopStreaming();
       setVoiceState("processing");
       return;
@@ -1243,7 +1255,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     // Premium realtime path: stream continuous 24kHz PCM instead of buffering
     // a WAV. No client-side silence auto-stop — the server's VAD handles
     // turn-taking; the user ends the turn via stopRecording.
-    if (realtimeActiveRef.current) {
+    if (realtimeAvailableRef.current) {
       const ctrl = getRealtimeController();
       if (ctrl) {
         // Instant audible "I'm listening" — fires before the (brief) capture +
@@ -1251,7 +1263,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
         // words (now buffered) land cleanly.
         playWakeChime();
         await ctrl.startStreaming();
-        setVoiceState("recording");
+        if (realtimeSessionActiveRef.current && ctrl.isStreaming) setVoiceState("recording");
         return;
       }
       // No controller (no WS) — fall through to the standard path.
@@ -1357,8 +1369,9 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
     // shell calls forceIdle on navigate/room/orb events; tearing the session
     // down here sent a spurious voice_end and killed conversations mid-sentence.
     // No-op in realtime — the session drives its own state.
-    if (realtimeActiveRef.current) return;
+    if (realtimeSessionActiveRef.current) return;
     // Drain any in-flight TTS just in case
+    ttsPlaybackGenerationRef.current++;
     ttsQueueRef.current = [];
     ttsPlayingRef.current = false;
     ttsRequestIdRef.current = null;
@@ -1472,6 +1485,7 @@ export function useVoice({ wsRef, wakeWordEnabled = true, nativeWakeActive = fal
   // --- Cleanup on unmount ---
   useEffect(() => {
     return () => {
+      ttsPlaybackGenerationRef.current++;
       streamRef.current?.getTracks().forEach(t => t.stop());
       if (silenceCheckRef.current) clearInterval(silenceCheckRef.current);
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);

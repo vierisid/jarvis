@@ -20,6 +20,8 @@ const CAPTURE_WORKLET_URL = "/audio/pcm-capture-processor.js";
 export type RealtimeControllerOpts = {
   ws: WebSocket;
   getCurrentRoom?: () => string;
+  /** Fired after this client has requested a PCM session on its socket. */
+  onSessionStart?: () => void;
   /** Fired when output audio begins playing (drive UI → "speaking"). */
   onPlaybackStart?: () => void;
   /** Fired when the output queue drains (drive UI → "idle"). */
@@ -82,6 +84,7 @@ export class RealtimeVoiceController {
           timestamp: Date.now(),
         }),
       );
+      this.opts.onSessionStart?.();
 
       const ctxRate = this.captureCtx.sampleRate;
       this.worklet.port.onmessage = (e: MessageEvent) => {
