@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   Bot,
   Cable,
@@ -28,6 +28,8 @@ import { VoiceTab } from "./tabs/VoiceTab";
 import { IntegrationsTab } from "./tabs/IntegrationsTab";
 import { SidecarTab } from "./tabs/SidecarTab";
 import { BillingTab } from "./tabs/BillingTab";
+import { useBilling } from "../../billing/useBilling";
+import { billingTabVisible } from "../../billing/billing-view";
 import "./SettingsRoom.css";
 
 export type SettingsTab =
@@ -55,12 +57,24 @@ const VALID_TABS = new Set<SettingsTab>(TABS.map((t) => t.key));
 
 export type RoomBodyMode = "inline" | "expanded";
 
-const TAB_KEYS = TABS.map((t) => t.key) as ReadonlyArray<SettingsTab>;
-
 export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
   const data = useSettingsData();
   const [tab, setTab] = useState<SettingsTab>("general");
-  const tabsApi = useRovingTabs<SettingsTab>(TAB_KEYS, tab, setTab, "v2-set");
+  // A self-hosted install has no bill, so it gets no Billing tab. Same shared
+  // store as the shell banner, so this costs no extra request; see
+  // billingTabVisible for why the tab stays while the answer is not known yet.
+  const showBilling = billingTabVisible(useBilling().state);
+  const visibleTabs = useMemo(
+    () => (showBilling ? TABS : TABS.filter((t) => t.key !== "billing")),
+    [showBilling],
+  );
+  const visibleKeys = useMemo(() => visibleTabs.map((t) => t.key), [visibleTabs]);
+  const tabsApi = useRovingTabs<SettingsTab>(visibleKeys, tab, setTab, "v2-set");
+  // Sitting on Billing when the install turns out to be self-hosted: move off
+  // a tab that no longer exists.
+  useEffect(() => {
+    if (!showBilling && tab === "billing") setTab("general");
+  }, [showBilling, tab]);
   const [toast, setToast] = useState<{ text: string; tone: "ok" | "warn" } | null>(null);
 
   const showToast = useCallback((text: string, tone: "ok" | "warn" = "ok") => {
@@ -98,7 +112,7 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
     switch (action) {
       case "switch_tab": {
         const t = String(args.tab);
-        if (VALID_TABS.has(t as SettingsTab)) {
+        if (VALID_TABS.has(t as SettingsTab) && (showBilling || t !== "billing")) {
           setTab(t as SettingsTab);
           return true;
         }
@@ -358,7 +372,7 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
         aria-label="Settings sections"
         ref={tabsApi.tablistRef}
       >
-        {TABS.map((t) => (
+        {visibleTabs.map((t) => (
           <button
             key={t.key}
             type="button"
@@ -384,7 +398,7 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
             {tab === "channels" && <ChannelsTab data={data} onToast={showToast} />}
             {tab === "voice" && <VoiceTab data={data} onToast={showToast} />}
             {tab === "integrations" && <IntegrationsTab data={data} onToast={showToast} />}
-            {tab === "billing" && <BillingTab data={data} onToast={showToast} />}
+            {tab === "billing" && showBilling && <BillingTab data={data} onToast={showToast} />}
             {tab === "sidecar" && <SidecarTab data={data} onToast={showToast} />}
           </>
         )}

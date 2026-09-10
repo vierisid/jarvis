@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   bannerFor,
   billingState,
+  billingTabVisible,
   boldSegments,
   brandLabel,
   cardExpiresBefore,
@@ -93,6 +94,17 @@ describe('classifying GET /api/billing', () => {
   test('unavailable keeps the links so the user still has a way to their account', () => {
     expect(classifyBillingResponse(200, { ok: false, error: 'x', links: LINKS })).toEqual({ kind: 'unavailable', links: LINKS });
     expect(classifyBillingResponse(200, { ok: false, error: 'x', links: null })).toEqual({ kind: 'unavailable', links: null });
+  });
+});
+
+describe('the Settings tab', () => {
+  test('is hidden only when the daemon has said the install is self-hosted', () => {
+    expect(billingTabVisible('self')).toBe(false);
+    expect(billingTabVisible('ready')).toBe(true);
+    // Hosted but not connected still has somewhere to point the user.
+    expect(billingTabVisible('unavailable')).toBe(true);
+    // Not known yet (or the read is failing): never hide a hosted user's page.
+    expect(billingTabVisible('unknown')).toBe(true);
   });
 });
 

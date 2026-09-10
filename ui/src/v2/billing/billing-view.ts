@@ -121,6 +121,19 @@ export function isHttpsUrl(v: string | null): v is string {
   return typeof v === "string" && /^https:\/\//.test(v);
 }
 
+/**
+ * Whether Settings shows a Billing tab at all.
+ *
+ * Hidden only once the daemon has SAID this install is self-hosted (its 503):
+ * there is no bill here, so there is nothing to show. While the first read is
+ * still out, or failing, the tab stays — a hosted user must never lose their
+ * Billing page to a slow or broken request. The shell banner starts that read
+ * at app load, so a self-hosted user rarely sees the tab at all.
+ */
+export function billingTabVisible(loadState: "unknown" | "self" | "ready" | "unavailable"): boolean {
+  return loadState !== "self";
+}
+
 // ── Formatting ─────────────────────────────────────────────────────────────
 
 /**
