@@ -5,6 +5,7 @@ import {
   convertToolsForRealtime,
   type RealtimeSocket,
   type RealtimeSocketFactory,
+  type RealtimeSessionOptions,
 } from './realtime.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import type { LLMTool } from '../llm/provider.ts';
@@ -40,13 +41,39 @@ describe('buildSessionUpdate', () => {
     const msg = buildSessionUpdate(RESOLVED, TOOLS, 'Be helpful', 24000, 24000) as any;
     expect(msg.type).toBe('session.update');
     expect(msg.session.type).toBe('realtime');
-    expect(msg.session.model).toBe('gpt-realtime-2');
+    // The model rides on the connect URL only (see the hosted case below).
+    expect('model' in msg.session).toBe(false);
     expect(msg.session.reasoning).toEqual({ effort: 'medium' });
     expect(msg.session.audio.input.format).toEqual({ type: 'audio/pcm', rate: 24000 });
     expect(msg.session.audio.output.format).toEqual({ type: 'audio/pcm', rate: 24000 });
     expect(msg.session.audio.output.voice).toBe('marin');
     expect(msg.session.tools).toHaveLength(1);
     expect(msg.session.tool_choice).toBe('auto');
+  });
+
+  // Prod, 2026-09-10: every hosted session died on `invalid_value: Unsupported
+  // option for this model.` because the update restated the proxy alias as
+  // `session.model`, which the proxy forwards to OpenAI verbatim.
+  test('hosted: the proxy alias goes on the URL and never into the session', async () => {
+    const hosted: ResolvedRealtimeVoice = { ...RESOLVED, provider: 'usejarvis_ai', model: 'uj-realtime' };
+    const socket = new FakeSocket();
+    const dialed: string[] = [];
+    const session = new RealtimeSession({
+      resolved: hosted,
+      tools: TOOLS,
+      instructions: 'x',
+      transport: new BrowserAudioTransport({ sendAudio: () => {}, inputSampleRate: 24000 }),
+      socketFactory: (url) => {
+        dialed.push(url);
+        queueMicrotask(() => socket.onopen?.());
+        return socket;
+      },
+    });
+    await session.connect();
+    expect(dialed[0]).toBe('wss://proxy.test/v1/realtime?model=uj-realtime');
+    const update = socket.sent.map((s) => JSON.parse(s)).find((m) => m.type === 'session.update');
+    expect(update).toBeTruthy();
+    expect(JSON.stringify(update)).not.toContain('uj-realtime');
   });
 
   test('omits voice and tools when not provided', () => {
@@ -73,7 +100,7 @@ class FakeSocket implements RealtimeSocket {
   sentTypes(): string[] { return this.sent.map((s) => JSON.parse(s).type); }
 }
 
-function makeSession() {
+function makeSession(extra: Partial<RealtimeSessionOptions> = {}) {
   const socket = new FakeSocket();
   const dialed: string[] = [];
   // connect() resolves on OPEN now, so a dial that never opens is a dial that
@@ -94,6 +121,7 @@ function makeSession() {
     instructions: 'Be helpful',
     transport,
     socketFactory: factory,
+    ...extra,
   });
   return { socket, session, transport, sentAudio, dialed };
 }
@@ -206,6 +234,204 @@ describe('RealtimeSession lifecycle', () => {
     expect(socket.sentTypes()).toEqual(['conversation.item.create', 'response.create']);
     const item = JSON.parse(socket.sent[0]!).item;
     expect(item).toEqual({ type: 'function_call_output', call_id: 'c1', output: '{"ok":true}' });
+  });
+
+  // Prod proxy, 2026-09-10: a reply with two tool calls sent one response.create
+  // per result; OpenAI refused the second with
+  // conversation_already_has_active_response and the pebble died on the error.
+  describe('tool results and response.create', () => {
+    const handOut = (socket: FakeSocket, callId: string) => {
+      socket.emit({ type: 'response.output_item.added', item: { type: 'function_call', call_id: callId, name: 'open_dashboard_room' } });
+      socket.emit({ type: 'response.function_call_arguments.done', call_id: callId, arguments: '{"room":"settings"}' });
+    };
+    const started = async (extra: Partial<RealtimeSessionOptions> = {}) => {
+      const s = makeSession(extra);
+      s.session.onFunctionCall(() => {});
+      await s.session.connect();
+      s.socket.sent = [];
+      return s;
+    };
+
+    test('two calls in one reply: ONE response.create, once both results are in and the reply is done', async () => {
+      const { socket, session } = await started();
+      socket.emit({ type: 'response.created' });
+      handOut(socket, 'c1');
+      handOut(socket, 'c2');
+      session.sendFunctionResult('c1', 'ok');
+      socket.emit({ type: 'response.done', response: {} });
+      expect(socket.sentTypes()).toEqual(['conversation.item.create']); // c2 still running
+      session.sendFunctionResult('c2', 'ok');
+      expect(socket.sentTypes()).toEqual(['conversation.item.create', 'conversation.item.create', 'response.create']);
+    });
+
+    test('a result that lands before response.done waits for it', async () => {
+      const { socket, session } = await started();
+      socket.emit({ type: 'response.created' });
+      handOut(socket, 'c1');
+      session.sendFunctionResult('c1', 'ok');
+      expect(socket.sentTypes()).toEqual(['conversation.item.create']);
+      socket.emit({ type: 'response.done', response: {} });
+      expect(socket.sentTypes()).toEqual(['conversation.item.create', 'response.create']);
+    });
+
+    test('a result while our response.create is unacknowledged is voiced after that response', async () => {
+      const { socket, session } = await started();
+      session.sendFunctionResult('c1', 'ok');
+      session.sendFunctionResult('c2', 'ok');
+      expect(socket.sentTypes()).toEqual(['conversation.item.create', 'response.create', 'conversation.item.create']);
+      socket.emit({ type: 'response.created' });
+      socket.emit({ type: 'response.done', response: {} });
+      expect(socket.sentTypes().filter((t) => t === 'response.create')).toHaveLength(2);
+    });
+
+    test('a refusal because the server already started a response is not fatal and is retried after it', async () => {
+      const { socket, session } = await started();
+      const errs: string[] = [];
+      session.onError((e) => errs.push(e));
+      session.sendFunctionResult('c1', 'ok');
+      socket.emit({ type: 'response.created' }); // the VAD's response, not ours
+      socket.emit({ type: 'error', error: { code: 'conversation_already_has_active_response', message: 'Conversation already has an active response in progress' } });
+      expect(errs).toEqual([]);
+      socket.emit({ type: 'response.done', response: {} });
+      expect(socket.sentTypes()).toEqual(['conversation.item.create', 'response.create', 'response.create']);
+    });
+
+    test('barge-in drops a deferred response.create: the user turn response sees the tool output', async () => {
+      const { socket, session } = await started();
+      socket.emit({ type: 'response.created' });
+      handOut(socket, 'c1');
+      session.sendFunctionResult('c1', 'ok');
+      socket.emit({ type: 'input_audio_buffer.speech_started' });
+      socket.emit({ type: 'response.done', response: { status: 'cancelled' } });
+      socket.emit({ type: 'response.created' }); // the VAD answering the user
+      socket.emit({ type: 'response.done', response: {} });
+      expect(socket.sentTypes()).toEqual(['conversation.item.create', 'response.cancel']);
+    });
+
+    test('a result landing while the user still has the turn is not voiced over them', async () => {
+      const { socket, session } = await started();
+      socket.emit({ type: 'response.created' });
+      handOut(socket, 'c1');
+      socket.emit({ type: 'input_audio_buffer.speech_started' });
+      session.sendFunctionResult('c1', 'ok'); // the tool returns mid-utterance
+      socket.emit({ type: 'response.done', response: { status: 'cancelled' } });
+      expect(socket.sentTypes()).toEqual(['response.cancel', 'conversation.item.create']);
+      socket.emit({ type: 'response.created' }); // the VAD's reply sees the output
+      socket.emit({ type: 'response.done', response: {} });
+      expect(socket.sentTypes()).not.toContain('response.create');
+      // The gate is lifted: a later result is voiced as usual.
+      session.sendFunctionResult('c2', 'ok');
+      expect(socket.sentTypes().at(-1)).toBe('response.create');
+    });
+
+    test('a call that never returns holds the reply back only for the grace, then stops blocking', async () => {
+      const { socket, session } = await started({ toolResultGraceMs: 20 });
+      socket.emit({ type: 'response.created' });
+      handOut(socket, 'c1');
+      handOut(socket, 'hung');
+      socket.emit({ type: 'response.done', response: {} });
+      session.sendFunctionResult('c1', 'ok');
+      expect(socket.sentTypes()).toEqual(['conversation.item.create']);
+      await new Promise((r) => setTimeout(r, 60));
+      expect(socket.sentTypes()).toEqual(['conversation.item.create', 'response.create']);
+      socket.emit({ type: 'response.created' });
+      socket.emit({ type: 'response.done', response: {} });
+      // A later reply's call is voiced at once: the hung one no longer counts.
+      socket.emit({ type: 'response.created' });
+      handOut(socket, 'c3');
+      socket.emit({ type: 'response.done', response: {} });
+      session.sendFunctionResult('c3', 'ok');
+      expect(socket.sentTypes().at(-1)).toBe('response.create');
+      expect(socket.sentTypes().filter((t) => t === 'response.create')).toHaveLength(2);
+    });
+
+    test('a late result after the grace is still voiced on its own', async () => {
+      const { socket, session } = await started({ toolResultGraceMs: 20 });
+      socket.emit({ type: 'response.created' });
+      handOut(socket, 'c1');
+      handOut(socket, 'slow');
+      socket.emit({ type: 'response.done', response: {} });
+      session.sendFunctionResult('c1', 'ok');
+      await new Promise((r) => setTimeout(r, 60));
+      socket.emit({ type: 'response.created' });
+      socket.emit({ type: 'response.done', response: {} });
+      session.sendFunctionResult('slow', 'finally');
+      expect(socket.sentTypes().filter((t) => t === 'response.create')).toHaveLength(2);
+    });
+
+    test('a long call from an earlier reply does not hold back the next reply', async () => {
+      const { socket, session } = await started();
+      socket.emit({ type: 'response.created' });
+      handOut(socket, 'delegate'); // still running
+      socket.emit({ type: 'response.done', response: {} });
+      socket.emit({ type: 'response.created' }); // the user asks for something else
+      handOut(socket, 'nav');
+      socket.emit({ type: 'response.done', response: {} });
+      session.sendFunctionResult('nav', 'ok');
+      expect(socket.sentTypes()).toEqual(['conversation.item.create', 'response.create']);
+    });
+
+    test("a grace expiring during the user's turn waits for the VAD reply, which sees the output", async () => {
+      const { socket, session } = await started({ toolResultGraceMs: 20 });
+      socket.emit({ type: 'response.created' });
+      handOut(socket, 'c1');
+      handOut(socket, 'c2');
+      socket.emit({ type: 'response.done', response: {} });
+      session.sendFunctionResult('c1', 'ok');
+      socket.emit({ type: 'input_audio_buffer.speech_started' });
+      await new Promise((r) => setTimeout(r, 60));
+      expect(socket.sentTypes()).toEqual(['conversation.item.create']);
+      socket.emit({ type: 'response.created' });
+      socket.emit({ type: 'response.done', response: {} });
+      expect(socket.sentTypes()).toEqual(['conversation.item.create']);
+    });
+
+    test('a grace expiring after a stop dropped the result sends nothing', async () => {
+      const { socket, session } = await started({ toolResultGraceMs: 20 });
+      socket.emit({ type: 'response.created' });
+      handOut(socket, 'c1');
+      handOut(socket, 'c2');
+      socket.emit({ type: 'response.done', response: {} });
+      session.sendFunctionResult('c1', 'ok');
+      session.interrupt();
+      await new Promise((r) => setTimeout(r, 60));
+      expect(socket.sentTypes()).toEqual(['conversation.item.create', 'response.cancel']);
+    });
+
+    test('our own response starting mid-utterance does not end the user turn', async () => {
+      const { socket, session } = await started();
+      const creates = () => socket.sentTypes().filter((t) => t === 'response.create').length;
+      session.sendFunctionResult('c0', 'ok'); // response.create, not yet acknowledged
+      socket.emit({ type: 'input_audio_buffer.speech_started' });
+      socket.emit({ type: 'response.created' }); // ours, not the VAD's
+      session.sendFunctionResult('c1', 'ok');
+      socket.emit({ type: 'response.done', response: {} });
+      expect(creates()).toBe(1);
+      socket.emit({ type: 'response.created' }); // the VAD's reply
+      socket.emit({ type: 'response.done', response: {} });
+      expect(creates()).toBe(1);
+    });
+
+    test('without an onFunctionCall handler, calls are not waited on', async () => {
+      const { socket, session } = makeSession();
+      await session.connect();
+      socket.sent = [];
+      socket.emit({ type: 'response.created' });
+      handOut(socket, 'c1');
+      socket.emit({ type: 'response.done', response: {} });
+      session.sendFunctionResult('c2', 'ok');
+      expect(socket.sentTypes()).toEqual(['conversation.item.create', 'response.create']);
+    });
+
+    test("the dashboard's stop also drops tool results waiting to be voiced", async () => {
+      const { socket, session } = await started();
+      socket.emit({ type: 'response.created' });
+      handOut(socket, 'c1');
+      session.sendFunctionResult('c1', 'ok');
+      session.interrupt();
+      socket.emit({ type: 'response.done', response: { status: 'cancelled' } });
+      expect(socket.sentTypes()).toEqual(['conversation.item.create', 'response.cancel']);
+    });
   });
 
   test('speech_started triggers transport.stopPlayback (barge-in)', async () => {
