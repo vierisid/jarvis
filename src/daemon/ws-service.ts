@@ -88,20 +88,6 @@ const VOICE_CONFIRMATION_TTL_MS = 10 * 60_000;
 const VOICE_CONFIRMATION_SWEEP_INTERVAL_MS = 60_000;
 
 /**
- * Legacy registration shape retained for daemon compatibility. Onboarding
- * interviews are text-only; WebSocketService never arms or activates this
- * bridge. Ordinary Pebble voice remains independent of the interview.
- */
-export interface InterviewVoiceBridge {
-  /** Capture one utterance for the interview. */
-  arm(): Promise<{ armed: boolean; reason?: string }>;
-  /** Drop a capture armed by `arm()` (turn over, interview finished). */
-  disarm(): void;
-  /** Interview lifecycle. While active, pebble voice feeds the interview. */
-  setActive(active: boolean): void;
-}
-
-/**
  * Pure cleanup helper: removes every per-socket entry from the WS-service
  * maps when a client disconnects. Extracted so the cleanup contract can
  * be unit-tested without spinning up a real WebSocket server.
@@ -303,25 +289,6 @@ export class WebSocketService implements Service {
   setDeferredExecutor(exec: DeferredExecutor): void {
     this.deferredExecutor = exec;
   }
-
-  /** @deprecated Interviews no longer borrow the microphone. */
-  setInterviewVoiceBridge(_bridge: InterviewVoiceBridge): void {}
-
-  /** True while a written onboarding interview is running. */
-  hasActiveInterview(): boolean {
-    return this.interviewSessions.size > 0;
-  }
-
-  /**
-   * Legacy Pebble entry point. Never consume speech as an interview answer;
-   * false leaves the caller's ordinary assistant voice routing intact.
-   */
-  deliverInterviewVoice(_text: string): boolean {
-    return false;
-  }
-
-  /** @deprecated A written interview has no listening state to update. */
-  notifyInterviewListenEnded(_reason: string): void {}
 
   /** Drop pending written turns when the interview wraps or disconnects. */
   private endInterviewSession(ws: ServerWebSocket<unknown>): void {

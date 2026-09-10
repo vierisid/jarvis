@@ -39,8 +39,22 @@ export function Composer({
     }
   }, [value]);
 
+  // Opening Talk focuses the composer. If it opened while disabled (waiting
+  // for the daemon), focus it once enabled unless the user is typing in
+  // another field. After that, a reconnect only restores focus the disconnect
+  // took away (disabling the textarea drops focus to <body>).
+  const openedEnabled = useRef(!disabled);
+  const autoFocused = useRef(false);
   React.useEffect(() => {
-    if (autoFocus && !disabled) inputRef.current?.focus();
+    if (!autoFocus || disabled) return;
+    const input = inputRef.current;
+    const active = document.activeElement as HTMLElement | null;
+    const focusLost = !active || active === document.body;
+    const typingElsewhere = !!active && active !== input
+      && (active.isContentEditable || /^(INPUT|TEXTAREA|SELECT)$/.test(active.tagName));
+    const first = !autoFocused.current;
+    autoFocused.current = true;
+    if (first ? openedEnabled.current || !typingElsewhere : focusLost) input?.focus();
   }, [autoFocus, disabled]);
 
   // Global `/` opens the command palette directly. Suppressed inside any

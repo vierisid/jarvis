@@ -127,9 +127,11 @@ describe("written interview session", () => {
     });
     expect(socket.sent.filter((m) => m.type === "interview_user_message")).toHaveLength(1);
     await act(async () => socket.receive("interview_error", { message: "Please try again." }));
+    // The failed turn was rolled back on the daemon, so its bubble goes too.
+    expect(session.messages.filter((m) => m.role === "user")).toHaveLength(0);
     socket.failSend = true;
     await act(async () => { expect(session.sendUserMessage("Review before sharing")).toBe(false); });
-    expect(session.messages.filter((m) => m.role === "user")).toHaveLength(1);
+    expect(session.messages.filter((m) => m.role === "user")).toHaveLength(0);
     expect(session.error).toContain("wasn't sent");
     socket.failSend = false;
     await act(async () => { expect(session.sendUserMessage("Review before sharing")).toBe(true); });
@@ -193,6 +195,23 @@ describe("written interview UI", () => {
     expect(textarea.value).toBe("");
     expect(host.querySelector(".obw-bub.me")?.textContent).toBe("Weekly company updates");
     expect(send.disabled).toBe(true);
+  });
+
+  test("a failed turn returns the answer to the composer instead of showing it twice", async () => {
+    const socket = await mountInterview();
+    await act(async () => socket.receive("interview_assistant", { text: "What repeats?" }));
+    const textarea = await typeAnswer("Weekly company updates");
+    const send = Array.from(host.querySelectorAll("button")).find((b) => b.textContent === "Send")!;
+    await act(async () => send.click());
+    expect(textarea.value).toBe("");
+    await typeAnswer("and invoices");
+    await act(async () => socket.receive("interview_error", { message: "The model is busy." }));
+    expect(host.querySelectorAll(".obw-bub.me")).toHaveLength(0);
+    expect(textarea.value).toBe("Weekly company updates\n\nand invoices");
+    await typeAnswer("Weekly company updates");
+    await act(async () => send.click());
+    expect(socket.sent.filter((m) => m.type === "interview_user_message")).toHaveLength(2);
+    expect(Array.from(host.querySelectorAll(".obw-bub.me")).map((b) => b.textContent)).toEqual(["Weekly company updates"]);
   });
 
   test("Enter never submits during composition, with Shift, or while a reply is pending", async () => {

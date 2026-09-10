@@ -11,10 +11,10 @@ export type WSMessage = {
   type: 'chat' | 'cancel' | 'command' | 'status' | 'stream' | 'error' | 'notification'
       | 'tts_start' | 'tts_text' | 'tts_end' | 'voice_start' | 'voice_end' | 'voice_text'
       | 'interview_start' | 'interview_user_message' | 'interview_assistant' | 'interview_done' | 'interview_error'
-      // Interview voice: the UI asks for the mic (`interview_listen`) and the
-      // daemon answers with `interview_listen_state`; a transcript captured by
-      // the pebble comes back as `interview_user_transcript`.
-      | 'interview_listen' | 'interview_listen_stop' | 'interview_listen_state' | 'interview_user_transcript'
+      // A dashboard loaded before the interview became text-only can still
+      // send `interview_listen`; the daemon answers `interview_listen_state`
+      // with reason 'text-only' so it stops waiting on a microphone.
+      | 'interview_listen' | 'interview_listen_stop' | 'interview_listen_state'
       | 'thinking_start' | 'thinking_end'
       | 'workflow_event'
       | 'goal_event'

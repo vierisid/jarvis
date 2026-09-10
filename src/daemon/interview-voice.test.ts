@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test';
 import { WebSocketService } from './ws-service.ts';
 import { initDatabase } from '../vault/schema.ts';
+import { getUserProfile } from '../vault/user-profile.ts';
 import type { JarvisConfig } from '../config/types.ts';
 import type { InterviewSession } from './onboarding-interviewer.ts';
 
@@ -33,18 +34,6 @@ const makeService = (llmManager?: unknown) => {
   return { svc, internals, makeClient };
 };
 
-const makeBridge = () => {
-  const calls: string[] = [];
-  return {
-    calls,
-    bridge: {
-      arm: async () => { calls.push('arm'); return { armed: true }; },
-      disarm: () => { calls.push('disarm'); },
-      setActive: (active: boolean) => { calls.push(`setActive:${active}`); },
-    },
-  };
-};
-
 const tick = () => new Promise<void>(resolve => setTimeout(resolve, 0));
 const send = async (
   internals: ReturnType<typeof makeService>['internals'],
@@ -57,6 +46,10 @@ const send = async (
 };
 const lastOfType = (sent: Array<Record<string, unknown>>, type: string) =>
   [...sent].reverse().find(m => m.type === type);
+const hasRepeatedRole = (messages: Array<{ role: string }>) => {
+  const roles = messages.map(m => m.role).filter(role => role === 'user' || role === 'assistant');
+  return roles.some((role, index) => index > 0 && role === roles[index - 1]);
+};
 
 const makeLLM = (done = false) => ({
   getProviderNames: () => ['stub'],
@@ -72,10 +65,8 @@ const makeLLM = (done = false) => ({
 describe('written interview transport', () => {
   beforeEach(() => initDatabase(':memory:'));
 
-  test('opening and replying never activate the microphone or synthesize audio, even for legacy speakReply requests', async () => {
+  test('opening and replying never synthesize audio, even for legacy speakReply requests', async () => {
     const { svc, internals, makeClient } = makeService(makeLLM());
-    const { calls, bridge } = makeBridge();
-    svc.setInterviewVoiceBridge(bridge);
     let synthesisCalls = 0;
     svc.setTTSProvider({
       synthesizeStream: async function* () {
@@ -88,8 +79,7 @@ describe('written interview transport', () => {
     await send(internals, ws, 'interview_start', { speakReply: true });
     await send(internals, ws, 'interview_user_message', { text: 'I am building a studio.', speakReply: true });
 
-    expect(svc.hasActiveInterview()).toBe(true);
-    expect(calls).toEqual([]);
+    expect(internals.interviewSessions.has(ws)).toBe(true);
     expect(synthesisCalls).toBe(0);
     expect(binary).toEqual([]);
     const replies = sent.filter(m => m.type === 'interview_assistant');
@@ -100,9 +90,7 @@ describe('written interview transport', () => {
   });
 
   test('legacy microphone requests receive text-only without touching ordinary voice capture', async () => {
-    const { svc, internals, makeClient } = makeService();
-    const { calls, bridge } = makeBridge();
-    svc.setInterviewVoiceBridge(bridge);
+    const { internals, makeClient } = makeService();
     const { ws, sent } = makeClient();
     await send(internals, ws, 'interview_start');
     await send(internals, ws, 'voice_start', { requestId: 'normal-voice', mode: 'wav' });
@@ -113,11 +101,10 @@ describe('written interview transport', () => {
     await send(internals, ws, 'interview_listen_stop');
 
     expect(lastOfType(sent, 'interview_listen_state')?.payload).toEqual({ armed: false, reason: 'text-only' });
-    expect(calls).toEqual([]);
     expect(internals.voiceSessions.get(ws)).toBe(normalCapture);
   });
 
-  test('a stale client receives text-only even without a running interview or bridge', async () => {
+  test('a stale client receives text-only even without a running interview', async () => {
     const { internals, makeClient } = makeService();
     const { ws, sent } = makeClient();
     await send(internals, ws, 'interview_listen');
@@ -125,36 +112,15 @@ describe('written interview transport', () => {
     expect(internals.interviewSessions.size).toBe(0);
   });
 
-  test('Pebble speech is never consumed as an interview answer, including with multiple windows', async () => {
-    const { svc, internals, makeClient } = makeService(makeLLM());
-    const first = makeClient();
-    const second = makeClient();
-    expect(svc.deliverInterviewVoice('Before setup')).toBe(false);
-    await send(internals, first.ws, 'interview_start');
-    await send(internals, second.ws, 'interview_start');
-    const histories = [...internals.interviewSessions.values()].map(session => [...session.messages]);
-
-    expect(svc.deliverInterviewVoice('I design products in Milan')).toBe(false);
-    expect(svc.deliverInterviewVoice('   ')).toBe(false);
-    svc.notifyInterviewListenEnded('no-speech');
-    await tick();
-
-    expect([...internals.interviewSessions.values()].map(session => session.messages)).toEqual(histories);
-    expect([...first.sent, ...second.sent].some(m => m.type === 'interview_user_transcript' || m.type === 'interview_listen_state')).toBe(false);
-  });
-
-  test('wrapping sends written completion and clears the session without changing normal voice', async () => {
-    const { svc, internals, makeClient } = makeService(makeLLM(true));
-    const { calls, bridge } = makeBridge();
-    svc.setInterviewVoiceBridge(bridge);
+  test('wrapping sends written completion and clears the session', async () => {
+    const { internals, makeClient } = makeService(makeLLM(true));
     const { ws, sent } = makeClient();
     await send(internals, ws, 'interview_start', { speakReply: true });
 
     expect(lastOfType(sent, 'interview_done')).toBeDefined();
-    expect(svc.hasActiveInterview()).toBe(false);
+    expect(internals.interviewSessions.size).toBe(0);
     expect(internals.interviewTurnsInFlight.size).toBe(0);
     expect(internals.interviewPendingText.size).toBe(0);
-    expect(calls).toEqual([]);
   });
 });
 
@@ -183,32 +149,27 @@ const makeSlowLLM = () => {
 };
 
 describe('written interview turn lifecycle', () => {
-  test('typed replies arriving mid-turn run next in order, while speech stays outside the interview', async () => {
+  test('typed replies arriving mid-turn run next in order', async () => {
     const slow = makeSlowLLM();
-    const { svc, internals, makeClient } = makeService(slow.llm);
+    const { internals, makeClient } = makeService(slow.llm);
     const { ws, sent } = makeClient();
     await send(internals, ws, 'interview_start');
     await send(internals, ws, 'interview_user_message', { text: "I'm a designer" });
     await send(internals, ws, 'interview_user_message', { text: 'in Milan' });
-    expect(svc.deliverInterviewVoice('Unrelated voice conversation')).toBe(false);
     expect(slow.seen).toHaveLength(1);
 
     await slow.finishTurn();
     expect(slow.seen).toHaveLength(2);
     const nextTurn = slow.seen[1]!;
     expect(nextTurn.filter(m => m.role === 'user').at(-1)?.content).toBe("I'm a designer in Milan");
-    expect(nextTurn.some(m => m.content === 'Unrelated voice conversation')).toBe(false);
-    const roles = nextTurn.map(m => m.role).filter(role => role === 'user' || role === 'assistant');
-    expect(roles.some((role, index) => index > 0 && role === roles[index - 1])).toBe(false);
+    expect(hasRepeatedRole(nextTurn)).toBe(false);
     await slow.finishTurn();
     expect(sent.filter(m => m.type === 'interview_assistant')).toHaveLength(2);
   });
 
   test('disconnect drops queued input and ignores the late reply', async () => {
     const slow = makeSlowLLM();
-    const { svc, internals, makeClient } = makeService(slow.llm);
-    const { calls, bridge } = makeBridge();
-    svc.setInterviewVoiceBridge(bridge);
+    const { internals, makeClient } = makeService(slow.llm);
     const { ws, sent } = makeClient();
     await send(internals, ws, 'interview_start');
     await send(internals, ws, 'interview_user_message', { text: 'A queued answer' });
@@ -222,7 +183,71 @@ describe('written interview turn lifecycle', () => {
     expect(sent.some(m => m.type === 'interview_assistant')).toBe(false);
     expect(internals.interviewTurnsInFlight.size).toBe(0);
     expect(internals.interviewPendingText.size).toBe(0);
-    expect(svc.hasActiveInterview()).toBe(false);
-    expect(calls).toEqual([]);
+    expect(internals.interviewSessions.size).toBe(0);
+  });
+
+  test('a failed turn is rolled back so a retried answer is not a second user turn', async () => {
+    const seen: Array<Array<{ role: string; content: string }>> = [];
+    let calls = 0;
+    const llm = {
+      getProviderNames: () => ['stub'],
+      hasConversationTier: () => false,
+      chatTier: async (_tier: string, _caller: string, messages: Array<{ role: string; content: string }>) => {
+        seen.push(messages.map(m => ({ role: m.role, content: m.content })));
+        if (++calls === 2) throw new Error('provider overloaded');
+        return { content: 'What work do you repeat?', tool_calls: [] };
+      },
+    };
+    const { internals, makeClient } = makeService(llm);
+    const { ws, sent } = makeClient();
+    await send(internals, ws, 'interview_start');
+    const session = internals.interviewSessions.get(ws)!;
+    const historyBefore = [...session.messages];
+    const turnsBefore = session.turnCount;
+
+    await send(internals, ws, 'interview_user_message', { text: 'I run a studio' });
+    expect(lastOfType(sent, 'interview_error')).toBeDefined();
+    expect(session.messages).toEqual(historyBefore);
+    expect(session.turnCount).toBe(turnsBefore);
+
+    await send(internals, ws, 'interview_user_message', { text: 'I run a studio' });
+    expect(seen).toHaveLength(3);
+    expect(hasRepeatedRole(seen[2]!)).toBe(false);
+    expect(seen[2]!.filter(m => m.content === 'I run a studio')).toHaveLength(1);
+    expect(sent.filter(m => m.type === 'interview_assistant')).toHaveLength(2);
+  });
+
+  test('facts from a turn that fails after recording them are not saved, so a retry does not duplicate them', async () => {
+    initDatabase(':memory:');
+    const recordFact = (summary: string) => ({
+      content: '',
+      tool_calls: [{ id: `fact-${summary}`, name: 'record_profile_facts', arguments: { facts: [{ theme: 'work', summary }] } }],
+    });
+    const replies: Array<() => unknown> = [
+      () => ({ content: 'What are you building?', tool_calls: [] }),
+      () => recordFact('Runs a design studio'),
+      () => { throw new Error('provider overloaded'); },
+      () => recordFact('Runs a small design studio'),
+      () => ({ content: 'What repeats each week?', tool_calls: [] }),
+    ];
+    const llm = {
+      getProviderNames: () => ['stub'],
+      hasConversationTier: () => false,
+      chatTier: async () => replies.shift()!(),
+    };
+    const { internals, makeClient } = makeService(llm);
+    const { ws, sent } = makeClient();
+    await send(internals, ws, 'interview_start');
+    const session = internals.interviewSessions.get(ws)!;
+
+    await send(internals, ws, 'interview_user_message', { text: 'I run a design studio' });
+    expect(lastOfType(sent, 'interview_error')).toBeDefined();
+    expect(session.factsRecorded).toBe(0);
+    expect(getUserProfile()?.interview_facts ?? []).toHaveLength(0);
+
+    await send(internals, ws, 'interview_user_message', { text: 'I run a design studio' });
+    expect(session.factsRecorded).toBe(1);
+    expect((getUserProfile()?.interview_facts ?? []).map(f => f.summary)).toEqual(['Runs a small design studio']);
+    expect((lastOfType(sent, 'interview_assistant')?.payload as { facts_recorded: number }).facts_recorded).toBe(1);
   });
 });

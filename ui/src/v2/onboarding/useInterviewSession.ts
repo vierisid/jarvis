@@ -9,9 +9,15 @@ export type InterviewMessage =
 
 type InterviewPhase = "connecting" | "ready" | "thinking" | "done" | "error";
 
-export function useInterviewSession() {
+/** `onAnswerReturned` receives an answer whose turn failed, so the caller can
+ * put it back in its composer for a retry. */
+export function useInterviewSession(onAnswerReturned?: (text: string) => void) {
   const wsRef = useRef<WebSocket | null>(null);
   const phaseRef = useRef<InterviewPhase>("connecting");
+  // The answer the daemon is currently replying to, if any.
+  const unansweredRef = useRef<string | null>(null);
+  const onAnswerReturnedRef = useRef(onAnswerReturned);
+  onAnswerReturnedRef.current = onAnswerReturned;
   const [phase, setPhase] = useState<InterviewPhase>("connecting");
   const [messages, setMessages] = useState<InterviewMessage[]>([]);
   const [factsRecorded, setFactsRecorded] = useState(0);
@@ -48,6 +54,7 @@ export function useInterviewSession() {
       switch (msg.type) {
         case "interview_assistant": {
           if (phaseRef.current === "done") return;
+          unansweredRef.current = null;
           const text = String(msg.payload?.text ?? "").trim();
           if (text) setMessages((prev) => [
             ...prev, { role: "assistant", text, ts: msg.timestamp ?? Date.now() },
@@ -60,17 +67,27 @@ export function useInterviewSession() {
           break;
         }
         case "interview_done":
+          unansweredRef.current = null;
           setFarewell(String(msg.payload?.farewell ?? ""));
           if (typeof msg.payload?.facts_recorded === "number") {
             setFactsRecorded(msg.payload.facts_recorded);
           }
           changePhase("done");
           break;
-        case "interview_error":
+        case "interview_error": {
           if (phaseRef.current === "done") return;
+          // The daemon rolls a failed turn back, so the answer never reached
+          // the interview. Drop its bubble and hand the text back for a retry.
+          const unanswered = unansweredRef.current;
+          unansweredRef.current = null;
+          if (unanswered !== null) {
+            setMessages((prev) => (prev.at(-1)?.role === "user" ? prev.slice(0, -1) : prev));
+            onAnswerReturnedRef.current?.(unanswered);
+          }
           setError(String(msg.payload?.message ?? "Interview failed. Please try again."));
           changePhase("error");
           break;
+        }
       }
     };
 
@@ -105,6 +122,7 @@ export function useInterviewSession() {
       changePhase("error");
       return false;
     }
+    unansweredRef.current = trimmed;
     setMessages((prev) => [...prev, { role: "user", text: trimmed, ts: Date.now() }]);
     setError(null);
     changePhase("thinking");

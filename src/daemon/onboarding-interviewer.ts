@@ -186,6 +186,43 @@ export async function runInterviewTurn(
     };
   }
 
+  // A turn is all or nothing. Facts are held until it succeeds, and a failed
+  // model call leaves the history as it was, so a retried answer is neither a
+  // second user turn in a row nor a second copy of the facts it produced.
+  const historyLength = session.messages.length;
+  const turnCount = session.turnCount;
+  const pendingFacts: ProfileFactInput[] = [];
+  let result: InterviewTurnResult;
+  try {
+    result = await advanceInterview(session, llm, userText, pendingFacts);
+  } catch (err) {
+    session.messages.length = historyLength;
+    session.turnCount = turnCount;
+    throw err;
+  }
+  saveFacts(session, pendingFacts);
+  return { ...result, factsRecorded: session.factsRecorded };
+}
+
+type ProfileFactInput = Parameters<typeof appendUserProfileFact>[0];
+
+function saveFacts(session: InterviewSession, facts: ProfileFactInput[]): void {
+  for (const fact of facts) {
+    try {
+      appendUserProfileFact(fact);
+      session.factsRecorded++;
+    } catch (err) {
+      console.warn('[Interviewer] Failed to save fact:', err);
+    }
+  }
+}
+
+async function advanceInterview(
+  session: InterviewSession,
+  llm: LLMManager,
+  userText: string | null,
+  pendingFacts: ProfileFactInput[],
+): Promise<InterviewTurnResult> {
   if (userText !== null) {
     session.messages.push({ role: 'user', content: userText.trim() });
   } else if (session.messages.length === 1) {
@@ -247,7 +284,7 @@ export async function runInterviewTurn(
     // message back to the history.
     let wrappedThisTurn = false;
     for (const call of response.tool_calls) {
-      const result = executeInterviewerTool(session, call);
+      const result = executeInterviewerTool(session, call, pendingFacts);
       session.messages.push({
         role: 'tool',
         content: result.message,
@@ -304,6 +341,7 @@ export async function runInterviewTurn(
 function executeInterviewerTool(
   session: InterviewSession,
   call: LLMToolCall,
+  pendingFacts: ProfileFactInput[],
 ): { message: string; wrapped: boolean } {
   if (call.name === 'record_profile_facts') {
     const args = call.arguments as { facts?: Array<{ theme: string; summary: string; raw_quote?: string }> };
@@ -311,22 +349,18 @@ function executeInterviewerTool(
     if (facts.length === 0) {
       return { message: 'Error: facts array was empty.', wrapped: false };
     }
-    let saved = 0;
+    let accepted = 0;
     for (const f of facts) {
       if (typeof f?.theme !== 'string' || typeof f?.summary !== 'string') continue;
-      try {
-        appendUserProfileFact({
-          theme: f.theme.trim(),
-          summary: f.summary.trim(),
-          raw_quote: typeof f.raw_quote === 'string' && f.raw_quote.trim() ? f.raw_quote.trim() : undefined,
-        });
-        saved++;
-      } catch (err) {
-        console.warn('[Interviewer] Failed to save fact:', err);
-      }
+      // Written by runInterviewTurn once the whole turn has succeeded.
+      pendingFacts.push({
+        theme: f.theme.trim(),
+        summary: f.summary.trim(),
+        raw_quote: typeof f.raw_quote === 'string' && f.raw_quote.trim() ? f.raw_quote.trim() : undefined,
+      });
+      accepted++;
     }
-    session.factsRecorded += saved;
-    return { message: `Saved ${saved} fact${saved === 1 ? '' : 's'}.`, wrapped: false };
+    return { message: `Saved ${accepted} fact${accepted === 1 ? '' : 's'}.`, wrapped: false };
   }
 
   if (call.name === 'wrap_interview') {

@@ -10,6 +10,7 @@ let WorkflowActivation: typeof import("./WorkflowActivation").WorkflowActivation
 let OnboardingGate: typeof import("./OnboardingGate").OnboardingGate;
 let Composer: typeof import("../shell/Composer").Composer;
 let useTalkDraft: typeof import("../shell/useTalkDraft").useTalkDraft;
+let STATUS_RETRY: typeof import("./useOnboardingStatus").STATUS_RETRY;
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot> | null = null;
 
@@ -20,6 +21,7 @@ beforeAll(async () => {
   ({ OnboardingGate } = await import("./OnboardingGate"));
   ({ Composer } = await import("../shell/Composer"));
   ({ useTalkDraft } = await import("../shell/useTalkDraft"));
+  ({ STATUS_RETRY } = await import("./useOnboardingStatus"));
 });
 afterEach(async () => {
   if (root) await act(async () => root!.unmount());
@@ -179,10 +181,16 @@ test("a failed completion refresh retains the activation task and can be retried
   await mount(<OnboardingGate><TalkHarness connected onSubmit={(text) => sent.push(text)} /></OnboardingGate>);
   await act(async () => button("Skip tour").click());
   await enter(host.querySelector("textarea")!, "Prepare my Friday update");
-  await act(async () => {
-    button("Review request in Talk").click();
-    await new Promise((resolve) => setTimeout(resolve, 2300));
-  });
+  const retryDelay = STATUS_RETRY.delayMs;
+  STATUS_RETRY.delayMs = 0;
+  try {
+    await act(async () => {
+      button("Review request in Talk").click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+  } finally {
+    STATUS_RETRY.delayMs = retryDelay;
+  }
   expect(host.querySelector('[role="alert"]')!.textContent).toContain("Your task is still here");
   expect(host.querySelector("textarea")!.value).toBe("Prepare my Friday update");
   failRefresh = false;
@@ -190,4 +198,49 @@ test("a failed completion refresh retains the activation task and can be retried
   expect(host.querySelector('[aria-label="Shell"]')).not.toBeNull();
   expect(host.querySelector("textarea")!.value).toContain("Prepare my Friday update");
   expect(sent).toEqual([]);
+});
+
+const NEW_INSTALL = {
+  setup_completed: false, setup_completed_at: null, setup_skipped_profile: false,
+  profile_completed: false, tutorial_completed: false, tutorial_completed_at: null,
+  tutorial_dismissed: false, tutorial_progress_step: null, last_reset_at: null,
+};
+
+test("a skip that saves but cannot load the dashboard says so, and retrying works", async () => {
+  let statusReads = 0;
+  let failRefresh = true;
+  const skips: string[] = [];
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (String(url) === "/api/onboarding/skip") {
+      skips.push(init?.method ?? "GET");
+      return Response.json({ ok: true });
+    }
+    if (String(url) === "/api/onboarding/status") {
+      if (++statusReads === 1) return Response.json(NEW_INSTALL);
+      if (failRefresh) return new Response("Unavailable", { status: 503 });
+      return Response.json({ ...NEW_INSTALL, setup_completed: true, setup_skipped_profile: true, tutorial_dismissed: true, post_setup_services_ready: true });
+    }
+    return Response.json({ hosted_llm: true });
+  }) as never;
+  const retryDelay = STATUS_RETRY.delayMs;
+  STATUS_RETRY.delayMs = 0;
+  try {
+    await mount(<OnboardingGate><section aria-label="Shell" /></OnboardingGate>);
+    const later = () => [...host.querySelectorAll("button")].find((el) => el.textContent?.includes("do this later"))!;
+    await act(async () => {
+      later().click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(host.textContent).toContain("Skip saved, but Jarvis couldn't load your dashboard");
+    expect(host.textContent).not.toContain("Couldn't save the skip");
+    failRefresh = false;
+    await act(async () => {
+      later().click();
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    });
+    expect(host.querySelector('[aria-label="Shell"]')).not.toBeNull();
+    expect(skips).toEqual(["POST", "POST"]);
+  } finally {
+    STATUS_RETRY.delayMs = retryDelay;
+  }
 });

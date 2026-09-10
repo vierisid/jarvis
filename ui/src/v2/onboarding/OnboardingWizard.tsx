@@ -594,10 +594,17 @@ export function OnboardingWizard({
     try {
       const r = await fetch("/api/onboarding/skip", { method: "POST" });
       if (!r.ok) throw new Error((await r.text().catch(() => "")) || `HTTP ${r.status}`);
-      await onComplete();
     } catch (e) {
       // Closing anyway would replay onboarding next launch — surface it instead.
       setError(e instanceof Error && e.message ? `Couldn't save the skip: ${e.message}` : "Couldn't reach the daemon — try again.");
+      setBusy(false);
+      return;
+    }
+    try {
+      await onComplete();
+    } catch {
+      // The skip is saved; only loading the dashboard failed, and retrying is safe.
+      setError("Skip saved, but Jarvis couldn't load your dashboard. Try again.");
     } finally { setBusy(false); }
   }, [onComplete]);
 
@@ -1447,8 +1454,11 @@ const IV_PHASE_CLASS: Record<string, string> = { thinking: "s-think", done: "s-d
 const IV_PHASE_LABEL: Record<string, string> = { connecting: "connecting…", ready: "your turn", error: "needs attention", thinking: "thinking", done: "done" };
 
 function InterviewStep({ onComplete }: { onComplete: () => void }) {
-  const session = useInterviewSession();
   const [composerText, setComposerText] = useState("");
+  // A failed turn hands its answer back for a retry. Keep anything typed since.
+  const session = useInterviewSession((text) => {
+    setComposerText((current) => (current.trim() ? `${text}\n\n${current}` : text));
+  });
   const canSend = session.phase === "ready" || session.phase === "error";
   const sendTyped = () => {
     if (session.sendUserMessage(composerText)) setComposerText("");

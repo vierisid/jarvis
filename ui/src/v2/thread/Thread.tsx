@@ -388,8 +388,8 @@ function EmptyState() {
         Make room for <em>your work.</em>
       </h1>
       <p className="v2-thread__empty-lede">
-        Describe a recurring task. Jarvis can help you draft a workflow, work through
-        the details, and decide where your judgment belongs. Review your message below, then send it to begin.
+        Describe a recurring task below. Jarvis can help you draft a workflow, work through
+        the details, and decide where your judgment belongs.
       </p>
     </section>
   );

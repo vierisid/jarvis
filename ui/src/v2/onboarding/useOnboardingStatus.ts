@@ -149,6 +149,9 @@ export function useOnboardingStatus(): HookValue {
   return { status, loading, error, refresh };
 }
 
+/** Base backoff between status attempts. Mutable so tests can shorten it. */
+export const STATUS_RETRY = { delayMs: 700 };
+
 /** Fetch `/api/onboarding/status` with a few short retries. A daemon
  *  that is mid-restart (or briefly 503ing while services come up) used
  *  to fail the single fetch, and the error fallback re-showed the full
@@ -159,7 +162,7 @@ async function fetchStatusWithRetry(): Promise<OnboardingStatus> {
   let lastError: unknown;
   for (let attempt = 0; attempt < 3; attempt++) {
     if (attempt > 0) {
-      await new Promise((resolve) => setTimeout(resolve, attempt * 700));
+      await new Promise((resolve) => setTimeout(resolve, attempt * STATUS_RETRY.delayMs));
     }
     try {
       const r = await fetch("/api/onboarding/status");
