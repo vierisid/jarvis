@@ -61,25 +61,30 @@ export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
   const data = useSettingsData();
   const [tab, setTab] = useState<SettingsTab>("general");
   // A self-hosted install has no bill, so it gets no Billing tab. Same shared
-  // store as the shell banner, so this costs no extra request; see
-  // billingTabVisible for why the tab stays while the answer is not known yet.
-  const showBilling = billingTabVisible(useBilling().state);
+  // store as the shell banner, and refreshOnMount: false so opening Settings
+  // does not itself trigger a read; see billingTabVisible for why the tab stays
+  // while the answer is not known yet.
+  const showBilling = billingTabVisible(useBilling({ refreshOnMount: false }).state);
   const visibleTabs = useMemo(
     () => (showBilling ? TABS : TABS.filter((t) => t.key !== "billing")),
     [showBilling],
   );
   const visibleKeys = useMemo(() => visibleTabs.map((t) => t.key), [visibleTabs]);
   const tabsApi = useRovingTabs<SettingsTab>(visibleKeys, tab, setTab, "v2-set");
-  // Sitting on Billing when the install turns out to be self-hosted: move off
-  // a tab that no longer exists.
-  useEffect(() => {
-    if (!showBilling && tab === "billing") setTab("general");
-  }, [showBilling, tab]);
   const [toast, setToast] = useState<{ text: string; tone: "ok" | "warn" } | null>(null);
 
   const showToast = useCallback((text: string, tone: "ok" | "warn" = "ok") => {
     setToast({ text, tone });
   }, []);
+
+  // Sitting on Billing when the install turns out to be self-hosted (possible
+  // only before the first read lands): move off a tab that no longer exists,
+  // and say why, so the jump is not a mystery.
+  useEffect(() => {
+    if (showBilling || tab !== "billing") return;
+    setTab("general");
+    showToast("This Jarvis is self-hosted, so there's no billing to show.", "ok");
+  }, [showBilling, tab, showToast]);
 
   useEffect(() => {
     if (!toast) return;

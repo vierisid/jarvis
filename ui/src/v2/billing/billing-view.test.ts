@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import {
   bannerFor,
+  billingRecheckDue,
   billingState,
   billingTabVisible,
+  SELF_HOSTED_RECHECK_MS,
   boldSegments,
   brandLabel,
   cardExpiresBefore,
@@ -105,6 +107,17 @@ describe('the Settings tab', () => {
     expect(billingTabVisible('unavailable')).toBe(true);
     // Not known yet (or the read is failing): never hide a hosted user's page.
     expect(billingTabVisible('unknown')).toBe(true);
+  });
+
+  test('a self-hosted answer is re-asked rarely, so a brain that becomes hosted gets its tab back without a reload', () => {
+    const t0 = 1_000_000;
+    expect(billingRecheckDue('self', t0, t0 + 60_000)).toBe(false);
+    expect(billingRecheckDue('self', t0, t0 + SELF_HOSTED_RECHECK_MS - 1)).toBe(false);
+    expect(billingRecheckDue('self', t0, t0 + SELF_HOSTED_RECHECK_MS)).toBe(true);
+    // Everything else polls as usual.
+    for (const state of ['unknown', 'ready', 'unavailable'] as const) {
+      expect(billingRecheckDue(state, t0, t0 + 1)).toBe(true);
+    }
   });
 });
 

@@ -1,5 +1,6 @@
 import { useEffect, useSyncExternalStore } from "react";
 import {
+  billingRecheckDue,
   classifyBillingResponse,
   type BillingLinks,
   type BillingSummary,
@@ -28,7 +29,7 @@ export interface BillingSnapshot {
   links: BillingLinks | null;
   /** The last read failed or answered "unavailable" while a summary is shown. */
   stale: boolean;
-  /** When the current summary was read; 0 before any. */
+  /** When the current summary (or the self-hosted answer) was read; 0 before any. */
   readAt: number;
 }
 
@@ -60,7 +61,8 @@ async function load(fresh: boolean): Promise<void> {
     if (probe.kind === "failed") throw new Error(`HTTP ${res.status}`);
     backoff = RETRY_MS;
     if (probe.kind === "self") {
-      publish({ ...INITIAL, state: "self" });
+      // readAt stamps the answer, so it is re-asked only rarely (billingRecheckDue).
+      publish({ ...INITIAL, state: "self", readAt: Date.now() });
     } else if (probe.kind === "ready") {
       publish({ state: "ready", summary: probe.summary, links: probe.links, stale: false, readAt: Date.now() });
     } else if (snapshot.summary) {
@@ -87,13 +89,13 @@ async function load(fresh: boolean): Promise<void> {
 let pollTimer: number | null = null;
 
 function onReturn(): void {
-  if (!document.hidden && snapshot.state !== "self") void load(true);
+  if (!document.hidden && billingRecheckDue(snapshot.state, snapshot.readAt, Date.now())) void load(true);
 }
 
 function start(): void {
   void load(false);
   pollTimer = window.setInterval(() => {
-    if (!document.hidden && snapshot.state !== "self") void load(false);
+    if (!document.hidden && billingRecheckDue(snapshot.state, snapshot.readAt, Date.now())) void load(false);
   }, BILLING_POLL_MS);
   window.addEventListener("focus", onReturn);
   document.addEventListener("visibilitychange", onReturn);
@@ -117,13 +119,20 @@ function subscribe(listener: () => void): () => void {
   };
 }
 
-export function useBilling(): BillingSnapshot & { refresh: () => void } {
+export function useBilling(
+  /**
+   * `refreshOnMount: false` for callers that only need the load state (the
+   * Settings tab list): they must not turn opening Settings into a read.
+   */
+  opts: { refreshOnMount?: boolean } = {},
+): BillingSnapshot & { refresh: () => void } {
   const snap = useSyncExternalStore(subscribe, () => snapshot, () => INITIAL);
+  const refreshOnMount = opts.refreshOnMount ?? true;
   // Opening Settings -> Billing is itself a reason to look again, including
   // onto an "unavailable" screen, which schedules no retry of its own. The very
   // first mount already loads through subscribe().
   useEffect(() => {
-    if (snapshot.state === "ready" || snapshot.state === "unavailable") void load(true);
-  }, []);
+    if (refreshOnMount && (snapshot.state === "ready" || snapshot.state === "unavailable")) void load(true);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps -- a mount-time read, by definition
   return { ...snap, refresh: () => void load(true) };
 }
