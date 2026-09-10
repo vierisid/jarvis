@@ -3,10 +3,8 @@ import type { OnboardingStatus } from "./useOnboardingStatus";
 
 /**
  * Whether the restart banner should be visible for the given status.
- * Exported so the OnboardingGate can decide whether to wrap the shell
- * in the `.v2-shell-frame` grid container — when the banner is hidden,
- * wrapping causes the shell to collapse into the `auto` row track and
- * the composer ends up mid-page.
+ * The gate keeps a stable wrapper and switches it to display:contents when
+ * this banner is hidden, avoiding an empty grid row or a shell remount.
  */
 export function shouldShowRestartBanner(status: OnboardingStatus | null): boolean {
   if (!status) return false;

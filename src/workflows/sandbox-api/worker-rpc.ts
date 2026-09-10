@@ -70,6 +70,12 @@ type ConnectionWaiter = {
   timer: ReturnType<typeof setTimeout>;
 };
 
+/**
+ * Ceiling on a single engine RPC frame. See the note at the `Server` options
+ * for why it is this number and not a larger one.
+ */
+const MAX_HTTP_BUFFER_SIZE = 16 * 1024 * 1024;
+
 export class WorkerRpcServer {
   private io: Server | null = null;
   private readonly connections = new Map<string, ConnectedSandbox>();
@@ -106,10 +112,35 @@ export class WorkerRpcServer {
   async start(): Promise<void> {
     if (this.io) return;
     this.io = new Server({
-      // Engine clients negotiate via polling-then-upgrade by default; allow
-      // both transports so the upstream client connects without a config
-      // override on its side.
+      // BOTH transports offered, but under Bun the engine only ever uses
+      // polling: the engine bundle carries the real `ws` npm client, and its
+      // upgrade against Bun's http client comes back as
+      // `unexpected-response 101`, so it never completes. Measured on a live
+      // engine -- the server-side transport reads `polling` throughout. An
+      // in-process test client uses Bun's own `ws` shim and DOES upgrade,
+      // which is why a websocket-based test of the limit below is green
+      // against the bug it was written for.
       transports: ["polling", "websocket"],
+      // socket.io's 1MB default CLOSES the connection on an oversized frame,
+      // silently: no error, no reply, just a dropped socket. Piece metadata
+      // outgrows it -- @activepieces/piece-ampeco@0.2.8 replies with 2.68MB
+      // (377 actions is 0.75MB, 8 bundled i18n files add 2.2MB more) -- and
+      // that killed the socket mid-extraction, so the caller waited out its
+      // budget for a reply that could never arrive and every later operation
+      // on that handle went to a dead client. One piece took a whole
+      // shared-runtime build with it.
+      //
+      // 16MB, not more. It is ~6x the largest payload we have measured, and it
+      // MATCHES Bun's native websocket frame cap: if a Bun release ever makes
+      // the engine's upgrade succeed, the effective ceiling stays where this
+      // says it is instead of silently becoming 16MB. Note this bound is not
+      // purely self-imposed -- the engine.io handshake is unauthenticated and
+      // loopback is shared by every tenant's processes on a hosted box, so
+      // this is also how much any local process can make one daemon buffer per
+      // request. That argues for smaller, not larger; the way to bring it down
+      // further is to stop shipping the i18n blob the daemon discards (see
+      // metadataToCatalogEntry), which is 82% of ampeco's payload.
+      maxHttpBufferSize: MAX_HTTP_BUFFER_SIZE,
       path: "/worker/ws",
       // Auth check happens in the connection handler below; the middleware
       // form rejects with a generic error, which is harder to debug.
@@ -123,6 +154,23 @@ export class WorkerRpcServer {
     // over it) to anything that can reach the box. The engine always dials
     // 127.0.0.1, so loopback is the only address it needs.
     const httpServer = createServer();
+    // SAY SO when a frame is refused. socket.io answers an over-limit polling
+    // body with a 413 and closes the socket, emitting nothing an engine.io
+    // listener can see: the caller just waits out its budget and reports a
+    // timeout. That silence is why one oversized piece cost an investigation
+    // rather than a log line, and raising the ceiling does not end it -- it
+    // only moves it, so the next piece past MAX_HTTP_BUFFER_SIZE would be just
+    // as quiet.
+    httpServer.on("request", (req, res) => {
+      res.once("finish", () => {
+        if (res.statusCode !== 413) return;
+        console.error(
+          `[worker-rpc] an engine RPC frame of ${req.headers["content-length"] ?? "unknown"} bytes ` +
+            `exceeded maxHttpBufferSize (${MAX_HTTP_BUFFER_SIZE}); socket.io refused it and closed ` +
+            `the socket, so whatever operation was in flight will report a timeout instead.`,
+        );
+      });
+    });
     this.io.attach(httpServer);
 
     await new Promise<void>((res, rej) => {
@@ -305,6 +353,14 @@ export class WorkerRpcServer {
     }
 
     socket.on("disconnect", () => {
+      // ONLY if this socket is still the registered one. A reconnecting engine
+      // registers its new socket under the same sandbox id, and if the old
+      // socket's disconnect fires after that (a server ping timeout racing a
+      // completed re-handshake), an unconditional delete drops the LIVE entry.
+      // Callers then see "no connection" for an engine that is connected and
+      // healthy -- which used to cost a 90s timeout and now, since the handle
+      // re-resolves per send, would destroy that engine instead.
+      if (this.connections.get(sandboxId)?.socket !== socket) return;
       this.connections.delete(sandboxId);
     });
   }

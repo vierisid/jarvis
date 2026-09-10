@@ -24,6 +24,11 @@ if no OpenAI provider is configured, realtime voice reports unavailable.
 The user is billed by OpenAI directly (BYO key). The Settings > Voice GET
 endpoint redacts the key and reports `has_api_key` / `available` only.
 
+Hosted installs (a `usejarvis_ai` block) are the exception: they never read a
+user key. `resolveRealtimeVoice` points the session at the LLM proxy with the
+plan-gated `uj-realtime` alias as the model, and the proxy maps that alias to the
+upstream OpenAI model when the socket is dialed.
+
 ## 2. Protocol notes (GA, post-2026-05)
 
 These were confirmed via the live smoke test (`scripts/realtime-smoke.ts`) and
@@ -33,6 +38,12 @@ are load-bearing - they differ from the older beta:
   **no** `OpenAI-Beta` header.
 - Session config is nested under `session.audio.{input,output}` with
   `session.type: 'realtime'`.
+- We name the model only in `?model=` on the connect URL, never as
+  `session.model` in `session.update`. OpenAI would accept it on a direct key,
+  but the proxy (section 1, hosted) only maps the alias at dial time and forwards
+  the update verbatim, so OpenAI rejects `uj-realtime` there with
+  `invalid_value: Unsupported option for this model.` and every hosted session
+  dies before it starts.
 - Reasoning effort is `session.reasoning.effort` (GPT-5 convention), not a
   top-level field.
 - Output audio events use the `response.output_audio*` names
@@ -75,6 +86,24 @@ response server-side (`response.cancel`) and stops local playback. Cancelling
 matters: without it OpenAI keeps generating tokens/audio the user will never
 hear, and trailing deltas can replay over the interruption. Deltas that arrive
 after a cancel (before the next `response.created`) are suppressed.
+
+### Tool results
+
+OpenAI refuses a `response.create` while a response is active
+(`conversation_already_has_active_response`). So each `function_call_output` is
+sent as soon as its tool returns, but the one `response.create` that voices them
+waits until every call handed out is answered and `response.done` has landed.
+The wait on sibling calls is bounded (`TOOL_RESULT_GRACE_MS`, 4s), since no tool
+has a timeout: after it, the results already in are voiced and a late one is
+voiced on its own. Seeing no output for the missing call, the model may call that
+tool again, so a legitimately long tool next to a quick one in the same reply can
+be dispatched twice. Calls from an earlier reply stop counting once a new
+response starts. A refusal anyway (a response started that we have not heard
+about yet) is not an error: the request is repeated after that response ends.
+From a barge-in until the VAD's response starts nothing is voiced, because that
+response already sees the outputs; the dashboard's stop drops them too. Sending
+one `response.create` per result killed pebble sessions on any two-tool reply,
+since the pebble treats every `error` event as fatal.
 
 ## 4. Daemon wiring
 

@@ -78,19 +78,19 @@ export const PERM_COPY: Record<string, PermCopy> = {
     label: "Accessibility",
     glyph: "access",
     required: true,
-    body: "Global hotkeys like Ctrl+Space, and letting Jarvis operate your apps. macOS won't grant this from a dialog, so until you switch it on the shortcuts quietly do nothing.",
+    body: "Keyboard shortcuts and desktop control, so Jarvis can operate your apps as part of a workflow. Enable this in macOS Settings; action approval rules are separate in Authority.",
   },
   screen: {
     label: "Screen Recording",
     glyph: "screen",
     required: true,
-    body: "Seeing your screen for Awareness: reading what's on it, and noticing when you're stuck.",
+    body: "Screen context for Awareness, so Jarvis can notice repeated work and suggest routines worth turning into workflows.",
   },
   microphone: {
     label: "Microphone",
     glyph: "mic",
     required: false,
-    body: "Voice commands and the wake word. Jarvis will ask again the first time you talk to it.",
+    body: "Optional voice commands and the wake word. The onboarding interview uses written answers. Jarvis will ask again when you use voice.",
   },
   notifications: {
     label: "Notifications",

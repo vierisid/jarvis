@@ -578,8 +578,21 @@ func makeBrowserNavigateHandler(cfg *SidecarConfig) RPCHandler {
 		// Register the waiter BEFORE navigating so the event can't be missed
 		loaded := cdp.waitForEvent("Page.loadEventFired")
 
-		if _, err := cdp.send("Page.navigate", map[string]any{"url": url}); err != nil {
+		result, err := cdp.send("Page.navigate", map[string]any{"url": url})
+		if err != nil {
 			return nil, fmt.Errorf("navigate failed: %w", err)
+		}
+
+		// Page.navigate reports network-level failures (DNS, blocked, ERR_*)
+		// in errorText, NOT as a protocol error. Returning success while
+		// ignoring it is how the agent ends up claiming it opened a page it
+		// never reached.
+		var nav struct {
+			ErrorText string `json:"errorText"`
+		}
+		_ = json.Unmarshal(result, &nav)
+		if nav.ErrorText != "" {
+			return nil, fmt.Errorf("navigation to %s failed: %s", url, nav.ErrorText)
 		}
 
 		select {

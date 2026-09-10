@@ -3,8 +3,10 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os/exec"
 	"strconv"
@@ -339,9 +341,6 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 			return nil, fmt.Errorf("launch_app: open -a %q failed: %w", executable, err)
 		}
 
-		// Wait briefly for the app to register, then resolve its PID
-		time.Sleep(500 * time.Millisecond)
-
 		name := executable
 		if strings.HasSuffix(name, ".app") {
 			name = name[:len(name)-4]
@@ -350,13 +349,14 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 			name = name[idx+1:]
 		}
 
-		pgrepOut, _ := exec.Command("pgrep", "-n", name).Output()
-		pidStr := strings.TrimSpace(string(pgrepOut))
-		pid, _ := strconv.Atoi(pidStr)
+		// Poll for the process AND a visible window instead of a fixed
+		// 500ms sleep — returning before the window exists made the next
+		// tool call fail ("no window found") or, worse, act on the wrong app.
+		pid, probe, probeErr := waitForAppWindowDarwin(name, 0, 5*time.Second)
 		if pid == 0 {
-			return nil, fmt.Errorf("launch_app: open -a %q succeeded but process PID could not be resolved via pgrep %q", executable, name)
+			return nil, fmt.Errorf("launch_app: open -a %q succeeded but no running %s.app process appeared within 5s", executable, name)
 		}
-		return &RPCResult{Result: map[string]any{"success": true, "pid": pid, "name": name}}, nil
+		return launchResultDarwin(pid, name, probe, probeErr), nil
 	}
 
 	// Absolute/relative path to a binary — start detached
@@ -387,7 +387,130 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 		name = executable[idx+1:]
 	}
 
-	return &RPCResult{Result: map[string]any{"success": true, "pid": pid, "name": name}}, nil
+	_, probe, probeErr := waitForAppWindowDarwin("", pid, 5*time.Second)
+	return launchResultDarwin(pid, name, probe, probeErr), nil
+}
+
+// countWindowsDarwin asks System Events how many windows pid owns.
+//
+// A denied automation prompt is not "zero windows", it is no answer at all,
+// and the two have to stay distinguishable: the caller reports the first as
+// a failed launch and the second as an unverified one.
+func countWindowsDarwin(pid int) (int, error) {
+	script := fmt.Sprintf(`tell application "System Events" to count windows of (first process whose unix id is %d)`, pid)
+
+	// Bounded on purpose: the first automation attempt can raise a consent
+	// dialog, and osascript blocks behind it for as long as the dialog is
+	// up. Without a deadline the whole launch_app RPC would hang there.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, "osascript", "-e", script)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return 0, fmt.Errorf("%w: System Events did not answer in time, which usually means an automation consent dialog is waiting to be answered", errWindowCheckUnavailable)
+	}
+	if err != nil {
+		msg := strings.TrimSpace(stderr.String())
+		if isPermissionErrorDarwin(msg) {
+			return 0, fmt.Errorf("%w: %s", errWindowCheckUnavailable, firstLine(msg))
+		}
+		if msg == "" {
+			msg = err.Error()
+		}
+		// Anything else (the process is not registered with System Events
+		// yet, most often) may still resolve on a later poll.
+		return 0, fmt.Errorf("System Events could not count windows: %s", firstLine(msg))
+	}
+	n, convErr := strconv.Atoi(strings.TrimSpace(string(out)))
+	if convErr != nil {
+		return 0, fmt.Errorf("System Events returned a non-numeric window count %q", strings.TrimSpace(string(out)))
+	}
+	return n, nil
+}
+
+// isPermissionErrorDarwin recognises the AppleScript failures that mean the
+// sidecar will never be allowed to look, rather than that it looked and saw
+// nothing: -1743 (automation not authorized), -25211 (assistive access not
+// granted), and -1728 on System Events itself when it is blocked outright.
+func isPermissionErrorDarwin(stderr string) bool {
+	if stderr == "" {
+		return false
+	}
+	lower := strings.ToLower(stderr)
+	for _, marker := range []string{"-1743", "-25211", "not authorized", "not allowed assistive access", "assistive access"} {
+		if strings.Contains(lower, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// waitForAppWindowDarwin polls until the app has a visible window, up to
+// timeout. When pid is 0 it is first resolved from `ps` by app name (see
+// appProcessPid). Returns the pid (0 if the process never appeared), what the
+// window check established, and the last probe error for the caller's note.
+func waitForAppWindowDarwin(name string, pid int, timeout time.Duration) (int, launchProbe, error) {
+	deadline := time.Now().Add(timeout)
+	var lastErr error
+	for {
+		if pid == 0 && name != "" {
+			// Re-asked on every poll until it answers: `open -a` returns before
+			// a cold launch has exec'd the app's main process.
+			if out, err := exec.Command("ps", "-axo", "pid=,comm=").Output(); err == nil {
+				pid = appProcessPid(string(out), name)
+			}
+		}
+		if pid != 0 {
+			n, err := countWindowsDarwin(pid)
+			switch {
+			case err == nil && n > 0:
+				return pid, probeWindowFound, nil
+			case errors.Is(err, errWindowCheckUnavailable):
+				// Permission will not appear mid-poll; stop rather than
+				// spend the whole timeout re-asking the same question.
+				return pid, probeUncheckable, err
+			case err != nil:
+				lastErr = err
+			}
+		}
+		if time.Now().After(deadline) {
+			return pid, probeWindowAbsent, lastErr
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
+// launchResultDarwin builds the launch_app result with an honest
+// window_visible flag: success means "the app is on screen", not merely
+// "a process was spawned".
+//
+// The unverified case is kept separate from the failed one. Reporting
+// success:false when the automation permission was refused would mark every
+// working launch on an unprompted Mac as a failure, and the model would
+// launch the app again on the strength of it.
+func launchResultDarwin(pid int, name string, probe launchProbe, probeErr error) *RPCResult {
+	res := map[string]any{"pid": pid, "name": name}
+
+	switch probe {
+	case probeWindowFound:
+		res["success"] = true
+		res["window_visible"] = true
+
+	case probeUncheckable:
+		res["success"] = true
+		res["window_visible"] = nil
+		res["note"] = fmt.Sprintf("app started (pid %d) but whether a window opened could NOT be checked: %v. This is not a failure report - the app may well be on screen. Run desktop_list_windows to see what is actually open before interacting, and do not launch it again on the strength of this result.", pid, probeErr)
+
+	default: // probeWindowAbsent
+		res["success"] = false
+		res["window_visible"] = false
+		res["note"] = fmt.Sprintf("process started (pid %d) but no window appeared within 5s - the app may still be starting, be windowless, or have exited. Run desktop_list_windows to check before interacting; do NOT assume it is open.", pid)
+	}
+
+	return &RPCResult{Result: res}
 }
 
 // ── focus_window ─────────────────────────────────────────────────────

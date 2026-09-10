@@ -71,7 +71,14 @@ func (c *SidecarClient) openRoom(id PanelID, route, title string, w, h int) {
 		Resizable: true,
 	})
 	if errors.Is(err, ErrPanelExists) {
-		_ = c.panels.Focus(id) // already open — bring it forward instead
+		// Already open: bring it forward instead. Logged either way, because
+		// this branch used to be silent, and a crash inside it on macOS left
+		// sidecar.log ending on the RPC that triggered it with nothing after.
+		if err := c.panels.Focus(id); err != nil {
+			log.Printf("[tray] focus %q failed: %v", title, err)
+			return
+		}
+		log.Printf("[tray] focused %q", title)
 		return
 	}
 	if err != nil {

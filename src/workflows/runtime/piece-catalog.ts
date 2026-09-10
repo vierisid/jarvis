@@ -405,6 +405,22 @@ export interface BuildCatalogOptions {
    */
   overallTimeoutMs?: number;
   /**
+   * Give up after this many extractions in a row get NO ANSWER from the
+   * engine. A wedged engine burns `pieceTimeoutMs` on every remaining piece,
+   * so without this one broken engine costs the whole catalog times that
+   * timeout -- on the hosted shared-runtime build that is 659 pieces x 30s,
+   * about five and a half hours, against an install op that gives up after
+   * thirty minutes. The build then reports nothing at all: it is killed
+   * mid-loop, so even the failures never surface.
+   *
+   * TIMEOUTS ONLY. An error REPLY proves the engine is alive and answering, so
+   * counting those would end a healthy build on a run of legitimately broken
+   * pieces -- and discovery is sorted, which groups families (piece-google-*
+   * and friends), so a shared broken dependency produces exactly such a run.
+   * Reset by a success; an error reply leaves it alone. Default 5.
+   */
+  maxConsecutiveTimeouts?: number;
+  /**
    * Optional reporter for `discoverPieces` conflicts and per-piece extraction
    * failures. Defaults to `console.warn`. Pass a noop in tests.
    */
@@ -487,6 +503,31 @@ export function readCachedEntries(
  * logged via `reporter`, and surfaced on `failures[]`. The catalog still
  * boots with whichever pieces succeeded; the daemon can log/UI-display the
  * failures without blocking startup.
+ *
+ * An extraction that gets NO ANSWER also ends that engine. Our per-piece race
+ * abandons an operation the engine is still running (nothing cancels it), so
+ * the next piece would queue behind it; the following one gets a fresh engine
+ * instead. An error REPLY is left alone -- the engine answered, so it is alive
+ * and reusable, and destroying it would be churn (and a no-op under a pooled
+ * runtime, which would simply park and re-hand the same process).
+ *
+ * `maxConsecutiveTimeouts` unanswered extractions in a row end the build, with
+ * the remainder reported as unattempted rather than paying `pieceTimeoutMs` on
+ * every one of them.
+ *
+ * WHAT PROMPTED THIS, now established: on the hosted shared-runtime build a
+ * single piece got NO reply and every one of the 658 after it timed out,
+ * against an engine process still alive. The cause was not the engine at all.
+ * `@activepieces/piece-ampeco@0.2.8` replies with 2.68MB of metadata, over
+ * socket.io's 1MB default frame limit, which CLOSES the connection rather than
+ * erroring; the reply never came, and the handle went on emitting into a dead
+ * socket. The limit is raised in sandbox-api/worker-rpc.ts and the handle now
+ * re-resolves its client per send.
+ *
+ * This loop is what stands behind those: an engine that stops answering for
+ * ANY reason -- an oversized frame, a piece that blocks the event loop, a
+ * future cause nobody has met yet -- costs one piece instead of the rest of
+ * the catalog.
  */
 export async function buildPieceCatalog(
   opts: BuildCatalogOptions,
@@ -494,6 +535,7 @@ export async function buildPieceCatalog(
   const reporter = opts.reporter ?? ((m) => console.warn(`[piece-catalog] ${m}`));
   const pieceTimeoutMs = opts.pieceTimeoutMs ?? 10_000;
   const overallTimeoutMs = opts.overallTimeoutMs ?? 60_000;
+  const maxConsecutiveTimeouts = opts.maxConsecutiveTimeouts ?? 5;
 
   const { entries: discovered, conflicts } = discoverPieces(opts.pieceRoots);
   for (const c of conflicts) {
@@ -543,11 +585,17 @@ export async function buildPieceCatalog(
   let extracted = 0;
   if (misses.length > 0) {
     const projectId = opts.projectId ?? DEFAULT_IDS.project;
-    const runId = "metadata-extract-" + SandboxRegistry.newSandboxId();
+    // A FRESH run id per engine: the loop below replaces the engine after a
+    // failure, and two live sandboxes must not share one.
+    const newRunId = () => "metadata-extract-" + SandboxRegistry.newSandboxId();
 
-    const handle = await opts.runtime.acquire({ runId, projectId });
+    let handle = await opts.runtime.acquire({ runId: newRunId(), projectId });
+    /** Set while `handle` has already been released and not yet replaced, so
+     * the `finally` below cannot release the same engine twice. */
+    let handleReleased = false;
     const overallDeadline = Date.now() + overallTimeoutMs;
     let processed = 0;
+    let consecutiveTimeouts = 0;
     try {
       for (const { piece, contentHash } of misses) {
         if (Date.now() > overallDeadline) {
@@ -580,6 +628,7 @@ export async function buildPieceCatalog(
           out.push(entry);
           userEntries[`${piece.name}@${piece.version}`] = { contentHash, entry };
           extracted++;
+          consecutiveTimeouts = 0;
         } catch (e) {
           const reason = e instanceof Error ? e.message : String(e);
           failures.push({
@@ -588,10 +637,85 @@ export async function buildPieceCatalog(
             reason,
           });
           reporter(`extract ${piece.name}@${piece.version} failed: ${reason}`);
+
+          // An error REPLY means the engine answered: it is alive, idle and
+          // reusable, so keep it. Only a timeout is grounds for destroying it.
+          //
+          // This distinction is what stops the give-up below from ending a
+          // healthy build. Discovery is sorted, which groups piece families
+          // (piece-google-*, piece-microsoft-*), and the shared-runtime build
+          // installs with --ignore-scripts, so one broken dependency across a
+          // family yields a run of error replies from engines that answered
+          // promptly every time. Counting those as evidence of a wedge would
+          // abandon the remaining hundreds of pieces over a handful of bad
+          // ones.
+          if (!(e instanceof PieceExtractionTimeoutError)) continue;
+
+          consecutiveTimeouts++;
+
+          // NO ANSWER: replace the engine. `withTimeout` above stopped waiting
+          // but nothing cancelled the operation -- there is no cancel message
+          // in EngineContract -- so this engine is still working on the piece
+          // we gave up on, and the next one would queue behind it and time out
+          // too. That is the shape the hosted build hit: one failure, then 658
+          // timeouts against a process still alive at 486MB.
+          //
+          // `release()` is the right call and not a shortcut: it kills rather
+          // than pools an engine with work still in flight, and the send() we
+          // abandoned is exactly that (`inFlight` is still 1 here, because it
+          // is decremented in send()'s own finally, which has not run). On an
+          // error reply it would instead PARK the process under `pool: true`
+          // and hand the same one back on the next acquire -- another reason
+          // the two cases are not interchangeable.
+          //
+          // The transport has its own deadline that marks such an engine
+          // abandoned, but it is CONTROL_OPERATION_TIMEOUT_S (60s) plus a 30s
+          // margin, always later than this loop's budget, so it never fires
+          // first and that machinery never runs.
+          handleReleased = true;
+          await handle.release().catch(() => {
+            // A failed release is a leaked engine, not a reason to abandon the
+            // build; the run id is dead either way.
+          });
+
+          if (consecutiveTimeouts >= maxConsecutiveTimeouts) {
+            const pending = misses.length - processed;
+            reporter(
+              `${consecutiveTimeouts} extractions in a row got no answer from the engine; ` +
+                `giving up with ${pending} piece(s) unattempted (a wedged engine costs ` +
+                `${pieceTimeoutMs}ms on every remaining piece)`,
+            );
+            for (const skipped of misses.slice(processed)) {
+              failures.push({
+                pieceName: skipped.piece.name,
+                pieceVersion: skipped.piece.version,
+                reason: `not attempted: gave up after ${consecutiveTimeouts} consecutive extraction timeouts`,
+              });
+            }
+            break;
+          }
+
+          try {
+            handle = await opts.runtime.acquire({ runId: newRunId(), projectId });
+            handleReleased = false;
+          } catch (spawnErr) {
+            // No engine, no catalog. Report the rest rather than throwing away
+            // the entries that already extracted successfully.
+            const why = spawnErr instanceof Error ? spawnErr.message : String(spawnErr);
+            reporter(`could not start a replacement engine: ${why}`);
+            for (const skipped of misses.slice(processed)) {
+              failures.push({
+                pieceName: skipped.piece.name,
+                pieceVersion: skipped.piece.version,
+                reason: `not attempted: replacement engine could not start (${why})`,
+              });
+            }
+            break;
+          }
         }
       }
     } finally {
-      await handle.release();
+      if (!handleReleased) await handle.release();
     }
   }
 
@@ -613,12 +737,22 @@ export async function buildPieceCatalog(
   return { catalog: new PieceCatalog(out), failures };
 }
 
+/**
+ * Thrown when an extraction outruns its per-piece budget.
+ *
+ * A distinct type because the two failure shapes need opposite handling and a
+ * substring match on a message is not a fact: an engine that ANSWERED with an
+ * error is alive and reusable, an engine that did not answer is still working
+ * on the piece we walked away from and must be destroyed.
+ */
+export class PieceExtractionTimeoutError extends Error {}
+
 /** Race a promise against a timeout; rejects with `message` on timeout. */
 function withTimeout<T>(p: Promise<T>, ms: number, message: string): Promise<T> {
   return Promise.race([
     p,
     new Promise<T>((_, reject) =>
-      setTimeout(() => reject(new Error(message)), ms),
+      setTimeout(() => reject(new PieceExtractionTimeoutError(message)), ms),
     ),
   ]);
 }

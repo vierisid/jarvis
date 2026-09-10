@@ -245,6 +245,83 @@ const PATCHED_VENDOR_SOURCES = [
 ] as const;
 
 /**
+ * Prepended to the engine bundle, so it runs before any piece module is
+ * imported.
+ *
+ * A BROWSER resolves a relative or empty Request URL against the document
+ * base; Bun has no base and throws `Failed to construct 'Request': url is
+ * required`. Bun also defines `self`, so bundles that sniff for a browser take
+ * the browser branch and then hit that throw. The abortcontroller-polyfill
+ * does exactly this AT MODULE LOAD:
+ *
+ *     I4 = typeof window < "u" ? window : typeof self < "u" ? self : null;
+ *     I4 ? ("signal" in new Request("")) ? ... : ...
+ *
+ * It reaches us bundled inside the airtable SDK, so importing
+ * `@activepieces/piece-airtable` throws before a single line of our code runs
+ * and EXTRACT_PIECE_METADATA reports INTERNAL_ERROR. Reproduced with nothing
+ * but `bun -e 'await import("@activepieces/piece-airtable")'`.
+ *
+ * So resolve against a dummy base, which is what the browser these bundles
+ * think they are running in would do. STRICTLY ADDITIVE: an input that already
+ * builds a Request is passed through untouched, and only one that would have
+ * THROWN is resolved, so nothing that works today changes. The probe then
+ * succeeds and the polyfill selects the NATIVE AbortController.
+ *
+ * `self` is deliberately left alone. Deleting it also fixes this piece, but
+ * UMD wrappers commonly do `typeof self !== "undefined" ? self : this`, and
+ * `this` is undefined in an ES module -- a broader blast radius than the one
+ * invalid input this replaces. `Symbol.hasInstance` delegates to the native
+ * constructor so `x instanceof Request` stays true for Requests built by
+ * fetch internals.
+ */
+/**
+ * The path-free half of the esbuild configuration: everything that changes the
+ * OUTPUT rather than where it lands. `bundleHash` hashes this whole object, so
+ * adding a define, changing the target, or removing the banner below all
+ * invalidate cached bundles by themselves.
+ *
+ * Hashing the banner CONSTANT instead would not: deleting the `banner:` line
+ * while leaving the constant in the file changes what the engine executes and
+ * leaves the key untouched, which is the same stale-bundle trap
+ * PATCHED_VENDOR_SOURCES exists to close. Paths stay out because they differ
+ * per machine and must not fragment the cache.
+ */
+export const ENGINE_ESBUILD_CONFIG = {
+  bundle: true,
+  platform: "node",
+  target: "node20",
+  format: "cjs",
+  sourcemap: true,
+  minifySyntax: true,
+  minifyWhitespace: true,
+  metafile: true,
+  // isolated-vm intentionally excluded -- we only run SANDBOX_PROCESS mode
+  // (see SPIKE-SANDBOXING.md). utf-8-validate / bufferutil are optional ws deps.
+  external: ["isolated-vm", "utf-8-validate", "bufferutil"],
+  get banner() {
+    return { js: ENGINE_REQUEST_BASE_SHIM };
+  },
+} as const;
+
+export const ENGINE_REQUEST_BASE_SHIM = `(() => {
+  const NativeRequest = globalThis.Request;
+  if (typeof NativeRequest !== "function") return;
+  class Request extends NativeRequest {
+    constructor(input, init) {
+      if (typeof input === "string") {
+        try { new URL(input); } catch { input = new URL(input, "http://localhost/").href; }
+      }
+      super(input, init);
+    }
+  }
+  Object.defineProperty(Request, Symbol.hasInstance, {
+    value: (x) => x instanceof NativeRequest,
+  });
+  globalThis.Request = Request;
+})();`;
+
+/**
  * Cache key combines the synthesized package.json (which captures dep versions),
  * the vendored upstream pin (tag + SHA shipped as a generated TS constant
  * by `sync-activepieces.ts`), and the content of any vendored source files
@@ -264,6 +341,17 @@ export function bundleHash(): string {
     const content = readFileSync(resolve(VENDOR_PACKAGES, rel), "utf8");
     hasher.update("\0").update(rel).update("\0").update(content);
   }
+  // The build CONFIG is a patch too: it changes the bytes the engine executes,
+  // just from our own options rather than a vendored file. Leaving it out of
+  // the key would serve the OLD engine from cache to every host that already
+  // has a bundle for this hash -- the exact stale-engine trap the list above
+  // exists to close -- and hashing only the banner constant would miss the
+  // banner being UNWIRED, or the target changing.
+  hasher
+    .update("\0")
+    .update("esbuild-config")
+    .update("\0")
+    .update(JSON.stringify(ENGINE_ESBUILD_CONFIG));
   return hasher.digest("hex").slice(0, 16);
 }
 
@@ -341,24 +429,17 @@ export async function buildEngineBundle(opts?: {
   };
 
   const result = await esbuild.build({
+    // The hashed config first, then only the path-dependent options. Anything
+    // that changes the output must live in ENGINE_ESBUILD_CONFIG or it is
+    // outside the cache key.
+    ...ENGINE_ESBUILD_CONFIG,
     entryPoints: [resolve(ENGINE_DIR, "src/main.ts")],
-    bundle: true,
-    platform: "node",
-    target: "node20",
     outfile: bundlePath,
-    format: "cjs",
-    sourcemap: true,
-    minifySyntax: true,
-    minifyWhitespace: true,
-    metafile: true,
     alias: {
       "@activepieces/shared": resolve(VENDOR_PACKAGES, "shared/src"),
       "@activepieces/pieces-framework": resolve(VENDOR_PACKAGES, "pieces/framework/src"),
       "@activepieces/pieces-common": resolve(VENDOR_PACKAGES, "pieces/common/src"),
     },
-    // isolated-vm intentionally excluded -- we only run SANDBOX_PROCESS mode
-    // (see SPIKE-SANDBOXING.md). utf-8-validate / bufferutil are optional ws deps.
-    external: ["isolated-vm", "utf-8-validate", "bufferutil"],
     nodePaths: [resolve(STAGING_DIR, "node_modules")],
     logLevel: "warning",
   });

@@ -40,7 +40,9 @@ describe("WorkerRpcServer (B4: socket.io engine <-> daemon)", () => {
   let signer: EngineTokenSigner;
   let registry: SandboxRegistry;
 
-  async function makeSandbox(): Promise<TestSandbox> {
+  async function makeSandbox(opts?: {
+    transports?: Array<"polling" | "websocket">;
+  }): Promise<TestSandbox> {
     const flow = createFlow({ projectId: DEFAULT_IDS.project });
     const v = createDraftVersion({ flowId: flow.id, displayName: "wsf" });
     lockVersion(v.id);
@@ -65,7 +67,7 @@ describe("WorkerRpcServer (B4: socket.io engine <-> daemon)", () => {
     });
 
     const client = socketIoClient(`http://127.0.0.1:${api.sandboxWsPort}`, {
-      transports: ["websocket"],
+      transports: opts?.transports ?? ["websocket"],
       path: "/worker/ws",
       auth: { sandboxId },
       reconnection: false,
@@ -118,6 +120,94 @@ describe("WorkerRpcServer (B4: socket.io engine <-> daemon)", () => {
     await api.stop();
     closeWorkflowDb();
   });
+
+  test("an engine reply larger than socket.io's 1MB default still arrives", async () => {
+    // THE ROOT CAUSE of a halted shared-runtime build. socket.io closes a
+    // connection carrying an oversized frame -- silently: no error, no reply,
+    // just a dropped socket. Piece metadata outgrows the 1MB default:
+    // @activepieces/piece-ampeco@0.2.8 replies with 2.68MB (377 actions is
+    // 0.75MB; 8 bundled i18n files add 2.2MB). The extraction then waited out
+    // its whole budget for a reply that could never come, and every later
+    // operation on that handle went to a dead socket.
+    // POLLING is not incidental, it is the whole test, and for a sharper
+    // reason than "socket.io tries polling first": under Bun the engine NEVER
+    // upgrades. Its bundle carries the real `ws` npm client, whose upgrade
+    // against Bun's http client comes back as `unexpected-response 101`, so a
+    // live engine reads `polling` on the server side from start to finish.
+    // socket.io enforces maxHttpBufferSize there as an HTTP body limit.
+    //
+    // Over websocket this runtime does NOT enforce it at all -- Bun's `ws`
+    // shim drops `maxPayload` when it completes the upgrade, leaving Bun's own
+    // 16MB frame cap in charge -- so a websocket version of this test passes
+    // with the 1MB default still in place. Measured, and it is exactly how the
+    // first draft came out green against the bug it was written for. An
+    // in-process test client uses Bun's shim and upgrades happily, which is
+    // why the transport has to be pinned here.
+    const sb = await makeSandbox({ transports: ["polling"] });
+    try {
+      // Answer executeOperation the way the engine does, with a payload the
+      // default would have refused.
+      const big = "x".repeat(3 * 1024 * 1024);
+      sb.client.on(
+        "rpc",
+        (msg: { method: string }, ack: (result: unknown) => void) => {
+          if (msg.method !== "executeOperation") return;
+          ack({ status: "OK", response: { blob: big } });
+        },
+      );
+
+      const engine = api.workerRpc.engineClient(sb.sandboxId);
+      const reply = (await engine.executeOperation(
+        { operationType: "EXTRACT_PIECE_METADATA", operation: {} } as never,
+        { timeoutMs: 15_000 },
+      )) as { response?: { blob?: string } };
+
+      expect(reply.response?.blob?.length).toBe(big.length);
+      // And the socket survived: a refused frame would have closed it.
+      expect(sb.client.connected).toBe(true);
+    } finally {
+      sb.client.close();
+    }
+  }, 30_000);
+
+  test("a late disconnect from a REPLACED socket does not drop the live entry", async () => {
+    // A reconnecting engine registers its new socket under the same sandbox
+    // id. If the OLD socket's disconnect lands after that -- a server ping
+    // timeout racing a completed re-handshake -- an unconditional delete drops
+    // the LIVE entry, and callers then see "no connection" for an engine that
+    // is connected and healthy. That used to cost a timeout; now that the
+    // handle re-resolves its client per send, it would DESTROY that engine.
+    const sb = await makeSandbox();
+    let second: ReturnType<typeof socketIoClient> | null = null;
+    try {
+      second = socketIoClient(`http://127.0.0.1:${api.sandboxWsPort}`, {
+        transports: ["websocket"],
+        path: "/worker/ws",
+        auth: { sandboxId: sb.sandboxId },
+        reconnection: false,
+      });
+      await new Promise<void>((res, rej) => {
+        const t = setTimeout(() => rej(new Error("second connect timeout")), 5000);
+        second!.once("connect", () => {
+          clearTimeout(t);
+          res();
+        });
+        second!.once("connect_error", (e) => {
+          clearTimeout(t);
+          rej(e);
+        });
+      });
+
+      // The server now holds `second` for this sandbox. Now the OLD one goes.
+      sb.client.close();
+      await new Promise((r) => setTimeout(r, 300));
+
+      expect(() => api.workerRpc.engineClient(sb.sandboxId)).not.toThrow();
+    } finally {
+      second?.close();
+      sb.client.close();
+    }
+  }, 20_000);
 
   test("connection is rejected without a sandboxId", async () => {
     const client = socketIoClient(`http://127.0.0.1:${api.sandboxWsPort}`, {

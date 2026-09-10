@@ -17,7 +17,7 @@ import (
 func uiaPerformAction(state *uiaState, elementID int, action, value string) (map[string]any, error) {
 	elem := state.cache.get(elementID)
 	if elem == nil {
-		return nil, fmt.Errorf("element %d not found in cache — run desktop_snapshot first", elementID)
+		return nil, fmt.Errorf("element %d is not in the current element cache — every desktop_snapshot invalidates all previous ids, so only ids from the MOST RECENT snapshot/find_element are valid; take a fresh desktop_snapshot and use an id from that result", elementID)
 	}
 
 	result := map[string]any{

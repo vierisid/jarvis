@@ -731,6 +731,26 @@ func (s *panelService) SetClickThrough(id PanelID, clickThrough bool) error {
 	return nil
 }
 
+// windowClosed reports whether the panel's window is already gone even though
+// its registry entry is still there.
+//
+// The entry outlives the window by a scheduling beat: on macOS the window
+// closes on the main thread, which closes uiClosed, and only then does the
+// spawn goroutine wake and delete the entry. Focus and SetWindowState queue
+// their AppKit work onto the main thread, so one that lands in that gap would
+// re-show a closed window the registry no longer tracks, and the next "open
+// dashboard" would put a second one beside it. Checking here narrows that gap
+// to the queue hop itself. uiClosed is only ever closed on macOS, so elsewhere
+// this is always false.
+func (p *panelImpl) windowClosed() bool {
+	select {
+	case <-p.uiClosed:
+		return true
+	default:
+		return false
+	}
+}
+
 func (s *panelService) Focus(id PanelID) error {
 	e, ok := s.reg.get(id)
 	if !ok {
@@ -739,6 +759,9 @@ func (s *panelService) Focus(id PanelID) error {
 	impl, ok := e.handle.(*panelImpl)
 	if !ok {
 		return formatPanelError("focus", id, fmt.Errorf("window not ready"))
+	}
+	if impl.windowClosed() {
+		return formatPanelError("focus", id, errPanelWindowClosed)
 	}
 	wv := impl.loadWV()
 	if wv == nil {
@@ -762,6 +785,9 @@ func (s *panelService) SetWindowState(id PanelID, state PanelWindowState) error 
 	impl, ok := e.handle.(*panelImpl)
 	if !ok {
 		return formatPanelError("set_window_state", id, fmt.Errorf("window not ready"))
+	}
+	if impl.windowClosed() {
+		return formatPanelError("set_window_state", id, errPanelWindowClosed)
 	}
 	wv := impl.loadWV()
 	if wv == nil {

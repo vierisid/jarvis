@@ -3,14 +3,17 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
 	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 )
 
@@ -472,11 +475,117 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 		name = executable[idx+1:]
 	}
 
-	return &RPCResult{Result: map[string]any{
-		"success": true,
-		"pid":     pid,
-		"name":    name,
-	}}, nil
+	// A spawned process is not an open app: returning immediately made the
+	// next tool call race the window ("no window found"). Poll for a visible
+	// window owned by this PID before declaring success.
+	win, probe, probeErr := waitForWindowLinux(pid, 5*time.Second)
+	return launchResultLinux(pid, name, win, probe, probeErr), nil
+}
+
+// launchResultLinux turns a window probe into the launch_app result.
+//
+// The three outcomes stay distinct on purpose. "A window appeared" and "no
+// window appeared" are both observations, and success reports them. "The
+// window could not be looked for" is not an observation at all, and
+// reporting it as success:false would be exactly the kind of confident
+// wrong answer this handler exists to stop: on a Wayland session or a box
+// without xdotool that would mark every successful GUI launch as a failure,
+// and the model would launch the app a second time.
+func launchResultLinux(pid int, name string, win map[string]any, probe launchProbe, probeErr error) *RPCResult {
+	res := map[string]any{"pid": pid, "name": name}
+
+	switch probe {
+	case probeWindowFound:
+		res["success"] = true
+		res["window_visible"] = true
+		res["window_title"] = win["title"]
+
+	case probeProcessGone:
+		res["success"] = false
+		res["window_visible"] = false
+		res["note"] = fmt.Sprintf("process (pid %d) exited without showing a window - it may be a short-lived launcher, a CLI tool, or it crashed. Run desktop_list_windows to see what is actually open.", pid)
+
+	case probeUncheckable:
+		// The process is alive and nothing contradicts the launch, so this is
+		// not a failure; it is an unverified success, and the note has to say
+		// so rather than let the flag speak for it.
+		res["success"] = true
+		res["window_visible"] = nil
+		res["note"] = fmt.Sprintf("process started (pid %d) but whether a window opened could NOT be checked: %v. This is not a failure report - the app may well be on screen. Run desktop_list_windows to see what is actually open before interacting, and do not launch it again on the strength of this result.", pid, probeErr)
+
+	default: // probeWindowAbsent
+		res["success"] = false
+		res["window_visible"] = false
+		res["note"] = fmt.Sprintf("process started (pid %d) but no window appeared within 5s - the app may still be starting, be windowless, or have exited. Run desktop_list_windows to check before interacting; do NOT assume it is open.", pid)
+	}
+
+	return &RPCResult{Result: res}
+}
+
+// classifyWindowSearch reads one `xdotool search` run.
+//
+// The exit status alone cannot answer the question: xdotool exits 1 both
+// when it matched nothing and when it could not run at all (no DISPLAY, for
+// instance). What separates them is that a clean no-match is silent and
+// exits exactly 1, while a failure either says something on stderr, exits
+// with another status, or never returns. Returning (nil, nil) claims "there
+// is no window", so every other shape has to come back as an error.
+func classifyWindowSearch(r probeRun) ([]string, error) {
+	switch {
+	case r.timedOut:
+		return nil, fmt.Errorf("%w: xdotool search did not return in time", errWindowCheckUnavailable)
+	case strings.TrimSpace(r.stderr) != "":
+		return nil, fmt.Errorf("%w: xdotool search failed: %s", errWindowCheckUnavailable, firstLine(strings.TrimSpace(r.stderr)))
+	case r.exitCode == 1:
+		return nil, nil // ran cleanly and matched nothing
+	case r.err != nil:
+		return nil, fmt.Errorf("%w: could not run xdotool (exit %d): %v", errWindowCheckUnavailable, r.exitCode, r.err)
+	}
+	return strings.Fields(r.stdout), nil
+}
+
+// probeWindowOnce asks xdotool for a visible window owned by pid. A nil
+// window with a nil error means "looked, found none"; a non-nil error means
+// the question could not be put at all.
+func probeWindowOnce(pid int) (map[string]any, error) {
+	if _, err := exec.LookPath("xdotool"); err != nil {
+		return nil, fmt.Errorf("%w: xdotool is not installed", errWindowCheckUnavailable)
+	}
+
+	ids, err := classifyWindowSearch(runProbe(2*time.Second, "xdotool", "search", "--onlyvisible", "--pid", strconv.Itoa(pid)))
+	if err != nil || len(ids) == 0 {
+		return nil, err
+	}
+
+	title := ""
+	if t := runProbe(2*time.Second, "xdotool", "getwindowname", ids[0]); t.err == nil {
+		title = t.stdout
+	}
+	return map[string]any{"title": title}, nil
+}
+
+// waitForWindowLinux polls for a visible window owned by pid. It stops early
+// when the process disappears (no point waiting out the timeout for a window
+// that can no longer appear) and when the check itself is unusable.
+func waitForWindowLinux(pid int, timeout time.Duration) (map[string]any, launchProbe, error) {
+	deadline := time.Now().Add(timeout)
+	for {
+		win, err := probeWindowOnce(pid)
+		if win != nil {
+			return win, probeWindowFound, nil
+		}
+		// A dead process settles the question whether or not xdotool worked.
+		if syscall.Kill(pid, 0) != nil {
+			return nil, probeProcessGone, err
+		}
+		if errors.Is(err, errWindowCheckUnavailable) {
+			return nil, probeUncheckable, err
+		}
+		if time.Now().After(deadline) {
+			return nil, probeWindowAbsent, nil
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
 }
 
 // splitArgs splits a string into arguments, respecting double-quoted groups.
@@ -570,6 +679,44 @@ func handleFindElement(params map[string]any) (*RPCResult, error) {
 }
 
 // ── Helpers ──────────────────────────────────────────────────────────
+
+// probeRun is everything needed to tell a tool that ran and found nothing
+// apart from one that could not run. runWithTimeout throws all of it away
+// except stdout, which is why the window check cannot use it.
+type probeRun struct {
+	stdout   string
+	stderr   string
+	exitCode int // 0 on success, the tool's status on exit, -1 if it never ran
+	timedOut bool
+	err      error
+}
+
+// runProbe runs a command with a timeout and keeps the full outcome.
+func runProbe(timeout time.Duration, name string, args ...string) probeRun {
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, name, args...)
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	out, err := cmd.Output()
+
+	r := probeRun{
+		stdout:   strings.TrimSpace(string(out)),
+		stderr:   stderr.String(),
+		timedOut: errors.Is(ctx.Err(), context.DeadlineExceeded),
+		err:      err,
+	}
+	var exitErr *exec.ExitError
+	switch {
+	case err == nil:
+		r.exitCode = 0
+	case errors.As(err, &exitErr):
+		r.exitCode = exitErr.ExitCode()
+	default:
+		r.exitCode = -1
+	}
+	return r
+}
 
 // runWithTimeout runs a command with a timeout and returns trimmed stdout.
 // Stderr is discarded; only stdout is returned.

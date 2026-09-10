@@ -33,6 +33,10 @@
   overflow: hidden;
 }
 
+/* Retain the shell instance when the banner changes without creating an
+   empty grid row above it when there is no banner. */
+.v2-shell-frame--plain { display: contents; }
+
 /* T18 panel mode — bare RoomBody hosted in a sidecar-spawned native
    window. No AppShell, no Thread/Rail, no voice handlers. Padding gives
    the body breathing room from the OS window chrome; overflow:auto so

@@ -179,18 +179,19 @@ select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
 .obw-ivhead .r { display: flex; align-items: center; gap: 14px; }
 .obw-ivhead .facts { font-family: var(--mono); font-size: 10px; color: var(--ink2); }
 .obw-ivhead .facts b { color: var(--ink); }
-.obw-ivstage { flex: 1; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 14px; padding: 18px; position: relative; overflow: hidden; }
+.obw-ivstage { flex: 1; min-height: 0; display: flex; flex-direction: column; align-items: center; justify-content: safe center; gap: 14px; padding: 18px; position: relative; overflow-y: auto; }
+.obw-ivstage > * { flex-shrink: 0; }
 .obw-ivstage .obw-bloom { width: 160px; height: 160px; }
 .obw-ivphase { font-family: var(--mono); font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink3); }
 .obw-ivq { font-size: 17px; font-weight: 600; color: var(--ink); text-align: center; max-width: 30ch; line-height: 1.35; letter-spacing: -0.01em; min-height: 46px; transition: opacity 0.18s; }
 .obw-ivtrans { display: flex; flex-direction: column; gap: 7px; width: 100%; max-width: 430px; margin-top: 2px; }
+.obw-ivhelp { font-size: 12px; line-height: 1.5; color: var(--ink2); max-width: 44ch; text-align: center; }
+.obw-iverror { font-size: 12px; line-height: 1.5; color: var(--ink); max-width: 44ch; text-align: center; }
 .obw-bub { max-width: 78%; padding: 8px 12px; font-size: 12.5px; line-height: 1.4; }
 .obw-bub.jv { align-self: flex-start; background: var(--panel); color: var(--ink2); border-radius: 11px 11px 11px 2px; }
 .obw-bub.me { align-self: flex-end; background: var(--ink); color: var(--bg); border-radius: 11px 11px 2px 11px; }
 .obw-ivcomposer { display: flex; gap: 9px; align-items: center; padding: 13px 22px; border-top: 1px solid var(--rule); }
-.obw-ivcomposer .obw-inp { flex: 1; }
-.obw-voicepill { display: inline-flex; align-items: center; gap: 7px; font-family: var(--mono); font-size: 10px; color: var(--ink3); border: 1px solid var(--rule); border-radius: 7px; padding: 8px 11px; flex-shrink: 0; }
-.obw-voicepill .ld { width: 9px; height: 9px; border-radius: 50% 50% 50% 1px; transform: rotate(45deg); background: var(--listen); animation: obw-br 1.6s var(--ease-out, ease) infinite; }
+.obw-ivcomposer .obw-inp { flex: 1; min-width: 0; resize: vertical; max-height: 160px; }
 
 /* spotlight tour */
 .obw-tourstage {
@@ -231,7 +232,9 @@ select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
   height: min(860px, 100%);
   border: 1px solid var(--rule);
   border-radius: 14px 3px 14px 14px;
-  overflow: hidden;
+  /* The preview can extend below a short window. It must not become a
+     hidden scroll container when focus moves to the next tour card. */
+  overflow: clip;
   background: var(--bg);
   box-shadow: 0 30px 70px -34px rgba(0, 0, 0, 0.65);
 }
@@ -259,16 +262,18 @@ select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
 .obw-miniapp .mpeb { position: absolute; right: 16px; bottom: 14px; }
 .obw-tourdim { position: absolute; inset: 0; background: rgba(8, 10, 14, 0.52); z-index: 40; }
 :root[data-theme="dark"] .obw-tourdim { background: rgba(0, 0, 0, 0.62); }
-.obw-spot { position: absolute; z-index: 60; background: var(--raise); border: 1px solid var(--rule); border-radius: 13px 3px 13px 13px; box-shadow: 0 16px 40px -18px rgba(0, 0, 0, 0.5); padding: 15px 16px; width: 248px; }
+.obw-preview-label { position: absolute; z-index: 50; top: 13px; right: 16px; color: #fff; font-family: var(--mono); font-size: 10px; }
+.obw-spot { position: absolute; z-index: 60; background: var(--raise); border: 1px solid var(--rule); border-radius: 13px 3px 13px 13px; box-shadow: 0 16px 40px -18px rgba(0, 0, 0, 0.5); padding: 18px; width: 310px; max-height: calc(100% - 24px); overflow-y: auto; }
+.obw-spot h3 { font-size: 17px; line-height: 1.3; margin: 12px 0 8px; color: var(--ink); }
 .obw-spot .sh { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
 .obw-spot .sh .sd { width: 13px; height: 13px; border-radius: 50% 50% 50% 2px; transform: rotate(45deg); position: relative; }
 .obw-spot .sh .sd .in { position: absolute; inset: 0; border-radius: inherit; background: var(--listen); animation: obw-brS 2s var(--ease-out, ease) infinite; }
 .obw-spot .sh .sl { font-family: var(--mono); font-size: 8.5px; letter-spacing: 0.1em; text-transform: uppercase; color: var(--ink3); }
-.obw-spot .sh .sc { margin-left: auto; font-family: var(--mono); font-size: 8.5px; color: var(--faint); }
+.obw-spot .sh .sc { margin-left: auto; font-family: var(--mono); font-size: 9px; color: var(--ink2); }
 /* direct child only — `.sm` also collides with the small-button modifier
    (`.obw-btn.sm`), which would force the button text to --ink (invisible). */
 .obw-spot > .sm { font-size: 13px; line-height: 1.45; color: var(--ink); letter-spacing: -0.005em; }
-.obw-spot .stry { font-family: var(--mono); font-size: 9.5px; color: var(--speak); margin-top: 8px; }
+.obw-spot .stry { font-size: 11px; line-height: 1.45; color: var(--ink2); margin-top: 10px; }
 .obw-spot .sb { display: flex; align-items: center; gap: 8px; margin-top: 13px; }
 .obw-spot .sb .grow { flex: 1; }
 
@@ -286,21 +291,10 @@ select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
   .obw-provgrid { grid-template-columns: 1fr; }
   .obw-tourframe { --mrail-w: 84px; }
 }
-/* Short windows: pin the spotlight to the bottom of the frame instead of the
-   place its slide asked for.
-   The frame clips (overflow:hidden, for the mock), and slide 5's card starts
-   150px down and runs ~175px — so once the frame drops under roughly 330px it
-   was cut off, taking "Skip tour" and "Finish" with it and stranding the user
-   on the last slide with no way forward. Pinned to the bottom edge it is always
-   whole and its buttons always reachable; the callout stops pointing at a
-   specific row, which is the right thing to lose when the alternative is a
-   dead end. `!important` because each slide's position is an inline style, and
-   an important declaration in a stylesheet is the one thing that outranks one.
-   The breakpoint is derived, not guessed: the tour step renders no progress bar,
-   so the frame is about `viewport - 98px`, and slide 5's card runs to ~325px —
-   clipping starts near a 425px viewport. Pinning earlier than that only costs
-   the pointing, so there is a little headroom and no more. */
-@media (max-height: 470px) {
+/* Short or narrow windows: pin inside the frame so the fuller workflow copy
+   and both actions remain reachable. The card scrolls if the frame itself is
+   shorter than its contents. Important overrides the per-slide inline target. */
+@media (max-height: 600px), (max-width: 560px) {
   .obw-spot {
     top: auto !important;
     bottom: 12px !important;
@@ -313,7 +307,7 @@ select.obw-inp { cursor: pointer; -webkit-appearance: none; appearance: none; }
   }
 }
 @media (prefers-reduced-motion: reduce) {
-  .obw-drop .in, .obw-drop .ring, .obw-spot .sh .sd .in, .obw-micbars b, .obw-wave b, .obw-voicepill .ld { animation: none !important; }
+  .obw-drop .in, .obw-drop .ring, .obw-spot .sh .sd .in, .obw-micbars b, .obw-wave b { animation: none !important; }
   .obw-drop .in { opacity: 1 !important; }
   .obw-drop.s-think .ring { opacity: 0.95 !important; }
   .obw-micbars b { height: 60% !important; }

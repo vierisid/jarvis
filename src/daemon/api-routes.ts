@@ -1737,6 +1737,41 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     // provider is built from the system-owned config.yaml block — the route
     // takes no credentials and never echoes the base_url or key back.
     /**
+     * The owner's billing summary, for Settings -> Billing and the shell banner
+     * (control plane: docs/BILLING.md "Billing inside the brain").
+     *
+     * Read-only. The response carries the parsed summary and the account-page
+     * LINKS every change goes through, opened in the system browser; never the
+     * endpoint, the instance id or the secret.
+     *
+     * - self-hosted: 503, like the usage meter — there is no bill to show;
+     * - hosted but no billing block, or the read failed: 200 `{ ok: false }`,
+     *   with links when the block names a page, so the user still has a way to
+     *   their account;
+     * - `?fresh=1` re-reads (bounded, see BILLING_FRESH_MIN_MS) for a user who
+     *   just came back from changing something.
+     */
+    '/api/billing': {
+      GET: async (req: Request) => {
+        const { readHostedBillingConfig, readHostedBilling, billingLinks } = await import('./hosted-billing.ts');
+        const cfg = readHostedBillingConfig(ctx.config);
+        if (!cfg) {
+          const { isHostedInstall } = await import('./usejarvis-ai.ts');
+          if (!isHostedInstall(ctx.config)) {
+            return error('Billing is only available on hosted installs.', 503);
+          }
+          return json({ ok: false, error: 'Billing is unavailable right now', links: null });
+        }
+        const fresh = new URL(req.url).searchParams.get('fresh') === '1';
+        const summary = await readHostedBilling(ctx.config, { fresh });
+        const links = billingLinks(cfg.pageUrl);
+        return summary
+          ? json({ ok: true, summary, links })
+          : json({ ok: false, error: 'Billing is unavailable right now', links });
+      },
+    },
+
+    /**
      * This instance's hosted usage meter — % of each window used and when they
      * reset (docs/LLM.md on the control plane, "Windows + meters").
      *

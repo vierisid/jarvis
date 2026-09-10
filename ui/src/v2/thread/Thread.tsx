@@ -383,13 +383,13 @@ function ItemRenderer({
 function EmptyState() {
   return (
     <section className="v2-thread__empty">
-      <span className="v2-thread__empty-eyebrow">Phase 3A · thread ready</span>
+      <span className="v2-thread__empty-eyebrow">Your AI cofounder</span>
       <h1 className="v2-thread__empty-title">
-        The thread is <em>the whole app.</em>
+        Make room for <em>your work.</em>
       </h1>
       <p className="v2-thread__empty-lede">
-        Nothing yet. Tap the orb, press <kbd>/</kbd>, or wait for the morning brief — every
-        message flows through this surface.
+        Describe a recurring task below. Jarvis can help you draft a workflow, work through
+        the details, and decide where your judgment belongs.
       </p>
     </section>
   );

@@ -90,6 +90,35 @@ function describeMachine(sidecar: SidecarInfo): string {
 }
 
 /**
+ * Pick the stack that will serve one tool call, and say which it was.
+ *
+ * Two implementations back every desktop_* and browser_* tool: the Go
+ * sidecar, and the daemon's own local controllers. Which one runs depends on
+ * whether a sidecar is connected, and the choice used to be made in silence,
+ * so "it works sometimes" was untraceable after the fact. One line per call
+ * names the stack that answered.
+ *
+ * An explicit target is passed through verbatim; findSidecar trims before
+ * matching, so there is nothing to gain by doing it twice, and the log line
+ * then shows exactly what the caller asked for. A blank string counts as no
+ * target at all and falls through to auto-selection.
+ */
+export function resolveToolTarget(
+  explicit: unknown,
+  capability: SidecarCapability,
+  tool: string,
+): string | null {
+  const named = typeof explicit === 'string' && explicit.trim() ? explicit : null;
+  const target = named ?? autoTargetForCapability(capability);
+  console.log(
+    target
+      ? `[${capability}] ${tool} -> sidecar stack (target=${target}, ${named ? 'explicit' : 'auto'})`
+      : `[${capability}] ${tool} -> local stack`,
+  );
+  return target;
+}
+
+/**
  * Find a sidecar by name or ID.
  * Priority: exact ID → exact name (case-insensitive) → contains match.
  */
@@ -155,7 +184,15 @@ export async function routeToSidecar(
     const result = await sidecarManager.dispatchRPC(sidecar.id, method, params);
 
     if (result === 'detached') {
-      return `Task dispatched to "${sidecar.name}" and running in the background.`;
+      // The RPC outlived the initial timeout. Detached completions are only
+      // console-logged (manager.ts onDetachedComplete) — the result never
+      // reaches the model — so claiming background success would be a lie
+      // for anything interactive. Only run_command keeps fire-and-forget
+      // semantics; everything else reports an honest timeout.
+      if (method === 'run_command') {
+        return `Command dispatched to "${describeMachine(sidecar)}" and still running in the background. Its output will NOT be reported back — verify its effect yourself if it matters.`;
+      }
+      return `Error [${describeMachine(sidecar)}]: "${method}" did not complete within the timeout. The action may or may not have taken effect — do NOT assume it succeeded; verify the current state (e.g. take a snapshot) before continuing.`;
     }
 
     return typeof result === 'string' ? result : JSON.stringify(result, null, 2);

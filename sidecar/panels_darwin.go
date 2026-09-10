@@ -10,6 +10,33 @@ package main
 
 extern void goPanelClosed(unsigned long long token);
 
+// jarvis_panel_on_main runs block on the main thread: inline when the caller is
+// already there, otherwise queued onto the main queue.
+//
+// AppKit throws when a window is touched off the main thread, and the abort
+// takes the whole sidecar down with it. Spawn and Close reach these functions
+// through uiSync, but Focus, SetWindowState and SetClickThrough came straight
+// from whatever goroutine called them: the RPC goroutine for panel.focus /
+// panel.set_window_state, and the tray's openRoom when the dashboard is already
+// open. That last one is "launch Jarvis" while the dashboard sits minimized:
+// LaunchServices sends the running app a reopen, OpenChat finds tray:chat in
+// the registry, and makeKeyAndOrderFront deminiaturizes it from a background
+// thread. The cursor-follow goroutine moves windows every frame the same way.
+//
+// uiSync cannot simply be added on the Go side, because webview bindings
+// (__sidecar_set_clickthrough) already run ON the main thread and would block
+// forever waiting for it. Running inline there keeps the ordering Spawn's
+// reveal depends on; async elsewhere keeps a background caller from waiting on
+// a main thread that may be waiting on it. Under ARC the block retains the
+// NSWindow, so a queued mutation cannot outlive its window.
+static void jarvis_panel_on_main(dispatch_block_t block) {
+    if ([NSThread isMainThread]) {
+        block();
+    } else {
+        dispatch_async(dispatch_get_main_queue(), block);
+    }
+}
+
 static void jarvis_panel_apply_flags(
     void* nswindow_ptr,
     int alwaysOnTop,
@@ -20,82 +47,94 @@ static void jarvis_panel_apply_flags(
 ) {
     if (!nswindow_ptr) return;
     NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
-    // Panels live under the tray's shared run loop; the host tears them down
-    // explicitly. Keep the NSWindow object alive when the user clicks its close
-    // button so teardown (and any in-flight focus) can't touch freed memory.
-    [w setReleasedWhenClosed:NO];
+    jarvis_panel_on_main(^{
+        // Panels live under the tray's shared run loop; the host tears them down
+        // explicitly. Keep the NSWindow object alive when the user clicks its close
+        // button so teardown (and any in-flight focus) can't touch freed memory.
+        [w setReleasedWhenClosed:NO];
 
-    if (alwaysOnTop) {
-        [w setLevel:NSFloatingWindowLevel];
-        [w setCollectionBehavior:
-            NSWindowCollectionBehaviorCanJoinAllSpaces |
-            NSWindowCollectionBehaviorTransient |
-            NSWindowCollectionBehaviorIgnoresCycle];
-        [w setHidesOnDeactivate:NO];
-    }
-    if (clickThrough) {
-        [w setIgnoresMouseEvents:YES];
-    }
-    if (transparent) {
-        [w setOpaque:NO];
-        [w setBackgroundColor:[NSColor clearColor]];
-        [w setHasShadow:NO];
-    }
-    if (frameless) {
-        NSUInteger mask = [w styleMask];
-        mask |= NSWindowStyleMaskBorderless;
-        mask &= ~(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable);
-        if (resizable) {
-            mask |= NSWindowStyleMaskResizable;
-        } else {
-            mask &= ~NSWindowStyleMaskResizable;
+        if (alwaysOnTop) {
+            [w setLevel:NSFloatingWindowLevel];
+            [w setCollectionBehavior:
+                NSWindowCollectionBehaviorCanJoinAllSpaces |
+                NSWindowCollectionBehaviorTransient |
+                NSWindowCollectionBehaviorIgnoresCycle];
+            [w setHidesOnDeactivate:NO];
         }
-        [w setStyleMask:mask];
-        [w setTitlebarAppearsTransparent:YES];
-        [w setTitleVisibility:NSWindowTitleHidden];
-        [w setMovableByWindowBackground:YES];
-    }
+        if (clickThrough) {
+            [w setIgnoresMouseEvents:YES];
+        }
+        if (transparent) {
+            [w setOpaque:NO];
+            [w setBackgroundColor:[NSColor clearColor]];
+            [w setHasShadow:NO];
+        }
+        if (frameless) {
+            NSUInteger mask = [w styleMask];
+            mask |= NSWindowStyleMaskBorderless;
+            mask &= ~(NSWindowStyleMaskTitled | NSWindowStyleMaskClosable | NSWindowStyleMaskMiniaturizable);
+            if (resizable) {
+                mask |= NSWindowStyleMaskResizable;
+            } else {
+                mask &= ~NSWindowStyleMaskResizable;
+            }
+            [w setStyleMask:mask];
+            [w setTitlebarAppearsTransparent:YES];
+            [w setTitleVisibility:NSWindowTitleHidden];
+            [w setMovableByWindowBackground:YES];
+        }
+    });
 }
 
 static void jarvis_panel_focus(void* nswindow_ptr) {
     if (!nswindow_ptr) return;
     NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
-    [NSApp activateIgnoringOtherApps:YES];
-    [w makeKeyAndOrderFront:nil];
+    jarvis_panel_on_main(^{
+        [NSApp activateIgnoringOtherApps:YES];
+        [w makeKeyAndOrderFront:nil];
+    });
 }
 
 static void jarvis_panel_destroy(void* nswindow_ptr) {
     if (!nswindow_ptr) return;
     NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
-    [w close];
+    jarvis_panel_on_main(^{
+        [w close];
+    });
 }
 
 // 0=normal, 1=minimized, 2=maximized — matches platformSetWindowState.
 static void jarvis_panel_set_window_state(void* nswindow_ptr, int state) {
     if (!nswindow_ptr) return;
     NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
-    if (state == 1) {
-        [w miniaturize:nil];
-    } else if (state == 2) {
-        if ([w isMiniaturized]) [w deminiaturize:nil];
-        if (![w isZoomed]) [w zoom:nil];
-    } else {
-        if ([w isMiniaturized]) [w deminiaturize:nil];
-        if ([w isZoomed]) [w zoom:nil];
-        [w makeKeyAndOrderFront:nil];
-    }
+    jarvis_panel_on_main(^{
+        if (state == 1) {
+            [w miniaturize:nil];
+        } else if (state == 2) {
+            if ([w isMiniaturized]) [w deminiaturize:nil];
+            if (![w isZoomed]) [w zoom:nil];
+        } else {
+            if ([w isMiniaturized]) [w deminiaturize:nil];
+            if ([w isZoomed]) [w zoom:nil];
+            [w makeKeyAndOrderFront:nil];
+        }
+    });
 }
 
 static void jarvis_panel_set_visible(void* nswindow_ptr, int visible) {
     if (!nswindow_ptr) return;
     NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
-    if (visible) [w makeKeyAndOrderFront:nil]; else [w orderOut:nil];
+    jarvis_panel_on_main(^{
+        if (visible) [w makeKeyAndOrderFront:nil]; else [w orderOut:nil];
+    });
 }
 
 static void jarvis_panel_set_click_through(void* nswindow_ptr, int clickThrough) {
     if (!nswindow_ptr) return;
     NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
-    [w setIgnoresMouseEvents:(clickThrough ? YES : NO)];
+    jarvis_panel_on_main(^{
+        [w setIgnoresMouseEvents:(clickThrough ? YES : NO)];
+    });
 }
 
 // Returns cursor position in screen coordinates with origin at top-left
@@ -112,15 +151,17 @@ static void jarvis_panel_cursor_pos(int* x, int* y) {
 static void jarvis_panel_move_window(void* nswindow_ptr, int x, int y) {
     if (!nswindow_ptr) return;
     NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
-    NSRect frame = [w frame];
-    NSScreen* main = [[NSScreen screens] firstObject];
-    CGFloat screenH = main ? main.frame.size.height : 0;
-    NSPoint origin = NSMakePoint((CGFloat)x, screenH - (CGFloat)y - frame.size.height);
-    [w setFrameOrigin:origin];
-    // Re-assert floating level + order in front so the window stays above
-    // other apps even if they were promoted to floating.
-    [w setLevel:NSFloatingWindowLevel];
-    [w orderFrontRegardless];
+    jarvis_panel_on_main(^{
+        NSRect frame = [w frame];
+        NSScreen* main = [[NSScreen screens] firstObject];
+        CGFloat screenH = main ? main.frame.size.height : 0;
+        NSPoint origin = NSMakePoint((CGFloat)x, screenH - (CGFloat)y - frame.size.height);
+        [w setFrameOrigin:origin];
+        // Re-assert floating level + order in front so the window stays above
+        // other apps even if they were promoted to floating.
+        [w setLevel:NSFloatingWindowLevel];
+        [w orderFrontRegardless];
+    });
 }
 
 // Fire goPanelClosed(token) when the user closes this window, so the host can

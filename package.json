@@ -1,6 +1,6 @@
 {
   "name": "@usejarvis/brain",
-  "version": "0.13.1",
+  "version": "0.13.6",
   "description": "J.A.R.V.I.S. — Just A Rather Very Intelligent System. An always-on autonomous AI daemon.",
   "module": "src/daemon/index.ts",
   "type": "module",
@@ -29,6 +29,7 @@
     "ui/dist/",
     "ui/public/",
     "scripts/ensure-bun.cjs",
+    "scripts/build-shared-runtime.ts",
     "README.md"
   ],
   "scripts": {
@@ -43,6 +44,7 @@
     "lint:templates": "bun run scripts/lint-webapp-templates.ts",
     "sync:pieces": "bun run scripts/sync-pieces-catalog.ts",
     "check:pieces": "bun run scripts/sync-pieces-catalog.ts --check",
+    "check:package": "bun run scripts/check-package-files.ts",
     "build:workflows": "bun run scripts/build-workflows.ts",
     "audit:piece-outputs": "bun run scripts/audit-piece-outputs.ts",
     "db:init": "bun run src/vault/schema.ts",

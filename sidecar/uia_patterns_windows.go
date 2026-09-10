@@ -16,11 +16,42 @@ import (
 	"github.com/go-ole/go-ole"
 )
 
+// uiaOpError converts a failed UIA call into an error the model can act on.
+// Raw HRESULTs ("Invoke failed: HRESULT 0x80004005") gave the LLM nothing to
+// correct with; these map the common failures to concrete next steps.
+func uiaOpError(op string, hr uintptr) error {
+	return fmt.Errorf("%s failed: %s", op, hresultText(hr))
+}
+
+func hresultText(hr uintptr) string {
+	switch uint32(hr) {
+	case 0:
+		// Reached via uiaElementGetPattern, which also fails when UIA
+		// answers S_OK with a null pattern - its way of saying the control
+		// does not implement it. That is the single most common failure
+		// here, and rendering it as "HRESULT 0x00000000, retry once" told
+		// the model to keep retrying something that can never work.
+		return "the control does not expose this pattern, so this action is not available on it - take a desktop_snapshot and use one of the actions it lists for this element, or pick a different element"
+	case 0x80040201: // UIA_E_ELEMENTNOTAVAILABLE
+		return "the element no longer exists — the UI changed or the window closed since the last snapshot; take a fresh desktop_snapshot and use a new element id"
+	case 0x80040200: // UIA_E_ELEMENTNOTENABLED
+		return "the element is disabled and cannot be interacted with right now — something in the app must enable it first"
+	case 0x80040202: // UIA_E_NOCLICKABLEPOINT
+		return "the element has no clickable point — it is offscreen or covered by another element; try action=scroll_into_view first"
+	case 0x80070005: // E_ACCESSDENIED
+		return "access denied — the target app likely runs elevated (as administrator) while the sidecar does not; Windows blocks UI automation across that boundary"
+	case 0x80004005: // E_FAIL
+		return "the control rejected the action — it may be busy, mid-update, or not truly support this operation; take a fresh desktop_snapshot and retry once"
+	default:
+		return fmt.Sprintf("HRESULT 0x%08x — take a fresh desktop_snapshot and retry once; if it persists the control does not support this action", uint32(hr))
+	}
+}
+
 // patternInvoke calls IUIAutomationInvokePattern::Invoke.
 func patternInvoke(elem *ole.IDispatch) error {
 	pattern, err := uiaElementGetPattern(elem, UIA_InvokePatternId)
 	if err != nil {
-		return fmt.Errorf("element does not support Invoke pattern: %w", err)
+		return fmt.Errorf("element does not support the Invoke action — run desktop_snapshot and check the element's listed patterns/actions before retrying: %w", err)
 	}
 	defer pattern.Release()
 
@@ -30,7 +61,7 @@ func patternInvoke(elem *ole.IDispatch) error {
 		uintptr(unsafe.Pointer(pattern)),
 	)
 	if hr != 0 {
-		return fmt.Errorf("Invoke failed: HRESULT 0x%x", hr)
+		return uiaOpError("Invoke", hr)
 	}
 	return nil
 }
@@ -39,7 +70,7 @@ func patternInvoke(elem *ole.IDispatch) error {
 func patternGetValue(elem *ole.IDispatch) (string, error) {
 	pattern, err := uiaElementGetPattern(elem, UIA_ValuePatternId)
 	if err != nil {
-		return "", fmt.Errorf("element does not support Value pattern: %w", err)
+		return "", fmt.Errorf("element does not support the Value action — run desktop_snapshot and check the element's listed patterns/actions before retrying: %w", err)
 	}
 	defer pattern.Release()
 
@@ -51,7 +82,7 @@ func patternGetValue(elem *ole.IDispatch) (string, error) {
 		uintptr(unsafe.Pointer(&bstr)),
 	)
 	if hr != 0 {
-		return "", fmt.Errorf("get_CurrentValue failed: HRESULT 0x%x", hr)
+		return "", uiaOpError("get_CurrentValue", hr)
 	}
 	if bstr == nil {
 		return "", nil
@@ -65,7 +96,7 @@ func patternGetValue(elem *ole.IDispatch) (string, error) {
 func patternSetValue(elem *ole.IDispatch, value string) error {
 	pattern, err := uiaElementGetPattern(elem, UIA_ValuePatternId)
 	if err != nil {
-		return fmt.Errorf("element does not support Value pattern: %w", err)
+		return fmt.Errorf("element does not support the Value action — run desktop_snapshot and check the element's listed patterns/actions before retrying: %w", err)
 	}
 	defer pattern.Release()
 
@@ -79,7 +110,7 @@ func patternSetValue(elem *ole.IDispatch, value string) error {
 		uintptr(unsafe.Pointer(bstr)),
 	)
 	if hr != 0 {
-		return fmt.Errorf("SetValue failed: HRESULT 0x%x", hr)
+		return uiaOpError("SetValue", hr)
 	}
 	return nil
 }
@@ -88,7 +119,7 @@ func patternSetValue(elem *ole.IDispatch, value string) error {
 func patternToggle(elem *ole.IDispatch) error {
 	pattern, err := uiaElementGetPattern(elem, UIA_TogglePatternId)
 	if err != nil {
-		return fmt.Errorf("element does not support Toggle pattern: %w", err)
+		return fmt.Errorf("element does not support the Toggle action — run desktop_snapshot and check the element's listed patterns/actions before retrying: %w", err)
 	}
 	defer pattern.Release()
 
@@ -98,7 +129,7 @@ func patternToggle(elem *ole.IDispatch) error {
 		uintptr(unsafe.Pointer(pattern)),
 	)
 	if hr != 0 {
-		return fmt.Errorf("Toggle failed: HRESULT 0x%x", hr)
+		return uiaOpError("Toggle", hr)
 	}
 	return nil
 }
@@ -108,7 +139,7 @@ func patternToggle(elem *ole.IDispatch) error {
 func patternGetToggleState(elem *ole.IDispatch) (int, error) {
 	pattern, err := uiaElementGetPattern(elem, UIA_TogglePatternId)
 	if err != nil {
-		return 0, fmt.Errorf("element does not support Toggle pattern: %w", err)
+		return 0, fmt.Errorf("element does not support the Toggle action — run desktop_snapshot and check the element's listed patterns/actions before retrying: %w", err)
 	}
 	defer pattern.Release()
 
@@ -120,7 +151,7 @@ func patternGetToggleState(elem *ole.IDispatch) (int, error) {
 		uintptr(unsafe.Pointer(&state)),
 	)
 	if hr != 0 {
-		return 0, fmt.Errorf("get_CurrentToggleState failed: HRESULT 0x%x", hr)
+		return 0, uiaOpError("get_CurrentToggleState", hr)
 	}
 	return int(state), nil
 }
@@ -129,7 +160,7 @@ func patternGetToggleState(elem *ole.IDispatch) (int, error) {
 func patternExpand(elem *ole.IDispatch) error {
 	pattern, err := uiaElementGetPattern(elem, UIA_ExpandCollapsePatternId)
 	if err != nil {
-		return fmt.Errorf("element does not support ExpandCollapse pattern: %w", err)
+		return fmt.Errorf("element does not support the ExpandCollapse action — run desktop_snapshot and check the element's listed patterns/actions before retrying: %w", err)
 	}
 	defer pattern.Release()
 
@@ -139,7 +170,7 @@ func patternExpand(elem *ole.IDispatch) error {
 		uintptr(unsafe.Pointer(pattern)),
 	)
 	if hr != 0 {
-		return fmt.Errorf("Expand failed: HRESULT 0x%x", hr)
+		return uiaOpError("Expand", hr)
 	}
 	return nil
 }
@@ -148,7 +179,7 @@ func patternExpand(elem *ole.IDispatch) error {
 func patternCollapse(elem *ole.IDispatch) error {
 	pattern, err := uiaElementGetPattern(elem, UIA_ExpandCollapsePatternId)
 	if err != nil {
-		return fmt.Errorf("element does not support ExpandCollapse pattern: %w", err)
+		return fmt.Errorf("element does not support the ExpandCollapse action — run desktop_snapshot and check the element's listed patterns/actions before retrying: %w", err)
 	}
 	defer pattern.Release()
 
@@ -158,7 +189,7 @@ func patternCollapse(elem *ole.IDispatch) error {
 		uintptr(unsafe.Pointer(pattern)),
 	)
 	if hr != 0 {
-		return fmt.Errorf("Collapse failed: HRESULT 0x%x", hr)
+		return uiaOpError("Collapse", hr)
 	}
 	return nil
 }
@@ -167,7 +198,7 @@ func patternCollapse(elem *ole.IDispatch) error {
 func patternSelectItem(elem *ole.IDispatch) error {
 	pattern, err := uiaElementGetPattern(elem, UIA_SelectionItemPatternId)
 	if err != nil {
-		return fmt.Errorf("element does not support SelectionItem pattern: %w", err)
+		return fmt.Errorf("element does not support the SelectionItem action — run desktop_snapshot and check the element's listed patterns/actions before retrying: %w", err)
 	}
 	defer pattern.Release()
 
@@ -177,7 +208,7 @@ func patternSelectItem(elem *ole.IDispatch) error {
 		uintptr(unsafe.Pointer(pattern)),
 	)
 	if hr != 0 {
-		return fmt.Errorf("Select failed: HRESULT 0x%x", hr)
+		return uiaOpError("Select", hr)
 	}
 	return nil
 }
@@ -186,7 +217,7 @@ func patternSelectItem(elem *ole.IDispatch) error {
 func patternScrollIntoView(elem *ole.IDispatch) error {
 	pattern, err := uiaElementGetPattern(elem, UIA_ScrollItemPatternId)
 	if err != nil {
-		return fmt.Errorf("element does not support ScrollItem pattern: %w", err)
+		return fmt.Errorf("element does not support the ScrollItem action — run desktop_snapshot and check the element's listed patterns/actions before retrying: %w", err)
 	}
 	defer pattern.Release()
 
@@ -196,7 +227,7 @@ func patternScrollIntoView(elem *ole.IDispatch) error {
 		uintptr(unsafe.Pointer(pattern)),
 	)
 	if hr != 0 {
-		return fmt.Errorf("ScrollIntoView failed: HRESULT 0x%x", hr)
+		return uiaOpError("ScrollIntoView", hr)
 	}
 	return nil
 }

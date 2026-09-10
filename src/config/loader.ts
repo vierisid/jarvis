@@ -253,17 +253,37 @@ export async function reloadUsejarvisAiBlock(
   config: JarvisConfig,
   configPath?: string,
 ): Promise<void> {
+  await reloadSystemBlock(config, 'usejarvis_ai', configPath);
+}
+
+/**
+ * Re-read ONLY the SYSTEM-owned `usejarvis_billing` block, with exactly the
+ * semantics of `reloadUsejarvisAiBlock`: a converge that rotates the billing
+ * secret or moves the endpoint lands on SIGHUP without a restart.
+ */
+export async function reloadUsejarvisBillingBlock(
+  config: JarvisConfig,
+  configPath?: string,
+): Promise<void> {
+  await reloadSystemBlock(config, 'usejarvis_billing', configPath);
+}
+
+async function reloadSystemBlock(
+  config: JarvisConfig,
+  key: 'usejarvis_ai' | 'usejarvis_billing',
+  configPath?: string,
+): Promise<void> {
   try {
     const raw = await readRawConfigFile(configPath);
-    const block = raw?.usejarvis_ai;
+    const block = raw?.[key];
     if (block && typeof block === 'object' && !Array.isArray(block)) {
-      config.usejarvis_ai = block as { base_url?: string; api_key?: string };
+      (config as Record<string, unknown>)[key] = block;
     } else {
-      delete config.usejarvis_ai;
+      delete config[key];
     }
   } catch (err) {
     console.warn(
-      '[Config] Could not re-read the usejarvis_ai block from config.yaml; keeping the current value:',
+      `[Config] Could not re-read the ${key} block from config.yaml; keeping the current value:`,
       err instanceof Error ? err.message : err,
     );
   }

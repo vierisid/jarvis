@@ -165,7 +165,15 @@ const { catalog: built, failures } = await buildPieceCatalog({
   pieceRoots,
   cacheFile,
   cacheKey: computeCatalogCacheKey({ bundlePath: bundle.bundlePath }),
-  pieceTimeoutMs: 30_000,
+  // 10s, not 30. Measured on a hosted host over the real installed tree, the
+  // slowest piece in the catalog's first forty extracts in 1.2s and the median
+  // in about 0.3s, cold transpiler cache or warm -- so this is still eight
+  // times the worst case observed. It is not a budget for slow pieces; it is
+  // how long the build waits before deciding an engine has stopped answering,
+  // and it is paid in FULL every time that happens. At 30s the full catalog
+  // spends about fourteen minutes waiting, inside an install op that gives up
+  // at thirty.
+  pieceTimeoutMs: 10_000,
   overallTimeoutMs: 6 * 60 * 60 * 1000,
   reporter: (m) => log(m),
 });
@@ -186,3 +194,26 @@ const summary =
   });
 if (summaryPath) writeFileSync(resolve(summaryPath), summary + "\n");
 console.log(summary);
+
+// 6. A build that GAVE UP must not look like a build that finished.
+//
+// buildPieceCatalog ends early when the engine stops answering, and marks the
+// pieces it never tried. Exiting 0 here would publish that partial cache under
+// a cacheKey that MATCHES the daemon's, so every consumer treats it as
+// complete: install-version moves it into place, the tenant-side
+// "does not match this daemon's catalog key" warning never fires, and every
+// instance on the host silently re-extracts the hundreds of missing pieces at
+// its own boot -- the fleet-wide storm that shared cache exists to prevent.
+//
+// Failing is the loud option, and the summary above already names every piece
+// and why. Individual broken pieces stay non-fatal: a catalog is expected to
+// carry some, and `failures` reports them.
+const unattempted = failures.filter((f) => f.reason.startsWith("not attempted"));
+if (unattempted.length > 0) {
+  log(
+    `REFUSING to publish: the catalog build gave up with ${unattempted.length} of ` +
+      `${catalog.length} piece(s) never attempted. The metadata cache would be partial ` +
+      `but indistinguishable from a complete one. See failures[] in the summary.`,
+  );
+  process.exit(1);
+}

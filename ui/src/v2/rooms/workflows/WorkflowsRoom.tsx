@@ -557,12 +557,13 @@ function PausedRunCallout({ runId }: { runId: string }): React.ReactElement {
 function EmptyState({ onCreate }: { onCreate: () => void }): React.ReactElement {
   return (
     <div className="wf-empty">
-      <p>No workflows yet.</p>
+      <p>Your first workflow starts with a conversation.</p>
       <p className="wf-empty__hint">
-        Start with a blank canvas and add steps as you go.
+        Open Talk and describe a recurring task. Jarvis can draft the steps with you.
+        Or start with a blank canvas below.
       </p>
       <Button variant="primary" size="sm" onClick={onCreate}>
-        <Icon icon={Plus} size={14} /> New workflow
+        <Icon icon={Plus} size={14} /> Build from scratch
       </Button>
     </div>
   );

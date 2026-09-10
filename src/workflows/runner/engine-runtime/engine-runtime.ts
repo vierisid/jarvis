@@ -209,6 +209,40 @@ export class EngineHandle {
   }
 
   /**
+   * The RPC client for THIS sandbox as of right now, rather than the one
+   * captured when the handle was built.
+   *
+   * `engineClient` is bound to a single socket.io connection. If that
+   * connection drops, worker-rpc deletes it and a reconnecting engine gets a
+   * NEW client stored under the same sandbox id -- which a handle holding the
+   * old one never sees. It would then emit into a dead socket and wait out the
+   * full ack deadline on every subsequent operation, while the engine sat
+   * there healthy and idle. Measured before this existed: after a forced
+   * disconnect the handle simply never got another reply.
+   *
+   * Re-resolving per send makes a reconnect self-healing for the NEXT
+   * operation, and makes an absent connection fail in milliseconds instead of
+   * ninety seconds. It cannot rescue an operation already in flight when the
+   * socket dropped: socket.io leaves that ack pending, so it still waits out
+   * its own deadline.
+   */
+  private liveEngineClient(): EngineContract {
+    try {
+      return this.api.workerRpc.engineClient(this.sandboxId);
+    } catch {
+      // No live connection. Throwing here rather than emitting into a dead
+      // socket is the whole point; `send()`'s catch marks the handle abandoned,
+      // so `release()` destroys the engine instead of parking it for the next
+      // caller. Note this covers "disconnected" AND "has not finished
+      // reconnecting", which are indistinguishable from here -- the operation
+      // was never sent either way.
+      throw new Error(
+        `no live connection for sandbox ${this.sandboxId}; the engine disconnected and has not reconnected`,
+      );
+    }
+  }
+
+  /**
    * Send one operation to the engine, bounding the wait by the budget we
    * told the engine to honour rather than by the RPC client's default.
    *
@@ -220,7 +254,7 @@ export class EngineHandle {
   private async send(operation: EngineOperationEnvelope): Promise<EngineResponse<unknown>> {
     this.inFlight++;
     try {
-      return await this.engineClient.executeOperation(operation, {
+      return await this.liveEngineClient().executeOperation(operation, {
         timeoutMs: ackTimeoutMsForOperation(operation),
       });
     } catch (e) {

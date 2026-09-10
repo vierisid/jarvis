@@ -15,7 +15,7 @@ import { WSLBridge } from '../terminal/wsl-bridge.ts';
 import { BrowserController, type PageSnapshot } from '../browser/session.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
-import { routeToSidecar, autoTargetForCapability } from './sidecar-route.ts';
+import { routeToSidecar, autoTargetForCapability, resolveToolTarget } from './sidecar-route.ts';
 import { WebappTemplateDelivery, globalWebappTemplateDelivery } from './webapp-template-injection.ts';
 import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS } from './desktop.ts';
@@ -551,6 +551,14 @@ function formatSnapshot(snap: PageSnapshot): string {
 
 // --- Browser Tool Implementations ---
 
+/**
+ * Resolve which browser stack serves this call and log the decision. Thin
+ * wrapper over the shared resolver so each call site names only its tool.
+ */
+function resolveBrowserTarget(params: Record<string, unknown>, tool: string): string | null {
+  return resolveToolTarget(params.target, 'browser', tool);
+}
+
 export const browserNavigateTool: ToolDefinition = {
   name: 'browser_navigate',
   description: 'Navigate the browser to a URL. Returns page text content and a list of interactive elements with [id] numbers you can reference in browser_click and browser_type. Optionally specify a "target" sidecar to use a remote browser. By default the browser opens visibly so the user can watch and interact; set "headless" to true to run it hidden in the background (useful for research, or when the user is focused on something else and a popping browser window would be intrusive).',
@@ -573,7 +581,7 @@ export const browserNavigateTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_navigate');
     if (target) {
       const result = await routeToSidecar(target, 'browser_navigate', { url: params.url, headless: params.headless }, 'browser');
       return globalWebappTemplateDelivery.withInstructions(result, params.url as string);
@@ -601,7 +609,7 @@ export const browserSnapshotTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_snapshot');
     if (target) {
       const result = await routeToSidecar(target, 'browser_snapshot', {}, 'browser');
       return globalWebappTemplateDelivery.withInstructions(result);
@@ -644,7 +652,7 @@ export const browserClickTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_click');
     if (target) {
       return routeToSidecar(target, 'browser_click', {
         element_id: params.element_id,
@@ -682,7 +690,7 @@ export const browserHoverTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_hover');
     if (target) {
       return routeToSidecar(target, 'browser_hover', { element_id: params.element_id }, 'browser');
     }
@@ -713,7 +721,7 @@ export const browserPressKeyTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_press_key');
     if (target) {
       return routeToSidecar(target, 'browser_press_key', { key: params.key }, 'browser');
     }
@@ -759,7 +767,7 @@ export const browserTypeTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_type');
     if (target) {
       return routeToSidecar(target, 'browser_type', {
         element_id: params.element_id,
@@ -795,7 +803,7 @@ export const browserScreenshotTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_screenshot');
     if (target) {
       return routeToSidecar(target, 'browser_screenshot', {}, 'browser');
     }
@@ -871,7 +879,7 @@ export const browserScrollTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_scroll');
     if (target) {
       return routeToSidecar(target, 'browser_scroll', {
         direction: params.direction,
@@ -907,7 +915,7 @@ export const browserEvaluateTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
-    const target = (params.target as string | undefined) || autoTargetForCapability("browser");
+    const target = resolveBrowserTarget(params, 'browser_evaluate');
     if (target) {
       return routeToSidecar(target, 'browser_evaluate', { expression: params.expression }, 'browser');
     }

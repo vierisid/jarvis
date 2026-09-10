@@ -70,6 +70,30 @@ Ownership and semantics:
   scalars) are warned about and treated as an absent block — the daemon still
   boots.
 
+### The `usejarvis_billing` block (hosted installs only)
+
+Also written exclusively by the hosting control plane, for the Settings ->
+Billing page:
+
+```yaml
+usejarvis_billing:
+  url: https://app.usejarvis.dev/api/billing/instance   # signed POST, https
+  instance_id: <uuid>
+  secret: <64 hex>                                      # per-instance, derived
+  page_url: https://app.usejarvis.dev/billing           # opened by a person
+```
+
+- **All four or none** (`daemon/hosted-billing.ts`); a partial block reads as
+  billing unavailable.
+- **Read-only credential.** The secret signs a read of the owner's billing
+  summary and nothing else. Every change is a link to `page_url` with an
+  `?action=` (`manage`, `payment-method`, `change-plan`, `cancel`), opened in
+  the system browser where the user's own account session authorizes it.
+- **File-authoritative** like `usejarvis_ai`: re-read on SIGHUP and
+  `POST /api/config/reload` (`reloadUsejarvisBillingBlock`).
+- `GET /api/billing` serves the parsed summary and the links to the UI, and
+  never the endpoint, instance id or secret.
+
 All user-owned sections (personality, voice, stt/tts, authority, channels,
 onboarding, ... — see `USER_OWNED_SECTIONS` in `types.ts`) persist to the
 vault DB settings store instead:

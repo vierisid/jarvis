@@ -88,25 +88,6 @@ const VOICE_CONFIRMATION_TTL_MS = 10 * 60_000;
 const VOICE_CONFIRMATION_SWEEP_INTERVAL_MS = 60_000;
 
 /**
- * Bridge into the machine's microphone for the onboarding interview.
- *
- * The dashboard no longer owns the mic (the sidecar's pebble does), so the
- * interview borrows it: while an interview session is alive the daemon points
- * the pebble's capture at the interview instead of the normal assistant turn.
- * Implemented in `daemon/index.ts` (the ambient-UI block owns the pebble);
- * null in headless / dashboard-only mode, in which case the UI falls back to
- * browser speech recognition.
- */
-export interface InterviewVoiceBridge {
-  /** Capture one utterance for the interview. */
-  arm(): Promise<{ armed: boolean; reason?: string }>;
-  /** Drop a capture armed by `arm()` (turn over, interview finished). */
-  disarm(): void;
-  /** Interview lifecycle. While active, pebble voice feeds the interview. */
-  setActive(active: boolean): void;
-}
-
-/**
  * Pure cleanup helper: removes every per-socket entry from the WS-service
  * maps when a client disconnects. Extracted so the cleanup contract can
  * be unit-tested without spinning up a real WebSocket server.
@@ -255,21 +236,9 @@ export class WebSocketService implements Service {
    * persisted via `appendUserProfileFact` inside the agent loop.
    */
   private interviewSessions = new Map<ServerWebSocket<unknown>, InterviewSession>();
-  /**
-   * Voice for the interview. `activeInterviewWs` is the socket whose interview
-   * currently owns the microphone — the newest one to take a turn, so a stale
-   * background tab can't steal the transcript from the window the user is
-   * actually talking to. See `deliverInterviewVoice`.
-   */
-  private interviewVoiceBridge: InterviewVoiceBridge | null = null;
-  private activeInterviewWs: ServerWebSocket<unknown> | null = null;
-  /** Mirrors the UI's speakReply for transcripts that arrive off-socket. */
-  private interviewSpeakReply = true;
-  /** True while the pebble is capturing an utterance for the interview. */
-  private interviewListening = false;
   /** Sockets with an interview turn running — see `handleInterviewMessage`. */
   private interviewTurnsInFlight = new Set<ServerWebSocket<unknown>>();
-  /** Speech that landed mid-turn, run as the next turn. */
+  /** Typed text that landed mid-turn, run as the next turn. */
   private interviewPendingText = new Map<ServerWebSocket<unknown>, string>();
   /**
    * Periodic sweep handle for `pendingVoiceConfirmations` TTL eviction.
@@ -321,133 +290,10 @@ export class WebSocketService implements Service {
     this.deferredExecutor = exec;
   }
 
-  /**
-   * Wire the pebble's microphone into the onboarding interview. Without it
-   * the interview is text-only (plus whatever the browser can transcribe on
-   * its own) and any speech keeps landing in the normal assistant flow.
-   */
-  setInterviewVoiceBridge(bridge: InterviewVoiceBridge): void {
-    this.interviewVoiceBridge = bridge;
-  }
-
-  /** True while an onboarding interview is running and owns the user's voice. */
-  hasActiveInterview(): boolean {
-    const ws = this.activeInterviewWs;
-    return ws !== null && this.interviewSessions.has(ws);
-  }
-
-  /**
-   * Feed a transcript captured by the pebble into the running interview
-   * instead of the assistant. Returns false when no interview is live (the
-   * caller then runs its normal response cycle).
-   */
-  deliverInterviewVoice(text: string): boolean {
-    const ws = this.activeInterviewWs;
-    const trimmed = text.trim();
-    if (!ws || !this.interviewSessions.has(ws) || !trimmed) return false;
-    this.interviewListening = false;
-    // Echo the transcript first: the UI renders the user's bubble and stops
-    // waiting on the mic before the (slow) agent turn starts.
-    this.wsServer.sendToClient(ws, {
-      type: 'interview_user_transcript',
-      payload: { text: trimmed },
-      timestamp: Date.now(),
-    });
-    this.handleInterviewMessage(ws, trimmed, this.interviewSpeakReply).catch(err =>
-      console.error('[WSService] interview voice turn failed:', err)
-    );
-    return true;
-  }
-
-  /**
-   * The pebble stopped listening without a usable answer (silence, a mute, a
-   * dropped capture). Tell the UI so it can re-arm or fall back to typing
-   * rather than sit on a "listening" orb that nothing is feeding.
-   */
-  notifyInterviewListenEnded(reason: string): void {
-    const ws = this.activeInterviewWs;
-    if (!ws || !this.interviewSessions.has(ws)) return;
-    this.interviewListening = false;
-    this.wsServer.sendToClient(ws, {
-      type: 'interview_listen_state',
-      payload: { armed: false, reason },
-      timestamp: Date.now(),
-    });
-  }
-
-  /**
-   * Arm the pebble for one interview utterance and tell the UI whether it
-   * worked. `armed: false` is not an error — it's the UI's cue to use browser
-   * speech recognition (or just the composer) for this turn.
-   */
-  private async armInterviewListening(
-    ws: ServerWebSocket<unknown>,
-    speakReply?: boolean,
-  ): Promise<void> {
-    // Only a socket that is actually interviewing gets the mic, or a stray
-    // client could point the machine's microphone at someone else's session.
-    if (!this.interviewSessions.has(ws)) return;
-    this.activeInterviewWs = ws;
-    if (speakReply !== undefined) this.interviewSpeakReply = speakReply !== false;
-    const reply = (armed: boolean, reason?: string) => {
-      this.wsServer.sendToClient(ws, {
-        type: 'interview_listen_state',
-        payload: reason ? { armed, reason } : { armed },
-        timestamp: Date.now(),
-      });
-    };
-    const bridge = this.interviewVoiceBridge;
-    if (!bridge) {
-      reply(false, 'no-pebble');
-      return;
-    }
-    let result: { armed: boolean; reason?: string };
-    try {
-      result = await bridge.arm();
-    } catch (err) {
-      console.warn('[WSService] interview mic arm failed:', err);
-      reply(false, 'error');
-      return;
-    }
-    // The interview may have finished (or the socket gone) during the arm.
-    if (!this.interviewSessions.has(ws)) {
-      if (result.armed) bridge.disarm();
-      return;
-    }
-    this.interviewListening = result.armed;
-    reply(result.armed, result.reason);
-  }
-
-  /**
-   * Release the interview's claim on the microphone. Called when the session
-   * wraps and on disconnect, so a closed dashboard never leaves the pebble
-   * routing speech into an interview nobody is watching.
-   */
-  private endInterviewVoice(ws: ServerWebSocket<unknown>): void {
+  /** Drop pending written turns when the interview wraps or disconnects. */
+  private endInterviewSession(ws: ServerWebSocket<unknown>): void {
     this.interviewPendingText.delete(ws);
     this.interviewTurnsInFlight.delete(ws);
-    if (this.activeInterviewWs === ws) {
-      this.activeInterviewWs = null;
-      if (this.interviewListening) {
-        this.interviewListening = false;
-        try {
-          this.interviewVoiceBridge?.disarm();
-        } catch (err) {
-          console.warn('[WSService] interview mic disarm failed:', err);
-        }
-      }
-      // Another window still interviewing (rare, but a reload mid-interview
-      // looks exactly like this): give it the mic rather than leaving voice
-      // routed to an interview no socket owns — the assistant would answer.
-      for (const other of this.interviewSessions.keys()) this.activeInterviewWs = other;
-    }
-    if (this.interviewSessions.size === 0) {
-      try {
-        this.interviewVoiceBridge?.setActive(false);
-      } catch (err) {
-        console.warn('[WSService] interview voice teardown failed:', err);
-      }
-    }
   }
 
   setAuditTrail(audit: AuditTrail): void {
@@ -563,9 +409,7 @@ export class WebSocketService implements Service {
             this.realtimeSessions as unknown as Map<typeof ws, unknown>,
             this.pendingVoiceFrames as unknown as Map<typeof ws, unknown>,
           );
-          // After the maps are swept, so `endInterviewVoice` sees the real
-          // remaining-session count when it decides to hand the mic back.
-          this.endInterviewVoice(ws);
+          this.endInterviewSession(ws);
           console.log('[WSService] Client disconnected');
         },
       });
@@ -1157,36 +1001,29 @@ export class WebSocketService implements Service {
         // agent loop (see `onboarding-interviewer.ts`); doesn't touch
         // the primary chat agent or persist messages to vault
         // conversations.
-        const payload = msg.payload as { text?: string; speakReply?: boolean };
+        const payload = msg.payload as { text?: string };
         const userText = msg.type === 'interview_start' ? null : (payload?.text ?? '').trim();
-        const speakReply = payload?.speakReply !== false; // default true
-        this.handleInterviewMessage(ws, userText, speakReply).catch(err =>
+        // Ignore legacy speakReply requests: this interview is always written.
+        this.handleInterviewMessage(ws, userText).catch(err =>
           console.error('[WSService] interview pipeline error:', err)
         );
         return undefined;
       }
 
       case 'interview_listen': {
-        // The interview reached its "listening" beat and wants the mic. The
-        // pebble owns it, so borrow it here rather than opening a second one
-        // in the browser — that is what used to send the answer to the
-        // assistant instead of the interviewer.
-        const speak = (msg.payload as { speakReply?: boolean } | undefined)?.speakReply;
-        this.armInterviewListening(ws, speak).catch(err =>
-          console.error('[WSService] interview listen error:', err)
-        );
+        // Tell an older dashboard that recording is unavailable. Never arm
+        // a microphone or change ordinary assistant voice routing.
+        this.wsServer.sendToClient(ws, {
+          type: 'interview_listen_state',
+          payload: { armed: false, reason: 'text-only' },
+          timestamp: Date.now(),
+        });
         return undefined;
       }
 
       case 'interview_listen_stop': {
-        if (this.activeInterviewWs === ws && this.interviewListening) {
-          this.interviewListening = false;
-          try {
-            this.interviewVoiceBridge?.disarm();
-          } catch (err) {
-            console.warn('[WSService] interview mic disarm failed:', err);
-          }
-        }
+        // No interview capture exists to stop. In particular, do not disarm
+        // a normal Pebble conversation because a stale client sent this.
         return undefined;
       }
 
@@ -1921,9 +1758,8 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   /**
    * Phase B — onboarding interview message handler. Drives the
    * `onboarding-interviewer` module's agent loop, streams the
-   * assistant text back to the UI as an `interview_assistant`
-   * message, and (optionally) speaks it via TTS so the orb can
-   * play the question aloud.
+   * assistant text back to the UI as an `interview_assistant` message.
+   * Interview replies are always written, independently of voice settings.
    *
    * `userText === null` means "start the interview" (first turn);
    * the agent opens with its scripted intro + first question.
@@ -1933,33 +1769,20 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   private async handleInterviewMessage(
     ws: ServerWebSocket<unknown>,
     userText: string | null,
-    speakReply: boolean,
   ): Promise<void> {
     if (!this.interviewSessions.has(ws)) {
       this.interviewSessions.set(ws, createInterviewSession());
-      // First turn: take the user's voice off the assistant for the duration.
-      try {
-        this.interviewVoiceBridge?.setActive(true);
-      } catch (err) {
-        console.warn('[WSService] interview voice takeover failed:', err);
-      }
     }
-    // Whoever spoke last owns the mic, and their speakReply is the one an
-    // off-socket transcript should honour.
-    this.activeInterviewWs = ws;
-    this.interviewSpeakReply = speakReply;
 
     // One turn at a time per session. `runInterviewTurn` mutates the session's
     // message history across awaits, so two overlapping turns interleave into
     // a history no provider will accept (two user turns in a row, orphaned
-    // tool results). The transcript can now arrive from the pebble at any
-    // moment — including while the previous turn is still running — so hold
-    // it and run it next instead of dropping it or racing.
+    // tool results). Hold an additional typed reply until the current turn
+    // finishes instead of dropping it or racing.
     if (this.interviewTurnsInFlight.has(ws)) {
       if (userText) {
         const queued = this.interviewPendingText.get(ws);
-        // Merge: someone finishing a thought in two breaths ("I'm a
-        // designer." … "In Milan.") should read as one answer.
+        // Preserve the order of additional text sent during a pending turn.
         this.interviewPendingText.set(ws, queued ? `${queued} ${userText}` : userText);
       }
       return;
@@ -1967,7 +1790,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
     this.interviewTurnsInFlight.add(ws);
     try {
-      await this.runInterviewTurnForSocket(ws, userText, speakReply);
+      await this.runInterviewTurnForSocket(ws, userText);
     } finally {
       this.interviewTurnsInFlight.delete(ws);
     }
@@ -1977,15 +1800,14 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     const pending = this.interviewPendingText.get(ws);
     this.interviewPendingText.delete(ws);
     if (pending && this.interviewSessions.has(ws)) {
-      await this.handleInterviewMessage(ws, pending, speakReply);
+      await this.handleInterviewMessage(ws, pending);
     }
   }
 
-  /** One interview turn: run the agent, send the text, speak it, wrap up. */
+  /** One written interview turn: run the agent, send the text, wrap up. */
   private async runInterviewTurnForSocket(
     ws: ServerWebSocket<unknown>,
     userText: string | null,
-    speakReply: boolean,
   ): Promise<void> {
     const session = this.interviewSessions.get(ws);
     if (!session) return;
@@ -2008,6 +1830,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       result = await runInterviewTurn(session, llm, userText);
     } catch (err) {
       console.error('[WSService] Interview turn failed:', err);
+      if (this.interviewSessions.get(ws) !== session) return;
       this.wsServer.sendToClient(ws, {
         type: 'interview_error',
         payload: { message: err instanceof Error ? err.message : String(err) },
@@ -2016,68 +1839,21 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       return;
     }
 
+    // A disconnected or replaced session must not receive a late reply.
+    if (this.interviewSessions.get(ws) !== session) return;
     const text = result.assistantText.trim();
 
-    // Decide up-front whether audio will follow, and TELL the UI in the
-    // text message. The UI must not guess: when it assumed TTS based on
-    // its own (possibly stale) settings fetch and no `tts_start` ever
-    // arrived — e.g. TTS disabled, or no provider loaded — it sat in
-    // "Jarvis is thinking…" forever with the composer disabled.
-    const willSpeak = Boolean(speakReply && this.ttsProvider && text);
-
-    // Send the text reply for the UI to render in the chat-bubble
-    // layout (always — the bubble is the visual record even when TTS
-    // is on).
+    // Keep will_speak explicit so an older dashboard does not wait for TTS.
     this.wsServer.sendToClient(ws, {
       type: 'interview_assistant',
       payload: {
         text,
         facts_recorded: result.factsRecorded,
         done: result.done,
-        will_speak: willSpeak,
+        will_speak: false,
       },
       timestamp: Date.now(),
     });
-
-    // Stream the audio via the existing `tts_start` + binary chunks
-    // pipeline so the UI's MicOrb plays it through the normal
-    // "speaking" state machine.
-    if (willSpeak && this.ttsProvider) {
-      const requestId = `interview-${Date.now()}`;
-      // Tracks whether the tts_start frame went out: the finally block
-      // below closes it with tts_end exactly when it was opened, so a
-      // provider that throws -- even before the first chunk -- never
-      // strands the UI in "speaking" with no audio and no tts_end.
-      let ttsStarted = false;
-      try {
-        this.wsServer.sendToClient(ws, {
-          type: 'tts_start',
-          // containsWake=true conservatively suppresses the wake
-          // recognizer for the entire interview reply — interviews
-          // are short and we don't need "Jarvis" interrupts here.
-          payload: { requestId, containsWake: true },
-          id: requestId,
-          timestamp: Date.now(),
-        });
-        ttsStarted = true;
-        for await (const chunk of this.ttsProvider.synthesizeStream(text)) {
-          this.wsServer.sendBinary(ws, chunk);
-        }
-      } catch (err) {
-        console.warn('[WSService] Interview TTS failed:', err);
-      } finally {
-        // Always close the TTS frame once it was opened — a synthesis
-        // failure mid-stream must not leave the UI waiting forever.
-        if (ttsStarted) {
-          this.wsServer.sendToClient(ws, {
-            type: 'tts_end',
-            payload: { requestId },
-            id: requestId,
-            timestamp: Date.now(),
-          });
-        }
-      }
-    }
 
     if (result.done) {
       this.wsServer.sendToClient(ws, {
@@ -2089,7 +1865,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         timestamp: Date.now(),
       });
       this.interviewSessions.delete(ws);
-      this.endInterviewVoice(ws);
+      this.endInterviewSession(ws);
     }
   }
 

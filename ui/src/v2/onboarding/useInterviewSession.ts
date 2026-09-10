@@ -1,474 +1,133 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { OrbState } from "../shell/MicOrb";
 
-/**
- * Phase B — UI hook driving the onboarding profile interview.
- *
- * Owns the WebSocket lifecycle for the interview message types
- * (`interview_start`, `interview_user_message`, `interview_assistant`,
- * `interview_done`, `interview_error`) AND the local "current orb
- * state" + transcript-buffer machinery. The ProfileInterviewRoom
- * consumes this hook and renders.
- *
- * Voice flow (when TTS is on AND mic is available):
- *   1. Mount → connect WS → send `interview_start` → daemon replies
- *      with `interview_assistant` text + streams TTS audio.
- *   2. UI plays the audio (orb state="speaking"). When TTS audio ends,
- *      auto-arms recording (orb state="listening").
- *   3. User speaks → browser SpeechRecognition (or the existing voice
- *      pipeline) collects transcript → user clicks "send" or silence
- *      detection ends → we send `interview_user_message`.
- *   4. Repeat until `interview_done` arrives.
- *
- * Where the microphone comes from:
- *   The dashboard does not hold the mic — the sidecar's pebble does. So on
- *   every "listening" beat we ask the daemon for it (`interview_listen`); it
- *   captures one utterance on the pebble and sends the transcript back as
- *   `interview_user_transcript`, routed to the interview instead of the
- *   assistant. `interview_listen_state` says whether that worked: when the
- *   daemon has no pebble/STT to offer (`armed: false`), the caller falls back
- *   to browser speech recognition, and typing always works either way.
- *
- * Text-only fallback (TTS off OR mic unavailable):
- *   Same WS message types, but no auto-record. User types into a
- *   composer and hits Enter to send.
- *
- * The hook does NOT use the existing useVoice hook directly because
- * useVoice is the rail's voice machinery and would interfere with
- * the regular dashboard flow. We piggyback on the same TTS playback
- * pipeline (the daemon broadcasts `tts_start` + binary chunks; the
- * existing useVoice on AppShell would normally consume those — but
- * AppShell is not mounted while the gate renders ProfileInterviewRoom,
- * so we mount our own minimal TTS player here).
- */
-
+/** The profile interview is always written, independent of the user's normal
+ * voice settings. This hook owns only its socket, transcript and completion.
+ * It never requests the Pebble's microphone or plays daemon audio. */
 export type InterviewMessage =
   | { role: "assistant"; text: string; ts: number }
   | { role: "user"; text: string; ts: number };
 
-interface InterviewState {
-  /** Connection + pipeline status. */
-  phase: "connecting" | "ready" | "speaking" | "listening" | "thinking" | "done" | "error";
-  /** Driver for the orb visual. Maps phase → OrbState. */
-  orbState: OrbState;
-  /** Full transcript so far — both sides. */
-  messages: InterviewMessage[];
-  /** Live STT partial under the orb. */
-  partialUserText: string;
-  /** Cumulative facts the agent has recorded. Updates after each turn. */
-  factsRecorded: number;
-  /** Closing line surfaced when the interview wraps. */
-  farewell: string | null;
-  /** Last error message, if any. */
-  error: string | null;
-  /**
-   * Where this turn's voice input comes from:
-   *   idle        — not listening (thinking/speaking/done, or text-only)
-   *   pending     — we asked the daemon for the pebble's mic, waiting
-   *   armed       — the pebble is capturing this turn; do NOT open a second mic
-   *   unavailable — no daemon mic (no pebble, no STT, muted): fall back locally
-   */
-  micStatus: "idle" | "pending" | "armed" | "unavailable";
-  /** Why the daemon mic isn't available, when `micStatus === "unavailable"`. */
-  micReason: string | null;
-}
+type InterviewPhase = "connecting" | "ready" | "thinking" | "done" | "error";
 
-interface InterviewControls {
-  /** Send the user's text reply (typed OR transcribed). */
-  sendUserMessage: (text: string) => void;
-  /** Toggle text-only mode (skips TTS playback + auto-record). */
-  setTextOnly: (next: boolean) => void;
-  /** True when the user has explicitly opted out of voice. */
-  textOnly: boolean;
-  /** Update the live STT partial — driven by SpeechRecognition. */
-  setPartialUserText: (text: string) => void;
-}
-
-export function useInterviewSession(opts: {
-  /** True when the user picked "no TTS" in Phase A. Forces text-only. */
-  ttsDisabled: boolean;
-}): InterviewState & InterviewControls {
+/** `onAnswerReturned` receives an answer whose turn failed, so the caller can
+ * put it back in its composer for a retry. */
+export function useInterviewSession(onAnswerReturned?: (text: string) => void) {
   const wsRef = useRef<WebSocket | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null);
-  const audioQueueRef = useRef<ArrayBuffer[]>([]);
-  const audioPlayingRef = useRef(false);
-  const ttsPendingRef = useRef(false);
-  const ttsFallbackTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-
-  const [phase, setPhase] = useState<InterviewState["phase"]>("connecting");
-  const [orbState, setOrbState] = useState<OrbState>("idle");
+  const phaseRef = useRef<InterviewPhase>("connecting");
+  // The answer the daemon is currently replying to, if any.
+  const unansweredRef = useRef<string | null>(null);
+  const onAnswerReturnedRef = useRef(onAnswerReturned);
+  onAnswerReturnedRef.current = onAnswerReturned;
+  const [phase, setPhase] = useState<InterviewPhase>("connecting");
   const [messages, setMessages] = useState<InterviewMessage[]>([]);
-  const [partialUserText, setPartialUserText] = useState("");
   const [factsRecorded, setFactsRecorded] = useState(0);
   const [farewell, setFarewell] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [textOnly, setTextOnlyState] = useState(opts.ttsDisabled);
-  const [micStatus, setMicStatus] = useState<InterviewState["micStatus"]>("idle");
-  const [micReason, setMicReason] = useState<string | null>(null);
-  // Live view of micStatus for the mount-once WS handlers (same reason as
-  // textOnlyRef below).
-  const micStatusRef = useRef<InterviewState["micStatus"]>("idle");
-  // Consecutive empty captures. A capture that hears nothing is worth
-  // retrying — the user was still thinking — but not forever: after a few we
-  // stop re-arming and let the composer (or the browser recognizer) take over.
-  const emptyCapturesRef = useRef(0);
-  const rearmTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  // The WS handlers below live in a mount-once effect, so reading the
-  // `textOnly` state there would see the value frozen at mount. The ref
-  // is the live view — without it, toggling "Continue with text only"
-  // mid-session left the handlers waiting for TTS that was no longer
-  // requested.
-  const textOnlyRef = useRef(textOnly);
 
-  const setMic = useCallback((status: InterviewState["micStatus"], reason: string | null = null) => {
-    micStatusRef.current = status;
-    setMicStatus(status);
-    setMicReason(reason);
+  const changePhase = useCallback((next: InterviewPhase) => {
+    phaseRef.current = next;
+    setPhase(next);
   }, []);
 
-  /** Ask the daemon to capture this turn's answer on the pebble. */
-  const requestDaemonMic = useCallback((speak: boolean) => {
-    const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    setMic("pending");
-    ws.send(
-      JSON.stringify({
-        type: "interview_listen",
-        payload: { speakReply: speak },
-        timestamp: Date.now(),
-      }),
-    );
-  }, [setMic]);
-
-  const clearRearmTimer = useCallback(() => {
-    if (rearmTimerRef.current !== null) {
-      clearTimeout(rearmTimerRef.current);
-      rearmTimerRef.current = null;
-    }
-  }, []);
-
-  const clearTtsFallbackTimer = useCallback(() => {
-    if (ttsFallbackTimerRef.current !== null) {
-      clearTimeout(ttsFallbackTimerRef.current);
-      ttsFallbackTimerRef.current = null;
-    }
-  }, []);
-
-  /** Toggle text-only mode. Turning it ON also rescues a session stuck
-   *  waiting on TTS audio — flip straight to listening so the composer
-   *  re-enables. */
-  const setTextOnly = useCallback(
-    (next: boolean) => {
-      textOnlyRef.current = next;
-      setTextOnlyState(next);
-      if (next && ttsPendingRef.current) {
-        ttsPendingRef.current = false;
-        clearTtsFallbackTimer();
-        setPhase("listening");
-        setOrbState("listening");
-      }
-    },
-    [clearTtsFallbackTimer],
-  );
-
-  // ── WS lifecycle ─────────────────────────────────────────────────
   useEffect(() => {
     const proto = window.location.protocol === "https:" ? "wss" : "ws";
     const ws = new WebSocket(`${proto}://${window.location.host}/ws`);
-    ws.binaryType = "arraybuffer";
     wsRef.current = ws;
 
     ws.onopen = () => {
-      setPhase("thinking");
-      setOrbState("thinking");
-      ws.send(
-        JSON.stringify({
-          type: "interview_start",
-          payload: { speakReply: !textOnlyRef.current },
-          timestamp: Date.now(),
-        }),
-      );
+      changePhase("thinking");
+      ws.send(JSON.stringify({
+        type: "interview_start",
+        payload: { speakReply: false },
+        timestamp: Date.now(),
+      }));
     };
 
     ws.onmessage = (event) => {
-      // Binary frames are TTS audio chunks.
-      if (event.data instanceof ArrayBuffer) {
-        if (textOnlyRef.current) return; // ignore audio in text-only mode
-        audioQueueRef.current.push(event.data);
-        if (!audioPlayingRef.current) playNextChunk();
-        return;
-      }
-
+      // Ignore binary audio and all unrelated voice messages, including ones
+      // broadcast by an older daemon. They cannot change interview state.
+      if (typeof event.data !== "string") return;
       let msg: any;
-      try {
-        msg = JSON.parse(String(event.data));
-      } catch {
-        return;
-      }
+      try { msg = JSON.parse(event.data); } catch { return; }
+      if (!msg || typeof msg !== "object") return;
 
       switch (msg.type) {
         case "interview_assistant": {
+          if (phaseRef.current === "done") return;
+          unansweredRef.current = null;
           const text = String(msg.payload?.text ?? "").trim();
-          if (text) {
-            setMessages((prev) => [
-              ...prev,
-              { role: "assistant", text, ts: msg.timestamp ?? Date.now() },
-            ]);
-          }
+          if (text) setMessages((prev) => [
+            ...prev, { role: "assistant", text, ts: msg.timestamp ?? Date.now() },
+          ]);
           if (typeof msg.payload?.facts_recorded === "number") {
             setFactsRecorded(msg.payload.facts_recorded);
           }
-          // We get the text immediately; if TTS will follow, the
-          // orb stays in "thinking" until tts_start fires. If not,
-          // jump straight to listening so the user can reply. The
-          // daemon says explicitly whether audio is coming
-          // (`will_speak`) — trust it over our local mode guess, so
-          // a TTS-less daemon never strands us waiting for audio.
-          // (Older daemons omit the field; undefined falls through
-          // to the local guess + timeout fallback below.)
-          const willSpeak = msg.payload?.will_speak;
-          if (textOnlyRef.current || !text || willSpeak === false) {
-            setPhase("listening");
-            setOrbState("listening");
-          } else {
-            ttsPendingRef.current = true;
-            // Safety net: if tts_start never arrives (provider died,
-            // pre-will_speak daemon with TTS off), un-stick the
-            // composer rather than waiting forever.
-            clearTtsFallbackTimer();
-            ttsFallbackTimerRef.current = setTimeout(() => {
-              ttsFallbackTimerRef.current = null;
-              if (ttsPendingRef.current) {
-                ttsPendingRef.current = false;
-                setPhase("listening");
-                setOrbState("listening");
-              }
-            }, 10_000);
-          }
+          setError(null);
+          changePhase("ready");
           break;
         }
-        case "tts_start":
-          if (!textOnlyRef.current) {
-            ttsPendingRef.current = false;
-            clearTtsFallbackTimer();
-            setPhase("speaking");
-            setOrbState("speaking");
-            // Pre-warm AudioContext so the first chunk plays cleanly.
-            getAudioContext();
-          }
-          break;
-        case "tts_end":
-          // Wait for the queue to drain in playNextChunk() before
-          // flipping to listening. If the queue is already empty,
-          // flip now.
-          if (audioQueueRef.current.length === 0 && !audioPlayingRef.current) {
-            setPhase("listening");
-            setOrbState("listening");
-          }
-          break;
-        case "interview_listen_state": {
-          const armed = Boolean(msg.payload?.armed);
-          const reason = msg.payload?.reason ? String(msg.payload.reason) : null;
-          if (armed) {
-            emptyCapturesRef.current = 0;
-            setMic("armed");
-            break;
-          }
-          // A capture that came back empty (silence, or the sidecar's VAD
-          // window closing) isn't a broken mic — re-arm and keep waiting, up
-          // to a few tries so a user who walked away doesn't loop forever.
-          const retryable = reason === "no-speech" || reason === "timeout";
-          if (retryable && micStatusRef.current !== "idle" && emptyCapturesRef.current < 3) {
-            emptyCapturesRef.current += 1;
-            setMic("pending", reason);
-            clearRearmTimer();
-            rearmTimerRef.current = setTimeout(() => {
-              rearmTimerRef.current = null;
-              requestDaemonMic(!textOnlyRef.current);
-            }, 400);
-            break;
-          }
-          setMic("unavailable", reason ?? "unavailable");
-          break;
-        }
-        case "interview_user_transcript": {
-          // The pebble heard the answer. Render it as the user's turn — the
-          // interviewer's reply is already on its way.
-          const text = String(msg.payload?.text ?? "").trim();
-          if (!text) break;
-          emptyCapturesRef.current = 0;
-          clearRearmTimer();
-          setMic("idle");
-          setMessages((prev) => [...prev, { role: "user", text, ts: msg.timestamp ?? Date.now() }]);
-          setPartialUserText("");
-          setPhase("thinking");
-          setOrbState("thinking");
-          break;
-        }
-        case "interview_done": {
+        case "interview_done":
+          unansweredRef.current = null;
           setFarewell(String(msg.payload?.farewell ?? ""));
           if (typeof msg.payload?.facts_recorded === "number") {
             setFactsRecorded(msg.payload.facts_recorded);
           }
-          // Wait for any in-flight TTS to drain before flipping done.
-          const finishOnDrain = () => {
-            if (audioQueueRef.current.length === 0 && !audioPlayingRef.current) {
-              setPhase("done");
-              setOrbState("idle");
-            } else {
-              setTimeout(finishOnDrain, 200);
-            }
-          };
-          finishOnDrain();
+          changePhase("done");
+          break;
+        case "interview_error": {
+          if (phaseRef.current === "done") return;
+          // The daemon rolls a failed turn back, so the answer never reached
+          // the interview. Drop its bubble and hand the text back for a retry.
+          const unanswered = unansweredRef.current;
+          unansweredRef.current = null;
+          if (unanswered !== null) {
+            setMessages((prev) => (prev.at(-1)?.role === "user" ? prev.slice(0, -1) : prev));
+            onAnswerReturnedRef.current?.(unanswered);
+          }
+          setError(String(msg.payload?.message ?? "Interview failed. Please try again."));
+          changePhase("error");
           break;
         }
-        case "interview_error":
-          setError(String(msg.payload?.message ?? "Interview failed."));
-          setPhase("error");
-          setOrbState("idle");
-          break;
-        default:
-          // Ignore unrelated messages — daemon may send chat / suggestions etc.
-          break;
       }
     };
 
-    ws.onerror = () => {
-      setError("Connection error.");
-      setPhase("error");
-      setOrbState("idle");
-    };
-
-    ws.onclose = () => {
-      // Only treat as error if we weren't already done.
-      setPhase((p) => (p === "done" ? "done" : "error"));
+    ws.onerror = ws.onclose = () => {
+      if (phaseRef.current === "done") return;
+      setError("Connection lost. Reload to reconnect, or skip the interview.");
+      changePhase("error");
     };
 
     return () => {
-      try {
-        ws.close();
-      } catch {
-        /* ignore */
-      }
+      ws.onopen = ws.onmessage = ws.onerror = ws.onclose = null;
       wsRef.current = null;
-      try {
-        audioCtxRef.current?.close();
-      } catch {
-        /* ignore */
-      }
-      audioCtxRef.current = null;
-      audioQueueRef.current = [];
-      clearTtsFallbackTimer();
-      clearRearmTimer();
+      try { ws.close(); } catch { /* already closed */ }
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [changePhase]);
 
-  // ── Microphone hand-off ──────────────────────────────────────────
-  // The mic lives on the pebble, so borrow it for exactly the window where
-  // the interview wants an answer — never while Jarvis is speaking (the
-  // sidecar would capture its own TTS) and never once the interview is done.
-  useEffect(() => {
+  /** Returns false without clearing the draft if a turn is already running
+   * or the connection went away. The ref also prevents a rapid double-send. */
+  const sendUserMessage = useCallback((text: string): boolean => {
+    const trimmed = text.trim();
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return;
-    // Asked for on every listening beat, even with TTS off: "no spoken
-    // replies" is a choice about Jarvis's voice, not the user's. Whether
-    // there is a mic to lend at all is the daemon's call (it knows if STT is
-    // configured and a pebble is connected), so we just ask.
-    const wants = phase === "listening";
-    if (wants) {
-      if (micStatusRef.current === "idle") requestDaemonMic(!textOnly);
-      return;
-    }
-    clearRearmTimer();
-    emptyCapturesRef.current = 0;
-    if (micStatusRef.current === "idle") return;
-    // Hand the mic back. Harmless when the daemon never armed it.
-    setMic("idle");
+    if (!trimmed || !ws || ws.readyState !== WebSocket.OPEN) return false;
+    if (phaseRef.current !== "ready" && phaseRef.current !== "error") return false;
     try {
-      ws.send(JSON.stringify({ type: "interview_listen_stop", payload: {}, timestamp: Date.now() }));
+      ws.send(JSON.stringify({
+        type: "interview_user_message",
+        payload: { text: trimmed, speakReply: false },
+        timestamp: Date.now(),
+      }));
     } catch {
-      /* socket already going away */
+      setError("Your answer wasn't sent. Check the connection and try again.");
+      changePhase("error");
+      return false;
     }
-  }, [phase, textOnly, requestDaemonMic, clearRearmTimer, setMic]);
+    unansweredRef.current = trimmed;
+    setMessages((prev) => [...prev, { role: "user", text: trimmed, ts: Date.now() }]);
+    setError(null);
+    changePhase("thinking");
+    return true;
+  }, [changePhase]);
 
-  // ── TTS playback ─────────────────────────────────────────────────
-  function getAudioContext(): AudioContext {
-    if (!audioCtxRef.current || audioCtxRef.current.state === "closed") {
-      audioCtxRef.current = new AudioContext();
-    }
-    return audioCtxRef.current;
-  }
-
-  const playNextChunk = useCallback(async () => {
-    const chunk = audioQueueRef.current.shift();
-    if (!chunk) {
-      audioPlayingRef.current = false;
-      // If TTS has fully drained AND we're past speaking, flip to listening.
-      setPhase((prev) => {
-        if (prev === "speaking") {
-          setOrbState("listening");
-          return "listening";
-        }
-        return prev;
-      });
-      return;
-    }
-    audioPlayingRef.current = true;
-    const ctx = getAudioContext();
-    try {
-      const buf = await ctx.decodeAudioData(chunk.slice(0));
-      const src = ctx.createBufferSource();
-      src.buffer = buf;
-      src.connect(ctx.destination);
-      src.onended = () => playNextChunk();
-      src.start();
-    } catch (err) {
-      console.warn("[Interview] TTS decode failed:", err);
-      playNextChunk();
-    }
-  }, []);
-
-  // ── User send ────────────────────────────────────────────────────
-  const sendUserMessage = useCallback(
-    (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed) return;
-      const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
-      setMessages((prev) => [
-        ...prev,
-        { role: "user", text: trimmed, ts: Date.now() },
-      ]);
-      setPartialUserText("");
-      // Typing wins the turn: the effect above hands the pebble's mic back
-      // as soon as we leave the listening phase.
-      setPhase("thinking");
-      setOrbState("thinking");
-      ws.send(
-        JSON.stringify({
-          type: "interview_user_message",
-          payload: { text: trimmed, speakReply: !textOnlyRef.current },
-          timestamp: Date.now(),
-        }),
-      );
-    },
-    [],
-  );
-
-  return {
-    phase,
-    orbState,
-    messages,
-    partialUserText,
-    factsRecorded,
-    farewell,
-    error,
-    micStatus,
-    micReason,
-    textOnly,
-    sendUserMessage,
-    setTextOnly,
-    setPartialUserText,
-  };
+  return { phase, messages, factsRecorded, farewell, error, sendUserMessage };
 }

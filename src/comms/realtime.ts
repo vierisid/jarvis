@@ -80,7 +80,18 @@ export type RealtimeSessionOptions = {
   safetyIdentifier?: string;
   /** Injectable socket factory (defaults to a Bun WebSocket). */
   socketFactory?: RealtimeSocketFactory;
+  /** Override TOOL_RESULT_GRACE_MS (tests). */
+  toolResultGraceMs?: number;
 };
+
+/**
+ * How long voicing tool results waits on a sibling call from the same reply.
+ * A nav tool answers in milliseconds, but no tool has a timeout, so a slow or
+ * hung one would otherwise hold every result back. After this the results
+ * already in are voiced, and a late one is voiced on its own when it lands.
+ * Seeing no output for the missing call, the model may call that tool again.
+ */
+export const TOOL_RESULT_GRACE_MS = 4_000;
 
 /** Convert shared `LLMTool`s into the GA realtime `tools` entry format. */
 export function convertToolsForRealtime(tools: LLMTool[]): Array<Record<string, unknown>> {
@@ -100,9 +111,10 @@ export function buildSessionUpdate(
   inputSampleRate: number,
   outputSampleRate: number,
 ): Record<string, unknown> {
+  // No `model`: the connect URL names it, and a hosted alias here is rejected
+  // upstream (docs/GPT_REALTIME_2_INTEGRATION.md section 2).
   const session: Record<string, unknown> = {
     type: 'realtime',
-    model: resolved.model,
     output_modalities: ['audio'],
     instructions,
     audio: {
@@ -181,6 +193,21 @@ export class RealtimeSession {
   // Gates barge-in cancel so we don't send response.cancel with nothing active
   // (which OpenAI rejects with an error event).
   private responseActive = false;
+  // Server truth for "a response exists" (response.created..done). Unlike
+  // responseActive it is not cleared on barge-in: a cancelled response still
+  // refuses a response.create until its response.done lands.
+  private responseInFlight = false;
+  // We sent response.create and its response.created has not arrived yet.
+  private responseRequested = false;
+  // Tool output is in the conversation and still needs a response to voice it.
+  private responsePending = false;
+  // Calls handed to onFunctionCall whose result has not come back yet.
+  private unansweredCalls = new Set<string>();
+  // Bounds the wait on unansweredCalls (TOOL_RESULT_GRACE_MS).
+  private graceTimer: ReturnType<typeof setTimeout> | null = null;
+  // Set on barge-in until the VAD's response starts. That response sees every
+  // tool output sent before it, so nothing is flushed while the user has the turn.
+  private userTurnOpen = false;
   // Wall-clock the current response started (response.created), used to compute
   // a per-response latency for the usage record on response.done.
   private responseStartedAt = 0;
@@ -289,6 +316,7 @@ export class RealtimeSession {
       };
       ws.onclose = (ev) => {
         this.closed = true;
+        this.clearGraceTimer();
         const detail = describeSocketClose(ev);
         if (!settled) {
           settle(new Error(`realtime socket closed before it opened${detail ? ` (${detail})` : ''}`));
@@ -305,8 +333,20 @@ export class RealtimeSession {
     this.send({ type: 'input_audio_buffer.append', audio: pcm.toString('base64') });
   }
 
-  /** Return a tool result to the model, then ask it to continue speaking. */
+  /**
+   * Return a tool result to the model, then ask it to continue speaking.
+   *
+   * The result goes out at once, but the response.create waits until every
+   * call handed out has its result (bounded by TOOL_RESULT_GRACE_MS), no
+   * response is in flight, and the user is not mid-turn. OpenAI refuses
+   * a response.create while one is active (`conversation_already_has_active_response`),
+   * and a reply with two tool calls used to send one per result: the second
+   * always hit that error, which the pebble treats as fatal, so live voice died
+   * on any multi-tool answer (prod proxy, 2026-09-10).
+   */
   sendFunctionResult(callId: string, result: unknown): void {
+    if (this.closed) return;
+    this.unansweredCalls.delete(callId);
     this.send({
       type: 'conversation.item.create',
       item: {
@@ -315,15 +355,42 @@ export class RealtimeSession {
         output: typeof result === 'string' ? result : JSON.stringify(result),
       },
     });
+    this.responsePending = true;
+    this.flushPendingResponse();
+  }
+
+  /** Send the deferred response.create once nothing can refuse it. */
+  private flushPendingResponse(): void {
+    if (!this.responsePending || this.responseInFlight || this.responseRequested || this.userTurnOpen) return;
+    if (this.unansweredCalls.size > 0) {
+      // Wait for the rest of the reply's calls, but not forever.
+      this.graceTimer ??= setTimeout(() => {
+        this.graceTimer = null;
+        this.unansweredCalls.clear();
+        this.flushPendingResponse();
+      }, this.opts.toolResultGraceMs ?? TOOL_RESULT_GRACE_MS);
+      return;
+    }
+    this.clearGraceTimer();
+    this.responsePending = false;
+    this.responseRequested = true;
     this.send({ type: 'response.create' });
   }
 
-  /** Cancel the in-flight response (used on barge-in). */
+  private clearGraceTimer(): void {
+    if (this.graceTimer) clearTimeout(this.graceTimer);
+    this.graceTimer = null;
+  }
+
+  /** Cancel the in-flight response (barge-in, or the dashboard's stop). A stop
+   *  also drops tool results still waiting to be voiced. */
   interrupt(): void {
+    this.responsePending = false;
     this.send({ type: 'response.cancel' });
   }
 
   close(): void {
+    this.clearGraceTimer();
     this.closed = true;
     try { this.ws?.close(); } catch { /* ignore */ }
     this.ws = null;
@@ -347,13 +414,28 @@ export class RealtimeSession {
       case 'response.created': {
         // A new response is in flight — clear any barge-in suppression so its
         // audio plays, and arm the cancel gate.
+        const ours = this.responseRequested;
         this.responseActive = true;
+        this.responseInFlight = true;
+        this.responseRequested = false;
+        // Calls from earlier replies stop gating: this reply hands out its own,
+        // and a late result is still voiced on its own via responsePending.
+        this.unansweredCalls.clear();
+        this.clearGraceTimer();
+        // The VAD answering a barge-in sees every tool output sent before it,
+        // so there is nothing left to voice separately. Our own request landing
+        // mid-utterance does not end the user's turn.
+        if (this.userTurnOpen && !ours) {
+          this.userTurnOpen = false;
+          this.responsePending = false;
+        }
         this.suppressOutputAudio = false;
         this.responseStartedAt = Date.now();
         break;
       }
       case 'response.done': {
         this.responseActive = false;
+        this.responseInFlight = false;
         // Extract per-response usage if present and emit it. OpenAI realtime
         // reports `response.usage.{input_tokens, output_tokens}` (plus audio /
         // text breakdowns we don't currently surface). Missing fields default
@@ -371,6 +453,8 @@ export class RealtimeSession {
           });
         }
         this.responseStartedAt = 0;
+        // Tool results that arrived while this response was running.
+        this.flushPendingResponse();
         break;
       }
       case 'response.output_audio.delta': {
@@ -411,6 +495,10 @@ export class RealtimeSession {
           this.responseActive = false;
           this.suppressOutputAudio = true;
         }
+        // Hold deferred tool voicing until the VAD answers this turn (see
+        // response.created): a response.create now would talk over the user or
+        // be refused. Should no response ever follow, the next one lifts it.
+        this.userTurnOpen = true;
         this.speechStartedCb?.();
         break;
       }
@@ -432,7 +520,10 @@ export class RealtimeSession {
         if (raw) {
           try { args = JSON.parse(raw); } catch { args = {}; }
         }
-        if (name) this.functionCallCb?.({ callId, name, args });
+        if (name && this.functionCallCb) {
+          this.unansweredCalls.add(callId);
+          this.functionCallCb({ callId, name, args });
+        }
         break;
       }
       case 'error': {
@@ -444,6 +535,14 @@ export class RealtimeSession {
         // Swallow it: surfacing it churned the browser session (it reset the
         // stream on every interrupt → voice_end/voice_start spam).
         if (e?.code === 'response_cancel_not_active' || /no active response|cancellation failed/i.test(msg)) {
+          break;
+        }
+        // Our response.create raced one the server started on its own. Its
+        // response.created has already arrived (one ordered socket), so its
+        // response.done asks again, since it may predate our tool output.
+        if (e?.code === 'conversation_already_has_active_response') {
+          this.responseRequested = false;
+          this.responsePending = true;
           break;
         }
         this.errorCb?.(msg);

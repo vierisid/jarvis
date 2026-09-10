@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Composer } from "./Composer";
+import { useTalkDraft } from "./useTalkDraft";
 import { Header, type ConnectionState } from "./Header";
 import { Thread, type ThreadHandle } from "../thread/Thread";
 import { MOCK_THREAD } from "../thread/mock";
@@ -874,7 +875,7 @@ function ShellLayout({
   const route = useV2Route();
   const [collapsed, toggleCollapse] = useIndexCollapsed();
   const [arranging, setArranging] = useState(false);
-  const [talkOpen, setTalkOpen] = useState(false);
+  const { open: talkOpen, setOpen: setTalkOpen, draft: composerDraft, setDraft: setComposerDraft } = useTalkDraft();
   const [talkIn, setTalkIn] = useState(false);
 
   // awaiting-approval renders as the "asking" (amber) pebble state.
@@ -1037,6 +1038,9 @@ function ShellLayout({
           <div className="rs-talk-foot">
             <div style={{ padding: "11px 13px" }}>
               <Composer
+                value={composerDraft}
+                onValueChange={setComposerDraft}
+                autoFocus
                 onSubmit={onSubmit}
                 onSlash={onOpenPalette}
                 disabled={composerDisabled}

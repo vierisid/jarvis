@@ -11,6 +11,8 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"sort"
+	"strings"
 	"sync"
 	"syscall"
 	"unsafe"
@@ -27,14 +29,14 @@ var (
 
 // UIAutomation property IDs
 const (
-	UIA_BoundingRectanglePropertyId  = 30001
-	UIA_ProcessIdPropertyId          = 30002
-	UIA_ControlTypePropertyId        = 30003
-	UIA_NamePropertyId               = 30005
+	UIA_BoundingRectanglePropertyId   = 30001
+	UIA_ProcessIdPropertyId           = 30002
+	UIA_ControlTypePropertyId         = 30003
+	UIA_NamePropertyId                = 30005
 	UIA_IsKeyboardFocusablePropertyId = 30009
-	UIA_IsEnabledPropertyId          = 30010
-	UIA_AutomationIdPropertyId       = 30011
-	UIA_ClassNamePropertyId          = 30012
+	UIA_IsEnabledPropertyId           = 30010
+	UIA_AutomationIdPropertyId        = 30011
+	UIA_ClassNamePropertyId           = 30012
 )
 
 // UIAutomation pattern IDs
@@ -187,7 +189,7 @@ func uiaGetRootElement(automation *ole.IDispatch) (*ole.IDispatch, error) {
 		uintptr(unsafe.Pointer(&elem)),
 	)
 	if hr != 0 {
-		return nil, fmt.Errorf("GetRootElement failed: HRESULT 0x%x", hr)
+		return nil, uiaOpError("GetRootElement", hr)
 	}
 	return elem, nil
 }
@@ -201,7 +203,7 @@ func uiaCreateTrueCondition(automation *ole.IDispatch) (*ole.IDispatch, error) {
 		uintptr(unsafe.Pointer(&cond)),
 	)
 	if hr != 0 {
-		return nil, fmt.Errorf("CreateTrueCondition failed: HRESULT 0x%x", hr)
+		return nil, uiaOpError("CreateTrueCondition", hr)
 	}
 	return cond, nil
 }
@@ -228,7 +230,7 @@ func uiaCreatePropertyCondition(automation *ole.IDispatch, propertyId int, value
 		uintptr(unsafe.Pointer(&cond)),
 	)
 	if hr != 0 {
-		return nil, fmt.Errorf("CreatePropertyCondition(%d) failed: HRESULT 0x%x", propertyId, hr)
+		return nil, uiaOpError(fmt.Sprintf("CreatePropertyCondition(%d)", propertyId), hr)
 	}
 	return cond, nil
 }
@@ -244,7 +246,7 @@ func uiaCreateAndCondition(automation *ole.IDispatch, cond1, cond2 *ole.IDispatc
 		uintptr(unsafe.Pointer(&cond)),
 	)
 	if hr != 0 {
-		return nil, fmt.Errorf("CreateAndCondition failed: HRESULT 0x%x", hr)
+		return nil, uiaOpError("CreateAndCondition", hr)
 	}
 	return cond, nil
 }
@@ -354,7 +356,7 @@ func uiaElementSetFocus(elem *ole.IDispatch) error {
 		uintptr(unsafe.Pointer(elem)),
 	)
 	if hr != 0 {
-		return fmt.Errorf("SetFocus failed: HRESULT 0x%x", hr)
+		return uiaOpError("SetFocus", hr)
 	}
 	return nil
 }
@@ -371,7 +373,7 @@ func uiaElementFindFirst(elem *ole.IDispatch, scope int, condition *ole.IDispatc
 		uintptr(unsafe.Pointer(&found)),
 	)
 	if hr != 0 {
-		return nil, fmt.Errorf("FindFirst failed: HRESULT 0x%x", hr)
+		return nil, uiaOpError("FindFirst", hr)
 	}
 	return found, nil
 }
@@ -388,7 +390,7 @@ func uiaElementFindAll(elem *ole.IDispatch, scope int, condition *ole.IDispatch)
 		uintptr(unsafe.Pointer(&arr)),
 	)
 	if hr != 0 {
-		return nil, fmt.Errorf("FindAll failed: HRESULT 0x%x", hr)
+		return nil, uiaOpError("FindAll", hr)
 	}
 	return arr, nil
 }
@@ -404,7 +406,7 @@ func uiaElementGetPattern(elem *ole.IDispatch, patternId int) (*ole.IDispatch, e
 		uintptr(unsafe.Pointer(&pattern)),
 	)
 	if hr != 0 || pattern == nil {
-		return nil, fmt.Errorf("GetCurrentPattern(%d) failed: HRESULT 0x%x", patternId, hr)
+		return nil, uiaOpError(fmt.Sprintf("GetCurrentPattern(%d)", patternId), hr)
 	}
 	return pattern, nil
 }
@@ -709,26 +711,166 @@ func uiaFindElements(state *uiaState, pid int, automationId, name, className, co
 	if err != nil {
 		return nil, err
 	}
-	if arr == nil {
-		return map[string]any{"match_count": 0, "elements": []any{}}, nil
+	if arr != nil {
+		defer arr.Release()
 	}
-	defer arr.Release()
 
 	// Don't clear cache — allow mixing inspect + find results (matches C# behavior)
 	var results []map[string]any
-	length := uiaArrayLength(arr)
-	for i := 0; i < length; i++ {
-		elem := uiaArrayGetElement(arr, i)
-		if elem != nil {
-			id := state.cache.add(elem)
-			results = append(results, buildElementInfo(elem, id, 0))
+	if arr != nil {
+		length := uiaArrayLength(arr)
+		for i := 0; i < length; i++ {
+			elem := uiaArrayGetElement(arr, i)
+			if elem != nil {
+				id := state.cache.add(elem)
+				results = append(results, buildElementInfo(elem, id, 0))
+			}
 		}
 	}
 
-	return map[string]any{
+	out := map[string]any{
 		"match_count": len(results),
 		"elements":    results,
-	}, nil
+	}
+	if len(results) == 0 {
+		// An empty result gave the model nothing to correct with (it would
+		// blindly retry the same query). Surface the closest-named elements
+		// in the window so it can fix its search terms — exact-match Name
+		// conditions miss "Save As…" when asked for "Save".
+		similar, truncated := collectNearMisses(state, window, name, controlType)
+		switch {
+		case len(similar) > 0:
+			out["similar"] = similar
+			out["hint"] = "no exact match; 'similar' lists close elements in this window - Name matching is exact and case-sensitive, so retry with one of those exact names, or use desktop_snapshot to see everything"
+		case truncated:
+			// Only part of a large window was scanned, so "nothing similar"
+			// is not something we are in a position to say.
+			out["hint"] = "no exact match, and the search for similar elements stopped partway through a large window without finding one - that is not the same as there being none; run desktop_snapshot to see what this window actually contains"
+		default:
+			out["hint"] = "no match and nothing similar found in this window - the target may not exist yet (still loading?) or lives in another window; run desktop_list_windows and desktop_snapshot to orient"
+		}
+	}
+	return out, nil
+}
+
+// nearMissCondition narrows the near-miss walk where doing so cannot change
+// the answer.
+//
+// Only the nameless search qualifies. With no name, scoring keeps an element
+// solely for having the requested control type, so asking UIA for that type
+// up front returns the same candidates over a fraction of the tree. As soon
+// as a name is in play the walk has to stay wide: "you asked for a button
+// called Save, but there is a menu item called Save As" is the single most
+// useful correction this can offer, and filtering by control type first is
+// exactly what would throw it away.
+func nearMissCondition(state *uiaState, wantName, wantType string) (*ole.IDispatch, error) {
+	if wantName == "" && wantType != "" {
+		if ctrlID := controlTypeIdFromName(wantType); ctrlID > 0 {
+			if cond, err := uiaCreatePropertyCondition(state.automation, UIA_ControlTypePropertyId, ctrlID); err == nil {
+				return cond, nil
+			}
+		}
+	}
+	return uiaCreateTrueCondition(state.automation)
+}
+
+// collectNearMisses walks the window subtree and returns up to 8 elements
+// whose name loosely matches the requested one (or whose control type
+// matches when no name was given). Read-only: nothing is cached.
+//
+// This runs on the failure path, and the walk is not free: FindAll over a
+// window's descendants materialises the whole subtree before any of the
+// scoring below happens, which is the real cost here (scanCap only bounds
+// what we then inspect). So the search is narrowed as far as the caller's
+// own criteria allow, and skipped outright when they leave nothing to score
+// against.
+// The second return says whether the scan was cut short by scanCap. An
+// empty result then means "nothing similar in the part we looked at", which
+// is not the same claim as "nothing similar in this window", and the caller
+// has to phrase its hint accordingly.
+func collectNearMisses(state *uiaState, window *ole.IDispatch, wantName, wantType string) ([]map[string]any, bool) {
+	want := strings.ToLower(strings.TrimSpace(wantName))
+
+	// Scoring needs either a name to be near or a control type to share.
+	// Searches by automation_id or class_name alone give neither, and every
+	// candidate would score zero after a full-tree walk.
+	if want == "" && wantType == "" {
+		return nil, false
+	}
+
+	cond, err := nearMissCondition(state, want, wantType)
+	if err != nil {
+		return nil, false
+	}
+	defer cond.Release()
+
+	arr, err := uiaElementFindAll(window, TreeScope_Descendants, cond)
+	if err != nil || arr == nil {
+		return nil, false
+	}
+	defer arr.Release()
+
+	type scored struct {
+		info  map[string]any
+		score int
+	}
+	wantTokens := strings.Fields(want)
+
+	var candidates []scored
+	length := uiaArrayLength(arr)
+	const scanCap = 500 // bound the walk on huge trees
+	truncated := length > scanCap
+	if truncated {
+		length = scanCap
+	}
+	for i := 0; i < length; i++ {
+		elem := uiaArrayGetElement(arr, i)
+		if elem == nil {
+			continue
+		}
+		elemName := uiaElementGetPropertyStr(elem, UIA_NamePropertyId)
+		ctrlType := controlTypeNames[uiaElementGetPropertyInt(elem, UIA_ControlTypePropertyId)]
+		autoID := uiaElementGetPropertyStr(elem, UIA_AutomationIdPropertyId)
+		elem.Release()
+
+		if strings.TrimSpace(elemName) == "" {
+			continue
+		}
+		score := 0
+		if want != "" {
+			lower := strings.ToLower(elemName)
+			switch {
+			case strings.Contains(lower, want) || strings.Contains(want, lower):
+				score = 3
+			default:
+				for _, tok := range wantTokens {
+					if len(tok) >= 3 && strings.Contains(lower, tok) {
+						score = 2
+						break
+					}
+				}
+			}
+		} else if wantType != "" && ctrlType == wantType {
+			score = 1
+		}
+		if score == 0 {
+			continue
+		}
+		candidates = append(candidates, scored{
+			info:  map[string]any{"name": elemName, "control_type": ctrlType, "automation_id": autoID},
+			score: score,
+		})
+	}
+
+	sort.SliceStable(candidates, func(i, j int) bool { return candidates[i].score > candidates[j].score })
+	if len(candidates) > 8 {
+		candidates = candidates[:8]
+	}
+	out := make([]map[string]any, len(candidates))
+	for i, c := range candidates {
+		out[i] = c.info
+	}
+	return out, truncated
 }
 
 // controlTypeIdFromName maps a human-readable control type name to its UIAutomation ID.
@@ -744,15 +886,15 @@ func controlTypeIdFromName(name string) int {
 // ── Win32 helpers ────────────────────────────────────────────────────
 
 var (
-	user32                   = syscall.NewLazyDLL("user32.dll")
-	kernel32                 = syscall.NewLazyDLL("kernel32.dll")
-	procGetForegroundWindow  = user32.NewProc("GetForegroundWindow")
+	user32                    = syscall.NewLazyDLL("user32.dll")
+	kernel32                  = syscall.NewLazyDLL("kernel32.dll")
+	procGetForegroundWindow   = user32.NewProc("GetForegroundWindow")
 	procGetWindowThreadProcId = user32.NewProc("GetWindowThreadProcessId")
-	procSetCursorPos         = user32.NewProc("SetCursorPos")
-	procMouseEvent           = user32.NewProc("mouse_event")
-	procSetForegroundWindow  = user32.NewProc("SetForegroundWindow")
-	procShowWindow           = user32.NewProc("ShowWindow")
-	procSleep                = kernel32.NewProc("Sleep")
+	procSetCursorPos          = user32.NewProc("SetCursorPos")
+	procMouseEvent            = user32.NewProc("mouse_event")
+	procSetForegroundWindow   = user32.NewProc("SetForegroundWindow")
+	procShowWindow            = user32.NewProc("ShowWindow")
+	procSleep                 = kernel32.NewProc("Sleep")
 )
 
 func win32GetForegroundWindow() uintptr {

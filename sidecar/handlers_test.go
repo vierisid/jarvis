@@ -268,7 +268,17 @@ func TestLaunchAppNonexistentBinary(t *testing.T) {
 }
 
 func TestLaunchAppSuccessReturnsNonZeroPid(t *testing.T) {
-	// Use a real binary that exists and exits quickly
+	// /bin/sleep exists, starts, and never opens a window, so it pins both
+	// halves of launch_app's contract: the real pid still comes back, and
+	// success is not allowed to mean "a process was spawned".
+	//
+	// Which of the two honest answers we get depends on the machine, so the
+	// assertions cover both. On a desktop with working window tooling the
+	// probe runs and reports a definite "no window" (success: false). On a
+	// headless runner it cannot run at all, and reporting that as a failure
+	// would be its own lie, so the result is an unverified success with
+	// window_visible left nil. What must never happen, in either
+	// environment, is a claim that a window is visible.
 	result, err := handleLaunchApp(map[string]any{
 		"executable": "/bin/sleep",
 		"args":       "0.1",
@@ -282,10 +292,25 @@ func TestLaunchAppSuccessReturnsNonZeroPid(t *testing.T) {
 		t.Fatalf("pid is not int: %T", m["pid"])
 	}
 	if pid == 0 {
-		t.Error("expected non-zero pid on success")
+		t.Error("expected non-zero pid")
 	}
-	if m["success"] != true {
-		t.Error("expected success: true")
+
+	switch m["window_visible"] {
+	case false:
+		if m["success"] != false {
+			t.Errorf("the probe ran and saw no window, so success must be false, got %v", m["success"])
+		}
+	case nil:
+		if m["success"] != true {
+			t.Errorf("the probe could not run, so this must not be reported as a failed launch, got success: %v", m["success"])
+		}
+	default:
+		t.Errorf("a windowless process must never report window_visible: %v", m["window_visible"])
+	}
+
+	note, _ := m["note"].(string)
+	if note == "" {
+		t.Error("expected an explanatory note whenever no window was confirmed")
 	}
 }
 
