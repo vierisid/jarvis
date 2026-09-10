@@ -497,6 +497,28 @@ export type JarvisConfig = {
      */
     prompt_cache?: boolean;
   };
+  /**
+   * Hosted billing read (SYSTEM-owned, file-authoritative): written by the
+   * hosting control plane into the root-owned config.yaml, re-read on SIGHUP,
+   * never written by the brain. Absent on self-hosted installs, and on hosted
+   * ones whose control plane has no origin an instance can reach.
+   *
+   * Its own block rather than inside `usejarvis_ai`: that block is only
+   * rendered when hosted LLM is on, and a hosting-only customer still has a
+   * bill.
+   *
+   * All four or none (see daemon/hosted-billing.ts). The secret authenticates
+   * a READ of the owner's billing summary and nothing else; every change goes
+   * through `page_url`, opened in the system browser.
+   */
+  usejarvis_billing?: {
+    /** POST endpoint on the control plane (https). */
+    url?: string;
+    instance_id?: string;
+    secret?: string;
+    /** The account billing page a person opens. */
+    page_url?: string;
+  };
   user?: UserConfig;
   onboarding?: OnboardingConfig;
   telemetry?: TelemetryConfig;

@@ -48,6 +48,52 @@ describe('Config Loader', () => {
     expect(loaded.llm.providers).toEqual({});
   });
 
+  test('usejarvis_billing survives the load intact', async () => {
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(
+      TEST_CONFIG_PATH,
+      [
+        'usejarvis_billing:',
+        '  url: https://app.usejarvis.dev/api/billing/instance',
+        '  instance_id: 11111111-2222-3333-4444-555555555555',
+        `  secret: ${'e'.repeat(64)}`,
+        '  page_url: https://app.usejarvis.dev/billing',
+        '',
+      ].join('\n'),
+    );
+    const loaded = await loadConfig(TEST_CONFIG_PATH);
+    // Unquoted, exactly as the control plane renders it: every value must
+    // still arrive as a string.
+    expect(loaded.usejarvis_billing).toEqual({
+      url: 'https://app.usejarvis.dev/api/billing/instance',
+      instance_id: '11111111-2222-3333-4444-555555555555',
+      secret: 'e'.repeat(64),
+      page_url: 'https://app.usejarvis.dev/billing',
+    });
+  });
+
+  test('reloadUsejarvisBillingBlock: rotation lands, removal clears, corruption keeps the current value', async () => {
+    const { writeFile } = await import('node:fs/promises');
+    const { reloadUsejarvisBillingBlock } = await import('./loader.ts');
+    const block = (secret: string) =>
+      `usejarvis_billing:\n  url: https://cp.example/api/billing/instance\n  instance_id: i-1\n  secret: ${secret}\n  page_url: https://app.example/billing\n`;
+    await writeFile(TEST_CONFIG_PATH, block('a'.repeat(64)));
+    const config = await loadConfig(TEST_CONFIG_PATH);
+    expect(config.usejarvis_billing?.secret).toBe('a'.repeat(64));
+
+    await writeFile(TEST_CONFIG_PATH, block('b'.repeat(64)));
+    await reloadUsejarvisBillingBlock(config, TEST_CONFIG_PATH);
+    expect(config.usejarvis_billing?.secret).toBe('b'.repeat(64));
+
+    await writeFile(TEST_CONFIG_PATH, 'usejarvis_billing: [unclosed');
+    await reloadUsejarvisBillingBlock(config, TEST_CONFIG_PATH);
+    expect(config.usejarvis_billing?.secret).toBe('b'.repeat(64));
+
+    await writeFile(TEST_CONFIG_PATH, 'daemon:\n  port: 3142\n');
+    await reloadUsejarvisBillingBlock(config, TEST_CONFIG_PATH);
+    expect(config.usejarvis_billing).toBeUndefined();
+  });
+
   test('reloadUsejarvisAiBlock: rotation lands, removal un-hosts, corruption keeps the current value', async () => {
     const { writeFile } = await import('node:fs/promises');
     const { reloadUsejarvisAiBlock } = await import('./loader.ts');

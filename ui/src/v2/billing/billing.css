@@ -96,6 +96,25 @@
 .bl-bnr.neutral { background: var(--panel2); border-bottom-color: var(--rule); }
 .bl-bnr.neutral .bi { background: var(--panel); color: var(--ink2); }
 
+/* ── live billing page (Settings → Billing) ── */
+.bl-soon__act { display: flex; gap: 8px; margin-top: 16px; flex-wrap: wrap; justify-content: center; }
+.bl-receipt__empty { padding: 12px 14px; font-size: 12.5px; color: var(--ink3); }
+.bl-receipt__row > span:first-child { min-width: 0; }
+.bl-row-end { display: inline-flex; align-items: baseline; gap: 12px; flex-shrink: 0; }
+.bl-pm { display: inline-flex; align-items: center; gap: 8px; min-width: 0; }
+.bl-exp { font-family: var(--mono); font-size: 11px; color: var(--ink3); font-variant-numeric: tabular-nums; }
+.bl-exp--warn { color: var(--hold-tx); }
+.bl-tax { font-family: var(--mono); font-size: 11px; font-weight: 400; color: var(--ink3); }
+.bl-receipt__row .link { display: inline-flex; align-items: center; gap: 3px; }
+.bl-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 18px 2px 4px; font-family: var(--mono); font-size: 10.5px; color: var(--ink3); }
+.bl-foot__refresh { display: inline-flex; align-items: center; gap: 5px; font-family: var(--mono); font-size: 10.5px; color: var(--ink2); background: none; border: 1px solid var(--rule); border-radius: 7px 2px 7px 7px; padding: 4px 9px; cursor: pointer; flex-shrink: 0; }
+.bl-foot__refresh:hover { border-color: var(--ink3); }
+.bl-foot__refresh:focus-visible, .bl-receipt__row .link:focus-visible { outline: 2px solid var(--speak); outline-offset: 2px; }
+@media (max-width: 520px) {
+  .bl-receipt__row { flex-wrap: wrap; }
+  .bl-foot { flex-direction: column; align-items: flex-start; }
+}
+
 /* ── change-plan modal ── */
 .bl-modal { position: fixed; inset: 0; z-index: 400; display: flex; align-items: center; justify-content: center; padding: 24px; background: color-mix(in srgb, var(--ink) 22%, transparent); -webkit-backdrop-filter: blur(2px); backdrop-filter: blur(2px); animation: bl-fade 0.14s var(--ease, ease); }
 @keyframes bl-fade { from { opacity: 0; } to { opacity: 1; } }
