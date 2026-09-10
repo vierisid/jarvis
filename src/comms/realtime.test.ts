@@ -540,3 +540,47 @@ describe('RealtimeSession lifecycle', () => {
     expect(errs.some((e) => e.includes('24000') && e.includes('upsampled'))).toBe(true);
   });
 });
+
+describe('RealtimeSession.isResponding', () => {
+  test('is true from response.created until response.done', async () => {
+    const { socket, session } = makeSession();
+    await session.connect();
+    expect(session.isResponding).toBe(false);
+    socket.emit({ type: 'response.created' });
+    expect(session.isResponding).toBe(true);
+    socket.emit({ type: 'response.done', response: {} });
+    expect(session.isResponding).toBe(false);
+  });
+
+  test('counts a response requested for tool output before it starts', async () => {
+    const { session } = makeSession();
+    await session.connect();
+    session.sendFunctionResult('c1', 'ok');
+    expect(session.isResponding).toBe(true);
+  });
+
+  test('tool output held back by the user turn does not count as responding', async () => {
+    const { socket, session } = makeSession();
+    session.onFunctionCall(() => {});
+    await session.connect();
+    socket.emit({ type: 'input_audio_buffer.speech_started' });
+    session.sendFunctionResult('c1', 'ok');
+    expect(session.isResponding).toBe(false);
+  });
+});
+
+describe('RealtimeSession.connect after its error sink closed it', () => {
+  test('does not dial, and rejects', async () => {
+    let dialed = 0;
+    const session = new RealtimeSession({
+      resolved: RESOLVED,
+      tools: [],
+      instructions: 'x',
+      transport: new BrowserAudioTransport({ sendAudio: () => {}, inputSampleRate: 16000 }),
+      socketFactory: () => { dialed++; return new FakeSocket(); },
+    });
+    session.onError(() => session.close());
+    await expect(session.connect()).rejects.toThrow(/closed before it connected/);
+    expect(dialed).toBe(0);
+  });
+});

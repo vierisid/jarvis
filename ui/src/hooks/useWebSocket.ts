@@ -211,7 +211,30 @@ export type VoiceCallbacks = {
    *  server close). The client must stop the mic — it's otherwise streaming
    *  into a session that no longer exists. */
   onRealtimeClosed?: (reason?: string) => void;
+  /** Realtime session failed (`realtime_status` error). Falls back to
+   *  `onError` when absent. */
+  onRealtimeError?: (message?: string) => void;
+  /** The socket dropped; nothing the daemon had in flight on it will finish. */
+  onDisconnect?: () => void;
 };
+
+/**
+ * Route a realtime_status frame to the voice hook. An error goes to the
+ * realtime handler when there is one: the generic onError also serves chat and
+ * STT failures, and one of those must not be what ends a live realtime session.
+ */
+export function dispatchRealtimeStatus(
+  payload: { state?: string; reason?: string; message?: string } | undefined,
+  callbacks: VoiceCallbacks | null | undefined,
+): void {
+  if (payload?.state === "error") {
+    if (callbacks?.onRealtimeError) callbacks.onRealtimeError(payload.message);
+    else callbacks?.onError(payload.message);
+  } else if (payload?.state === "closed") {
+    // Server tore the session down (timeout/close/refusal): stop the hot mic.
+    callbacks?.onRealtimeClosed?.(payload.reason);
+  }
+}
 
 export type WorkflowEvent = {
   type: string;
@@ -613,6 +636,9 @@ export function useWebSocket() {
       setIsConnected(false);
       setIsResponding(false);
       currentChatRequestIdRef.current = null;
+      // The daemon ends this socket's realtime session and any TTS turn with
+      // it, and can no longer say so: tell the voice hook directly.
+      voiceCallbacksRef.current?.onDisconnect?.();
       console.log("[WS] Disconnected, reconnecting in 2s...");
       reconnectTimerRef.current = setTimeout(connect, 2000);
     };
@@ -661,7 +687,6 @@ export function useWebSocket() {
         }
         // Premium realtime voice (gpt-realtime-2) status + live captions.
         if (msg.type === "realtime_status") {
-          const state = msg.payload?.state;
           // Surface any human-readable reason (e.g. budget reached) as a
           // persistent system line — the v2 orb collapses error→idle and shows
           // no text, so without this the message would be invisible.
@@ -676,9 +701,7 @@ export function useWebSocket() {
               },
             ]);
           }
-          if (state === "error") voiceCallbacksRef.current?.onError(msg.payload?.message);
-          // Server tore the session down (timeout/close) — stop the hot mic.
-          else if (state === "closed") voiceCallbacksRef.current?.onRealtimeClosed?.(msg.payload?.reason);
+          dispatchRealtimeStatus(msg.payload, voiceCallbacksRef.current);
           return;
         }
         if (msg.type === "realtime_transcript") {

@@ -149,3 +149,179 @@ describe('disconnect during the gate window', () => {
     expect(internals.pendingVoiceFrames.has(ws)).toBe(false);
   });
 });
+
+describe('voice_start when the daemon cannot resolve realtime', () => {
+  const offConfig = () => ({
+    voice: { realtime: { enabled: false } },
+    llm: { providers: {} },
+  }) as unknown as JarvisConfig;
+
+  // The client's settings poll can still say realtime is on (it lags up to one
+  // poll interval behind a toggle). Its PCM frames are useless to the WAV
+  // accumulator, so falling back used to drop the turn with nothing said.
+  test('a PCM client is told the session is closed instead of feeding the WAV pipeline', async () => {
+    const { ws, sent, internals } = makeService(offConfig());
+    await internals.routeMessage(voiceStart('pcm'), ws);
+    expect(internals.voiceSessions.has(ws)).toBe(false);
+    expect(internals.realtimeSessions.has(ws)).toBe(false);
+    expect(internals.pendingVoiceFrames.has(ws)).toBe(false);
+    const status = sent.find((m) => m.type === 'realtime_status');
+    expect(status?.payload).toMatchObject({ state: 'closed', reason: 'unavailable' });
+  });
+
+  test('a mode-less client still falls open to the standard pipeline', async () => {
+    const { ws, sent, internals } = makeService(offConfig());
+    await internals.routeMessage(voiceStart(), ws);
+    expect(internals.voiceSessions.has(ws)).toBe(true);
+    expect(sent.some((m) => m.type === 'realtime_status')).toBe(false);
+  });
+});
+
+describe('realtime output on the dashboard socket', () => {
+  test('is tagged so the dashboard can tell it from encoded TTS', async () => {
+    const { untagRealtimePcm } = await import('../comms/realtime-frame.ts');
+    const { ws, internals } = makeService();
+    const frames: Buffer[] = [];
+    (ws as unknown as { sendBinary: (b: Buffer) => void }).sendBinary = (b) => { frames.push(b); };
+    const sink = (internals as unknown as {
+      realtimeAudioSink: (socket: unknown) => (chunk: Buffer) => void;
+    }).realtimeAudioSink(ws);
+    sink(Buffer.from([1, 2, 3, 4]));
+    expect(frames).toHaveLength(1);
+    const payload = untagRealtimePcm(new Uint8Array(frames[0]!).buffer);
+    expect(payload && [...new Uint8Array(payload)]).toEqual([1, 2, 3, 4]);
+  });
+});
+
+describe('proactive TTS and live realtime sessions', () => {
+  const fakeClient = () => {
+    const json: Array<Record<string, unknown>> = [];
+    const binary: Buffer[] = [];
+    const socket = {
+      send: (raw: string) => { json.push(JSON.parse(raw) as Record<string, unknown>); },
+      sendBinary: (b: Buffer) => { binary.push(b); },
+    };
+    return { socket, json, binary };
+  };
+  const withClients = (...clients: Array<ReturnType<typeof fakeClient>>) => {
+    const { svc, internals } = makeService();
+    const set = internals.wsServer.getClients();
+    set.clear();
+    for (const c of clients) set.add(c.socket);
+    let synthesized = 0;
+    (svc as unknown as { ttsProvider: unknown }).ttsProvider = {
+      async *synthesizeStream() { synthesized++; yield Buffer.from('mp3-bytes'); },
+    };
+    return { svc, internals, synthesized: () => synthesized };
+  };
+
+  const session = (isResponding: boolean, lastMicAt = 0) => ({ session: { isResponding }, lastMicAt });
+
+  // A proactive clip on a socket whose realtime reply is streaming talks over
+  // the model, and the open mic feeds it back into the session.
+  test('a socket whose model is answering gets no clip; the others get all of it', async () => {
+    const live = fakeClient();
+    const other = fakeClient();
+    const { svc, internals } = withClients(live, other);
+    internals.realtimeSessions.set(live.socket, session(true));
+    await svc.broadcastProactiveVoice('Your meeting starts in five minutes.');
+    expect(live.json).toEqual([]);
+    expect(live.binary).toEqual([]);
+    expect(other.json.map((m) => m.type)).toEqual(['tts_start', 'tts_end']);
+    expect(other.binary).toHaveLength(1);
+  });
+
+  test('a socket whose user is talking into the session gets no clip', async () => {
+    const talking = fakeClient();
+    const { svc, internals, synthesized } = withClients(talking);
+    internals.realtimeSessions.set(talking.socket, session(false, Date.now()));
+    await svc.broadcastProactiveVoice('Heads up.');
+    expect(synthesized()).toBe(0);
+    expect(talking.json).toEqual([]);
+  });
+
+  // A session stays open for max_session_minutes after the last turn; skipping
+  // proactive voice for that whole time would silence it for the dashboard.
+  test('a session left open with no turn in progress still gets proactive voice', async () => {
+    const open = fakeClient();
+    const { svc, internals } = withClients(open);
+    internals.realtimeSessions.set(open.socket, session(false, Date.now() - 60_000));
+    await svc.broadcastProactiveVoice('Heads up.');
+    expect(open.json.map((m) => m.type)).toEqual(['tts_start', 'tts_end']);
+    expect(open.binary).toHaveLength(1);
+  });
+});
+
+describe('mic frames on a socket with a realtime session', () => {
+  const liveEntry = (pushed: Buffer[]) => ({
+    transport: { pushMicChunk: (b: Buffer) => { pushed.push(b); } },
+    lastMicAt: 0,
+  });
+
+  test('a WAV upload opened beside the session keeps its frames', async () => {
+    const { ws, internals } = makeService();
+    const pushed: Buffer[] = [];
+    internals.realtimeSessions.set(ws, liveEntry(pushed));
+    await internals.routeMessage(voiceStart('wav'), ws);
+    const wav = Buffer.from('RIFFxxxxWAVE');
+    await internals.handleVoiceAudio(wav, ws);
+    expect(internals.voiceSessions.get(ws)!.chunks).toEqual([wav]);
+    expect(pushed).toEqual([]);
+  });
+
+  test('realtime mic frames go to the session and mark the user as talking', async () => {
+    const { ws, internals } = makeService();
+    const pushed: Buffer[] = [];
+    const entry = liveEntry(pushed);
+    internals.realtimeSessions.set(ws, entry);
+    const frame = Buffer.from([1, 2, 3, 4]);
+    await internals.handleVoiceAudio(frame, ws);
+    expect(pushed).toEqual([frame]);
+    expect(entry.lastMicAt).toBeGreaterThan(0);
+  });
+
+  test('frames still arriving after a PCM refusal are dropped without a warning each', async () => {
+    const offConfig = { voice: { realtime: { enabled: false } }, llm: { providers: {} } } as unknown as JarvisConfig;
+    const { ws, internals } = makeService(offConfig);
+    await internals.routeMessage(voiceStart('pcm'), ws);
+    const warn = console.warn;
+    let warnings = 0;
+    console.warn = () => { warnings++; };
+    try {
+      await internals.handleVoiceAudio(Buffer.from([1, 2]), ws);
+      await internals.handleVoiceAudio(Buffer.from([3, 4]), ws);
+    } finally {
+      console.warn = warn;
+    }
+    expect(warnings).toBe(0);
+  });
+});
+
+describe('closing a realtime session', () => {
+  test('a quiet close ends the session without a closed status', async () => {
+    const { ws, sent, internals } = makeService();
+    let closed = 0;
+    internals.realtimeSessions.set(ws, {
+      session: { close: () => { closed++; } },
+      timeout: setTimeout(() => {}, 0),
+      startedAt: Date.now(),
+      hosted: true,
+      lastMicAt: 0,
+    });
+    (internals as unknown as { closeRealtimeVoice: (s: unknown, o?: { notify?: boolean }) => void })
+      .closeRealtimeVoice(ws, { notify: false });
+    expect(closed).toBe(1);
+    expect(internals.realtimeSessions.has(ws)).toBe(false);
+    expect(sent.some((m) => m.type === 'realtime_status')).toBe(false);
+    // Mic frames the client sent before it heard are dropped without a warning each.
+    const warn = console.warn;
+    let warnings = 0;
+    console.warn = () => { warnings++; };
+    try {
+      await internals.handleVoiceAudio(Buffer.from([1, 2]), ws);
+    } finally {
+      console.warn = warn;
+    }
+    expect(warnings).toBe(0);
+  });
+});

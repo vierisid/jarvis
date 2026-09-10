@@ -41,6 +41,7 @@ import { StreamRelay } from '../comms/streaming.ts';
 import { resolveRealtimeVoice, type ResolvedRealtimeVoice } from '../config/realtime.ts';
 import { realtimeEnablement } from './usejarvis-ai.ts';
 import { BrowserAudioTransport } from '../comms/audio-transport.ts';
+import { tagRealtimePcm } from '../comms/realtime-frame.ts';
 import { RealtimeVoiceSession } from './realtime-voice.ts';
 import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from './realtime-nav-tools.ts';
 import { RealtimeBudgetTracker } from './realtime-budget.ts';
@@ -210,8 +211,15 @@ export class WebSocketService implements Service {
       /** True when the platform proxy is the billing authority for this
        * session — see closeRealtimeVoice for why the local ledger is skipped. */
       hosted: boolean;
+      /** Last mic frame routed into the session (ms epoch, 0 before any). */
+      lastMicAt: number;
     }
   >();
+  /** Sockets whose realtime start was refused or whose session the daemon just
+   *  closed. The client stops streaming once it hears; frames already on the
+   *  wire are dropped quietly instead of logging one warning each. Cleared by
+   *  the next voice_start. */
+  private quietVoiceFrames = new WeakSet<ServerWebSocket<unknown>>();
   /**
    * Mic frames that arrive while a realtime start is mid-gate (the plan-gate
    * catalog fetch is the only await before a session exists). Without this
@@ -694,10 +702,20 @@ export class WebSocketService implements Service {
       return;
     }
 
+    // A socket mid-turn in its realtime session would get a clip talking over
+    // the model, and the open mic would feed that clip back into the session.
+    // Only the audio is skipped for it; a session merely left open (it lives
+    // for max_session_minutes) still gets proactive voice.
+    const targets = [...this.wsServer.getClients()].filter((client) => !this.realtimeTurnActive(client));
+    if (targets.length === 0) {
+      console.log('[WSService] Proactive TTS skipped: every client is mid-turn in a realtime session');
+      return;
+    }
+
     try {
       const requestId = `proactive-${Date.now()}`;
 
-      // Signal TTS start to all clients (with wake-phrase guard flag —
+      // Signal TTS start to the target clients (with wake-phrase guard flag -
       // proactive TTS knows the full text up front so we can compute
       // it once).
       const startMsg: WSMessage = {
@@ -705,7 +723,7 @@ export class WebSocketService implements Service {
         payload: { requestId, containsWake: containsWakePhrase(text) },
         timestamp: Date.now(),
       };
-      this.wsServer.broadcast(startMsg);
+      for (const client of targets) this.wsServer.sendToClient(client, startMsg);
 
       let chunkCount = 0;
       // Sentence-split like the reply path: proactive text goes to the
@@ -716,8 +734,8 @@ export class WebSocketService implements Service {
       for (const sentence of splitIntoSentences(text)) {
         try {
           for await (const chunk of this.ttsProvider.synthesizeStream(sentence)) {
-            // Send binary audio to all connected clients
-            for (const ws of this.wsServer.getClients()) {
+            // Send binary audio to the target clients
+            for (const ws of targets) {
               try {
                 ws.sendBinary(chunk);
               } catch { /* client may have disconnected */ }
@@ -735,13 +753,15 @@ export class WebSocketService implements Service {
         payload: { requestId },
         timestamp: Date.now(),
       };
-      this.wsServer.broadcast(endMsg);
+      for (const client of targets) this.wsServer.sendToClient(client, endMsg);
       console.log(`[WSService] Proactive TTS complete: "${text.slice(0, 60)}..." (${chunkCount} chunks)`);
     } catch (err) {
       console.error('[WSService] Proactive TTS error:', err instanceof Error ? err.message : err);
       // Still send tts_end so client doesn't get stuck
       try {
-        this.wsServer.broadcast({ type: 'tts_end', payload: {}, timestamp: Date.now() });
+        for (const client of targets) {
+          this.wsServer.sendToClient(client, { type: 'tts_end', payload: {}, timestamp: Date.now() });
+        }
       } catch { /* ignore */ }
     }
   }
@@ -923,6 +943,7 @@ export class WebSocketService implements Service {
         const { requestId, currentRoom, mode } = msg.payload as {
           requestId: string; currentRoom?: string; mode?: 'pcm' | 'wav';
         };
+        this.quietVoiceFrames.delete(ws);
         // A WAV-mode client is uploading a finished recording — realtime is
         // never the right consumer for it (the session would treat the WAV
         // container bytes as raw PCM frames). Skip the realtime starter and
@@ -1473,28 +1494,33 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
    * Accumulates chunks into the active voice session for this client.
    */
   private async handleVoiceAudio(data: Buffer, ws: ServerWebSocket<unknown>): Promise<void> {
+    // A WAV upload the client explicitly opened (voice_start mode:"wav") owns
+    // its frames even while a realtime session is open on the socket: checked
+    // first, or the WAV bytes were streamed into the realtime session as PCM.
+    const session = this.voiceSessions.get(ws);
+    if (session) {
+      session.chunks.push(data);
+      return;
+    }
     // Realtime path: stream the mic frame straight into the OpenAI session.
     const realtime = this.realtimeSessions.get(ws);
     if (realtime) {
+      realtime.lastMicAt = Date.now();
       realtime.transport.pushMicChunk(data);
       return;
     }
-    const session = this.voiceSessions.get(ws);
-    if (!session) {
-      // A realtime start is mid-gate: hold the frames (bounded) so the first
-      // utterance isn't clipped; they flush into whichever consumer wins.
-      const pending = this.pendingVoiceFrames.get(ws);
-      if (pending) {
-        if (pending.bytes < WebSocketService.PENDING_FRAMES_MAX_BYTES) {
-          pending.chunks.push(data);
-          pending.bytes += data.length;
-        }
-        return;
+    // A realtime start is mid-gate: hold the frames (bounded) so the first
+    // utterance isn't clipped; they flush into whichever consumer wins.
+    const pending = this.pendingVoiceFrames.get(ws);
+    if (pending) {
+      if (pending.bytes < WebSocketService.PENDING_FRAMES_MAX_BYTES) {
+        pending.chunks.push(data);
+        pending.bytes += data.length;
       }
-      console.warn('[WSService] Binary audio received with no active voice session');
       return;
     }
-    session.chunks.push(data);
+    if (this.quietVoiceFrames.has(ws)) return;
+    console.warn('[WSService] Binary audio received with no active voice session');
   }
 
   /** ~2MB ≈ 40s of 24kHz s16 mono — far beyond any gate window; the cap only
@@ -1517,11 +1543,17 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     try {
       const cfg = this.agentService.getConfig();
       const res = resolveRealtimeVoice(cfg, realtimeEnablement(cfg));
-      if (!res.ok) return false;
+      if (!res.ok) {
+        if (mode === 'pcm') {
+          console.warn(`[WSService] realtime unavailable for a PCM voice_start (${res.reason ?? 'no reason'}), refusing session`);
+          return this.refusePcmRealtimeStart(ws, 'unavailable');
+        }
+        return false;
+      }
       resolved = res.resolved;
     } catch (err) {
       console.warn('[WSService] realtime voice resolve failed, using standard pipeline:', err);
-      return false;
+      return mode === 'pcm' ? this.refusePcmRealtimeStart(ws, 'unavailable') : false;
     }
 
     // Buffer mic frames that arrive during the gate await below — without
@@ -1552,18 +1584,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     if (!(await hostedRealtimeIncluded(resolved))) {
       console.warn('[WSService] realtime not included in this plan — refusing session');
       if (mode !== 'pcm') return false; // caller seeds the accumulator with any buffered frames
-      this.pendingVoiceFrames.delete(ws); // raw PCM is useless to the WAV pipeline
-      this.wsServer.sendToClient(ws, {
-        type: 'realtime_status',
-        payload: {
-          state: 'closed',
-          reason: 'plan',
-          message: 'Live voice is not included in your plan, so this session was not started. '
-            + 'Say that again and it will go through the standard voice pipeline.',
-        },
-        timestamp: Date.now(),
-      });
-      return true;
+      return this.refusePcmRealtimeStart(ws, 'plan'); // raw PCM is useless to the WAV pipeline
     }
     // The gate await opened windows a sync starter never had:
     //  - the client may have DISCONNECTED mid-gate. onDisconnect found no
@@ -1587,6 +1608,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // for the same reason as the plan gate above.
     if (resolved.monthlyBudgetUsd && !this.getRealtimeBudget().canStart(resolved.monthlyBudgetUsd)) {
       console.warn('[WSService] realtime monthly budget reached — refusing new session');
+      this.quietVoiceFrames.add(ws); // frames already on the wire have nowhere to go
       this.wsServer.sendToClient(ws, {
         type: 'realtime_status',
         payload: {
@@ -1601,7 +1623,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
     const orchestrator = this.agentService.getOrchestrator();
     const transport = new BrowserAudioTransport({
-      sendAudio: (chunk) => this.wsServer.sendBinary(ws, chunk),
+      sendAudio: this.realtimeAudioSink(ws),
       signalStopPlayback: () =>
         this.wsServer.sendToClient(ws, { type: 'tts_end', payload: { bargeIn: true }, timestamp: Date.now() }),
       // OpenAI requires input rate >= 24kHz; the browser client must capture/
@@ -1610,6 +1632,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       outputSampleRate: 24000,
     });
 
+    // Session callbacks are keyed by socket. A late event from a session that
+    // has already been replaced on this socket must not tear down, or announce,
+    // its successor.
+    const isCurrent = () => this.realtimeSessions.get(ws)?.session === session;
     const session = new RealtimeVoiceSession(resolved, transport, {
       // Agent tools + dashboard navigation/in-room-action tools so the model
       // can drive the UI by voice (open settings, turn off TTS, go back…).
@@ -1634,8 +1660,14 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       onError: (err) => {
         console.error('[WSService] realtime voice error:', err);
         this.wsServer.sendToClient(ws, { type: 'realtime_status', payload: { state: 'error', message: err }, timestamp: Date.now() });
+        // The dashboard ends its side on this status (mic stopped, output
+        // dropped), so a daemon session left open would stream billed audio
+        // nobody hears until max_session_minutes. Benign errors never get here
+        // (RealtimeSession swallows them). No `closed` follows: the client
+        // already handled the end, and a close would cut its error flash.
+        if (isCurrent()) this.closeRealtimeVoice(ws, { notify: false });
       },
-      onClose: () => this.closeRealtimeVoice(ws),
+      onClose: () => { if (isCurrent()) this.closeRealtimeVoice(ws); },
     });
 
     const timeout = setTimeout(() => {
@@ -1643,20 +1675,27 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       this.closeRealtimeVoice(ws);
     }, resolved.maxSessionMinutes * 60_000);
 
-    this.realtimeSessions.set(ws, {
-      session, transport, timeout, startedAt: Date.now(),
-      hosted: resolved.provider === 'usejarvis_ai',
-    });
     // Frames that arrived mid-gate belong to this utterance; the transport
     // buffers pre-connect frames itself, so pushing before connect is safe.
     const gateBuffered = this.pendingVoiceFrames.get(ws);
     this.pendingVoiceFrames.delete(ws);
+    // Any accumulator still here predates the session (a WAV or mode-less start
+    // that never got its voice_end). handleVoiceAudio checks accumulators first,
+    // so a stale one would swallow every realtime mic frame.
+    this.voiceSessions.delete(ws);
+    this.realtimeSessions.set(ws, {
+      session, transport, timeout, startedAt: Date.now(),
+      hosted: resolved.provider === 'usejarvis_ai',
+      lastMicAt: gateBuffered?.chunks.length ? Date.now() : 0,
+    });
     if (gateBuffered) for (const frame of gateBuffered.chunks) transport.pushMicChunk(frame);
     session.connect().then(
-      () => this.wsServer.sendToClient(ws, { type: 'realtime_status', payload: { state: 'live', model: resolved.model }, timestamp: Date.now() }),
+      () => {
+        if (isCurrent()) this.wsServer.sendToClient(ws, { type: 'realtime_status', payload: { state: 'live', model: resolved.model }, timestamp: Date.now() });
+      },
       (err) => {
         console.error('[WSService] realtime connect failed:', err);
-        this.closeRealtimeVoice(ws);
+        if (isCurrent()) this.closeRealtimeVoice(ws);
       },
     );
     return true;
@@ -1715,11 +1754,65 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     return this.realtimeBudget;
   }
 
-  /** Tear down a realtime voice session and notify the client. */
-  private closeRealtimeVoice(ws: ServerWebSocket<unknown>): void {
+  /**
+   * Where a realtime session's output audio goes: this socket, tagged so the
+   * dashboard can tell it from encoded TTS arriving on the same socket
+   * (src/comms/realtime-frame.ts).
+   */
+  private realtimeAudioSink(ws: ServerWebSocket<unknown>): (chunk: Buffer) => void {
+    return (chunk) => {
+      const tagged = tagRealtimePcm(chunk);
+      this.wsServer.sendBinary(ws, Buffer.from(tagged.buffer, tagged.byteOffset, tagged.byteLength));
+    };
+  }
+
+  /** Mic audio this recent means the user is in a realtime turn. */
+  private static readonly REALTIME_MIC_ACTIVE_MS = 2_000;
+
+  /**
+   * True while this socket's realtime session is mid-turn: the model has a
+   * response in flight or requested, or the user's mic streamed into it within
+   * the last REALTIME_MIC_ACTIVE_MS.
+   */
+  private realtimeTurnActive(ws: ServerWebSocket<unknown>): boolean {
+    const entry = this.realtimeSessions.get(ws);
+    if (!entry) return false;
+    return entry.session.isResponding || Date.now() - entry.lastMicAt < WebSocketService.REALTIME_MIC_ACTIVE_MS;
+  }
+
+  private static readonly PCM_REFUSAL_MESSAGES = {
+    plan: 'Live voice is not included in your plan, so this session was not started. '
+      + 'Say that again and it will go through the standard voice pipeline.',
+    unavailable: 'Live voice is not available right now, so this session was not started. '
+      + 'Say that again and it will go through the standard voice pipeline.',
+  } as const;
+
+  /**
+   * Refuse a PCM voice_start that realtime cannot serve: the hosted plan
+   * excludes it (`plan`), or it is off or not configured (`unavailable`). The
+   * client is streaming raw 24 kHz frames the WAV accumulator cannot consume,
+   * and its settings poll can still say realtime is on, so falling back to the
+   * standard pipeline would silently drop the turn. The `closed` status and its
+   * reason make the client re-check availability before the next utterance.
+   * Returns true so no standard session opens.
+   */
+  private refusePcmRealtimeStart(ws: ServerWebSocket<unknown>, reason: 'plan' | 'unavailable'): true {
+    this.pendingVoiceFrames.delete(ws);
+    this.quietVoiceFrames.add(ws);
+    this.wsServer.sendToClient(ws, {
+      type: 'realtime_status',
+      payload: { state: 'closed', reason, message: WebSocketService.PCM_REFUSAL_MESSAGES[reason] },
+      timestamp: Date.now(),
+    });
+    return true;
+  }
+
+  /** Tear down a realtime voice session and (unless told not to) notify the client. */
+  private closeRealtimeVoice(ws: ServerWebSocket<unknown>, { notify = true }: { notify?: boolean } = {}): void {
     const entry = this.realtimeSessions.get(ws);
     if (!entry) return;
     this.realtimeSessions.delete(ws);
+    this.quietVoiceFrames.add(ws);
     clearTimeout(entry.timeout);
     // Record estimated spend against the monthly budget (only meaningful when a
     // budget is set; recording always is cheap and keeps the cap honest if one
@@ -1739,6 +1832,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       }
     }
     try { entry.session.close(); } catch { /* ignore */ }
+    if (!notify) return;
     try {
       this.wsServer.sendToClient(ws, { type: 'realtime_status', payload: { state: 'closed' }, timestamp: Date.now() });
     } catch { /* socket may already be gone */ }

@@ -219,6 +219,16 @@ export class RealtimeSession {
     this.opts = opts;
   }
 
+  /**
+   * True while a response is in flight or requested. Tool output still waiting
+   * to be voiced does not count on its own: it is only held back by one of
+   * those, by sibling calls (bounded by the grace), or by the user's turn,
+   * which may never close and would otherwise pin this true for the session.
+   */
+  get isResponding(): boolean {
+    return this.responseInFlight || this.responseRequested;
+  }
+
   onAudio(cb: (chunk: Buffer) => void): void { this.audioCb = cb; }
   onTranscript(cb: (t: RealtimeTranscript) => void): void { this.transcriptCb = cb; }
   onFunctionCall(cb: (c: RealtimeFunctionCall) => void): void { this.functionCallCb = cb; }
@@ -261,6 +271,10 @@ export class RealtimeSession {
         `will reject the input buffer.`,
       );
     }
+
+    // An error sink may close the session synchronously (the dashboard's does);
+    // dialing anyway would open a socket nothing ever closes.
+    if (this.closed) return Promise.reject(new Error('realtime session closed before it connected'));
 
     const factory = socketFactory ?? defaultSocketFactory;
     const ws = factory(url, { headers });

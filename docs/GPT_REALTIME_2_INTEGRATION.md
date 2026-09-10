@@ -79,6 +79,16 @@ the `sendAudio` hook. Playback timing/queueing lives in the browser
 (`RealtimeVoiceController`, `ui/src/lib/`). A `PebbleAudioTransport` can be added
 later against the same interface with no session changes.
 
+**Wire tag.** The dashboard socket also carries encoded TTS (MP3/WAV between
+`tts_start` and `tts_end`), so ws-service prefixes every realtime output frame
+with a 4-byte tag, `01 00 FF FF` (`src/comms/realtime-frame.ts`). The dashboard
+routes by the tag: tagged frames go to `RealtimeVoiceController` with the tag
+stripped, while its session is active; untagged frames go to the decoder, only
+inside a TTS turn. Routing by voice state instead played MP3 bytes as PCM
+(static) when a clip was stopped mid-session. The tag has an even length and
+reads as the samples +1 and -1, so a dashboard bundle older than the tag plays
+two samples of silence.
+
 ### Barge-in
 
 On `input_audio_buffer.speech_started` the session both cancels the in-flight
@@ -119,6 +129,20 @@ disconnect, on `max_session_minutes`, or when the monthly budget is reached.
 When the server closes a session it sends `realtime_status: { state: 'closed' }`;
 the browser must stop streaming on this, or it keeps a hot mic streaming into a
 session that no longer exists.
+
+A PCM `voice_start` the daemon cannot serve is refused the same way, with a
+reason: `plan` (the hosted plan excludes realtime) or `unavailable` (realtime is
+off or not configured). Either makes the dashboard re-check `/api/config/voice`
+at once, so the next utterance takes the standard pipeline. A realtime `error`
+sends `realtime_status: { state: 'error' }` and ends the daemon session too,
+since the dashboard ends its side on it. A dropped socket ends both sides with
+no message: the daemon closes the session with the socket and the dashboard
+clears its session state in `onclose`.
+
+Proactive voice (`broadcastProactiveVoice`) leaves out a socket that is mid-turn
+in its realtime session (a response in flight, or mic audio in the last 2s): the
+clip would talk over the model and the open mic would feed it back in. Only the
+audio is skipped.
 
 ### Phase 3 - auto-approve tool bridge
 

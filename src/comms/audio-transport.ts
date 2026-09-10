@@ -39,7 +39,8 @@ export interface AudioTransport {
 
 /** Hooks a `BrowserAudioTransport` needs from the ws-service layer. */
 export type BrowserTransportHooks = {
-  /** Send a binary audio frame to the browser client (e.g. ws.sendBinary). */
+  /** Send a binary audio frame to the browser client. ws-service tags it first
+   *  (src/comms/realtime-frame.ts) so the dashboard can tell it from TTS. */
   sendAudio: (chunk: Buffer) => void;
   /** Notify the browser that playback should stop/flush (barge-in). */
   signalStopPlayback?: () => void;

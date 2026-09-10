@@ -104,6 +104,11 @@ export class RealtimeVoiceSession {
     return this.session.connect();
   }
 
+  /** True while the model is answering (see RealtimeSession.isResponding). */
+  get isResponding(): boolean {
+    return Boolean(this.session.isResponding);
+  }
+
   /** Stop the current spoken response without closing the conversation. */
   interrupt(): void {
     if (!this.closed) this.session.interrupt();

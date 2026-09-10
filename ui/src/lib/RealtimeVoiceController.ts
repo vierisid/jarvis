@@ -53,6 +53,16 @@ export class RealtimeVoiceController {
     return this.streaming;
   }
 
+  /** The socket this controller streams on (useVoice rebuilds it on reconnect). */
+  get socket(): WebSocket {
+    return this.opts.ws;
+  }
+
+  /** True while realtime output is queued or playing. */
+  get isPlaying(): boolean {
+    return this.activeSources.size > 0;
+  }
+
   /** Open the mic and begin streaming continuous 24 kHz PCM frames. */
   async startStreaming(): Promise<void> {
     if (this.streaming) return;
@@ -73,8 +83,30 @@ export class RealtimeVoiceController {
       this.source = this.captureCtx.createMediaStreamSource(this.stream);
       this.worklet = new AudioWorkletNode(this.captureCtx, "pcm-capture-processor");
 
+      const ctxRate = this.captureCtx.sampleRate;
+      this.worklet.port.onmessage = (e: MessageEvent) => {
+        if (!this.streaming || ws.readyState !== WebSocket.OPEN) return;
+        const raw = new Float32Array(e.data as ArrayBuffer);
+        const float = ctxRate !== REALTIME_SAMPLE_RATE ? resampleFloat32(raw, ctxRate, REALTIME_SAMPLE_RATE) : raw;
+        ws.send(floatTo16BitPCM(float));
+      };
+      // Keep the worklet's graph alive with a muted sink (some browsers won't
+      // pull from a worklet that isn't connected to a destination).
+      const sink = this.captureCtx.createGain();
+      sink.gain.value = 0;
+      this.worklet.connect(sink);
+      sink.connect(this.captureCtx.destination);
+
+      // voice_start opens a session on the daemon, so it goes out only once the
+      // capture graph is built: a mic or worklet failure above leaves nothing
+      // open. `streaming` flips together with the send, so a failure after it
+      // still reaches the voice_end in stopStreaming.
+      // The socket was checked before the mic and worklet awaits; it can drop
+      // during them, and a voice_start sent now would vanish with the orb left
+      // on "recording" for a session that never opened.
+      if (ws.readyState !== WebSocket.OPEN) throw new Error("WebSocket closed while the mic was starting");
       this.requestId = uuid();
-      // mode:"pcm" tells the daemon raw realtime frames follow — if the plan
+      // mode:"pcm" tells the daemon raw realtime frames follow; if the plan
       // gate refuses the session, the daemon must NOT open a WAV accumulator
       // for them (headerless PCM is garbage to the standard pipeline).
       ws.send(
@@ -84,25 +116,10 @@ export class RealtimeVoiceController {
           timestamp: Date.now(),
         }),
       );
+      this.streaming = true;
       this.opts.onSessionStart?.();
 
-      const ctxRate = this.captureCtx.sampleRate;
-      this.worklet.port.onmessage = (e: MessageEvent) => {
-        if (!this.streaming || ws.readyState !== WebSocket.OPEN) return;
-        const raw = new Float32Array(e.data as ArrayBuffer);
-        const float = ctxRate !== REALTIME_SAMPLE_RATE ? resampleFloat32(raw, ctxRate, REALTIME_SAMPLE_RATE) : raw;
-        ws.send(floatTo16BitPCM(float));
-      };
-
       this.source.connect(this.worklet);
-      // Keep the worklet's graph alive with a muted sink (some browsers won't
-      // pull from a worklet that isn't connected to a destination).
-      const sink = this.captureCtx.createGain();
-      sink.gain.value = 0;
-      this.worklet.connect(sink);
-      sink.connect(this.captureCtx.destination);
-
-      this.streaming = true;
     } catch (err) {
       this.opts.onError?.(err instanceof Error ? err.message : String(err));
       this.stopStreaming();
@@ -111,7 +128,7 @@ export class RealtimeVoiceController {
 
   /** Stop the mic + tell the server this turn is done (session stays open). */
   stopStreaming(): void {
-    if (this.streaming && this.requestId) {
+    if (this.streaming && this.requestId && this.opts.ws.readyState === WebSocket.OPEN) {
       try {
         this.opts.ws.send(
           JSON.stringify({ type: "voice_end", payload: { requestId: this.requestId }, timestamp: Date.now() }),
@@ -164,6 +181,10 @@ export class RealtimeVoiceController {
   }
 
   dispose(): void {
+    // Teardown, not a playback event: the owner is dropping this controller
+    // (unmount, or a socket replaced on reconnect) and has already settled its
+    // own state, so none of its callbacks may fire from here.
+    this.opts = { ws: this.opts.ws };
     this.stopStreaming();
     this.flushPlayback();
     this.playbackCtx?.close().catch(() => {});
