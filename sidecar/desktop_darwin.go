@@ -354,7 +354,7 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 		// tool call fail ("no window found") or, worse, act on the wrong app.
 		pid, probe, probeErr := waitForAppWindowDarwin(name, 0, 5*time.Second)
 		if pid == 0 {
-			return nil, fmt.Errorf("launch_app: open -a %q succeeded but the process never appeared in pgrep %q within 5s", executable, name)
+			return nil, fmt.Errorf("launch_app: open -a %q succeeded but no running %s.app process appeared within 5s", executable, name)
 		}
 		return launchResultDarwin(pid, name, probe, probeErr), nil
 	}
@@ -449,16 +449,19 @@ func isPermissionErrorDarwin(stderr string) bool {
 }
 
 // waitForAppWindowDarwin polls until the app has a visible window, up to
-// timeout. When pid is 0 it is first resolved via `pgrep -n name`. Returns
-// the pid (0 if the process never appeared), what the window check
-// established, and the last probe error for the caller's note.
+// timeout. When pid is 0 it is first resolved from `ps` by app name (see
+// appProcessPid). Returns the pid (0 if the process never appeared), what the
+// window check established, and the last probe error for the caller's note.
 func waitForAppWindowDarwin(name string, pid int, timeout time.Duration) (int, launchProbe, error) {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
 	for {
 		if pid == 0 && name != "" {
-			out, _ := exec.Command("pgrep", "-n", name).Output()
-			pid, _ = strconv.Atoi(strings.TrimSpace(string(out)))
+			// Re-asked on every poll until it answers: `open -a` returns before
+			// a cold launch has exec'd the app's main process.
+			if out, err := exec.Command("ps", "-axo", "pid=,comm=").Output(); err == nil {
+				pid = appProcessPid(string(out), name)
+			}
 		}
 		if pid != 0 {
 			n, err := countWindowsDarwin(pid)
