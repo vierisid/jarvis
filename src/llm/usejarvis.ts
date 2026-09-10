@@ -1,5 +1,5 @@
 import { OpenAIProvider, type OpenAIMessage } from './openai.ts';
-import type { LLMMessage, LLMOptions } from './provider.ts';
+import { LLMProviderError, type LLMMessage, type LLMOptions } from './provider.ts';
 import { hostedProxyError, isBudgetExhaustion } from '../util/hosted-error.ts';
 import { redactSecrets } from '../util/redact.ts';
 
@@ -299,7 +299,11 @@ export class UsejarvisAIProvider extends OpenAIProvider {
               continue restart;
             }
           }
-          yield { ...event, error: await this.rewriteText(event.error) };
+          yield {
+            ...event,
+            error: await this.rewriteText(event.error),
+            ...(UsejarvisAIProvider.isRoutingMiss(event.error) ? UsejarvisAIProvider.ROUTING_MISS_RETRY : {}),
+          };
         } else {
           yieldedContent = true;
           yield event;
@@ -380,6 +384,34 @@ export class UsejarvisAIProvider extends OpenAIProvider {
   private static readonly BASE_ERROR_RE =
     /API error(?: \((\d+)\):|: HTTP (\d+):?) ?([\s\S]*)$/;
 
+  /**
+   * LiteLLM's router refusing for want of a deployment, not because the
+   * request is bad. "There are no healthy deployments for this model" means
+   * the replica that answered holds none for the name at that moment (a
+   * /model/update in flight evicts every DB model from its replica while it
+   * reloads), and "No deployments available for selected model" means every
+   * one is cooling down. Both clear within moments, so a 400 carrying either
+   * retries as a server fault after a short pause instead of failing the turn
+   * on its first attempt. Only a 400: the 429 form is already a rate limit,
+   * which the manager retries AND fails over, and relabelling it would lose
+   * the failover.
+   *
+   * A group missing for good (an alias pointing at nothing) now costs three
+   * attempts and two pauses before it surfaces, instead of one attempt.
+   * Accepted: every attempt still logs the proxy body through
+   * hostedProxyError's warn, so a persistent miss reads differently from a
+   * transient one in the log.
+   */
+  private static isRoutingMiss(text: string): boolean {
+    const match = text.match(UsejarvisAIProvider.BASE_ERROR_RE);
+    if (!match || Number(match[1] ?? match[2]) !== 400) return false;
+    return /no healthy deployments for this model|no deployments available for selected model/i.test(match[3] ?? '');
+  }
+
+  /** One pause long enough to outlast a replica's reload. The manager's shared
+   * Retry-After budget bounds what several of them can add up to. */
+  private static readonly ROUTING_MISS_RETRY = { code: 'server', retry_after_ms: 1_000 } as const;
+
   private async rewriteText(text: string): Promise<string> {
     const match = text.match(UsejarvisAIProvider.BASE_ERROR_RE);
     if (!match) return text;
@@ -392,7 +424,12 @@ export class UsejarvisAIProvider extends OpenAIProvider {
     // aborts) through untouched.
     const match = error.message.match(UsejarvisAIProvider.BASE_ERROR_RE);
     if (!match) return error;
-    return this.friendly(Number(match[1] ?? match[2]), match[3] ?? '');
+    const friendly = await this.friendly(Number(match[1] ?? match[2]), match[3] ?? '');
+    if (!UsejarvisAIProvider.isRoutingMiss(error.message)) return friendly;
+    // The chat path's twin of the stream event tagging: the manager reads the
+    // code and Retry-After off an LLMProviderError, never off message text.
+    const { code, retry_after_ms } = UsejarvisAIProvider.ROUTING_MISS_RETRY;
+    return new LLMProviderError(friendly.message, code, retry_after_ms);
   }
 }
 
