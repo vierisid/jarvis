@@ -316,3 +316,65 @@ export class PebbleRealtimeManager {
     for (const id of [...this.sessions.keys()]) this.stop(id);
   }
 }
+
+/** How long a burst of voice saves (a toggle, then a voice pick) settles
+ * before the advertisement is re-pushed once. */
+const READVERTISE_DEBOUNCE_MS = 250;
+
+/**
+ * Keep every connected pebble's `configure_realtime` advertisement in step
+ * with the settings that decide it.
+ *
+ * The advertisement is pushed when a sidecar connects, and the sidecar keeps
+ * it: its summon hotkey acts on that verdict, not on the daemon's config. So
+ * "resolveRealtimeVoice reads live config per call" holds for the dashboard's
+ * voice_start but not for the pebble, and two triggers have to re-push it:
+ *
+ * - a `voice` section save, which is where the realtime toggle lands
+ *   (POST /api/config/voice, through the saveUserSection choke point).
+ *   Without it a toggle reached a connected pebble only on reconnect: on
+ *   2026-09-10 realtime was switched on in Settings and every summon still
+ *   ran the one-shot pipeline;
+ * - every reloadAll (SIGHUP and POST /api/config/reload), whose cause can be
+ *   the SYSTEM-owned usejarvis_ai block that no section applier watches.
+ *
+ * NOT covered: on a self-hosted install a BYO OpenAI key decides whether
+ * realtime is available, and `llm` saves (POST /api/config/llm and the
+ * onboarding route) bypass saveUserSection, so adding or removing that key
+ * reaches a connected pebble only on reconnect or reload. Hosted installs are
+ * unaffected, since the plan serves realtime there. Closing it means those
+ * routes applying through the coordinator the way the STT/TTS routes do.
+ *
+ * Pushes run on their OWN serialized chain, not on the coordinator's queue.
+ * Awaiting them there would park every other applier behind a sidecar RPC,
+ * whose timeout is 30s for a half-open socket (a laptop lid closed, no RST
+ * yet), and the STT/TTS routes await that queue for their HTTP response. They
+ * stay in order among themselves because each push reads the config when its
+ * turn comes, so the last one always reflects the latest save; two concurrent
+ * pushes could otherwise land an older verdict after a newer one. For the same
+ * reason a request made while a push is queued but not yet started is dropped:
+ * that push will read the config the request would have. A reload that also
+ * changed `voice` therefore pushes at most twice, and the push is idempotent.
+ *
+ * Returns `settled`, which resolves once every push requested so far has run.
+ */
+export function wireRealtimeReadvertisement(
+  coordinator: Pick<import('./settings-reload.ts').SettingsReloadCoordinator, 'registerApplier' | 'setPostReloadAll'>,
+  readvertise: () => Promise<void>,
+): { settled: () => Promise<void> } {
+  let chain: Promise<void> = Promise.resolve();
+  let queued = false;
+  const push = () => {
+    if (queued) return;
+    queued = true;
+    chain = chain
+      .then(() => {
+        queued = false;
+        return readvertise();
+      })
+      .catch((err) => console.warn('[pebble-realtime] re-advertisement failed:', err));
+  };
+  coordinator.registerApplier('voice', push, { debounceMs: READVERTISE_DEBOUNCE_MS });
+  coordinator.setPostReloadAll(async () => push());
+  return { settled: () => chain };
+}

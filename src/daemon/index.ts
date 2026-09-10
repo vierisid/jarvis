@@ -22,7 +22,7 @@ import { AgentService } from "./agent-service.ts";
 import { createObservation } from "../vault/observations.ts";
 import { ObserverService, mapEventType } from "./observer-service.ts";
 import { WebSocketService } from "./ws-service.ts";
-import { PebbleRealtimeManager } from "./pebble-realtime.ts";
+import { PebbleRealtimeManager, wireRealtimeReadvertisement } from "./pebble-realtime.ts";
 import { hostedRealtimeIncluded, warmRealtimeGateFor } from './realtime-gate.ts';
 import { resolveRealtimeVoice } from "../config/realtime.ts";
 import { realtimeEnablement } from "./usejarvis-ai.ts";
@@ -105,10 +105,6 @@ let systemCron: import('./system-cron.ts').SystemCronService | null = null;
 let usageAlerts: import('./usage-alerts-service.ts').UsageAlertsService | null = null;
 let timerScheduler: TimerWaitpointScheduler | null = null;
 let settingsReload: import('./settings-reload.ts').SettingsReloadCoordinator | null = null;
-/** Set once the sidecar manager is up; re-pushes the pebble realtime
- * capability after a settings reload (a plan change arrives that way, and the
- * advertisement is otherwise computed only at connect). */
-let readvertiseRealtime: (() => Promise<void>) | null = null;
 /** Graceful-drain deadline (ms), set from config at boot. Default 75s. */
 let drainDeadlineMs = 75_000;
 
@@ -901,6 +897,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // The advertisement must agree with the starters' plan gate, or the
         // summon hotkey opens sessions the plan refuses at dial.
         const enabled = res.ok && (await hostedRealtimeIncluded(res.resolved));
+        // Realtime switched off (or excluded) while a live session is open: end
+        // the billed session here rather than trusting the sidecar to report
+        // back, since the RPC below is swallowed on an older or half-dead
+        // sidecar. stop() is idempotent and its closed echo makes the sidecar
+        // stop without re-emitting.
+        if (!enabled) pebbleRealtime.stop(sidecarId);
         console.log(`[pebble-realtime] configure_realtime → ${sidecarId} enabled=${enabled}${res.ok ? '' : ` (${res.reason})`}`);
         await sidecarManager.dispatchRPC(sidecarId, 'pebble.configure_realtime', { enabled })
           .catch((err) => console.warn(`[pebble-realtime] configure_realtime dispatch failed (older sidecar?):`, err));
@@ -910,18 +912,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // excluded realtime keeps its summon hotkey in one-shot mode until it
       // reconnects — even after an upgrade. reloadAll clears the gate cache,
       // so this re-asks the catalog rather than repeating a stale verdict.
-      readvertiseRealtime = async () => {
+      const readvertiseRealtime = async () => {
         for (const s of sidecarManager.listConnected()) {
           if (s.capabilities.includes('pebble')) await advertiseRealtime(s.id);
         }
       };
-      // Registered on the coordinator (not just the SIGHUP handler) so BOTH
-      // reload entry points — SIGHUP and POST /api/config/reload — re-push
-      // the advertisement; the route previously cleared the gate cache but
-      // left every connected pebble on its stale configure_realtime verdict.
-      settingsReload?.setPostReloadAll(async () => {
-        await readvertiseRealtime?.();
-      });
+      // Re-pushed on a `voice` save (the realtime toggle) and on every
+      // reloadAll (SIGHUP and POST /api/config/reload); see
+      // wireRealtimeReadvertisement for why the pebble needs both.
+      if (settingsReload) wireRealtimeReadvertisement(settingsReload, readvertiseRealtime);
       sidecarManager.onSidecarConnected((sidecar) => {
         if (!sidecar.capabilities.includes('pebble')) return;
         // The listener is typed `=> void` and the dispatch loop only catches
@@ -3990,7 +3989,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     settingsReload.registerApplier('awareness', async (cfg) => {
       awarenessService?.toggle(cfg.awareness?.enabled !== false);
     });
-    // voice needs no applier: resolveRealtimeVoice reads live config per call.
+    // voice: resolveRealtimeVoice reads live config per call, so the dashboard
+    // needs no applier, but a connected pebble keeps the realtime verdict it
+    // was sent; its re-push applier is wired beside the pebble voice loop
+    // (wireRealtimeReadvertisement).
 
     // ── Tray menu live data (design: usejarvis-tray §00) ──
     // Push a status snapshot to each connected sidecar every few seconds so the
