@@ -61,9 +61,39 @@ Usage:
 		os.Exit(runTests(flag.Args()))
 	}
 
+	// One sidecar per user session (single_instance.go). Checked before
+	// setupLogging so a launch that is about to exit never rotates the running
+	// instance's log out from under it. A plain second launch hands off to the
+	// running instance and exits. A relaunch never hands off, because the
+	// instance it would reach is the one exiting to make room for it. --token
+	// only checks for one: the running instance would ignore the token, so say
+	// so instead of opening its dashboard.
+	relaunch := os.Getenv("JARVIS_RELAUNCH") == "1"
+	handOff, instanceWait := handOffShow, singleInstanceWait
+	switch {
+	case relaunch:
+		handOff, instanceWait = handOffNever, singleInstanceRelaunchWait
+	case *token != "":
+		handOff = handOffDetect
+	}
+	start, instanceErr := claimSingleInstance(newInstanceLock(), handOff,
+		instanceWait, singleInstancePoll, time.Now, time.Sleep)
+	if !start {
+		if *token != "" {
+			msg := "Jarvis is already running. Quit it from the tray, then run --token again.\nThe token was not saved."
+			fmt.Fprintf(os.Stderr, "Error: %s\n", msg)
+			platformShowAlert("JARVIS Sidecar", msg)
+			os.Exit(1)
+		}
+		return
+	}
+
 	// Route logs to ~/.jarvis/sidecar.log so the GUI-subsystem Windows build runs
 	// without a console window (and so there's a log to inspect anywhere).
 	setupLogging()
+	if instanceErr != nil {
+		log.Printf("[sidecar] single-instance check failed, starting anyway: %v", instanceErr)
+	}
 
 	// Register the AUMID + jarvis:// URI scheme notifications need (Windows-only;
 	// no-op elsewhere). Idempotent, cheap, safe to run every launch.
@@ -83,7 +113,7 @@ Usage:
 	// When relaunched by an in-app restart (settings token change), wait briefly
 	// for the previous instance to exit and release the mic / hotkeys / tray icon
 	// before we grab them.
-	if os.Getenv("JARVIS_RELAUNCH") == "1" {
+	if relaunch {
 		log.Println("[sidecar] relaunched — waiting for the previous instance to exit...")
 		time.Sleep(restartRelaunchWait)
 	}
@@ -196,6 +226,7 @@ Usage:
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 	go func() {
 		<-sigCh
+		sidecarQuitting.Store(true)
 		log.Println("\n[sidecar] Shutting down...")
 		// The browser runs in its own process group (Setpgid), so terminal
 		// signals no longer reach it — close it explicitly or it outlives us.

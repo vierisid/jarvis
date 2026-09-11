@@ -119,6 +119,7 @@ var (
 // runWithTray (Windows): tray on its own goroutine, client on the main goroutine.
 func runWithTray(ctx context.Context, cancel context.CancelFunc, client *SidecarClient) {
 	trayOnClose = func() {
+		sidecarQuitting.Store(true)
 		client.Stop()
 		cancel()
 	}
@@ -338,6 +339,21 @@ func trayWndProc(hwnd uintptr, msg uint32, wParam, lParam uintptr) uintptr {
 		if cds := (*copyDataStruct)(unsafe.Pointer(lParam)); cds != nil && cds.dwData == quitCopyDataMagic {
 			if trayOnClose != nil {
 				go trayOnClose()
+			}
+			return 1
+		}
+		// A second launch of jarvis handing off to this instance
+		// (single_instance_windows.go): bring the dashboard forward. Once we
+		// are quitting, answer 0 so that launch waits for us to exit and starts
+		// in our place instead of exiting on the word of an instance that is
+		// going away.
+		if cds := (*copyDataStruct)(unsafe.Pointer(lParam)); cds != nil &&
+			(cds.dwData == showCopyDataMagic || cds.dwData == pingCopyDataMagic) {
+			if sidecarQuitting.Load() {
+				return 0
+			}
+			if cds.dwData == showCopyDataMagic && trayOpenChat != nil {
+				go trayOpenChat()
 			}
 			return 1
 		}
