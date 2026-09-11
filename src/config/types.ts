@@ -241,6 +241,34 @@ export type ContextRule = {
   description: string;
 };
 
+/**
+ * Extra restrictions for the background agent: the one that reacts to
+ * observer events, screen struggles and commitments with no user turn. Its
+ * prompts are built from ambient input (screen text, email snippets,
+ * clipboard), so it gets the shared authority config PLUS these. They can
+ * only tighten: a category listed here needs approval even when the main
+ * agent may run it outright, and level_cap denies anything above it.
+ */
+export type BackgroundAuthorityConfig = {
+  /** Ceiling on the background agent's effective level. Unset = no cap. */
+  level_cap?: number;
+  /** Categories that always require approval for the background agent. */
+  governed_categories?: string[];      // ActionCategory[]
+};
+
+/**
+ * Taint gating for the chat agent: within a turn in which it read outside
+ * content (web page, clipboard, file, screen text, sub-agent report), the
+ * listed categories require approval. The agent's level is unchanged; a new
+ * user message clears the taint. See src/authority/taint-gating.ts.
+ */
+export type TaintGatingConfig = {
+  /** Default true. */
+  enabled?: boolean;
+  /** Categories gated while tainted. Explicit [] disables the list. */
+  governed_categories?: string[];      // ActionCategory[]
+};
+
 export type AuthorityConfig = {
   default_level: number;
   governed_categories: string[];       // ActionCategory[]
@@ -251,6 +279,8 @@ export type AuthorityConfig = {
     suggest_threshold: number;
   };
   emergency_state: 'normal' | 'paused' | 'killed';
+  background?: BackgroundAuthorityConfig;
+  taint_gating?: TaintGatingConfig;
 };
 
 export type WorkflowConfig = {
@@ -752,6 +782,21 @@ export const DEFAULT_CONFIG: JarvisConfig = {
       suggest_threshold: 5,
     },
     emergency_state: 'normal',
+    background: {
+      governed_categories: [
+        'execute_command', 'write_data', 'control_app',
+        'delete_data', 'install_software', 'modify_settings',
+        'send_email', 'send_message', 'make_payment',
+      ],
+    },
+    taint_gating: {
+      enabled: true,
+      governed_categories: [
+        'execute_command', 'write_data', 'control_app',
+        'delete_data', 'install_software', 'modify_settings',
+        'send_email', 'send_message', 'make_payment', 'spawn_agent',
+      ],
+    },
   },
   heartbeat: {
     interval_minutes: 15,

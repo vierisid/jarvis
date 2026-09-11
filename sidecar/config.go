@@ -47,11 +47,20 @@ const (
 	defaultWindowIntervalMs   = 5000
 	defaultMinChangeThreshold = 0.02
 	defaultStuckThresholdMs   = 120000
+	// Local retention floor for screenshots, independent of the brain (which
+	// cleans at 24h by default when connected).
+	defaultCaptureTTLHours = 48
 )
 
 // currentConfigVersion is the number stamped into every config this build
 // writes. Bump it when adding a migration below.
-const currentConfigVersion = 1
+//
+//	1: superseded awareness intervals read as unset.
+//	2: filesystem.blocked_paths in an older file gains every default entry
+//	   (credentials and persistence locations) it does not already have.
+//	   Files at version 2 or later keep an explicit empty list as the user's
+//	   choice.
+const currentConfigVersion = 2
 
 // Defaults that shipped in an earlier release and were therefore written into
 // existing sidecar.yaml files verbatim. Within a file that predates
@@ -90,6 +99,28 @@ func defaultCaptureDir() string {
 	return filepath.Join(homeDir(), ".jarvis", "captures")
 }
 
+// mergeBlockedPaths appends the entries of extra that are not already in
+// existing, comparing canonical forms so "~/.ssh" and "/home/u/.ssh" count
+// as the same entry. Order: existing first, then new defaults.
+func mergeBlockedPaths(existing, extra []string) []string {
+	seen := make(map[string]bool, len(existing))
+	out := make([]string, 0, len(existing)+len(extra))
+	for _, p := range existing {
+		if strings.TrimSpace(p) == "" {
+			continue
+		}
+		seen[canonicalPath(p)] = true
+		out = append(out, p)
+	}
+	for _, p := range extra {
+		if key := canonicalPath(p); !seen[key] {
+			seen[key] = true
+			out = append(out, p)
+		}
+	}
+	return out
+}
+
 func defaultConfig() SidecarConfig {
 	return SidecarConfig{
 		Capabilities: []SidecarCapability{
@@ -101,7 +132,10 @@ func defaultConfig() SidecarConfig {
 			TimeoutMs:       defaultTerminalTimeoutMs,
 		},
 		Filesystem: FilesystemConfig{
-			BlockedPaths:  []string{},
+			// Written to the file verbatim (not sparse): the list is a
+			// deliberate choice once it exists, and additions to the default
+			// set ship as config-version migrations.
+			BlockedPaths:  defaultBlockedPaths(),
 			MaxFileSizeKB: defaultMaxFileSizeKB,
 		},
 		Browser: BrowserConfig{
@@ -118,6 +152,7 @@ func defaultConfig() SidecarConfig {
 			StuckThresholdMs:   defaultStuckThresholdMs,
 			OCREnabled:         true,
 			CaptureDir:         defaultCaptureDir(),
+			CaptureTTLHours:    defaultCaptureTTLHours,
 		},
 	}
 }
@@ -184,6 +219,13 @@ func LoadConfig() (*SidecarConfig, error) {
 			cfg.Awareness.WindowIntervalMs = 0
 		}
 	}
+	if probe.ConfigVersion < 2 {
+		// No release before version 2 shipped any default entry, so nothing
+		// in a pre-2 list can be a decision AGAINST a default: append every
+		// default the user does not already have, keeping their own entries.
+		// (An empty list there was `blocked_paths: []`, the old default.)
+		cfg.Filesystem.BlockedPaths = mergeBlockedPaths(cfg.Filesystem.BlockedPaths, defaultBlockedPaths())
+	}
 	cfg.ConfigVersion = currentConfigVersion
 
 	// Awareness defaults
@@ -201,6 +243,9 @@ func LoadConfig() (*SidecarConfig, error) {
 	}
 	if cfg.Awareness.CaptureDir == "" {
 		cfg.Awareness.CaptureDir = defaultCaptureDir()
+	}
+	if cfg.Awareness.CaptureTTLHours == 0 {
+		cfg.Awareness.CaptureTTLHours = defaultCaptureTTLHours
 	}
 
 	return &cfg, nil
@@ -242,6 +287,9 @@ func sparseForSave(cfg *SidecarConfig) SidecarConfig {
 	}
 	if out.Awareness.CaptureDir == defaultCaptureDir() {
 		out.Awareness.CaptureDir = ""
+	}
+	if out.Awareness.CaptureTTLHours == defaultCaptureTTLHours {
+		out.Awareness.CaptureTTLHours = 0
 	}
 	return out
 }

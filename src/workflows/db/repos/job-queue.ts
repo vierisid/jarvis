@@ -121,6 +121,14 @@ function rowToJob<P = Record<string, unknown>>(row: JobRow): Job<P> {
   };
 }
 
+/** Jobs waiting to run. Used to refuse public ingress once a backlog builds. */
+export function countQueued(): number {
+  const row = db()
+    .query<{ n: number }, []>(`SELECT COUNT(*) AS n FROM workflow_job WHERE status = 'QUEUED'`)
+    .get();
+  return row?.n ?? 0;
+}
+
 export function enqueue<P = Record<string, unknown>>(input: EnqueueInput<P>): Job<P> {
   const id = apId();
   const ts = nowMs();

@@ -249,6 +249,9 @@ type ScreenObserver struct {
 	captureCount       int
 	ocrEnabled         bool
 	captureDir         string
+	// captureTTL is the local retention floor for saved screenshots; <= 0
+	// disables the sidecar-side sweep (the brain may still clean).
+	captureTTL time.Duration
 }
 
 func NewScreenObserver(cfg *SidecarConfig, ocrAvailable bool) *ScreenObserver {
@@ -257,6 +260,7 @@ func NewScreenObserver(cfg *SidecarConfig, ocrAvailable bool) *ScreenObserver {
 		minChangeThreshold: cfg.Awareness.MinChangeThreshold,
 		ocrEnabled:         cfg.Awareness.OCREnabled && ocrAvailable,
 		captureDir:         cfg.Awareness.CaptureDir,
+		captureTTL:         captureTTL(cfg),
 	}
 }
 
@@ -266,13 +270,36 @@ func (o *ScreenObserver) Run(ctx context.Context, send EventSender) {
 	ticker := time.NewTicker(time.Duration(o.intervalMs) * time.Millisecond)
 	defer ticker.Stop()
 
+	// Retention sweep: once at start, then hourly. main.go runs the same
+	// sweep for the life of the process; this one exists so a TTL changed
+	// through update_config (which restarts the observers) applies at once.
+	o.pruneCaptures()
+	prune := time.NewTicker(time.Hour)
+	defer prune.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 			o.capture(ctx, send)
+		case <-prune.C:
+			o.pruneCaptures()
 		}
+	}
+}
+
+func (o *ScreenObserver) pruneCaptures() {
+	if o.captureTTL <= 0 || o.captureDir == "" {
+		return
+	}
+	files, dirs, err := pruneCapturesOlderThan(o.captureDir, o.captureTTL)
+	if err != nil {
+		log.Printf("[screen] Capture retention sweep failed: %v", err)
+		return
+	}
+	if files > 0 || dirs > 0 {
+		log.Printf("[screen] Capture retention: removed %d file(s), %d empty dir(s) older than %s", files, dirs, o.captureTTL)
 	}
 }
 

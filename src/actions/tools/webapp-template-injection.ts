@@ -14,6 +14,7 @@
  */
 
 import { getWebappInstructionsForUrl } from '../../vault/webapp-templates.ts';
+import { SITE_INSTRUCTIONS_MARKER } from '../../roles/untrusted.ts';
 
 /**
  * Re-deliver a template after this long. Long sessions can outlive context
@@ -74,11 +75,10 @@ export class WebappTemplateDelivery {
     if (last !== undefined && now - last < REDELIVER_AFTER_MS) return result;
     this.delivered.set(resolved.templateId, now);
 
+    // Joined with the shared marker so untrusted-content wrapping (roles/untrusted.ts)
+    // can keep these repo-authored instructions outside the wrapped page text.
     return [
-      result,
-      '',
-      '---',
-      `You are now on ${resolved.appName}. Follow these site-specific instructions while operating it:`,
+      `${result}${SITE_INSTRUCTIONS_MARKER}${resolved.appName}. Follow these site-specific instructions while operating it:`,
       '',
       resolved.instructions,
     ].join('\n');

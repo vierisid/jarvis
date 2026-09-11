@@ -126,14 +126,15 @@ func handleLaunchApp(params map[string]any) (*RPCResult, error) {
 		return nil, fmt.Errorf("launch_app: %w", err)
 	}
 
-	escaped := strings.ReplaceAll(executable, "'", "''")
+	// psSingleQuoted doubles ASCII and typographic single quotes alike.
+	escaped := psSingleQuoted(executable)
 	argsClause := ""
 	if args != "" {
-		argsClause = fmt.Sprintf("-ArgumentList '%s'", strings.ReplaceAll(args, "'", "''"))
+		argsClause = "-ArgumentList " + psSingleQuoted(args)
 	}
 
 	script := fmt.Sprintf(`
-$p = Start-Process -FilePath '%s' %s -PassThru
+$p = Start-Process -FilePath %s %s -PassThru
 @{ pid=$p.Id; name=$p.ProcessName } | ConvertTo-Json -Compress
 `, escaped, argsClause)
 

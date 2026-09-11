@@ -6,7 +6,7 @@
  * check status / collect results later.
  */
 
-import { runSubAgent, type SubAgentResult, type ProgressCallback } from './sub-agent-runner.ts';
+import { runSubAgent, type SubAgentResult, type ProgressCallback, type RunSubAgentOptions } from './sub-agent-runner.ts';
 import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
@@ -40,6 +40,8 @@ export type LaunchOptions = {
   toolRegistry: ToolRegistry;
   onProgress?: ProgressCallback;
   onComplete?: (task: AsyncTask) => void;
+  /** Authority gate for the background sub-agent; passed straight to runSubAgent. */
+  authority?: Pick<RunSubAgentOptions, 'authorityEngine' | 'auditTrail' | 'emergencyController' | 'temporaryGrants' | 'profile' | 'taintGating'>;
 };
 
 export type TaskLifecycleEvent = 'launch' | 'complete' | 'fail';
@@ -74,7 +76,7 @@ export class AgentTaskManager {
    * Launch a sub-agent task in the background. Returns task ID immediately.
    */
   launch(opts: LaunchOptions): string {
-    const { agent, task, context, llmManager, toolRegistry, onProgress, onComplete } = opts;
+    const { agent, task, context, llmManager, toolRegistry, onProgress, onComplete, authority } = opts;
 
     const taskId = crypto.randomUUID();
     const asyncTask: AsyncTask = {
@@ -101,6 +103,7 @@ export class AgentTaskManager {
       llmManager,
       toolRegistry,
       onProgress,
+      ...(authority ?? {}),
     }).then((result) => {
       asyncTask.status = 'completed';
       asyncTask.completedAt = Date.now();

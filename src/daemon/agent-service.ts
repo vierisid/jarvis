@@ -62,7 +62,7 @@ import {
 } from '../personality/learner.ts';
 import { getDueCommitments, getUpcoming } from '../vault/commitments.ts';
 import { findContent } from '../vault/content-pipeline.ts';
-import { getRecentObservations } from '../vault/observations.ts';
+import { getRecentObservations, describeObservationForPrompt } from '../vault/observations.ts';
 import { extractAndStore } from '../vault/extractor.ts';
 import { getKnowledgeForMessage } from '../vault/retrieval.ts';
 import { formatUserProfileForPrompt } from '../user/profile.ts';
@@ -985,7 +985,8 @@ export class AgentService implements Service, IAgentService {
       if (observations.length > 0) {
         context.recentObservations = observations.map((o) => {
           const time = new Date(o.created_at).toLocaleTimeString();
-          return `[${time}] ${o.type}: ${JSON.stringify(o.data).slice(0, 200)}`;
+          // Content-free: no OCR text, clipboard body or email snippet in the prompt.
+          return `[${time}] ${describeObservationForPrompt(o)}`;
         });
       }
     } catch (err) {

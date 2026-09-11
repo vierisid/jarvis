@@ -16,7 +16,8 @@
  *     Someone read the source, ran a smoke test, and signed off (date in
  *     `VERIFIED_METADATA`).
  *   - `tier: "community"` -- everything else. Installed from npm at the
- *     user's request, runs inside the engine sandbox, but has not been
+ *     user's request and run by the workflow engine with the daemon's own
+ *     permissions (there is no isolation layer), but has not been
  *     individually reviewed. The Library UI surfaces a preamble explaining
  *     this distinction so users opt in with their eyes open.
  */
@@ -101,11 +102,20 @@ function mergeEntry(g: GeneratedCatalogEntry): CatalogEntry {
   //   - DESCRIPTION_OVERRIDE beats generated for description.
   //   - SIZE_OVERRIDE adds an estimatedSizeMb when the generator had none.
   //   - VERIFIED_METADATA supplies vettedAt for verified entries.
+  // A verified piece installs the exact version that was reviewed. The
+  // review is of a specific release, so an open range would let a later
+  // minor land on the user's machine without anyone having looked at it;
+  // a catalog re-sync (a reviewable repo change) is how the pin moves.
+  // Community pieces keep the generated range: nobody vouched for any
+  // particular version of those.
+  const vettedVersion = pin?.vettedVersion ?? g.latestVersion;
+  const versionRange = pin?.versionRange ?? (tier === "verified" ? vettedVersion : g.versionRange);
+
   const entry: CatalogEntry = {
     id: g.id,
     npmPackage: g.npmPackage,
-    versionRange: pin?.versionRange ?? g.versionRange,
-    vettedVersion: pin?.vettedVersion ?? g.latestVersion,
+    versionRange,
+    vettedVersion,
     displayName: g.displayName,
     description: DESCRIPTION_OVERRIDE[g.id] ?? g.description,
     sourceUrl: g.sourceUrl,

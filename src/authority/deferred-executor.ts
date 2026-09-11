@@ -8,6 +8,7 @@ import type { AuditTrail } from './audit.ts';
 import type { AuthorityLearner } from './learning.ts';
 import type { EmergencyController } from './emergency.ts';
 import type { ActionCategory } from '../roles/authority.ts';
+import { TAINT_PROFILE_LABEL } from './taint-gating.ts';
 
 export type ExecutionResultCallback = (requestId: string, request: ApprovalRequest, result: string) => void;
 
@@ -88,12 +89,16 @@ export class DeferredExecutor {
         execution_time_ms: executionTimeMs,
       });
 
-      // Record approval for learning
-      this.learner?.recordDecision(
-        request.action_category as ActionCategory,
-        request.tool_name,
-        true
-      );
+      // Record approval for learning. Taint-gated approvals are excluded:
+      // an override the learner would suggest cannot lift a profile gate,
+      // so the suggestion would be dead on arrival.
+      if (!(request.reason ?? '').includes(TAINT_PROFILE_LABEL)) {
+        this.learner?.recordDecision(
+          request.action_category as ActionCategory,
+          request.tool_name,
+          true
+        );
+      }
 
       // Notify
       this.onResult?.(requestId, request, result);

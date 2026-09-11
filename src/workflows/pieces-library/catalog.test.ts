@@ -33,6 +33,19 @@ describe("CATALOG invariants", () => {
     }
   });
 
+  test("verified entries install exactly the vetted version unless hand-pinned", () => {
+    for (const entry of CATALOG) {
+      if (entry.tier !== "verified") continue;
+      // A hand pin (VERSION_PIN) may widen or narrow; otherwise the range IS
+      // the vetted version, so a later minor cannot land unreviewed.
+      if (entry.versionRange === entry.vettedVersion) continue;
+      expect(entry.versionRange.startsWith("^") || entry.versionRange.startsWith("~")).toBe(true);
+    }
+    // At least one verified entry is pinned exactly (the common case).
+    const exact = CATALOG.filter((e) => e.tier === "verified" && e.versionRange === e.vettedVersion);
+    expect(exact.length).toBeGreaterThan(0);
+  });
+
   test("vettedVersion is an exact semver (no operator)", () => {
     for (const entry of CATALOG) {
       expect(entry.vettedVersion).toMatch(/^\d+\.\d+\.\d+$/);

@@ -57,7 +57,9 @@ describe('orchestrator.executeRealtimeToolCall (auto-approve bridge)', () => {
   test('allowed tool executes and returns the result', async () => {
     const { orch, audit } = makeOrchestrator(authorityConfig());
     const out = await orch.executeRealtimeToolCall('read_file', { path: '/etc/hosts' });
-    expect(out).toBe('contents of /etc/hosts');
+    // read_file output is outside content, so it comes back framed as untrusted.
+    expect(out).toContain('contents of /etc/hosts');
+    expect(out).toContain('UNTRUSTED_CONTENT');
     expect(executed).toEqual(['read_file:/etc/hosts']);
     const log = audit.query({ limit: 10 });
     expect(log[0]!.channel).toBe('voice');
@@ -70,7 +72,7 @@ describe('orchestrator.executeRealtimeToolCall (auto-approve bridge)', () => {
     const cfg = authorityConfig({ overrides: [{ action: 'read_data', allowed: true, requires_approval: true }] });
     const { orch, audit } = makeOrchestrator(cfg);
     const out = await orch.executeRealtimeToolCall('read_file', { path: '/x' });
-    expect(out).toBe('contents of /x');           // executed despite needing approval
+    expect(out).toContain('contents of /x');      // executed despite needing approval
     expect(executed).toEqual(['read_file:/x']);
     const log = audit.query({ limit: 10 });
     expect(log[0]!.authority_decision).toBe('approval_required');

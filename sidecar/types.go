@@ -41,6 +41,10 @@ type AwarenessConfig struct {
 	StuckThresholdMs   int     `yaml:"stuck_threshold_ms,omitempty"`
 	OCREnabled         bool    `yaml:"ocr_enabled"`
 	CaptureDir         string  `yaml:"capture_dir,omitempty"`
+	// CaptureTTLHours is how long screenshots stay on this machine before the
+	// sidecar deletes them itself. The brain also cleans when connected; this
+	// is the floor that applies when it is not. Negative disables the sweep.
+	CaptureTTLHours int `yaml:"capture_ttl_hours,omitempty"`
 }
 
 // SidecarTokenClaims is the JWT payload from the brain.

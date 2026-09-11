@@ -395,7 +395,8 @@ func TestSaveConfigStampsVersion(t *testing.T) {
 	if err != nil {
 		t.Fatalf("read config: %v", err)
 	}
-	if !strings.Contains(string(data), "config_version: 1") {
+	// Keep in step with currentConfigVersion.
+	if !strings.Contains(string(data), "config_version: 2") {
 		t.Errorf("saved config carries no version stamp:\n%s", data)
 	}
 }

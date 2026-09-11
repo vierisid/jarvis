@@ -46,7 +46,7 @@ import {
   type FlowVersion,
 } from "../../db/repos/flow-version";
 import { createFlowRun } from "../../db/repos/flow-run";
-import { enqueue } from "../../db/repos/job-queue";
+import { enqueue, countQueued } from "../../db/repos/job-queue";
 import { RUN_FLOW } from "../handler";
 import { DEFAULT_IDS } from "../../db/schema";
 import type { EngineRuntime } from "../engine-runtime/engine-runtime";
@@ -61,6 +61,12 @@ interface TriggerNode {
     input?: Record<string, unknown>;
   };
 }
+
+/**
+ * Queued jobs beyond which webhook ingress is refused (503, Retry-After) and
+ * any webhook fire that slipped past the probe is dropped with a log line.
+ */
+export const MAX_QUEUED_WEBHOOK_RUNS = 500;
 
 type SubscriptionKind = "cron" | "webhook" | "event" | "engine";
 type ActiveSub = {
@@ -143,6 +149,15 @@ export class TriggerManager {
     this.bus = deps.eventBus;
     this.cron = deps.cronScheduler ?? new CronScheduler();
     this.webhooks = deps.webhookManager ?? new WebhookManager();
+    // Public ingress answers 503 while the queue is backed up, so senders
+    // retry instead of being told "ok" about a run that was never queued.
+    this.webhooks.setCapacityCheck(() => {
+      try {
+        return countQueued() < MAX_QUEUED_WEBHOOK_RUNS;
+      } catch {
+        return true; // a probe failure must not close the ingress
+      }
+    });
     this.engineRuntime = deps.engineRuntime;
     this.log = deps.log ?? ((line) => console.log(`[trigger-manager] ${line}`));
     // 5s / 15s / 1m / 5m / 15m -- covers a brief engine hiccup within seconds
@@ -687,6 +702,21 @@ export class TriggerManager {
     if (!versionId) {
       this.log(`flow ${flowId} (${kind}) fire skipped: no active subscription`);
       return;
+    }
+    // Backlog cap for the public ingress: the webhook route is rate limited
+    // per minute, but a worker that is slow or down would still let the
+    // queue grow without bound. Owner-driven kinds are not dropped.
+    if (kind === "webhook") {
+      let queued = 0;
+      try {
+        queued = countQueued();
+      } catch (e) {
+        this.log(`flow ${flowId} (webhook) backlog check failed: ${(e as Error).message}`);
+      }
+      if (queued >= MAX_QUEUED_WEBHOOK_RUNS) {
+        this.log(`flow ${flowId} (webhook) fire dropped: ${queued} jobs already queued`);
+        return;
+      }
     }
     try {
       this.enqueueFlowRun({

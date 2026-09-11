@@ -203,11 +203,22 @@ func makeRunCommandHandler(cfg *SidecarConfig) RPCHandler {
 
 // --- Filesystem ---
 
+// isBlockedPath reports whether filePath is, or lies inside, one of the
+// blocked entries. Both sides are canonicalised first (absolute, cleaned,
+// symlinks resolved, case-folded where the filesystem is), and containment is
+// a path-segment test rather than a string prefix, so "~/.ssh" blocks
+// "/home/u/.ssh/id_rsa", a symlink pointing into it, and "C:\USERS\U\.SSH",
+// while leaving "/home/u/.sshfoo" alone.
 func isBlockedPath(filePath string, blockedPaths []string) bool {
-	resolved, _ := filepath.Abs(filePath)
+	if len(blockedPaths) == 0 {
+		return false
+	}
+	target := canonicalPath(filePath)
 	for _, bp := range blockedPaths {
-		abs, _ := filepath.Abs(bp)
-		if strings.HasPrefix(resolved, abs) {
+		if strings.TrimSpace(bp) == "" {
+			continue
+		}
+		if pathWithin(target, canonicalPath(bp)) {
 			return true
 		}
 	}
@@ -477,47 +488,9 @@ func makeCleanupCapturesHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, fmt.Errorf("cutoff must be in the past")
 		}
 
-		captureDir := cfg.Awareness.CaptureDir
-		filesDeleted := 0
-		dirsRemoved := 0
-
-		entries, err := os.ReadDir(captureDir)
+		filesDeleted, dirsRemoved, err := deleteCapturesBefore(cfg.Awareness.CaptureDir, cutoff)
 		if err != nil {
-			if os.IsNotExist(err) {
-				return &RPCResult{Result: map[string]any{"files_deleted": 0, "dirs_removed": 0}}, nil
-			}
-			return nil, fmt.Errorf("read capture dir: %w", err)
-		}
-
-		for _, dateEntry := range entries {
-			if !dateEntry.IsDir() {
-				continue
-			}
-			dateDir := filepath.Join(captureDir, dateEntry.Name())
-			files, err := os.ReadDir(dateDir)
-			if err != nil {
-				continue
-			}
-			for _, f := range files {
-				if f.IsDir() {
-					continue
-				}
-				p := filepath.Join(dateDir, f.Name())
-				info, err := f.Info()
-				if err != nil {
-					continue
-				}
-				if info.ModTime().Before(cutoff) {
-					if err := os.Remove(p); err == nil {
-						filesDeleted++
-					}
-				}
-			}
-			if remaining, _ := os.ReadDir(dateDir); len(remaining) == 0 {
-				if err := os.Remove(dateDir); err == nil {
-					dirsRemoved++
-				}
-			}
+			return nil, err
 		}
 
 		return &RPCResult{Result: map[string]any{
@@ -784,6 +757,7 @@ func makeGetConfigHandler(cfg *SidecarConfig) RPCHandler {
 				"window_interval_ms":   cfg.Awareness.WindowIntervalMs,
 				"min_change_threshold": cfg.Awareness.MinChangeThreshold,
 				"stuck_threshold_ms":   cfg.Awareness.StuckThresholdMs,
+				"capture_ttl_hours":    cfg.Awareness.CaptureTTLHours,
 			},
 		}}, nil
 	}
@@ -870,6 +844,9 @@ func makeUpdateConfigHandler(cfg *SidecarConfig, mu sync.Locker, onReloaded func
 			}
 			if v, ok := awareness["stuck_threshold_ms"].(float64); ok {
 				cfg.Awareness.StuckThresholdMs = int(v)
+			}
+			if v, ok := awareness["capture_ttl_hours"].(float64); ok {
+				cfg.Awareness.CaptureTTLHours = int(v)
 			}
 		}
 

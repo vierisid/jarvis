@@ -19,8 +19,9 @@ func platformClipboardRead() (string, error) {
 }
 
 func platformClipboardWrite(content string) error {
-	escaped := strings.ReplaceAll(content, "'", "''")
-	_, err := runCmd("powershell", []string{"-command", fmt.Sprintf("Set-Clipboard -Value '%s'", escaped)}, "")
+	// The value travels as base64 (psquote.go), so nothing in it can end the
+	// PowerShell literal and non-ASCII text survives the console code page.
+	_, err := runCmd("powershell", []string{"-command", psUTF8Base64Expr(content) + " | Set-Clipboard"}, "")
 	return err
 }
 
@@ -31,7 +32,7 @@ func platformCaptureScreen(outputPath string) error {
 			`$bmp = New-Object System.Drawing.Bitmap($_.Bounds.Width, $_.Bounds.Height); `+
 			`$g = [System.Drawing.Graphics]::FromImage($bmp); `+
 			`$g.CopyFromScreen($_.Bounds.Location, [System.Drawing.Point]::Empty, $_.Bounds.Size); `+
-			`$bmp.Save('%s') }`, outputPath)
+			`$bmp.Save(%s) }`, psSingleQuoted(outputPath))
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	cmd := exec.CommandContext(ctx, "powershell", "-command", psScript)

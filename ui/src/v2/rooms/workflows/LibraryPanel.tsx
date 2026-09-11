@@ -167,9 +167,9 @@ export function LibraryPanel(): React.ReactElement {
                     the user cannot act on. */}
                 {lib.managed ? null : (
                   <p className="wf-lib__section-hint wf-lib__section-hint--warn">
-                    Community pieces are installed from npm and run inside the engine
-                    sandbox. They haven't been individually reviewed by Jarvis -- check
-                    each piece's source link before opting in.
+                    Community pieces are installed from npm and run with the same
+                    permissions as Jarvis itself. They haven't been individually
+                    reviewed by Jarvis -- check each piece's source link before opting in.
                   </p>
                 )}
                 {community.length === 0 ? (

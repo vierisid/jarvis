@@ -5,6 +5,7 @@ import { isWithin } from '../util/path.ts';
 import type { SidecarManager } from '../sidecar/manager.ts';
 import { PANEL_SESSION_COOKIE } from '../sidecar/panel-sessions.ts';
 import { getCookie } from '../util/cookie.ts';
+import { rejectsCrossSiteWrite } from './cross-site-guard.ts';
 
 /** Constant-time string comparison to prevent timing attacks */
 export type WSMessage = {
@@ -443,6 +444,11 @@ export class WebSocketServer {
                 'Access-Control-Allow-Headers': 'Content-Type',
               },
             });
+          }
+
+          // Cross-site write guard; see cross-site-guard.ts for the reasoning.
+          if (rejectsCrossSiteWrite(req.method, req.headers.get('sec-fetch-site'), isPublicRoute(pathname, req.method))) {
+            return Response.json({ error: 'Cross-site requests are not accepted' }, { status: 403 });
           }
 
           // Try exact match first

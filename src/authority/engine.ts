@@ -46,6 +46,27 @@ export type AuthorityDecision = {
   reason: string;
   actionCategory: ActionCategory;
   contextRule?: string;
+  /** Set when a per-orchestrator profile tightened the base decision; its label. */
+  profileLabel?: string;
+};
+
+/**
+ * Restrictions layered on top of the shared config for one orchestrator.
+ *
+ * The base decision (grants, overrides, context rules, level, governed
+ * categories) is computed exactly as before; a profile can only TIGHTEN it.
+ * It never lifts a denial and never removes an approval requirement, so a
+ * global "always allow" override still cannot let a profiled agent run an
+ * action the profile governs. Used for the background (event-driven) agent,
+ * whose prompts are built from ambient input the user never typed.
+ */
+export type AuthorityProfile = {
+  /** Human label used in decision reasons and prompt text. */
+  label?: string;
+  /** Ceiling on the effective level. Actions above it are denied outright. */
+  level_cap?: number;
+  /** Categories that require approval for this agent even when the base config allows them. */
+  governed_categories?: ActionCategory[];
 };
 
 export type AuthorityCheckParams = {
@@ -56,6 +77,8 @@ export type AuthorityCheckParams = {
   toolCategory: string;
   actionCategory: ActionCategory;
   temporaryGrants: Map<string, ActionCategory[]>;
+  /** Optional per-orchestrator restrictions; see AuthorityProfile. */
+  profile?: AuthorityProfile | null;
 };
 
 export class AuthorityEngine {
@@ -69,6 +92,14 @@ export class AuthorityEngine {
    * Core decision function — determines if an action is allowed.
    */
   checkAuthority(params: AuthorityCheckParams): AuthorityDecision {
+    const base = this.baseDecision(params);
+    return params.profile ? applyProfile(base, params.profile) : base;
+  }
+
+  /**
+   * The shared decision, before any per-orchestrator profile is applied.
+   */
+  private baseDecision(params: AuthorityCheckParams): AuthorityDecision {
     const { agentId, agentAuthorityLevel, agentRoleId, toolName, actionCategory, temporaryGrants } = params;
 
     // 1. Check temporary grants (parent escalation)
@@ -177,17 +208,22 @@ export class AuthorityEngine {
   /**
    * Generate human-readable authority rules for the system prompt.
    */
-  describeRulesForAgent(authorityLevel: number, roleId: string): string {
-    const effectiveLevel = Math.max(authorityLevel, this.config.default_level);
+  describeRulesForAgent(authorityLevel: number, roleId: string, profile?: AuthorityProfile | null): string {
+    let effectiveLevel = Math.max(authorityLevel, this.config.default_level);
+    if (profile?.level_cap !== undefined) {
+      effectiveLevel = Math.min(effectiveLevel, profile.level_cap);
+    }
     const lines: string[] = [];
 
     lines.push(`Your authority level: ${effectiveLevel}/10`);
     lines.push('');
 
-    // Governed categories
-    if (this.config.governed_categories.length > 0) {
+    // Governed categories: the shared list plus anything the profile adds.
+    const governed = new Set<ActionCategory>(this.config.governed_categories);
+    for (const cat of profile?.governed_categories ?? []) governed.add(cat);
+    if (governed.size > 0) {
       lines.push('Actions requiring user approval before execution:');
-      for (const cat of this.config.governed_categories) {
+      for (const cat of governed) {
         lines.push(`  - ${cat}`);
       }
       lines.push('');
@@ -298,4 +334,41 @@ export class AuthorityEngine {
     }
     return null;
   }
+}
+
+/**
+ * Tighten a base decision with a per-orchestrator profile. Pure: denials pass
+ * through untouched, approvals are never removed, and the profile can only
+ * add a denial (level cap) or an approval requirement (governed category).
+ */
+export function applyProfile(base: AuthorityDecision, profile: AuthorityProfile): AuthorityDecision {
+  if (!base.allowed) return base;
+  const label = profile.label ?? 'agent profile';
+  const { actionCategory } = base;
+
+  if (profile.level_cap !== undefined) {
+    const requiredLevel = AUTHORITY_REQUIREMENTS[actionCategory];
+    if (profile.level_cap < requiredLevel) {
+      return {
+        allowed: false,
+        requiresApproval: false,
+        reason: `${label}: level cap ${profile.level_cap} is below required ${requiredLevel} for ${actionCategory}`,
+        actionCategory,
+        profileLabel: label,
+      };
+    }
+  }
+
+  if (!base.requiresApproval && profile.governed_categories?.includes(actionCategory)) {
+    return {
+      allowed: true,
+      requiresApproval: true,
+      reason: `${label}: ${actionCategory} requires user approval`,
+      actionCategory,
+      contextRule: base.contextRule,
+      profileLabel: label,
+    };
+  }
+
+  return base;
 }

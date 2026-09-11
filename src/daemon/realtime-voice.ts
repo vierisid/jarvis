@@ -114,6 +114,15 @@ export class RealtimeVoiceSession {
     if (!this.closed) this.session.interrupt();
   }
 
+  /**
+   * Fired when the user starts a new utterance (server VAD), before the
+   * model responds to it. The taint-gating turn boundary for voice.
+   * Optional call: test fakes of the inner session may not implement it.
+   */
+  onUserTurnStart(cb: () => void): void {
+    this.session.onUserTurnStart?.(cb);
+  }
+
   close(): void {
     this.closed = true;
     this.session.close();

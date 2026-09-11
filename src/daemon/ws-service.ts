@@ -19,6 +19,7 @@ import { setDefaultCwd } from '../actions/tools/builtin.ts';
 import type { ApprovalRequest, ApprovalManager } from '../authority/approval.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
+import { TAINT_PROFILE_LABEL } from '../authority/taint-gating.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import { impactFromCategory, gateVoiceApprovalResolution } from '../roles/authority.ts';
 import type { ActionCategory } from '../roles/authority.ts';
@@ -1683,6 +1684,10 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
     // that never got its voice_end). handleVoiceAudio checks accumulators first,
     // so a stale one would swallow every realtime mic frame.
     this.voiceSessions.delete(ws);
+    // Voice has no turn objects: the user starting to speak is the taint
+    // gating boundary (ordered before that utterance's tool calls; the
+    // transcript event is not).
+    session.onUserTurnStart(() => orchestrator.resetRealtimeTaint());
     this.realtimeSessions.set(ws, {
       session, transport, timeout, startedAt: Date.now(),
       hosted: resolved.provider === 'usejarvis_ai',
@@ -2734,8 +2739,17 @@ function formatApprovalIntent(request: ApprovalRequest): string {
   const reason = (request.reason ?? '').trim();
 
   // `reason` is usually an imperative sentence drafted by the LLM (e.g.,
-  // "Reply to Anya — move Monday review to 3pm"). Keep it as-is when present.
-  if (reason.length > 0) return reason;
+  // "Reply to Anya, move Monday review to 3pm"). Keep it as-is when present,
+  // unless the authority engine wrote it ("... requires user approval"): then
+  // the per-tool sentence below is the headline the user needs (what will
+  // run), and the engine's reason follows it.
+  const engineReason = reason.endsWith('requires user approval') || reason.includes(TAINT_PROFILE_LABEL);
+  if (reason.length > 0 && !engineReason) return reason;
+  const synthesized = synthesizeApprovalIntent(request);
+  return engineReason ? `${synthesized} (${reason})` : synthesized;
+}
+
+function synthesizeApprovalIntent(request: ApprovalRequest): string {
 
   let args: Record<string, unknown> = {};
   try {

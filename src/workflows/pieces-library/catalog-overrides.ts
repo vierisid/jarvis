@@ -100,14 +100,17 @@ export const VERSION_PIN: Record<
 > = {
   // github 0.6 line never made it to npm even though it was in the
   // monorepo's package.json; npm tops out at 0.6.7. Force the working 0.7.
+  // Both are verified pieces, so the range is the exact vetted version like
+  // every other verified entry; the pin only exists to move off the
+  // unpublished line.
   github: {
-    versionRange: "^0.7.0",
+    versionRange: "0.7.3",
     vettedVersion: "0.7.3",
     reason: "0.6.x in monorepo never published to npm",
   },
   // telegram-bot's 0.6.x line never reached npm; latest there is 0.5.7.
   "telegram-bot": {
-    versionRange: "^0.5.0",
+    versionRange: "0.5.7",
     vettedVersion: "0.5.7",
     reason: "0.6.x not published to npm",
   },

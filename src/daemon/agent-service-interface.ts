@@ -6,4 +6,13 @@
  */
 export interface IAgentService {
   handleMessage(text: string, channel?: string): Promise<string>;
+  /**
+   * True when the most recent handleMessage turn stopped on at least one
+   * approval request instead of finishing the work. Callers that treat a
+   * turn's text as "done" (commitment executor, awareness handlers) use
+   * this to report "waiting for your approval" instead.
+   */
+  lastTurnRequestedApproval?(): boolean;
+  /** Ids of the approval requests that turn created, for callers that track outcomes. */
+  lastTurnApprovalIds?(): string[];
 }

@@ -186,6 +186,8 @@ export class RealtimeSession {
   private openCb: (() => void) | null = null;
   private closeCb: ((detail?: string) => void) | null = null;
   private speechStartedCb: (() => void) | null = null;
+  /** Separate from speechStartedCb, which the session uses for barge-in playback control. */
+  private userTurnStartCb: (() => void) | null = null;
   // Response-latency instrumentation (user-stopped → first audio).
   private turnEndedAt = 0;
   private loggedResponseLatency = false;
@@ -242,6 +244,14 @@ export class RealtimeSession {
   onClose(cb: (detail?: string) => void): void { this.closeCb = cb; }
   /** Fired when the model detects the user started speaking (barge-in). */
   onSpeechStarted(cb: () => void): void { this.speechStartedCb = cb; }
+  /**
+   * Fired when the server VAD hears the user start a new utterance. This is
+   * ordered BEFORE the response (and any tool calls) for that utterance,
+   * unlike the input transcription event, which is asynchronous and can land
+   * after the model has already started acting. Used as the taint-gating
+   * turn boundary for voice.
+   */
+  onUserTurnStart(cb: () => void): void { this.userTurnStartCb = cb; }
 
   /**
    * Connect, send session.update, and wire the transport's mic + playback.
@@ -514,6 +524,7 @@ export class RealtimeSession {
         // be refused. Should no response ever follow, the next one lifts it.
         this.userTurnOpen = true;
         this.speechStartedCb?.();
+        this.userTurnStartCb?.();
         break;
       }
       case 'response.output_item.added': {

@@ -10,8 +10,9 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
-import { writeManifest } from "./installer";
+import { writeManifest, readManifest } from "./installer";
 import { reconcilePiecesLibrary } from "./reconciler";
+import { catalogById } from "./catalog";
 
 let base: string;
 
@@ -114,6 +115,10 @@ describe("reconcilePiecesLibrary", () => {
   });
 
   test("reports drifted pieces when on-disk version differs from manifest", async () => {
+    // gmail is a verified piece: a manifest range that differs from the
+    // catalog pin would be re-pinned (and the install accepted as the new
+    // truth), so use the catalog's own range here to isolate plain drift.
+    const gmailRange = catalogById().get("gmail")!.versionRange;
     await writeManifest(
       {
         version: 1,
@@ -121,7 +126,7 @@ describe("reconcilePiecesLibrary", () => {
           {
             id: "gmail",
             npmPackage: "@activepieces/piece-gmail",
-            versionRange: "^0.12.2",
+            versionRange: gmailRange,
             resolvedVersion: "0.12.3",
             installedAt: 1,
           },
@@ -140,5 +145,27 @@ describe("reconcilePiecesLibrary", () => {
     expect(result.drifted).toHaveLength(1);
     expect(result.drifted[0]?.onDiskVersion).toBe("0.12.5");
     expect(result.drifted[0]?.piece.resolvedVersion).toBe("0.12.3");
+  });
+
+  test("re-pins a verified piece to the catalog version and records the install as the new truth", async () => {
+    const gmailRange = catalogById().get("gmail")!.versionRange;
+    await writeManifest(
+      {
+        version: 1,
+        pieces: [
+          { id: "gmail", npmPackage: "@activepieces/piece-gmail", versionRange: "^0.12.2", resolvedVersion: "0.12.9", installedAt: 1 },
+        ],
+      },
+      base,
+    );
+    const result = await reconcilePiecesLibrary({
+      base,
+      runBunInstall: async () => { fakeInstall("@activepieces/piece-gmail", gmailRange); },
+      log: () => {},
+    });
+    expect(result.drifted).toHaveLength(0);
+    const manifest = await readManifest(base);
+    expect(manifest.pieces[0]?.versionRange).toBe(gmailRange);
+    expect(manifest.pieces[0]?.resolvedVersion).toBe(gmailRange);
   });
 });

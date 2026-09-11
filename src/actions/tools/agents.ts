@@ -109,6 +109,8 @@ export async function assignPersistentAgentTask(
     data: `[Assigning task to ${agent.agent.role.name}...]`,
   });
 
+  // Same authority engine and effective profile as the parent (see
+  // delegate.ts): a background sub-agent is not a way around the gate.
   const taskId = deps.taskManager.launch({
     agent,
     task,
@@ -117,6 +119,14 @@ export async function assignPersistentAgentTask(
     toolRegistry: scopedRegistry,
     onProgress: deps.onProgress,
     onComplete: deps.onTaskComplete,
+    authority: {
+      authorityEngine: deps.orchestrator.getAuthorityEngine() ?? undefined,
+      auditTrail: deps.orchestrator.getAuditTrail() ?? undefined,
+      emergencyController: deps.orchestrator.getEmergencyController() ?? undefined,
+      temporaryGrants: deps.orchestrator.getTemporaryGrants(),
+      profile: deps.orchestrator.getEffectiveProfile(),
+      taintGating: deps.orchestrator.getTaintGating(),
+    },
   });
 
   console.log(`[ManageAgents] Assigned task ${taskId} to ${agent.agent.role.name}`);

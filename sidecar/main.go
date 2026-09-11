@@ -1,3 +1,9 @@
+// Junctions (mklink /J, no privilege needed) must resolve like symlinks so a
+// junction pointing into a blocked directory cannot walk the filesystem
+// blocklist (paths.go). Go 1.23 stopped reporting them as symlinks and
+// filepath.EvalSymlinks no longer follows them; this restores that.
+//go:debug winsymlink=0
+
 package main
 
 import (
@@ -122,6 +128,11 @@ Usage:
 	if err != nil {
 		log.Fatalf("[sidecar] Failed to load config: %v", err)
 	}
+
+	// Screenshot retention runs from here, not only from the screen observer,
+	// so it applies with the brain offline and with awareness switched off
+	// (the files may be left from an earlier session).
+	startCaptureRetention(cfg)
 
 	if *token != "" {
 		// Same contract as the setup/settings forms (verify_token.go): prove

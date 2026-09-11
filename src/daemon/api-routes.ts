@@ -1573,7 +1573,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         // "simple request" that needs no preflight, so any page the user is
         // browsing could pop TCC prompts. Demanding a JSON content type forces
         // a preflight, which the configured allow-origin then bounds; the
-        // Sec-Fetch-Site check catches a browser that sends it.
+        // Sec-Fetch-Site check catches a browser that sends it. (The request
+        // router now applies a Sec-Fetch-Site guard to every non-GET API
+        // route, comms/cross-site-guard.ts; this one stays as defence in
+        // depth for the route where the effect is a desktop prompt.)
         if (!(req.headers.get('content-type') ?? '').toLowerCase().includes('application/json')) {
           return error('Content-Type: application/json required', 415);
         }
@@ -3585,7 +3588,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/authority/config': {
       GET: () => {
         if (!ctx.authorityEngine) return json({});
-        return json(ctx.authorityEngine.getConfig());
+        // `background` is not part of the engine's config: it is the extra
+        // restriction set the background agent's profile is built from.
+        return json({ ...ctx.authorityEngine.getConfig(), background: ctx.config.authority?.background });
       },
       POST: async (req: Request) => {
         if (!ctx.authorityEngine) return error('Authority engine not configured', 500);
@@ -3602,7 +3607,28 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
           ctx.authorityEngine.updateConfig(currentConfig);
 
-          // Persist to config.yaml
+          // Background-agent restrictions: validated by buildBackgroundProfile
+          // on apply; here only the shape is checked so a bad body is a 400.
+          let background = ctx.config.authority?.background;
+          if (body.background !== undefined) {
+            const b = body.background as Record<string, unknown> | null;
+            if (b === null || typeof b !== 'object' || Array.isArray(b)) return error('background must be an object');
+            if (b.governed_categories !== undefined && !Array.isArray(b.governed_categories)) {
+              return error('background.governed_categories must be a list');
+            }
+            if (b.level_cap !== undefined && typeof b.level_cap !== 'number') {
+              return error('background.level_cap must be a number');
+            }
+            // Merge over the stored value so sending one field keeps the other.
+            background = {
+              ...background,
+              ...(b.governed_categories !== undefined ? { governed_categories: (b.governed_categories as unknown[]).map(String) } : {}),
+              ...(b.level_cap !== undefined ? { level_cap: b.level_cap as number } : {}),
+            };
+          }
+
+          // Persist to the user settings store; saving the section triggers
+          // the 'authority' reload applier, which rebuilds the background profile.
           const { saveUserSection } = await import('./user-settings.ts');
           const freshConfig = ctx.config;
           freshConfig.authority = {
@@ -3612,10 +3638,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             overrides: currentConfig.overrides,
             context_rules: currentConfig.context_rules,
             learning: currentConfig.learning,
+            ...(background !== undefined ? { background } : {}),
           };
           saveUserSection('authority', freshConfig.authority);
 
-          return json({ ok: true, config: currentConfig });
+          return json({ ok: true, config: { ...currentConfig, background } });
         } catch (err) {
           return error('Invalid request body');
         }

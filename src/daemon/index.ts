@@ -44,12 +44,15 @@ import { AuthorityEngine } from "../authority/engine.ts";
 import { ApprovalManager } from "../authority/approval.ts";
 import { AuditTrail } from "../authority/audit.ts";
 import { impactFromCategory } from "../roles/authority.ts";
+import { wrapUntrusted } from "../roles/untrusted.ts";
 import { SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
 import { containsWakePhrase, hasSpokenContent, wakeCommandFrom } from "../voice/wake-phrase.ts";
 import { AuthorityLearner } from "../authority/learning.ts";
 import { EmergencyController } from "../authority/emergency.ts";
 import { ApprovalDelivery } from "../authority/approval-delivery.ts";
 import { DeferredExecutor } from "../authority/deferred-executor.ts";
+import { buildBackgroundProfile } from "../authority/background-profile.ts";
+import { buildTaintGating } from "../authority/taint-gating.ts";
 import { applyApprovalDecision } from "./approval-decision.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 import { SidecarManager, buildEnrollmentUrls } from "../sidecar/manager.ts";
@@ -3982,6 +3985,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         context_rules: (a.context_rules ?? current.context_rules) as any,
         learning: a.learning ?? current.learning,
       });
+      // The background agent's extra restrictions live beside the shared
+      // config; rebuild its profile so a dashboard/file edit applies live.
+      bgAgent?.setAuthorityProfile(buildBackgroundProfile(a.background));
+      agentService.getOrchestrator().setTaintGating(buildTaintGating(a.taint_gating));
     });
 
     // awareness — the service snapshots its sub-config at construction; the
@@ -4233,6 +4240,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     orchestrator.setDeferredExecutor(deferredExecutor);
     orchestrator.setAuditTrail(auditTrail);
     orchestrator.setEmergencyController(emergencyController);
+    // Within a turn that read outside content, machine-changing actions
+    // stop for approval. The level itself is untouched.
+    orchestrator.setTaintGating(buildTaintGating(jarvisConfig.authority?.taint_gating));
 
     // Wire approval callback: when orchestrator needs approval, deliver to user
     orchestrator.setApprovalCallback((request) => {
@@ -4845,6 +4855,23 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // 10b. Background agent (needs LLM providers from agentService.start())
       const bgAgentService = new BackgroundAgentService(jarvisConfig, agentService.getLLMManager());
       bgAgentService.setResearchQueue(researchQueue);
+      // Same engine, approvals, audit and kill switch as the main agent, plus
+      // the background profile: this agent acts on ambient input (screen
+      // text, email snippets, clipboard) with no user turn, so anything that
+      // changes the machine stops for approval. Wired BEFORE start() so no
+      // reaction can ever run against an ungated orchestrator.
+      bgAgentService.setAuthority({
+        engine: authorityEngine,
+        profile: buildBackgroundProfile(jarvisConfig.authority?.background),
+        approvalManager,
+        auditTrail,
+        emergencyController,
+        onApprovalNeeded: (request) => {
+          approvalDelivery.deliver(request).catch(err =>
+            console.error('[Daemon] Background approval delivery error:', err)
+          );
+        },
+      });
       await bgAgentService.start();
       bgAgent = bgAgentService;
       console.log('[Daemon] Background agent started (separate browser for heartbeat/reactions)');
@@ -4852,6 +4879,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // 10c. Wire reactor + executor to background agent
       reactor.setAgentService(bgAgentService);
       executor.setAgentService(bgAgentService);
+      // Commitments parked on a background approval close from its outcome.
+      executor.setApprovalLookup((id) => approvalManager.getRequest(id));
 
       // 10d. Wire executor broadcast (needs wsServer running) and start
       executor.setBroadcast((msg) => wsService.getServer().broadcast(msg));
@@ -4942,15 +4971,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               if (errorText.length > 5) {
                 console.log(`[Daemon] Auto-researching error: "${errorText.slice(0, 80)}"`);
                 bgAgent.handleMessage(
-                  `The user is seeing this error in ${appName}: "${errorText}". ` +
+                  `The user is seeing an error in ${appName}. The error text, read from their screen:\n` +
+                  wrapUntrusted(errorText, 'screen text (OCR)') + '\n\n' +
                   `Search the web and vault for a solution. Be concise and actionable. ` +
                   `Start your response with the fix, not a question.`,
                   'awareness'
                 ).then(solution => {
                   if (solution && solution.length > 10) {
-                    const solutionText = `**Fix for error in ${appName}:**\n${solution.slice(0, 500)}`;
+                    // A turn that stopped on an approval request is not a fix yet.
+                    const awaiting = bgAgent?.lastTurnRequestedApproval() ?? false;
+                    const heading = awaiting ? `Needs your approval (error in ${appName})` : `Fix for error in ${appName}`;
+                    const solutionText = `**${heading}:**\n${solution.slice(0, 500)}`;
                     wsService.broadcastNotification(solutionText, 'urgent');
-                    sendDesktopNotification(`JARVIS: Fix for ${appName}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
+                    sendDesktopNotification(`JARVIS: ${heading}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
                     // Strip markdown for TTS — voice should sound natural
                     const voiceText = solution
                       .replace(/#{1,6}\s*/g, '')
@@ -4964,7 +4997,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                       .slice(0, 300);
                     console.log(`[Daemon] Speaking error solution (${voiceText.length} chars): "${voiceText.slice(0, 80)}..."`);
                     wsService.broadcastProactiveVoice(
-                      `I found a fix for the error in ${appName}. ${voiceText}`
+                      awaiting
+                        ? `I need your approval to fix the error in ${appName}. ${voiceText}`
+                        : `I found a fix for the error in ${appName}. ${voiceText}`
                     ).then(() =>
                       console.log('[Daemon] Error solution TTS delivered')
                     ).catch(err =>
@@ -4988,15 +5023,18 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 console.log(`[Daemon] Deep-researching struggle in ${sAppName} (score: ${compositeScore.toFixed(2)})`);
                 bgAgent.handleMessage(
                   `The user has been struggling in ${sAppName} (${appCategory}) for several minutes. ` +
-                  `Here's what's on their screen:\n"${ocrPreview.slice(0, 800)}"\n\n` +
+                  `Here's what's on their screen:\n` +
+                  wrapUntrusted(ocrPreview.slice(0, 800), 'screen text (OCR)') + '\n\n' +
                   `Search for solutions to any errors visible. Check documentation for the relevant language/framework. ` +
                   `Provide a specific, actionable fix. Start with the solution, not a question.`,
                   'awareness'
                 ).then(solution => {
                   if (solution && solution.length > 10) {
-                    const solutionText = `**Help for ${sAppName}:**\n${solution.slice(0, 500)}`;
+                    const awaiting = bgAgent?.lastTurnRequestedApproval() ?? false;
+                    const heading = awaiting ? `Needs your approval (${sAppName})` : `Help for ${sAppName}`;
+                    const solutionText = `**${heading}:**\n${solution.slice(0, 500)}`;
                     wsService.broadcastNotification(solutionText, 'urgent');
-                    sendDesktopNotification(`JARVIS: Help for ${sAppName}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
+                    sendDesktopNotification(`JARVIS: ${heading}`, solution.slice(0, 200), { urgency: 'critical', expireMs: 15000 });
                     const voiceText = solution
                       .replace(/#{1,6}\s*/g, '')
                       .replace(/\*{1,2}([^*]+)\*{1,2}/g, '$1')
@@ -5008,7 +5046,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                       .trim()
                       .slice(0, 300);
                     wsService.broadcastProactiveVoice(
-                      `I found something that might help with what you're working on in ${sAppName}. ${voiceText}`
+                      awaiting
+                        ? `I need your approval to help with what you're working on in ${sAppName}. ${voiceText}`
+                        : `I found something that might help with what you're working on in ${sAppName}. ${voiceText}`
                     ).catch(err =>
                       console.error('[Daemon] Struggle solution TTS failed:', err instanceof Error ? err.message : err)
                     );

@@ -22,18 +22,28 @@ export const TOOL_ACTION_MAP: Record<string, ActionCategory> = {
   browser_click: 'access_browser',
   browser_type: 'access_browser',
   browser_scroll: 'access_browser',
-  browser_evaluate: 'access_browser',
+  // Arbitrary JavaScript in the page is code execution, not browsing.
+  browser_evaluate: 'execute_command',
   browser_screenshot: 'access_browser',
+  // Sends a local file out: a write to the outside world.
+  browser_upload_file: 'write_data',
 
-  // Desktop
-  desktop_list_windows: 'control_app',
+  // Desktop. Reads are reads; only tools that act on the desktop are
+  // control_app, so a read cannot make its own follow-up steps gated.
+  desktop_list_windows: 'read_data',
   desktop_focus_window: 'control_app',
-  desktop_snapshot: 'control_app',
+  desktop_snapshot: 'read_data',
+  desktop_find_element: 'read_data',
   desktop_click: 'control_app',
   desktop_type: 'control_app',
   desktop_press_keys: 'control_app',
   desktop_launch_app: 'control_app',
-  desktop_screenshot: 'control_app',
+  desktop_screenshot: 'read_data',
+
+  // Small writes that used to fall through to read_data.
+  set_clipboard: 'write_data',
+  create_document: 'write_data',
+  manage_goals: 'write_data',
 
   // Delegation
   delegate_task: 'spawn_agent',

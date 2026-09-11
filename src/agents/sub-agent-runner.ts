@@ -13,10 +13,12 @@ import type { LLMMessage, LLMResponse, LLMToolCall, LLMTool } from '../llm/provi
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { toolDefToLLMTool, BUILTIN_TOOLS } from '../actions/tools/builtin.ts';
 import type { ActionCategory } from '../roles/authority.ts';
-import type { AuthorityEngine } from '../authority/engine.ts';
+import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { getActionForTool } from '../authority/tool-action-map.ts';
+import { markUntrustedToolResult, isTaintSourceTool } from '../roles/untrusted.ts';
+import { mergeProfiles, taintProfile, type TaintGating } from '../authority/taint-gating.ts';
 
 const MAX_TOOL_ITERATIONS = 100; // Lower than primary's 200 — sub-agents should be focused
 const MAX_TOOL_RESULT_CHARS = 6000;
@@ -69,6 +71,10 @@ export type RunSubAgentOptions = {
   auditTrail?: AuditTrail;
   emergencyController?: EmergencyController;
   temporaryGrants?: Map<string, ActionCategory[]>;
+  /** The parent's effective profile (static + taint); tighten-only. */
+  profile?: AuthorityProfile | null;
+  /** Taint gating for what the sub-agent itself reads during its run. */
+  taintGating?: TaintGating | null;
 };
 
 /**
@@ -126,11 +132,18 @@ async function executeTool(
     auditTrail?: AuditTrail;
     emergencyController?: EmergencyController;
     temporaryGrants?: Map<string, ActionCategory[]>;
+    profile?: AuthorityProfile | null;
+    taintGating?: TaintGating | null;
+    /** Outside content the sub-agent read so far in this run. */
+    taint: Set<string>;
   }
 ): Promise<string> {
   // Authority gate (if engine provided)
   if (authorityCtx) {
-    const { agent, engine, auditTrail, emergencyController, temporaryGrants } = authorityCtx;
+    const { agent, engine, auditTrail, emergencyController, temporaryGrants, taintGating, taint } = authorityCtx;
+    // The parent's restrictions plus whatever this run has read itself: a
+    // browsing specialist that read a page cannot then write or run clean.
+    const profile = mergeProfiles(authorityCtx.profile ?? null, taintProfile(taintGating ?? null, taint));
 
     // Emergency check
     if (emergencyController && !emergencyController.canExecute()) {
@@ -148,6 +161,7 @@ async function executeTool(
       toolCategory: tool?.category ?? 'unknown',
       actionCategory,
       temporaryGrants: temporaryGrants ?? new Map(),
+      profile: profile ?? null,
     });
 
     auditTrail?.log({
@@ -171,13 +185,15 @@ async function executeTool(
 
   try {
     const raw = await registry.execute(toolCall.name, toolCall.arguments);
+    const category = registry.get(toolCall.name)?.category;
+    if (authorityCtx && isTaintSourceTool(toolCall.name, category)) authorityCtx.taint.add(toolCall.name);
     let result: string = typeof raw === 'string' ? raw : JSON.stringify(raw);
 
     if (result.length > MAX_TOOL_RESULT_CHARS) {
       result = result.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${result.length} chars)`;
     }
 
-    return result;
+    return markUntrustedToolResult(toolCall.name, category, result);
   } catch (err) {
     return `Error executing ${toolCall.name}: ${err instanceof Error ? err.message : String(err)}`;
   }
@@ -203,6 +219,8 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     auditTrail,
     emergencyController,
     temporaryGrants,
+    profile,
+    taintGating,
   } = opts;
 
   // Build authority context if engine provided
@@ -212,6 +230,9 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     auditTrail,
     emergencyController,
     temporaryGrants,
+    profile,
+    taintGating,
+    taint: new Set<string>(),
   } : undefined;
 
   const agentName = agent.agent.role.name;

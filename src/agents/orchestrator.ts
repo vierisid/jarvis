@@ -9,7 +9,24 @@ import { AgentHierarchy } from './hierarchy.ts';
 import { ToolRegistry, type ToolDefinition, isToolResult } from '../actions/tools/registry.ts';
 import { toolDefToLLMTool } from '../actions/tools/builtin.ts';
 import type { ActionCategory } from '../roles/authority.ts';
-import type { AuthorityEngine } from '../authority/engine.ts';
+import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
+import { markUntrustedToolResult, markUntrustedToolBlocks, isTaintSourceTool } from '../roles/untrusted.ts';
+import { taintProfile, mergeProfiles, TAINT_PROFILE_LABEL, type TaintGating } from '../authority/taint-gating.ts';
+import { AsyncLocalStorage } from 'node:async_hooks';
+
+/**
+ * Rebuild a turn's taint from a resumed conversation: every tool call the
+ * assistant made earlier in it that reads outside content counts, whether or
+ * not its result was wrapped (delegate_task's is not).
+ */
+export function seedTaintFromHistory(history: LLMMessage[], taint: Set<string>, registry: ToolRegistry | null): void {
+  for (const m of history) {
+    if (m.role !== 'assistant' || !m.tool_calls) continue;
+    for (const tc of m.tool_calls) {
+      if (isTaintSourceTool(tc.name, registry?.get(tc.name)?.category)) taint.add(tc.name);
+    }
+  }
+}
 import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
@@ -141,6 +158,22 @@ export class AgentOrchestrator {
   private emergencyController: EmergencyController | null = null;
   private temporaryGrants: Map<string, ActionCategory[]> = new Map();
   private onApprovalNeeded: ((request: ApprovalRequest) => void) | null = null;
+  /** Per-orchestrator restrictions passed into every authority check. */
+  private authorityProfile: AuthorityProfile | null = null;
+  /** Taint gating config (main agent); null = off. */
+  private taintGating: TaintGating | null = null;
+  /**
+   * Per-turn taint. Each turn owns a Set that executeTool enters via
+   * AsyncLocalStorage, so concurrent turns (a Telegram message alongside a
+   * dashboard stream, two dispatched tasks) neither see nor reset each
+   * other's taint, and a tool running inside the turn (delegate_task) can
+   * read the parent turn's taint through getEffectiveProfile().
+   */
+  private taintStore = new AsyncLocalStorage<Set<string>>();
+  /** Realtime voice has no turn objects; its taint lives per session here. */
+  private realtimeTaint: Set<string> = new Set();
+  /** Logged once: tools ran with no authority engine wired (tests, embedded use). */
+  private warnedNoAuthority = false;
 
   constructor() {
     this.hierarchy = new AgentHierarchy();
@@ -202,6 +235,87 @@ export class AgentOrchestrator {
 
   setApprovalCallback(cb: (request: ApprovalRequest) => void): void {
     this.onApprovalNeeded = cb;
+  }
+
+  /**
+   * Restrictions layered on the shared engine for THIS orchestrator only.
+   * The engine and its config stay the single source of truth (dashboard
+   * edits, overrides, emergency state all still apply); the profile can only
+   * tighten the outcome. Pass null to clear.
+   */
+  setAuthorityProfile(profile: AuthorityProfile | null): void {
+    this.authorityProfile = profile;
+  }
+
+  getAuthorityProfile(): AuthorityProfile | null {
+    return this.authorityProfile;
+  }
+
+  /**
+   * Audit-trail name. Both orchestrators run the same role, so the profile
+   * label is what tells a background-originated action from a chat one.
+   */
+  private auditAgentName(roleName: string): string {
+    const label = this.authorityProfile?.label;
+    return label ? `${roleName} (${label})` : roleName;
+  }
+
+  // --- Taint gating ---
+
+  /** Enable or disable taint gating; see src/authority/taint-gating.ts. */
+  setTaintGating(gating: TaintGating | null): void {
+    this.taintGating = gating;
+  }
+
+  /** The taint set of the turn currently executing, or the realtime session's. */
+  private currentTaint(): Set<string> {
+    return this.taintStore.getStore() ?? this.realtimeTaint;
+  }
+
+  /** Sources of outside content read so far in the calling turn (or voice session). */
+  getTurnTaint(): ReadonlySet<string> {
+    return this.currentTaint();
+  }
+
+  /** Voice sessions have no turn objects: the WS layer calls this on each final user transcript. */
+  resetRealtimeTaint(): void {
+    this.realtimeTaint.clear();
+  }
+
+  private noteTaint(toolName: string, category: string | undefined): void {
+    if (isTaintSourceTool(toolName, category)) this.currentTaint().add(toolName);
+  }
+
+  /**
+   * Static profile plus, while the calling turn is tainted, the taint
+   * profile. Tighten-only. Public so tools that spawn sub-agents inside a
+   * turn (delegate_task, manage_agents) can hand the sub-agent the same
+   * restrictions the parent is under.
+   */
+  getEffectiveProfile(): AuthorityProfile | null {
+    return mergeProfiles(this.authorityProfile, taintProfile(this.taintGating, this.currentTaint()));
+  }
+
+  // --- Accessors for tools that run sub-agents ---
+
+  getAuthorityEngine(): AuthorityEngine | null {
+    return this.authorityEngine;
+  }
+
+  getAuditTrail(): AuditTrail | null {
+    return this.auditTrail;
+  }
+
+  getEmergencyController(): EmergencyController | null {
+    return this.emergencyController;
+  }
+
+  getTemporaryGrants(): Map<string, ActionCategory[]> {
+    return this.temporaryGrants;
+  }
+
+  getTaintGating(): TaintGating | null {
+    return this.taintGating;
   }
 
   /**
@@ -277,6 +391,7 @@ export class AgentOrchestrator {
         toolCategory: 'delegation',
         actionCategory: 'spawn_agent',
         temporaryGrants: this.temporaryGrants,
+        profile: this.getEffectiveProfile(),
       });
       if (!decision.allowed) {
         throw new Error(`Authority denied spawning a sub-agent: ${decision.reason}`);
@@ -383,6 +498,10 @@ export class AgentOrchestrator {
       throw new Error('No primary agent exists. Create one first.');
     }
 
+    // A message from the user is the turn boundary for taint gating: this
+    // turn's reads gate this turn's later calls and nothing else.
+    const turnTaint = new Set<string>();
+
     // Add user message to persistent history
     primary.addMessage('user', message);
 
@@ -416,7 +535,7 @@ export class AgentOrchestrator {
 
         // Execute each tool and add results
         for (const tc of llmResponse.tool_calls) {
-          const result = await this.executeTool(tc);
+          const result = await this.executeTool(tc, undefined, turnTaint);
           messages.push({
             role: 'tool',
             content: result,
@@ -490,6 +609,13 @@ export class AgentOrchestrator {
       return { kind: 'completed', text: '[No LLM configured]', conversation: [] };
     }
 
+    // Fresh call or a resume with the user's reply. On a resume the earlier
+    // tool results are still in the history, and a page could have said
+    // "ask first, then run it", so the taint is rebuilt from the history
+    // instead of starting clean.
+    const turnTaint = new Set<string>();
+    if (opts.history) seedTaintFromHistory(opts.history, turnTaint, this.toolRegistry);
+
     // Build the running conversation buffer. On a fresh call: system + user
     // message. On resume: prior conversation + a new user message (the
     // clarification reply).
@@ -560,7 +686,7 @@ export class AgentOrchestrator {
         });
 
         for (const tc of llmResponse.tool_calls) {
-          const result = await this.executeTool(tc, opts.signal);
+          const result = await this.executeTool(tc, opts.signal, turnTaint);
           toolsExecuted++;
           messages.push({
             role: 'tool',
@@ -684,6 +810,10 @@ export class AgentOrchestrator {
     if (!primary) {
       throw new Error('No primary agent exists. Create one first.');
     }
+
+    // A message from the user is the turn boundary for taint gating: this
+    // turn's reads gate this turn's later calls and nothing else.
+    const turnTaint = new Set<string>();
 
     // Add user message to persistent history
     primary.addMessage('user', message);
@@ -819,7 +949,7 @@ export class AgentOrchestrator {
 
       // Execute each tool and add results
       for (const tc of toolCalls) {
-        const result = await this.executeTool(tc);
+        const result = await this.executeTool(tc, undefined, turnTaint);
         messages.push({
           role: 'tool',
           content: result,
@@ -900,7 +1030,17 @@ export class AgentOrchestrator {
    * `signal` (task-tier calls) lets a cancelled task break out of the
    * blocking approval wait instead of holding the dispatch open.
    */
-  private async executeTool(toolCall: LLMToolCall, signal?: AbortSignal): Promise<string | ContentBlock[]> {
+  /**
+   * `taint` is required so a tool loop cannot forget its turn set (tsc
+   * catches a missed call site); the fallback only guards an untyped caller.
+   */
+  private async executeTool(toolCall: LLMToolCall, signal: AbortSignal | undefined, taint: Set<string>): Promise<string | ContentBlock[]> {
+    // Enter the turn's taint set for the duration of the call so noteTaint,
+    // getEffectiveProfile and any sub-agent spawned by the tool see it.
+    return this.taintStore.run(taint ?? new Set<string>(), () => this.executeToolInner(toolCall, signal));
+  }
+
+  private async executeToolInner(toolCall: LLMToolCall, signal?: AbortSignal): Promise<string | ContentBlock[]> {
     if (!this.toolRegistry) {
       return `Error: No tool registry configured`;
     }
@@ -929,6 +1069,17 @@ export class AgentOrchestrator {
 
     // 2. Authority check
     const primary = this.getPrimary();
+    if (!this.authorityEngine && !this.warnedNoAuthority) {
+      // Every production orchestrator must be wired (see daemon/index.ts).
+      // An unwired one executes every tool call ungated and unaudited, which
+      // is what the background agent silently did before it got a profile.
+      this.warnedNoAuthority = true;
+      console.warn(`[Orchestrator] Executing "${toolCall.name}" with NO authority engine wired: tool calls are ungated and unaudited`);
+    }
+    if (this.authorityEngine && !primary) {
+      // Fail closed: a wired gate with nobody to evaluate for must not run the tool.
+      return `[AUTHORITY DENIED] Cannot execute ${toolCall.name}: no primary agent is active.`;
+    }
     if (this.authorityEngine && primary) {
       const tool = this.toolRegistry.get(toolCall.name);
       const actionCategory = getActionForTool(toolCall.name, tool?.category ?? 'unknown');
@@ -941,6 +1092,7 @@ export class AgentOrchestrator {
         toolCategory: tool?.category ?? 'unknown',
         actionCategory,
         temporaryGrants: this.temporaryGrants,
+        profile: this.getEffectiveProfile(),
       });
 
       // Determine decision type for audit
@@ -951,7 +1103,7 @@ export class AgentOrchestrator {
       // 3. Log to audit trail
       this.auditTrail?.log({
         agent_id: primary.id,
-        agent_name: primary.agent.role.name,
+        agent_name: this.auditAgentName(primary.agent.role.name),
         tool_name: toolCall.name,
         action_category: actionCategory,
         authority_decision: decisionType,
@@ -976,7 +1128,7 @@ export class AgentOrchestrator {
         const inline = this.deferredExecutor !== null;
         const request = this.approvalManager.createRequest({
           agentId: primary.id,
-          agentName: primary.agent.role.name,
+          agentName: this.auditAgentName(primary.agent.role.name),
           toolName: toolCall.name,
           toolArguments: toolCall.arguments,
           actionCategory,
@@ -1001,16 +1153,22 @@ export class AgentOrchestrator {
           signal,
         });
 
+        // Approved results are still outside content when the tool reads it.
+        const frame = (text: string): string => {
+          this.noteTaint(toolCall.name, tool?.category);
+          return markUntrustedToolResult(toolCall.name, tool?.category, text);
+        };
+
         switch (resolved.status) {
           case 'approved':
             // The approve endpoints skip execution for inline requests; we
             // are the single executor. executeApproved handles markExecuted,
             // audit, and approval learning.
-            return await this.deferredExecutor!.executeApproved(request.id);
+            return frame(await this.deferredExecutor!.executeApproved(request.id));
           case 'executed':
             // Another path already ran it (shouldn't happen for inline
             // requests; tolerated for robustness). Surface its result.
-            return resolved.execution_result ?? `[EXECUTED] ${toolCall.name} completed.`;
+            return frame(resolved.execution_result ?? `[EXECUTED] ${toolCall.name} completed.`);
           case 'denied':
             return `[APPROVAL DENIED] The user denied permission to execute ${toolCall.name}. ` +
                    `Do not retry the action. Briefly tell the user it was not performed.`;
@@ -1028,10 +1186,10 @@ export class AgentOrchestrator {
             if (!this.approvalManager.demoteToDeferred(request.id)) {
               const recheck = this.approvalManager.getRequest(request.id);
               if (recheck?.status === 'approved') {
-                return await this.deferredExecutor!.executeApproved(request.id);
+                return frame(await this.deferredExecutor!.executeApproved(request.id));
               }
               if (recheck?.status === 'executed') {
-                return recheck.execution_result ?? `[EXECUTED] ${toolCall.name} completed.`;
+                return frame(recheck.execution_result ?? `[EXECUTED] ${toolCall.name} completed.`);
               }
               if (recheck?.status === 'denied') {
                 return `[APPROVAL DENIED] The user denied permission to execute ${toolCall.name}. ` +
@@ -1045,6 +1203,21 @@ export class AgentOrchestrator {
                    `if approved later, it will be executed and the user will be notified.`;
           }
         }
+      } else if (decision.requiresApproval) {
+        // Fail closed. A gate that asks for approval with nobody to ask must
+        // not fall through to execution.
+        this.auditTrail?.log({
+          agent_id: primary.id,
+          agent_name: this.auditAgentName(primary.agent.role.name),
+          tool_name: toolCall.name,
+          action_category: actionCategory,
+          authority_decision: 'approval_required',
+          approval_id: null,
+          executed: false,
+          execution_time_ms: null,
+        });
+        return `[APPROVAL UNAVAILABLE] ${toolCall.name} (${actionCategory}) requires user approval but no approval channel is configured. ` +
+               `The action was not performed; tell the user what you wanted to do.`;
       }
     }
 
@@ -1057,9 +1230,13 @@ export class AgentOrchestrator {
       // Update audit entry with execution time (for allowed actions)
       // We already logged above; for simplicity we log execution separately if needed
 
+      const category = this.toolRegistry.get(toolCall.name)?.category;
+      // From here on this turn has read outside content (if the tool does).
+      this.noteTaint(toolCall.name, category);
+
       // Multi-modal result (e.g. screenshot with image data)
       if (isToolResult(raw)) {
-        return raw.content.map(guardImageSize);
+        return markUntrustedToolBlocks(toolCall.name, category, raw.content.map(guardImageSize));
       }
 
       // Plain text result
@@ -1070,7 +1247,8 @@ export class AgentOrchestrator {
         result = result.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${result.length} chars)`;
       }
 
-      return result;
+      // Outside content (pages, screen text, clipboard, files) is framed as data.
+      return markUntrustedToolResult(toolCall.name, category, result);
     } catch (err) {
       return `Error executing ${toolCall.name}: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -1137,6 +1315,7 @@ export class AgentOrchestrator {
         toolCategory: tool?.category ?? 'unknown',
         actionCategory,
         temporaryGrants: this.temporaryGrants,
+        profile: this.getEffectiveProfile(),
       });
 
       if (!decision.allowed) {
@@ -1144,22 +1323,34 @@ export class AgentOrchestrator {
         return `[AUTHORITY DENIED] Cannot execute ${name}: ${decision.reason}.`;
       }
 
-      // requiresApproval -> auto-approved in realtime; audited as such.
+      // Taint-gated approvals cannot be auto-approved: the whole point is
+      // that content the session read must not turn into an action without
+      // the user. Refuse, and let the model say so out loud.
+      if (decision.requiresApproval && decision.profileLabel?.includes(TAINT_PROFILE_LABEL)) {
+        logAudit('denied', false);
+        return `[BLOCKED] ${name} (${actionCategory}) was not run: this session read outside content (${[...this.realtimeTaint].join(', ')}) and voice cannot approve it. ` +
+               `Tell the user what you wanted to do and ask them to say it again as a fresh request.`;
+      }
+
+      // Other requiresApproval -> auto-approved in realtime; audited as such.
       logAudit(decision.requiresApproval ? 'approval_required' : 'allowed', true);
     }
 
     // 4. Execute.
     try {
       const raw = await this.toolRegistry.execute(name, args);
+      const category = tool?.category;
+      this.noteTaint(name, category);
       if (isToolResult(raw)) {
         // Realtime function output is text; flatten non-text blocks to a tag.
-        return raw.content.map((c) => (c.type === 'text' ? c.text : `[${c.type}]`)).join('\n');
+        const flat = raw.content.map((c) => (c.type === 'text' ? c.text : `[${c.type}]`)).join('\n');
+        return markUntrustedToolResult(name, category, flat);
       }
       let result = typeof raw === 'string' ? raw : JSON.stringify(raw);
       if (result.length > MAX_TOOL_RESULT_CHARS) {
         result = result.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${result.length} chars)`;
       }
-      return result;
+      return markUntrustedToolResult(name, category, result);
     } catch (err) {
       return `Error executing ${name}: ${err instanceof Error ? err.message : String(err)}`;
     }

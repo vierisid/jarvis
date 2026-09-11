@@ -10,7 +10,7 @@
  *   aggressive: 5s cancel window
  */
 
-import { getDueCommitments, getUpcoming, updateCommitmentStatus } from '../vault/commitments.ts';
+import { getDueCommitments, getUpcoming, updateCommitmentStatus, getCommitment } from '../vault/commitments.ts';
 import type { Commitment } from '../vault/commitments.ts';
 import type { IAgentService } from './agent-service-interface.ts';
 import type { WSMessage } from '../comms/websocket.ts';
@@ -35,6 +35,21 @@ const CANCEL_WINDOW: Record<Aggressiveness, number> = {
   aggressive: 5_000,
 };
 
+/** Minimal view of an approval request the executor needs to settle a commitment. */
+export type ApprovalLookup = (requestId: string) => { status: string; execution_result: string | null } | null;
+
+/** Result prefix of a commitment parked on approval requests. */
+const AWAITING_PREFIX = 'Awaiting user approval ';
+const AWAITING_RE = /^Awaiting user approval \[req:([^\]]*)\]/;
+
+/** Request ids encoded in a parked commitment's result, or null if not parked. */
+export function parseParkedRequestIds(result: string | null | undefined): string[] | null {
+  if (!result) return null;
+  const m = AWAITING_RE.exec(result);
+  if (!m) return null;
+  return m[1]!.split(',').map((s) => s.trim()).filter((s) => s.length > 0);
+}
+
 export class CommitmentExecutor {
   private agentService: IAgentService | null = null;
   private broadcast: BroadcastFn | null = null;
@@ -43,6 +58,9 @@ export class CommitmentExecutor {
   private notifiedIds: Set<string> = new Set();
   private pending: Map<string, ExecutionState> = new Map();
   private executedIds: Set<string> = new Set();
+  /** Commitments parked on approval requests, keyed by commitment id. */
+  private awaitingApproval: Map<string, { what: string; requestIds: string[] }> = new Map();
+  private approvalLookup: ApprovalLookup | null = null;
   private checkTimer: Timer | null = null;
   /**
    * Per-pending execution-fire timers. Replaces the global 5s polling tick:
@@ -60,6 +78,55 @@ export class CommitmentExecutor {
 
   setAgentService(agent: IAgentService): void {
     this.agentService = agent;
+  }
+
+  /** Lets the executor read approval outcomes for parked commitments. */
+  setApprovalLookup(lookup: ApprovalLookup): void {
+    this.approvalLookup = lookup;
+  }
+
+  /**
+   * Close commitments parked on approval requests once every request has a
+   * final outcome: completed if at least one executed, failed if they were
+   * all denied or expired. Runs on every check tick and can be called
+   * directly (tests, or right after an approval decision).
+   */
+  settleAwaitingApprovals(): void {
+    if (!this.approvalLookup) return;
+    for (const [commitmentId, entry] of this.awaitingApproval) {
+      try {
+        let pending = 0;
+        let executed = 0;
+        const results: string[] = [];
+        for (const id of entry.requestIds) {
+          const req = this.approvalLookup(id);
+          const status = req?.status ?? 'expired'; // a vanished row counts as expired
+          if (status === 'pending' || status === 'approved') pending += 1;
+          else if (status === 'executed') {
+            executed += 1;
+            if (req?.execution_result) results.push(req.execution_result);
+          }
+        }
+        if (pending > 0) continue;
+
+        this.awaitingApproval.delete(commitmentId);
+        // The user (dashboard, commitments tool) may have closed or cancelled
+        // it by hand in the meantime; their decision wins over the outcome.
+        const current = getCommitment(commitmentId);
+        if (!current || current.status !== 'active') continue;
+        if (executed > 0) {
+          const summary = results.join('\n').slice(0, 500) || 'Approved and executed';
+          updateCommitmentStatus(commitmentId, 'completed', summary);
+          console.log(`[Executor] Completed after approval: "${entry.what}"`);
+        } else {
+          updateCommitmentStatus(commitmentId, 'failed', 'Approval denied or expired');
+          console.log(`[Executor] Approval denied or expired: "${entry.what}"`);
+        }
+      } catch (err) {
+        // One bad row must not skip the rest of the tick.
+        console.error('[Executor] Failed to settle commitment status:', err);
+      }
+    }
   }
 
   setBroadcast(fn: BroadcastFn): void {
@@ -111,6 +178,7 @@ export class CommitmentExecutor {
    * triggers fire on transitions (not every poll).
    */
   checkAndAnnounce(): void {
+    this.settleAwaitingApprovals();
     try {
       const now = Date.now();
       const dueNow = getDueCommitments(); // when_due <= now
@@ -157,6 +225,17 @@ export class CommitmentExecutor {
         if (this.pending.has(commitment.id)) continue;
         if (this.executedIds.has(commitment.id)) continue;
         if (commitment.status === 'completed' || commitment.status === 'failed') continue;
+
+        // Parked on approval requests (possibly from before a restart, or
+        // evicted from executedIds): rehydrate the wait instead of running
+        // the commitment again and creating a second request.
+        const parked = parseParkedRequestIds(commitment.result);
+        if (parked) {
+          if (!this.awaitingApproval.has(commitment.id)) {
+            this.awaitingApproval.set(commitment.id, { what: commitment.what, requestIds: parked });
+          }
+          continue;
+        }
 
         this.announceExecution(commitment);
       }
@@ -321,7 +400,7 @@ export class CommitmentExecutor {
       'Instructions:',
       '1. Use your available tools (browser, terminal, file operations) to complete this task.',
       '2. Be thorough — actually perform the work, don\'t just describe it.',
-      '3. **Intent Gating still applies.** If this task involves sending email/messages, payments, installs, destructive ops, or any other gated category, you MUST call `request_approval` first and wait for `[APPROVED]` before acting. Do NOT write "APPROVAL REQUIRED" yourself — always use the tool.',
+      '3. Gated actions (commands that change the machine, file writes, app control, deletions, installs, settings, messages, email, payments) stop automatically for the user\'s approval and return [AWAITING_APPROVAL]. Do the autonomous part first, then make the call; if it is awaiting approval, say so and stop. Do NOT write "APPROVAL REQUIRED" yourself and do not claim the action was done.',
       '4. After completion, summarize what you did.',
       '5. If the task is impossible or unclear, explain why and suggest alternatives.',
       '',
@@ -341,10 +420,28 @@ export class CommitmentExecutor {
       timestamp: Date.now(),
     });
 
-    // Mark commitment as completed
     const resultSummary = response
       ? response.length > 500 ? response.slice(0, 497) + '...' : response
       : 'Executed successfully';
+
+    // A turn that stopped on an approval request did not do the work. Park
+    // the commitment as active, remember which requests it is waiting on,
+    // and let settleAwaitingApprovals() close it from their outcome instead
+    // of recording it as done on the strength of a request that may still
+    // be denied or expire.
+    const requestIds = this.agentService?.lastTurnApprovalIds?.() ?? [];
+    if (requestIds.length > 0) {
+      this.awaitingApproval.set(state.commitmentId, { what: state.what, requestIds });
+      try {
+        // The request ids ride in the stored result so a restarted daemon can
+        // pick the parked commitment back up instead of re-running it.
+        updateCommitmentStatus(state.commitmentId, 'active', `${AWAITING_PREFIX}[req:${requestIds.join(',')}]: ${resultSummary}`);
+      } catch (err) {
+        console.error('[Executor] Failed to update commitment status:', err);
+      }
+      console.log(`[Executor] Awaiting approval (${requestIds.length} request(s)): "${state.what}"`);
+      return;
+    }
 
     try {
       updateCommitmentStatus(state.commitmentId, 'completed', resultSummary);
