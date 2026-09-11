@@ -5,6 +5,7 @@ import { WorkflowActivation } from "./WorkflowActivation";
 import type { OnboardingStatus } from "./useOnboardingStatus";
 import "./OnboardingWizard.css";
 import { modelForOnboardingTest, onboardingDefaultModelRef } from "./llm-setup";
+import { localSTTSetup, type LocalSTTServerType } from "./stt-setup";
 import { modKey } from "../ui/platform";
 import { useSystemPermissions } from "./useSystemPermissions";
 import {
@@ -279,6 +280,8 @@ export function OnboardingWizard({
   const [stt, setStt] = useState<"skip" | "openai" | "groq" | "local">("skip");
   const [sttKey, setSttKey] = useState("");
   const [sttEndpoint, setSttEndpoint] = useState("http://localhost:8080");
+  const [sttServerType, setSttServerType] = useState<LocalSTTServerType>("whisper_cpp");
+  const localSTTTouched = useRef(false);
   // speaking
   const [tts, setTts] = useState<"off" | "edge" | "elevenlabs">("edge");
   const [edgeVoice, setEdgeVoice] = useState(EDGE_VOICES[0]!.id);
@@ -296,6 +299,27 @@ export function OnboardingWizard({
   const [tgBusy, setTgBusy] = useState(false);
   // tour
   const [tourI, setTourI] = useState(0);
+
+  // A rerun must show and preserve the local server's existing dialect. The
+  // endpoint alone cannot distinguish whisper.cpp's /inference API from an
+  // OpenAI-compatible /v1/audio/transcriptions server.
+  useEffect(() => {
+    if (hosted) return;
+    let cancelled = false;
+    fetch("/api/config/stt")
+      .then((response) => response.ok ? response.json() : null)
+      .then((current: { local_endpoint?: unknown; local_server_type?: unknown } | null) => {
+        if (cancelled || localSTTTouched.current || !current) return;
+        if (typeof current.local_endpoint === "string" && current.local_endpoint) {
+          setSttEndpoint(current.local_endpoint);
+        }
+        if (current.local_server_type === "whisper_cpp" || current.local_server_type === "openai_compatible") {
+          setSttServerType(current.local_server_type);
+        }
+      })
+      .catch(() => { /* defaults remain usable while the daemon is unavailable */ });
+    return () => { cancelled = true; };
+  }, [hosted]);
   // The spotlight is remounted per slide (see renderTour), and a remount drops
   // keyboard focus to <body> - so a keyboard user who advanced with Enter had
   // to Tab back into the card on every slide, and a screen reader lost its
@@ -573,7 +597,7 @@ export function OnboardingWizard({
       if (!hosted && stt !== "skip") {
         const sttBlock: Record<string, unknown> = { provider: stt };
         if ((stt === "openai" || stt === "groq") && sttKey) sttBlock[stt] = { api_key: sttKey };
-        else if (stt === "local") sttBlock.local = { endpoint: sttEndpoint.trim(), server_type: "whisper_cpp" };
+        else if (stt === "local") sttBlock.local = localSTTSetup(sttEndpoint, sttServerType);
         payload.stt = sttBlock;
       }
       const r = await fetch("/api/onboarding/setup", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
@@ -587,7 +611,7 @@ export function OnboardingWizard({
     } catch (e) {
       setError(e instanceof Error ? e.message : "Setup failed.");
     } finally { setBusy(false); }
-  }, [hosted, hostedProbe, prov, provId, apiKey, baseUrl, customEndpoint, model, test, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint]);
+  }, [hosted, hostedProbe, prov, provId, apiKey, baseUrl, customEndpoint, model, test, tts, edgeVoice, elevenKey, elevenVoice, elevenModel, stt, sttKey, sttEndpoint, sttServerType]);
 
   const skipAll = useCallback(async () => {
     setBusy(true);
@@ -1095,7 +1119,7 @@ export function OnboardingWizard({
           ["skip", "micoff", "Skip for now", "Text only. Wire up speech later from Settings."],
           ["openai", "mic", "OpenAI Whisper", "Cloud Whisper. Accurate, needs an OpenAI key."],
           ["groq", "mic", "Groq Whisper", "Fastest hosted Whisper. Needs a Groq key."],
-          ["local", "mic", "Local Whisper.cpp", "Runs on your machine. No key needed."],
+          ["local", "mic", "Local speech server", "whisper.cpp or an OpenAI-compatible server. No key needed."],
         ];
         return (
           <div className="obw-body"><div className="obw-wrap wide">
@@ -1114,7 +1138,30 @@ export function OnboardingWizard({
               <div className="obw-subctl"><input className="obw-inp" type="password" placeholder={`paste your ${stt === "openai" ? "OpenAI" : "Groq"} key`} value={sttKey} onChange={(e) => setSttKey(e.target.value)} /></div>
             )}
             {stt === "local" && (
-              <div className="obw-subctl"><input className="obw-inp" placeholder="http://localhost:8080" value={sttEndpoint} onChange={(e) => setSttEndpoint(e.target.value)} /></div>
+              <div className="obw-subctl" style={{ display: "grid", gap: 8 }}>
+                <select
+                  className="obw-inp"
+                  aria-label="Local speech server API"
+                  value={sttServerType}
+                  onChange={(e) => {
+                    localSTTTouched.current = true;
+                    setSttServerType(e.target.value as LocalSTTServerType);
+                  }}
+                >
+                  <option value="whisper_cpp">whisper.cpp API</option>
+                  <option value="openai_compatible">OpenAI-compatible API</option>
+                </select>
+                <input
+                  className="obw-inp"
+                  aria-label="Local speech server endpoint"
+                  placeholder="http://localhost:8080"
+                  value={sttEndpoint}
+                  onChange={(e) => {
+                    localSTTTouched.current = true;
+                    setSttEndpoint(e.target.value);
+                  }}
+                />
+              </div>
             )}
             {stt !== "skip" && <MicLevelCheck />}
             <div className="obw-btnrow"><button className="obw-btn obw-btn-ghost" onClick={back}>Back</button><span className="grow" /><button className="obw-btn obw-btn-pri" onClick={next}>Continue</button></div>
