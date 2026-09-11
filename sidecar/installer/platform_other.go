@@ -14,8 +14,8 @@ func installDirDefault() (string, error) {
 
 func detectInstalled() (installedSidecar, error) {
 	var inst installedSidecar
-	inst.ManagedByNpm = npmManagedSidecarPresent()
-	if !inst.ManagedByNpm {
+	inst.PackageManager = sidecarPackageManager()
+	if inst.PackageManager == "" {
 		return inst, fmt.Errorf("the installer supports Windows and macOS; install with: bun install -g @usejarvis/sidecar")
 	}
 	return inst, nil

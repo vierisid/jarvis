@@ -95,7 +95,7 @@ func TestApplyPlan(t *testing.T) {
 		{name: "older version", inst: installedSidecar{Version: "0.9.1"}, installed: true},
 		{name: "current version", inst: installedSidecar{Version: "0.9.2"}, installed: true, upToDate: true},
 		{name: "newer than latest", inst: installedSidecar{Version: "0.9.3"}, installed: true, upToDate: true},
-		{name: "npm managed", inst: installedSidecar{Version: "0.9.1", ManagedByNpm: true}, installed: true, npm: true},
+		{name: "npm managed", inst: installedSidecar{PackageManager: "bun"}, first: true, npm: true},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -121,6 +121,9 @@ func TestApplyPlan(t *testing.T) {
 			if s.NpmManaged != c.npm {
 				t.Errorf("npm_managed = %v, want %v", s.NpmManaged, c.npm)
 			}
+			if s.PackageManager != c.inst.PackageManager {
+				t.Errorf("package_manager = %q, want %q", s.PackageManager, c.inst.PackageManager)
+			}
 		})
 	}
 }
@@ -132,7 +135,7 @@ func TestApplyOutcomeMarksTheSidecarInstalled(t *testing.T) {
 	cases := map[string]installOutcome{
 		"fresh install":   {InstallDir: "/opt/jarvis"},
 		"already current": {UpToDate: true},
-		"npm managed":     {NpmManaged: true},
+		"npm managed":     {NpmManaged: true, Inst: installedSidecar{PackageManager: "npm"}},
 	}
 	for name, out := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -154,6 +157,10 @@ func TestApplyOutcomeMarksTheSidecarInstalled(t *testing.T) {
 			}
 			if s.NpmManaged != out.NpmManaged {
 				t.Errorf("npm_managed = %v, want %v", s.NpmManaged, out.NpmManaged)
+			}
+			// The done screen prints the owner's update command.
+			if s.PackageManager != out.Inst.PackageManager {
+				t.Errorf("package_manager = %q, want %q", s.PackageManager, out.Inst.PackageManager)
 			}
 			// FirstInstall keeps its plan-time meaning: the macOS done screen
 			// and the autostart policy both ask "was this run the first one?".

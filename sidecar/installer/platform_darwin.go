@@ -55,8 +55,9 @@ func canWriteDir(dir string) bool {
 var plistVersionRe = regexp.MustCompile(`<key>CFBundleShortVersionString</key>\s*<string>([^<]+)</string>`)
 
 // detectInstalled looks for Jarvis.app in /Applications then ~/Applications,
-// reading the version straight from Info.plist. A PATH-visible npm/bun shim
-// marks the install as npm-managed (we defer to it rather than fight it).
+// reading the version straight from Info.plist. A global bun/npm install of
+// the package marks the machine as npm-managed (we defer to it rather than
+// fight it).
 func detectInstalled() (installedSidecar, error) {
 	var inst installedSidecar
 	candidates := []string{"/Applications"}
@@ -78,7 +79,7 @@ func detectInstalled() (installedSidecar, error) {
 	// No bundle install — a global bun/npm @usejarvis/sidecar owns this
 	// machine instead? (Positive identification only: a bare `jarvis` on PATH
 	// could be the brain CLI.)
-	inst.ManagedByNpm = npmManagedSidecarPresent()
+	inst.PackageManager = sidecarPackageManager()
 	return inst, nil
 }
 

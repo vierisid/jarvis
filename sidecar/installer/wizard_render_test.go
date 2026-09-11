@@ -67,6 +67,10 @@ func renderPage(t *testing.T, chrome string, st wizardState) string {
 	)
 	var stderr strings.Builder
 	cmd.Stderr = &stderr
+	// The deadline kills chrome, but its helper processes inherit the output
+	// pipes and hold them open, so Output would keep waiting on them and the
+	// package would still run into its timeout. Stop waiting soon after.
+	cmd.WaitDelay = 5 * time.Second
 	out, err := cmd.Output()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		t.Fatalf("%s never exited within 60s; stderr:\n%s", chrome, stderr.String())
@@ -102,7 +106,10 @@ func TestWizardPanelSaysWhatIsOnTheMachine(t *testing.T) {
 		status    string
 		subtitle  string
 		button    string
-		autostart bool // the login-item row is visible
+		autostart bool   // the login-item row is visible
+		closeOnly bool   // Cancel is hidden: the main button is the footer's only one
+		cancel    string // what the secondary button says, where it shows
+		noMain    bool   // the main button is hidden
 	}{
 		{
 			name:      "nothing installed yet",
@@ -111,6 +118,7 @@ func TestWizardPanelSaysWhatIsOnTheMachine(t *testing.T) {
 			subtitle:  "This installs the Jarvis sidecar on this machine.",
 			button:    "Install",
 			autostart: true,
+			cancel:    "Cancel",
 		},
 		{
 			name:     "an update is waiting",
@@ -118,33 +126,72 @@ func TestWizardPanelSaysWhatIsOnTheMachine(t *testing.T) {
 			status:   "Update available",
 			subtitle: "This updates the Jarvis sidecar on this machine.",
 			button:   "Update",
+			cancel:   "Cancel",
 		},
+		// Nothing to cancel here: the second button closes the window, and
+		// says so.
 		{
 			name:     "already current",
 			st:       with(func(s *wizardState) { s.Phase, s.Detected, s.Installed, s.UpToDate = "plan", true, true, true }),
 			status:   "Up to date",
 			subtitle: "You already have the latest sidecar — it runs in the system tray, near the clock.",
 			button:   "Launch Jarvis",
+			cancel:   "Close",
+		},
+		// --no-launch: a "Launch Jarvis" button would only close the window.
+		{
+			name: "already current, told not to launch",
+			st: with(func(s *wizardState) {
+				s.Phase, s.Detected, s.Installed, s.UpToDate, s.NoLaunch = "plan", true, true, true, true
+			}),
+			status:    "Up to date",
+			subtitle:  "You already have the latest sidecar. Start Jarvis from the Start menu when you want it.",
+			button:    "Close",
+			closeOnly: true,
+		},
+		// What detection really reports for a bun/npm install: no native
+		// version, so FirstInstall is set, and the autostart row stays hidden
+		// anyway.
+		{
+			name: "bun owns it",
+			st: with(func(s *wizardState) {
+				s.Phase, s.Detected, s.FirstInstall, s.NpmManaged, s.PackageManager = "plan", true, true, true, "bun"
+			}),
+			status:    "Managed by bun",
+			subtitle:  "This machine's sidecar is managed by bun. Update it with bun update -g @usejarvis/sidecar, or remove it with bun remove -g @usejarvis/sidecar to use this installer instead.",
+			button:    "Close",
+			closeOnly: true,
 		},
 		{
-			name:   "npm owns it",
-			st:     with(func(s *wizardState) { s.Phase, s.Detected, s.Installed, s.NpmManaged = "plan", true, true, true }),
-			status: "Managed by npm",
-			button: "Close",
+			name:     "still checking",
+			st:       with(func(s *wizardState) { s.Phase = "resolving" }),
+			status:   "Checking…",
+			subtitle: "Checking for the latest sidecar…",
+			cancel:   "Cancel",
+			noMain:   true,
 		},
 		{
-			name:   "mid-install",
-			st:     with(func(s *wizardState) { s.Phase, s.Detected = "running", true }),
-			status: "In progress",
+			name:     "mid-install",
+			st:       with(func(s *wizardState) { s.Phase, s.Detected = "running", true }),
+			status:   "In progress",
+			subtitle: "Installing…",
+		},
+		// The button that started it said Update.
+		{
+			name:     "mid-update",
+			st:       with(func(s *wizardState) { s.Phase, s.Detected, s.Installed = "running", true, true }),
+			status:   "In progress",
+			subtitle: "Updating…",
 		},
 		// THE REGRESSION. A first install that finished must not still be
 		// reporting the plan's answer.
 		{
-			name:     "a first install that finished",
-			st:       with(func(s *wizardState) { s.Phase, s.Detected, s.Installed, s.FirstInstall = "done", true, true, true }),
-			status:   "Installed",
-			subtitle: "Installed. Jarvis lives in the system tray, near the clock.",
-			button:   "Launch Jarvis",
+			name:      "a first install that finished",
+			st:        with(func(s *wizardState) { s.Phase, s.Detected, s.Installed, s.FirstInstall = "done", true, true, true }),
+			status:    "Installed",
+			subtitle:  "Installed. Jarvis lives in the system tray, near the clock.",
+			button:    "Launch Jarvis",
+			closeOnly: true,
 		},
 		// The one macOS case: the done screen there routes through the
 		// permissions handoff AND names the menu bar, and both live on this
@@ -154,22 +201,35 @@ func TestWizardPanelSaysWhatIsOnTheMachine(t *testing.T) {
 			st: with(func(s *wizardState) {
 				s.Phase, s.Detected, s.Installed, s.FirstInstall, s.Platform = "done", true, true, true, "darwin"
 			}),
-			status:   "Installed",
-			subtitle: "Installed. Jarvis will ask for its permissions, then live in the menu bar, at the top-right of your screen.",
-			button:   "Launch Jarvis",
+			status:    "Installed",
+			subtitle:  "Installed. Jarvis will ask for its permissions, then live in the menu bar, at the top-right of your screen.",
+			button:    "Launch Jarvis",
+			closeOnly: true,
 		},
 		{
-			name:     "an update that finished",
-			st:       with(func(s *wizardState) { s.Phase, s.Detected, s.Installed = "done", true, true }),
-			status:   "Updated",
-			subtitle: "Updated. Jarvis lives in the system tray, near the clock.",
-			button:   "Launch Jarvis",
+			name:      "an update that finished",
+			st:        with(func(s *wizardState) { s.Phase, s.Detected, s.Installed = "done", true, true }),
+			status:    "Updated",
+			subtitle:  "Updated. Jarvis lives in the system tray, near the clock.",
+			button:    "Launch Jarvis",
+			closeOnly: true,
+		},
+		{
+			name: "a first install that finished, told not to launch",
+			st: with(func(s *wizardState) {
+				s.Phase, s.Detected, s.Installed, s.FirstInstall, s.NoLaunch = "done", true, true, true, true
+			}),
+			status:    "Installed",
+			subtitle:  "Installed. Start Jarvis from the Start menu when you want it.",
+			button:    "Close",
+			closeOnly: true,
 		},
 		{
 			name:   "nothing could be checked",
 			st:     with(func(s *wizardState) { s.Phase, s.Error = "failed", "could not reach the npm registry" }),
 			status: "—",
 			button: "Retry",
+			cancel: "Cancel",
 		},
 	}
 
@@ -191,6 +251,17 @@ func TestWizardPanelSaysWhatIsOnTheMachine(t *testing.T) {
 			}
 			if got := !hidden(t, dom, "autostartRow"); got != c.autostart {
 				t.Errorf("autostart row visible = %v, want %v", got, c.autostart)
+			}
+			if got := hidden(t, dom, "btnCancel"); got != c.closeOnly {
+				t.Errorf("Cancel hidden = %v, want %v", got, c.closeOnly)
+			}
+			if c.cancel != "" {
+				if got := text(t, dom, "btnCancel"); got != c.cancel {
+					t.Errorf("secondary button says %q, want %q", got, c.cancel)
+				}
+			}
+			if got := hidden(t, dom, "btnMain"); got != c.noMain {
+				t.Errorf("main button hidden = %v, want %v", got, c.noMain)
 			}
 			// The strip is what this window is closed and moved by on
 			// Windows; a page that rendered without it is a trapped window.

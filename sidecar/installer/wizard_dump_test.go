@@ -78,7 +78,9 @@ func TestDumpWizardPage(t *testing.T) {
 		"plan-fresh":   with(func(s *wizardState) { s.Phase, s.Detected, s.FirstInstall = "plan", true, true }),
 		"plan-update":  with(func(s *wizardState) { s.Phase, s.Detected, s.Installed = "plan", true, true }),
 		"plan-current": with(func(s *wizardState) { s.Phase, s.Detected, s.Installed, s.UpToDate = "plan", true, true, true }),
-		"plan-npm":     with(func(s *wizardState) { s.Phase, s.Detected, s.Installed, s.NpmManaged = "plan", true, true, true }),
+		"plan-npm": with(func(s *wizardState) {
+			s.Phase, s.Detected, s.FirstInstall, s.NpmManaged, s.PackageManager = "plan", true, true, true, "bun"
+		}),
 		"running": with(func(s *wizardState) {
 			s.Phase, s.Detected, s.Detail = "running", true, "Verifying the payload (sha512 + code signature)…"
 		}),

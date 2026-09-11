@@ -30,9 +30,12 @@ func logf(format string, args ...any) {
 
 // installedSidecar is what detection found on this machine.
 type installedSidecar struct {
-	Version      string // "" when absent
-	InstallDir   string // "" when absent
-	ManagedByNpm bool   // a global npm/bun install owns the sidecar here
+	Version    string // "" when absent
+	InstallDir string // "" when absent
+	// PackageManager is "bun" or "npm" when a global install of the package
+	// owns the sidecar here, "" otherwise. Which one matters: they keep
+	// separate global trees, so only the owner's commands reach it.
+	PackageManager string
 }
 
 // progressFn receives coarse stage updates ("download", "verify", "install")
@@ -72,7 +75,7 @@ func performInstall(registryURL string, silent bool, progress progressFn) instal
 	}
 	out := installOutcome{Code: exitOK, Rel: rel, Inst: inst}
 	switch {
-	case inst.ManagedByNpm:
+	case inst.PackageManager != "":
 		out.NpmManaged = true
 		return out
 	case inst.Version != "" && !versionLess(inst.Version, rel.Version):
@@ -161,7 +164,8 @@ func runInstall(registryURL string, silent, noLaunch, autostartOn bool) int {
 		}
 		return out.Code
 	case out.NpmManaged:
-		logf("this machine's sidecar is managed by npm/bun — update it with: bun update -g @usejarvis/sidecar")
+		pm := out.Inst.PackageManager
+		logf("this machine's sidecar is managed by %s; update it with: %s update -g @usejarvis/sidecar", pm, pm)
 		return exitOK
 	case out.UpToDate:
 		logf("installed sidecar %s is already current", out.Inst.Version)
@@ -210,22 +214,25 @@ func setupHandoffAllowed(version string) bool {
 	return !versionLess(version, minSetupSidecarVersion)
 }
 
-// npmManagedSidecarPresent positively identifies a global bun/npm-managed
-// @usejarvis/sidecar (package dir present in a known global tree). We defer
-// to the package manager instead of installing alongside it.
-func npmManagedSidecarPresent() bool {
-	var candidates []string
-	if home, err := os.UserHomeDir(); err == nil {
-		candidates = append(candidates,
-			filepath.Join(home, ".bun", "install", "global", "node_modules", "@usejarvis", "sidecar"))
+// sidecarPackageManager positively identifies a global bun- or npm-managed
+// @usejarvis/sidecar and names its owner ("bun" or "npm"; "" when neither has
+// it). We defer to the package manager instead of installing alongside it.
+func sidecarPackageManager() string {
+	if home, err := os.UserHomeDir(); err == nil &&
+		hasSidecarPackage(filepath.Join(home, ".bun", "install", "global", "node_modules")) {
+		return "bun"
 	}
-	if out, err := execCommandOutput("npm", "root", "-g"); err == nil && out != "" {
-		candidates = append(candidates, filepath.Join(out, "@usejarvis", "sidecar"))
+	if root, err := execCommandOutput("npm", "root", "-g"); err == nil && root != "" && hasSidecarPackage(root) {
+		return "npm"
 	}
-	for _, c := range candidates {
-		if fi, err := os.Stat(c); err == nil && fi.IsDir() {
-			return true
-		}
-	}
-	return false
+	return ""
+}
+
+// hasSidecarPackage reports whether a global node_modules tree holds the
+// package. It wants the package's package.json, not just its directory: a
+// folder left behind by an uninstall would otherwise refuse the native install
+// for good, with nothing on the screen saying why.
+func hasSidecarPackage(nodeModules string) bool {
+	fi, err := os.Stat(filepath.Join(nodeModules, "@usejarvis", "sidecar", "package.json"))
+	return err == nil && !fi.IsDir()
 }

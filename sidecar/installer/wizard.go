@@ -47,8 +47,14 @@ type wizardState struct {
 	UpToDate     bool   `json:"up_to_date"`
 	FirstInstall bool   `json:"first_install"`
 	Platform     string `json:"platform"`
+	// PackageManager names the owner when NpmManaged ("bun" or "npm"), so the
+	// page prints commands that reach the install detection found.
+	PackageManager string `json:"package_manager"`
 	// AutostartDefault seeds the wizard's checkbox (--no-autostart clears it).
 	AutostartDefault bool `json:"autostart_default"`
+	// NoLaunch mirrors --no-launch. The buttons that would start Jarvis only
+	// close the window then, so they must not say "Launch Jarvis".
+	NoLaunch bool `json:"no_launch"`
 }
 
 // applyPlan folds what detection found into the page's state. Pure, and split
@@ -58,7 +64,8 @@ func applyPlan(s *wizardState, inst installedSidecar, latestVersion string) {
 	s.Phase = "plan"
 	s.Detected = true
 	s.Installed = inst.Version != ""
-	s.NpmManaged = inst.ManagedByNpm
+	s.NpmManaged = inst.PackageManager != ""
+	s.PackageManager = inst.PackageManager
 	s.UpToDate = inst.Version != "" && !versionLess(inst.Version, latestVersion)
 	// Updates must not re-apply autostart: the user's own choice is
 	// authoritative once installed.
@@ -81,6 +88,7 @@ func applyOutcome(s *wizardState, out installOutcome) {
 	// it was current to begin with.
 	s.Installed = true
 	s.NpmManaged = out.NpmManaged
+	s.PackageManager = out.Inst.PackageManager
 	s.UpToDate = out.UpToDate
 }
 
@@ -99,6 +107,234 @@ func launchHomeSpot() string {
 	}
 }
 
+// wizardDeps is what a wizard run reaches outside itself for. runWizard wires
+// the real registry, detection and install; tests wire fakes, because the
+// decisions a run makes between those calls (whether Retry may plan again,
+// what code a closed window exits with) never reach the page.
+type wizardDeps struct {
+	fetchLatest    func() (*pkgRelease, error)
+	detect         func() (installedSidecar, error)
+	install        func(progressFn) installOutcome
+	applyAutostart func(installDir string, enabled bool) error
+}
+
+// wizardRun is the wizard's state machine, kept apart from the window that
+// shows it: every binding the page calls is a method here. Bindings run on the
+// UI thread and the work on goroutines, so all of it is guarded by mu.
+type wizardRun struct {
+	deps wizardDeps
+	// initial is the state a run opens with, and what Retry resets the page to.
+	initial wizardState
+
+	mu       sync.Mutex
+	st       wizardState
+	out      installOutcome
+	started  bool
+	planned  bool
+	planGen  int // invalidates results from superseded plan goroutines
+	exitCode int // exitOther (closed early) unless a flow completes
+	// installDone is closed when the install goroutine finishes. Closing
+	// the window mid-install must not os.Exit through a half-finished
+	// binary swap, so wait blocks on it.
+	installDone chan struct{}
+}
+
+func newWizardRun(deps wizardDeps, initial wizardState) *wizardRun {
+	return &wizardRun{deps: deps, initial: initial, st: initial, exitCode: exitOther}
+}
+
+func (r *wizardRun) set(fn func(*wizardState)) {
+	r.mu.Lock()
+	fn(&r.st)
+	r.mu.Unlock()
+}
+
+// progress is the snapshot the page polls.
+func (r *wizardRun) progress() wizardState {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.st
+}
+
+// startPlan resolves versions on a goroutine. Bindings run ON the UI
+// thread, so doing the (up to 60s) registry fetch inline would block
+// the event loop — including the reveal-on-load that makes the window
+// visible in the first place. The page polls getProgress instead.
+func (r *wizardRun) startPlan() {
+	r.mu.Lock()
+	if r.planned || r.started {
+		r.mu.Unlock()
+		return
+	}
+	r.planned = true
+	r.planGen++
+	gen := r.planGen
+	r.mu.Unlock()
+
+	go func() {
+		// A superseded (or overtaken-by-install) goroutine must not
+		// clobber the current phase — otherwise a double Retry can
+		// bounce a running install back to the plan screen. Call it only
+		// inside set, which holds mu.
+		stale := func() bool { return gen != r.planGen || r.started }
+
+		rel, err := r.deps.fetchLatest()
+		if err != nil {
+			r.set(func(s *wizardState) {
+				if stale() {
+					return
+				}
+				s.Phase = "failed"
+				s.Error = fmt.Sprintf("could not reach the npm registry: %v", err)
+			})
+			return
+		}
+
+		inst, ierr := r.deps.detect()
+		if ierr != nil {
+			// Fail rather than plan. A plan we could not verify has
+			// nothing honest to put in the panel — the page would
+			// have to either claim "not installed" or admit it is
+			// still checking, next to a live Install button — and
+			// performInstall would refuse this machine anyway
+			// (flow.go returns exitOther on the same error).
+			r.set(func(s *wizardState) {
+				if stale() {
+					return
+				}
+				s.Phase = "failed"
+				s.Error = fmt.Sprintf("could not inspect the existing installation: %v", ierr)
+			})
+			return
+		}
+		r.set(func(s *wizardState) {
+			if stale() {
+				return
+			}
+			applyPlan(s, inst, rel.Version)
+			// Already current: no install goroutine will run to set
+			// `out`, but the up-to-date screen offers a Launch button (a
+			// menu-bar-only app the user re-ran the installer to find).
+			// Seed the launch target so launchAndClose can start the
+			// installed sidecar. This runs inside set()'s mu-held section,
+			// past the stale() guard, so it can neither clobber nor be
+			// clobbered by a real install, and there is no window in which
+			// the Launch button is live before `out` is seeded.
+			if s.UpToDate {
+				r.out = installOutcome{Rel: rel, Inst: inst, InstallDir: inst.InstallDir, UpToDate: true}
+			}
+			// Nothing to install is a benign terminal state however the
+			// window is closed: already current, or owned by bun/npm (the
+			// console flow exits 0 on both). Neither screen has an Install
+			// button, so its window controls must agree with its Close.
+			if s.UpToDate || s.NpmManaged {
+				r.exitCode = exitOK
+			}
+		})
+	}()
+}
+
+// retryPlan re-runs resolution after a failure. (The page can't just
+// reload: it was loaded via SetHtml, so a reload lands on about:blank.)
+func (r *wizardRun) retryPlan() {
+	r.mu.Lock()
+	if r.started {
+		r.mu.Unlock()
+		return
+	}
+	r.planned = false
+	r.st = r.initial
+	// A fresh plan starts a fresh run: the code of an install that failed
+	// before this Retry says nothing about how the new one ends.
+	r.exitCode = exitOther
+	r.mu.Unlock()
+	r.startPlan()
+}
+
+// startInstall runs the install on a goroutine; the page follows it through
+// getProgress.
+func (r *wizardRun) startInstall(autostartOn bool) {
+	r.mu.Lock()
+	if r.started {
+		r.mu.Unlock()
+		return
+	}
+	r.started = true
+	r.st.Phase = "running"
+	r.installDone = make(chan struct{})
+	done := r.installDone
+	r.mu.Unlock()
+
+	go func() {
+		defer close(done)
+		res := r.deps.install(func(stage, detail string) {
+			r.set(func(s *wizardState) { s.Stage, s.Detail = stage, detail })
+		})
+		if res.Err != nil {
+			r.mu.Lock()
+			defer r.mu.Unlock()
+			r.out = res
+			// Carry the real code out (2 network / 3 verification /
+			// 4 stop / 5 filesystem) so a scripted GUI run is as
+			// diagnosable as a --silent one.
+			r.exitCode = res.Code
+			// The install is over, so the failed screen's Retry has to be
+			// able to plan again. Left set, started turned retryPlan into
+			// a no-op and the page into a dead end.
+			r.started = false
+			r.st.Phase = "failed"
+			r.st.Error = res.Err.Error()
+			return
+		}
+		if shouldApplyAutostart(res) {
+			if err := r.deps.applyAutostart(res.InstallDir, autostartOn); err != nil {
+				logf("warning: autostart registration failed: %v", err)
+			}
+		}
+		// Exit code and phase in one step: the UI must never advertise
+		// success ahead of the value the process will exit with.
+		r.mu.Lock()
+		defer r.mu.Unlock()
+		r.out = res
+		r.exitCode = exitOK
+		applyOutcome(&r.st, res)
+	}()
+}
+
+// launchTarget is what the Launch button starts: the install that just
+// finished, or the already-current one the plan found.
+func (r *wizardRun) launchTarget() installOutcome {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.out
+}
+
+// closeInstaller records how a run the user is done with ends. success=true
+// for benign terminal states (already current, npm-managed), which exit 0;
+// Cancel passes false and keeps the non-zero "did not install" code, except
+// where the plan already seeded exitOK because there was nothing to install.
+func (r *wizardRun) closeInstaller(success bool) {
+	if !success {
+		return
+	}
+	r.mu.Lock()
+	r.exitCode = exitOK
+	r.mu.Unlock()
+}
+
+// wait returns the code to exit with, once no install is mid-flight.
+func (r *wizardRun) wait() int {
+	r.mu.Lock()
+	done := r.installDone
+	r.mu.Unlock()
+	if done != nil {
+		<-done
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.exitCode
+}
+
 func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 	// The wizard itself is WebView2-backed on Windows; internal/webview2
 	// prompts + waits when the runtime is missing (no-op elsewhere). The
@@ -110,30 +346,14 @@ func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 		return runInstall(registryURL, false, noLaunch, autostartDefault)
 	}
 
-	var (
-		mu       sync.Mutex
-		st       = wizardState{Phase: "resolving", Platform: runtime.GOOS, AutostartDefault: autostartDefault}
-		out      installOutcome
-		started  bool
-		planned  bool
-		planGen  int         // invalidates results from superseded plan goroutines
-		exitCode = exitOther // closed early unless a flow completes
-		// installDone is closed when the install goroutine finishes. Closing
-		// the window mid-install must not os.Exit through a half-finished
-		// binary swap, so runWizard waits on it before returning.
-		installDone chan struct{}
-	)
-
-	set := func(fn func(*wizardState)) {
-		mu.Lock()
-		fn(&st)
-		mu.Unlock()
-	}
-	snapshot := func() wizardState {
-		mu.Lock()
-		defer mu.Unlock()
-		return st
-	}
+	r := newWizardRun(wizardDeps{
+		fetchLatest: func() (*pkgRelease, error) { return fetchLatestRelease(registryURL) },
+		detect:      detectInstalled,
+		install: func(progress progressFn) installOutcome {
+			return performInstall(registryURL, false, progress)
+		},
+		applyAutostart: applyAutostart,
+	}, wizardState{Phase: "resolving", Platform: runtime.GOOS, AutostartDefault: autostartDefault, NoLaunch: noLaunch})
 
 	// The same title bar the sidecar's own local windows draw (internal/brand +
 	// internal/winchrome, Windows-only; native everywhere else). This window is
@@ -143,150 +363,15 @@ func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 	// local HTML compiled into this binary, and the window controls it binds
 	// are never reachable by a remote document.
 	opened := webviewui.RunWindow("Install Jarvis", 480, 560, webview.HintNone, winchrome.CustomTitleBar, func(w webview.WebView) {
-
-		// startPlan resolves versions on a goroutine. Bindings run ON the UI
-		// thread, so doing the (up to 60s) registry fetch inline would block
-		// the event loop — including the reveal-on-load that makes the window
-		// visible in the first place. The page polls getProgress instead.
-		startPlan := func() {
-			mu.Lock()
-			if planned || started {
-				mu.Unlock()
-				return
-			}
-			planned = true
-			planGen++
-			gen := planGen
-			mu.Unlock()
-
-			go func() {
-				rel, err := fetchLatestRelease(registryURL)
-				if err != nil {
-					set(func(s *wizardState) {
-						if gen != planGen || started {
-							return
-						}
-						s.Phase = "failed"
-						s.Error = fmt.Sprintf("could not reach the npm registry: %v", err)
-					})
-					return
-				}
-				// A superseded (or overtaken-by-install) goroutine must not
-				// clobber the current phase — otherwise a double Retry can
-				// bounce a running install back to the plan screen.
-				stale := func(s *wizardState) bool { return gen != planGen || started }
-
-				inst, ierr := detectInstalled()
-				if ierr != nil {
-					// Fail rather than plan. A plan we could not verify has
-					// nothing honest to put in the panel — the page would
-					// have to either claim "not installed" or admit it is
-					// still checking, next to a live Install button — and
-					// performInstall would refuse this machine anyway
-					// (flow.go returns exitOther on the same error).
-					set(func(s *wizardState) {
-						if stale(s) {
-							return
-						}
-						s.Phase = "failed"
-						s.Error = fmt.Sprintf("could not inspect the existing installation: %v", ierr)
-					})
-					return
-				}
-				set(func(s *wizardState) {
-					if stale(s) {
-						return
-					}
-					applyPlan(s, inst, rel.Version)
-					// Already current: no install goroutine will run to set
-					// `out`/exitCode, but the up-to-date screen offers a Launch
-					// button (a menu-bar-only app the user re-ran the installer
-					// to find). Seed the launch target so launchAndClose can
-					// start the installed sidecar, and mark exit 0 — "already
-					// current" is a benign terminal state however the window is
-					// closed (matches the console flow and closeInstaller's
-					// contract). This runs inside set()'s mu-held section, past
-					// the stale() guard, so it can neither clobber nor be
-					// clobbered by a real install, and there is no window in
-					// which the Launch button is live before `out` is seeded.
-					if s.UpToDate {
-						out = installOutcome{Rel: rel, Inst: inst, InstallDir: inst.InstallDir, UpToDate: true}
-						exitCode = exitOK
-					}
-				})
-			}()
-		}
-		_ = w.Bind("startPlan", startPlan)
-
-		// retryPlan re-runs resolution after a failure. (The page can't just
-		// reload: it was loaded via SetHtml, so a reload lands on about:blank.)
-		_ = w.Bind("retryPlan", func() {
-			mu.Lock()
-			if started {
-				mu.Unlock()
-				return
-			}
-			planned = false
-			st = wizardState{Phase: "resolving", Platform: runtime.GOOS, AutostartDefault: autostartDefault}
-			mu.Unlock()
-			startPlan()
-		})
-
-		_ = w.Bind("getProgress", func() wizardState { return snapshot() })
-
-		_ = w.Bind("startInstall", func(autostartOn bool) {
-			mu.Lock()
-			if started {
-				mu.Unlock()
-				return
-			}
-			started = true
-			st.Phase = "running"
-			installDone = make(chan struct{})
-			done := installDone
-			mu.Unlock()
-
-			go func() {
-				defer close(done)
-				res := performInstall(registryURL, false, func(stage, detail string) {
-					set(func(s *wizardState) { s.Stage, s.Detail = stage, detail })
-				})
-				mu.Lock()
-				out = res
-				mu.Unlock()
-				if res.Err != nil {
-					// Carry the real code out (2 network / 3 verification /
-					// 4 stop / 5 filesystem) so a scripted GUI run is as
-					// diagnosable as a --silent one.
-					mu.Lock()
-					exitCode = res.Code
-					mu.Unlock()
-					set(func(s *wizardState) {
-						s.Phase = "failed"
-						s.Error = res.Err.Error()
-					})
-					return
-				}
-				if shouldApplyAutostart(res) {
-					if err := applyAutostart(res.InstallDir, autostartOn); err != nil {
-						logf("warning: autostart registration failed: %v", err)
-					}
-				}
-				// Exit code before phase: the UI must never advertise
-				// success ahead of the value the process will exit with.
-				mu.Lock()
-				exitCode = exitOK
-				mu.Unlock()
-				set(func(s *wizardState) { applyOutcome(s, res) })
-			}()
-		})
+		_ = w.Bind("startPlan", r.startPlan)
+		_ = w.Bind("retryPlan", r.retryPlan)
+		_ = w.Bind("getProgress", r.progress)
+		_ = w.Bind("startInstall", r.startInstall)
 
 		// launchAndClose starts the installed sidecar (macOS first installs
 		// hand off to Jarvis.app --setup for the permission wizard) and closes.
 		_ = w.Bind("launchAndClose", func() {
-			mu.Lock()
-			res := out
-			mu.Unlock()
+			res := r.launchTarget()
 			if !noLaunch && res.InstallDir != "" && res.Rel != nil {
 				firstInstall := res.Inst.Version == ""
 				if err := launchInstalled(res.InstallDir, res.Rel.Version, firstInstall); err != nil {
@@ -305,17 +390,8 @@ func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 			w.Dispatch(w.Terminate)
 		})
 
-		// closeInstaller ends a run the user is done with. success=true for
-		// benign terminal states (already current, npm-managed) which exit 0;
-		// Cancel passes false and keeps the non-zero "did not install" code —
-		// except on the up-to-date screen, where the plan already seeded exitOK
-		// (the machine is in the desired state however this window is closed).
 		_ = w.Bind("closeInstaller", func(success bool) {
-			if success {
-				mu.Lock()
-				exitCode = exitOK
-				mu.Unlock()
-			}
+			r.closeInstaller(success)
 			w.Dispatch(w.Terminate)
 		})
 
@@ -336,16 +412,7 @@ func runWizard(registryURL string, noLaunch, autostartDefault bool) int {
 	// Returning here would os.Exit the process — potentially between the two
 	// renames of the binary swap, leaving the machine with a .old and no
 	// installed binary — so let the install finish first.
-	mu.Lock()
-	done := installDone
-	mu.Unlock()
-	if done != nil {
-		<-done
-	}
-
-	mu.Lock()
-	defer mu.Unlock()
-	return exitCode
+	return r.wait()
 }
 
 const wizardHTML = `<!doctype html>
@@ -419,7 +486,7 @@ const wizardHTML = `<!doctype html>
 
   <div class="foot">
     <button class="sbtn" id="btnCancel" onclick="window.closeInstaller(false)">Cancel</button>
-    <button class="sbtn pri" id="btnMain" disabled>Install</button>
+    <button class="sbtn pri hidden" id="btnMain" disabled>Install</button>
   </div>
 </div>` + brand.TitlebarHTML + `
 
@@ -438,11 +505,11 @@ const wizardHTML = `<!doctype html>
     // Nothing was inspected yet (or the registry never answered): "Not
     // installed" would be a claim we cannot make.
     if (!st.detected) { return st.phase === 'failed' ? '—' : 'Checking…'; }
-    if (st.npm_managed) { return 'Managed by npm'; }
-    // Not "Installing…": the subtitle above already says that, and the stage
-    // line below says which part. What must NOT appear here mid-install is the
-    // plan's "Not installed" — true until the swap lands, and indistinguishable
-    // from the label having got stuck.
+    if (st.npm_managed) { return 'Managed by ' + (st.package_manager || 'npm'); }
+    // Not "Installing…"/"Updating…": the subtitle above already says that, and
+    // the stage line below says which part. What must NOT appear here
+    // mid-install is the plan's "Not installed" — true until the swap lands,
+    // and indistinguishable from the label having got stuck.
     if (st.phase === 'running') { return 'In progress'; }
     // "Updated", not "Installed", when the run replaced something: the button
     // that started it said Update.
@@ -461,12 +528,23 @@ const wizardHTML = `<!doctype html>
     el('error').textContent = st.error || '';
     var pebble = el('pebble');
     var main = el('btnMain');
+    var cancel = el('btnCancel');
     // Where Jarvis lives after it starts. It has no Dock/taskbar presence and
     // no persistent window — only a menu-bar (macOS) / system-tray (Windows)
     // icon — so a done screen that doesn't say this reads as "nothing happened".
     var homeSpot = st.platform === 'darwin' ? 'the menu bar, at the top-right of your screen'
       : st.platform === 'windows' ? 'the system tray, near the clock'
       : 'the menu bar';
+    // Where to start it by hand, for a run told not to launch it (--no-launch).
+    var startSpot = st.platform === 'darwin' ? 'your Applications folder'
+      : st.platform === 'windows' ? 'the Start menu'
+      : 'your applications';
+    // bun and npm keep separate global trees, so the commands name the one
+    // that owns this machine's install.
+    var pm = st.package_manager || 'npm';
+    var npmLine = 'This machine\'s sidecar is managed by ' + pm + '. Update it with ' +
+      pm + ' update -g @usejarvis/sidecar, or remove it with ' +
+      pm + ' remove -g @usejarvis/sidecar to use this installer instead.';
     // Autostart applies on first install only; on updates the user's own
     // choice (Jarvis settings / setup wizard) stands.
     var showAutostart = st.phase === 'plan' && st.platform === 'windows' &&
@@ -477,6 +555,17 @@ const wizardHTML = `<!doctype html>
       el('autostart').checked = !!st.autostart_default;
       autostartSeeded = true;
     }
+
+    // Nothing to press until the plan is in: a disabled "Install" (or, after
+    // a failure, "Retry") would name a choice the page has not offered yet.
+    main.classList.toggle('hidden', st.phase === 'resolving');
+    // The secondary button only ever closes the window. It goes where the
+    // main button already does that alone, and says Close rather than Cancel
+    // where there is nothing left to cancel.
+    var nothingToInstall = st.phase === 'plan' && (st.npm_managed || st.up_to_date);
+    var mainCloses = st.npm_managed || (st.no_launch && (st.phase === 'done' || nothingToInstall));
+    cancel.classList.toggle('hidden', st.phase === 'done' || mainCloses);
+    cancel.textContent = nothingToInstall ? 'Close' : 'Cancel';
 
     if (st.phase === 'resolving') {
       el('subtitle').textContent = 'Checking for the latest sidecar…';
@@ -489,23 +578,29 @@ const wizardHTML = `<!doctype html>
       pebble.className = 'bdrop s-err';
       main.textContent = 'Retry';
       main.disabled = false;
-      el('btnCancel').disabled = false;
+      cancel.disabled = false;
       main.onclick = function () { window.retryPlan(); };
       return;
     }
     if (st.phase === 'running') {
-      el('subtitle').textContent = 'Installing…';
+      // Updating, not Installing, when the button that started it said Update.
+      el('subtitle').textContent = st.installed ? 'Updating…' : 'Installing…';
       pebble.className = 'bdrop s-think';
       main.disabled = true;
-      el('btnCancel').disabled = true;
+      cancel.disabled = true;
       return;
     }
     if (st.phase === 'done') {
       pebble.className = 'bdrop s-done';
-      el('btnCancel').classList.add('hidden');
       main.disabled = false;
       if (st.npm_managed) {
-        el('subtitle').textContent = 'This machine uses the npm-managed sidecar — update it with bun update -g @usejarvis/sidecar.';
+        el('subtitle').textContent = npmLine;
+        main.textContent = 'Close';
+        main.onclick = function () { window.closeInstaller(true); };
+      } else if (st.no_launch) {
+        el('subtitle').textContent =
+          (st.up_to_date ? 'Already up to date.' : st.first_install ? 'Installed.' : 'Updated.') +
+          ' Start Jarvis from ' + startSpot + ' when you want it.';
         main.textContent = 'Close';
         main.onclick = function () { window.closeInstaller(true); };
       } else {
@@ -523,7 +618,11 @@ const wizardHTML = `<!doctype html>
     pebble.className = 'bdrop';
     main.disabled = false;
     if (st.npm_managed) {
-      el('subtitle').textContent = 'This machine uses the npm-managed sidecar — nothing to do here.';
+      el('subtitle').textContent = npmLine;
+      main.textContent = 'Close';
+      main.onclick = function () { window.closeInstaller(true); };
+    } else if (st.up_to_date && st.no_launch) {
+      el('subtitle').textContent = 'You already have the latest sidecar. Start Jarvis from ' + startSpot + ' when you want it.';
       main.textContent = 'Close';
       main.onclick = function () { window.closeInstaller(true); };
     } else if (st.up_to_date) {

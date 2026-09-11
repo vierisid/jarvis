@@ -66,7 +66,7 @@ func detectInstalled() (installedSidecar, error) {
 			return inst, nil
 		}
 	}
-	inst.ManagedByNpm = npmManagedSidecarPresent()
+	inst.PackageManager = sidecarPackageManager()
 	return inst, nil
 }
 
