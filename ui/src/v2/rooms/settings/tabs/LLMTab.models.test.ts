@@ -35,6 +35,20 @@ describe("providerModels: hosted catalog filtering", () => {
     };
     expect(providerModels(omni.kinds, "omni", null, omni.catalog)).toEqual(["a/b", "c/d"]);
   });
+
+  test("uses NVIDIA's rotating live catalog instead of curated fallbacks", () => {
+    const providers = { nim: { kind: "nvidia" as const, has_api_key: true } };
+    expect(providerModels(providers, "nim", null, { nim: ["current-chat", "current-reasoning"] }))
+      .toEqual(["current-chat", "current-reasoning"]);
+  });
+
+  test("keeps NVIDIA's current fallback when live discovery fails", () => {
+    const providers = { nim: { kind: "nvidia" as const, has_api_key: true } };
+    expect(providerModels(providers, "nim", null, {})).toEqual([
+      "nvidia/nemotron-3-super-120b-a12b",
+      "openai/gpt-oss-20b",
+    ]);
+  });
 });
 
 /** Switching a tier's provider auto-commits immediately, so WHICH model gets

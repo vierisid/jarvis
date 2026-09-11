@@ -89,6 +89,14 @@ type Provider = {
   noConfig?: boolean; needsKey?: boolean; keyOptional?: boolean; needsBaseUrl?: boolean; optionalBaseUrl?: boolean; freeModel?: boolean;
   keyLabel?: string; urlLabel?: string; urlPh?: string; models?: string[]; hint?: string;
 };
+export const NVIDIA_DEFAULT_MODEL = "nvidia/nemotron-3-super-120b-a12b";
+
+/** Keep a valid selection when NVIDIA refreshes its rotating catalog. */
+export function selectLiveNvidiaModel(current: string, models: string[]): string {
+  if (models.includes(current)) return current;
+  return models.includes(NVIDIA_DEFAULT_MODEL) ? NVIDIA_DEFAULT_MODEL : (models[0] ?? current);
+}
+
 const PROVIDERS: Provider[] = [
   // Hosted brain. `soon: true` is the self-hosted default; the wizard flips
   // it off when GET /api/config/llm reports hosted_llm (see provList below).
@@ -99,7 +107,7 @@ const PROVIDERS: Provider[] = [
   { id: "gemini", name: "Gemini", abbr: "Ge", kind: "API key", needsKey: true, models: ["gemini-3.1-pro-preview", "gemini-3-flash-preview", "gemini-2.5-pro"] },
   { id: "ollama", name: "Ollama", abbr: "Ol", kind: "local", needsBaseUrl: true, urlLabel: "Ollama base URL", urlPh: "http://localhost:11434", models: ["llama3.1", "llama3.2", "mistral", "qwen2.5"] },
   { id: "openrouter", name: "OpenRouter", abbr: "OR", kind: "API key", needsKey: true, models: ["anthropic/claude-opus-4", "openai/gpt-5.4", "google/gemini-2.5-pro"] },
-  { id: "nvidia", name: "NVIDIA NIM", abbr: "N", kind: "API key", needsKey: true, models: ["meta/llama-3.3-70b-instruct"], hint: "Live model catalog loads from your NVIDIA account." },
+  { id: "nvidia", name: "NVIDIA NIM", abbr: "N", kind: "API key", needsKey: true, models: [NVIDIA_DEFAULT_MODEL, "openai/gpt-oss-20b"], hint: "The catalog includes chat, embedding and vision models. Test connection confirms the selected model supports chat." },
   { id: "openai_compatible", name: "OpenAI-compatible", abbr: "C", kind: "self-hosted", needsBaseUrl: true, freeModel: true, urlLabel: "Base URL", urlPh: "http://localhost:8080/v1", hint: "Any server that speaks /v1/chat/completions: llama.cpp, vLLM, LM Studio, TGI. Include the /v1 suffix." },
   { id: "litellm", name: "LiteLLM", abbr: "L", kind: "proxy", needsBaseUrl: true, freeModel: true, urlLabel: "LiteLLM proxy URL", urlPh: "http://localhost:4000/v1", hint: "The model below must match an alias defined on your proxy." },
   { id: "omniroute", name: "OmniRoute", abbr: "Om", kind: "gateway", needsKey: true, keyOptional: true, needsBaseUrl: true, urlLabel: "OmniRoute API URL", urlPh: "http://localhost:20128/v1", models: ["auto"], hint: "Loads every route and combo from your OmniRoute instance. Tool calls and streaming are supported through its OpenAI-compatible API." },
@@ -451,6 +459,32 @@ export function OnboardingWizard({
     if (provId !== "groq" || !groqModels?.length) return;
     if (!groqModels.includes(model)) setModel(groqModels.includes("openai/gpt-oss-20b") ? "openai/gpt-oss-20b" : groqModels[0]!);
   }, [groqModels, model, provId]);
+
+  // NVIDIA rotates its hosted catalog regularly. The daemon exposes the
+  // provider's public /v1/models result, so do not strand onboarding on a
+  // hardcoded model that NVIDIA has retired.
+  const [nvidiaModels, setNvidiaModels] = useState<string[] | null>(null);
+  const [nvidiaLoading, setNvidiaLoading] = useState(false);
+  const [nvidiaFilter, setNvidiaFilter] = useState("");
+  useEffect(() => {
+    if (provId !== "nvidia" || nvidiaModels !== null) return;
+    let cancelled = false;
+    setNvidiaLoading(true);
+    fetch("/api/config/llm/nvidia/models")
+      .then((r) => r.json())
+      .then((d: { ok: boolean; models?: string[] }) => {
+        if (!cancelled) setNvidiaModels(d.ok && d.models?.length ? d.models : []);
+      })
+      .catch(() => { if (!cancelled) setNvidiaModels([]); })
+      .finally(() => { if (!cancelled) setNvidiaLoading(false); });
+    return () => { cancelled = true; };
+  }, [provId, nvidiaModels]);
+
+  useEffect(() => {
+    if (provId !== "nvidia" || !nvidiaModels?.length) return;
+    const next = selectLiveNvidiaModel(model, nvidiaModels);
+    if (next !== model) setModel(next);
+  }, [model, nvidiaModels, provId]);
 
   // The Google OAuth poll outlives the click handler — keep its id in a ref so
   // finishing/unmounting the wizard stops it (it ran for up to 5 min after).
@@ -1288,9 +1322,16 @@ export function OnboardingWizard({
         ? omniRouteModels
         : provId === "groq" && groqModels && groqModels.length > 0
           ? groqModels
+          : provId === "nvidia" && nvidiaModels && nvidiaModels.length > 0
+            ? nvidiaModels
           : customAnthropic
             ? (discoveredModels ?? [])
             : (prov.models ?? []);
+    const nvidiaNeedle = nvidiaFilter.trim().toLowerCase();
+    const visibleModels = provId === "nvidia" && nvidiaNeedle
+      ? pickerModels.filter((candidate) => candidate.toLowerCase().includes(nvidiaNeedle))
+      : pickerModels;
+    const modelHiddenByFilter = provId === "nvidia" && pickerModels.includes(model) && !visibleModels.includes(model);
     return (
       <>
         {prov.optionalBaseUrl && (
@@ -1316,13 +1357,36 @@ export function OnboardingWizard({
           ? <div className="obw-field"><label>Model</label><input className="obw-inp" placeholder="model id" value={model} onChange={(e) => setModel(e.target.value)} /></div>
           : customAnthropic && pickerModels.length === 0
             ? <div className="obw-field"><label>Model</label><div className="obw-hint">Models are read from the gateway when you test the connection.</div></div>
-            : <div className="obw-field"><label>Model</label><select className="obw-inp" value={model} onChange={(e) => setModel(e.target.value)}>{pickerModels.map((m) => <option key={m} value={m}>{m}</option>)}</select></div>}
+            : <div className="obw-field">
+                <label>Model</label>
+                {provId === "nvidia" && (
+                  <input
+                    className="obw-inp"
+                    value={nvidiaFilter}
+                    onChange={(e) => setNvidiaFilter(e.target.value)}
+                    placeholder={nvidiaLoading ? "Loading model catalog…" : `Filter ${pickerModels.length} models`}
+                    autoComplete="off"
+                    style={{ marginBottom: "var(--s-2)" }}
+                  />
+                )}
+                <select
+                  className="obw-inp"
+                  value={modelHiddenByFilter ? "__hidden_by_filter" : model}
+                  onChange={(e) => { if (e.target.value !== "__hidden_by_filter") setModel(e.target.value); }}
+                >
+                  {modelHiddenByFilter && <option value="__hidden_by_filter" disabled>{model} (hidden by filter)</option>}
+                  {model && !pickerModels.includes(model) && <option value={model} disabled>{model} (unavailable)</option>}
+                  {visibleModels.map((m) => <option key={m} value={m}>{m}</option>)}
+                </select>
+              </div>}
         {provId === "ollama" && ollamaLoading && <div className="obw-hint">Reading installed models from Ollama…</div>}
         {provId === "ollama" && !ollamaLoading && ollamaModels?.length === 0 && <div className="obw-hint">Could not reach Ollama at this URL — showing suggestions instead. Make sure Ollama is running (models must include their tag, e.g. llama3.1:8b).</div>}
         {provId === "omniroute" && omniRouteLoading && <div className="obw-hint">Loading every OmniRoute model and combo…</div>}
         {provId === "omniroute" && !omniRouteLoading && omniRouteModels?.length === 0 && <div className="obw-hint">Could not read this OmniRoute catalog. Check the URL and API key; you can still test the auto route.</div>}
         {provId === "groq" && groqLoading && <div className="obw-hint">Loading currently supported Groq models…</div>}
         {provId === "groq" && !groqLoading && groqModels?.length === 0 && <div className="obw-hint">Could not read Groq’s live catalog — showing current fallback models.</div>}
+        {provId === "nvidia" && nvidiaLoading && <div className="obw-hint">Loading NVIDIA’s current model catalog…</div>}
+        {provId === "nvidia" && !nvidiaLoading && nvidiaModels?.length === 0 && <div className="obw-hint">Could not read NVIDIA’s live catalog — showing current fallback models.</div>}
         <div className="obw-testrow">
           <button className="obw-btn obw-btn-ghost sm" disabled={test.status === "testing"} onClick={runTest}>{test.status === "testing" ? "Testing…" : "Test connection"}</button>
           {test.status === "ok" && <span className="obw-testres ok"><span className="dot" />Connected · {test.msg}</span>}

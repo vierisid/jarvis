@@ -787,7 +787,7 @@ describe('Default Models', () => {
 
   test('NVIDIAProvider has correct default model', () => {
     const provider = new NVIDIAProvider('test-key') as any;
-    expect(provider.defaultModel).toBe('meta/llama-3.3-70b-instruct');
+    expect(provider.defaultModel).toBe('nvidia/nemotron-3-super-120b-a12b');
   });
 
   test('can override default models', () => {

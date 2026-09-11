@@ -93,7 +93,7 @@ export class NVIDIAProvider implements LLMProvider {
   private defaultModel: string;
   private apiUrl = 'https://integrate.api.nvidia.com/v1/chat/completions';
 
-  constructor(apiKey: string, defaultModel = 'meta/llama-3.3-70b-instruct') {
+  constructor(apiKey: string, defaultModel = 'nvidia/nemotron-3-super-120b-a12b') {
     this.apiKey = apiKey;
     this.defaultModel = defaultModel;
   }
