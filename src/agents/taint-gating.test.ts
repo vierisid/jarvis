@@ -60,17 +60,18 @@ describe('buildTaintGating', () => {
     expect(g.governed_categories).not.toContain('access_browser');
   });
 
-  test('enabled:false turns it off; explicit [] empties the list; junk falls back', () => {
-    expect(buildTaintGating({ enabled: false }).enabled).toBe(false);
-    expect(buildTaintGating({ governed_categories: [] }).governed_categories).toEqual([]);
+  test('the safety floor cannot be disabled or emptied; valid extras are additive', () => {
+    expect(buildTaintGating({ enabled: false }).enabled).toBe(true);
+    expect(buildTaintGating({ governed_categories: [] }).governed_categories).toEqual([...DEFAULT_TAINT_GOVERNED]);
+    expect(buildTaintGating({ governed_categories: ['read_data'] }).governed_categories).toEqual([...DEFAULT_TAINT_GOVERNED, 'read_data']);
     expect(buildTaintGating({ governed_categories: ['nope'] }).governed_categories).toEqual([...DEFAULT_TAINT_GOVERNED]);
     expect(buildTaintGating({ governed_categories: 'x' as unknown as string[] }).governed_categories).toEqual([...DEFAULT_TAINT_GOVERNED]);
   });
 
-  test('taintProfile is null when off or clean; mergeProfiles unions and takes the lower cap', () => {
+  test('taintProfile is null when clean; mergeProfiles unions and takes the lower cap', () => {
     const g = buildTaintGating(undefined);
     expect(taintProfile(g, new Set())).toBeNull();
-    expect(taintProfile(buildTaintGating({ enabled: false }), new Set(['browser_snapshot']))).toBeNull();
+    expect(taintProfile(buildTaintGating({ enabled: false }), new Set(['browser_snapshot']))).not.toBeNull();
     const p = taintProfile(g, new Set(['browser_snapshot']))!;
     expect(p.label).toContain('browser_snapshot');
     const merged = mergeProfiles(buildBackgroundProfile({ level_cap: 6, governed_categories: ['control_app'] }), { level_cap: 4, governed_categories: ['write_data'] })!;
@@ -133,14 +134,14 @@ describe('orchestrator taint gating', () => {
     expect(calls).not.toContain('desktop_click');
   });
 
-  test('reading a file does not taint, but is still framed as outside content', async () => {
+  test('reading a file taints and gates a subsequent write', async () => {
     const { orch, calls } = build();
     const turn = new Set<string>();
     const out = String(await exec(orch, 'read_file', turn));
     expect(out).toContain('UNTRUSTED_CONTENT');
-    expect(turn.size).toBe(0);
-    expect(await exec(orch, 'write_file', turn)).toBe('ok');
-    expect(calls).toEqual(['read_file', 'write_file']);
+    expect([...turn]).toEqual(['read_file']);
+    expect(String(await exec(orch, 'write_file', turn))).toContain('[AWAITING_APPROVAL]');
+    expect(calls).toEqual(['read_file']);
   });
 
   test('a new turn starts clean; concurrent turns do not share taint', async () => {

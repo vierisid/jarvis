@@ -9,10 +9,6 @@ type SidecarConfig = {
   awareness: { screen_interval_ms: number; window_interval_ms: number; min_change_threshold: number; stuck_threshold_ms: number };
 };
 
-const ALL_CAPABILITIES = [
-  "terminal", "filesystem", "desktop", "browser", "clipboard", "screenshot", "system_info", "awareness",
-] as const;
-
 type UnavailableCapability = {
   name: string;
   reason: string;
@@ -78,9 +74,13 @@ export function SidecarConfigEditor({ sidecarId, sidecarName, unavailableCapabil
       } else {
         payload = config;
       }
+      const safePayload = {
+        filesystem: { max_file_size_kb: payload.filesystem.max_file_size_kb },
+        awareness: payload.awareness,
+      };
       const result = await api<SidecarConfig>(`/api/sidecars/${sidecarId}/config`, {
         method: "PATCH",
-        body: JSON.stringify(payload),
+        body: JSON.stringify(safePayload),
       });
       setConfig(result);
       setYamlText(configToYaml(result));
@@ -196,58 +196,16 @@ function FormMode({ config, updateConfig, unavailableCapabilities = [] }: {
   updateConfig: (fn: (c: SidecarConfig) => SidecarConfig) => void;
   unavailableCapabilities?: UnavailableCapability[];
 }) {
-  const unavailableMap = new Map(unavailableCapabilities.map(u => [u.name, u.reason]));
-
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: "16px" }}>
       <ConfigSection title="Capabilities">
-        <div style={{ display: "flex", flexWrap: "wrap", gap: "8px" }}>
-          {ALL_CAPABILITIES.map((cap) => {
-            const unavailReason = unavailableMap.get(cap);
-            return (
-              <label key={cap} style={checkboxLabelStyle}>
-                <input
-                  type="checkbox"
-                  checked={config.capabilities.includes(cap)}
-                  onChange={(e) => {
-                    updateConfig((c) => ({
-                      ...c,
-                      capabilities: e.target.checked
-                        ? [...c.capabilities, cap]
-                        : c.capabilities.filter((x) => x !== cap),
-                    }));
-                  }}
-                />
-                {cap}
-                {unavailReason && (
-                  <span title={unavailReason} style={{ color: "var(--j-warning, #fa0)", cursor: "help", marginLeft: "2px" }}>
-                    &#9888;
-                  </span>
-                )}
-              </label>
-            );
-          })}
+        <div style={{ color: "var(--ink3)", fontSize: "12px" }}>
+          {config.capabilities.join(", ") || "None"}. Change capabilities in the sidecar's local configuration.
         </div>
       </ConfigSection>
 
       <ConfigSection title="Terminal">
-        <ConfigNumberField
-          label="Timeout (ms)"
-          value={config.terminal.timeout_ms}
-          onChange={(v) => updateConfig((c) => ({ ...c, terminal: { ...c.terminal, timeout_ms: v } }))}
-        />
-        <ConfigTextField
-          label="Default Shell"
-          value={config.terminal.default_shell}
-          placeholder="/bin/bash"
-          onChange={(v) => updateConfig((c) => ({ ...c, terminal: { ...c.terminal, default_shell: v } }))}
-        />
-        <ConfigListField
-          label="Blocked Commands"
-          items={config.terminal.blocked_commands}
-          placeholder="e.g. rm -rf"
-          onChange={(items) => updateConfig((c) => ({ ...c, terminal: { ...c.terminal, blocked_commands: items } }))}
-        />
+        <div style={{ color: "var(--ink3)", fontSize: "12px" }}>Terminal settings are managed locally on the sidecar.</div>
       </ConfigSection>
 
       <ConfigSection title="Filesystem">
@@ -256,26 +214,11 @@ function FormMode({ config, updateConfig, unavailableCapabilities = [] }: {
           value={config.filesystem.max_file_size_kb}
           onChange={(v) => updateConfig((c) => ({ ...c, filesystem: { ...c.filesystem, max_file_size_kb: v } }))}
         />
-        <ConfigListField
-          label="Blocked Paths"
-          items={config.filesystem.blocked_paths}
-          placeholder="e.g. /etc/shadow"
-          onChange={(items) => updateConfig((c) => ({ ...c, filesystem: { ...c.filesystem, blocked_paths: items } }))}
-        />
+        <div style={{ color: "var(--ink3)", fontSize: "12px" }}>Blocked paths are managed locally on the sidecar.</div>
       </ConfigSection>
 
       <ConfigSection title="Browser">
-        <ConfigNumberField
-          label="CDP Port"
-          value={config.browser.cdp_port}
-          onChange={(v) => updateConfig((c) => ({ ...c, browser: { ...c.browser, cdp_port: v } }))}
-        />
-        <ConfigTextField
-          label="Profile Directory"
-          value={config.browser.profile_dir}
-          placeholder="Chrome profile path"
-          onChange={(v) => updateConfig((c) => ({ ...c, browser: { ...c.browser, profile_dir: v } }))}
-        />
+        <div style={{ color: "var(--ink3)", fontSize: "12px" }}>Browser settings are managed locally on the sidecar.</div>
       </ConfigSection>
 
       <ConfigSection title="Awareness">

@@ -153,6 +153,10 @@ func makeRunCommandHandler(cfg *SidecarConfig) RPCHandler {
 			timeoutMs = int(t)
 		}
 
+		// This is a local deny-list for accidental or plainly written commands,
+		// not an authorization boundary. Shell syntax is intentionally expressive
+		// and cannot be secured by substring matching; authorization is enforced
+		// by the brain before this RPC is dispatched.
 		for _, blocked := range cfg.Terminal.BlockedCommands {
 			if strings.Contains(command, blocked) {
 				return &RPCResult{Result: map[string]any{
@@ -767,67 +771,33 @@ func makeUpdateConfigHandler(cfg *SidecarConfig, mu sync.Locker, onReloaded func
 	getConfig := makeGetConfigHandler(cfg)
 
 	return func(params map[string]any) (*RPCResult, error) {
+		// The brain is an execution peer, not a local administrator. Do not let
+		// remote input enable capabilities or weaken the policies that constrain
+		// that peer. These settings remain editable in the sidecar's local YAML.
+		if _, ok := params["capabilities"]; ok {
+			return nil, fmt.Errorf("capabilities can only be changed locally on the sidecar")
+		}
+		if _, ok := params["terminal"]; ok {
+			return nil, fmt.Errorf("terminal settings can only be changed locally on the sidecar")
+		}
+		if fs, ok := params["filesystem"].(map[string]any); ok {
+			if _, present := fs["blocked_paths"]; present {
+				return nil, fmt.Errorf("filesystem.blocked_paths can only be changed locally on the sidecar")
+			}
+		}
+		if _, ok := params["browser"]; ok {
+			return nil, fmt.Errorf("browser settings can only be changed locally on the sidecar")
+		}
+
 		// Mutate the shared *SidecarConfig under the same lock that editConfig /
 		// reloadConfig / Preferences use — this handler runs on a per-RPC
 		// goroutine while those run on the settings/reconnect paths, all touching
 		// the same struct. No early returns until the explicit Unlock below.
 		mu.Lock()
-		// Update capabilities
-		if caps, ok := params["capabilities"].([]any); ok {
-			newCaps := make([]SidecarCapability, 0, len(caps))
-			for _, c := range caps {
-				if s, ok := c.(string); ok {
-					newCaps = append(newCaps, s)
-				}
-			}
-			cfg.Capabilities = newCaps
-		}
-
-		// Update terminal
-		if terminal, ok := params["terminal"].(map[string]any); ok {
-			if v, ok := terminal["timeout_ms"].(float64); ok {
-				cfg.Terminal.TimeoutMs = int(v)
-			}
-			if v, ok := terminal["default_shell"].(string); ok {
-				cfg.Terminal.DefaultShell = v
-			}
-			if v, ok := terminal["blocked_commands"].([]any); ok {
-				cmds := make([]string, 0, len(v))
-				for _, c := range v {
-					if s, ok := c.(string); ok {
-						cmds = append(cmds, s)
-					}
-				}
-				cfg.Terminal.BlockedCommands = cmds
-			}
-		}
-
 		// Update filesystem
 		if fs, ok := params["filesystem"].(map[string]any); ok {
 			if v, ok := fs["max_file_size_kb"].(float64); ok {
 				cfg.Filesystem.MaxFileSizeKB = int(v)
-			}
-			if v, ok := fs["blocked_paths"].([]any); ok {
-				paths := make([]string, 0, len(v))
-				for _, p := range v {
-					if s, ok := p.(string); ok {
-						paths = append(paths, s)
-					}
-				}
-				cfg.Filesystem.BlockedPaths = paths
-			}
-		}
-
-		// Update browser
-		if browser, ok := params["browser"].(map[string]any); ok {
-			if v, ok := browser["executable_path"].(string); ok {
-				cfg.Browser.ExecutablePath = v
-			}
-			if v, ok := browser["profile_dir"].(string); ok {
-				cfg.Browser.ProfileDir = v
-			}
-			if v, ok := browser["cdp_port"].(float64); ok {
-				cfg.Browser.CDPPort = int(v)
 			}
 		}
 

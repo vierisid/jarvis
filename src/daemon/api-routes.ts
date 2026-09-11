@@ -4368,6 +4368,19 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           }
           const body = await req.json() as Record<string, unknown>;
           delete body.token;
+          if ('capabilities' in body) {
+            return error('Sidecar capabilities can only be changed locally', 403);
+          }
+          if ('terminal' in body) {
+            return error('Sidecar terminal settings can only be changed locally', 403);
+          }
+          const filesystem = body.filesystem as Record<string, unknown> | undefined;
+          if (filesystem && 'blocked_paths' in filesystem) {
+            return error('Blocked paths can only be changed locally', 403);
+          }
+          if ('browser' in body) {
+            return error('Sidecar browser settings can only be changed locally', 403);
+          }
           const result = await ctx.sidecarManager.dispatchRPC(id, 'update_config', body);
           return json(result);
         } catch (err) { return error(`${err}`, 500); }

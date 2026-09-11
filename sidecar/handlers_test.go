@@ -3,6 +3,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"sync"
 	"testing"
 )
 
@@ -13,6 +14,35 @@ func testConfig() *SidecarConfig {
 	// don't construct the pebble/panel services or start Chrome.
 	cfg.Capabilities = []SidecarCapability{CapTerminal, CapFilesystem, CapSystemInfo}
 	return &cfg
+}
+
+func TestRemoteConfigCannotWeakenExecutionPolicy(t *testing.T) {
+	cfg := testConfig()
+	cfg.Terminal.BlockedCommands = []string{"danger"}
+	cfg.Filesystem.BlockedPaths = []string{"/protected"}
+	handler := makeUpdateConfigHandler(cfg, &sync.Mutex{}, nil)
+
+	tests := []struct {
+		name   string
+		params map[string]any
+	}{
+		{"capabilities", map[string]any{"capabilities": []any{}}},
+		{"terminal", map[string]any{"terminal": map[string]any{"default_shell": "/tmp/attacker"}}},
+		{"blocked commands", map[string]any{"terminal": map[string]any{"blocked_commands": []any{}}}},
+		{"blocked paths", map[string]any{"filesystem": map[string]any{"blocked_paths": []any{}}}},
+		{"browser", map[string]any{"browser": map[string]any{"executable_path": "/tmp/attacker"}}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if _, err := handler(tt.params); err == nil {
+				t.Fatal("expected remote policy change to be rejected")
+			}
+		})
+	}
+
+	if len(cfg.Capabilities) != 3 || len(cfg.Terminal.BlockedCommands) != 1 || len(cfg.Filesystem.BlockedPaths) != 1 {
+		t.Fatal("rejected update changed the local configuration")
+	}
 }
 
 func TestRunCommand(t *testing.T) {

@@ -4,9 +4,9 @@
  * The chat agent keeps its full authority level: the owner chose it, and an
  * autonomous assistant is the product. What changes is one specific case:
  * within a turn in which the agent has READ outside content (a web page,
- * the clipboard, screen text, or a sub-agent's report; see
- * isTaintSourceTool in roles/untrusted.ts for the list, and why read_file
- * is not on it), the actions that change the machine, contact someone or
+ * the clipboard, a local file, screen text, or a sub-agent's report; see
+ * isTaintSourceTool in roles/untrusted.ts for the list), the actions that
+ * change the machine, contact someone or
  * delegate stop for approval. Nothing an attacker wrote on a page can then
  * turn straight into a shell command; the user sees exactly what the agent
  * wants to do and clicks once.
@@ -19,7 +19,9 @@
  * Taint-gated approvals are not fed to the approval learner, because an
  * override cannot lift a profile gate and the suggestion would be dead.
  *
- * Configured under `authority.taint_gating`.
+ * Configured under `authority.taint_gating`. The categories below form a
+ * safety floor: configuration may add categories, but cannot remove these
+ * controls or disable gating.
  */
 
 import type { ActionCategory } from '../roles/authority.ts';
@@ -29,7 +31,7 @@ import type { TaintGatingConfig } from '../config/types.ts';
 export const TAINT_PROFILE_LABEL = 'outside content read this turn';
 
 /** Applied when `authority.taint_gating.governed_categories` is absent. */
-export const DEFAULT_TAINT_GOVERNED: readonly ActionCategory[] = [
+export const REQUIRED_TAINT_GOVERNED: readonly ActionCategory[] = [
   'execute_command',
   'write_data',
   'control_app',
@@ -43,6 +45,8 @@ export const DEFAULT_TAINT_GOVERNED: readonly ActionCategory[] = [
   // parent must not be able to route around the gate that way.
   'spawn_agent',
 ];
+
+export const DEFAULT_TAINT_GOVERNED = REQUIRED_TAINT_GOVERNED;
 
 const KNOWN_CATEGORIES: ReadonlySet<string> = new Set<ActionCategory>([
   'read_data', 'write_data', 'delete_data',
@@ -59,10 +63,9 @@ export type TaintGating = {
 };
 
 /**
- * Build the gating from its config section. Same parsing rules as the
- * background profile: only an explicit empty list opts out of the category
- * list; malformed input falls back to the defaults and is logged. `enabled`
- * defaults to true.
+ * Build the gating from its config section. User configuration can add
+ * categories, but the security-sensitive defaults are always retained.
+ * Malformed input falls back to the defaults and is logged.
  */
 export function buildTaintGating(section?: TaintGatingConfig | null): TaintGating {
   const raw = section?.governed_categories;
@@ -73,21 +76,20 @@ export function buildTaintGating(section?: TaintGatingConfig | null): TaintGatin
     console.warn('[Authority] authority.taint_gating.governed_categories is not a list; using defaults');
     governed = [...DEFAULT_TAINT_GOVERNED];
   } else {
-    governed = [];
+    governed = [...REQUIRED_TAINT_GOVERNED];
     for (const cat of raw) {
       if (typeof cat === 'string' && KNOWN_CATEGORIES.has(cat)) {
-        governed.push(cat as ActionCategory);
+        if (!governed.includes(cat as ActionCategory)) governed.push(cat as ActionCategory);
       } else {
         console.warn(`[Authority] authority.taint_gating.governed_categories: unknown category "${String(cat)}" ignored`);
       }
     }
-    if (raw.length > 0 && governed.length === 0) {
-      console.warn('[Authority] authority.taint_gating.governed_categories had no valid entries; using defaults');
-      governed = [...DEFAULT_TAINT_GOVERNED];
-    }
+  }
+  if (section?.enabled === false) {
+    console.warn('[Authority] authority.taint_gating.enabled=false is no longer accepted; gating remains enabled');
   }
   return {
-    enabled: section?.enabled !== false,
+    enabled: true,
     governed_categories: governed,
   };
 }

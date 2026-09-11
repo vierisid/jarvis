@@ -46,14 +46,12 @@ export function isUntrustedSourceTool(name: string, category: string | undefined
 /**
  * Tools whose result taints the turn for authority purposes.
  *
- * Every wrapped tool does except read_file: the owner's own files are the
- * usual target and cannot be told apart from a download, and gating every
- * "read X then edit or run it" turn would make the assistant unusable. The
- * content is still framed as data. Added on top: delegation (a sub-agent's
- * report is its own words, unwrapped, but carries whatever it read) and the
- * screenshot tools, which show the vision model whatever is on screen.
+ * Every wrapped tool does. A local path is not a trust boundary: downloads,
+ * synced folders, repositories and attachments can all contain text supplied
+ * by an attacker. Added on top: delegation (a sub-agent's report is its own
+ * words, unwrapped, but carries whatever it read) and the screenshot tools,
+ * which show the vision model whatever is on screen.
  */
-const TAINT_EXEMPT_TOOLS: ReadonlySet<string> = new Set(['read_file']);
 const TAINT_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'delegate_task',
   'manage_agents',
@@ -62,7 +60,6 @@ const TAINT_ONLY_TOOLS: ReadonlySet<string> = new Set([
 ]);
 
 export function isTaintSourceTool(name: string, category: string | undefined): boolean {
-  if (TAINT_EXEMPT_TOOLS.has(name)) return false;
   return isUntrustedSourceTool(name, category) || TAINT_ONLY_TOOLS.has(name);
 }
 

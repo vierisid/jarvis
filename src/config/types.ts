@@ -263,9 +263,9 @@ export type BackgroundAuthorityConfig = {
  * user message clears the taint. See src/authority/taint-gating.ts.
  */
 export type TaintGatingConfig = {
-  /** Default true. */
+  /** Deprecated. Gating is always enabled; retained for config compatibility. */
   enabled?: boolean;
-  /** Categories gated while tainted. Explicit [] disables the list. */
+  /** Extra categories gated while tainted. Core categories cannot be removed. */
   governed_categories?: string[];      // ActionCategory[]
 };
 
