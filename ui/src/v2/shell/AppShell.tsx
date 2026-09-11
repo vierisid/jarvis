@@ -519,6 +519,17 @@ function AppShellLive() {
     return null;
   }, [live.items]);
 
+  // Expanding is a presentation transition, not another copy of the room.
+  // Remove the source window before mounting the fullscreen RoomShell so the
+  // inline/floating body cannot remain visible and keep duplicate local state.
+  const handleRoomExpand = useCallback((id: string) => {
+    const item = live.items.find((candidate) => candidate.id === id);
+    if (!item || item.kind !== "room-window") return;
+    setRoomEntry(item.roomKey as RoomKey, "thread");
+    live.closeRoomWindow(id);
+    openRoom(item.roomKey as RoomKey);
+  }, [live.items, live.closeRoomWindow]);
+
   return (
     <LiveDataProvider
       value={{
@@ -560,18 +571,7 @@ function AppShellLive() {
         onRoomClose={(id) => live.closeRoomWindow(id)}
         onRoomMinimize={(id) => live.setRoomWindowStateById(id, "minimized")}
         onRoomRestore={(id) => live.setRoomWindowStateById(id, "inline")}
-        onRoomExpand={(id) => {
-          const item = live.items.find((i) => i.id === id);
-          if (item && item.kind === "room-window") {
-            // Inline windows in the thread were spawned by some prior
-            // action (palette pick, voice "open X", or InlineCard
-            // Focus). We don't track that origin per-window today, so
-            // mark the expand as "thread" — the user is escalating an
-            // existing thread element to fullscreen.
-            setRoomEntry(item.roomKey as RoomKey, "thread");
-            openRoom(item.roomKey as RoomKey);
-          }
-        }}
+        onRoomExpand={handleRoomExpand}
         onRoomLayoutChange={(id, next) => live.setRoomWindowLayout(id, next)}
         onClarifier={handleClarifier}
         onRepeatBack={handleRepeatBack}
@@ -601,15 +601,7 @@ function AppShellLive() {
         onClose={(id) => live.closeRoomWindow(id)}
         onMinimize={(id) => live.setRoomWindowStateById(id, "minimized")}
         onRestore={(id) => live.setRoomWindowStateById(id, "inline")}
-        onExpand={(id) => {
-          const item = live.items.find((i) => i.id === id);
-          if (item && item.kind === "room-window") {
-            // Floating-window expand → fullscreen room. Same source
-            // attribution as the inline expand above.
-            setRoomEntry(item.roomKey as RoomKey, "thread");
-            openRoom(item.roomKey as RoomKey);
-          }
-        }}
+        onExpand={handleRoomExpand}
         onLayoutChange={(id, next) => live.setRoomWindowLayout(id, next)}
       />
       <CommandPalette
