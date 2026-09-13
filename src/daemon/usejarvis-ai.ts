@@ -152,17 +152,26 @@ export function applyUsejarvisAi(config: JarvisConfig): void {
 
 /**
  * The LLM config the provider-binding paths (boot registration, hot reload)
- * must consume instead of config.llm. On self-hosted installs it IS
- * config.llm. On hosted installs it is a copy whose tier slots are resolved
- * per-slot: explicit user ref → llm.default → plan uj-* alias.
+ * must consume instead of config.llm. It is a copy whose tier slots are
+ * resolved per-slot. Self-hosted installs use explicit ref → llm.default;
+ * hosted installs add the plan uj-* alias as the final fallback.
  *
  * Never mutates config and its result must never be persisted — the fill
  * exists only for the duration of a bind.
  */
 export function effectiveLlmForBinding(config: JarvisConfig): LLMConfig {
-  if (!hasUsejarvisAi(config)) return config.llm;
-
   const tiers: Record<string, string> = { ...(config.llm.tiers ?? {}) };
+  // A single-LLM default is a real routing assignment, not merely a UI
+  // preference. Keep conversation unset so the classic orchestrator remains
+  // active, while every task/background tier resolves to the chosen model.
+  if (config.llm.default) {
+    for (const tier of ['low', 'medium', 'high']) {
+      if (!tiers[tier]) tiers[tier] = config.llm.default;
+    }
+  }
+
+  if (!hasUsejarvisAi(config)) return { ...config.llm, tiers };
+
   for (const [tier, alias] of Object.entries(USEJARVIS_TIER_DEFAULTS)) {
     if (!tiers[tier]) {
       tiers[tier] = config.llm.default || alias;

@@ -122,10 +122,22 @@ describe('applyUsejarvisAi (provider injection only)', () => {
 });
 
 describe('effectiveLlmForBinding (per-slot: explicit ref → llm.default → plan alias)', () => {
-  test('self-hosted: returns config.llm untouched', () => {
+  test('self-hosted: explicit tiers remain untouched when there is no default', () => {
     const config = base();
     config.llm.tiers = { high: 'anthropic:claude-x' };
-    expect(effectiveLlmForBinding(config)).toBe(config.llm);
+    expect(effectiveLlmForBinding(config).tiers).toEqual({ high: 'anthropic:claude-x' });
+  });
+
+  test('self-hosted: default fills task tiers without enabling router-first', () => {
+    const config = base();
+    config.llm.default = 'ollama:qwen3:14b';
+    const effective = effectiveLlmForBinding(config);
+    expect(effective.tiers).toEqual({
+      low: 'ollama:qwen3:14b',
+      medium: 'ollama:qwen3:14b',
+      high: 'ollama:qwen3:14b',
+    });
+    expect(config.llm.tiers ?? {}).toEqual({});
   });
 
   test('hosted, all silent: every slot resolves to its uj-* alias', () => {

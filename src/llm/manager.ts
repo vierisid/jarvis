@@ -244,7 +244,7 @@ export class LLMManager {
     if (!resolution) {
       throw new Error(
         `No provider configured for tier '${tier}' or its fall-up chain. ` +
-        `Configure llm.tiers.${tier} or llm.tiers.medium in config.yaml.`,
+        `Choose a default model or assign the ${tier}/medium tier in Settings > LLM.`,
       );
     }
     const provider = this.providers.get(resolution.assignment.provider);

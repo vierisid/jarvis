@@ -942,7 +942,13 @@ export async function testLLMProvider(
 
   try {
     let models: string[] | undefined;
-    let testModel = opts.model;
+    // The provider card does not own a model picker. When testing an already
+    // configured provider, inherit its selected single-LLM default instead of
+    // falling through to the provider SDK's arbitrary built-in model (for
+    // Ollama that is `llama3`, which may not even be installed).
+    const configuredDefault = parseModelRef(config.llm.default);
+    let testModel = opts.model
+      ?? (configuredDefault?.provider === name ? configuredDefault.model : undefined);
     if (kind === 'anthropic' && isAnthropicCustomBaseUrl(baseUrl) && !testModel) {
       models = await instance.listModels().catch(() => []);
       if (!models.length) {

@@ -14,11 +14,12 @@ type CapturedRequest = {
 function callEndpoint(
   providers: Record<string, LLMProviderEntry>,
   body: Record<string, unknown>,
+  defaultModel?: string,
 ): Response | Promise<Response> {
   const ctx = {
     daemonStartedAt: Date.now(),
     healthMonitor: {} as ApiContext['healthMonitor'],
-    config: { llm: { providers } } as JarvisConfig,
+    config: { llm: { providers, default: defaultModel } } as JarvisConfig,
   } as ApiContext;
   const route = createApiRoutes(ctx)['/api/config/llm/test'] as { POST: Handler };
   return route.POST(new Request('http://x/api/config/llm/test', {
@@ -27,6 +28,38 @@ function callEndpoint(
     body: JSON.stringify(body),
   }));
 }
+
+describe('POST /api/config/llm/test single-LLM default', () => {
+  const realFetch = globalThis.fetch;
+
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  it('tests the selected Ollama model instead of the SDK llama3 fallback', async () => {
+    let requestedModel = '';
+    globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
+      const requestBody = JSON.parse(String(init?.body)) as { model: string };
+      requestedModel = requestBody.model;
+      return new Response(JSON.stringify({
+        model: requestBody.model,
+        message: { role: 'assistant', content: 'OK' },
+        done: true,
+        prompt_eval_count: 1,
+        eval_count: 1,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+    }) as unknown as typeof fetch;
+
+    const response = await callEndpoint(
+      { ollama: { kind: 'ollama', base_url: 'http://ollama.example:11434' } },
+      { name: 'ollama' },
+      'ollama:qwen3:14b',
+    );
+    const body = await response.json() as { ok: boolean; model: string };
+
+    expect(body.ok).toBe(true);
+    expect(body.model).toBe('qwen3:14b');
+    expect(requestedModel).toBe('qwen3:14b');
+  });
+});
 
 describe('POST /api/config/llm/test Anthropic endpoint scoping', () => {
   const realFetch = globalThis.fetch;
