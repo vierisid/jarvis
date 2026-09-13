@@ -33,7 +33,7 @@ export interface GeneratedCatalogEntry {
 }
 
 /** Timestamp of the last generation pass (ISO date). */
-export const GENERATED_AT = "2026-09-06";
+export const GENERATED_AT = "2026-09-13";
 
 /** Activepieces commit the script walked when generating this list. */
 export const GENERATED_FROM_SHA = "d04e6807c485ecd788a72af0d04abffba78563c7";
@@ -1262,8 +1262,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "coda",
     npmPackage: "@activepieces/piece-coda",
-    versionRange: "^0.1.8",
-    latestVersion: "0.1.8",
+    versionRange: "^0.1.9",
+    latestVersion: "0.1.9",
     displayName: "Coda",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/coda",
@@ -1372,8 +1372,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "convertkit",
     npmPackage: "@activepieces/piece-convertkit",
-    versionRange: "^0.3.7",
-    latestVersion: "0.3.7",
+    versionRange: "^0.3.8",
+    latestVersion: "0.3.8",
     displayName: "Convertkit",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/convertkit",
@@ -2372,8 +2372,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "gmail",
     npmPackage: "@activepieces/piece-gmail",
-    versionRange: "^0.14.0",
-    latestVersion: "0.14.0",
+    versionRange: "^0.15.0",
+    latestVersion: "0.15.0",
     displayName: "Gmail",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/gmail",
@@ -3062,8 +3062,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "kimai",
     npmPackage: "@activepieces/piece-kimai",
-    versionRange: "^0.2.7",
-    latestVersion: "0.2.7",
+    versionRange: "^0.3.0",
+    latestVersion: "0.3.0",
     displayName: "Kimai",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/kimai",
@@ -3272,8 +3272,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "linear",
     npmPackage: "@activepieces/piece-linear",
-    versionRange: "^0.5.1",
-    latestVersion: "0.5.1",
+    versionRange: "^0.5.2",
+    latestVersion: "0.5.2",
     displayName: "Linear",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/linear",
@@ -3932,8 +3932,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "mooninvoice",
     npmPackage: "@activepieces/piece-mooninvoice",
-    versionRange: "^0.0.8",
-    latestVersion: "0.0.8",
+    versionRange: "^0.0.9",
+    latestVersion: "0.0.9",
     displayName: "Mooninvoice",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/mooninvoice",
@@ -4092,8 +4092,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "ntfy",
     npmPackage: "@activepieces/piece-ntfy",
-    versionRange: "^0.2.8",
-    latestVersion: "0.2.8",
+    versionRange: "^0.2.9",
+    latestVersion: "0.2.9",
     displayName: "Ntfy",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/ntfy",
@@ -4132,8 +4132,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "okta",
     npmPackage: "@activepieces/piece-okta",
-    versionRange: "^0.1.7",
-    latestVersion: "0.1.7",
+    versionRange: "^0.2.0",
+    latestVersion: "0.2.0",
     displayName: "Okta",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/okta",
@@ -4682,8 +4682,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "pushover",
     npmPackage: "@activepieces/piece-pushover",
-    versionRange: "^0.2.7",
-    latestVersion: "0.2.7",
+    versionRange: "^0.2.8",
+    latestVersion: "0.2.8",
     displayName: "Pushover",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/pushover",
@@ -5352,8 +5352,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "slack",
     npmPackage: "@activepieces/piece-slack",
-    versionRange: "^0.17.9",
-    latestVersion: "0.17.9",
+    versionRange: "^0.17.10",
+    latestVersion: "0.17.10",
     displayName: "Slack",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/slack",
@@ -5552,8 +5552,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "stripe",
     npmPackage: "@activepieces/piece-stripe",
-    versionRange: "^0.6.14",
-    latestVersion: "0.6.14",
+    versionRange: "^0.6.15",
+    latestVersion: "0.6.15",
     displayName: "Stripe",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/stripe",
@@ -5632,8 +5632,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "systeme-io",
     npmPackage: "@activepieces/piece-systeme-io",
-    versionRange: "^0.1.8",
-    latestVersion: "0.1.8",
+    versionRange: "^0.1.9",
+    latestVersion: "0.1.9",
     displayName: "Systeme Io",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/systeme-io",
@@ -5652,8 +5652,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "talkable",
     npmPackage: "@activepieces/piece-talkable",
-    versionRange: "^0.2.8",
-    latestVersion: "0.2.8",
+    versionRange: "^0.2.9",
+    latestVersion: "0.2.9",
     displayName: "Talkable",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/talkable",
@@ -5902,8 +5902,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "truelayer",
     npmPackage: "@activepieces/piece-truelayer",
-    versionRange: "^0.1.8",
-    latestVersion: "0.1.8",
+    versionRange: "^0.1.9",
+    latestVersion: "0.1.9",
     displayName: "Truelayer",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/truelayer",
@@ -6302,8 +6302,8 @@ export const GENERATED: GeneratedCatalogEntry[] = [
   {
     id: "whatsscale",
     npmPackage: "@activepieces/piece-whatsscale",
-    versionRange: "^0.0.6",
-    latestVersion: "0.0.6",
+    versionRange: "^1.0.0",
+    latestVersion: "1.0.0",
     displayName: "Whatsscale",
     description: "",
     sourceUrl: "https://github.com/activepieces/activepieces/tree/d04e6807c485ecd788a72af0d04abffba78563c7/packages/pieces/community/whatsscale",
