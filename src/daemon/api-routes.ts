@@ -3919,11 +3919,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
     '/api/awareness/report/weekly': {
       GET: async (req: Request) => {
-        if (!ctx.awarenessService) return error('Awareness service not available', 503);
+        const awareness = ctx.awarenessService;
+        if (!awareness) return error('Awareness service not available', 503);
         try {
           const params = getSearchParams(req);
           const weekStart = params.get('weekStart') ?? undefined;
-          const report = await ctx.awarenessService.generateWeeklyReport(weekStart);
+          // Background like the rest of awareness: the report is built from
+          // screen-derived session summaries, not from anything typed.
+          const report = await runWithOrigin('background', () => awareness.generateWeeklyReport(weekStart));
           return json(report);
         } catch (err) {
           return error(`Weekly report error: ${err instanceof Error ? err.message : err}`);

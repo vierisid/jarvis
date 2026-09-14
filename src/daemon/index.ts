@@ -90,8 +90,23 @@ import { EngineFlowExecutor } from "../workflows/runner/engine-runtime/engine-fl
 import { createLimiter } from "../util/concurrency.ts";
 import { runWithOrigin } from "../llm/origin.ts";
 
-/** Sentences of one Pebble reply synthesized at once (see runResponseCycle). */
+/** Sentences synthesized at once for one sidecar's Pebble speech (see runResponseCycle). */
 const PEBBLE_TTS_CONCURRENCY = 4;
+
+/**
+ * One synthesis limiter per sidecar, shared by every response cycle on it. A
+ * barge-in cancels a cycle whose in-flight syntheses cannot be stopped, and a
+ * limiter per cycle would let the next cycle start four more beside them.
+ */
+const pebbleSynthLimiters = new Map<string, ReturnType<typeof createLimiter>>();
+function pebbleSynthLimiter(sidecarId: string): ReturnType<typeof createLimiter> {
+  let limiter = pebbleSynthLimiters.get(sidecarId);
+  if (!limiter) {
+    limiter = createLimiter(PEBBLE_TTS_CONCURRENCY);
+    pebbleSynthLimiters.set(sidecarId, limiter);
+  }
+  return limiter;
+}
 
 // Constants
 const DEFAULT_PORT = 3142;  // JARVIS port
@@ -2810,6 +2825,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           await speakConfirmation(sidecarId, "I can't start a background agent right now.", ctrl);
           return true;
         }
+        // Asked BEFORE spawning: a cap hit inside assign would leave an idle
+        // specialist behind for a task that never started.
+        if (!taskManagerLocal.canLaunch()) {
+          await speakConfirmation(
+            sidecarId,
+            "Too many background tasks are already running. Try again when one finishes.",
+            ctrl,
+          );
+          return true;
+        }
 
         const deps = {
           orchestrator,
@@ -3276,9 +3301,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const pendingTTS: Promise<unknown>[] = [];
         // Synthesis started for every sentence at once, so a long reply fired a
         // burst of parallel hosted TTS requests large enough to trip a per-key
-        // limit. Bounded per cycle; only the synthesize call holds a slot, so
-        // waiting on the previous clip below can never deadlock the queue.
-        const synthLimit = createLimiter(PEBBLE_TTS_CONCURRENCY);
+        // limit. Bounded per SIDECAR, shared with any cycle a barge-in starts;
+        // only the synthesize call holds a slot, so waiting on the previous
+        // clip below can never deadlock the queue.
+        const synthLimit = pebbleSynthLimiter(sidecarId);
         // Serializes clip DISPATCH (not synthesis) so sentences play in order
         // even when a later, shorter sentence synthesizes faster than an earlier
         // one. Each job awaits the previous before queueing its clip + bumping

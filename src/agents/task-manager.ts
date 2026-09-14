@@ -71,7 +71,11 @@ export class AgentTaskManager {
   /** `runSubAgentFn` is a test seam; production gets the real runner. */
   constructor(private readonly runSubAgentFn: typeof runSubAgent = runSubAgent) {}
 
-  /** Tasks currently running. */
+  /**
+   * Tasks currently running. A task whose agent was terminated still counts:
+   * the sub-agent loop has no abort and keeps calling the model until it
+   * finishes, and bounding that traffic is what the cap is for.
+   */
   runningCount(): number {
     let n = 0;
     for (const task of this.tasks.values()) if (task.status === 'running') n++;

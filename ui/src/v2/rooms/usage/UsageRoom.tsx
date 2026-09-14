@@ -136,20 +136,25 @@ function HostedBudgetStrip() {
   return (
     <div className="rk-usage__budget">
       {banner && <div className={`rk-usage__banner rk-usage__banner--${banner.tone}`}>{banner.text}</div>}
-      <div className="rk-usage__meters">
-        <Meter
-          label="6-hour window"
-          value={meter.sessionPct}
-          tone={meterTone(meter.sessionPct)}
-          note={formatResetIn(meter.sessionResetsAt, now)}
-        />
-        <Meter
-          label="this week"
-          value={meter.weekPct}
-          tone={meterTone(meter.weekPct)}
-          note={formatResetIn(meter.weekResetsAt, now)}
-        />
-      </div>
+      {/* Restricted with no plan: the windows would read 100% with a reset
+          countdown, which says the AI comes back at the reset. The banner is
+          the whole story, so the meters are left out. */}
+      {meter.entitled && (
+        <div className="rk-usage__meters">
+          <Meter
+            label="6-hour window"
+            value={meter.sessionPct}
+            tone={meterTone(meter.sessionPct)}
+            note={formatResetIn(meter.sessionResetsAt, now)}
+          />
+          <Meter
+            label="this week"
+            value={meter.weekPct}
+            tone={meterTone(meter.weekPct)}
+            note={formatResetIn(meter.weekResetsAt, now)}
+          />
+        </div>
+      )}
     </div>
   );
 }
