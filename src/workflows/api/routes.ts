@@ -1,3 +1,6 @@
+import { startWorkItemRun } from '../../goals/workflow-bridge.ts';
+import { WorkItemError } from '../../goals/work-items.ts';
+
 /**
  * HTTP routes for the workflow runtime.
  *
@@ -989,7 +992,16 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             triggeredBy?: string;
             stepNameToTest?: string;
             payload?: Record<string, unknown>;
+            workItemId?: string;
           };
+          if (body.workItemId !== undefined) {
+            if (typeof body.workItemId !== 'string' || !body.workItemId) return err('workItemId must be a non-empty string', 400);
+            if (Object.keys(body).some(key => key !== 'workItemId')) {
+              return err('Linked work uses its accepted version and input; only workItemId is allowed', 400);
+            }
+            try { return ok(startWorkItemRun(body.workItemId, id), 202); }
+            catch (e) { if (e instanceof WorkItemError) return err(e.message, e.status); throw e; }
+          }
           // Version selection:
           //   - Test-from-here (stepNameToTest set): prefer DRAFT. The user
           //     is iterating on step definitions + sample data in the editor,

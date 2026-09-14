@@ -19,7 +19,7 @@ type GoalRow = Omit<Goal, 'tags' | 'dependencies'> & {
 
 type ProgressRow = GoalProgressEntry;
 
-type CheckInRow = Omit<GoalCheckIn, 'goals_reviewed' | 'actions_planned' | 'actions_completed'> & {
+type CheckInRow = Omit<GoalCheckIn, 'goals_reviewed' | 'actions_planned' | 'actions_completed' | 'work_item_ids'> & {
   goals_reviewed: string | null;
   actions_planned: string | null;
   actions_completed: string | null;
@@ -41,6 +41,9 @@ function parseCheckIn(row: CheckInRow): GoalCheckIn {
     goals_reviewed: row.goals_reviewed ? JSON.parse(row.goals_reviewed) : [],
     actions_planned: row.actions_planned ? JSON.parse(row.actions_planned) : [],
     actions_completed: row.actions_completed ? JSON.parse(row.actions_completed) : [],
+    work_item_ids: getDb().query<{ work_id: string }, [string]>(
+      'SELECT work_id FROM commitment_work WHERE plan_id = ? ORDER BY action_index',
+    ).all(row.id).map(w => w.work_id),
   };
 }
 
@@ -389,6 +392,7 @@ export function createCheckIn(
     goals_reviewed: goalsReviewed,
     actions_planned: actionsPlanned,
     actions_completed: actionsCompleted,
+    work_item_ids: [],
     created_at: now,
   };
 }

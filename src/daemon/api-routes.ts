@@ -1,3 +1,5 @@
+import { createWorkItemRoutes } from '../goals/work-item-routes.ts';
+
 /**
  * REST API Routes
  *
@@ -4074,10 +4076,13 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       GET: () => {
         try {
           const goals = require('../vault/goals.ts');
+          // Keep the legacy goal-row contract; Today uses /api/work-items?today=true.
           return json(goals.findGoals({ level: 'daily_action', status: 'active', limit: 20 }));
         } catch (err) { return error(`${err}`); }
       },
     },
+
+    ...createWorkItemRoutes(),
 
     '/api/goals/:id': {
       GET: (req: Request) => {
