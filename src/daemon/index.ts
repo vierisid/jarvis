@@ -70,6 +70,8 @@ import { AWARENESS_EVENT_TYPE_MAP, OBSERVER_EVENT_TYPE_MAP } from "../workflows/
 import { WorkflowEventBus } from "../workflows/runtime/event-bus.ts";
 import { WorkflowEventBuffer } from "../workflows/runtime/event-buffer.ts";
 import { createComposerLlmClient } from "../actions/tools/composer-llm.ts";
+import { composeFlow } from '../actions/tools/workflow-composer.ts';
+import { SuggestionComposer } from '../awareness/suggestion-composer.ts';
 import {
   bootstrapWorkflowEngine,
   type BootstrapWorkflowEngineResult,
@@ -95,6 +97,7 @@ export interface DaemonConfig {
 }
 
 let shutdownInProgress = false;
+let suggestionComposer: SuggestionComposer | null = null;
 let registry: ServiceRegistry | null = null;
 let healthMonitor: HealthMonitor | null = null;
 let commitmentExecutor: CommitmentExecutor | null = null;
@@ -199,6 +202,8 @@ async function handleShutdown(signal: string): Promise<void> {
   }
 
   shutdownInProgress = true;
+  suggestionComposer?.stop();
+  suggestionComposer = null;
   console.log(`\n[Daemon] Received ${signal}, draining gracefully (deadline ${drainDeadlineMs}ms)...`);
 
   try {
@@ -4723,6 +4728,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       if (!toolRegistry.has('manage_workflow')) {
         toolRegistry.register(manageWorkflowTool);
         console.log('[Daemon] Registered manage_workflow tool');
+      }
+      if (workflowPieceCatalog) {
+        const pieceRegistry = workflowPieceCatalog;
+        suggestionComposer = new SuggestionComposer(request => composeFlow({
+          llm: composeLlm, pieceRegistry,
+          tools: composerToolRegistry?.listDetailed(),
+          specialistRoles: Array.from(agentService.getSpecialists().values()).map(r => ({
+            id: r.id, name: r.name, description: r.description,
+          })),
+          library: composerLibrary, executionTargets: collectExecutionTargets(),
+        }, request));
+        apiContext.suggestionComposer = suggestionComposer;
+        suggestionComposer.start();
       }
     }
     approvalDelivery.setBroadcaster(wsService);

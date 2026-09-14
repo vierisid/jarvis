@@ -13,6 +13,8 @@ import type {
   SuggestionType,
   AppUsageStat,
 } from '../awareness/types.ts';
+import { automationIdentity } from './suggestion-schema.ts';
+import { canonicalSuggestion, recordSuggestionDecision } from '../awareness/suggestion-feedback.ts';
 
 // ── Screen Captures ──
 
@@ -371,38 +373,53 @@ export function createSuggestion(data: {
   context?: Record<string, unknown>;
 }): SuggestionRow {
   const db = getDb();
-  const id = generateId();
-  const now = Date.now();
+  return db.transaction(() => {
+    const identity = automationIdentity(data);
+    const existing = findAutomationSuggestion(data);
+    if (existing) return existing;
+    const id = generateId();
+    const now = Date.now();
 
-  db.prepare(`
-    INSERT INTO awareness_suggestions
-      (id, type, trigger_capture_id, title, body, context, delivered, delivered_at, delivery_channel, dismissed, acted_on, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id,
-    data.type,
-    data.triggerCaptureId ?? null,
-    data.title,
-    data.body,
-    data.context ? JSON.stringify(data.context) : null,
-    0, null, null, 0, 0,
-    now,
-  );
+    db.prepare(`
+      INSERT INTO awareness_suggestions
+        (id, type, trigger_capture_id, title, body, context, delivered, delivered_at, delivery_channel, dismissed, acted_on, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      data.type,
+      data.triggerCaptureId ?? null,
+      data.title,
+      data.body,
+      data.context ? JSON.stringify(data.context) : null,
+      0, null, null, 0, 0,
+      now,
+    );
+    if (identity) db.run('INSERT INTO suggestion_identities VALUES (?, ?)', [id, identity]);
 
-  return {
-    id,
-    type: data.type,
-    trigger_capture_id: data.triggerCaptureId ?? null,
-    title: data.title,
-    body: data.body,
-    context: data.context ? JSON.stringify(data.context) : null,
-    delivered: 0,
-    delivered_at: null,
-    delivery_channel: null,
-    dismissed: 0,
-    acted_on: 0,
-    created_at: now,
-  };
+    return {
+      id,
+      type: data.type,
+      trigger_capture_id: data.triggerCaptureId ?? null,
+      title: data.title,
+      body: data.body,
+      context: data.context ? JSON.stringify(data.context) : null,
+      delivered: 0,
+      delivered_at: null,
+      delivery_channel: null,
+      dismissed: 0,
+      acted_on: 0,
+      created_at: now,
+    };
+  }).immediate();
+}
+
+export function findAutomationSuggestion(data: Parameters<typeof automationIdentity>[0]): SuggestionRow | null {
+  const identity = automationIdentity(data);
+  if (!identity) return null;
+  const row = getDb().query<SuggestionRow, [string]>(`SELECT s.* FROM awareness_suggestions s
+    JOIN suggestion_identities i ON i.suggestion_id = s.id WHERE i.pattern_key = ?
+    ORDER BY s.created_at, s.id LIMIT 1`).get(identity);
+  return row ? canonicalSuggestion(row.id) : null;
 }
 
 export function markSuggestionDelivered(id: string, channel: string): void {
@@ -412,14 +429,12 @@ export function markSuggestionDelivered(id: string, channel: string): void {
   ).run(Date.now(), channel, id);
 }
 
-export function markSuggestionDismissed(id: string): void {
-  const db = getDb();
-  db.prepare('UPDATE awareness_suggestions SET dismissed = 1 WHERE id = ?').run(id);
+export function markSuggestionDismissed(id: string, reason = 'Dismissed without a reason'): void {
+  recordSuggestionDecision(id, 'dismiss', { requestId: 'legacy-dismiss', reason });
 }
 
 export function markSuggestionActedOn(id: string): void {
-  const db = getDb();
-  db.prepare('UPDATE awareness_suggestions SET acted_on = 1 WHERE id = ?').run(id);
+  recordSuggestionDecision(id, 'interest', { requestId: 'legacy-interest', reason: 'Requested more information' });
 }
 
 export function getRecentSuggestions(limit: number = 20, type?: SuggestionType): SuggestionRow[] {

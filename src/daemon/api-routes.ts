@@ -124,7 +124,10 @@ import {
   scheduleAutostartRestart,
 } from '../cli/autostart.ts';
 
+import { createSuggestionFeedbackRoutes } from '../awareness/suggestion-feedback-routes.ts';
+
 export type ApiContext = {
+  suggestionComposer?: import('../awareness/suggestion-composer.ts').SuggestionComposer | null;
   /**
    * Daemon process boot time (Date.now() at start). Surfaced via the
    * onboarding-status endpoint so the dashboard can detect when setup
@@ -3871,21 +3874,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
-    '/api/awareness/suggestions/:id/dismiss': {
-      PATCH: (req: Request & { params: { id: string } }) => {
-        if (!ctx.awarenessService) return error('Awareness service not running', 503);
-        ctx.awarenessService.dismissSuggestion(req.params.id);
-        return json({ ok: true });
-      },
-    },
-
-    '/api/awareness/suggestions/:id/act': {
-      PATCH: (req: Request & { params: { id: string } }) => {
-        if (!ctx.awarenessService) return error('Awareness service not running', 503);
-        ctx.awarenessService.actOnSuggestion(req.params.id);
-        return json({ ok: true });
-      },
-    },
+    ...createSuggestionFeedbackRoutes(() => ctx.suggestionComposer),
 
     '/api/awareness/report': {
       GET: async (req: Request) => {

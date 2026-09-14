@@ -81,6 +81,10 @@ type RoomTab = "flows" | "connections" | "library";
 
 export function WorkflowsRoomBody(): React.ReactElement {
   const data = useWorkflowsData();
+  useEffect(() => {
+    const flowId = new URLSearchParams(window.location.search).get('workflow');
+    if (flowId) data.setEditingFlowId(flowId);
+  }, [data.setEditingFlowId]);
   const [actionMessage, setActionMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   const [tab, setTab] = useState<RoomTab>("flows");
 
