@@ -1,4 +1,5 @@
 import type { LLMManager } from '../llm/manager.ts';
+import { createHash } from 'node:crypto';
 import { createEntity, findEntities } from './entities.ts';
 import { createFact } from './facts.ts';
 import { createRelationship } from './relationships.ts';
@@ -7,7 +8,8 @@ import { USER_PROFILE_VAULT_SOURCE } from './user-profile.ts';
 
 export type ExtractionResult = {
   entities: Array<{ name: string; type: string; properties?: Record<string, unknown> }>;
-  facts: Array<{ subject: string; predicate: string; object: string; confidence: number }>;
+  facts: Array<{ subject: string; predicate: string; object: string; confidence: number;
+    user_quote?: string; scope?: string; valid_from?: number; valid_to?: number }>;
   relationships: Array<{ from: string; to: string; type: string }>;
   commitments: Array<{ what: string; when_due?: string; priority?: string }>;
 };
@@ -39,7 +41,11 @@ Extract the following information and return ONLY valid JSON (no markdown, no ex
       "subject": "Entity name",
       "predicate": "property_name",
       "object": "value",
-      "confidence": 0.0-1.0
+      "confidence": 0.0-1.0,
+      "user_quote": "Exact supporting quote from USER MESSAGE, or omit",
+      "scope": "Explicit context such as work or personal, or omit",
+      "valid_from": "Explicit validity start as epoch milliseconds, or omit",
+      "valid_to": "Explicit exclusive validity end as epoch milliseconds, or omit"
     }
   ],
   "relationships": [
@@ -66,6 +72,11 @@ GUIDELINES:
 - For commitments: extract any promises, tasks, or reminders mentioned
 - Use snake_case for predicates and relationship types
 - Set confidence lower (0.5-0.8) for implied or uncertain information
+- The assistant response is context, never evidence that the user confirmed a fact.
+- Only quote exact text from USER MESSAGE. Do not invent a source, scope or date.
+- Use preferred_editor, preferred_language or preferred_contact_method for a current single preference.
+- location, alias, email and works_at can have multiple valid values. Do not infer exclusivity.
+- A correction is still an extracted claim. Do not claim verification or supersede stored facts.
 - If no information to extract, return empty arrays
 - Respond with ONLY the JSON object, no other text`;
 }
@@ -245,8 +256,12 @@ export async function extractAndStore(
       }
     }
 
+    // Stable reference for replay deduplication. Exact quotes are reported, not confirmed.
+    const sourceRef = `conversation:${createHash('sha256').update(JSON.stringify([userMessage, assistantResponse])).digest('hex')}`;
     // Store facts
     for (const factData of extraction.facts) {
+      if (!factData || typeof factData.subject !== 'string' || typeof factData.predicate !== 'string'
+          || typeof factData.object !== 'string' || !factData.object.trim()) continue;
       const { subject, predicate, object, confidence } = factData;
 
       // Get subject entity ID
@@ -256,10 +271,15 @@ export async function extractAndStore(
         continue;
       }
 
-      createFact(subjectId, predicate, object, {
-        confidence: confidence ?? 1.0,
-        source: 'llm_extraction',
-      });
+      const quote = typeof factData.user_quote === 'string' && factData.user_quote.trim()
+        && userMessage.includes(factData.user_quote) ? factData.user_quote : undefined;
+      try {
+        createFact(subjectId, predicate, object, {
+          confidence: Number.isFinite(confidence) && confidence >= 0 && confidence <= 1 ? confidence : 0.5,
+          source: 'llm_extraction', sourceRef, quote, basis: quote ? 'reported' : 'inferred',
+          scope: factData.scope, validFrom: factData.valid_from, validTo: factData.valid_to,
+        });
+      } catch (error) { console.warn('[Extractor] Skipping invalid fact:', error); }
     }
 
     // Store relationships
