@@ -1,12 +1,18 @@
 /**
  * Gate for the control-plane bench endpoint (/api/debug/rpc).
  *
- * The endpoint can drive the desktop of every connected sidecar without an
- * LLM in the loop, so it is opt-in twice over: the daemon must be started
- * with JARVIS_DEBUG_RPC set to a secret of at least MIN_SECRET_LENGTH
- * characters, and every request must echo that secret in the
- * `x-debug-rpc-token` header. A short or missing secret leaves the route
- * absent (404), never "open by mistake".
+ * Whoever holds the secret can call any RPC on every connected sidecar (shell
+ * commands, file read/write, clipboard, browser JavaScript, desktop input)
+ * with no LLM, approval step or audit trail in the loop, so it is opt-in twice
+ * over: the daemon must be started with JARVIS_DEBUG_RPC set to a secret of at
+ * least MIN_SECRET_LENGTH characters, and every request must echo that secret
+ * in the `x-debug-rpc-token` header. A short or missing secret, or a hosted
+ * install, leaves the route absent (404), never "open by mistake".
+ *
+ * The secret stops network callers, not local ones. Anything running as the
+ * daemon's user can recover it (a command the terminal tool runs can read
+ * /proc/<daemon pid>/environ on Linux), so an open gate hands every connected
+ * sidecar to that user's local processes.
  */
 
 import { timingSafeEqual } from 'node:crypto';
@@ -15,17 +21,32 @@ export const DEBUG_RPC_ENV = 'JARVIS_DEBUG_RPC';
 export const DEBUG_RPC_HEADER = 'x-debug-rpc-token';
 export const MIN_SECRET_LENGTH = 16;
 
-/** The active gate secret, or null when the route must not exist. */
-export function debugRpcGate(env: NodeJS.ProcessEnv = process.env): string | null {
+export type DebugRpcGateState = 'off' | 'too-short' | 'refused-hosted' | 'open';
+
+let activeSecret: string | null = null;
+
+/**
+ * Resolve the gate once, at startup. The secret is removed from `env` whatever
+ * the outcome: the daemon spawns children with `{ ...process.env }` (the
+ * terminal tool among them), and a command an agent runs must never be able to
+ * read it.
+ */
+export function initDebugRpcGate(opts: { hosted: boolean }, env: NodeJS.ProcessEnv = process.env): DebugRpcGateState {
   const raw = env[DEBUG_RPC_ENV];
-  if (!raw || raw.length < MIN_SECRET_LENGTH) return null;
-  return raw;
+  delete env[DEBUG_RPC_ENV];
+  activeSecret = null;
+  if (!raw) return 'off';
+  if (raw.length < MIN_SECRET_LENGTH) return 'too-short';
+  // A hosted brain is internet-facing by design; the bench harness has no
+  // business there.
+  if (opts.hosted) return 'refused-hosted';
+  activeSecret = raw;
+  return 'open';
 }
 
-/** True when the env var is set but too short to enable the route. */
-export function debugRpcGateRejected(env: NodeJS.ProcessEnv = process.env): boolean {
-  const raw = env[DEBUG_RPC_ENV];
-  return !!raw && raw.length < MIN_SECRET_LENGTH;
+/** The active gate secret, or null when the route must not exist. */
+export function debugRpcGate(): string | null {
+  return activeSecret;
 }
 
 /** Constant-time compare of a presented token against the gate secret. */

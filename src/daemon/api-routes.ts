@@ -4273,12 +4273,15 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
 
     // Raw sidecar RPC passthrough for the control-plane bench harness
-    // (bench/control/acceptance.ts). Deliberately double-gated: the route
-    // does not exist unless the daemon was started with JARVIS_DEBUG_RPC set
-    // to a secret of at least 16 characters, and the caller must echo that
-    // value back as a shared secret (compared in constant time) — the HTTP
-    // server may be bound beyond loopback, and this endpoint can drive the
-    // desktop. See debug-rpc-gate.ts.
+    // (bench/control/acceptance.ts). It reaches any RPC a sidecar registered
+    // (shell, files, clipboard, browser JavaScript, desktop input) and skips
+    // routeToSidecar's capability checks, the authority engine and the audit
+    // trail; only the sidecar's own capability registry and command blocklist
+    // still apply. Hence the double gate: the route does not exist unless the
+    // daemon resolved a JARVIS_DEBUG_RPC secret of at least 16 characters at
+    // startup (never on a hosted install), and the caller must echo it back
+    // (compared in constant time). The HTTP server may be bound beyond
+    // loopback. See debug-rpc-gate.ts.
     '/api/debug/rpc': {
       POST: async (req: Request) => {
         const gate = debugRpcGate();
@@ -4311,6 +4314,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (!target) return error(body.target ? `No sidecar matching "${body.target}"` : 'No connected sidecar', 409);
           if (!target.connected) return error(`Sidecar "${target.name}" is offline`, 409);
 
+          // The only trace these calls leave: they never reach the audit trail.
+          console.log('[DebugRPC]', JSON.stringify(body.method), '->', target.name);
           const started = Date.now();
           const result = await ctx.sidecarManager.dispatchRPC(
             target.id,

@@ -9,7 +9,7 @@
  *
  *   Prereqs:
  *     1. Start the daemon with the debug gate:  JARVIS_DEBUG_RPC=<secret> jarvis start
- *        (run the sidecar build from THIS branch — Phase 0/1 changes)
+ *        (bench/control/README.md lists which sidecar build each suite needs)
  *     2. A sidecar paired + connected with desktop + browser capabilities.
  *
  *   Usage:
@@ -26,6 +26,9 @@
  *     --out <file>        write a markdown report   (default bench/control/last-report.md)
  *     --token <secret>    debug token (else $JARVIS_DEBUG_RPC)
  *
+ * Checks the connected sidecar cannot run (an RPC or feature its build lacks,
+ * or a missing capability) are reported as SKIP, not FAIL.
+ *
  * Nothing here is Windows-specific except the default app + the desktop suite's
  * expectations; --app and --suite let it run per-platform.
  */
@@ -41,6 +44,8 @@ interface Opts {
   token: string;
 }
 
+const SUITES = ['phase0', 'browser', 'desktop', 'all'];
+
 function parseArgs(argv: string[]): Opts {
   const get = (flag: string, fallback?: string): string | undefined => {
     const i = argv.indexOf(flag);
@@ -51,10 +56,15 @@ function parseArgs(argv: string[]): Opts {
     console.error('ERROR: no debug token. Set JARVIS_DEBUG_RPC or pass --token.');
     process.exit(2);
   }
+  const suite = get('--suite', 'all')!;
+  if (!SUITES.includes(suite)) {
+    console.error(`ERROR: unknown --suite "${suite}" (expected ${SUITES.join(' | ')}).`);
+    process.exit(2);
+  }
   return {
     base: get('--base', 'http://127.0.0.1:3142')!,
     target: get('--target'),
-    suite: get('--suite', 'all')!,
+    suite,
     gmailUrl: get('--gmail-url', 'https://mail.google.com/mail/u/0/#inbox')!,
     app: get('--app', 'notepad.exe')!,
     runs: parseInt(get('--runs', '20')!, 10),
@@ -72,57 +82,105 @@ type RpcResponse = {
   error?: string;
 };
 
+type SidecarRow = { id?: string; name: string; connected: boolean; capabilities?: string[] };
+
+/** The endpoint answered 404: the gate is off or the token is wrong, so nothing else can run. */
+class GateClosedError extends Error {}
+
 class Driver {
   constructor(private opts: Opts) {}
+
+  /** POST to the debug endpoint. Throws on a closed gate, a transport failure or a non-JSON reply. */
+  private async post(body: Record<string, unknown>, timeoutMs: number): Promise<unknown> {
+    const res = await fetch(`${this.opts.base}/api/debug/rpc`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'x-debug-rpc-token': this.opts.token },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    if (res.status === 404) {
+      throw new GateClosedError('debug RPC endpoint returned 404: daemon not started with a matching JARVIS_DEBUG_RPC, or wrong token');
+    }
+    const text = await res.text();
+    try {
+      return JSON.parse(text);
+    } catch {
+      throw new Error(`HTTP ${res.status} with a non-JSON body: ${text.slice(0, 200)}`);
+    }
+  }
 
   async rpc(method: string, params: Record<string, unknown> = {}): Promise<RpcResponse> {
     // Generous ceiling: a real desktop/browser RPC can take seconds, but a
     // dead daemon must not hang the whole run.
-    const res = await fetch(`${this.opts.base}/api/debug/rpc`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-debug-rpc-token': this.opts.token },
-      body: JSON.stringify({ target: this.opts.target, method, params }),
-      signal: AbortSignal.timeout(130_000),
-    });
-    if (res.status === 404) {
-      throw new Error('debug RPC endpoint returned 404 — daemon not started with a matching JARVIS_DEBUG_RPC, or wrong token');
+    try {
+      return (await this.post({ target: this.opts.target, method, params }, 130_000)) as RpcResponse;
+    } catch (e) {
+      // A closed gate stops the run. Anything else (timeout, dead daemon,
+      // garbage reply) fails only the check that made this call.
+      if (e instanceof GateClosedError) throw e;
+      return { error: `request failed: ${e instanceof Error ? e.message : String(e)}` };
     }
-    return (await res.json()) as RpcResponse;
   }
 
-  async listSidecars(): Promise<Array<{ name: string; connected: boolean; capabilities?: string[] }>> {
+  async listSidecars(): Promise<SidecarRow[]> {
     // Go through the debug endpoint (secret-gated, bypasses the dashboard
     // access-token gate) rather than the authed /api/sidecars.
-    const res = await fetch(`${this.opts.base}/api/debug/rpc`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'x-debug-rpc-token': this.opts.token },
-      body: JSON.stringify({ method: '__list_sidecars' }),
-      signal: AbortSignal.timeout(5_000),
-    });
-    if (res.status === 404) {
-      throw new Error('debug endpoint 404 — daemon not started with a matching JARVIS_DEBUG_RPC (or the token differs)');
-    }
-    return (await res.json()) as Array<{ name: string; connected: boolean; capabilities?: string[] }>;
+    return (await this.post({ method: '__list_sidecars' }, 5_000)) as SidecarRow[];
   }
 }
 
 // ── result model ─────────────────────────────────────────────────────
+type Status = 'pass' | 'fail' | 'skip';
 type Check = {
   name: string;
-  pass: boolean;
+  status: Status;
   detail: string;
   ms?: number;
 };
 const checks: Check[] = [];
-function record(name: string, pass: boolean, detail: string, ms?: number): Check {
-  const c = { name, pass, detail, ms };
+const TAGS: Record<Status, string> = {
+  pass: '\x1b[32mPASS\x1b[0m',
+  fail: '\x1b[31mFAIL\x1b[0m',
+  skip: '\x1b[33mSKIP\x1b[0m',
+};
+function push(c: Check): Check {
   checks.push(c);
-  const tag = pass ? '\x1b[32mPASS\x1b[0m' : '\x1b[31mFAIL\x1b[0m';
-  console.log(`  ${tag}  ${name}${ms !== undefined ? ` (${ms}ms)` : ''} — ${detail}`);
+  console.log(`  ${TAGS[c.status]}  ${c.name}${c.ms !== undefined ? ` (${c.ms}ms)` : ''} - ${c.detail}`);
   return c;
 }
+function record(name: string, pass: boolean, detail: string, ms?: number): Check {
+  return push({ name, status: pass ? 'pass' : 'fail', detail, ms });
+}
+/** A check the connected sidecar cannot run. Listed in the report, but not a failure. */
+function skip(name: string, reason: string): Check {
+  return push({ name, status: 'skip', detail: reason });
+}
+const countStatus = (s: Status) => checks.filter((c) => c.status === s).length;
 const asObj = (r: unknown): Record<string, unknown> =>
   r && typeof r === 'object' ? (r as Record<string, unknown>) : {};
+
+/** True when the sidecar rejected the call as an unknown method, i.e. its build predates the RPC. */
+const methodMissing = (r: RpcResponse) => (r.error ?? '').includes('METHOD_NOT_FOUND');
+const OLD_BUILD_HINT =
+  'the connected sidecar build predates this feature. If you built a newer one, a stale auto-started ' +
+  'sidecar probably reconnected in its place: stop every jarvis-sidecar process and start only the fresh binary';
+
+/**
+ * Share of the first snapshot's elements whose sig is distinct and still
+ * present in the second snapshot. Dividing distinct surviving sigs by the
+ * element count means missing or duplicated sigs pull the rate down instead of
+ * scoring as stable.
+ */
+function sigReresolution(first: Array<Record<string, unknown>>, second: Array<Record<string, unknown>>) {
+  const sigsOf = (es: Array<Record<string, unknown>>) =>
+    new Set(es.map((e) => e.sig).filter((s): s is string => typeof s === 'string' && s !== ''));
+  const before = sigsOf(first);
+  const after = sigsOf(second);
+  let kept = 0;
+  for (const s of before) if (after.has(s)) kept++;
+  const rate = first.length ? kept / first.length : 0;
+  return { rate, detail: `${Math.round(rate * 100)}% of ${first.length} elements (${before.size} distinct sigs)` };
+}
 
 /**
  * The PID to address a launched app's window. Packaged apps (Win11 Notepad,
@@ -153,39 +211,52 @@ async function suitePhase0(d: Driver, opts: Opts) {
       r.error ? `error: ${r.error}` : `result.success=${asObj(r.result).success}`);
   }
 
-  // 2. Notepad reliability loop: launch must report a visible window,
-  //    then a snapshot must find the window, then typing must not error.
+  // 2. Notepad reliability loop: launch must report a visible window, then
+  //    typing into that window must not error.
   let launchOk = 0, typeOk = 0;
   let lastLaunchMs = 0;
+  const typeFailures: string[] = [];
   for (let i = 0; i < opts.runs; i++) {
     const launch = await d.rpc('launch_app', { executable: opts.app });
     lastLaunchMs = launch.elapsed_ms ?? 0;
     const lr = asObj(launch.result);
     const visible = lr.window_visible === true && lr.success === true;
     if (visible) launchOk++;
-    const pid = typeof lr.pid === 'number' ? lr.pid : (typeof lr.window_pid === 'number' ? lr.window_pid : undefined);
+    const pid = windowPidOf(launch.result);
 
     if (visible && pid !== undefined) {
-      await d.rpc('focus_window', { pid });
-      const type = await d.rpc('type_text', { text: `jarvis acceptance run ${i + 1}\n` });
-      if (!type.error && asObj(type.result).success === true) typeOk++;
-      // Close this Notepad so the next run is clean (Ctrl+A, Delete, Alt+F4 without saving via Esc later).
-      await d.rpc('press_keys', { keys: 'ctrl,a' });
-      await d.rpc('press_keys', { keys: 'delete' });
+      // Type only into the window just focused. If focus did not succeed, the
+      // foreground window is unknown (it may be the user's own), so this run
+      // sends no input at all and counts as a typing failure. Linux and macOS
+      // report a refused focus as {success:false} with no RPC error, and a
+      // detached reply has no result, so require an explicit success.
+      const focus = await d.rpc('focus_window', { pid });
+      if (focus.error || asObj(focus.result).success !== true) {
+        const why = focus.error ?? `result ${JSON.stringify(focus.result ?? null)}`;
+        typeFailures.push(`run ${i + 1}: focus_window(pid ${pid}) did not succeed: ${why.slice(0, 100)}`);
+      } else {
+        const type = await d.rpc('type_text', { text: `jarvis acceptance run ${i + 1}\n` });
+        if (!type.error && asObj(type.result).success === true) typeOk++;
+        else typeFailures.push(`run ${i + 1}: ${type.error?.slice(0, 100) ?? 'type_text did not report success'}`);
+      }
     }
     await sleep(200);
   }
   record(`launch_app reports visible window (${launchOk}/${opts.runs})`,
     launchOk / opts.runs >= 0.95, `${Math.round((100 * launchOk) / opts.runs)}% visible`, lastLaunchMs);
   record(`type after launch succeeds (${typeOk}/${opts.runs})`,
-    typeOk / opts.runs >= 0.95, `${Math.round((100 * typeOk) / opts.runs)}% typed without error`);
+    typeOk / opts.runs >= 0.95,
+    `${Math.round((100 * typeOk) / opts.runs)}% typed without error${typeFailures.length ? `; first failure: ${typeFailures[0]}` : ''}`);
+  // There is no close RPC, and closing by keystroke could land in the wrong
+  // window, so the launched windows stay open.
+  if (launchOk > 0) console.log(`  note: ${launchOk} launch(es) of ${opts.app} left open; close them without saving`);
 
   // 3. list_windows latency (native path should be ~ms, not ~second).
   {
     const r = await d.rpc('list_windows', {});
     const count = Array.isArray(asObj(r.result).windows) ? (asObj(r.result).windows as unknown[]).length : 0;
-    record('list_windows is fast (native path)', (r.elapsed_ms ?? 9999) < 300,
-      `${count} windows`, r.elapsed_ms);
+    record('list_windows is fast (native path)', !r.error && (r.elapsed_ms ?? 9999) < 300,
+      r.error ? `error: ${r.error.slice(0, 120)}` : `${count} windows`, r.elapsed_ms);
   }
 
   // 4. Stale element id → the id-churn explanation, not a bare failure.
@@ -202,15 +273,20 @@ async function suitePhase0(d: Driver, opts: Opts) {
     // (packaged Notepad's launcher pid has no window).
     const launch = await d.rpc('launch_app', { executable: opts.app });
     const pid = windowPidOf(launch.result);
-    await sleep(400);
-    const r = await d.rpc('find_element', { pid, name: 'Save', control_type: 'MenuItem' });
-    if (r.error) {
-      record('find_element miss returns hint/similar', false, `RPC error (pid ${pid}): ${r.error.slice(0, 120)}`);
+    if (pid === undefined) {
+      record('find_element miss returns hint/similar', false,
+        `launch_app returned no pid: ${launch.error ?? JSON.stringify(launch.result)}`.slice(0, 160));
     } else {
-      const res = asObj(r.result);
-      const hasHint = typeof res.hint === 'string' || Array.isArray(res.similar);
-      record('find_element miss returns hint/similar', hasHint,
-        Array.isArray(res.similar) ? `${(res.similar as unknown[]).length} similar` : String(res.hint ?? `match_count=${res.match_count ?? '?'}`));
+      await sleep(400);
+      const r = await d.rpc('find_element', { pid, name: 'Save', control_type: 'MenuItem' });
+      if (r.error) {
+        record('find_element miss returns hint/similar', false, `RPC error (pid ${pid}): ${r.error.slice(0, 120)}`);
+      } else {
+        const res = asObj(r.result);
+        const hasHint = typeof res.hint === 'string' || Array.isArray(res.similar);
+        record('find_element miss returns hint/similar', hasHint,
+          Array.isArray(res.similar) ? `${(res.similar as unknown[]).length} similar` : String(res.hint ?? `match_count=${res.match_count ?? '?'}`));
+      }
     }
   }
 
@@ -219,8 +295,12 @@ async function suitePhase0(d: Driver, opts: Opts) {
   {
     const r = await d.rpc('press_keys', { keys: 'win,r' });
     record('win+r chord dispatches without error', !r.error, r.error ?? 'ok', r.elapsed_ms);
-    await sleep(300);
-    await d.rpc('press_keys', { keys: 'escape' });
+    // Only dismiss a dialog the chord could have opened; after a failed chord
+    // the Esc would land in whatever window is in front.
+    if (!r.error) {
+      await sleep(300);
+      await d.rpc('press_keys', { keys: 'escape' });
+    }
   }
 }
 
@@ -239,11 +319,18 @@ async function suiteBrowser(d: Driver, opts: Opts) {
   const nav = await d.rpc('browser_navigate', { url: opts.gmailUrl });
   record('navigate to Gmail', !nav.error, nav.error ?? String(asObj(nav.result).url ?? 'ok'), nav.elapsed_ms);
 
+  // Everything below needs the browser_ax_* RPCs.
+  let axSnap = await d.rpc('browser_ax_snapshot', {});
+  if (methodMissing(axSnap)) {
+    skip('browser AX checks (refs, payload size, sig stability, compose flow)',
+      `browser_ax_snapshot is not implemented: ${OLD_BUILD_HINT}`);
+    return;
+  }
+
   // Gmail is a heavy SPA — the inbox (and the Compose button) render several
   // seconds after navigation, well after the top-bar shell. Poll the AX tree
   // until Compose appears (or the element count stops growing) so we snapshot
   // a settled page, not the loading shell.
-  let axSnap = await d.rpc('browser_ax_snapshot', {});
   let elems = (asObj(axSnap.result).elements as Array<Record<string, unknown>>) ?? [];
   const hasCompose = (es: Array<Record<string, unknown>>) =>
     es.some((e) => typeof e.name === 'string' && /compose/i.test(e.name) && e.interactive === true);
@@ -268,7 +355,7 @@ async function suiteBrowser(d: Driver, opts: Opts) {
   const axBytes = JSON.stringify(axRes).length;
   record('browser_ax_snapshot returns elements + refs',
     elems.length > 0 && elems.every((e) => typeof e.sig === 'string' && e.backend_node_id !== undefined),
-    `${elems.length} elements, ${axBytes}B, ${elems.length ? 'refs present' : 'NO refs'}`, axSnap.elapsed_ms);
+    `${axSnap.error ? `error: ${axSnap.error.slice(0, 100)}; ` : ''}${elems.length} elements, ${axBytes}B, ${elems.length ? 'refs present' : 'NO refs'}`, axSnap.elapsed_ms);
 
   // Screenshot baseline for the token-cost comparison (~1 token ≈ 0.75 chars
   // of base64; image tokenization differs per model, so report bytes and a
@@ -280,6 +367,10 @@ async function suiteBrowser(d: Driver, opts: Opts) {
     const ratio = (shotBytes / Math.max(1, axBytes)).toFixed(1);
     record('AX snapshot ≥8× smaller than screenshot payload', shotBytes / Math.max(1, axBytes) >= 8,
       `screenshot ${shotBytes}B vs AX ${axBytes}B (${ratio}×)`);
+  } else {
+    // Without a baseline the criterion is unmeasured; fail it rather than drop the row.
+    record('AX snapshot ≥8× smaller than screenshot payload', false,
+      `no screenshot to compare against: ${shot.error?.slice(0, 100) ?? 'empty image data'}`);
   }
 
   // Rot-proofing: two back-to-back snapshots of the NOW-SETTLED page should
@@ -292,11 +383,10 @@ async function suiteBrowser(d: Driver, opts: Opts) {
     const s2 = await d.rpc('browser_ax_snapshot', {});
     const e1 = (asObj(s1.result).elements as Array<Record<string, unknown>>) ?? [];
     const e2 = (asObj(s2.result).elements as Array<Record<string, unknown>>) ?? [];
-    const sigs1 = new Set(e1.map((e) => e.sig as string));
-    const stable = e2.filter((e) => sigs1.has(e.sig as string)).length;
-    const rate = e1.length ? stable / e1.length : 0;
+    const { rate, detail } = sigReresolution(e1, e2);
+    const snapError = s1.error ?? s2.error;
     record('sig re-resolution across re-snapshot ≥95%', rate >= 0.95,
-      `${Math.round(rate * 100)}% of ${e1.length} sigs stable (settled page)`);
+      snapError ? `error: ${snapError.slice(0, 120)}` : `${detail} re-resolved (settled page)`);
   }
 
   // Find the Compose control and click it by ref.
@@ -346,7 +436,7 @@ async function suiteBrowser(d: Driver, opts: Opts) {
       record('AX-set Subject field', !r.error, r.error ?? 'set');
     }
     // Deliberately do NOT send — leave the draft for manual inspection.
-    record('compose reached (draft left unsent)', true, 'draft prepared; not sent');
+    console.log('  note: compose draft left unsent for manual inspection');
   } else {
     // Show what the AX tree actually contains so we can tell "not logged in"
     // from "the button has a different accessible name".
@@ -362,48 +452,64 @@ async function suiteBrowser(d: Driver, opts: Opts) {
 // ── Desktop (UIA semantic) acceptance ────────────────────────────────
 async function suiteDesktop(d: Driver, opts: Opts) {
   console.log('\n=== Phase 1 — desktop UIA semantic snapshot ===');
+  const SNAPSHOT_CHECK = 'semantic snapshot emits sig/path/ordinal';
+  const RERESOLVE_CHECK = 'desktop sig re-resolution ≥95%';
+
   const launch = await d.rpc('launch_app', { executable: opts.app });
   const pid = windowPidOf(launch.result); // window pid — packaged apps differ from launcher pid
+  if (pid === undefined || asObj(launch.result).window_visible !== true) {
+    record(SNAPSHOT_CHECK, false,
+      `no window to snapshot: launch_app ${launch.error ? `error: ${launch.error}` : `returned ${JSON.stringify(launch.result)}`}`.slice(0, 200));
+    skip(RERESOLVE_CHECK, 'no first snapshot to compare against');
+    return;
+  }
   await sleep(600);
 
   const snap = await d.rpc('get_window_tree', { pid, semantic: true, depth: 8 });
   if (snap.error) {
-    record('semantic snapshot emits sig/path/ordinal', false, `RPC error (pid ${pid}): ${snap.error.slice(0, 140)}`, snap.elapsed_ms);
+    record(SNAPSHOT_CHECK, false, `RPC error (pid ${pid}): ${snap.error.slice(0, 140)}`, snap.elapsed_ms);
+    skip(RERESOLVE_CHECK, 'no first snapshot to compare against');
+    return;
   }
   const res = asObj(snap.result);
   const els = Array.isArray(res.elements) ? (res.elements as Array<Record<string, unknown>>) : [];
-  const withSig = els.filter((e) => typeof e.sig === 'string' && e.sig !== '').length;
-  if (!snap.error) {
-    record('semantic snapshot emits sig/path/ordinal',
-      els.length > 0 && withSig === els.length,
-      els.length === 0 ? `0 elements for pid ${pid} (window under a different pid? launch returned pid=${asObj(launch.result).pid}, window_pid=${asObj(launch.result).window_pid})` : `${withSig}/${els.length} elements carry a sig`, snap.elapsed_ms);
+  // A build without semantic refs ignores `semantic` and emits no sig key at all.
+  if (els.length > 0 && !els.some((e) => 'sig' in e)) {
+    const reason = `get_window_tree ignored semantic:true (no element has a sig): ${OLD_BUILD_HINT}`;
+    skip(SNAPSHOT_CHECK, reason);
+    skip(RERESOLVE_CHECK, reason);
+    return;
   }
+  const withSig = els.filter((e) => typeof e.sig === 'string' && e.sig !== '').length;
+  record(SNAPSHOT_CHECK,
+    els.length > 0 && withSig === els.length,
+    els.length === 0 ? `0 elements for pid ${pid} (window under a different pid? launch returned pid=${asObj(launch.result).pid}, window_pid=${asObj(launch.result).window_pid})` : `${withSig}/${els.length} elements carry a sig`, snap.elapsed_ms);
 
   // Re-snapshot and confirm sigs are stable for an unchanged window.
   const snap2 = await d.rpc('get_window_tree', { pid, semantic: true, depth: 8 });
   const els2 = (asObj(snap2.result).elements as Array<Record<string, unknown>>) ?? [];
-  const sigs = new Set(els.map((e) => e.sig as string));
-  const stable = els2.filter((e) => sigs.has(e.sig as string)).length;
-  const rate = els.length ? stable / els.length : 0;
-  record('desktop sig re-resolution ≥95%', rate >= 0.95, `${Math.round(rate * 100)}% stable`);
+  const { rate, detail } = sigReresolution(els, els2);
+  record(RERESOLVE_CHECK, rate >= 0.95,
+    snap2.error ? `error on re-snapshot: ${snap2.error.slice(0, 120)}` : `${detail} re-resolved`);
 }
 
 // ── report ───────────────────────────────────────────────────────────
-function writeReport(opts: Opts, meta: Record<string, string>) {
-  const pass = checks.filter((c) => c.pass).length;
+const REPORT_MARK: Record<Status, string> = { pass: '✅', fail: '❌', skip: 'SKIP' };
+
+async function writeReport(opts: Opts, meta: Record<string, string>) {
   const lines: string[] = [];
   lines.push('# Control-plane acceptance report', '');
-  lines.push(`- Run: (timestamp set by caller)`);
+  lines.push(`- Run: ${new Date().toISOString()}`);
   for (const [k, v] of Object.entries(meta)) lines.push(`- ${k}: ${v}`);
-  lines.push(`- Result: **${pass}/${checks.length} checks passed**`, '');
+  lines.push(`- Result: **${countStatus('pass')}/${checks.length} checks passed**, ${countStatus('fail')} failed, ${countStatus('skip')} skipped`, '');
   lines.push('| Check | Result | ms | Detail |', '|---|---|---|---|');
   for (const c of checks) {
-    lines.push(`| ${c.name} | ${c.pass ? '✅' : '❌'} | ${c.ms ?? ''} | ${c.detail.replace(/\|/g, '\\|')} |`);
+    lines.push(`| ${c.name} | ${REPORT_MARK[c.status]} | ${c.ms ?? ''} | ${c.detail.replace(/\|/g, '\\|')} |`);
   }
   lines.push('', '> Latency/token numbers are single-run; average across a few runs before recording in docs/control-plane/PHASE1_ADOPT_VS_BUILD.md.');
   const text = lines.join('\n');
   try {
-    Bun.write(opts.out, text);
+    await Bun.write(opts.out, text);
     console.log(`\nReport written to ${opts.out}`);
   } catch (e) {
     console.error(`Could not write report: ${e}`);
@@ -422,12 +528,12 @@ async function main() {
     console.error(`Cannot reach daemon at ${opts.base}: ${e}`);
     process.exit(2);
   }
-  // /api/sidecars returns an array on success, or {error} (e.g. the sidecar
+  // The sidecar list is an array on success, or {error} (e.g. the sidecar
   // subsystem isn't up). Surface the real response instead of crashing.
   if (!Array.isArray(sidecars)) {
     const body = sidecars as unknown as { error?: string };
     console.error(
-      `Daemon reachable but /api/sidecars did not return a list — got: ${JSON.stringify(sidecars)}.\n` +
+      `Daemon reachable but the sidecar list did not come back as a list: ${JSON.stringify(sidecars)}.\n` +
       (body?.error
         ? `The daemon reports: "${body.error}". The sidecar subsystem may not have started — check the daemon's startup logs.`
         : 'Is this the branch daemon (bun run src/daemon/index.ts), not the global "jarvis"?'),
@@ -437,64 +543,65 @@ async function main() {
   const connected = sidecars.filter((s) => s.connected);
   if (connected.length === 0) {
     const names = sidecars.map((s) => s.name).join(', ') || 'none enrolled';
-    console.error(`No connected sidecar (enrolled: ${names}). Start the sidecar exe on Windows and confirm it connects, then retry.`);
+    console.error(`No connected sidecar (enrolled: ${names}). Start the sidecar and confirm it connects, then retry.`);
     process.exit(2);
   }
-  const chosen = opts.target
-    ? connected.find((s) => s.name.toLowerCase() === opts.target!.toLowerCase())
+  const wanted = opts.target?.toLowerCase();
+  const chosen = wanted
+    ? connected.find((s) => s.id?.toLowerCase() === wanted || s.name.toLowerCase() === wanted)
     : connected[0];
   if (!chosen) {
     console.error(`Target "${opts.target}" not connected. Connected: ${connected.map((s) => s.name).join(', ')}`);
     process.exit(2);
   }
+  // Pin every RPC to the sidecar whose capabilities are checked below; with no
+  // target the daemon would pick its own first connected sidecar.
+  opts.target = chosen.id ?? chosen.name;
   console.log(`Driving sidecar "${chosen.name}" [caps: ${(chosen.capabilities ?? []).join(', ')}]`);
   const caps = new Set(chosen.capabilities ?? []);
 
-  // Build check — refuse to run against an OLD sidecar. recorder_stop is a
-  // no-op RPC that only exists in this branch's build; the old binary rejects
-  // it as an unknown method. This prevents a confusing all-fail run when a
-  // stale auto-started sidecar has reconnected instead of the new one.
-  const probe = await d.rpc('recorder_stop', {});
-  const probeErr = (probe.error ?? '').toUpperCase();
-  if (probeErr.includes('METHOD_NOT_FOUND') || probeErr.includes('UNKNOWN METHOD') || probeErr.includes('NOT AVAILABLE') || probeErr.includes('NOT FOUND')) {
-    console.error(
-      `\n✗ WRONG SIDECAR BUILD CONNECTED.\n` +
-      `  The connected "${chosen.name}" is an OLD sidecar — it doesn't have this branch's handlers\n` +
-      `  (recorder_stop probe → ${probe.error}).\n` +
-      `  A stale/auto-started sidecar likely reconnected. Do this on Windows:\n` +
-      `   1. Close ALL running jarvis sidecars (Task Manager → end every jarvis-sidecar.exe;\n` +
-      `      check the system tray and Windows Startup apps for an auto-started one).\n` +
-      `   2. Run ONLY the freshly-built binary:\n` +
-      `      ...\\control-plane-v2\\sidecar\\jarvis-sidecar.exe\n` +
-      `   3. Confirm it's connected, then re-run this script.\n`,
-    );
-    process.exit(3);
+  const suites: Array<[name: string, capability: string, run: (d: Driver, opts: Opts) => Promise<void>]> = [
+    ['phase0', 'desktop', suitePhase0],
+    ['browser', 'browser', suiteBrowser],
+    ['desktop', 'desktop', suiteDesktop],
+  ];
+  let gateClosed = false;
+  for (const [name, capability, run] of suites) {
+    if (opts.suite !== 'all' && opts.suite !== name) continue;
+    if (!caps.has(capability)) {
+      skip(`${name} suite`, `sidecar lacks the ${capability} capability`);
+      continue;
+    }
+    try {
+      await run(d, opts);
+    } catch (e) {
+      // A closed gate (daemon restarted without the secret?) ends the run but
+      // keeps what was already measured; any other throw fails only its suite.
+      // Either way the abort is a row in the report, not just console output.
+      record(`${name} suite ran to completion`, false, `aborted: ${e instanceof Error ? e.message : String(e)}`);
+      if (e instanceof GateClosedError) {
+        gateClosed = true;
+        break;
+      }
+    }
   }
 
-  const suite = opts.suite;
-  if (suite === 'all' || suite === 'phase0') {
-    if (caps.has('desktop')) await suitePhase0(d, opts);
-    else console.log('(skipping phase0 — sidecar lacks the desktop capability)');
-  }
-  if (suite === 'all' || suite === 'browser') {
-    if (caps.has('browser')) await suiteBrowser(d, opts);
-    else console.log('(skipping browser — sidecar lacks the browser capability)');
-  }
-  if (suite === 'all' || suite === 'desktop') {
-    if (caps.has('desktop')) await suiteDesktop(d, opts);
-    else console.log('(skipping desktop — sidecar lacks the desktop capability)');
-  }
-
-  writeReport(opts, {
+  await writeReport(opts, {
     sidecar: chosen.name,
-    suite,
+    suite: opts.suite,
     app: opts.app,
     'gmail-url': opts.gmailUrl,
   });
 
-  const failed = checks.filter((c) => !c.pass).length;
-  console.log(`\n${checks.length - failed}/${checks.length} checks passed.`);
-  process.exit(failed > 0 ? 1 : 0);
+  const failed = countStatus('fail');
+  const verified = checks.length - countStatus('skip');
+  console.log(`\n${countStatus('pass')}/${checks.length} checks passed, ${failed} failed, ${countStatus('skip')} skipped.`);
+  // A run that verified nothing is not a pass.
+  if (verified === 0) console.error('Nothing was verified: every check was skipped.');
+  process.exit(gateClosed ? 2 : failed > 0 || verified === 0 ? 1 : 0);
 }
 
-void main();
+main().catch((e) => {
+  console.error(`acceptance driver crashed: ${e instanceof Error ? e.stack : String(e)}`);
+  process.exit(2);
+});

@@ -19,14 +19,14 @@ import { resolveEngineIdleTtlMs } from "./config-merge.ts";
 import { activeTurns } from "./active-turns.ts";
 import { writeLockedPort } from "./pid.ts";
 import { AgentService } from "./agent-service.ts";
-import { debugRpcGate, debugRpcGateRejected } from "./debug-rpc-gate.ts";
+import { initDebugRpcGate, MIN_SECRET_LENGTH } from "./debug-rpc-gate.ts";
 import { createObservation } from "../vault/observations.ts";
 import { ObserverService, mapEventType } from "./observer-service.ts";
 import { WebSocketService } from "./ws-service.ts";
 import { PebbleRealtimeManager, wireRealtimeReadvertisement } from "./pebble-realtime.ts";
 import { hostedRealtimeIncluded, warmRealtimeGateFor } from './realtime-gate.ts';
 import { resolveRealtimeVoice } from "../config/realtime.ts";
-import { realtimeEnablement } from "./usejarvis-ai.ts";
+import { isHostedInstall, realtimeEnablement } from "./usejarvis-ai.ts";
 import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
 import { EventCoalescer } from "./event-coalescer.ts";
@@ -375,6 +375,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     process.exit(1);
   }
 
+  // Resolve the bench debug gate once, before any service starts: it refuses a
+  // hosted install and deletes JARVIS_DEBUG_RPC from process.env so explicit
+  // `{ ...process.env }` spawns stop copying it (defense in depth only, see
+  // debug-rpc-gate.ts). The outcome is logged next to the sidecar manager (6c).
+  const debugRpcState = initDebugRpcGate({ hosted: isHostedInstall(jarvisConfig) });
+
   // File sink, installed here - the first thing after the config is readable
   // and before anything else boots - so the log captures startup too. A hosted
   // brain is a plain systemd process with no `StandardOutput=`, so without this
@@ -661,11 +667,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const sidecarManager = new SidecarManager(jarvisConfig.daemon.data_dir.replace('~', os.homedir()));
 
     // The bench harness backdoor must never be on quietly. Say so at startup,
-    // every time, and say why a too-short secret did not enable it.
-    if (debugRpcGate()) {
-      console.warn('[Daemon] JARVIS_DEBUG_RPC is set: /api/debug/rpc is OPEN (secret-gated) and can drive the desktop of every connected sidecar. This exists for the control-plane acceptance harness only; unset it for normal use.');
-    } else if (debugRpcGateRejected()) {
-      console.warn('[Daemon] JARVIS_DEBUG_RPC is set but shorter than 16 characters; /api/debug/rpc stays disabled.');
+    // every time, and say why a set secret did not enable it.
+    if (debugRpcState === 'open') {
+      console.warn('[Daemon] JARVIS_DEBUG_RPC is set: /api/debug/rpc is OPEN (secret-gated). Whoever holds the secret can call any RPC on every connected sidecar (shell commands, file read/write, clipboard, browser JavaScript, desktop input) with no approval step or audit trail. This exists for the control-plane acceptance harness only; unset it for normal use.');
+    } else if (debugRpcState === 'too-short') {
+      console.warn(`[Daemon] JARVIS_DEBUG_RPC is set but shorter than ${MIN_SECRET_LENGTH} characters; /api/debug/rpc stays disabled.`);
+    } else if (debugRpcState === 'refused-hosted') {
+      console.warn('[Daemon] JARVIS_DEBUG_RPC is ignored because this install counts as hosted (a usejarvis_ai block is configured, or daemon.listen is a unix: socket); /api/debug/rpc stays disabled.');
     }
     // Public-origin precedence: env > public_url > legacy brain_domain >
     // local fallback. Re-check env only to attribute the startup log source.

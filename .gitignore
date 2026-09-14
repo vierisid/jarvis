@@ -13,6 +13,9 @@ src/workflows/activepieces/packages/pieces/jarvis/*/dist/
 coverage
 *.lcov
 
+# control-plane acceptance harness report (bench/control/acceptance.ts)
+bench/control/last-report.md
+
 # logs
 /logs
 # Piece extraction runs the real pieces, and some write log files next to the
