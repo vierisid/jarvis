@@ -8,7 +8,8 @@ import { createEntity, findEntities } from './entities';
 import { createFact, correctFact, findFacts, getFact, verifyFact, queryFact, updateFact, deleteFact } from './facts';
 import { getKnowledgeForMessage } from './retrieval';
 import { createFactDecisionRoutes } from './fact-routes';
-import { saveUserProfile } from './user-profile';
+import { saveUserProfile, getUserProfile, appendUserProfileFact } from './user-profile';
+import { formatUserProfileForPrompt, USER_PROFILE_SETTING_KEY } from '../user/profile';
 import { extractAndStore } from './extractor';
 import type { LLMManager } from '../llm/manager';
 
@@ -153,6 +154,111 @@ test('profile changes retain superseded history and confirmed current answers', 
   expect(all.find(f => f.object === 'Chemistry')?.status).toBe('superseded');
   expect(findFacts({ subject_id: entity.id }).find(f => f.predicate === 'interests')?.object).toBe('Engineering');
   expect(findFacts({ subject_id: entity.id }).every(f => f.basis === 'confirmed')).toBe(true);
+});
+
+test('profile corrections update prompt settings and derived name across restart and later saves', () => {
+  saveUserProfile({ preferred_name: 'Jamie', interests: 'Chemistry' });
+  appendUserProfileFact({ theme: 'work', summary: 'Works remotely' });
+  const person = findEntities({ name: 'Jamie' })[0]!;
+  const old = findFacts({ subject_id: person.id, predicate: 'preferred_name' })[0]!;
+  const corrected = correctFact(old.id, 'Sam', 'Please call me Sam');
+  expect(getUserProfile()?.answers.preferred_name).toBe('Sam');
+  expect(formatUserProfileForPrompt(getUserProfile())).toContain('    Sam');
+  expect(formatUserProfileForPrompt(getUserProfile())).not.toContain('Jamie');
+  expect(getUserProfile()?.interview_facts?.[0]?.summary).toBe('Works remotely');
+  expect(findEntities({ name: 'Sam' })[0]?.id).toBe(person.id);
+  expect(queryFact('Sam', 'name')?.object).toBe('Sam');
+  expect(getKnowledgeForMessage('What is my name?')).not.toContain('Jamie');
+  expect(getFact(corrected.id)?.evidence.some(e => e.quote === 'Please call me Sam')).toBe(true);
+  closeDb(); initDatabase(path);
+  saveUserProfile({ ...getUserProfile()!.answers, interests: 'Engineering' });
+  expect(getFact(corrected.id)?.status).toBe('active');
+  expect(correctFact(old.id, 'Sam', 'Please call me Sam').id).toBe(corrected.id);
+  // The derived name is also editable in Memory and must update the same answer.
+  correctFact(queryFact('Sam', 'name')!.id, 'Robin', 'Updated name');
+  expect(getUserProfile()?.answers.preferred_name).toBe('Robin');
+  expect(queryFact('Robin', 'preferred_name')?.object).toBe('Robin');
+  const interest = findFacts({ subject_id: person.id, predicate: 'interests' })[0]!;
+  correctFact(interest.id, 'Physics', 'Current interest');
+  saveUserProfile({ ...getUserProfile()!.answers, pronouns: 'they/them' });
+  expect(findFacts({ subject_id: person.id, predicate: 'interests' }).map(f => f.object)).toEqual(['Physics']);
+});
+
+test('profile correction rolls back settings, entity, projections and evidence together', () => {
+  saveUserProfile({ preferred_name: 'Jamie' });
+  const old = findFacts({ predicate: 'preferred_name' })[0]!;
+  const evidenceCount = getDb().query('SELECT id FROM fact_evidence').all().length;
+  getDb().run("CREATE TRIGGER fail_profile_projection BEFORE UPDATE ON entities BEGIN SELECT RAISE(ABORT, 'profile unavailable'); END");
+  expect(() => correctFact(old.id, 'Sam', 'Updated name')).toThrow('profile unavailable');
+  expect(getUserProfile()?.answers.preferred_name).toBe('Jamie');
+  expect(getFact(old.id)?.status).toBe('active');
+  expect(findFacts({ object: 'Sam', includeSuperseded: true })).toHaveLength(0);
+  expect(getDb().query('SELECT id FROM fact_evidence').all()).toHaveLength(evidenceCount);
+});
+
+test('profile heuristics remain inferred and cannot turn a product name into a confirmed user alias', () => {
+  saveUserProfile({ preferred_name: 'Jamie', work_role: 'I manage a product called Atlas' });
+  const aliases = findFacts({ predicate: 'alias' }).concat(findFacts({ predicate: 'username' }));
+  expect(aliases).toHaveLength(2);
+  for (const fact of aliases) {
+    expect(fact.object).toBe('Atlas'); expect(fact.basis).toBe('inferred');
+    expect(fact.verified_at).toBeNull(); expect(fact.binding_eligible).toBe(false);
+    expect(fact.evidence.some(e => e.quote === 'I manage a product called Atlas')).toBe(true);
+  }
+  expect(queryFact('Jamie', 'username')).toBeNull();
+  expect(queryFact('Jamie', 'preferred_name')?.basis).toBe('confirmed');
+  expect(queryFact('Jamie', 'name')?.basis).toBe('confirmed');
+  saveUserProfile({ ...getUserProfile()!.answers, interests: 'Chemistry' });
+  expect(findFacts({ predicate: 'alias' })[0]?.id).toBe(aliases[0]!.id);
+  closeDb(); initDatabase(path);
+  expect(queryFact('Jamie', 'username')).toBeNull();
+});
+
+test('confirming a competing profile answer updates the profile without affecting scoped or other-person facts', () => {
+  saveUserProfile({ preferred_name: 'Jamie' });
+  const person = findEntities({ name: 'Jamie' })[0]!;
+  const candidate = createFact(person.id, 'preferred_name', 'Sam', inference);
+  verifyFact(candidate.id, 'Call me Sam');
+  expect(getUserProfile()?.answers.preferred_name).toBe('Sam');
+  expect(queryFact('Sam', 'name')?.object).toBe('Sam');
+  const scoped = createFact(person.id, 'preferred_name', 'Work name', { ...inference, scope: 'work' });
+  correctFact(scoped.id, 'Team name', 'Work only');
+  const other = createFact(subject, 'preferred_name', 'Alex', inference);
+  correctFact(other.id, 'Alexander', 'Other person');
+  expect(getUserProfile()?.answers.preferred_name).toBe('Sam');
+});
+
+test('later profile edits retain explicitly confirmed aliases but retire removed direct answers', () => {
+  saveUserProfile({ preferred_name: 'Jamie', work_role: 'I manage a product called Atlas', interests: 'Chemistry' });
+  const alias = findFacts({ predicate: 'alias' })[0]!;
+  verifyFact(alias.id, 'I also use this handle');
+  const interest = findFacts({ predicate: 'interests' })[0]!;
+  verifyFact(interest.id, 'Still interested');
+  saveUserProfile({ preferred_name: 'Jamie', work_role: 'Product manager' });
+  expect(getFact(alias.id)?.status).toBe('active'); expect(getFact(alias.id)?.basis).toBe('confirmed');
+  expect(getFact(interest.id)?.status).toBe('superseded');
+  expect(findFacts({ predicate: 'username' })).toHaveLength(0);
+});
+
+test('legacy migration confirms only profile answers supported by the canonical record', () => {
+  closeDb(); const legacyPath = join(directory, 'legacy-profile.db'); const db = new Database(legacyPath);
+  db.exec(`CREATE TABLE entities (id TEXT PRIMARY KEY, type TEXT, name TEXT, properties TEXT, created_at INTEGER, updated_at INTEGER, source TEXT);
+    CREATE TABLE facts (id TEXT PRIMARY KEY, subject_id TEXT, predicate TEXT, object TEXT, confidence REAL, source TEXT, created_at INTEGER, verified_at INTEGER);
+    CREATE TABLE settings (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at INTEGER NOT NULL);
+    INSERT INTO entities VALUES ('jamie','person','Jamie',NULL,1,1,'user_profile');
+    INSERT INTO facts VALUES ('answer','jamie','preferred_name','Jamie',1,'user_profile',1,NULL);
+    INSERT INTO facts VALUES ('name','jamie','name','Jamie',1,'user_profile',1,NULL);
+    INSERT INTO facts VALUES ('derived','jamie','username','Atlas',1,'user_profile',1,NULL);
+    INSERT INTO facts VALUES ('checked','jamie','alias','Jay',1,'user_profile',1,2);
+    INSERT INTO facts VALUES ('unsupported','jamie','pronouns','he/him',1,'user_profile',1,NULL);`);
+  db.run('INSERT INTO settings VALUES (?, ?, 1)', [USER_PROFILE_SETTING_KEY, JSON.stringify({ answers: { preferred_name: 'Jamie', work_role: 'I manage a product called Atlas' } })]);
+  db.close(); initDatabase(legacyPath);
+  expect(getFact('answer')?.basis).toBe('confirmed'); expect(getFact('name')?.basis).toBe('confirmed');
+  expect(getFact('derived')?.basis).toBe('inferred'); expect(getFact('derived')?.binding_eligible).toBe(false);
+  expect(getFact('unsupported')?.verified_at).toBeNull();
+  expect(getFact('checked')?.verified_at).toBe(2);
+  closeDb(); initDatabase(legacyPath);
+  expect(getFact('derived')?.basis).toBe('inferred'); expect(queryFact('Jamie', 'username')).toBeNull();
 });
 
 test('deleting a conflicting inference clears contested state without confirming anything', () => {

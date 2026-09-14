@@ -1,5 +1,14 @@
 import type { Database } from 'bun:sqlite';
 import { predicateKey, valueKey, currentState, samePeriod, type FactRow } from './fact-policy.ts';
+import { USER_PROFILE_SETTING_KEY, normalizeUserProfileAnswers, profileQuestionForPredicate } from '../user/profile.ts';
+
+function legacyProfileAnswers(db: Database) {
+  // Facts are upgraded before settings are created in a fresh database.
+  if (!db.query("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'settings'").get()) return {};
+  const record = db.query<{ value: string }, [string]>('SELECT value FROM settings WHERE key = ?').get(USER_PROFILE_SETTING_KEY);
+  try { return normalizeUserProfileAnswers(JSON.parse(record?.value ?? '{}').answers ?? {}); }
+  catch { return {}; }
+}
 
 export function reconcileFacts(db: Database, subjectId: string, predicate: string, scope: string): void {
   const rows = db.query<FactRow, [string, string, string]>(
@@ -28,14 +37,20 @@ export function ensureFactSchema(db: Database): void {
     db.run('CREATE INDEX IF NOT EXISTS idx_fact_evidence_fact ON fact_evidence(fact_id)');
     db.run('CREATE INDEX IF NOT EXISTS idx_facts_identity ON facts(subject_id, predicate_key, scope, value_key)');
     const legacy = db.query<FactRow, []>('SELECT * FROM facts WHERE predicate_key IS NULL ORDER BY created_at, id').all();
+    const answers = legacyProfileAnswers(db);
+    const profileEntity = db.query<{ id: string }, []>("SELECT id FROM entities WHERE source = 'user_profile' ORDER BY updated_at DESC LIMIT 1").get();
     const groups = new Map<string, [string, string, string]>();
     for (const row of legacy) {
       row.predicate_key = predicateKey(row.predicate); row.value_key = valueKey(row.predicate, row.object);
-      // Wizard answers were explicitly entered. A model confidence of 1 is not verification.
-      if (row.source === 'user_profile' && row.verified_at === null) row.verified_at = row.created_at;
+      const question = profileQuestionForPredicate(row.predicate_key);
+      const answer = question ? answers[question] : undefined;
+      // The source label alone cannot confirm heuristic aliases or unsupported values.
+      if (row.source === 'user_profile' && row.verified_at === null && row.subject_id === profileEntity?.id
+          && answer && valueKey(row.predicate, answer) === row.value_key) row.verified_at = row.created_at;
       db.run('UPDATE facts SET predicate_key = ?, value_key = ?, verified_at = ? WHERE id = ?',
         [row.predicate_key, row.value_key, row.verified_at, row.id]);
-      const basis = row.verified_at !== null ? 'confirmed' : row.source === 'llm_extraction' ? 'inferred' : 'unspecified';
+      const basis = row.verified_at !== null ? 'confirmed'
+        : row.source === 'llm_extraction' || (row.source === 'user_profile' && ['alias', 'username'].includes(row.predicate_key)) ? 'inferred' : 'unspecified';
       const peers = db.query<FactRow, [string, string, string, string, string]>(`SELECT * FROM facts
         WHERE subject_id = ? AND predicate_key = ? AND scope = ? AND value_key = ? AND id != ? AND status != 'superseded'
         ORDER BY created_at, id`).all(row.subject_id, row.predicate_key, row.scope, row.value_key, row.id);

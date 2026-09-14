@@ -1,6 +1,6 @@
 import { deleteSetting, getSetting, setSetting } from './settings.ts';
 import { createEntity, updateEntity } from './entities.ts';
-import { createFact, findFacts } from './facts.ts';
+import { createFact, findFacts, type Fact } from './facts.ts';
 import { reconcileFacts } from './fact-schema.ts';
 import { getDb } from './schema.ts';
 import {
@@ -9,6 +9,7 @@ import {
   createEmptyUserProfile,
   countAnsweredUserProfileQuestions,
   normalizeUserProfileAnswers,
+  profileQuestionForPredicate,
   type UserProfileFact,
   type UserProfileRecord,
 } from '../user/profile.ts';
@@ -39,6 +40,10 @@ export function getUserProfile(): UserProfileRecord | null {
 }
 
 export function saveUserProfile(input: Record<string, unknown>): UserProfileRecord {
+  return getDb().transaction(() => saveUserProfileRecord(input)).immediate();
+}
+
+function saveUserProfileRecord(input: Record<string, unknown>): UserProfileRecord {
   const existing = getUserProfile();
   const now = Date.now();
   const answers = normalizeUserProfileAnswers(input);
@@ -62,6 +67,24 @@ export function saveUserProfile(input: Record<string, unknown>): UserProfileReco
   setSetting(USER_PROFILE_SETTING_KEY, JSON.stringify(profile));
   syncUserProfileKnowledge(profile);
   return profile;
+}
+
+/** Called inside the fact correction transaction, so settings and projections commit together. */
+export function syncUserProfileFactCorrection(fact: Fact, object: string): void {
+  const question = profileQuestionForPredicate(fact.predicate_key);
+  if (!question || fact.scope || fact.valid_from !== null || fact.valid_to !== null) return;
+  // A separately entered legal name is not necessarily the preferred-name projection.
+  if (fact.predicate_key === 'name' && !hasProfileEvidence(fact)) return;
+  const currentUser = getDb().query<{ id: string }, [string]>(
+    'SELECT id FROM entities WHERE source = ? ORDER BY updated_at DESC LIMIT 1'
+  ).get(USER_PROFILE_VAULT_SOURCE);
+  const profile = getUserProfile();
+  if (!profile || currentUser?.id !== fact.subject_id) return;
+  saveUserProfile({ ...profile.answers, [question]: object });
+}
+
+function hasProfileEvidence(fact: Fact): boolean {
+  return fact.source === USER_PROFILE_VAULT_SOURCE || fact.evidence.some(e => e.source === USER_PROFILE_VAULT_SOURCE);
 }
 
 /**
@@ -149,13 +172,17 @@ function syncUserProfileKnowledge(profile: UserProfileRecord): void {
   }
 
   db.transaction(() => {
-    const previous = findFacts({ subject_id: entity.id }).filter(f => f.source === USER_PROFILE_VAULT_SOURCE);
-    const desired = USER_PROFILE_QUESTIONS.flatMap<{ predicate: string; object: string }>(question => {
+    const previous = findFacts({ subject_id: entity.id }).filter(f => hasProfileEvidence(f)
+      && !f.scope && f.valid_from === null && f.valid_to === null
+      && (profileQuestionForPredicate(f.predicate_key) || f.verified_at === null));
+    const desired = USER_PROFILE_QUESTIONS.flatMap<ProfileKnowledgeFact>(question => {
       const answer = profile.answers[question.id]?.trim();
-      return answer ? [{ predicate: question.id, object: answer }] : [];
+      return answer ? [{ predicate: question.id, object: answer, confirmed: true,
+        sourceRef: `profile:answer:${question.id}`, quote: answer }] : [];
     }).concat(getDerivedUserProfileFacts(profile));
     const saved = desired.map(fact => createFact(entity.id, fact.predicate, fact.object, {
-      confidence: 1, confirmed: true, source: USER_PROFILE_VAULT_SOURCE,
+      confidence: fact.confirmed ? 1 : 0.5, confirmed: fact.confirmed, source: USER_PROFILE_VAULT_SOURCE,
+      basis: fact.confirmed ? undefined : 'inferred', sourceRef: fact.sourceRef, quote: fact.quote,
     }));
     for (const old of previous) if (!saved.some(f => f.id === old.id)) {
       const next = saved.find(f => f.predicate_key === old.predicate_key);
@@ -174,44 +201,29 @@ function clearUserProfileKnowledge(): void {
   }
 }
 
-function getDerivedUserProfileFacts(profile: UserProfileRecord): Array<{ predicate: string; object: string }> {
-  const facts: Array<{ predicate: string; object: string }> = [];
-  const seen = new Set<string>();
+type ProfileKnowledgeFact = { predicate: string; object: string; confirmed: boolean; sourceRef: string; quote: string };
+
+function getDerivedUserProfileFacts(profile: UserProfileRecord): ProfileKnowledgeFact[] {
+  const facts: ProfileKnowledgeFact[] = [];
 
   const preferredName = profile.answers.preferred_name?.trim();
   if (preferredName) {
-    pushFact(facts, seen, 'name', preferredName);
+    facts.push({ predicate: 'name', object: preferredName, confirmed: true,
+      sourceRef: 'profile:answer:preferred_name', quote: preferredName });
   }
 
-  const aliasSources = [
-    profile.answers.important_people,
-    profile.answers.anything_else,
-    profile.answers.work_role,
-    profile.answers.communication_preferences,
-  ].filter((value): value is string => typeof value === 'string' && value.trim().length > 0);
+  const aliasQuestions = ['important_people', 'anything_else', 'work_role', 'communication_preferences'] as const;
 
-  for (const source of aliasSources) {
-    for (const alias of extractAliases(source)) {
-      pushFact(facts, seen, 'alias', alias);
-      pushFact(facts, seen, 'username', alias);
+  for (const question of aliasQuestions) {
+    const answer = profile.answers[question]?.trim();
+    if (!answer) continue;
+    for (const alias of extractAliases(answer)) {
+      for (const predicate of ['alias', 'username']) facts.push({ predicate, object: alias,
+        confirmed: false, sourceRef: `profile:derived:${question}`, quote: answer });
     }
   }
 
   return facts;
-}
-
-function pushFact(
-  facts: Array<{ predicate: string; object: string }>,
-  seen: Set<string>,
-  predicate: string,
-  object: string,
-): void {
-  const value = object.trim();
-  if (!value) return;
-  const key = `${predicate}\u0000${value.toLowerCase()}`;
-  if (seen.has(key)) return;
-  seen.add(key);
-  facts.push({ predicate, object: value });
 }
 
 function extractAliases(text: string): string[] {

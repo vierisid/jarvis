@@ -2,6 +2,7 @@ import { createHash } from 'node:crypto';
 import { getDb, generateId } from './schema.ts';
 import { findEntities } from './entities.ts';
 import { reconcileFacts } from './fact-schema.ts';
+import { syncUserProfileFactCorrection } from './user-profile.ts';
 import { appliesAt, isSingleValued, predicateKey, valueKey, samePeriod, type FactRow, type FactBasis } from './fact-policy.ts';
 
 export interface FactEvidence {
@@ -125,6 +126,7 @@ export function correctFact(id: string, object: string, reason: string): Fact {
     });
     if (replacement.id !== old.id) getDb().run("UPDATE facts SET status = 'superseded', superseded_by = ? WHERE id = ?", [replacement.id, old.id]);
     reconcileFacts(getDb(), old.subject_id, old.predicate_key, old.scope);
+    syncUserProfileFactCorrection(old, replacement.object);
     return getFact(replacement.id)!;
   }).immediate();
 }
@@ -154,9 +156,11 @@ export function verifyFact(id: string, reason = 'Explicit fact confirmation'): F
   return getDb().transaction(() => {
     const fact = getFact(id); if (!fact) throw new FactInputError('Fact not found', 404);
     if (fact.status === 'superseded') throw new FactInputError('Cannot confirm a superseded fact', 409);
-    return createFact(fact.subject_id, fact.predicate, fact.object, {
+    const confirmed = createFact(fact.subject_id, fact.predicate, fact.object, {
       confirmed: true, source: 'user_confirmation', sourceRef: `fact:${id}`, quote: factText(reason, 'reason', 1000),
       scope: fact.scope, validFrom: fact.valid_from, validTo: fact.valid_to,
     });
+    syncUserProfileFactCorrection(fact, confirmed.object);
+    return getFact(confirmed.id)!;
   }).immediate();
 }

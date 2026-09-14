@@ -59,5 +59,14 @@ need their own approval. No downstream model action is claimed to be verified.
 
 Legacy `updateFact` retains revisions and refuses to overwrite confirmed facts;
 explicit corrections use `correctFact`. Profile saves retain superseded answer
-history. Relationships have no verification record and are labelled unverified
+history. Confirming or correcting an unscoped current-user profile answer also
+updates the canonical profile, entity name and derived projections in the same
+transaction. The mirrored `name` updates `preferred_name`; unrelated names,
+other people and scoped or time-bounded facts do not rewrite that profile.
+Direct answers are confirmed. Regex-derived aliases/usernames retain their source
+answer as inferred evidence, even when the source is a user profile. Legacy
+unverified profile facts are confirmed only when they match a direct answer in
+the canonical record; existing explicit verification is preserved. Independent
+alias confirmation remains valid when its original profile text later changes.
+Relationships have no verification record and are labelled unverified
 when included in recall, preventing a parallel unqualified claim surface.
