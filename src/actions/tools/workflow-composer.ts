@@ -28,10 +28,11 @@ import { classifyErrorString, LLMProviderError } from "../../llm/provider.ts";
  * module.
  */
 export interface ComposerLlmClient {
-  chat(input: { prompt: string; system?: string }): Promise<{ text: string }>;
+  chat(input: { prompt: string; system?: string; signal?: AbortSignal }): Promise<{ text: string }>;
   chatTools?(
     messages: ComposerChatMessage[],
     tools: ComposerToolDef[],
+    signal?: AbortSignal,
   ): Promise<ComposerChatReply>;
 }
 
@@ -96,6 +97,8 @@ export interface ComposedStep extends FlowTriggerNode {
 const STEP_NAME_REGEX = /^[a-zA-Z_][a-zA-Z0-9_]*$/;
 
 export interface ComposeRequest {
+  /** Stops provider requests and subsequent discovery/validation attempts. */
+  signal?: AbortSignal;
   /** Display name for the new flow. */
   name: string;
   /** Plain-English description from the user. */
@@ -311,6 +314,7 @@ export async function composeFlow(
   deps: ComposeDeps,
   req: ComposeRequest,
 ): Promise<ComposeResult> {
+  req.signal?.throwIfAborted();
   if (!req.name.trim()) return { ok: false, errors: ["name is required"], rawResponse: null };
   if (!req.description.trim()) return { ok: false, errors: ["description is required"], rawResponse: null };
 
@@ -321,6 +325,7 @@ export async function composeFlow(
   // the model doesn't engage with the tools (composeWithTools returns null).
   if (deps.llm.chatTools) {
     const viaTools = await composeWithTools(deps, req);
+    req.signal?.throwIfAborted();
     if (viaTools) return viaTools;
     // composeWithTools returned null: either the turn-1 tool call errored in a
     // way that warrants a retry without tools, or the model answered without
@@ -381,12 +386,15 @@ async function composeOneShot(
   let lastErrors: string[] = [];
 
   for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    req.signal?.throwIfAborted();
     let raw: string;
     try {
-      const reply = await deps.llm.chat({ system, prompt });
+      const reply = await deps.llm.chat({ system, prompt, signal: req.signal });
+      req.signal?.throwIfAborted();
       raw = reply.text.trim();
       lastRaw = raw;
     } catch (e) {
+      req.signal?.throwIfAborted();
       // LLM call failure (network, provider unavailable) -- retrying
       // won't help. Bail out immediately rather than burning attempts.
       return {
@@ -515,10 +523,13 @@ async function composeWithTools(
   let lastRaw: string | null = null;
 
   for (let turn = 1; turn <= TOOL_LOOP_MAX_TURNS; turn++) {
+    req.signal?.throwIfAborted();
     let reply: ComposerChatReply;
     try {
-      reply = await deps.llm.chatTools!(messages, toolDefs);
+      reply = await deps.llm.chatTools!(messages, toolDefs, req.signal);
+      req.signal?.throwIfAborted();
     } catch (e) {
+      req.signal?.throwIfAborted();
       const message = (e as Error).message;
       // A mid-loop failure is a transient/provider error; retrying from scratch
       // without tools would discard progress for no better odds, so bail.

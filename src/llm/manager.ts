@@ -338,6 +338,7 @@ export class LLMManager {
     messages: LLMMessage[],
     options?: LLMOptions,
   ): Promise<LLMResponse> {
+    options?.signal?.throwIfAborted();
     const failures: string[] = [];
     let lastFailureCode: LLMErrorCode = 'unknown';
     let lastRetryAfterMs: number | undefined;
@@ -375,6 +376,7 @@ export class LLMManager {
         });
         return response;
       } catch (err) {
+        options?.signal?.throwIfAborted();
         const msg = err instanceof Error ? err.message : String(err);
         const code = err instanceof LLMProviderError ? err.code : classifyErrorString(msg);
         lastFailureCode = code;
@@ -501,17 +503,20 @@ export class LLMManager {
     let lastRetryAfterMs: number | undefined;
     const retryBudget = this.newRetryBudget();
     for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
+      options?.signal?.throwIfAborted();
       try {
         const result = await this.withTimeout(
           (signal) => provider.chat(messages, { ...options, signal }),
           provider.name,
           options?.signal,
         );
+        options?.signal?.throwIfAborted();
         if (LLMManager.isDebugging && attempt > 1) {
           console.log(`[DEBUG] LLM ${provider.name} succeeded on retry attempt ${attempt}`);
         }
         return result;
       } catch (err) {
+        options?.signal?.throwIfAborted();
         const errorMsg = err instanceof Error ? err.message : String(err);
         errors.push(`attempt ${attempt}: ${errorMsg}`);
         lastCode = err instanceof LLMProviderError ? err.code : classifyErrorString(errorMsg);
