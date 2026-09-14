@@ -75,14 +75,21 @@ failed. SUCCEEDED alone means `needs_check`, not verified goal progress. A manua
 commitment marked completed through an older client also remains unchecked.
 An explicit result check is the authority for `verified`. Checks retain the run
 snapshot if run history is later deleted; an unchecked missing run is blocked.
-An unresolved waitpoint blocks result checking even if an older runtime recorded
-SUCCEEDED. A pause finishes the current queue job while keeping the run PAUSED
+An unresolved waitpoint blocks result checking when the run is still active or
+an older runtime incorrectly recorded SUCCEEDED. Terminal failures take precedence
+over leftover waitpoints and can receive a failed-result check, never a passed
+check or goal progress. A pause finishes the current queue job while keeping the run PAUSED
 with no finish time; the existing resume endpoint continues the same run.
 At startup, an interrupted execution that exhausted its attempts is recorded as
 FAILED with its partial outputs and an unknown-outcome explanation. It is never
 silently replayed. Inspect those outputs before recording a failed check or
 creating a new proposal. Recovery preserves terminal results and pending pauses;
 an exhausted resume with no remaining waitpoint is also recorded as a failure.
+Cancelling an unclaimed execution or resume records STOPPED atomically with the
+queue cancellation. Its original run ID and any partial outputs remain available
+for a failed-result check. Startup also repairs cancelled jobs left unfinished
+by older code, preserving terminal outcomes and later attempts. An already
+running executor remains responsible for reporting its actual outcome.
 Evening review receives these linked decisions/results and is instructed not to
 count an already recorded goal progress entry again. Its independent goal review
 behavior is preserved; LLM narration never writes work-item verification.
