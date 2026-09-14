@@ -146,6 +146,35 @@ test('upgrade preserves legacy IDs/sources, consolidates duplicates and qualifie
   expect(queryFact('Alex', 'birthday')).toBeNull();
 });
 
+test.each(['constructor', '__proto__'])('inherited property predicate %s supports creation, lookup and restart', predicate => {
+  const first = createFact(subject, predicate, 'Acme', inference);
+  expect(first.predicate_key).toBe(predicate);
+  expect(createFact(subject, ` ${predicate.toUpperCase()} `, 'Acme', inference).id).toBe(first.id);
+  createFact(subject, predicate, 'Other', inference);
+  expect(findFacts({ subject_id: subject, predicate }).every(f => f.status === 'active')).toBe(true);
+  closeDb(); initDatabase(path);
+  expect(findFacts({ subject_id: subject, predicate })).toHaveLength(2);
+  expect(getFact(first.id)?.basis).toBe('inferred');
+  expect(getKnowledgeForMessage('Alex')).toContain(`${predicate}: Acme`);
+});
+
+test.each(['constructor', '__proto__'])('inherited property predicate %s migrates legacy facts without blocking startup', predicate => {
+  closeDb(); const legacyPath = join(directory, 'legacy-property.db'); const db = new Database(legacyPath);
+  db.exec(`CREATE TABLE entities (id TEXT PRIMARY KEY, type TEXT, name TEXT, properties TEXT, created_at INTEGER, updated_at INTEGER, source TEXT);
+    CREATE TABLE facts (id TEXT PRIMARY KEY, subject_id TEXT, predicate TEXT, object TEXT, confidence REAL, source TEXT, created_at INTEGER, verified_at INTEGER);
+    INSERT INTO entities VALUES ('alex','person','Alex',NULL,1,1,NULL);`);
+  db.run('INSERT INTO facts VALUES (?, ?, ?, ?, ?, ?, ?, NULL)', ['old', 'alex', predicate, 'Acme', 0.7, 'llm_extraction', 1]);
+  db.run('INSERT INTO facts VALUES (?, ?, ?, ?, ?, ?, ?, NULL)', ['duplicate', 'alex', predicate.toUpperCase(), 'Acme', 0.8, 'llm_extraction', 2]);
+  db.close(); initDatabase(legacyPath);
+  expect(getFact('old')?.predicate_key).toBe(predicate);
+  expect(getFact('duplicate')?.superseded_by).toBe('old');
+  expect(getFact('old')?.evidence).toHaveLength(2);
+  closeDb(); initDatabase(legacyPath);
+  expect(findFacts({ subject_id: 'alex', predicate })).toHaveLength(1);
+  expect(getFact('old')?.evidence).toHaveLength(2);
+  expect(getKnowledgeForMessage('Alex')).toContain(`${predicate}: Acme`);
+});
+
 test('profile changes retain superseded history and confirmed current answers', () => {
   saveUserProfile({ preferred_name: 'Jamie', interests: 'Chemistry' });
   const entity = findEntities({ name: 'Jamie' })[0]!;
