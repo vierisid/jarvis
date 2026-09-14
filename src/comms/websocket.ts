@@ -773,13 +773,17 @@ export class WebSocketServer {
   }
 
   broadcast(message: WSMessage): void {
+    this.broadcastWithReceipt(message);
+  }
+
+  /** Number of sockets accepting the frame, including queued backpressure. Not a read receipt. */
+  broadcastWithReceipt(message: WSMessage): number {
     const payload = JSON.stringify(message);
     let sent = 0;
 
     for (const client of this.clients) {
       try {
-        client.send(payload);
-        sent++;
+        if (client.send(payload) !== 0) sent++;
       } catch (error) {
         console.error('[WebSocketServer] Error broadcasting to client:', error);
       }
@@ -789,6 +793,7 @@ export class WebSocketServer {
     if (sent === 0 && this.clients.size > 0) {
       console.warn(`[WebSocketServer] Broadcast failed: 0/${this.clients.size} clients received message`);
     }
+    return sent;
   }
 
   send(client: ServerWebSocket<unknown>, message: WSMessage): void {
