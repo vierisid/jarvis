@@ -4366,9 +4366,18 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (!ctx.sidecarManager.isConnected(id)) {
             return error('Sidecar is not connected', 409);
           }
-          const body = await req.json() as Record<string, unknown>;
-          delete body.token;
-          const result = await ctx.sidecarManager.dispatchRPC(id, 'update_config', body);
+          let body: unknown;
+          try {
+            body = await req.json();
+          } catch {
+            return error('Invalid JSON body');
+          }
+          if (typeof body !== 'object' || body === null || Array.isArray(body)) {
+            return error('Body must be a JSON object');
+          }
+          const patch = body as Record<string, unknown>;
+          delete patch.token;
+          const result = await ctx.sidecarManager.dispatchRPC(id, 'update_config', patch);
           return json(result);
         } catch (err) { return error(`${err}`, 500); }
       },
