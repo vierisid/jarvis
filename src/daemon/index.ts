@@ -1325,12 +1325,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 content: `Task: ${task.task}\n\nAgent response:\n${raw.slice(0, 4000)}\n\nSummary:`,
               },
             ];
-            // Route through Groq (or whatever cheap provider is configured)
-            // when available — summaries don't need top-tier reasoning and
-            // sub-cent-per-task makes the always-on summary affordable.
-            // chatWithOverride silently falls back to the default provider
-            // if the requested one isn't registered.
-            const resp = await llm.chatWithOverride(messages, 'groq', { max_tokens: 180, temperature: 0.3 });
+            // Summaries don't need top-tier reasoning, so they run on the low
+            // tier (falling up to medium/high). Routing by tier keeps the
+            // user's model choice: a provider override carries no model and
+            // would run the provider's built-in default (Ollama: llama3).
+            const resp = await llm.chatTier('low', 'sub_pebble_summary', messages, { max_tokens: 180, temperature: 0.3 });
             const summary = (resp.content || '').trim();
             if (summary) {
               tm.setSummary(taskId, summary);
