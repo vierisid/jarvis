@@ -10,6 +10,9 @@ import type { ScreenContext, AwarenessEvent, Suggestion, SuggestionType } from '
 import { createSuggestion, getSuggestionCountSince, getActivityInRange, MAX_CAPTURE_GAP_MS } from '../vault/awareness.ts';
 import { searchEntitiesByName } from '../vault/entities.ts';
 import { findFacts } from '../vault/facts.ts';
+import { assessOpportunities, opportunitySuggestion, publishOpportunity } from './opportunities.ts';
+import { pruneOpportunityObservations } from '../vault/opportunity-observations.ts';
+import type { JobHypothesis } from './opportunity-types.ts';
 
 const MAX_DEDUP_HASHES = 50;
 
@@ -37,8 +40,7 @@ export class SuggestionEngine {
   private recentHashes: Set<string> = new Set();
   private hashQueue: string[] = [];
 
-  // Gap 3: automation detection state
-  private actionHistory: Array<{ appName: string; windowTitle: string; timestamp: number }> = [];
+  private lastOpportunityCheckAt = 0;
 
   // Gap 4: knowledge dedup
   private lastKnowledgeEntityId = '';
@@ -77,7 +79,7 @@ export class SuggestionEngine {
       this.checkError(context, events),
       this.checkStruggle(context, events, cloudAnalysis),
       this.checkStuck(context, events),
-      this.checkAutomation(context, events),
+      this.checkAutomation(),
       this.checkKnowledge(context, events),
       null, // placeholder for async schedule
       this.checkBreak(context),
@@ -101,6 +103,12 @@ export class SuggestionEngine {
     }
 
     if (!suggestion) return null;
+
+    if (suggestion.type === 'automation') {
+      const published = publishOpportunity(suggestion.context!.opportunity as JobHypothesis);
+      if (published) this.lastSuggestionByType.set('automation', now);
+      return published;
+    }
 
     // Dedup check
     const hash = this.hashSuggestion(suggestion);
@@ -234,60 +242,14 @@ export class SuggestionEngine {
     };
   }
 
-  /**
-   * Detect repetitive app-switching patterns (automation opportunities).
-   * Tracks action history and looks for A→B→A→B patterns (3+ repeats in 5 min).
-   */
-  private checkAutomation(context: ScreenContext, events: AwarenessEvent[]): Suggestion | null {
-    // Track action history
-    this.actionHistory.push({
-      appName: context.appName,
-      windowTitle: context.windowTitle,
-      timestamp: context.timestamp,
-    });
-
-    // Trim to last 5 minutes
-    const fiveMinAgo = Date.now() - 5 * 60 * 1000;
-    this.actionHistory = this.actionHistory.filter(a => a.timestamp > fiveMinAgo);
-
-    // Need a context change and sufficient history
-    if (!events.some(e => e.type === 'context_changed')) return null;
-    if (this.actionHistory.length < 6) return null;
-
-    // Count app-pair transitions
-    const transitions = new Map<string, number>();
-    for (let i = 1; i < this.actionHistory.length; i++) {
-      const from = this.actionHistory[i - 1]!.appName;
-      const to = this.actionHistory[i]!.appName;
-      if (from !== to) {
-        const key = `${from}→${to}`;
-        transitions.set(key, (transitions.get(key) ?? 0) + 1);
-      }
-    }
-
-    // Find most repeated transition
-    let maxTransition = '';
-    let maxCount = 0;
-    for (const [key, count] of transitions) {
-      if (count > maxCount) {
-        maxTransition = key;
-        maxCount = count;
-      }
-    }
-
-    if (maxCount >= 3) {
-      const [fromApp, toApp] = maxTransition.split('→');
-      return {
-        id: '',
-        type: 'automation',
-        title: `Repetitive pattern: ${fromApp} ↔ ${toApp}`,
-        body: `You've switched between ${fromApp} and ${toApp} ${maxCount} times recently. Want me to create a workflow to automate this?`,
-        triggerCaptureId: context.captureId,
-        context: { fromApp, toApp, count: maxCount, pattern: 'app_switch' },
-      };
-    }
-
-    return null;
+  /** Capture persistence supplies evidence even while C1/C2/C3 event fixes are pending. */
+  private checkAutomation(): Suggestion | null {
+    const now = Date.now();
+    if (now - this.lastOpportunityCheckAt < 5 * 60_000) return null;
+    this.lastOpportunityCheckAt = now;
+    pruneOpportunityObservations(now);
+    const hypothesis = assessOpportunities(now).proposals[0];
+    return hypothesis ? opportunitySuggestion(hypothesis) : null;
   }
 
   /**

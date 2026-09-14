@@ -497,6 +497,34 @@ function createTables(db: Database): void {
   db.run(`CREATE INDEX IF NOT EXISTS idx_suggestions_type ON awareness_suggestions(type)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_suggestions_created ON awareness_suggestions(created_at)`);
 
+  // C6: bounded observation ledger survives short capture retention. Proposals
+  // extend suggestion identity so C7 can attach drafts without another ID map.
+  db.run(`CREATE TABLE IF NOT EXISTS opportunity_observations (
+    capture_id TEXT NOT NULL, kind TEXT NOT NULL, observed_at INTEGER NOT NULL,
+    app TEXT NOT NULL, cue TEXT NOT NULL, PRIMARY KEY (capture_id, kind)
+  )`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_opportunity_observations_time ON opportunity_observations(observed_at)`);
+  db.run(`CREATE TABLE IF NOT EXISTS opportunity_hypotheses (
+    suggestion_id TEXT PRIMARY KEY REFERENCES awareness_suggestions(id) ON DELETE CASCADE,
+    pattern_key TEXT NOT NULL UNIQUE, hypothesis TEXT NOT NULL,
+    validation TEXT, created_at INTEGER NOT NULL
+  )`);
+  db.run(`CREATE TABLE IF NOT EXISTS opportunity_feedback (
+    id TEXT PRIMARY KEY, opportunity_id TEXT NOT NULL REFERENCES opportunity_hypotheses(suggestion_id) ON DELETE CASCADE,
+    request_id TEXT NOT NULL, kind TEXT NOT NULL CHECK(kind IN ('validate', 'dismiss', 'outcome')),
+    payload TEXT NOT NULL, work_ref TEXT, created_at INTEGER NOT NULL,
+    UNIQUE(opportunity_id, request_id), UNIQUE(opportunity_id, work_ref)
+  )`);
+  db.run(`CREATE TABLE IF NOT EXISTS opportunity_delivery (
+    opportunity_id TEXT PRIMARY KEY REFERENCES opportunity_hypotheses(suggestion_id) ON DELETE CASCADE,
+    delivered_at INTEGER, channel TEXT, next_attempt_at INTEGER NOT NULL DEFAULT 0,
+    lease_token TEXT, lease_until INTEGER NOT NULL DEFAULT 0
+  )`);
+  // Old delivered flags were written before the notification callback. They
+  // cannot establish delivery; recover unacknowledged proposals conservatively.
+  db.run(`INSERT OR IGNORE INTO opportunity_delivery (opportunity_id)
+    SELECT suggestion_id FROM opportunity_hypotheses`);
+
   // ── Workflows (M14): Automation engine ──
 
   db.run(`

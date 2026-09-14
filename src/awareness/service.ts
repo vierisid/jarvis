@@ -36,6 +36,7 @@ import {
 import { createObservation } from '../vault/observations.ts';
 import { getUpcoming } from '../vault/commitments.ts';
 import { generateId } from '../vault/schema.ts';
+import { OpportunityDelivery, type DeliverOpportunity } from './opportunity-delivery.ts';
 export class AwarenessService implements Service {
   name = 'awareness';
   private _status: ServiceStatus = 'stopped';
@@ -52,6 +53,9 @@ export class AwarenessService implements Service {
   private cleanupSidecarCaptures: ((cutoffMs: number) => Promise<void>) | null;
   private enabled: boolean;
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
+  private opportunityDelivery: OpportunityDelivery | null;
+  private runRequested = false;
+  private lifecycle: Promise<void> = Promise.resolve();
 
   constructor(
     jarvisConfig: JarvisConfig,
@@ -59,7 +63,8 @@ export class AwarenessService implements Service {
     eventCallback?: (event: AwarenessEvent) => void,
     googleAuth?: { isAuthenticated(): boolean; getAccessToken(): Promise<string> } | null,
     fetchCapture?: (sidecarId: string, path: string) => Promise<Buffer | null>,
-    cleanupSidecarCaptures?: (cutoffMs: number) => Promise<void>
+    cleanupSidecarCaptures?: (cutoffMs: number) => Promise<void>,
+    deliverOpportunity?: DeliverOpportunity,
   ) {
     const cfg = jarvisConfig.awareness!;
     this.config = cfg;
@@ -68,6 +73,7 @@ export class AwarenessService implements Service {
     this.fetchCapture = fetchCapture ?? null;
     this.cleanupSidecarCaptures = cleanupSidecarCaptures ?? null;
     this.enabled = cfg.enabled;
+    this.opportunityDelivery = deliverOpportunity ? new OpportunityDelivery(deliverOpportunity) : null;
 
     // How much elapsed time a single gap between captures may account for.
     // Derived from the sampling interval so a slowly-sampling install does not
@@ -92,7 +98,27 @@ export class AwarenessService implements Service {
     this.analytics = new BehaviorAnalytics(llm, maxGapMs);
   }
 
-  async start(): Promise<void> {
+  start(): Promise<void> {
+    this.runRequested = this.enabled;
+    return this.reconcileLifecycle();
+  }
+
+  stop(): Promise<void> {
+    this.runRequested = false;
+    return this.reconcileLifecycle();
+  }
+
+  private reconcileLifecycle(): Promise<void> {
+    // Each request gets a turn after any in-flight shutdown. Read the latest
+    // intent then, so a later disable or explicit daemon stop cancels a resume.
+    const transition = this.lifecycle.then(() => this.runRequested ? this.startNow() : this.stopNow());
+    // A failed transition must not poison later requests; its caller still sees the error.
+    this.lifecycle = transition.catch(() => {});
+    return transition;
+  }
+
+  private async startNow(): Promise<void> {
+    if (this._status === 'running') return;
     if (!this.enabled) {
       console.log('[Awareness] Disabled by config');
       this._status = 'stopped';
@@ -107,6 +133,7 @@ export class AwarenessService implements Service {
       this.cleanupTimer = setInterval(() => this.cleanupRetention(), 10 * 60 * 1000);
 
       this._status = 'running';
+      this.opportunityDelivery?.start();
       console.log('[Awareness] Service started — listening for sidecar events (sidecar-side OCR + context tracking)');
     } catch (err) {
       this._status = 'error';
@@ -115,8 +142,10 @@ export class AwarenessService implements Service {
     }
   }
 
-  async stop(): Promise<void> {
+  private async stopNow(): Promise<void> {
+    if (this._status === 'stopped') return;
     this._status = 'stopping';
+    await this.opportunityDelivery?.stop();
 
     this.contextTracker.endCurrentSession();
 
@@ -204,15 +233,9 @@ export class AwarenessService implements Service {
 
   toggle(enabled: boolean): void {
     this.enabled = enabled;
-    if (!enabled && this._status === 'running') {
-      this.stop().catch(err =>
-        console.error('[Awareness] Error stopping:', err)
-      );
-    } else if (enabled && this._status === 'stopped') {
-      this.start().catch(err =>
-        console.error('[Awareness] Error starting:', err)
-      );
-    }
+    (enabled ? this.start() : this.stop()).catch(err =>
+      console.error('[Awareness] Error changing enabled state:', err)
+    );
   }
 
   isEnabled(): boolean {
@@ -222,7 +245,7 @@ export class AwarenessService implements Service {
   // ── Sidecar Event Handler ──
 
   async handleSidecarEvent(sidecarId: string, event: SidecarEvent): Promise<void> {
-    if (this._status !== 'running') return;
+    if (!this.runRequested || this._status !== 'running') return;
 
     try {
       switch (event.event_type) {
@@ -431,7 +454,9 @@ export class AwarenessService implements Service {
       // 7. Suggestion evaluation
       const suggestion = await this.suggestionEngine.evaluate(context, events, cloudAnalysis);
       if (suggestion) {
-        try { markSuggestionDelivered(suggestion.id, 'websocket'); } catch { /* ignore */ }
+        if (!suggestion.context?.opportunity) {
+          try { markSuggestionDelivered(suggestion.id, 'websocket'); } catch { /* ignore */ }
+        }
 
         const suggestionEvent: AwarenessEvent = {
           type: 'suggestion_ready',
@@ -440,6 +465,7 @@ export class AwarenessService implements Service {
             type: suggestion.type,
             title: suggestion.title,
             body: suggestion.body,
+            ...(suggestion.context?.opportunity ? { opportunityId: suggestion.id } : {}),
           },
           timestamp: Date.now(),
         };
@@ -450,6 +476,7 @@ export class AwarenessService implements Service {
       for (const event of events) {
         this.eventCallback?.(event);
       }
+      if (suggestion?.context?.opportunity) void this.opportunityDelivery?.flush();
 
       // 9. Session topic inference (async, non-blocking)
       const sessionEnd = events.find(e => e.type === 'session_ended');

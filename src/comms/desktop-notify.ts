@@ -42,7 +42,7 @@ function detectMethod(): NotifyMethod {
 
 /**
  * Send a native desktop notification.
- * Returns true if sent, false if unavailable.
+ * Returns true if a sender was launched, false if unavailable.
  */
 export function sendDesktopNotification(
   title: string,
@@ -57,40 +57,64 @@ export function sendDesktopNotification(
 
   try {
     if (m === 'notify-send') {
-      return sendViaNotifySend(title, body, options);
+      sendViaNotifySend(title, body, options);
     } else {
-      return sendViaPowerShell(title, body);
+      sendViaPowerShell(title, body);
     }
+    return true;
   } catch {
     return false;
   }
+}
+
+/** Wait for the native sender to report acceptance; spawning alone is not delivery. */
+export async function sendDesktopNotificationWithReceipt(
+  title: string, body: string,
+  options?: { urgency?: 'low' | 'normal' | 'critical'; expireMs?: number },
+): Promise<boolean> {
+  const m = detectMethod();
+  if (!m) return false;
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const child = m === 'notify-send' ? sendViaNotifySend(title, body, options) : sendViaPowerShell(title, body);
+    return await Promise.race([
+      child.exited.then(code => code === 0),
+      new Promise<false>(resolve => {
+        timeout = setTimeout(() => {
+          try { child.kill(); } catch { /* already exited */ }
+          resolve(false);
+        }, 5000);
+      }),
+    ]);
+  } catch { return false; }
+  finally { clearTimeout(timeout); }
 }
 
 function sendViaNotifySend(
   title: string,
   body: string,
   options?: { urgency?: string; expireMs?: number }
-): boolean {
+): Bun.Subprocess<'ignore', 'ignore', 'ignore'> {
   const urgency = options?.urgency ?? 'normal';
   const expireMs = options?.expireMs ?? (urgency === 'critical' ? 10000 : 5000);
 
-  Bun.spawn([
+  return Bun.spawn([
     'notify-send',
     `--urgency=${urgency}`,
     `--expire-time=${expireMs}`,
     '--app-name=JARVIS',
     title,
     body,
-  ], { stdout: 'ignore', stderr: 'ignore' });
-  return true;
+  ], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore' });
 }
 
-function sendViaPowerShell(title: string, body: string): boolean {
+function sendViaPowerShell(title: string, body: string): Bun.Subprocess<'ignore', 'ignore', 'ignore'> {
   // Escape single quotes for PowerShell
   const safeTitle = title.replace(/'/g, "''").slice(0, 100);
   const safeBody = body.replace(/'/g, "''").slice(0, 200);
 
   const script = `
+    $ErrorActionPreference = 'Stop'
     [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
     [Windows.Data.Xml.Dom.XmlDocument, Windows.Data.Xml.Dom, ContentType = WindowsRuntime] | Out-Null
     $xml = [Windows.Data.Xml.Dom.XmlDocument]::new()
@@ -99,11 +123,11 @@ function sendViaPowerShell(title: string, body: string): boolean {
     [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier('JARVIS').Show($toast)
   `.trim();
 
-  Bun.spawn(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script], {
+  return Bun.spawn(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', script], {
+    stdin: 'ignore',
     stdout: 'ignore',
     stderr: 'ignore',
   });
-  return true;
 }
 
 /**
