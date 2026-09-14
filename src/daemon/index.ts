@@ -55,6 +55,7 @@ import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
 import { applyApprovalDecision } from "./approval-decision.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
+import { deliverOpportunityNotification } from './opportunity-notification.ts';
 import { SidecarManager, buildEnrollmentUrls } from "../sidecar/manager.ts";
 import { claimDashboardIntro } from "../sidecar/first-run.ts";
 import type { ConnectedSidecar } from "../sidecar/types.ts";
@@ -4921,8 +4922,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             } else {
               coalescer.addEvent(classified);
             }
-            // Broadcast to WebSocket clients
-            wsService.broadcastAwarenessEvent(event);
+            // Opportunity notifications use their durable outbox below.
+            if (!event.data.opportunityId) wsService.broadcastAwarenessEvent(event);
 
             // Republish onto the workflow event bus so flows with `on_event`
             // triggers (awareness.context_changed, awareness.suggestion_ready, etc.)
@@ -4939,7 +4940,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             sharedEventBus.publish(canonical, { ...event.data, _timestamp: event.timestamp });
 
             // Push suggestions as chat notifications + voice + desktop
-            if (event.type === 'suggestion_ready') {
+            if (event.type === 'suggestion_ready' && !event.data.opportunityId) {
               const title = String(event.data.title ?? '');
               const body = String(event.data.body ?? '');
               const text = `**${title}**\n${body}`;
@@ -5125,7 +5126,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             if (offline > 0) {
               console.log(`[Daemon] Sidecar capture cleanup: skipped ${offline} offline sidecar(s); their files will be pruned on reconnect`);
             }
-          }
+          },
+          async suggestion => {
+            const channel = await deliverOpportunityNotification(suggestion, wsService.getServer(), channelService);
+            if (channel === 'websocket') {
+              sendDesktopNotification(`JARVIS: ${suggestion.title}`, suggestion.body, { urgency: 'normal' });
+              wsService.broadcastProactiveVoice(suggestion.body).catch(err =>
+                console.error('[Daemon] Awareness TTS error:', err)
+              );
+            }
+            return channel;
+          },
         );
         await svc.start();
         awarenessService = svc;

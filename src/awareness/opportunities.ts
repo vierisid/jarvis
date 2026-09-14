@@ -70,6 +70,7 @@ export function publishOpportunity(hypothesis: JobHypothesis): Suggestion | null
     db.prepare(`INSERT INTO opportunity_hypotheses
       (suggestion_id, pattern_key, hypothesis, created_at) VALUES (?, ?, ?, ?)`)
       .run(suggestion.id, hypothesis.patternKey, JSON.stringify(hypothesis), suggestion.created_at);
+    db.prepare('INSERT INTO opportunity_delivery (opportunity_id) VALUES (?)').run(suggestion.id);
     return { ...candidate, id: suggestion.id };
   }).immediate();
 }
@@ -170,10 +171,12 @@ export function getOpportunityFeedback(id: string) {
 export function getOpportunityMetrics() {
   const db = getDb();
   const counts = db.prepare(`SELECT COUNT(*) AS proposed,
-    COALESCE(SUM(s.delivered), 0) AS delivered, COALESCE(SUM(s.acted_on), 0) AS interested,
+    COALESCE(SUM(d.delivered_at IS NOT NULL), 0) AS delivered, COALESCE(SUM(s.acted_on), 0) AS interested,
     COALESCE(SUM(s.dismissed), 0) AS dismissed,
     COALESCE(SUM(h.validation IS NOT NULL), 0) AS validated
-    FROM opportunity_hypotheses h JOIN awareness_suggestions s ON s.id = h.suggestion_id`).get() as Record<string, number>;
+    FROM opportunity_hypotheses h JOIN awareness_suggestions s ON s.id = h.suggestion_id
+    LEFT JOIN opportunity_delivery d ON d.opportunity_id = h.suggestion_id`).get() as
+      Record<'proposed' | 'delivered' | 'interested' | 'dismissed' | 'validated', number>;
   const outcomes = db.prepare(`SELECT opportunity_id, payload FROM opportunity_feedback WHERE kind = 'outcome'`)
     .all() as Array<{ opportunity_id: string; payload: string }>;
   const perOpportunity = new Map<string, number>();
