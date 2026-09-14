@@ -9,6 +9,9 @@ package main
 #include <gdk/gdk.h>
 #include <cairo.h>
 
+// Every function here touches GTK, so it must run on the shared GTK main loop's
+// thread. The Go wrappers below get it there (onGTKWindow, gtkInvokeSync).
+
 static void jarvis_panel_apply_flags(
     void* gtkwin_ptr,
     int alwaysOnTop,
@@ -164,6 +167,8 @@ import "C"
 import (
 	"fmt"
 	"unsafe"
+
+	webview "github.com/webview/webview_go"
 )
 
 func boolToCInt(b bool) C.int {
@@ -173,41 +178,116 @@ func boolToCInt(b bool) C.int {
 	return 0
 }
 
-func applyPlatformFlags(handle unsafe.Pointer, spec PanelSpec) error {
+// Linux panels live under the one shared GTK main loop (gtk_main_linux.go),
+// beside the pebble overlays. GTK may only be touched on that loop's thread,
+// but the functions below are called from RPC goroutines, the cursor-follow
+// goroutine, and the loop's own thread (webview bindings, Dispatch closures).
+// onGTKWindow runs fn on the loop's thread (inline when already there) and
+// only while the window is still alive, checked on that same thread: a call
+// that queued behind Close() or the user's close button must not reach a
+// freed widget.
+func onGTKWindow(handle unsafe.Pointer, fn func()) error {
 	if handle == nil {
 		return fmt.Errorf("nil GtkWindow*")
 	}
-	C.jarvis_panel_apply_flags(
-		handle,
-		boolToCInt(spec.AlwaysOnTop),
-		boolToCInt(spec.ClickThrough),
-		boolToCInt(spec.Transparent),
-		boolToCInt(spec.Frameless),
-		boolToCInt(spec.Resizable),
-	)
+	alive := false
+	if !gtkInvokeSync(func() {
+		if alive = gtkWindowAlive(handle); alive {
+			fn()
+		}
+	}) {
+		return errGTKUnavailable
+	}
+	if !alive {
+		return errPanelWindowClosed
+	}
 	return nil
 }
 
+// newPanelWebview creates a panel's webview on the shared loop's thread.
+// Upstream's GTK engine initialises GTK and builds its widgets on whatever
+// thread constructs it, so constructing it on a panel goroutine is exactly the
+// two-threads-in-GTK crash. The window is tracked in the same callback, before
+// anything else can run on the loop, so onGTKWindow and
+// registerPanelCloseWatch always know about it. Returns nil when there is no
+// loop (no display).
+func newPanelWebview(debug bool) webview.WebView {
+	var wv webview.WebView
+	gtkInvokeSync(func() {
+		wv = webview.New(debug)
+		if wv == nil {
+			return
+		}
+		win := wv.Window()
+		gtkTrackWindow(win)
+		// The engine shows its window as it builds it. Hide it again in this
+		// same callback, before the loop can paint a blank default-size window;
+		// Spawn's setup shows it once it is sized, flagged and loaded (overlays
+		// right away), which is what Windows gets by creating windows hidden.
+		C.jarvis_panel_set_visible(win, 0)
+	})
+	return wv
+}
+
+// runOnSharedUIThread runs fn on the loop's thread for uiSync (inline when
+// already there) and reports that it handled the call. With no loop fn does not
+// run, and there is no panel window for it to act on anyway.
+func runOnSharedUIThread(fn func()) bool {
+	gtkInvokeSync(fn)
+	return true
+}
+
+// withPanelWindow resolves a panel's GtkWindow on the loop's thread and runs fn
+// with it there. Read anywhere else, wv.Window() races the destroy handler that
+// clears it, and a pointer carried across the hop could by then name a newer
+// window GTK allocated at the same address. Read on the loop's thread it is nil
+// for a destroyed panel and can only name that panel's own live window.
+func withPanelWindow(wv webview.WebView, fn func(handle unsafe.Pointer) error) error {
+	err := errGTKUnavailable
+	gtkInvokeSync(func() {
+		h := wv.Window()
+		if h == nil {
+			err = errPanelWindowClosed
+			return
+		}
+		err = fn(h)
+	})
+	return err
+}
+
+// withFollowedWindow is withPanelWindow for the cursor-follow goroutine, which
+// on Linux ignores the handle it captured at spawn for the same reason.
+func withFollowedWindow(wv webview.WebView, _ unsafe.Pointer, fn func(handle unsafe.Pointer) error) error {
+	return withPanelWindow(wv, fn)
+}
+
+func applyPlatformFlags(handle unsafe.Pointer, spec PanelSpec) error {
+	return onGTKWindow(handle, func() {
+		C.jarvis_panel_apply_flags(
+			handle,
+			boolToCInt(spec.AlwaysOnTop),
+			boolToCInt(spec.ClickThrough),
+			boolToCInt(spec.Transparent),
+			boolToCInt(spec.Frameless),
+			boolToCInt(spec.Resizable),
+		)
+	})
+}
+
 func platformFocusWindow(handle unsafe.Pointer) error {
-	if handle == nil {
-		return fmt.Errorf("nil GtkWindow*")
-	}
-	C.jarvis_panel_focus(handle)
-	return nil
+	return onGTKWindow(handle, func() { C.jarvis_panel_focus(handle) })
 }
 
 func platformGetCursorPos() (int, int, error) {
 	var x, y C.int
-	C.jarvis_panel_cursor_pos(&x, &y)
+	if !gtkInvokeSync(func() { C.jarvis_panel_cursor_pos(&x, &y) }) {
+		return 0, 0, errGTKUnavailable
+	}
 	return int(x), int(y), nil
 }
 
 func platformMoveWindow(handle unsafe.Pointer, x, y int) error {
-	if handle == nil {
-		return fmt.Errorf("nil GtkWindow*")
-	}
-	C.jarvis_panel_move_window(handle, C.int(x), C.int(y))
-	return nil
+	return onGTKWindow(handle, func() { C.jarvis_panel_move_window(handle, C.int(x), C.int(y)) })
 }
 
 // platformGetWindowRect — Linux port deferred (needs gtk_window_get_position
@@ -224,11 +304,7 @@ func platformMoveWindowKeepZOrder(handle unsafe.Pointer, x, y int) error {
 }
 
 func platformSetClickThrough(handle unsafe.Pointer, clickThrough bool) error {
-	if handle == nil {
-		return fmt.Errorf("nil GtkWindow*")
-	}
-	C.jarvis_panel_set_click_through(handle, boolToCInt(clickThrough))
-	return nil
+	return onGTKWindow(handle, func() { C.jarvis_panel_set_click_through(handle, boolToCInt(clickThrough)) })
 }
 
 func platformGetScreenSize() (int, int) {
@@ -244,16 +320,11 @@ func platformReassertTopmost(handle unsafe.Pointer) error {
 	if handle == nil {
 		return nil
 	}
-	C.jarvis_panel_focus(handle)
-	return nil
+	return onGTKWindow(handle, func() { C.jarvis_panel_focus(handle) })
 }
 
 func platformDestroyWindow(handle unsafe.Pointer) error {
-	if handle == nil {
-		return fmt.Errorf("nil GtkWindow*")
-	}
-	C.jarvis_panel_destroy(handle)
-	return nil
+	return onGTKWindow(handle, func() { C.jarvis_panel_destroy(handle) })
 }
 
 func platformSetWindowState(handle unsafe.Pointer, state PanelWindowState) error {
@@ -271,40 +342,41 @@ func platformSetWindowState(handle unsafe.Pointer, state PanelWindowState) error
 	default:
 		return fmt.Errorf("unknown window state: %q", state)
 	}
-	C.jarvis_panel_set_window_state(handle, s)
-	return nil
+	return onGTKWindow(handle, func() { C.jarvis_panel_set_window_state(handle, s) })
 }
 
-// platformWindowAlive — best-effort on Linux (the GTK handle can't be safely
-// probed once freed). Returns true so the Windows-only close watcher is a no-op
-// here; GTK's own destroy → terminate path handles cleanup.
+// platformWindowAlive feeds the Windows close watcher, which polls. Nothing
+// needs polling here, since registerPanelCloseWatch hears GTK's destroy signal,
+// so this only reports whether there is a handle at all: a panel whose setup
+// found its window already gone has none, and the watcher then ends it too.
 func platformWindowAlive(handle unsafe.Pointer) bool { return handle != nil }
 
-// registerPanelCloseWatch is macOS-only (NSWindowWillCloseNotification); the
-// Windows/Linux close watcher polls platformWindowAlive instead.
-func registerPanelCloseWatch(_ unsafe.Pointer, _ *panelImpl) {}
+// registerPanelCloseWatch signals impl's teardown when GTK destroys its window
+// (the user's close button, or Close()). Panels run no loop of their own here,
+// so nothing else would notice the window going away and the registry would
+// keep a stale entry that a reopen then focuses. Spawn calls it on the loop's
+// thread; if the window is already gone by then the signal fires at once.
+func registerPanelCloseWatch(handle unsafe.Pointer, impl *panelImpl) {
+	if impl == nil {
+		return
+	}
+	signal := func() { impl.uiCloseOnce.Do(func() { close(impl.uiClosed) }) }
+	if handle == nil {
+		signal()
+		return
+	}
+	gtkInvokeSync(func() { gtkOnWindowDestroyed(handle, signal) })
+}
 
 func platformSetWindowVisible(handle unsafe.Pointer, visible bool) error {
-	if handle == nil {
-		return fmt.Errorf("nil GtkWindow*")
-	}
-	v := C.int(0)
-	if visible {
-		v = 1
-	}
-	C.jarvis_panel_set_visible(handle, v)
-	return nil
+	return onGTKWindow(handle, func() { C.jarvis_panel_set_visible(handle, boolToCInt(visible)) })
 }
 
 func platformSetInteractiveRegions(handle unsafe.Pointer, rects []PanelRect) error {
-	if handle == nil {
-		return fmt.Errorf("nil GtkWindow*")
-	}
 	if len(rects) == 0 {
 		// Empty region — apply via 0-count call so cairo creates the empty
 		// region inside the C side.
-		C.jarvis_panel_set_regions(handle, nil, 0)
-		return nil
+		return onGTKWindow(handle, func() { C.jarvis_panel_set_regions(handle, nil, 0) })
 	}
 	flat := make([]C.int, 0, len(rects)*4)
 	for _, r := range rects {
@@ -315,6 +387,5 @@ func platformSetInteractiveRegions(handle unsafe.Pointer, rects []PanelRect) err
 			C.int(r.H),
 		)
 	}
-	C.jarvis_panel_set_regions(handle, &flat[0], C.int(len(rects)))
-	return nil
+	return onGTKWindow(handle, func() { C.jarvis_panel_set_regions(handle, &flat[0], C.int(len(rects))) })
 }

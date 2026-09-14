@@ -6,7 +6,8 @@ with **six patches**, all carried by `jarvis.patch`: a Win32 one for the open
 flash, a Cocoa one to create the window on the main thread, a `webview_create`
 check that rejects a half-built engine, a NULL-handle guard in `webview.go`,
 a browser-controller accessor in a file of our own, `jarvis_native.go`, and a
-Cocoa `terminate` that stops the run loop only when a window actually owns it.
+Cocoa and GTK `terminate` that stops the run loop only when a window actually
+owns it.
 
 `jarvis.patch` must carry EVERY vendored edit. `vendor-webview.sh` deletes the
 vendor directory and copies pristine upstream over it, keeping only
@@ -67,7 +68,10 @@ The host side (`panels_runtime.go`) cooperates: it runs all panel setup through
 attaches to the shared loop and tears down when the window closes. The tray sets
 itself as the `NSApplicationDelegate` so the engine skips its own bootstrap loop.
 
-The GTK path is unchanged.
+GTK needs no creation patch: its engine builds its widgets on whatever thread
+constructs it, so the Linux host constructs panel webviews on the shared GTK
+loop's thread itself (`newPanelWebview` in `panels_linux.go`). It does share
+the terminate guard below.
 
 ## Upgrading
 
@@ -178,7 +182,7 @@ Windows cross-build in `test.yml` and `update-webview.yml`, not a green PR that
 quietly dropped a behavior. The sanity grep in `vendor-webview.sh` is kept
 anyway, both for consistency and because it names the intent.
 
-## The Cocoa terminate guard
+## The terminate guard (Cocoa and GTK)
 
 The sidecar's tray runs ONE shared `[NSApp run]` loop, and every window opened
 afterwards (panels, settings, logs) lives under it. Upstream's
@@ -212,10 +216,25 @@ The fix is a flag rather than a no-op:
 
 `webview_set_host_owns_run_loop(1)` (Go: `webview.SetHostOwnsRunLoop(true)`) is
 called once, from `tray_darwin.go`, immediately before entering
-`jarvisTrayRun()`. Everything before that point owns the loop and terminates
-normally; everything after is under the tray's loop and cannot stop it. The C
-entry point exists on every platform and is a no-op off Cocoa, so the Go caller
+`jarvisTrayRun()` (on Linux from `gtk_main_linux.go`, see GTK below).
+Everything before that point owns the loop and terminates normally; everything
+after is under the tray's loop and cannot stop it. The C
+entry point exists on every platform and is a no-op on Windows, so the Go caller
 needs no build tag.
 
 Both halves have their own sanity grep in `vendor-webview.sh`. Neither is
 detectable by the build: losing either one is a hang, not a compile error.
+
+### GTK
+
+The Linux sidecar has the same shape. It runs ONE `gtk_main`, started by
+`ensureGTKMain` (`gtk_main_linux.go`), for the pebble overlays and every panel
+window, because two `gtk_main` loops on two threads crash inside GTK. Upstream's
+GTK `terminate_impl` is `gtk_main_quit()`, so the last panel window closing
+would quit that loop: the pebble freezes and the next panel waits forever to be
+created on a loop nobody runs. The GTK engine gets its own
+`jarvis_host_owns_run_loop()` flag (only one backend is compiled per build) and
+the same guard around `gtk_main_quit()`, and `webview_set_host_owns_run_loop`
+sets it on GTK too. `ensureGTKMain` sets it once GTK initialises, before entering
+`gtk_main`; the connect and onboarding windows that run their own loop are
+finished before that. The script asserts both the guarded quit and the setter.

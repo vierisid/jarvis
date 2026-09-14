@@ -249,7 +249,9 @@ func (s *regionSelectionLinux) cancel() {
 	activeRegionLinux.Store(nil)
 	s.reset()
 	if cb != nil {
-		cb()
+		// Off the GTK loop's thread: the loop also serves the pebble and every
+		// panel window, and a callback that blocks would freeze all of them.
+		go cb()
 	}
 }
 
@@ -274,7 +276,8 @@ func (s *regionSelectionLinux) finish(x0, y0, x1, y1 int) {
 	s.reset()
 	log.Printf("[region] captured %dx%d, %d PNG bytes", w, h, len(png))
 	if cb != nil {
-		cb(png, w, h)
+		// Off the loop's thread, as in cancel: this one uploads the PNG.
+		go cb(png, w, h)
 	}
 }
 

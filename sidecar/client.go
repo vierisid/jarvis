@@ -143,6 +143,9 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 		tokenProvider:  newAccessTokenProvider(claims.Brain, config.Token),
 		reconnectDelay: minReconnectDelay,
 	}
+	// The first-run windows are behind us, so the overlay and panel services
+	// below may start Linux's shared GTK loop (gtk_main_linux.go).
+	allowSharedUILoop()
 	client.runPreflight()
 	client.panels = maybeNewPanelService(client.availableCaps)
 	client.pebble = maybeNewPebbleService(client.availableCaps)

@@ -13,17 +13,24 @@ import (
 )
 
 // panelSharedLoop is true on platforms where one process-wide native run loop,
-// owned elsewhere (the macOS tray's [NSApp run]), services every panel window.
+// owned elsewhere, services every panel window: the macOS tray's [NSApp run],
+// and on Linux the GTK main loop the pebble overlays run (gtk_main_linux.go).
 // There, panels must NOT start their own loop and every window/webview mutation
-// must be marshalled onto that loop's thread (the main thread). On Windows/Linux
-// each panel goroutine owns its window and runs its own loop, so this is false.
-const panelSharedLoop = runtime.GOOS == "darwin"
+// must be marshalled onto that loop's thread. On Linux that is not optional: a
+// panel running its own gtk_main beside the overlays' put two threads inside
+// GTK and crashed the sidecar as the window opened. On Windows each panel
+// goroutine owns its window and runs its own loop, so this is false.
+const panelSharedLoop = runtime.GOOS == "darwin" || runtime.GOOS == "linux"
 
 // uiSync runs fn on the thread that owns the panel windows and blocks until it
-// finishes. On shared-loop platforms (macOS) that's the main thread, reached via
-// the webview's main-queue dispatch; elsewhere the caller already owns the
-// window so fn runs inline.
+// finishes. On shared-loop platforms that's the loop's thread: Linux reaches it
+// through gtkInvokeSync (runOnSharedUIThread, inline when already there), macOS
+// through the webview's main-queue dispatch. On Windows the caller already owns
+// the window so fn runs inline.
 func uiSync(wv webview.WebView, fn func()) {
+	if panelSharedLoop && runOnSharedUIThread(fn) {
+		return
+	}
 	if !panelSharedLoop || wv == nil {
 		fn()
 		return
@@ -45,9 +52,9 @@ type panelImpl struct {
 	following  atomic.Bool   // when true, cursor-tracker actively moves window
 	followStop chan struct{} // closed by Close()/Stop() to halt the tracker
 	hotkeyStop func()        // unregister + stop the hotkey listener
-	// macOS shared-loop teardown: uiClosed is closed (once) when the window is
-	// gone so the spawn goroutine, which does not run its own loop there, can
-	// return. Unused on Windows/Linux (those block in wv.Run()).
+	// Shared-loop teardown (macOS, Linux): uiClosed is closed (once) when the
+	// window is gone so the spawn goroutine, which does not run its own loop
+	// there, can return. Unused on Windows (it blocks in wv.Run()).
 	uiClosed    chan struct{}
 	uiCloseOnce sync.Once
 }
@@ -114,21 +121,26 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		runtime.LockOSThread()
 		defer runtime.UnlockOSThread()
 
-		// Windows/Linux own the loop and Destroy the webview after Run()
+		// Windows owns the loop and Destroys the webview after Run()
 		// returns. Declared FIRST so defer LIFO runs it LAST: hotkey teardown,
 		// follower shutdown, close(impl.done), and registry removal all happen
 		// before the engine is freed — with Destroy first (the old order), the
 		// still-registered summon hotkey could Dispatch into freed memory, and
 		// a Close()/reopen could reach the dead entry. The delayShow reveal
 		// timer and the close watcher are joined here too, for the same reason
-		// (same fix as webview_reveal.go's stop). On macOS (shared loop) the
-		// window closes under the tray's [NSApp run], and webview's own
-		// on_window_will_close dispatch still references the engine; destroying
-		// it here frees the engine out from under it -> use-after-free crash.
-		// Leak the engine on macOS instead (panels open rarely; the timer and
-		// watcher are joined either way). TODO: cancellable teardown to
-		// reclaim. wv/stopReveal/stopCloseWatch are populated later; they stay
-		// nil/no-op on the webview.New failure path.
+		// (same fix as webview_reveal.go's stop). On the shared-loop platforms
+		// the window closes under a loop this goroutine does not run. On macOS
+		// webview's own on_window_will_close dispatch still references the
+		// engine, so destroying it here frees the engine out from under it ->
+		// use-after-free crash. On Linux ~gtk_webkit_engine pumps the GTK loop
+		// from the calling thread, which is the two-threads-in-GTK crash again.
+		// Leak the engine there instead (the timer and watcher are joined
+		// either way). That is not always rare: the Linux palette opens and
+		// closes on every Ctrl+K and leaks one small engine each time. TODO:
+		// reclaim it, e.g. Destroy on the loop's thread after the destroy
+		// signal, where the engine's own loop pump is a legal nested iteration.
+		// wv/stopReveal/stopCloseWatch are populated later; they stay nil/no-op
+		// on the webview.New failure path.
 		var wv webview.WebView
 		stopReveal := func() {}
 		stopCloseWatch := func() {}
@@ -156,9 +168,9 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 
 		log.Printf("[panels] spawn(%s): creating webview", spec.ID)
 		debug := false
-		wv = webview.New(debug)
+		wv = newPanelWebview(debug)
 		if wv == nil {
-			log.Printf("[panels] spawn(%s): webview.New returned nil — WebView2 runtime missing, or its init failed", spec.ID)
+			log.Printf("[panels] spawn(%s): could not create the webview — no display, webview runtime missing, or its init failed", spec.ID)
 			close(impl.ready)
 			return
 		}
@@ -170,16 +182,26 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		// so it appears fully-formed instead of showing the empty webview that
 		// fills + resizes as it loads). Fullscreen / cursor-follow panels (the
 		// transparent overlays) must be visible from the start, so they opt out.
-		// All window/webview setup below touches AppKit/WebKit objects, which on
-		// the shared-loop platform (macOS) must run on the main thread. uiSync
-		// marshals the whole sequence there and blocks until done; on
-		// Windows/Linux it runs inline on this goroutine. earlyHandle/handle/
+		// All window/webview setup below touches AppKit/GTK/WebKit objects,
+		// which on the shared-loop platforms must run on that loop's thread (the
+		// main thread on macOS, the GTK main loop's on Linux). uiSync marshals
+		// the whole sequence there and blocks until done; on Windows it runs
+		// inline on this goroutine. earlyHandle/handle/
 		// delayShow are hoisted because later goroutines (follow, bounds, close
 		// watcher) read them.
 		var earlyHandle, handle unsafe.Pointer
 		var delayShow bool
 		uiSync(wv, func() {
 			earlyHandle = wv.Window()
+			if earlyHandle == nil && panelSharedLoop {
+				// Shared loop: the window was destroyed between its creation and
+				// this setup (a Close() or the user's close button got there
+				// first), and the engine's calls below would each hit a null
+				// window. Nothing to set up; end the panel.
+				log.Printf("[panels] spawn(%s): window closed before setup", spec.ID)
+				impl.uiCloseOnce.Do(func() { close(impl.uiClosed) })
+				return
+			}
 			delayShow = !spec.Fullscreen && !spec.FollowCursor && earlyHandle != nil
 			if delayShow {
 				_ = platformSetWindowVisible(earlyHandle, false)
@@ -277,10 +299,11 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 					}
 					select {
 					case <-impl.uiClosed:
-						// macOS: the window already closed under the shared
-						// loop. uiClosed is closed inside the will-close
-						// notification ON THE MAIN THREAD, so a reveal closure
-						// queued behind it reliably sees this and bails —
+						// Shared loop: the window already closed under it.
+						// uiClosed is closed ON THE LOOP'S THREAD (inside the
+						// will-close notification on macOS, the destroy signal
+						// on Linux), so a reveal closure queued behind it
+						// reliably sees this and bails —
 						// otherwise it would re-show and focus the closed
 						// (frameless, registry-deleted) panel as an
 						// unreachable zombie. revealStopped can't cover this:
@@ -350,13 +373,30 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 				wv.Navigate(spec.URL)
 				log.Printf("[panels] spawn(%s): navigated to %s", spec.ID, redactPanelURL(spec.URL))
 			}
+
+			// Shared-loop platforms (macOS, Linux): panels don't run their own
+			// loop, so we can't rely on wv.Run() returning when the window
+			// closes. Observe the window's close to signal teardown (clears the
+			// registry so a reopen makes a fresh window instead of focusing the
+			// destroyed one). Registered here, on the loop's thread, so a close
+			// handled by the loop cannot slip in before the watch exists. No-op
+			// on Windows.
+			registerPanelCloseWatch(handle, impl)
 		})
 
-		// macOS: panels don't run their own loop, so we can't rely on wv.Run()
-		// returning when the window closes. Observe the window's close to signal
-		// teardown (clears the registry so a reopen makes a fresh window instead
-		// of focusing the destroyed one). No-op on Windows/Linux.
-		registerPanelCloseWatch(handle, impl)
+		if panelSharedLoop && earlyHandle == nil {
+			// Setup found the window already gone and ended the panel. Skip the
+			// hotkey grab and the follow/bounds/close watchers it would only tear
+			// straight back down, and report the close like any other.
+			close(impl.ready)
+			s.mu.Lock()
+			closedCb := s.closedCb
+			s.mu.Unlock()
+			if closedCb != nil {
+				closedCb(spec.ID)
+			}
+			return
+		}
 
 		// Global summon hotkey: toggles cursor-follow and dispatches a JS
 		// callback in the page so the user can summon/dismiss from any app.
@@ -437,7 +477,9 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 						// apps activating don't bury us. In non-fullscreen
 						// mode platformMoveWindow already does this per frame.
 						if fullscreen {
-							_ = platformReassertTopmost(panelHandle)
+							_ = withFollowedWindow(wv, panelHandle, func(h unsafe.Pointer) error {
+								return platformReassertTopmost(h)
+							})
 						}
 					case <-ticker.C:
 						if fullscreen {
@@ -458,7 +500,10 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 						targetY := float64(y + oy)
 						curX += (targetX - curX) * followFactor
 						curY += (targetY - curY) * followFactor
-						_ = platformMoveWindow(panelHandle, int(curX), int(curY))
+						moveX, moveY := int(curX), int(curY)
+						_ = withFollowedWindow(wv, panelHandle, func(h unsafe.Pointer) error {
+							return platformMoveWindow(h, moveX, moveY)
+						})
 					}
 				}
 			}()
@@ -554,8 +599,8 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 						return // already tearing down (webview terminated it)
 					default:
 						if panelSharedLoop {
-							// macOS: the window is gone, but the shared [NSApp run]
-							// loop must keep running for the tray + other panels.
+							// Shared loop: the window is gone, but the loop must
+							// keep running for the tray/overlays + other panels.
 							// Signal the spawn goroutine instead of terminating.
 							impl.uiCloseOnce.Do(func() { close(impl.uiClosed) })
 						} else if wv := impl.loadWV(); wv != nil {
@@ -576,10 +621,11 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 
 		close(impl.ready)
 		if panelSharedLoop {
-			// macOS: the tray owns the single process-wide [NSApp run] loop and
-			// services this window. Starting our own loop here would nest
-			// [NSApp run] on a background goroutine (illegal). Just block until
-			// the window closes — the close watcher / Close() signals uiClosed.
+			// Shared loop: the macOS tray's [NSApp run], or the Linux GTK main
+			// loop, services this window. Starting our own loop here would nest
+			// [NSApp run] on a background goroutine (illegal) or run a second
+			// gtk_main on another thread (a crash inside GTK). Just block until
+			// the window closes — the close watch / Close() signals uiClosed.
 			log.Printf("[panels] spawn(%s): attached to shared run loop", spec.ID)
 			<-impl.uiClosed
 			log.Printf("[panels] spawn(%s): window closed", spec.ID)
@@ -618,24 +664,30 @@ func (s *panelService) Close(id PanelID) error {
 	}
 	if wv := impl.loadWV(); wv != nil {
 		if panelSharedLoop {
-			// macOS: close the window on the main thread (it owns the NSWindow)
-			// and signal the spawn goroutine. Never Terminate() here — that stops
-			// the tray's shared [NSApp run] loop, killing the menu bar + every
-			// other panel. The close watcher's deferred cleanup runs once the
-			// spawn goroutine returns from <-uiClosed.
+			// Shared loop: close the window on the loop's thread (it owns the
+			// NSWindow / GtkWindow) and signal the spawn goroutine. Never
+			// Terminate() here — that stops the shared loop, killing the menu
+			// bar or the pebble overlays + every other panel. The close
+			// watcher's deferred cleanup runs once the spawn goroutine returns
+			// from <-uiClosed.
 			uiSync(wv, func() {
-				if err := platformDestroyWindow(wv.Window()); err != nil {
+				// Nil when the window is already gone (the user closed it);
+				// there is nothing left to destroy.
+				h := wv.Window()
+				if h == nil {
+					return
+				}
+				if err := platformDestroyWindow(h); err != nil {
 					log.Printf("[panels] platformDestroyWindow(%s): %v", id, err)
 				}
 			})
 			impl.uiCloseOnce.Do(func() { close(impl.uiClosed) })
 			return nil
 		}
-		// On Windows, wv.Terminate() asks the webview's message loop to
+		// Windows: wv.Terminate() asks the webview's message loop to
 		// return but doesn't actually destroy the OS HWND, so the user
 		// still sees the window after Close() reports success. Force the
-		// OS-level close by posting WM_CLOSE (Win32) / [w close] (Cocoa)
-		// / gtk_widget_destroy (Linux) to the underlying handle, then
+		// OS-level close by posting WM_CLOSE to the underlying HWND, then
 		// fall through to wv.Terminate so the webview's deferred cleanup
 		// (`reg.delete`, `wv.Destroy`) still runs.
 		if err := platformDestroyWindow(wv.Window()); err != nil {
@@ -706,7 +758,9 @@ func (s *panelService) SetInteractiveRegions(id PanelID, rects []PanelRect) erro
 	if wv == nil {
 		return formatPanelError("set_regions", id, fmt.Errorf("window not ready"))
 	}
-	if err := platformSetInteractiveRegions(wv.Window(), rects); err != nil {
+	if err := withPanelWindow(wv, func(h unsafe.Pointer) error {
+		return platformSetInteractiveRegions(h, rects)
+	}); err != nil {
 		return formatPanelError("set_regions", id, err)
 	}
 	return nil
@@ -725,7 +779,9 @@ func (s *panelService) SetClickThrough(id PanelID, clickThrough bool) error {
 	if wv == nil {
 		return formatPanelError("set_clickthrough", id, fmt.Errorf("window not ready"))
 	}
-	if err := platformSetClickThrough(wv.Window(), clickThrough); err != nil {
+	if err := withPanelWindow(wv, func(h unsafe.Pointer) error {
+		return platformSetClickThrough(h, clickThrough)
+	}); err != nil {
 		return formatPanelError("set_clickthrough", id, err)
 	}
 	return nil
@@ -740,8 +796,9 @@ func (s *panelService) SetClickThrough(id PanelID, clickThrough bool) error {
 // their AppKit work onto the main thread, so one that lands in that gap would
 // re-show a closed window the registry no longer tracks, and the next "open
 // dashboard" would put a second one beside it. Checking here narrows that gap
-// to the queue hop itself. uiClosed is only ever closed on macOS, so elsewhere
-// this is always false.
+// to the queue hop itself (on Linux the GTK wrappers also re-check the window
+// on the loop's thread). uiClosed is only ever closed on the shared-loop
+// platforms (macOS, Linux), so on Windows this is always false.
 func (p *panelImpl) windowClosed() bool {
 	select {
 	case <-p.uiClosed:
@@ -767,7 +824,7 @@ func (s *panelService) Focus(id PanelID) error {
 	if wv == nil {
 		return formatPanelError("focus", id, fmt.Errorf("window not ready"))
 	}
-	if err := platformFocusWindow(wv.Window()); err != nil {
+	if err := withPanelWindow(wv, platformFocusWindow); err != nil {
 		return formatPanelError("focus", id, err)
 	}
 	return nil
@@ -793,7 +850,9 @@ func (s *panelService) SetWindowState(id PanelID, state PanelWindowState) error 
 	if wv == nil {
 		return formatPanelError("set_window_state", id, fmt.Errorf("window not ready"))
 	}
-	if err := platformSetWindowState(wv.Window(), state); err != nil {
+	if err := withPanelWindow(wv, func(h unsafe.Pointer) error {
+		return platformSetWindowState(h, state)
+	}); err != nil {
 		return formatPanelError("set_window_state", id, err)
 	}
 	return nil

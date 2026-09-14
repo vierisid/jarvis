@@ -288,6 +288,9 @@ func (s *subPebbleServiceLinux) Spawn(spec SubPebbleSpec) error {
 	if spec.ID == "" {
 		return fmt.Errorf("sub_pebble.spawn: id is required")
 	}
+	// Read before taking s.mu: the cursor lives on the GTK loop's thread, so this
+	// waits on that loop, and s.mu must not be held across it.
+	cx, cy, cursorErr := platformGetCursorPos()
 	s.mu.Lock()
 	if _, exists := s.items[spec.ID]; exists {
 		s.mu.Unlock()
@@ -310,7 +313,7 @@ func (s *subPebbleServiceLinux) Spawn(spec SubPebbleSpec) error {
 	// Seed the animated position from the cursor so the disc "flies out" toward
 	// its slot. monitorRight is filled in once the create idle resolves the
 	// display (goSubSetMonitorRight); until then slotPosition falls back.
-	if cx, cy, err := platformGetCursorPos(); err == nil {
+	if cursorErr == nil {
 		entry.curX.Store(int32(cx - subPebbleLinuxAnchor))
 		entry.curY.Store(int32(cy - subPebbleLinuxAnchor))
 	}

@@ -218,11 +218,12 @@ WEBVIEW_API void webview_terminate(webview_t w);
  * PATCHED (jarvis): declare that a HOST-OWNED run loop is running, so a
  * window's terminate must not stop it.
  *
- * Cocoa only; a no-op elsewhere. The sidecar's tray runs one shared [NSApp run]
- * loop that every later window (panels, settings, logs) lives under, and a
- * window closing must not take the app down with it. But the FIRST-RUN windows
- * open before the tray exists and own the loop themselves, so for those
- * terminate has to work exactly as upstream intends.
+ * Cocoa and GTK; a no-op on Windows. The sidecar's tray runs one shared
+ * [NSApp run] loop that every later window (panels, settings, logs) lives
+ * under, and a window closing must not take the app down with it. On Linux the
+ * shared loop is the sidecar's one gtk_main for its overlays and panels. But the
+ * FIRST-RUN windows open before the shared loop exists and own the loop
+ * themselves, so for those terminate has to work exactly as upstream intends.
  *
  * Set it to 1 immediately before entering the shared loop and leave it there.
  */
@@ -1132,6 +1133,19 @@ inline std::string json_parse(const std::string &s, const std::string &key,
 namespace webview {
 namespace detail {
 
+/**
+ * PATCHED (jarvis): does something OTHER than a webview window own the GTK
+ * main loop right now? See webview_set_host_owns_run_loop.
+ *
+ * The GTK twin of the Cocoa flag of the same name; only one backend is compiled
+ * into a build, so the two cannot collide. Function-local static in an inline
+ * function for the same ODR reason given there.
+ */
+inline std::atomic<bool> &jarvis_host_owns_run_loop() {
+  static std::atomic<bool> owns{false};
+  return owns;
+}
+
 // Namespace containing workaround for WebKit 2.42 when using NVIDIA GPU
 // driver.
 // See WebKit bug: https://bugs.webkit.org/show_bug.cgi?id=261874
@@ -1334,7 +1348,16 @@ public:
   void *browser_controller_impl() override { return (void *)m_webview; };
   void run_impl() override { gtk_main(); }
   void terminate_impl() override {
-    dispatch_impl([] { gtk_main_quit(); });
+    // PATCHED (jarvis): leave a HOST-OWNED gtk_main running. The Linux sidecar
+    // runs one GTK main loop for its overlays (pebble, sub-pebbles, region
+    // select) and every panel window, and on_window_destroyed() calls
+    // terminate() when the last webview window closes. Quitting that loop
+    // would freeze the pebble and leave the next panel's creation waiting on a
+    // loop that no longer runs. A window that runs its own loop (the pre-client
+    // connect and onboarding windows) still quits it.
+    if (!jarvis_host_owns_run_loop()) {
+      dispatch_impl([] { gtk_main_quit(); });
+    }
   }
   void dispatch_impl(std::function<void()> f) override {
     g_idle_add_full(G_PRIORITY_HIGH_IDLE, (GSourceFunc)([](void *f) -> int {
@@ -3593,11 +3616,11 @@ WEBVIEW_API void webview_terminate(webview_t w) {
 }
 
 WEBVIEW_API void webview_set_host_owns_run_loop(int owns) {
-#if defined(WEBVIEW_COCOA)
+#if defined(WEBVIEW_COCOA) || defined(WEBVIEW_GTK)
   webview::detail::jarvis_host_owns_run_loop() = owns != 0;
 #else
-  // Windows and GTK stop their loops per window and have no shared host loop
-  // to protect, so there is nothing to declare. Present on every platform
+  // Windows stops its loops per window and has no shared host loop to
+  // protect, so there is nothing to declare. Present on every platform
   // anyway, so the Go caller needs no build tag of its own.
   (void)owns;
 #endif

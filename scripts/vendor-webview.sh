@@ -100,6 +100,12 @@ grep -q "webview_set_host_owns_run_loop" "$HEADER"          # cocoa: host-owned 
 # both leave the string "jarvis_host_owns_run_loop()) {" in place while breaking
 # it in the direction where first run hangs.
 grep -A1 'if (!jarvis_host_owns_run_loop()) {' "$HEADER" | grep -q 'stop_run_loop();'
+# The GTK half of the same guard: the Linux sidecar runs one gtk_main for its
+# overlays and every panel window, and a panel closing must not quit it. Assert
+# the guarded quit AND that the setter reaches the GTK flag, since losing either
+# leaves the build green and the pebble frozen after the first panel closes.
+grep -A1 'if (!jarvis_host_owns_run_loop()) {' "$HEADER" | grep -q 'gtk_main_quit'
+grep -q 'defined(WEBVIEW_COCOA) || defined(WEBVIEW_GTK)' "$HEADER"
 grep -q "PATCHED (jarvis)" "$VENDOR_DIR/webview.go"         # nil WebView on NULL handle
 grep -q "PATCHED (jarvis)" "$VENDOR_DIR/jarvis_native.go"   # browser controller accessor
 grep -q "SetHostOwnsRunLoop" "$VENDOR_DIR/jarvis_native.go" # cocoa: the flag's Go binding

@@ -1,17 +1,18 @@
 --- a/libs/webview/include/webview.h
 +++ b/libs/webview/include/webview.h
-@@ -215,6 +215,20 @@
+@@ -215,6 +215,21 @@
  WEBVIEW_API void webview_terminate(webview_t w);
  
  /**
 + * PATCHED (jarvis): declare that a HOST-OWNED run loop is running, so a
 + * window's terminate must not stop it.
 + *
-+ * Cocoa only; a no-op elsewhere. The sidecar's tray runs one shared [NSApp run]
-+ * loop that every later window (panels, settings, logs) lives under, and a
-+ * window closing must not take the app down with it. But the FIRST-RUN windows
-+ * open before the tray exists and own the loop themselves, so for those
-+ * terminate has to work exactly as upstream intends.
++ * Cocoa and GTK; a no-op on Windows. The sidecar's tray runs one shared
++ * [NSApp run] loop that every later window (panels, settings, logs) lives
++ * under, and a window closing must not take the app down with it. On Linux the
++ * shared loop is the sidecar's one gtk_main for its overlays and panels. But the
++ * FIRST-RUN windows open before the shared loop exists and own the loop
++ * themselves, so for those terminate has to work exactly as upstream intends.
 + *
 + * Set it to 1 immediately before entering the shared loop and leave it there.
 + */
@@ -21,7 +22,45 @@
   * Schedules a function to be invoked on the thread with the run/event loop.
   * Use this function e.g. to interact with the library or native handles.
   *
-@@ -1471,6 +1485,7 @@
+@@ -1118,6 +1133,19 @@
+ namespace webview {
+ namespace detail {
+ 
++/**
++ * PATCHED (jarvis): does something OTHER than a webview window own the GTK
++ * main loop right now? See webview_set_host_owns_run_loop.
++ *
++ * The GTK twin of the Cocoa flag of the same name; only one backend is compiled
++ * into a build, so the two cannot collide. Function-local static in an inline
++ * function for the same ODR reason given there.
++ */
++inline std::atomic<bool> &jarvis_host_owns_run_loop() {
++  static std::atomic<bool> owns{false};
++  return owns;
++}
++
+ // Namespace containing workaround for WebKit 2.42 when using NVIDIA GPU
+ // driver.
+ // See WebKit bug: https://bugs.webkit.org/show_bug.cgi?id=261874
+@@ -1320,7 +1348,16 @@
+   void *browser_controller_impl() override { return (void *)m_webview; };
+   void run_impl() override { gtk_main(); }
+   void terminate_impl() override {
+-    dispatch_impl([] { gtk_main_quit(); });
++    // PATCHED (jarvis): leave a HOST-OWNED gtk_main running. The Linux sidecar
++    // runs one GTK main loop for its overlays (pebble, sub-pebbles, region
++    // select) and every panel window, and on_window_destroyed() calls
++    // terminate() when the last webview window closes. Quitting that loop
++    // would freeze the pebble and leave the next panel's creation waiting on a
++    // loop that no longer runs. A window that runs its own loop (the pre-client
++    // connect and onboarding windows) still quits it.
++    if (!jarvis_host_owns_run_loop()) {
++      dispatch_impl([] { gtk_main_quit(); });
++    }
+   }
+   void dispatch_impl(std::function<void()> f) override {
+     g_idle_add_full(G_PRIORITY_HIGH_IDLE, (GSourceFunc)([](void *f) -> int {
+@@ -1471,6 +1508,7 @@
  #include <CoreGraphics/CoreGraphics.h>
  #include <objc/NSObjCRuntime.h>
  #include <objc/objc-runtime.h>
@@ -29,7 +68,7 @@
  
  namespace webview {
  namespace detail {
-@@ -1551,6 +1566,26 @@
+@@ -1551,6 +1589,26 @@
    return objc::msg_send<id>("NSString"_cls, "stringWithUTF8String:"_sel, s);
  }
  
@@ -56,7 +95,7 @@
  class cocoa_wkwebview_engine : public engine_base {
  public:
    cocoa_wkwebview_engine(bool debug, void *window)
-@@ -1634,7 +1669,31 @@
+@@ -1634,7 +1692,31 @@
    void *window_impl() override { return (void *)m_window; }
    void *widget_impl() override { return (void *)m_webview; }
    void *browser_controller_impl() override { return (void *)m_webview; };
@@ -89,7 +128,7 @@
    void run_impl() override {
      auto app = get_shared_application();
      objc::msg_send<void>(app, "run"_sel);
-@@ -1895,6 +1954,19 @@
+@@ -1895,6 +1977,19 @@
      dispatch([this] { on_window_destroyed(); });
    }
    void set_up_window() {
@@ -109,7 +148,7 @@
      objc::autoreleasepool arp;
  
      // Main window
-@@ -2022,23 +2094,14 @@
+@@ -2022,23 +2117,14 @@
  
    // Blocks while depleting the run loop of events.
    void deplete_run_loop_event_queue() {
@@ -141,7 +180,7 @@
    }
  
    bool m_debug{};
-@@ -3179,9 +3242,10 @@
+@@ -3179,9 +3265,10 @@
                      nullptr, hInstance, this);
  
      if (m_owns_window) {
@@ -155,7 +194,7 @@
      }
  
      auto cb =
-@@ -3500,7 +3564,16 @@
+@@ -3500,7 +3587,16 @@
  
  WEBVIEW_API webview_t webview_create(int debug, void *wnd) {
    auto w = new webview::webview(debug, wnd);
@@ -173,16 +212,16 @@
      delete w;
      return nullptr;
    }
-@@ -3519,6 +3592,17 @@
+@@ -3519,6 +3615,17 @@
    static_cast<webview::webview *>(w)->terminate();
  }
  
 +WEBVIEW_API void webview_set_host_owns_run_loop(int owns) {
-+#if defined(WEBVIEW_COCOA)
++#if defined(WEBVIEW_COCOA) || defined(WEBVIEW_GTK)
 +  webview::detail::jarvis_host_owns_run_loop() = owns != 0;
 +#else
-+  // Windows and GTK stop their loops per window and have no shared host loop
-+  // to protect, so there is nothing to declare. Present on every platform
++  // Windows stops its loops per window and has no shared host loop to
++  // protect, so there is nothing to declare. Present on every platform
 +  // anyway, so the Go caller needs no build tag of its own.
 +  (void)owns;
 +#endif
@@ -212,7 +251,7 @@
  
 --- /dev/null
 +++ b/jarvis_native.go
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,67 @@
 +package webview
 +
 +/*
@@ -260,17 +299,19 @@
 +
 +// PATCHED (jarvis): declare that a host-owned run loop is running.
 +//
-+// Cocoa only; a no-op on Windows and GTK, which stop their loops per window.
++// Cocoa and GTK; a no-op on Windows, which stops its loops per window.
 +//
 +// The sidecar's tray runs ONE shared [NSApp run] loop that every window opened
 +// afterwards (panels, settings, logs) lives under, so a window closing must not
-+// stop it -- see terminate_impl in webview.h for what breaks if it does. The
-+// first-run windows are the exception that makes this a flag rather than an
-+// unconditional no-op: they open before the tray, own the loop themselves, and
-+// call Terminate to hand control back to main().
++// stop it -- see terminate_impl in webview.h for what breaks if it does. On
++// Linux the same holds for the one GTK main loop the sidecar runs for its
++// overlays and panel windows. The first-run windows are the exception that
++// makes this a flag rather than an unconditional no-op: they open before the
++// shared loop, own the loop themselves, and call Terminate to hand control back
++// to main().
 +//
 +// Call with true once, immediately before entering the shared loop. There is no
-+// matching false: the tray owns the loop until the process exits.
++// matching false: the host owns the loop until the process exits.
 +func SetHostOwnsRunLoop(owns bool) {
 +	v := C.int(0)
 +	if owns {
