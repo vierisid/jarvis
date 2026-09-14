@@ -11,7 +11,8 @@ const CASE_INSENSITIVE_VALUES = new Set(['birthday', 'name', 'preferred_name', '
 
 export function predicateKey(predicate: string): string {
   const key = predicate.trim().toLowerCase().replace(/\s+/g, '_');
-  return ALIASES[key] ?? key;
+  // Unknown predicates must not resolve to inherited properties such as constructor.
+  return Object.hasOwn(ALIASES, key) ? ALIASES[key]! : key;
 }
 export function valueKey(predicate: string, value: string): string {
   const trimmed = value.trim();
