@@ -950,8 +950,8 @@ export class AgentService implements Service, IAgentService {
     // Get due commitments — skipped in slim/voice mode.
     if (!slim) {
       try {
-        const due = getDueCommitments();
-        const upcoming = getUpcoming(5);
+        const due = getDueCommitments({ excludeWorkItems: true });
+        const upcoming = getUpcoming(5, { excludeWorkItems: true });
         const allCommitments = [...due, ...upcoming];
 
         if (allCommitments.length > 0) {

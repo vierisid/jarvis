@@ -3,6 +3,17 @@ import { getDb, generateId } from './schema.ts';
 export type CommitmentPriority = 'low' | 'normal' | 'high' | 'critical';
 export type CommitmentStatus = 'pending' | 'active' | 'completed' | 'failed' | 'escalated';
 
+export type CommitmentScheduleOptions = {
+  /** Linked work uses its own decision and execution contract, even when it has a due date. */
+  excludeWorkItems?: boolean;
+};
+
+const EXCLUDE_WORK_ITEMS = 'AND NOT EXISTS (SELECT 1 FROM commitment_work WHERE work_id = commitments.id)';
+
+export function isWorkItemCommitment(id: string): boolean {
+  return !!getDb().query('SELECT 1 FROM commitment_work WHERE work_id = ?').get(id);
+}
+
 export type RetryPolicy = {
   max_retries: number;
   interval_ms: number;
@@ -163,10 +174,11 @@ export function findCommitments(query: {
 /**
  * Get upcoming commitments, ordered by due date
  */
-export function getUpcoming(limit: number = 10): Commitment[] {
+export function getUpcoming(limit: number = 10, options: CommitmentScheduleOptions = {}): Commitment[] {
   const db = getDb();
   const stmt = db.prepare(
-    "SELECT * FROM commitments WHERE status IN ('pending', 'active') AND when_due IS NOT NULL ORDER BY when_due ASC LIMIT ?"
+    `SELECT * FROM commitments WHERE status IN ('pending', 'active') AND when_due IS NOT NULL
+     ${options.excludeWorkItems ? EXCLUDE_WORK_ITEMS : ''} ORDER BY when_due ASC LIMIT ?`
   );
   const rows = stmt.all(limit) as CommitmentRow[];
 
@@ -222,11 +234,12 @@ export function escalateCommitment(id: string): Commitment | null {
 /**
  * Get commitments that are currently due
  */
-export function getDueCommitments(): Commitment[] {
+export function getDueCommitments(options: CommitmentScheduleOptions = {}): Commitment[] {
   const db = getDb();
   const now = Date.now();
   const stmt = db.prepare(
-    "SELECT * FROM commitments WHERE when_due IS NOT NULL AND when_due <= ? AND status IN ('pending', 'active') ORDER BY when_due ASC"
+    `SELECT * FROM commitments WHERE when_due IS NOT NULL AND when_due <= ? AND status IN ('pending', 'active')
+     ${options.excludeWorkItems ? EXCLUDE_WORK_ITEMS : ''} ORDER BY when_due ASC`
   );
   const rows = stmt.all(now) as CommitmentRow[];
 

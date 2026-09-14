@@ -61,14 +61,14 @@ export function getWorkItem(id: string): WorkItem {
   const decision = w.decision ? JSON.parse(w.decision) as WorkDecision : null;
   const resultCheck = w.result_check ? JSON.parse(w.result_check) as ResultCheck : null;
   const run = w.run_id && workflowAvailable() ? getFlowRun(w.run_id) : null;
+  const waitpoint = run ? listWaitpointsByFlowRun(run.id, false)[0] : undefined;
   let blocker: WorkItem['blocker'] = w.blocker ? { kind: 'manual', ref: null, reason: w.blocker } : null;
   let status: WorkItem['status'] = decision ? decision.outcome === 'rejected' ? 'rejected' : 'ready' : 'proposed';
   if (w.run_id) {
     if (!run) {
       blocker = { kind: 'missing_run', ref: w.run_id, reason: 'Linked run is unavailable' };
       status = 'blocked';
-    } else if (run.status === 'PAUSED') {
-      const waitpoint = listWaitpointsByFlowRun(run.id, false)[0];
+    } else if (run.status === 'PAUSED' || waitpoint) {
       blocker = { kind: 'waitpoint', ref: waitpoint?.id ?? run.id, reason: waitpoint ? `Waiting at ${waitpoint.stepName}` : 'Run is paused' };
       status = 'blocked';
     } else if (run.status === 'RUNNING' || run.status === 'QUEUED') {
@@ -212,6 +212,7 @@ export function checkWorkResult(id: string, body: unknown): WorkItem {
     if (work.decision?.outcome !== 'accepted' || work.blocker?.kind === 'manual') throw new WorkItemError('Accept and unblock the work before checking its result', 409);
     if (work.mode === 'workflow') {
       if (!work.run || ['RUNNING', 'QUEUED', 'PAUSED'].includes(work.run.status)) throw new WorkItemError('A finished linked run is required', 409);
+      if (listWaitpointsByFlowRun(work.run.id, false).length) throw new WorkItemError('Resolve outstanding run waitpoints before checking its result', 409);
       if (input.verdict === 'passed' && work.run.status !== 'SUCCEEDED') throw new WorkItemError('A failed run cannot be verified as successful', 409);
     }
     const check: ResultCheck = {

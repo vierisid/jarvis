@@ -264,6 +264,7 @@ export function getJob<P = Record<string, unknown>>(id: string): Job<P> | null {
  * Retire RUN_FLOW jobs with an actionable error without replaying effects.
  * Other job types may re-queue within their attempt budget. Returns how many
  * retryable jobs were re-queued. Must run BEFORE the worker starts polling.
+ * Runs stranded by an older daemon's recovery code are closed the same way.
  */
 export function recoverOrphanedJobs(): number {
   // Before the transaction below, and before retireWorkflowRetries, on purpose.
@@ -289,6 +290,24 @@ export function recoverOrphanedJobs(): number {
        SET status = 'QUEUED', locked_until = NULL, scheduled_at = ?, updated = ?
        WHERE status = 'RUNNING' AND attempt < max_attempts`,
       [ts, ts],
+    );
+    // Also repair runs stranded by older recovery code. A persisted pause or
+    // terminal outcome wins, as does another active job for a valid resume/retry.
+    // A consumed pause whose RESUME job died before entering the handler must
+    // close too; it has no remaining waitpoint that could wake the run again.
+    d.run(
+      `UPDATE flow_run SET status = 'FAILED', failed_step = ?, finish_time = ?, updated = ?
+       WHERE status IN ('QUEUED', 'RUNNING', 'PAUSED')
+         AND EXISTS (SELECT 1 FROM workflow_job j WHERE j.flow_run_id = flow_run.id
+           AND j.job_type = 'RUN_FLOW' AND j.status = 'FAILED'
+           AND j.last_error = 'orphaned: max attempts exhausted'
+           AND (flow_run.status <> 'PAUSED' OR json_extract(j.payload, '$.executionType') = 'RESUME'))
+         AND (status <> 'PAUSED' OR NOT EXISTS (SELECT 1 FROM waitpoint w
+           WHERE w.flow_run_id = flow_run.id AND w.resumed_at IS NULL))
+         AND NOT EXISTS (SELECT 1 FROM workflow_job j WHERE j.flow_run_id = flow_run.id
+           AND j.status IN ('QUEUED', 'RUNNING'))`,
+      [JSON.stringify({ name: '<recovery>', displayName: 'Recovery',
+        errorMessage: 'Execution was interrupted and exhausted its attempts. Its outcome is unknown; inspect partial results before proposing another run.' }), ts, ts],
     );
     return res.changes;
   })();

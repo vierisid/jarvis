@@ -58,6 +58,11 @@ its legacy active goal-row response for existing clients and independent rhythms
    Check, progress and commitment completion commit atomically. A second check
    returns 409; retrieve the existing result after an uncertain HTTP response.
 
+Due dates on linked commitments are metadata. Legacy commitment scheduling,
+automatic due events and reminder context exclude linked work, regardless of its
+decision or mode. Workflow work starts through the linked run endpoint; manual
+work is carried out by the user and requires an explicit result check.
+
 These routes use the daemon's existing authenticated API boundary. A planning
 decision records intent; it does not grant tool authority or resolve runtime
 approval requests. Evidence references are supplied by the user and are not
@@ -70,6 +75,14 @@ failed. SUCCEEDED alone means `needs_check`, not verified goal progress. A manua
 commitment marked completed through an older client also remains unchecked.
 An explicit result check is the authority for `verified`. Checks retain the run
 snapshot if run history is later deleted; an unchecked missing run is blocked.
+An unresolved waitpoint blocks result checking even if an older runtime recorded
+SUCCEEDED. A pause finishes the current queue job while keeping the run PAUSED
+with no finish time; the existing resume endpoint continues the same run.
+At startup, an interrupted execution that exhausted its attempts is recorded as
+FAILED with its partial outputs and an unknown-outcome explanation. It is never
+silently replayed. Inspect those outputs before recording a failed check or
+creating a new proposal. Recovery preserves terminal results and pending pauses;
+an exhausted resume with no remaining waitpoint is also recorded as a failure.
 Evening review receives these linked decisions/results and is instructed not to
 count an already recorded goal progress entry again. Its independent goal review
 behavior is preserved; LLM narration never writes work-item verification.
