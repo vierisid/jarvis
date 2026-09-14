@@ -6,6 +6,7 @@
  */
 
 import { getDb, generateId } from './schema.ts';
+import { recordOpportunityObservation } from './opportunity-observations.ts';
 import type {
   ScreenCaptureRow,
   SessionRow,
@@ -35,26 +36,31 @@ export function createCapture(data: {
   const id = generateId();
   const now = Date.now();
 
-  db.prepare(`
-    INSERT INTO screen_captures
-      (id, timestamp, session_id, sidecar_id, image_path, pixel_change_pct,
-       ocr_text, app_name, window_title, url, file_path, retention_tier, created_at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-  `).run(
-    id,
-    data.timestamp,
-    data.sessionId ?? null,
-    data.sidecarId ?? null,
-    data.imagePath ?? null,
-    data.pixelChangePct,
-    data.ocrText ?? null,
-    data.appName ?? null,
-    data.windowTitle ?? null,
-    data.url ?? null,
-    data.filePath ?? null,
-    data.retentionTier ?? 'full',
-    now,
-  );
+  db.transaction(() => {
+    db.prepare(`
+      INSERT INTO screen_captures
+        (id, timestamp, session_id, sidecar_id, image_path, pixel_change_pct,
+         ocr_text, app_name, window_title, url, file_path, retention_tier, created_at)
+      VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `).run(
+      id,
+      data.timestamp,
+      data.sessionId ?? null,
+      data.sidecarId ?? null,
+      data.imagePath ?? null,
+      data.pixelChangePct,
+      data.ocrText ?? null,
+      data.appName ?? null,
+      data.windowTitle ?? null,
+      data.url ?? null,
+      data.filePath ?? null,
+      data.retentionTier ?? 'full',
+      now,
+    );
+
+    recordOpportunityObservation({ captureId: id, timestamp: data.timestamp,
+      app: data.appName, windowTitle: data.windowTitle, ocrText: data.ocrText });
+  })();
 
   return {
     id,
