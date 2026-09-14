@@ -101,10 +101,11 @@ export class SuggestionComposer {
         if (canonicalSuggestion(job.suggestion_id).dismissed) throw new Error('Suggestion was dismissed. No draft was created.');
         const request = JSON.parse(job.request) as CompositionRequest;
         const result = await Promise.race([
-          this.compose({ name: request.name, description: `${request.description}\n\nExpected result: ${request.expectedOutcome}` }),
+          this.compose({ name: request.name, description: `${request.description}\n\nExpected result: ${request.expectedOutcome}`,
+            signal: active.abort.signal }),
           new Promise<never>((_, reject) => {
-            timer = setTimeout(() => reject(new Error('Composition timed out. Review the request and retry.')), this.timeoutMs);
-            active.abort.signal.addEventListener('abort', () => reject(new Error('Composition stopped')), { once: true });
+            timer = setTimeout(() => active.abort.abort(new Error('Composition timed out. Review the request and retry.')), this.timeoutMs);
+            active.abort.signal.addEventListener('abort', () => reject(active.abort.signal.reason), { once: true });
           }),
         ]);
         // A stopped/replaced worker must never write into a reopened database.
@@ -119,6 +120,8 @@ export class SuggestionComposer {
         if (this.running && this.active === active) failSuggestionComposition(job, error instanceof Error ? error.message : String(error));
       } finally {
         if (timer) clearTimeout(timer);
+        // Also cancel transport work orphaned by a provider/router's own timeout.
+        active.abort.abort();
         if (this.active === active) this.active = null;
       }
     }

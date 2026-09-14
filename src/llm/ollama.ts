@@ -129,6 +129,7 @@ export class OllamaProvider implements LLMProvider {
 
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
+      signal: options.signal,
       headers: {
         'Content-Type': 'application/json',
       },
@@ -170,6 +171,7 @@ export class OllamaProvider implements LLMProvider {
 
     const response = await fetch(`${this.baseUrl}/api/chat`, {
       method: 'POST',
+      signal: options.signal,
       headers: {
         'Content-Type': 'application/json',
       },

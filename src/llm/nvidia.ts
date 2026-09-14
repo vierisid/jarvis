@@ -122,6 +122,7 @@ export class NVIDIAProvider implements LLMProvider {
 
     const response = await fetch(this.apiUrl, {
       method: 'POST',
+      signal: options.signal,
       headers: {
         'Authorization': `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
@@ -162,6 +163,7 @@ export class NVIDIAProvider implements LLMProvider {
 
     const response = await fetch(this.apiUrl, {
       method: 'POST',
+      signal: options.signal,
       headers: {
         'Authorization': `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',

@@ -1,5 +1,5 @@
 import {
-  acceptSuggestion, getSuggestionLearning, listSuggestionCompositions,
+  acceptSuggestion, getSuggestionLearning, listSuggestionCompositions, listSuggestionRoutines,
   recordSuggestionDecision, retrySuggestionComposition, SuggestionFeedbackError,
 } from './suggestion-feedback.ts';
 import type { SuggestionComposer } from './suggestion-composer.ts';
@@ -23,6 +23,12 @@ const handle = async (fn: () => unknown | Promise<unknown>): Promise<Response> =
 
 export function createSuggestionFeedbackRoutes(composer: () => Pick<SuggestionComposer, 'kick'> | null | undefined) {
   return {
+    '/api/awareness/routines': { GET: (req?: Request) => handle(() => {
+      const offset = Number(req ? new URL(req.url).searchParams.get('offset') ?? 0 : 0);
+      if (!Number.isSafeInteger(offset) || offset < 0) throw new SuggestionFeedbackError('offset must be a non-negative integer');
+      const suggestions = listSuggestionRoutines(offset);
+      return { suggestions, nextOffset: suggestions.length === 100 ? offset + 100 : null };
+    }) },
     '/api/awareness/compositions': { GET: (req?: Request) => handle(() => {
       const offset = Number(req ? new URL(req.url).searchParams.get('offset') ?? 0 : 0);
       if (!Number.isSafeInteger(offset) || offset < 0) throw new SuggestionFeedbackError('offset must be a non-negative integer');

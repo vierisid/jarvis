@@ -1,0 +1,26 @@
+.wf-routines { flex: 1; min-height: 0; overflow: auto; padding: 0 var(--s-6) var(--s-6); color: var(--ink); font-size: 0.9375rem; }
+.wf-routines__toolbar, .wf-routines__actions { display: flex; align-items: center; flex-wrap: wrap; gap: var(--s-3); }
+.wf-routines__toolbar { justify-content: space-between; margin-bottom: var(--s-4); }
+.wf-routines p { max-width: 70ch; line-height: 1.5; }
+.wf-routines__layout { display: grid; grid-template-columns: minmax(0, 2fr) minmax(0, 3fr); gap: var(--s-6); }
+.wf-routines__list { list-style: none; margin: 0 0 var(--s-3); padding: 0; }
+.wf-routines__row { display: flex; align-items: center; justify-content: space-between; gap: var(--s-3); width: 100%; padding: var(--s-3); text-align: left; font: inherit; color: var(--ink); background: transparent; border: 0; border-bottom: 1px solid var(--rule); cursor: pointer; }
+.wf-routines__row:hover, .wf-routines__row[aria-pressed="true"] { background: var(--panel); }
+.wf-routines__row:focus-visible { outline: 2px solid var(--ink2); outline-offset: -2px; }
+.wf-routines__row span { overflow-wrap: anywhere; }
+.wf-routines__detail { min-width: 0; overflow-wrap: anywhere; }
+.wf-routines__detail h3 { margin-top: 0; font-size: 1.125rem; }
+.wf-routines details { margin: var(--s-4) 0; }
+.wf-routines summary { cursor: pointer; }
+.wf-routines small { display: block; color: var(--ink2); font-size: 0.8125rem; }
+.wf-routines dt { margin-top: var(--s-3); font-weight: 600; }
+.wf-routines dd { margin: var(--s-1) 0; white-space: pre-wrap; }
+.wf-routines [role="alert"] { color: var(--listen-tx); }
+.wf-routines__form fieldset { padding: 0; margin: 0; border: 0; min-width: 0; }
+.wf-routines__form label { display: flex; flex-direction: column; gap: var(--s-2); margin-bottom: var(--s-4); }
+.wf-routines__form input, .wf-routines__form textarea, .wf-routines__form select { box-sizing: border-box; width: 100%; min-width: 0; padding: var(--s-2) var(--s-3); color: var(--ink); background: var(--raise); border: 1px solid var(--rule); border-radius: var(--corner-sm); font: inherit; }
+.wf-routines__form textarea { min-height: 6rem; resize: vertical; }
+.wf-routines__form :is(input, textarea, select):focus-visible { outline: 2px solid var(--ink2); outline-offset: 2px; }
+.wf-routines__form :disabled { opacity: 0.65; }
+.wf-room__tabs { flex-wrap: wrap; }
+@container wfroom (max-width: 680px) { .wf-routines__layout { grid-template-columns: 1fr; } }

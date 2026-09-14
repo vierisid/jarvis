@@ -143,6 +143,8 @@ export function classifyErrorString(raw: string | undefined | null): LLMErrorCod
 }
 
 export type LLMOptions = {
+  /** Cancellation for the request, including retries and provider failover. */
+  signal?: AbortSignal;
   model?: string;
   temperature?: number;
   max_tokens?: number;

@@ -9,7 +9,7 @@ import { createGoal } from '../vault/goals.ts';
 import { getFlow, deleteFlow, listFlows } from '../workflows/db/repos/flow.ts';
 import { getFlowVersion } from '../workflows/db/repos/flow-version.ts';
 import { acceptSuggestion, canonicalSuggestion, getSuggestionLearning, retrySuggestionComposition,
-  recordSuggestionDecision, getCompositionRow, listSuggestionCompositions } from './suggestion-feedback.ts';
+  recordSuggestionDecision, getCompositionRow, listSuggestionCompositions, listSuggestionRoutines } from './suggestion-feedback.ts';
 import { SuggestionComposer, attachSuggestionDraft, claimSuggestionComposition, failSuggestionComposition,
   recoverExpiredCompositions } from './suggestion-composer.ts';
 import { createSuggestionFeedbackRoutes } from './suggestion-feedback-routes.ts';
@@ -65,6 +65,7 @@ describe('durable suggestion feedback', () => {
       [JSON.stringify({ pattern: 'app_switch', fromApp: 'Sheets', toApp: 'mail' }), Date.now() + 100]);
     closeDb(); initWorkflowDb(path);
     expect(canonicalSuggestion('older-client-alias').id).toBe(first.id);
+    expect(listSuggestionRoutines().map(item => item.opportunityId)).toEqual([first.id]);
     const one = acceptSuggestion(first.id, acceptance);
     const two = acceptSuggestion('older-client-alias', { ...acceptance, requestId: 'accept-2' });
     expect(two.composition?.id).toBe(one.composition?.id);
@@ -198,7 +199,10 @@ describe('composition job and draft recovery', () => {
   test('shutdown fences late LLM completion across a database reopen', async () => {
     const suggestion = proposal(); acceptSuggestion(suggestion.id, acceptance);
     const gate = deferred<ComposeResult>();
-    worker = new SuggestionComposer(() => gate.promise); worker.start(); worker.stop(); await worker.idle();
+    let signal: AbortSignal | undefined;
+    worker = new SuggestionComposer(request => { signal = request.signal; return gate.promise; });
+    worker.start(); worker.stop(); await worker.idle();
+    expect(signal?.aborted).toBe(true);
     closeDb(); initWorkflowDb(path); gate.resolve(result); await Promise.resolve();
     expect(listFlows()).toHaveLength(0);
     expect(getSuggestionLearning(suggestion.id).composition?.state).toBe('failed');
@@ -206,7 +210,10 @@ describe('composition job and draft recovery', () => {
 
   test('timeout releases the queue and retains an actionable failure', async () => {
     const suggestion = proposal(); acceptSuggestion(suggestion.id, acceptance);
-    worker = new SuggestionComposer(() => new Promise(() => {}), 20); worker.start(); await worker.idle();
+    let signal: AbortSignal | undefined;
+    worker = new SuggestionComposer(request => { signal = request.signal; return new Promise(() => {}); }, 20);
+    worker.start(); await worker.idle();
+    expect(signal?.aborted).toBe(true);
     expect(getSuggestionLearning(suggestion.id).composition?.error).toContain('timed out');
     expect(listFlows()).toHaveLength(0);
   });
@@ -233,4 +240,25 @@ test('routes validate JSON, IDs, reason, conflicts and operate without an awaren
   expect((await post(req(suggestion.id, JSON.stringify(acceptance)))).status).toBe(200);
   expect((await post(req(suggestion.id, JSON.stringify({ ...acceptance, name: 'Changed' })))).status).toBe(409);
   expect((await routes['/api/awareness/compositions'].GET()).status).toBe(200);
+});
+
+test('routine discovery pages canonical proposals and decisions without a notification-age cutoff', async () => {
+  const old = proposal();
+  getDb().run('UPDATE awareness_suggestions SET created_at = 1, delivered = 1 WHERE id = ?', [old.id]);
+  markSuggestionDismissed(old.id, 'Already handled');
+  getDb().transaction(() => {
+    for (let i = 0; i < 104; i++) createSuggestion({ type: 'automation', title: `Routine ${i}`, body: 'Recurring work',
+      context: { opportunity: { patternKey: `test-job-${i}` } } });
+    createSuggestion({ type: 'break', title: 'Take a break', body: 'Independent rhythm' });
+  })();
+  closeDb(); initWorkflowDb(path);
+  const routes = createSuggestionFeedbackRoutes(() => null);
+  const list = (offset: number) => routes['/api/awareness/routines'].GET(new Request(`http://localhost/api/awareness/routines?offset=${offset}`));
+  const first = await (await list(0)).json(); const second = await (await list(first.nextOffset)).json();
+  expect(first.suggestions).toHaveLength(100); expect(second.suggestions).toHaveLength(5);
+  expect(second.nextOffset).toBeNull();
+  const all = [...first.suggestions, ...second.suggestions];
+  expect(new Set(all.map(row => row.opportunityId)).size).toBe(105);
+  expect(all.find(row => row.opportunityId === old.id).status).toBe('dismissed');
+  expect((await list(-1)).status).toBe(400);
 });

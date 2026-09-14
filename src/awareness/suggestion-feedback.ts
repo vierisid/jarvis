@@ -194,3 +194,17 @@ export function listSuggestionCompositions(offset = 0) {
     'SELECT suggestion_id FROM suggestion_composition_jobs ORDER BY created_at DESC, id LIMIT 100 OFFSET ?').all(offset)
     .map(row => getSuggestionLearning(row.suggestion_id));
 }
+
+export type SuggestionLearning = ReturnType<typeof getSuggestionLearning>;
+
+/** Include proposals with no decision/job, without a recent-notification cutoff. */
+export function listSuggestionRoutines(offset = 0) {
+  return getDb().query<{ id: string }, [number]>(`SELECT id FROM (
+    SELECT s.id, s.created_at, ROW_NUMBER() OVER (
+      PARTITION BY COALESCE(i.pattern_key, 'suggestion:' || s.id) ORDER BY s.created_at, s.id
+    ) AS position
+    FROM awareness_suggestions s LEFT JOIN suggestion_identities i ON i.suggestion_id = s.id
+    WHERE s.type = 'automation'
+  ) WHERE position = 1 ORDER BY created_at DESC, id LIMIT 100 OFFSET ?`).all(offset)
+    .map(row => getSuggestionLearning(row.id));
+}

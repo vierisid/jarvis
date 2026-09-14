@@ -60,6 +60,9 @@ is paused or awareness is unavailable.
   more information does not compose or execute anything.
 - `GET /api/awareness/compositions?offset=0`: `{suggestions, nextOffset}`, in
   pages of 100, independent of recent notification history.
+- `GET /api/awareness/routines?offset=0`: the same page shape for all canonical
+  automation proposals, including undecided and dismissed proposals. Delivered
+  proposals remain discoverable without an age cutoff; legacy aliases appear once.
 
 Missing suggestions return 404; invalid input returns 400; changed acceptance or
 reused keys with different feedback return 409. Identical repeated acceptance
@@ -81,16 +84,24 @@ those dependencies are unavailable.
    expired lease records an interrupted failure. Queued jobs resume on startup;
    interrupted calls require explicit retry to avoid repeated unrequested spend.
 
+Each attempt carries an abort signal through the composer, tier router and
+provider transport. Timeout and shutdown abort in-flight requests. Aborted
+attempts cannot start another provider retry, failover, discovery turn or
+one-shot fallback. Finishing an attempt also aborts transport work left behind
+by a provider's own timeout. Already consumed provider usage cannot be undone.
+
 A crash before the final commit leaves a recoverable request; a crash after it
 leaves the complete relation. Flow creation and attachment roll back together.
 Stale workers are fenced by lease token and state. Deleted drafts retain their
 historical IDs and report `draftAvailable: false`; repeat acceptance never
 silently creates a replacement.
 
-The overlay collects the recurring job and useful result, supports an optional
-explicit goal, saves dismissal reasons and offers saved requests with error/retry
-and draft-review controls. A proactive chat copy cannot replace a structured
-suggestion's ID. Acceptance does not send a duplicate chat composition command.
+The active dashboard and standalone Workflows room expose a Routine requests
+tab. It collects the recurring job and useful result, supports an optional
+explicit goal, saves dismissal reasons and lists proposals and saved requests
+with error/retry controls. Review opens the attached draft in the same room.
+The legacy overlay remains compatible, but is not required to reach this flow.
+Acceptance does not send a duplicate chat composition command.
 
 C10 execution remains a later explicit step: publish/lock the reviewed draft,
 link that version to accepted work, run through existing approval controls, then
@@ -102,5 +113,5 @@ goal progress.
 Implement additive schema/alias recovery, acceptance APIs, the lease and atomic
 attachment worker, then overlay review/retry. Verify with real database reopen,
 concurrent acceptance, rollback fault injection, stale-worker fencing, retry
-idempotency, goal validation and DOM/browser checks. The app-pair restart
+idempotency, transport cancellation, goal validation and active-room DOM/browser checks. The app-pair restart
 regression must fail on clean main and pass on this branch.

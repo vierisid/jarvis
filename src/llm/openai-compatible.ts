@@ -129,9 +129,9 @@ export class OpenAICompatibleProvider extends OpenAIProvider {
     return firstMiss!;
   }
 
-  protected override postChat(body: Record<string, unknown>, base?: string): Promise<Response> {
-    if (base !== undefined) return super.postChat(body, base);
-    return this.overRoutes((route) => super.postChat(body, route));
+  protected override postChat(body: Record<string, unknown>, base?: string, signal?: AbortSignal): Promise<Response> {
+    if (base !== undefined) return super.postChat(body, base, signal);
+    return this.overRoutes((route) => super.postChat(body, route, signal));
   }
 
   override async listModels(): Promise<string[]> {
