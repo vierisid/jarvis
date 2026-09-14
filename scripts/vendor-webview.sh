@@ -106,6 +106,10 @@ grep -A1 'if (!jarvis_host_owns_run_loop()) {' "$HEADER" | grep -q 'stop_run_loo
 # leaves the build green and the pebble frozen after the first panel closes.
 grep -A1 'if (!jarvis_host_owns_run_loop()) {' "$HEADER" | grep -q 'gtk_main_quit'
 grep -q 'defined(WEBVIEW_COCOA) || defined(WEBVIEW_GTK)' "$HEADER"
+# win32: a create that fails before the message window exists must return NULL,
+# not spin forever in the destructor's event-queue pump. Losing this is a hang
+# of the panel goroutine and a stuck "panel already exists", not a build error.
+grep -q 'if (m_owns_window && m_message_window) {' "$HEADER"
 grep -q "PATCHED (jarvis)" "$VENDOR_DIR/webview.go"         # nil WebView on NULL handle
 grep -q "PATCHED (jarvis)" "$VENDOR_DIR/jarvis_native.go"   # browser controller accessor
 grep -q "SetHostOwnsRunLoop" "$VENDOR_DIR/jarvis_native.go" # cocoa: the flag's Go binding

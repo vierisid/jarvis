@@ -538,7 +538,7 @@ func (s *AudioPlaybackService) deviceFor(sampleRate, channels int) (*pcmRing, er
 func (s *AudioPlaybackService) openDevice(sampleRate, channels int) (*pcmRing, error) {
 	s.ctxMu.Lock()
 	if s.ctx == nil {
-		ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(message string) {
+		ctx, err := newAudioContext(func(message string) {
 			log.Printf("[playback] miniaudio: %s", message)
 		})
 		if err != nil {

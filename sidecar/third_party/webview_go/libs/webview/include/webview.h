@@ -3313,7 +3313,14 @@ public:
       }
       m_window = nullptr;
     }
-    if (m_owns_window) {
+    // PATCHED (jarvis): pump only when the message window exists. dispatch()
+    // posts to it, so without one the `done` sentinel is never delivered and
+    // deplete_run_loop_event_queue() spins in GetMessageW forever. That is the
+    // state the constructor leaves when it bails early (no WebView2 runtime, or
+    // a thread whose COM apartment is already multithreaded), and
+    // webview_create deletes such an engine: a failed create hung its thread
+    // for good instead of returning NULL.
+    if (m_owns_window && m_message_window) {
       // Not strictly needed for windows to close immediately but aligns
       // behavior across backends.
       deplete_run_loop_event_queue();

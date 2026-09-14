@@ -145,9 +145,11 @@ func (s *AudioCaptureService) start(sessionID string, accumulate bool) error {
 
 	// Lazily init the malgo context — first Start spins it up; later
 	// sessions reuse it. The context is closed in Stop() of the service
-	// itself if/when we add a graceful shutdown path.
+	// itself if/when we add a graceful shutdown path, which must uninit it
+	// through onAudioContextThread: WASAPI's uninit calls CoUninitialize on
+	// the calling thread.
 	if s.ctx == nil {
-		ctx, err := malgo.InitContext(nil, malgo.ContextConfig{}, func(message string) {
+		ctx, err := newAudioContext(func(message string) {
 			log.Printf("[audio] miniaudio: %s", message)
 		})
 		if err != nil {

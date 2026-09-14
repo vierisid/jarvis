@@ -52,6 +52,10 @@ type panelImpl struct {
 	following  atomic.Bool   // when true, cursor-tracker actively moves window
 	followStop chan struct{} // closed by Close()/Stop() to halt the tracker
 	hotkeyStop func()        // unregister + stop the hotkey listener
+	// createFailed is set, before ready is closed, when the webview could not
+	// be created, so Spawn can report the failure instead of an id for a window
+	// that will never exist. Read only after <-ready.
+	createFailed bool
 	// Shared-loop teardown (macOS, Linux): uiClosed is closed (once) when the
 	// window is gone so the spawn goroutine, which does not run its own loop
 	// there, can return. Unused on Windows (it blocks in wv.Run()).
@@ -87,17 +91,68 @@ func NewPanelService() PanelService {
 	return &panelService{reg: newPanelRegistry()}
 }
 
+// spawnReadyWait bounds how long Spawn waits for a new window to be created (or
+// fail) before answering. WebView2's first environment in a login session can
+// take several seconds, and the answer matters: it is how the brain learns
+// whether its first-run dashboard really opened.
+const spawnReadyWait = 10 * time.Second
+
+// deleteIf removes id's entry only while it still belongs to handle, so a panel
+// tearing down late cannot remove a newer panel that has since taken its id.
+func (r *panelRegistry) deleteIf(id PanelID, handle any) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, ok := r.entries[id]; ok && e.handle == handle {
+		delete(r.entries, id)
+	}
+}
+
 func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 	if err := validateSpec(spec); err != nil {
 		return "", err
 	}
 	spec = resolveSpec(spec)
+	// Waiting out a same-id panel below gets half the budget, and this panel's
+	// own creation still gets all of spawnReadyWait afterwards: a creation that
+	// started late must not be reported as opened just because the wait before it
+	// used up the time. Both together (plus the panel token mint in the RPC
+	// handler) stay well inside the brain's RPC timeout.
+	deadline := time.Now().Add(spawnReadyWait / 2)
 
 	s.mu.Lock()
 	if !spec.MultiInstance {
-		if _, exists := s.reg.get(spec.ID); exists {
+		// A same-id panel that is still being created is waited out, bounded,
+		// before answering. Two opens of the dashboard can race (the brain's
+		// first-run intro and the sidecar's own open-at-startup), and answering
+		// "panel already exists" while the other creation is still running would
+		// tell the loser the dashboard is up even when that creation then fails.
+		// A failed creation removes its entry before it signals ready, so the
+		// re-check sees the truth; with several waiters, the first to wake
+		// creates and the rest wait on that creation in turn.
+		for {
+			e, exists := s.reg.get(spec.ID)
+			if !exists {
+				break
+			}
+			pending, creating := e.handle.(*panelImpl)
+			if creating {
+				select {
+				case <-pending.ready:
+					creating = false
+				default:
+				}
+			}
+			remaining := time.Until(deadline)
+			if !creating || remaining <= 0 {
+				s.mu.Unlock()
+				return spec.ID, formatPanelError("spawn", spec.ID, ErrPanelExists)
+			}
 			s.mu.Unlock()
-			return spec.ID, formatPanelError("spawn", spec.ID, ErrPanelExists)
+			select {
+			case <-pending.ready:
+			case <-time.After(remaining):
+			}
+			s.mu.Lock()
 		}
 	}
 	impl := &panelImpl{
@@ -152,7 +207,7 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 			}
 		}()
 
-		defer s.reg.delete(spec.ID)
+		defer s.reg.deleteIf(spec.ID, impl)
 		defer close(impl.done)
 		defer func() {
 			// idempotent close — guard against double-close panic if
@@ -171,6 +226,10 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		wv = newPanelWebview(debug)
 		if wv == nil {
 			log.Printf("[panels] spawn(%s): could not create the webview — no display, webview runtime missing, or its init failed", spec.ID)
+			impl.createFailed = true
+			// Free the id before signalling, so whoever reads the failure (this
+			// Spawn, or a same-id Spawn waiting on it) can create it again at once.
+			s.reg.deleteIf(spec.ID, impl)
 			close(impl.ready)
 			return
 		}
@@ -387,7 +446,10 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		if panelSharedLoop && earlyHandle == nil {
 			// Setup found the window already gone and ended the panel. Skip the
 			// hotkey grab and the follow/bounds/close watchers it would only tear
-			// straight back down, and report the close like any other.
+			// straight back down, and report the close like any other. The id is
+			// freed before ready is signalled, so a same-id Spawn waiting on this
+			// one creates a new window instead of hearing "panel already exists".
+			s.reg.deleteIf(spec.ID, impl)
 			close(impl.ready)
 			s.mu.Lock()
 			closedCb := s.closedCb
@@ -642,12 +704,21 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 		}
 	}()
 
-	// Wait briefly for the window to become ready so the caller knows it
-	// either started or failed without holding the RPC connection too long.
+	// Wait for the window to become ready so the caller knows it either started
+	// or failed. RPC handlers run on their own goroutines, so this holds up only
+	// the caller, never the connection.
 	select {
 	case <-impl.ready:
-	case <-time.After(2 * time.Second):
-		// Continue anyway — webview may take longer on slow systems.
+		if impl.createFailed {
+			// Say so. Reporting the id of a window that will never exist told
+			// the brain its first-run dashboard had opened, and it never tried
+			// again.
+			return spec.ID, formatPanelError("spawn", spec.ID, fmt.Errorf("could not create the window"))
+		}
+	case <-time.After(spawnReadyWait):
+		// Still being created after spawnReadyWait: answer with the id. A
+		// failure after this point is logged by the spawn goroutine but not
+		// reported to this caller.
 	}
 
 	return spec.ID, nil

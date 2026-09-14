@@ -2,12 +2,13 @@
 
 This is a local copy of `github.com/webview/webview_go` (the pinned version is
 in `UPSTREAM_VERSION`), wired in via a `replace` directive in `sidecar/go.mod`,
-with **six patches**, all carried by `jarvis.patch`: a Win32 one for the open
+with **seven patches**, all carried by `jarvis.patch`: a Win32 one for the open
 flash, a Cocoa one to create the window on the main thread, a `webview_create`
 check that rejects a half-built engine, a NULL-handle guard in `webview.go`,
-a browser-controller accessor in a file of our own, `jarvis_native.go`, and a
+a browser-controller accessor in a file of our own, `jarvis_native.go`, a
 Cocoa and GTK `terminate` that stops the run loop only when a window actually
-owns it.
+owns it, and a win32 destructor that no longer hangs when the create failed
+before its message window existed.
 
 `jarvis.patch` must carry EVERY vendored edit. `vendor-webview.sh` deletes the
 vendor directory and copies pristine upstream over it, keeping only
@@ -238,3 +239,33 @@ the same guard around `gtk_main_quit()`, and `webview_set_host_owns_run_loop`
 sets it on GTK too. `ensureGTKMain` sets it once GTK initialises, before entering
 `gtk_main`; the connect and onboarding windows that run their own loop are
 finished before that. The script asserts both the guarded quit and the setter.
+
+## The failed-create hang (win32 destructor)
+
+The win32 engine's constructor can return before it has created any window:
+when WebView2 is not installed, or when `CoInitializeEx(COINIT_APARTMENTTHREADED)`
+is refused because the calling thread is already in the multithreaded apartment.
+`webview_create` then deletes that engine (see the half-built-engine patch), and
+upstream's destructor ends with `deplete_run_loop_event_queue()`, which
+dispatches a `done` sentinel to `m_message_window` and pumps `GetMessageW` until
+it arrives. With no message window the sentinel goes nowhere, so the pump never
+returns: a failed create hung the calling thread forever instead of returning
+NULL.
+
+In the sidecar that thread is a panel goroutine, so the panel's registry entry
+was never removed either: the dashboard never opened, and every later "open
+dashboard" got "panel already exists" and focused a window that did not exist.
+The multithreaded thread came from miniaudio, which initialises COM in the MTA
+on the thread that creates an audio context (the sidecar now creates those on a
+dedicated thread, `audio_context.go`).
+
+The pump now runs only when the message window exists:
+
+```cpp
+    if (m_owns_window && m_message_window) {
+      deplete_run_loop_event_queue();
+    }
+```
+
+A normal teardown always has one, so it behaves as before. The script asserts
+the guard; losing it is a hang, not a build failure.

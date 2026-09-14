@@ -92,6 +92,23 @@ static void jarvis_panel_focus(void* nswindow_ptr) {
     jarvis_panel_on_main(^{
         [NSApp activateIgnoringOtherApps:YES];
         [w makeKeyAndOrderFront:nil];
+        // Most panels open with nobody clicking Jarvis (the first-run dashboard
+        // on connect, open-at-startup at login). Since macOS 14 activation is
+        // cooperative and a background app's request above can be ignored, and
+        // makeKeyAndOrderFront on an inactive app orders the window in BEHIND
+        // the frontmost app. orderFrontRegardless puts it in front anyway.
+        [w orderFrontRegardless];
+    });
+}
+
+// jarvis_panel_reassert keeps an overlay's place without orderFrontRegardless,
+// which platformReassertTopmost would otherwise repeat every second.
+static void jarvis_panel_reassert(void* nswindow_ptr) {
+    if (!nswindow_ptr) return;
+    NSWindow* w = (__bridge NSWindow*)nswindow_ptr;
+    jarvis_panel_on_main(^{
+        [NSApp activateIgnoringOtherApps:YES];
+        [w makeKeyAndOrderFront:nil];
     });
 }
 
@@ -312,11 +329,12 @@ func platformGetVirtualScreenOrigin() (int, int) {
 }
 
 func platformReassertTopmost(handle unsafe.Pointer) error {
-	// macOS NSWindow level reassertion; reuses the same C bridge.
+	// macOS NSWindow level reassertion. Not jarvis_panel_focus: that also
+	// orders the window front regardless, which this would repeat every second.
 	if handle == nil {
 		return nil
 	}
-	C.jarvis_panel_focus(handle)
+	C.jarvis_panel_reassert(handle)
 	return nil
 }
 

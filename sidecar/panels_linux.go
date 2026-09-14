@@ -65,6 +65,22 @@ static void jarvis_panel_focus(void* gtkwin_ptr) {
     gtk_window_present(w);
 }
 
+// jarvis_panel_present brings forward a panel nobody just clicked on (the
+// first-run dashboard on connect, open-at-startup at login). The present
+// focuses it only if the window manager's focus-stealing prevention allows it,
+// and otherwise marks it as wanting attention; the raise before it asks for the
+// window on top either way. Some window managers (Mutter on X11) apply the same
+// rule to restacking, so there it can stay behind with only the attention hint,
+// and Wayland ignores the raise.
+static void jarvis_panel_present(void* gtkwin_ptr) {
+    if (!gtkwin_ptr) return;
+    GtkWindow* w = GTK_WINDOW(gtkwin_ptr);
+    if (!GTK_IS_WINDOW(w)) return;
+    GdkWindow* gdkw = gtk_widget_get_window(GTK_WIDGET(w));
+    if (gdkw) gdk_window_raise(gdkw);
+    gtk_window_present(w);
+}
+
 static void jarvis_panel_destroy(void* gtkwin_ptr) {
     if (!gtkwin_ptr) return;
     GtkWindow* w = GTK_WINDOW(gtkwin_ptr);
@@ -274,8 +290,11 @@ func applyPlatformFlags(handle unsafe.Pointer, spec PanelSpec) error {
 	})
 }
 
+// platformFocusWindow brings a panel forward with jarvis_panel_present (raise,
+// then present), since most panels open with nobody clicking Jarvis.
+// platformReassertTopmost keeps the plain present: it repeats every second.
 func platformFocusWindow(handle unsafe.Pointer) error {
-	return onGTKWindow(handle, func() { C.jarvis_panel_focus(handle) })
+	return onGTKWindow(handle, func() { C.jarvis_panel_present(handle) })
 }
 
 func platformGetCursorPos() (int, int, error) {

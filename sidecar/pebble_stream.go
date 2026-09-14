@@ -100,9 +100,10 @@ const echoHangover = 300 * time.Millisecond
 // The realtime controller builds a FRESH AudioStreamPlayer for every session,
 // so a per-player miniaudio context would leak one context (and its backend
 // handles) per conversation. Tearing one down per session is the other obvious
-// answer and is worse: ma_context_uninit calls CoUninitialize on WASAPI, and a
-// goroutine is not pinned to the OS thread that initialized COM. So there is one
-// context for the life of the process, created on first use and never freed.
+// answer and is worse: ma_context_uninit calls CoUninitialize on WASAPI, on the
+// calling thread. So there is one context for the life of the process, created on
+// first use on the dedicated audio-context thread (audio_context.go) and never
+// freed; anything that ever frees a context must do it on that thread too.
 var (
 	streamCtxOnce sync.Once
 	streamCtx     *malgo.AllocatedContext
@@ -111,7 +112,7 @@ var (
 
 func streamPlaybackContext() (*malgo.AllocatedContext, error) {
 	streamCtxOnce.Do(func() {
-		streamCtx, streamCtxErr = malgo.InitContext(nil, malgo.ContextConfig{}, func(m string) {
+		streamCtx, streamCtxErr = newAudioContext(func(m string) {
 			log.Printf("[stream] miniaudio: %s", m)
 		})
 	})

@@ -56,7 +56,12 @@ import { buildTaintGating } from "../authority/taint-gating.ts";
 import { applyApprovalDecision } from "./approval-decision.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
 import { SidecarManager, buildEnrollmentUrls } from "../sidecar/manager.ts";
-import { claimDashboardIntro } from "../sidecar/first-run.ts";
+import {
+  beginDashboardIntro,
+  finishDashboardIntro,
+  dashboardSpawnOutcome,
+  type DashboardSpawnSettled,
+} from "../sidecar/first-run.ts";
 import type { ConnectedSidecar } from "../sidecar/types.ts";
 import { resolveExternalOrigin } from "../util/external-origin.ts";
 import { ensureWorkflowSchema } from "../workflows/db/index.ts";
@@ -1155,47 +1160,77 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // The very first sidecar ever to connect to THIS brain gets the dashboard
       // opened alongside the pebble: a lone pebble on a fresh install reads as
       // "nothing happened", and on Linux there is no tray to find the dashboard
-      // from. Scoped to the brain (claimDashboardIntro persists the flag in the
-      // vault), so a re-issued enrollment token or a second machine is NOT a
-      // first run. Distinct from the sidecar-local "Open dashboard at startup"
-      // preference, which the sidecar honours itself on every launch.
+      // from. Scoped to the brain (first-run.ts persists the flag in the vault),
+      // so a re-issued enrollment token or a second machine is NOT a first run.
+      // Distinct from the sidecar-local "Open dashboard at startup" preference,
+      // which the sidecar honours itself on every launch.
+      //
+      // Marked shown only when the spawn succeeds; a failed attempt leaves it
+      // for the next connect, up to MAX_DASHBOARD_INTRO_ATTEMPTS.
       //
       // Never throws: this is a nicety, and the caller's catch block owns the
       // pebble's spawn bookkeeping — a failure here must not un-guard that.
       const openFirstRunDashboard = async (sidecar: ConnectedSidecar): Promise<void> => {
-        // Everything lives inside the try — claimDashboardIntro() does
-        // synchronous SQLite I/O and can throw on a sick vault, and the caller's
-        // catch owns the pebble's spawn bookkeeping.
+        // Without the 'windows' capability the sidecar has no panel service at
+        // all, so the spawn could only fail — leave the intro for a capable
+        // sidecar instead of spending an attempt here.
+        if (!sidecar.capabilities.includes('windows')) return;
+        let started = false;
+        let shown = false;
+        // Everything lives inside the try — the intro helpers do synchronous
+        // SQLite I/O and can throw on a sick vault, and the caller's catch owns
+        // the pebble's spawn bookkeeping.
         try {
-          // Without the 'windows' capability the sidecar has no panel service at
-          // all, so the spawn could only fail — leave the intro unclaimed for a
-          // capable sidecar instead of burning it here.
-          if (!sidecar.capabilities.includes('windows')) return;
-          if (!claimDashboardIntro()) return;
-          // The full dashboard SPA at '#/' — the same window (and the same
-          // panel id) the tray's "Open dashboard" opens, so this can never
-          // produce a duplicate. NOT dashboardURL(), which renders a single
-          // chrome-less room body.
-          await sidecarManager.dispatchRPC(sidecar.id, 'panel.spawn', {
-            id: 'tray:chat',
-            url: `${pebblePanelOrigin}/#/`,
-            title: 'JARVIS',
-            bounds: { x: -1, y: -1, w: 1100, h: 760 },
-            resizable: true,
-            multi_instance: false,
-          });
-          console.log(`[ambient-ui] first-run dashboard opened on ${sidecar.id}`);
-        } catch (err) {
-          // Losing the race for the 'tray:chat' id (the user clicked the tray, or
-          // the sidecar's own open-at-startup preference got there first) means
-          // the dashboard IS up — the intro's whole purpose is served. Not a
-          // failure; say so rather than crying wolf in the log.
-          const msg = err instanceof Error ? err.message : String(err);
-          if (msg.includes('panel already exists')) {
-            console.log(`[ambient-ui] first-run dashboard already open on ${sidecar.id}`);
-            return;
+          started = beginDashboardIntro();
+          if (!started) return;
+          let settled: DashboardSpawnSettled;
+          try {
+            // The full dashboard SPA at '#/' — the same window (and the same
+            // panel id) the tray's "Open dashboard" opens, so this can never
+            // produce a duplicate. NOT dashboardURL(), which renders a single
+            // chrome-less room body.
+            const result = await sidecarManager.dispatchRPC(sidecar.id, 'panel.spawn', {
+              id: 'tray:chat',
+              url: `${pebblePanelOrigin}/#/`,
+              title: 'JARVIS',
+              bounds: { x: -1, y: -1, w: 1100, h: 760 },
+              resizable: true,
+              multi_instance: false,
+            });
+            settled = { ok: true, result };
+          } catch (error) {
+            settled = { ok: false, error };
           }
-          console.warn(`[ambient-ui] first-run dashboard open failed on ${sidecar.id}:`, err);
+          // See dashboardSpawnOutcome for why each outcome counts as it does.
+          const outcome = dashboardSpawnOutcome(settled);
+          shown = outcome !== 'failed';
+          switch (outcome) {
+            case 'opened':
+              console.log(`[ambient-ui] first-run dashboard opened on ${sidecar.id}`);
+              break;
+            case 'already-open':
+              console.log(`[ambient-ui] first-run dashboard already open on ${sidecar.id}`);
+              break;
+            case 'detached':
+              console.log(`[ambient-ui] first-run dashboard spawn still running on ${sidecar.id}; counting it as shown`);
+              break;
+            case 'failed':
+              console.warn(
+                `[ambient-ui] first-run dashboard open failed on ${sidecar.id}; will retry on a later connect:`,
+                settled.ok ? settled.result : settled.error,
+              );
+              break;
+          }
+        } catch (err) {
+          console.warn(`[ambient-ui] first-run dashboard bookkeeping failed on ${sidecar.id}:`, err);
+        } finally {
+          if (started) {
+            try {
+              finishDashboardIntro(shown);
+            } catch (err) {
+              console.warn('[ambient-ui] could not record the first-run dashboard attempt:', err);
+            }
+          }
         }
       };
 

@@ -151,4 +151,36 @@ func checkGTKEntryPointsWithoutDisplay(t *testing.T) {
 	if sharedUILoopRunning() {
 		t.Error("sharedUILoopRunning reports a loop with no display")
 	}
+
+	// A panel whose window cannot be created must say so, and must not leave
+	// its id behind: the second spawn right after must fail the same way, not
+	// with "panel already exists" for a window that never existed.
+	svc := NewPanelService()
+	for i := 1; i <= 2; i++ {
+		_, err := svc.Spawn(PanelSpec{ID: "tray:chat", URL: "http://localhost/#/"})
+		if err == nil || !strings.Contains(err.Error(), "could not create the window") {
+			t.Errorf("Spawn #%d with no display: err = %v, want a could-not-create-the-window error", i, err)
+		}
+	}
+	if ids := svc.List(); len(ids) != 0 {
+		t.Errorf("failed spawns left registry entries behind: %v", ids)
+	}
+
+	// Racing same-id spawns (the brain's intro against open-at-startup) must
+	// each learn that creation failed, never "panel already exists".
+	results := make(chan error, 4)
+	for i := 0; i < cap(results); i++ {
+		go func() {
+			_, err := svc.Spawn(PanelSpec{ID: "tray:chat", URL: "http://localhost/#/"})
+			results <- err
+		}()
+	}
+	for i := 1; i <= cap(results); i++ {
+		if err := <-results; err == nil || !strings.Contains(err.Error(), "could not create the window") {
+			t.Errorf("concurrent Spawn #%d with no display: err = %v, want a could-not-create-the-window error", i, err)
+		}
+	}
+	if ids := svc.List(); len(ids) != 0 {
+		t.Errorf("concurrent failed spawns left registry entries behind: %v", ids)
+	}
 }
