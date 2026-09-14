@@ -201,7 +201,7 @@ export function checkCommitments(): ClassifiedEvent[] {
 
   try {
     // Check overdue commitments
-    const overdue = getDueCommitments();
+    const overdue = getDueCommitments({ excludeWorkItems: true });
     for (const c of overdue) {
       events.push({
         event: {
@@ -215,7 +215,7 @@ export function checkCommitments(): ClassifiedEvent[] {
     }
 
     // Check commitments due within 15 minutes
-    const upcoming = getUpcoming(10);
+    const upcoming = getUpcoming(10, { excludeWorkItems: true });
     const fifteenMinFromNow = Date.now() + 15 * 60 * 1000;
 
     for (const c of upcoming) {

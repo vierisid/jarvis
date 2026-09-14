@@ -5,14 +5,17 @@ import { tmpdir } from 'node:os';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import { ensureWorkflowSchema, initWorkflowDb } from '../workflows/db/index.ts';
 import * as goals from '../vault/goals.ts';
-import { getCommitment, completeCommitment } from '../vault/commitments.ts';
+import { getCommitment, completeCommitment, createCommitment, getDueCommitments, getUpcoming, updateCommitmentDue } from '../vault/commitments.ts';
+import { CommitmentExecutor } from '../daemon/commitment-executor.ts';
 import { createFlow, deleteFlow, setPublishedVersion } from '../workflows/db/repos/flow.ts';
 import { createDraftVersion, lockVersion } from '../workflows/db/repos/flow-version.ts';
-import { updateRun } from '../workflows/db/repos/flow-run.ts';
+import { getFlowRun, updateRun } from '../workflows/db/repos/flow-run.ts';
 import { createWaitpoint, markWaitpointResumed } from '../workflows/db/repos/waitpoint.ts';
-import { queueStats } from '../workflows/db/repos/job-queue.ts';
+import { claimNextJob, completeJob, enqueue, getJob, queueStats, recoverOrphanedJobs } from '../workflows/db/repos/job-queue.ts';
 import { Worker } from '../workflows/queue/worker.ts';
 import { createRunFlowHandler } from '../workflows/runner/handler.ts';
+import { EngineFlowExecutor } from '../workflows/runner/engine-runtime/engine-flow-executor.ts';
+import type { EngineRuntime } from '../workflows/runner/engine-runtime/engine-runtime.ts';
 import { createWorkflowRoutes } from '../workflows/api/routes.ts';
 import { createApiRoutes, type ApiContext } from '../daemon/api-routes.ts';
 import { DailyRhythm } from './rhythm.ts';
@@ -61,6 +64,145 @@ async function runRoute(flowId: string, body: unknown) {
 }
 
 describe('Today work trace', () => {
+  test('due dates never route linked proposals through legacy automatic execution or events', () => {
+    const proposed = createWorkItem({ title: 'Undecided proposal' });
+    const rejected = createWorkItem({ title: 'Rejected proposal' });
+    decideWorkItem(rejected.id, { outcome: 'rejected', reason: 'Wrong priority' });
+    const manual = createWorkItem({ title: 'Accepted manual work' }); accept(manual.id);
+    const { flow, work } = configuredWork(); accept(work.id);
+    startWorkItemRun(work.id, flow.id);
+    for (const item of [proposed, rejected, manual, work]) {
+      // The commitments.set_due tool and existing task API use this same setter.
+      updateCommitmentDue(item.id, Date.now() - 1_000);
+    }
+    const upcoming = createWorkItem({ title: 'Upcoming proposal' });
+    updateCommitmentDue(upcoming.id, Date.now() + 60_000);
+    const ordinary = createCommitment('Ordinary due task', { when_due: Date.now() - 1_000 });
+    restart();
+    const executor = new CommitmentExecutor('passive');
+    const published: string[] = [];
+    executor.setEventBus({ publish: (_event: string, data: { id: string }) => published.push(data.id) } as any);
+    executor.checkAndAnnounce();
+    expect(executor.getPending().map(p => p.commitmentId)).toEqual([ordinary.id]);
+    expect(published).toEqual([ordinary.id]);
+    expect(getDueCommitments().map(c => c.id)).toContain(rejected.id);
+    expect(getUpcoming().map(c => c.id)).toContain(upcoming.id);
+    expect(getWorkItem(rejected.id).status).toBe('rejected');
+    expect(queueStats().queued).toBe(1);
+  });
+
+  test('an exhausted execution interrupted by restart becomes a checked failure without rerunning', () => {
+    const { flow, work } = configuredWork(); accept(work.id);
+    const run = startWorkItemRun(work.id, flow.id);
+    const job = claimNextJob()!;
+    expect(job.flowRunId).toBe(run.id);
+    expect(job.maxAttempts).toBe(1);
+    // Durable state left by process death after claim and a partial execution.
+    updateRun(run.id, { status: 'RUNNING', steps: { prepared: { output: 42 } }, stepsCount: 1 });
+    restart();
+    expect(recoverOrphanedJobs()).toBe(0);
+    expect(getJob(job.id)?.status).toBe('FAILED');
+    const recovered = getWorkItem(work.id);
+    expect(recovered.status).toBe('failed');
+    expect(recovered.blocker?.reason).toContain('interrupted');
+    expect(recovered.run?.steps).toEqual({ prepared: { output: 42 } });
+    expect(recovered.run?.finishTime).not.toBeNull();
+    expect(startWorkItemRun(work.id, flow.id).id).toBe(run.id);
+    expect(queueStats().queued).toBe(0);
+    expect(() => checkWorkResult(work.id, result)).toThrow('failed run');
+    checkWorkResult(work.id, { ...result, verdict: 'failed' });
+    restart();
+    expect(getWorkItem(work.id).resultCheck?.runSnapshot?.status).toBe('FAILED');
+  });
+
+  test('recovery repairs older stranded runs and preserves paused, finished, or still queued work', () => {
+    for (const state of ['RUNNING', 'QUEUED', 'PAUSED', 'SUCCEEDED'] as const) {
+      const { flow, work } = configuredWork(); accept(work.id);
+      const run = startWorkItemRun(work.id, flow.id);
+      const job = claimNextJob()!;
+      updateRun(run.id, { status: state });
+      // An earlier daemon already failed the queue entry without reconciling the run.
+      getDb().run("UPDATE workflow_job SET status = 'FAILED', last_error = 'orphaned: max attempts exhausted' WHERE id = ?", [job.id]);
+      recoverOrphanedJobs();
+      expect(getFlowRun(run.id)?.status).toBe(['RUNNING', 'QUEUED'].includes(state) ? 'FAILED' : state);
+    }
+    const { flow, work } = configuredWork(); accept(work.id);
+    const run = startWorkItemRun(work.id, flow.id);
+    claimNextJob();
+    updateRun(run.id, { status: 'RUNNING' });
+    enqueue({ jobType: 'RUN_FLOW', payload: { runId: run.id, executionType: 'RESUME' }, flowRunId: run.id, maxAttempts: 1 });
+    recoverOrphanedJobs();
+    expect(getFlowRun(run.id)?.status).toBe('RUNNING');
+    expect(queueStats().queued).toBe(1);
+  });
+
+  test.each([false, true])('recovery of an exhausted resume preserves an unresolved waitpoint: %s', (pausedAgain) => {
+    const { flow, work } = configuredWork(); accept(work.id);
+    const run = startWorkItemRun(work.id, flow.id);
+    const initialJob = claimNextJob()!;
+    const waitpoint = createWaitpoint({ flowRunId: run.id, projectId: run.projectId, stepName: 'approve', type: 'MANUAL' });
+    updateRun(run.id, { status: 'PAUSED' });
+    completeJob(initialJob.id);
+    markWaitpointResumed(waitpoint.id);
+    enqueue({ jobType: 'RUN_FLOW', payload: { runId: run.id, executionType: 'RESUME' }, flowRunId: run.id, maxAttempts: 1 });
+    const resume = claimNextJob()!;
+    // Death can happen just after claim, or after the engine reached another pause.
+    const nextWaitpoint = pausedAgain ? createWaitpoint({ flowRunId: run.id, projectId: run.projectId, stepName: 'approve_again', type: 'MANUAL' }) : null;
+    restart();
+    recoverOrphanedJobs();
+    expect(getJob(resume.id)?.status).toBe('FAILED');
+    expect(getWorkItem(work.id)).toMatchObject(nextWaitpoint
+      ? { status: 'blocked', blocker: { kind: 'waitpoint', ref: nextWaitpoint.id } }
+      : { status: 'failed', blocker: { kind: 'run_failure' } });
+    expect(queueStats().queued).toBe(0);
+  });
+
+  test('the production executor and handler preserve approval pauses through restart and resume', async () => {
+    const { flow, work, goal } = configuredWork(); accept(work.id);
+    const run = startWorkItemRun(work.id, flow.id);
+    let waitpointId = '';
+    // Only the external engine process is stubbed; queue, executor, handler and resume API are real.
+    const runtime = { acquire: async () => ({
+      async executeFlow(opts: { executionType?: string; resumePayload?: unknown }) {
+        if (opts.executionType === 'RESUME') {
+          expect(opts.resumePayload).toEqual({ approved: true });
+          updateRun(run.id, { status: 'SUCCEEDED', steps: { report: { output: 42 } }, stepsCount: 1 });
+        } else {
+          waitpointId = createWaitpoint({ flowRunId: run.id, projectId: run.projectId, stepName: 'approve_report', type: 'MANUAL' }).id;
+          updateRun(run.id, { status: 'PAUSED' });
+        }
+      },
+      async release() {},
+    }) } as unknown as EngineRuntime;
+    const executor = new EngineFlowExecutor(runtime, { loaderBaseDir: directory, terminalTimeoutMs: 1_000, terminalPollIntervalMs: 10 });
+    const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({ executor }) } });
+    expect(await worker.drain()).toBe(1);
+    restart();
+    expect(getFlowRun(run.id)?.status).toBe('PAUSED');
+    expect(getFlowRun(run.id)?.finishTime).toBeNull();
+    expect(getWorkItem(work.id).blocker).toMatchObject({ kind: 'waitpoint', ref: waitpointId });
+    expect((await call('/api/work-items/:id/result', 'POST', `/api/work-items/${work.id}/result`, { ...result, goalScore: 1 })).status).toBe(409);
+    expect(goals.getGoal(goal.id)?.score).toBe(0);
+    const req = new Request(`http://localhost/api/webhooks/waitpoints/${waitpointId}`, { method: 'POST', body: JSON.stringify({ approved: true }) }) as Request & { params: { id: string } };
+    req.params = { id: waitpointId };
+    expect((await createWorkflowRoutes()['/api/webhooks/waitpoints/:id']!.POST!(req)).status).toBe(202);
+    expect(await worker.drain()).toBe(1);
+    expect(getWorkItem(work.id)).toMatchObject({ runId: run.id, status: 'needs_check' });
+    expect(checkWorkResult(work.id, { ...result, goalScore: 1 }).status).toBe('verified');
+  });
+
+  test('an unresolved waitpoint blocks verification even if older code marked the run succeeded', async () => {
+    const { flow, work, goal } = configuredWork(); accept(work.id);
+    const run = startWorkItemRun(work.id, flow.id);
+    const waitpoint = createWaitpoint({ flowRunId: run.id, projectId: run.projectId, stepName: 'approve_report', type: 'MANUAL' });
+    updateRun(run.id, { status: 'SUCCEEDED', finishTime: Date.now() });
+    restart();
+    expect(getWorkItem(work.id)).toMatchObject({ status: 'blocked', blocker: { kind: 'waitpoint', ref: waitpoint.id } });
+    expect((await call('/api/work-items/:id/result', 'POST', `/api/work-items/${work.id}/result`, { ...result, goalScore: 1 })).status).toBe(409);
+    expect(goals.getProgressHistory(goal.id)).toEqual([]);
+    expect(getWorkItem(work.id).resultCheck).toBeNull();
+  });
+
   test('morning plan -> user decision -> queued execution -> checked goal progress survives restart', async () => {
     const { flow, version } = workflow();
     const goal = goals.createGoal('Deliver report', 'task', { status: 'active' });

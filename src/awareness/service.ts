@@ -82,7 +82,7 @@ export class AwarenessService implements Service {
     );
     this.suggestionEngine = new SuggestionEngine(cfg.suggestion_rate_limit_ms, {
       googleAuth: googleAuth ?? null,
-      getUpcomingCommitments: () => getUpcoming(10).map(c => ({
+      getUpcomingCommitments: () => getUpcoming(10, { excludeWorkItems: true }).map(c => ({
         what: c.what,
         when_due: c.when_due,
         priority: c.priority,

@@ -203,30 +203,48 @@ export function getJob<P = Record<string, unknown>>(id: string): Job<P> | null {
  * Reset such jobs to `QUEUED` with the lease cleared and `scheduled_at=now` so
  * the worker re-claims them IMMEDIATELY, instead of waiting out the (up to
  * `leaseMs`, default 5-min) lease lapse. The run re-executes from its last
- * durable checkpoint. Returns how many jobs were recovered. Must run BEFORE the
+ * durable checkpoint. Exhausted jobs also close any unfinished run, preserving
+ * partial outputs and recording that its outcome is unknown. Returns how many
+ * jobs were requeued. Must run BEFORE the
  * worker starts polling.
  */
 export function recoverOrphanedJobs(): number {
   const ts = nowMs();
   const d = db();
-  // Poison guard: a job that already hit its attempt ceiling terminates as
-  // FAILED instead of re-running (and possibly re-crashing the daemon on) its
-  // side-effectful steps in a tight boot loop forever. `claimNextJob` doesn't
-  // check max_attempts, so recovery must.
-  d.run(
-    `UPDATE workflow_job
-     SET status = 'FAILED', last_error = 'orphaned: max attempts exhausted', locked_until = NULL, updated = ?
-     WHERE status = 'RUNNING' AND attempt >= max_attempts`,
-    [ts],
-  );
-  // The rest re-queue for immediate re-claim.
-  const res = d.run(
-    `UPDATE workflow_job
-     SET status = 'QUEUED', locked_until = NULL, scheduled_at = ?, updated = ?
-     WHERE status = 'RUNNING' AND attempt < max_attempts`,
-    [ts, ts],
-  );
-  return res.changes;
+  return d.transaction(() => {
+    // Never replay exhausted jobs: they may already have produced external effects.
+    d.run(
+      `UPDATE workflow_job
+       SET status = 'FAILED', last_error = 'orphaned: max attempts exhausted', locked_until = NULL, updated = ?
+       WHERE status = 'RUNNING' AND attempt >= max_attempts`,
+      [ts],
+    );
+    const res = d.run(
+      `UPDATE workflow_job
+       SET status = 'QUEUED', locked_until = NULL, scheduled_at = ?, updated = ?
+       WHERE status = 'RUNNING' AND attempt < max_attempts`,
+      [ts, ts],
+    );
+    // Also repair runs stranded by older recovery code. A persisted pause or
+    // terminal outcome wins, as does another active job for a valid resume/retry.
+    // A consumed pause whose RESUME job died before entering the handler must
+    // close too; it has no remaining waitpoint that could wake the run again.
+    d.run(
+      `UPDATE flow_run SET status = 'FAILED', failed_step = ?, finish_time = ?, updated = ?
+       WHERE status IN ('QUEUED', 'RUNNING', 'PAUSED')
+         AND EXISTS (SELECT 1 FROM workflow_job j WHERE j.flow_run_id = flow_run.id
+           AND j.job_type = 'RUN_FLOW' AND j.status = 'FAILED'
+           AND j.last_error = 'orphaned: max attempts exhausted'
+           AND (flow_run.status <> 'PAUSED' OR json_extract(j.payload, '$.executionType') = 'RESUME'))
+         AND (status <> 'PAUSED' OR NOT EXISTS (SELECT 1 FROM waitpoint w
+           WHERE w.flow_run_id = flow_run.id AND w.resumed_at IS NULL))
+         AND NOT EXISTS (SELECT 1 FROM workflow_job j WHERE j.flow_run_id = flow_run.id
+           AND j.status IN ('QUEUED', 'RUNNING'))`,
+      [JSON.stringify({ name: '<recovery>', displayName: 'Recovery',
+        errorMessage: 'Execution was interrupted and exhausted its attempts. Its outcome is unknown; inspect partial results before proposing another run.' }), ts, ts],
+    );
+    return res.changes;
+  })();
 }
 
 export function completeJob(id: string): void {

@@ -2,6 +2,7 @@ import { test, expect, describe, beforeEach, afterEach } from 'bun:test';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import { createCommitment, getCommitment, updateCommitmentStatus } from '../vault/commitments.ts';
 import { CommitmentExecutor, parseParkedRequestIds } from './commitment-executor.ts';
+import { createWorkItem, decideWorkItem } from '../goals/work-items.ts';
 
 type Awaiting = Map<string, { what: string; requestIds: string[] }>;
 const awaitingOf = (ex: CommitmentExecutor): Awaiting => (ex as unknown as { awaitingApproval: Awaiting }).awaitingApproval;
@@ -63,6 +64,35 @@ describe('CommitmentExecutor.settleAwaitingApprovals', () => {
     const id = park(ex, ['r1']);
     ex.settleAwaitingApprovals();
     expect(awaitingOf(ex).has(id)).toBe(true);
+  });
+
+  test('does not settle linked work from a stale legacy approval entry', () => {
+    const ex = new CommitmentExecutor();
+    const work = createWorkItem({ title: 'Review report' });
+    decideWorkItem(work.id, { outcome: 'accepted', reason: 'Review the figures' });
+    updateCommitmentStatus(work.id, 'active');
+    awaitingOf(ex).set(work.id, { what: work.title, requestIds: ['r1'] });
+    ex.setApprovalLookup(() => ({ status: 'executed', execution_result: 'done' }));
+    ex.settleAwaitingApprovals();
+    expect(getCommitment(work.id)?.status).toBe('active');
+    expect(awaitingOf(ex).has(work.id)).toBe(false);
+  });
+
+  test('drops linked work from a stale execution timer without invoking the agent', async () => {
+    const ex = new CommitmentExecutor('passive');
+    const work = createWorkItem({ title: 'Rejected work' });
+    decideWorkItem(work.id, { outcome: 'rejected', reason: 'Wrong priority' });
+    const internals = ex as unknown as {
+      announceExecution: (commitment: NonNullable<ReturnType<typeof getCommitment>>) => void;
+      fireExecution: (id: string) => Promise<void>;
+    };
+    let executions = 0;
+    ex.setAgentService({ handleMessage: async () => { executions++; return 'done'; } } as any);
+    internals.announceExecution(getCommitment(work.id)!);
+    await internals.fireExecution(work.id);
+    expect(executions).toBe(0);
+    expect(ex.getPending()).toEqual([]);
+    expect(getCommitment(work.id)?.status).toBe('pending');
   });
 });
 
