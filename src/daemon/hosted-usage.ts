@@ -140,7 +140,12 @@ export function makeHostedUsageReader(
   const now = deps.now ?? (() => Date.now());
   let cache: (CacheEntry & { key: string }) | null = null;
 
-  return async (config: JarvisConfig) => {
+  // One request at a time per credential set: concurrent callers (a burst of
+  // 401s each asking for the restriction, the Usage room polling at the same
+  // moment) share the read in flight instead of each POSTing their own.
+  let inflight: { key: string; promise: Promise<HostedUsageMeter | null> } | null = null;
+
+  const readOnce = async (config: JarvisConfig): Promise<HostedUsageMeter | null> => {
     const cfg = readHostedUsageConfig(config);
     if (!cfg) return null;
     // Keyed by the credentials themselves, so a converge that rotates the
@@ -212,6 +217,18 @@ export function makeHostedUsageReader(
     }
     cache = { key, at: now(), value };
     return value;
+  };
+
+  return (config: JarvisConfig) => {
+    const cfg = readHostedUsageConfig(config);
+    if (!cfg) return Promise.resolve(null);
+    const key = `${cfg.url}|${cfg.instanceId}|${cfg.secret}`;
+    if (inflight && inflight.key === key) return inflight.promise;
+    const promise = readOnce(config).finally(() => {
+      if (inflight?.promise === promise) inflight = null;
+    });
+    inflight = { key, promise };
+    return promise;
   };
 }
 

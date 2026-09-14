@@ -14,7 +14,7 @@ import type {
 } from "../../workflows/runtime/piece-input.ts";
 import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
 import type { LLMMessage, LLMResponse, LLMTool, LLMToolCall } from "../../llm/provider.ts";
-import { classifyErrorString } from "../../llm/provider.ts";
+import { classifyErrorString, LLMProviderError } from "../../llm/provider.ts";
 
 /**
  * LLM-client shape the composer needs. `chat` is the mandatory single-shot
@@ -530,10 +530,15 @@ async function composeWithTools(
         // codes (the shapes a rejected-tools-param error takes). Clearly
         // transient (rate_limit, network, server) or auth/permission failures are surfaced
         // as-is -- dropping tools won't fix them and hides the real cause.
-        const code = classifyErrorString(message);
+        // Prefer the typed code: a hosted content-policy block, used-up usage
+        // or a restricted account still carries a "(400)"/"(429)" marker in
+        // its text, and re-sending the same request without tools would only
+        // repeat what was refused.
+        const code = e instanceof LLMProviderError ? e.code : classifyErrorString(message);
         if (
           code === "rate_limit" || code === "network" || code === "server" ||
-          code === "auth" || code === "forbidden"
+          code === "auth" || code === "forbidden" ||
+          code === "content_policy" || code === "quota_exhausted" || code === "restricted"
         ) {
           logAttempt(turn, "tool-loop-error", `tool call failed (${code}); not falling back: ${message}`);
           return {

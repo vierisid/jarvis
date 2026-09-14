@@ -74,6 +74,17 @@ export class HostedProxyError extends Error {
  */
 export const CONTENT_POLICY_MARKER = 'usejarvis_content_policy';
 
+/**
+ * A denial of the MODEL rather than of the account. Some key shapes answer an
+ * out-of-plan model with a 401 carrying this text, so it is recognised before
+ * a 401 is read as "inactive" or "restricted" — and the provider uses it to
+ * skip a meter read whose answer could not change the copy.
+ */
+export function isModelDenial(status: number, detail: string): boolean {
+  const lower = detail.toLowerCase();
+  return status === 403 || (lower.includes('model') && (lower.includes('not allowed') || lower.includes('invalid model')));
+}
+
 export function hostedProxyError(
   label: string,
   status: number,
@@ -83,15 +94,18 @@ export function hostedProxyError(
 ): HostedProxyError {
   const safe = redactSecrets(detail);
   const lower = safe.toLowerCase();
-  if (safe) console.warn(`[usejarvis] ${label} proxy error (${status}): ${safe.slice(0, 200)}`);
 
   if (lower.includes(CONTENT_POLICY_MARKER)) {
+    // No body in the log either: the gate's reason can quote the very text it
+    // blocked, and a daemon log is not where that should end up.
+    console.warn(`[usejarvis] ${label} request blocked by the content policy (${status})`);
     return new HostedProxyError(
       `${label} error (${status}): this request was blocked by the Usejarvis AI content policy and was not processed.`,
       'content_policy',
       status,
     );
   }
+  if (safe) console.warn(`[usejarvis] ${label} proxy error (${status}): ${safe.slice(0, 200)}`);
   if (isBudgetExhaustion(safe)) {
     const valid = resetAt && !Number.isNaN(resetAt.getTime());
     const resumes = valid
@@ -104,7 +118,7 @@ export function hostedProxyError(
       status,
     );
   }
-  if (status === 403 || (lower.includes('model') && (lower.includes('not allowed') || lower.includes('invalid model')))) {
+  if (isModelDenial(status, safe)) {
     return new HostedProxyError(
       `${label} error (${status}): that model is not included in your plan.`,
       'model_not_in_plan',

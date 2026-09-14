@@ -9,6 +9,7 @@ import {
 import {
   hostedProxyError,
   isBudgetExhaustion,
+  isModelDenial,
   type HostedErrorKind,
   type HostedProxyError,
   type HostedRestriction,
@@ -408,7 +409,10 @@ export class UsejarvisAIProvider extends OpenAIProvider {
    * an unpaid one answer the proxy identically. */
   private async friendly(status: number, detail: string): Promise<HostedProxyError> {
     const resetAt = isBudgetExhaustion(detail) ? await this.budgetResetAt() : null;
-    const restricted = status === 401 ? await this.lookupRestriction() : null;
+    // Only where the answer can change the copy: a 401 that is really a model
+    // denial never reaches the restriction branch, so it must not pay a meter
+    // read on an error path.
+    const restricted = status === 401 && !isModelDenial(status, detail) ? await this.lookupRestriction() : null;
     return hostedProxyError(`${this.errorLabel} API`, status, detail, resetAt, restricted);
   }
 

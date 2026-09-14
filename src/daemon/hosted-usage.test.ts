@@ -70,6 +70,27 @@ describe('hosted usage reader: the restriction', () => {
   });
 });
 
+describe('hosted usage reader: concurrent reads', () => {
+  test('callers arriving while a read is in flight share it instead of each POSTing', async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => {
+      release = resolve;
+    });
+    let posts = 0;
+    const fn = (async () => {
+      posts++;
+      await gate;
+      return new Response(JSON.stringify(METER), { status: 200 });
+    }) as unknown as typeof fetch;
+    const read = makeHostedUsageReader({ fetchImpl: fn, now: () => 1_000 });
+    // A burst of 401s each asking for the restriction, all before the first answer lands.
+    const burst = Promise.all([read(configWith()), read(configWith()), read(configWith())]);
+    release();
+    expect(await burst).toEqual([METER, METER, METER]);
+    expect(posts).toBe(1);
+  });
+});
+
 describe('hosted usage reader', () => {
   test('all three fields or the meter is OFF', () => {
     // A partial set cannot authenticate, so treating it as present would poll a

@@ -123,6 +123,23 @@ describe('hostedProxyError: provider-policy outcomes', () => {
   });
 });
 
+describe('hostedProxyError: logging', () => {
+  test('a content-policy block is logged without the body, which can quote the blocked text', () => {
+    const original = console.warn;
+    const lines: string[] = [];
+    console.warn = (...args: unknown[]) => {
+      lines.push(args.map(String).join(' '));
+    };
+    try {
+      hostedProxyError('Usejarvis AI API', 400, `{"error":{"message":"${CONTENT_POLICY_MARKER}: quoted secret text"}}`);
+    } finally {
+      console.warn = original;
+    }
+    expect(lines.join('\n')).toContain('blocked by the content policy');
+    expect(lines.join('\n')).not.toContain('quoted secret text');
+  });
+});
+
 describe('isBudgetExhaustion', () => {
   test('matches the LiteLLM budget family and nothing else', () => {
     expect(isBudgetExhaustion('ExceededBudget: budget has been exceeded for this key')).toBe(true);

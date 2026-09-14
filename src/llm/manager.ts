@@ -160,9 +160,10 @@ export class LLMManager {
    * Run one provider call under the request timeout.
    *
    * The call receives an AbortSignal and the timeout ABORTS it. A bare race
-   * only stopped waiting: the fetch kept running at the provider while the
-   * retry went out, so one slow call could occupy several parallel slots
-   * against a per-key limit, and every timer outlived its request.
+   * only stopped waiting: the fetch kept running at the provider after the
+   * manager had given up on it, holding a slot against a per-key parallel
+   * limit for as long as the upstream took, and every timer outlived its
+   * request.
    */
   private async withTimeout<T>(
     run: (signal: AbortSignal) => Promise<T>,

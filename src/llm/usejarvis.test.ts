@@ -255,10 +255,15 @@ describe('UsejarvisAIProvider', () => {
 
   it('a content-policy block is its own code in chat and stream, and never carries a retry hint', async () => {
     globalThis.fetch = (async () =>
-      jsonResponse(400, { error: { message: 'Guardrail blocked: usejarvis_content_policy' } })) as unknown as typeof fetch;
+      new Response(JSON.stringify({ error: { message: 'Guardrail blocked: usejarvis_content_policy' } }), {
+        status: 400,
+        // A hint the rewrite must DROP: a block is never retried.
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '30' },
+      })) as unknown as typeof fetch;
     const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
     const thrown = await provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-chat' }).catch((e) => e);
     expect(thrown).toMatchObject({ name: 'LLMProviderError', code: 'content_policy' });
+    expect(thrown.retryAfterMs).toBeUndefined();
     expect(thrown.message).toMatch(/\(400\).*blocked by the Usejarvis AI content policy/);
 
     const events: Array<{ type: string; code?: string; retry_after_ms?: number }> = [];
@@ -303,11 +308,15 @@ describe('UsejarvisAIProvider', () => {
 
   it('budget exhaustion is quota_exhausted, while a plain 429 keeps the Retry-After it came with', async () => {
     globalThis.fetch = (async () =>
-      jsonResponse(429, { error: { message: 'ExceededBudget: budget has been exceeded' } })) as unknown as typeof fetch;
+      new Response(JSON.stringify({ error: { message: 'ExceededBudget: budget has been exceeded' } }), {
+        status: 429,
+        // A hint the rewrite must drop: used-up usage is never retried.
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '30' },
+      })) as unknown as typeof fetch;
     const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
-    await expect(provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-chat' })).rejects.toMatchObject({
-      code: 'quota_exhausted',
-    });
+    const exhausted = await provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-chat' }).catch((e) => e);
+    expect(exhausted).toMatchObject({ code: 'quota_exhausted' });
+    expect(exhausted.retryAfterMs).toBeUndefined();
 
     globalThis.fetch = (async () =>
       new Response(JSON.stringify({ error: { message: 'rate limited' } }), {
