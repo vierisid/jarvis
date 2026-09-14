@@ -158,7 +158,9 @@ export class M7AgentDelegator implements PieceAgentDelegator {
         context: "",
         llmManager: this.llmManager,
         toolRegistry: scopedRegistry,
-        maxIterations: input.maxIterations ?? this.defaultMaxIterations,
+        // Clamped as well as validated at the route: this adapter is also
+        // reachable without it, and 200 is the primary loop's own ceiling.
+        maxIterations: Math.min(input.maxIterations ?? this.defaultMaxIterations, 200),
         ...(this.authorityEngine ? { authorityEngine: this.authorityEngine } : {}),
         ...(this.auditTrail ? { auditTrail: this.auditTrail } : {}),
         ...(this.emergencyController ? { emergencyController: this.emergencyController } : {}),

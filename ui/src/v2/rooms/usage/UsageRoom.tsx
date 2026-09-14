@@ -129,7 +129,9 @@ function HostedBudgetStrip() {
   // Renders NOTHING while unknown and on a self-hosted install. An entitled
   // flag that is false means a hosted user with no active plan; there is no
   // window to meter, and a pair of empty bars would read as "all used up".
-  if (state !== "hosted" || !meter || !meter.entitled) return null;
+  // A RESTRICTED account renders even without a plan: its banner is the only
+  // place the person learns why nothing works and where to appeal.
+  if (state !== "hosted" || !meter || (!meter.entitled && !meter.restricted)) return null;
   const banner = bannerFor(meter);
   return (
     <div className="rk-usage__budget">

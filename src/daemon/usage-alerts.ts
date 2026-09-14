@@ -1,4 +1,5 @@
 import type { HostedUsageMeter } from './hosted-usage.ts';
+import { restrictionCopy } from '../util/hosted-error.ts';
 
 /**
  * Warn a hosted tenant BEFORE the proxy starts refusing them.
@@ -80,7 +81,21 @@ export function decideUsageAlerts(
   // No reading and no plan both mean there is no window to warn about. A failed
   // read must never be treated as 0% (silent) OR as exhausted (a false alarm) —
   // it produces nothing, and the next check tries again.
-  if (!meter || !meter.entitled) return [];
+  if (!meter) return [];
+  // Before the plan check: a restricted account may have no active plan left,
+  // and this is the one notification that explains why nothing works. Once a
+  // week while it lasts; any other alert would only be noise on top of it.
+  if (meter.restricted) {
+    const restricted: UsageAlert = {
+      window: 'week',
+      level: 100,
+      key: `${FLAG_PREFIX}restricted.${meter.restricted.reason}.${meter.weekResetsAt}`,
+      title: 'Usejarvis AI is restricted on this account',
+      body: restrictionCopy(meter.restricted),
+    };
+    return delivered(restricted.key) ? [] : [restricted];
+  }
+  if (!meter.entitled) return [];
 
   const out: UsageAlert[] = [];
   // Tracks whether a window is FULL, not whether anything was queued: a 75%

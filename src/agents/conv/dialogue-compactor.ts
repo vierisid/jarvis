@@ -17,6 +17,7 @@
 
 import type { LLMManager } from '../../llm/manager.ts';
 import type { LLMMessage } from '../../llm/provider.ts';
+import { runWithOrigin } from '../../llm/origin.ts';
 
 type CacheEntry = {
   /** Head slice size at the time we summarized. */
@@ -104,7 +105,8 @@ export class DialogueCompactor {
     this.pending.add(conversationId);
     const headCount = messages.length - this.keepRecent;
     const head = messages.slice(0, headCount);
-    this.summarizeHead(head)
+    // Background: a summary of messages the conversation already sent.
+    runWithOrigin('background', () => this.summarizeHead(head))
       .then(summary => {
         this.cache.set(conversationId, {
           headCount,

@@ -14,6 +14,7 @@ import {
   type HostedRestriction,
 } from '../util/hosted-error.ts';
 import { redactSecrets } from '../util/redact.ts';
+import { originHeaders } from './origin.ts';
 
 /**
  * Hosted "Usejarvis AI" provider: the platform's OpenAI-compatible LLM proxy.
@@ -168,6 +169,13 @@ export class UsejarvisAIProvider extends OpenAIProvider {
 
   protected override get errorLabel(): string {
     return 'Usejarvis AI';
+  }
+
+  /** Every chat request says on whose behalf it is made (src/llm/origin.ts),
+   * so the platform's safety screen can tell the person's own words from
+   * quoted email, workflow input or a re-sent turn. */
+  protected override requestHeaders(includeContentType = true): Record<string, string> {
+    return { ...super.requestHeaders(includeContentType), ...originHeaders() };
   }
 
   /** The key-scoped catalog: the uj-* aliases this plan includes.

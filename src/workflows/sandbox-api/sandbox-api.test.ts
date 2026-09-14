@@ -1083,6 +1083,17 @@ describe("SandboxApi routes (H: jarvis-agent/trigger)", () => {
     expect(r.status).toBe(400);
   });
 
+  test("POST /v1/jarvis/agent/delegate refuses more than 200 maxIterations and accepts exactly 200", async () => {
+    const delegate = (maxIterations: number) =>
+      authedFetch("/v1/jarvis/agent/delegate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ goal: "x", maxIterations }),
+      });
+    expect((await delegate(201)).status).toBe(400);
+    expect((await delegate(200)).status).toBe(200);
+  });
+
   test("POST /v1/jarvis/events/poll forwards eventType+filter+since", async () => {
     pollReply = {
       events: [

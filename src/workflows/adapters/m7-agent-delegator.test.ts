@@ -178,6 +178,33 @@ describe("M7AgentDelegator", () => {
     expect(out.status).toBe("max_iterations");
   });
 
+  test("clamps maxIterations to the primary loop's ceiling of 200", async () => {
+    const { orchestrator } = makeOrchestratorStub({
+      primary: { id: "primary", canSpawn: true },
+    });
+    const seen: Array<number | undefined> = [];
+    const runner: RunSubAgentFn = async (opts) => {
+      seen.push(opts.maxIterations);
+      return {
+        success: true,
+        response: "ok",
+        toolsUsed: [],
+        tokensUsed: { input: 0, output: 0 },
+        terminationReason: "max_iterations",
+        messages: [],
+      };
+    };
+    const delegator = new M7AgentDelegator({
+      orchestrator: orchestrator as never,
+      llmManager: {} as never,
+      specialists: new Map([["workflow-default", makeRole("workflow-default")]]),
+      runSubAgentFn: runner,
+    });
+    await delegator.delegate({ goal: "do", maxIterations: 5000 });
+    await delegator.delegate({ goal: "do", maxIterations: 7 });
+    expect(seen).toEqual([200, 7]);
+  });
+
   test("maps terminationReason='error' to status='error' with the runner's message", async () => {
     const { orchestrator, calls } = makeOrchestratorStub({
       primary: { id: "primary", canSpawn: true },

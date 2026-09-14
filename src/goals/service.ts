@@ -14,6 +14,7 @@ import type { DailyRhythm } from './rhythm.ts';
 import type { WorkflowEventBus } from '../workflows/runtime/event-bus.ts';
 import { CronScheduler } from '../lib/cron-scheduler.ts';
 import * as vault from '../vault/goals.ts';
+import { runWithOrigin } from '../llm/origin.ts';
 
 export class GoalService implements Service {
   name = 'goals';
@@ -104,7 +105,7 @@ export class GoalService implements Service {
 
     try {
       this.cron.schedule('goals:morning', `0 ${morningHour} * * *`, () => {
-        this.runMorningPlan().catch(err =>
+        runWithOrigin('background', () => this.runMorningPlan()).catch(err =>
           console.error('[GoalService] Morning plan error:', err),
         );
       });
@@ -114,7 +115,7 @@ export class GoalService implements Service {
 
     try {
       this.cron.schedule('goals:evening', `0 ${eveningHour} * * *`, () => {
-        this.runEveningReview().catch(err =>
+        runWithOrigin('background', () => this.runEveningReview()).catch(err =>
           console.error('[GoalService] Evening review error:', err),
         );
       });
@@ -130,7 +131,7 @@ export class GoalService implements Service {
     if (this.eventBus) {
       this.unsubscribers.push(
         this.eventBus.subscribe('cron.hourly', () => {
-          this.checkAccountability().catch(err =>
+          runWithOrigin('background', () => this.checkAccountability()).catch(err =>
             console.error('[GoalService] Accountability check error:', err),
           );
           this.recalculateAllHealth().catch(err =>

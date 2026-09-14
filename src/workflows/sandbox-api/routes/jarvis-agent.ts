@@ -65,6 +65,12 @@ export function createJarvisAgentDelegateRoute(
       ) {
         return err("maxIterations must be a positive integer", 400);
       }
+      // The same ceiling as the primary agent loop. A workflow step asking for
+      // more is either a mistake or a loop that should not be one LLM call per
+      // iteration against a shared, rate-limited key.
+      if (n > 200) {
+        return err("maxIterations must be at most 200", 400);
+      }
       out.maxIterations = n;
     }
     const reply = await deps.agentDelegate(out, {

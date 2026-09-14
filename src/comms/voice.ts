@@ -1,6 +1,7 @@
 import type { STTConfig, TTSConfig } from '../config/types.ts';
 import { redactSecrets } from '../util/redact.ts';
 import { hostedProxyError } from '../util/hosted-error.ts';
+import { originHeaders } from '../llm/origin.ts';
 
 export interface STTProvider {
   transcribe(audio: Buffer): Promise<string>;
@@ -193,7 +194,7 @@ export class UsejarvisSTT implements STTProvider {
     // forever with no user-visible failure.
     const response = await fetch(`${this.baseUrl}/audio/transcriptions`, {
       method: 'POST',
-      headers: { 'Authorization': `Bearer ${this.apiKey}` },
+      headers: { 'Authorization': `Bearer ${this.apiKey}`, ...originHeaders() },
       body: formData,
       signal: AbortSignal.timeout(UsejarvisSTT.TIMEOUT_MS),
     });
@@ -567,6 +568,7 @@ export class UsejarvisTTS implements TTSProvider {
       headers: {
         'Authorization': `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
+        ...originHeaders(),
       },
       body: JSON.stringify({
         model: 'uj-tts',

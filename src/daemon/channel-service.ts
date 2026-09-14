@@ -20,6 +20,7 @@ import { effectiveSttForBinding, usejarvisVoiceCredentials } from './usejarvis-a
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
 import { getSettingsByPrefix, setSetting } from '../vault/settings.ts';
 import { classifyErrorString } from '../llm/provider.ts';
+import { runWithOrigin } from '../llm/origin.ts';
 
 /** Settings-table key prefix for persisted per-channel broadcast recipients. */
 const LAST_RECIPIENT_PREFIX = 'channel.lastRecipient.';
@@ -297,7 +298,7 @@ export class ChannelService implements Service {
     addMessage(conversation.id, { role: 'user', content: msg.text });
 
     // 2. Route to AgentService (non-streaming — external channels are request/response)
-    const response = await this.agentService.handleMessage(msg.text, channelTag);
+    const response = await runWithOrigin('user', () => this.agentService.handleMessage(msg.text, channelTag));
 
     // 3. Persist assistant response to vault
     addMessage(conversation.id, { role: 'assistant', content: response });

@@ -148,6 +148,27 @@ describe('a key that is switched off', () => {
   });
 });
 
+describe('a restricted account', () => {
+  const restricted = { reason: 'account_suspended' as const, contact: 'support@usejarvis.test' };
+
+  test('is told once a week, with where to appeal, even with no plan left, and nothing else', () => {
+    const s = fakeStore([]);
+    const out = decideUsageAlerts(
+      meter({ entitled: false, blocked: true, sessionPct: 100, weekPct: 100, restricted }),
+      s.delivered,
+    );
+    expect(out).toHaveLength(1);
+    expect(out[0]!.title).toContain('restricted');
+    expect(out[0]!.body).toContain('support@usejarvis.test');
+    expect(out[0]!.key).toBe(`${FLAG_PREFIX}restricted.account_suspended.${WEEK_RESET}`);
+  });
+
+  test('stays silent once this week\'s notice was delivered', () => {
+    const s = fakeStore([`${FLAG_PREFIX}restricted.account_suspended.${WEEK_RESET}`]);
+    expect(decideUsageAlerts(meter({ restricted }), s.delivered)).toEqual([]);
+  });
+});
+
 describe('pruning', () => {
   test('keeps the live windows and drops the rest', () => {
     // Keys are only ever added, so without this a long-lived install grows a

@@ -96,6 +96,11 @@ export async function assignPersistentAgentTask(
   if (deps.taskManager.isAgentBusy(agentId)) {
     throw new HttpError(409, `Agent "${agent.agent.role.name}" is already running a task.`);
   }
+  // The manager enforces the same cap; asking first gives the caller a
+  // sentence instead of a stack trace from inside launch().
+  if (!deps.taskManager.canLaunch()) {
+    throw new HttpError(429, 'Too many agent tasks are already running. Wait for one to finish, then assign this one.');
+  }
 
   const scopedRegistry = agentRegistries.get(agentId);
   if (!scopedRegistry) {

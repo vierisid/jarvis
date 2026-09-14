@@ -33,6 +33,7 @@ import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { getActionForTool } from '../authority/tool-action-map.ts';
 import { progressAcknowledgement } from './progress.ts';
+import { runWithOrigin } from '../llm/origin.ts';
 
 /**
  * Convert a system prompt (legacy string or static/dynamic parts) into the
@@ -1272,6 +1273,15 @@ export class AgentOrchestrator {
     name: string,
     args: Record<string, unknown>,
     opts: { blockedCategories?: string[] } = {},
+  ): Promise<string> {
+    // A realtime voice session is the person talking (src/llm/origin.ts).
+    return runWithOrigin('user', () => this.executeRealtimeToolCallInner(name, args, opts));
+  }
+
+  private async executeRealtimeToolCallInner(
+    name: string,
+    args: Record<string, unknown>,
+    opts: { blockedCategories?: string[] },
   ): Promise<string> {
     if (!this.toolRegistry) return 'Error: No tool registry configured';
 

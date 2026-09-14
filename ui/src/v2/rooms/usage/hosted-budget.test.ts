@@ -121,6 +121,28 @@ describe('banner', () => {
 });
 
 
+describe('a restricted account', () => {
+  test('gets its reason and where to appeal, even without a plan', () => {
+    const banner = bannerFor(
+      meter({
+        entitled: false,
+        blocked: true,
+        restricted: { reason: 'account_banned', contact: 'support@usejarvis.test' },
+      }),
+    );
+    expect(banner).toEqual({
+      tone: 'fail',
+      text: 'Usejarvis AI is no longer available on this account. To appeal, contact support@usejarvis.test.',
+    });
+  });
+
+  test('with no contact configured it still says how', () => {
+    expect(bannerFor(meter({ restricted: { reason: 'content_policy', contact: null } }))?.text).toContain(
+      'To appeal, contact support.',
+    );
+  });
+});
+
 describe('the hosted gate', () => {
   const hosted: BudgetView = { state: 'hosted', meter: meter() };
   const unknown: BudgetView = { state: 'unknown', meter: null };

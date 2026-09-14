@@ -50,6 +50,7 @@ import { hostedRealtimeIncluded } from './realtime-gate.ts';
 import { classifyErrorString } from '../llm/provider.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
 import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../user/profile-followup.ts';
+import { runWithOrigin } from '../llm/origin.ts';
 
 type VoiceSession = {
   requestId: string;
@@ -1063,6 +1064,12 @@ export class WebSocketService implements Service {
    * Auto-creates a task for non-trivial messages so the task board tracks agent work.
    */
   private async handleChat(msg: WSMessage, ws?: ServerWebSocket<unknown>): Promise<WSMessage | void> {
+    // The person's own turn, including the streamed answer consumed below
+    // (src/llm/origin.ts).
+    return runWithOrigin('user', () => this.handleChatTurn(msg, ws));
+  }
+
+  private async handleChatTurn(msg: WSMessage, ws?: ServerWebSocket<unknown>): Promise<WSMessage | void> {
     const payload = msg.payload as {
       text?: string;
       channel?: string;
@@ -2056,6 +2063,16 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
   }
 
   private async processVoiceTranscript(
+    transcript: string,
+    requestId: string,
+    ws: ServerWebSocket<unknown>,
+    currentRoom?: string,
+  ): Promise<void> {
+    // The person speaking: the intent classifier and any turn it hands to chat.
+    return runWithOrigin('user', () => this.processVoiceTranscriptTurn(transcript, requestId, ws, currentRoom));
+  }
+
+  private async processVoiceTranscriptTurn(
     transcript: string,
     requestId: string,
     ws: ServerWebSocket<unknown>,

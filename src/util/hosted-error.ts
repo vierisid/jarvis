@@ -138,7 +138,7 @@ export function hostedProxyError(
  * from the control plane, validated there as one plain line; it is re-bounded
  * here anyway because it lands in a chat bubble.
  */
-function restrictionCopy(restricted: HostedRestriction): string {
+export function restrictionCopy(restricted: HostedRestriction): string {
   const why =
     restricted.reason === 'account_banned'
       ? 'Usejarvis AI is no longer available on this account.'

@@ -124,6 +124,7 @@ import {
   isAutostartInstalled,
   scheduleAutostartRestart,
 } from '../cli/autostart.ts';
+import { runWithOrigin } from '../llm/origin.ts';
 
 export type ApiContext = {
   /**
@@ -829,6 +830,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             },
           };
 
+          // Refuse BEFORE spawning: a cap hit after it would leave an idle
+          // agent behind for a task that never started.
+          if (body.task?.trim() && !taskManager.canLaunch()) {
+            return error('Too many agent tasks are already running. Wait for one to finish.', 429);
+          }
           const spawned = spawnPersistentAgent(deps, body.specialist ?? '');
           let assignment: Awaited<ReturnType<typeof assignPersistentAgentTask>> | null = null;
 
@@ -3521,7 +3527,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             : [];
 
           const { generateVoiceSuggestions } = await import('../agents/voice-suggestions.ts');
-          const suggestions = await generateVoiceSuggestions(turns, llm);
+          const suggestions = await runWithOrigin('user', () => generateVoiceSuggestions(turns, llm));
           return json({ suggestions });
         } catch (err) {
           console.warn('[api] voice suggestions error:', err);
@@ -3988,7 +3994,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             const { NLGoalBuilder } = await import('../goals/nl-builder.ts');
             const llmManager = ctx.agentService.getLLMManager();
             const builder = new NLGoalBuilder(llmManager);
-            const proposal = await builder.parseGoal(text.trim());
+            const proposal = await runWithOrigin('user', () => builder.parseGoal(text.trim()));
             return json(proposal);
           }
 

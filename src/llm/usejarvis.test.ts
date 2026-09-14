@@ -47,6 +47,27 @@ describe('UsejarvisAIProvider', () => {
     expect(auth ?? '').toBe('Bearer sk-uj-abc');
   });
 
+  it('tags chat requests with the origin they run under, and sends no header when it is unknown', async () => {
+    const { runWithOrigin } = await import('./origin.ts');
+    const seen: Array<string | null> = [];
+    globalThis.fetch = (async (_input: any, init?: any) => {
+      seen.push(new Headers(init?.headers).get('x-jarvis-origin'));
+      return jsonResponse(200, {
+        id: 'x',
+        object: 'chat.completion',
+        created: 0,
+        model: 'uj-chat',
+        choices: [{ index: 0, message: { role: 'assistant', content: 'hi' }, finish_reason: 'stop' }],
+        usage: { prompt_tokens: 1, completion_tokens: 1, total_tokens: 2 },
+      });
+    }) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    await provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-chat' });
+    await runWithOrigin('background', () => provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-chat' }));
+    await runWithOrigin('workflow', () => provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-chat' }));
+    expect(seen).toEqual([null, 'background', 'workflow']);
+  });
+
   it('never sends a custom temperature — the uj-* aliases resolve to reasoning models that reject it', async () => {
     // The base OpenAIProvider skips temperature only for names it recognises as
     // reasoning models; the hosted aliases are opaque, so without the override a

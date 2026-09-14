@@ -92,7 +92,22 @@ export interface MeterBanner {
  * rather than a claim of headroom.
  */
 export function bannerFor(meter: HostedMeter | null): MeterBanner | null {
-  if (!meter || !meter.entitled) return null;
+  if (!meter) return null;
+  // Before the plan check: a restricted account may have no active plan left,
+  // and this is the one sentence that explains why nothing works. The copy
+  // matches the chat's (src/util/hosted-error.ts restrictionCopy); the usage
+  // contract test holds the two together.
+  if (meter.restricted) {
+    const why =
+      meter.restricted.reason === "account_banned"
+        ? "Usejarvis AI is no longer available on this account."
+        : meter.restricted.reason === "account_suspended"
+          ? "Usejarvis AI is unavailable while this account is suspended."
+          : "Usejarvis AI is restricted on this account for a usage-policy violation.";
+    const contact = (meter.restricted.contact ?? "").replace(/[\r\n\t<>]/g, " ").trim().slice(0, 200);
+    return { tone: "fail", text: `${why} To appeal, contact ${contact || "support"}.` };
+  }
+  if (!meter.entitled) return null;
   // Blocked is NOT "used up" — see the note in src/daemon/usage-alerts.ts. The
   // control plane sets it for a user with no plan (filtered out above) or a
   // converge gap, so reaching here means a plan whose key is switched off.

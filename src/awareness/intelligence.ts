@@ -24,6 +24,7 @@ import type { ContentBlock } from '../llm/provider.ts';
 import { guardImageSize, LLMProviderError } from '../llm/provider.ts';
 import type { Tier } from '../llm/tiers.ts';
 import type { ScreenContext, AwarenessEvent } from './types.ts';
+import { runWithOrigin } from '../llm/origin.ts';
 
 /** Which analysis a claimed escalation should run. */
 export type EscalationKind = 'struggle' | 'delta' | 'general';
@@ -128,6 +129,16 @@ export class AwarenessIntelligence {
    * On the first failure, drop to `medium` for the life of the process.
    */
   private async visionChat(
+    subsystem: string,
+    content: ContentBlock[],
+    maxTokens: number,
+  ): Promise<string> {
+    // Awareness runs on its own schedule, and what it sends is screen content,
+    // not anything the person typed (src/llm/origin.ts).
+    return runWithOrigin('background', () => this.visionChatUnderOrigin(subsystem, content, maxTokens));
+  }
+
+  private async visionChatUnderOrigin(
     subsystem: string,
     content: ContentBlock[],
     maxTokens: number,
@@ -340,6 +351,18 @@ Provide clear, actionable guidance.`,
    * Summarize an activity session for storage.
    */
   async summarizeSession(
+    apps: string[],
+    captureCount: number,
+    durationMinutes: number,
+    sampleOcrTexts: string[]
+  ): Promise<{ topic: string; summary: string }> {
+    // Background, like the vision calls: a summary of screen activity.
+    return runWithOrigin('background', () =>
+      this.summarizeSessionUnderOrigin(apps, captureCount, durationMinutes, sampleOcrTexts),
+    );
+  }
+
+  private async summarizeSessionUnderOrigin(
     apps: string[],
     captureCount: number,
     durationMinutes: number,

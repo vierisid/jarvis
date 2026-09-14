@@ -75,6 +75,7 @@ import {
   type WorkflowsStartFn,
 } from "./routes/jarvis-workflows";
 import { json, err, type RouteContext, type RouteHandler } from "./routes/shared";
+import { runWithOrigin } from "../../llm/origin.ts";
 
 export interface SandboxApiServices {
   credentialResolver: CredentialResolver;
@@ -396,7 +397,9 @@ export class SandboxApi {
       // verified claims and matched params alongside.
       const ctx: RouteContext = { req, claims, params };
       try {
-        return await route.handler(ctx);
+        // Everything a workflow asks the brain for (jarvis-ask, agent
+        // delegation, tools) runs on the workflow's behalf (src/llm/origin.ts).
+        return await runWithOrigin('workflow', () => route.handler(ctx));
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
         return err(`internal error: ${message}`, 500);

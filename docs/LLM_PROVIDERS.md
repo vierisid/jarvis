@@ -524,6 +524,14 @@ How it works per provider:
 - **Ollama**: local KV-cache reuse is automatic and free; nothing is reported or billed.
 - **Other providers**: the cache markers are ignored; no behavior change.
 
+#### Usejarvis AI errors, retries and request origin
+
+- A 429 or 5xx from the proxy carries the server's `Retry-After` into the manager, which waits it out (within its 60s budget) instead of retrying at once.
+- Three hosted outcomes are never retried: `quota_exhausted` (the plan's included usage is used up for the window), `content_policy` (the platform's safety gate blocked the request; the error body carries `usejarvis_content_policy`) and `restricted` (hosted AI is restricted on the account; the copy comes from the usage meter's `restricted` field and names where to appeal). The first and last may still fail over to a provider of the user's own on another tier; a content-policy block never does.
+- A timed-out request is aborted, so it stops holding a slot at the proxy while the retry goes out.
+- Every hosted chat, STT and TTS request carries `x-jarvis-origin: user | background | workflow` (src/llm/origin.ts), set at the entry points: chat, voice and channel turns are `user`; the background agent, goals, awareness, the post-turn extractor and the compactor are `background`; the workflow sandbox is `workflow`. The platform only counts policy strikes against `user` traffic, and a request with no origin omits the header and is treated as the person's own.
+- Fan-out caps that keep ordinary use under a per-key limit: at most 5 running `manage_agents` tasks, at most 4 Pebble sentences synthesized at once, and workflow agent delegation capped at 200 iterations.
+
 #### Usejarvis AI prompt caching — verification record and enablement conditions
 
 Initial live verification against the hosted proxy (previously cited as "docs/LLM.md, POC case 3"; recorded here since that file was never committed): a `cache_control` marker on a **system** content part and on a **user** content part both reached the Anthropic upstream intact through LiteLLM; the second identical call billed the marked prefix at the cache-read rate (~0.1x the platform's resale input price).
