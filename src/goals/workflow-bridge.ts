@@ -6,6 +6,45 @@
  */
 
 import type { GoalConfig } from '../config/types.ts';
+import { getDb } from '../vault/schema.ts';
+import { getWorkItem, WorkItemError } from './work-items.ts';
+import { getFlow } from '../workflows/db/repos/flow.ts';
+import { getFlowVersion } from '../workflows/db/repos/flow-version.ts';
+import { createFlowRun, type FlowRun } from '../workflows/db/repos/flow-run.ts';
+import { enqueue } from '../workflows/db/repos/job-queue.ts';
+
+/** The real plan-to-execution bridge. All writes share the vault transaction. */
+export function startWorkItemRun(workItemId: string, workflowId: string): FlowRun {
+  return getDb().transaction(() => {
+    const work = getWorkItem(workItemId);
+    if (work.mode !== 'workflow' || work.workflowId !== workflowId || !work.workflowVersionId) {
+      throw new WorkItemError('Work item does not reference this workflow', 409);
+    }
+    if (work.decision?.outcome !== 'accepted') throw new WorkItemError('Accept the work proposal before running it', 409);
+    // A repeated click/retry after an HTTP disconnect returns the original run.
+    if (work.runId) {
+      if (!work.run) throw new WorkItemError('Linked run is unavailable; create a new proposal to retry', 409);
+      return work.run;
+    }
+    if (work.blocker || work.resultCheck) throw new WorkItemError('Work is blocked or already checked', 409);
+    const flow = getFlow(workflowId);
+    const version = getFlowVersion(work.workflowVersionId);
+    if (!flow || !version || version.flowId !== workflowId || version.state !== 'LOCKED') {
+      throw new WorkItemError('The accepted workflow version is unavailable', 409);
+    }
+    const run = createFlowRun({
+      flowId: workflowId, flowVersionId: version.id, environment: 'PRODUCTION',
+      triggeredBy: `work_item:${work.id}:decision:${work.decision.id}`, startTime: Date.now(),
+    });
+    enqueue({
+      jobType: 'RUN_FLOW', payload: { runId: run.id, payload: work.input },
+      flowRunId: run.id, flowId: workflowId, flowVersionId: version.id, maxAttempts: 1,
+    });
+    getDb().run('UPDATE commitment_work SET run_id = ?, updated_at = ? WHERE work_id = ?', [run.id, Date.now(), work.id]);
+    getDb().run("UPDATE commitments SET status = 'active' WHERE id = ?", [work.id]);
+    return run;
+  })();
+}
 
 /**
  * Workflow definition for the goal system's daily rhythm.

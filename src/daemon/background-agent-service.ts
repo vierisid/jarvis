@@ -261,8 +261,8 @@ export class BackgroundAgentService implements Service, IAgentService {
 
     // Get due commitments
     try {
-      const due = getDueCommitments();
-      const upcoming = getUpcoming(5);
+      const due = getDueCommitments({ excludeWorkItems: true });
+      const upcoming = getUpcoming(5, { excludeWorkItems: true });
       const allCommitments = [...due, ...upcoming];
 
       if (allCommitments.length > 0) {

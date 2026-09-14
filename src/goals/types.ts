@@ -69,6 +69,7 @@ export type GoalCheckIn = {
   actions_planned: string[];         // for morning
   actions_completed: string[];       // for evening
   created_at: number;
+  work_item_ids: string[];          // commitment IDs, ordered like actions_planned
 };
 
 export type GoalEstimate = {

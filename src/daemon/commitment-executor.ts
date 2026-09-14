@@ -10,7 +10,7 @@
  *   aggressive: 5s cancel window
  */
 
-import { getDueCommitments, getUpcoming, updateCommitmentStatus, getCommitment } from '../vault/commitments.ts';
+import { getDueCommitments, getUpcoming, updateCommitmentStatus, getCommitment, isWorkItemCommitment } from '../vault/commitments.ts';
 import type { Commitment } from '../vault/commitments.ts';
 import type { IAgentService } from './agent-service-interface.ts';
 import type { WSMessage } from '../comms/websocket.ts';
@@ -95,6 +95,10 @@ export class CommitmentExecutor {
     if (!this.approvalLookup) return;
     for (const [commitmentId, entry] of this.awaitingApproval) {
       try {
+        if (isWorkItemCommitment(commitmentId)) {
+          this.awaitingApproval.delete(commitmentId);
+          continue;
+        }
         let pending = 0;
         let executed = 0;
         const results: string[] = [];
@@ -181,8 +185,8 @@ export class CommitmentExecutor {
     this.settleAwaitingApprovals();
     try {
       const now = Date.now();
-      const dueNow = getDueCommitments(); // when_due <= now
-      const upcoming = getUpcoming(20); // all upcoming with when_due
+      const dueNow = getDueCommitments({ excludeWorkItems: true }); // when_due <= now
+      const upcoming = getUpcoming(20, { excludeWorkItems: true }); // all upcoming with when_due
 
       // Filter upcoming to those due within 15 minutes (matches the workflow
       // event semantics that the deleted heartbeat used).
@@ -355,7 +359,7 @@ export class CommitmentExecutor {
   private async fireExecution(commitmentId: string): Promise<void> {
     const state = this.pending.get(commitmentId);
     if (!state) return;
-    if (state.cancelled || state.executed) {
+    if (state.cancelled || state.executed || isWorkItemCommitment(commitmentId)) {
       this.pending.delete(commitmentId);
       return;
     }

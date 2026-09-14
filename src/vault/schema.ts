@@ -73,6 +73,33 @@ export function initDatabase(dbPath: string = ":memory:", opts?: { quiet?: boole
   }
 }
 
+/** Upgrade text-only plans without inventing goal, execution or completion claims. */
+function backfillPlannedWork(db: Database): void {
+  const plans = db.query<{ id: string; actions_planned: string | null; created_at: number }, []>(
+    "SELECT id, actions_planned, created_at FROM goal_check_ins WHERE type = 'morning_plan'",
+  ).all();
+  const exists = db.query('SELECT work_id FROM commitment_work WHERE plan_id = ? AND action_index = ?');
+  db.transaction(() => {
+    for (const plan of plans) {
+      let actions: unknown;
+      try { actions = JSON.parse(plan.actions_planned ?? '[]'); } catch { continue; }
+      if (!Array.isArray(actions)) continue;
+      for (const [index, title] of actions.entries()) {
+        if (typeof title !== 'string' || !title.trim() || exists.get(plan.id, index)) continue;
+        const id = generateId();
+        db.run(
+          "INSERT INTO commitments (id, what, priority, status, created_from, created_at) VALUES (?, ?, 'normal', 'pending', ?, ?)",
+          [id, title, `goal_check_in:${plan.id}`, plan.created_at],
+        );
+        db.run(
+          'INSERT INTO commitment_work (work_id, plan_id, action_index, updated_at) VALUES (?, ?, ?, ?)',
+          [id, plan.id, index, plan.created_at],
+        );
+      }
+    }
+  })();
+}
+
 /**
  * Create all database tables and indexes
  */
@@ -662,6 +689,31 @@ function createTables(db: Database): void {
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_gci_type ON goal_check_ins(type)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_gci_created ON goal_check_ins(created_at)`);
+
+  // A work item extends a commitment: its public ID is the commitment ID.
+  // Workflow IDs remain durable references even if run history is deleted.
+  // No workflow-table FK: independent goal rhythms also run without that schema.
+  db.run(`
+    CREATE TABLE IF NOT EXISTS commitment_work (
+      work_id TEXT PRIMARY KEY REFERENCES commitments(id) ON DELETE CASCADE,
+      plan_id TEXT REFERENCES goal_check_ins(id),
+      action_index INTEGER,
+      goal_id TEXT,
+      mode TEXT NOT NULL DEFAULT 'manual' CHECK(mode IN ('manual', 'workflow')),
+      workflow_id TEXT,
+      workflow_version_id TEXT,
+      input TEXT NOT NULL DEFAULT '{}',
+      decision TEXT,
+      run_id TEXT UNIQUE,
+      blocker TEXT,
+      result_check TEXT,
+      updated_at INTEGER NOT NULL,
+      UNIQUE(plan_id, action_index)
+    )
+  `);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_work_plan ON commitment_work(plan_id)`);
+  db.run(`CREATE INDEX IF NOT EXISTS idx_work_goal ON commitment_work(goal_id)`);
+  backfillPlannedWork(db);
 
   // Sidecars table: enrolled sidecar processes
   db.run(`

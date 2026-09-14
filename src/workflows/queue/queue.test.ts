@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { closeWorkflowDb, initWorkflowDb } from "../db/index";
+import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../db/index";
+import { createFlow } from "../db/repos/flow";
+import { createDraftVersion } from "../db/repos/flow-version";
+import { createFlowRun, getFlowRun, updateRun } from "../db/repos/flow-run";
 import {
   cancelJob,
   claimNextJob,
@@ -21,6 +24,14 @@ afterEach(() => {
 });
 
 const silent = () => undefined;
+
+function queuedRun() {
+  const flow = createFlow();
+  const version = createDraftVersion({ flowId: flow.id, displayName: 'Cancellation test' });
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
+  const job = enqueue({ jobType: 'RUN_FLOW', payload: { runId: run.id }, flowRunId: run.id, maxAttempts: 1 });
+  return { run, job };
+}
 
 describe("job-queue repo", () => {
   test("enqueue + claim + complete happy path", () => {
@@ -135,6 +146,37 @@ describe("job-queue repo", () => {
     claimNextJob();
     cancelJob(b.id);
     expect(getJob(b.id)?.status).toBe("CANCELED");
+  });
+
+  test('queued cancellation rolls back if recording the stopped run fails', () => {
+    const { run, job } = queuedRun();
+    getWorkflowDb().exec("CREATE TRIGGER reject_stop BEFORE UPDATE ON flow_run BEGIN SELECT RAISE(ABORT, 'run unavailable'); END");
+    expect(() => cancelJob(job.id)).toThrow('run unavailable');
+    expect(getJob(job.id)?.status).toBe('QUEUED');
+    expect(getFlowRun(run.id)?.status).toBe('QUEUED');
+  });
+
+  test('cancelling a claimed job does not falsely acknowledge that its executor stopped', () => {
+    const { run, job } = queuedRun(); claimNextJob();
+    updateRun(run.id, { status: 'RUNNING' });
+    cancelJob(job.id);
+    expect(getFlowRun(run.id)?.status).toBe('RUNNING');
+    // The still-live executor can report its actual outcome after the request.
+    updateRun(run.id, { status: 'SUCCEEDED', finishTime: Date.now() });
+    recoverOrphanedJobs();
+    expect(getFlowRun(run.id)?.status).toBe('SUCCEEDED');
+  });
+
+  test.each(['PAUSED', 'SUCCEEDED', 'FAILED'] as const)('old cancellations do not overwrite a later %s attempt', (status) => {
+    const { run, job } = queuedRun();
+    getWorkflowDb().run("UPDATE workflow_job SET status = 'CANCELED', created = 1 WHERE id = ?", [job.id]);
+    const later = enqueue({ jobType: 'RUN_FLOW', payload: { runId: run.id, executionType: 'RESUME' }, flowRunId: run.id });
+    // Equal millisecond timestamps still need deterministic insertion ordering.
+    getWorkflowDb().run('UPDATE workflow_job SET created = 1 WHERE id = ?', [later.id]);
+    claimNextJob(); completeJob(later.id);
+    updateRun(run.id, { status });
+    recoverOrphanedJobs();
+    expect(getFlowRun(run.id)?.status).toBe(status);
   });
 
   test("queueStats reflects status counts", () => {
