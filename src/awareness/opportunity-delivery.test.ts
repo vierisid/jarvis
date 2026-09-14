@@ -3,6 +3,9 @@ import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
 import { createCapture, getRecentSuggestions, markSuggestionActedOn, markSuggestionDelivered, markSuggestionDismissed } from '../vault/awareness.ts';
 import { getOpportunityMetrics, recordOpportunityFeedback, refreshOpportunity } from './opportunities.ts';
 import { OpportunityDelivery, type DeliverOpportunity } from './opportunity-delivery.ts';
+import { AwarenessService } from './service.ts';
+import type { JarvisConfig } from '../config/types.ts';
+import type { LLMManager } from '../llm/manager.ts';
 
 const workers: OpportunityDelivery[] = [];
 beforeEach(() => initDatabase(':memory:', { quiet: true }));
@@ -109,4 +112,80 @@ test('concurrent workers and flush calls share a claim until its lease expires',
   await flush;
   expect(sends).toBe(2);
   expect(getRecentSuggestions()[0]!.delivery_channel).toBe('recovered');
+});
+
+function service(deliver: DeliverOpportunity) {
+  return new AwarenessService({ awareness: {
+    enabled: true, capture_interval_ms: 15000, min_change_threshold: 0.02,
+    cloud_vision_enabled: false, cloud_vision_cooldown_ms: 30000,
+    cloud_vision_ambient_cooldown_ms: 900000, stuck_threshold_ms: 300000,
+    suggestion_rate_limit_ms: 60000, retention: { full_hours: 24, key_moment_hours: 72 },
+    struggle_grace_ms: 120000, struggle_cooldown_ms: 180000, overlay_autolaunch: false,
+  } } as JarvisConfig, {} as LLMManager, undefined, null, undefined, undefined, deliver);
+}
+
+test.each(['enable', 'disable', 'shutdown'])('pending delivery honors the last lifecycle request: %s', async lastRequest => {
+  proposal();
+  let finish!: (channel: string) => void;
+  let sends = 0;
+  const svc = service(() => { sends++; return new Promise(resolve => { finish = resolve; }); });
+  await svc.start();
+  try {
+    expect(sends).toBe(1);
+    svc.toggle(false);
+    await Bun.sleep(0);
+    expect(svc.status()).toBe('stopping');
+    svc.toggle(true);
+    if (lastRequest === 'disable') svc.toggle(false);
+    const shutdown = lastRequest === 'shutdown' ? svc.stop() : undefined;
+    finish('websocket');
+    await shutdown;
+    await Bun.sleep(0);
+    expect(svc.isEnabled()).toBe(lastRequest !== 'disable');
+    expect(svc.status()).toBe(lastRequest === 'enable' ? 'running' : 'stopped');
+    // Exercise the public ingestion path, not just the status field. A resumed
+    // service accepts captures; the latest disable or shutdown still blocks them.
+    await svc.handleSidecarEvent('fixture-sidecar', {
+      type: 'sidecar_event', event_type: 'screen_capture', timestamp: Date.now(),
+      payload: { capture_id: 'after-toggle', image_path: '/fixture/capture.png',
+        pixel_change_pct: 0.9, app_name: 'Editor', window_title: 'Notes', ocr_text: 'Notes' },
+    });
+    expect(getDb().query('SELECT COUNT(*) AS n FROM screen_captures').get())
+      .toEqual({ n: lastRequest === 'enable' ? 4 : 3 });
+    expect(sends).toBe(1);
+  } finally { finish('websocket'); await svc.stop(); }
+});
+
+test('rapid toggles before queued work settles honor the final setting', async () => {
+  const svc = service(async () => 'websocket');
+  try {
+    const starting = svc.start();
+    svc.toggle(false);
+    svc.toggle(true);
+    await starting;
+    await Bun.sleep(0);
+    expect(svc.status()).toBe('running');
+    svc.toggle(false);
+    svc.toggle(true);
+    svc.toggle(false);
+    await Bun.sleep(0);
+    expect(svc.isEnabled()).toBe(false);
+    expect(svc.status()).toBe('stopped');
+  } finally { await svc.stop(); }
+});
+
+test('a stop request blocks new capture events before queued shutdown begins', async () => {
+  const svc = service(async () => 'websocket');
+  await svc.start();
+  try {
+    const stopping = svc.stop();
+    await svc.handleSidecarEvent('fixture-sidecar', {
+      type: 'sidecar_event', event_type: 'screen_capture', timestamp: Date.now(),
+      payload: { capture_id: 'during-stop', image_path: '/fixture/capture.png',
+        pixel_change_pct: 0.9, app_name: 'Editor', window_title: 'Notes', ocr_text: 'Notes' },
+    });
+    await stopping;
+    expect(getDb().query('SELECT COUNT(*) AS n FROM screen_captures').get()).toEqual({ n: 0 });
+    expect(svc.status()).toBe('stopped');
+  } finally { await svc.stop(); }
 });
