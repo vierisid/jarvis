@@ -156,7 +156,8 @@ func makeRunCommandHandler(cfg *SidecarConfig) RPCHandler {
 		// A convenience deny-list for plainly written commands, not an
 		// authorization boundary: substring matching cannot contain shell
 		// syntax (quoting, variables, subshells). Whether a command may run is
-		// decided by the brain's authority engine before this RPC is dispatched.
+		// decided brain-side: the authority engine gates agent tool calls, and
+		// workflow tool steps run as the owner configured them.
 		for _, blocked := range cfg.Terminal.BlockedCommands {
 			if strings.Contains(command, blocked) {
 				return &RPCResult{Result: map[string]any{
