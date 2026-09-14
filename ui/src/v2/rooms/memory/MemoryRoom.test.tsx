@@ -8,6 +8,8 @@ import { createEntity, findEntities } from '../../../../../src/vault/entities';
 import { createFact, findFacts, getFact, queryFact } from '../../../../../src/vault/facts';
 import { getKnowledgeForMessage } from '../../../../../src/vault/retrieval';
 import { createFactDecisionRoutes } from '../../../../../src/vault/fact-routes';
+import { getUserProfile, saveUserProfile } from '../../../../../src/vault/user-profile';
+import { formatUserProfileForPrompt } from '../../../../../src/user/profile';
 
 const NativeRequest = globalThis.Request, NativeResponse = globalThis.Response, originalFetch = globalThis.fetch;
 GlobalRegistrator.register();
@@ -55,12 +57,12 @@ function button(label: string) {
   const found = [...host.querySelectorAll('button')].find(b => b.textContent?.trim() === label);
   if (!found) throw new Error(`Missing ${label}: ${host.textContent}`); return found;
 }
-async function mount() {
+async function mount(name = 'Alex') {
   if (root) { await act(async () => root!.unmount()); host.remove(); }
   host = document.createElement('div'); document.body.append(host); root = createRoot(host);
   await act(async () => root!.render(<MemoryRoomBody mode="expanded" />));
   await act(async () => button('Browser').click());
-  const entity = [...host.querySelectorAll('button')].find(b => b.classList.contains('v2-mem__col-row') && b.textContent?.includes('Alex'))!;
+  const entity = [...host.querySelectorAll('button')].find(b => b.classList.contains('v2-mem__col-row') && b.textContent?.includes(name))!;
   await act(async () => entity.click());
 }
 async function submit() {
@@ -100,4 +102,23 @@ test('failed or uncertain correction retains input and retry produces one replac
   await submit(); expect(findFacts({ subject_id: subject })).toHaveLength(1);
   expect(findFacts({ subject_id: subject, includeSuperseded: true })).toHaveLength(2);
   expect(host.textContent).toContain('confirmed · active');
+});
+
+test('Memory profile correction updates agent profile context and survives restart and a later profile save', async () => {
+  saveUserProfile({ preferred_name: 'Jamie', interests: 'Chemistry' });
+  await mount('Jamie');
+  const row = [...host.querySelectorAll('.v2-mem__fact')].find(el => el.querySelector('.v2-mem__fact-pred')?.textContent === 'preferred_name')!;
+  const correct = [...row.querySelectorAll('button')].find(b => b.textContent === 'Correct fact')!;
+  await act(async () => correct.click());
+  (host.querySelector('[name="object"]') as HTMLTextAreaElement).value = 'Sam';
+  (host.querySelector('[name="reason"]') as HTMLTextAreaElement).value = 'Call me Sam';
+  await submit();
+  expect(getUserProfile()?.answers.preferred_name).toBe('Sam');
+  expect(formatUserProfileForPrompt(getUserProfile())).not.toContain('Jamie');
+  closeDb(); initDatabase(path);
+  saveUserProfile({ ...getUserProfile()!.answers, interests: 'Engineering' });
+  await mount('Sam');
+  expect(queryFact('Sam', 'preferred_name')?.object).toBe('Sam');
+  expect(queryFact('Sam', 'name')?.object).toBe('Sam');
+  expect(host.querySelector('[role="alert"]')).toBeNull();
 });
