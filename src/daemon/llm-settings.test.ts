@@ -355,15 +355,13 @@ describe('getLLMSettings.effective: the dashboard reads routing reality, not a r
     expect(effective.tiers.conversation).toEqual({ ref: 'anthropic:claude-x', source: 'default' });
   });
 
-  test('self-hosted: effective includes the single-LLM default for task tiers', () => {
+  test('self-hosted: effective mirrors the persisted refs, silent slots stay empty', () => {
     const config = structuredClone(DEFAULT_CONFIG);
-    config.llm.default = 'anthropic:claude-default';
     config.llm.tiers = { high: 'anthropic:claude-x' };
     const { effective } = getLLMSettings(config);
     expect(effective.mode).toBe('single'); // no conversation tier bound
     expect(effective.tiers.high).toEqual({ ref: 'anthropic:claude-x', source: 'choice' });
-    expect(effective.tiers.medium).toEqual({ ref: 'anthropic:claude-default', source: 'default' });
-    expect(effective.tiers.low).toEqual({ ref: 'anthropic:claude-default', source: 'default' });
+    expect(effective.tiers.low).toEqual({ ref: null, source: null });
   });
 });
 
