@@ -54,6 +54,8 @@ export class AwarenessService implements Service {
   private enabled: boolean;
   private cleanupTimer: ReturnType<typeof setInterval> | null = null;
   private opportunityDelivery: OpportunityDelivery | null;
+  private runRequested = false;
+  private lifecycle: Promise<void> = Promise.resolve();
 
   constructor(
     jarvisConfig: JarvisConfig,
@@ -96,7 +98,27 @@ export class AwarenessService implements Service {
     this.analytics = new BehaviorAnalytics(llm, maxGapMs);
   }
 
-  async start(): Promise<void> {
+  start(): Promise<void> {
+    this.runRequested = this.enabled;
+    return this.reconcileLifecycle();
+  }
+
+  stop(): Promise<void> {
+    this.runRequested = false;
+    return this.reconcileLifecycle();
+  }
+
+  private reconcileLifecycle(): Promise<void> {
+    // Each request gets a turn after any in-flight shutdown. Read the latest
+    // intent then, so a later disable or explicit daemon stop cancels a resume.
+    const transition = this.lifecycle.then(() => this.runRequested ? this.startNow() : this.stopNow());
+    // A failed transition must not poison later requests; its caller still sees the error.
+    this.lifecycle = transition.catch(() => {});
+    return transition;
+  }
+
+  private async startNow(): Promise<void> {
+    if (this._status === 'running') return;
     if (!this.enabled) {
       console.log('[Awareness] Disabled by config');
       this._status = 'stopped';
@@ -120,7 +142,8 @@ export class AwarenessService implements Service {
     }
   }
 
-  async stop(): Promise<void> {
+  private async stopNow(): Promise<void> {
+    if (this._status === 'stopped') return;
     this._status = 'stopping';
     await this.opportunityDelivery?.stop();
 
@@ -210,15 +233,9 @@ export class AwarenessService implements Service {
 
   toggle(enabled: boolean): void {
     this.enabled = enabled;
-    if (!enabled && this._status === 'running') {
-      this.stop().catch(err =>
-        console.error('[Awareness] Error stopping:', err)
-      );
-    } else if (enabled && this._status === 'stopped') {
-      this.start().catch(err =>
-        console.error('[Awareness] Error starting:', err)
-      );
-    }
+    (enabled ? this.start() : this.stop()).catch(err =>
+      console.error('[Awareness] Error changing enabled state:', err)
+    );
   }
 
   isEnabled(): boolean {
@@ -228,7 +245,7 @@ export class AwarenessService implements Service {
   // ── Sidecar Event Handler ──
 
   async handleSidecarEvent(sidecarId: string, event: SidecarEvent): Promise<void> {
-    if (this._status !== 'running') return;
+    if (!this.runRequested || this._status !== 'running') return;
 
     try {
       switch (event.event_type) {
