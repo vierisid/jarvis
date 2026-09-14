@@ -111,6 +111,7 @@ import type { WebSocketService } from './ws-service.ts';
 import type { ChannelService } from './channel-service.ts';
 
 import type { AwarenessService } from '../awareness/service.ts';
+import { createOpportunityRoutes } from '../awareness/opportunity-routes.ts';
 import { readFileSync } from 'node:fs';
 import {
   getCapture,
@@ -334,6 +335,7 @@ function buildAgentSnapshots(ctx: ApiContext) {
 export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
   const googleOAuthFlows = new GoogleOAuthFlowStore();
   return {
+    ...createOpportunityRoutes(json),
     // --- Health ---
     '/api/health': {
       GET: () => json(ctx.healthMonitor.getHealth()),
