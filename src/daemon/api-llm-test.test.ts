@@ -14,12 +14,12 @@ type CapturedRequest = {
 function callEndpoint(
   providers: Record<string, LLMProviderEntry>,
   body: Record<string, unknown>,
-  defaultModel?: string,
+  llm: Partial<JarvisConfig['llm']> = {},
 ): Response | Promise<Response> {
   const ctx = {
     daemonStartedAt: Date.now(),
     healthMonitor: {} as ApiContext['healthMonitor'],
-    config: { llm: { providers, default: defaultModel } } as JarvisConfig,
+    config: { llm: { ...llm, providers } } as JarvisConfig,
   } as ApiContext;
   const route = createApiRoutes(ctx)['/api/config/llm/test'] as { POST: Handler };
   return route.POST(new Request('http://x/api/config/llm/test', {
@@ -29,13 +29,13 @@ function callEndpoint(
   }));
 }
 
-describe('POST /api/config/llm/test single-LLM default', () => {
+describe('POST /api/config/llm/test saved model', () => {
   const realFetch = globalThis.fetch;
+  const ollama: LLMProviderEntry = { kind: 'ollama', base_url: 'http://ollama.example:11434' };
+  let requestedModel = '';
 
-  afterEach(() => { globalThis.fetch = realFetch; });
-
-  it('tests the selected Ollama model instead of the SDK llama3 fallback', async () => {
-    let requestedModel = '';
+  beforeEach(() => {
+    requestedModel = '';
     globalThis.fetch = (async (_input: string | URL | Request, init?: RequestInit) => {
       const requestBody = JSON.parse(String(init?.body)) as { model: string };
       requestedModel = requestBody.model;
@@ -47,17 +47,47 @@ describe('POST /api/config/llm/test single-LLM default', () => {
         eval_count: 1,
       }), { status: 200, headers: { 'Content-Type': 'application/json' } });
     }) as unknown as typeof fetch;
+  });
 
-    const response = await callEndpoint(
-      { ollama: { kind: 'ollama', base_url: 'http://ollama.example:11434' } },
-      { name: 'ollama' },
-      'ollama:qwen3:14b',
-    );
+  afterEach(() => { globalThis.fetch = realFetch; });
+
+  it('tests the selected Ollama model instead of the SDK llama3 fallback', async () => {
+    const response = await callEndpoint({ ollama }, { name: 'ollama' }, { default: 'ollama:qwen3:14b' });
     const body = await response.json() as { ok: boolean; model: string };
 
     expect(body.ok).toBe(true);
     expect(body.model).toBe('qwen3:14b');
     expect(requestedModel).toBe('qwen3:14b');
+  });
+
+  it('falls back to a tier ref naming the provider when no default is set', async () => {
+    await callEndpoint(
+      { ollama },
+      { name: 'ollama' },
+      { tiers: { conversation: 'ollama:qwen3:4b', medium: 'ollama:qwen3:14b' } },
+    );
+
+    expect(requestedModel).toBe('qwen3:14b');
+  });
+
+  it('ignores saved refs that name another provider', async () => {
+    await callEndpoint(
+      { ollama, 'ollama-remote': ollama },
+      { name: 'ollama' },
+      { default: 'ollama-remote:qwen3:14b', tiers: { medium: 'ollama-remote:qwen3:14b' } },
+    );
+
+    expect(requestedModel).toBe('llama3');
+  });
+
+  it('does not carry the saved model to a changed endpoint', async () => {
+    await callEndpoint(
+      { ollama },
+      { name: 'ollama', base_url: 'http://other-ollama.example:11434' },
+      { default: 'ollama:qwen3:14b' },
+    );
+
+    expect(requestedModel).toBe('llama3');
   });
 });
 

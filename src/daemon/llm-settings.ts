@@ -884,30 +884,23 @@ export async function testLLMProvider(
   const storedApiKey = getSecret(keychainKey(name)) ?? configured?.api_key ?? '';
   const normalizedRequestedBaseUrl = normalizeBaseUrl(requestedBaseUrl);
   const normalizedConfiguredBaseUrl = normalizeBaseUrl(configuredBaseUrl);
+  const baseUrlChanged = hasExplicitBaseUrl && normalizedRequestedBaseUrl !== normalizedConfiguredBaseUrl;
+  // Legacy entries without an explicit kind are keyed by name.
+  const kindChanged = opts.kind !== undefined && opts.kind !== (configured?.kind ?? name);
 
   // A stored credential is scoped to its saved endpoint, in both directions:
   // never attach it to a caller-supplied URL, and never replay a gateway
   // token against the official endpoint after the URL is cleared. Moving the
   // endpoint anywhere requires the credential again in the same request.
-  if (
-    hasExplicitBaseUrl
-    && normalizedRequestedBaseUrl !== normalizedConfiguredBaseUrl
-    && storedApiKey
-    && !opts.api_key
-  ) {
+  if (baseUrlChanged && storedApiKey && !opts.api_key) {
     return { ok: false, error: 'Changing base_url requires an explicit api_key or auth token' };
   }
 
   // `kind` selects an endpoint just like base_url does — an overridden kind
   // would replay the stored credential against another provider's API (some
   // kinds don't even need a base_url to reach one, e.g. their default
-  // origin). Legacy entries without an explicit kind are keyed by name.
-  if (
-    opts.kind !== undefined
-    && opts.kind !== (configured?.kind ?? name)
-    && storedApiKey
-    && !opts.api_key
-  ) {
+  // origin).
+  if (kindChanged && storedApiKey && !opts.api_key) {
     return { ok: false, error: 'Changing the provider kind requires an explicit api_key or auth token' };
   }
 
@@ -943,12 +936,21 @@ export async function testLLMProvider(
   try {
     let models: string[] | undefined;
     // The provider card does not own a model picker. When testing an already
-    // configured provider, inherit its selected single-LLM default instead of
-    // falling through to the provider SDK's arbitrary built-in model (for
-    // Ollama that is `llama3`, which may not even be installed).
-    const configuredDefault = parseModelRef(config.llm.default);
-    let testModel = opts.model
-      ?? (configuredDefault?.provider === name ? configuredDefault.model : undefined);
+    // configured provider, use the model it is saved to route (the single-LLM
+    // default, else a tier ref naming it) instead of falling through to the
+    // provider SDK's arbitrary built-in model (for Ollama that is `llama3`,
+    // which may not even be installed). A changed base_url or kind is another
+    // server that need not serve that model, so it gets no saved model.
+    const savedRef = configured && !baseUrlChanged && !kindChanged
+      ? [
+        config.llm.default,
+        config.llm.tiers?.medium,
+        config.llm.tiers?.high,
+        config.llm.tiers?.low,
+        config.llm.tiers?.conversation,
+      ].map((ref) => parseModelRef(ref)).find((ref) => ref?.provider === name)
+      : undefined;
+    let testModel = opts.model ?? savedRef?.model;
     if (kind === 'anthropic' && isAnthropicCustomBaseUrl(baseUrl) && !testModel) {
       models = await instance.listModels().catch(() => []);
       if (!models.length) {
