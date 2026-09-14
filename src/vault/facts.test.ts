@@ -184,6 +184,39 @@ test('profile corrections update prompt settings and derived name across restart
   expect(findFacts({ subject_id: person.id, predicate: 'interests' }).map(f => f.object)).toEqual(['Physics']);
 });
 
+test('capitalization correction updates API, profile and recall without duplicate facts or inference overwrite', async () => {
+  saveUserProfile({ preferred_name: 'jamie' });
+  const old = findFacts({ predicate: 'preferred_name' })[0]!;
+  const route = createFactDecisionRoutes()['/api/vault/facts/:id/correct'];
+  const request = () => Object.assign(new Request('http://local', { method: 'POST',
+    body: JSON.stringify({ confirmed: true, object: 'Jamie', reason: 'Capitalize my name' }),
+  }), { params: { id: old.id } });
+  const response = await route.POST(request());
+  expect(response.status).toBe(200);
+  expect((await response.json()).object).toBe('Jamie');
+  expect(getUserProfile()?.answers.preferred_name).toBe('Jamie');
+  expect(queryFact('Jamie', 'name')?.object).toBe('Jamie');
+  expect((await (await route.POST(request())).json()).id).toBe(old.id);
+  createFact(old.subject_id, 'preferred_name', 'JAMIE', inference);
+  expect(findFacts({ subject_id: old.subject_id, predicate: 'preferred_name', includeSuperseded: true })).toHaveLength(1);
+  expect(getFact(old.id)?.object).toBe('Jamie');
+  expect(getFact(old.id)?.evidence.some(e => e.quote === 'jamie')).toBe(true);
+  expect(getFact(old.id)?.evidence.some(e => e.quote === 'Capitalize my name')).toBe(true);
+  closeDb(); initDatabase(path);
+  saveUserProfile({ ...getUserProfile()!.answers, interests: 'Chemistry' });
+  expect(getFact(old.id)?.object).toBe('Jamie');
+  expect(getKnowledgeForMessage('What is my name?')).toContain('preferred_name: Jamie');
+  expect(formatUserProfileForPrompt(getUserProfile())).toContain('    Jamie');
+});
+
+test('a changed capitalization on a superseded correction requires reviewing the current fact', () => {
+  const old = createFact(subject, 'location', 'berlin', inference);
+  const replacement = correctFact(old.id, 'hamburg', 'Moved home');
+  expect(() => correctFact(old.id, 'Hamburg', 'Capitalize the city')).toThrow('already superseded');
+  expect(correctFact(replacement.id, 'Hamburg', 'Capitalize the city').id).toBe(replacement.id);
+  expect(getFact(replacement.id)?.object).toBe('Hamburg');
+});
+
 test('profile correction rolls back settings, entity, projections and evidence together', () => {
   saveUserProfile({ preferred_name: 'Jamie' });
   const old = findFacts({ predicate: 'preferred_name' })[0]!;

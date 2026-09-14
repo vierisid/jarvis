@@ -104,21 +104,21 @@ test('failed or uncertain correction retains input and retry produces one replac
   expect(host.textContent).toContain('confirmed · active');
 });
 
-test('Memory profile correction updates agent profile context and survives restart and a later profile save', async () => {
-  saveUserProfile({ preferred_name: 'Jamie', interests: 'Chemistry' });
-  await mount('Jamie');
+test.each([['Jamie', 'Sam'], ['jamie', 'Jamie']])('Memory profile correction %s to %s survives restart and a later profile save', async (before, after) => {
+  saveUserProfile({ preferred_name: before, interests: 'Chemistry' });
+  await mount(before);
   const row = [...host.querySelectorAll('.v2-mem__fact')].find(el => el.querySelector('.v2-mem__fact-pred')?.textContent === 'preferred_name')!;
   const correct = [...row.querySelectorAll('button')].find(b => b.textContent === 'Correct fact')!;
   await act(async () => correct.click());
-  (host.querySelector('[name="object"]') as HTMLTextAreaElement).value = 'Sam';
-  (host.querySelector('[name="reason"]') as HTMLTextAreaElement).value = 'Call me Sam';
+  (host.querySelector('[name="object"]') as HTMLTextAreaElement).value = after;
+  (host.querySelector('[name="reason"]') as HTMLTextAreaElement).value = `Call me ${after}`;
   await submit();
-  expect(getUserProfile()?.answers.preferred_name).toBe('Sam');
-  expect(formatUserProfileForPrompt(getUserProfile())).not.toContain('Jamie');
+  expect(getUserProfile()?.answers.preferred_name).toBe(after);
+  expect(formatUserProfileForPrompt(getUserProfile())).not.toContain(before);
   closeDb(); initDatabase(path);
   saveUserProfile({ ...getUserProfile()!.answers, interests: 'Engineering' });
-  await mount('Sam');
-  expect(queryFact('Sam', 'preferred_name')?.object).toBe('Sam');
-  expect(queryFact('Sam', 'name')?.object).toBe('Sam');
+  await mount(after);
+  expect(queryFact(after, 'preferred_name')?.object).toBe(after);
+  expect(queryFact(after, 'name')?.object).toBe(after);
   expect(host.querySelector('[role="alert"]')).toBeNull();
 });

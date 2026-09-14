@@ -77,7 +77,8 @@ export function createFact(subject_id: string, predicate: string, object: string
       [id, subject_id, predicate, key, object, value, scope, options.confidence ?? 1, options.source ?? null,
         now, options.confirmed ? now : null, from, to]);
     } else if (options.confirmed) {
-      getDb().run('UPDATE facts SET verified_at = ?, confidence = ?, source = ? WHERE id = ?', [now, options.confidence ?? 1, options.source ?? null, id]);
+      // Keep normalized identity stable, but honor the explicitly confirmed spelling.
+      getDb().run('UPDATE facts SET object = ?, verified_at = ?, confidence = ?, source = ? WHERE id = ?', [object, now, options.confidence ?? 1, options.source ?? null, id]);
     }
     addEvidence(id, options, now);
     const row = getDb().query<FactRow, [string]>('SELECT * FROM facts WHERE id = ?').get(id)!;
@@ -117,7 +118,7 @@ export function correctFact(id: string, object: string, reason: string): Fact {
     const old = getFact(id); if (!old) throw new FactInputError('Fact not found', 404);
     if (old.status === 'superseded') {
       const replacement = old.superseded_by ? getFact(old.superseded_by) : null;
-      if (replacement && replacement.status !== 'superseded' && replacement.value_key === valueKey(old.predicate, object)) return replacement;
+      if (replacement && replacement.status !== 'superseded' && replacement.object === object) return replacement;
       throw new FactInputError('Fact was already superseded; review its current replacement', 409);
     }
     const replacement = createFact(old.subject_id, old.predicate, object, {
