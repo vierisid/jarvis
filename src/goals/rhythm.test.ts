@@ -87,6 +87,14 @@ describe('DailyRhythm', () => {
     expect(todayCheckIn).not.toBeNull();
   });
 
+  test('morning actions have durable work IDs in the stored check-in', async () => {
+    vault.createGoal('Active Goal', 'task', { status: 'active' });
+    const result = await rhythm.runMorningPlan();
+    expect(result.workItems).toHaveLength(result.dailyActions.length);
+    expect(result.workItems.map(w => w.title)).toEqual(result.dailyActions);
+    expect(vault.getTodayCheckIn('morning_plan')?.work_item_ids).toEqual(result.workItems.map(w => w.id));
+  });
+
   test('runEveningReview creates check-in', async () => {
     vault.createGoal('Active Goal', 'task', { status: 'active' });
 
