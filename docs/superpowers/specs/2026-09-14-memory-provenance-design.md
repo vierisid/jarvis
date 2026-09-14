@@ -49,6 +49,9 @@ Writes are synchronous database transactions behind the existing authenticated
 daemon boundary. Missing records return 404, invalid decisions 400, and stale
 changed corrections or confirmation of superseded records 409. Identical retry
 of a targeted correction returns its existing current replacement.
+Explicit confirmation preserves the requested spelling even when only case changes;
+normalized identity and evidence remain intact. Inferred repeats cannot overwrite it.
+Retries against superseded IDs must match the replacement's exact spelling.
 
 Facts expose `basis`, `status`, `evidence[]`, `predicate_key`, `value_key`, `scope`,
 `valid_from`, `valid_to`, `superseded_by` and `binding_eligible`, alongside existing
