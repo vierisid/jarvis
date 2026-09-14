@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { ensureSuggestionSchema } from './suggestion-schema.ts';
 
 let dbInstance: Database | null = null;
 
@@ -876,4 +877,5 @@ function createTables(db: Database): void {
   `);
   db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_status_updated ON tasks(status, updated_at DESC)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated_at DESC)`);
+  ensureSuggestionSchema(db);
 }

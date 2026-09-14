@@ -7,7 +7,7 @@
  */
 
 import type { ScreenContext, AwarenessEvent, Suggestion, SuggestionType } from './types.ts';
-import { createSuggestion, getSuggestionCountSince, getActivityInRange, MAX_CAPTURE_GAP_MS } from '../vault/awareness.ts';
+import { createSuggestion, findAutomationSuggestion, getSuggestionCountSince, getActivityInRange, MAX_CAPTURE_GAP_MS } from '../vault/awareness.ts';
 import { searchEntitiesByName } from '../vault/entities.ts';
 import { findFacts } from '../vault/facts.ts';
 
@@ -93,6 +93,10 @@ export class SuggestionEngine {
     let suggestion: Suggestion | null = null;
     for (const candidate of candidates) {
       if (!candidate) continue;
+      // Durable opportunity identity survives process restart and changes in
+      // recurrence counts. Independent error/break rhythms retain their scope.
+      const previous = findAutomationSuggestion(candidate);
+      if (previous && (previous.dismissed || previous.acted_on || previous.delivered)) continue;
       const typeLimit = TYPE_RATE_LIMITS[candidate.type] ?? this.defaultRateLimitMs;
       const lastFired = this.lastSuggestionByType.get(candidate.type) ?? 0;
       if (now - lastFired < typeLimit) continue; // rate-limited for this type
