@@ -67,6 +67,8 @@ export function openAICompatibleRouteCandidates(baseUrl: string): string[] {
  */
 export class OpenAICompatibleProvider extends OpenAIProvider {
   override name = 'openai_compatible';
+  /** No built-in model: the endpoint serves whatever its operator loaded. */
+  readonly placeholderDefaultModel = true;
 
   /** Every root worth trying, in priority order. Never mutated. */
   private readonly routes: string[];

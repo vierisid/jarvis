@@ -275,6 +275,59 @@ describe('LLMManager', () => {
     expect(seenModels).toEqual(['deepseek-r1-distill-llama-70b', undefined]);
   });
 
+  test('tier routing never retries a placeholder default model after the saved model fails', async () => {
+    const manager = new LLMManager();
+    const seenModels: Array<string | undefined> = [];
+    const notFound = (model?: string) => `Ollama API error (404): {"error":"model '${model ?? 'llama3'}' not found"}`;
+    const ollama = {
+      name: 'ollama',
+      placeholderDefaultModel: true,
+      listModels: async () => ['qwen3:14b'],
+      async chat(_messages: LLMMessage[], options?: { model?: string }) {
+        seenModels.push(options?.model);
+        throw new Error(notFound(options?.model));
+      },
+      async *stream(_messages: LLMMessage[], options?: { model?: string }) {
+        seenModels.push(options?.model);
+        yield { type: 'error' as const, error: notFound(options?.model) };
+      },
+    };
+    manager.registerProvider(ollama);
+    manager.setTierMap({ medium: { provider: 'ollama', model: 'qwen3:14b' } });
+
+    await expect(manager.chatTier('medium', 'test', sampleMessages)).rejects.toThrow("model 'qwen3:14b' not found");
+    expect(seenModels).toEqual(['qwen3:14b']);
+
+    seenModels.length = 0;
+    const errors: string[] = [];
+    for await (const event of manager.streamTier('medium', 'test', sampleMessages)) {
+      if (event.type === 'error') errors.push(event.error);
+    }
+    expect(seenModels).toEqual(['qwen3:14b']);
+    expect(errors.join('\n')).toContain("model 'qwen3:14b' not found");
+    expect(errors.join('\n')).not.toContain('llama3');
+  });
+
+  test('local and gateway providers mark their built-in default model as a placeholder', () => {
+    expect(new OllamaProvider().placeholderDefaultModel).toBe(true);
+    expect(new OpenAICompatibleProvider('http://localhost:8080').placeholderDefaultModel).toBe(true);
+    expect(new LiteLLMProvider().placeholderDefaultModel).toBe(true);
+    expect('placeholderDefaultModel' in new GroqProvider('test-key')).toBe(false);
+  });
+
+  test('tier routing names the real fall-up chain when nothing is assigned', async () => {
+    const manager = new LLMManager();
+    await expect(manager.chatTier('medium', 'test', sampleMessages)).rejects.toThrow(
+      "No provider configured for tier 'medium' or its fall-up chain. Choose a default model or assign the medium or high tier in Settings > LLM.",
+    );
+    await expect(manager.chatTier('low', 'test', sampleMessages)).rejects.toThrow(
+      'assign the low, medium or high tier',
+    );
+    await expect(manager.chatTier('conversation', 'test', sampleMessages)).rejects.toThrow(
+      "No provider configured for tier 'conversation'. Assign the conversation tier in Settings > LLM.",
+    );
+  });
+
   test('tier routing skips a rate-limited provider and fails over immediately', async () => {
     const manager = new LLMManager();
     let groqCalls = 0;

@@ -90,6 +90,8 @@ type OllamaModelInfo = {
 
 export class OllamaProvider implements LLMProvider {
   name = 'ollama';
+  /** `llama3` is only a guess: Ollama serves whatever the operator pulled. */
+  readonly placeholderDefaultModel = true;
   private baseUrl: string;
   private defaultModel: string;
 

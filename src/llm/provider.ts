@@ -153,6 +153,14 @@ export type LLMOptions = {
 
 export interface LLMProvider {
   name: string;
+  /**
+   * True when the built-in default model is a guess rather than one the
+   * endpoint is known to serve (local servers and gateways serve whatever
+   * their operator installed). Tier failover never retries such a provider
+   * without a model: the guess cannot recover a failed request and replaces
+   * the real error with an unrelated "model not found".
+   */
+  readonly placeholderDefaultModel?: boolean;
   chat(messages: LLMMessage[], options?: LLMOptions): Promise<LLMResponse>;
   stream(messages: LLMMessage[], options?: LLMOptions): AsyncIterable<LLMStreamEvent>;
   listModels(): Promise<string[]>;

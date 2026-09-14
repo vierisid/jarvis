@@ -19,6 +19,8 @@ import { OpenAIProvider } from './openai.ts';
  */
 export class LiteLLMProvider extends OpenAIProvider {
   override name = 'litellm';
+  /** No built-in model: the proxy routes whatever its operator configured. */
+  readonly placeholderDefaultModel = true;
 
   constructor(baseUrl = 'http://localhost:4000/v1', defaultModel = '', apiKey = '', authHeader = 'Authorization') {
     super(apiKey, defaultModel, baseUrl, authHeader);

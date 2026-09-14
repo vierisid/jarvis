@@ -242,9 +242,16 @@ export class LLMManager {
   private resolveTierOrThrow(tier: Tier): { resolution: TierResolution; provider: LLMProvider } {
     const resolution = resolveTier(tier, this.tierMap);
     if (!resolution) {
+      // Conversation never falls up, and llm.default does not fill it.
+      if (tier === 'conversation') {
+        throw new Error(
+          `No provider configured for tier 'conversation'. Assign the conversation tier in Settings > LLM.`,
+        );
+      }
+      const chain = [tier, ...TIER_FALLBACK[tier]];
       throw new Error(
         `No provider configured for tier '${tier}' or its fall-up chain. ` +
-        `Choose a default model or assign the ${tier}/medium tier in Settings > LLM.`,
+        `Choose a default model or assign the ${chain.slice(0, -1).join(', ')} or ${chain.at(-1)} tier in Settings > LLM.`,
       );
     }
     const provider = this.providers.get(resolution.assignment.provider);
@@ -261,7 +268,8 @@ export class LLMManager {
    * providers are eligible: merely configuring a provider does not authorize
    * the router to send conversation content to it. Each mapped provider's
    * default follows its assigned model so a retired model can recover without
-   * waiting for the dashboard to refresh the saved setting.
+   * waiting for the dashboard to refresh the saved setting, unless that
+   * default is only a placeholder (see LLMProvider.placeholderDefaultModel).
    */
   private tierCandidates(tier: Tier): Array<{ resolution: TierResolution; provider: LLMProvider }> {
     const first = this.resolveTierOrThrow(tier);
@@ -270,6 +278,7 @@ export class LLMManager {
     const add = (resolution: TierResolution) => {
       const provider = this.providers.get(resolution.assignment.provider);
       if (!provider) return;
+      if (!resolution.assignment.model && provider.placeholderDefaultModel) return;
       const key = `${provider.name}\u0000${resolution.assignment.model ?? ''}`;
       if (seen.has(key)) return;
       seen.add(key);
