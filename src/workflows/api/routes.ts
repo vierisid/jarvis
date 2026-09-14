@@ -1116,9 +1116,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = getFlowRun(runId);
           if (!run) return err("run not found", 404);
-          // Cancel the queued/running job (if any). The worker observes the
-          // canceled status and stops the run. Run-row state transitions
-          // (e.g. STOPPED) are written by the worker, not here.
+          // An unclaimed cancellation records STOPPED with the queue update.
+          // An already running execution retains its executor-reported outcome.
           const job = findActiveJobForRun(run.id);
           if (job) cancelJob(job.id);
           return ok({ ok: true, jobCanceled: !!job });

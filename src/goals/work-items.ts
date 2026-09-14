@@ -68,6 +68,11 @@ export function getWorkItem(id: string): WorkItem {
     if (!run) {
       blocker = { kind: 'missing_run', ref: w.run_id, reason: 'Linked run is unavailable' };
       status = 'blocked';
+    } else if (!['QUEUED', 'RUNNING', 'PAUSED', 'SUCCEEDED'].includes(run.status)) {
+      // A terminal failure can leave waitpoints behind. Those cannot be resumed
+      // and must not hide the failure or prevent recording its checked outcome.
+      status = 'failed';
+      blocker = { kind: 'run_failure', ref: run.id, reason: run.failedStep?.errorMessage ?? run.status };
     } else if (run.status === 'PAUSED' || waitpoint) {
       blocker = { kind: 'waitpoint', ref: waitpoint?.id ?? run.id, reason: waitpoint ? `Waiting at ${waitpoint.stepName}` : 'Run is paused' };
       status = 'blocked';
@@ -75,9 +80,6 @@ export function getWorkItem(id: string): WorkItem {
       status = 'running';
     } else if (run.status === 'SUCCEEDED') {
       status = 'needs_check';
-    } else {
-      status = 'failed';
-      blocker = { kind: 'run_failure', ref: run.id, reason: run.failedStep?.errorMessage ?? run.status };
     }
   }
   if (w.blocker && !w.run_id && decision?.outcome === 'accepted') status = 'blocked';
@@ -212,7 +214,7 @@ export function checkWorkResult(id: string, body: unknown): WorkItem {
     if (work.decision?.outcome !== 'accepted' || work.blocker?.kind === 'manual') throw new WorkItemError('Accept and unblock the work before checking its result', 409);
     if (work.mode === 'workflow') {
       if (!work.run || ['RUNNING', 'QUEUED', 'PAUSED'].includes(work.run.status)) throw new WorkItemError('A finished linked run is required', 409);
-      if (listWaitpointsByFlowRun(work.run.id, false).length) throw new WorkItemError('Resolve outstanding run waitpoints before checking its result', 409);
+      if (work.run.status === 'SUCCEEDED' && listWaitpointsByFlowRun(work.run.id, false).length) throw new WorkItemError('Resolve outstanding run waitpoints before checking its result', 409);
       if (input.verdict === 'passed' && work.run.status !== 'SUCCEEDED') throw new WorkItemError('A failed run cannot be verified as successful', 409);
     }
     const check: ResultCheck = {

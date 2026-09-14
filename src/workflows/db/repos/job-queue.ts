@@ -225,6 +225,9 @@ export function recoverOrphanedJobs(): number {
        WHERE status = 'RUNNING' AND attempt < max_attempts`,
       [ts, ts],
     );
+    // No executor from the previous process is alive. Repair cancelled runs
+    // left unfinished by older code, before handling exhausted executions.
+    reconcileCanceledRuns(ts);
     // Also repair runs stranded by older recovery code. A persisted pause or
     // terminal outcome wins, as does another active job for a valid resume/retry.
     // A consumed pause whose RESUME job died before entering the handler must
@@ -294,14 +297,39 @@ export function failJob(id: string, error: string, opts: FailJobOptions = {}): b
   return true;
 }
 
-export function cancelJob(id: string): void {
-  const ts = nowMs();
+/** Called only for an unclaimed cancellation, or before workers start at boot. */
+function reconcileCanceledRuns(ts: number, runId?: string): void {
   db().run(
-    `UPDATE workflow_job
-     SET status = 'CANCELED', locked_until = NULL, updated = ?
-     WHERE id = ? AND status IN ('QUEUED', 'RUNNING')`,
-    [ts, id],
+    `UPDATE flow_run SET status = 'STOPPED', failed_step = ?, finish_time = ?, updated = ?
+     WHERE status IN ('QUEUED', 'RUNNING', 'PAUSED')
+       ${runId === undefined ? '' : 'AND id = ?'}
+       AND (SELECT j.status FROM workflow_job j
+         WHERE j.flow_run_id = flow_run.id AND j.job_type = 'RUN_FLOW'
+         ORDER BY j.created DESC, j.rowid DESC LIMIT 1) = 'CANCELED'
+       AND NOT EXISTS (SELECT 1 FROM workflow_job j WHERE j.flow_run_id = flow_run.id
+         AND j.status IN ('QUEUED', 'RUNNING'))`,
+    [JSON.stringify({ name: '<cancel>', displayName: 'Cancellation',
+      errorMessage: 'Execution was cancelled. Inspect any partial results before proposing another run.' }),
+    ts, ts, ...(runId === undefined ? [] : [runId])],
   );
+}
+
+export function cancelJob(id: string): void {
+  const d = db();
+  d.transaction(() => {
+    const job = getJob(id);
+    if (!job || !['QUEUED', 'RUNNING'].includes(job.status)) return;
+    const ts = nowMs();
+    d.run(
+      `UPDATE workflow_job SET status = 'CANCELED', locked_until = NULL, updated = ? WHERE id = ?`,
+      [ts, id],
+    );
+    // Claim and cancellation serialize through SQLite. Only an unclaimed job
+    // can be acknowledged as stopped here; a live executor owns its outcome.
+    if (job.status === 'QUEUED' && job.jobType === 'RUN_FLOW' && job.flowRunId) {
+      reconcileCanceledRuns(ts, job.flowRunId);
+    }
+  })();
 }
 
 /**

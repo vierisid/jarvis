@@ -115,6 +115,68 @@ describe('Today work trace', () => {
     expect(getWorkItem(work.id).resultCheck?.runSnapshot?.status).toBe('FAILED');
   });
 
+  test('a crash between waitpoint creation and the pause upload leaves a checkable failure', async () => {
+    const { flow, work, goal } = configuredWork(); accept(work.id);
+    const run = startWorkItemRun(work.id, flow.id);
+    claimNextJob();
+    updateRun(run.id, { status: 'RUNNING', steps: { prepared: { output: 42 } }, stepsCount: 1 });
+    // Waitpoint creation and the engine's PAUSED upload are separate writes.
+    const waitpoint = createWaitpoint({ flowRunId: run.id, projectId: run.projectId, stepName: 'approve_report', type: 'MANUAL' });
+    restart();
+    recoverOrphanedJobs();
+    expect(getWorkItem(work.id)).toMatchObject({ status: 'failed', blocker: { kind: 'run_failure', ref: run.id } });
+    const resume = new Request(`http://localhost/api/webhooks/waitpoints/${waitpoint.id}`, { method: 'POST' }) as Request & { params: { id: string } };
+    resume.params = { id: waitpoint.id };
+    expect((await createWorkflowRoutes()['/api/webhooks/waitpoints/:id']!.POST!(resume)).status).toBe(409);
+    expect((await call('/api/work-items/:id/result', 'POST', `/api/work-items/${work.id}/result`, { ...result, goalScore: 1 })).status).toBe(409);
+    const checked = await call('/api/work-items/:id/result', 'POST', `/api/work-items/${work.id}/result`, { ...result, verdict: 'failed', summary: 'Interrupted before approval; report was not delivered' });
+    expect(checked.status).toBe(200);
+    restart();
+    expect(getWorkItem(work.id).resultCheck?.runSnapshot).toMatchObject({ id: run.id, status: 'FAILED', steps: { prepared: { output: 42 } } });
+    expect(goals.getProgressHistory(goal.id)).toEqual([]);
+    expect(goals.getGoal(goal.id)?.score).toBe(0);
+  });
+
+  test.each([false, true])('cancelling queued work preserves its result after restart (resume: %s)', async (resume) => {
+    const { flow, work, goal } = configuredWork(); accept(work.id);
+    const run = startWorkItemRun(work.id, flow.id);
+    if (resume) {
+      const initial = claimNextJob()!;
+      updateRun(run.id, { status: 'PAUSED', steps: { prepared: { output: 42 } }, stepsCount: 1 });
+      const waitpoint = createWaitpoint({ flowRunId: run.id, projectId: run.projectId, stepName: 'approve', type: 'MANUAL' });
+      completeJob(initial.id);
+      const request = new Request(`http://localhost/api/webhooks/waitpoints/${waitpoint.id}`, { method: 'POST', body: '{}' }) as Request & { params: { id: string } };
+      request.params = { id: waitpoint.id };
+      expect((await createWorkflowRoutes()['/api/webhooks/waitpoints/:id']!.POST!(request)).status).toBe(202);
+    }
+    const req = new Request(`http://localhost/api/workflow-runs/${run.id}/cancel`, { method: 'POST' }) as Request & { params: { runId: string } };
+    req.params = { runId: run.id };
+    const cancelled = await createWorkflowRoutes()['/api/workflow-runs/:runId/cancel']!.POST!(req);
+    expect(cancelled.status).toBe(200);
+    expect(await cancelled.json()).toMatchObject({ jobCanceled: true });
+    expect(getWorkItem(work.id)).toMatchObject({ status: 'failed', run: { id: run.id, status: 'STOPPED' }, blocker: { kind: 'run_failure' } });
+    restart(); recoverOrphanedJobs();
+    expect(claimNextJob()).toBeNull();
+    expect(startWorkItemRun(work.id, flow.id).id).toBe(run.id);
+    expect(queueStats().queued).toBe(0);
+    expect(() => checkWorkResult(work.id, result)).toThrow('failed run');
+    expect(checkWorkResult(work.id, { ...result, verdict: 'failed', summary: 'Cancelled before execution' }).status).toBe('failed');
+    restart();
+    expect(getWorkItem(work.id).resultCheck?.runSnapshot?.status).toBe('STOPPED');
+    if (resume) expect(getWorkItem(work.id).resultCheck?.runSnapshot?.steps).toEqual({ prepared: { output: 42 } });
+    expect(goals.getProgressHistory(goal.id)).toEqual([]);
+  });
+
+  test('startup repairs work left queued by older cancellation code', () => {
+    const { flow, work } = configuredWork(); accept(work.id);
+    const run = startWorkItemRun(work.id, flow.id);
+    getDb().run("UPDATE workflow_job SET status = 'CANCELED' WHERE flow_run_id = ?", [run.id]);
+    restart(); recoverOrphanedJobs();
+    expect(getWorkItem(work.id)).toMatchObject({ status: 'failed', run: { id: run.id, status: 'STOPPED' } });
+    expect(getFlowRun(run.id)?.finishTime).not.toBeNull();
+    expect(claimNextJob()).toBeNull();
+  });
+
   test('recovery repairs older stranded runs and preserves paused, finished, or still queued work', () => {
     for (const state of ['RUNNING', 'QUEUED', 'PAUSED', 'SUCCEEDED'] as const) {
       const { flow, work } = configuredWork(); accept(work.id);
@@ -182,6 +244,7 @@ describe('Today work trace', () => {
     expect(getFlowRun(run.id)?.finishTime).toBeNull();
     expect(getWorkItem(work.id).blocker).toMatchObject({ kind: 'waitpoint', ref: waitpointId });
     expect((await call('/api/work-items/:id/result', 'POST', `/api/work-items/${work.id}/result`, { ...result, goalScore: 1 })).status).toBe(409);
+    expect(() => checkWorkResult(work.id, { ...result, verdict: 'failed' })).toThrow('finished');
     expect(goals.getGoal(goal.id)?.score).toBe(0);
     const req = new Request(`http://localhost/api/webhooks/waitpoints/${waitpointId}`, { method: 'POST', body: JSON.stringify({ approved: true }) }) as Request & { params: { id: string } };
     req.params = { id: waitpointId };
@@ -199,6 +262,7 @@ describe('Today work trace', () => {
     restart();
     expect(getWorkItem(work.id)).toMatchObject({ status: 'blocked', blocker: { kind: 'waitpoint', ref: waitpoint.id } });
     expect((await call('/api/work-items/:id/result', 'POST', `/api/work-items/${work.id}/result`, { ...result, goalScore: 1 })).status).toBe(409);
+    expect(() => checkWorkResult(work.id, { ...result, verdict: 'failed' })).toThrow('waitpoints');
     expect(goals.getProgressHistory(goal.id)).toEqual([]);
     expect(getWorkItem(work.id).resultCheck).toBeNull();
   });
