@@ -32,7 +32,8 @@ import { applyQuickOverride } from '../authority/quick-override.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 
 import { findEntities, getEntity, searchEntitiesByName, createEntity } from '../vault/entities.ts';
-import { findFacts, createFact } from '../vault/facts.ts';
+import { findFacts, createFact, FactInputError } from '../vault/facts.ts';
+import { createFactDecisionRoutes } from '../vault/fact-routes.ts';
 import { findRelationships, getEntityRelationships, createRelationship } from '../vault/relationships.ts';
 import { listFlows } from '../workflows/db/repos/flow.ts';
 import { getFlowVersion, getLatestDraft } from '../workflows/db/repos/flow-version.ts';
@@ -412,10 +413,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
 
     // --- Vault: Facts ---
+    ...createFactDecisionRoutes(),
     '/api/vault/facts': {
       GET: (req: Request) => {
         const params = getSearchParams(req);
-        const query: { subject_id?: string; predicate?: string; object?: string } = {};
+        const query: Parameters<typeof findFacts>[0] = { includeSuperseded: params.get('include_superseded') === 'true' };
         const subjectId = params.get('subject_id');
         const predicate = params.get('predicate');
         const object = params.get('object');
@@ -432,6 +434,9 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
             object?: string;
             confidence?: number;
             source?: string;
+            scope?: string;
+            valid_from?: number;
+            valid_to?: number;
           };
           if (!body.subject_id || !body.predicate || !body.object) {
             return error('subject_id, predicate, and object are required', 400);
@@ -441,9 +446,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const fact = createFact(body.subject_id, body.predicate, body.object, {
             confidence: body.confidence,
             source: body.source ?? 'dashboard',
+            scope: body.scope, validFrom: body.valid_from, validTo: body.valid_to,
           });
           return json(fact);
-        } catch (err) { return errorFromException(err); }
+        } catch (err) { return err instanceof FactInputError ? error(err.message, err.status) : errorFromException(err); }
       },
     },
 

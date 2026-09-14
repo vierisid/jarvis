@@ -837,3 +837,14 @@
 .v2-mem__detail-icon .rk-shape { width: 16px; height: 16px; }
 .v2-mem__filter-btn .rk-shape { width: 11px; height: 11px; }
 .v2-mem__browser .rk-shape { width: 13px; height: 13px; }
+/* Fact provenance and explicit corrections share the existing memory surfaces. */
+.v2-mem__fact details { margin-top: 8px; font-size: 12px; overflow-wrap: anywhere; }
+.v2-mem__fact details p { margin: 8px 0; }
+.v2-mem__fact-controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+.v2-mem__fact button { font: inherit; cursor: pointer; color: inherit; background: transparent; border: 1px solid var(--rule-soft); padding: 5px 8px; border-radius: 4px; }
+.v2-mem__fact-review fieldset { border: 0; padding: 8px 0; min-width: 0; }
+.v2-mem__fact-review label { display: block; margin: 8px 0; }
+.v2-mem__fact-review textarea { display: block; width: 100%; min-height: 65px; box-sizing: border-box; font: inherit; color: inherit; background: transparent; border: 1px solid var(--rule-soft); padding: 6px; }
+.v2-mem__fact-review p { font-size: 12px; }
+.v2-mem__fact :focus-visible { outline: 2px solid currentColor; outline-offset: 2px; }
+.v2-mem__fact button:disabled { opacity: .6; cursor: wait; }

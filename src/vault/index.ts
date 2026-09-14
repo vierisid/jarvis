@@ -36,6 +36,7 @@ export {
   updateFact,
   deleteFact,
   verifyFact,
+  correctFact,
 } from './facts.ts';
 
 // Re-export relationships module

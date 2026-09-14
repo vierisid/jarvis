@@ -10,6 +10,7 @@ import type { ScreenContext, AwarenessEvent, Suggestion, SuggestionType } from '
 import { createSuggestion, findAutomationSuggestion, getSuggestionCountSince, getActivityInRange, MAX_CAPTURE_GAP_MS } from '../vault/awareness.ts';
 import { searchEntitiesByName } from '../vault/entities.ts';
 import { findFacts } from '../vault/facts.ts';
+import { formatFact } from '../vault/fact-format.ts';
 
 const MAX_DEDUP_HASHES = 50;
 
@@ -323,7 +324,7 @@ export class SuggestionEngine {
 
           const factSummary = facts
             .slice(0, 3)
-            .map(f => `${f.predicate}: ${f.object}`)
+            .map(formatFact)
             .join('; ');
 
           return {

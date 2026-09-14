@@ -25,6 +25,7 @@ import {
   type Relationship,
 } from "./useMemoryData";
 import "./MemoryRoom.css";
+import { FactDetails } from './FactDetails';
 
 type TabId = "constellation" | "explorer" | "browser";
 
@@ -705,6 +706,7 @@ function EntityCard({
             <li key={f.id}>
               <span className="v2-mem__card-pred">{f.predicate}</span>
               <span className="v2-mem__card-obj">{f.object}</span>
+              <span className="v2-mem__fact-meta">{f.basis} · {f.status}</span>
             </li>
           ))}
         </ul>
@@ -786,12 +788,7 @@ function Browser({
           <ul className="v2-mem__col-list">
             {facts.map((f) => (
               <li key={f.id} className="v2-mem__fact">
-                <div className="v2-mem__fact-pred">{f.predicate}</div>
-                <div className="v2-mem__fact-obj">{f.object}</div>
-                <div className="v2-mem__fact-meta">
-                  {(f.confidence * 100).toFixed(0)}% confidence
-                  {f.source && <> · {f.source}</>}
-                </div>
+                <FactDetails fact={f} />
               </li>
             ))}
           </ul>
@@ -904,12 +901,7 @@ function DetailPanel({
             <ul className="v2-mem__detail-facts">
               {facts.map((f) => (
                 <li key={f.id} className="v2-mem__fact">
-                  <div className="v2-mem__fact-pred">{f.predicate}</div>
-                  <div className="v2-mem__fact-obj">{f.object}</div>
-                  <div className="v2-mem__fact-meta">
-                    {(f.confidence * 100).toFixed(0)}%
-                    {f.source && <> · {f.source}</>}
-                  </div>
+                  <FactDetails fact={f} />
                 </li>
               ))}
             </ul>

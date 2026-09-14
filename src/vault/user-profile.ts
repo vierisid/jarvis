@@ -1,6 +1,7 @@
 import { deleteSetting, getSetting, setSetting } from './settings.ts';
 import { createEntity, updateEntity } from './entities.ts';
-import { createFact } from './facts.ts';
+import { createFact, findFacts } from './facts.ts';
+import { reconcileFacts } from './fact-schema.ts';
 import { getDb } from './schema.ts';
 import {
   USER_PROFILE_QUESTIONS,
@@ -147,23 +148,21 @@ function syncUserProfileKnowledge(profile: UserProfileRecord): void {
     throw new Error('Failed to sync user profile entity to vault');
   }
 
-  db.prepare('DELETE FROM facts WHERE subject_id = ? AND source = ?').run(entity.id, USER_PROFILE_VAULT_SOURCE);
-
-  for (const question of USER_PROFILE_QUESTIONS) {
-    const answer = profile.answers[question.id]?.trim();
-    if (!answer) continue;
-    createFact(entity.id, question.id, answer, {
-      confidence: 1,
-      source: USER_PROFILE_VAULT_SOURCE,
-    });
-  }
-
-  for (const fact of getDerivedUserProfileFacts(profile)) {
-    createFact(entity.id, fact.predicate, fact.object, {
-      confidence: 1,
-      source: USER_PROFILE_VAULT_SOURCE,
-    });
-  }
+  db.transaction(() => {
+    const previous = findFacts({ subject_id: entity.id }).filter(f => f.source === USER_PROFILE_VAULT_SOURCE);
+    const desired = USER_PROFILE_QUESTIONS.flatMap<{ predicate: string; object: string }>(question => {
+      const answer = profile.answers[question.id]?.trim();
+      return answer ? [{ predicate: question.id, object: answer }] : [];
+    }).concat(getDerivedUserProfileFacts(profile));
+    const saved = desired.map(fact => createFact(entity.id, fact.predicate, fact.object, {
+      confidence: 1, confirmed: true, source: USER_PROFILE_VAULT_SOURCE,
+    }));
+    for (const old of previous) if (!saved.some(f => f.id === old.id)) {
+      const next = saved.find(f => f.predicate_key === old.predicate_key);
+      db.run("UPDATE facts SET status = 'superseded', superseded_by = ? WHERE id = ?", [next?.id ?? null, old.id]);
+      reconcileFacts(db, old.subject_id, old.predicate_key, old.scope);
+    }
+  }).immediate();
 }
 
 function clearUserProfileKnowledge(): void {
