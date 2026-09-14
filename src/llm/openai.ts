@@ -188,8 +188,10 @@ export class OpenAIProvider implements LLMProvider {
    * `this.baseUrl` around the call) is what keeps concurrent requests from
    * reading each other's root.
    */
-  protected postChat(body: Record<string, unknown>, base = this.baseUrl): Promise<Response> {
+  protected postChat(body: Record<string, unknown>, base = this.baseUrl, signal?: AbortSignal): Promise<Response> {
+    signal?.throwIfAborted();
     return fetch(`${base}/chat/completions`, {
+      signal,
       method: 'POST',
       headers: this.requestHeaders(),
       body: JSON.stringify(body),
@@ -217,7 +219,7 @@ export class OpenAIProvider implements LLMProvider {
       body.tool_choice = tool_choice || 'auto';  // Enable tool calling
     }
 
-    const response = await this.postChat(body);
+    const response = await this.postChat(body, undefined, options.signal);
 
     if (!response.ok) {
       const errorText = await response.text();
@@ -251,7 +253,7 @@ export class OpenAIProvider implements LLMProvider {
       body.tool_choice = tool_choice || 'auto';  // Enable tool calling
     }
 
-    const response = await this.postChat(body);
+    const response = await this.postChat(body, undefined, options.signal);
 
     if (!response.ok) {
       const errorText = await response.text();

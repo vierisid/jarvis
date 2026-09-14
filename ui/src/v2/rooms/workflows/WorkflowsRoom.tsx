@@ -43,6 +43,7 @@ import {
 import "./WorkflowsRoom.css";
 import { ConnectionsPanel } from "./ConnectionsPanel";
 import { LibraryPanel } from "./LibraryPanel";
+import { RoutineRequestsPanel } from "./RoutineRequestsPanel";
 
 const STATUS_TONE: Record<FlowStatus, "ok" | "neutral"> = {
   ENABLED: "ok",
@@ -77,10 +78,14 @@ const TERMINAL_STATUSES = new Set<FlowRunStatus>([
   "SCHEDULE_FAILURE",
 ]);
 
-type RoomTab = "flows" | "connections" | "library";
+type RoomTab = "flows" | "connections" | "library" | "routines";
 
 export function WorkflowsRoomBody(): React.ReactElement {
   const data = useWorkflowsData();
+  useEffect(() => {
+    const flowId = new URLSearchParams(window.location.search).get('workflow');
+    if (flowId) data.setEditingFlowId(flowId);
+  }, [data.setEditingFlowId]);
   const [actionMessage, setActionMessage] = useState<{ tone: "ok" | "warn"; text: string } | null>(null);
   const [tab, setTab] = useState<RoomTab>("flows");
 
@@ -163,6 +168,13 @@ export function WorkflowsRoomBody(): React.ReactElement {
           </button>
           <button
             type="button"
+            className={`wf-room__tab ${tab === "routines" ? "wf-room__tab--active" : ""}`}
+            onClick={() => setTab("routines")}
+          >
+            Routine requests
+          </button>
+          <button
+            type="button"
             className={`wf-room__tab ${tab === "library" ? "wf-room__tab--active" : ""}`}
             onClick={() => setTab("library")}
           >
@@ -193,6 +205,7 @@ export function WorkflowsRoomBody(): React.ReactElement {
 
       {tab === "connections" ? <ConnectionsPanel /> : null}
       {tab === "library" ? <LibraryPanel /> : null}
+      {tab === "routines" ? <RoutineRequestsPanel onReview={data.setEditingFlowId} /> : null}
 
       {tab === "flows" ? (
       <div className="wf-room__layout">

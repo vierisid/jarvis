@@ -155,7 +155,7 @@ export class AnthropicProvider implements LLMProvider {
   /**
    * Make an API request with retry on rate limit (429) and server errors (5xx).
    */
-  private async fetchWithRetry(body: string, stream: boolean = false): Promise<Response> {
+  private async fetchWithRetry(body: string, stream: boolean = false, signal?: AbortSignal): Promise<Response> {
     const headers: Record<string, string> = {
       'anthropic-version': '2023-06-01',
       'content-type': 'application/json',
@@ -165,7 +165,9 @@ export class AnthropicProvider implements LLMProvider {
       : this.apiKey;
 
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      signal?.throwIfAborted();
       const response = await fetch(this.apiUrl, {
+        signal,
         method: 'POST',
         headers,
         body,
@@ -218,7 +220,7 @@ export class AnthropicProvider implements LLMProvider {
       // Anthropic uses budget_tokens for tool use (no explicit tool_choice needed)
     }
 
-    const response = await this.fetchWithRetry(JSON.stringify(body));
+    const response = await this.fetchWithRetry(JSON.stringify(body), false, options.signal);
     if (response.headers.get('content-type')?.toLowerCase().includes('text/event-stream')) {
       return this.parseSSEChatResponse(await response.text(), model);
     }
@@ -354,7 +356,7 @@ export class AnthropicProvider implements LLMProvider {
 
     let response: Response;
     try {
-      response = await this.fetchWithRetry(JSON.stringify(body), true);
+      response = await this.fetchWithRetry(JSON.stringify(body), true, options.signal);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       yield { type: 'error', error: message, code: classifyErrorString(message) };

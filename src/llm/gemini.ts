@@ -68,9 +68,11 @@ export class GeminiProvider implements LLMProvider {
     this.defaultModel = defaultModel;
   }
 
-  private async fetchWithRetry(url: string, body: string): Promise<Response> {
+  private async fetchWithRetry(url: string, body: string, signal?: AbortSignal): Promise<Response> {
     for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
+      signal?.throwIfAborted();
       const response = await fetch(url, {
+        signal,
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body,
@@ -114,7 +116,7 @@ export class GeminiProvider implements LLMProvider {
       body.tools = [{ functionDeclarations: this.convertTools(tools) }];
     }
 
-    const response = await this.fetchWithRetry(url, JSON.stringify(body));
+    const response = await this.fetchWithRetry(url, JSON.stringify(body), options.signal);
     const data = await response.json() as GeminiResponse;
     return this.convertResponse(data, model);
   }
@@ -143,7 +145,7 @@ export class GeminiProvider implements LLMProvider {
 
     let response: Response;
     try {
-      response = await this.fetchWithRetry(url, JSON.stringify(body));
+      response = await this.fetchWithRetry(url, JSON.stringify(body), options.signal);
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       yield { type: 'error', error: message, code: classifyErrorString(message) };

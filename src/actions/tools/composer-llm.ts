@@ -138,11 +138,11 @@ export function createComposerLlmClient(manager: LLMManager): ComposerLlmClient 
     manager.chatTier(COMPOSER_TIER, COMPOSER_SUBSYSTEM, messages, options);
 
   return {
-    async chat(input: { prompt: string; system?: string }): Promise<{ text: string }> {
+    async chat(input: { prompt: string; system?: string; signal?: AbortSignal }): Promise<{ text: string }> {
       const messages: LLMMessage[] = [];
       if (input.system !== undefined) messages.push({ role: "system", content: input.system });
       messages.push({ role: "user", content: input.prompt });
-      const reply = await route(messages, { max_tokens: COMPOSER_MAX_TOKENS });
+      const reply = await route(messages, { max_tokens: COMPOSER_MAX_TOKENS, signal: input.signal });
       return { text: textOf(reply.content) };
     },
 
@@ -159,11 +159,13 @@ export function createComposerLlmClient(manager: LLMManager): ComposerLlmClient 
     async chatTools(
       messages: ComposerChatMessage[],
       tools: ComposerToolDef[],
+      signal?: AbortSignal,
     ): Promise<ComposerChatReply> {
       const reply = await route(messages, {
         max_tokens: COMPOSER_MAX_TOKENS,
         tools,
         tool_choice: "auto",
+        signal,
       });
       return {
         content: textOf(reply.content),

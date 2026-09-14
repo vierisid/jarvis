@@ -36,6 +36,7 @@
     height: 100vh;
     padding: 10px;
     gap: 8px;
+    overflow-y: auto;
   }
 
   .header {
@@ -101,6 +102,24 @@
     flex-direction: column;
   }
   .tip.visible { opacity: 1; transform: translateY(0); }
+  .overlay > * { flex-shrink: 0; }
+  .tip form, #savedRoutines { -webkit-app-region: no-drag; font-size: 11px; color: var(--text); }
+  .tip form { margin-top: 8px; user-select: text; }
+  .tip form label { display: block; margin: 8px 0; }
+  .tip form input, .tip form textarea, .tip form select {
+    display: block; width: 100%; margin-top: 4px; padding: 6px;
+    background: var(--bg); color: var(--text); border: 1px solid var(--text-dim); border-radius: 5px; font: inherit;
+  }
+  .tip form textarea { min-height: 60px; resize: vertical; }
+  .tip form button { width: 100%; padding: 8px; }
+  .tip-btn:disabled { opacity: .6; cursor: wait; }
+  .tip-btn:focus-visible, .tip form :focus-visible, summary:focus-visible { outline: 2px solid var(--text); outline-offset: 2px; }
+  .tip[data-composition] .tip-body { display: block; overflow: visible; white-space: pre-line; }
+  .tip details { margin-top: 8px; font-size: 11px; -webkit-app-region: no-drag; user-select: text; }
+  .tip details p { margin-top: 6px; white-space: pre-wrap; overflow-wrap: anywhere; }
+  #routineRequests .tip-btn { display: block; width: 100%; margin-top: 6px; padding: 8px; text-align: left; color: var(--text); }
+  .tip [role="status"] { margin-top: 8px; color: var(--text); font-size: 11px; }
+  @media (prefers-reduced-motion: reduce) { .tip, .tip-btn { transition: none; } .status-dot { animation: none; } }
 
   .tip-header { display: flex; align-items: center; gap: 6px; margin-bottom: 4px; }
 
@@ -174,6 +193,10 @@
   <div id="tipContainer">
     <div class="empty" id="emptyState">Watching for tips...</div>
   </div>
+  <details id="savedRoutines">
+    <summary>Saved routine requests</summary>
+    <div id="routineRequests">Loading...</div>
+  </details>
 </div>
 
 <script>
@@ -185,6 +208,9 @@
   let contextTimer = null;
   let tipDismissTimer = null;
   let lastTipContext = null;
+  let currentTip = null;
+  let structuredTip = null;
+  let routineOffset = 0;
 
   function connectWS() {
     const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -209,6 +235,9 @@
         if (msg.type === 'chat' && msg.payload?.source === 'proactive') {
           const title = extractTitle(msg.payload.text);
           const body = extractBody(msg.payload.text);
+          // The daemon also sends a chat copy of each structured suggestion.
+          // Preserve its real ID and automation controls when that copy arrives.
+          if (structuredTip && structuredTip.title === title && structuredTip.body === body) return;
           const isError = msg.priority === 'urgent' || title.toLowerCase().includes('error') || title.toLowerCase().includes('fix');
           showTip({
             id: msg.id,
@@ -223,13 +252,14 @@
         if (msg.type === 'notification' && msg.payload?.source === 'awareness_event') {
           const ev = msg.payload.event;
           if (ev?.type === 'suggestion_ready') {
-            showTip({
+            structuredTip = {
               id: ev.data.id,
               title: ev.data.title,
               body: ev.data.body,
               type: ev.data.type || 'general',
               context: ev.data,
-            });
+            };
+            showTip(structuredTip);
           }
         }
       } catch { /* ignore */ }
@@ -267,6 +297,7 @@
   }
 
   async function fetchContext() {
+    fetchRoutineRequests();
     try {
       const resp = await fetch('/api/awareness/status');
       if (!resp.ok) return;
@@ -288,6 +319,8 @@
 
   // --- Tip display with action buttons ---
   function showTip(tip) {
+    if (document.querySelector('.tip form') && !tip.learning?.composition) return;
+    currentTip = tip;
     const container = document.getElementById('tipContainer');
     const empty = document.getElementById('emptyState');
     if (empty) empty.style.display = 'none';
@@ -304,6 +337,7 @@
 
     const el = document.createElement('div');
     el.className = 'tip';
+    if (tip.learning?.composition) el.dataset.composition = 'true';
     el.innerHTML = `
       <div class="tip-header">
         <span class="tip-type ${tip.type}">${escapeHtml(tip.type)}</span>
@@ -315,6 +349,17 @@
 
     container.appendChild(el);
 
+    if (tip.learning?.composition) {
+      const request = tip.learning.composition.request;
+      const details = document.createElement('details');
+      const summary = document.createElement('summary'); summary.textContent = 'Accepted routine'; details.appendChild(summary);
+      for (const text of [request.description, `Useful result: ${request.expectedOutcome}`,
+        tip.learning.goalLink ? `Goal: ${tip.learning.goalLink.title}. ${tip.learning.goalLink.reason}` : 'No current goal link']) {
+        const p = document.createElement('p'); p.textContent = text; details.appendChild(p);
+      }
+      el.appendChild(details);
+    }
+
     // Add buttons
     const actionsDiv = el.querySelector('#tipActions');
     actions.forEach(action => {
@@ -323,7 +368,10 @@
       btn.textContent = action.label;
       btn.onclick = (e) => {
         e.stopPropagation();
-        action.handler(tip, btn);
+        Promise.resolve().then(() => action.handler(tip, btn)).catch(error => {
+          btn.disabled = false;
+          showTipError(el, error.message);
+        });
       };
       actionsDiv.appendChild(btn);
     });
@@ -334,7 +382,106 @@
     });
 
     // Auto-dismiss after timeout
-    tipDismissTimer = setTimeout(() => removeTip(el), TIP_DISPLAY_MS);
+    if (!tip.learning?.composition) tipDismissTimer = setTimeout(() => removeTip(el), TIP_DISPLAY_MS);
+  }
+
+  function showTipError(el, message) {
+    let status = el.querySelector('[role="status"]');
+    if (!status) { status = document.createElement('p'); status.setAttribute('role', 'status'); el.appendChild(status); }
+    status.textContent = message;
+  }
+
+  async function suggestionRequest(id, action, method = 'GET', data) {
+    const response = await fetch(`/api/awareness/suggestions/${encodeURIComponent(id)}/${action}`, {
+      method, ...(data ? { headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(data) } : {}),
+    });
+    const result = await response.json();
+    if (!response.ok) throw new Error(result.error || 'Could not save. Please retry.');
+    return result;
+  }
+
+  function showLearning(learning) {
+    const job = learning.composition;
+    const messages = {
+      queued: 'Your request is saved and waiting to compose.',
+      running: 'Creating your draft. You can close this tip and return to Saved routine requests.',
+      failed: job?.error || 'Composition failed. Your request is saved and can be retried.',
+      draft_ready: job?.draftAvailable === false ? 'The attached draft was deleted. Your original request and feedback are retained.'
+        : `Draft ready: ${job?.request.name}. Review it in Workflows before publishing or running it.`,
+    };
+    showTip({ id: learning.opportunityId, type: 'automation', title: learning.title,
+      body: job ? messages[job.state] : learning.body, learning });
+  }
+
+  async function fetchRoutineRequests() {
+    const target = document.getElementById('routineRequests');
+    try {
+      const response = await fetch(`/api/awareness/compositions?offset=${routineOffset}`);
+      if (!response.ok) throw new Error('Could not load saved requests. Reconnecting...');
+      const data = await response.json();
+      target.replaceChildren();
+      if (!data.suggestions.length) target.textContent = 'No routine requests yet.';
+      for (const learning of data.suggestions) {
+        const button = document.createElement('button');
+        button.className = 'tip-btn secondary';
+        const labels = { queued: 'Waiting', running: 'Creating', failed: 'Needs attention', draft_ready: 'Draft ready' };
+        button.textContent = `${learning.composition.request.name}: ${labels[learning.composition.state]}`;
+        button.onclick = () => showLearning(learning);
+        target.appendChild(button);
+        if (currentTip?.id === learning.opportunityId && currentTip.learning?.composition
+            && currentTip.learning.composition.updatedAt !== learning.composition.updatedAt) showLearning(learning);
+      }
+      for (const [label, offset] of [['Newer requests', routineOffset - 100], ['Older requests', data.nextOffset]]) {
+        if (offset == null || offset < 0 || (label === 'Newer requests' && routineOffset === 0)) continue;
+        const button = document.createElement('button'); button.className = 'tip-btn secondary'; button.textContent = label;
+        button.onclick = () => { routineOffset = offset; fetchRoutineRequests(); }; target.appendChild(button);
+      }
+    } catch (error) { target.textContent = error.message; }
+  }
+
+  async function showAcceptanceForm(tip, button) {
+    const learning = await suggestionRequest(tip.id, 'learning');
+    if (learning.composition || learning.status === 'dismissed') { showLearning(learning); return; }
+    const el = button.closest('.tip');
+    if (!el || el.querySelector('form')) return;
+    clearTimeout(tipDismissTimer);
+    const form = document.createElement('form');
+    form.innerHTML = `
+      <label>Routine name<input name="name" required maxlength="200"></label>
+      <label>What recurring job should it do?<textarea name="description" required maxlength="4000"></textarea></label>
+      <label>What result would be useful?<textarea name="expectedOutcome" required maxlength="1000"></textarea></label>
+      <label>Related goal (optional)<select name="goalId"><option value="">No goal link</option></select></label>
+      <label>Why does it support that goal?<input name="goalReason" maxlength="1000" disabled></label>
+      <button class="tip-btn primary" type="submit">Create draft</button>
+      <p role="status">This creates a disabled draft for your review.</p>`;
+    el.appendChild(form);
+    form.elements.name.value = learning.title;
+    form.elements.goalId.onchange = () => {
+      form.elements.goalReason.disabled = !form.elements.goalId.value;
+      form.elements.goalReason.required = !!form.elements.goalId.value;
+    };
+    fetch('/api/goals?status=active').then(r => r.ok ? r.json() : []).then(goals => {
+      for (const goal of goals) {
+        const option = document.createElement('option'); option.value = goal.id; option.textContent = goal.title;
+        form.elements.goalId.appendChild(option);
+      }
+    }).catch(() => {});
+    let request = null;
+    form.onsubmit = async event => {
+      event.preventDefault();
+      const submit = form.querySelector('button[type="submit"]');
+      submit.disabled = true;
+      const values = Object.fromEntries(new FormData(form));
+      const data = { name: values.name, description: values.description, expectedOutcome: values.expectedOutcome,
+        goalId: values.goalId || null, goalReason: values.goalId ? values.goalReason : null,
+        reason: 'Confirmed the recurring job and requested a workflow draft' };
+      // Keep the key for an uncertain response. A changed form is a different request.
+      if (!request || JSON.stringify(request.data) !== JSON.stringify(data)) request = { id: crypto.randomUUID(), data };
+      try {
+        showLearning(await suggestionRequest(tip.id, 'accept', 'POST', { requestId: request.id, ...data }));
+        fetchRoutineRequests();
+      } catch (error) { showTipError(form, error.message); submit.disabled = false; }
+    };
   }
 
   function removeTip(el) {
@@ -349,6 +496,34 @@
 
   function getActions(tip) {
     const type = tip.type;
+
+    if (type === 'automation' && tip.id) {
+      const learning = tip.learning;
+      const job = learning?.composition;
+      if (job?.state === 'draft_ready' && job.draftAvailable === false) return [];
+      if (job?.state === 'draft_ready') return [{ label: 'Review draft', style: 'primary', handler: () => {
+        window.open(`/?workflow=${encodeURIComponent(job.workflowId)}#/_room_workflows`, '_blank', 'noopener');
+      } }];
+      if (job?.state === 'failed') return [{ label: 'Retry composition', style: 'primary', handler: async (t, btn) => {
+        btn.disabled = true;
+        t.retryRequestId ||= crypto.randomUUID();
+        showLearning(await suggestionRequest(t.id, 'retry', 'POST', {
+          requestId: t.retryRequestId, reason: 'Reviewed the composition error and requested another attempt',
+        }));
+      } }];
+      if (job || learning?.status === 'dismissed') return [];
+      return [
+        { label: 'Draft a routine', style: 'primary', handler: showAcceptanceForm },
+        { label: 'Dismiss', style: 'secondary', handler: async (t, btn) => {
+          const reason = window.prompt('Why is this suggestion not useful?', 'Not useful for my work');
+          if (!reason?.trim()) return;
+          btn.disabled = true;
+          t.dismissRequestId ||= crypto.randomUUID();
+          await suggestionRequest(t.id, 'dismiss', 'PATCH', { requestId: t.dismissRequestId, reason });
+          removeTip(btn.closest('.tip'));
+        } },
+      ];
+    }
 
     if (type === 'error') {
       return [
@@ -437,6 +612,7 @@
     return div.innerHTML;
   }
 
+  fetchRoutineRequests();
   connectWS();
 </script>
 </body>
