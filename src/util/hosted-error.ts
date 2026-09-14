@@ -24,48 +24,129 @@ import { redactSecrets } from './redact.ts';
  * historically denied out-of-plan models with a 401 "not allowed to access
  * model" TEXT instead, so the model-text check still precedes the auth branch.
  *
+ * A key blocked for a provider-policy sanction answers exactly like an unpaid
+ * one (401, blocked), so the proxy alone cannot tell "restricted" from "no
+ * plan"; the caller passes the hosted usage meter's `restricted` field, which
+ * the control plane reads from its own records.
+ *
  * The error body carries NO reset timestamp (confirmed — none is ever sent);
  * the reset time lives on the proxy's `GET /key/info`, which the PROVIDER
  * fetches and hands in as `resetAt`. This function never parses times out of
  * bodies: it states a time only when explicitly given one.
  *
- * The `(status)` marker is preserved because classifyErrorString keys retry
- * behaviour on it (429/503 retry; 400s do not).
+ * The `(status)` marker is preserved in every message. The retryable kinds
+ * still lean on it (classifyErrorString reads 429/503 out of text), while the
+ * kinds a retry cannot change travel with an explicit code: the provider turns
+ * `kind` into an LLMProviderError, so nothing downstream has to guess.
  */
+
+/** What a hosted failure means for the person, beyond its status code. */
+export type HostedErrorKind =
+  | 'quota_exhausted'
+  | 'content_policy'
+  | 'restricted'
+  | 'model_not_in_plan'
+  | 'inactive'
+  | 'generic';
+
+/** The hosted usage meter's restriction, exactly as the control plane serves it. */
+export interface HostedRestriction {
+  reason: 'content_policy' | 'account_suspended' | 'account_banned';
+  /** Where to appeal (an address or URL), or null when none is configured. */
+  contact: string | null;
+}
+
+export class HostedProxyError extends Error {
+  constructor(
+    message: string,
+    readonly kind: HostedErrorKind,
+    readonly status: number,
+  ) {
+    super(message);
+    this.name = 'HostedProxyError';
+  }
+}
+
+/**
+ * The reason the platform's safety gate attaches to a request it blocks; the
+ * proxy answers 400 with it inside the error body. Matched as a marker rather
+ * than by status: a plain 400 is an invalid request and must keep its own copy.
+ */
+export const CONTENT_POLICY_MARKER = 'usejarvis_content_policy';
+
 export function hostedProxyError(
   label: string,
   status: number,
   detail: string,
   resetAt?: Date | null,
-): Error {
+  restricted?: HostedRestriction | null,
+): HostedProxyError {
   const safe = redactSecrets(detail);
   const lower = safe.toLowerCase();
   if (safe) console.warn(`[usejarvis] ${label} proxy error (${status}): ${safe.slice(0, 200)}`);
 
+  if (lower.includes(CONTENT_POLICY_MARKER)) {
+    return new HostedProxyError(
+      `${label} error (${status}): this request was blocked by the Usejarvis AI content policy and was not processed.`,
+      'content_policy',
+      status,
+    );
+  }
   if (isBudgetExhaustion(safe)) {
     const valid = resetAt && !Number.isNaN(resetAt.getTime());
     const resumes = valid
       ? ` (resumes ${String(resetAt.getUTCHours()).padStart(2, '0')}:${String(resetAt.getUTCMinutes()).padStart(2, '0')} UTC)`
       : '';
-    return new Error(
+    return new HostedProxyError(
       `${label} error (${status}): your included AI usage is used up for this window${resumes}. ` +
         'It resumes automatically - the usage meter shows when.',
+      'quota_exhausted',
+      status,
     );
   }
   if (status === 403 || (lower.includes('model') && (lower.includes('not allowed') || lower.includes('invalid model')))) {
-    return new Error(`${label} error (${status}): that model is not included in your plan.`);
+    return new HostedProxyError(
+      `${label} error (${status}): that model is not included in your plan.`,
+      'model_not_in_plan',
+      status,
+    );
   }
   if (status === 401) {
-    return new Error(
+    if (restricted) {
+      return new HostedProxyError(`${label} error (${status}): ${restrictionCopy(restricted)}`, 'restricted', status);
+    }
+    return new HostedProxyError(
       `${label} error (${status}): Usejarvis AI is not active on this account - ` +
         'an active plan is required.',
+      'inactive',
+      status,
     );
   }
   // Invariant 2, enforced: the body NEVER rides along in user-facing copy —
   // even truncated-and-redacted, a CDN 502 page puts the hosted hostname in
   // its first line. Operators already have the full (redacted) body from the
   // console.warn above.
-  return new Error(`${label} error (${status}): the AI service could not process this request. It usually recovers on its own - try again shortly.`);
+  return new HostedProxyError(
+    `${label} error (${status}): the AI service could not process this request. It usually recovers on its own - try again shortly.`,
+    'generic',
+    status,
+  );
+}
+
+/**
+ * The sentence a restricted account is shown. The contact is admin-set text
+ * from the control plane, validated there as one plain line; it is re-bounded
+ * here anyway because it lands in a chat bubble.
+ */
+function restrictionCopy(restricted: HostedRestriction): string {
+  const why =
+    restricted.reason === 'account_banned'
+      ? 'Usejarvis AI is no longer available on this account.'
+      : restricted.reason === 'account_suspended'
+        ? 'Usejarvis AI is unavailable while this account is suspended.'
+        : 'Usejarvis AI is restricted on this account for a usage-policy violation.';
+  const contact = (restricted.contact ?? '').replace(/[\r\n\t<>]/g, ' ').trim().slice(0, 200);
+  return `${why} To appeal, contact ${contact || 'support'}.`;
 }
 
 /**

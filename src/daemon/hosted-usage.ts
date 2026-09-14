@@ -1,6 +1,7 @@
 import type { JarvisConfig } from '../config/types.ts';
 import { INSTANCE_SIGNATURE_HEADER, signWithSecret } from '../integrations/google-signature.ts';
 import { redactSecrets } from '../util/redact.ts';
+import type { HostedRestriction } from '../util/hosted-error.ts';
 
 /**
  * This instance's hosted usage meter, read from the control plane.
@@ -37,6 +38,12 @@ export interface HostedUsageMeter {
   /** ISO-8601. */
   sessionResetsAt: string;
   weekResetsAt: string;
+  /**
+   * Hosted AI restricted by a provider-policy sanction, or null. The proxy
+   * answers a restricted key exactly like an unpaid one, so this is the only
+   * place the two can be told apart.
+   */
+  restricted: HostedRestriction | null;
 }
 
 /**
@@ -60,6 +67,30 @@ export function readHostedUsageConfig(config: JarvisConfig): HostedUsageConfig |
   const secret = typeof block.usage_secret === 'string' ? block.usage_secret.trim() : '';
   if (!url || !instanceId || !secret) return null;
   return { url, instanceId, secret };
+}
+
+/**
+ * The meter's `restricted` field, validated. Anything but the documented shape
+ * reads as null ("not restricted"): the proxy's own refusal still stops the
+ * request, and a malformed field must not put invented copy in front of the
+ * user. A control plane that predates the field lands here too.
+ */
+function parseRestriction(raw: unknown): HostedRestriction | null {
+  if (!raw || typeof raw !== 'object') return null;
+  const { reason, contact } = raw as { reason?: unknown; contact?: unknown };
+  if (reason !== 'content_policy' && reason !== 'account_suspended' && reason !== 'account_banned') return null;
+  const trimmed = typeof contact === 'string' ? contact.trim() : '';
+  return { reason, contact: trimmed ? trimmed.slice(0, 200) : null };
+}
+
+/**
+ * The lookup the hosted LLM provider consults on a 401 to tell a restricted
+ * account from an unpaid one. Bound to the config object, which is re-read per
+ * call, and served through the shared reader's cache, so a burst of failing
+ * requests costs at most one meter request a minute.
+ */
+export function hostedRestrictionLookup(config: JarvisConfig): () => Promise<HostedRestriction | null> {
+  return async () => (await readHostedUsage(config))?.restricted ?? null;
 }
 
 /** How long to wait on the control plane. Nothing is blocked on this — a meter
@@ -147,6 +178,7 @@ export function makeHostedUsageReader(
             weekPct: parsed.weekPct,
             sessionResetsAt: parsed.sessionResetsAt,
             weekResetsAt: parsed.weekResetsAt,
+            restricted: parseRestriction((parsed as { restricted?: unknown }).restricted),
           };
           if (typeof parsed.entitled !== 'boolean') {
             // Not fatal — the three checked fields are all present — but it is

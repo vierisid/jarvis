@@ -34,6 +34,7 @@ import {
   atomicReloadProviders,
   configureLLMTiers,
 } from '../llm/config-binding.ts';
+import { hostedRestrictionLookup } from './hosted-usage.ts';
 import { isAnthropicCustomBaseUrl } from '../llm/anthropic.ts';
 import { GROQ_DEPRECATED_MODEL_REPLACEMENTS } from '../llm/groq-models.ts';
 import { NVIDIA_RETIRED_MODEL_REPLACEMENTS } from '../llm/nvidia-models.ts';
@@ -758,6 +759,7 @@ export function hotReloadLLMProviders(config: JarvisConfig, llmManager: LLMManag
   // old map or the new one, never an empty/partial map.
   const built = atomicReloadProviders(llmManager, enrichedProviders, {
     promptCache: config.llm.prompt_cache !== false,
+    hostedRestriction: hostedRestrictionLookup(config),
   });
   if (built.length === 0) {
     console.warn('[LLM] Hot-reload: no providers registered (all entries missing credentials).');

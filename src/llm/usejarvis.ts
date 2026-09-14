@@ -1,6 +1,18 @@
 import { OpenAIProvider, type OpenAIMessage } from './openai.ts';
-import { LLMProviderError, type LLMMessage, type LLMOptions } from './provider.ts';
-import { hostedProxyError, isBudgetExhaustion } from '../util/hosted-error.ts';
+import {
+  classifyHttpStatus,
+  LLMProviderError,
+  type LLMErrorCode,
+  type LLMMessage,
+  type LLMOptions,
+} from './provider.ts';
+import {
+  hostedProxyError,
+  isBudgetExhaustion,
+  type HostedErrorKind,
+  type HostedProxyError,
+  type HostedRestriction,
+} from '../util/hosted-error.ts';
 import { redactSecrets } from '../util/redact.ts';
 
 /**
@@ -21,7 +33,14 @@ export class UsejarvisAIProvider extends OpenAIProvider {
 
   private readonly promptCache: boolean;
 
-  constructor(baseUrl: string, apiKey: string, opts?: { promptCache?: boolean }) {
+  /** Reads the hosted usage meter's restriction; absent outside the daemon. */
+  private readonly restriction?: () => Promise<HostedRestriction | null>;
+
+  constructor(
+    baseUrl: string,
+    apiKey: string,
+    opts?: { promptCache?: boolean; restriction?: () => Promise<HostedRestriction | null> },
+  ) {
     // The provisioner writes the proxy ORIGIN (https://llm.example.host);
     // OpenAIProvider expects the /v1 prefix to already be present.
     const trimmed = baseUrl.replace(/\/+$/, '');
@@ -38,6 +57,7 @@ export class UsejarvisAIProvider extends OpenAIProvider {
     // see the `usejarvis_ai.prompt_cache` block comment in config/types.ts
     // for the three conditions to confirm before enabling.
     this.promptCache = opts?.promptCache === true;
+    this.restriction = opts?.restriction;
   }
 
   /** The proxy (LiteLLM) supports stream_options.include_usage; without it
@@ -299,9 +319,15 @@ export class UsejarvisAIProvider extends OpenAIProvider {
               continue restart;
             }
           }
+          const rewritten = await this.rewriteText(event.error);
+          // A kind with its own code also drops any Retry-After: those outcomes
+          // are never retried, so a pause hint could only mislead.
+          const base = rewritten.code
+            ? { type: event.type, error: event.error, code: rewritten.code }
+            : event;
           yield {
-            ...event,
-            error: await this.rewriteText(event.error),
+            ...base,
+            error: rewritten.message,
             ...(UsejarvisAIProvider.isRoutingMiss(event.error) ? UsejarvisAIProvider.ROUTING_MISS_RETRY : {}),
           };
         } else {
@@ -369,10 +395,42 @@ export class UsejarvisAIProvider extends OpenAIProvider {
    * the redaction, branch-order and no-body-in-copy rules. The "<label> API"
    * form keeps the exact `Usejarvis AI API error (NNN)` prefix that
    * classifyErrorString and rewriteText both parse. Budget errors trigger the
-   * /key/info reset lookup so the copy can quote a real resume time. */
-  private async friendly(status: number, detail: string): Promise<Error> {
+   * /key/info reset lookup so the copy can quote a real resume time, and a 401
+   * consults the hosted usage meter: a key blocked for a policy sanction and
+   * an unpaid one answer the proxy identically. */
+  private async friendly(status: number, detail: string): Promise<HostedProxyError> {
     const resetAt = isBudgetExhaustion(detail) ? await this.budgetResetAt() : null;
-    return hostedProxyError(`${this.errorLabel} API`, status, detail, resetAt);
+    const restricted = status === 401 ? await this.lookupRestriction() : null;
+    return hostedProxyError(`${this.errorLabel} API`, status, detail, resetAt, restricted);
+  }
+
+  /** Never throws: a meter we cannot read just means the plain 401 copy. */
+  private async lookupRestriction(): Promise<HostedRestriction | null> {
+    if (!this.restriction) return null;
+    try {
+      return await this.restriction();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * The code a hosted kind carries past this provider. Only the outcomes a
+   * retry cannot change get one of their own — that is what stops the manager
+   * retrying them, and (per LLMManager.shouldFailOver) decides whether it may
+   * still try another provider. Every other kind keeps the HTTP-derived code.
+   */
+  private static codeForKind(kind: HostedErrorKind): LLMErrorCode | null {
+    switch (kind) {
+      case 'quota_exhausted':
+        return 'quota_exhausted';
+      case 'content_policy':
+        return 'content_policy';
+      case 'restricted':
+        return 'restricted';
+      default:
+        return null;
+    }
   }
 
   /** Text-shaped variant of `rewrite` for stream error EVENTS (the base class
@@ -412,10 +470,13 @@ export class UsejarvisAIProvider extends OpenAIProvider {
    * Retry-After budget bounds what several of them can add up to. */
   private static readonly ROUTING_MISS_RETRY = { code: 'server', retry_after_ms: 1_000 } as const;
 
-  private async rewriteText(text: string): Promise<string> {
+  /** Returns the copy plus the code the event must carry when the kind
+   * demands one (null = keep the event's own code and Retry-After). */
+  private async rewriteText(text: string): Promise<{ message: string; code: LLMErrorCode | null }> {
     const match = text.match(UsejarvisAIProvider.BASE_ERROR_RE);
-    if (!match) return text;
-    return (await this.friendly(Number(match[1] ?? match[2]), match[3] ?? '')).message;
+    if (!match) return { message: text, code: null };
+    const friendly = await this.friendly(Number(match[1] ?? match[2]), match[3] ?? '');
+    return { message: friendly.message, code: UsejarvisAIProvider.codeForKind(friendly.kind) };
   }
 
   private async rewrite(error: unknown): Promise<unknown> {
@@ -424,12 +485,21 @@ export class UsejarvisAIProvider extends OpenAIProvider {
     // aborts) through untouched.
     const match = error.message.match(UsejarvisAIProvider.BASE_ERROR_RE);
     if (!match) return error;
-    const friendly = await this.friendly(Number(match[1] ?? match[2]), match[3] ?? '');
-    if (!UsejarvisAIProvider.isRoutingMiss(error.message)) return friendly;
-    // The chat path's twin of the stream event tagging: the manager reads the
-    // code and Retry-After off an LLMProviderError, never off message text.
-    const { code, retry_after_ms } = UsejarvisAIProvider.ROUTING_MISS_RETRY;
-    return new LLMProviderError(friendly.message, code, retry_after_ms);
+    const status = Number(match[1] ?? match[2]);
+    const friendly = await this.friendly(status, match[3] ?? '');
+    // The manager reads the code and Retry-After off an LLMProviderError,
+    // never off message text, so every rewrite stays one.
+    if (UsejarvisAIProvider.isRoutingMiss(error.message)) {
+      const { code, retry_after_ms } = UsejarvisAIProvider.ROUTING_MISS_RETRY;
+      return new LLMProviderError(friendly.message, code, retry_after_ms);
+    }
+    const kindCode = UsejarvisAIProvider.codeForKind(friendly.kind);
+    if (kindCode) return new LLMProviderError(friendly.message, kindCode);
+    // Everything else keeps the code and Retry-After the base class read off
+    // the response: rewriting the COPY must not cost the manager its pause.
+    return error instanceof LLMProviderError
+      ? new LLMProviderError(friendly.message, error.code, error.retryAfterMs)
+      : new LLMProviderError(friendly.message, classifyHttpStatus(status));
   }
 }
 

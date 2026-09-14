@@ -50,6 +50,12 @@ export type LLMErrorCode =
   | 'bad_request'  // 400/422, invalid parameters
   | 'not_found'    // 404, model/resource missing
   | 'server'       // generic 5xx
+  // Hosted (usejarvis_ai) outcomes that retrying cannot change. None of them
+  // is retried on the same provider; see LLMManager.shouldFailOver for which
+  // may still move to another one.
+  | 'quota_exhausted' // the plan's included usage is used up for this window
+  | 'content_policy'  // the platform's content policy blocked this request
+  | 'restricted'      // hosted AI is restricted on this account
   | 'unknown';
 
 export type LLMStreamEvent =
@@ -76,6 +82,22 @@ export class LLMProviderError extends Error {
     super(message);
     this.name = 'LLMProviderError';
   }
+}
+
+/**
+ * An HTTP `Retry-After` header (delta-seconds or HTTP-date) in milliseconds.
+ *
+ * Undefined when absent or unreadable: that is "no hint", which the manager
+ * reads as "retry without a pause", so a parse that guessed would be worse
+ * than none.
+ */
+export function parseRetryAfterMs(headers: Headers): number | undefined {
+  const raw = headers.get('retry-after');
+  if (!raw) return undefined;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
+  const dateMs = Date.parse(raw);
+  return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : undefined;
 }
 
 /**
@@ -149,6 +171,12 @@ export type LLMOptions = {
   tools?: LLMTool[];
   stream?: boolean;
   tool_choice?: 'auto' | 'none' | 'required';  // 'auto' enables tool calling when available
+  /**
+   * Aborts the underlying request. The manager sets it so a request it has
+   * already given up on (its timeout) stops running at the provider instead of
+   * holding a slot there while the retry goes out.
+   */
+  signal?: AbortSignal;
 };
 
 export interface LLMProvider {

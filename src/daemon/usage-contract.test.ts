@@ -32,12 +32,14 @@ describe('the daemon and the Usage room agree', () => {
       weekPct: 20,
       sessionResetsAt: '2026-08-26T12:00:00.000Z',
       weekResetsAt: '2026-08-31T00:00:00.000Z',
+      restricted: { reason: 'content_policy', contact: 'support@usejarvis.test' },
     };
     const asRoom: HostedMeter = fromDaemon;
     const backAgain: HostedUsageMeter = asRoom;
     expect(Object.keys(backAgain).sort()).toEqual([
       'blocked',
       'entitled',
+      'restricted',
       'sessionPct',
       'sessionResetsAt',
       'weekPct',

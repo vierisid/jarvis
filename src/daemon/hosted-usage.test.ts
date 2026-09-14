@@ -15,6 +15,7 @@ const METER: HostedUsageMeter = {
   weekPct: 12,
   sessionResetsAt: '2026-08-26T12:00:00.000Z',
   weekResetsAt: '2026-08-31T00:00:00.000Z',
+  restricted: null,
 };
 
 const SECRET = 'a'.repeat(64);
@@ -45,6 +46,29 @@ function stubFetch(reply: () => Response) {
 }
 
 const ok = () => new Response(JSON.stringify(METER), { status: 200 });
+
+describe('hosted usage reader: the restriction', () => {
+  test('a well-formed restriction passes through; anything else reads as not restricted', async () => {
+    const cases: Array<[unknown, unknown]> = [
+      [
+        { reason: 'account_banned', contact: 'support@usejarvis.test' },
+        { reason: 'account_banned', contact: 'support@usejarvis.test' },
+      ],
+      [{ reason: 'content_policy', contact: null }, { reason: 'content_policy', contact: null }],
+      [{ reason: 'account_suspended', contact: '   ' }, { reason: 'account_suspended', contact: null }],
+      [{ reason: 'made_up', contact: 'x' }, null],
+      ['content_policy', null],
+      // A control plane that predates the field.
+      [undefined, null],
+      [null, null],
+    ];
+    for (const [raw, expected] of cases) {
+      const { fn } = stubFetch(() => new Response(JSON.stringify({ ...METER, restricted: raw }), { status: 200 }));
+      const read = makeHostedUsageReader({ fetchImpl: fn, now: () => 1_000 });
+      expect((await read(configWith()))?.restricted as unknown).toEqual(expected);
+    }
+  });
+});
 
 describe('hosted usage reader', () => {
   test('all three fields or the meter is OFF', () => {

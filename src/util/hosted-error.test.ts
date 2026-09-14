@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { hostedProxyError, hostedRealtimeError, isBudgetExhaustion } from './hosted-error.ts';
+import { CONTENT_POLICY_MARKER, hostedProxyError, hostedRealtimeError, isBudgetExhaustion } from './hosted-error.ts';
 
 describe('hostedProxyError', () => {
   test('the generic branch never carries the proxy body (hostname stays out of chat copy)', () => {
@@ -13,6 +13,7 @@ describe('hostedProxyError', () => {
     expect(err.message).toContain('(502)');
     expect(err.message).not.toContain('llm.usejarvis.host');
     expect(err.message).not.toContain('502 Bad Gateway');
+    expect(err.kind).toBe('generic');
   });
 
   test('budget copy quotes a reset time ONLY when handed one (never parsed from the body)', () => {
@@ -25,6 +26,7 @@ describe('hostedProxyError', () => {
       new Date('2026-08-19T12:00:00+00:00'),
     );
     expect(timed.message).toContain('used up for this window (resumes 12:00 UTC)');
+    expect(timed.kind).toBe('quota_exhausted');
 
     // No timestamp handed in → no time claimed, even if the body smuggles
     // something date-shaped (the old parser would have quoted it).
@@ -45,6 +47,7 @@ describe('hostedProxyError', () => {
     const err = hostedProxyError('Usejarvis AI API', 403, '{"error":{"code":"team_model_access_denied"}}');
     expect(err.message).toContain('(403)');
     expect(err.message).toContain('not included in your plan');
+    expect(err.kind).toBe('model_not_in_plan');
   });
 
   test('model-denial TEXT still precedes the auth branch (historical 401 shape)', () => {
@@ -52,15 +55,71 @@ describe('hostedProxyError', () => {
     expect(err.message).toContain('not included in your plan');
   });
 
-  test('401 without model text is the credential/plan copy', () => {
+  test('401 without model text or a restriction is the credential/plan copy', () => {
     const err = hostedProxyError('Usejarvis AI API', 401, 'Authentication Error: key is blocked');
     expect(err.message).toMatch(/\(401\).*active plan is required/);
+    expect(err.kind).toBe('inactive');
   });
 
   test('an ordinary 429 rate limit is NOT budget copy (stays retryable-generic)', () => {
     const err = hostedProxyError('Usejarvis AI API', 429, 'rate limited, retry shortly');
     expect(err.message).toContain('(429)');
     expect(err.message).not.toContain('used up');
+    expect(err.kind).toBe('generic');
+  });
+});
+
+describe('hostedProxyError: provider-policy outcomes', () => {
+  test("the safety gate's marker is a content-policy block whatever the status, and the body stays out", () => {
+    const body = `{"error":{"message":"Blocked: ${CONTENT_POLICY_MARKER} (quoted user text here)"}}`;
+    for (const status of [400, 422]) {
+      const err = hostedProxyError('Usejarvis AI API', status, body);
+      expect(err.kind).toBe('content_policy');
+      expect(err.message).toContain(`(${status})`);
+      expect(err.message).toContain('blocked by the Usejarvis AI content policy');
+      expect(err.message).not.toContain('quoted user text');
+    }
+    // A plain 400 without the marker is still an ordinary invalid request.
+    expect(hostedProxyError('Usejarvis AI API', 400, 'invalid parameter').kind).toBe('generic');
+  });
+
+  test('a blocked key reads as restricted only when the meter says so, with where to appeal', () => {
+    const banned = hostedProxyError('Usejarvis AI API', 401, 'key is blocked', null, {
+      reason: 'account_banned',
+      contact: 'support@usejarvis.test',
+    });
+    expect(banned.kind).toBe('restricted');
+    expect(banned.message).toMatch(/\(401\): Usejarvis AI is no longer available on this account\. To appeal, contact support@usejarvis\.test\./);
+
+    const suspended = hostedProxyError('Usejarvis AI API', 401, 'key is blocked', null, {
+      reason: 'account_suspended',
+      contact: null,
+    });
+    expect(suspended.message).toContain('unavailable while this account is suspended. To appeal, contact support.');
+
+    const policy = hostedProxyError('Usejarvis AI API', 401, 'key is blocked', null, {
+      reason: 'content_policy',
+      contact: 'https://usejarvis.dev/appeal',
+    });
+    expect(policy.message).toContain('restricted on this account for a usage-policy violation');
+
+    // The restriction never turns a non-401 into restricted copy: a budget or
+    // model answer is still the more precise sentence.
+    const budget = hostedProxyError('Usejarvis AI API', 429, 'budget exceeded', null, {
+      reason: 'content_policy',
+      contact: null,
+    });
+    expect(budget.kind).toBe('quota_exhausted');
+  });
+
+  test('the appeal contact is re-bounded before it reaches a chat bubble', () => {
+    const err = hostedProxyError('Usejarvis AI API', 401, 'key is blocked', null, {
+      reason: 'content_policy',
+      contact: `support@x.test\n<script>alert(1)</script>${'x'.repeat(400)}`,
+    });
+    expect(err.message).not.toContain('\n');
+    expect(err.message).not.toContain('<');
+    expect(err.message.length).toBeLessThan(400);
   });
 });
 

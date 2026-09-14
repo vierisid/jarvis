@@ -80,8 +80,11 @@ describe('UsejarvisAIProvider routing miss', () => {
     expect(err.retry_after_ms).toBeUndefined();
     globalThis.fetch = (async () => jsonResponse(400, { error: { message: 'some other invalid_request_error' } })) as unknown as typeof fetch;
     const thrown = await provider().chat([{ role: 'user', content: 'hi' }], { model: 'uj-chat' }).catch((e: unknown) => e);
-    expect(thrown).toBeInstanceOf(Error);
-    expect(thrown).not.toBeInstanceOf(LLMProviderError);
+    // Typed now (the base class reads the status), and still not retryable:
+    // the code is the status-derived one and no pause hint is invented.
+    expect(thrown).toBeInstanceOf(LLMProviderError);
+    expect((thrown as LLMProviderError).code).toBe('bad_request');
+    expect((thrown as LLMProviderError).retryAfterMs).toBeUndefined();
     expect((thrown as Error).message).toMatch(/\(400\)/);
   });
 

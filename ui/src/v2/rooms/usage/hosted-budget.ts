@@ -17,6 +17,12 @@ export interface HostedMeter {
   weekPct: number;
   sessionResetsAt: string;
   weekResetsAt: string;
+  /** Hosted AI restricted by a provider-policy sanction, or null. A code plus
+   *  where to appeal; the proxy alone cannot tell this apart from "no plan". */
+  restricted: {
+    reason: "content_policy" | "account_suspended" | "account_banned";
+    contact: string | null;
+  } | null;
 }
 
 /** Where a window turns from information into a warning. Matches the daemon's

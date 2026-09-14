@@ -13,6 +13,7 @@ const meter = (over: Partial<HostedUsageMeter> = {}): HostedUsageMeter => ({
   weekPct: 10,
   sessionResetsAt: SESSION_RESET,
   weekResetsAt: '2026-08-31T00:00:00.000Z',
+  restricted: null,
   ...over,
 });
 

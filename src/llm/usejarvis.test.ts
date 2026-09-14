@@ -232,6 +232,73 @@ describe('UsejarvisAIProvider', () => {
     expect(err?.error).toMatch(/\(400\)/);
   });
 
+  it('a content-policy block is its own code in chat and stream, and never carries a retry hint', async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(400, { error: { message: 'Guardrail blocked: usejarvis_content_policy' } })) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    const thrown = await provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-chat' }).catch((e) => e);
+    expect(thrown).toMatchObject({ name: 'LLMProviderError', code: 'content_policy' });
+    expect(thrown.message).toMatch(/\(400\).*blocked by the Usejarvis AI content policy/);
+
+    const events: Array<{ type: string; code?: string; retry_after_ms?: number }> = [];
+    for await (const ev of provider.stream([{ role: 'user', content: 'hi' }], { model: 'uj-chat' })) {
+      events.push(ev as { type: string; code?: string; retry_after_ms?: number });
+    }
+    const err = events.find((e) => e.type === 'error');
+    expect(err?.code).toBe('content_policy');
+    expect(err?.retry_after_ms).toBeUndefined();
+  });
+
+  it('a blocked key reads as restricted when the meter says so, and plain inactive otherwise', async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(401, { error: { message: 'Authentication Error: key is blocked' } })) as unknown as typeof fetch;
+    const call = (provider: UsejarvisAIProvider) =>
+      provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-chat' }).catch((e) => e);
+
+    const restricted = await call(
+      new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc', {
+        restriction: async () => ({ reason: 'content_policy', contact: 'support@usejarvis.test' }),
+      }),
+    );
+    expect(restricted).toMatchObject({ code: 'restricted' });
+    expect(restricted.message).toMatch(/restricted on this account.*support@usejarvis\.test/);
+
+    const inactive = await call(
+      new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc', { restriction: async () => null }),
+    );
+    expect(inactive).toMatchObject({ code: 'auth' });
+    expect(inactive.message).toMatch(/active plan is required/);
+
+    // A meter that cannot be read never breaks the error path.
+    const unreadable = await call(
+      new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc', {
+        restriction: async () => {
+          throw new Error('control plane down');
+        },
+      }),
+    );
+    expect(unreadable.message).toMatch(/active plan is required/);
+  });
+
+  it('budget exhaustion is quota_exhausted, while a plain 429 keeps the Retry-After it came with', async () => {
+    globalThis.fetch = (async () =>
+      jsonResponse(429, { error: { message: 'ExceededBudget: budget has been exceeded' } })) as unknown as typeof fetch;
+    const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');
+    await expect(provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-chat' })).rejects.toMatchObject({
+      code: 'quota_exhausted',
+    });
+
+    globalThis.fetch = (async () =>
+      new Response(JSON.stringify({ error: { message: 'rate limited' } }), {
+        status: 429,
+        headers: { 'Content-Type': 'application/json', 'Retry-After': '60' },
+      })) as unknown as typeof fetch;
+    await expect(provider.chat([{ role: 'user', content: 'hi' }], { model: 'uj-chat' })).rejects.toMatchObject({
+      code: 'rate_limit',
+      retryAfterMs: 60_000,
+    });
+  });
+
   it('keeps retryable statuses recognizable (429 passes through with marker)', async () => {
     globalThis.fetch = (async () => jsonResponse(429, { error: { message: 'rate limited' } })) as unknown as typeof fetch;
     const provider = new UsejarvisAIProvider('https://llm.usejarvis.host', 'sk-uj-abc');

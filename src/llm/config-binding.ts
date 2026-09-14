@@ -16,6 +16,7 @@
 import type { LLMConfig, LLMProviderEntry, LLMProviderKind } from '../config/types.ts';
 import type { LLMManager } from './manager.ts';
 import type { LLMProvider } from './provider.ts';
+import type { HostedRestriction } from '../util/hosted-error.ts';
 import { type Tier, type TierMap, parseModelRef } from './tiers.ts';
 import { AnthropicProvider } from './anthropic.ts';
 import { OpenAIProvider } from './openai.ts';
@@ -43,6 +44,14 @@ import { UsejarvisAIProvider } from './usejarvis.ts';
 export type ProviderGlobals = {
   /** Provider-side prompt caching (Anthropic cache_control). Default true. */
   promptCache?: boolean;
+  /**
+   * Whether hosted AI is restricted on this account, read from the hosted
+   * usage meter. The proxy answers a restricted key exactly like an unpaid one,
+   * so the hosted provider asks this before telling the user which it is.
+   * A function, not a value: it must reflect the meter at the time of the
+   * error, not at provider build time.
+   */
+  hostedRestriction?: () => Promise<HostedRestriction | null>;
 };
 
 export function instantiateProvider(
@@ -109,6 +118,8 @@ export function instantiateProvider(
         // usejarvis_ai.prompt_cache in config/types.ts), AND still subject
         // to the user-level switch the anthropic/openrouter cases honour.
         promptCache: entry.prompt_cache === true && globals?.promptCache !== false,
+        // Tells a policy-restricted account apart from an unpaid one on a 401.
+        restriction: globals?.hostedRestriction,
       });
       break;
     default:

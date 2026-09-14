@@ -739,6 +739,129 @@ describe('LLMManager', () => {
   });
 });
 
+describe('LLMManager: hosted outcomes a retry cannot change', () => {
+  const messages: LLMMessage[] = [{ role: 'user', content: 'Hello' }];
+  const answer = (content: string) => ({
+    content,
+    tool_calls: [],
+    usage: { input_tokens: 1, output_tokens: 1 },
+    model: 'm',
+    finish_reason: 'stop' as const,
+  });
+
+  for (const code of ['quota_exhausted', 'content_policy', 'restricted'] as const) {
+    test(`${code} is tried exactly once on its provider`, async () => {
+      const manager = new LLMManager();
+      let calls = 0;
+      manager.registerProvider({
+        name: 'hosted', listModels: async () => ['m'],
+        async chat() { calls++; throw new LLMProviderError(code, code); },
+        async *stream() { /* not used */ },
+      });
+      manager.setTierMap({ medium: { provider: 'hosted', model: 'm' } });
+      await expect(manager.chatTier('medium', 'test', messages)).rejects.toMatchObject({ code });
+      expect(calls).toBe(1);
+    });
+  }
+
+  test('quota and restriction move to a user-owned provider; a content-policy block does not', async () => {
+    for (const [code, movesOn] of [
+      ['quota_exhausted', true],
+      ['restricted', true],
+      ['content_policy', false],
+    ] as const) {
+      const manager = new LLMManager();
+      manager.registerProvider({
+        name: 'hosted', listModels: async () => ['m'],
+        async chat() { throw new LLMProviderError(code, code); },
+        async *stream() { /* not used */ },
+      });
+      manager.registerProvider({
+        name: 'byo', listModels: async () => ['b'],
+        async chat() { return answer('byo'); },
+        async *stream() { /* not used */ },
+      });
+      manager.setTierMap({
+        medium: { provider: 'hosted', model: 'm' },
+        high: { provider: 'byo', model: 'b' },
+      });
+      if (movesOn) {
+        expect((await manager.chatTier('medium', 'test', messages)).content).toBe('byo');
+      } else {
+        await expect(manager.chatTier('medium', 'test', messages)).rejects.toMatchObject({ code });
+      }
+    }
+  });
+
+  test('an exhausted or restricted hosted provider is not tried again under another tier', async () => {
+    for (const code of ['quota_exhausted', 'restricted'] as const) {
+      const manager = new LLMManager();
+      let calls = 0;
+      manager.registerProvider({
+        name: 'hosted', listModels: async () => ['m', 'n'],
+        async chat() { calls++; throw new LLMProviderError(code, code); },
+        async *stream() {
+          calls++;
+          yield { type: 'error' as const, error: code, code };
+        },
+      });
+      manager.setTierMap({
+        medium: { provider: 'hosted', model: 'm' },
+        high: { provider: 'hosted', model: 'n' },
+      });
+      await expect(manager.chatTier('medium', 'test', messages)).rejects.toMatchObject({ code });
+      expect(calls).toBe(1);
+
+      calls = 0;
+      const events = [];
+      for await (const event of manager.streamTier('medium', 'test', messages)) events.push(event);
+      expect(events).toEqual([expect.objectContaining({ type: 'error', code })]);
+      expect(calls).toBe(1);
+    }
+  });
+
+  test('a streamed content-policy block surfaces once, with its code', async () => {
+    const manager = new LLMManager();
+    let calls = 0;
+    manager.registerProvider({
+      name: 'hosted', listModels: async () => ['m'],
+      async chat() { throw new Error('not used'); },
+      async *stream() {
+        calls++;
+        yield { type: 'error' as const, error: 'blocked', code: 'content_policy' as const };
+      },
+    });
+    manager.setTierMap({ medium: { provider: 'hosted', model: 'm' } });
+    const events = [];
+    for await (const event of manager.streamTier('medium', 'test', messages)) events.push(event);
+    expect(events).toEqual([expect.objectContaining({ type: 'error', code: 'content_policy' })]);
+    expect(calls).toBe(1);
+  });
+
+  test('a timed-out request is ABORTED at the provider, not left running', async () => {
+    const statics = LLMManager as unknown as { REQUEST_TIMEOUT_MS: number };
+    const original = statics.REQUEST_TIMEOUT_MS;
+    statics.REQUEST_TIMEOUT_MS = 20;
+    try {
+      let seen: AbortSignal | undefined;
+      const manager = new LLMManager();
+      manager.registerProvider({
+        name: 'slow', listModels: async () => ['m'],
+        chat: (_messages, options) => new Promise((_, reject) => {
+          seen = options?.signal;
+          options?.signal?.addEventListener('abort', () => reject(new Error('aborted by the manager')));
+        }),
+        async *stream() { /* not used */ },
+      });
+      manager.setTierMap({ medium: { provider: 'slow', model: 'm' } });
+      await expect(manager.chatTier('medium', 'test', messages)).rejects.toThrow(/timed out/);
+      expect(seen?.aborted).toBe(true);
+    } finally {
+      statics.REQUEST_TIMEOUT_MS = original;
+    }
+  });
+});
+
 describe('Message Types', () => {
   test('LLMMessage has correct structure', () => {
     const message: LLMMessage = {

@@ -157,18 +157,35 @@ export class LLMManager {
   }
 
   /**
-   * Add request timeout wrapper for network resilience
+   * Run one provider call under the request timeout.
+   *
+   * The call receives an AbortSignal and the timeout ABORTS it. A bare race
+   * only stopped waiting: the fetch kept running at the provider while the
+   * retry went out, so one slow call could occupy several parallel slots
+   * against a per-key limit, and every timer outlived its request.
    */
-  private async withTimeout<T>(promise: Promise<T>, provider: string): Promise<T> {
-    return Promise.race([
-      promise,
-      new Promise<T>((_, reject) =>
-        setTimeout(
-          () => reject(new Error(`LLM request to ${provider} timed out after ${LLMManager.REQUEST_TIMEOUT_MS}ms`)),
-          LLMManager.REQUEST_TIMEOUT_MS
-        )
-      )
-    ]);
+  private async withTimeout<T>(
+    run: (signal: AbortSignal) => Promise<T>,
+    provider: string,
+    callerSignal?: AbortSignal,
+  ): Promise<T> {
+    const controller = new AbortController();
+    const signal = callerSignal ? AbortSignal.any([callerSignal, controller.signal]) : controller.signal;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const timeout = new Promise<never>((_, reject) => {
+      timer = setTimeout(() => {
+        const err = new Error(`LLM request to ${provider} timed out after ${LLMManager.REQUEST_TIMEOUT_MS}ms`);
+        // Reject FIRST: a provider can reject synchronously inside abort(), and
+        // the race must settle with the timeout, not with "aborted".
+        reject(err);
+        controller.abort(err);
+      }, LLMManager.REQUEST_TIMEOUT_MS);
+    });
+    try {
+      return await Promise.race([run(signal), timeout]);
+    } finally {
+      clearTimeout(timer);
+    }
   }
 
   /**
@@ -202,7 +219,13 @@ export class LLMManager {
    * when the selected model is unavailable or the provider has no quota.
    */
   private shouldFailOver(code: LLMErrorCode | undefined, message: string): boolean {
-    if (code === 'rate_limit') return true;
+    // Out of capacity on THIS provider: another one may still serve. A
+    // restricted hosted account has the same shape — the restriction covers the
+    // platform's AI, not a key of the user's own on another tier.
+    if (code === 'rate_limit' || code === 'quota_exhausted' || code === 'restricted') return true;
+    // A content-policy block is a verdict on the REQUEST: sending the same
+    // conversation to another provider would be routing around it. It falls
+    // through to `false` below like every other code not listed.
     if (code !== 'bad_request' && code !== 'not_found') return false;
 
     // A bare 404 can mean a bad endpoint or missing non-model resource. Only
@@ -363,7 +386,11 @@ export class LLMManager {
           latency_ms: Date.now() - started, error_code: code,
         });
         if (!this.shouldFailOver(code, msg)) throw err;
-        if (code === 'rate_limit') exhaustedProviders.add(provider.name);
+        // The same provider under another tier would answer the same way: its
+        // budget or the account's restriction does not depend on the model.
+        if (code === 'rate_limit' || code === 'quota_exhausted' || code === 'restricted') {
+          exhaustedProviders.add(provider.name);
+        }
       }
     }
     throw new LLMProviderError(failures.join('\n\n'), lastFailureCode, lastRetryAfterMs);
@@ -440,7 +467,7 @@ export class LLMManager {
         yield terminalError;
         return;
       }
-      if (terminalCode === 'rate_limit') {
+      if (terminalCode === 'rate_limit' || terminalCode === 'quota_exhausted' || terminalCode === 'restricted') {
         exhaustedProviders.add(provider.name);
       }
       failures.push(terminalError);
@@ -474,7 +501,11 @@ export class LLMManager {
     const retryBudget = this.newRetryBudget();
     for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
       try {
-        const result = await this.withTimeout(provider.chat(messages, options), provider.name);
+        const result = await this.withTimeout(
+          (signal) => provider.chat(messages, { ...options, signal }),
+          provider.name,
+          options?.signal,
+        );
         if (LLMManager.isDebugging && attempt > 1) {
           console.log(`[DEBUG] LLM ${provider.name} succeeded on retry attempt ${attempt}`);
         }
@@ -605,7 +636,11 @@ export class LLMManager {
       const retryBudget = this.newRetryBudget();
       for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
         try {
-          const result = await this.withTimeout(provider.chat(messages, options), providerName);
+          const result = await this.withTimeout(
+            (signal) => provider.chat(messages, { ...options, signal }),
+            providerName,
+            options?.signal,
+          );
           if (LLMManager.isDebugging && attempt > 1) {
             console.log(`[DEBUG] LLM ${providerName} succeeded on retry attempt ${attempt}`);
           }

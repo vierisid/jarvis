@@ -7,7 +7,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
-import { classifyHttpStatus } from './provider.ts';
+import { classifyHttpStatus, LLMProviderError, parseRetryAfterMs } from './provider.ts';
 import { compactHistory, calculateHistoryBudget } from './history.ts';
 
 /**
@@ -188,16 +188,19 @@ export class OpenAIProvider implements LLMProvider {
    * `this.baseUrl` around the call) is what keeps concurrent requests from
    * reading each other's root.
    */
-  protected postChat(body: Record<string, unknown>, base = this.baseUrl): Promise<Response> {
+  protected postChat(body: Record<string, unknown>, base = this.baseUrl, signal?: AbortSignal): Promise<Response> {
     return fetch(`${base}/chat/completions`, {
       method: 'POST',
       headers: this.requestHeaders(),
       body: JSON.stringify(body),
+      // Only when the caller set one: aborting is what frees the provider-side
+      // slot of a request the manager has already timed out and retried.
+      ...(signal ? { signal } : {}),
     });
   }
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
-    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
+    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice, signal } = options;
 
     // Compact history for large contexts (128k token limit)
     const budget = calculateHistoryBudget(128000);
@@ -217,11 +220,18 @@ export class OpenAIProvider implements LLMProvider {
       body.tool_choice = tool_choice || 'auto';  // Enable tool calling
     }
 
-    const response = await this.postChat(body);
+    const response = await this.postChat(body, undefined, signal);
 
     if (!response.ok) {
       const errorText = await response.text();
-      throw new Error(`${this.errorLabel} API error: ${formatOpenAIHttpError(response.status, response.headers.get('content-type'), errorText)}`);
+      // Typed, with the server's Retry-After: the manager keys retry, pause and
+      // failover on these. A plain Error left it guessing from the text, and a
+      // 429 was retried three times with no pause at all.
+      throw new LLMProviderError(
+        `${this.errorLabel} API error: ${formatOpenAIHttpError(response.status, response.headers.get('content-type'), errorText)}`,
+        classifyHttpStatus(response.status),
+        parseRetryAfterMs(response.headers),
+      );
     }
 
     const data = await response.json() as OpenAIResponse;
@@ -229,7 +239,7 @@ export class OpenAIProvider implements LLMProvider {
   }
 
   async *stream(messages: LLMMessage[], options: LLMOptions = {}): AsyncIterable<LLMStreamEvent> {
-    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice } = options;
+    const { model = this.defaultModel, temperature, max_tokens, tools, tool_choice, signal } = options;
 
     // Compact history for large contexts (128k token limit)
     const budget = calculateHistoryBudget(128000);
@@ -251,14 +261,16 @@ export class OpenAIProvider implements LLMProvider {
       body.tool_choice = tool_choice || 'auto';  // Enable tool calling
     }
 
-    const response = await this.postChat(body);
+    const response = await this.postChat(body, undefined, signal);
 
     if (!response.ok) {
       const errorText = await response.text();
+      const retryAfterMs = parseRetryAfterMs(response.headers);
       yield {
         type: 'error',
         error: `${this.errorLabel} API error: ${formatOpenAIHttpError(response.status, response.headers.get('content-type'), errorText)}`,
         code: classifyHttpStatus(response.status),
+        ...(retryAfterMs !== undefined ? { retry_after_ms: retryAfterMs } : {}),
       };
       return;
     }

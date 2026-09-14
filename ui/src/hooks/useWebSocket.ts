@@ -389,6 +389,9 @@ export type ProviderErrorCode =
   | "bad_request"
   | "not_found"
   | "server"
+  | "quota_exhausted"
+  | "content_policy"
+  | "restricted"
   | "unknown";
 
 /** Shared by the structured `forbidden` code and the keyword fallbacks below. */
@@ -411,6 +414,14 @@ function summaryForCode(code: ProviderErrorCode | undefined): string | null {
       return "The AI provider couldn't find the requested resource. Check your model settings.";
     case "server":
       return "The AI provider had a server error. Try again in a moment.";
+    // Hosted outcomes a retry cannot change; the detail carries the specifics
+    // (the resume time, where to appeal).
+    case "quota_exhausted":
+      return "Your included AI usage is used up for this window. It resumes automatically.";
+    case "content_policy":
+      return "This request was blocked by the Usejarvis AI content policy.";
+    case "restricted":
+      return "Usejarvis AI is restricted on this account. The details say how to appeal.";
     default:
       return null;
   }

@@ -7,7 +7,7 @@ import type {
   LLMTool,
   LLMToolCall,
 } from './provider.ts';
-import { classifyHttpStatus, LLMProviderError } from './provider.ts';
+import { classifyHttpStatus, LLMProviderError, parseRetryAfterMs } from './provider.ts';
 type GroqContentPart =
   | { type: 'text'; text: string }
   | { type: 'image_url'; image_url: { url: string } };
@@ -402,12 +402,7 @@ export class GroqProvider implements LLMProvider {
   }
 
   private retryAfterMs(response: Response): number | undefined {
-    const raw = response.headers.get('retry-after');
-    if (!raw) return undefined;
-    const seconds = Number(raw);
-    if (Number.isFinite(seconds) && seconds >= 0) return Math.ceil(seconds * 1000);
-    const dateMs = Date.parse(raw);
-    return Number.isFinite(dateMs) ? Math.max(0, dateMs - Date.now()) : undefined;
+    return parseRetryAfterMs(response.headers);
   }
 
   private httpError(response: Response, detail: string): LLMProviderError {

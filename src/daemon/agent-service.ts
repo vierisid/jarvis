@@ -16,6 +16,7 @@ import type { PersonalityModel } from '../personality/model.ts';
 import { LLMManager } from '../llm/manager.ts';
 import { activeTurns, DrainingError } from './active-turns.ts';
 import { registerLLMProviders, configureLLMTiers } from '../llm/config-binding.ts';
+import { hostedRestrictionLookup } from './hosted-usage.ts';
 import { effectiveLlmForBinding } from './usejarvis-ai.ts';
 
 /** Wrap a turn's stream so the in-flight count is released when it settles
@@ -656,6 +657,7 @@ export class AgentService implements Service, IAgentService {
     const llm = effectiveLlmForBinding(this.config);
     const hasProvider = registerLLMProviders(this.llmManager, llm.providers ?? {}, {
       promptCache: llm.prompt_cache !== false,
+      hostedRestriction: hostedRestrictionLookup(this.config),
     });
 
     if (!hasProvider) {
