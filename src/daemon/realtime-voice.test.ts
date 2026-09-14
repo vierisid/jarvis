@@ -140,3 +140,51 @@ describe('RealtimeVoiceSession usage tracking', () => {
     });
   });
 });
+
+describe('RealtimeVoiceSession error copy', () => {
+  // The exact event text a tenant saw in the chat on 2026-09-14, when the
+  // platform's upstream OpenAI account ran out of credits.
+  const UPSTREAM =
+    'You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/.';
+
+  function withErrors(provider: ResolvedRealtimeVoice['provider']) {
+    const fake = new FakeRealtimeSession();
+    const errors: string[] = [];
+    new RealtimeVoiceSession(
+      { ...RESOLVED, provider },
+      new BrowserAudioTransport({ sendAudio: () => {}, inputSampleRate: 24000 }),
+      {
+        tools: [],
+        instructions: 'persona',
+        executeToolCall: async () => 'ok',
+        onError: (e) => errors.push(e),
+        sessionFactory: () => fake as unknown as RealtimeSession,
+      },
+    );
+    return { fake, errors };
+  }
+
+  test('a hosted session never passes the upstream provider text to the error sink', () => {
+    const { fake, errors } = withErrors('usejarvis_ai');
+    const warn = console.warn;
+    const logged: string[] = [];
+    console.warn = (...args: unknown[]) => { logged.push(args.map(String).join(' ')); };
+    try {
+      fake.errorCb!(UPSTREAM);
+    } finally {
+      console.warn = warn;
+    }
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).not.toContain('credits');
+    expect(errors[0]).not.toContain('platform.openai.com');
+    expect(errors[0]).toContain('try again');
+    // Operators still get the original, in the daemon log only.
+    expect(logged.some((l) => l.includes('no credits remaining'))).toBe(true);
+  });
+
+  test('a BYO OpenAI session keeps the provider text (the account is the user\'s own)', () => {
+    const { fake, errors } = withErrors('openai');
+    fake.errorCb!(UPSTREAM);
+    expect(errors).toEqual([UPSTREAM]);
+  });
+});

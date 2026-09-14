@@ -80,3 +80,25 @@ export function isBudgetExhaustion(detail: string): boolean {
   const lower = detail.toLowerCase();
   return lower.includes('budget') && (lower.includes('exceed') || lower.includes('over'));
 }
+
+/**
+ * Copy for an error a HOSTED realtime voice session reports.
+ *
+ * Invariant 2 above, for the websocket surface. The proxy relays the upstream
+ * provider's realtime `error` events verbatim, so their text is the provider
+ * talking about the PLATFORM's account, not the user's: "You have no credits
+ * remaining. Add credits to continue using the API at <billing link>" reached
+ * a tenant's chat this way (2026-09-14). Nothing in such a message is
+ * something the user can act on, and the session ends whatever it says, so
+ * one generic line is the whole answer. Operators keep the redacted original
+ * in the daemon log, same as hostedProxyError.
+ *
+ * The session's own local failures (socket error, unparseable event) arrive
+ * through the same sink and get the same copy, which is why the log line says
+ * "session error" rather than blaming the proxy.
+ */
+export function hostedRealtimeError(detail: string): string {
+  const safe = redactSecrets(detail);
+  if (safe) console.warn(`[usejarvis] Usejarvis AI realtime session error: ${safe.slice(0, 200)}`);
+  return 'Live voice stopped: the AI service could not process this request. It usually recovers on its own - try again shortly.';
+}

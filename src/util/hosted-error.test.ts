@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { hostedProxyError, isBudgetExhaustion } from './hosted-error.ts';
+import { hostedProxyError, hostedRealtimeError, isBudgetExhaustion } from './hosted-error.ts';
 
 describe('hostedProxyError', () => {
   test('the generic branch never carries the proxy body (hostname stays out of chat copy)', () => {
@@ -70,5 +70,43 @@ describe('isBudgetExhaustion', () => {
     expect(isBudgetExhaustion('{"error":{"code":"budget_exceeded","message":"over budget"}}')).toBe(true);
     expect(isBudgetExhaustion('rate limited, retry shortly')).toBe(false);
     expect(isBudgetExhaustion('model not allowed')).toBe(false);
+  });
+});
+
+describe('hostedRealtimeError', () => {
+  /** Run fn with console.warn captured, so the log channel can be asserted. */
+  function captureWarn<T>(fn: () => T): { value: T; logged: string[] } {
+    const warn = console.warn;
+    const logged: string[] = [];
+    console.warn = (...args: unknown[]) => { logged.push(args.map(String).join(' ')); };
+    try {
+      return { value: fn(), logged };
+    } finally {
+      console.warn = warn;
+    }
+  }
+
+  test('the upstream provider text never reaches the copy, only the log', () => {
+    const upstream =
+      'You have no credits remaining. Add credits to continue using the API at https://platform.openai.com/settings/organization/billing/.';
+    const { value, logged } = captureWarn(() => hostedRealtimeError(upstream));
+    expect(value).not.toContain('credits');
+    expect(value).not.toContain('platform.openai.com');
+    expect(value).toContain('try again shortly');
+    expect(logged).toHaveLength(1);
+    expect(logged[0]).toContain('no credits remaining');
+  });
+
+  test('secrets echoed in the event are redacted out of the log line', () => {
+    const { logged } = captureWarn(() =>
+      hostedRealtimeError('Incorrect API key provided: Bearer sk-uj-abcdefghijklmnopqrstuvwxyz0123456789'),
+    );
+    expect(logged[0]).not.toContain('abcdefghijklmnopqrstuvwxyz0123456789');
+  });
+
+  test('an empty event logs nothing and still gets the copy', () => {
+    const { value, logged } = captureWarn(() => hostedRealtimeError(''));
+    expect(logged).toHaveLength(0);
+    expect(value).toContain('try again shortly');
   });
 });

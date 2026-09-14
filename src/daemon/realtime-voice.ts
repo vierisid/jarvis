@@ -16,6 +16,7 @@ import type { AudioTransport } from '../comms/audio-transport.ts';
 import type { ResolvedRealtimeVoice } from '../config/realtime.ts';
 import type { LLMTool } from '../llm/provider.ts';
 import { recordUsage } from '../llm/usage.ts';
+import { hostedRealtimeError } from '../util/hosted-error.ts';
 
 export type RealtimeVoiceDeps = {
   /** Shared tool schema (same `LLMTool[]` the text providers use). */
@@ -30,7 +31,8 @@ export type RealtimeVoiceDeps = {
   executeToolCall: (name: string, args: Record<string, unknown>) => Promise<string>;
   /** Transcript sink (UI captions + vault writes). */
   onTranscript?: (t: RealtimeTranscript) => void;
-  /** Error sink. */
+  /** Error sink. Receives text that is safe to show the user: on a hosted
+   *  session it is the shared hosted copy, never the provider's own words. */
   onError?: (err: string) => void;
   /** Fired when the underlying session closes (for ws-service cleanup).
    *  `detail` is the socket's close code/reason when the server gave one. */
@@ -63,7 +65,17 @@ export class RealtimeVoiceSession {
     this.session = deps.sessionFactory ? deps.sessionFactory(opts) : new RealtimeSession(opts);
 
     this.session.onTranscript((t) => this.deps.onTranscript?.(t));
-    this.session.onError((e) => this.deps.onError?.(e));
+    // The one place both realtime surfaces (the dashboard socket in ws-service
+    // and the pebble in pebble-realtime) receive session errors, so the hosted
+    // rule lives here rather than in each of them. The proxy relays upstream
+    // realtime `error` events verbatim (LiteLLM does not rewrite websocket
+    // frames), and the dashboard prints this string into the chat as a system
+    // line: that is how "You have no credits remaining. Add credits..." from
+    // the PLATFORM's upstream account reached a tenant. A BYO key keeps the
+    // provider's own words, since it is that user's account and the text tells
+    // them what to fix.
+    const hosted = resolved.provider === 'usejarvis_ai';
+    this.session.onError((e) => this.deps.onError?.(hosted ? hostedRealtimeError(e) : e));
     this.session.onClose((detail) => {
       this.closed = true;
       this.deps.onClose?.(detail);
