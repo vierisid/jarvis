@@ -50,8 +50,10 @@ export class TimerWaitpointScheduler {
     for (const wp of due) {
       try {
         const run = getFlowRun(wp.flowRunId);
-        // Only PAUSED runs are resumable; for anything else, retire the
-        // waitpoint so it isn't re-scanned every tick.
+        // A waitpoint can become due before the engine publishes PAUSED.
+        // Keep it pending until that upload lands; only missing or finished
+        // runs can safely have their timers retired.
+        if (run?.status === 'RUNNING' || run?.status === 'QUEUED') continue;
         if (!run || run.status !== 'PAUSED') {
           markWaitpointResumed(wp.id, now);
           continue;

@@ -102,7 +102,7 @@ export interface UpdateRunInput {
   status?: FlowRunStatus;
   steps?: Record<string, unknown> | null;
   failedStep?: FailedStep | null;
-  finishTime?: number;
+  finishTime?: number | null;
   startTime?: number;
   stepsCount?: number;
   logsFileId?: string | null;

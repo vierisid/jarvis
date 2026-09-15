@@ -50,7 +50,25 @@ describe('TimerWaitpointScheduler', () => {
     expect(claimNextJob()).toBeNull();
   });
 
-  test('retires a due timer whose run is no longer PAUSED (no resume enqueued)', () => {
+  for (const status of ['QUEUED', 'RUNNING'] as const) {
+    test(`keeps a due timer while the run is ${status}, then resumes its published pause once`, () => {
+      const runId = pausedRun();
+      updateRun(runId, { status });
+      const wp = timerWaitpoint(runId, new Date(now - 1000).toISOString());
+      // The engine creates the waitpoint before uploading its PAUSED state.
+      expect(sched.tick(now)).toBe(0);
+      expect(getWaitpoint(wp.id)?.resumedAt).toBeNull();
+      expect(claimNextJob()).toBeNull();
+
+      updateRun(runId, { status: 'PAUSED' });
+      expect(sched.tick(now)).toBe(1);
+      expect(sched.tick(now)).toBe(0);
+      expect(claimNextJob()?.flowRunId).toBe(runId);
+      expect(claimNextJob()).toBeNull();
+    });
+  }
+
+  test('retires a due timer whose run has succeeded (no resume enqueued)', () => {
     const runId = pausedRun();
     updateRun(runId, { status: 'SUCCEEDED' });
     const wp = timerWaitpoint(runId, new Date(now - 1000).toISOString());

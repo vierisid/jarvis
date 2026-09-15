@@ -175,6 +175,7 @@ describe("EngineFlowExecutor", () => {
       terminalPollIntervalMs: 10,
     });
     const result = await exec.execute(ctx);
+    expect(result.status).toBe("PAUSED");
     expect(result.stepsCount).toBe(0);
   });
 
