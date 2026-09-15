@@ -23,7 +23,8 @@ import {
   type FlowVersion,
 } from "../db/repos/flow-version";
 
-export const RUN_FLOW = "RUN_FLOW";
+import { workflowFailureMessage } from "../queue/retry-policy";
+export { RUN_FLOW } from "../queue/retry-policy";
 
 export interface RunFlowJobPayload {
   runId: string;
@@ -132,18 +133,17 @@ export interface CreateRunFlowHandlerOptions {
  * Lifecycle on each invocation:
  *   - Read the flow_run referenced by the job; abort if missing.
  *   - Read the flow_version referenced by the run; abort if missing.
- *   - Mark RUNNING and clear stale failed_step from prior attempts.
+ *   - Allow BEGIN only for QUEUED runs and RESUME only for PAUSED runs.
+ *   - Mark RUNNING and clear the prior pause's failed_step.
  *   - Run the executor.
  *   - On success: mark SUCCEEDED with steps + finish_time.
  *   - On FlowExecutionError: mark FAILED with the named failedStep, then
- *     rethrow so the queue can decide on retry. Steps captured before the
+ *     rethrow so the queue records failure. Steps captured before the
  *     failure are persisted.
  *   - On any other Error: mark FAILED with a generic failed_step and rethrow.
  *
- * The queue's max_attempts policy controls retry. Retries re-enter this
- * handler on a fresh attempt; the run row is reused (status flipped back to
- * RUNNING). When the job ultimately succeeds or exhausts retries, the run
- * row's terminal state reflects the last attempt only.
+ * The shared queue policy forbids automatic workflow retries. A fresh queue
+ * job is not permission to replay an already started/terminal run either.
  */
 export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHandler {
   const now = opts.now ?? Date.now;
@@ -160,6 +160,12 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       // deleted between enqueue and claim) and self-correcting.
       return;
     }
+    const expectedStatus = typed.payload.executionType === "RESUME" ? "PAUSED" : "QUEUED";
+    if (job.attempt !== 1 || run.status !== expectedStatus) {
+      throw new Error(workflowFailureMessage(
+        `RUN_FLOW refused ${typed.payload.executionType ?? "BEGIN"} for run ${runId} in ${run.status} (attempt ${job.attempt}).`,
+      ));
+    }
     const version = getFlowVersion(run.flowVersionId);
     if (!version) {
       const ts = now();
@@ -175,7 +181,7 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
     updateRun(runId, {
       status: "RUNNING",
       startTime,
-      // Clear any failed_step from a previous attempt of this same run.
+      // A planned continuation starts from the paused run's durable state.
       failedStep: null,
     });
 
@@ -213,7 +219,7 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       // bare `{name, displayName}`, so an operator looking at a failed run saw
       // "engine" and nothing else -- the actual message (RPC timeout, engine
       // rejection, ...) lived only in the daemon log.
-      const errorMessage = e instanceof Error ? e.message : String(e);
+      const errorMessage = workflowFailureMessage(e instanceof Error ? e.message : String(e));
       if (e instanceof FlowExecutionError) {
         updateRun(runId, {
           status: "FAILED",

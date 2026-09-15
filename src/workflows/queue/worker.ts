@@ -28,7 +28,7 @@ export interface WorkerOptions {
   handlers: Record<string, JobHandler>;
   /** Idle poll interval; lower = lower latency, higher CPU. Default 250ms. */
   pollIntervalMs?: number;
-  /** Lease for a claimed job. If a worker dies mid-job the lease lapses and another claim picks it up. */
+  /** Lease for retryable jobs. Workflow execution claims are never reassigned. */
   leaseMs?: number;
   /** Optional logger; defaults to console. Pass a no-op to silence. */
   log?: (line: string) => void;

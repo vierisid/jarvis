@@ -1,0 +1,28 @@
+diff --git a/src/workflows/runtime/workflow-authority.test.ts b/src/workflows/runtime/workflow-authority.test.ts
+index c56658e9..8a5c9f77 100644
+--- a/src/workflows/runtime/workflow-authority.test.ts
++++ b/src/workflows/runtime/workflow-authority.test.ts
+@@ -433,6 +433,7 @@ describe('workflow effect boundary', () => {
+       executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }),
+     }) } });
+     try {
++      updateRun(f.run.id, { status: 'QUEUED' });
+       enqueue({ jobType: 'RUN_FLOW', flowRunId: f.run.id, maxAttempts: 1, payload: { runId: f.run.id } });
+       await worker.drain();
+       expect(getFlowRun(f.run.id)!.status).toBe('FAILED');
+@@ -463,6 +464,7 @@ describe('workflow effect boundary', () => {
+       executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }),
+     }) } });
+     try {
++      updateRun(f.run.id, { status: 'QUEUED' });
+       enqueue({ jobType: 'RUN_FLOW', flowRunId: f.run.id, maxAttempts: 1, payload: {
+         runId: f.run.id, stepNameToTest: 'action', sampleData: { before: { text: 'reviewed sample' } },
+         sampleInputOverride: { action: { toolName: 'write_file', params: { path: '/preview', content: '{{before.text}}' } } },
+@@ -508,6 +510,7 @@ describe('workflow effect boundary', () => {
+       executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }),
+     }) } });
+     try {
++      updateRun(f.run.id, { status: 'QUEUED' });
+       enqueue({ jobType: 'RUN_FLOW', flowRunId: f.run.id, maxAttempts: 1, payload: { runId: f.run.id, payload: { items: [1, 2] } } });
+       await worker.drain();
+       expect(getFlowRun(f.run.id)!.status).toBe('PAUSED');

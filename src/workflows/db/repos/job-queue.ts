@@ -19,12 +19,14 @@
  *
  * Lease: a claimed job is locked for `leaseMs`. If a worker dies mid-execution
  * the row's `locked_until` will lapse and another worker can re-claim it on
- * the next poll.
+ * the next poll, EXCEPT for RUN_FLOW. Workflow execution is never reassigned:
+ * the original worker may still be running and effects may already exist.
  */
 
 import type { Database } from "bun:sqlite";
 import { getWorkflowDb } from "../index";
 import { apId } from "../ids";
+import { maxAttemptsForJob, RUN_FLOW, workflowFailureMessage } from "../../queue/retry-policy";
 
 export type JobStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELED";
 
@@ -76,7 +78,7 @@ export interface EnqueueInput<P = Record<string, unknown>> {
 }
 
 export interface ClaimOptions {
-  /** How long the worker holds the claim before another worker can steal it. */
+  /** Lease duration for retryable jobs. RUN_FLOW claims cannot be stolen. */
   leaseMs?: number;
   now?: number;
 }
@@ -145,7 +147,7 @@ export function enqueue<P = Record<string, unknown>>(input: EnqueueInput<P>): Jo
       input.flowVersionId ?? null,
       JSON.stringify(input.payload),
       input.priority ?? 0,
-      input.maxAttempts ?? 3,
+      maxAttemptsForJob(input.jobType, input.maxAttempts),
       input.scheduledAt ?? ts,
       ts,
       ts,
@@ -161,32 +163,74 @@ export function enqueue<P = Record<string, unknown>>(input: EnqueueInput<P>): Jo
 /**
  * Atomically claim the next ready job. Returns null if the queue is empty.
  *
- * "Ready" = status='QUEUED' AND scheduled_at <= now AND (locked_until IS NULL
- * OR locked_until <= now). On claim, status flips to 'RUNNING', attempt++,
- * locked_until = now + leaseMs.
+ * "Ready" = QUEUED and scheduled, or an expired RUNNING lease for a retryable
+ * job type. Workflow jobs must never have been attempted. On claim, status
+ * flips to RUNNING, attempt++, locked_until = now + leaseMs.
  */
 export function claimNextJob<P = Record<string, unknown>>(opts: ClaimOptions = {}): Job<P> | null {
   const now = opts.now ?? nowMs();
   const leaseUntil = now + (opts.leaseMs ?? DEFAULT_LEASE_MS);
-  // A row is claimable if it's QUEUED and ready to run, OR if it's RUNNING but
-  // its lease has expired (a previous worker claimed it and never reported
-  // back). The lease-expiry branch is what lets a crashed worker's job get
-  // retried by another worker.
-  const row = db()
-    .query<JobRow, [JobStatus, number, number, number, number]>(
-      `UPDATE workflow_job
+  return db().transaction(() => {
+    // Older chat jobs may already be queued for a second attempt. Retire
+    // those before claiming anything, even when boot recovery wasn't called.
+    retireWorkflowRetries(now, false);
+    const row = db()
+      .query<JobRow, [JobStatus, number, number, number, number, string]>(
+        `UPDATE workflow_job
        SET status = ?, attempt = attempt + 1, locked_until = ?, updated = ?
        WHERE id = (
          SELECT id FROM workflow_job
          WHERE (status = 'QUEUED' AND scheduled_at <= ?)
-            OR (status = 'RUNNING' AND locked_until IS NOT NULL AND locked_until <= ?)
+            OR (status = 'RUNNING' AND locked_until IS NOT NULL AND locked_until <= ? AND job_type != ?)
          ORDER BY priority DESC, scheduled_at ASC, created ASC
          LIMIT 1
        )
        RETURNING *`,
-    )
-    .get("RUNNING", leaseUntil, now, now, now);
-  return row ? rowToJob<P>(row) : null;
+      )
+      .get("RUNNING", leaseUntil, now, now, now, RUN_FLOW);
+    return row ? rowToJob<P>(row) : null;
+  })();
+}
+
+/** Called inside a transaction. Preserve step outputs and terminal run results;
+ * an interrupted job is evidence of uncertainty, never proof of no effect. */
+function retireWorkflowRetries(ts: number, atBoot: boolean): void {
+  const d = db();
+  d.run(`UPDATE workflow_job SET max_attempts = 1, updated = ?
+    WHERE job_type = ? AND status IN ('QUEUED', 'RUNNING') AND max_attempts != 1`, [ts, RUN_FLOW]);
+  const jobs = d.query<JobRow, [string, number]>(`SELECT * FROM workflow_job
+    WHERE job_type = ? AND ((status = 'QUEUED' AND attempt > 0) OR (? = 1 AND status = 'RUNNING'))`)
+    .all(RUN_FLOW, atBoot ? 1 : 0);
+  for (const job of jobs) {
+    const reason = job.status === "RUNNING"
+      ? "Workflow execution was interrupted before its queue result was recorded. Effects may already have completed."
+      : "A previously attempted workflow job was queued for replay; automatic replay was stopped.";
+    const message = workflowFailureMessage([reason, job.last_error].filter(Boolean).join("\n"));
+    d.run(`UPDATE workflow_job SET status = 'FAILED', last_error = ?, locked_until = NULL, updated = ? WHERE id = ?`,
+      [message, ts, job.id]);
+    // flow_run_id was optional in older callers. Use the execution payload as
+    // a fallback so those runs also stop looking perpetually RUNNING/PAUSED.
+    let runId = job.flow_run_id;
+    if (!runId) {
+      try {
+        const payload = JSON.parse(job.payload);
+        if (typeof payload?.runId === "string") runId = payload.runId;
+      } catch { /* Keep the malformed job's durable error even without a run. */ }
+    }
+    if (runId) {
+      // A durable PAUSED result with a still-open waitpoint is a planned
+      // continuation, not an interrupted execution. Preserve that checkpoint.
+      // Merely creating a waitpoint while RUNNING does not establish a pause.
+      d.run(`UPDATE flow_run SET status = 'FAILED', failed_step = ?, finish_time = ?, updated = ?
+        WHERE id = ? AND status IN ('QUEUED', 'RUNNING', 'PAUSED')
+          AND (status != 'PAUSED' OR NOT EXISTS (
+            SELECT 1 FROM waitpoint WHERE flow_run_id = flow_run.id AND resumed_at IS NULL
+          ))`, [
+        JSON.stringify({ name: "<queue>", displayName: "Interrupted execution", errorMessage: message }),
+        ts, ts, runId,
+      ]);
+    }
+  }
 }
 
 export function getJob<P = Record<string, unknown>>(id: string): Job<P> | null {
@@ -200,33 +244,30 @@ export function getJob<P = Record<string, unknown>>(id: string): Job<P> | null {
  * Boot-time recovery (UPDATES.md graceful-drain resume). The daemon is
  * single-process, so any job still `RUNNING` at startup was orphaned by the
  * previous process's death (crash, or a drain that exceeded its deadline).
- * Reset such jobs to `QUEUED` with the lease cleared and `scheduled_at=now` so
- * the worker re-claims them IMMEDIATELY, instead of waiting out the (up to
- * `leaseMs`, default 5-min) lease lapse. The run re-executes from its last
- * durable checkpoint. Returns how many jobs were recovered. Must run BEFORE the
- * worker starts polling.
+ * Retire RUN_FLOW jobs with an actionable error without replaying effects.
+ * Other job types may re-queue within their attempt budget. Returns how many
+ * retryable jobs were re-queued. Must run BEFORE the worker starts polling.
  */
 export function recoverOrphanedJobs(): number {
   const ts = nowMs();
   const d = db();
-  // Poison guard: a job that already hit its attempt ceiling terminates as
-  // FAILED instead of re-running (and possibly re-crashing the daemon on) its
-  // side-effectful steps in a tight boot loop forever. `claimNextJob` doesn't
-  // check max_attempts, so recovery must.
-  d.run(
-    `UPDATE workflow_job
-     SET status = 'FAILED', last_error = 'orphaned: max attempts exhausted', locked_until = NULL, updated = ?
-     WHERE status = 'RUNNING' AND attempt >= max_attempts`,
-    [ts],
-  );
-  // The rest re-queue for immediate re-claim.
-  const res = d.run(
-    `UPDATE workflow_job
-     SET status = 'QUEUED', locked_until = NULL, scheduled_at = ?, updated = ?
-     WHERE status = 'RUNNING' AND attempt < max_attempts`,
-    [ts, ts],
-  );
-  return res.changes;
+  return d.transaction(() => {
+    retireWorkflowRetries(ts, true);
+    // Preserve the attempt ceiling for other orphaned job types too.
+    d.run(
+      `UPDATE workflow_job
+       SET status = 'FAILED', last_error = 'orphaned: max attempts exhausted', locked_until = NULL, updated = ?
+       WHERE status = 'RUNNING' AND attempt >= max_attempts`,
+      [ts],
+    );
+    const res = d.run(
+      `UPDATE workflow_job
+       SET status = 'QUEUED', locked_until = NULL, scheduled_at = ?, updated = ?
+       WHERE status = 'RUNNING' AND attempt < max_attempts`,
+      [ts, ts],
+    );
+    return res.changes;
+  })();
 }
 
 export function completeJob(id: string): void {
@@ -255,12 +296,12 @@ export function failJob(id: string, error: string, opts: FailJobOptions = {}): b
     throw new Error(`failJob: job is ${job.status}, expected RUNNING (id=${id})`);
   }
   const ts = opts.now ?? nowMs();
-  if (job.attempt >= job.maxAttempts) {
+  if (job.attempt >= maxAttemptsForJob(job.jobType, job.maxAttempts)) {
     db().run(
       `UPDATE workflow_job
        SET status = 'FAILED', last_error = ?, locked_until = NULL, updated = ?
        WHERE id = ?`,
-      [error, ts, id],
+      [job.jobType === RUN_FLOW ? workflowFailureMessage(error) : error, ts, id],
     );
     return false;
   }
