@@ -367,6 +367,7 @@ function actRun(flow: FlowRow, payload?: Record<string, unknown>): Record<string
     triggeredBy: "assistant:manage_workflow",
     startTime: Date.now(),
   });
+  // The queue's shared RUN_FLOW policy enforces one attempt for chat too.
   enqueue({
     jobType: RUN_FLOW,
     payload: { runId: run.id, payload: payload ?? {} },

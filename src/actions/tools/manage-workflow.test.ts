@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeWorkflowDb, initWorkflowDb } from "../../workflows/db/index.ts";
-import { queueStats } from "../../workflows/db/repos/job-queue.ts";
+import { findActiveJobForRun, getJob, queueStats } from "../../workflows/db/repos/job-queue.ts";
+import { getFlowRun } from "../../workflows/db/repos/flow-run.ts";
+import { Worker } from "../../workflows/queue/worker.ts";
+import { createRunFlowHandler, FlowExecutionError, RUN_FLOW } from "../../workflows/runner/handler.ts";
 import { createManageWorkflowTool } from "./manage-workflow.ts";
 import { sampleCatalog } from "../../workflows/runtime/test-fixtures.ts";
 import type { ComposerLlmClient } from "./workflow-composer.ts";
@@ -55,6 +58,35 @@ describe("manage_workflow tool", () => {
     expect(typeof out.run_id).toBe("string");
     expect(out.status).toBe("QUEUED");
     expect(queueStats().queued).toBe(1);
+    expect(findActiveJobForRun(out.run_id)?.maxAttempts).toBe(1);
+  });
+
+  test("chat run never repeats a completed effect after a downstream failure", async () => {
+    await call("create", { name: "effect then failure", empty: true });
+    const out = await call("run", { flow: "effect then failure" }) as { run_id: string };
+    const job = findActiveJobForRun(out.run_id)!;
+    let deliveries = 0;
+    const worker = new Worker({ log: () => {}, handlers: {
+      [RUN_FLOW]: createRunFlowHandler({ executor: { async execute() {
+        deliveries++;
+        throw new FlowExecutionError("later step failed", { name: "later", displayName: "Later" }, {
+          send: { output: { receipt: "fake-delivery-1" } },
+        });
+      } } }),
+    } });
+    await worker.drain();
+    await Bun.sleep(1100);
+    await worker.drain();
+    expect(deliveries).toBe(1);
+    expect(getJob(job.id)).toMatchObject({ status: "FAILED", attempt: 1 });
+    expect(getFlowRun(out.run_id)).toMatchObject({
+      status: "FAILED", steps: { send: { output: { receipt: "fake-delivery-1" } } },
+    });
+    const inspected = await call("get_run", { run_id: out.run_id }) as {
+      failedStep: { errorMessage: string }; steps: Record<string, unknown>;
+    };
+    expect(inspected.failedStep.errorMessage).toContain("Check completed effects");
+    expect(inspected.steps).toEqual({ send: { output: { receipt: "fake-delivery-1" } } });
   });
 
   test("enable / disable round-trip", async () => {

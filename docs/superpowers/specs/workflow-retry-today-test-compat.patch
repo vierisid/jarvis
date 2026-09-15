@@ -1,0 +1,9 @@
+diff --git a/src/goals/work-items.test.ts b/src/goals/work-items.test.ts
+index 7561c0a2..70d8f233 100644
+--- a/src/goals/work-items.test.ts
++++ b/src/goals/work-items.test.ts
+@@ -196,3 +196,3 @@ describe('Today work trace', () => {
+     recoverOrphanedJobs();
+-    expect(getFlowRun(run.id)?.status).toBe('RUNNING');
++    expect(getFlowRun(run.id)?.status).toBe('FAILED');
+     expect(queueStats().queued).toBe(1);
