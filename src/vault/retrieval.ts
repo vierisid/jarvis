@@ -7,181 +7,42 @@
  */
 
 import { getDb } from './schema.ts';
-import { searchEntitiesByName, type Entity } from './entities.ts';
-import { findFacts, type Fact } from './facts.ts';
+import { findEntities } from './entities.ts';
+import { getFact } from './facts.ts';
 import { getEntityRelationships } from './relationships.ts';
-import { USER_PROFILE_VAULT_SOURCE } from './user-profile.ts';
-import { formatFact, MEMORY_USE_RULES } from './fact-format.ts';
+import { rankRecall, recallTerms, type RecallFact } from './recall-ranking.ts';
+import { packRecallContext, RECALL_LIMITS, type RecallProfile } from './recall-context.ts';
 
-// Common stopwords to filter from search queries
-const STOPWORDS = new Set([
-  'i', 'me', 'my', 'myself', 'we', 'our', 'ours', 'ourselves', 'you', 'your',
-  'yours', 'yourself', 'yourselves', 'he', 'him', 'his', 'himself', 'she', 'her',
-  'hers', 'herself', 'it', 'its', 'itself', 'they', 'them', 'their', 'theirs',
-  'themselves', 'what', 'which', 'who', 'whom', 'this', 'that', 'these', 'those',
-  'am', 'is', 'are', 'was', 'were', 'be', 'been', 'being', 'have', 'has', 'had',
-  'having', 'do', 'does', 'did', 'doing', 'a', 'an', 'the', 'and', 'but', 'if',
-  'or', 'because', 'as', 'until', 'while', 'of', 'at', 'by', 'for', 'with',
-  'about', 'against', 'between', 'through', 'during', 'before', 'after', 'above',
-  'below', 'to', 'from', 'up', 'down', 'in', 'out', 'on', 'off', 'over', 'under',
-  'again', 'further', 'then', 'once', 'here', 'there', 'when', 'where', 'why',
-  'how', 'all', 'both', 'each', 'few', 'more', 'most', 'other', 'some', 'such',
-  'no', 'nor', 'not', 'only', 'own', 'same', 'so', 'than', 'too', 'very',
-  'can', 'will', 'just', 'don', 'should', 'now', 'could', 'would', 'shall',
-  'may', 'might', 'must', 'tell', 'know', 'think', 'say', 'said', 'get', 'go',
-  'make', 'like', 'also', 'well', 'back', 'way', 'want', 'look', 'first', 'even',
-  'give', 'yeah', 'yes', 'please', 'thanks', 'thank', 'hi', 'hello', 'hey',
-  'okay', 'ok', 'sure', 'right', 'much', 'many', 'need', 'let', 'remember',
-  'recall', 'told', 'mentioned', 'talked', 'work', 'works', 'working',
-]);
+export type EntityProfile = RecallProfile;
+export const extractSearchTerms = recallTerms;
 
-export type EntityProfile = {
-  entity: Entity;
-  facts: Fact[];
-  relationships: Array<{ type: string; target: string; direction: 'from' | 'to' }>;
-};
-
-/**
- * Extract meaningful search terms from a user message.
- * Filters stopwords and short words, deduplicates.
- */
-export function extractSearchTerms(message: string): string[] {
-  const words = message
-    .toLowerCase()
-    .split(/[^a-zA-Z0-9']+/)
-    .map(w => w.replace(/^'+|'+$/g, '')) // trim quotes
-    .filter(w => w.length > 1 && !STOPWORDS.has(w));
-
-  return [...new Set(words)];
-}
-
-/**
- * Search the vault for entities matching the given terms.
- * Searches entity names and fact objects/predicates.
- */
+/** Score every current candidate before selecting subjects or loading evidence. */
 export function retrieveForMessage(message: string): EntityProfile[] {
-  const terms = extractSearchTerms(message);
-  const entityMap = new Map<string, Entity>();
-
-  if (looksLikeSelfQuery(message)) {
-    try {
-      const db = getDb();
-      const row = db.prepare(
-        'SELECT * FROM entities WHERE source = ? ORDER BY updated_at DESC LIMIT 1'
-      ).get(USER_PROFILE_VAULT_SOURCE) as {
-        id: string;
-        type: Entity['type'];
-        name: string;
-        properties: string | null;
-        created_at: number;
-        updated_at: number;
-        source: string | null;
-      } | null;
-
-      if (row) {
-        entityMap.set(row.id, {
-          ...row,
-          properties: row.properties ? JSON.parse(row.properties) : null,
-        });
-      }
-    } catch {
-      // DB not available — skip self-profile bootstrap
-    }
-  }
-
-  if (terms.length === 0 && entityMap.size === 0) return [];
-
-  // 1. Search entity names
-  for (const term of terms) {
-    const matches = searchEntitiesByName(term);
-    for (const entity of matches) {
-      entityMap.set(entity.id, entity);
-    }
-  }
-
-  // 2. Search fact objects and predicates for matching terms
-  try {
-    const db = getDb();
-    for (const term of terms) {
-      const stmt = db.prepare(`
-        SELECT DISTINCT e.id, e.type, e.name, e.properties, e.created_at, e.updated_at, e.source
-        FROM entities e
-        JOIN facts f ON e.id = f.subject_id
-        WHERE f.status != 'superseded' AND (f.object LIKE ? OR f.predicate LIKE ?)
-        LIMIT 10
-      `);
-      const rows = stmt.all(`%${term}%`, `%${term}%`) as any[];
-      for (const row of rows) {
-        if (!entityMap.has(row.id)) {
-          entityMap.set(row.id, {
-            ...row,
-            properties: row.properties ? JSON.parse(row.properties) : null,
-          });
-        }
-      }
-    }
-  } catch {
-    // DB not available — return what we have from entity search
-  }
-
-  // 3. Build full profiles for matched entities (cap at 10)
-  const entities = [...entityMap.values()].slice(0, 10);
-  const profiles: EntityProfile[] = [];
-
-  for (const entity of entities) {
-    const facts = findFacts({ subject_id: entity.id });
-
-    let relationships: EntityProfile['relationships'] = [];
-    try {
-      const rels = getEntityRelationships(entity.id);
-      relationships = rels.map(r => ({
-        type: r.type,
-        target: r.from_id === entity.id ? r.to_entity.name : r.from_entity.name,
-        direction: (r.from_id === entity.id ? 'from' : 'to') as 'from' | 'to',
-      }));
-    } catch {
-      // Relationship query failed — skip
-    }
-
-    profiles.push({ entity, facts, relationships });
-  }
-
-  return profiles;
+  const entities = findEntities({});
+  const facts = getDb().query<RecallFact, []>('SELECT * FROM facts').all();
+  const ranked = rankRecall(message, entities, facts);
+  const terms = new Set(recallTerms(message));
+  return ranked.slice(0, RECALL_LIMITS.entities).map(({ entity, facts }, index) => ({
+    entity,
+    hasMore: index === 0 && ranked.length > RECALL_LIMITS.entities,
+    // Load provenance only for bounded finalists through the canonical repository.
+    facts: facts.slice(0, RECALL_LIMITS.factsPerEntity + 1).flatMap(fact => {
+      const complete = getFact(fact.id);
+      return complete ? [complete] : [];
+    }),
+    relationships: getEntityRelationships(entity.id).map(rel => ({
+      type: rel.type,
+      target: rel.from_id === entity.id ? rel.to_entity.name : rel.from_entity.name,
+      direction: rel.from_id === entity.id ? 'from' as const : 'to' as const,
+    })).sort((a, b) => {
+      const score = (rel: typeof a) => recallTerms(`${rel.type} ${rel.target}`).filter(term => terms.has(term)).length;
+      return score(b) - score(a) || a.type.localeCompare(b.type) || a.target.localeCompare(b.target) || a.direction.localeCompare(b.direction);
+    }).slice(0, RECALL_LIMITS.relationshipsPerEntity + 1),
+  }));
 }
 
-function looksLikeSelfQuery(message: string): boolean {
-  return /\b(i|me|my|mine|myself)\b/i.test(message);
-}
-
-/**
- * Format entity profiles into readable text for the system prompt.
- */
-export function formatKnowledgeContext(profiles: EntityProfile[]): string {
-  if (profiles.length === 0) return '';
-
-  const sections: string[] = [];
-
-  for (const { entity, facts, relationships } of profiles) {
-    const lines: string[] = [];
-
-    lines.push(`**${entity.name}** (${entity.type})`);
-
-    for (const fact of facts) {
-      if (fact.status !== 'superseded') lines.push(`  - ${formatFact(fact)}`);
-    }
-
-    for (const rel of relationships) {
-      if (rel.direction === 'from') {
-        lines.push(`  - Unverified relationship: ${rel.type} -> ${rel.target}`);
-      } else {
-        lines.push(`  - Unverified relationship: ${rel.target} -> ${rel.type} -> ${entity.name}`);
-      }
-    }
-
-    sections.push(lines.join('\n'));
-  }
-
-  return `${MEMORY_USE_RULES}\n\n${sections.join('\n\n')}`;
+export function formatKnowledgeContext(profiles: EntityProfile[], maxChars?: number): string {
+  return packRecallContext(profiles, maxChars);
 }
 
 /**

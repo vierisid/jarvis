@@ -1,0 +1,334 @@
+[
+  {
+    "id": "v2-multientity",
+    "category": "operating",
+    "queries": [
+      "Cobalt renewal owner Quartz rollback",
+      "Quartz rollback Cobalt owner renewal"
+    ],
+    "entities": [
+      {
+        "name": "Cobalt",
+        "facts": [
+          {
+            "key": "owner",
+            "predicate": "renewal_owner",
+            "object": "Rhea",
+            "confirmed": true
+          }
+        ]
+      },
+      {
+        "name": "Quartz",
+        "facts": [
+          {
+            "key": "rollback",
+            "predicate": "rollback",
+            "object": "Restore the last signed release",
+            "confirmed": true
+          }
+        ]
+      }
+    ],
+    "required": [
+      "owner",
+      "rollback"
+    ]
+  },
+  {
+    "id": "v2-common-first",
+    "category": "operating/order",
+    "queries": [
+      "approval Juniper contact",
+      "Juniper contact approval"
+    ],
+    "noise": {
+      "count": 25,
+      "name": "Approval archive",
+      "predicate": "notes",
+      "object": "approval discussion"
+    },
+    "entities": [
+      {
+        "name": "Juniper",
+        "facts": [
+          {
+            "key": "contact",
+            "predicate": "approval_contact",
+            "object": "luis@juniper.example",
+            "confirmed": true
+          }
+        ]
+      }
+    ],
+    "required": [
+      "contact"
+    ]
+  },
+  {
+    "id": "v2-alias-ambiguity",
+    "category": "aliases",
+    "queries": [
+      "pulsebox notification route"
+    ],
+    "entities": [
+      {
+        "name": "East pager",
+        "facts": [
+          {
+            "key": "east-alias",
+            "predicate": "alias",
+            "object": "pulsebox",
+            "source": "llm_extraction"
+          },
+          {
+            "key": "east-route",
+            "predicate": "notification_route",
+            "object": "East on-call",
+            "confirmed": true
+          }
+        ]
+      },
+      {
+        "name": "West pager",
+        "facts": [
+          {
+            "key": "west-alias",
+            "predicate": "alias",
+            "object": "pulsebox",
+            "source": "llm_extraction"
+          },
+          {
+            "key": "west-route",
+            "predicate": "notification_route",
+            "object": "West on-call",
+            "confirmed": true
+          }
+        ]
+      }
+    ],
+    "required": [
+      "east-alias",
+      "east-route",
+      "west-alias",
+      "west-route"
+    ]
+  },
+  {
+    "id": "v2-context",
+    "category": "context-budget",
+    "queries": [
+      "Sequoia contract retention"
+    ],
+    "entities": [
+      {
+        "name": "Sequoia",
+        "facts": [
+          {
+            "key": "retention",
+            "predicate": "contract_retention",
+            "object": "Retain signed copies for seven years",
+            "confirmed": true
+          },
+          {
+            "key": "noise-0",
+            "predicate": "diary",
+            "object": "Unrelated office conversation 0. cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation "
+          },
+          {
+            "key": "noise-1",
+            "predicate": "diary",
+            "object": "Unrelated office conversation 1. cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation "
+          },
+          {
+            "key": "noise-2",
+            "predicate": "diary",
+            "object": "Unrelated office conversation 2. cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation "
+          },
+          {
+            "key": "noise-3",
+            "predicate": "diary",
+            "object": "Unrelated office conversation 3. cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation cafeteria conversation "
+          }
+        ]
+      }
+    ],
+    "required": [
+      "retention"
+    ]
+  },
+  {
+    "id": "v2-italian",
+    "category": "multilingual",
+    "queries": [
+      "Giosuè contatto fatture",
+      "Giosue contatto fatture"
+    ],
+    "entities": [
+      {
+        "name": "Giosuè",
+        "facts": [
+          {
+            "key": "billing",
+            "predicate": "contatto_fatture",
+            "object": "amministrazione@example.it",
+            "confirmed": true
+          }
+        ]
+      }
+    ],
+    "required": [
+      "billing"
+    ]
+  },
+  {
+    "id": "v2-german",
+    "category": "multilingual",
+    "queries": [
+      "Jürgen Vertragsfreigabe",
+      "Jurgen Vertragsfreigabe"
+    ],
+    "entities": [
+      {
+        "name": "Jürgen",
+        "facts": [
+          {
+            "key": "contract",
+            "predicate": "Vertragsfreigabe",
+            "object": "Erst nach Prüfung durch Nela",
+            "confirmed": true
+          }
+        ]
+      }
+    ],
+    "required": [
+      "contract"
+    ]
+  },
+  {
+    "id": "v2-spanish",
+    "category": "multilingual",
+    "queries": [
+      "Lucía revisión entrega",
+      "Lucia revision entrega"
+    ],
+    "entities": [
+      {
+        "name": "Lucía",
+        "facts": [
+          {
+            "key": "delivery",
+            "predicate": "revisión_entrega",
+            "object": "Necesita dos firmas",
+            "confirmed": true
+          }
+        ]
+      }
+    ],
+    "required": [
+      "delivery"
+    ]
+  },
+  {
+    "id": "v2-cyrillic",
+    "category": "multilingual",
+    "queries": [
+      "Ольга счета"
+    ],
+    "entities": [
+      {
+        "name": "Ольга",
+        "facts": [
+          {
+            "key": "invoice",
+            "predicate": "счета",
+            "object": "Проверить перед оплатой",
+            "confirmed": true
+          }
+        ]
+      }
+    ],
+    "required": [
+      "invoice"
+    ]
+  },
+  {
+    "id": "v2-cjk",
+    "category": "multilingual",
+    "queries": [
+      "白鹭项目发票联系人"
+    ],
+    "entities": [
+      {
+        "name": "白鹭项目",
+        "facts": [
+          {
+            "key": "invoice",
+            "predicate": "发票联系人",
+            "object": "lin@bailu.example",
+            "confirmed": true
+          }
+        ]
+      }
+    ],
+    "required": [
+      "invoice"
+    ]
+  },
+  {
+    "id": "v2-correction",
+    "category": "truth",
+    "queries": [
+      "Helena preferred language"
+    ],
+    "entities": [
+      {
+        "name": "Helena",
+        "facts": [
+          {
+            "key": "old",
+            "predicate": "preferred_language",
+            "object": "English",
+            "correction": "Italian",
+            "replacementKey": "current"
+          },
+          {
+            "key": "inference",
+            "predicate": "preferred_language",
+            "object": "German",
+            "source": "llm_extraction",
+            "confidence": 0.98
+          }
+        ]
+      }
+    ],
+    "required": [
+      "current",
+      "inference"
+    ],
+    "forbiddenValues": [
+      "preferred_language: English"
+    ]
+  },
+  {
+    "id": "v2-abstain",
+    "category": "abstention",
+    "queries": [
+      "asteroid spectroscopy"
+    ],
+    "entities": [
+      {
+        "name": "Moss",
+        "facts": [
+          {
+            "key": "noise",
+            "predicate": "invoice_review",
+            "object": "Every Wednesday"
+          }
+        ]
+      }
+    ],
+    "required": [],
+    "abstain": true
+  }
+]
