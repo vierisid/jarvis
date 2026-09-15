@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
-import { CodeSandbox } from '../../core/code/code-sandbox-common'
+import { evaluateWorkflowExpression } from '../../../../../../../../runtime/safe-expression'
+import type { CodeSandbox } from '../../core/code/code-sandbox-common'
 
 const CODE_RUNNER_SCRIPT = `
 process.once('message', async function(msg) {
@@ -103,15 +104,8 @@ export const noOpCodeSandbox: CodeSandbox = {
         return runInChildProcess({ codeFilePath, inputs })
     },
 
-    async runScript({ script, scriptContext, functions }) {
-        const newContext = {
-            ...scriptContext,
-            ...functions,
-        }
-        const params = Object.keys(newContext)
-        const args = Object.values(newContext)
-        const body = `return (${script})`
-        const fn = Function(...params, body)
-        return fn(...args)
+    async runScript({ script, scriptContext }) {
+        // Jarvis: expressions may read data, never execute arbitrary code or callbacks.
+        return evaluateWorkflowExpression(script, scriptContext)
     },
 }

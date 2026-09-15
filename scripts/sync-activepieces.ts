@@ -26,6 +26,7 @@ import { existsSync, mkdirSync, readdirSync, statSync, rmSync, copyFileSync, rea
 import { join, relative, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { expressionPatches, applyExpressionPatch } from './activepieces-expression-patch';
 
 const PINNED_TAG = "0.82.1";
 const PINNED_SHA = "d04e6807c485ecd788a72af0d04abffba78563c7";
@@ -567,6 +568,12 @@ for (const [relPath, patches] of Object.entries(PATCH_INSERTIONS)) {
   }
   writeFileSync(dst, out.join("\n"));
   info(`applied ${patches.length} patch insertion(s) to ${relPath}`);
+}
+
+for (const [relPath, replacements] of Object.entries(expressionPatches)) {
+  const dst = join(VENDOR_DIR, relPath);
+  writeFileSync(dst, applyExpressionPatch(readFileSync(dst, 'utf8'), replacements));
+  info(`applied expression boundary patch to ${relPath}`);
 }
 
 // 8. Defense-in-depth: walk the vendor tree and abort if any /ee/ path slipped through

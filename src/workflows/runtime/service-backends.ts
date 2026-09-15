@@ -180,7 +180,7 @@ export function buildSandboxServiceBackends(
 
   const notifierDeps: NotifierDeps = {
     broadcastToDashboard: (text, priority) =>
-      opts.wsService.broadcastNotification(text, priority),
+      opts.wsService.broadcastNotificationToDashboard(text, priority),
     // Real per-channel routing: tryBroadcastToChannels iterates the requested
     // names, dispatches each to its adapter, and reports delivered/failed
     // independently. A flow that says "telegram" only goes to telegram (with
@@ -225,7 +225,7 @@ export function buildSandboxServiceBackends(
       execute: async (args, checkpoint) => {
         const recipients = args.recipients as Record<string, string | null>;
         const guardedNotifier = new JarvisNotifierAdapter({ ...notifierDeps,
-          broadcastToDashboard: (text, priority) => { checkpoint(); opts.wsService.broadcastNotification(text, priority); },
+          broadcastToDashboard: (text, priority) => { checkpoint(); opts.wsService.broadcastNotificationToDashboard(text, priority); },
           broadcastToChannels: async (channels, text) => {
             const delivered: string[] = [], failed: { channel: string; error: string }[] = [];
             for (const channel of channels) {

@@ -27,7 +27,7 @@ import {
   updateDraftVersion,
 } from "../../db/repos/flow-version";
 import type { FlowTriggerNode } from "../../db/repos/flow-version";
-import { createFlowRun, getFlowRun } from "../../db/repos/flow-run";
+import { createFlowRun, ensureRunExecutionConfig, getFlowRun } from "../../db/repos/flow-run";
 import { DEFAULT_IDS } from "../../db/schema";
 import { CredentialResolver } from "../../credentials/adapter";
 import { SandboxApi } from "../../sandbox-api/server";
@@ -471,6 +471,8 @@ describe("Engine end-to-end: full RESUME via zstd backup", () => {
       });
 
       // ── Pause: same direct executeFlow as the previous test ──────────
+      // Match the immutable configuration written by EngineFlowExecutor before BEGIN.
+      ensureRunExecutionConfig(run.id, {});
       const h1 = await runtime!.acquire({
         runId: run.id,
         projectId: DEFAULT_IDS.project,

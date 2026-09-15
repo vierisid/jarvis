@@ -21,6 +21,9 @@ effects. Preserve the existing delegated-agent checks.
   A crash during dispatch leaves an uncertain outcome and never auto-retries.
 - Check emergency/policy before each notification channel. Already dispatched
   effects cannot be rolled back; partial results remain visible.
+  Dashboard delivery uses a dedicated local broadcast method. High priority
+  cannot trigger the proactive notification service's external fan-out. External
+  channels use only the approved recipient snapshot, including `auto` expansion.
 - Preserve PAUSED through the worker so approval waits do not become success.
 
 ## Capabilities
@@ -48,6 +51,19 @@ the adapter must dispatch those exact arguments and target. Existing flows using
 undeclared tools or native effect pieces now fail with an unsupported-capability
 error. This requires an adapter, not an approval that purports to understand raw
 code or arbitrary UI semantics.
+
+Inline `{{ ... }}` expressions also use a bounded data interpreter. Supported
+syntax includes own-property references, dot/bracket and optional access,
+primitive literals, arrays/objects, arithmetic/comparisons, logical/nullish
+operators, ternaries and the built-in `flattenNestedKeys(data, path)` helper.
+There are no globals, arbitrary calls, assignment, constructors or prototype
+access. Getters, functions and object coercion are rejected. Unsupported syntax
+fails the step before dispatch instead of silently becoming an empty input.
+Existing flows using JavaScript methods or functions must use supported data
+expressions or a trusted adapter. Limits per expression: 16,384 source characters,
+2,048 tokens, depth 64, 10,000 evaluation/data visits and 1,048,576 accumulated
+string characters. The interpreter and engine patches participate in the bundle
+hash; source sync applies exact replacements and fails on upstream drift.
 
 ## API and identity
 
@@ -86,13 +102,23 @@ to the effect is atomic; delivery happens after that transaction. Generic
 waitpoint webhooks cannot resume Authority-owned waits. Approved requests remain
 owned by the workflow across restart.
 
+Before BEGIN, `flow_run.execution_config` stores an immutable JSON snapshot of
+`stepNameToTest`, `sampleData` and `sampleInputOverride`. Every continuation uses
+that snapshot, including retries and approval resumes after a database restart
+or queue-history cleanup. Single-step previews remain single-step previews.
+The additive migration leaves existing records intact; legacy paused runs can
+recover their configuration from their original BEGIN job. If both records are
+absent, resumption fails with an instruction to start a new run rather than
+guessing the original scope or inputs. Live version sample edits never replace
+an existing run snapshot.
+
 Effects already handed to an external adapter cannot be undone. Notifications
 recheck before each channel and voice chunk. Failure or a crash during dispatch
 retains a failed/uncertain record and blocks automatic replay; operators must
 inspect the remote outcome before starting a replacement run. This is an at-most-
 one dispatch claim, not a distributed exactly-once or sandbox-security guarantee.
 
-## Verification (2026-09-15)
+## Initial verification (2026-09-15)
 
 - Six tool/notification deny, pause and kill regressions failed before the gate.
 - The final 40 boundary tests pass, including real engine and worker approval
@@ -117,3 +143,32 @@ one dispatch claim, not a distributed exactly-once or sandbox-security guarantee
 
 All effect tests use synthetic writes/messages. They establish policy and
 dispatch behavior, not sandbox isolation or real-service business outcomes.
+
+## Review fixes and verification (2026-09-15)
+
+- R1: reproduced a host `fetch` call through `runScript`; replaced JavaScript
+  evaluation with the bounded interpreter. Real-engine tests reject inline HTTP
+  effects in piece inputs and loop expressions before any request or tool call,
+  under allowed, denied and paused policy states. Invalid expressions fail loudly.
+  Adversarial tests cover constructor/prototype access, getters, coercion hooks,
+  injected helper callbacks, unselected executable branches and resource limits.
+- R2: reproduced urgent dashboard delivery reaching an external recipient through
+  the real `WebSocketService`. Dedicated dashboard delivery now preserves the
+  approved channels and recipients, including high-priority `auto` notifications,
+  recipient changes while awaiting approval and emergency pause during fan-out.
+  Existing proactive notification broadcasts retain their original behavior.
+- R3: reproduced failed approval continuation of a single-step preview. The real
+  engine now completes only that step with the reviewed inputs after database
+  restart, queue-job deletion and changes to the version's sample settings.
+  Migration, immutable snapshots, legacy recovery and missing-history rejection
+  have separate regressions. Existing full-flow and loop resumes still pass.
+- Fresh broader run: **576 passed, zero failed, three existing opt-in skips**, with
+  1,850 assertions across 44 files. Scope: Authority; workflow runtime, database,
+  adapters, queue, sandbox API, runner and timer; daemon channel, approval and
+  WebSocket tests; expression-sync patch tests. The three skips cover catalog
+  extraction/drift and the standalone engine-build gate; real engine/worker tests
+  ran successfully. TypeScript, daemon/workflow builds and licensing, migration,
+  template and packaging guards pass. Packaging used the guard's Bun fallback.
+- The full repository and workflow API suites were not rerun for these fixes;
+  their previously verified limitations above remain. No external effects were
+  sent: reproduction uses synthetic tools/messages and a local HTTP listener.

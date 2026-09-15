@@ -86,6 +86,7 @@ const STATEMENTS: string[] = [
     steps TEXT,
     failed_step TEXT,
     step_name_to_test TEXT,
+    execution_config TEXT,
     start_time INTEGER,
     finish_time INTEGER,
     archived_at INTEGER,
@@ -248,6 +249,7 @@ export function createSchema(db: Database): void {
 function applyAdditiveColumnMigrations(db: Database): void {
   type ColMigration = { table: string; column: string; ddl: string };
   const migrations: ColMigration[] = [
+    { table: "flow_run", column: "execution_config", ddl: "ALTER TABLE flow_run ADD COLUMN execution_config TEXT" },
     { table: "flow_version", column: "engine_listeners", ddl: "ALTER TABLE flow_version ADD COLUMN engine_listeners TEXT" },
     { table: "flow_version", column: "engine_schedule", ddl: "ALTER TABLE flow_version ADD COLUMN engine_schedule TEXT" },
     // sample_data: JSON map { [stepName]: sampleOutput } fed to the engine
