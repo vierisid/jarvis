@@ -13,7 +13,7 @@ import { applyApprovalDecision } from '../../daemon/approval-decision';
 import { listWorkflowEffects, saveWorkflowEffect } from '../db/repos/workflow-effect';
 import { getWorkflowDb } from '../db';
 import { updateRun } from '../db/repos/flow-run';
-import { updateDraftVersion } from '../db/repos/flow-version';
+import { updateDraftVersion, setSampleDataEntry, setSampleInputEntry } from '../db/repos/flow-version';
 import { resumeResolvedWorkflowEffects } from './effect-approval-scheduler';
 import { assertWorkflowCapabilities } from './effect-capabilities';
 import { SandboxApi } from '../sandbox-api/server';
@@ -33,6 +33,8 @@ import { getSidecarManager, setSidecarManagerRef } from '../../actions/tools/sid
 import { CredentialResolver } from '../credentials/adapter';
 import { WorkflowEventBuffer } from './event-buffer';
 import { buildSandboxServiceBackends, type BuildServiceBackendsOptions } from './service-backends';
+import { WebSocketService } from '../../daemon/ws-service';
+import { noOpCodeSandbox } from '../activepieces/packages/server/engine/src/lib/core/code/no-op-code-sandbox';
 
 beforeEach(() => { initWorkflowDb(':memory:'); });
 afterEach(() => { closeWorkflowDb(); });
@@ -62,7 +64,7 @@ function fixture(route: 'tool' | 'notify' | 'agent' | 'workflow' = 'tool') {
     channelService: { getChannelStatus: () => ({}), getBroadcastRecipient: () => 'recipient-at-review',
       sendWorkflowNotification: async (...args: unknown[]) => { calls.push(args.slice(0, 3)); },
       tryBroadcastToChannels: async () => ({ delivered: [], failed: [] }) } as any,
-    wsService: { broadcastNotification: (...args: unknown[]) => { calls.push(args); } } as any,
+    wsService: { broadcastNotificationToDashboard: (...args: unknown[]) => { calls.push(args); } } as any,
   };
   const backends = buildSandboxServiceBackends(options);
   const context = { runId: run.id, projectId: DEFAULT_IDS.project, stepName: 'action', executionPath: [] };
@@ -73,6 +75,36 @@ function fixture(route: 'tool' | 'notify' | 'agent' | 'workflow' = 'tool') {
 }
 
 describe('workflow effect boundary', () => {
+  test('inline expressions cannot call the host fetch function', async () => {
+    const original = globalThis.fetch;
+    let calls = 0;
+    globalThis.fetch = (async () => { calls++; return new Response('synthetic'); }) as unknown as typeof fetch;
+    try {
+      await expect(noOpCodeSandbox.runScript({ script: 'fetch("https://example.invalid/")', scriptContext: {}, functions: {} })).rejects.toThrow();
+      expect(calls).toBe(0);
+    } finally { globalThis.fetch = original; }
+  });
+
+  test('urgent dashboard-only notifications do not broadcast to external recipients', async () => {
+    const f = fixture('notify');
+    const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
+    (ws as any).wsServer.broadcast = () => { f.calls.push('dashboard'); };
+    ws.setChannelService({ broadcastToAll: async () => { f.calls.push('unapproved-recipient'); } } as any);
+    f.options.wsService = ws;
+    const result = await f.backends.notify!({ message: 'hello', channels: ['dashboard'], priority: 'high' }, f.context);
+    expect(result.delivered).toEqual(['dashboard']);
+    expect(f.calls).toEqual(['dashboard']);
+  });
+
+  test('legacy urgent proactive notifications retain their explicit broadcast behavior', () => {
+    const calls: string[] = [];
+    const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
+    (ws as any).wsServer.broadcast = () => { calls.push('dashboard'); };
+    ws.setChannelService({ broadcastToAll: async (text: string) => { calls.push(text); } } as any);
+    ws.broadcastNotification('legacy', 'urgent');
+    expect(calls).toEqual(['dashboard', '[URGENT] legacy']);
+  });
+
   for (const route of ['tool', 'notify'] as const) {
     test(`${route}: Authority denial prevents the effect`, async () => {
       const f = fixture(route);
@@ -207,7 +239,11 @@ describe('workflow effect boundary', () => {
     const f = fixture('notify');
     f.options.channelService.getChannelStatus = () => ({ telegram: true } as any);
     f.authority.setGovernedCategories(['send_message']);
-    const req = { message: 'hello', channels: ['auto'], priority: 'normal' as const };
+    const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
+    (ws as any).wsServer.broadcast = () => { f.calls.push('dashboard'); };
+    ws.setChannelService({ broadcastToAll: async () => { f.calls.push('unapproved-recipient'); } } as any);
+    f.options.wsService = ws;
+    const req = { message: 'hello', channels: ['auto'], priority: 'high' as const };
     const pending = await f.backends.notify!(req, f.context);
     expect(f.calls).toHaveLength(0);
     f.options.channelService.getBroadcastRecipient = () => 'new-recipient';
@@ -215,14 +251,18 @@ describe('workflow effect boundary', () => {
     f.approvals.approve(pending.approval!.approvalId, 'test');
     const result = await f.backends.notify!(req, f.context);
     expect(result.delivered).toEqual(['dashboard', 'telegram']);
+    expect(f.calls).toHaveLength(2);
     expect(f.calls[1]).toEqual(['telegram', 'recipient-at-review', 'hello']);
     expect(listWorkflowEffects(f.run.id)[0]!.target).toMatchObject({ recipients: { telegram: 'recipient-at-review' } });
   });
 
   test('emergency during notification fan-out blocks later channels and records partial delivery', async () => {
     const f = fixture('notify');
-    f.options.wsService.broadcastNotification = () => { f.calls.push('dashboard'); f.emergency.pause(); };
-    const reply = await f.backends.notify!({ message: 'hello', channels: ['dashboard', 'telegram'], priority: 'normal' }, f.context);
+    const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
+    (ws as any).wsServer.broadcast = () => { f.calls.push('dashboard'); f.emergency.pause(); };
+    ws.setChannelService({ broadcastToAll: async () => { f.calls.push('unapproved-recipient'); } } as any);
+    f.options.wsService = ws;
+    const reply = await f.backends.notify!({ message: 'hello', channels: ['dashboard', 'telegram'], priority: 'high' }, f.context);
     expect(reply.delivered).toEqual(['dashboard']);
     expect(reply.failed[0]).toMatchObject({ channel: 'telegram' });
     expect(reply.failed[0]!.error).toContain('paused');
@@ -373,6 +413,82 @@ describe('workflow effect boundary', () => {
       expect(f.calls).toHaveLength(0);
     } finally { closeWorkflowDb(); rmSync(directory, { recursive: true, force: true }); }
   });
+
+  for (const state of ['allowed', 'denied', 'paused'] as const) test(`real engine rejects inline effects before dispatch when ${state}`, async () => {
+    const f = fixture();
+    let requests = 0;
+    const server = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => { requests++; return new Response('synthetic'); } });
+    const expression = `{{fetch("http://127.0.0.1:${server.port}/synthetic")}}`;
+    const action = f.version.trigger.nextAction!;
+    action.settings!.input = { toolName: 'write_file', params: { path: '/tmp/synthetic', content: expression } };
+    updateDraftVersion(f.version.id, { trigger: { ...f.version.trigger, nextAction: state === 'denied'
+      ? { name: 'loop', type: 'LOOP_ON_ITEMS', settings: { items: expression }, firstLoopAction: action } : action } });
+    if (state === 'denied') f.authority.addOverride({ action: 'write_data', allowed: false });
+    if (state === 'paused') f.emergency.pause();
+    const api = new SandboxApi({ services: f.backends });
+    await api.start({ port: 0 });
+    const bundle = await buildEngineBundle(); await buildAllJarvisPieces();
+    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath });
+    const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({
+      executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }),
+    }) } });
+    try {
+      enqueue({ jobType: 'RUN_FLOW', flowRunId: f.run.id, maxAttempts: 1, payload: { runId: f.run.id } });
+      await worker.drain();
+      expect(getFlowRun(f.run.id)!.status).toBe('FAILED');
+      expect(getFlowRun(f.run.id)!.failedStep?.errorMessage).toContain('Unsupported workflow expression');
+      expect(requests).toBe(0); expect(f.calls).toHaveLength(0);
+      expect(listWorkflowEffects(f.run.id)).toHaveLength(0);
+    } finally { await runtime.shutdown(); await api.stop(); server.stop(true); }
+  }, 60_000);
+
+  test('approved step preview retains scope and sample inputs after restart and job cleanup', async () => {
+    closeWorkflowDb();
+    const directory = mkdtempSync(join(tmpdir(), 'jarvis-preview-approval-'));
+    const path = join(directory, 'test.db');
+    initWorkflowDb(path);
+    const f = fixture();
+    const action = f.version.trigger.nextAction!;
+    action.settings!.input = { toolName: 'write_file', params: { path: '/wrong', content: 'production' } };
+    action.nextAction = { ...action, name: 'after', nextAction: undefined };
+    updateDraftVersion(f.version.id, { trigger: { ...f.version.trigger,
+      nextAction: { ...action, name: 'before', nextAction: action } } });
+    f.authority.setGovernedCategories(['write_data']);
+    const api = new SandboxApi({ services: f.backends });
+    await api.start({ port: 0 });
+    const bundle = await buildEngineBundle();
+    await buildAllJarvisPieces();
+    const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath });
+    const makeWorker = () => new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({
+      executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }),
+    }) } });
+    try {
+      enqueue({ jobType: 'RUN_FLOW', flowRunId: f.run.id, maxAttempts: 1, payload: {
+        runId: f.run.id, stepNameToTest: 'action', sampleData: { before: { text: 'reviewed sample' } },
+        sampleInputOverride: { action: { toolName: 'write_file', params: { path: '/preview', content: '{{before.text}}' } } },
+      } });
+      await makeWorker().drain();
+      expect(getFlowRun(f.run.id)!.status).toBe('PAUSED');
+      expect(f.calls).toHaveLength(0);
+      const effect = listWorkflowEffects(f.run.id)[0]!;
+      expect(effect.arguments).toMatchObject({ path: '/preview', content: 'reviewed sample' });
+      // Continuation must not depend on retained queue history or live sample settings.
+      getWorkflowDb().run("DELETE FROM workflow_job WHERE flow_run_id=?", [f.run.id]);
+      setSampleDataEntry(f.version.id, 'before', { text: 'later sample' });
+      setSampleInputEntry(f.version.id, 'action', { toolName: 'write_file', params: { path: '/later' } });
+      closeWorkflowDb(); initWorkflowDb(path);
+      new ApprovalManager().approve(effect.approvalId!, 'after-restart');
+      expect(resumeResolvedWorkflowEffects()).toBe(1);
+      await makeWorker().drain();
+      expect(getFlowRun(f.run.id)!.status).toBe('SUCCEEDED');
+      expect(f.calls).toHaveLength(1);
+      expect(f.calls[0]).toMatchObject({ path: '/preview', content: 'reviewed sample' });
+      expect(listWorkflowEffects(f.run.id).map(item => item.stepName)).toEqual(['action']);
+    } finally {
+      await runtime.shutdown(); await api.stop(); closeWorkflowDb();
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   for (const route of ['tool', 'notify'] as const) test(`${route}: real engine and worker pause, resume and preserve loop identity`, async () => {
     const f = fixture(route);

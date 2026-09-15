@@ -509,6 +509,18 @@ export class WebSocketService implements Service {
    * Urgent notifications are also pushed to all external channels.
    */
   broadcastNotification(text: string, priority: 'urgent' | 'normal' | 'low'): void {
+    this.broadcastNotificationToDashboard(text, priority);
+
+    // Legacy proactive notifications intentionally fan out to external channels.
+    if (priority === 'urgent' && this.channelService) {
+      this.channelService.broadcastToAll(`[URGENT] ${text}`).catch(err =>
+        console.error('[WSService] Channel broadcast error:', err)
+      );
+    }
+  }
+
+  /** Dashboard delivery only. Governed callers authorize external recipients separately. */
+  broadcastNotificationToDashboard(text: string, priority: 'urgent' | 'normal' | 'low'): void {
     const message: WSMessage = {
       type: 'chat',
       payload: {
@@ -519,13 +531,6 @@ export class WebSocketService implements Service {
       timestamp: Date.now(),
     };
     this.wsServer.broadcast(message);
-
-    // Push urgent notifications to external channels (Telegram, Discord)
-    if (priority === 'urgent' && this.channelService) {
-      this.channelService.broadcastToAll(`[URGENT] ${text}`).catch(err =>
-        console.error('[WSService] Channel broadcast error:', err)
-      );
-    }
   }
 
   /**
