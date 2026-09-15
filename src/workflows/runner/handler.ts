@@ -88,6 +88,8 @@ export interface FlowExecutorContext {
 }
 
 export interface FlowExecutorResult {
+  /** A pause completes this queue job but leaves the run waiting for a resume. */
+  status?: "SUCCEEDED" | "PAUSED";
   /** Per-step output keyed by step name. Empty for trivial flows. */
   steps: Record<string, unknown>;
   stepsCount: number;
@@ -136,7 +138,7 @@ export interface CreateRunFlowHandlerOptions {
  *   - Allow BEGIN only for QUEUED runs and RESUME only for PAUSED runs.
  *   - Mark RUNNING and clear the prior pause's failed_step.
  *   - Run the executor.
- *   - On success: mark SUCCEEDED with steps + finish_time.
+ *   - On completion: preserve PAUSED, or mark SUCCEEDED with finish_time.
  *   - On FlowExecutionError: mark FAILED with the named failedStep, then
  *     rethrow so the queue records failure. Steps captured before the
  *     failure are persisted.
@@ -181,6 +183,7 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
     updateRun(runId, {
       status: "RUNNING",
       startTime,
+      finishTime: null,
       // A planned continuation starts from the paused run's durable state.
       failedStep: null,
     });
@@ -193,11 +196,12 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
         payload: typed.payload.payload ?? {},
       });
       updateRun(runId, {
-        status: "SUCCEEDED",
+        status: result.status ?? "SUCCEEDED",
         steps: result.steps,
         stepsCount: result.stepsCount,
-        finishTime: now(),
+        finishTime: result.status === "PAUSED" ? null : now(),
       });
+      if (result.status === "PAUSED") return;
       // Auto-capture: write each step's output into the version's
       // sampleData map for cells that are currently empty. Lets the
       // variable picker in the editor surface real field names after a

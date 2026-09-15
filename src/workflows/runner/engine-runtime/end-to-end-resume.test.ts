@@ -400,16 +400,19 @@ describe("Engine end-to-end: full RESUME via zstd backup", () => {
   );
 
   test.skipIf(skipE2eTests)(
-    "RESUME via EngineFlowExecutor: restoreExecutionState reads the backup itself",
+    "worker preserves the engine pause and resumes through EngineFlowExecutor with its backup",
     async () => {
       // The first test calls handle.executeFlow directly with an explicit
       // executionState. The production path runs through
       // `EngineFlowExecutor.restoreExecutionState`, which decides between
       // the zstd backup and the flow_run.steps fallback. This test covers
-      // that integration: only the executor sees the runId; it discovers
-      // the backup file on its own.
+      // that integration through the worker and handler, including normal
+      // completion of the original queue job without losing PAUSED.
       const { EngineFlowExecutor } = await import("./engine-flow-executor");
-      const { RUN_FLOW } = await import("../handler");
+      const { RUN_FLOW, createRunFlowHandler } = await import("../handler");
+      const { Worker } = await import("../../queue/worker");
+      const { enqueue, getJob } = await import("../../db/repos/job-queue");
+      const { createWorkflowRoutes } = await import("../../api/routes");
 
       // ── Build a flow that pauses, just like the previous test ─────────
       const flow = createFlow({ projectId: DEFAULT_IDS.project });
@@ -470,48 +473,26 @@ describe("Engine end-to-end: full RESUME via zstd backup", () => {
         environment: "TESTING",
       });
 
-      // ── Pause: same direct executeFlow as the previous test ──────────
-      const h1 = await runtime!.acquire({
-        runId: run.id,
-        projectId: DEFAULT_IDS.project,
-      });
-      try {
-        const paused = await h1.executeFlow({
-          flowVersion: getFlowVersion(v.id)!,
-          streamStepProgress: "WEBSOCKET",
-          runEnvironment: "TESTING",
-        });
-        expect(paused.status).toBe("PAUSED");
-      } finally {
-        await h1.release();
-      }
+      const worker = new Worker({ log: () => {}, handlers: {
+        [RUN_FLOW]: createRunFlowHandler({ executor: new EngineFlowExecutor(runtime!) }),
+      } });
+      const original = enqueue({ jobType: RUN_FLOW, flowRunId: run.id, payload: { runId: run.id } });
+      expect(await worker.drain()).toBe(1);
+      expect(getJob(original.id)?.status).toBe("SUCCEEDED");
+      expect(getFlowRun(run.id)).toMatchObject({ status: "PAUSED", finishTime: null });
 
-      // ── RESUME via the executor (production path) ────────────────────
-      // The executor's `restoreExecutionState` calls the loader for us;
-      // we don't pass an executionState here, only stepNameToTest=undefined
-      // and executionType=RESUME on the job payload.
-      const executor = new EngineFlowExecutor(runtime!);
-      const ctx = {
-        run: getFlowRun(run.id)!,
-        version: getFlowVersion(v.id)!,
-        job: {
-          id: "test_resume_via_executor",
-          payload: {
-            runId: run.id,
-            executionType: "RESUME",
-            resumePayload: { queryParams: {} },
-          },
-          jobType: RUN_FLOW,
-        },
-        payload: {},
-      };
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const result = await executor.execute(ctx as any);
-      expect(result.stepsCount).toBeGreaterThanOrEqual(2);
+      const waitpoint = listWaitpointsByFlowRun(run.id, false)[0]!;
+      const request = Object.assign(new Request("http://localhost/api/webhooks/waitpoints/" + waitpoint.id, {
+        method: "POST", body: JSON.stringify({ queryParams: {} }),
+      }), { params: { id: waitpoint.id } });
+      expect((await createWorkflowRoutes()["/api/webhooks/waitpoints/:id"]!.POST!(request)).status).toBe(202);
+      expect(await worker.drain()).toBe(1);
 
       // step_final should have dereferenced step_seed.echo.seeded -> 99.
       const persisted = getFlowRun(run.id);
       expect(persisted?.status).toBe("SUCCEEDED");
+      expect(persisted!.finishTime).toBeGreaterThan(0);
+      expect(persisted!.stepsCount).toBeGreaterThanOrEqual(2);
       const finalSteps = (persisted?.steps ?? {}) as Record<string, { output?: unknown }>;
       const finalEnvelope = finalSteps["step_final"] as
         | { output?: { output?: { echo?: { recovered?: unknown } } } }

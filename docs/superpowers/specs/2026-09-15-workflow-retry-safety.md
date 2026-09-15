@@ -36,6 +36,11 @@ acquisition retries before flow execution remain unchanged.
 - A new queue job cannot restart a completed or failed run: BEGIN requires
   QUEUED, RESUME requires PAUSED, and both require the first queue attempt.
   A legitimate waitpoint continuation is a fresh single-attempt job.
+- Normal engine completion distinguishes PAUSED from SUCCEEDED. A pause
+  completes its queue job but retains the run's PAUSED status, outputs and
+  null finish time. The handler skips sample capture until actual success.
+  A queued continuation can run whether it arrives before or after the
+  original job completes, without depending on another open PR.
 
 This uses existing durable `workflow_job` and `flow_run` records. There is no
 schema migration or new status enum. The daemon remains a single process;
@@ -82,7 +87,12 @@ made. A4 must test actual supported effect receipts and reconciliation.
 
 ## Combining open PRs
 
-The A1 implementation combines cleanly. Apply
+Both A1 and Today also carry the pause-result contract now included here.
+Keep one copy of that contract, including nullable finish time and clearing
+it when a continuation starts. Preserve A1's immutable execution configuration.
+The worker-driven engine regression now records that configuration through
+its real BEGIN path, replacing A1's manual setup in that test; its executor
+unit tests still need their configuration fixtures. Apply
 [`workflow-retry-a1-test-compat.patch`](workflow-retry-a1-test-compat.patch)
 after merging A1: three engine test setups (six parameterized cases) must
 reset their direct-boundary RUNNING fixture to QUEUED before handing it to
@@ -91,14 +101,14 @@ the worker. Production entry points already start QUEUED.
 PR #450 also edits queue recovery and the handler. Keep this branch's
 `retireWorkflowRetries(ts, true)` before re-queuing other job types, and keep
 #450's `reconcileCanceledRuns`, its legacy stranded-run repair and its
-cancel implementation. Keep #450's PAUSED result and null finish-time
+cancel implementation. Keep the shared PAUSED result and null finish-time
 handling alongside the new handler entry guard. Union the queue tests and
 their imports/helpers. Apply the accompanying
 [`workflow-retry-today-test-compat.patch`](workflow-retry-today-test-compat.patch):
 a queued RESUME cannot make an interrupted RUNNING execution safe. That run
 must fail with guidance; a recorded PAUSED checkpoint remains resumable.
-These combinations were exercised in isolated checkouts, without adding
-either PR's implementation to this branch.
+These combinations were exercised in isolated checkouts, without importing
+either PR's commits into this branch.
 
 ## Verification
 
@@ -137,6 +147,31 @@ Verification: 122 focused tests passed, followed by the final 39-test queue
 run with fresh-process recovery. Isolated combinations passed 96 Authority
 and 75 Today tests. TypeScript, daemon build and all four guards passed.
 The full-suite and per-commit hook limitations above remain unchanged.
+
+### R2: preserve a pause when the original job completes normally
+
+The production executor returns an explicit PAUSED or SUCCEEDED result.
+The handler retains PAUSED with no finish time, completes that queue job,
+and accepts the planned continuation under the existing strict entry guard.
+It also clears stale finish times on entry and avoids capturing partial
+outputs as successful sample data. This matches the open Today/A1 contract
+and works independently on this branch.
+
+Four timer/webhook regressions cover continuations queued before and after
+normal completion through the real queue, handler and production executor,
+with only the engine subprocess stubbed. They verify retained outputs,
+one synthetic delivery, one continuation, no partial sample capture and
+cleared finish times. The real-engine backup/resume test now runs both BEGIN
+and RESUME through the worker, using the webhook endpoint to enqueue RESUME.
+All four timing cases, the executor status assertion and the real-engine
+regression failed before the fix. Afterward, 145 focused tests passed across
+seven files, followed by the final 14 handler tests with stale-time coverage.
+TypeScript, daemon build and all four repository guards passed.
+The isolated A1 combination passed 119 tests, including the real engine.
+The Today combination passed 95 tests; its three real-engine tests skipped
+because that checkout lacks the engine/piece build cache. Those three
+tests passed on this branch and in the A1 combination. The full repository
+suite was not run; the documented per-commit hook limitation still applies.
 
 All effects in these tests are synthetic. Live delivery incidence and
 provider reconciliation have not been measured.

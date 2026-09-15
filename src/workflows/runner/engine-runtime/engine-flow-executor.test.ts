@@ -176,6 +176,7 @@ describe("EngineFlowExecutor", () => {
     });
     const result = await exec.execute(ctx);
     expect(result.stepsCount).toBe(0);
+    expect(result).toMatchObject({ status: "PAUSED" });
   });
 
   test("RESUME: passes resumePayload + unwrapped executionState.steps to engine", async () => {
