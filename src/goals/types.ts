@@ -5,6 +5,8 @@
  * Goals nest: objective → key_result → milestone → task → daily_action.
  */
 
+import type { GoalReviewRecord } from './review-evidence.ts';
+
 // ── Enums ───────────────────────────────────────────────────────────
 
 export type GoalLevel = 'objective' | 'key_result' | 'milestone' | 'task' | 'daily_action';
@@ -62,6 +64,7 @@ export type GoalProgressEntry = {
 };
 
 export type GoalCheckIn = {
+  review_evidence?: GoalReviewRecord;
   id: string;
   type: CheckInType;
   summary: string;

@@ -327,6 +327,9 @@ export class GoalService implements Service {
         parts.push(`**Evening Review**\n`);
         parts.push(result.message);
         parts.push(`\n\n${result.assessment}`);
+        if (result.reviewEvidence?.bundle.scorePolicy === 'no_verified_score_mapping') {
+          parts.push('\n\nAutomatic scores unchanged: verified measurements linked to the goal criteria are required.');
+        }
         if (result.scoreUpdates.length > 0) {
           parts.push(`\n\n**Score Updates:**`);
           for (const u of result.scoreUpdates) {

@@ -4,6 +4,7 @@
 
 import type { SQLQueryBindings } from 'bun:sqlite';
 import { getDb, generateId } from './schema.ts';
+import { getGoalReviewRecord } from '../goals/review-evidence.ts';
 import type {
   Goal, GoalProgressEntry, GoalCheckIn,
   GoalLevel, GoalStatus, GoalHealth, EscalationStage,
@@ -36,8 +37,10 @@ function parseGoal(row: GoalRow): Goal {
 }
 
 function parseCheckIn(row: CheckInRow): GoalCheckIn {
+  const reviewEvidence = row.type === 'evening_review' ? getGoalReviewRecord(row.id) : null;
   return {
     ...row,
+    ...(reviewEvidence ? { review_evidence: reviewEvidence } : {}),
     goals_reviewed: row.goals_reviewed ? JSON.parse(row.goals_reviewed) : [],
     actions_planned: row.actions_planned ? JSON.parse(row.actions_planned) : [],
     actions_completed: row.actions_completed ? JSON.parse(row.actions_completed) : [],
@@ -206,6 +209,9 @@ export function updateGoal(id: string, updates: GoalUpdate): Goal | null {
 }
 
 export function updateGoalScore(id: string, score: number, reason: string, source = 'user'): Goal | null {
+  // Automatic reviews need a verified measurement-to-score contract (C5/C9).
+  // Do not allow callers to bypass review evidence validation with a known ID.
+  if (source === 'daily_review' || typeof score !== 'number' || !Number.isFinite(score)) return null;
   const db = getDb();
   const existing = getGoal(id);
   if (!existing) return null;

@@ -721,6 +721,12 @@ function createTables(db: Database): void {
   db.run(`CREATE INDEX IF NOT EXISTS idx_gci_type ON goal_check_ins(type)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_gci_created ON goal_check_ins(created_at)`);
 
+  // Additive review audit: the exact bounded inputs and rejected score proposals.
+  db.run(`CREATE TABLE IF NOT EXISTS goal_review_evidence (
+    check_in_id TEXT PRIMARY KEY REFERENCES goal_check_ins(id) ON DELETE CASCADE,
+    record TEXT NOT NULL
+  )`);
+
   // A work item extends a commitment: its public ID is the commitment ID.
   // Workflow IDs remain durable references even if run history is deleted.
   // No workflow-table FK: independent goal rhythms also run without that schema.

@@ -4148,6 +4148,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const parts = url.pathname.split('/');
           const id = parts[parts.length - 2]!;
           const body = await req.json() as { score: number; reason: string; source?: string };
+          if (body.source === 'daily_review') {
+            return error('Automatic goal reviews require a verified measurement-to-score mapping', 400);
+          }
+          if (typeof body.score !== 'number' || !Number.isFinite(body.score)) {
+            return error('Score must be a finite number', 400);
+          }
           const goals = require('../vault/goals.ts');
           const updated = goals.updateGoalScore(id, body.score, body.reason, body.source ?? 'user');
           if (!updated) return error('Goal not found', 404);

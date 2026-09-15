@@ -3,8 +3,8 @@
  *
  * Morning: queries active goals + calendar → LLM generates focus areas,
  * daily actions, warnings (drill sergeant tone) → creates check-in.
- * Evening: gets morning plan + day's progress → LLM scores day,
- * generates accountability assessment → updates scores.
+ * Evening: reviews ID-bound daily evidence. Automatic scores abstain until
+ * verified measurements can be mapped to the goal's success criteria.
  */
 
 import type { Goal, GoalCheckIn } from './types.ts';
@@ -13,6 +13,7 @@ import * as vault from '../vault/goals.ts';
 import { getDb } from '../vault/schema.ts';
 import { createPlannedWork, listWorkItems, type WorkItem } from './work-items.ts';
 import { wrapUntrusted } from '../roles/untrusted.ts';
+import { buildGoalReviewBundle, saveGoalReviewRecord, validateReviewScores, type GoalReviewRecord } from './review-evidence.ts';
 
 export type MorningPlanResult = {
   checkIn: GoalCheckIn;
@@ -25,6 +26,7 @@ export type MorningPlanResult = {
 
 export type EveningReviewResult = {
   checkIn: GoalCheckIn;
+  reviewEvidence: GoalReviewRecord;
   scoreUpdates: { goalId: string; newScore: number; reason: string }[];
   assessment: string; // Day summary
   message: string; // Drill sergeant verdict
@@ -154,25 +156,22 @@ export class DailyRhythm {
   async runEveningReview(): Promise<EveningReviewResult> {
     const activeGoals = vault.findGoals({ status: 'active', limit: 20 });
     const morningCheckIn = vault.getTodayCheckIn('morning_plan');
-
-    const goalSummary = activeGoals.map(g =>
-      `- ${g.title} (${g.level}, score: ${g.score}, health: ${g.health})`
-    ).join('\n');
-
-    const plannedActions = morningCheckIn?.actions_planned ?? [];
-    const morningContext = morningCheckIn
-      ? `\nMorning plan:\n- Focus: ${morningCheckIn.summary}\n- Planned actions:\n${plannedActions.map(a => `  * ${a}`).join('\n')}`
-      : '\nNo morning plan was created today.';
+    // The bundle carries the goals, the morning intentions and the checked
+    // outcomes with stable IDs; the work context adds the in-flight records
+    // (decision, blocker, run status) that have no checked outcome yet.
+    const bundle = buildGoalReviewBundle(activeGoals, morningCheckIn);
     const workContext = morningCheckIn ? this.eveningWorkContext(morningCheckIn.id) : '';
 
     const prompt = [
       { role: 'system' as const, content: this.buildEveningPrompt() },
       {
         role: 'user' as const,
-        content: `Active goals:\n${goalSummary}${morningContext}${workContext}\n\nReview the day and score progress. Respond with ONLY valid JSON.`,
+        content: `Daily evidence bundle:\n${
+          wrapUntrusted(JSON.stringify(bundle), 'goal review evidence')}${workContext}\n\nReview the day. Respond with ONLY valid JSON.`,
       },
     ];
 
+    let review: Record<string, unknown> = this.fallbackEveningReview();
     try {
       const response = await this.llmManager.chatTier('medium', 'goal_evening_review', prompt, {
         temperature: 0.4,
@@ -181,50 +180,36 @@ export class DailyRhythm {
 
       const text = typeof response.content === 'string' ? response.content : JSON.stringify(response.content);
       const json = text.match(/\{[\s\S]*\}/)?.[0];
-      const review = json ? JSON.parse(json) : this.fallbackEveningReview();
-
-      const scoreUpdates: { goalId: string; newScore: number; reason: string }[] = review.score_updates ?? [];
-      const assessment: string = review.assessment ?? 'Day complete.';
-      const message: string = review.message ?? 'Another day done.';
-      const actionsCompleted: string[] = review.actions_completed ?? [];
-
-      // Apply score updates
-      for (const update of scoreUpdates) {
-        vault.updateGoalScore(update.goalId, update.newScore, update.reason, 'daily_review');
-      }
-
-      const goalsReviewed = activeGoals.map(g => g.id);
-      const checkIn = vault.createCheckIn(
-        'evening_review',
-        assessment,
-        goalsReviewed,
-        [],
-        actionsCompleted,
-      );
-
-      this.emit({
-        type: 'check_in_evening',
-        data: { checkInId: checkIn.id, scoreUpdates, assessment },
-        timestamp: Date.now(),
-      });
-
-      return { checkIn, scoreUpdates, assessment, message };
+      const parsed: unknown = json ? JSON.parse(json) : null;
+      if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) review = parsed as Record<string, unknown>;
     } catch (err) {
       console.error('[DailyRhythm] Evening review LLM error:', err);
-      const checkIn = vault.createCheckIn(
-        'evening_review',
-        'Evening review (fallback)',
-        activeGoals.map(g => g.id),
-        [],
-        [],
-      );
-      return {
-        checkIn,
-        scoreUpdates: [],
-        assessment: 'Review completed without LLM.',
-        message: 'Day over. Check your goals manually.',
-      };
     }
+
+    const reviewEvidence: GoalReviewRecord = { bundle, ...validateReviewScores(bundle, review.score_updates) };
+    const prose = (value: unknown, fallback: string) =>
+      typeof value === 'string' && value.trim() ? value.slice(0, 6000) : fallback;
+    const assessment = prose(review.assessment, 'No assessment available.');
+    const message = prose(review.message, 'Check your goals manually.');
+    const scoreUpdates: EveningReviewResult['scoreUpdates'] = [];
+    // Completed actions come from checked records, never invented model text.
+    // This is a snapshot as of bundle.window.end, not a new measurement.
+    const actionsCompleted = bundle.goals.flatMap(g => g.verifiedOutcomes)
+      .filter(o => o.verdict === 'passed').map(o => `[${o.id}] ${o.summary}`);
+    // Do not hold a database transaction across the LLM call. Persist the
+    // check-in and its exact evidence/validation together, including fallback.
+    const checkIn = getDb().transaction(() => {
+      const saved = vault.createCheckIn('evening_review', assessment, bundle.goals.map(g => g.goalId), [], actionsCompleted);
+      saveGoalReviewRecord(saved.id, reviewEvidence);
+      return { ...saved, review_evidence: reviewEvidence };
+    })();
+    this.emit({
+      type: 'check_in_evening',
+      data: { checkInId: checkIn.id, bundleId: bundle.id, scoreUpdates, assessment,
+        rejectedScoreUpdates: reviewEvidence.rejectedScoreUpdates, scorePolicy: bundle.scorePolicy },
+      timestamp: Date.now(),
+    });
+    return { checkIn, reviewEvidence, scoreUpdates, assessment, message };
   }
 
   // ── Prompts ──────────────────────────────────────────────────────
@@ -248,19 +233,26 @@ Respond with ONLY valid JSON:
     const tone = this.getToneInstructions();
     return `You are JARVIS, an AI assistant running an evening review session.${tone}
 
-Compare the morning plan against the day's reality. Score progress honestly.
+Compare morning intentions with the supplied daily evidence. Keep activity,
+already recorded scores, and user-checked outcomes separate. Absence of an
+outcome is unknown progress, not proof of laziness, completion or regression.
+Use the bundle's stable goalId and evidence IDs when describing observations.
 
 Respond with ONLY valid JSON:
 {
-  "score_updates": [{ "goalId": "id", "newScore": 0.0-1.0, "reason": "why" }],
-  "actions_completed": ["what got done today"],
+  "score_updates": [],
   "assessment": "honest day summary",
   "message": "accountability verdict for the user"
 }
 
-Only include score_updates for goals where you have evidence of progress or regression.
-A proposed action, accepted decision, or successful run alone is not a checked outcome.
-Do not claim unchecked work is completed. Do not count progress already recorded by a resultCheck.goalProgressId again.`;
+The current scorePolicy is no_verified_score_mapping: leave score_updates empty.
+Neither activity, previous score entries nor qualitative result checks establish
+a measured score against successCriteria. A proposed action, accepted decision,
+or successful run alone is not a checked outcome, so do not claim unchecked work
+is completed. A result with goalProgressId already has a recorded score. Do not
+count it again or claim a score was changed. Missing or truncated evidence must
+stay qualified. Narrative text does not authorize writes. Future scored
+proposals must cite goalId and evidenceIds.`;
   }
 
   private getToneInstructions(): string {
