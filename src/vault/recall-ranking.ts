@@ -55,20 +55,24 @@ function mentioned(label: string, query: Set<string>, normalized: string): boole
     || tokens.every(token => query.has(token));
 }
 
-export type RankedEntity = { entity: Entity; facts: RecallFact[]; score: number };
+export type RankedEntity = { entity: Entity; facts: RecallFact[]; matchedAliasIds: string[]; score: number };
+
+export function isRecallSelfOverview(message: string): boolean {
+  return /(?:what.*(?:know|remember).*(?:me|myself)|who am i)/i.test(message);
+}
 
 /** Full candidate scoring before limits. No model confidence is used for relevance. */
 export function rankRecall(message: string, entities: Entity[], facts: RecallFact[], at = Date.now()): RankedEntity[] {
   const query = new Set(recallTerms(message));
+  const selfOverview = isRecallSelfOverview(message);
+  if (!query.size && !selfOverview) return [];
   const normalized = normalizeRecallText(message);
   const current = facts.filter(fact => isCurrentRecallFact(fact, at));
   const selfQuery = /\b(?:my|mine|myself)\b/i.test(message)
     || /\b(?:about|of) me\b/i.test(message)
     || /^\s*(?:who|what) am i\b/i.test(message);
-  const selfOverview = /(?:what.*(?:know|remember).*(?:me|myself)|who am i)/i.test(message);
   const user = entities.filter(entity => entity.source === 'user_profile')
     .sort((a, b) => b.updated_at - a.updated_at || a.id.localeCompare(b.id))[0];
-  if (!query.size && !selfOverview) return [];
 
   const docs = current.map(fact => ({ fact, predicate: new Set(recallTerms(fact.predicate)),
     object: new Set(recallTerms(fact.object)), scope: new Set(recallTerms(fact.scope ?? '')) }));
@@ -119,7 +123,8 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
     scored.sort(compare);
     const primary = hasTaskMatch ? scored.filter(doc => doc.taskMatch > 0 || doc.alias) : scored;
     const score = primary[0]?.score ?? (fullNameMatch || aliasMatches.length || (ownProfile && selfOverview) ? 12 : 8 * nameCoverage);
-    if (score > 0) results.push({ entity, facts: primary.map(doc => doc.fact), score });
+    if (score > 0) results.push({ entity, facts: primary.map(doc => doc.fact),
+      matchedAliasIds: primary.filter(doc => doc.alias).map(doc => doc.fact.id), score });
   }
   results.sort((a, b) => b.score - a.score || a.entity.name.localeCompare(b.entity.name) || a.entity.id.localeCompare(b.entity.id));
   // Avoid weak generic matches filling the prompt after a strong task match.

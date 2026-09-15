@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, expect, test } from 'bun:test';
+import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test';
 import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -53,6 +53,138 @@ test('aliases shared by different subjects preserve ambiguity and evidence quali
   expect(context).toContain('South.example');
   expect(context).toContain('"basis":"inferred"');
   expect(context).toContain('"binding_eligible":false');
+});
+
+test.each([false, true])('crowded alias recall keeps selection evidence (reverse=%s)', reverse => {
+  const entity = createEntity('project', 'Orion');
+  const insertAlias = () => repository.createFact(entity.id, 'alias', 'beacon', { source: 'llm_extraction', confidence: 0.7 });
+  if (!reverse) insertAlias();
+  for (let i = 0; i < 8; i++) {
+    const fact = repository.createFact(entity.id, `deployment_endpoint_${i}`, `route-${i}.example`);
+    repository.verifyFact(fact.id);
+  }
+  if (reverse) insertAlias();
+  const context = getKnowledgeForMessage('beacon deployment endpoint');
+  expect(context).toContain('deployment_endpoint_0: route-0.example');
+  const aliasLine = context.split('\n').find(line => line.includes('alias: beacon'));
+  expect(aliasLine).toBeDefined();
+  expect(aliasLine).toContain('"basis":"inferred"');
+  expect(aliasLine).toContain('"binding_eligible":false');
+  expect((context.match(/  - /g) ?? []).length).toBeLessThanOrEqual(RECALL_LIMITS.factsPerEntity);
+});
+
+test('a subject cannot appear when its required alias qualification does not fit', () => {
+  const entity = createEntity('project', 'Orion');
+  repository.createFact(entity.id, 'alias', 'beacon', { source: 's'.repeat(2500), confidence: 0.6 });
+  repository.createFact(entity.id, 'endpoint', 'route.example');
+  createRelationship(entity.id, createEntity('project', 'Destination').id, 'supports');
+  const context = formatKnowledgeContext(retrieveForMessage('beacon endpoint'), 1300);
+  expect(context).not.toContain('route.example');
+  expect(context).not.toContain('Destination');
+  expect(context).toContain('omitted');
+});
+
+test('all matched aliases count toward the fact limits', () => {
+  const entity = createEntity('project', 'Orion');
+  const aliases = Array.from({ length: 9 }, (_, i) => `beacon${i}`);
+  for (const alias of aliases) repository.createFact(entity.id, 'alias', alias, { source: 'llm_extraction' });
+  repository.createFact(entity.id, 'endpoint', 'route.example');
+  const context = getKnowledgeForMessage(aliases.join(' ') + ' endpoint');
+  expect(context).not.toContain('route.example');
+  expect(context).not.toContain('alias:');
+  expect(context).toContain('omitted');
+});
+
+test.each(['missing', 'expired'])('unavailable alias dependencies omit the subject (%s)', state => {
+  const entity = createEntity('project', 'Orion');
+  const alias = repository.createFact(entity.id, 'alias', 'beacon');
+  const endpoint = repository.createFact(entity.id, 'endpoint', 'route.example');
+  const context = packRecallContext([{ entity, matchedAliasIds: [alias.id],
+    facts: state === 'missing' ? [endpoint] : [endpoint, { ...alias, valid_to: 1 }],
+    relationships: [{ type: 'supports', target: 'Destination', direction: 'from' }],
+  }]);
+  expect(context).not.toContain('Orion');
+  expect(context).not.toContain('route.example');
+  expect(context).not.toContain('Destination');
+  expect(context).toContain('omitted');
+});
+
+test('alias dependencies remain whole at the shared fact limit', () => {
+  const profiles = Array.from({ length: 6 }, (_, i) => {
+    const entity = createEntity('project', `Orion ${i}`);
+    const aliases = ['beacon', 'nightshift'].map(value => repository.createFact(entity.id, 'alias', value, { source: 'llm_extraction' }));
+    const endpoints = Array.from({ length: 4 }, (_, j) => repository.createFact(entity.id, `endpoint_${j}`, `route-${i}-${j}.example`));
+    // Dependency grouping must work even when callers supply task facts first.
+    return { entity, facts: [...endpoints, ...aliases], matchedAliasIds: aliases.map(fact => fact.id), relationships: [] };
+  });
+  const context = packRecallContext(profiles);
+  for (const section of context.split('**Orion').slice(1)) {
+    expect(section).toContain('alias: beacon');
+    expect(section).toContain('alias: nightshift');
+    expect(section).toContain('"basis":"inferred"');
+  }
+  expect(context).toContain('endpoint_0:');
+  expect(context).toContain('omitted');
+  expect((context.match(/  - /g) ?? []).length).toBeLessThanOrEqual(RECALL_LIMITS.facts);
+  expect(context.length).toBeLessThanOrEqual(RECALL_LIMITS.chars);
+});
+
+test('empty and stopword-only messages avoid database reads while self overview still reads', () => {
+  saveUserProfile({ preferred_name: 'Sofia', interests: 'Cooking' });
+  const queries = spyOn(getDb(), 'query');
+  const statements = spyOn(getDb(), 'prepare');
+  try {
+    for (const message of ['', 'hi', 'thanks', 'the and of']) expect(getKnowledgeForMessage(message)).toBe('');
+    expect(queries).not.toHaveBeenCalled();
+    expect(statements).not.toHaveBeenCalled();
+    expect(getKnowledgeForMessage('What do you know about me?')).toContain('Cooking');
+    expect(queries).toHaveBeenCalled();
+  } finally { queries.mockRestore(); statements.mockRestore(); }
+});
+
+test('large evidence quotes cannot evict a short qualified fact or be silently truncated', () => {
+  const entity = createEntity('project', 'Orion');
+  const base = repository.createFact(entity.id, 'deployment_endpoint', 'route.example');
+  const fact: RecallFact = { ...base, status: 'active', basis: 'confirmed', verified_at: 1, binding_eligible: true,
+    evidence: (['confirmed', 'observed', 'reported', 'inferred'] as const).map((basis, i) => ({
+      id: `evidence-${i}`, fact_id: base.id, basis, source: 'meeting', source_ref: `turn:${i}`,
+      confidence: 0.8, recorded_at: i, quote: 'q'.repeat(3000) + ' but this is not yet approved',
+    })) };
+  const context = packRecallContext([{ entity, facts: [fact], relationships: [] }]);
+  expect(context).toContain('deployment_endpoint: route.example');
+  expect(context).toContain('"basis":"confirmed"');
+  expect(context).toContain('"binding_eligible":true');
+  expect(context).toContain(`fact:${base.id}`);
+  for (let i = 0; i < 4; i++) expect(context).toContain(`turn:${i}`);
+  expect(context).toContain('"quotes_omitted":4');
+  expect(context).not.toContain('qqqq');
+  expect(context.length).toBeLessThanOrEqual(RECALL_LIMITS.chars);
+  expect(fact.evidence?.[0]?.quote).toEndWith('not yet approved');
+});
+
+test('many evidence records keep explicit omission counts and a stable ledger reference', () => {
+  const entity = createEntity('project', 'Orion');
+  const base = repository.createFact(entity.id, 'endpoint', 'route.example');
+  const fact: RecallFact = { ...base, status: 'contested', basis: 'reported', scope: 'work', binding_eligible: false,
+    evidence: Array.from({ length: 100 }, (_, i) => ({ id: `ev-${i}`, fact_id: base.id,
+      basis: 'reported' as const, source: 'meeting', source_ref: `turn:${i}`, confidence: 0.6,
+      recorded_at: i, quote: 'Same endpoint was mentioned in the meeting.',
+    })) };
+  const context = packRecallContext([{ entity, facts: [fact], relationships: [] }]);
+  expect(context).toContain('endpoint: route.example');
+  expect(context).toContain('"total":100');
+  expect(context).toMatch(/"omitted":[1-9]\d*/);
+  expect(context).toContain(`fact:${base.id}`);
+  expect(context).toContain('"binding_eligible":false');
+  expect(context).toContain('"state":"contested"');
+  expect(context).toContain('"scope":"work"');
+  const shown = JSON.parse(context.split(' | evidence: ')[1]!.split(' | evidence_summary: ')[0]!);
+  const summary = JSON.parse(context.split(' | evidence_summary: ')[1]!);
+  expect(shown.length + summary.omitted).toBe(100);
+  expect(summary.omitted_by_basis.reported).toBe(summary.omitted);
+  expect(shown[0].ref).toBe('turn:99');
+  expect(context.length).toBeLessThanOrEqual(RECALL_LIMITS.chars);
+  expect(fact.evidence).toHaveLength(100);
 });
 
 test('whole qualified facts fit the exact budget; oversize facts cannot hide small siblings', () => {
@@ -135,6 +267,39 @@ test('default recall recovers qualified facts after a database restart', () => {
 });
 
 const hasC8 = Reflect.has(repository, 'correctFact');
+test.skipIf(!hasC8)('actual C8 repeated evidence preserves corrected recall and the full ledger after restart', () => {
+  closeDb();
+  const dir = mkdtempSync(join(tmpdir(), 'jarvis-recall-evidence-'));
+  try {
+    const file = join(dir, 'vault.db');
+    initDatabase(file, { quiet: true });
+    const entity = createEntity('person', 'Helena');
+    repository.createFact(entity.id, 'alias', 'portmap', { source: 'llm_extraction', confidence: 0.7 });
+    const create = repository.createFact as (id: string, predicate: string, object: string, options: Record<string, unknown>) => RecallFact;
+    const correct = Reflect.get(repository, 'correctFact') as (id: string, object: string, reason: string) => RecallFact;
+    const old = create(entity.id, 'preferred_editor', 'OldEditor', { source: 'llm_extraction' });
+    const current = correct(old.id, 'CurrentEditor', 'Confirmed editor for work');
+    for (let i = 0; i < 4; i++) {
+      expect(create(entity.id, 'preferred_editor', 'CurrentEditor', { source: 'meeting', basis: 'reported',
+        sourceRef: `meeting:${i}`, quote: `${i}: ` + 'q'.repeat(3000), confidence: 0.7 }).id).toBe(current.id);
+    }
+    const before = getKnowledgeForMessage('portmap preferred editor');
+    closeDb(); initDatabase(file, { quiet: true });
+    const after = getKnowledgeForMessage('portmap preferred editor');
+    expect(after).toBe(before);
+    expect(after).toContain('alias: portmap');
+    expect(after).toContain('preferred_editor: CurrentEditor');
+    expect(after).not.toContain('OldEditor');
+    expect(after).toContain('"basis":"confirmed"');
+    expect(after).toContain('"binding_eligible":true');
+    expect(after).toContain('"quotes_omitted":4');
+    expect(after).toContain(`fact:${current.id}`);
+    const stored = repository.getFact(current.id) as RecallFact;
+    expect(stored.evidence).toHaveLength(5);
+    expect(stored.evidence?.filter(e => (e.quote?.length ?? 0) > 3000)).toHaveLength(4);
+  } finally { closeDb(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test.skipIf(!hasC8)('actual C8 corrections, periods and source ledger survive default recall', () => {
   const entity = createEntity('person', 'C8 integration');
   const create = repository.createFact as (id: string, predicate: string, object: string, options: Record<string, unknown>) => RecallFact;

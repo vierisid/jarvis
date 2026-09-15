@@ -10,7 +10,7 @@ import { getDb } from './schema.ts';
 import { findEntities } from './entities.ts';
 import { getFact } from './facts.ts';
 import { getEntityRelationships } from './relationships.ts';
-import { rankRecall, recallTerms, type RecallFact } from './recall-ranking.ts';
+import { isRecallSelfOverview, rankRecall, recallTerms, type RecallFact } from './recall-ranking.ts';
 import { packRecallContext, RECALL_LIMITS, type RecallProfile } from './recall-context.ts';
 
 export type EntityProfile = RecallProfile;
@@ -18,15 +18,20 @@ export const extractSearchTerms = recallTerms;
 
 /** Score every current candidate before selecting subjects or loading evidence. */
 export function retrieveForMessage(message: string): EntityProfile[] {
+  const terms = new Set(recallTerms(message));
+  if (!terms.size && !isRecallSelfOverview(message)) return [];
   const entities = findEntities({});
   const facts = getDb().query<RecallFact, []>('SELECT * FROM facts').all();
   const ranked = rankRecall(message, entities, facts);
-  const terms = new Set(recallTerms(message));
-  return ranked.slice(0, RECALL_LIMITS.entities).map(({ entity, facts }, index) => ({
+  return ranked.slice(0, RECALL_LIMITS.entities).map(({ entity, facts, matchedAliasIds }, index) => ({
     entity,
+    matchedAliasIds,
     hasMore: index === 0 && ranked.length > RECALL_LIMITS.entities,
-    // Load provenance only for bounded finalists through the canonical repository.
-    facts: facts.slice(0, RECALL_LIMITS.factsPerEntity + 1).flatMap(fact => {
+    // Alias dependencies precede ordinary finalists. The extra record is a
+    // limit sentinel; missing dependencies make the formatter omit the subject.
+    facts: [...facts.filter(fact => matchedAliasIds.includes(fact.id)),
+      ...facts.filter(fact => !matchedAliasIds.includes(fact.id))]
+      .slice(0, RECALL_LIMITS.factsPerEntity + 1).flatMap(fact => {
       const complete = getFact(fact.id);
       return complete ? [complete] : [];
     }),

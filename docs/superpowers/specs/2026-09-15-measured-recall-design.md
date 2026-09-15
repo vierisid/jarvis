@@ -16,8 +16,9 @@ approach addresses the observed failures without a model call or new service.
   retain their evidence qualification. Task matches outrank unrelated subject facts.
   Once a task match exists, omit unrelated background facts from that subject.
 - Cap context at 12,000 UTF-16 code units, 18 facts, six entities, eight facts per
-  entity and four relationships per entity. Include whole qualified records or
-  omit them with an omission notice. These are not model-token counts.
+  entity and four relationships per entity. Preserve complete fact values and
+  qualifications. Bound the attached evidence view with explicit omissions and
+  a canonical ledger reference. These are not model-token counts.
 - Exclude superseded and out-of-period facts from default current recall.
   Preserve contested/inferred state, source/confidence/time, scope and evidence.
   Relevance never establishes verification or action authority. Return empty
@@ -72,7 +73,41 @@ remain available through getFact/findFacts, but default context now excludes
 expired values. The new C8 integration regression verifies that behavior. This
 test adjustment changes no C8 repository behavior.
 
-## Results (2026-09-15)
+## Review fixes (2026-09-15)
+
+R1: ranked profiles carry `matchedAliasIds`. Hydration reserves those records
+before the ordinary finalists, and context packing includes all matched aliases
+as required dependencies. They count toward both fact limits. A missing, expired
+or unrepresentable dependency prevents the subject's facts and relationships
+from appearing without its selection qualifications.
+
+R2: the prompt evidence array is capped at 2,000 characters per fact. Entries
+retain IDs, basis, source, confidence, time and source references where they fit;
+confirmed evidence is selected first, then recent evidence. Oversized quotes
+are omitted whole, never cut mid-qualification. Omitted entries are counted by
+basis, with a total, omitted-quote count and `fact:<id>` ledger reference. The
+stored ledger, fact qualifications and binding eligibility remain unchanged.
+
+R3: empty/stopword-only requests return before any database reads. Explicit
+self-overview requests retain the existing profile behavior.
+
+Seven new branch regressions and one actual-C8 regression failed before these
+fixes. Eleven added cases now cover crowded aliases, tight/shared limits,
+missing/expired dependencies, large quotes, evidence counts, empty-query reads
+and correction/alias/evidence recovery after a real database restart. Fresh
+validation passed 174 backend tests (three skips) and 207 with C8 (one existing
+keychain skip), TypeScript in both checkouts, the daemon build and all four
+guards. Package verification used the supported Bun fallback with a Bun-only
+PATH because of the previously recorded npm stall. The full suite was not rerun;
+the unchanged package-test timeout below remains a validation limit.
+
+The existing frozen v2 set was rerun as regression coverage, with 32/32 passing
+in both configurations and all four quality ratios at 100%. Maximum context is
+1,932 characters here and 3,124 with C8, including evidence IDs. No new held-out
+quality or scale-performance claim is made. The results below and adjacent JSON
+retain the original pre-review measurements at `05054c91`.
+
+## Initial results at 05054c91 (2026-09-15)
 
 All runs use actual SQLite ingestion and the default getKnowledgeForMessage path.
 The baseline uses clean main 06c12e65 and the same final measurement harness.
