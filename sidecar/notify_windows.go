@@ -326,12 +326,3 @@ func onBalloonClick() {
 	}
 	notifyEmitAction(n.ID, n.Kind, "review")
 }
-
-// truncateRunes caps s to at most max runes (so a multi-byte tail isn't split).
-func truncateRunes(s string, max int) string {
-	r := []rune(s)
-	if len(r) <= max {
-		return s
-	}
-	return string(r[:max])
-}
