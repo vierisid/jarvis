@@ -184,6 +184,12 @@ export const USER_PROFILE_QUESTIONS: UserProfileQuestion[] = [
   },
 ];
 
+/** Direct vault projections of an answer, including the mirrored preferred name. */
+export function profileQuestionForPredicate(predicateKey: string): UserProfileQuestionId | undefined {
+  if (predicateKey === 'name') return 'preferred_name';
+  return USER_PROFILE_QUESTIONS.find(question => question.id === predicateKey)?.id;
+}
+
 export function createEmptyUserProfile(): UserProfileRecord {
   const now = Date.now();
   return {

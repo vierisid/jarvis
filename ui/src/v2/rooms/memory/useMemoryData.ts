@@ -23,16 +23,8 @@ export interface Entity {
   source: string | null;
 }
 
-export interface Fact {
-  id: string;
-  subject_id: string;
-  predicate: string;
-  object: string;
-  confidence: number;
-  source: string | null;
-  created_at: number;
-  verified_at: number | null;
-}
+export type { Fact } from '../../../../../src/vault/facts';
+import type { Fact } from '../../../../../src/vault/facts';
 
 export interface Relationship {
   id: string;
@@ -86,11 +78,12 @@ export function useMemoryData() {
 
   useEffect(() => {
     refresh();
+    window.addEventListener('vault-facts-updated', refresh);
     const id = window.setInterval(() => {
       if (typeof document !== "undefined" && document.hidden) return;
       refresh();
     }, POLL_INTERVAL_MS);
-    return () => window.clearInterval(id);
+    return () => { window.clearInterval(id); window.removeEventListener('vault-facts-updated', refresh); };
   }, [refresh]);
 
   const stats = useMemo(

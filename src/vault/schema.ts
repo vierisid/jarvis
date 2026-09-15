@@ -1,4 +1,5 @@
 import { Database } from "bun:sqlite";
+import { ensureFactSchema } from './fact-schema.ts';
 
 let dbInstance: Database | null = null;
 
@@ -121,6 +122,7 @@ function createTables(db: Database): void {
   db.run(`
     CREATE INDEX IF NOT EXISTS idx_facts_predicate ON facts(predicate)
   `);
+  ensureFactSchema(db);
 
   // Relationships table: edges between entities
   db.run(`

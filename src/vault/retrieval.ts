@@ -11,6 +11,7 @@ import { searchEntitiesByName, type Entity } from './entities.ts';
 import { findFacts, type Fact } from './facts.ts';
 import { getEntityRelationships } from './relationships.ts';
 import { USER_PROFILE_VAULT_SOURCE } from './user-profile.ts';
+import { formatFact, MEMORY_USE_RULES } from './fact-format.ts';
 
 // Common stopwords to filter from search queries
 const STOPWORDS = new Set([
@@ -106,7 +107,7 @@ export function retrieveForMessage(message: string): EntityProfile[] {
         SELECT DISTINCT e.id, e.type, e.name, e.properties, e.created_at, e.updated_at, e.source
         FROM entities e
         JOIN facts f ON e.id = f.subject_id
-        WHERE f.object LIKE ? OR f.predicate LIKE ?
+        WHERE f.status != 'superseded' AND (f.object LIKE ? OR f.predicate LIKE ?)
         LIMIT 10
       `);
       const rows = stmt.all(`%${term}%`, `%${term}%`) as any[];
@@ -166,21 +167,21 @@ export function formatKnowledgeContext(profiles: EntityProfile[]): string {
     lines.push(`**${entity.name}** (${entity.type})`);
 
     for (const fact of facts) {
-      lines.push(`  - ${fact.predicate}: ${fact.object}`);
+      if (fact.status !== 'superseded') lines.push(`  - ${formatFact(fact)}`);
     }
 
     for (const rel of relationships) {
       if (rel.direction === 'from') {
-        lines.push(`  - ${rel.type} -> ${rel.target}`);
+        lines.push(`  - Unverified relationship: ${rel.type} -> ${rel.target}`);
       } else {
-        lines.push(`  - ${rel.target} -> ${rel.type} -> ${entity.name}`);
+        lines.push(`  - Unverified relationship: ${rel.target} -> ${rel.type} -> ${entity.name}`);
       }
     }
 
     sections.push(lines.join('\n'));
   }
 
-  return sections.join('\n\n');
+  return `${MEMORY_USE_RULES}\n\n${sections.join('\n\n')}`;
 }
 
 /**

@@ -147,11 +147,11 @@ function CalendarWidget() {
 }
 
 function MemoryWidget() {
-  const { data, loaded } = useWidgetData<Array<{ predicate: string; object: string; created_at: number }>>("/api/vault/facts");
+  const { data, loaded } = useWidgetData<Array<{ predicate: string; object: string; created_at: number; basis: string; status: string }>>("/api/vault/facts");
   const facts = Array.isArray(data) ? [...data].sort((a, b) => b.created_at - a.created_at) : [];
   const newest = facts[0];
   return (<><WHeader label="memory · new" room="memory" />
-    {newest ? <Stat n={facts.length} unit={facts.length === 1 ? "fact" : "facts"} sub={<>Newest: {deslug(newest.predicate)} <b>{newest.object}</b></>} />
+    {newest ? <Stat n={facts.length} unit={facts.length === 1 ? "fact" : "facts"} sub={<>Newest: {deslug(newest.predicate)} <b>{newest.object}</b> · {newest.basis} · {newest.status}</>} />
       : loaded ? <Empty>New facts Jarvis learns surface here. <span className="dim">Browse the vault in Memory.</span></Empty> : <Loading />}</>);
 }
 

@@ -27,7 +27,7 @@ import { join } from "node:path";
 const REPO_ROOT = new URL("..", import.meta.url).pathname.replace(/\/$/, "");
 
 // Per-instance DB DDL sources (the user data whose shape a rollback depends on).
-const DDL_FILES = ["src/vault/schema.ts", "src/workflows/db/schema.ts"];
+const DDL_FILES = ["src/vault/schema.ts", "src/vault/fact-schema.ts", "src/workflows/db/schema.ts"];
 
 /** A line opts out with this marker in a comment (acknowledged as window-safe). */
 export const OK_MARKER = "expand-contract-ok";
