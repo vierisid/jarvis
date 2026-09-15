@@ -50,7 +50,61 @@ describe('TimerWaitpointScheduler', () => {
     expect(claimNextJob()).toBeNull();
   });
 
-  test('retires a due timer whose run is no longer PAUSED (no resume enqueued)', () => {
+  for (const status of ['QUEUED', 'RUNNING'] as const) {
+    test(`keeps a due timer while the run is ${status}, then resumes its published pause once`, () => {
+      const runId = pausedRun();
+      updateRun(runId, { status });
+      const wp = timerWaitpoint(runId, new Date(now - 1000).toISOString());
+      // The engine creates the waitpoint before uploading its PAUSED state.
+      expect(sched.tick(now)).toBe(0);
+      expect(getWaitpoint(wp.id)?.resumedAt).toBeNull();
+      expect(claimNextJob()).toBeNull();
+
+      updateRun(runId, { status: 'PAUSED' });
+      expect(sched.tick(now)).toBe(1);
+      expect(sched.tick(now)).toBe(0);
+      expect(claimNextJob()?.flowRunId).toBe(runId);
+      expect(claimNextJob()).toBeNull();
+    });
+
+    test(`100 older ${status} timers cannot starve a later PAUSED run`, () => {
+      const deferred = Array.from({ length: 100 }, () => {
+        const runId = pausedRun();
+        updateRun(runId, { status });
+        return { runId, wp: timerWaitpoint(runId, new Date(now - 2000).toISOString()) };
+      });
+      const readyRunId = pausedRun();
+      timerWaitpoint(readyRunId, new Date(now - 1000).toISOString());
+
+      expect(sched.tick(now)).toBe(1);
+      expect(claimNextJob()?.flowRunId).toBe(readyRunId);
+      expect(claimNextJob()).toBeNull();
+      expect(sched.tick(now)).toBe(0);
+      for (const { wp } of deferred) expect(getWaitpoint(wp.id)?.resumedAt).toBeNull();
+
+      // Excluding these rows from this scan must not lose their future pause.
+      const first = deferred[0]!;
+      updateRun(first.runId, { status: 'PAUSED' });
+      expect(sched.tick(now)).toBe(1);
+      expect(claimNextJob()?.flowRunId).toBe(first.runId);
+      expect(sched.tick(now)).toBe(0);
+      expect(claimNextJob()).toBeNull();
+      for (const { wp } of deferred.slice(1)) expect(getWaitpoint(wp.id)?.resumedAt).toBeNull();
+    });
+  }
+
+  test('still bounds each scan to 100 eligible timers and reaches the remainder next tick', () => {
+    const waits = Array.from({ length: 101 }, (_, index) =>
+      timerWaitpoint(pausedRun(), new Date(now - 2000 + index).toISOString()),
+    );
+    expect(sched.tick(now)).toBe(100);
+    expect(getWaitpoint(waits[100]!.id)?.resumedAt).toBeNull();
+    expect(sched.tick(now)).toBe(1);
+    expect(sched.tick(now)).toBe(0);
+    for (const wp of waits) expect(getWaitpoint(wp.id)?.resumedAt).toBe(now);
+  });
+
+  test('retires a due timer whose run has succeeded (no resume enqueued)', () => {
     const runId = pausedRun();
     updateRun(runId, { status: 'SUCCEEDED' });
     const wp = timerWaitpoint(runId, new Date(now - 1000).toISOString());
