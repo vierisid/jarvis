@@ -320,8 +320,8 @@ async function handleShutdown(signal: string): Promise<void> {
 
     // Stop the workflow worker (drains its in-flight run, then exits the poll
     // loop) -- but bounded by the remaining budget. If a long run overruns, we
-    // leave it RUNNING; the next boot's recoverOrphanedJobs re-queues it to
-    // resume promptly (workflow state is durable, unlike agent turns).
+    // leave it RUNNING; the next boot's recoverOrphanedJobs retires it with
+    // reconciliation guidance, since its effects cannot safely be replayed.
     if (workflowWorker) {
       const wfBudget = Math.max(2000, drainUntil - Date.now());
       const stopped = await Promise.race([
@@ -4888,10 +4888,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       workflowSandboxApi.setServices(backends);
       logWithTimestamp("Workflow engine service backends wired (llm/tools/notify/context/agent/events/workflows)");
 
-      // Boot recovery: re-queue any run orphaned RUNNING by a prior crash /
-      // over-deadline drain so it resumes NOW, not after the lease lapses.
+      // Boot recovery retires interrupted workflows for reconciliation.
+      // Only other retryable job types can be re-queued automatically.
       const recovered = recoverOrphanedJobs();
-      if (recovered > 0) logWithTimestamp(`Recovered ${recovered} orphaned workflow job(s) for resume`);
+      if (recovered > 0) logWithTimestamp(`Re-queued ${recovered} interrupted retryable job(s)`);
 
       const flowExecutor = new EngineFlowExecutor(workflowEngineRuntime);
       workflowWorker = new WorkflowWorker({

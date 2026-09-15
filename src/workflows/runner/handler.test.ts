@@ -3,7 +3,8 @@ import { closeWorkflowDb, initWorkflowDb } from "../db/index";
 import { createFlow } from "../db/repos/flow";
 import { createDraftVersion } from "../db/repos/flow-version";
 import { createFlowRun, getFlowRun, updateRun } from "../db/repos/flow-run";
-import { enqueue, queueStats } from "../db/repos/job-queue";
+import { enqueue, getJob, queueStats } from "../db/repos/job-queue";
+import { workflowFailureMessage } from "../queue/retry-policy";
 import { Worker } from "../queue/worker";
 import {
   createRunFlowHandler,
@@ -57,7 +58,7 @@ describe("RUN_FLOW handler with NoopFlowExecutor", () => {
     expect(queueStats()).toMatchObject({ succeeded: 1, queued: 0 });
   });
 
-  test("preserves an existing startTime across retries (does not reset on second attempt)", async () => {
+  test("preserves the startTime recorded at enqueue", async () => {
     const { runId } = setupRun();
     // Pre-set startTime to simulate a job that already started.
     const fixedStart = 1_700_000_000_000;
@@ -143,13 +144,6 @@ describe("RUN_FLOW handler with custom executor", () => {
     const worker = new Worker({
       log: silent,
       handlers: { [RUN_FLOW]: createRunFlowHandler({ executor }) },
-      // Single attempt -- no retries to keep the test deterministic.
-    });
-    enqueue({
-      jobType: RUN_FLOW,
-      payload: { runId, payload: {} },
-      flowRunId: runId,
-      maxAttempts: 1,
     });
     await worker.drain();
     const after = getFlowRun(runId);
@@ -157,7 +151,7 @@ describe("RUN_FLOW handler with custom executor", () => {
     expect(after?.failedStep).toEqual({
       name: "step2",
       displayName: "Send Email",
-      errorMessage: "step2 blew up",
+      errorMessage: workflowFailureMessage("step2 blew up"),
     });
     expect(after?.steps).toEqual({ step1: { output: "ok" }, step2: { error: "blew up" } });
     expect(after?.stepsCount).toBe(2);
@@ -187,10 +181,10 @@ describe("RUN_FLOW handler with custom executor", () => {
     expect(after?.status).toBe("FAILED");
     expect(after?.failedStep?.name).toBe("<engine>");
     // The reason must survive onto the run row, not just the daemon log.
-    expect(after?.failedStep?.errorMessage).toBe("network blip");
+    expect(after?.failedStep?.errorMessage).toBe(workflowFailureMessage("network blip"));
   });
 
-  test("clears failed_step from a prior attempt before retry", async () => {
+  test("retains a failed run instead of replaying it, even when a caller requests retries", async () => {
     const flow = createFlow();
     const version = createDraftVersion({ flowId: flow.id, displayName: "v1" });
     const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id });
@@ -215,7 +209,7 @@ describe("RUN_FLOW handler with custom executor", () => {
       handlers: { [RUN_FLOW]: createRunFlowHandler({ executor }) },
     });
 
-    // First drain: handler throws, queue requeues with backoff.
+    // First drain: handler throws; the shared policy stops the job.
     await worker.drain();
     expect(getFlowRun(run.id)?.status).toBe("FAILED");
     expect(getFlowRun(run.id)?.failedStep?.name).toBe("stepX");
@@ -223,9 +217,51 @@ describe("RUN_FLOW handler with custom executor", () => {
     await Bun.sleep(1100);
     await worker.drain();
     const after = getFlowRun(run.id);
-    expect(after?.status).toBe("SUCCEEDED");
-    expect(after?.failedStep).toBeNull();
-    expect(attempts).toBe(2);
+    expect(after?.status).toBe("FAILED");
+    expect(after?.failedStep?.name).toBe("stepX");
+    expect(attempts).toBe(1);
+  });
+
+  test("a fresh BEGIN job cannot replay an already completed run", async () => {
+    const { runId } = setupRun();
+    let effects = 0;
+    const worker = new Worker({ log: silent, handlers: {
+      [RUN_FLOW]: createRunFlowHandler({ executor: { async execute() {
+        effects++;
+        return { steps: { send: { receipt: "fake-1" } }, stepsCount: 1 };
+      } } }),
+    } });
+    await worker.drain();
+    const original = getFlowRun(runId);
+    const duplicate = enqueue({ jobType: RUN_FLOW, payload: { runId }, flowRunId: runId });
+    await worker.drain();
+    expect(effects).toBe(1);
+    expect(getJob(duplicate.id)?.status).toBe("FAILED");
+    expect(getFlowRun(runId)).toEqual(original);
+  });
+
+  test("planned RESUME continues PAUSED state once; another dispatch cannot replay the terminal run", async () => {
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: "paused" });
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "PAUSED" });
+    updateRun(run.id, { steps: { send: { receipt: "fake-1" } } });
+    const payload = { runId: run.id, executionType: "RESUME" };
+    enqueue({ jobType: RUN_FLOW, payload, flowRunId: run.id });
+    let continuations = 0;
+    const worker = new Worker({ log: silent, handlers: {
+      [RUN_FLOW]: createRunFlowHandler({ executor: { async execute(ctx) {
+        expect(ctx.run.steps).toEqual({ send: { receipt: "fake-1" } });
+        expect(ctx.job.payload.executionType).toBe("RESUME");
+        continuations++;
+        return { steps: { ...ctx.run.steps, afterWait: "done" }, stepsCount: 2 };
+      } } }),
+    } });
+    await worker.drain();
+    const duplicate = enqueue({ jobType: RUN_FLOW, payload, flowRunId: run.id });
+    await worker.drain();
+    expect(continuations).toBe(1);
+    expect(getJob(duplicate.id)?.status).toBe("FAILED");
+    expect(getFlowRun(run.id)?.status).toBe("SUCCEEDED");
   });
 
   test("missing run row: handler returns silently and the job is marked succeeded", async () => {
