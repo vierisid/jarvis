@@ -15,6 +15,7 @@ import { closeWorkflowDb, initWorkflowDb } from "../db";
 import { _clearStoreForTests } from "../db/repos/store-entry";
 import { createFlow, setPublishedVersion, updateFlowStatus } from "../db/repos/flow";
 import { createDraftVersion, lockVersion } from "../db/repos/flow-version";
+import { createFlowRun } from "../db/repos/flow-run";
 import { getWaitpoint } from "../db/repos/waitpoint";
 
 const sampleIdentity = () => ({
@@ -22,6 +23,13 @@ const sampleIdentity = () => ({
   runId: "run_test_" + Math.random().toString(36).slice(2, 10),
   projectId: DEFAULT_IDS.project,
 });
+
+function persistedIdentity() {
+  const flow = createFlow();
+  const version = createDraftVersion({ flowId: flow.id, displayName: "Sandbox API test" });
+  const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: "RUNNING" });
+  return { ...sampleIdentity(), runId: run.id, projectId: run.projectId };
+}
 
 describe("EngineTokenSigner", () => {
   test("mint+verify round-trip preserves claims", async () => {
@@ -703,7 +711,7 @@ describe("SandboxApi routes (G: jarvis-tool/notify/context)", () => {
   let contextCalls: Array<{ method: string; input: unknown }>;
 
   async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
-    const id = sampleIdentity();
+    const id = persistedIdentity();
     const { token } = await signer.mint(id);
     registry.register({
       ...id,
@@ -1001,7 +1009,7 @@ describe("SandboxApi routes (H: jarvis-agent/trigger)", () => {
   };
 
   async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
-    const id = sampleIdentity();
+    const id = persistedIdentity();
     const { token } = await signer.mint(id);
     registry.register({
       ...id,
@@ -1179,7 +1187,7 @@ describe("SandboxApi routes (workflows/start error mapping)", () => {
   let throwError: { code: string; message: string } | null = null;
 
   async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
-    const id = sampleIdentity();
+    const id = persistedIdentity();
     const { token } = await signer.mint(id);
     registry.register({
       ...id,
@@ -1324,7 +1332,7 @@ describe("SandboxApi /v1/jarvis/* envelope hardening (G+H review #7)", () => {
   let registry: SandboxRegistry;
 
   async function authedFetch(path: string, init: RequestInit = {}): Promise<Response> {
-    const id = sampleIdentity();
+    const id = persistedIdentity();
     const { token } = await signer.mint(id);
     registry.register({
       ...id,

@@ -1,14 +1,20 @@
 import { withExecutionScope } from "../../actions/execution-scope";
+import { getWorkflowDb } from "../db";
 import { getRunCancellation } from "../db/repos/run-cancellation";
 import { onRunCanceled } from "./cancellation-signals";
 
 export class WorkflowCancellationError extends Error {
   override readonly name = "WorkflowCancellationError";
-  constructor(runId: string) { super(`Workflow ${runId} was canceled; no new actions may start. Previously dispatched effects may have completed.`); }
+  constructor(runId: string) { super(`Workflow ${runId} was canceled or deleted; no new actions may start. Previously dispatched effects may have completed.`); }
 }
 
 export function assertRunNotCanceled(runId: string): void {
-  if (getRunCancellation(runId)) throw new WorkflowCancellationError(runId);
+  // Deleting a workflow cascades to its run and cancellation record. Pending
+  // daemon callbacks outlive that deletion, so missing identity must also
+  // keep their dispatch fence closed. Run IDs are never reused.
+  if (getRunCancellation(runId) || !getWorkflowDb().query("SELECT id FROM flow_run WHERE id = ?").get(runId)) {
+    throw new WorkflowCancellationError(runId);
+  }
 }
 
 export function withRunCancellation<T>(runId: string, execute: () => T): T {

@@ -37,6 +37,16 @@ async function cancel(runId: string) {
   return response.json();
 }
 
+async function deleteWorkflow(flowId: string, runId: string) {
+  const req = Object.assign(new Request(`http://local/api/workflows/${flowId}`, { method: "DELETE" }), { params: { id: flowId } });
+  const response = await createWorkflowRoutes()["/api/workflows/:id"]!.DELETE!(req);
+  expect(response.status).toBe(200);
+  expect(getFlowRun(runId)).toBeNull();
+  // The foreign-key cascade removes the marker too, while daemon callbacks
+  // that started before deletion may still be awaiting remote replies.
+  expect(getRunCancellation(runId)).toBeNull();
+}
+
 function deferred() {
   let resolve!: () => void;
   const promise = new Promise<void>(r => { resolve = r; });
@@ -164,7 +174,7 @@ test("the handler propagates an abort signal to the active executor", async () =
   expect(getFlowRun(run.id)?.status).toBe("STOPPED");
 });
 
-test("notification fanout stops after an in-flight send and preserves its delivery report", async () => {
+test.each([false, true])("notification fanout preserves cancellation and delivery report (delete after cancel: %s)", async (deleteAfterCancel) => {
   const run = fixture("RUNNING");
   const entered = deferred(), delivered = deferred();
   const sends: string[] = [];
@@ -181,6 +191,7 @@ test("notification fanout stops after an in-flight send and preserves its delive
   const notification = withRunCancellation(run.id, () => notifier.notify({ message: "test", channels: ["telegram", "discord", "desktop"] }));
   await entered.promise;
   cancelFlowRun(run.id);
+  if (deleteAfterCancel) await deleteWorkflow(run.flowId, run.id);
   delivered.resolve();
   const result = await notification;
   expect(sends).toEqual(["telegram"]);
@@ -226,7 +237,7 @@ test("cancellation during webhook body parsing wins over resume", async () => {
   expect(getWorkflowDb().query("SELECT id FROM workflow_job WHERE flow_run_id = ?").all(run.id)).toEqual([]);
 });
 
-test("a delegated agent stops between tool calls and retains the first tool result", async () => {
+test.each([false, true])("a delegated agent stops between tool calls and retains the first result (delete after cancel: %s)", async (deleteAfterCancel) => {
   const run = fixture("RUNNING");
   const entered = deferred(), finish = deferred();
   const registry = new ToolRegistry();
@@ -235,7 +246,7 @@ test("a delegated agent stops between tool calls and retains the first tool resu
     effects++; entered.resolve(); await finish.promise; return "committed-receipt";
   } });
   const result = withRunCancellation(run.id, () => runSubAgent({
-    task: "synthetic", context: "", toolRegistry: registry,
+    task: "synthetic", context: "", toolRegistry: registry, maxIterations: 1,
     agent: { id: "test", agent: { role: { name: "test", description: "test", responsibilities: [] } },
       activate() {}, idle() {}, setTask() {}, addMessage() {}, getMessages: () => [] },
     llmManager: { async chatTier() { llmCalls++; return {
@@ -244,7 +255,9 @@ test("a delegated agent stops between tool calls and retains the first tool resu
     }; } },
   } as unknown as RunSubAgentOptions));
   await entered.promise;
-  cancelFlowRun(run.id); finish.resolve();
+  cancelFlowRun(run.id);
+  if (deleteAfterCancel) await deleteWorkflow(run.flowId, run.id);
+  finish.resolve();
   const final = await result;
   expect(effects).toBe(1);
   expect(llmCalls).toBe(1);
@@ -253,7 +266,7 @@ test("a delegated agent stops between tool calls and retains the first tool resu
   expect(JSON.stringify(final.messages)).toContain("committed-receipt");
 });
 
-test("authenticated sandbox routes reject new work after acknowledgement", async () => {
+test.each([false, true])("authenticated sandbox routes reject work after acknowledgement (delete after cancel: %s)", async (deleteAfterCancel) => {
   const run = fixture("RUNNING");
   let dispatches = 0;
   const api = new SandboxApi({ services: {
@@ -270,6 +283,7 @@ test("authenticated sandbox routes reject new work after acknowledgement", async
   api.registry.register({ ...identity, engineToken: token, expiresAt, terminatedAt: null });
   try {
     cancelFlowRun(run.id);
+    if (deleteAfterCancel) await deleteWorkflow(run.flowId, run.id);
     for (const [path, body] of [
       ["tools/invoke", { toolName: "test", params: {} }], ["notify", { message: "test" }],
       ["agent/delegate", { goal: "test" }], ["workflows/start", { flowId: "test" }], ["llm/chat", { prompt: "test" }],

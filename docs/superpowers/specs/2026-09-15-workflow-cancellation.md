@@ -102,6 +102,17 @@ scopes, authenticated routes, late results, file-backed database reopen, legacy
 jobs and webhook races. All effects are synthetic; no live remote delivery
 claim is made.
 
+Review R1: dispatch also requires the run to still exist. Deleting a workflow
+cascades to its run and cancellation record, but cannot reopen a pending
+daemon callback's dispatch fence. Run IDs are not reused. Three new cases
+failed before the fix and now cover cancellation followed by deletion during
+notification fanout, delegated tool execution and authenticated sandbox calls.
+API test fixtures now persist their run identities. Fresh checks passed 159
+focused tests, 157 with A1 + retry, and 107 with Today + retry, plus TypeScript,
+the daemon build and all four guards. Packaging used the Bun fallback because
+npm's output contained no parseable file list. The full-suite limits below
+still apply.
+
 Isolated combinations passed 151 tests across seven files with A1 + retry and
 155 tests across six files with Today + retry. Merge resolutions described
 above were applied only in those disposable checkouts. An existing generic
