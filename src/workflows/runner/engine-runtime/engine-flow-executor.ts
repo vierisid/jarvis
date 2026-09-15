@@ -25,6 +25,7 @@ import type { FlowTriggerNode } from "../../db/repos/flow-version";
 import { DEFAULT_IDS } from "../../db/schema";
 import type { EngineHandle, EngineRuntime } from "./engine-runtime";
 import { loadExecutionStateFromLog } from "./execution-state-loader";
+import { abortable } from "../../runtime/cancellation";
 
 /**
  * Statuses where the engine is finished writing the run row and we can
@@ -142,16 +143,30 @@ export class EngineFlowExecutor implements FlowExecutor {
     };
     let lastError: unknown;
     for (let attempt = 0; attempt < ACQUIRE_ATTEMPTS; attempt++) {
+      ctx.signal?.throwIfAborted();
+      let acquired: EngineHandle | undefined;
       try {
-        return await this.runtime.acquire(opts);
+        // A spawn may finish after cancellation. Destroy that handle without
+        // ever sending EXECUTE_FLOW, even if this worker already moved on.
+        const acquiring = this.runtime.acquire(opts).then(async handle => {
+          acquired = handle;
+          if (ctx.signal?.aborted) {
+            await handle.killAndTerminate();
+            ctx.signal.throwIfAborted();
+          }
+          return handle;
+        });
+        return await abortable(acquiring, ctx.signal);
       } catch (e) {
+        if (ctx.signal?.aborted && acquired) await acquired.killAndTerminate();
+        ctx.signal?.throwIfAborted();
         lastError = e;
         if (attempt === ACQUIRE_ATTEMPTS - 1) break;
         console.warn(
           `[engine-executor] run ${ctx.run.id}: engine acquire failed ` +
             `(attempt ${attempt + 1}/${ACQUIRE_ATTEMPTS}): ${(e as Error).message}`,
         );
-        await new Promise((r) => setTimeout(r, ACQUIRE_RETRY_DELAY_MS));
+        await abortable(new Promise((r) => setTimeout(r, ACQUIRE_RETRY_DELAY_MS)), ctx.signal);
       }
     }
     throw lastError;
@@ -160,6 +175,7 @@ export class EngineFlowExecutor implements FlowExecutor {
   async execute(ctx: FlowExecutorContext): Promise<FlowExecutorResult> {
     const handle = await this.acquireWithRetry(ctx);
     try {
+      ctx.signal?.throwIfAborted();
       // streamStepProgress: WEBSOCKET makes the engine emit per-step
       // `updateRunProgress({ step })` calls to the daemon -- the
       // worker-handler accumulates each step's output onto `flow_run.steps`
@@ -235,16 +251,20 @@ export class EngineFlowExecutor implements FlowExecutor {
           }
         }
       }
-      await handle.executeFlow(flowOpts);
+      ctx.signal?.throwIfAborted();
+      await abortable(handle.executeFlow(flowOpts), ctx.signal);
     } finally {
-      await handle.release();
+      // A canceled engine must never re-enter the warm pool, including when
+      // its RPC happened to finish at the same time as cancellation.
+      if (ctx.signal?.aborted) await handle.killAndTerminate();
+      else await handle.release();
     }
 
     // Wait for the engine's `uploadRunLog` to settle. `executeOperation` and
     // `uploadRunLog` are independent socket.io messages; the run row may
     // still be RUNNING / QUEUED for a brief window after `executeFlow`
     // resolves. Poll briefly for a terminal status.
-    const persisted = await this.waitForTerminalStatus(ctx.run.id);
+    const persisted = await abortable(this.waitForTerminalStatus(ctx.run.id, ctx.signal), ctx.signal);
 
     const stepsRecord = (persisted.steps ?? {}) as Record<string, unknown>;
     const stepsCount =
@@ -292,10 +312,12 @@ export class EngineFlowExecutor implements FlowExecutor {
 
   private async waitForTerminalStatus(
     runId: string,
+    signal?: AbortSignal,
   ): Promise<NonNullable<ReturnType<typeof getFlowRun>>> {
     const deadline = Date.now() + this.terminalTimeoutMs;
     let lastSeenStatus: FlowRunStatus | null = null;
     while (Date.now() < deadline) {
+      signal?.throwIfAborted();
       const persisted = getFlowRun(runId);
       if (!persisted) {
         throw new Error(`flow_run ${runId} disappeared after engine executeFlow`);

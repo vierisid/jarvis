@@ -35,6 +35,7 @@ import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
 import {
   useWorkflowsData,
+  CANCELED_EFFECT_WARNING,
   type Flow,
   type FlowRun,
   type FlowRunStatus,
@@ -467,6 +468,7 @@ function RunRow({ run, expanded, onToggle, onCancel }: RunRowProps): React.React
             <dd>{run.triggeredBy ?? "manual"}</dd>
           </dl>
           {run.status === "PAUSED" ? <PausedRunCallout runId={run.id} /> : null}
+          {run.cancellation?.inFlightMayHaveCompleted ? <p>{CANCELED_EFFECT_WARNING}</p> : null}
           {run.steps && Object.keys(run.steps).length > 0 ? (
             <details className="wf-runs__steps">
               <summary>Step output JSON</summary>

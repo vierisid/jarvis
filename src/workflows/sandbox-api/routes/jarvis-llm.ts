@@ -18,6 +18,7 @@
  */
 
 import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
+import { cancellableWorkflowService } from "../../runtime/cancellation";
 
 export interface LlmChatRequest {
   prompt: string;
@@ -64,7 +65,7 @@ export function createJarvisLlmChatRoute(deps: JarvisLlmRouteDeps): RouteHandler
     if (typeof raw.system === "string") body.system = raw.system;
     if (raw.overrideSystem === true) body.overrideSystem = true;
     if (raw.parseJson === true) body.parseJson = true;
-    const reply = await deps.llmChat(body, {
+    const reply = await cancellableWorkflowService(deps.llmChat)(body, {
       runId: ctx.claims.runId,
       projectId: ctx.claims.projectId,
     });

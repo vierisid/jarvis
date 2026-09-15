@@ -54,7 +54,8 @@ import {
   type FlowRunStatus,
   type RunEnvironment,
 } from "../db/repos/flow-run";
-import { cancelJob, enqueue, findActiveJobForRun } from "../db/repos/job-queue";
+import { enqueue } from "../db/repos/job-queue";
+import { cancelFlowRun } from "../db/repos/run-cancellation";
 import {
   getWaitpoint,
   listWaitpointsByFlowRun,
@@ -682,7 +683,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           } catch {
             // Non-JSON or empty body -- use {} as the payload.
           }
-          markWaitpointResumed(id);
+          // Reading a request body yields; cancellation may have won meanwhile.
+          if (getFlowRun(wp.flowRunId)?.status !== "PAUSED") return err("run is no longer paused", 409);
+          if (!markWaitpointResumed(id)) return err("waitpoint already resumed", 410);
           enqueue({
             jobType: "RUN_FLOW",
             payload: {
@@ -1104,12 +1107,9 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { runId } = (req as RequestWithParams<{ runId: string }>).params;
           const run = getFlowRun(runId);
           if (!run) return err("run not found", 404);
-          // Cancel the queued/running job (if any). The worker observes the
-          // canceled status and stops the run. Run-row state transitions
-          // (e.g. STOPPED) are written by the worker, not here.
-          const job = findActiveJobForRun(run.id);
-          if (job) cancelJob(job.id);
-          return ok({ ok: true, jobCanceled: !!job });
+          // Acknowledgement closes the durable dispatch fence. It does not
+          // claim that an already-dispatched remote effect was rolled back.
+          return ok({ ok: true, ...cancelFlowRun(run.id) });
         }),
     },
 

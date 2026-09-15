@@ -21,6 +21,13 @@ export const DEFAULT_IDS = {
 } as const;
 
 const STATEMENTS: string[] = [
+  // Cancellation is a durable dispatch fence, separate from effect receipts.
+  `CREATE TABLE IF NOT EXISTS workflow_run_cancellation (
+    run_id TEXT PRIMARY KEY REFERENCES flow_run(id) ON DELETE CASCADE,
+    acknowledged_at INTEGER NOT NULL,
+    status_at_request TEXT NOT NULL,
+    in_flight_may_have_completed INTEGER NOT NULL
+  )`,
   // --- Flow definitions ---
   `CREATE TABLE IF NOT EXISTS flow (
     id TEXT PRIMARY KEY,

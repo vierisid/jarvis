@@ -20,6 +20,7 @@ import type {
   UploadRunLogsRequest,
 } from "./contracts";
 import { getFlowRun, updateRun, type FlowRunStatus } from "../db/repos/flow-run";
+import { getRunCancellation } from "../db/repos/run-cancellation";
 
 const PER_RUN_LOG_BUFFER_MAX = 200;
 
@@ -109,6 +110,8 @@ export class DefaultWorkerHandlers
    * and no reason.
    */
   private isStaleWrite(runId: string, incoming: FlowRunStatus): boolean {
+    // updateRun fences canceled status while retaining late step evidence.
+    if (getRunCancellation(runId)) return false;
     if (TERMINAL_RUN_STATUSES.has(incoming)) return false;
     try {
       const row = getFlowRun(runId);
@@ -120,7 +123,7 @@ export class DefaultWorkerHandlers
   }
 
   async updateRunProgress(sandboxId: string, input: UpdateRunProgressRequest): Promise<void> {
-    if (!this.requireRunId(sandboxId)) return;
+    if (this.requireRunId(sandboxId) !== input.flowRun.id) return;
     this.lastProgress.set(sandboxId, input);
     // Late progress from an engine whose run the daemon already settled.
     if (this.isStaleWrite(input.flowRun.id, input.flowRun.status)) return;

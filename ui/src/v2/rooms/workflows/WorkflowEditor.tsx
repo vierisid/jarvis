@@ -52,6 +52,7 @@ import { useLibrary, type LibraryEntry as InstallableLibraryEntry } from "./useL
 import type { ConnectionMeta } from "./useConnections";
 import { useFlowRuns } from "./useFlowRuns";
 import type { FlowRun, FlowRunStatus } from "./useWorkflowsData";
+import { CANCELED_EFFECT_WARNING } from "./useWorkflowsData";
 import "./WorkflowEditor.css";
 import { modKey } from "../../ui/platform";
 
@@ -5625,6 +5626,7 @@ function OverlayBanner({
       </span>
       <span className="wf-editor__overlay-banner-text">
         Viewing run {startedAt} -- <strong>{run.status}</strong>
+        {run.cancellation?.inFlightMayHaveCompleted ? <span className="wf-editor__overlay-banner-reason">{CANCELED_EFFECT_WARNING}</span> : null}
         {run.failedStep ? <> at <code>{run.failedStep.displayName}</code></> : null}
         {!hasOverlayData ? (
           <em className="wf-editor__overlay-banner-note">

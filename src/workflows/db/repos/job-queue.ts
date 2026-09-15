@@ -25,6 +25,7 @@
 import type { Database } from "bun:sqlite";
 import { getWorkflowDb } from "../index";
 import { apId } from "../ids";
+import { cancelFlowRun, getRunCancellation, recoverCanceledRuns } from "./run-cancellation";
 
 export type JobStatus = "QUEUED" | "RUNNING" | "SUCCEEDED" | "FAILED" | "CANCELED";
 
@@ -130,6 +131,10 @@ export function countQueued(): number {
 }
 
 export function enqueue<P = Record<string, unknown>>(input: EnqueueInput<P>): Job<P> {
+  const runId = input.flowRunId ?? (input.payload as { runId?: string } | null)?.runId;
+  if (input.jobType === "RUN_FLOW" && runId && getRunCancellation(runId)) {
+    throw new Error(`Cannot enqueue canceled workflow run ${runId}`);
+  }
   const id = apId();
   const ts = nowMs();
   db().run(
@@ -207,6 +212,7 @@ export function getJob<P = Record<string, unknown>>(id: string): Job<P> | null {
  * worker starts polling.
  */
 export function recoverOrphanedJobs(): number {
+  recoverCanceledRuns();
   const ts = nowMs();
   const d = db();
   // Poison guard: a job that already hit its attempt ceiling terminates as
@@ -277,6 +283,12 @@ export function failJob(id: string, error: string, opts: FailJobOptions = {}): b
 }
 
 export function cancelJob(id: string): void {
+  const job = getJob<{ runId?: string }>(id);
+  const runId = job?.flowRunId ?? job?.payload.runId;
+  if (job?.jobType === "RUN_FLOW" && runId && ["QUEUED", "RUNNING"].includes(job.status)) {
+    const run = db().query("SELECT id FROM flow_run WHERE id = ?").get(runId);
+    if (run) { cancelFlowRun(runId); return; }
+  }
   const ts = nowMs();
   db().run(
     `UPDATE workflow_job
