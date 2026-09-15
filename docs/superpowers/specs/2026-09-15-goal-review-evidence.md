@@ -29,6 +29,14 @@ escape expansion. Whole records are removed from the largest goal if needed.
 Their stable IDs point to the full source records. Truncated evidence is never
 a basis for an automatic score.
 
+Stored morning actions are treated as untrusted JSON. Only nonblank strings
+enter the intention list; objects, nested arrays, nulls and other malformed
+entries are omitted before clipping. A malformed collection produces an empty
+list. New snapshots set `morningIntentions.invalidActionsOmitted` and
+`truncated` when invalid data was excluded, while preserving the original
+check-in for inspection. Older snapshots may omit the new optional flag.
+These omissions are not evidence that the user failed to act.
+
 Model proposals use `{ goalId, newScore, reason, evidenceIds }`. Validation
 rejects malformed values, goals outside the bundle, changed/deleted goals,
 missing or foreign evidence, activity/history alone, already-recorded scores,
@@ -99,6 +107,22 @@ An isolated combination with the actual #450 branch was tested. Merge guidance:
    Today integration test automatically runs when its real service exists.
 
 ## Verification
+
+R1 follow-up:
+
+- Seven malformed-input cases failed before the fix; a further case verifies
+  the new qualification for valid input. The added coverage includes the
+  actual morning planner writing a structured action, database reopening
+  before the evening review, mixed/null/non-array stored inputs, malformed
+  entries after the context limit, preserved source records and LLM failure.
+- `bun test src/goals src/daemon/api-goal-review.test.ts`: 115 passed,
+  1 skipped, 0 failed. The skip awaits #450's actual service.
+- The same suites against the actual #450 combination: 138 passed,
+  0 skipped, 0 failed.
+- Final evidence tests: 31 passed. TypeScript passed in both checkouts;
+  daemon build and all four guards passed, with the package guard's Bun fallback.
+
+Initial implementation:
 
 - Three regressions failed before the fix: known-ID unsupported scoring,
   direct `daily_review` writes, and missing ID-bound evening inputs.

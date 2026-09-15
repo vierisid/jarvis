@@ -129,6 +129,79 @@ describe('automatic score boundary', () => {
 });
 
 describe('evidence snapshots', () => {
+  test('a structured action from morning planning cannot abort the evening review', async () => {
+    directory = mkdtempSync(join(tmpdir(), 'jarvis-review-morning-'));
+    const path = join(directory, 'review.db');
+    initDatabase(path, { quiet: true });
+    const g = goal();
+    const valid = 'Review the deployment receipt';
+    const invalid = { task: 'UNTRUSTED ACTION ' + 'x'.repeat(350) };
+    let eveningContext = '';
+    const daily = new DailyRhythm({ chatTier: async (_tier: string, subsystem: string, messages: any[]) => {
+      if (subsystem === 'goal_morning_plan') return { content: JSON.stringify({
+        focus_areas: ['Review deployments'], daily_actions: [valid, invalid], warnings: [], message: 'Review the receipt',
+      }) };
+      eveningContext = messages[1].content;
+      return { content: JSON.stringify({ assessment: 'No measured progress', score_updates: [] }) };
+    } });
+    const morning = await daily.runMorningPlan();
+    closeDb();
+    initDatabase(path, { quiet: true });
+    expect(vault.getTodayCheckIn('morning_plan')!.id).toBe(morning.checkIn.id);
+    const evening = await daily.runEveningReview();
+    expect(evening.reviewEvidence.bundle.morningIntentions!.checkInId).toBe(morning.checkIn.id);
+    expect(evening.reviewEvidence.bundle.morningIntentions!.actions).toEqual([valid]);
+    expect(eveningContext).not.toContain('UNTRUSTED ACTION');
+    expect(getGoalReviewRecord(evening.checkIn.id)).toEqual(evening.reviewEvidence);
+    expect(evening.checkIn.actions_completed).toEqual([]);
+    expect(vault.getGoal(g.id)!.score).toBe(0);
+  });
+
+  test.each([
+    { name: 'mixed entries', raw: ['Keep this intention', { task: 'x'.repeat(350) }, { title: 'short' }, null, 42, true, ['nested'], '  '], expected: ['Keep this intention'] },
+    { name: 'object after the context limit', raw: [...Array.from({ length: 20 }, (_, i) => `Intention ${i}`), { task: 'x'.repeat(350) }], expected: Array.from({ length: 20 }, (_, i) => `Intention ${i}`) },
+    { name: 'object collection', raw: { task: 'x'.repeat(350) }, expected: [] },
+    { name: 'string collection', raw: 'An unstructured intention', expected: [] },
+    { name: 'null collection', raw: null, expected: [] },
+  ])('malformed stored morning actions: $name', async ({ raw, expected }) => {
+    const g = goal();
+    const morning = vault.createCheckIn('morning_plan', 'Morning focus', [g.id]);
+    // Older morning planners persist model JSON without validating its shape.
+    getDb().query('UPDATE goal_check_ins SET actions_planned = ? WHERE id = ?').run(JSON.stringify(raw), morning.id);
+    const result = await rhythm({ score_updates: [proposal(g.id)], actions_completed: ['Invented completion'] }).runEveningReview();
+    const intentions = result.reviewEvidence.bundle.morningIntentions!;
+    expect(intentions.actions).toEqual([...expected]);
+    expect(intentions.truncated).toBe(true);
+    expect(intentions.invalidActionsOmitted).toBe(true);
+    expect(getGoalReviewRecord(result.checkIn.id)!.bundle.morningIntentions).toEqual(intentions);
+    expect<unknown>(vault.getTodayCheckIn('morning_plan')!.actions_planned).toEqual(raw);
+    expect(result.checkIn.actions_completed).toEqual([]);
+    expect(vault.getGoal(g.id)!.score).toBe(0);
+    expect(vault.getProgressHistory(g.id)).toEqual([]);
+  });
+
+  test('discarded malformed intentions remain qualified when the evening LLM is unavailable', async () => {
+    const g = goal();
+    const morning = vault.createCheckIn('morning_plan', 'Morning focus', [g.id]);
+    getDb().query('UPDATE goal_check_ins SET actions_planned = ? WHERE id = ?')
+      .run(JSON.stringify([{ task: 'x'.repeat(350) }]), morning.id);
+    const result = await new DailyRhythm({ chatTier: async () => { throw new Error('offline'); } }).runEveningReview();
+    expect(result.reviewEvidence.bundle.morningIntentions).toMatchObject({
+      checkInId: morning.id, actions: [], truncated: true, invalidActionsOmitted: true,
+    });
+    expect(vault.getTodayCheckIn('evening_review')!.review_evidence).toEqual(result.reviewEvidence);
+    expect(result.scoreUpdates).toEqual([]);
+  });
+
+  test('valid morning intentions retain their text without an invalid-data qualification', async () => {
+    const morning = vault.createCheckIn('morning_plan', 'Morning focus', [], ['Read the receipt', 'Ask the customer']);
+    const result = await rhythm({}).runEveningReview();
+    expect(result.reviewEvidence.bundle.morningIntentions).toEqual({
+      checkInId: morning.id, summary: morning.summary, actions: morning.actions_planned,
+      truncated: false, invalidActionsOmitted: false,
+    });
+  });
+
   test('only checks within the local review day count, regardless of work creation date', () => {
     const g = goal();
     const today = new Date(); today.setHours(0, 0, 0, 0);

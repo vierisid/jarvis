@@ -45,7 +45,12 @@ export type GoalReviewBundle = {
   scorePolicy: 'no_verified_score_mapping';
   outcomeSource: 'today_result_checks' | 'unavailable';
   goalsOmitted: number;
-  morningIntentions: { checkInId: string; summary: string; actions: string[]; truncated: boolean } | null;
+  morningIntentions: {
+    checkInId: string; summary: string; actions: string[]; truncated: boolean;
+    // Older snapshots omit this field. New snapshots identify malformed input
+    // separately from valid text/records omitted by context limits.
+    invalidActionsOmitted?: boolean;
+  } | null;
   goals: {
     goalId: string; title: string; level: string; score: number; health: string;
     successCriteria: string; updatedAt: number;
@@ -110,6 +115,34 @@ function readOutcomes(goalId: string, start: number, end: number): { outcomes: R
     || rows.some(row => { const check = JSON.parse(row.result_check); return nonempty(check.summary) && clip(check.summary) !== check.summary; }) };
 }
 
+function buildMorningIntentions(morning: GoalCheckIn | null): GoalReviewBundle['morningIntentions'] {
+  if (!morning) return null;
+  // Historical check-ins contain unvalidated model JSON despite the string[]
+  // annotation. Do not infer action text or goal links from arbitrary objects.
+  const rawActions: unknown = morning.actions_planned;
+  const summary = clip(morning.summary, 1000);
+  const actions: string[] = [];
+  let invalidActionsOmitted = !Array.isArray(rawActions);
+  let truncated = invalidActionsOmitted || summary !== morning.summary;
+  if (Array.isArray(rawActions)) {
+    for (const action of rawActions) {
+      if (!nonempty(action)) {
+        invalidActionsOmitted = true;
+        truncated = true;
+        continue;
+      }
+      if (actions.length === 20) {
+        truncated = true;
+        continue;
+      }
+      const text = clip(action, 300);
+      actions.push(text);
+      truncated ||= text !== action;
+    }
+  }
+  return { checkInId: morning.id, summary, actions, truncated, invalidActionsOmitted };
+}
+
 export function buildGoalReviewBundle(goals: Goal[], morning: GoalCheckIn | null, now = Date.now()): GoalReviewBundle {
   const start = new Date(now);
   start.setHours(0, 0, 0, 0);
@@ -119,11 +152,7 @@ export function buildGoalReviewBundle(goals: Goal[], morning: GoalCheckIn | null
     version: 1, id: generateId(), window: { start: start.getTime(), end: now },
     scorePolicy: 'no_verified_score_mapping', outcomeSource: todayAvailable ? 'today_result_checks' : 'unavailable',
     goalsOmitted: Math.max(0, activeCount - Math.min(goals.length, 20)),
-    morningIntentions: morning ? {
-      checkInId: morning.id, summary: clip(morning.summary, 1000),
-      actions: morning.actions_planned.slice(0, 20).map(a => clip(a, 300)),
-      truncated: clip(morning.summary, 1000) !== morning.summary || morning.actions_planned.length > 20 || morning.actions_planned.some(a => clip(a, 300) !== a),
-    } : null,
+    morningIntentions: buildMorningIntentions(morning),
     goals: goals.slice(0, 20).map(goal => {
       const readProgress = (scored: boolean) => getDb().query(`
         SELECT * FROM goal_progress WHERE goal_id = ? AND created_at BETWEEN ? AND ?
