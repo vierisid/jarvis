@@ -1,11 +1,16 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeWorkflowDb, initWorkflowDb } from "../db/index";
 import { createFlow } from "../db/repos/flow";
-import { createDraftVersion } from "../db/repos/flow-version";
+import { createDraftVersion, getFlowVersion } from "../db/repos/flow-version";
 import { createFlowRun, getFlowRun, updateRun } from "../db/repos/flow-run";
 import { enqueue, getJob, queueStats } from "../db/repos/job-queue";
 import { workflowFailureMessage } from "../queue/retry-policy";
 import { Worker } from "../queue/worker";
+import { createWaitpoint } from "../db/repos/waitpoint";
+import { createWorkflowRoutes } from "../api/routes";
+import { TimerWaitpointScheduler } from "../timer-scheduler";
+import { EngineFlowExecutor } from "./engine-runtime/engine-flow-executor";
+import type { EngineHandle, EngineRuntime } from "./engine-runtime/engine-runtime";
 import {
   createRunFlowHandler,
   FlowExecutionError,
@@ -73,6 +78,71 @@ describe("RUN_FLOW handler with NoopFlowExecutor", () => {
 });
 
 describe("RUN_FLOW handler with custom executor", () => {
+  for (const source of ["timer", "webhook"] as const) {
+    for (const timing of ["before", "after"] as const) {
+      test(`${source} continuation queued ${timing} original completion preserves the engine pause`, async () => {
+        const { runId, versionId } = setupRun();
+        let deliveries = 0;
+        let resumes = 0;
+        let waitpointId = "";
+        const seed = { output: { type: "PIECE", status: "SUCCEEDED", output: { receipt: "fake-before-pause" } } };
+        const resumePayload = source === "timer" ? {} : { approved: true };
+        const resume = async () => {
+          if (source === "timer") {
+            expect(new TimerWaitpointScheduler().tick()).toBe(1);
+          } else {
+            const request = Object.assign(new Request("http://localhost/api/webhooks/waitpoints/" + waitpointId, {
+              method: "POST", body: JSON.stringify(resumePayload),
+            }), { params: { id: waitpointId } });
+            expect((await createWorkflowRoutes()["/api/webhooks/waitpoints/:id"]!.POST!(request)).status).toBe(202);
+          }
+        };
+        // Stub only the engine subprocess: the queue, handler, production
+        // executor, run records and continuation producers are real.
+        const runtime = { async acquire() {
+          return { async executeFlow(opts: Parameters<EngineHandle["executeFlow"]>[0]) {
+            if (opts.executionType === "RESUME") {
+              resumes++;
+              expect(queueStats().succeeded).toBe(1);
+              expect(getFlowVersion(versionId)?.sampleData).toBeNull();
+              expect(getFlowRun(runId)?.finishTime).toBeNull();
+              expect(opts.resumePayload).toEqual(resumePayload);
+              expect(opts.executionState?.steps.seed).toEqual(seed.output);
+              updateRun(runId, { status: "SUCCEEDED", steps: { seed, afterWait: { output: "done" } }, stepsCount: 2 });
+            } else {
+              deliveries++;
+              const run = getFlowRun(runId)!;
+              waitpointId = createWaitpoint({ flowRunId: runId, projectId: run.projectId, stepName: "wait",
+                type: source === "timer" ? "TIMER" : "WEBHOOK",
+                resumeDateTime: new Date(Date.now() - 1000).toISOString(),
+              }).id;
+              // An engine attempt can finish while the workflow is waiting.
+              updateRun(runId, { status: "PAUSED", steps: { seed }, stepsCount: 1, finishTime: 123 });
+              if (timing === "before") await resume();
+            }
+          }, async release() {} } as unknown as EngineHandle;
+        } } as unknown as EngineRuntime;
+        const worker = new Worker({ log: silent, handlers: {
+          [RUN_FLOW]: createRunFlowHandler({ executor: new EngineFlowExecutor(runtime) }),
+        } });
+        await worker.drain();
+        if (timing === "after") {
+          expect(getFlowRun(runId)).toMatchObject({ status: "PAUSED", finishTime: null, steps: { seed } });
+          expect(queueStats()).toMatchObject({ succeeded: 1, failed: 0 });
+          // A legacy pause may already carry a stale finish time. Clear it
+          // before dispatching the continuation as well as after a new pause.
+          updateRun(runId, { finishTime: 456 });
+          await resume();
+          await worker.drain();
+        }
+        expect({ deliveries, resumes }).toEqual({ deliveries: 1, resumes: 1 });
+        expect(getFlowRun(runId)).toMatchObject({ status: "SUCCEEDED", steps: { seed, afterWait: { output: "done" } } });
+        expect(getFlowRun(runId)!.finishTime).toBeGreaterThan(0);
+        expect(queueStats()).toMatchObject({ succeeded: 2, failed: 0 });
+      });
+    }
+  }
+
   test("persists steps + stepsCount returned by the executor", async () => {
     const { runId } = setupRun();
     const executor: FlowExecutor = {
