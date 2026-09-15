@@ -26,6 +26,7 @@ import { existsSync, mkdirSync, readdirSync, statSync, rmSync, copyFileSync, rea
 import { join, relative, dirname } from "node:path";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
+import { expressionPatches, applyExpressionPatch } from './activepieces-expression-patch';
 
 const PINNED_TAG = "0.82.1";
 const PINNED_SHA = "d04e6807c485ecd788a72af0d04abffba78563c7";
@@ -250,12 +251,16 @@ const PATCH_INSERTIONS: Record<
   string,
   Array<{ anchor: RegExp; insert: string; position?: "before" | "after" }>
 > = {
+  'packages/server/engine/src/lib/handler/piece-executor.ts': [
+    { anchor: /^\s*step: \{\s*$/, insert: '                executionPath: executionState.currentPath.path,' },
+  ],
   // Polling triggers need `server.{token,apiUrl}` to call back into the
   // daemon's /v1/jarvis/* endpoints with the engineToken. The engine
   // runtime sets this unconditionally (trigger-helper.ts:137-141) but
   // upstream's TS type omitted it for POLLING; we add it here so trigger
   // code can call back without unsafe casts.
   "packages/pieces/framework/src/lib/context/index.ts": [
+    { anchor: /^export type StepContext = \{\s*$/, insert: '  /** Jarvis runtime loop identity, independent of properties. */\n  executionPath?: readonly [string, number][];' },
     {
       anchor: /^\s*setSchedule\(schedule: \{ cronExpression: string; timezone\?: string \}\): void;\s*$/,
       insert:
@@ -563,6 +568,12 @@ for (const [relPath, patches] of Object.entries(PATCH_INSERTIONS)) {
   }
   writeFileSync(dst, out.join("\n"));
   info(`applied ${patches.length} patch insertion(s) to ${relPath}`);
+}
+
+for (const [relPath, replacements] of Object.entries(expressionPatches)) {
+  const dst = join(VENDOR_DIR, relPath);
+  writeFileSync(dst, applyExpressionPatch(readFileSync(dst, 'utf8'), replacements));
+  info(`applied expression boundary patch to ${relPath}`);
 }
 
 // 8. Defense-in-depth: walk the vendor tree and abort if any /ee/ path slipped through

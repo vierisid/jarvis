@@ -26,6 +26,45 @@ export type FlowRunStatus =
 
 export type RunEnvironment = "PRODUCTION" | "TESTING";
 
+/** Immutable per-run preview scope and inputs, retained independently of queue history. */
+export interface RunExecutionConfig {
+  stepNameToTest?: string;
+  sampleData?: Record<string, unknown>;
+  sampleInputOverride?: Record<string, Record<string, unknown>>;
+}
+
+/** Freeze before the first engine invocation. RESUME never trusts its job's preview settings. */
+export function ensureRunExecutionConfig(runId: string, initial?: RunExecutionConfig): RunExecutionConfig {
+  return db().transaction(() => {
+    const row = db().query('SELECT execution_config, step_name_to_test FROM flow_run WHERE id=?')
+      .get(runId) as { execution_config: string | null; step_name_to_test: string | null } | null;
+    if (!row) throw new Error(`Run ${runId} not found`);
+    if (row.execution_config !== null) return JSON.parse(row.execution_config) as RunExecutionConfig;
+    let source = initial;
+    if (!source) {
+      // Upgrade recovery for runs parked before this column existed. Only the original
+      // BEGIN payload can supply the snapshot; live version samples may have changed.
+      const job = db().query(`SELECT payload FROM workflow_job WHERE flow_run_id=? AND job_type='RUN_FLOW'
+        AND COALESCE(json_extract(payload, '$.executionType'), 'BEGIN')='BEGIN' ORDER BY created, id LIMIT 1`)
+        .get(runId) as { payload: string } | null;
+      if (!job) throw new Error('Original run configuration unavailable; start a new run to preserve preview scope');
+      source = JSON.parse(job.payload) as RunExecutionConfig;
+    }
+    if (row.step_name_to_test && source.stepNameToTest && row.step_name_to_test !== source.stepNameToTest) {
+      throw new Error('Run preview scope does not match the original job');
+    }
+    const stepNameToTest = row.step_name_to_test ?? source.stepNameToTest;
+    const config: RunExecutionConfig = {
+      ...(stepNameToTest ? { stepNameToTest } : {}),
+      ...(source.sampleData ? { sampleData: source.sampleData } : {}),
+      ...(source.sampleInputOverride ? { sampleInputOverride: source.sampleInputOverride } : {}),
+    };
+    const snapshot = JSON.stringify(config);
+    db().run('UPDATE flow_run SET execution_config=?, step_name_to_test=? WHERE id=?', [snapshot, stepNameToTest ?? null, runId]);
+    return JSON.parse(snapshot) as RunExecutionConfig;
+  })();
+}
+
 export interface FlowRunRow {
   id: string;
   flow_id: string;
@@ -39,6 +78,7 @@ export interface FlowRunRow {
   steps: string | null;
   failed_step: string | null;
   step_name_to_test: string | null;
+  execution_config: string | null;
   start_time: number | null;
   finish_time: number | null;
   archived_at: number | null;
@@ -102,7 +142,7 @@ export interface UpdateRunInput {
   status?: FlowRunStatus;
   steps?: Record<string, unknown> | null;
   failedStep?: FailedStep | null;
-  finishTime?: number;
+  finishTime?: number | null;
   startTime?: number;
   stepsCount?: number;
   logsFileId?: string | null;

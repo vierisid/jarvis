@@ -78,6 +78,8 @@ import { json, err, type RouteContext, type RouteHandler } from "./routes/shared
 
 export interface SandboxApiServices {
   credentialResolver: CredentialResolver;
+  /** Trusted host admission policy. Absence uses the restricted built-in policy. */
+  assertFlowCapabilities?: (trigger: import('../db/repos/flow-version').FlowTriggerNode) => void;
   /**
    * URL prefix used to mint resumeUrl values for waitpoints. Engine pieces
    * embed this URL in step output; external callers POST to it to wake the

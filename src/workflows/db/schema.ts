@@ -86,6 +86,7 @@ const STATEMENTS: string[] = [
     steps TEXT,
     failed_step TEXT,
     step_name_to_test TEXT,
+    execution_config TEXT,
     start_time INTEGER,
     finish_time INTEGER,
     archived_at INTEGER,
@@ -100,6 +101,18 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_flow_run_project ON flow_run(project_id)`,
   `CREATE INDEX IF NOT EXISTS idx_flow_run_started ON flow_run(start_time)`,
   `CREATE INDEX IF NOT EXISTS idx_flow_run_parent ON flow_run(parent_run_id)`,
+
+  // Durable effect identity and dispatch fence, independent of run-log uploads.
+  `CREATE TABLE IF NOT EXISTS workflow_effect (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES flow_run(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    approval_id TEXT,
+    waitpoint_id TEXT,
+    record TEXT NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_workflow_effect_run ON workflow_effect(run_id)`,
+  `CREATE INDEX IF NOT EXISTS idx_workflow_effect_pending ON workflow_effect(status)`,
 
   // --- Credentials per piece (OAuth tokens, API keys, etc.) ---
   // Sensitive `value` is stored as JSON; encryption-at-rest via the keychain
@@ -236,6 +249,7 @@ export function createSchema(db: Database): void {
 function applyAdditiveColumnMigrations(db: Database): void {
   type ColMigration = { table: string; column: string; ddl: string };
   const migrations: ColMigration[] = [
+    { table: "flow_run", column: "execution_config", ddl: "ALTER TABLE flow_run ADD COLUMN execution_config TEXT" },
     { table: "flow_version", column: "engine_listeners", ddl: "ALTER TABLE flow_version ADD COLUMN engine_listeners TEXT" },
     { table: "flow_version", column: "engine_schedule", ddl: "ALTER TABLE flow_version ADD COLUMN engine_schedule TEXT" },
     // sample_data: JSON map { [stepName]: sampleOutput } fed to the engine

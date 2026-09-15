@@ -151,6 +151,8 @@ export type FlowsContext = {
 
 export type StepContext = {
   name: string;
+  /** Jarvis runtime provenance: loop path, independent of user properties. */
+  executionPath?: readonly [string, number][];
 }
 
 export type ListFlowsContextParams = {

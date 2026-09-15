@@ -13,7 +13,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeWorkflowDb, initWorkflowDb } from "../../db/index";
 import { createFlow } from "../../db/repos/flow";
 import { createDraftVersion, lockVersion, type FlowVersion } from "../../db/repos/flow-version";
-import { createFlowRun, updateRun, getFlowRun, type FlowRunStatus } from "../../db/repos/flow-run";
+import { createFlowRun, ensureRunExecutionConfig, updateRun, getFlowRun, type FlowRunStatus } from "../../db/repos/flow-run";
 import { DEFAULT_IDS } from "../../db/schema";
 import { FlowExecutionError } from "../handler";
 import type { Job } from "../../db/repos/job-queue";
@@ -180,6 +180,7 @@ describe("EngineFlowExecutor", () => {
 
   test("RESUME: passes resumePayload + unwrapped executionState.steps to engine", async () => {
     const { runId, ctx } = setupRun();
+    ensureRunExecutionConfig(runId, {});
     // Seed prior step output in the wrapped envelope shape that
     // worker-handler accumulates into `flow_run.steps`.
     updateRun(runId, {
@@ -265,6 +266,7 @@ describe("EngineFlowExecutor", () => {
     try {
       const { runId, ctx } = setupRun();
       // The DB-side `flow_run.steps` only carries the outer (incomplete) shape.
+      ensureRunExecutionConfig(runId, {});
       // The backup carries the canonical recursive iteration state -- if the
       // executor falls through to flow_run.steps, the LOOP iteration tracker
       // is lost.
@@ -347,6 +349,7 @@ describe("EngineFlowExecutor", () => {
     const loaderBaseDir = mkdtempSync(join(tmpdir(), "jarvis-resume-fallback-"));
     try {
       const { runId, ctx } = setupRun();
+      ensureRunExecutionConfig(runId, {});
       updateRun(runId, {
         status: "PAUSED",
         steps: {

@@ -50,6 +50,10 @@ export class DeferredExecutor {
       return `Error: Request ${requestId} not found or not in approved state`;
     }
 
+    if (request.execution_mode === 'workflow') {
+      return 'Workflow-owned approval: execution must resume through its recorded effect boundary';
+    }
+
     if (!this.toolRegistry) {
       return 'Error: No tool registry configured';
     }

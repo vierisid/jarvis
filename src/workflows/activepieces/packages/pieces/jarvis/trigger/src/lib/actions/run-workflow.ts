@@ -20,7 +20,8 @@
 import { createAction, Property } from "@activepieces/pieces-framework";
 
 interface RunWorkflowResponse {
-  runId: string;
+  runId: string | null;
+  approval?: { effectId: string; approvalId: string; waitpointId: string };
 }
 
 export const runWorkflowAction = createAction({
@@ -75,6 +76,8 @@ export const runWorkflowAction = createAction({
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${context.server.token}`,
+        'X-Jarvis-Step-Name': context.step.name,
+        'X-Jarvis-Execution-Path': JSON.stringify(context.step.executionPath ?? []),
       },
       body: JSON.stringify(body),
     });
@@ -84,7 +87,9 @@ export const runWorkflowAction = createAction({
         `jarvis-trigger.run_workflow: daemon responded ${response.status}: ${text.slice(0, 500)}`,
       );
     }
-    return (await response.json()) as RunWorkflowResponse;
+    const reply = (await response.json()) as RunWorkflowResponse;
+    if (reply.approval) context.run.waitForWaitpoint(reply.approval.waitpointId);
+    return reply;
   },
 });
 

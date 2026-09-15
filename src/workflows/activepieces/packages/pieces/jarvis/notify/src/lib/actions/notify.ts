@@ -16,6 +16,7 @@ import { createAction, Property } from "@activepieces/pieces-framework";
 interface NotifyResponse {
   delivered: string[];
   failed: { channel: string; error: string }[];
+  approval?: { effectId: string; approvalId: string; waitpointId: string };
 }
 
 export const notifyAction = createAction({
@@ -89,6 +90,8 @@ export const notifyAction = createAction({
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${context.server.token}`,
+        'X-Jarvis-Step-Name': context.step.name,
+        'X-Jarvis-Execution-Path': JSON.stringify(context.step.executionPath ?? []),
       },
       body: JSON.stringify(body),
     });
@@ -98,7 +101,9 @@ export const notifyAction = createAction({
         `jarvis-notify: daemon responded ${response.status}: ${text.slice(0, 500)}`,
       );
     }
-    return (await response.json()) as NotifyResponse;
+    const reply = (await response.json()) as NotifyResponse;
+    if (reply.approval) context.run.waitForWaitpoint(reply.approval.waitpointId);
+    return reply;
   },
 });
 

@@ -7,6 +7,7 @@
 import { createAction, Property } from "@activepieces/pieces-framework";
 
 interface DelegateResponse {
+  approval?: { effectId: string; approvalId: string; waitpointId: string };
   finalMessage: string;
   toolCalls: Array<{
     name: string;
@@ -14,7 +15,7 @@ interface DelegateResponse {
     result?: string;
     error?: string;
   }>;
-  status: "completed" | "max_iterations" | "error" | "canceled";
+  status: "completed" | "max_iterations" | "error" | "canceled" | "approval_required";
   error?: string;
 }
 
@@ -79,6 +80,8 @@ export const delegateAction = createAction({
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${context.server.token}`,
+        'X-Jarvis-Step-Name': context.step.name,
+        'X-Jarvis-Execution-Path': JSON.stringify(context.step.executionPath ?? []),
       },
       body: JSON.stringify(body),
     });
@@ -88,7 +91,9 @@ export const delegateAction = createAction({
         `jarvis-agent: daemon responded ${response.status}: ${text.slice(0, 500)}`,
       );
     }
-    return (await response.json()) as DelegateResponse;
+    const reply = (await response.json()) as DelegateResponse;
+    if (reply.approval) context.run.waitForWaitpoint(reply.approval.waitpointId);
+    return reply;
   },
 });
 

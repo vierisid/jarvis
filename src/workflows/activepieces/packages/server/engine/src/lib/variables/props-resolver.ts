@@ -205,8 +205,8 @@ async function evalInScope(js: string, contextAsScope: Record<string, unknown>, 
     }))
 
     if (resultError) {
-        console.warn('[evalInScope] Error evaluating variable', resultError)
-        return ''
+        // Jarvis: an unsupported expression must stop the step before any effect.
+        throw resultError
     }
     return result ?? ''
 }
