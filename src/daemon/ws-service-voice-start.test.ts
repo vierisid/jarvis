@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { WebSocketService } from './ws-service.ts';
+import { withExecutionScope } from '../actions/execution-scope';
 import { clearRealtimeGateCache } from './realtime-gate.ts';
 import type { JarvisConfig } from '../config/types.ts';
 
@@ -194,6 +195,19 @@ describe('realtime output on the dashboard socket', () => {
 });
 
 describe('proactive TTS and live realtime sessions', () => {
+  test('cancellation during synthesis prevents audio delivery and remains a failed delivery', async () => {
+    const { svc, internals } = makeService();
+    const frames: Buffer[] = [];
+    internals.wsServer.getClients().clear();
+    internals.wsServer.getClients().add({ send: () => {}, sendBinary: (b: Buffer) => frames.push(b) });
+    let canceled = false;
+    (svc as unknown as { ttsProvider: unknown }).ttsProvider = {
+      async *synthesizeStream() { canceled = true; yield Buffer.from('audio'); },
+    };
+    await expect(withExecutionScope(() => { if (canceled) throw new Error('workflow canceled'); },
+      () => svc.broadcastProactiveVoice('Synthetic test.'))).rejects.toThrow('canceled');
+    expect(frames).toEqual([]);
+  });
   const fakeClient = () => {
     const json: Array<Record<string, unknown>> = [];
     const binary: Buffer[] = [];

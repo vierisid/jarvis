@@ -14,6 +14,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { FlowRun, FlowRunStatus } from "./useWorkflowsData";
+import { cancellationMessage } from "./useWorkflowsData";
 
 const TERMINAL_STATUSES = new Set<FlowRunStatus>([
   "SUCCEEDED",
@@ -179,7 +180,7 @@ export function useFlowRuns(flowId: string | null): FlowRunsState {
           return { ok: false, message: body.error ?? `cancel failed: ${res.status}` };
         }
         void refresh();
-        return { ok: true, message: "cancel queued" };
+        return { ok: true, message: cancellationMessage(await res.json()) };
       } catch (e) {
         return { ok: false, message: e instanceof Error ? e.message : String(e) };
       }

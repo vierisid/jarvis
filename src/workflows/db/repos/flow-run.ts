@@ -8,6 +8,7 @@
  */
 
 import type { Database } from "bun:sqlite";
+import { getRunCancellation, type RunCancellation } from "./run-cancellation";
 import { getWorkflowDb, DEFAULT_IDS } from "../index";
 import { apId } from "../ids";
 
@@ -62,6 +63,7 @@ export interface FailedStep {
 }
 
 export interface FlowRun {
+  cancellation: RunCancellation | null;
   id: string;
   flowId: string;
   flowVersionId: string;
@@ -118,6 +120,7 @@ function now(): number {
 
 function rowToRun(row: FlowRunRow): FlowRun {
   return {
+    cancellation: getRunCancellation(row.id),
     id: row.id,
     flowId: row.flow_id,
     flowVersionId: row.flow_version_id,
@@ -185,6 +188,14 @@ export function getFlowRun(id: string): FlowRun | null {
 export function updateRun(id: string, patch: UpdateRunInput): FlowRun {
   const existing = getFlowRunRow(id);
   if (!existing) throw new Error(`updateRun: not found (id=${id})`);
+  const cancellation = getRunCancellation(id);
+  if (cancellation) {
+    // Late engine/handler writes may enrich evidence but cannot revoke a
+    // user's stop decision or erase outputs recorded before cancellation.
+    const steps = { ...(existing.steps ? JSON.parse(existing.steps) : {}), ...(patch.steps ?? {}) };
+    patch = { ...patch, status: "STOPPED", finishTime: cancellation.acknowledgedAt,
+      steps, stepsCount: Math.max(existing.steps_count ?? 0, patch.stepsCount ?? 0, Object.keys(steps).length) };
+  }
   const next: FlowRunRow = {
     ...existing,
     status: patch.status ?? existing.status,

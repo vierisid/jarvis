@@ -7,6 +7,7 @@
 
 import type { ServerWebSocket } from 'bun';
 import { join } from 'node:path';
+import { checkpointExecution } from '../actions/execution-scope';
 import { homedir } from 'node:os';
 import type { Service, ServiceStatus } from './services.ts';
 import type { AgentService } from './agent-service.ts';
@@ -724,6 +725,7 @@ export class WebSocketService implements Service {
         payload: { requestId, containsWake: containsWakePhrase(text) },
         timestamp: Date.now(),
       };
+      checkpointExecution();
       for (const client of targets) this.wsServer.sendToClient(client, startMsg);
 
       let chunkCount = 0;
@@ -733,8 +735,10 @@ export class WebSocketService implements Service {
       // sentences synthesize completely and fail independently.
       const { splitIntoSentences } = await import('../comms/voice.ts');
       for (const sentence of splitIntoSentences(text)) {
+        checkpointExecution();
         try {
           for await (const chunk of this.ttsProvider.synthesizeStream(sentence)) {
+            checkpointExecution();
             // Send binary audio to the target clients
             for (const ws of targets) {
               try {
@@ -744,6 +748,7 @@ export class WebSocketService implements Service {
             chunkCount++;
           }
         } catch (err) {
+          checkpointExecution();
           console.error('[WSService] Proactive TTS sentence error:', err instanceof Error ? err.message : err);
         }
       }
@@ -764,6 +769,9 @@ export class WebSocketService implements Service {
           this.wsServer.sendToClient(client, { type: 'tts_end', payload: {}, timestamp: Date.now() });
         }
       } catch { /* ignore */ }
+      // Preserve cancellation in the delivery report after closing the UI's
+      // audio session. A canceled stream must not be reported as delivered.
+      checkpointExecution();
     }
   }
 

@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { closeWorkflowDb, initWorkflowDb } from "../db/index";
+import { closeWorkflowDb, initWorkflowDb, getWorkflowDb } from "../db/index";
 import {
   cancelJob,
   claimNextJob,
@@ -187,14 +187,15 @@ describe("Worker", () => {
         },
       },
     });
-    enqueue({ jobType: "FLAKY", payload: {}, maxAttempts: 2 });
+    const retryJob = enqueue({ jobType: "FLAKY", payload: {}, maxAttempts: 2 });
 
     // First drain: claim, throw, requeue with backoff -> not ready immediately.
     await worker.drain();
     expect(queueStats()).toMatchObject({ queued: 1, failed: 0, succeeded: 0 });
 
-    // Wait past the backoff (default 1s for attempt 1) to make it claimable.
-    await Bun.sleep(1100);
+    // Make this retry due without relying on wall-clock drift in the host.
+    // The repository tests separately verify the backoff calculation.
+    getWorkflowDb().run("UPDATE workflow_job SET scheduled_at = 0 WHERE id = ?", [retryJob.id]);
     await worker.drain();
     expect(calls).toBe(2);
     expect(queueStats()).toMatchObject({ failed: 1, queued: 0, running: 0 });
