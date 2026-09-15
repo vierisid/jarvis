@@ -91,8 +91,26 @@ stored ledger, fact qualifications and binding eligibility remain unchanged.
 R3: empty/stopword-only requests return before any database reads. Explicit
 self-overview requests retain the existing profile behavior.
 
+R4: a value-based query matching a contested fact retains its current confirmed
+counterparts for the same subject, canonical predicate and scope. C8 supplies
+the conflict state; active multi-valued records are not treated as corrections.
+Profiles carry `factDependencies: { factId, requiredFactIds }[]`, including
+transitive requirements for mutually contested confirmations. Hydration reserves
+confirmed counterparts, and packing includes complete dependency groups or omits
+the dependent claim. A confirmed answer may appear alone; unrelated task facts
+remain eligible. Missing, expired or oversized counterparts cannot leave an
+isolated inference in context. No truth records or binding eligibility change.
+
+R4 added eight cases. Six unit regressions and the actual-C8 value-query case
+failed before the fix; all now pass, including canonical predicate aliases,
+scope/validity boundaries, tight budgets, crowding and restart. Fresh R4 checks
+passed 181 backend tests here (four skips) and 215 with C8 (one existing skip),
+TypeScript in both checkouts, the daemon build and all four guards. Existing
+development/held-out fixtures still pass as regression coverage. The full suite
+was not rerun, and the package-test timeout and hook-bypass limits remain.
+
 Seven new branch regressions and one actual-C8 regression failed before these
-fixes. Eleven added cases now cover crowded aliases, tight/shared limits,
+R1-R3 fixes. Their eleven added cases cover crowded aliases, tight/shared limits,
 missing/expired dependencies, large quotes, evidence counts, empty-query reads
 and correction/alias/evidence recovery after a real database restart. Fresh
 validation passed 174 backend tests (three skips) and 207 with C8 (one existing

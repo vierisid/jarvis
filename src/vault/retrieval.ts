@@ -10,7 +10,7 @@ import { getDb } from './schema.ts';
 import { findEntities } from './entities.ts';
 import { getFact } from './facts.ts';
 import { getEntityRelationships } from './relationships.ts';
-import { isRecallSelfOverview, rankRecall, recallTerms, type RecallFact } from './recall-ranking.ts';
+import { expandRecallDependencies, isRecallSelfOverview, rankRecall, recallTerms, type RecallFact } from './recall-ranking.ts';
 import { packRecallContext, RECALL_LIMITS, type RecallProfile } from './recall-context.ts';
 
 export type EntityProfile = RecallProfile;
@@ -23,27 +23,37 @@ export function retrieveForMessage(message: string): EntityProfile[] {
   const entities = findEntities({});
   const facts = getDb().query<RecallFact, []>('SELECT * FROM facts').all();
   const ranked = rankRecall(message, entities, facts);
-  return ranked.slice(0, RECALL_LIMITS.entities).map(({ entity, facts, matchedAliasIds }, index) => ({
-    entity,
-    matchedAliasIds,
-    hasMore: index === 0 && ranked.length > RECALL_LIMITS.entities,
-    // Alias dependencies precede ordinary finalists. The extra record is a
-    // limit sentinel; missing dependencies make the formatter omit the subject.
-    facts: [...facts.filter(fact => matchedAliasIds.includes(fact.id)),
-      ...facts.filter(fact => !matchedAliasIds.includes(fact.id))]
-      .slice(0, RECALL_LIMITS.factsPerEntity + 1).flatMap(fact => {
-      const complete = getFact(fact.id);
-      return complete ? [complete] : [];
-    }),
-    relationships: getEntityRelationships(entity.id).map(rel => ({
-      type: rel.type,
-      target: rel.from_id === entity.id ? rel.to_entity.name : rel.from_entity.name,
-      direction: rel.from_id === entity.id ? 'from' as const : 'to' as const,
-    })).sort((a, b) => {
-      const score = (rel: typeof a) => recallTerms(`${rel.type} ${rel.target}`).filter(term => terms.has(term)).length;
-      return score(b) - score(a) || a.type.localeCompare(b.type) || a.target.localeCompare(b.target) || a.direction.localeCompare(b.direction);
-    }).slice(0, RECALL_LIMITS.relationshipsPerEntity + 1),
-  }));
+  return ranked.slice(0, RECALL_LIMITS.entities).map(({ entity, facts, matchedAliasIds, factDependencies }, index) => {
+    const byId = new Map(facts.map(fact => [fact.id, fact]));
+    const finalists = new Set(expandRecallDependencies(matchedAliasIds, factDependencies));
+    for (const fact of facts) {
+      // Reserve confirmed counterparts before their matching inferences. The
+      // dependency metadata lets packing reject any group the cap leaves incomplete.
+      const group = expandRecallDependencies([fact.id], factDependencies).sort((a, b) =>
+        Number(byId.get(b)?.verified_at != null) - Number(byId.get(a)?.verified_at != null));
+      for (const id of group) finalists.add(id);
+      if (finalists.size > RECALL_LIMITS.factsPerEntity) break;
+    }
+    return {
+      entity,
+      matchedAliasIds,
+      factDependencies,
+      hasMore: index === 0 && ranked.length > RECALL_LIMITS.entities,
+      // The extra record is a limit sentinel; provenance hydration stays bounded.
+      facts: [...finalists].slice(0, RECALL_LIMITS.factsPerEntity + 1).flatMap(id => {
+        const complete = getFact(id);
+        return complete ? [complete] : [];
+      }),
+      relationships: getEntityRelationships(entity.id).map(rel => ({
+        type: rel.type,
+        target: rel.from_id === entity.id ? rel.to_entity.name : rel.from_entity.name,
+        direction: rel.from_id === entity.id ? 'from' as const : 'to' as const,
+      })).sort((a, b) => {
+        const score = (rel: typeof a) => recallTerms(`${rel.type} ${rel.target}`).filter(term => terms.has(term)).length;
+        return score(b) - score(a) || a.type.localeCompare(b.type) || a.target.localeCompare(b.target) || a.direction.localeCompare(b.direction);
+      }).slice(0, RECALL_LIMITS.relationshipsPerEntity + 1),
+    };
+  });
 }
 
 export function formatKnowledgeContext(profiles: EntityProfile[], maxChars?: number): string {
