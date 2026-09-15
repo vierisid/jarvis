@@ -10,7 +10,7 @@ A successful queue job means its execution slice completed. The workflow can sti
 - On PAUSED, the handler persists steps and step count, clears `finishTime`, and completes the current queue job. It skips sample-data capture until workflow success.
 - A continuation uses the existing run ID and a new `RUN_FLOW` job with `executionType: "RESUME"`. Starting it clears stale finish time while preserving the original start time and prior outputs.
 - `UpdateRunInput.finishTime` accepts null. Storage already supports this; no schema migration is needed.
-- The timer scheduler leaves due waitpoints pending while a run is QUEUED or RUNNING, because the engine creates the waitpoint before uploading PAUSED. PAUSED runs resume through the existing atomic consume-and-enqueue transaction. Missing or terminal runs still have their timers retired. Repeated ticks do not enqueue a second continuation.
+- The timer query excludes QUEUED/RUNNING runs before applying its 100-row limit, leaving their waitpoints pending because the engine creates the waitpoint before uploading PAUSED. Deferred timers therefore cannot fill the scan and starve later PAUSED runs. PAUSED runs resume through the existing atomic consume-and-enqueue transaction. Missing or terminal runs still have their timers retired. Repeated ticks do not enqueue a second continuation.
 
 ## Regression evidence
 
@@ -50,6 +50,8 @@ Checked in isolated working trees containing the actual prior PR changes:
 
 ## Verification commands and limits
 
+R1 verification: both 100-row starvation regressions failed before the query change and passed afterward. Three added cases cover QUEUED and RUNNING backlogs, retained waitpoints becoming resumable later, and the 100-eligible-row batch limit. Fresh checks passed 41 focused tests, 63 Authority/retry/cancellation integration tests, and 68 Today/retry/cancellation integration tests. Each set includes the real outer-worker delay. TypeScript on this branch, daemon build and all four guards passed; packaging used its Bun fallback. Logs are `/tmp/jarvis-w1-r1-{red,focused,a1,today,types,build,ee,migrations,templates,package}.log`. The earlier broader verification below was not repeated for this query-only correction.
+
 Run from the repository with Bun on PATH:
 
 ```bash
@@ -68,7 +70,7 @@ bun test \
   src/workflows/runner/engine-runtime/execution-state-loader.test.ts
 ```
 
-These passed 38 and 163 tests respectively, with no skips or failures. TypeScript on this branch, the daemon build, EE-import guard, migration guard, template lint and package guard also passed. The package guard used its Bun fallback because npm produced no parseable file list.
+Initial verification passed 38 and 163 tests respectively, with no skips or failures. TypeScript on this branch, the daemon build, EE-import guard, migration guard, template lint and package guard also passed. The package guard used its Bun fallback because npm produced no parseable file list.
 
 Logs: `/tmp/jarvis-w1-{red,delay-red,green,broader,a1,today,today-work-items,types,a1-types,today-types,build,ee,migrations,templates,package}.log` on the development host. The corrected real-delay red run is `delay-red`; the first combined red run also caught a test-fixture field typo, fixed before the corrected reproduction.
 
