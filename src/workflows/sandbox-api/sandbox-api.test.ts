@@ -693,6 +693,8 @@ describe("SandboxApi routes (B3: files, waitpoints, logs)", () => {
 });
 
 describe("SandboxApi routes (G: jarvis-tool/notify/context)", () => {
+  beforeAll(() => { initWorkflowDb(":memory:"); });
+  afterAll(() => { closeWorkflowDb(); });
   let api: SandboxApi;
   let signer: EngineTokenSigner;
   let registry: SandboxRegistry;
@@ -975,6 +977,8 @@ describe("SandboxApi routes (G unconfigured -> 503)", () => {
 });
 
 describe("SandboxApi routes (H: jarvis-agent/trigger)", () => {
+  beforeAll(() => { initWorkflowDb(":memory:"); });
+  afterAll(() => { closeWorkflowDb(); });
   let api: SandboxApi;
   let signer: EngineTokenSigner;
   let registry: SandboxRegistry;
@@ -1174,6 +1178,8 @@ describe("SandboxApi routes (H: jarvis-agent/trigger)", () => {
 });
 
 describe("SandboxApi routes (workflows/start error mapping)", () => {
+  beforeAll(() => { initWorkflowDb(":memory:"); });
+  afterAll(() => { closeWorkflowDb(); });
   // The route maps typed errors (carrying `.code`) into specific HTTP
   // statuses so the piece's error message derives cleanly from status
   // instead of grepping the body. Each test below installs a fresh
@@ -1322,6 +1328,8 @@ describe("SandboxApi routes (H unconfigured -> 503)", () => {
 });
 
 describe("SandboxApi /v1/jarvis/* envelope hardening (G+H review #7)", () => {
+  beforeAll(() => { initWorkflowDb(":memory:"); });
+  afterAll(() => { closeWorkflowDb(); });
   let api: SandboxApi;
   let signer: EngineTokenSigner;
   let registry: SandboxRegistry;

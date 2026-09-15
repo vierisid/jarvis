@@ -8,6 +8,7 @@
  */
 
 import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
+import { cancellableWorkflowService } from "../../runtime/cancellation";
 
 export interface AgentDelegateRequest {
   goal: string;
@@ -73,7 +74,7 @@ export function createJarvisAgentDelegateRoute(
       }
       out.maxIterations = n;
     }
-    const reply = await deps.agentDelegate(out, {
+    const reply = await cancellableWorkflowService(deps.agentDelegate)(out, {
       runId: ctx.claims.runId,
       projectId: ctx.claims.projectId,
     });

@@ -30,6 +30,7 @@ export interface Flow {
 }
 
 export interface FlowRun {
+  cancellation?: { acknowledgedAt: number; inFlightMayHaveCompleted: boolean } | null;
   id: string;
   flowId: string;
   flowVersionId: string;
@@ -48,6 +49,14 @@ export interface FlowRun {
 interface ActionResult {
   ok: boolean;
   message: string;
+}
+
+export const CANCELED_EFFECT_WARNING = "An action already started may have completed. Check its result before running again.";
+
+export function cancellationMessage(result: { accepted?: boolean; cancellation?: FlowRun["cancellation"] }): string {
+  if (result.accepted === false) return "Run already finished; its outcome is unchanged.";
+  if (result.accepted !== true) return "Cancellation requested.";
+  return result.cancellation?.inFlightMayHaveCompleted ? `Run stopped. ${CANCELED_EFFECT_WARNING}` : "Run stopped.";
 }
 
 /**
@@ -285,7 +294,7 @@ export function useWorkflowsData() {
         return { ok: false, message: body?.error ?? `cancel failed: ${res.status}` };
       }
       if (selectedFlowId) void refreshRuns(selectedFlowId);
-      return { ok: true, message: "Run canceled" };
+      return { ok: true, message: cancellationMessage(await res.json()) };
     } catch (e) {
       return { ok: false, message: e instanceof Error ? e.message : String(e) };
     }

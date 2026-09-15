@@ -11,6 +11,7 @@ import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import type { LLMMessage, LLMResponse, LLMToolCall, LLMTool } from '../llm/provider.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
+import { checkpointExecution } from '../actions/execution-scope';
 import { toolDefToLLMTool, BUILTIN_TOOLS } from '../actions/tools/builtin.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
@@ -264,7 +265,9 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   try {
     // Tool execution loop
     for (let iteration = 0; iteration < maxIterations; iteration++) {
+      checkpointExecution();
       const llmResponse: LLMResponse = await llmManager.chatTier('medium', 'sub_agent', messages, { tools });
+      checkpointExecution();
 
       totalUsage.input += llmResponse.usage.input_tokens;
       totalUsage.output += llmResponse.usage.output_tokens;
@@ -284,6 +287,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
 
         // Execute each tool
         for (const tc of llmResponse.tool_calls) {
+          checkpointExecution();
           toolsUsed.push(tc.name);
 
           // Notify about tool call

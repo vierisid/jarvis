@@ -9,6 +9,7 @@
  */
 
 import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
+import { cancellableWorkflowService } from "../../runtime/cancellation";
 
 export interface ToolsInvokeRequest {
   toolName: string;
@@ -52,7 +53,7 @@ export function createJarvisToolsInvokeRoute(
       }
       params = raw.params as Record<string, unknown>;
     }
-    const reply = await deps.toolsInvoke(
+    const reply = await cancellableWorkflowService(deps.toolsInvoke)(
       { toolName: raw.toolName, params },
       { runId: ctx.claims.runId, projectId: ctx.claims.projectId },
     );

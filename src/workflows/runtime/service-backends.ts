@@ -37,6 +37,7 @@ import type { WorkflowsStartFn } from "../sandbox-api/routes/jarvis-workflows";
 import type { SandboxApiServices } from "../sandbox-api/server";
 import type { CredentialResolver } from "../credentials/adapter";
 import { WorkflowEventBuffer } from "./event-buffer";
+import { cancellableWorkflowService } from "./cancellation";
 
 export interface BuildServiceBackendsOptions {
   credentialResolver: CredentialResolver;
@@ -268,14 +269,14 @@ export function buildSandboxServiceBackends(
 
   const services: SandboxApiServices = {
     credentialResolver: opts.credentialResolver,
-    llmChat,
-    notify,
+    llmChat: cancellableWorkflowService(llmChat),
+    notify: cancellableWorkflowService(notify),
     contextProvider,
-    agentDelegate,
+    agentDelegate: cancellableWorkflowService(agentDelegate),
     eventsPoll,
-    workflowsStart,
+    workflowsStart: cancellableWorkflowService(workflowsStart),
     ...(opts.resumeUrlPrefix !== undefined ? { resumeUrlPrefix: opts.resumeUrlPrefix } : {}),
   };
-  if (toolsInvoke) services.toolsInvoke = toolsInvoke;
+  if (toolsInvoke) services.toolsInvoke = cancellableWorkflowService(toolsInvoke);
   return services;
 }

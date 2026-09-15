@@ -26,6 +26,7 @@ import { getFlowVersion, getLatestDraft } from "../db/repos/flow-version";
 import { createFlowRun, getFlowRun } from "../db/repos/flow-run";
 import { enqueue } from "../db/repos/job-queue";
 import { RUN_FLOW } from "../runner/handler";
+import { assertRunNotCanceled } from "../runtime/cancellation";
 
 /**
  * Upper bound on how far up the parent-run chain we walk when checking
@@ -62,6 +63,7 @@ export class JarvisWorkflowRunnerAdapter implements PieceWorkflowRunner {
     input: PieceWorkflowStartInput,
     callerRunId?: string,
   ): Promise<PieceWorkflowStartResult> {
+    if (callerRunId) assertRunNotCanceled(callerRunId);
     if (!input.flowId) {
       throw new WorkflowRunnerError("MISSING_REF", "flowId is required");
     }

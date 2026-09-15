@@ -19,6 +19,7 @@
  */
 
 import type { Server } from "bun";
+import { WorkflowCancellationError } from "../runtime/cancellation";
 
 // We don't attach per-connection state to upgrades on this server (yet --
 // socket.io will own that in B4), so the Bun.Server generic gets `unknown`.
@@ -401,6 +402,7 @@ export class SandboxApi {
         // delegation, tools) runs on the workflow's behalf (src/llm/origin.ts).
         return await runWithOrigin('workflow', () => route.handler(ctx));
       } catch (e) {
+        if (e instanceof WorkflowCancellationError) return err(e.message, 409);
         const message = e instanceof Error ? e.message : String(e);
         return err(`internal error: ${message}`, 500);
       }

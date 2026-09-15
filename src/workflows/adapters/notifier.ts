@@ -21,6 +21,7 @@
  * never throw on partial failure, so workflows can branch on the result.
  */
 
+import { checkpointExecution } from "../../actions/execution-scope";
 import type {
   PieceNotifier,
   PieceNotifyChannel,
@@ -76,6 +77,7 @@ export class JarvisNotifierAdapter implements PieceNotifier {
     // Dashboard
     if (expanded.has("dashboard")) {
       try {
+        checkpointExecution();
         this.deps.broadcastToDashboard(input.message, priority);
         delivered.push("dashboard");
       } catch (e) {
@@ -87,6 +89,7 @@ export class JarvisNotifierAdapter implements PieceNotifier {
     const m8Channels = Array.from(expanded).filter((c) => c !== "dashboard" && c !== "voice" && c !== "desktop");
     if (m8Channels.length > 0) {
       try {
+        checkpointExecution();
         const report = await this.deps.broadcastToChannels(m8Channels, input.message);
         for (const d of report.delivered) delivered.push(d);
         for (const f of report.failed) failed.push(f);
@@ -104,6 +107,7 @@ export class JarvisNotifierAdapter implements PieceNotifier {
         failed.push({ channel: "voice", error: "voice channel not wired (TTS provider not configured)" });
       } else {
         try {
+          checkpointExecution();
           await this.deps.sendVoice(input.message);
           delivered.push("voice");
         } catch (e) {
@@ -118,6 +122,7 @@ export class JarvisNotifierAdapter implements PieceNotifier {
         failed.push({ channel: "desktop", error: "desktop notifications not available on this platform" });
       } else {
         try {
+          checkpointExecution();
           await this.deps.sendDesktop(titleForPriority(priority), input.message);
           delivered.push("desktop");
         } catch (e) {

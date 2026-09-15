@@ -12,6 +12,7 @@
 import type { Database } from "bun:sqlite";
 import { getWorkflowDb } from "../index";
 import { apId } from "../ids";
+import { assertRunNotCanceled } from "../../runtime/cancellation";
 
 export type WaitpointType = "WEBHOOK" | "TIMER" | "MANUAL";
 
@@ -79,6 +80,7 @@ function rowToWaitpoint(row: WaitpointRow): Waitpoint {
 }
 
 export function createWaitpoint(input: CreateWaitpointInput): Waitpoint {
+  assertRunNotCanceled(input.flowRunId);
   const id = apId();
   const created = Date.now();
   db()

@@ -17,6 +17,8 @@
 import type { Job } from "../db/repos/job-queue";
 import type { JobHandler } from "../queue/worker";
 import { getFlowRun, updateRun, type FlowRun } from "../db/repos/flow-run";
+import { getRunCancellation } from "../db/repos/run-cancellation";
+import { watchRunCancellation, withRunCancellation } from "../runtime/cancellation";
 import {
   getFlowVersion,
   mergeRunOutputsIntoSampleData,
@@ -80,6 +82,8 @@ export interface RunFlowJobPayload {
 }
 
 export interface FlowExecutorContext {
+  /** Aborted after the durable cancellation fence closes. */
+  signal?: AbortSignal;
   run: FlowRun;
   version: FlowVersion;
   job: Job<RunFlowJobPayload>;
@@ -162,6 +166,10 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       // deleted between enqueue and claim) and self-correcting.
       return;
     }
+    // The fence outranks the continuation guard below: a canceled run stops
+    // quietly instead of raising a refusal for the STOPPED status the
+    // cancellation itself wrote.
+    if (getRunCancellation(runId)) return;
     const expectedStatus = typed.payload.executionType === "RESUME" ? "PAUSED" : "QUEUED";
     if (job.attempt !== 1 || run.status !== expectedStatus) {
       throw new Error(workflowFailureMessage(
@@ -188,20 +196,25 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
       failedStep: null,
     });
 
+    const cancellation = watchRunCancellation(runId);
     try {
-      const result = await opts.executor.execute({
+      const result = await withRunCancellation(runId, () => opts.executor.execute({
         run,
         version,
         job: typed,
         payload: typed.payload.payload ?? {},
-      });
+        signal: cancellation.signal,
+      }));
       updateRun(runId, {
         status: result.status ?? "SUCCEEDED",
         steps: result.steps,
         stepsCount: result.stepsCount,
         finishTime: result.status === "PAUSED" ? null : now(),
       });
-      if (result.status === "PAUSED") return;
+      // Sample capture belongs to a run that finished on its own terms:
+      // skip a planned continuation, and skip a canceled run whose recorded
+      // outcome is the fence's, not the flow's.
+      if (result.status === "PAUSED" || getRunCancellation(runId)) return;
       // Auto-capture: write each step's output into the version's
       // sampleData map for cells that are currently empty. Lets the
       // variable picker in the editor surface real field names after a
@@ -218,6 +231,10 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
         );
       }
     } catch (e) {
+      if (getRunCancellation(runId)) {
+        if (e instanceof FlowExecutionError) updateRun(runId, { steps: e.steps });
+        return;
+      }
       const ts = now();
       // Persist the reason, not just the step. Both branches used to record a
       // bare `{name, displayName}`, so an operator looking at a failed run saw
@@ -240,6 +257,8 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
         });
       }
       throw e;
+    } finally {
+      cancellation.dispose();
     }
   };
 }

@@ -169,6 +169,7 @@ export class EngineHandle {
    * release rather than reused.
    */
   private abandoned = false;
+  private terminating: Promise<void> | undefined;
 
   constructor(
     public readonly sandboxId: string,
@@ -252,6 +253,7 @@ export class EngineHandle {
    * engine abandoned and gets it destroyed on release.
    */
   private async send(operation: EngineOperationEnvelope): Promise<EngineResponse<unknown>> {
+    if (this.terminating) throw new Error(`sandbox ${this.sandboxId} is terminating`);
     this.inFlight++;
     try {
       return await this.liveEngineClient().executeOperation(operation, {
@@ -446,6 +448,7 @@ export class EngineHandle {
    * side effects the flow performs.
    */
   async release(): Promise<void> {
+    if (this.terminating) return this.terminating;
     if (this.abandoned || this.inFlight > 0) {
       return this.killAndTerminate();
     }
@@ -456,7 +459,17 @@ export class EngineHandle {
    * The default kill-and-terminate strategy, exposed so the runtime's pool
    * code can call it for forced shutdown of an idle engine.
    */
-  async killAndTerminate(): Promise<void> {
+  killAndTerminate(): Promise<void> {
+    // Revoke the sandbox before waiting for process exit. Existing daemon
+    // effect callbacks may still finish and save their receipts.
+    if (!this.terminating) {
+      this.registry.terminate(this.sandboxId);
+      this.terminating = this.terminateProcess();
+    }
+    return this.terminating;
+  }
+
+  private async terminateProcess(): Promise<void> {
     this.proc.kill("SIGTERM");
     const settled = await Promise.race([
       this.proc.exited.then(() => "exited" as const),
@@ -470,7 +483,6 @@ export class EngineHandle {
         new Promise<void>((res) => setTimeout(res, 500)),
       ]);
     }
-    this.registry.terminate(this.sandboxId);
   }
 
   /** Internal: pool reuse needs the spawned engine + RPC client; expose to runtime only. */

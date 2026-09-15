@@ -8,6 +8,7 @@
  */
 
 import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
+import { cancellableWorkflowService } from "../../runtime/cancellation";
 
 const VALID_CHANNELS = new Set([
   "auto",
@@ -76,7 +77,7 @@ export function createJarvisNotifyRoute(
       }
       priority = raw.priority as "low" | "normal" | "high";
     }
-    const reply = await deps.notify(
+    const reply = await cancellableWorkflowService(deps.notify)(
       { message: raw.message, channels, priority },
       { runId: ctx.claims.runId, projectId: ctx.claims.projectId },
     );

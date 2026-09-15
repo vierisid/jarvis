@@ -18,6 +18,7 @@ import {
   claimNextJob,
   completeJob,
   failJob,
+  getJob,
   type Job,
 } from "../db/repos/job-queue";
 
@@ -125,8 +126,10 @@ export class Worker {
     }
     try {
       await handler(job);
-      completeJob(job.id);
+      // Cancellation is terminal queue bookkeeping, not a handler failure.
+      if (getJob(job.id)?.status === "RUNNING") completeJob(job.id);
     } catch (e) {
+      if (getJob(job.id)?.status === "CANCELED") return;
       const msg = e instanceof Error ? `${e.name}: ${e.message}` : String(e);
       this.log(`job ${job.id} (${job.jobType}) failed: ${msg}`);
       try {

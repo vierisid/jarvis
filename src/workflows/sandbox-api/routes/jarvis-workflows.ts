@@ -15,6 +15,7 @@
  */
 
 import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
+import { cancellableWorkflowService } from "../../runtime/cancellation";
 
 export interface WorkflowsStartRequest {
   flowId: string;
@@ -68,7 +69,7 @@ export function createJarvisWorkflowsStartRoute(
       out.payload = raw.payload as Record<string, unknown>;
     }
     try {
-      const reply = await deps.workflowsStart(out, {
+      const reply = await cancellableWorkflowService(deps.workflowsStart)(out, {
         runId: ctx.claims.runId,
         projectId: ctx.claims.projectId,
       });

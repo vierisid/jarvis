@@ -19,6 +19,8 @@ import { FlowExecutionError } from "../handler";
 import type { Job } from "../../db/repos/job-queue";
 import { EngineFlowExecutor } from "./engine-flow-executor";
 import type { EngineHandle, EngineRuntime } from "./engine-runtime";
+import { watchRunCancellation } from "../../runtime/cancellation";
+import { cancelFlowRun } from "../../db/repos/run-cancellation";
 
 beforeEach(() => initWorkflowDb(":memory:"));
 afterEach(() => closeWorkflowDb());
@@ -86,6 +88,47 @@ function setupRun(): { runId: string; ctx: Parameters<EngineFlowExecutor["execut
 }
 
 describe("EngineFlowExecutor", () => {
+  test("cancellation interrupts a pending RPC and destroys rather than releases the handle", async () => {
+    const { runId, ctx } = setupRun();
+    const watch = watchRunCancellation(runId);
+    ctx.signal = watch.signal;
+    let executed!: () => void;
+    const started = new Promise<void>(r => { executed = r; });
+    let killed = 0, released = 0;
+    const runtime = { async acquire() { return {
+      async executeFlow() { executed(); await new Promise(() => {}); },
+      async killAndTerminate() { killed++; }, async release() { released++; },
+    }; } } as unknown as EngineRuntime;
+    try {
+      const result = new EngineFlowExecutor(runtime).execute(ctx);
+      const rejected = result.catch(error => error as Error);
+      await started;
+      cancelFlowRun(runId);
+      expect((await rejected as Error).message).toContain("canceled");
+      expect(killed).toBe(1);
+      expect(released).toBe(0);
+    } finally { watch.dispose(); }
+  });
+
+  test("a handle acquired after cancellation is destroyed without dispatch", async () => {
+    const { runId, ctx } = setupRun();
+    const watch = watchRunCancellation(runId);
+    ctx.signal = watch.signal;
+    let acquire!: (handle: EngineHandle) => void;
+    const pending = new Promise<EngineHandle>(r => { acquire = r; });
+    let calls = 0, killed = 0;
+    const runtime = { acquire: () => pending } as unknown as EngineRuntime;
+    try {
+      const result = new EngineFlowExecutor(runtime).execute(ctx);
+      const rejected = result.catch(error => error as Error);
+      cancelFlowRun(runId);
+      expect((await rejected as Error).message).toContain("canceled");
+      acquire({ async executeFlow() { calls++; }, async killAndTerminate() { killed++; } } as unknown as EngineHandle);
+      await new Promise<void>(r => setImmediate(r));
+      expect(calls).toBe(0);
+      expect(killed).toBe(1);
+    } finally { watch.dispose(); }
+  });
   test("waits for terminal status when uploadRunLog lands AFTER executeFlow resolves", async () => {
     const { runId, ctx } = setupRun();
     const runtime = scriptedRuntime({

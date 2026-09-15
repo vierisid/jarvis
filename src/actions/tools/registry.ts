@@ -1,4 +1,5 @@
 import type { ContentBlock } from '../../llm/provider.ts';
+import { checkpointExecution } from '../execution-scope';
 
 export type ToolParameter = {
   type: string;
@@ -64,6 +65,7 @@ export class ToolRegistry {
     this.validateParameters(tool, params);
 
     try {
+      checkpointExecution();
       return await tool.execute(params);
     } catch (error) {
       throw new Error(
