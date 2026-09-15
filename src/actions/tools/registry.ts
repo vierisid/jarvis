@@ -20,6 +20,11 @@ export type ToolDefinition = {
   category: string;
   parameters: Record<string, ToolParameter>;
   execute: (params: Record<string, unknown>) => Promise<unknown>;
+  /** Trusted adapter declaration, never accepted from workflow/model input. */
+  workflowEffect?: {
+    category: import('../../roles/authority').ActionCategory;
+    target: (params: Record<string, unknown>) => Record<string, unknown>;
+  };
 };
 
 export class ToolRegistry {

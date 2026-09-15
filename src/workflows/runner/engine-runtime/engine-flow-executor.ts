@@ -266,7 +266,7 @@ export class EngineFlowExecutor implements FlowExecutor {
       );
     }
 
-    return { steps: stepsRecord, stepsCount };
+    return { steps: stepsRecord, stepsCount, status: persisted.status === 'PAUSED' ? 'PAUSED' : 'SUCCEEDED' };
   }
 
   /**

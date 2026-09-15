@@ -250,12 +250,16 @@ const PATCH_INSERTIONS: Record<
   string,
   Array<{ anchor: RegExp; insert: string; position?: "before" | "after" }>
 > = {
+  'packages/server/engine/src/lib/handler/piece-executor.ts': [
+    { anchor: /^\s*step: \{\s*$/, insert: '                executionPath: executionState.currentPath.path,' },
+  ],
   // Polling triggers need `server.{token,apiUrl}` to call back into the
   // daemon's /v1/jarvis/* endpoints with the engineToken. The engine
   // runtime sets this unconditionally (trigger-helper.ts:137-141) but
   // upstream's TS type omitted it for POLLING; we add it here so trigger
   // code can call back without unsafe casts.
   "packages/pieces/framework/src/lib/context/index.ts": [
+    { anchor: /^export type StepContext = \{\s*$/, insert: '  /** Jarvis runtime loop identity, independent of properties. */\n  executionPath?: readonly [string, number][];' },
     {
       anchor: /^\s*setSchedule\(schedule: \{ cronExpression: string; timezone\?: string \}\): void;\s*$/,
       insert:

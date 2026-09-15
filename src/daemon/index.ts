@@ -4825,6 +4825,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         authorityEngine,
         auditTrail,
         emergencyController,
+        approvalManager,
+        onWorkflowApproval: request => approvalDelivery.deliver(request),
         // Give the jarvis-ask piece the same Jarvis-flavoured system
         // prompt the chat agent uses, so workflow LLM calls answer as
         // Jarvis rather than as the bare base model. `"workflow"` is the

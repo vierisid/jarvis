@@ -156,6 +156,21 @@ describe("EngineHandle operation lifecycle", () => {
     expect(engine.calls[0]?.timeoutMs).toBe(900_000 + ENGINE_ACK_MARGIN_MS);
   });
 
+  test("default admission blocks opaque effects before RPC, including trigger hooks", async () => {
+    const engine = fakeEngine(async () => ({ status: "OK", response: undefined }));
+    const handle = makeHandle(engine, fakeProc());
+    for (const action of [
+      { name: "unsafe", type: "CODE", settings: { sourceCode: "throw new Error('must not run')" } },
+      { name: "unsafe", type: "PIECE", settings: { pieceName: "@activepieces/piece-http" } },
+    ]) {
+      const version = flowVersion("v-unsafe");
+      version.trigger.nextAction = action as never;
+      await expect(handle.executeFlow({ flowVersion: version })).rejects.toThrow(/Unsupported/);
+      await expect(handle.executeTriggerHook("RUN", { flowVersion: version })).rejects.toThrow(/Unsupported/);
+    }
+    expect(engine.calls).toHaveLength(0);
+  });
+
   // The regression itself: the flow budget defaults to 600s, so the ack
   // deadline must be far above the 60s the RPC client defaults to. A flow
   // that legitimately runs for minutes (an LLM step, say) used to die at 60s

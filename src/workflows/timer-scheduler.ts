@@ -13,6 +13,7 @@ import { getWorkflowDb } from './db/index.ts';
 import { enqueue } from './db/repos/job-queue.ts';
 import { getFlowRun } from './db/repos/flow-run.ts';
 import { listDueTimerWaitpoints, markWaitpointResumed } from './db/repos/waitpoint.ts';
+import { resumeResolvedWorkflowEffects } from './runtime/effect-approval-scheduler';
 
 export class TimerWaitpointScheduler {
   private timer: ReturnType<typeof setInterval> | null = null;
@@ -40,6 +41,8 @@ export class TimerWaitpointScheduler {
    */
   tick(now: number = Date.now()): number {
     let resumed = 0;
+    try { resumed += resumeResolvedWorkflowEffects(); }
+    catch (error) { console.error('[Workflow Authority] approval recovery failed:', error); }
     let due;
     try {
       due = listDueTimerWaitpoints(new Date(now).toISOString());

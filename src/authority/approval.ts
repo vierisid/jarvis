@@ -18,8 +18,10 @@ export type ApprovalUrgency = 'urgent' | 'normal';
  *    endpoints must only flip the status, never execute.
  *  - 'deferred': nobody is waiting; whichever endpoint approves it runs
  *    the tool via DeferredExecutor (the legacy fire-and-forget path).
+ *  - 'workflow': a durable workflow effect owns dispatch and continuation.
+ *    Approval endpoints resolve only; the workflow scheduler resumes the run.
  */
-export type ApprovalExecutionMode = 'inline' | 'deferred';
+export type ApprovalExecutionMode = 'inline' | 'deferred' | 'workflow';
 
 export type ApprovalRequest = {
   id: string;

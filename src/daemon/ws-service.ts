@@ -692,7 +692,7 @@ export class WebSocketService implements Service {
    * Synthesize TTS for a proactive message and broadcast audio to all clients.
    * Used for awareness suggestions and other unsolicited voice notifications.
    */
-  async broadcastProactiveVoice(text: string): Promise<void> {
+  async broadcastProactiveVoice(text: string, checkpoint?: () => void): Promise<void> {
     if (!this.ttsProvider || !text) {
       console.log(`[WSService] Proactive TTS skipped: ${!this.ttsProvider ? 'no TTS provider' : 'empty text'}`);
       return;
@@ -724,6 +724,7 @@ export class WebSocketService implements Service {
         payload: { requestId, containsWake: containsWakePhrase(text) },
         timestamp: Date.now(),
       };
+      checkpoint?.();
       for (const client of targets) this.wsServer.sendToClient(client, startMsg);
 
       let chunkCount = 0;
@@ -733,8 +734,10 @@ export class WebSocketService implements Service {
       // sentences synthesize completely and fail independently.
       const { splitIntoSentences } = await import('../comms/voice.ts');
       for (const sentence of splitIntoSentences(text)) {
+        checkpoint?.();
         try {
           for await (const chunk of this.ttsProvider.synthesizeStream(sentence)) {
+            checkpoint?.();
             // Send binary audio to the target clients
             for (const ws of targets) {
               try {
@@ -744,6 +747,7 @@ export class WebSocketService implements Service {
             chunkCount++;
           }
         } catch (err) {
+          if (checkpoint) throw err;
           console.error('[WSService] Proactive TTS sentence error:', err instanceof Error ? err.message : err);
         }
       }
@@ -764,6 +768,7 @@ export class WebSocketService implements Service {
           this.wsServer.sendToClient(client, { type: 'tts_end', payload: {}, timestamp: Date.now() });
         }
       } catch { /* ignore */ }
+      if (checkpoint) throw err;
     }
   }
 
@@ -2345,7 +2350,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           });
           // Same skip-on-intent-only and skip-on-inline path as the REST
           // endpoint: inline requests are executed by the blocked gate.
-          if (this.deferredExecutor && approved.tool_name !== 'request_approval' && approved.execution_mode !== 'inline') {
+          if (this.deferredExecutor && approved.tool_name !== 'request_approval' && approved.execution_mode === 'deferred') {
             try {
               await this.deferredExecutor.executeApproved(latest.id);
             } catch (err) {

@@ -8,6 +8,8 @@
  */
 
 import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
+import { workflowEffectContext } from './effect-context';
+import type { WorkflowEffectContext, WorkflowApprovalPending } from '../../runtime/effect-context';
 
 const VALID_CHANNELS = new Set([
   "auto",
@@ -29,11 +31,12 @@ export interface NotifyRequest {
 export interface NotifyResponse {
   delivered: string[];
   failed: { channel: string; error: string }[];
+  approval?: WorkflowApprovalPending;
 }
 
 export type NotifyFn = (
   req: NotifyRequest,
-  ctx: { runId: string; projectId: string },
+  ctx: WorkflowEffectContext,
 ) => Promise<NotifyResponse>;
 
 export interface JarvisNotifyRouteDeps {
@@ -78,7 +81,7 @@ export function createJarvisNotifyRoute(
     }
     const reply = await deps.notify(
       { message: raw.message, channels, priority },
-      { runId: ctx.claims.runId, projectId: ctx.claims.projectId },
+      workflowEffectContext(ctx),
     );
     return json(reply);
   };
