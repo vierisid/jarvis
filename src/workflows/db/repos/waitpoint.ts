@@ -154,6 +154,9 @@ export function listWaitpointsByFlowRun(
  * now`). Drives the TIMER scheduler (UPDATES.md) — a delay/wait step whose
  * timer elapsed (incl. during downtime) has no other resume trigger. ISO-8601
  * strings sort chronologically, so a lexical `<=` is a time comparison.
+ * Exclude QUEUED/RUNNING runs before limiting the batch so pending engine
+ * uploads cannot starve later PAUSED runs. Missing and terminal runs remain
+ * eligible for the scheduler's waitpoint retirement.
  */
 export function listDueTimerWaitpoints(nowIso: string, limit = 100): Waitpoint[] {
   return db()
@@ -161,6 +164,11 @@ export function listDueTimerWaitpoints(nowIso: string, limit = 100): Waitpoint[]
       `SELECT * FROM waitpoint
        WHERE type = 'TIMER' AND resumed_at IS NULL
          AND resume_date_time IS NOT NULL AND resume_date_time <= ?
+         AND NOT EXISTS (
+           SELECT 1 FROM flow_run
+           WHERE flow_run.id = waitpoint.flow_run_id
+             AND flow_run.status IN ('QUEUED', 'RUNNING')
+         )
        ORDER BY resume_date_time ASC LIMIT ?`,
     )
     .all(nowIso, limit)
