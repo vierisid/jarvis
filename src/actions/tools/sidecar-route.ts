@@ -122,7 +122,7 @@ export function resolveToolTarget(
  * Find a sidecar by name or ID.
  * Priority: exact ID → exact name (case-insensitive) → contains match.
  */
-function findSidecar(nameOrId: string, sidecars: SidecarInfo[]): SidecarInfo | null {
+export function findSidecar(nameOrId: string, sidecars: SidecarInfo[]): SidecarInfo | null {
   const query = nameOrId.trim();
   if (!query) return null;
 

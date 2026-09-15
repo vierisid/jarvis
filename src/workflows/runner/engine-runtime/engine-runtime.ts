@@ -45,6 +45,7 @@ import {
 } from "./flow-version-adapter";
 import type { FlowVersion as JarvisFlowVersion } from "../../db/repos/flow-version";
 import { getFlowRun, type FlowRun } from "../../db/repos/flow-run";
+import { assertWorkflowCapabilities } from "../../runtime/effect-capabilities";
 
 export interface EngineRuntimeOptions {
   api: SandboxApi;
@@ -285,6 +286,7 @@ export class EngineHandle {
    * via the returned FlowRun row.
    */
   async executeFlow(opts: ExecuteFlowOnHandleOptions): Promise<FlowRun> {
+    (this.api.services?.assertFlowCapabilities ?? assertWorkflowCapabilities)(opts.flowVersion.trigger as import('../../db/repos/flow-version').FlowTriggerNode);
     const upstream = isUpstreamFlowVersion(opts.flowVersion)
       ? opts.flowVersion
       : toUpstreamFlowVersion(opts.flowVersion);
@@ -366,6 +368,7 @@ export class EngineHandle {
       platformId?: string;
     },
   ): Promise<unknown> {
+    (this.api.services?.assertFlowCapabilities ?? assertWorkflowCapabilities)(opts.flowVersion.trigger as import('../../db/repos/flow-version').FlowTriggerNode);
     const merged: ExecuteTriggerHookOptions = {
       hookType,
       flowVersion: opts.flowVersion,

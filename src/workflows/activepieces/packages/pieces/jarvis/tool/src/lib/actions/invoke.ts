@@ -9,13 +9,14 @@ import { createAction, Property } from "@activepieces/pieces-framework";
 interface InvokeResponse {
   result: unknown;
   toolName: string;
+  approval?: { effectId: string; approvalId: string; waitpointId: string };
 }
 
 export const invokeAction = createAction({
   name: "invoke",
   displayName: "Invoke a Jarvis tool",
   description:
-    "Call a registered Jarvis tool by name with the given parameters. Returns the tool's raw result.",
+    "Call a supported Jarvis tool under Authority policy. Pauses for approval when required and returns the tool's raw result.",
   // The envelope is always `{ result, toolName }`; the shape of
   // `result` is the called tool's concern. We declare a string here
   // as a representative example -- many Jarvis tools return a
@@ -23,20 +24,20 @@ export const invokeAction = createAction({
   // user can drill in with `{{step.result.<field>}}` after seeing it
   // captured from a successful run.
   outputSample: {
-    result: "Saved 3 records to the vault.",
-    toolName: "vault_search",
+    result: "File written successfully.",
+    toolName: "write_file",
   },
   props: {
     toolName: Property.ShortText({
       displayName: "Tool name",
       description:
-        "Exact id of the registered Jarvis tool (e.g. run_command, vault_search).",
+        "Exact id of a tool with a supported Authority capability (e.g. read_file, write_file). Raw commands and ambiguous UI actions require a governed adapter.",
       required: true,
     }),
     params: Property.Json({
       displayName: "Parameters",
       description:
-        "JSON object passed verbatim to the tool's execute() function.",
+        "JSON arguments for the tool. Arguments and the execution target are included when approval is needed.",
       required: false,
       defaultValue: {},
     }),
@@ -56,6 +57,8 @@ export const invokeAction = createAction({
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${context.server.token}`,
+        'X-Jarvis-Step-Name': context.step.name,
+        'X-Jarvis-Execution-Path': JSON.stringify(context.step.executionPath ?? []),
       },
       body: JSON.stringify({ toolName, params }),
     });
@@ -65,7 +68,9 @@ export const invokeAction = createAction({
         `jarvis-tool: daemon responded ${response.status}: ${text.slice(0, 500)}`,
       );
     }
-    return (await response.json()) as InvokeResponse;
+    const reply = (await response.json()) as InvokeResponse;
+    if (reply.approval) context.run.waitForWaitpoint(reply.approval.waitpointId);
+    return reply;
   },
 });
 

@@ -33,7 +33,7 @@ export async function applyApprovalDecision(
     let executed = false;
     let result = '';
     let error: string | undefined;
-    if (approved.tool_name !== 'request_approval' && approved.execution_mode !== 'inline') {
+    if (approved.tool_name !== 'request_approval' && approved.execution_mode === 'deferred') {
       // Intent-only and inline requests are executed by the blocked caller
       // (request_approval tool / authority gate) once it sees the status flip —
       // executing here would run the tool twice.

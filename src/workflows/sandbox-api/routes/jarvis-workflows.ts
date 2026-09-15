@@ -16,6 +16,8 @@
 
 import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
 import { cancellableWorkflowService } from "../../runtime/cancellation";
+import { workflowEffectContext } from './effect-context';
+import type { WorkflowEffectContext, WorkflowApprovalPending } from '../../runtime/effect-context';
 
 export interface WorkflowsStartRequest {
   flowId: string;
@@ -23,7 +25,8 @@ export interface WorkflowsStartRequest {
 }
 
 export interface WorkflowsStartResponse {
-  runId: string;
+  runId: string | null;
+  approval?: WorkflowApprovalPending;
 }
 
 /**
@@ -42,7 +45,7 @@ export interface WorkflowsStartResponse {
  */
 export type WorkflowsStartFn = (
   req: WorkflowsStartRequest,
-  ctx: { runId: string; projectId: string },
+  ctx: WorkflowEffectContext,
 ) => Promise<WorkflowsStartResponse>;
 
 export interface JarvisWorkflowsRouteDeps {
@@ -69,10 +72,7 @@ export function createJarvisWorkflowsStartRoute(
       out.payload = raw.payload as Record<string, unknown>;
     }
     try {
-      const reply = await cancellableWorkflowService(deps.workflowsStart)(out, {
-        runId: ctx.claims.runId,
-        projectId: ctx.claims.projectId,
-      });
+      const reply = await cancellableWorkflowService(deps.workflowsStart)(out, workflowEffectContext(ctx));
       return json(reply);
     } catch (e) {
       // Typed errors from JarvisWorkflowRunnerAdapter carry a `code`

@@ -105,6 +105,7 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
                 flowVersionId: constants.flowVersionId,
             }),
             step: {
+                executionPath: executionState.currentPath.path,
                 name: action.name,
             },
             auth: processedInput[AUTHENTICATION_PROPERTY_NAME],

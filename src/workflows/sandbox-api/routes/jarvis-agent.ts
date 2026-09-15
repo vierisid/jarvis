@@ -9,6 +9,8 @@
 
 import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
 import { cancellableWorkflowService } from "../../runtime/cancellation";
+import { workflowEffectContext } from './effect-context';
+import type { WorkflowEffectContext, WorkflowApprovalPending } from '../../runtime/effect-context';
 
 export interface AgentDelegateRequest {
   goal: string;
@@ -17,6 +19,7 @@ export interface AgentDelegateRequest {
 }
 
 export interface AgentDelegateResponse {
+  approval?: WorkflowApprovalPending;
   finalMessage: string;
   toolCalls: Array<{
     name: string;
@@ -24,13 +27,13 @@ export interface AgentDelegateResponse {
     result?: string;
     error?: string;
   }>;
-  status: "completed" | "max_iterations" | "error" | "canceled";
+  status: "completed" | "max_iterations" | "error" | "canceled" | "approval_required";
   error?: string;
 }
 
 export type AgentDelegateFn = (
   req: AgentDelegateRequest,
-  ctx: { runId: string; projectId: string },
+  ctx: WorkflowEffectContext,
 ) => Promise<AgentDelegateResponse>;
 
 export interface JarvisAgentRouteDeps {
@@ -74,10 +77,7 @@ export function createJarvisAgentDelegateRoute(
       }
       out.maxIterations = n;
     }
-    const reply = await cancellableWorkflowService(deps.agentDelegate)(out, {
-      runId: ctx.claims.runId,
-      projectId: ctx.claims.projectId,
-    });
+    const reply = await cancellableWorkflowService(deps.agentDelegate)(out, workflowEffectContext(ctx));
     return json(reply);
   };
 }

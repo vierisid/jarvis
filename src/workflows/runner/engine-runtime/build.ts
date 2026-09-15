@@ -204,6 +204,7 @@ function buildStagingPackageJson(): string {
  * new patch is a one-line cache-invalidation registration.
  */
 const PATCHED_VENDOR_SOURCES = [
+  'server/engine/src/lib/handler/piece-executor.ts',
   "server/engine/src/lib/helper/piece-loader.ts",
   // Jarvis-only `outputSample` extension on actions + the matching
   // ActionBase change. Hand-edits to these files (or a sync that

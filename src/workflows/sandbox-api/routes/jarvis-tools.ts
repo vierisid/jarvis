@@ -10,6 +10,8 @@
 
 import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
 import { cancellableWorkflowService } from "../../runtime/cancellation";
+import { workflowEffectContext } from './effect-context';
+import type { WorkflowEffectContext, WorkflowApprovalPending } from '../../runtime/effect-context';
 
 export interface ToolsInvokeRequest {
   toolName: string;
@@ -19,11 +21,12 @@ export interface ToolsInvokeRequest {
 export interface ToolsInvokeResponse {
   result: unknown;
   toolName: string;
+  approval?: WorkflowApprovalPending;
 }
 
 export type ToolsInvokeFn = (
   req: ToolsInvokeRequest,
-  ctx: { runId: string; projectId: string },
+  ctx: WorkflowEffectContext,
 ) => Promise<ToolsInvokeResponse>;
 
 export interface JarvisToolsRouteDeps {
@@ -55,7 +58,7 @@ export function createJarvisToolsInvokeRoute(
     }
     const reply = await cancellableWorkflowService(deps.toolsInvoke)(
       { toolName: raw.toolName, params },
-      { runId: ctx.claims.runId, projectId: ctx.claims.projectId },
+      workflowEffectContext(ctx),
     );
     return json(reply);
   };

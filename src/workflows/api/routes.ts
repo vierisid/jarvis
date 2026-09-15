@@ -20,6 +20,7 @@
  * `initWorkflowDb(...)` before routes serve traffic.
  */
 
+import { getWorkflowDb } from '../db';
 import {
   createFlow,
   deleteFlow,
@@ -664,6 +665,8 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           const wp = getWaitpoint(id);
           if (!wp) return err("waitpoint not found", 404);
+          const ownedEffect = getWorkflowDb().query('SELECT id FROM workflow_effect WHERE waitpoint_id=?').get(id);
+          if (ownedEffect) return err('This waitpoint is owned by Authority; resolve its approval request', 403);
           if (wp.resumedAt !== null) return err("waitpoint already resumed", 410);
           const run = getFlowRun(wp.flowRunId);
           if (!run) return err("waitpoint references a missing run", 410);
@@ -1085,6 +1088,15 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           if (status) opts.status = status;
           return ok(listRuns(opts));
         }),
+    },
+
+    "/api/workflow-runs/:runId/effects": {
+      GET: (req) => trapErrors(async () => {
+        const { runId } = (req as RequestWithParams<{ runId: string }>).params;
+        if (!getFlowRun(runId)) return err('run not found', 404);
+        const { listWorkflowEffects } = await import('../db/repos/workflow-effect');
+        return ok({ runId, effects: listWorkflowEffects(runId) });
+      }),
     },
 
     "/api/workflow-runs/:runId": {
