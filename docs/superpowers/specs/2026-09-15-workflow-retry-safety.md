@@ -25,7 +25,11 @@ acquisition retries before flow execution remain unchanged.
   explanation, finish time and instructions to check effects before deciding
   on another run. Job and run changes commit together. Existing terminal run
   results and partial step outputs are preserved. A durable PAUSED result
-  with an unresolved waitpoint remains paused for its planned continuation.
+  with an unresolved waitpoint or a matching, unattempted queued RESUME
+  remains paused for its planned continuation. The latter covers a timer or
+  webhook consuming the waitpoint before the original queue job finishes.
+  The continuation payload must identify this run; any stored run, flow and
+  version IDs must agree. Attempted, canceled or malformed jobs do not qualify.
 - Executor failures preserve the original error and attach the same retry
   guidance. Chat `get_run`, run history and the existing run API expose the
   `failedStep.errorMessage` with the stored step outputs.
@@ -118,6 +122,21 @@ either PR's implementation to this branch.
 - The full repository suite was not run. The commit hook was replaced by
   these explicit checks for this commit because prior sessions established
   full-suite/package-wrapper hangs; no global hook configuration was changed.
+
+### R1: preserve a queued continuation after consuming its waitpoint
+
+Recovery now recognizes the durable handoff from a PAUSED run to its fresh
+RESUME job. The original job still terminates without replay. Three
+regressions failed before the fix, covering the real timer scheduler,
+webhook route and legacy nullable `flow_run_id`. They now execute recovery
+in a fresh process, preserve the job and payload across another reopening,
+and run the continuation once through the worker and handler. Ten negative
+cases retain failure for attempted/canceled jobs, incorrect identities,
+BEGIN or unrelated jobs, malformed JSON and runs without a recorded pause.
+Verification: 122 focused tests passed, followed by the final 39-test queue
+run with fresh-process recovery. Isolated combinations passed 96 Authority
+and 75 Today tests. TypeScript, daemon build and all four guards passed.
+The full-suite and per-commit hook limitations above remain unchanged.
 
 All effects in these tests are synthetic. Live delivery incidence and
 provider reconciliation have not been measured.

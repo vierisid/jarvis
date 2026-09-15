@@ -218,13 +218,25 @@ function retireWorkflowRetries(ts: number, atBoot: boolean): void {
       } catch { /* Keep the malformed job's durable error even without a run. */ }
     }
     if (runId) {
-      // A durable PAUSED result with a still-open waitpoint is a planned
-      // continuation, not an interrupted execution. Preserve that checkpoint.
-      // Merely creating a waitpoint while RUNNING does not establish a pause.
+      // A durable PAUSED result can be waiting on an open waitpoint or on
+      // the fresh RESUME that consumed it before this old job finished.
+      // Preserve either continuation, but never an attempted/mismatched job.
+      // Merely queuing a resume while RUNNING does not establish a pause.
       d.run(`UPDATE flow_run SET status = 'FAILED', failed_step = ?, finish_time = ?, updated = ?
         WHERE id = ? AND status IN ('QUEUED', 'RUNNING', 'PAUSED')
-          AND (status != 'PAUSED' OR NOT EXISTS (
-            SELECT 1 FROM waitpoint WHERE flow_run_id = flow_run.id AND resumed_at IS NULL
+          AND (status != 'PAUSED' OR (
+            NOT EXISTS (SELECT 1 FROM waitpoint WHERE flow_run_id = flow_run.id AND resumed_at IS NULL)
+            AND NOT EXISTS (
+              SELECT 1 FROM workflow_job continuation
+              WHERE continuation.job_type = 'RUN_FLOW' AND continuation.status = 'QUEUED' AND continuation.attempt = 0
+                AND (continuation.flow_run_id IS NULL OR continuation.flow_run_id = flow_run.id)
+                AND (continuation.flow_id IS NULL OR continuation.flow_id = flow_run.flow_id)
+                AND (continuation.flow_version_id IS NULL OR continuation.flow_version_id = flow_run.flow_version_id)
+                AND CASE WHEN json_valid(continuation.payload) THEN
+                  json_extract(continuation.payload, '$.runId') = flow_run.id
+                  AND json_extract(continuation.payload, '$.executionType') = 'RESUME'
+                ELSE 0 END
+            )
           ))`, [
         JSON.stringify({ name: "<queue>", displayName: "Interrupted execution", errorMessage: message }),
         ts, ts, runId,
