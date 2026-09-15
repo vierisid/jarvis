@@ -9,7 +9,7 @@ import { saveUserProfile } from './user-profile.ts';
 import { createRelationship } from './relationships.ts';
 import { getKnowledgeForMessage, retrieveForMessage, formatKnowledgeContext } from './retrieval.ts';
 import { rankRecall, recallTerms, type RecallFact } from './recall-ranking.ts';
-import { packRecallContext, RECALL_LIMITS } from './recall-context.ts';
+import { formatRecallFact, packRecallContext, RECALL_LIMITS } from './recall-context.ts';
 import { runRecallBenchmark } from '../../scripts/benchmark-memory-recall.ts';
 
 beforeEach(() => initDatabase(':memory:', { quiet: true }));
@@ -239,6 +239,79 @@ test('ranking respects C8 states and periods while retaining contested facts', (
   expect(ranked.flatMap(profile => profile.facts.map(fact => fact.object))).toEqual(['Emacs', 'Zed']);
 });
 
+test.each(['Does Alex still use Vim?', 'Vim'])('value query retains the current confirmed counterpart: %s', query => {
+  const entity = createEntity('person', 'Alex');
+  const base = repository.createFact(entity.id, 'preferred_editor', 'Zed');
+  const confirmed: RecallFact = { ...base, id: 'confirmed', predicate_key: 'preferred_editor',
+    verified_at: 1, status: 'active', basis: 'confirmed', scope: 'work', binding_eligible: true };
+  const contested: RecallFact = { ...base, id: 'inferred', predicate: 'prefers_editor', predicate_key: 'preferred_editor',
+    object: 'Vim', status: 'contested', basis: 'inferred', scope: 'work', verified_at: null, binding_eligible: false };
+  const records: RecallFact[] = [contested, confirmed,
+    { ...confirmed, id: 'personal', object: 'PersonalEditor', scope: 'personal' },
+    { ...confirmed, id: 'expired', object: 'ExpiredEditor', valid_to: 1 },
+    { ...confirmed, id: 'future', object: 'FutureEditor', valid_from: Date.now() + 86_400_000 },
+    { ...confirmed, id: 'superseded', object: 'OldEditor', status: 'superseded' },
+    { ...confirmed, id: 'different-predicate', predicate_key: 'preferred_language', predicate: 'preferred_language', object: 'French' },
+  ];
+  const ranked = rankRecall(query, [entity], records);
+  expect(ranked.flatMap(profile => profile.facts.map(fact => fact.id)).sort()).toEqual(['confirmed', 'inferred']);
+  const profiles = ranked.map(profile => ({ ...profile, relationships: [] }));
+  const context = packRecallContext(profiles);
+  expect(context).toContain('preferred_editor: Zed');
+  expect(context).toContain('prefers_editor: Vim');
+  expect(context).toContain('"state":"contested"');
+  expect(context).toContain('"basis":"confirmed"');
+  // The confirmed answer may fit alone, but the inference cannot appear alone.
+  const tight = packRecallContext(profiles, formatRecallFact(confirmed).length + 550);
+  expect(tight).toContain('preferred_editor: Zed');
+  expect(tight).not.toContain('prefers_editor: Vim');
+  expect(tight).toContain('omitted');
+});
+
+test('active multi-valued facts do not acquire correction dependencies', () => {
+  const entity = createEntity('person', 'Alex');
+  const base = repository.createFact(entity.id, 'location', 'Paris');
+  const records: RecallFact[] = [
+    { ...base, id: 'paris', status: 'active', predicate_key: 'location', basis: 'inferred', binding_eligible: false },
+    { ...base, id: 'london', object: 'London', status: 'active', predicate_key: 'location', verified_at: 1, basis: 'confirmed' },
+  ];
+  const ranked = rankRecall('Alex Paris', [entity], records);
+  expect(ranked.flatMap(profile => profile.facts.map(fact => fact.id))).toEqual(['paris']);
+});
+
+test.each(['missing', 'expired', 'oversize'])('unavailable correction hides its inference but keeps unrelated facts: %s', unavailable => {
+  const entity = createEntity('person', 'Alex');
+  const base = repository.createFact(entity.id, 'preferred_editor', 'Zed');
+  const confirmed: RecallFact = { ...base, id: 'confirmed', predicate_key: 'preferred_editor',
+    verified_at: 1, status: 'active', basis: 'confirmed' };
+  const contested: RecallFact = { ...base, id: 'inferred', predicate_key: 'preferred_editor',
+    object: 'Vim', status: 'contested', basis: 'inferred', verified_at: null, binding_eligible: false };
+  const deadline = repository.createFact(entity.id, 'deadline', 'Friday');
+  const profiles = rankRecall('Alex Vim deadline', [entity], [contested, confirmed, deadline])
+    .map(profile => ({ ...profile, relationships: [] }));
+  profiles[0]!.facts = profiles[0]!.facts.flatMap(fact => fact.id !== confirmed.id ? [fact]
+    : unavailable === 'missing' ? [] : [{ ...fact, ...(unavailable === 'expired' ? { valid_to: 1 } : { object: 'x'.repeat(3900) }) }]);
+  const context = packRecallContext(profiles, 1500);
+  expect(context).not.toContain('preferred_editor: Vim');
+  expect(context).toContain('deadline: Friday');
+  expect(context).toContain('omitted');
+});
+
+test('mutually contested confirmations preserve their dependency group at context limits', () => {
+  const entity = createEntity('person', 'Alex');
+  const base = repository.createFact(entity.id, 'preferred_editor', 'Zed');
+  const one: RecallFact = { ...base, id: 'zed', predicate_key: 'preferred_editor',
+    verified_at: 1, status: 'contested', basis: 'confirmed', binding_eligible: false };
+  const two: RecallFact = { ...one, id: 'vim', object: 'Vim' };
+  const profiles = rankRecall('Alex Vim', [entity], [one, two]).map(profile => ({ ...profile, relationships: [] }));
+  const context = packRecallContext(profiles);
+  expect(context).toContain('preferred_editor: Zed');
+  expect(context).toContain('preferred_editor: Vim');
+  const tight = packRecallContext(profiles, formatRecallFact(one).length + 550);
+  expect(tight).not.toContain('preferred_editor:');
+  expect(tight).toContain('omitted');
+});
+
 test('packing keeps C8 source references, scope, validity and contested status intact', () => {
   const entity = createEntity('person', 'Tao');
   const base = repository.createFact(entity.id, 'preferred_editor', 'Zed');
@@ -267,6 +340,45 @@ test('default recall recovers qualified facts after a database restart', () => {
 });
 
 const hasC8 = Reflect.has(repository, 'correctFact');
+test.skipIf(!hasC8)('actual C8 value queries retain the correction through aliases, crowding and restart', () => {
+  closeDb();
+  const dir = mkdtempSync(join(tmpdir(), 'jarvis-recall-correction-'));
+  try {
+    const file = join(dir, 'vault.db');
+    initDatabase(file, { quiet: true });
+    const entity = createEntity('person', 'Alex');
+    repository.createFact(entity.id, 'alias', 'beacon', { source: 'llm_extraction', confidence: 0.7 });
+    const create = repository.createFact as (id: string, predicate: string, object: string, options: Record<string, unknown>) => RecallFact;
+    const correct = Reflect.get(repository, 'correctFact') as (id: string, object: string, reason: string) => RecallFact;
+    const old = create(entity.id, 'preferred_editor', 'Vim', { source: 'llm_extraction', scope: 'work' });
+    const current = correct(old.id, 'Zed', 'Confirmed the current editor');
+    create(entity.id, 'prefers_editor', 'Vim', { source: 'llm_extraction', scope: 'work', confidence: 1 });
+    create(entity.id, 'preferred_editor', 'PersonalEditor', { confirmed: true, scope: 'personal' });
+    for (const query of ['Does Alex still use Vim?', 'Does beacon still use Vim?', 'Vim']) {
+      const context = getKnowledgeForMessage(query);
+      expect(context).toContain('preferred_editor: Zed');
+      expect(context).toContain('prefers_editor: Vim');
+      expect(context).not.toContain('PersonalEditor');
+      expect(context).toContain('"state":"contested"');
+      expect(context).toContain('"basis":"confirmed"');
+      expect(context).toContain('"binding_eligible":false');
+    }
+    for (let i = 0; i < 10; i++) create(entity.id, 'prefers_editor', `Vim variant ${i}`, {
+      source: 'llm_extraction', scope: 'work', confidence: 1,
+    });
+    const query = 'Does beacon still use Vim?';
+    const before = getKnowledgeForMessage(query);
+    closeDb(); initDatabase(file, { quiet: true });
+    expect(getKnowledgeForMessage(query)).toBe(before);
+    expect(before).toContain('preferred_editor: Zed');
+    expect(before).toContain('alias: beacon');
+    expect((before.match(/  - /g) ?? []).length).toBeLessThanOrEqual(RECALL_LIMITS.factsPerEntity);
+    expect(before.length).toBeLessThanOrEqual(RECALL_LIMITS.chars);
+    expect((repository.getFact(old.id) as RecallFact)?.status).toBe('superseded');
+    expect((repository.getFact(current.id) as RecallFact)?.binding_eligible).toBe(true);
+  } finally { closeDb(); rmSync(dir, { recursive: true, force: true }); }
+});
+
 test.skipIf(!hasC8)('actual C8 repeated evidence preserves corrected recall and the full ledger after restart', () => {
   closeDb();
   const dir = mkdtempSync(join(tmpdir(), 'jarvis-recall-evidence-'));

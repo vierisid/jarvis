@@ -55,7 +55,17 @@ function mentioned(label: string, query: Set<string>, normalized: string): boole
     || tokens.every(token => query.has(token));
 }
 
-export type RankedEntity = { entity: Entity; facts: RecallFact[]; matchedAliasIds: string[]; score: number };
+export type RecallFactDependency = { factId: string; requiredFactIds: string[] };
+export type RankedEntity = { entity: Entity; facts: RecallFact[]; matchedAliasIds: string[];
+  factDependencies: RecallFactDependency[]; score: number };
+
+/** Include transitive requirements once, including mutually contested confirmations. */
+export function expandRecallDependencies(ids: Iterable<string>, dependencies: RecallFactDependency[] = []): string[] {
+  const required = new Map(dependencies.map(dependency => [dependency.factId, dependency.requiredFactIds]));
+  const selected = new Set(ids);
+  for (const id of selected) for (const peer of required.get(id) ?? []) selected.add(peer);
+  return [...selected];
+}
 
 export function isRecallSelfOverview(message: string): boolean {
   return /(?:what.*(?:know|remember).*(?:me|myself)|who am i)/i.test(message);
@@ -123,8 +133,27 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
     scored.sort(compare);
     const primary = hasTaskMatch ? scored.filter(doc => doc.taskMatch > 0 || doc.alias) : scored;
     const score = primary[0]?.score ?? (fullNameMatch || aliasMatches.length || (ownProfile && selfOverview) ? 12 : 8 * nameCoverage);
-    if (score > 0) results.push({ entity, facts: primary.map(doc => doc.fact),
-      matchedAliasIds: primary.filter(doc => doc.alias).map(doc => doc.fact.id), score });
+    if (score > 0) {
+      // C8 supplies the conflict state and canonical predicate. A lexical hit on
+      // an old inferred value must retain the confirmed answer, even if that
+      // answer has no query-token match. Both records already apply at `at`.
+      const contextKey = (fact: RecallFact) => JSON.stringify([fact.predicate_key ?? fact.predicate, fact.scope ?? '']);
+      const confirmations = new Map<string, string[]>();
+      for (const { fact } of entityDocs) if (fact.verified_at != null) {
+        const key = contextKey(fact), peers = confirmations.get(key) ?? [];
+        peers.push(fact.id); confirmations.set(key, peers);
+      }
+      const dependencies = entityDocs.flatMap(({ fact }) => {
+        if (fact.status !== 'contested') return [];
+        const requiredFactIds = (confirmations.get(contextKey(fact)) ?? []).filter(id => id !== fact.id).sort();
+        return requiredFactIds.length ? [{ factId: fact.id, requiredFactIds }] : [];
+      });
+      const ids = new Set(expandRecallDependencies(primary.map(doc => doc.fact.id), dependencies));
+      const byId = new Map(entityDocs.map(doc => [doc.fact.id, doc.fact]));
+      results.push({ entity, facts: [...ids].map(id => byId.get(id)!),
+        matchedAliasIds: primary.filter(doc => doc.alias).map(doc => doc.fact.id),
+        factDependencies: dependencies.filter(dependency => ids.has(dependency.factId)), score });
+    }
   }
   results.sort((a, b) => b.score - a.score || a.entity.name.localeCompare(b.entity.name) || a.entity.id.localeCompare(b.entity.id));
   // Avoid weak generic matches filling the prompt after a strong task match.
