@@ -41,6 +41,18 @@ function addEvidence(id: string, options: FactOptions, now: number): void {
     (id, fact_id, source, source_ref, quote, basis, confidence, recorded_at, evidence_key) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
   [generateId(), id, ...fields, now, key]);
 }
+/**
+ * Provenance is unforgeable because `confirmed` is read from `verified_at`
+ * FIRST and from nothing else. `verified_at` is written only by an explicit
+ * decision (verifyFact/correctFact, i.e. the authenticated confirm/correct
+ * routes) or by a legacy answer the canonical profile record vouches for.
+ * Every other input -- the `source` label, the model's confidence, an evidence
+ * row's own basis, an LLM putting `confirmed: true` in its extraction JSON --
+ * is reachable by untrusted content and can only ever reach the WEAKER arms of
+ * this expression. Keep that order: reading a caller-supplied field before
+ * `verified_at` would let extracted text promote itself to a confirmed fact,
+ * and `binding_eligible` below -- and `queryFact` through it -- would follow.
+ */
 function decorate(row: FactRow): Fact {
   const evidence = getDb().query<FactEvidence, [string]>('SELECT * FROM fact_evidence WHERE fact_id = ? ORDER BY recorded_at DESC, id').all(row.id);
   const basis: FactBasis = row.verified_at !== null ? 'confirmed' : evidence.some(e => e.basis === 'reported') ? 'reported'
