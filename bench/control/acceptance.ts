@@ -42,6 +42,13 @@ interface Opts {
   runs: number;
   out: string;
   token: string;
+  /**
+   * GOOS of the sidecar being driven, as it reported on register. Not a CLI
+   * option: main() fills it in once the target is chosen. Some checks can only
+   * pass on one platform, and saying which one is the difference between a
+   * useful skip and a wild goose chase.
+   */
+  sidecarOs?: string;
 }
 
 const SUITES = ['phase0', 'browser', 'desktop', 'all'];
@@ -82,7 +89,7 @@ type RpcResponse = {
   error?: string;
 };
 
-type SidecarRow = { id?: string; name: string; connected: boolean; capabilities?: string[] };
+type SidecarRow = { id?: string; name: string; connected: boolean; capabilities?: string[]; os?: string };
 
 /** The endpoint answered 404: the gate is off or the token is wrong, so nothing else can run. */
 class GateClosedError extends Error {}
@@ -164,6 +171,35 @@ const methodMissing = (r: RpcResponse) => (r.error ?? '').includes('METHOD_NOT_F
 const OLD_BUILD_HINT =
   'the connected sidecar build predates this feature. If you built a newer one, a stale auto-started ' +
   'sidecar probably reconnected in its place: stop every jarvis-sidecar process and start only the fresh binary';
+
+/** The only GOOS whose get_window_tree reads the `semantic` parameter. */
+const SEMANTIC_REF_OS = 'windows';
+
+/**
+ * Why get_window_tree came back with no sigs.
+ *
+ * Only sidecar/desktop_windows.go threads `semantic` into its walk; the darwin
+ * and linux handlers never read the parameter, so off Windows a ref-less tree
+ * is the implemented behaviour and no sidecar build changes it. Blaming the
+ * build there sends the operator to rebuild something that will fail the check
+ * again. See docs/sidecar/SIDECAR_PROTOCOL.md, "Surface Limits".
+ */
+export function noSemanticRefsReason(os: string | undefined): string {
+  const base = 'get_window_tree ignored semantic:true (no element has a sig)';
+  if (os && os !== 'unknown' && os !== SEMANTIC_REF_OS) {
+    return `${base}: semantic refs are Windows-only and this sidecar reports os=${os}. ` +
+      'The darwin and linux get_window_tree handlers do not read the flag, so no sidecar build ' +
+      'passes this check there. See docs/sidecar/SIDECAR_PROTOCOL.md, "Surface Limits".';
+  }
+  // Windows, or an OS the daemon could not report: the build is the likely
+  // cause, but say the platform out loud so a non-Windows run is not sent
+  // rebuilding either.
+  const caveat = os === SEMANTIC_REF_OS
+    ? ''
+    : ' (the daemon did not report this sidecar\'s OS; if it is not Windows the check cannot pass at all,' +
+      ' semantic refs are Windows-only)';
+  return `${base}: ${OLD_BUILD_HINT}${caveat}`;
+}
 
 /**
  * Share of the first snapshot's elements whose sig is distinct and still
@@ -473,9 +509,11 @@ async function suiteDesktop(d: Driver, opts: Opts) {
   }
   const res = asObj(snap.result);
   const els = Array.isArray(res.elements) ? (res.elements as Array<Record<string, unknown>>) : [];
-  // A build without semantic refs ignores `semantic` and emits no sig key at all.
+  // No sig key anywhere means the walk ignored `semantic`. That is a stale
+  // build on Windows and an unimplemented surface everywhere else, so the
+  // reason is derived from the sidecar's OS rather than assumed.
   if (els.length > 0 && !els.some((e) => 'sig' in e)) {
-    const reason = `get_window_tree ignored semantic:true (no element has a sig): ${OLD_BUILD_HINT}`;
+    const reason = noSemanticRefsReason(opts.sidecarOs);
     skip(SNAPSHOT_CHECK, reason);
     skip(RERESOLVE_CHECK, reason);
     return;
@@ -557,7 +595,8 @@ async function main() {
   // Pin every RPC to the sidecar whose capabilities are checked below; with no
   // target the daemon would pick its own first connected sidecar.
   opts.target = chosen.id ?? chosen.name;
-  console.log(`Driving sidecar "${chosen.name}" [caps: ${(chosen.capabilities ?? []).join(', ')}]`);
+  opts.sidecarOs = chosen.os;
+  console.log(`Driving sidecar "${chosen.name}" [os: ${chosen.os ?? 'unreported'}, caps: ${(chosen.capabilities ?? []).join(', ')}]`);
   const caps = new Set(chosen.capabilities ?? []);
 
   const suites: Array<[name: string, capability: string, run: (d: Driver, opts: Opts) => Promise<void>]> = [
@@ -601,7 +640,10 @@ async function main() {
   process.exit(gateClosed ? 2 : failed > 0 || verified === 0 ? 1 : 0);
 }
 
-main().catch((e) => {
-  console.error(`acceptance driver crashed: ${e instanceof Error ? e.stack : String(e)}`);
-  process.exit(2);
-});
+// Guarded so a test file can import the helpers above without driving a daemon.
+if (import.meta.main) {
+  main().catch((e) => {
+    console.error(`acceptance driver crashed: ${e instanceof Error ? e.stack : String(e)}`);
+    process.exit(2);
+  });
+}

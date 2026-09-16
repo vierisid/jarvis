@@ -89,6 +89,12 @@ end tell`
 
 // ── get_window_tree ────────────────────────────────────────────────────
 
+// handleGetWindowTree walks the AX tree through JXA. It deliberately does not
+// read params["semantic"]: durable refs (sig/path/ordinal) are implemented only
+// in the Windows UIA walk, so `semantic: true` is a no-op here and elements come
+// back without refs rather than with an error. Documented in
+// docs/sidecar/SIDECAR_PROTOCOL.md, "Surface Limits"; the shared sig helpers in
+// semantic.go are provider-independent if this walk ever grows them.
 func handleGetWindowTree(params map[string]any) (*RPCResult, error) {
 	pid := 0
 	if v, ok := params["pid"].(float64); ok {

@@ -218,6 +218,84 @@ Common `kind` values:
 - `file_changed` — watched file/directory changed
 - `error` — sidecar encountered an internal error
 
+## Surface Limits
+
+Two of the structural-surface RPCs do not cover the same ground everywhere.
+Neither is a bug, and neither reports an error: in both cases the call succeeds
+and simply returns less than the caller expected, which is why the symptom
+reads as something else. Callers that depend on the missing part have to
+recognise it themselves.
+
+### `get_window_tree`: the `semantic` flag is Windows-only
+
+`semantic: true` asks the desktop provider for durable element addresses, the
+`sig` / `path` / `ordinal` triple that `src/structural/` resolves refs against.
+Only the Windows handler implements it: `handleGetWindowTree` in
+`sidecar/desktop_windows.go` reads `params["semantic"]` and threads it into the
+UIA walk. The darwin handler (JXA over System Events) and the linux handler
+(AT-SPI2) never read the parameter, so passing it there is a no-op and every
+element comes back without refs.
+
+Nothing fails, because from the handler's side nothing went wrong: the tree is
+returned, it just has no refs in it. So a ref-less tree is ambiguous, and which
+explanation is right depends on the sidecar's OS:
+
+| Sidecar `os` | A tree with no `sig` means |
+|---|---|
+| `windows` | the build predates semantic refs, or a stale sidecar reconnected |
+| `darwin`, `linux` | the surface was never implemented; no build satisfies it |
+
+`bench/control/acceptance.ts` reads the connected sidecar's reported `os`
+before it names a cause, so its desktop suite skips off Windows with the
+platform reason instead of sending the operator to rebuild something that
+cannot change.
+
+Implementing it elsewhere means deriving the same sig inputs from each
+provider's own vocabulary (AX roles on macOS, AT-SPI roles on Linux). The sig
+format is deliberately provider-independent and the helpers in
+`sidecar/semantic.go` are shared, so the work is in the walk, not in the
+addressing.
+
+### `browser_ax_snapshot`: no traversal into out-of-process iframes
+
+The sidecar attaches one flat-mode CDP session to a single page target
+(`attachToPage` in `sidecar/browser.go`) and tags every page-scoped command
+with it. `browser_ax_snapshot` issues one `Accessibility.getFullAXTree` on that
+session, which returns the page's tree plus any frame rendered in the same
+renderer process. A frame in its own process (an OOPIF, which under Chrome's
+default site isolation is every cross-origin frame) is a separate target with
+its own session, and its nodes are absent from the reply. No error, just a
+smaller tree.
+
+The older `browser_snapshot` has a different blind spot rather than none. Its
+injected script walks frames itself (`collectFrames` in
+`sidecar/browser_snapshot.go`, capped at depth 3 and 10 frames) and reaches
+each one through `iframe.contentDocument`, which the same-origin policy blocks
+for a cross-origin frame whether or not it is out of process.
+
+So the two providers are gated on different things, and can disagree in both
+directions:
+
+| Frame | `browser_snapshot` | `browser_ax_snapshot` |
+|---|---|---|
+| same-origin, within the caps | yes | yes |
+| same-origin, nested past depth 3 or frame 10 | no | yes |
+| cross-origin, same process | no (`contentDocument` throws) | yes |
+| cross-origin, out of process | no | no |
+
+With site isolation on, the last row is the common case and both miss the same
+content; the middle rows are what makes an element visible to one provider and
+absent from the other. Refs do not bridge the gap either: `browser_ax_click`
+and `browser_ax_set_value` act on a `backend_node_id`, and those ids are minted
+per session.
+
+Closing it needs per-target traversal, not a bigger tree: discover the iframe
+targets (`attachToPage` only ever looks for `type == "page"`), attach a session
+to each, call `getFullAXTree` per session, and merge -- keeping the session
+alongside each `backend_node_id` so actions dispatch on the right one, and
+offsetting each frame's coordinates the way the DOM snapshot already does. That
+is deferred until the AX provider becomes the default path.
+
 ## RPC Lifecycle on the Brain
 
 Every RPC uses a **two-timeout mechanism**: an initial timeout (blocking phase) followed by a max timeout (detached phase). This provides a unified model — the difference between "fast" and "slow" RPCs is just the timeout values.

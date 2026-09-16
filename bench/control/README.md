@@ -9,10 +9,14 @@ choices.
 ## Prerequisites
 
 1. Build + install a sidecar that implements the suites you want to run:
-   - **Phase 0** runs against the sidecar on `main`.
-   - **Browser** and **desktop** (Phase 1) need the semantic-refs sidecar
-     (`browser_ax_*` RPCs and `get_window_tree {semantic:true}`), which is not
-     on `main` yet.
+   - **Phase 0** and **browser** (Phase 1) run on any current `main` build: the
+     semantic-refs RPCs (`browser_ax_*` and `get_window_tree {semantic:true}`)
+     have landed there.
+   - The **desktop** suite (Phase 1) needs a **Windows** sidecar on top of
+     that. Only the UIA walk reads `semantic`, so on macOS and Linux its checks
+     skip and no rebuild changes that. See
+     [`docs/sidecar/SIDECAR_PROTOCOL.md`](../../docs/sidecar/SIDECAR_PROTOCOL.md),
+     "Surface Limits".
 
    ```
    cd sidecar && make build      # on Windows, or use the CI artifact
@@ -90,7 +94,8 @@ draft is left unsent for manual inspection.)
 
 **Desktop (Phase 1)** - `get_window_tree {semantic:true}` emits sig/path/
 ordinal on every element; >=95% of elements keep a distinct sig across a
-re-snapshot.
+re-snapshot. Windows only; the skip off Windows names the platform rather than
+blaming the build.
 
 ## Note on the debug endpoint
 

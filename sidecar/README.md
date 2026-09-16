@@ -160,6 +160,14 @@ compiles. Each set exports identical signatures, so callers are OS-agnostic:
 Anything compiled only for one OS is invisible to the others' builds — which is
 why CI compiles all three targets rather than trusting a Linux build.
 
+Identical signatures are not identical coverage, though. An RPC can answer on
+all three platforms and still see less on some: `get_window_tree`'s `semantic`
+flag is read only by the Windows UIA walk, and the two browser surface
+providers stop at different iframe boundaries. Neither gap errors, so both are
+written down in [`docs/sidecar/SIDECAR_PROTOCOL.md`](../docs/sidecar/SIDECAR_PROTOCOL.md)
+under "Surface Limits" rather than left to be rediscovered from an empty
+result.
+
 ### Custom window chrome (Windows)
 
 The local webview windows — settings, logs, the first-run connect window and

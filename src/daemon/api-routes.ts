@@ -4316,8 +4316,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           // reachable with just the debug secret) so it never needs the
           // access-token-gated /api/sidecars.
           if (body.method === '__list_sidecars') {
+            // `os` is the sidecar's GOOS. The harness needs it because some
+            // checks can only pass on one platform (get_window_tree's
+            // `semantic` flag is read on Windows only), and without it a
+            // missing surface is indistinguishable from a stale build.
             return json(ctx.sidecarManager.listSidecars().map((s) => ({
-              id: s.id, name: s.name, connected: s.connected, capabilities: s.capabilities,
+              id: s.id, name: s.name, connected: s.connected, capabilities: s.capabilities, os: s.os,
             })));
           }
 
