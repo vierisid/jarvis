@@ -140,9 +140,11 @@ retrieving the subject. Same rule as R1, reached through the budget.
 R7: the relevance floor is computed from a score that includes the flat name
 bonus, so a subject matched only by name hid the subjects whose facts actually
 answered the request ("Where does John work?" returned John's birthday and
-dropped Google's `employee: John`). The floor is now waived for task-matched
-subjects when the top subject has no task match. Development, both held-out
-splits and every quality ratio are unchanged at 100%.
+dropped Google's `employee: John`). When the top subject matched on its name
+alone, the floor is now waived for the subjects that name it back. A merely
+lexical hit on a generic task term is not such a cross-reference, so unrelated
+subjects still do not enter. Development, both held-out splits and every quality
+ratio are unchanged at 100%.
 
 R8: ranking drops candidates before packing sees them, through the per-subject
 task filter and the floor. Those drops now set the same incomplete-record notice
@@ -151,9 +153,12 @@ record.
 
 R9: whole-word self detection. An embedded "me" (melatonin, meeting, same) no
 longer reads as a self-overview request, which had both bypassed the empty-query
-read guard and injected the whole user profile into unrelated requests. The
-overview predicate and the profile-boost predicate are now derived from one
-another rather than drifting.
+read guard and injected the whole user profile into unrelated requests. One
+narrow predicate now serves the read gate and the profile boost: the self
+reference has to be the object of the knowing and stay inside the same clause,
+so "what do you know about the Q3 budget? send it to me" is not a self request.
+Widening the gate instead would have leaked the profile far more often than the
+original bug withheld it.
 
 R10: `line()` defangs the " | " separator as well as newlines. Predicates,
 values and names come from untrusted extraction, so a value could otherwise
@@ -175,11 +180,20 @@ subject's current facts, so mentioning the owner's own name returns the profile
 even when the request is unrelated to it. That is the same behaviour main had for
 any named subject, and the caps now bound it, but it is not data minimisation.
 
+R12: a possessive drops its ending before the remaining apostrophes are
+removed, so "Ann's" anchors on the subject Ann. Names normalise the same way on
+both sides, so a subject actually named "Ann's Diner" keeps matching itself.
+Scores also compare with a 1e-9 epsilon: the same record can sum its term
+weights in a different order, and an exact-equality tiebreak would otherwise be
+bypassed by float noise. That is inert on this schema and observable once C8
+populates scope, so it lands before the merge rather than after.
+
 Known limitation, unchanged: matching is whole-token, so an inflected query term
 does not reach an uninflected stored value ("projects" does not match
 "project"). Stemming is language-specific and this recall path is multilingual,
-so it is not attempted here. Name-anchored requests are unaffected. No held-out
-case covers inflection; a fix needs a fresh evaluation set.
+so it is not attempted here; the English possessive is handled in normalisation
+rather than by a stemmer. No held-out case covers inflection; a fix needs a
+fresh evaluation set.
 
 ## Initial results at 05054c91 (2026-09-15)
 

@@ -275,6 +275,9 @@ test('a long message cannot make scoring quadratic on the recall path', () => {
     return performance.now() - start;
   }));
   expect(elapsed).toBeLessThan(2000);
+  // Not vacuous: three thousand nonsense tokens must abstain, not time out.
+  expect(getKnowledgeForMessage(message)).toBe('');
+  expect(getKnowledgeForMessage(`${message} Archived project 7`)).toContain('operating_note_0');
 });
 
 test('a subject whose facts all miss the budget contributes no heading or relationship', () => {
@@ -292,9 +295,20 @@ test('a value stored on another subject survives a name-only top match', () => {
   repository.createFact(john.id, 'birthday', 'March 15');
   const google = createEntity('concept', 'Google');
   repository.createFact(google.id, 'employee', 'John');
+  const noise = createEntity('project', 'Unrelated');
+  repository.createFact(noise.id, 'notes', 'weekly work schedule notes');
   const context = getKnowledgeForMessage('Where does John work?');
   expect(context).toContain('**John** (person)');
   expect(context).toContain('employee: John');
+  // Only subjects that name John back are recovered, not any lexical hit.
+  expect(context).not.toContain('Unrelated');
+});
+
+test('a possessive name still anchors on its subject', () => {
+  const ann = createEntity('person', 'Ann');
+  repository.createFact(ann.id, 'job_title', 'Staff engineer');
+  expect(recallTerms("Ann's")).toEqual(['ann']);
+  expect(getKnowledgeForMessage("Remind me of Ann's details")).toContain('Staff engineer');
 });
 
 test('facts dropped by ranking are reported as an incomplete record', () => {
@@ -311,6 +325,13 @@ test('the self overview and the profile boost agree on the same request', () => 
   saveUserProfile({ preferred_name: 'Sofia', interests: 'Cooking' });
   expect(getKnowledgeForMessage('Hey, who am I to you?')).toContain('Cooking');
   expect(getKnowledgeForMessage('What do you know regarding me?')).toContain('Cooking');
+  // The overview predicate also boosts the profile, so a request whose subject
+  // is something else must not reach it through a trailing "me".
+  for (const message of ['What do you know about the Q3 budget? Send it to me.',
+    'What do I need to know? Email me the summary.',
+    'What did Ann say - do you know if she emailed me?']) {
+    expect(getKnowledgeForMessage(message)).not.toContain('Cooking');
+  }
 });
 
 test('relationship context is bounded, stable and unverified', () => {

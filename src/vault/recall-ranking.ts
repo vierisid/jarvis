@@ -25,7 +25,11 @@ const CJK = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
 const segmenter = new Intl.Segmenter('und', { granularity: 'word' });
 
 export function normalizeRecallText(text: string): string {
-  return text.normalize('NFKD').toLowerCase().replace(/\p{M}/gu, '').replace(/[’']/g, '');
+  // Drop a possessive ending before the remaining apostrophes, so "Ann's" still
+  // anchors on the subject Ann. Stored names normalise the same way, so a
+  // subject actually named "Ann's Diner" keeps matching itself.
+  return text.normalize('NFKD').toLowerCase().replace(/\p{M}/gu, '')
+    .replace(/[’']s\b/g, '').replace(/[’']/g, '');
 }
 
 /** Sorted sets make scoring independent of query term order and repetition. */
@@ -61,7 +65,11 @@ export type RankedEntity = { entity: Entity; facts: RecallFact[]; matchedAliasId
   factDependencies: RecallFactDependency[]; score: number;
   /** A task match, so the subject holds an answer rather than only a name. */
   taskMatch: boolean;
-  /** Ranking already dropped candidates here; the prompt must say so. */
+  /** Query terms this subject actually matched, for cross-reference recovery. */
+  matchedTerms: string[];
+  /** The subject's own name and alias terms, as matched against the query. */
+  anchorTerms: string[];
+  /** Ranking dropped candidates that this result's slice does not show. */
   omitted: boolean };
 
 /** Include transitive requirements once, including mutually contested confirmations. */
@@ -72,9 +80,19 @@ export function expandRecallDependencies(ids: Iterable<string>, dependencies: Re
   return [...selected];
 }
 
-/** Whole words only: an embedded "me" (melatonin, meeting, same) is not a self request. */
+/**
+ * An explicit request for what is known about the owner. The self reference has
+ * to be the object of the knowing and stay inside the same clause: this also
+ * boosts the owner's profile, so "what do you know about the budget? send it to
+ * me" must not read as one. Whole words only, so an embedded "me" (melatonin,
+ * meeting, same) is not a self request either.
+ */
+/** Summation order differs between records, so a tie must still reach the tiebreak chain. */
+const near = (a: number, b: number) => Math.abs(b - a) < 1e-9 ? 0 : b - a;
+
 export function isRecallSelfOverview(message: string): boolean {
-  return /(?:\bwhat\b.*\b(?:know|remember)\b.*\b(?:me|myself)\b|\bwho am i\b)/i.test(message);
+  return /\b(?:what|how much)\b[^.?!]*\b(?:know|remember)\b[^.?!]*\b(?:about|regarding|concerning|of)\s+(?:me|myself)\b/i.test(message)
+    || /\bwho am i\b/i.test(message);
 }
 
 /** Full candidate scoring before limits. No model confidence is used for relevance. */
@@ -121,6 +139,7 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
     ]);
     const taskTerms = new Set([...query].filter(term => !anchorTerms.has(term)));
     const ownProfile = selfQuery && entity.id === user?.id;
+    const matchedTerms = new Set<string>();
     const scored = entityDocs.map(doc => {
       let match = 0, taskMatch = 0;
       // Walk the record's own terms rather than the query. Scoring stays linear
@@ -131,6 +150,7 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
         const hit = (doc.predicate.has(term) ? 2 : 0) + (doc.object.has(term) ? 1 : 0) + (doc.scope.has(term) ? 1 : 0);
         const value = hit * weight(term);
         match += value;
+        if (hit) matchedTerms.add(term);
         if (taskTerms.has(term)) taskMatch += value;
       }
       const alias = aliasMatches.includes(doc);
@@ -142,7 +162,7 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
     // A specific task needs its matching facts and alias evidence. Unrelated
     // background notes, even only one or two, can dominate the character budget.
     const compare = (a: typeof scored[number], b: typeof scored[number]) =>
-      b.score - a.score || Number(b.fact.verified_at != null) - Number(a.fact.verified_at != null)
+      near(a.score, b.score) || Number(b.fact.verified_at != null) - Number(a.fact.verified_at != null)
       || a.fact.predicate.localeCompare(b.fact.predicate) || a.fact.object.localeCompare(b.fact.object)
       || (a.fact.scope ?? '').localeCompare(b.fact.scope ?? '') || a.fact.id.localeCompare(b.fact.id);
     scored.sort(compare);
@@ -168,16 +188,21 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
       results.push({ entity, facts: [...ids].map(id => byId.get(id)!),
         matchedAliasIds: primary.filter(doc => doc.alias).map(doc => doc.fact.id),
         factDependencies: dependencies.filter(dependency => ids.has(dependency.factId)), score,
-        taskMatch: hasTaskMatch, omitted: ids.size < entityDocs.length });
+        taskMatch: hasTaskMatch, matchedTerms: [...matchedTerms], anchorTerms: [...anchorTerms],
+        omitted: ids.size < entityDocs.length });
     }
   }
-  results.sort((a, b) => b.score - a.score || a.entity.name.localeCompare(b.entity.name) || a.entity.id.localeCompare(b.entity.id));
+  results.sort((a, b) => near(a.score, b.score) || a.entity.name.localeCompare(b.entity.name) || a.entity.id.localeCompare(b.entity.id));
   // Avoid weak generic matches filling the prompt after a strong task match.
-  // When the best subject matched on its name alone it holds no answer, and the
-  // flat name bonus would otherwise floor out the subjects whose facts do match.
-  const floor = (results[0]?.score ?? 0) * 0.45;
-  const nameOnly = results[0] != null && !results[0].taskMatch;
-  const kept = results.filter(result => result.score >= floor || (nameOnly && result.taskMatch));
+  // When the best subject matched on its name alone it holds no answer, so keep
+  // the subjects that name it back: the flat name bonus would otherwise floor
+  // out the record that stores the requested value against the other subject.
+  // A merely lexical hit on a generic task term is not such a cross-reference.
+  const top = results[0];
+  const floor = (top?.score ?? 0) * 0.45;
+  const anchors = top != null && !top.taskMatch ? new Set(top.anchorTerms) : new Set<string>();
+  const kept = results.filter(result => result.score >= floor
+    || (result !== top && result.matchedTerms.some(term => anchors.has(term))));
   if (kept.length < results.length && kept[0]) kept[0].omitted = true;
   return kept;
 }
