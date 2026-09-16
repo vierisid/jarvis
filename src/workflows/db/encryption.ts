@@ -125,10 +125,9 @@ export function decryptJson(stored: string, context = "stored value"): unknown {
   if (!stored.startsWith(PREFIX)) {
     try {
       return JSON.parse(stored);
-    } catch (e) {
-      throw new Error(
-        `${context}: legacy plaintext is not valid JSON: ${(e as Error).message}`,
-      );
+    } catch {
+      // JSON parser messages can contain input snippets, including secrets.
+      throw new Error(`${context}: legacy plaintext is not valid JSON`);
     }
   }
   // Sanity-check the wire format before touching crypto. A failure here is
@@ -162,10 +161,8 @@ export function decryptJson(stored: string, context = "stored value"): unknown {
   }
   try {
     return JSON.parse(plaintext.toString("utf8"));
-  } catch (e) {
-    throw new Error(
-      `${context}: decrypted bytes are not valid JSON: ${(e as Error).message}`,
-    );
+  } catch {
+    throw new Error(`${context}: decrypted bytes are not valid JSON`);
   }
 }
 

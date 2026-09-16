@@ -1,10 +1,8 @@
 /**
  * `app_connection` repository: per-piece credentials (OAuth tokens, API keys,
- * etc.). The raw `value` is stored as JSON for now; encryption-at-rest via
- * Jarvis' keychain will be layered in step 15 by wrapping serialize/deserialize
- * here. The credential adapter (also step 15) will compose this repo with
- * Jarvis' existing OAuth stores so that pieces like Gmail/Telegram see the
- * tokens Jarvis already manages, without users connecting twice.
+ * etc.). Inserts and updates share the encrypting serializer. Reads accept
+ * encrypted values and legacy JSON; reading a legacy row does not rewrite it.
+ * The credential adapter also resolves Jarvis-managed OAuth stores.
  */
 
 import type { Database } from "bun:sqlite";
@@ -110,6 +108,8 @@ function rowToConnection(row: AppConnectionRow): AppConnection {
 export function upsertConnection(input: UpsertConnectionInput): AppConnection {
   const projectId = input.projectId ?? DEFAULT_IDS.project;
   const existing = getConnectionByExternalId(projectId, input.pieceName, input.externalId);
+  // Resolve encryption before either write. A key failure must never save JSON.
+  const storedValue = encryptJson(input.value);
   const ts = now();
   if (existing) {
     db().run(
@@ -122,7 +122,7 @@ export function upsertConnection(input: UpsertConnectionInput): AppConnection {
         input.displayName,
         input.type,
         input.status ?? existing.status,
-        encryptJson(input.value),
+        storedValue,
         input.metadata ? JSON.stringify(input.metadata) : null,
         input.pieceVersion,
         input.ownerId !== undefined ? input.ownerId : existing.ownerId,
@@ -159,7 +159,7 @@ export function upsertConnection(input: UpsertConnectionInput): AppConnection {
       input.pieceVersion,
       projectId,
       input.ownerId ?? null,
-      JSON.stringify(input.value),
+      storedValue,
       input.metadata ? JSON.stringify(input.metadata) : null,
       input.preSelectForNewProjects ? 1 : 0,
       ts,

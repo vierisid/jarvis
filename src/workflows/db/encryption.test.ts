@@ -10,7 +10,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { randomBytes } from "node:crypto";
+import { createCipheriv, randomBytes } from "node:crypto";
 import {
   decryptJson,
   encryptJson,
@@ -68,5 +68,25 @@ describe("encryption", () => {
   test("malformed encrypted blob throws", () => {
     expect(() => decryptJson("enc1:notbase64")).toThrow();
     expect(() => decryptJson("enc1:")).toThrow();
+  });
+
+  test("malformed legacy JSON errors never include credential text", () => {
+    const secret = "synthetic-malformed-credential-token";
+    let message = "";
+    try { decryptJson(secret); } catch (error) { message = (error as Error).message; }
+    expect(message).toContain("legacy plaintext is not valid JSON");
+    expect(message).not.toContain(secret);
+  });
+
+  test("authenticated but invalid JSON errors never include decrypted credential text", () => {
+    const secret = "synthetic-invalid-decrypted-credential";
+    const iv = randomBytes(12);
+    const cipher = createCipheriv("aes-256-gcm", KEY_A, iv);
+    const ciphertext = Buffer.concat([cipher.update(secret, "utf8"), cipher.final()]);
+    const stored = "enc1:" + Buffer.concat([iv, cipher.getAuthTag(), ciphertext]).toString("base64");
+    let message = "";
+    try { decryptJson(stored); } catch (error) { message = (error as Error).message; }
+    expect(message).toContain("decrypted bytes are not valid JSON");
+    expect(message).not.toContain(secret);
   });
 });
