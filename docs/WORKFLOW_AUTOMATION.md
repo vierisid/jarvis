@@ -257,7 +257,7 @@ If bootstrap fails (e.g. esbuild error in a piece), the daemon logs a warning an
 Following a single run from a user click to a SUCCEEDED row:
 
 1. User clicks **Run** in the editor. UI calls `POST /api/workflows/:id/run`.
-2. `flowRunRepo.create()` writes a `flow_run` row in PENDING state; `jobQueueRepo.enqueue()` adds a `RUN_FLOW` job.
+2. `flowRunRepo.create()` writes a `flow_run` row in QUEUED state; `jobQueueRepo.enqueue()` adds a `RUN_FLOW` job.
 3. The worker drains the job. `RUN_FLOW` resolves the flow version, materializes any CODE pieces onto disk, then calls `EngineFlowExecutor.executeFlow()`.
 4. `EngineRuntime.acquire()` either picks up the warm engine or spawns a fresh one. Spawn passes `AP_SANDBOX_WS_PORT` + an engine token in env.
 5. The engine subprocess imports the populated flow's pieces (Jarvis pieces via dev-pieces resolution, community pieces via `node_modules`), runs the trigger payload through each step, and streams `WorkerNotify.updateStepProgress` events back over the WS for every step boundary.
@@ -265,6 +265,35 @@ Following a single run from a user click to a SUCCEEDED row:
 7. On terminal status, the engine sends `WorkerContract.updateRunProgress(SUCCEEDED|FAILED|PAUSED)` plus `uploadRunLog` (zstd execution-state). The handler updates the row and releases the engine back to the pool.
 
 If a step calls `context.run.pause()` (e.g. waiting on a webhook), the engine sends PAUSED + the zstd backup. The daemon writes a `waitpoint` row and the run hangs. A later `POST /api/webhooks/waitpoints/:id` enqueues a `RESUME` job; the worker loads the backup, restores execution state via `execution-state-loader.ts`, and the engine picks up exactly where it paused.
+
+### Run status lifecycle
+
+`FlowRunStatus` (`src/workflows/db/repos/flow-run.ts`) has eleven values. Only two are non-final for a given attempt:
+
+```
+QUEUED --claim--> RUNNING --+--> SUCCEEDED
+                            |
+                            +--> PAUSED --resume--> RUNNING --> ...
+                            |
+                            +--> FAILED | INTERNAL_ERROR | TIMEOUT | STOPPED
+                                 | QUOTA_EXCEEDED | MEMORY_LIMIT_EXCEEDED
+                                 | SCHEDULE_FAILURE
+```
+
+A **queue job** and a **run** finish on different clocks. A `RUN_FLOW` job covers one execution slice; when that slice ends at a waitpoint the job is SUCCEEDED and the run stays PAUSED. `FlowExecutorResult.status` carries that distinction out of the executor so `createRunFlowHandler` can persist the pause instead of overwriting it with SUCCEEDED:
+
+- On PAUSED the handler persists `steps` + `steps_count`, sets `finish_time` to NULL, and skips sample-data auto-capture. `finish_time` stays NULL for the whole pause, so nothing reports a paused run as finished or computes a duration for it.
+- Each job clears `finish_time` when it flips the run to RUNNING, so a RESUME never carries a stale finish time left behind by an earlier slice. `start_time` is preserved across resumes.
+- A resume re-enters the same run id with a new `RUN_FLOW` job carrying `executionType: "RESUME"`. The handler refuses a BEGIN for a run that is not QUEUED and a RESUME for a run that is not PAUSED, so a durable PAUSED row is what makes the continuation legal -- see "Failure and restart" below.
+
+Two things produce that resume job, both server-side:
+
+- `POST /api/webhooks/waitpoints/:id` for WEBHOOK/MANUAL waitpoints. It refuses anything but a PAUSED run (409) and an already-resumed waitpoint (410).
+- `TimerWaitpointScheduler` (`src/workflows/timer-scheduler.ts`) for TIMER waitpoints, which have no external trigger. It ticks every 15s plus once at boot, so a delay that elapsed entirely during downtime still fires. Marking the waitpoint resumed and enqueueing the job happen in one transaction, so a crash between them cannot strand the run.
+
+The scheduler's eligibility query (`listDueTimerWaitpoints`) skips waitpoints whose run is still QUEUED or RUNNING, *before* applying its 100-row batch limit. The engine creates the waitpoint row before it publishes PAUSED, so a short delay can come due inside that window; retiring the timer there would strand the run PAUSED with nothing left to wake it. Deferring instead also keeps those rows from filling a scan and starving later PAUSED runs. Missing and terminal runs still get their timers retired.
+
+The one transition not shown above is boot recovery: an orphaned run whose job died mid-flight is retired to FAILED rather than replayed, again covered in "Failure and restart" below. A run that had durably PAUSED is the exception and stays PAUSED, which is what lets its timer or webhook still fire after a restart.
 
 ## Failure and restart: no automatic replay
 
@@ -448,14 +477,14 @@ The drift test (`runtime/test-fixtures-drift.test.ts`) compares the live engine-
 | Bump the catalog projection | Bump `CATALOG_SCHEMA_VERSION` in `piece-catalog.ts` so existing caches invalidate | (this file -- "Build, cache, and sync") |
 | Run the engine-extract test against a real piece | `JARVIS_GATED_REAL_PIECE_TESTS=1 bun test src/workflows/runner/engine-runtime/extract-piece-metadata.test.ts` | (this file -- "Testing") |
 | Add a new connection source for `jarvis:*` external ids | Implement a `JarvisConnectionSource`, register in `src/workflows/credentials/adapter.ts` | (this file -- "Source tree map") |
-| Debug a stuck or weird run | Inspect `flow_run.status` + `waitpoint` rows, then `~/.jarvis/cache/run-logs/<runId>.zst` for the engine's last execution state | (this file -- "Persistence and encryption") |
+| Debug a stuck or weird run | Inspect `flow_run.status` + `waitpoint` rows (a run stuck PAUSED has an unresumed one), then `~/.jarvis/workflow-logs/<runId>.bin` for the engine's last execution state | (this file -- "Persistence and encryption") |
 
 ## Glossary
 
 - **Piece** -- an npm package that ships actions and/or triggers. Examples: `@jarvispieces/piece-jarvis-ask`, `@activepieces/piece-gmail`.
 - **Flow** -- a workflow as the user sees it. Has a name, a published state, and many versions.
 - **Flow version** -- an immutable snapshot of a flow's tree. Triggers reference a specific version.
-- **Flow run** -- one execution of a flow version. Has a status (PENDING / RUNNING / SUCCEEDED / FAILED / PAUSED) and a checkpointed execution state.
+- **Flow run** -- one execution of a flow version. Has a status (QUEUED / RUNNING / SUCCEEDED / FAILED / PAUSED / TIMEOUT / INTERNAL_ERROR / QUOTA_EXCEEDED / STOPPED / MEMORY_LIMIT_EXCEEDED / SCHEDULE_FAILURE) and a checkpointed execution state. See "Run status lifecycle".
 - **Connection** -- a stored credential bound to a piece's auth shape. Encrypted at rest.
 - **Engine** -- the vendored Activepieces flow executor, built as a CJS bundle and spawned as a child Bun process.
 - **Engine subprocess** -- one instance of the engine, running with a unique sandbox id and engine token. Held in a single-slot warm pool with a 5min idle TTL.
