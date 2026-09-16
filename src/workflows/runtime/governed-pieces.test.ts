@@ -202,6 +202,18 @@ describe('governed piece adapters: gmail', () => {
     // Stripped on the engine side too, before anything leaves the subprocess.
     expect(sanitizePieceInput({ subject: 'x', auth: { access_token: secret } })).toEqual({ subject: 'x' });
   });
+
+  test('an attachment is summarised, not spelled out byte by byte', () => {
+    const bounded = sanitizePieceInput({ subject: 'x', attachments: new Uint8Array(4096),
+      sentAt: new Date('2026-09-16T10:00:00.000Z'), body: 'y'.repeat(900) });
+    expect(bounded.attachments).toBe('[binary, 4096 bytes]');
+    expect(bounded.sentAt).toBe('2026-09-16T10:00:00.000Z');
+    expect(String(bounded.body)).toContain('[388 more characters]');
+    // Deterministic, so the digest an approval was granted against still
+    // matches when the step re-authorizes on resume.
+    expect(sanitizePieceInput({ subject: 'x', attachments: new Uint8Array(4096),
+      sentAt: new Date('2026-09-16T10:00:00.000Z'), body: 'y'.repeat(900) })).toEqual(bounded);
+  });
 });
 
 describe('governed piece adapters: over the wire', () => {

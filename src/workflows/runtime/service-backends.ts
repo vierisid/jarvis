@@ -401,6 +401,13 @@ export function buildSandboxServiceBackends(
    * and not a completion receipt.
    *
    * A piece with no adapter is reported ungoverned and runs as it does today.
+   *
+   * One authorization covers one step instance. A step the flow configures to
+   * retry re-reads the recorded authorization for the same arguments instead
+   * of asking again, so the engine's own retry of a step whose remote call
+   * failed can repeat that call under the original decision. Any change to the
+   * arguments, the version or the Authority decision invalidates the record and
+   * stops the dispatch.
    */
   const pieceAuthorize: PieceAuthorizeFn = async (req, ctx) => {
     const resolved = resolveGovernedPieceAction(req.piece, req.action);

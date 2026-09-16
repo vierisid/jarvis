@@ -405,6 +405,11 @@ function bound(value: unknown, depth: number): unknown {
     return value.length <= MAX_STRING ? value : `${value.slice(0, MAX_STRING)}... [${value.length - MAX_STRING} more characters]`;
   }
   if (value === null || typeof value !== 'object') return value;
+  // A file attachment is bytes, not fields. Rendering it key by key would put
+  // 40 array indices on the approval card and nothing a reviewer can use.
+  if (ArrayBuffer.isView(value)) return `[binary, ${(value as ArrayBufferView).byteLength} bytes]`;
+  if (value instanceof ArrayBuffer) return `[binary, ${value.byteLength} bytes]`;
+  if (value instanceof Date) return value.toISOString();
   if (depth >= MAX_DEPTH) return '[nested value omitted]';
   if (Array.isArray(value)) {
     const items = value.slice(0, MAX_ARRAY).map(item => bound(item, depth + 1));
