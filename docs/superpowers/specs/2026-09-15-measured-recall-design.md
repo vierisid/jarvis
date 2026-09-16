@@ -170,6 +170,11 @@ of re-finding the first match, so duplicate values cannot let a qualified record
 vouch for an unqualified one. The scale script reports a median and a maximum,
 which is what ten warm samples support; the earlier run's "p95" was the maximum.
 
+Known limitation, unchanged: naming a subject with no matching fact returns that
+subject's current facts, so mentioning the owner's own name returns the profile
+even when the request is unrelated to it. That is the same behaviour main had for
+any named subject, and the caps now bound it, but it is not data minimisation.
+
 Known limitation, unchanged: matching is whole-token, so an inflected query term
 does not reach an uninflected stored value ("projects" does not match
 "project"). Stemming is language-specific and this recall path is multilingual,

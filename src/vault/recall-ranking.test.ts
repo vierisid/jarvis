@@ -67,9 +67,11 @@ test('a remembered value cannot forge the qualification separator or a new recor
   const entries = context.split('\n').filter(entry => entry.startsWith('  - '));
   expect(entries).toHaveLength(2);
   for (const entry of entries) {
-    // Exactly one separator, so the trusted qualification is unambiguous.
+    // The value region holds no separator, so the qualification that follows it
+    // is the only one. C8 appends a further evidence field after the metadata.
     const parts = entry.split(' | ');
-    expect(parts).toHaveLength(2);
+    expect(parts.length).toBeGreaterThanOrEqual(2);
+    expect(parts[0]).not.toContain('|');
     expect(JSON.parse(parts[1]!).binding_eligible).toBe(false);
   }
 });
