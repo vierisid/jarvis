@@ -35,19 +35,22 @@ function context(): ScreenContext {
   return { captureId: 'sidecar-id', timestamp: Date.now(), appName: 'Accounting', windowTitle: '',
     ocrText: '', sessionId: '', url: null, filePath: null, isSignificantChange: false, isAppSwitch: false };
 }
+function awarenessConfig(): JarvisConfig {
+  return { awareness: {
+    enabled: true, capture_interval_ms: 15000, min_change_threshold: 0.02,
+    cloud_vision_enabled: false, cloud_vision_cooldown_ms: 30000,
+    cloud_vision_ambient_cooldown_ms: 900000, stuck_threshold_ms: 300000,
+    suggestion_rate_limit_ms: 60000, retention: { full_hours: 24, key_moment_hours: 72 },
+    struggle_grace_ms: 120000, struggle_cooldown_ms: 180000, overlay_autolaunch: false,
+  } } as JarvisConfig;
+}
 
 describe('evidence-backed hypotheses', () => {
   test('sidecar ingestion emits an explainable suggestion using actual persisted capture IDs', async () => {
     capture(Date.now() - 2 * day);
     capture(Date.now() - day);
     const events: AwarenessEvent[] = [];
-    const service = new AwarenessService({ awareness: {
-      enabled: true, capture_interval_ms: 15000, min_change_threshold: 0.02,
-      cloud_vision_enabled: false, cloud_vision_cooldown_ms: 30000,
-      cloud_vision_ambient_cooldown_ms: 900000, stuck_threshold_ms: 300000,
-      suggestion_rate_limit_ms: 60000, retention: { full_hours: 24, key_moment_hours: 72 },
-      struggle_grace_ms: 120000, struggle_cooldown_ms: 180000, overlay_autolaunch: false,
-    } } as JarvisConfig, {} as LLMManager, event => events.push(event));
+    const service = new AwarenessService(awarenessConfig(), {} as LLMManager, event => events.push(event));
     await service.start();
     try {
       await service.handleSidecarEvent('fixture-sidecar', {
@@ -153,6 +156,26 @@ describe('evidence-backed hypotheses', () => {
     expect(await new SuggestionEngine(0).evaluate(context(), [])).toBeNull();
     expect(assessOpportunities().abstention).toBe('already_proposed');
     expect(getOpportunityMetrics()).toMatchObject({ interested: 1, dismissed: 1, outcomeReports: 0, usefulReportRate: null });
+  });
+
+  test('the ledger window is enforced on disk by retention, not only by suggestion evaluation', async () => {
+    let staleCount = 0;
+    const stale = () => getDb().prepare(`INSERT INTO opportunity_observations
+      (capture_id, kind, observed_at, app, cue) VALUES (?, ?, ?, ?, ?)`)
+      .run(`stale-${staleCount++}`, 'invoice_review', Date.now() - OPPORTUNITY_WINDOW_MS - day, 'Accounting', 'unpaid or overdue invoices');
+    const ledger = () => getDb().prepare('SELECT COUNT(*) AS n FROM opportunity_observations').get();
+    const service = new AwarenessService(awarenessConfig(), {} as LLMManager);
+    await service.start();
+    try {
+      stale();
+      expect(ledger()).toEqual({ n: 1 });
+      // The retention sweep owns the window; it must not depend on a suggestion
+      // being evaluated, which stops the moment awareness is blinded.
+      (service as unknown as { cleanupRetention(): void }).cleanupRetention();
+      expect(ledger()).toEqual({ n: 0 });
+      stale();
+    } finally { await service.stop(); }
+    expect(ledger()).toEqual({ n: 0 });
   });
 
   test('capture retention keeps only minimal cues, and duplicate ingestion is idempotent', () => {

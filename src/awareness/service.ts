@@ -36,6 +36,7 @@ import {
 import { createObservation } from '../vault/observations.ts';
 import { getUpcoming } from '../vault/commitments.ts';
 import { generateId } from '../vault/schema.ts';
+import { pruneOpportunityObservations } from '../vault/opportunity-observations.ts';
 import { OpportunityDelivery, type DeliverOpportunity } from './opportunity-delivery.ts';
 export class AwarenessService implements Service {
   name = 'awareness';
@@ -148,6 +149,10 @@ export class AwarenessService implements Service {
     await this.opportunityDelivery?.stop();
 
     this.contextTracker.endCurrentSession();
+
+    // Blinding awareness must not freeze the ledger at whatever it held: this
+    // is the last prune until awareness runs again.
+    try { pruneOpportunityObservations(); } catch { /* DB may already be closed */ }
 
     if (this.cleanupTimer) {
       clearInterval(this.cleanupTimer);
@@ -330,6 +335,10 @@ export class AwarenessService implements Service {
       try {
         fullDeleted = deleteCapturesBefore(fullCutoff, 'full');
         keyDeleted = deleteCapturesBefore(keyMomentCutoff, 'key_moment');
+        // The derived opportunity ledger outlives the capture tiers on purpose,
+        // but only for its own 14-day window. Prune it here rather than leaving
+        // it to suggestion evaluation, which stops the moment awareness does.
+        pruneOpportunityObservations(now);
       } catch { /* DB may not be initialized in tests */ }
 
       if (fullDeleted > 0 || keyDeleted > 0) {
