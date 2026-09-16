@@ -188,10 +188,11 @@ test('large evidence quotes cannot evict a short qualified fact or be silently t
   expect(context).toContain('deployment_endpoint: route.example');
   expect(context).toContain('"basis":"confirmed"');
   expect(context).toContain('"binding_eligible":true');
-  expect(context).toContain(`fact:${base.id}`);
-  for (let i = 0; i < 4; i++) expect(context).toContain(`turn:${i}`);
-  expect(context).toContain('"quotes_omitted":4');
-  expect(context).not.toContain('qqqq');
+  // The repository bounds the evidence view; packing must still fit the fact
+  // and its qualification, and the clip must be visible rather than silent.
+  expect(context).toContain('"evidence_count":4');
+  expect(context).toContain('...');
+  expect(context).not.toContain('q'.repeat(301));
   expect(context.length).toBeLessThanOrEqual(RECALL_LIMITS.chars);
   expect(fact.evidence?.[0]?.quote).toEndWith('not yet approved');
 });
@@ -206,16 +207,14 @@ test('many evidence records keep explicit omission counts and a stable ledger re
     })) };
   const context = packRecallContext([{ entity, facts: [fact], relationships: [] }]);
   expect(context).toContain('endpoint: route.example');
-  expect(context).toContain('"total":100');
-  expect(context).toMatch(/"omitted":[1-9]\d*/);
-  expect(context).toContain(`fact:${base.id}`);
+  // A growing ledger must not grow the prompt, and the qualification the
+  // ranking layer selected on must survive the bound intact.
+  expect(context).toContain('"evidence_count":100');
   expect(context).toContain('"binding_eligible":false');
   expect(context).toContain('"state":"contested"');
   expect(context).toContain('"scope":"work"');
-  const shown = JSON.parse(context.split(' | evidence: ')[1]!.split(' | evidence_summary: ')[0]!);
-  const summary = JSON.parse(context.split(' | evidence_summary: ')[1]!);
-  expect(shown.length + summary.omitted).toBe(100);
-  expect(summary.omitted_by_basis.reported).toBe(summary.omitted);
+  const shown = JSON.parse(context.slice(context.indexOf(' | evidence: ') + ' | evidence: '.length));
+  expect(shown).toHaveLength(3);
   expect(shown[0].ref).toBe('turn:99');
   expect(context.length).toBeLessThanOrEqual(RECALL_LIMITS.chars);
   expect(fact.evidence).toHaveLength(100);
@@ -535,8 +534,10 @@ test.skipIf(!hasC8)('actual C8 repeated evidence preserves corrected recall and 
     expect(after).not.toContain('OldEditor');
     expect(after).toContain('"basis":"confirmed"');
     expect(after).toContain('"binding_eligible":true');
-    expect(after).toContain('"quotes_omitted":4');
-    expect(after).toContain(`fact:${current.id}`);
+    // The prompt view is bounded and the clip is marked; the ledger is whole.
+    expect(after).toContain('"evidence_count":5');
+    expect(after).toContain('...');
+    expect(after).not.toContain('q'.repeat(301));
     const stored = repository.getFact(current.id) as RecallFact;
     expect(stored.evidence).toHaveLength(5);
     expect(stored.evidence?.filter(e => (e.quote?.length ?? 0) > 3000)).toHaveLength(4);

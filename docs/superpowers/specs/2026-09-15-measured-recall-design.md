@@ -151,9 +151,37 @@ task filter and the floor. Those drops now set the same incomplete-record notice
 that the packing limits set, so a filtered slice is never presented as the whole
 record.
 
+## Rebase onto the merged fact repository (2026-09-16)
+
+C8 landed as #456, so its metadata is real and this branch no longer carries a
+forward-compatible shim. `RecallFact` is now just `Fact`, and the duplicate
+formatter and rules constant are gone: recall lines go through `formatFact` and
+the block is headed by `MEMORY_USE_RULES`, both owned by `fact-format.ts`. Its
+per-fact evidence bound (three strongest and most recent rows, quotes clipped at
+300 characters, true `evidence_count`) is tighter than the 2,000-character
+evidence view this branch had, and it keeps `formatFact` and `describeFact`
+distinct, so the machine-readable provenance cannot leak into a notification
+body. This branch keeps only what it is for: ranking, selection and the bounded
+block around those lines. The separator defang moved into `fact-format.ts` with
+the formatter, so it now also covers the person-facing short form.
+
+One of #456's assertions changed, and only the mechanism, not the property.
+`scope and disjoint validity periods remain separate; expired values cannot
+bind` asserted that an expired value appears in recall marked `"validity":
+"outside recorded validity"` and `"binding_eligible":false`. Ranked recall
+selects only values that apply now, so it asserts instead that the expired
+editor and the expired address are absent while the current value is present,
+and that the expired row is still non-binding through `getFact`. That is the
+same guarantee enforced one step earlier: a stale value cannot be misread
+because it is never shown. It is a narrowing beyond #456's stated contract,
+which filters only `superseded`, and it is what the frozen evaluation measures.
+`contested` rows remain in recall, qualified, as that contract requires. The
+other two colliding assertions (the evidence ledger cap and the clipped quote)
+pass unchanged once recall uses `formatFact`.
+
 The C8 reconciliation patch that earlier accompanied this spec is gone: C8 is
 merged, so a committed diff against its pre-merge branch is stale by definition.
-The colliding assertions are resolved in the tree instead.
+The three colliding assertions are resolved in the tree instead.
 
 R9: whole-word self detection. An embedded "me" (melatonin, meeting, same) no
 longer reads as a self-overview request, which had both bypassed the empty-query

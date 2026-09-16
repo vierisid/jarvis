@@ -1,14 +1,9 @@
 import type { Entity } from './entities.ts';
 import type { Fact } from './facts.ts';
+import { appliesAt } from './fact-policy.ts';
 
-/** Structural C8 boundary: ranking consumes truth metadata; it never creates it. */
-export type RecallFact = Fact & {
-  status?: string; basis?: string; scope?: string; predicate_key?: string;
-  valid_from?: number | null; valid_to?: number | null; superseded_by?: string | null;
-  binding_eligible?: boolean;
-  evidence?: Array<{ id?: string; fact_id?: string; basis: string; source: string | null; confidence: number;
-    recorded_at: number; source_ref: string | null; quote: string | null }>;
-};
+/** Ranking consumes the repository's truth metadata; it never creates it. */
+export type RecallFact = Fact;
 
 const STOPWORDS = new Set(('i me my mine myself we our ours ourselves you your yours yourself '
   + 'he him his himself she her hers herself it its itself they them their theirs themselves '
@@ -47,10 +42,10 @@ export function recallTerms(text: string): string[] {
   return [...terms].sort();
 }
 
+/** Default recall carries only what applies now; corrected and expired rows stay
+ *  inspectable through the fact APIs. Contested rows are current and included. */
 export function isCurrentRecallFact(fact: RecallFact, at = Date.now()): boolean {
-  return fact.status !== 'superseded' && fact.superseded_by == null
-    && (fact.valid_from == null || fact.valid_from <= at)
-    && (fact.valid_to == null || at < fact.valid_to);
+  return fact.status !== 'superseded' && fact.superseded_by == null && appliesAt(fact, at);
 }
 
 function mentioned(label: string, query: Set<string>, normalized: string): boolean {
