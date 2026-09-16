@@ -1,8 +1,8 @@
 /**
  * `/v1/jarvis/tools/invoke` -- backs the `jarvis-tool` piece's `invoke` action.
  *
- * The piece-side action posts `{ toolName, params }` and expects back
- * `{ result, toolName }`. Implementation here is a thin wrapper around a
+ * The piece posts `{ toolName, params, requireSuccess? }` and receives
+ * `{ result, toolName, outcome }` or a pending approval. This wraps a
  * `ToolsInvokeFn` injected via `SandboxApiServices.toolsInvoke`. Tool
  * discovery / execution lives in the daemon's `ToolRegistry`; if no fn is
  * configured the route returns 503.
@@ -10,18 +10,22 @@
 
 import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
 import { cancellableWorkflowService } from "../../runtime/cancellation";
+import { ActionOutcomeError, type ActionOutcome } from '../../../actions/action-outcome';
 import { workflowEffectContext } from './effect-context';
 import type { WorkflowEffectContext, WorkflowApprovalPending } from '../../runtime/effect-context';
 
 export interface ToolsInvokeRequest {
   toolName: string;
   params: Record<string, unknown>;
+  /** Defaults to true. False explicitly returns a handled outcome for probes. */
+  requireSuccess?: boolean;
 }
 
 export interface ToolsInvokeResponse {
   result: unknown;
   toolName: string;
   approval?: WorkflowApprovalPending;
+  outcome?: ActionOutcome;
 }
 
 export type ToolsInvokeFn = (
@@ -56,10 +60,25 @@ export function createJarvisToolsInvokeRoute(
       }
       params = raw.params as Record<string, unknown>;
     }
-    const reply = await cancellableWorkflowService(deps.toolsInvoke)(
-      { toolName: raw.toolName, params },
-      workflowEffectContext(ctx),
-    );
-    return json(reply);
+    if (raw.requireSuccess !== undefined && typeof raw.requireSuccess !== 'boolean') {
+      return err('requireSuccess must be a boolean', 400);
+    }
+    let reply: ToolsInvokeResponse;
+    try {
+      reply = await cancellableWorkflowService(deps.toolsInvoke)(
+        { toolName: raw.toolName, params, ...(raw.requireSuccess !== undefined ? { requireSuccess: raw.requireSuccess } : {}) },
+        workflowEffectContext(ctx),
+      );
+    } catch (error) {
+      if (!(error instanceof ActionOutcomeError)) throw error;
+      reply = { toolName: raw.toolName, result: null, outcome: error.outcome };
+    }
+    if (reply.approval) return json(reply, 202);
+    const outcome = reply.outcome ?? { status: 'succeeded' as const };
+    // HTTP success for a probe acknowledges that its outcome was returned; it
+    // does not claim the requested desktop action succeeded.
+    const status = outcome.status === 'succeeded' || raw.requireSuccess === false ? 200
+      : outcome.status === 'blocked' ? 409 : outcome.status === 'error' ? 422 : 502;
+    return json({ ...reply, outcome }, status);
   };
 }

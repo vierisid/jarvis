@@ -15,6 +15,8 @@ import {
   type ExecutionTarget,
 } from '../../util/execution-environment.ts';
 import { isNoLocalTools } from './local-tools-guard.ts';
+import { ActionOutcomeError, type ActionFailure } from '../action-outcome.ts';
+import { SidecarRPCError } from '../../sidecar/rpc.ts';
 
 let sidecarManager: SidecarManager | null = null;
 
@@ -153,9 +155,17 @@ export async function routeToSidecar(
   method: string,
   params: Record<string, unknown>,
   requiredCapability: SidecarCapability,
+  typedErrors = false,
 ): Promise<string> {
+  // Keep legacy text callers stable while desktop tools adopt the typed
+  // contract. Classification happens here, never by parsing display text.
+  const fail = (status: ActionFailure['status'], code: string, message: string,
+    effect: ActionFailure['effect'] = 'not_started'): string => {
+    if (typedErrors) throw new ActionOutcomeError({ status, code, message, effect });
+    return message;
+  };
   if (!sidecarManager) {
-    return 'Error: Sidecar system not initialized.';
+    return fail('blocked', 'SIDECAR_UNINITIALIZED', 'Error: Sidecar system not initialized.');
   }
 
   const sidecars = sidecarManager.listSidecars();
@@ -163,21 +173,21 @@ export async function routeToSidecar(
 
   if (!sidecar) {
     const available = sidecars.map((s) => s.name).join(', ') || 'none';
-    return `Error: No sidecar found matching "${target}". Available: ${available}`;
+    return fail('blocked', 'SIDECAR_NOT_FOUND', `Error: No sidecar found matching "${target}". Available: ${available}`);
   }
 
   if (!sidecar.connected) {
-    return `Error: Sidecar "${describeMachine(sidecar)}" is offline.`;
+    return fail('blocked', 'SIDECAR_OFFLINE', `Error: Sidecar "${describeMachine(sidecar)}" is offline.`);
   }
 
   // Check if capability is enabled but unavailable (missing system dependencies)
   const unavail = sidecar.unavailable_capabilities?.find(u => u.name === requiredCapability);
   if (unavail) {
-    return `Error: Sidecar "${sidecar.name}" has "${requiredCapability}" enabled but it is unavailable: ${unavail.reason}. Do NOT retry.`;
+    return fail('blocked', 'CAPABILITY_UNAVAILABLE', `Error: Sidecar "${sidecar.name}" has "${requiredCapability}" enabled but it is unavailable: ${unavail.reason}. Do NOT retry.`);
   }
 
   if (sidecar.capabilities && !sidecar.capabilities.includes(requiredCapability)) {
-    return `Error: Sidecar "${sidecar.name}" does not have the "${requiredCapability}" capability enabled. Available capabilities: ${sidecar.capabilities.join(', ')}. Do NOT retry — ask the user to enable it in the sidecar's config if needed.`;
+    return fail('blocked', 'CAPABILITY_DISABLED', `Error: Sidecar "${sidecar.name}" does not have the "${requiredCapability}" capability enabled. Available capabilities: ${sidecar.capabilities.join(', ')}. Do NOT retry — ask the user to enable it in the sidecar's config if needed.`);
   }
 
   try {
@@ -189,24 +199,48 @@ export async function routeToSidecar(
       // reaches the model — so claiming background success would be a lie
       // for anything interactive. Only run_command keeps fire-and-forget
       // semantics; everything else reports an honest timeout.
-      if (method === 'run_command') {
+      if (method === 'run_command' && !typedErrors) {
         return `Command dispatched to "${describeMachine(sidecar)}" and still running in the background. Its output will NOT be reported back — verify its effect yourself if it matters.`;
       }
-      return `Error [${describeMachine(sidecar)}]: "${method}" did not complete within the timeout. The action may or may not have taken effect — do NOT assume it succeeded; verify the current state (e.g. take a snapshot) before continuing.`;
+      return fail('unknown', 'SIDECAR_TIMEOUT', `Error [${describeMachine(sidecar)}]: "${method}" did not complete within the timeout. The action may or may not have taken effect — do NOT assume it succeeded; verify the current state (e.g. take a snapshot) before continuing.`, 'may_have_occurred');
+    }
+
+    // launch_app can report a spawned process without a verified window.
+    // A failed assertion is not evidence that nothing happened remotely.
+    if (typedErrors && result && typeof result === 'object') {
+      const reply = result as Record<string, unknown>;
+      if (reply.success === false) {
+        return fail('error', 'SIDECAR_ACTION_FAILED', `Error [${describeMachine(sidecar)}]: "${method}" reported failure: ${JSON.stringify(reply)}`, 'may_have_occurred');
+      }
+      if (method === 'launch_app' && reply.window_visible === null) {
+        return fail('unknown', 'DESKTOP_WINDOW_UNVERIFIED', `Error [${describeMachine(sidecar)}]: The process was started but its window could not be verified. Check the desktop before retrying.`, 'may_have_occurred');
+      }
     }
 
     return typeof result === 'string' ? result : JSON.stringify(result, null, 2);
   } catch (err) {
+    if (err instanceof ActionOutcomeError) {
+      if (typedErrors) throw err;
+      return `Error [${describeMachine(sidecar)}]: ${err.message}`;
+    }
     const msg = err instanceof Error ? err.message : String(err);
 
     // METHOD_NOT_FOUND means the capability is disabled — tell the LLM not to retry
-    if (msg.includes('METHOD_NOT_FOUND')) {
-      return `Error [${describeMachine(sidecar)}]: Method "${method}" is not available. The "${requiredCapability}" capability is not enabled on this sidecar. Do NOT retry this call — ask the user to enable the capability in the sidecar's config if needed.`;
+    if (err instanceof SidecarRPCError && err.code === 'METHOD_NOT_FOUND' || !typedErrors && msg.includes('METHOD_NOT_FOUND')) {
+      return fail('blocked', 'METHOD_NOT_FOUND', `Error [${describeMachine(sidecar)}]: Method "${method}" is not available. The "${requiredCapability}" capability is not enabled on this sidecar. Do NOT retry this call — ask the user to enable the capability in the sidecar's config if needed.`);
     }
 
     // The OS goes in the message on purpose: the commonest remote failure is
     // a command written for the wrong platform (`notepad.exe` sent to a Mac),
     // and "command not found" alone tells neither the model nor the user why.
-    return `Error [${describeMachine(sidecar)}]: ${msg}`;
+    return fail(err instanceof SidecarRPCError ? 'error' : 'unknown',
+      err instanceof SidecarRPCError ? err.code : 'SIDECAR_OUTCOME_UNKNOWN',
+      `Error [${describeMachine(sidecar)}]: ${msg}`, 'may_have_occurred');
   }
+}
+
+/** Desktop callers require a typed failure, even outside workflows. */
+export function routeToSidecarAction(target: string, method: string,
+  params: Record<string, unknown>, capability: SidecarCapability): Promise<string> {
+  return routeToSidecar(target, method, params, capability, true);
 }

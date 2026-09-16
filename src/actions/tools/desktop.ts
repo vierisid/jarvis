@@ -12,7 +12,8 @@
 import type { AppController, UIElement, WindowInfo } from '../app-control/interface.ts';
 import { getAppController } from '../app-control/interface.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
-import { routeToSidecar, resolveToolTarget } from './sidecar-route.ts';
+import { routeToSidecarAction as routeToSidecar, resolveToolTarget } from './sidecar-route.ts';
+import { ActionOutcomeError } from '../action-outcome.ts';
 import type { SidecarCapability } from '../../sidecar/types.ts';
 
 /**
@@ -248,20 +249,25 @@ function withAction(element: UIElement, action?: string): UIElement {
   };
 }
 
-function unsupportedAction(action: string): string {
-  return `Error: Local desktop action "${action}" is not supported by this platform controller.`;
+function unsupportedAction(action: string): never {
+  throw new ActionOutcomeError({ status: 'blocked', code: 'DESKTOP_ACTION_UNSUPPORTED', effect: 'not_started',
+    message: `Error: Local desktop action "${action}" is not supported by this platform controller.` });
 }
 
-async function executeLocal<T>(fn: (controller: SnapshotCapableController) => Promise<T>): Promise<T | string> {
+async function executeLocal<T>(fn: (controller: SnapshotCapableController) => Promise<T>): Promise<T> {
   const disabled = isToolDisabled();
   if (disabled) {
-    return disabled;
+    throw new ActionOutcomeError({ status: 'blocked', code: 'LOCAL_TOOLS_DISABLED', message: disabled, effect: 'not_started' });
   }
 
   try {
     return await fn(getLocalController());
   } catch (error) {
-    return `Error: ${error instanceof Error ? error.message : String(error)}`;
+    if (error instanceof ActionOutcomeError) throw error;
+    // A local controller can throw after a partial action. Without a receipt
+    // it is unsafe to turn this into success or claim that retry is safe.
+    throw new ActionOutcomeError({ status: 'unknown', code: 'LOCAL_DESKTOP_OUTCOME_UNKNOWN',
+      message: `Error: ${error instanceof Error ? error.message : String(error)}`, effect: 'may_have_occurred' });
   }
 }
 

@@ -6,6 +6,7 @@ import type { ActionCategory } from '../../roles/authority';
 import { getWorkflowDb } from '../db';
 import { assertRunNotCanceled } from './cancellation';
 import { withExecutionScope } from '../../actions/execution-scope';
+import { ActionOutcomeError } from '../../actions/action-outcome';
 import { getFlowRun } from '../db/repos/flow-run';
 import { createWaitpoint } from '../db/repos/waitpoint';
 import { claimWorkflowEffect, getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
@@ -59,6 +60,7 @@ export class WorkflowEffectBoundary {
       throw new Error('Workflow effect changed since it was recorded; start a new run for new arguments or version');
     }
     if (effect?.status === 'succeeded') return { result: effect.result };
+    if (effect?.outcome && effect.outcome.status !== 'succeeded') throw new ActionOutcomeError(effect.outcome);
     if (effect?.status === 'dispatching') throw new Error('Workflow effect outcome is uncertain or still in flight; automatic replay is blocked');
     if (effect && effect.status !== 'pending') throw new Error(effect.error ?? `Workflow effect is ${effect.status}`);
     if (!effect) {
@@ -124,6 +126,7 @@ export class WorkflowEffectBoundary {
         // with the pre-delivery pending snapshot.
         const latest = getWorkflowEffect(id);
         if (latest?.status === 'succeeded') return { result: latest.result };
+        if (latest?.outcome && latest.outcome.status !== 'succeeded') throw new ActionOutcomeError(latest.outcome);
         if (latest?.status === 'dispatching') throw new Error('Workflow effect outcome is uncertain or still in flight; automatic replay is blocked');
         if (!latest || latest.status !== 'pending') throw new Error(latest?.error ?? 'Workflow effect is no longer pending');
       }
@@ -166,7 +169,13 @@ export class WorkflowEffectBoundary {
       log(true);
       return { result: record.result };
     } catch (error) {
-      record.status = 'failed'; record.error = `Effect dispatch failed; partial effects may have occurred: ${(error as Error).message}`;
+      if (error instanceof ActionOutcomeError) {
+        record.outcome = error.outcome;
+        record.status = error.outcome.status === 'error' ? 'failed' : error.outcome.status;
+        record.error = error.message;
+      } else {
+        record.status = 'failed'; record.error = `Effect dispatch failed; partial effects may have occurred: ${(error as Error).message}`;
+      }
       record.finishedAt = Date.now(); saveWorkflowEffect(record);
       // Completion was not established. The durable record retains the
       // possibility that a remote effect happened before the failure.

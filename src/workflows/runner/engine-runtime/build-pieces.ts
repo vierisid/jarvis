@@ -87,6 +87,9 @@ export interface BuildPieceOptions {
 function pieceHash(pieceDir: string): string {
   const hasher = createHash("sha256");
   hasher.update(bundleHash()).update("\0");
+  // Jarvis pieces import the daemon's pure action-outcome wire contract.
+  // Include it so contract edits cannot leave an old assertion in dist/.
+  hasher.update(readFileSync(resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, '../../../actions/action-outcome.ts'))).update('\0');
   const pkgPath = resolve(pieceDir, "package.json");
   if (existsSync(pkgPath)) {
     hasher.update(readFileSync(pkgPath)).update("\0");

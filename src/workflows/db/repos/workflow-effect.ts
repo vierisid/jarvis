@@ -1,6 +1,7 @@
 import { getWorkflowDb } from '../index';
+import type { ActionOutcome } from '../../../actions/action-outcome';
 
-export type EffectStatus = 'pending' | 'dispatching' | 'succeeded' | 'failed' | 'blocked';
+export type EffectStatus = 'pending' | 'dispatching' | 'succeeded' | 'failed' | 'blocked' | 'unknown';
 export interface WorkflowEffect {
   id: string; runId: string; projectId: string; flowId: string; versionId: string;
   versionDigest: string; stepName: string; executionPath: Array<[string, number]>;
@@ -9,6 +10,8 @@ export interface WorkflowEffect {
   provenance: Record<string, unknown>; decision: string; reason: string;
   status: EffectStatus; approvalId: string | null; waitpointId: string | null;
   result?: unknown; error?: string; createdAt: number; finishedAt?: number;
+  /** Qualified failure receipt; successful returns already have status/result. */
+  outcome?: ActionOutcome;
 }
 export function getWorkflowEffect(id: string): WorkflowEffect | null {
   const row = getWorkflowDb().query('SELECT record FROM workflow_effect WHERE id = ?').get(id) as { record: string } | null;

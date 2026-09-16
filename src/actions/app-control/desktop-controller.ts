@@ -8,6 +8,7 @@
 
 import { createConnection, type Socket } from 'node:net';
 import { writeFileSync } from 'node:fs';
+import { ActionOutcomeError } from '../action-outcome.ts';
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import { launchSidecar, stopSidecar, isSidecarRunning, type RunningSidecar } from './sidecar-launcher.ts';
 
@@ -188,7 +189,8 @@ export class DesktopController implements AppController {
 
     const element = this.elementCache.get(elementId);
     if (!element) {
-      return `Error: Element [${elementId}] not found. Run desktop_snapshot first.`;
+      throw new ActionOutcomeError({ status: 'blocked', code: 'DESKTOP_ELEMENT_NOT_FOUND', effect: 'not_started',
+        message: `Error: Element [${elementId}] not found. Run desktop_snapshot first.` });
     }
 
     await this.send('clickElement', { elementId });
@@ -204,8 +206,7 @@ export class DesktopController implements AppController {
     await this.ensureConnected();
 
     if (elementId !== undefined) {
-      const clickResult = await this.clickById(elementId);
-      if (clickResult.startsWith('Error:')) return clickResult;
+      await this.clickById(elementId);
       // Brief pause after click
       await Bun.sleep(200);
     }

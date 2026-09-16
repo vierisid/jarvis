@@ -8,6 +8,14 @@
 import type { RPCState, RPCTimeouts, RPCRequest } from './protocol.ts';
 import { DEFAULT_RPC_TIMEOUTS } from './protocol.ts';
 
+/** A reply from the remote handler, as distinct from a lost connection. */
+export class SidecarRPCError extends Error {
+  constructor(public readonly code: string, message: string) {
+    super(`${code}: ${message}`);
+    this.name = 'SidecarRPCError';
+  }
+}
+
 export interface PendingRPC {
   id: string;
   sidecarId: string;

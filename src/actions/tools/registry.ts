@@ -1,5 +1,6 @@
 import type { ContentBlock } from '../../llm/provider.ts';
 import { checkpointExecution } from '../execution-scope.ts';
+import { ActionOutcomeError } from '../action-outcome.ts';
 
 export type ToolParameter = {
   type: string;
@@ -76,6 +77,7 @@ export class ToolRegistry {
     try {
       return await tool.execute(params);
     } catch (error) {
+      if (error instanceof ActionOutcomeError) throw error;
       throw new Error(
         `Tool '${name}' execution failed: ${error instanceof Error ? error.message : String(error)}`
       );

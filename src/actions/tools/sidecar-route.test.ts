@@ -3,6 +3,9 @@ import type { SidecarManager } from "../../sidecar/manager.ts";
 import type { SidecarInfo } from "../../sidecar/types.ts";
 import { setNoLocalTools } from "./local-tools-guard.ts";
 import { collectExecutionTargets, resolveToolTarget, routeToSidecar, setSidecarManagerRef } from "./sidecar-route.ts";
+import { routeToSidecarAction } from './sidecar-route.ts';
+import { DESKTOP_TOOLS } from './desktop.ts';
+import { SidecarRPCError } from '../../sidecar/rpc.ts';
 
 const mac: SidecarInfo = {
   id: "sc-mac",
@@ -16,6 +19,49 @@ const mac: SidecarInfo = {
   platform: "arm64",
   capabilities: ["terminal", "desktop"],
 };
+
+describe('typed desktop outcomes', () => {
+  for (const tool of DESKTOP_TOOLS) test(`${tool.name}: offline prevents dispatch`, async () => {
+    let calls = 0;
+    setSidecarManagerRef(stubManager([{ ...mac, connected: false }], async () => { calls++; return 'ok'; }));
+    await expect(tool.execute({ target: mac.id })).rejects.toMatchObject({
+      outcome: { status: 'blocked', code: 'SIDECAR_OFFLINE', effect: 'not_started' },
+    });
+    expect(calls).toBe(0);
+  });
+
+  for (const [label, sidecars, code] of [
+    ['missing machine', [], 'SIDECAR_NOT_FOUND'],
+    ['disabled capability', [{ ...mac, capabilities: [] }], 'CAPABILITY_DISABLED'],
+    ['unavailable capability', [{ ...mac, unavailable_capabilities: [{ name: 'desktop', reason: 'dependency missing' }] }], 'CAPABILITY_UNAVAILABLE'],
+  ] as const) test(label, async () => {
+    let calls = 0;
+    setSidecarManagerRef(stubManager(sidecars as unknown as SidecarInfo[], async () => { calls++; return 'ok'; }));
+    await expect(routeToSidecarAction(mac.id, 'click_element', {}, 'desktop')).rejects.toMatchObject({
+      outcome: { status: 'blocked', code, effect: 'not_started' },
+    });
+    expect(calls).toBe(0);
+  });
+
+  for (const [label, dispatch, status, code] of [
+    ['timeout', async () => 'detached', 'unknown', 'SIDECAR_TIMEOUT'],
+    ['disconnect', async () => { throw new Error('Sidecar disconnected'); }, 'unknown', 'SIDECAR_OUTCOME_UNKNOWN'],
+    ['remote rejection', async () => { throw new SidecarRPCError('ACTION_FAILED', 'failed after starting'); }, 'error', 'ACTION_FAILED'],
+    ['missing method', async () => { throw new SidecarRPCError('METHOD_NOT_FOUND', 'not enabled'); }, 'blocked', 'METHOD_NOT_FOUND'],
+    ['negative receipt', async () => ({ success: false, window_visible: false }), 'error', 'SIDECAR_ACTION_FAILED'],
+    ['unverified window', async () => ({ success: true, window_visible: null }), 'unknown', 'DESKTOP_WINDOW_UNVERIFIED'],
+  ] as const) test(label, async () => {
+    setSidecarManagerRef(stubManager([mac], dispatch));
+    await expect(routeToSidecarAction(mac.id, 'launch_app', {}, 'desktop')).rejects.toMatchObject({
+      outcome: { status, code, effect: status === 'blocked' ? 'not_started' : 'may_have_occurred' },
+    });
+  });
+
+  test('data containing the word Error is not classified as a failed action', async () => {
+    setSidecarManagerRef(stubManager([mac], async () => 'Error: the title of a visible window'));
+    expect(await routeToSidecarAction(mac.id, 'list_windows', {}, 'desktop')).toBe('Error: the title of a visible window');
+  });
+});
 
 /** Minimal manager stub: only the two methods these paths touch. */
 function stubManager(

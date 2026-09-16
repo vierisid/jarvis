@@ -187,7 +187,10 @@ export function buildSandboxServiceBackends(
         })();
         const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-tool', action: 'invoke',
           route: 'tool', toolName: tool.name, category: capability.category, toolCategory: tool.category,
-          request: { ...req }, prepare: () => {
+          // requireSuccess controls how the caller handles the receipt, not
+          // the effect's identity. Keep pre-upgrade pending approvals valid
+          // when the updated piece starts sending the default explicitly.
+          request: { toolName: req.toolName, params: req.params }, prepare: () => {
             const args = capability.prepareArguments(req.params);
             return { arguments: args, target: capability.target(args) };
           },

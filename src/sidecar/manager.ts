@@ -22,7 +22,8 @@ import type {
 import type { RPCRequest, RPCTimeouts, SidecarEvent, RPCResultPayload, RPCErrorPayload, RPCProgressPayload } from './protocol.ts';
 import { DEFAULT_RPC_TIMEOUTS } from './protocol.ts';
 import { EventScheduler, type DroppedEventsStats } from './scheduler.ts';
-import { RPCTracker } from './rpc.ts';
+import { RPCTracker, SidecarRPCError } from './rpc.ts';
+import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { BinarySpool, type BinarySpoolStats } from './binary-spool.ts';
 import { SidecarConnection } from './connection.ts';
 import { PanelSessionStore, vaultPanelSessionSink, type PanelSession, type PanelSocket } from './panel-sessions.ts';
@@ -199,7 +200,7 @@ export class SidecarManager implements Service {
       this.scheduler.on('rpc_result', async (sidecarId, event) => {
         const payload = event.payload as RPCResultPayload | RPCErrorPayload;
         if (payload.error) {
-          this.rpcTracker.fail(payload.rpc_id, new Error(`${payload.error.code}: ${payload.error.message}`));
+          this.rpcTracker.fail(payload.rpc_id, new SidecarRPCError(payload.error.code, payload.error.message));
         } else {
           // Attach binary data to result when present (e.g. capture_screen returns image in binary)
           const result = payload.result as Record<string, unknown> | undefined;
@@ -876,7 +877,8 @@ export class SidecarManager implements Service {
   ): Promise<unknown> {
     const connection = this.sidecarConnections.get(sidecarId);
     if (!connection) {
-      throw new Error(`Sidecar ${sidecarId} is not connected`);
+      throw new ActionOutcomeError({ status: 'blocked', code: 'SIDECAR_OFFLINE',
+        message: `Sidecar ${sidecarId} is not connected`, effect: 'not_started' });
     }
 
     const rpcId = generateId();

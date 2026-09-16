@@ -219,9 +219,9 @@ describe('DESKTOP_TOOLS', () => {
     const clickTool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_click');
 
     await snapshotTool!.execute({});
-    const result = await clickTool!.execute({ element_id: 7, action: 'double_click' });
-
-    expect(result).toBe('Error: Local desktop action "double_click" is not supported by this platform controller.');
+    await expect(clickTool!.execute({ element_id: 7, action: 'double_click' })).rejects.toMatchObject({
+      outcome: { status: 'blocked', code: 'DESKTOP_ACTION_UNSUPPORTED', effect: 'not_started' },
+    });
     expect(controller.clickedIds).toEqual([]);
   });
 
@@ -278,7 +278,8 @@ describe('DESKTOP_TOOLS', () => {
   test('respects --no-local-tools for desktop tools', async () => {
     setNoLocalTools(true);
     const tool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_list_windows');
-    const result = await tool!.execute({});
-    expect(String(result)).toContain('Local tool execution is disabled');
+    await expect(tool!.execute({})).rejects.toMatchObject({
+      outcome: { status: 'blocked', code: 'LOCAL_TOOLS_DISABLED', effect: 'not_started' },
+    });
   });
 });
