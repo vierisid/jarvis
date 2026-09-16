@@ -9,7 +9,8 @@ import { saveUserProfile } from './user-profile.ts';
 import { createRelationship } from './relationships.ts';
 import { getKnowledgeForMessage, retrieveForMessage, formatKnowledgeContext } from './retrieval.ts';
 import { isRecallSelfOverview, rankRecall, recallTerms, type RecallFact } from './recall-ranking.ts';
-import { formatRecallFact, packRecallContext, RECALL_LIMITS } from './recall-context.ts';
+import { packRecallContext, RECALL_LIMITS } from './recall-context.ts';
+import { formatFact } from './fact-format.ts';
 import { runRecallBenchmark } from '../../scripts/benchmark-memory-recall.ts';
 
 beforeEach(() => initDatabase(':memory:', { quiet: true }));
@@ -392,7 +393,7 @@ test.each(['Does Alex still use Vim?', 'Vim'])('value query retains the current 
   expect(context).toContain('"state":"contested"');
   expect(context).toContain('"basis":"confirmed"');
   // The confirmed answer may fit alone, but the inference cannot appear alone.
-  const tight = packRecallContext(profiles, formatRecallFact(confirmed).length + 550);
+  const tight = packRecallContext(profiles, formatFact(confirmed).length + 550);
   expect(tight).toContain('preferred_editor: Zed');
   expect(tight).not.toContain('prefers_editor: Vim');
   expect(tight).toContain('omitted');
@@ -437,7 +438,7 @@ test('mutually contested confirmations preserve their dependency group at contex
   const context = packRecallContext(profiles);
   expect(context).toContain('preferred_editor: Zed');
   expect(context).toContain('preferred_editor: Vim');
-  const tight = packRecallContext(profiles, formatRecallFact(one).length + 550);
+  const tight = packRecallContext(profiles, formatFact(one).length + 550);
   expect(tight).not.toContain('preferred_editor:');
   expect(tight).toContain('omitted');
 });

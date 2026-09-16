@@ -7,10 +7,9 @@ export type RecallProfile = { entity: Entity; facts: RecallFact[]; hasMore?: boo
   factDependencies?: RecallFactDependency[];
   relationships: Array<{ type: string; target: string; direction: 'from' | 'to' }> };
 export const RECALL_LIMITS = { chars: 12_000, entities: 6, facts: 18, factsPerEntity: 8, relationshipsPerEntity: 4 } as const;
-export { MEMORY_USE_RULES as RECALL_RULES } from './fact-format.ts';
+// Qualification, the per-fact evidence bound and the rules preamble belong to
+// the fact repository. This module only ranks, selects and bounds the block.
 const omission = '\n\n[Additional memory omitted by relevance and context limits; this is not an exhaustive record.]';
-/** The fact repository owns qualification and the per-fact evidence bound. */
-export const formatRecallFact = formatFact;
 
 /** Round-robin allocation keeps a dense first subject from starving later subjects. */
 export function packRecallContext(profiles: RecallProfile[], maxChars: number = RECALL_LIMITS.chars): string {
@@ -45,7 +44,7 @@ export function packRecallContext(profiles: RecallProfile[], maxChars: number = 
       if (included[i]!.size + group.length > RECALL_LIMITS.factsPerEntity || count + group.length > RECALL_LIMITS.facts) {
         omitted = true; continue;
       }
-      if (append(i, group.map(item => `  - ${formatRecallFact(item)}`).join('\n'))) {
+      if (append(i, group.map(item => `  - ${formatFact(item)}`).join('\n'))) {
         for (const item of group) included[i]!.add(item.id);
         count += group.length;
       }
