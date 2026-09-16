@@ -351,6 +351,26 @@ Notable behaviors a contributor should know:
 - Connection picker auto-fills the first available connection for the piece's auth type.
 - The runs panel polls adaptively (250ms while a run is RUNNING, 5s when idle).
 
+### Routine requests tab
+
+`RoutineRequestsPanel.tsx` is a fourth tab beside Flows, Connections and Library. It
+lists the automation proposals awareness has saved and the drafts they turned into,
+reading `/api/awareness/routines` and `/api/awareness/compositions`. The legacy overlay
+(`ui/overlay.html`) reaches the same endpoints.
+
+Accepting a proposal (`POST /api/awareness/suggestions/:id/accept`) does not compose
+inline. It saves the user-confirmed request as one row in `suggestion_composition_jobs`
+and returns. `SuggestionComposer` (`src/awareness/suggestion-composer.ts`) then claims
+the job under a lease token, calls `composeFlow` with the same deps `manage_workflow`
+uses, and commits the flow, its draft version and the job result in a single
+transaction -- the LLM call itself never runs inside a transaction. An interrupted or
+timed-out attempt keeps the saved request and requires an explicit retry, so a crash
+never re-spends on its own.
+
+The composed flow is created DISABLED with no published version, so accepting a
+proposal registers no trigger and runs nothing; publishing and enabling stay explicit
+user steps.
+
 ## Persistence and encryption
 
 All workflow tables live in `~/.jarvis/jarvis.db` (the same SQLite file as the rest of Jarvis). Schema: `src/workflows/db/schema.ts`. Repos: `src/workflows/db/repos/`.

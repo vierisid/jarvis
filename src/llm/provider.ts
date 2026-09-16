@@ -174,7 +174,9 @@ export type LLMOptions = {
   /**
    * Aborts the underlying request. The manager sets it so a request it has
    * already given up on (its timeout) stops running at the provider instead of
-   * holding a slot there while the retry goes out.
+   * holding a slot there while the retry goes out. A caller may also pass its
+   * own; the manager composes the two, so cancelling the caller's also stops
+   * further retries and tier failover.
    */
   signal?: AbortSignal;
 };

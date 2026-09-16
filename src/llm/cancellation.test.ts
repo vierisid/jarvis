@@ -44,8 +44,11 @@ test('cancellation reaches transport through the composer and tier router', asyn
   manager.setTierMap({ high: { provider: 'openai' } });
   const pending = composeFlow({ llm: createComposerLlmClient(manager), pieceRegistry: sampleCatalog() },
     { name: 'Test', description: 'Check my invoices', signal: abort.signal });
-  expect(seen).toBe(abort.signal);
+  // The manager composes the caller's signal with its own request timeout, so
+  // the transport gets a derived signal rather than this exact object.
+  expect(seen?.aborted).toBe(false);
   abort.abort(new Error('Composition stopped'));
+  expect(seen?.aborted).toBe(true);
   await expect(pending).rejects.toThrow('Composition stopped');
 });
 
@@ -55,8 +58,11 @@ test('aborted provider failures cannot trigger a retry or tier failover', async 
   const manager = new LLMManager();
   for (const name of ['primary', 'fallback']) manager.registerProvider({ name,
     async chat(_messages, options?: LLMOptions): Promise<LLMResponse> {
-      calls++; expect(options?.signal).toBe(abort.signal);
+      calls++;
+      const signal = options?.signal;
+      expect(signal?.aborted).toBe(false);
       abort.abort(new Error('Composition stopped'));
+      expect(signal?.aborted).toBe(true);
       throw new LLMProviderError('Rate limited', 'rate_limit');
     }, async *stream() {}, async listModels() { return []; } });
   manager.setTierMap({ high: { provider: 'primary' }, medium: { provider: 'fallback' } });
