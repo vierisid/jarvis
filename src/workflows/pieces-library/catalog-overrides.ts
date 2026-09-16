@@ -45,6 +45,10 @@
  *      gmail.send_email) through the engine via /api/workflows/:id/run.
  *   4. Land the id here + add a vettedAt entry in VERIFIED_METADATA below
  *      with the date you ran the checks.
+ *   5. Land a governed adapter for it in
+ *      `src/workflows/runtime/piece-effects.ts`, so its actions carry an
+ *      Authority category and a reviewable target. Verified means vetted AND
+ *      governed; every id below has one.
  */
 export const VERIFIED: ReadonlySet<string> = new Set<string>([
   "gmail",

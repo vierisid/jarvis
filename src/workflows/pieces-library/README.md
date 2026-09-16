@@ -259,12 +259,30 @@ at the verification path.
    pieces (165MB+) deserve the heads-up. Omitting the field hides the
    badge; not wrong, just less helpful.
 
-8. **Record what you tested.** In the PR description, paste:
+8. **Land a governed adapter.** A verified piece's effects have to be
+   reviewable, so add an entry to `GOVERNED_PIECE_ADAPTERS` in
+   `src/workflows/runtime/piece-effects.ts` in the same PR:
+   - An Authority category for EVERY action the vetted version exposes.
+     Enumerate them with the spike from step 2
+     (`Object.keys(piece._actions)`), and classify each by what it does to
+     the remote account, not by what it is called.
+   - `unknownActionCategory`: the most severe category the piece can reach.
+     An action added by a later upstream release falls back to it, so it must
+     never be `read_data`. `custom_api_call` is always mapped there too.
+   - `targetProps`: the input props that identify the recipient, file or
+     endpoint. They are what the approval card shows.
+   - A deny case and an approve case in
+     `src/workflows/runtime/governed-pieces.test.ts`.
+
+   A piece WITHOUT an adapter is still installable and runnable; it just is
+   not governed. Verified means vetted AND governed.
+
+9. **Record what you tested.** In the PR description, paste:
    - The Bun version (`bun --version`)
    - The resolved piece version (`bun pm ls | grep <name>`)
    - The first 5-10 lines of the EXTRACT_PIECE_METADATA output
 
-9. **Update `BRANCH_SUMMARY.md`** if relevant and the project changelog.
+10. **Update `BRANCH_SUMMARY.md`** if relevant and the project changelog.
 
 ## Updating versions
 

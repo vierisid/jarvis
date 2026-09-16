@@ -52,8 +52,42 @@ Practical consequences:
   adapter first. A flow that called one of those directly now fails with
   "Unsupported direct workflow capability".
 - Community pieces are unaffected by the gate: they run in the engine and never
-  reach the daemon's tool surface. They are also not governed by it. See
-  `src/workflows/pieces-library/README.md` for the curation path.
+  reach the daemon's tool surface. See `Governed pieces` below for the verified
+  ten, and `src/workflows/pieces-library/README.md` for the curation path.
+
+### Governed pieces
+
+The ten verified pieces -- gmail, slack, notion, openai, github, google-calendar,
+google-drive, discord, telegram-bot, claude -- carry a typed governed adapter in
+`src/workflows/runtime/piece-effects.ts`. Before one of their actions runs, the
+engine asks the daemon at `/v1/jarvis/pieces/authorize`, and the answer comes
+from the same Authority boundary every other effect passes: emergency and
+cancellation fences, a durable `workflow_effect` row, an audit row, and an
+approval waitpoint when the category is governed. The approval card carries the
+step's resolved input and the resolved target -- the recipient, file or endpoint
+the action will touch -- never the connection credential, which is stripped in
+the engine before the input is sent and again on arrival.
+
+Categories are per action, not per piece: `gmail_search_mail` is `read_data`,
+`gmail_create_draft` is `write_data`, `send_email` is `send_email`, and
+`gmail_delete_draft` is `delete_data`. An action the table does not name --
+one added by a later upstream release, or `custom_api_call`, which can reach any
+endpoint of that API -- takes the piece's worst-case category, never `read_data`.
+
+What this does NOT do:
+
+- It does not close the catalogue. Every other piece stays installable and
+  runnable exactly as before; a piece with no adapter is reported ungoverned and
+  the step proceeds untouched. The verified set grows by landing an adapter.
+- It does not govern `CODE` steps, which run in a spawned child process with host
+  privileges and make their own calls. That is tracked separately in #467.
+- It does not make the daemon the caller. The piece's own HTTPS request still
+  happens in the engine subprocess after the daemon authorizes it, so the
+  recorded outcome is a dispatch authorization, not a delivery receipt. The gate
+  holds against an untrusted composed `FlowVersion`, which is the threat it was
+  built for; it does not hold against a malicious piece, which is why it covers
+  only pieces that have been read and vetted.
+- It does not cover triggers. Polling triggers run on a different engine path.
 
 ### `{{ ... }}` expressions are data, not JavaScript
 

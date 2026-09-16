@@ -26,6 +26,7 @@ import { buildSandboxServiceBackends, type BuildServiceBackendsOptions } from '.
 import { AUTHORITY_REQUIREMENTS, type ActionCategory } from '../../roles/authority';
 import { GOVERNED_PIECE_ADAPTERS, governedPieceToolName, resolveGovernedPieceAction, sanitizePieceInput } from './piece-effects';
 import { authorizePieceDispatch } from './piece-effect-guard';
+import { WebSocketService } from '../../daemon/ws-service';
 import { SandboxApi } from '../sandbox-api/server';
 import { EngineTokenSigner } from '../sandbox-api/engine-token';
 import { SandboxRegistry } from '../sandbox-api/sandbox-registry';
@@ -229,7 +230,47 @@ describe('governed piece adapters: over the wire', () => {
   });
 });
 
+describe('the approval card describes the piece action', () => {
+  test('the card names the piece, the action and the reviewed target', async () => {
+    const f = fixture(GMAIL, 'send_email');
+    f.authority.setGovernedCategories(['send_email']);
+    const pending = await f.authorize(SEND_INPUT);
+    const approvalId = (pending as { approval: { approvalId: string } }).approval.approvalId;
+    const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
+    const intent = ws.computeApprovalIntent(f.approvals.getRequest(approvalId)!);
+    // Not "gmail", and not "send_email is a governed action": who it goes to.
+    expect(intent).toContain('Gmail - send email');
+    expect(intent).toContain('finance@example.test');
+    expect(intent).toContain('Q3 invoice');
+  });
+
+  test('a piece action with no resolvable target still names what will run', async () => {
+    const f = fixture('@activepieces/piece-openai', 'list_models', 1);
+    f.authority.setGovernedCategories(['read_data']);
+    const pending = await f.authorize({});
+    const approvalId = (pending as { approval: { approvalId: string } }).approval.approvalId;
+    const ws = new WebSocketService(0, { setDelegationCallback: () => {} } as any);
+    expect(ws.computeApprovalIntent(f.approvals.getRequest(approvalId)!)).toContain('Openai - list models');
+  });
+});
+
 describe('governed piece adapter table', () => {
+  test('verified means governed, in both directions', async () => {
+    const { VERIFIED } = await import('../pieces-library/catalog-overrides');
+    const { CATALOG } = await import('../pieces-library/catalog');
+    const governed = new Set(GOVERNED_PIECE_ADAPTERS.map(adapter => adapter.catalogId));
+    // A piece promoted to VERIFIED without an adapter would be presented as
+    // vetted while its effects stayed outside the boundary.
+    expect([...VERIFIED].sort()).toEqual([...governed].sort());
+    for (const adapter of GOVERNED_PIECE_ADAPTERS) {
+      const entry = CATALOG.find(piece => piece.id === adapter.catalogId)!;
+      expect(entry).toBeDefined();
+      expect(entry.npmPackage).toBe(adapter.pieceName);
+      // The table was read from the version the catalogue actually installs.
+      expect(adapter.vettedVersion).toBe(entry.vettedVersion);
+    }
+  });
+
   test('every adapter names a real catalogue piece and a valid category', () => {
     for (const adapter of GOVERNED_PIECE_ADAPTERS) {
       expect(adapter.pieceName).toBe(`@activepieces/piece-${adapter.catalogId}`);
@@ -269,4 +310,113 @@ describe('governed piece adapter table', () => {
       }
     }
   });
+});
+
+/**
+ * One deny path and one approve path per verified piece, over its primary
+ * effect. Each case fails if that piece's adapter is removed from the table:
+ * without an adapter the backend answers `governed: false`, so nothing is
+ * denied and no approval is raised.
+ */
+const PIECES: Array<{
+  id: string; action: string; category: ActionCategory; input: Record<string, unknown>;
+  target: Record<string, unknown>;
+  /** A more severe action of the same piece, to prove per-action severity. */
+  severe: [string, ActionCategory];
+  /** A read of the same piece, which must clear authority level 1. */
+  read?: string;
+}> = [
+  { id: 'gmail', action: 'send_email', category: 'send_email',
+    input: { receiver: ['finance@example.test'], subject: 'Q3 invoice' },
+    target: { receiver: ['finance@example.test'] }, severe: ['gmail_delete_draft', 'delete_data'],
+    read: 'gmail_get_profile' },
+  { id: 'slack', action: 'slack_post_message', category: 'send_message',
+    input: { channel: 'C0ENGINEERING', text: 'deploy finished' }, target: { channel: 'C0ENGINEERING' },
+    severe: ['slack_delete_message', 'delete_data'], read: 'slack_list_channels' },
+  { id: 'notion', action: 'notion_create_page', category: 'write_data',
+    input: { parent_page_id: 'p_1', title: 'Quarterly review' }, target: { parent_page_id: 'p_1' },
+    severe: ['notion_archive_page', 'delete_data'], read: 'notion_search' },
+  { id: 'openai', action: 'ask_chatgpt', category: 'write_data',
+    input: { model: 'gpt-4o', prompt: 'summarise the vault' }, target: { prompt: 'summarise the vault' },
+    severe: ['delete_file', 'delete_data'], read: 'list_models' },
+  { id: 'claude', action: 'ask_claude', category: 'write_data',
+    input: { model: 'claude-opus-4', prompt: 'summarise the vault' },
+    target: { prompt: 'summarise the vault' }, severe: ['custom_api_call', 'delete_data'] },
+  { id: 'github', action: 'github_create_issue', category: 'write_data',
+    input: { repository: { owner: 'vierisid', repo: 'jarvis' }, title: 'Flaky test' },
+    target: { title: 'Flaky test' }, severe: ['delete_branch', 'delete_data'], read: 'find_issue' },
+  { id: 'google-calendar', action: 'google_calendar_create_event', category: 'write_data',
+    input: { calendar_id: 'primary', title: 'Design review' }, target: { calendar_id: 'primary' },
+    severe: ['google_calendar_delete_event', 'delete_data'], read: 'google_calendar_list_events' },
+  { id: 'google-drive', action: 'drive_share_file', category: 'modify_settings',
+    input: { file_id: 'f_1', user_email: 'outsider@example.test', role: 'writer' },
+    target: { user_email: 'outsider@example.test' }, severe: ['drive_empty_trash', 'delete_data'],
+    read: 'drive_list_files' },
+  { id: 'discord', action: 'discord_send_message', category: 'send_message',
+    input: { guild_id: 'g_1', channel_id: 'c_1', content: 'deploy finished' },
+    target: { channel_id: 'c_1' }, severe: ['discord_bulk_delete_messages', 'delete_data'],
+    read: 'discord_list_channels' },
+  { id: 'telegram-bot', action: 'send_text_message', category: 'send_message',
+    input: { chat_id: '4711', message: 'deploy finished' }, target: { chat_id: '4711' },
+    severe: ['create_invite_link', 'modify_settings'], read: 'get_chat_member' },
+];
+
+describe('every verified piece is gated', () => {
+  test('the table covers exactly the verified set', () => {
+    const verified = new Set(GOVERNED_PIECE_ADAPTERS.map(adapter => adapter.catalogId));
+    expect([...verified].sort()).toEqual(PIECES.map(piece => piece.id).sort());
+    expect(verified.size).toBe(10);
+  });
+
+  for (const piece of PIECES) {
+    const pieceName = `@activepieces/piece-${piece.id}`;
+
+    test(`${piece.id}: a denied ${piece.action} is refused and recorded`, async () => {
+      const f = fixture(pieceName, piece.action);
+      f.authority.addOverride({ action: piece.category, allowed: false });
+      await expect(f.authorize(piece.input)).rejects.toThrow(/Authority denied/);
+      const effect = listWorkflowEffects(f.run.id)[0]!;
+      expect(effect).toMatchObject({ status: 'blocked', decision: 'denied',
+        actionCategory: piece.category, toolName: `piece:${piece.id}/${piece.action}` });
+      expect(effect.target).toMatchObject({ piece: piece.id, action: piece.action, ...piece.target });
+    });
+
+    test(`${piece.id}: a governed ${piece.action} waits for a human, then dispatches`, async () => {
+      const f = fixture(pieceName, piece.action);
+      f.authority.setGovernedCategories([piece.category]);
+      const pending = await f.authorize(piece.input);
+      expect(pending).toMatchObject({ governed: true, dispatch: 'approval_required' });
+      const approvalId = (pending as { approval: { approvalId: string } }).approval.approvalId;
+      const request = f.approvals.getRequest(approvalId)!;
+      expect(request.action_category).toBe(piece.category);
+      // The card carries the resolved input, so the reviewer sees the real
+      // recipient / file / prompt rather than the piece name.
+      expect(JSON.parse(request.tool_arguments)).toMatchObject(piece.input);
+      expect(JSON.parse(request.context)).toMatchObject({ target: { piece: piece.id, ...piece.target } });
+      f.approvals.approve(approvalId, 'test-user');
+      updateRun(f.run.id, { status: 'PAUSED' });
+      expect(resumeResolvedWorkflowEffects()).toBe(1);
+      updateRun(f.run.id, { status: 'RUNNING' });
+      expect(await f.authorize(piece.input)).toEqual({ governed: true, dispatch: 'authorized' });
+      expect(listWorkflowEffects(f.run.id)[0]!.status).toBe('succeeded');
+    });
+
+    test(`${piece.id}: ${piece.severe[0]} is gated above the piece's ordinary writes`, async () => {
+      const [action, category] = piece.severe;
+      expect(resolveGovernedPieceAction(pieceName, action)!.category).toBe(category);
+      // Level 3 clears reads and writes. The severe action must not pass it.
+      const f = fixture(pieceName, action, 3);
+      await expect(f.authorize(piece.input)).rejects.toThrow(/below required/);
+      expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'blocked', actionCategory: category });
+    });
+
+    if (piece.read) {
+      test(`${piece.id}: ${piece.read} stays a read`, async () => {
+        expect(resolveGovernedPieceAction(pieceName, piece.read!)!.category).toBe('read_data');
+        const f = fixture(pieceName, piece.read!, 1);
+        expect(await f.authorize({})).toEqual({ governed: true, dispatch: 'authorized' });
+        expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ actionCategory: 'read_data', status: 'succeeded' });
+      });
+    }
+  }
 });

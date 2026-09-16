@@ -4907,7 +4907,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           agentService.buildFullSystemPromptParts("workflow", userMessage),
       });
       workflowSandboxApi.setServices(backends);
-      logWithTimestamp("Workflow engine service backends wired (llm/tools/notify/context/agent/events/workflows)");
+      logWithTimestamp("Workflow engine service backends wired (llm/tools/pieces/notify/context/agent/events/workflows)");
 
       // Boot recovery retires interrupted workflows for reconciliation.
       // Only other retryable job types can be re-queued automatically.

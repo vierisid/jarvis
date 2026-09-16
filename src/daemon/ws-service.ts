@@ -2773,7 +2773,13 @@ function formatApprovalIntent(request: ApprovalRequest): string {
   // unless the authority engine wrote it ("... requires user approval"): then
   // the per-tool sentence below is the headline the user needs (what will
   // run), and the engine's reason follows it.
-  const engineReason = reason.endsWith('requires user approval') || reason.includes(TAINT_PROFILE_LABEL);
+  // The Authority engine's own wording names the CATEGORY, never the effect.
+  // For a governed category ("send_email is a governed action requiring user
+  // approval") the headline the reviewer needs is what will actually run, so
+  // the synthesized sentence leads and the engine's wording follows it.
+  const engineReason = reason.endsWith('requires user approval')
+    || reason.endsWith('is a governed action requiring user approval')
+    || reason.includes(TAINT_PROFILE_LABEL);
   if (reason.length > 0 && !engineReason) return reason;
   const synthesized = synthesizeApprovalIntent(request);
   return engineReason ? `${synthesized} (${reason})` : synthesized;
@@ -2825,10 +2831,48 @@ function synthesizeApprovalIntent(request: ApprovalRequest): string {
       return `Spawn ${role}`;
     }
     default: {
+      // Governed workflow-piece effects: `piece:<catalog id>/<action>`. The
+      // durable effect's target rides along in `context`, so the sentence can
+      // name the recipient, file or endpoint rather than just the piece.
+      const governedPiece = /^piece:([^/]+)\/(.+)$/u.exec(request.tool_name);
+      if (governedPiece) return describeGovernedPieceIntent(governedPiece[1]!, governedPiece[2]!, request);
       const verb = request.tool_name.replace(/_/g, ' ');
       return `${verb}`.replace(/^./, (c) => c.toUpperCase());
     }
   }
+}
+
+/**
+ * "Gmail - send email to finance@example.test, subject: Q3 invoice".
+ *
+ * Reads the reviewed target out of the approval's context, which is what the
+ * piece adapter resolved from the step's real input. A card that said only
+ * "gmail" would not be governance.
+ */
+function describeGovernedPieceIntent(pieceId: string, action: string, request: ApprovalRequest): string {
+  const label = pieceId.replace(/-/g, ' ').replace(/^./, c => c.toUpperCase());
+  const verb = action.replace(new RegExp(`^${pieceId.replace(/-/g, '_')}_`, 'u'), '').replace(/[_-]/g, ' ');
+  let target: Record<string, unknown> = {};
+  try {
+    const context: unknown = JSON.parse(request.context ?? '{}');
+    if (context && typeof context === 'object' && !Array.isArray(context)) {
+      const raw = (context as Record<string, unknown>).target;
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) target = raw as Record<string, unknown>;
+    }
+  } catch {
+    // No context to read; the piece and action alone still describe the step.
+  }
+  const details: string[] = [];
+  for (const [key, value] of Object.entries(target)) {
+    if (key === 'piece' || key === 'action' || key === 'unmappedAction') continue;
+    const rendered = Array.isArray(value) ? value.map(item => String(item)).join(', ')
+      : value === null || typeof value === 'object' ? undefined : String(value);
+    if (!rendered) continue;
+    details.push(`${key.replace(/_/g, ' ')}: ${rendered.length > 80 ? `${rendered.slice(0, 80)}...` : rendered}`);
+    if (details.length === 3) break;
+  }
+  const head = `${label} - ${verb}`;
+  return details.length > 0 ? `${head} (${details.join(', ')})` : head;
 }
 
 function asString(v: unknown): string | undefined {
