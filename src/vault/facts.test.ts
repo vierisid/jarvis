@@ -345,8 +345,10 @@ test('recall caps the evidence ledger so a repeated assertion cannot grow the pr
   expect(getKnowledgeForMessage('Alex').length - large.length).toBeLessThan(5);
   expect(large.length).toBeLessThan(small * 2);
   expect(large).toContain('"evidence_count":200');
-  expect(large).toContain('conversation:199');
-  expect(large).not.toContain('conversation:100');
+  // Which of the equally recent rows is shown is not fixed (a tight loop shares
+  // a millisecond), but the count is: three, out of two hundred recorded.
+  expect(JSON.parse(large.slice(large.indexOf('evidence: ') + 'evidence: '.length))).toHaveLength(3);
+  expect(large).not.toContain('conversation:0"');
 });
 
 test('recall shows the strongest evidence first and clips an overlong quote', () => {
