@@ -7,8 +7,8 @@
 
 import type { ServerWebSocket } from 'bun';
 import { join } from 'node:path';
-import { checkpointExecution } from '../actions/execution-scope';
 import { homedir } from 'node:os';
+import { checkpointExecution } from '../actions/execution-scope.ts';
 import type { Service, ServiceStatus } from './services.ts';
 import type { AgentService } from './agent-service.ts';
 import type { CommitmentExecutor } from './commitment-executor.ts';

@@ -231,6 +231,10 @@ export function createRunFlowHandler(opts: CreateRunFlowHandlerOptions): JobHand
         );
       }
     } catch (e) {
+      // Deleting the workflow cascades the run away mid-flight. There is no
+      // row left to mark FAILED, and retrying would only re-enter the stale-
+      // job return above.
+      if (!getFlowRun(runId)) return;
       if (getRunCancellation(runId)) {
         if (e instanceof FlowExecutionError) updateRun(runId, { steps: e.steps });
         return;

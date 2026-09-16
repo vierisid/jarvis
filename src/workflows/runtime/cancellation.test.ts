@@ -83,6 +83,31 @@ test("acknowledged cancellation prevents the next tool and preserves a completed
   expect(logs.filter(line => /errored|requeued/.test(line))).toEqual([]);
 });
 
+test("deleting a workflow mid-run stops it without a spurious failure or retry", async () => {
+  const run = fixture();
+  const job = enqueue({ jobType: "RUN_FLOW", payload: { runId: run.id }, flowRunId: run.id, maxAttempts: 3 });
+  const started = deferred(), proceed = deferred();
+  const registry = new ToolRegistry();
+  let effects = 0;
+  registry.register({ name: "effect", description: "fake effect", category: "test", parameters: {}, execute: async () => ++effects });
+  const executor: FlowExecutor = { async execute() {
+    started.resolve();
+    await proceed.promise;
+    await registry.execute("effect", {});
+    return { steps: {}, stepsCount: 0 };
+  } };
+  const logs: string[] = [];
+  const draining = new Worker({ handlers: { RUN_FLOW: createRunFlowHandler({ executor }) }, log: line => logs.push(line) }).drain();
+  await started.promise;
+  await deleteWorkflow(run.flowId, run.id);
+  proceed.resolve();
+  await draining;
+  expect(effects).toBe(0);
+  // The queue retires the stale job instead of failing and retrying it.
+  expect(getJob(job.id)?.status).toBe("SUCCEEDED");
+  expect(logs.filter(line => /failed|requeued/.test(line))).toEqual([]);
+});
+
 test("late success cannot replace cancellation, but its committed output is retained", async () => {
   const run = fixture();
   const job = enqueue({ jobType: "RUN_FLOW", payload: { runId: run.id }, flowRunId: run.id });

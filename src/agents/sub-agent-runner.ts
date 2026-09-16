@@ -11,7 +11,7 @@ import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import type { LLMMessage, LLMResponse, LLMToolCall, LLMTool } from '../llm/provider.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
-import { checkpointExecution } from '../actions/execution-scope';
+import { checkpointExecution } from '../actions/execution-scope.ts';
 import { toolDefToLLMTool, BUILTIN_TOOLS } from '../actions/tools/builtin.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';

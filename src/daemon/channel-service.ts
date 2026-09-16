@@ -21,7 +21,7 @@ import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
 import { getSettingsByPrefix, setSetting } from '../vault/settings.ts';
 import { classifyErrorString } from '../llm/provider.ts';
 import { runWithOrigin } from '../llm/origin.ts';
-import { checkpointExecution } from '../actions/execution-scope';
+import { checkpointExecution } from '../actions/execution-scope.ts';
 
 /** Settings-table key prefix for persisted per-channel broadcast recipients. */
 const LAST_RECIPIENT_PREFIX = 'channel.lastRecipient.';

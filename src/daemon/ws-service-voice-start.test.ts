@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import { WebSocketService } from './ws-service.ts';
-import { withExecutionScope } from '../actions/execution-scope';
+import { withExecutionScope } from '../actions/execution-scope.ts';
 import { clearRealtimeGateCache } from './realtime-gate.ts';
 import type { JarvisConfig } from '../config/types.ts';
 

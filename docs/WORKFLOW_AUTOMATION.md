@@ -117,6 +117,10 @@ src/workflows/
                                 `~/.jarvis/cache/piece-metadata.json`
     piece-input.ts              Sample-input override clone applied before
                                 handing inputs to the engine
+    cancellation.ts             Dispatch fence: assert / scope / abort helpers
+                                every run's next action is checked against
+    cancellation-signals.ts     In-process bus that wakes the active executor
+                                once the fence commits
     event-bus.ts                Pub/sub used by `jarvis-trigger:on_event`
     event-buffer.ts             Recent-event ring buffer surfaced over /v1
     test-fixtures.ts            Catalog snapshot used by composer tests
@@ -177,8 +181,9 @@ src/workflows/
 
   db/                           Persistence
     schema.ts                   All SQLite tables (flow, flow_version,
-                                flow_run, app_connection, store_entry,
-                                waitpoint, workflow_file, workflow_job)
+                                flow_run, workflow_run_cancellation,
+                                app_connection, store_entry, waitpoint,
+                                workflow_file, workflow_job)
     encryption.ts               AES-256-GCM at-rest for app_connection.value
     repos/                      One file per table; thin CRUD over kysely
 
@@ -263,6 +268,8 @@ Following a single run from a user click to a SUCCEEDED row:
 5. The engine subprocess imports the populated flow's pieces (Jarvis pieces via dev-pieces resolution, community pieces via `node_modules`), runs the trigger payload through each step, and streams `WorkerNotify.updateStepProgress` events back over the WS for every step boundary.
 6. The UI's runs panel polls `/api/workflows/:id/runs` adaptively (faster while a run is RUNNING). The overlay on the canvas reflects the latest step status.
 7. On terminal status, the engine sends `WorkerContract.updateRunProgress(SUCCEEDED|FAILED|PAUSED)` plus `uploadRunLog` (zstd execution-state). The handler updates the row and releases the engine back to the pool.
+
+Cancellation (`POST /api/workflow-runs/:runId/cancel`) is a durable dispatch fence, not a remote undo. One SQLite transaction writes a `workflow_run_cancellation` row, marks the run STOPPED, and cancels every active `RUN_FLOW` job for it; only after that commit is the active executor signaled, which aborts the engine RPC and kills the subprocess instead of returning it to the warm pool. The fence outlives a restart and a workflow deletion: `enqueue`, `createWaitpoint` and every `/v1/jarvis/*` action route re-check it, and `updateRun` lets a late result add step evidence but never revoke STOPPED. An effect already dispatched may still land, so the run reports `inFlightMayHaveCompleted` and the dashboard says so.
 
 If a step calls `context.run.pause()` (e.g. waiting on a webhook), the engine sends PAUSED + the zstd backup. The daemon writes a `waitpoint` row and the run hangs. A later `POST /api/webhooks/waitpoints/:id` enqueues a `RESUME` job; the worker loads the backup, restores execution state via `execution-state-loader.ts`, and the engine picks up exactly where it paused.
 
@@ -380,6 +387,7 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | GET | `/api/workflows/events/buffer-stats` | Event buffer health (dropped count, capacity) |
 | ANY | `/api/webhooks/:flowId` | Engine-managed webhook trigger fan-in |
 | POST | `/api/webhooks/waitpoints/:id` | Resume a paused flow (idempotent: 410 on second hit) |
+| POST | `/api/workflow-runs/:runId/cancel` | Close the run's dispatch fence (idempotent; `accepted: false` once finished) |
 
 The engine subprocess hits `/v1/*` on the same daemon (the SandboxApi). Those routes are documented in the `sandbox-api/routes/` files; users never call them.
 

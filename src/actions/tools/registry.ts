@@ -1,5 +1,5 @@
 import type { ContentBlock } from '../../llm/provider.ts';
-import { checkpointExecution } from '../execution-scope';
+import { checkpointExecution } from '../execution-scope.ts';
 
 export type ToolParameter = {
   type: string;
@@ -64,8 +64,11 @@ export class ToolRegistry {
 
     this.validateParameters(tool, params);
 
+    // Outside the try: a cancellation fence is not a tool failure, and
+    // rewrapping it would hide its type from the callers that map it.
+    checkpointExecution();
+
     try {
-      checkpointExecution();
       return await tool.execute(params);
     } catch (error) {
       throw new Error(
