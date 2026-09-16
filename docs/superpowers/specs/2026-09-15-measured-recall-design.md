@@ -151,6 +151,10 @@ task filter and the floor. Those drops now set the same incomplete-record notice
 that the packing limits set, so a filtered slice is never presented as the whole
 record.
 
+The C8 reconciliation patch that earlier accompanied this spec is gone: C8 is
+merged, so a committed diff against its pre-merge branch is stale by definition.
+The colliding assertions are resolved in the tree instead.
+
 R9: whole-word self detection. An embedded "me" (melatonin, meeting, same) no
 longer reads as a self-overview request, which had both bypassed the empty-query
 read guard and injected the whole user profile into unrelated requests. One
@@ -175,10 +179,28 @@ of re-finding the first match, so duplicate values cannot let a qualified record
 vouch for an unqualified one. The scale script reports a median and a maximum,
 which is what ten warm samples support; the earlier run's "p95" was the maximum.
 
+Known limitation: the self-overview predicate keys on "about me" adjacency, so
+a self reference attached to a third party still reads as an overview ("what do
+you know about Ann's opinion of me?"). A regex cannot separate that from the
+real request; the blast radius is now that adjacency rather than a bare "me"
+anywhere in the message. Some explicit phrasings are also not recognised, for
+want of "what"/"how much" or "know"/"remember": "tell me everything you know
+about me", "do you remember anything about me?", "what info do you have about
+me?", "what have you learned about me?".
+
 Known limitation, unchanged: naming a subject with no matching fact returns that
 subject's current facts, so mentioning the owner's own name returns the profile
 even when the request is unrelated to it. That is the same behaviour main had for
 any named subject, and the caps now bound it, but it is not data minimisation.
+
+R13: the cross-reference exemption of R7 needs the anchor to identify the
+subject. A name that unrelated subjects keep mentioning ("Mark", "Platform") is
+shared vocabulary, so it recovers nothing; a name at most two other subjects
+mention does. Document frequency alone cannot separate these, because the same
+weight falls out of a rare term in a small store and a common term in a large
+one, so the rule counts mentioning subjects instead. The accepted trade is the
+other direction: a subject that holds the answer without naming the requested
+subject back stays below the floor.
 
 R12: a possessive drops its ending before the remaining apostrophes are
 removed, so "Ann's" anchors on the subject Ann. Names normalise the same way on
@@ -192,7 +214,10 @@ Known limitation, unchanged: matching is whole-token, so an inflected query term
 does not reach an uninflected stored value ("projects" does not match
 "project"). Stemming is language-specific and this recall path is multilingual,
 so it is not attempted here; the English possessive is handled in normalisation
-rather than by a stemmer. No held-out case covers inflection; a fix needs a
+rather than by a stemmer. That normalisation also drops the junk terms English
+contractions used to produce (`what's` emitted `whats`, which inflated document
+frequencies and could hit a stored value), which is a small precision gain.
+No held-out case covers inflection; a fix needs a
 fresh evaluation set.
 
 ## Initial results at 05054c91 (2026-09-15)

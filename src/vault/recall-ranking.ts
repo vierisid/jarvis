@@ -80,6 +80,12 @@ export function expandRecallDependencies(ids: Iterable<string>, dependencies: Re
   return [...selected];
 }
 
+/** Above this many unrelated subjects, a name is shared vocabulary, not a reference. */
+const CROSS_REFERENCE_SUBJECTS = 2;
+
+/** Summation order differs between records, so a tie must still reach the tiebreak chain. */
+const near = (a: number, b: number) => Math.abs(b - a) < 1e-9 ? 0 : b - a;
+
 /**
  * An explicit request for what is known about the owner. The self reference has
  * to be the object of the knowing and stay inside the same clause: this also
@@ -87,9 +93,6 @@ export function expandRecallDependencies(ids: Iterable<string>, dependencies: Re
  * me" must not read as one. Whole words only, so an embedded "me" (melatonin,
  * meeting, same) is not a self request either.
  */
-/** Summation order differs between records, so a tie must still reach the tiebreak chain. */
-const near = (a: number, b: number) => Math.abs(b - a) < 1e-9 ? 0 : b - a;
-
 export function isRecallSelfOverview(message: string): boolean {
   return /\b(?:what|how much)\b[^.?!]*\b(?:know|remember)\b[^.?!]*\b(?:about|regarding|concerning|of)\s+(?:me|myself)\b/i.test(message)
     || /\bwho am i\b/i.test(message);
@@ -120,9 +123,14 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
   for (const doc of docs) for (const term of doc.terms) frequencies.set(term, (frequencies.get(term) ?? 0) + 1);
   const weight = (term: string) => 1 + Math.log(1 + docs.length / (1 + (frequencies.get(term) ?? 0)));
   const grouped = new Map<string, typeof docs>();
+  const subjectsByTerm = new Map<string, Set<string>>();
   for (const doc of docs) {
     const list = grouped.get(doc.fact.subject_id) ?? [];
     list.push(doc); grouped.set(doc.fact.subject_id, list);
+    for (const term of doc.terms) {
+      const subjects = subjectsByTerm.get(term) ?? new Set<string>();
+      subjects.add(doc.fact.subject_id); subjectsByTerm.set(term, subjects);
+    }
   }
   const results: RankedEntity[] = [];
   for (const entity of entities) {
@@ -200,7 +208,15 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
   // A merely lexical hit on a generic task term is not such a cross-reference.
   const top = results[0];
   const floor = (top?.score ?? 0) * 0.45;
-  const anchors = top != null && !top.taskMatch ? new Set(top.anchorTerms) : new Set<string>();
+  // A subject named with a common word ("Mark", "Platform") would otherwise
+  // recover every record that happens to use the word, so the anchor has to
+  // identify the subject: a name that unrelated subjects keep mentioning is
+  // vocabulary, not a reference. Corpus size does not enter into it.
+  const identifies = (term: string) => {
+    const subjects = [...(subjectsByTerm.get(term) ?? [])].filter(id => id !== top!.entity.id);
+    return subjects.length <= CROSS_REFERENCE_SUBJECTS;
+  };
+  const anchors = new Set(top != null && !top.taskMatch ? top.anchorTerms.filter(identifies) : []);
   const kept = results.filter(result => result.score >= floor
     || (result !== top && result.matchedTerms.some(term => anchors.has(term))));
   if (kept.length < results.length && kept[0]) kept[0].omitted = true;

@@ -304,6 +304,18 @@ test('a value stored on another subject survives a name-only top match', () => {
   expect(context).not.toContain('Unrelated');
 });
 
+test('a subject named with a common word recovers no cross-references', () => {
+  const mark = createEntity('person', 'Mark');
+  repository.createFact(mark.id, 'role', 'Product lead');
+  for (const name of ['Docs', 'Grading', 'Ledger', 'Printer', 'Release process']) {
+    const entity = createEntity('project', name);
+    repository.createFact(entity.id, 'notes', `remember to mark the ${name} item`);
+  }
+  const context = getKnowledgeForMessage('What did Mark decide?');
+  expect(context).toContain('role: Product lead');
+  expect((context.match(/\*\*/g) ?? []).length / 2).toBe(1);
+});
+
 test('a possessive name still anchors on its subject', () => {
   const ann = createEntity('person', 'Ann');
   repository.createFact(ann.id, 'job_title', 'Staff engineer');
