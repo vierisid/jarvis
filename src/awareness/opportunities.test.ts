@@ -3,7 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { closeDb, getDb, initDatabase } from '../vault/schema.ts';
-import { createCapture, deleteCapturesBefore, getCapture, getRecentSuggestions, markSuggestionActedOn, markSuggestionDismissed } from '../vault/awareness.ts';
+import { createCapture, createSuggestion, deleteCapturesBefore, getCapture, getRecentSuggestions, markSuggestionActedOn, markSuggestionDismissed } from '../vault/awareness.ts';
 import { createGoal, getGoal, getProgressHistory, updateGoalStatus } from '../vault/goals.ts';
 import { getOpportunityObservations, recordOpportunityObservation } from '../vault/opportunity-observations.ts';
 import { assessJobHypotheses, classifyJobSignals, OPPORTUNITY_WINDOW_MS } from './job-hypotheses.ts';
@@ -176,6 +176,21 @@ describe('evidence-backed hypotheses', () => {
       stale();
     } finally { await service.stop(); }
     expect(ledger()).toEqual({ n: 0 });
+  });
+
+  test('a suggestion already holding the opportunity identity is never reused as a proposal', () => {
+    seed();
+    // createSuggestion dedupes on the durable automation identity, so a row that
+    // already owns this pattern comes back instead of a fresh insert. Publishing
+    // onto it would notify with the old body and consume the pattern for good.
+    const squatter = createSuggestion({ type: 'automation', title: 'Stale automation proposal',
+      body: 'Text from an earlier proposal that must never be republished.',
+      context: { opportunity: { patternKey: 'job-v1:invoice_review' } } });
+    expect(refreshOpportunity()).toBeNull();
+    expect(getOpportunity(squatter.id)).toBeNull();
+    expect(getRecentSuggestions(100, 'automation')).toHaveLength(1);
+    expect(getDb().prepare('SELECT COUNT(*) AS n FROM opportunity_delivery').get()).toEqual({ n: 0 });
+    expect(getDb().prepare('SELECT COUNT(*) AS n FROM opportunity_hypotheses').get()).toEqual({ n: 0 });
   });
 
   test('capture retention keeps only minimal cues, and duplicate ingestion is idempotent', () => {

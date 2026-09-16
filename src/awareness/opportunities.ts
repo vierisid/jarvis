@@ -1,5 +1,5 @@
 import { getDb, generateId } from '../vault/schema.ts';
-import { createSuggestion } from '../vault/awareness.ts';
+import { createSuggestion, findAutomationSuggestion } from '../vault/awareness.ts';
 import { findGoals, getGoal } from '../vault/goals.ts';
 import { getOpportunityObservations, pruneOpportunityObservations } from '../vault/opportunity-observations.ts';
 import { assessJobHypotheses } from './job-hypotheses.ts';
@@ -66,6 +66,12 @@ export function publishOpportunity(hypothesis: JobHypothesis): Suggestion | null
   return db.transaction(() => {
     if (db.prepare('SELECT 1 FROM opportunity_hypotheses WHERE pattern_key = ?').get(hypothesis.patternKey)) return null;
     const candidate = opportunitySuggestion(hypothesis);
+    // createSuggestion dedupes on the durable automation identity and returns a
+    // pre-existing row rather than inserting. A proposal must own a fresh
+    // suggestion: the hypothesis and delivery rows are keyed on its ID, and the
+    // notification body comes from that row. Reusing an older one would publish
+    // its stale text, or attach this proposal to a row the delivery query skips.
+    if (findAutomationSuggestion(candidate)) return null;
     const suggestion = createSuggestion(candidate);
     db.prepare(`INSERT INTO opportunity_hypotheses
       (suggestion_id, pattern_key, hypothesis, created_at) VALUES (?, ?, ?, ?)`)
