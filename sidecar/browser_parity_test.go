@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"fmt"
 	"net/url"
 	"os"
@@ -20,6 +21,7 @@ const parityTestPage = `<!DOCTYPE html>
   <div id="message" role="row" aria-label="message row" style="width:200px;height:40px;background:#eee">A message row</div>
   <button id="reaction" aria-label="Add reaction" style="display:none">Add reaction</button>
   <input id="field" aria-label="field" type="text" value="hello">
+  <input id="secret" aria-label="secret field" type="password">
   <div id="editor" contenteditable="true" role="textbox" aria-label="editor" style="width:200px;height:40px">first line</div>
   <button id="clickme" aria-label="click target" style="width:100px;height:30px">Click target</button>
   <script>
@@ -240,6 +242,53 @@ func TestBrowserHandlerParityIntegration(t *testing.T) {
 	scrollOut := callHandler(t, scroll, withHeadless(map[string]any{"direction": "down", "amount": float64(250)}))
 	if scrollOut != "Scrolled down by 250px" {
 		t.Fatalf("unexpected scroll output: %s", scrollOut)
+	}
+
+	// ── snapshots carry no typed input values, passwords included (#465) ──
+	// The snapshot script used to copy every element's live `value` property
+	// into attrs. Nothing formatted or read it, but it left a typed password
+	// one generic "print all attrs" loop away from the text sent to the
+	// configured LLM provider. Assert the typed string appears NOWHERE in the
+	// raw snapshot struct, not merely that one field is absent.
+	const secret = "correct-horse-battery-staple-9f3a"
+	snapOut = callHandler(t, snapshot, withHeadless(nil))
+	secretID := findElementID(t, snapOut, "secret field")
+	callHandler(t, typeText, withHeadless(map[string]any{"element_id": float64(secretID), "text": secret}))
+	// The typing really landed, so the assertions below mean the snapshot
+	// dropped the value rather than the page never having had one.
+	if got := callHandler(t, evaluate, withHeadless(map[string]any{"expression": `document.getElementById("secret").value`})); got != secret {
+		t.Fatalf("password field value = %q, want %q", got, secret)
+	}
+
+	cdp, err := getCDPForParams(cfg, withHeadless(nil))
+	if err != nil {
+		t.Fatalf("get cdp for raw snapshot: %v", err)
+	}
+	raw, err := takePageSnapshot(cdp)
+	if err != nil {
+		t.Fatalf("raw snapshot: %v", err)
+	}
+	rawJSON, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatalf("marshal raw snapshot: %v", err)
+	}
+	// Failures below deliberately do NOT dump the snapshot: it holds the
+	// credential this test exists to keep out of logs.
+	for _, el := range raw.Elements {
+		if _, ok := el.Attrs["value"]; ok {
+			t.Fatalf("element [%d] (%s) carries a value attribute; snapshots must not collect live element values", el.ID, el.Tag)
+		}
+	}
+	if strings.Contains(string(rawJSON), secret) {
+		t.Fatalf("typed password reached the raw snapshot (%d elements)", len(raw.Elements))
+	}
+	snapOut = formatBrowserSnapshot(raw)
+	if strings.Contains(snapOut, secret) {
+		t.Fatalf("typed password reached the formatted snapshot (%d elements)", len(raw.Elements))
+	}
+	// The field stays addressable: this drops the value, not the element.
+	if !strings.Contains(snapOut, `aria-label="secret field"`) {
+		t.Fatalf("password field should still appear in the snapshot:\n%s", snapOut)
 	}
 
 	// ── stale/unknown ids produce the daemon's guidance string ──

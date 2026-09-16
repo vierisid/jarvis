@@ -73,7 +73,9 @@ const browserSnapshotScript = `(() => {
         const v = el.getAttribute(a);
         if (v) attrs[a] = v.slice(0, 200);
       }
-      if ('value' in el && el.value) attrs.value = String(el.value).slice(0, 200);
+      // Live element values (el.value) are deliberately NOT collected.
+      // Nothing formats or reads them, and an input's value can be a typed
+      // password, so collecting it only creates something to leak later.
       if (inFrame) attrs.iframe = 'true';
       els.push({
         _el: el,

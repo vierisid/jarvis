@@ -14,6 +14,11 @@ import { BrowserController } from './session.ts';
 
 const TEST_PORT = 9777;
 
+// Typed into the password field by the credential-leak test below. Distinctive
+// so the assertion can scan the WHOLE serialized snapshot for it rather than
+// one field.
+const SECRET = 'correct-horse-battery-staple-9f3a';
+
 const CHROMIUM_CANDIDATES = [
   process.env.CHROME_PATH,
   '/snap/bin/chromium',
@@ -29,6 +34,7 @@ const TEST_PAGE = `<!DOCTYPE html>
   <div id="message" role="row" style="width:200px;height:40px;background:#eee">A message row</div>
   <button id="reaction" style="display:none">Add reaction</button>
   <input id="field" type="text" value="hello">
+  <input id="secret" type="password" aria-label="secret field">
   <div id="editor" contenteditable="true" role="textbox" style="width:200px;height:40px">first line</div>
   <button id="clickme" style="width:100px;height:30px">Click target</button>
   <script>
@@ -284,6 +290,44 @@ describe.skipIf(!chromiumExe)('browser primitives (integration)', () => {
     const snap = await browser.snapshot();
     expect(snap.text).toContain('Frame Button');
   }, 20_000);
+
+  // Regression guard for #465: the snapshot script used to copy every
+  // element's live `value` property into attrs. Nothing formatted or read it,
+  // but it put typed passwords one generic "print all attrs" loop away from
+  // the payload that goes to the configured LLM provider. Assert the typed
+  // text appears NOWHERE in the snapshot, not merely that one field is absent.
+  test('snapshot carries no typed input values, passwords included', async () => {
+    let snap = await browser.snapshot();
+    const secretId = findId(snap, 'secret');
+    const fieldId = findId(snap, 'field');
+    expect(secretId).toBeDefined();
+    expect(fieldId).toBeDefined();
+
+    await browser.type(secretId!, SECRET);
+    await browser.type(fieldId!, 'plaintext-typed-value');
+    // The typing really landed, so a passing assertion below means the snapshot
+    // dropped the value and not that the page never had one.
+    expect(await browser.evaluate('document.getElementById("secret").value')).toBe(SECRET);
+    expect(await browser.evaluate('document.getElementById("field").value')).toBe('plaintext-typed-value');
+
+    snap = await browser.snapshot();
+
+    // The fields stay addressable: this drops the value, not the element.
+    const secret = snap.elements.find(e => e.attrs.id === 'secret');
+    expect(secret).toBeDefined();
+    expect(secret!.attrs.type).toBe('password');
+    expect(secret!.attrs['aria-label']).toBe('secret field');
+
+    for (const el of snap.elements) {
+      expect(el.attrs.value).toBeUndefined();
+    }
+    // .includes(...) rather than not.toContain(...): a failing toContain prints
+    // the whole received string, which would put the credential in the log this
+    // test exists to keep it out of.
+    const serialized = JSON.stringify(snap);
+    expect(serialized.includes(SECRET)).toBe(false);
+    expect(serialized.includes('plaintext-typed-value')).toBe(false);
+  }, 30_000);
 
   test('double click and right click dispatch real events', async () => {
     const snap = await browser.snapshot();

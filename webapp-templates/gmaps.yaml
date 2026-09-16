@@ -48,7 +48,7 @@ instructions: |
   --- Page Text ---
   Price  Rating  Hours  All filters … Results … Sweet Coffee  4.2  Bar · Via Alessandro Manzoni, 42  Open · Closes 9 pm …
   --- Interactive Elements ---
-  [2] input name="q" role="combobox" value="coffee milan"
+  [2] input name="q" role="combobox"
   [20] a "Sweet Coffee" href="https://www.google.com/maps/place/Sweet+Coffee/data=…" aria-label="Sweet Coffee"    ← result entry (link role, verified)
   ```
   The map canvas contributes NOTHING to the snapshot — that is expected, not an error.
