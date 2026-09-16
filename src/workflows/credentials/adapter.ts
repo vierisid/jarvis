@@ -19,8 +19,8 @@
  * config/store) lives in the daemon bootstrap.
  */
 
-import type { AppConnectionType } from "../db/repos/app-connection";
-import { getConnectionByExternalId } from "../db/repos/app-connection";
+import type { AppConnectionStatus, AppConnectionType } from "../db/repos/app-connection";
+import { getConnectionByExternalId, getUniqueConnectionByExternalId } from "../db/repos/app-connection";
 
 /** Prefix that marks a connection as "managed by Jarvis itself". */
 export const JARVIS_PREFIX = "jarvis:";
@@ -29,6 +29,9 @@ export const JARVIS_PREFIX = "jarvis:";
 export interface ResolvedConnection {
   type: AppConnectionType;
   value: Record<string, unknown>;
+  /** Native identity/status; managed sources may omit these. */
+  pieceName?: string;
+  status?: AppConnectionStatus;
 }
 
 /**
@@ -50,7 +53,8 @@ export interface JarvisConnectionSource {
 
 export interface ResolveInput {
   projectId: string;
-  pieceName: string;
+  /** Omitted by the normal engine request: require a unique project match. */
+  pieceName?: string;
   externalId: string;
 }
 
@@ -79,9 +83,11 @@ export class CredentialResolver {
       }
       return null;
     }
-    const conn = getConnectionByExternalId(input.projectId, input.pieceName, input.externalId);
+    const conn = input.pieceName === undefined
+      ? getUniqueConnectionByExternalId(input.projectId, input.externalId)
+      : getConnectionByExternalId(input.projectId, input.pieceName, input.externalId);
     if (!conn) return null;
-    return { type: conn.type, value: conn.value };
+    return { type: conn.type, value: conn.value, pieceName: conn.pieceName, status: conn.status };
   }
 }
 

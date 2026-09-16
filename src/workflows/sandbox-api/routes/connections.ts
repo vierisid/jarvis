@@ -12,6 +12,8 @@
  *
  * Failures map to HTTP:
  *   - 404 when the connection doesn't exist or its source returns null.
+ *   - 403 when the requested project differs from the verified engine token.
+ *   - 409 when an external ID without a piece name matches multiple rows.
  *
  * Per CredentialResolver contract for Jarvis-managed Google connections, the
  * resolved value's `refresh_token` is intentionally empty; pieces that need a
@@ -19,6 +21,7 @@
  */
 
 import type { CredentialResolver } from "../../credentials/adapter";
+import { AmbiguousConnectionError } from "../../db/repos/app-connection";
 import type { EngineTokenClaims } from "../types";
 import { json, err, type RouteContext, type RouteHandler } from "./shared";
 
@@ -48,23 +51,22 @@ export function createConnectionsRoute(deps: ConnectionsRouteDeps): RouteHandler
     if (!externalIdRaw) return err("missing externalId path param", 400);
     const externalId = externalIdRaw;
     const queryProject = url.searchParams.get("projectId") ?? undefined;
-    const projectId = queryProject ?? ctx.claims.projectId;
+    const projectId = ctx.claims.projectId;
+    if (queryProject !== undefined && queryProject !== projectId) return err("forbidden project", 403);
 
-    // The engine doesn't tell us which piece is asking, but our resolver only
-    // needs the pieceName for app_connection lookups. For jarvis:* external
-    // ids the resolver short-circuits before pieceName is read; for other ids
-    // we fall back to "*" (treated as a wildcard at the repo level if
-    // available, otherwise empty pieceName which fails the repo's UNIQUE
-    // index lookup). Practically: vendored pieces will always present a
-    // pieceName-prefixed externalId, so this branch is a soft fallback.
-    const pieceName = url.searchParams.get("pieceName") ?? "*";
+    // Upstream omits pieceName. Resolve only a unique match in the token's
+    // project; explicit piece names retain exact matching, never wildcards.
+    const pieceName = url.searchParams.get("pieceName") ?? undefined;
+    if (pieceName !== undefined && !pieceName.trim()) return err("pieceName must not be empty", 400);
 
-    const resolved = await deps.credentialResolver.resolve({
-      projectId,
-      pieceName,
-      externalId,
-    });
-    if (!resolved) return err(`connection ${externalId} not found`, 404);
+    let resolved;
+    try {
+      resolved = await deps.credentialResolver.resolve({ projectId, pieceName, externalId });
+    } catch (error) {
+      if (error instanceof AmbiguousConnectionError) return err(error.message, 409);
+      throw error;
+    }
+    if (!resolved || resolved.status === "MISSING") return err(`connection ${externalId} not found`, 404);
 
     // Ensure value.type is set so the engine's switch() in
     // makeConnectionValueCompatibleWithContextV0 sees the discriminator.
@@ -80,8 +82,8 @@ export function createConnectionsRoute(deps: ConnectionsRouteDeps): RouteHandler
       externalId,
       type: resolved.type,
       scope: "PROJECT",
-      status: "ACTIVE",
-      pieceName: pieceName === "*" ? "" : pieceName,
+      status: resolved.status ?? "ACTIVE",
+      pieceName: resolved.pieceName ?? pieceName ?? "",
       displayName: externalId,
       projectIds: [projectId],
       platformId: claims.projectId,

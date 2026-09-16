@@ -191,6 +191,24 @@ export function getConnectionByExternalId(
   return row ? rowToConnection(row) : null;
 }
 
+/** A piece-less engine request must never choose between different connections. */
+export class AmbiguousConnectionError extends Error {
+  constructor() {
+    super("Connection external ID is ambiguous in this project; use a distinct external ID or specify the piece name.");
+    this.name = "AmbiguousConnectionError";
+  }
+}
+
+/** Resolve a project-scoped external ID only when exactly one piece owns it. */
+export function getUniqueConnectionByExternalId(projectId: string, externalId: string): AppConnection | null {
+  const rows = db().query<AppConnectionRow, [string, string]>(
+    "SELECT * FROM app_connection WHERE project_id = ? AND external_id = ? LIMIT 2",
+  ).all(projectId, externalId);
+  // Check identity before decrypting any candidate, including malformed rows.
+  if (rows.length > 1) throw new AmbiguousConnectionError();
+  return rows[0] ? rowToConnection(rows[0]) : null;
+}
+
 export function listConnections(
   projectId: string = DEFAULT_IDS.project,
   pieceName?: string,
