@@ -162,8 +162,8 @@ describe('Today work trace', () => {
     expect(cancelled.status).toBe(200);
     expect(await cancelled.json()).toMatchObject({ jobCanceled: true });
     expect(getWorkItem(work.id)).toMatchObject({ status: 'failed', run: { id: run.id, status: 'STOPPED' }, blocker: { kind: 'run_failure' } });
-    // The stop is named, and says whether the execution had already started.
-    expect(getWorkItem(work.id).blocker?.reason).toContain('cancelled');
+    // The stop is named, and reports uncertainty rather than claiming the run began.
+    expect(getWorkItem(work.id).blocker?.reason).toBe('Execution was cancelled; its effects are uncertain. Inspect any partial results before proposing another run.');
     expect(getWorkItem(work.id).run?.cancellation).not.toBeNull();
     restart(); recoverOrphanedJobs();
     expect(claimNextJob()).toBeNull();

@@ -58,11 +58,17 @@ function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new WorkItemError('Expected an object');
   return value as Record<string, unknown>;
 }
+/**
+ * A cancelled run carries no failed step, so name the stop instead. The fence's
+ * flag records uncertainty at acknowledgement, not proof that work happened: a
+ * run gets its start time when it is requested, so say effects are uncertain
+ * rather than claiming execution had begun.
+ */
 function cancelledReason(run: FlowRun): string | null {
   if (!run.cancellation) return null;
   return run.cancellation.inFlightMayHaveCompleted
-    ? 'Execution was cancelled after it started. Inspect any partial results before proposing another run.'
-    : 'Execution was cancelled before it started.';
+    ? 'Execution was cancelled; its effects are uncertain. Inspect any partial results before proposing another run.'
+    : 'Execution was cancelled before it could start.';
 }
 export function getWorkItem(id: string): WorkItem {
   const w = row(id);
@@ -80,8 +86,6 @@ export function getWorkItem(id: string): WorkItem {
     } else if (!['QUEUED', 'RUNNING', 'PAUSED', 'SUCCEEDED'].includes(run.status)) {
       // A terminal failure can leave waitpoints behind. Those cannot be resumed
       // and must not hide the failure or prevent recording its checked outcome.
-      // A cancellation carries no failed step, so name the stop and say whether
-      // the execution had already started when the user stopped it.
       status = 'failed';
       blocker = { kind: 'run_failure', ref: run.id, reason: run.failedStep?.errorMessage ?? cancelledReason(run) ?? run.status };
     } else if (run.status === 'PAUSED' || waitpoint) {

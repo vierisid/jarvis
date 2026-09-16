@@ -96,8 +96,9 @@ recorded as FAILED.
 Cancelling an execution or resume records STOPPED atomically with the queue
 cancellation, through the existing run-cancellation fence. A later write from a
 still-live executor cannot revoke that stop, so the blocker names the
-cancellation and whether the execution had already started; its original run ID
-and any partial outputs remain available for a failed-result check. Startup also
+cancellation and reports its effects as uncertain rather than claiming the run
+began; its original run ID and any partial outputs remain available for a
+failed-result check. Startup also
 repairs cancelled jobs left unfinished by older code, preserving terminal
 outcomes and later attempts.
 Evening review receives these linked decisions/results and is instructed not to
