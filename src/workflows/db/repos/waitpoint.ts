@@ -7,6 +7,30 @@
  * The actual resume scheduling (cron tick for TIMER, webhook route for
  * WEBHOOK) is layered on later; this repo just records the row and exposes
  * lookup + lifecycle.
+ *
+ * ## The waitpoint id is a bearer capability, not a plain identifier
+ *
+ * `POST /api/webhooks/waitpoints/:id` is unauthenticated on purpose:
+ * `/api/webhooks/*` is a public-route exemption in the global gate, because
+ * the caller resuming a waitpoint is typically an external service that has
+ * no Jarvis session. Holding the id IS the authorization to resume the run,
+ * so treat it the way you would treat a password-reset token:
+ *
+ *   - Do not log it, put it in an error message, or include it in telemetry.
+ *   - Do not shorten it or switch it to a shorter / sequential / derived id.
+ *     `apId()` (`../ids`) is a 21-char nanoid over a 62-char alphabet, ~125
+ *     bits, which is what makes guessing infeasible -- but it was chosen for
+ *     id-format compatibility with vendored Activepieces code, not as a
+ *     security decision, so the entropy is load-bearing by accident and the
+ *     next person to touch `apId()` needs to know it.
+ *   - Do not widen who can read one. It already reaches step output as
+ *     `resumeUrl` and the dashboard via
+ *     `GET /api/workflow-runs/:runId/waitpoints`; anything further is a new
+ *     grant of resume rights.
+ *
+ * The resume route rate-limits unknown-id probes so guessing is not free
+ * (see `WAITPOINT_RESUME_UNKNOWN_ID_PER_MINUTE` in `../../api/routes.ts`),
+ * but that is a backstop for the entropy, not a replacement for it.
  */
 
 import type { Database } from "bun:sqlite";

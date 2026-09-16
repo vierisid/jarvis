@@ -11,6 +11,12 @@
  *   - No handler-side authn/authz: Jarvis is single-tenant, the dashboard is
  *     CORS-bound to localhost, and the existing daemon routes have the same
  *     posture. Adding auth here would diverge from the rest.
+ *     The one exception to "CORS-bound to localhost" is
+ *     `POST /api/webhooks/waitpoints/:id`: `/api/webhooks/*` is a public-route
+ *     exemption in the global gate and is meant to be reachable from the
+ *     internet, so that handler carries its own ingress budgets and body cap
+ *     (see the block comment above it) instead of relying on the posture
+ *     above.
  *   - The `run` endpoint enqueues a job; it does not block on the engine.
  *     Engine spawning is a worker-side concern (Phase 2 follow-up).
  *
@@ -55,7 +61,7 @@ import {
   type FlowRunStatus,
   type RunEnvironment,
 } from "../db/repos/flow-run";
-import { enqueue } from "../db/repos/job-queue";
+import { countQueued, enqueue } from "../db/repos/job-queue";
 import { cancelFlowRun } from "../db/repos/run-cancellation";
 import { startWorkItemRun } from "../../goals/workflow-bridge";
 import { WorkItemError } from "../../goals/work-items";
@@ -72,7 +78,8 @@ import {
   type AppConnectionType,
 } from "../db/repos/app-connection";
 import type { CredentialResolver } from "../credentials/adapter";
-import type { TriggerManager } from "../runner/triggers/manager";
+import { MAX_QUEUED_WEBHOOK_RUNS, type TriggerManager } from "../runner/triggers/manager";
+import { KeyedRateLimiter } from "../runner/triggers/rate-limiter";
 import type { PieceLookup } from "../runtime/piece-catalog";
 import { CATALOG, findCatalogEntry } from "../pieces-library/catalog";
 import { piecesManagedByHost } from "../pieces-library/shared";
@@ -112,6 +119,31 @@ export type WorkflowRouteMap = Record<string, RouteMethods>;
  * limit comfortably with room for the map's JSON overhead.
  */
 const SAMPLE_DATA_ENTRY_MAX_BYTES = 256 * 1024;
+
+/**
+ * Ingress budgets for `POST /api/webhooks/waitpoints/:id`, the one route in
+ * this file that is deliberately internet-exposed (`/api/webhooks/*` is a
+ * public-route exemption in the global gate). They mirror the sibling
+ * trigger ingress in `runner/triggers/webhook.ts` on purpose: same window,
+ * same numbers, same `KeyedRateLimiter`, so there is one set of ingress
+ * budgets to reason about rather than two that drift apart.
+ *
+ * - PER_ID: one waitpoint's retry storm cannot crowd out other resumes.
+ * - GLOBAL: a flood across many *valid* ids still cannot fill the queue.
+ * - UNKNOWN_ID: the enumeration budget. Charged only when the id does not
+ *   resolve, and deliberately separate from GLOBAL so a probe flood cannot
+ *   lock out legitimate resumers -- the same split webhook.ts makes between
+ *   its per-flow budget and its bad-signature budget.
+ */
+export const WAITPOINT_RESUME_PER_ID_PER_MINUTE = 60;
+export const WAITPOINT_RESUME_GLOBAL_PER_MINUTE = 600;
+export const WAITPOINT_RESUME_UNKNOWN_ID_PER_MINUTE = 30;
+/**
+ * Body cap for the resume payload. The body becomes the paused step's
+ * resume input and is round-tripped through the job queue as JSON, so it is
+ * the real per-request cost. Matches `WEBHOOK_MAX_BODY_BYTES`.
+ */
+export const WAITPOINT_RESUME_MAX_BODY_BYTES = 1_000_000;
 
 const ok = (data: unknown, status = 200): Response =>
   new Response(JSON.stringify(data), {
@@ -203,6 +235,16 @@ export interface CreateWorkflowRoutesOptions {
     lastDroppedAt: number;
     lastDroppedHeadId: number;
   };
+  /**
+   * Test seams for the public waitpoint-resume ingress. `now` drives the
+   * rate-limit windows (so budget tests advance a fake clock instead of
+   * sleeping) and `queueDepth` stands in for the job-queue backlog probe.
+   * Production leaves both unset: `Date.now` and `countQueued()`.
+   */
+  waitpointResumeLimits?: {
+    now?: () => number;
+    queueDepth?: () => number;
+  };
 }
 
 /**
@@ -246,6 +288,38 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     if (!opts.executionTargets) return [];
     const ctx = osCheckContextFor(opts.executionTargets());
     return ctx ? flowOsWarnings(trigger, ctx) : [];
+  };
+  // Ingress budgets for the public waitpoint-resume route. Held per route
+  // map (not per module) so each `createWorkflowRoutes()` -- one per daemon,
+  // one per test -- gets its own windows and nothing leaks between them.
+  const resumeClock = opts.waitpointResumeLimits?.now ?? Date.now;
+  const resumeQueueDepth = opts.waitpointResumeLimits?.queueDepth ?? countQueued;
+  const resumePerId = new KeyedRateLimiter(60_000, WAITPOINT_RESUME_PER_ID_PER_MINUTE, resumeClock);
+  const resumeGlobal = new KeyedRateLimiter(60_000, WAITPOINT_RESUME_GLOBAL_PER_MINUTE, resumeClock);
+  const resumeUnknownId = new KeyedRateLimiter(
+    60_000,
+    WAITPOINT_RESUME_UNKNOWN_ID_PER_MINUTE,
+    resumeClock,
+  );
+  const tooManyRequests = (limiter: KeyedRateLimiter, key: string): Response =>
+    new Response(JSON.stringify({ error: "Too many requests" }), {
+      status: 429,
+      headers: {
+        "Content-Type": "application/json",
+        "Retry-After": String(limiter.retryAfterSeconds(key)),
+      },
+    });
+  /**
+   * Charge the per-id and global budgets for one resume attempt, or return
+   * the 429 to send. Both are checked before either is charged, so a request
+   * refused by the global budget does not silently eat the id's budget too.
+   */
+  const chargeResumeBudgets = (waitpointId: string): Response | null => {
+    if (!resumePerId.check(waitpointId)) return tooManyRequests(resumePerId, waitpointId);
+    if (!resumeGlobal.check("*")) return tooManyRequests(resumeGlobal, "*");
+    resumePerId.record(waitpointId);
+    resumeGlobal.record("*");
+    return null;
   };
   const refreshTrigger = (flowId: string): void => {
     if (!opts.triggerManager) return;
@@ -659,12 +733,59 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     // subsequently FAILED / TIMEOUT / STOPPED is unrecoverable -- returning
     // 409 here surfaces that to the resumer instead of letting the engine
     // reject the operation obscurely.
+    //
+    // Ingress guards, in the order they run. This route is unauthenticated by
+    // design (an external caller resuming a waitpoint is the intended use),
+    // so the waitpoint id is the only credential -- see the bearer-capability
+    // note in `db/repos/waitpoint.ts`. What stands behind it:
+    //   1. backlog cap    -> 503, before any budget is spent, so a sender
+    //                        retrying into a full queue keeps getting the
+    //                        503 and its Retry-After rather than flipping
+    //                        to 429.
+    //   2. unknown id     -> charged to its own enumeration budget, then 404.
+    //   3. known id       -> charged to the per-id + global budgets.
+    //   4. body cap       -> 413, declared size first (no read at all), then
+    //                        the actual size for bodies that declare none.
+    //
+    // On the response codes being distinct (404 / 403 / 410 / 409): only the
+    // 404 is reachable without already holding a valid waitpoint id, so the
+    // set is not an oracle an enumerator can use -- telling 410 from 409
+    // requires the capability that the enumeration is trying to find. The
+    // enumeration budget is what makes guessing expensive; collapsing 410 and
+    // 409 would only blind the legitimate resumer, who needs to tell "already
+    // resumed, nothing to do" from "this run is dead, stop retrying".
     "/api/webhooks/waitpoints/:id": {
       POST: (req) =>
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
+          let queued = 0;
+          try {
+            queued = resumeQueueDepth();
+          } catch {
+            // A probe failure must not close the ingress.
+          }
+          if (queued >= MAX_QUEUED_WEBHOOK_RUNS) {
+            return new Response(JSON.stringify({ error: "Service busy, retry later" }), {
+              status: 503,
+              headers: { "Content-Type": "application/json", "Retry-After": "30" },
+            });
+          }
           const wp = getWaitpoint(id);
-          if (!wp) return err("waitpoint not found", 404);
+          if (!wp) {
+            // Enumeration budget, kept apart from the budgets a real resume
+            // draws on: a probe flood burns this one out and gets 429s while
+            // legitimate resumes keep their full allowance.
+            if (!resumeUnknownId.allow("*")) return tooManyRequests(resumeUnknownId, "*");
+            return err("waitpoint not found", 404);
+          }
+          const limited = chargeResumeBudgets(id);
+          if (limited) return limited;
+          // Declared body size, checked before the row is touched further and
+          // before anything is read off the socket.
+          const declared = Number(req.headers.get("content-length") ?? "0");
+          if (Number.isFinite(declared) && declared > WAITPOINT_RESUME_MAX_BODY_BYTES) {
+            return err("resume payload too large", 413);
+          }
           const ownedEffect = getWorkflowDb().query('SELECT id FROM workflow_effect WHERE waitpoint_id=?').get(id);
           if (ownedEffect) return err('This waitpoint is owned by Authority; resolve its approval request', 403);
           if (wp.resumedAt !== null) return err("waitpoint already resumed", 410);
@@ -676,17 +797,42 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               409,
             );
           }
-          // Body is the resumePayload delivered to the paused step. Tolerate
-          // empty bodies and non-JSON payloads (some webhook senders POST
-          // form-encoded or empty); fall back to {}.
-          let resumePayload: Record<string, unknown> = {};
+          // Body is the resumePayload delivered to the paused step. Read as
+          // text so the actual size can be capped (a chunked body declares no
+          // content-length), then parsed. Empty and non-JSON bodies stay
+          // tolerated -- some webhook senders POST form-encoded or nothing at
+          // all -- and fall back to {}. A body that IS valid JSON but is not
+          // an object is refused rather than silently replaced with {}:
+          // resuming a step with a payload the sender never sent is worse
+          // than telling the sender its payload was the wrong shape.
+          let rawBody: string;
           try {
-            const raw = await req.json();
-            if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-              resumePayload = raw as Record<string, unknown>;
-            }
+            rawBody = await req.text();
           } catch {
-            // Non-JSON or empty body -- use {} as the payload.
+            return err("failed to read request body");
+          }
+          // String length, like the sibling ingress. A string's UTF-8 encoding
+          // is never shorter than its UTF-16 code-unit count, so this never
+          // rejects a body that is actually within the byte cap; an
+          // all-multibyte body is bounded within a small factor above it.
+          if (rawBody.length > WAITPOINT_RESUME_MAX_BODY_BYTES) {
+            return err("resume payload too large", 413);
+          }
+          let resumePayload: Record<string, unknown> = {};
+          if (rawBody.trim()) {
+            let parsed: unknown;
+            let isJson = true;
+            try {
+              parsed = JSON.parse(rawBody);
+            } catch {
+              isJson = false;
+            }
+            if (isJson) {
+              if (parsed === null || typeof parsed !== "object" || Array.isArray(parsed)) {
+                return err("resume payload must be a JSON object");
+              }
+              resumePayload = parsed as Record<string, unknown>;
+            }
           }
           // Reading a request body yields; cancellation may have won meanwhile.
           if (getFlowRun(wp.flowRunId)?.status !== "PAUSED") return err("run is no longer paused", 409);

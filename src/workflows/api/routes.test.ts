@@ -6,7 +6,13 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeWorkflowDb, initWorkflowDb } from "../db/index";
 import { queueStats } from "../db/repos/job-queue";
-import { createWorkflowRoutes, type WorkflowRouteMap } from "./routes";
+import {
+  createWorkflowRoutes,
+  WAITPOINT_RESUME_MAX_BODY_BYTES,
+  WAITPOINT_RESUME_PER_ID_PER_MINUTE,
+  WAITPOINT_RESUME_UNKNOWN_ID_PER_MINUTE,
+  type WorkflowRouteMap,
+} from "./routes";
 import { sampleCatalog } from "../runtime/test-fixtures";
 
 let routes: WorkflowRouteMap;
@@ -653,6 +659,206 @@ describe("workflow API: waitpoint resume", () => {
     expect(status).toBe(409);
     expect(body.error).toMatch(/FAILED/);
     expect(body.error).toMatch(/PAUSED/);
+  });
+});
+
+/**
+ * Ingress guards on the one public route in this file. Every budget test
+ * drives a fake clock through `waitpointResumeLimits.now` -- the windows are
+ * sliding and clock-driven, so nothing here sleeps or depends on wall time.
+ */
+describe("workflow API: waitpoint resume ingress guards", () => {
+  /** A run parked at PAUSED with a live waitpoint on it, as the route expects. */
+  async function pausedWaitpoint(): Promise<{ runId: string; waitpointId: string }> {
+    const { createFlow, setPublishedVersion, updateFlowStatus } = await import("../db/repos/flow");
+    const { createDraftVersion, lockVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun, updateRun } = await import("../db/repos/flow-run");
+    const { createWaitpoint } = await import("../db/repos/waitpoint");
+    const { DEFAULT_IDS } = await import("../db/schema");
+
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const v = createDraftVersion({
+      flowId: flow.id,
+      displayName: "paused flow",
+      trigger: { type: "EMPTY", name: "trigger", displayName: "Manual" } as unknown as Record<string, unknown>,
+    });
+    lockVersion(v.id);
+    setPublishedVersion(flow.id, v.id);
+    updateFlowStatus(flow.id, "ENABLED");
+    const run = createFlowRun({ flowId: flow.id, flowVersionId: v.id, environment: "TESTING" });
+    updateRun(run.id, { status: "PAUSED" });
+    const wp = createWaitpoint({
+      flowRunId: run.id,
+      projectId: DEFAULT_IDS.project,
+      stepName: "step_pause",
+      type: "WEBHOOK",
+    });
+    return { runId: run.id, waitpointId: wp.id };
+  }
+
+  /** A fake clock the rate-limit windows read; tests move it by hand. */
+  function fakeClock(start = 1_700_000_000_000) {
+    let t = start;
+    return { now: () => t, advance: (ms: number) => { t += ms; } };
+  }
+
+  const hit = (
+    post: unknown,
+    id: string,
+    body?: unknown,
+    headers?: Record<string, string>,
+  ) => {
+    const init: RequestInit = { method: "POST" };
+    if (body !== undefined) {
+      init.body = typeof body === "string" ? body : JSON.stringify(body);
+      init.headers = { "Content-Type": "application/json", ...(headers ?? {}) };
+    } else if (headers) {
+      init.headers = headers;
+    }
+    const req = new Request(`http://x/api/webhooks/waitpoints/${id}`, init) as Request & {
+      params: { id: string };
+    };
+    req.params = { id };
+    return callJson(post, req);
+  };
+
+  test("per-id budget refuses the 61st hit on one waitpoint with 429 + Retry-After", async () => {
+    const clock = fakeClock();
+    const r = createWorkflowRoutes({ waitpointResumeLimits: { now: clock.now } });
+    const post = r["/api/webhooks/waitpoints/:id"]?.POST;
+    const { waitpointId } = await pausedWaitpoint();
+
+    // First hit resumes the waitpoint (202); every later hit is a 410, and a
+    // 410 still spends budget -- that is the point, a retry storm on one id
+    // has to be bounded whether or not the retries can do anything.
+    const first = await hit(post, waitpointId, {});
+    expect(first.status).toBe(202);
+    for (let i = 2; i <= WAITPOINT_RESUME_PER_ID_PER_MINUTE; i++) {
+      const res = await hit(post, waitpointId, {});
+      expect(res.status).toBe(410);
+    }
+
+    const overBudget = await hit(post, waitpointId, {});
+    expect(overBudget.status).toBe(429);
+
+    // And the window is a window: once it slides past, the id is served again.
+    clock.advance(61_000);
+    const afterWindow = await hit(post, waitpointId, {});
+    expect(afterWindow.status).toBe(410);
+  });
+
+  test("per-id 429 carries a Retry-After the sender can honour", async () => {
+    const clock = fakeClock();
+    const r = createWorkflowRoutes({ waitpointResumeLimits: { now: clock.now } });
+    const post = r["/api/webhooks/waitpoints/:id"]?.POST;
+    const { waitpointId } = await pausedWaitpoint();
+    for (let i = 0; i < WAITPOINT_RESUME_PER_ID_PER_MINUTE; i++) await hit(post, waitpointId, {});
+
+    const req = new Request(`http://x/api/webhooks/waitpoints/${waitpointId}`, {
+      method: "POST",
+    }) as Request & { params: { id: string } };
+    req.params = { id: waitpointId };
+    const res = await (post as (q: Request) => Promise<Response>)(req);
+    expect(res.status).toBe(429);
+    const retryAfter = Number(res.headers.get("Retry-After"));
+    expect(retryAfter).toBeGreaterThan(0);
+    expect(retryAfter).toBeLessThanOrEqual(60);
+  });
+
+  test("unknown-id probes burn their own budget and leave real resumes untouched", async () => {
+    const clock = fakeClock();
+    const r = createWorkflowRoutes({ waitpointResumeLimits: { now: clock.now } });
+    const post = r["/api/webhooks/waitpoints/:id"]?.POST;
+    const { waitpointId } = await pausedWaitpoint();
+
+    for (let i = 0; i < WAITPOINT_RESUME_UNKNOWN_ID_PER_MINUTE; i++) {
+      const res = await hit(post, `no-such-waitpoint-${i}`, {});
+      expect(res.status).toBe(404);
+    }
+    // Enumeration is no longer free: the next guess costs a 429, not an answer.
+    const probe = await hit(post, "no-such-waitpoint-overflow", {});
+    expect(probe.status).toBe(429);
+
+    // The probe flood must not have locked out the legitimate resumer: the
+    // enumeration budget is deliberately separate from the resume budgets.
+    const real = await hit(post, waitpointId, { externalSignal: "wake-up" });
+    expect(real.status).toBe(202);
+  });
+
+  test("backlog cap answers 503 without resuming the waitpoint", async () => {
+    const { MAX_QUEUED_WEBHOOK_RUNS } = await import("../runner/triggers/manager");
+    const { getWaitpoint } = await import("../db/repos/waitpoint");
+    const r = createWorkflowRoutes({
+      waitpointResumeLimits: { queueDepth: () => MAX_QUEUED_WEBHOOK_RUNS },
+    });
+    const post = r["/api/webhooks/waitpoints/:id"]?.POST;
+    const { waitpointId } = await pausedWaitpoint();
+    const before = queueStats().queued;
+
+    const res = await hit(post, waitpointId, {});
+    expect(res.status).toBe(503);
+    expect(queueStats().queued).toBe(before);
+    expect(getWaitpoint(waitpointId)?.resumedAt).toBeNull();
+  });
+
+  test("a body whose declared size is over the cap is refused with 413", async () => {
+    const r = createWorkflowRoutes();
+    const post = r["/api/webhooks/waitpoints/:id"]?.POST;
+    const { waitpointId } = await pausedWaitpoint();
+    const { getWaitpoint } = await import("../db/repos/waitpoint");
+
+    const res = await hit(post, waitpointId, { small: true }, {
+      "Content-Length": String(WAITPOINT_RESUME_MAX_BODY_BYTES + 1),
+    });
+    expect(res.status).toBe(413);
+    expect(getWaitpoint(waitpointId)?.resumedAt).toBeNull();
+  });
+
+  test("a body over the cap is refused on its actual size when it declares none", async () => {
+    const r = createWorkflowRoutes();
+    const post = r["/api/webhooks/waitpoints/:id"]?.POST;
+    const { waitpointId } = await pausedWaitpoint();
+    const { getWaitpoint } = await import("../db/repos/waitpoint");
+
+    // A body built this way declares no content-length in Bun, so this is the
+    // read-it-and-measure branch rather than the header branch above.
+    const oversized = JSON.stringify({ blob: "a".repeat(WAITPOINT_RESUME_MAX_BODY_BYTES) });
+    const req = new Request(`http://x/api/webhooks/waitpoints/${waitpointId}`, {
+      method: "POST",
+      body: oversized,
+    }) as Request & { params: { id: string } };
+    req.params = { id: waitpointId };
+    expect(req.headers.get("content-length")).toBeNull();
+
+    const res = await (post as (q: Request) => Promise<Response>)(req);
+    expect(res.status).toBe(413);
+    expect(getWaitpoint(waitpointId)?.resumedAt).toBeNull();
+  });
+
+  test("a JSON body that is not an object is refused instead of silently becoming {}", async () => {
+    const r = createWorkflowRoutes();
+    const post = r["/api/webhooks/waitpoints/:id"]?.POST;
+    const { waitpointId } = await pausedWaitpoint();
+    const { getWaitpoint } = await import("../db/repos/waitpoint");
+
+    const res = await hit(post, waitpointId, [1, 2, 3]);
+    expect(res.status).toBe(400);
+    expect(res.body.error).toMatch(/JSON object/);
+    expect(getWaitpoint(waitpointId)?.resumedAt).toBeNull();
+  });
+
+  test("empty and non-JSON bodies are still tolerated and resume with {}", async () => {
+    const { claimNextJob } = await import("../db/repos/job-queue");
+    const r = createWorkflowRoutes();
+    const post = r["/api/webhooks/waitpoints/:id"]?.POST;
+
+    const empty = await pausedWaitpoint();
+    expect((await hit(post, empty.waitpointId)).status).toBe(202);
+    expect(claimNextJob<{ resumePayload?: Record<string, unknown> }>()?.payload.resumePayload).toEqual({});
+
+    const formish = await pausedWaitpoint();
+    expect((await hit(post, formish.waitpointId, "a=1&b=2")).status).toBe(202);
+    expect(claimNextJob<{ resumePayload?: Record<string, unknown> }>()?.payload.resumePayload).toEqual({});
   });
 });
 
