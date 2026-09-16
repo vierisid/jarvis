@@ -4082,7 +4082,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
     },
 
-    ...createWorkItemRoutes(),
+    ...createWorkItemRoutes(json),
 
     '/api/goals/:id': {
       GET: (req: Request) => {

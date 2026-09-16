@@ -3,21 +3,28 @@ import {
   getWorkItem, listWorkItems, setWorkBlocker, WorkItemError,
 } from './work-items.ts';
 
-type Handler = (req: Request) => Response | Promise<Response>;
-function route(action: (req: Request) => unknown | Promise<unknown>, status = 200): Handler {
-  return async req => {
-    try { return Response.json(await action(req), { status }); }
-    catch (e) {
-      return Response.json({ error: e instanceof Error ? e.message : String(e) }, {
-        status: e instanceof WorkItemError ? e.status : e instanceof SyntaxError ? 400 : 500,
-      });
-    }
-  };
-}
-function id(req: Request): string { return decodeURIComponent(new URL(req.url).pathname.split('/')[3]!); }
+type WorkRequest = Request & { params: { id: string } };
+type Handler = (req: WorkRequest) => Promise<Response>;
 
-/** Auth is supplied by the daemon's existing /api boundary, like goals/commitments. */
-export function createWorkItemRoutes(): Record<string, { GET?: Handler; POST?: Handler; PATCH?: Handler }> {
+/**
+ * Auth, CORS and the error shape are the daemon's, like goals/commitments:
+ * `json` is the same helper every other /api route answers through. Only a
+ * WorkItemError carries its message outward; anything else is logged and
+ * reported generically so internals do not reach the client.
+ */
+export function createWorkItemRoutes(
+  json: (data: unknown, status?: number) => Response,
+): Record<string, { GET?: Handler; POST?: Handler; PATCH?: Handler }> {
+  const route = (action: (req: WorkRequest) => unknown | Promise<unknown>, status = 200): Handler =>
+    async req => {
+      try { return json(await action(req), status); }
+      catch (err) {
+        if (err instanceof WorkItemError) return json({ error: err.message }, err.status);
+        if (err instanceof SyntaxError) return json({ error: 'Invalid JSON' }, 400);
+        console.error('[WorkItems] Request failed:', err);
+        return json({ error: 'Work item request failed' }, 500);
+      }
+    };
   return {
     '/api/work-items': {
       GET: route(req => {
@@ -27,11 +34,11 @@ export function createWorkItemRoutes(): Record<string, { GET?: Handler; POST?: H
       POST: route(async req => createWorkItem(await req.json()), 201),
     },
     '/api/work-items/:id': {
-      GET: route(req => getWorkItem(id(req))),
-      PATCH: route(async req => configureWorkItem(id(req), await req.json())),
+      GET: route(req => getWorkItem(req.params.id)),
+      PATCH: route(async req => configureWorkItem(req.params.id, await req.json())),
     },
-    '/api/work-items/:id/decision': { POST: route(async req => decideWorkItem(id(req), await req.json())) },
-    '/api/work-items/:id/blocker': { POST: route(async req => setWorkBlocker(id(req), await req.json())) },
-    '/api/work-items/:id/result': { POST: route(async req => checkWorkResult(id(req), await req.json())) },
+    '/api/work-items/:id/decision': { POST: route(async req => decideWorkItem(req.params.id, await req.json())) },
+    '/api/work-items/:id/blocker': { POST: route(async req => setWorkBlocker(req.params.id, await req.json())) },
+    '/api/work-items/:id/result': { POST: route(async req => checkWorkResult(req.params.id, await req.json())) },
   };
 }

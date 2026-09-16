@@ -52,10 +52,16 @@ async function call(path: string, method: 'GET' | 'POST' | 'PATCH', url: string,
   const routes = createApiRoutes({ config: {}, agentService: {} } as ApiContext);
   const handler = (routes[path] as any)?.[method];
   expect(handler).toBeDefined();
-  const res = await handler(new Request(`http://localhost${url}`, {
+  // The daemon's router fills :params; mirror that instead of re-parsing paths.
+  const pattern = path.split('/');
+  const actual = new URL(`http://localhost${url}`).pathname.split('/');
+  const params = Object.fromEntries(pattern.flatMap((segment, i) =>
+    segment.startsWith(':') ? [[segment.slice(1), decodeURIComponent(actual[i] ?? '')]] : []));
+  const req = Object.assign(new Request(`http://localhost${url}`, {
     method, ...(body === undefined ? {} : { body: JSON.stringify(body), headers: { 'Content-Type': 'application/json' } }),
-  }));
-  return { status: res.status, body: await res.json() };
+  }), { params });
+  const res = await handler(req);
+  return { status: res.status, body: await res.json(), headers: res.headers };
 }
 async function runRoute(flowId: string, body: unknown) {
   const req = new Request(`http://localhost/api/workflows/${flowId}/run`, { method: 'POST', body: JSON.stringify(body) }) as Request & { params: { id: string } };
@@ -513,6 +519,9 @@ describe('Today work trace', () => {
     expect(response.body[0].level).toBe('daily_action');
     expect((await call('/api/work-items/:id', 'GET', '/api/work-items/missing')).status).toBe(404);
     expect((await call('/api/work-items', 'POST', '/api/work-items', { title: '' })).status).toBe(400);
+    // The same CORS headers every other /api route answers with.
+    const cors = (r: { headers: Headers }) => r.headers.get('Access-Control-Allow-Origin');
+    expect(cors(await call('/api/work-items', 'GET', '/api/work-items'))).toBe(cors(response as any));
   });
 
   test('upgrades existing text-only plans once, preserving duplicate titles as separate actions', () => {
