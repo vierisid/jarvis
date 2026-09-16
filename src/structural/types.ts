@@ -101,7 +101,12 @@ export type UiaSemanticElement = {
   sig?: string;
 };
 
-/** Map a UIA pattern list to the action vocabulary. */
+/**
+ * Map a UIA pattern list to the action vocabulary. Every action here must be
+ * one sidecar/uia_actions_windows.go actually implements -- an advertised
+ * action it does not have just earns the model an "unsupported action" error.
+ * (The Text pattern has no entry for that reason: there is no get_text.)
+ */
 const PATTERN_ACTIONS: Record<string, string[]> = {
   Invoke: ['click'],
   Value: ['set_value', 'get_value'],
@@ -109,7 +114,6 @@ const PATTERN_ACTIONS: Record<string, string[]> = {
   SelectionItem: ['select'],
   ExpandCollapse: ['expand', 'collapse'],
   ScrollItem: ['scroll_into_view'],
-  Text: ['get_text'],
 };
 
 /** Adapt one Go-provider element into a SemanticNode. */
@@ -177,19 +181,25 @@ export type CdpAxElement = {
   selected?: boolean;
 };
 
-/** ARIA roles that carry actions in the browser action space. */
+/**
+ * ARIA roles that carry actions in the browser action space. The CDP provider
+ * implements exactly two verbs (browser_ax_click, browser_ax_set_value), so
+ * these lists stay inside that vocabulary: a checkbox is toggled BY clicking
+ * it, and advertising `toggle` here would only produce an action ui_act has
+ * to refuse.
+ */
 const AX_ROLE_ACTIONS: Record<string, string[]> = {
   button: ['click'],
   link: ['click'],
   tab: ['click'],
   menuitem: ['click'],
-  option: ['select'],
-  checkbox: ['toggle'],
-  radio: ['select'],
-  switch: ['toggle'],
+  option: ['click'],
+  checkbox: ['click'],
+  radio: ['click'],
+  switch: ['click'],
   textbox: ['set_value'],
   searchbox: ['set_value'],
-  combobox: ['set_value', 'expand'],
+  combobox: ['set_value', 'click'],
   textfield: ['set_value'],
 };
 

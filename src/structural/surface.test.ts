@@ -47,7 +47,7 @@ describe('computeCoverage', () => {
       { ...semanticNodeFromUia(uia({ control_type: 'button', name: 'Send', patterns: ['Invoke'] })), bounds: null, actions: ['click'] },
       { ...semanticNodeFromUia(uia({ control_type: 'button', name: '', patterns: ['Invoke'] })), bounds: null, actions: ['click'] },
     ];
-    // one of two interactables is named → 0.5
+    // one of two interactables is named -> 0.5
     expect(computeCoverage(noBounds)).toBeCloseTo(0.5, 1);
   });
 });

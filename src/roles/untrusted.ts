@@ -37,6 +37,15 @@ const UNTRUSTED_TOOL_NAMES: ReadonlySet<string> = new Set([
   'desktop_snapshot',
   'desktop_find_element',
   'desktop_list_windows',
+  // Structural runtime. Both return accessibility-tree text -- element names
+  // and values straight off a web page or an app window -- so both are
+  // outside content. ui_act is listed for the same reason every browser tool
+  // is: its result carries a surface diff, not just a status. Without these
+  // two the framing and the taint gate could be sidestepped by preferring
+  // ui_snapshot over browser_snapshot, which is exactly what the tool guide
+  // tells the model to do.
+  'ui_snapshot',
+  'ui_act',
 ]);
 
 export function isUntrustedSourceTool(name: string, category: string | undefined): boolean {

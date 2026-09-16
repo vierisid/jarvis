@@ -42,6 +42,28 @@ export const TOOL_ACTION_MAP: Record<string, ActionCategory> = {
   desktop_launch_app: 'control_app',
   desktop_screenshot: 'read_data',
 
+  // Structural runtime. ui_snapshot only reads the accessibility tree, so it
+  // is a read. ui_act dispatches to click_element / browser_ax_click /
+  // browser_ax_set_value -- it clicks, types and toggles real controls on the
+  // user's machine -- so it carries the same category as desktop_click. These
+  // are spelled out per tool on purpose: a CATEGORY_ACTION_MAP entry for 'ui'
+  // would have to pick one category for both and would hand the read-only
+  // snapshot write authority.
+  //
+  // One tool drives both surfaces, and an action category cannot vary per
+  // call, so ui_act is control_app even when it is acting on a browser page
+  // -- stricter than browser_click's access_browser. Deliberate: the strict
+  // side is the safe side, and control_app is the only one of the two that
+  // the background-agent and taint-gating profiles govern. Do not "correct"
+  // this to access_browser.
+  ui_snapshot: 'read_data',
+  ui_act: 'control_app',
+
+  // Lists connected sidecars. Reached read_data only via the default at the
+  // bottom of getActionForTool; spelled out so builtin-tool-coverage.test.ts
+  // stays at zero unmapped tools.
+  list_sidecars: 'read_data',
+
   // Reads whose tool category is 'general', so they reached read_data only via
   // the default at the bottom of getActionForTool. Spelled out because the
   // workflow effect boundary refuses any tool without an explicit action.

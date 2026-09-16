@@ -1,11 +1,17 @@
 /**
- * UI Tools — the structural-runtime agent surface.
+ * UI Tools - the structural-runtime agent surface.
  *
  * ui_snapshot / ui_act are the primary perception+action path: an
- * interactable-first accessibility view with durable refs, and a verified
- * act primitive that re-snapshots and checks a postcondition instead of
- * trusting the action fired. The legacy desktop and browser tools remain as
- * the low-level escape hatch.
+ * interactable-first accessibility view with durable refs, and an act
+ * primitive that re-resolves the ref on a fresh capture before dispatching
+ * and then checks a postcondition instead of trusting the action fired. The
+ * legacy desktop and browser tools remain as the low-level escape hatch.
+ *
+ * Authority: ui_snapshot is `read_data`, ui_act is `control_app` - the same
+ * category as desktop_click, because that is what it dispatches to. Both are
+ * registered in src/authority/tool-action-map.ts; both are untrusted-content
+ * sources in src/roles/untrusted.ts, since what they return is element text
+ * straight off a page or an app window.
  */
 
 import type { ToolDefinition } from './registry.ts';
@@ -17,18 +23,38 @@ import { recordPerception } from '../../structural/telemetry.ts';
 import type { SemanticNode, SemanticSurface } from '../../structural/types.ts';
 
 const ACT_RPC_TIMEOUT = { initial: 30_000, max: 60_000 };
+/** Below this the surface is mostly canvas/custom-drawn and vision wins. */
+const LOW_COVERAGE = 0.4;
+/** Pause before the last verification re-read, for async UI. */
+const SETTLE_MS = 400;
+/** How many snapshots' worth of [id]s stay addressable. */
+const MAX_REMEMBERED_SNAPSHOTS = 4;
 
 /**
- * The most recent ui_snapshot per (kind, target): the surface whose [ids]
- * the model is holding, plus the window it was taken from. ui_act resolves
- * an element through this — never by reusing the integer id against a
- * fresh capture. Desktop ids are session-scoped and reassigned on every
- * walk (the sidecar clears its element cache), so an id carried across
- * captures is a different element whenever the tree moved, and the
- * foreground window whenever the snapshot targeted a pid.
+ * What a `[id]` in tool output refers to.
+ *
+ * Ids are drawn from one process-wide counter and never reused. They are NOT
+ * the provider's element ids: those are session-scoped and reassigned on
+ * every walk, so the same integer means different elements in two captures.
+ * They are also not per-(kind,target) slots, which is what this used to be -
+ * two orchestrators in one daemon (chat and the background agent) share this
+ * module, so a snapshot taken by one between the other's snapshot and its act
+ * would have silently re-pointed the other's [id] at a different element.
+ * A globally unique id cannot collide that way: an id either resolves to the
+ * exact node that was shown under it, or to nothing.
  */
-type RememberedSurface = { surface: SemanticSurface; pid?: number; at: number };
-const lastSnapshots = new Map<string, RememberedSurface>();
+type AddressedElement = {
+  node: SemanticNode;
+  kind: CaptureKind;
+  /** Canonical sidecar id, not the name the caller happened to use. */
+  target: string;
+  pid?: number;
+};
+
+const addressed = new Map<number, AddressedElement>();
+/** Ids per snapshot, oldest first - the eviction queue for `addressed`. */
+const snapshotIds: number[][] = [];
+let nextId = 1;
 
 /** Sidecars are addressable by id or name; remember snapshots by id only. */
 function canonicalTarget(target: string): string {
@@ -36,20 +62,37 @@ function canonicalTarget(target: string): string {
   return s?.id ?? target;
 }
 
-function snapshotKey(kind: CaptureKind, target: string): string {
-  return `${kind}|${canonicalTarget(target)}`;
+/** Register a capture's nodes and return the `[id]` shown for each, in order. */
+function addressSurface(surface: SemanticSurface, kind: CaptureKind, target: string, pid?: number): number[] {
+  // Resolved once, not per node: a large window is hundreds of elements and
+  // this walks the sidecar list.
+  const canonical = canonicalTarget(target);
+  const ids = surface.nodes.map((node) => {
+    const id = nextId++;
+    addressed.set(id, { node, kind, target: canonical, pid });
+    return id;
+  });
+  snapshotIds.push(ids);
+  while (snapshotIds.length > MAX_REMEMBERED_SNAPSHOTS) {
+    for (const stale of snapshotIds.shift() ?? []) addressed.delete(stale);
+  }
+  return ids;
 }
 
-/** Test seam: forget remembered snapshots. */
+/** Test seam: forget every addressed element. */
 export function resetUiSnapshots(): void {
-  lastSnapshots.clear();
+  addressed.clear();
+  snapshotIds.length = 0;
+  nextId = 1;
 }
 
 /** Actions the browser provider can carry out; anything else must fail loudly. */
 const BROWSER_ACTIONS = new Set(['click', 'set_value']);
+/** Actions that only read, so there is nothing to verify or diff. */
+const READ_ONLY_ACTIONS = new Set(['get_value']);
 
-function fmtNode(n: SemanticNode): string {
-  const bits: string[] = [`[${n.sessionId}] ${n.role}`];
+function fmtNode(n: SemanticNode, id: number): string {
+  const bits: string[] = [`[${id}] ${n.role}`];
   if (n.name) bits.push(`"${n.name}"`);
   if (n.value) bits.push(`= "${truncate(n.value, 40)}"`);
   const flags: string[] = [];
@@ -65,10 +108,10 @@ function fmtNode(n: SemanticNode): string {
 }
 
 function truncate(s: string, n: number): string {
-  return s.length > n ? s.slice(0, n) + '…' : s;
+  return s.length > n ? s.slice(0, n) + '...' : s;
 }
 
-function formatSurface(surface: SemanticSurface): string {
+function formatSurface(surface: SemanticSurface, ids: number[]): string {
   const cov = Math.round(surface.coverage * 100);
   const header =
     surface.provider === 'cdp'
@@ -77,14 +120,14 @@ function formatSurface(surface: SemanticSurface): string {
 
   const lines = [header, `Coverage: ${cov}% structural`, ''];
   if (surface.nodes.length === 0) {
-    lines.push('(no salient elements — the surface may be canvas/custom-drawn; use a screenshot)');
+    lines.push('(no salient elements - the surface may be canvas/custom-drawn; use a screenshot)');
   } else {
-    for (const n of surface.nodes) lines.push(fmtNode(n));
+    surface.nodes.forEach((n, i) => lines.push(fmtNode(n, ids[i]!)));
   }
-  if (surface.coverage < 0.4) {
+  if (surface.coverage < LOW_COVERAGE) {
     lines.push(
       '',
-      '⚠ Low structural coverage — this surface is largely canvas/custom-drawn. Prefer desktop_screenshot/browser_screenshot (vision) for elements not listed above.',
+      'Low structural coverage - this surface is largely canvas/custom-drawn. Prefer desktop_screenshot/browser_screenshot (vision) for elements not listed above.',
     );
   }
   return lines.join('\n');
@@ -112,29 +155,48 @@ async function dispatchAct(
     }
     return manager.dispatchRPC(id, 'browser_ax_click', { backend_node_id: sessionId }, ACT_RPC_TIMEOUT);
   }
-  // desktop → click_element handles all action variants
+  // desktop -> click_element handles all action variants
   return manager.dispatchRPC(id, 'click_element', { element_id: sessionId, action, value }, ACT_RPC_TIMEOUT);
 }
 
-function parsePostcondition(raw: unknown, actedRef: SemanticNode | undefined): Postcondition | null {
-  if (!raw || typeof raw !== 'string') return null;
-  const s = raw.toLowerCase();
-  if (s === 'window_appeared') return { kind: 'window_appeared' };
-  if (s === 'element_gone' && actedRef) return { kind: 'element_gone', ref: actedRef.ref };
-  if (s === 'focus_moved' && actedRef) return { kind: 'focus_moved', fromRef: actedRef.ref };
-  if (s === 'element_present' && actedRef) return { kind: 'element_present', ref: actedRef.ref };
-  return null;
+/**
+ * Build the postcondition named by `verify`. Returns a string when the request
+ * names a real check that cannot be built from what was passed, so the caller
+ * can say why instead of silently acting unverified.
+ */
+export function parsePostcondition(
+  raw: unknown,
+  acted: SemanticNode,
+  beforeTitle: string | undefined,
+  value: string | undefined,
+): Postcondition | string | null {
+  if (raw === undefined || raw === null || raw === '') return null;
+  if (typeof raw !== 'string') return null;
+  switch (raw.toLowerCase()) {
+    case 'window_appeared': return { kind: 'window_appeared' };
+    case 'element_gone': return { kind: 'element_gone', ref: acted.ref };
+    case 'element_present': return { kind: 'element_present', ref: acted.ref };
+    case 'focus_moved': return { kind: 'focus_moved', fromRef: acted.ref };
+    case 'title_changed': return { kind: 'title_changed', from: beforeTitle ?? '' };
+    case 'value_equals':
+      if (value === undefined) {
+        return 'verify="value_equals" needs the value parameter (the text you expect the element to hold afterwards)';
+      }
+      return { kind: 'value_equals', ref: acted.ref, value };
+    default:
+      return `unknown verify "${raw}" (supported: window_appeared, element_gone, element_present, focus_moved, title_changed, value_equals)`;
+  }
 }
 
 export const uiSnapshotTool: ToolDefinition = {
   name: 'ui_snapshot',
   description:
-    'Perceive the current app or web page as an accessibility tree: an interactable-first list of elements, each with an [id] you pass to ui_act. This is the PRIMARY way to see UI — prefer it over screenshots. Reports a structural coverage %; when coverage is low the surface is canvas/custom-drawn and you should fall back to a screenshot. Set kind="browser" for the web page, "desktop" for a native window (optionally target a pid).',
+    'Perceive the current app or web page as an accessibility tree: an interactable-first list of elements, each with an [id] you pass to ui_act. This is the PRIMARY way to see UI - prefer it over screenshots. Reports a structural coverage %; when coverage is low the surface is canvas/custom-drawn and you should fall back to a screenshot. Set kind="browser" for the web page, "desktop" for a native window (optionally target a pid).',
   category: 'ui',
   parameters: {
     kind: { type: 'string', description: 'What to perceive: "desktop" (native window) or "browser" (web page). Default "desktop".', required: false },
     pid: { type: 'number', description: 'Desktop only: window PID (from desktop_list_windows). Omit for the foreground window.', required: false },
-    full: { type: 'boolean', description: 'Return the full tree instead of the salience-filtered interactable view. Default false — only set when the element you need is missing from the filtered list.', required: false },
+    full: { type: 'boolean', description: 'Return the full tree instead of the salience-filtered interactable view. Default false - only set when the element you need is missing from the filtered list.', required: false },
     target: { type: 'string', description: 'Sidecar name/ID (omit to auto-select the connected one).', required: false },
   },
   execute: async (params) => {
@@ -150,19 +212,15 @@ export const uiSnapshotTool: ToolDefinition = {
         pid,
         full: params.full === true,
       });
-      lastSnapshots.set(snapshotKey(kind, target), {
-        surface,
-        pid: pid ?? surface.root.pid,
-        at: Date.now(),
-      });
+      const ids = addressSurface(surface, kind, target, pid ?? surface.root.pid);
       recordPerception({
-        provider: surface.provider === 'cdp' ? 'cdp' : 'uia',
+        provider: surface.provider,
         action: 'snapshot',
         coverage: surface.coverage,
-        structural: true,
+        visionRecommended: surface.coverage < LOW_COVERAGE ? 'low_coverage' : undefined,
         detail: `${surface.nodes.length} salient nodes`,
       });
-      return formatSurface(surface);
+      return formatSurface(surface, ids);
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -172,91 +230,92 @@ export const uiSnapshotTool: ToolDefinition = {
 export const uiActTool: ToolDefinition = {
   name: 'ui_act',
   description:
-    'Act on an element from the most recent ui_snapshot by its [id], then VERIFY the effect. Actions: click, set_value (needs value), toggle, select, expand, collapse, focus, get_value, get_text. Optionally pass verify to confirm the outcome (window_appeared | element_gone | element_present | focus_moved) — on failure the runtime self-heals (re-snapshots and retries) before reporting. Always returns what actually changed, so you do not need a separate snapshot to check.',
+    'Act on an element from a recent ui_snapshot by its [id], then VERIFY the effect. Actions: click, set_value (needs value), toggle, select, expand, collapse, focus, scroll_into_view, get_value. Optionally pass verify to confirm the outcome (window_appeared | element_gone | element_present | focus_moved | title_changed | value_equals). The action is dispatched EXACTLY ONCE and is never re-sent: if verification does not hold, the runtime re-reads the surface a couple of times and then reports the outcome as unconfirmed, with a diff of what changed. Decide from that diff whether to act again - an unconfirmed action may still have happened. Always returns what actually changed, so you do not need a separate snapshot to check.',
   category: 'ui',
   parameters: {
-    element_id: { type: 'number', description: 'The [id] of the target element from the most recent ui_snapshot.', required: true },
-    action: { type: 'string', description: 'One of: click, set_value, toggle, select, expand, collapse, focus, get_value, get_text. Default click.', required: false },
-    value: { type: 'string', description: 'The text to set (required for set_value).', required: false },
-    kind: { type: 'string', description: '"desktop" or "browser" — must match the ui_snapshot you took. Default "desktop".', required: false },
-    verify: { type: 'string', description: 'Optional postcondition to confirm: window_appeared, element_gone, element_present, or focus_moved.', required: false },
-    target: { type: 'string', description: 'Sidecar name/ID (omit to auto-select).', required: false },
+    element_id: { type: 'number', description: 'The [id] of the target element from a recent ui_snapshot. The id carries its own window/page and sidecar, so there is nothing else to pass.', required: true },
+    action: { type: 'string', description: 'One of: click, set_value, toggle, select, expand, collapse, focus, scroll_into_view, get_value. Default click. Browser elements support only click and set_value.', required: false },
+    value: { type: 'string', description: 'The text to set (required for set_value; also the expected text for verify="value_equals").', required: false },
+    verify: { type: 'string', description: 'Optional postcondition: window_appeared, element_gone, element_present, focus_moved, title_changed, or value_equals.', required: false },
   },
   execute: async (params) => {
-    const kind = (params.kind === 'browser' ? 'browser' : 'desktop') as CaptureKind;
     const action = (params.action as string) || 'click';
-    const sessionId = params.element_id as number;
+    const elementId = params.element_id as number;
     const value = params.value as string | undefined;
-    const cap = kind === 'browser' ? 'browser' : 'desktop';
-    const target = (params.target as string | undefined)?.trim() || autoTargetForCapability(cap) || '';
-    if (!target) return `Error: no connected sidecar with the "${cap}" capability`;
+
+    // The [id] names the element, the surface it came from, and the sidecar
+    // and window it lives on. Nothing is inferred from the current
+    // foreground window or from a "most recent" snapshot that another agent
+    // in this process may have replaced.
+    const entry = addressed.get(elementId);
+    if (!entry) {
+      return addressed.size === 0
+        ? `Error: no ui_snapshot has been taken yet - take one and use an [id] from its output`
+        : `Error: [${elementId}] is not from any recent ui_snapshot - take a fresh ui_snapshot and use an [id] from that result`;
+    }
+    const { node: actedRef, kind, target, pid } = entry;
     if (kind === 'browser' && !BROWSER_ACTIONS.has(action)) {
       return `Error: action "${action}" is not available for kind="browser" (supported: click, set_value); use ui_snapshot to read state`;
-    }
-
-    // The [id] the model holds belongs to its last ui_snapshot. Look the
-    // element up there, then re-find it on a fresh capture of the SAME
-    // window by durable ref. Acting on the raw id would hit whatever the
-    // sidecar numbered that way on its next walk.
-    const remembered = lastSnapshots.get(snapshotKey(kind, target));
-    if (!remembered) {
-      return `Error: no ui_snapshot kind="${kind}" has been taken for this sidecar yet — take one first and use an [id] from it`;
-    }
-    const actedRef = remembered.surface.nodes.find((n) => n.sessionId === sessionId);
-    if (!actedRef) {
-      return `Error: [${sessionId}] is not in the most recent ui_snapshot (${remembered.surface.nodes.length} elements) — take a fresh ui_snapshot and use an [id] from that result`;
     }
 
     let before: SemanticNode[] = [];
     let beforeTitle: string | undefined;
     try {
-      const pre = await captureSurface({ kind, target, pid: remembered.pid, full: false });
+      const pre = await captureSurface({ kind, target, pid, full: false });
       before = pre.surface.nodes;
       beforeTitle = pre.surface.root.title;
     } catch (err) {
-      return `Error: could not re-capture the surface before acting (${err instanceof Error ? err.message : String(err)}) — nothing was done`;
+      return `Error: could not re-capture the surface before acting (${err instanceof Error ? err.message : String(err)}) - nothing was done`;
     }
+
+    // Element ids churn between captures; the durable ref is what survives.
     const live = resolveRef(actedRef.ref, before);
     if (!live.node) {
-      return `Error: ${actedRef.role} "${actedRef.name}" [${sessionId}] is no longer on the surface (best match ${Math.round(live.confidence * 100)}%) — nothing was done; take a fresh ui_snapshot`;
+      return `Error: ${actedRef.role} "${actedRef.name}" [${elementId}] is no longer on the surface (best match ${Math.round(live.confidence * 100)}%) - nothing was done; take a fresh ui_snapshot`;
     }
-    const liveId = live.node.sessionId;
+
+    const pc = parsePostcondition(params.verify, actedRef, beforeTitle, value);
+    if (typeof pc === 'string') return `Error: ${pc} - nothing was done`;
 
     let actResult: unknown;
     try {
-      actResult = await dispatchAct(kind, target, liveId, action, value);
+      actResult = await dispatchAct(kind, target, live.node.sessionId, action, value);
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
     }
 
     // Read-only actions need no verification/diff.
-    if (action === 'get_value' || action === 'get_text') {
-      return `${action} → ${JSON.stringify(actResult)}`;
+    if (READ_ONLY_ACTIONS.has(action)) {
+      return `${action} -> ${JSON.stringify(actResult)}`;
     }
 
-    const pc = parsePostcondition(params.verify, actedRef);
     const how = live.method === 'sig' || live.method === 'stableId'
       ? ''
       : ` (re-found by ${live.method}, ${Math.round(live.confidence * 100)}%)`;
-    const lines: string[] = [`Acted: ${action}${value !== undefined ? ` "${truncate(value, 40)}"` : ''} on [${sessionId}] ${actedRef.role} "${actedRef.name}"${how}`];
+    const lines: string[] = [`Acted: ${action}${value !== undefined ? ` "${truncate(value, 40)}"` : ''} on [${elementId}] ${actedRef.role} "${actedRef.name}"${how}`];
 
-    // Re-snapshot for verification + diff, climbing the self-heal ladder.
+    // Re-read for verification + diff, climbing the self-heal ladder. Every
+    // rung re-observes; none re-dispatches. See verifier.ts for why.
     const attempted: HealRung[] = [];
-    let satisfied = !pc; // no postcondition ⇒ nothing to fail
+    let satisfied = !pc;
     let after: SemanticNode[] = [];
     let afterTitle: string | undefined;
+    let coverage = 0;
 
-    for (let pass = 0; pass < 3; pass++) {
+    for (;;) {
       try {
         // Same window as the snapshot: a diff against a different window
         // would report changes that never happened to this one.
-        const post = await captureSurface({ kind, target, pid: remembered.pid, full: false });
+        const post = await captureSurface({ kind, target, pid, full: false });
         after = post.surface.nodes;
         afterTitle = post.surface.root.title;
+        coverage = post.surface.coverage;
       } catch {
         after = [];
+        afterTitle = undefined;
       }
       if (!pc) break;
+
       const v = verifyPostcondition(pc, {
         before, beforeTitle, after, afterTitle,
         surfacePresent: after.length > 0,
@@ -266,45 +325,35 @@ export const uiActTool: ToolDefinition = {
         lines.push(`Verified: ${v.detail}`);
         break;
       }
+
       const rung = nextHealRung({ attempted });
-      attempted.push(rung);
-      if (rung === 're_resolve') {
-        const r = resolveRef(actedRef.ref, after);
-        if (r.node && r.node.sessionId !== liveId) {
-          try { await dispatchAct(kind, target, r.node.sessionId, action, value); } catch { /* keep climbing */ }
-          continue;
-        }
-      } else if (rung === 'retry') {
-        await new Promise((res) => setTimeout(res, 400));
-        try { await dispatchAct(kind, target, liveId, action, value); } catch { /* keep climbing */ }
-        continue;
-      } else {
-        // vision / ask: the runtime cannot resolve structurally.
-        lines.push(`Not verified (${v.detail}). Self-heal exhausted structural options — fall back to a screenshot (vision) or ask the user.`);
+      if (rung === null || rung === 'report') {
+        if (rung) attempted.push(rung);
+        lines.push(
+          `NOT VERIFIED: ${v.detail}.`,
+          `The ${action} was dispatched once and was NOT repeated - it may still have taken effect. Read the diff below before deciding; if you need certainty, take a screenshot or ask the user.`,
+        );
         break;
       }
+      attempted.push(rung);
+      if (rung === 'settle') await new Promise((res) => setTimeout(res, SETTLE_MS));
     }
 
     lines.push(diffSurface(before, after));
-    if (pc && !satisfied && attempted[attempted.length - 1] !== 'vision' && attempted[attempted.length - 1] !== 'ask') {
-      lines.push('⚠ Postcondition not confirmed — do NOT assume the action worked; inspect the diff above.');
-    }
 
-    const usedVision = attempted.includes('vision');
     recordPerception({
-      provider: usedVision ? 'vision' : kind === 'browser' ? 'cdp' : 'uia',
+      provider: kind === 'browser' ? 'cdp' : 'uia',
       action,
-      coverage: 0,
-      structural: !usedVision,
+      coverage,
       verified: pc ? satisfied : undefined,
-      visionReason: usedVision ? 'step_failure' : undefined,
-      detail: attempted.length ? `self-heal: ${attempted.join('→')}` : undefined,
+      visionRecommended: pc && !satisfied ? 'unverified_outcome' : undefined,
+      detail: attempted.length ? `self-heal: ${attempted.join(' -> ')}` : undefined,
     });
     return lines.join('\n');
   },
 };
 
-/** Compact before→after diff by session-id set + focus/title changes. */
+/** Compact before->after diff by named-element set + focus changes. */
 function diffSurface(before: SemanticNode[], after: SemanticNode[]): string {
   const beforeNames = new Set(before.map((n) => `${n.role}|${n.name}`));
   const afterNames = new Set(after.map((n) => `${n.role}|${n.name}`));

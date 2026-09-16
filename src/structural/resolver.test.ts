@@ -164,7 +164,7 @@ describe('UIA adapter', () => {
     focusable: true,
     offscreen: false,
     rect: { x: 10, y: 20, w: 80, h: 24 },
-    patterns: ['Invoke', 'Text'],
+    patterns: ['Invoke', 'Text', 'Value'],
     depth: 3,
     path: GMAIL_PATH,
     ordinal: 0,
@@ -175,7 +175,11 @@ describe('UIA adapter', () => {
     const n = semanticNodeFromUia(el);
     expect(n.ref.stableId).toBe('sendBtn');
     expect(n.ref.sig).toBe('deadbeef00112233');
-    expect(n.actions).toEqual(['click', 'get_text']);
+    // Invoke -> click and Value -> set_value/get_value are implemented by
+    // sidecar/uia_actions_windows.go. The Text pattern maps to nothing: it
+    // used to advertise get_text, which that dispatcher rejects outright, so
+    // the model was offered an action that could only ever return an error.
+    expect(n.actions).toEqual(['click', 'set_value', 'get_value']);
     expect(n.bounds).toEqual({ x: 10, y: 20, width: 80, height: 24 });
     expect(n.sessionId).toBe(5);
   });

@@ -1,10 +1,10 @@
 /**
- * Structural Runtime — surface capture + provider dispatch.
+ * Structural Runtime - surface capture + provider dispatch.
  *
  * Turns a capture request into a SemanticSurface by dispatching to the right
  * sidecar provider (UIA desktop tree or CDP browser AX tree), then applies the
  * salience filter and coverage score that make the structural path the primary
- * one: an interactable-first view (≈10× fewer tokens than a full dump) plus a
+ * one: an interactable-first view (~10x fewer tokens than a full dump) plus a
  * coverage number that tells the model when to fall back to vision.
  */
 
@@ -35,13 +35,9 @@ export type CaptureOptions = {
 
 export type CaptureResult = {
   surface: SemanticSurface;
-  /** Nodes after the salience filter (== surface.nodes unless full). */
-  salient: SemanticNode[];
-  /** The provider + target actually used, for telemetry. */
-  meta: { provider: string; target: string };
 };
 
-const DESKTOP_RPC_TIMEOUT = { initial: 30_000, max: 60_000 };
+const CAPTURE_RPC_TIMEOUT = { initial: 30_000, max: 60_000 };
 
 function requireManager(): SidecarManager {
   const m = getSidecarManager();
@@ -81,7 +77,7 @@ function isInteractable(node: SemanticNode): boolean {
 
 /**
  * Salience filter: keep interactable elements, and named text that gives the
- * model context. Drops unnamed structural containers — the depth-8 noise that
+ * model context. Drops unnamed structural containers - the depth-8 noise that
  * made the raw dump expensive and hard for small models to read.
  */
 export function salienceFilter(nodes: SemanticNode[]): SemanticNode[] {
@@ -97,8 +93,8 @@ export function salienceFilter(nodes: SemanticNode[]): SemanticNode[] {
 
 /**
  * Coverage in [0, 1]: fraction of the visible interactable+named bounds area
- * that is "named-interactable" (has a name AND an action). Low coverage ⇒ the
- * surface is canvas/custom-drawn (Figma, games, bad-a11y Electron) ⇒ the model
+ * that is "named-interactable" (has a name AND an action). Low coverage => the
+ * surface is canvas/custom-drawn (Figma, games, bad-a11y Electron) => the model
  * should use vision. Desktop-only (bounds required); browser AX has no bounds
  * pre-layout, so browser coverage is approximated by the named-interactable
  * fraction of nodes instead of area.
@@ -133,7 +129,7 @@ export async function captureSurface(opts: CaptureOptions): Promise<CaptureResul
 
   let surface: SemanticSurface;
   if (opts.kind === 'browser') {
-    const raw = (await manager.dispatchRPC(sidecarId, 'browser_ax_snapshot', {}, DESKTOP_RPC_TIMEOUT)) as {
+    const raw = (await manager.dispatchRPC(sidecarId, 'browser_ax_snapshot', {}, CAPTURE_RPC_TIMEOUT)) as {
       url?: string;
       title?: string;
       elements?: CdpAxElement[];
@@ -144,7 +140,7 @@ export async function captureSurface(opts: CaptureOptions): Promise<CaptureResul
       sidecarId,
       'get_window_tree',
       { pid: opts.pid, depth: opts.depth ?? 8, semantic: true },
-      DESKTOP_RPC_TIMEOUT,
+      CAPTURE_RPC_TIMEOUT,
     )) as { window_title?: string; pid?: number; elements?: UiaSemanticElement[] };
     surface = surfaceFromUia({
       window_title: raw.window_title ?? '',
@@ -153,13 +149,11 @@ export async function captureSurface(opts: CaptureOptions): Promise<CaptureResul
     });
   }
 
-  const salient = opts.full ? surface.nodes : salienceFilter(surface.nodes);
+  // Coverage is scored over the whole surface, then the salience filter
+  // trims what the model reads: a filtered-down view must not make a
+  // canvas-drawn app look well covered.
   surface.coverage = computeCoverage(surface.nodes);
-  if (!opts.full) surface.nodes = salient;
+  if (!opts.full) surface.nodes = salienceFilter(surface.nodes);
 
-  return {
-    surface,
-    salient,
-    meta: { provider: surface.provider, target: sidecar?.name ?? target },
-  };
+  return { surface };
 }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { verifyPostcondition, nextHealRung, type VerifyContext } from './verifier.ts';
+import { verifyPostcondition, nextHealRung, HEAL_LADDER, type HealRung, type VerifyContext } from './verifier.ts';
 import type { SemanticNode, SemanticRef } from './types.ts';
 
 function node(p: {
@@ -29,8 +29,38 @@ function ctx(partial: Partial<VerifyContext>): VerifyContext {
 }
 
 describe('verifyPostcondition', () => {
-  it('window_appeared reflects surface presence', () => {
-    expect(verifyPostcondition({ kind: 'window_appeared' }, ctx({ surfacePresent: true })).satisfied).toBe(true);
+  it('window_appeared is NOT satisfied by the same unchanged surface', () => {
+    // The regression this guards: ui_act re-captures the window it acted on,
+    // so "the surface has nodes" is true before the click as well. Checking
+    // only that reported success for every action, including a no-op one.
+    const same = [node({ role: 'Button', name: 'File', sig: 'f' })];
+    const r = verifyPostcondition(
+      { kind: 'window_appeared' },
+      ctx({ before: same, after: same, beforeTitle: 'Notepad', afterTitle: 'Notepad' }),
+    );
+    expect(r.satisfied).toBe(false);
+    expect(r.detail).toContain('unchanged');
+  });
+
+  it('window_appeared passes when content the before-surface lacked shows up', () => {
+    const before = [node({ role: 'Button', name: 'File', sig: 'f' })];
+    const after = [...before, node({ role: 'Dialog', name: 'Save changes?', sig: 'd' })];
+    const r = verifyPostcondition({ kind: 'window_appeared' }, ctx({ before, after }));
+    expect(r.satisfied).toBe(true);
+    expect(r.detail).toContain('Save changes?');
+  });
+
+  it('window_appeared passes on a title change alone', () => {
+    const same = [node({ role: 'Button', name: 'File', sig: 'f' })];
+    const r = verifyPostcondition(
+      { kind: 'window_appeared' },
+      ctx({ before: same, after: same, beforeTitle: 'Untitled - Notepad', afterTitle: 'Open' }),
+    );
+    expect(r.satisfied).toBe(true);
+    expect(r.detail).toContain('Open');
+  });
+
+  it('window_appeared fails when no surface is left at all', () => {
     expect(verifyPostcondition({ kind: 'window_appeared' }, ctx({ surfacePresent: false })).satisfied).toBe(false);
   });
 
@@ -70,11 +100,22 @@ describe('verifyPostcondition', () => {
 });
 
 describe('nextHealRung', () => {
-  it('climbs the ladder in order then reports done', () => {
+  it('climbs the ladder in order, then exhausts', () => {
     expect(nextHealRung({ attempted: [] })).toBe('re_resolve');
-    expect(nextHealRung({ attempted: ['re_resolve'] })).toBe('retry');
-    expect(nextHealRung({ attempted: ['re_resolve', 'retry'] })).toBe('vision');
-    expect(nextHealRung({ attempted: ['re_resolve', 'retry', 'vision'] })).toBe('ask');
-    expect(nextHealRung({ attempted: ['re_resolve', 'retry', 'vision', 'ask'] })).toBe('done');
+    expect(nextHealRung({ attempted: ['re_resolve'] })).toBe('settle');
+    expect(nextHealRung({ attempted: ['re_resolve', 'settle'] })).toBe('report');
+    expect(nextHealRung({ attempted: ['re_resolve', 'settle', 'report'] })).toBeNull();
+  });
+
+  it('every rung the ladder names is one ui_act can actually climb', () => {
+    // A rung ui_act cannot reach is a rung that never runs. The ladder used
+    // to name `vision` and `ask`, neither of which this layer can perform.
+    const climbed: HealRung[] = [];
+    for (;;) {
+      const rung = nextHealRung({ attempted: climbed });
+      if (rung === null) break;
+      climbed.push(rung);
+    }
+    expect(climbed).toEqual([...HEAL_LADDER]);
   });
 });
