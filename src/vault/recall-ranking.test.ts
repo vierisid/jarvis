@@ -247,6 +247,70 @@ test('entity and fact budgets distribute useful context across subjects', () => 
   expect(context).toContain('omitted');
 });
 
+test('a subject whose records are all out of period reads as having none', () => {
+  const entity = createEntity('project', 'Orion');
+  const fact = repository.createFact(entity.id, 'endpoint', 'route.example');
+  const stale: RecallFact = { ...fact, status: 'superseded' };
+  const context = packRecallContext([{ entity, facts: [stale], relationships: [] }]);
+  expect(context).toContain('**Orion** (project)');
+  expect(context).toContain('No current facts recorded.');
+  expect(context).not.toContain('route.example');
+});
+
+test('a long message cannot make scoring quadratic on the recall path', () => {
+  getDb().transaction(() => {
+    for (let i = 0; i < 200; i++) {
+      const entity = createEntity('project', `Archived project ${i}`);
+      for (let j = 0; j < 10; j++) repository.createFact(entity.id, `operating_note_${j}`, `Release discussion ${i}-${j}`);
+    }
+  })();
+  const message = Array.from({ length: 3000 }, (_, i) => `token${i}`).join(' ');
+  // Generous absolute bound, not a load measurement: the quadratic form took
+  // over thirteen seconds for this input, the linear one takes tens of ms.
+  const elapsed = Math.min(...Array.from({ length: 3 }, () => {
+    const start = performance.now();
+    getKnowledgeForMessage(message);
+    return performance.now() - start;
+  }));
+  expect(elapsed).toBeLessThan(2000);
+});
+
+test('a subject whose facts all miss the budget contributes no heading or relationship', () => {
+  const entity = createEntity('project', 'Atlas');
+  repository.createFact(entity.id, 'notes', 'x'.repeat(3900));
+  createRelationship(entity.id, createEntity('project', 'SecretPartner').id, 'contracted_with');
+  const context = formatKnowledgeContext(retrieveForMessage('Atlas notes'), 900);
+  expect(context).not.toContain('Atlas');
+  expect(context).not.toContain('SecretPartner');
+  expect(context).toContain('omitted');
+});
+
+test('a value stored on another subject survives a name-only top match', () => {
+  const john = createEntity('person', 'John');
+  repository.createFact(john.id, 'birthday', 'March 15');
+  const google = createEntity('concept', 'Google');
+  repository.createFact(google.id, 'employee', 'John');
+  const context = getKnowledgeForMessage('Where does John work?');
+  expect(context).toContain('**John** (person)');
+  expect(context).toContain('employee: John');
+});
+
+test('facts dropped by ranking are reported as an incomplete record', () => {
+  const dana = createEntity('person', 'Dana');
+  repository.createFact(dana.id, 'deadline', 'Friday');
+  for (let i = 0; i < 5; i++) repository.createFact(dana.id, `background_${i}`, `note ${i}`);
+  const context = getKnowledgeForMessage('Dana deadline');
+  expect(context).toContain('deadline: Friday');
+  expect(context).not.toContain('background_0');
+  expect(context).toContain('omitted');
+});
+
+test('the self overview and the profile boost agree on the same request', () => {
+  saveUserProfile({ preferred_name: 'Sofia', interests: 'Cooking' });
+  expect(getKnowledgeForMessage('Hey, who am I to you?')).toContain('Cooking');
+  expect(getKnowledgeForMessage('What do you know regarding me?')).toContain('Cooking');
+});
+
 test('relationship context is bounded, stable and unverified', () => {
   const entity = createEntity('person', 'Ari');
   for (let i = 0; i < 8; i++) createRelationship(entity.id, createEntity('project', `Project ${i}`).id, 'supports');

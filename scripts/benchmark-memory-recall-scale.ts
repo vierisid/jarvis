@@ -24,6 +24,8 @@ try {
   }
   const coldMs = elapsed.shift()!;
   elapsed.sort((a, b) => a - b);
-  console.log(JSON.stringify({ distractorFacts: count, coldMs, medianMs: elapsed[4], p95Ms: elapsed[9],
-    warmQueries: elapsed.length, method: 'in-memory SQLite, default ingestion and recall, no embeddings' }, null, 2));
+  // Ten warm samples support a median and a maximum, not a p95.
+  console.log(JSON.stringify({ distractorFacts: count, coldMs, medianMs: (elapsed[4]! + elapsed[5]!) / 2,
+    maxMs: elapsed[elapsed.length - 1], warmQueries: elapsed.length,
+    method: 'in-memory SQLite, default ingestion and recall, no embeddings' }, null, 2));
 } finally { closeDb(); }

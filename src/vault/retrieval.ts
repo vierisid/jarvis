@@ -16,6 +16,15 @@ import { packRecallContext, RECALL_LIMITS, type RecallProfile } from './recall-c
 export type EntityProfile = RecallProfile;
 export const extractSearchTerms = recallTerms;
 
+/** A relationships failure degrades to facts only, as it did before ranking. */
+function readRelationships(entityId: string): ReturnType<typeof getEntityRelationships> {
+  try {
+    return getEntityRelationships(entityId);
+  } catch {
+    return [];
+  }
+}
+
 /** Score every current candidate before selecting subjects or loading evidence. */
 export function retrieveForMessage(message: string): EntityProfile[] {
   const terms = new Set(recallTerms(message));
@@ -23,7 +32,7 @@ export function retrieveForMessage(message: string): EntityProfile[] {
   const entities = findEntities({});
   const facts = getDb().query<RecallFact, []>('SELECT * FROM facts').all();
   const ranked = rankRecall(message, entities, facts);
-  return ranked.slice(0, RECALL_LIMITS.entities).map(({ entity, facts, matchedAliasIds, factDependencies }, index) => {
+  return ranked.slice(0, RECALL_LIMITS.entities).map(({ entity, facts, matchedAliasIds, factDependencies, omitted }, index) => {
     const byId = new Map(facts.map(fact => [fact.id, fact]));
     const finalists = new Set(expandRecallDependencies(matchedAliasIds, factDependencies));
     for (const fact of facts) {
@@ -38,13 +47,15 @@ export function retrieveForMessage(message: string): EntityProfile[] {
       entity,
       matchedAliasIds,
       factDependencies,
-      hasMore: index === 0 && ranked.length > RECALL_LIMITS.entities,
+      // Ranking drops candidates before packing ever sees them, so the prompt
+      // must still say the record it shows is not exhaustive.
+      hasMore: omitted || (index === 0 && ranked.length > RECALL_LIMITS.entities),
       // The extra record is a limit sentinel; provenance hydration stays bounded.
       facts: [...finalists].slice(0, RECALL_LIMITS.factsPerEntity + 1).flatMap(id => {
         const complete = getFact(id);
         return complete ? [complete] : [];
       }),
-      relationships: getEntityRelationships(entity.id).map(rel => ({
+      relationships: readRelationships(entity.id).map(rel => ({
         type: rel.type,
         target: rel.from_id === entity.id ? rel.to_entity.name : rel.from_entity.name,
         direction: rel.from_id === entity.id ? 'from' as const : 'to' as const,

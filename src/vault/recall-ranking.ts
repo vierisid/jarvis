@@ -11,7 +11,8 @@ export type RecallFact = Fact & {
 };
 
 const STOPWORDS = new Set(('i me my mine myself we our ours ourselves you your yours yourself '
-  + 'he him his she her hers it its itself they them their theirs what which who whom '
+  + 'he him his himself she her hers herself it its itself they them their theirs themselves '
+  + 'yourselves what which who whom '
   + 'this that these those am is are was were be been being have has had having '
   + 'do does did doing a an the and but if or because as until while of at by for with '
   + 'about against between through during before after above below to from up down in out '
@@ -57,7 +58,11 @@ function mentioned(label: string, query: Set<string>, normalized: string): boole
 
 export type RecallFactDependency = { factId: string; requiredFactIds: string[] };
 export type RankedEntity = { entity: Entity; facts: RecallFact[]; matchedAliasIds: string[];
-  factDependencies: RecallFactDependency[]; score: number };
+  factDependencies: RecallFactDependency[]; score: number;
+  /** A task match, so the subject holds an answer rather than only a name. */
+  taskMatch: boolean;
+  /** Ranking already dropped candidates here; the prompt must say so. */
+  omitted: boolean };
 
 /** Include transitive requirements once, including mutually contested confirmations. */
 export function expandRecallDependencies(ids: Iterable<string>, dependencies: RecallFactDependency[] = []): string[] {
@@ -79,18 +84,22 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
   if (!query.size && !selfOverview) return [];
   const normalized = normalizeRecallText(message);
   const current = facts.filter(fact => isCurrentRecallFact(fact, at));
-  const selfQuery = /\b(?:my|mine|myself)\b/i.test(message)
+  // Every overview request is a self request; the two must not disagree, or a
+  // message reads the whole vault and then scores as if it mentioned nobody.
+  const selfQuery = selfOverview || /\b(?:my|mine|myself)\b/i.test(message)
     || /\b(?:about|of) me\b/i.test(message)
     || /^\s*(?:who|what) am i\b/i.test(message);
   const user = entities.filter(entity => entity.source === 'user_profile')
     .sort((a, b) => b.updated_at - a.updated_at || a.id.localeCompare(b.id))[0];
 
-  const docs = current.map(fact => ({ fact, predicate: new Set(recallTerms(fact.predicate)),
-    object: new Set(recallTerms(fact.object)), scope: new Set(recallTerms(fact.scope ?? '')) }));
+  const docs = current.map(fact => {
+    const predicate = new Set(recallTerms(fact.predicate));
+    const object = new Set(recallTerms(fact.object));
+    const scope = new Set(recallTerms(fact.scope ?? ''));
+    return { fact, predicate, object, scope, terms: new Set([...predicate, ...object, ...scope]) };
+  });
   const frequencies = new Map<string, number>();
-  for (const doc of docs) for (const term of new Set([...doc.predicate, ...doc.object, ...doc.scope])) {
-    frequencies.set(term, (frequencies.get(term) ?? 0) + 1);
-  }
+  for (const doc of docs) for (const term of doc.terms) frequencies.set(term, (frequencies.get(term) ?? 0) + 1);
   const weight = (term: string) => 1 + Math.log(1 + docs.length / (1 + (frequencies.get(term) ?? 0)));
   const grouped = new Map<string, typeof docs>();
   for (const doc of docs) {
@@ -110,14 +119,19 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
       ...(nameMatch ? recallTerms(entity.name) : []),
       ...aliasMatches.flatMap(doc => recallTerms(doc.fact.object)),
     ]);
-    const taskTerms = [...query].filter(term => !anchorTerms.has(term));
+    const taskTerms = new Set([...query].filter(term => !anchorTerms.has(term)));
     const ownProfile = selfQuery && entity.id === user?.id;
     const scored = entityDocs.map(doc => {
       let match = 0, taskMatch = 0;
-      for (const term of query) {
+      // Walk the record's own terms rather than the query. Scoring stays linear
+      // in stored text, so a pasted document cannot stall the synchronous
+      // recall call the daemon makes on every message.
+      for (const term of doc.terms) {
+        if (!query.has(term)) continue;
         const hit = (doc.predicate.has(term) ? 2 : 0) + (doc.object.has(term) ? 1 : 0) + (doc.scope.has(term) ? 1 : 0);
-        match += hit * weight(term);
-        if (taskTerms.includes(term)) taskMatch += hit * weight(term);
+        const value = hit * weight(term);
+        match += value;
+        if (taskTerms.has(term)) taskMatch += value;
       }
       const alias = aliasMatches.includes(doc);
       return { fact: doc.fact, taskMatch, alias,
@@ -153,11 +167,17 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
       const byId = new Map(entityDocs.map(doc => [doc.fact.id, doc.fact]));
       results.push({ entity, facts: [...ids].map(id => byId.get(id)!),
         matchedAliasIds: primary.filter(doc => doc.alias).map(doc => doc.fact.id),
-        factDependencies: dependencies.filter(dependency => ids.has(dependency.factId)), score });
+        factDependencies: dependencies.filter(dependency => ids.has(dependency.factId)), score,
+        taskMatch: hasTaskMatch, omitted: ids.size < entityDocs.length });
     }
   }
   results.sort((a, b) => b.score - a.score || a.entity.name.localeCompare(b.entity.name) || a.entity.id.localeCompare(b.entity.id));
   // Avoid weak generic matches filling the prompt after a strong task match.
+  // When the best subject matched on its name alone it holds no answer, and the
+  // flat name bonus would otherwise floor out the subjects whose facts do match.
   const floor = (results[0]?.score ?? 0) * 0.45;
-  return results.filter(result => result.score >= floor);
+  const nameOnly = results[0] != null && !results[0].taskMatch;
+  const kept = results.filter(result => result.score >= floor || (nameOnly && result.taskMatch));
+  if (kept.length < results.length && kept[0]) kept[0].omitted = true;
+  return kept;
 }

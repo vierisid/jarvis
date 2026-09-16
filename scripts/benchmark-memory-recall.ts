@@ -68,6 +68,7 @@ export function runRecallBenchmark(split: 'development' | 'heldout' | 'heldout-v
       // identical distractor values do not inflate the retrieved-fact count.
       const availableLines = context.split('\n');
       const found: string[] = [];
+      const foundLines = new Map<string, string>();
       let relevantFactChars = 0, retrievedFactChars = 0;
       for (const [key, value] of labels) {
         const index = availableLines.findIndex(line => line.includes(`${value.predicate}: ${value.object}`)
@@ -76,14 +77,16 @@ export function runRecallBenchmark(split: 'development' | 'heldout' | 'heldout-v
           const chars = availableLines[index]!.length;
           retrievedFactChars += chars;
           if ((fixture.allowed ?? fixture.required).includes(key)) relevantFactChars += chars;
-          found.push(key); availableLines.splice(index, 1);
+          found.push(key); foundLines.set(key, availableLines[index]!); availableLines.splice(index, 1);
         }
       }
       const missing = fixture.required.filter(key => !found.includes(key));
       const irrelevant = found.filter(key => !(fixture.allowed ?? fixture.required).includes(key));
       const qualified = found.filter(key => {
         const value = labels.get(key)!;
-        const line = context.split('\n').find(line => line.includes(`${value.predicate}: ${value.object}`)) ?? '';
+        // The same line that was counted above: duplicate values must not let a
+        // qualified record vouch for an unqualified one.
+        const line = foundLines.get(key) ?? '';
         return line.includes(`"confidence":${value.confidence}`) && line.includes(`"source":${JSON.stringify(value.source ?? 'unspecified')}`)
           && line.includes('recorded') && line.includes('basis');
       });

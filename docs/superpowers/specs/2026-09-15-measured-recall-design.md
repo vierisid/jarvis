@@ -125,6 +125,57 @@ in both configurations and all four quality ratios at 100%. Maximum context is
 quality or scale-performance claim is made. The results below and adjacent JSON
 retain the original pre-review measurements at `05054c91`.
 
+## Review fixes (2026-09-16)
+
+R5: scoring walks each record's own terms instead of the query. The previous
+form was O(facts x query terms squared), so a pasted document stalled the
+synchronous recall call the daemon makes on every message: 13.7 s for a
+3,000-word message over 2,000 facts, now 40 ms. Frozen results are unchanged.
+
+R6: a subject whose facts were all rejected by the character budget no longer
+contributes a heading and its relationships. Relationships are unverified and
+carry no qualification, so they cannot stand in for the facts that justified
+retrieving the subject. Same rule as R1, reached through the budget.
+
+R7: the relevance floor is computed from a score that includes the flat name
+bonus, so a subject matched only by name hid the subjects whose facts actually
+answered the request ("Where does John work?" returned John's birthday and
+dropped Google's `employee: John`). The floor is now waived for task-matched
+subjects when the top subject has no task match. Development, both held-out
+splits and every quality ratio are unchanged at 100%.
+
+R8: ranking drops candidates before packing sees them, through the per-subject
+task filter and the floor. Those drops now set the same incomplete-record notice
+that the packing limits set, so a filtered slice is never presented as the whole
+record.
+
+R9: whole-word self detection. An embedded "me" (melatonin, meeting, same) no
+longer reads as a self-overview request, which had both bypassed the empty-query
+read guard and injected the whole user profile into unrelated requests. The
+overview predicate and the profile-boost predicate are now derived from one
+another rather than drifting.
+
+R10: `line()` defangs the " | " separator as well as newlines. Predicates,
+values and names come from untrusted extraction, so a value could otherwise
+carry a forged qualification blob ahead of the real one. Same rule as
+`defangDelimiters` in roles/untrusted.ts.
+
+R11: smaller corrections. A relationships failure degrades to facts only again,
+as it did before ranking. A subject whose records are all out of period reads as
+having none rather than vanishing. The reflexive stopwords dropped in the list
+reformat (himself, herself, themselves, yourselves) are restored; work/works/
+working stay out, deliberately, because they carry meaning in operating
+requests. The benchmark qualification check reuses the line it counted instead
+of re-finding the first match, so duplicate values cannot let a qualified record
+vouch for an unqualified one. The scale script reports a median and a maximum,
+which is what ten warm samples support; the earlier run's "p95" was the maximum.
+
+Known limitation, unchanged: matching is whole-token, so an inflected query term
+does not reach an uninflected stored value ("projects" does not match
+"project"). Stemming is language-specific and this recall path is multilingual,
+so it is not attempted here. Name-anchored requests are unaffected. No held-out
+case covers inflection; a fix needs a fresh evaluation set.
+
 ## Initial results at 05054c91 (2026-09-15)
 
 All runs use actual SQLite ingestion and the default getKnowledgeForMessage path.

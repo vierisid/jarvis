@@ -110,13 +110,19 @@ export function packRecallContext(profiles: RecallProfile[], maxChars: number = 
   }
   for (let i = 0; i < selected.length; i++) {
     const profile = selected[i]!;
-    if (blocked[i] || aliases[i]!.some(fact => !included[i]!.has(fact!.id))) continue;
+    // Relationships are unverified and carry no qualification of their own, so
+    // they cannot stand in for facts that the budget rejected: that would put
+    // the subject and a related name in the prompt with nothing qualifying them.
+    if (blocked[i] || (facts[i]!.length && !included[i]!.size)
+      || aliases[i]!.some(fact => !included[i]!.has(fact!.id))) continue;
     for (const [index, rel] of profile.relationships.entries()) {
       if (index >= RECALL_LIMITS.relationshipsPerEntity) { omitted = true; break; }
       const text = rel.direction === 'from' ? `${rel.type} -> ${rel.target}` : `${rel.target} -> ${rel.type} -> ${profile.entity.name}`;
       append(i, `  - Unverified relationship: ${line(text)}`);
     }
-    if (!profile.facts.length && !profile.relationships.length) append(i, '  - No current facts recorded.');
+    // Judge emptiness on the current-fact view: a subject whose every record is
+    // superseded or out of period must read the same as one with no records.
+    if (!facts[i]!.length && !profile.relationships.length) append(i, '  - No current facts recorded.');
   }
   const body = sections.filter(section => section.lines.length).map(section => section.header + '\n' + section.lines.join('\n')).join('\n\n');
   if (!body) return omitted ? RECALL_RULES + omission : '';
