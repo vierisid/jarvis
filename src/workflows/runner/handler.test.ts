@@ -283,8 +283,10 @@ describe("RUN_FLOW handler with custom executor", () => {
     await worker.drain();
     expect(getFlowRun(run.id)?.status).toBe("FAILED");
     expect(getFlowRun(run.id)?.failedStep?.name).toBe("stepX");
+    // No backoff retry was scheduled, so there is nothing to wait out: an
+    // immediate second drain would pick one up if the policy regressed.
+    expect(queueStats()).toMatchObject({ queued: 0, running: 0, failed: 1 });
 
-    await Bun.sleep(1100);
     await worker.drain();
     const after = getFlowRun(run.id);
     expect(after?.status).toBe("FAILED");

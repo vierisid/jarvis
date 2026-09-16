@@ -75,7 +75,9 @@ describe("manage_workflow tool", () => {
       } } }),
     } });
     await worker.drain();
-    await Bun.sleep(1100);
+    // No backoff retry was scheduled, so there is nothing to wait out: an
+    // immediate second drain would replay the effect if the policy regressed.
+    expect(queueStats()).toMatchObject({ queued: 0, running: 0, failed: 1 });
     await worker.drain();
     expect(deliveries).toBe(1);
     expect(getJob(job.id)).toMatchObject({ status: "FAILED", attempt: 1 });
