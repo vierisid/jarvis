@@ -1,6 +1,3 @@
-import { startWorkItemRun } from '../../goals/workflow-bridge.ts';
-import { WorkItemError } from '../../goals/work-items.ts';
-
 /**
  * HTTP routes for the workflow runtime.
  *
@@ -59,6 +56,8 @@ import {
 } from "../db/repos/flow-run";
 import { enqueue } from "../db/repos/job-queue";
 import { cancelFlowRun } from "../db/repos/run-cancellation";
+import { startWorkItemRun } from '../../goals/workflow-bridge.ts';
+import { WorkItemError } from '../../goals/work-items.ts';
 import {
   getWaitpoint,
   listWaitpointsByFlowRun,

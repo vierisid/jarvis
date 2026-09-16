@@ -1,5 +1,3 @@
-import { createWorkItemRoutes } from '../goals/work-item-routes.ts';
-
 /**
  * REST API Routes
  *
@@ -11,6 +9,7 @@ import { createHmac, timingSafeEqual } from 'node:crypto';
 import { DEBUG_RPC_HEADER, debugRpcGate, debugRpcTokenMatches } from './debug-rpc-gate.ts';
 import type { HealthMonitor } from './health.ts';
 import { applyApprovalDecision } from './approval-decision.ts';
+import { createWorkItemRoutes } from '../goals/work-item-routes.ts';
 import { isPermissionName, readSystemPermissions, requestSystemPermission } from './system-permissions.ts';
 import { PANEL_SESSION_COOKIE } from '../sidecar/panel-sessions.ts';
 import { getCookie } from '../util/cookie.ts';
