@@ -5,7 +5,25 @@
  */
 export class WorkflowExpressionError extends Error {
   override readonly name = 'WorkflowExpressionError';
+  /** The `{{ ... }}` source, set once the failure has been annotated with it. */
+  readonly source: string | undefined;
+  constructor(message: string, source?: string) {
+    super(message);
+    this.source = source;
+  }
 }
+
+const GUIDANCE = 'Workflow expressions are data only: property paths, literals, '
+  + 'arithmetic, comparisons, logical and nullish operators, ternaries, arrays/objects '
+  + 'and flattenNestedKeys(data, path). JavaScript methods, function calls, assignment '
+  + 'and prototype access are no longer evaluated. Rewrite the expression as a data '
+  + 'reference, or move the logic into a step whose effects Authority can govern.';
+
+/** Keep a failure message readable when the expression is long. */
+const excerpt = (script: string): string => {
+  const flat = script.replace(/\s+/gu, ' ').trim();
+  return flat.length > 120 ? `${flat.slice(0, 120)}...` : flat;
+};
 
 const fail = (message: string): never => { throw new WorkflowExpressionError(`Unsupported workflow expression: ${message}`); };
 const forbidden = new Set(['__proto__', 'prototype', 'constructor']);
@@ -223,6 +241,19 @@ function binary(operator: string, leftValue: unknown, rightValue: unknown): unkn
 }
 
 export function evaluateWorkflowExpression(script: string, context: Record<string, unknown>): unknown {
+  try {
+    return evaluateParsed(script, context);
+  } catch (error) {
+    // Name the expression that failed and say what is supported now. The bare
+    // reason alone leaves the user hunting through every input on the step.
+    if (error instanceof WorkflowExpressionError && error.source === undefined) {
+      throw new WorkflowExpressionError(`${error.message} in {{ ${excerpt(script)} }}. ${GUIDANCE}`, script);
+    }
+    throw error;
+  }
+}
+
+function evaluateParsed(script: string, context: Record<string, unknown>): unknown {
   const tree = new Parser(tokenize(script)).parse();
   const budget = new Budget();
   const evaluate = (node: Node, depth = 0): unknown => {

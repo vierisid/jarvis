@@ -24,6 +24,8 @@ export const TOOL_ACTION_MAP: Record<string, ActionCategory> = {
   browser_scroll: 'access_browser',
   // Arbitrary JavaScript in the page is code execution, not browsing.
   browser_evaluate: 'execute_command',
+  browser_hover: 'access_browser',
+  browser_press_key: 'access_browser',
   browser_screenshot: 'access_browser',
   // Sends a local file out: a write to the outside world.
   browser_upload_file: 'write_data',
@@ -39,6 +41,13 @@ export const TOOL_ACTION_MAP: Record<string, ActionCategory> = {
   desktop_press_keys: 'control_app',
   desktop_launch_app: 'control_app',
   desktop_screenshot: 'read_data',
+
+  // Reads whose tool category is 'general', so they reached read_data only via
+  // the default at the bottom of getActionForTool. Spelled out because the
+  // workflow effect boundary refuses any tool without an explicit action.
+  get_clipboard: 'read_data',
+  get_system_info: 'read_data',
+  capture_screen: 'read_data',
 
   // Small writes that used to fall through to read_data.
   set_clipboard: 'write_data',

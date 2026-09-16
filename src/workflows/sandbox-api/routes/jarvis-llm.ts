@@ -14,11 +14,16 @@
  *   - `system` + overrideSystem : `system` only (Jarvis context dropped)
  *
  * The endpoint is auth-gated like the rest of `/v1/*` (Bearer engineToken).
- * It is not exposed externally -- only the engine subprocess hits it.
+ * It is not exposed externally -- only the engine subprocess hits it. The call
+ * itself passes the daemon's Authority boundary: a prompt is the workflow's
+ * cheapest route off-device, so the text sent is recorded on a durable effect
+ * and can be denied, paused or held for approval like any other effect.
  */
 
 import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
 import { cancellableWorkflowService } from "../../runtime/cancellation";
+import { workflowEffectContext } from './effect-context';
+import type { WorkflowEffectContext, WorkflowApprovalPending } from '../../runtime/effect-context';
 
 export interface LlmChatRequest {
   prompt: string;
@@ -36,11 +41,13 @@ export interface LlmChatRequest {
 export interface LlmChatResponse {
   text: string;
   parsed?: unknown;
+  /** Present when Authority requires approval; the piece parks on the waitpoint. */
+  approval?: WorkflowApprovalPending;
 }
 
 export type LlmChatFn = (
   req: LlmChatRequest,
-  ctx: { runId: string; projectId: string },
+  ctx: WorkflowEffectContext,
 ) => Promise<LlmChatResponse>;
 
 export interface JarvisLlmRouteDeps {
@@ -65,10 +72,7 @@ export function createJarvisLlmChatRoute(deps: JarvisLlmRouteDeps): RouteHandler
     if (typeof raw.system === "string") body.system = raw.system;
     if (raw.overrideSystem === true) body.overrideSystem = true;
     if (raw.parseJson === true) body.parseJson = true;
-    const reply = await cancellableWorkflowService(deps.llmChat)(body, {
-      runId: ctx.claims.runId,
-      projectId: ctx.claims.projectId,
-    });
+    const reply = await cancellableWorkflowService(deps.llmChat)(body, workflowEffectContext(ctx));
     return json(reply);
   };
 }

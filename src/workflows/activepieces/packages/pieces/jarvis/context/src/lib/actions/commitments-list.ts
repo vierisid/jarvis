@@ -60,10 +60,10 @@ export const commitmentsListAction = createAction({
     if (typeof l === "number" && Number.isFinite(l) && l >= 0) body["limit"] = Math.floor(l);
 
     return await postContext<CommitmentSnapshot[]>(
-      context.server.apiUrl,
-      context.server.token,
+      context,
       "/v1/jarvis/context/commitments-list",
       body,
+      [],
     );
   },
 });

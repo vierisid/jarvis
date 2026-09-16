@@ -2,6 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import { evaluateWorkflowExpression as evaluate, WorkflowExpressionError } from './safe-expression';
 import { noOpCodeSandbox } from '../activepieces/packages/server/engine/src/lib/core/code/no-op-code-sandbox';
 
+/** Upper bound on the guidance suffix, so the excerpt assertion stays meaningful. */
+const GUIDANCE_MAX = 600;
+
 describe('workflow data expressions', () => {
   const context = { trigger: { amount: 12, rows: [{ name: 'Café' }, { name: '東京' }], key: 'amount' },
     connection: { secret_text: 'example' } };
@@ -50,5 +53,34 @@ describe('workflow data expressions', () => {
       ['1+'.repeat(1500) + '1', {}], ['data', { data: Array(10_001).fill(0) }],
       ['data', { data: cyclic }], ['data + data', { data: 'x'.repeat(600_000) }],
     ] as const) expect(() => evaluate(source, scope)).toThrow(WorkflowExpressionError);
+  });
+});
+
+describe('expression failure messages', () => {
+  test('name the failing expression and what replaced JavaScript evaluation', () => {
+    try {
+      evaluate('trigger.rows.map(r => r.name)', { trigger: { rows: [] } });
+      throw new Error('expected a WorkflowExpressionError');
+    } catch (error) {
+      const message = (error as Error).message;
+      expect(error).toBeInstanceOf(WorkflowExpressionError);
+      expect(message).toContain('{{ trigger.rows.map(r => r.name) }}');
+      expect(message).toContain('JavaScript methods, function calls');
+      expect(message).toContain('flattenNestedKeys(data, path)');
+      expect((error as WorkflowExpressionError).source).toBe('trigger.rows.map(r => r.name)');
+    }
+  });
+
+  test('a long expression is excerpted rather than dumped whole', () => {
+    const source = `trigger.a${'b'.repeat(400)}.map(x => x)`;
+    const error = (() => { try { evaluate(source, {}); } catch (e) { return e as WorkflowExpressionError; } })()!;
+    expect(error.message).toContain('...');
+    expect(error.message.length).toBeLessThan(source.length + GUIDANCE_MAX);
+  });
+
+  test('annotation happens once, even through the engine sandbox entry point', async () => {
+    const error = await noOpCodeSandbox.runScript({ script: 'new Date()', scriptContext: {}, functions: {} })
+      .then(() => null, (e: WorkflowExpressionError) => e);
+    expect(error!.message.match(/Workflow expressions are data only/g)).toHaveLength(1);
   });
 });

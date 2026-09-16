@@ -51,10 +51,10 @@ export const awarenessRecentAction = createAction({
     if (typeof s === "number" && Number.isFinite(s) && s >= 0) body["since"] = Math.floor(s);
 
     return await postContext<AwarenessActivitySnapshot[]>(
-      context.server.apiUrl,
-      context.server.token,
+      context,
       "/v1/jarvis/context/awareness-recent",
       body,
+      [],
     );
   },
 });

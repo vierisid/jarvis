@@ -237,11 +237,13 @@ export class ChannelService implements Service {
     return this.lastRecipients.get(channel) ?? null;
   }
 
-  async sendWorkflowNotification(channel: string, recipient: string | null, text: string, checkpoint: () => void): Promise<void> {
+  async sendWorkflowNotification(channel: string, recipient: string | null, text: string): Promise<void> {
     const adapter = this.manager.getChannel(channel);
     if (!adapter?.isConnected()) throw new Error(`Channel ${channel} is unavailable`);
     if (!recipient) throw new Error(`No approved recipient for ${channel}`);
-    checkpoint();
+    // Last gate before the adapter hands the message off. The governed caller
+    // installs its Authority/emergency checkpoint in the execution scope.
+    checkpointExecution();
     await adapter.sendMessage(recipient, text);
   }
 

@@ -15,7 +15,7 @@ export function canonicalJson(value: unknown): string {
 }
 export const digest = (value: unknown) => createHash('sha256').update(canonicalJson(value)).digest('hex');
 
-export function walkWorkflow(root: FlowTriggerNode): FlowTriggerNode[] {
+function walkWorkflow(root: FlowTriggerNode): FlowTriggerNode[] {
   const out: FlowTriggerNode[] = [], pending = [root];
   while (pending.length) {
     const node = pending.pop()!;

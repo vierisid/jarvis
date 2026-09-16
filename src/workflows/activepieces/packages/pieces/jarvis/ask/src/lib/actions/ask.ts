@@ -13,6 +13,7 @@ import { createAction, Property } from "@activepieces/pieces-framework";
 interface AskResponse {
   text: string;
   parsed?: unknown;
+  approval?: { effectId: string; approvalId: string; waitpointId: string };
 }
 
 export const askAction = createAction({
@@ -67,6 +68,8 @@ export const askAction = createAction({
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${context.server.token}`,
+        'X-Jarvis-Step-Name': context.step.name,
+        'X-Jarvis-Execution-Path': JSON.stringify(context.step.executionPath ?? []),
       },
       body: JSON.stringify(body),
     });
@@ -77,6 +80,7 @@ export const askAction = createAction({
       );
     }
     const data = (await response.json()) as AskResponse;
+    if (data.approval) context.run.waitForWaitpoint(data.approval.waitpointId);
     return data;
   },
 });

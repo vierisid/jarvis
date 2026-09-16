@@ -28,29 +28,36 @@ effects. Preserve the existing delegated-agent checks.
 
 ## Capabilities
 
-Use trusted tool definitions with declared action categories and targets, with
-conservative declarations for known bounded built-ins. Unknown tools cannot
-inherit the legacy read-data fallback. Raw commands, arbitrary code, unrestricted
-HTTP/native pieces and ambiguous UI mutations need a typed governed adapter before
-direct execution. A browser/command label cannot establish an email-deny rule
-inside a script or click sequence. Existing governed delegated-agent tools stay
-available; no universal business-intent guarantee is claimed for them.
-
-Validate executable capabilities, including nested branches and loops, before
-flow execution and trigger hooks. The restricted policy also applies before the
-daemon finishes wiring services. A model-supplied capability label never grants
-authority. Engine step/path changes participate in bundle cache invalidation and
-are retained by the vendored-source sync script.
+Use trusted tool definitions with declared action categories and targets. The
+Authority action for a bounded built-in comes from the daemon's `TOOL_ACTION_MAP`,
+so the boundary and the agent path cannot classify the same tool differently.
+Unknown tools cannot inherit the legacy read-data fallback: a tool with no
+explicit action is refused, and the refusal is audited under the worst-case
+category rather than silently downgraded. Raw commands and ambiguous UI mutations
+need a typed governed adapter before direct execution. A browser/command label
+cannot establish an email-deny rule inside a script or click sequence. Existing
+governed delegated-agent tools stay available; no universal business-intent
+guarantee is claimed for them.
 
 Bounded built-ins cover file reads/writes, clipboard, system information,
 screenshots and read-only browser/desktop inspection. Their reviewed sidecar ID
 and local absolute file path are pinned. A new default computer cannot redirect
 an approved action. Server-owned `ToolDefinition.workflowEffect` declarations
 provide an Authority category and target resolver for additional typed adapters;
-the adapter must dispatch those exact arguments and target. Existing flows using
-undeclared tools or native effect pieces now fail with an unsupported-capability
-error. This requires an adapter, not an approval that purports to understand raw
-code or arbitrary UI semantics.
+the adapter must dispatch those exact arguments and target. A model-supplied
+capability label never grants authority.
+
+This boundary governs what a step can reach *through the daemon*. It does not
+govern what a community piece does inside the engine subprocess: those pieces
+make their own network calls with user-configured credentials and are outside
+the tool surface entirely. An earlier revision of this change refused every
+non-Jarvis piece and every CODE step at admission time to close that gap. That
+was withdrawn: it disabled the whole installable-piece catalogue, which is a
+product decision rather than part of this fix. The residual risk and the
+proposed path -- expand the verified set deliberately, one typed governed
+adapter per PR -- are tracked separately. Removing admission does not weaken
+the boundary above: the gate lives in the daemon, on the far side of an HTTP
+hop, so whatever the engine subprocess runs still has to pass it.
 
 Inline `{{ ... }}` expressions also use a bounded data interpreter. Supported
 syntax includes own-property references, dot/bracket and optional access,
@@ -58,12 +65,14 @@ primitive literals, arrays/objects, arithmetic/comparisons, logical/nullish
 operators, ternaries and the built-in `flattenNestedKeys(data, path)` helper.
 There are no globals, arbitrary calls, assignment, constructors or prototype
 access. Getters, functions and object coercion are rejected. Unsupported syntax
-fails the step before dispatch instead of silently becoming an empty input.
+fails the step before dispatch instead of silently becoming an empty input, and
+the error quotes the expression that failed and states what is supported.
 Existing flows using JavaScript methods or functions must use supported data
-expressions or a trusted adapter. Limits per expression: 16,384 source characters,
-2,048 tokens, depth 64, 10,000 evaluation/data visits and 1,048,576 accumulated
-string characters. The interpreter and engine patches participate in the bundle
-hash; source sync applies exact replacements and fails on upstream drift.
+expressions or reshape the value upstream. Limits per expression: 16,384 source
+characters, 2,048 tokens, depth 64, 10,000 evaluation/data visits and 1,048,576
+accumulated string characters. The interpreter and engine patches participate in
+the bundle hash; source sync applies exact replacements and fails on upstream
+drift.
 
 ## API and identity
 
@@ -73,10 +82,17 @@ hash; source sync applies exact replacements and fails on upstream drift.
   pinned version.
 - `wfe_` plus SHA-256 of `[runId, stepName, executionPath, route]` identifies the
   durable effect. Request and version digests reject changed retries.
+- Governed routes are `tools`, `notify`, `agent`, `workflows`, `context` and
+  `llm`. Vault, commitment and screen-capture reads and the LLM prompt are the
+  read-and-egress halves of the same exfiltration path, so both are `read_data`
+  effects: one Authority setting governs the source and the sink together.
 - Pending tool/notification/delegation/child-run replies add
   `approval: { effectId, approvalId, waitpointId }`. Their normal result is empty;
-  child `runId` is null and delegation status is `approval_required`. The piece
-  parks the engine at that waitpoint. Approval status is resolved through the
+  child `runId` is null and delegation status is `approval_required`; `jarvis-ask`
+  returns empty text. The four `jarvis-context` reads keep their bare success
+  shape and signal a pending approval with HTTP `202` plus `{ approval }`
+  instead, so `outputSample` and downstream loop bindings are unchanged. The
+  piece parks the engine at that waitpoint. Approval status is resolved through the
   existing Authority endpoints and delivery surfaces.
 - `GET /api/workflow-runs/:runId/effects` returns `{ runId, effects }` with frozen
   arguments/target, provenance, decision/reason, approval and waitpoint IDs,
@@ -129,8 +145,7 @@ one dispatch claim, not a distributed exactly-once or sandbox-security guarantee
   fixed before the final run.
 - Broader Authority, adapter, sandbox API, worker, timer, channel, approval and
   engine suites: 352 passed, zero failed, one existing opt-in engine-build skip.
-  The final 40 boundary tests were rerun after the delivery-race fix. Engine
-  lifecycle tests also verify default admission before flow and trigger-hook RPC.
+  The final 40 boundary tests were rerun after the delivery-race fix.
 - Workflow API suite: 44 passed; the catalog-yank uninstall test returns 404
   instead of 200. It fails identically on clean main at
   `06c12e65ca19ee160768aada9c73ccae951ce056`.
@@ -172,3 +187,43 @@ dispatch behavior, not sandbox isolation or real-service business outcomes.
 - The full repository and workflow API suites were not rerun for these fixes;
   their previously verified limitations above remain. No external effects were
   sent: reproduction uses synthetic tools/messages and a local HTTP listener.
+
+## Review revision (2026-09-16)
+
+Changes made in review, after the sections above were written:
+
+- Admission (`assertWorkflowCapabilities`) was removed entirely, with its call
+  sites in `EngineHandle.executeFlow` / `executeTriggerHook` and its two tests.
+  Community pieces and CODE steps run again. See the Capabilities section for why
+  and for what still covers the gap.
+- `/v1/jarvis/context/*` and `/v1/jarvis/llm/chat` were brought inside the
+  boundary as `read_data` effects. Without admission these were the whole
+  remaining exposure: a workflow could read the vault, commitments and screen
+  history and post them into an LLM prompt with no gate at all.
+- Bounded-tool categories are now read from `TOOL_ACTION_MAP` instead of a
+  parallel copy, and `bounded-tools.test.ts` fails if the two drift. Completing
+  that map added explicit `read_data` entries for `get_clipboard`,
+  `get_system_info` and `capture_screen` and `access_browser` for
+  `browser_hover` and `browser_press_key`; all five previously resolved to the
+  same value through `getActionForTool`'s fallbacks, so the agent path is
+  unchanged.
+- A refused capability is audited before the refusal is raised. It had been the
+  one governance decision that left no trace.
+- Expression failures now quote the expression and state what is supported.
+- Upgrade notes for both breaking changes live in `docs/WORKFLOW_AUTOMATION.md`.
+
+Reconciled with #461 (run cancellation) on rebase:
+
+- The boundary's own `workflow_job ... status='CANCELED'` probe is gone. It now
+  calls `assertRunNotCanceled`, so cancellation has exactly one fence and the
+  boundary cannot disagree with the daemon's other dispatch points. That also
+  picks up the deleted-run case the probe missed.
+- The boundary publishes its pre-dispatch checkpoint into #461's execution scope
+  with `withExecutionScope`. Scopes compose, so a deep dispatch point calling
+  `checkpointExecution()` -- a TTS chunk, a channel adapter -- now enforces
+  Authority policy and emergency state as well as cancellation. The threaded
+  `checkpoint` callbacks on `broadcastProactiveVoice` and
+  `sendWorkflowNotification` were removed in favour of that.
+- Worker-driven tests hand the run back to `QUEUED` before enqueueing, because
+  BEGIN now owns the transition to `RUNNING` and refuses a run that is already
+  in it.

@@ -10,9 +10,20 @@
  *   POST /v1/jarvis/context/vault-get-entity
  *   POST /v1/jarvis/context/awareness-recent
  *   POST /v1/jarvis/context/commitments-list
+ *
+ * These are reads, but they read the most sensitive stores Jarvis has (vault
+ * entities, commitments and screen-capture history), so they pass the same
+ * daemon-owned Authority boundary as every other workflow effect.
+ *
+ * A successful reply keeps its original bare shape -- the actions declare it in
+ * `outputSample` and downstream LOOP steps bind to it. An approval-pending
+ * reply cannot be squeezed into a bare array, so it is a `202` carrying
+ * `{ approval }`; the piece parks on the waitpoint and returns a placeholder.
  */
 
 import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
+import { workflowEffectContext } from './effect-context';
+import type { WorkflowEffectContext, WorkflowApprovalPending } from '../../runtime/effect-context';
 
 const VAULT_TYPES = new Set([
   "person",
@@ -74,13 +85,36 @@ export interface CommitmentSnapshot {
   createdAt: number;
 }
 
+/** Either the read's result or the approval the caller must wait on. */
+export type ContextReply<T> =
+  | { result: T; approval?: undefined }
+  | { approval: WorkflowApprovalPending; result?: undefined };
+
 export interface JarvisContextProvider {
-  vaultSearch(input: VaultSearchRequest): Promise<VaultEntitySnapshot[]>;
-  vaultGetEntity(id: string): Promise<VaultEntitySnapshot | null>;
+  vaultSearch(
+    input: VaultSearchRequest,
+    ctx: WorkflowEffectContext,
+  ): Promise<ContextReply<VaultEntitySnapshot[]>>;
+  vaultGetEntity(
+    id: string,
+    ctx: WorkflowEffectContext,
+  ): Promise<ContextReply<VaultEntitySnapshot | null>>;
   awarenessRecent(
     input: AwarenessRecentRequest,
-  ): Promise<AwarenessActivitySnapshot[]>;
-  commitmentsList(input: CommitmentsListRequest): Promise<CommitmentSnapshot[]>;
+    ctx: WorkflowEffectContext,
+  ): Promise<ContextReply<AwarenessActivitySnapshot[]>>;
+  commitmentsList(
+    input: CommitmentsListRequest,
+    ctx: WorkflowEffectContext,
+  ): Promise<ContextReply<CommitmentSnapshot[]>>;
+}
+
+/**
+ * 200 with the original bare payload, or 202 with the pending approval. Status
+ * carries the distinction so the success shape never changes.
+ */
+function settle<T>(reply: ContextReply<T>): Response {
+  return reply.approval ? json({ approval: reply.approval }, 202) : json(reply.result);
 }
 
 export interface JarvisContextRouteDeps {
@@ -121,7 +155,7 @@ export function createJarvisContextVaultSearchRoute(
     const limit = readOptionalNonNegInt(raw, "limit");
     if (limit === "invalid") return err("limit must be a non-negative number", 400);
     if (limit !== undefined) out.limit = limit;
-    return json(await deps.contextProvider.vaultSearch(out));
+    return settle(await deps.contextProvider.vaultSearch(out, workflowEffectContext(ctx)));
   };
 }
 
@@ -135,7 +169,7 @@ export function createJarvisContextVaultGetEntityRoute(
     if (typeof raw.id !== "string" || raw.id.length === 0) {
       return err("id is required", 400);
     }
-    return json(await deps.contextProvider.vaultGetEntity(raw.id));
+    return settle(await deps.contextProvider.vaultGetEntity(raw.id, workflowEffectContext(ctx)));
   };
 }
 
@@ -153,7 +187,7 @@ export function createJarvisContextAwarenessRecentRoute(
     const since = readOptionalNonNegInt(raw, "since");
     if (since === "invalid") return err("since must be a non-negative number", 400);
     if (since !== undefined) out.since = since;
-    return json(await deps.contextProvider.awarenessRecent(out));
+    return settle(await deps.contextProvider.awarenessRecent(out, workflowEffectContext(ctx)));
   };
 }
 
@@ -177,6 +211,6 @@ export function createJarvisContextCommitmentsListRoute(
     const limit = readOptionalNonNegInt(raw, "limit");
     if (limit === "invalid") return err("limit must be a non-negative number", 400);
     if (limit !== undefined) out.limit = limit;
-    return json(await deps.contextProvider.commitmentsList(out));
+    return settle(await deps.contextProvider.commitmentsList(out, workflowEffectContext(ctx)));
   };
 }

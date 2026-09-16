@@ -747,19 +747,19 @@ describe("SandboxApi routes (G: jarvis-tool/notify/context)", () => {
         contextProvider: {
           vaultSearch: async (input) => {
             contextCalls.push({ method: "vaultSearch", input });
-            return [];
+            return { result: [] };
           },
           vaultGetEntity: async (id) => {
             contextCalls.push({ method: "vaultGetEntity", input: id });
-            return null;
+            return { result: null };
           },
           awarenessRecent: async (input) => {
             contextCalls.push({ method: "awarenessRecent", input });
-            return [];
+            return { result: [] };
           },
           commitmentsList: async (input) => {
             contextCalls.push({ method: "commitmentsList", input });
-            return [];
+            return { result: [] };
           },
         },
       },
@@ -1370,10 +1370,10 @@ describe("SandboxApi /v1/jarvis/* envelope hardening (G+H review #7)", () => {
         toolsInvoke: async () => ({ result: {}, toolName: "" }),
         notify: async () => ({ delivered: [], failed: [] }),
         contextProvider: {
-          vaultSearch: async () => [],
-          vaultGetEntity: async () => null,
-          awarenessRecent: async () => [],
-          commitmentsList: async () => [],
+          vaultSearch: async () => ({ result: [] }),
+          vaultGetEntity: async () => ({ result: null }),
+          awarenessRecent: async () => ({ result: [] }),
+          commitmentsList: async () => ({ result: [] }),
         },
         agentDelegate: async () => ({ finalMessage: "", toolCalls: [], status: "completed" }),
         eventsPoll: async () => ({ events: [], cursor: 7 }),

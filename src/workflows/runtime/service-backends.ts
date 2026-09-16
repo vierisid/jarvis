@@ -26,11 +26,11 @@ import { JarvisContextProviderAdapter } from "../adapters/context-provider";
 import { LlmOnlyAgentDelegator } from "../adapters/agent-delegator";
 import { M7AgentDelegator } from "../adapters/m7-agent-delegator";
 import { JarvisWorkflowRunnerAdapter } from "../adapters/workflow-runner";
-import type { LlmChatFn } from "../sandbox-api/routes/jarvis-llm";
+import type { LlmChatFn, LlmChatRequest, LlmChatResponse } from "../sandbox-api/routes/jarvis-llm";
 import type { SystemPromptParts } from "../../roles/prompt-builder";
 import type { ToolsInvokeFn } from "../sandbox-api/routes/jarvis-tools";
 import type { NotifyFn } from "../sandbox-api/routes/jarvis-notify";
-import type { JarvisContextProvider } from "../sandbox-api/routes/jarvis-context";
+import type { ContextReply, JarvisContextProvider } from "../sandbox-api/routes/jarvis-context";
 import type { AgentDelegateFn } from "../sandbox-api/routes/jarvis-agent";
 import type { EventsPollFn } from "../sandbox-api/routes/jarvis-events";
 import type { WorkflowsStartFn } from "../sandbox-api/routes/jarvis-workflows";
@@ -39,10 +39,10 @@ import type { CredentialResolver } from "../credentials/adapter";
 import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
 import { WorkflowEffectBoundary, type WorkflowAuthorityDependencies } from './effect-boundary';
-import { assertWorkflowCapabilities, toolEffectCapability } from './effect-capabilities';
+import { refusedEffectCategory, toolEffectCapability } from './effect-capabilities';
 import { getFlow } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
-import { digest } from './effect-context';
+import { digest, type WorkflowEffectContext } from './effect-context';
 
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
   credentialResolver: CredentialResolver;
@@ -102,7 +102,8 @@ export function buildSandboxServiceBackends(
   opts: BuildServiceBackendsOptions,
 ): SandboxApiServices {
   const llmClient = new JarvisLlmClient(opts.llmManager);
-  const llmChat: LlmChatFn = async (req) => {
+  const effects = new WorkflowEffectBoundary(opts);
+  const callLlm = async (req: LlmChatRequest): Promise<LlmChatResponse> => {
     // System-prompt composition:
     //   - overrideSystem=true       : use `req.system` only. Jarvis
     //                                 context (role, personality, vault
@@ -152,18 +153,36 @@ export function buildSandboxServiceBackends(
     }
     return { text: reply.text };
   };
+  const llmChat: LlmChatFn = async (req, ctx) => {
+    const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-ask', action: 'ask',
+      route: 'llm', toolName: 'workflow_ask', category: 'read_data', toolCategory: 'llm',
+      request: { ...req },
+      // The prompt is the payload that leaves the device, so it is what gets
+      // frozen and reviewed -- not the daemon-composed system prompt above.
+      prepare: () => ({ arguments: { ...req }, target: { destination: 'llm-provider', overrideSystem: req.overrideSystem === true } }),
+      execute: async (args, checkpoint) => { checkpoint(); return callLlm(args as unknown as LlmChatRequest); },
+    });
+    return reply.approval ? { text: '', approval: reply.approval } : reply.result as LlmChatResponse;
+  };
 
   const toolAdapter = opts.toolRegistry
     ? new JarvisToolRegistryAdapter(opts.toolRegistry)
     : null;
-  const effects = new WorkflowEffectBoundary(opts);
   const toolsInvoke: ToolsInvokeFn | undefined = toolAdapter
     ? async (req, ctx) => {
         if (!toolAdapter.has(req.toolName)) {
           throw new Error(`tool not found: ${req.toolName}`);
         }
         const tool = opts.toolRegistry!.get(req.toolName)!;
-        const capability = toolEffectCapability(tool);
+        const capability = (() => {
+          try { return toolEffectCapability(tool); }
+          catch (error) {
+            // Refusing a capability is a governance decision, so it is audited
+            // even though no durable effect record exists for it yet.
+            effects.auditRefusal({ context: ctx, toolName: tool.name, category: refusedEffectCategory(tool) });
+            throw error;
+          }
+        })();
         const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-tool', action: 'invoke',
           route: 'tool', toolName: tool.name, category: capability.category, toolCategory: tool.category,
           request: { ...req }, prepare: () => {
@@ -232,13 +251,13 @@ export function buildSandboxServiceBackends(
             for (const channel of channels) {
               try {
                 checkpoint();
-                await opts.channelService.sendWorkflowNotification(channel, recipients[channel] ?? null, text, checkpoint);
+                await opts.channelService.sendWorkflowNotification(channel, recipients[channel] ?? null, text);
                 delivered.push(channel);
               } catch (error) { failed.push({ channel, error: (error as Error).message }); }
             }
             return { delivered, failed };
           },
-          sendVoice: async text => { checkpoint(); await opts.wsService.broadcastProactiveVoice(text, checkpoint); },
+          sendVoice: async text => { checkpoint(); await opts.wsService.broadcastProactiveVoice(text); },
           ...(opts.sendDesktop ? { sendDesktop: async (title: string, body: string) => { checkpoint(); await opts.sendDesktop!(title, body); } } : {}),
         });
         return guardedNotifier.notify({ message: args.message as string, channels: args.channels as any, priority: args.priority as any });
@@ -248,17 +267,53 @@ export function buildSandboxServiceBackends(
   };
 
   const contextAdapter = new JarvisContextProviderAdapter();
+  /**
+   * Vault entities, commitments and screen-capture history are the most
+   * sensitive things a workflow can read, and a read is the first half of an
+   * exfiltration. Each one is a governed `read_data` effect, so a user who puts
+   * `read_data` under Authority governs both this and `jarvis-ask` -- the source
+   * and the sink of that path -- with a single setting.
+   */
+  const contextEffect = async <T>(
+    ctx: WorkflowEffectContext,
+    action: string,
+    store: string,
+    request: Record<string, unknown>,
+    run: (args: Record<string, unknown>) => Promise<T>,
+  ): Promise<ContextReply<T>> => {
+    const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-context', action,
+      route: `context:${action}`, toolName: `workflow_${action}`, category: 'read_data', toolCategory: 'context',
+      request: { ...request }, prepare: () => ({ arguments: { ...request }, target: { store } }),
+      execute: async (args, checkpoint) => { checkpoint(); return run(args); },
+    });
+    return reply.approval ? { approval: reply.approval } : { result: reply.result as T };
+  };
+  // Wrapped like `llmChat` and `notify`: a canceled run must not read either.
   const contextProvider: JarvisContextProvider = {
-    vaultSearch: (input) =>
-      contextAdapter.vaultSearch(
-        input as Parameters<typeof contextAdapter.vaultSearch>[0],
+    vaultSearch: cancellableWorkflowService((input, ctx) =>
+      contextEffect(ctx, 'vault_search', 'vault', { ...input }, (args) =>
+        contextAdapter.vaultSearch(
+          args as Parameters<typeof contextAdapter.vaultSearch>[0],
+        ),
       ),
-    vaultGetEntity: (id) => contextAdapter.vaultGetEntity(id),
-    awarenessRecent: (input) => contextAdapter.awarenessRecent(input),
-    commitmentsList: (input) =>
-      contextAdapter.commitmentsList(
-        input as Parameters<typeof contextAdapter.commitmentsList>[0],
+    ),
+    vaultGetEntity: cancellableWorkflowService((id: string, ctx) =>
+      contextEffect(ctx, 'vault_get_entity', 'vault', { id }, (args) =>
+        contextAdapter.vaultGetEntity(args.id as string),
       ),
+    ),
+    awarenessRecent: cancellableWorkflowService((input, ctx) =>
+      contextEffect(ctx, 'awareness_recent', 'awareness', { ...input }, (args) =>
+        contextAdapter.awarenessRecent(args),
+      ),
+    ),
+    commitmentsList: cancellableWorkflowService((input, ctx) =>
+      contextEffect(ctx, 'commitments_list', 'commitments', { ...input }, (args) =>
+        contextAdapter.commitmentsList(
+          args as Parameters<typeof contextAdapter.commitmentsList>[0],
+        ),
+      ),
+    ),
   };
 
   // Prefer the full M7 loop when the daemon supplied an orchestrator +
@@ -315,7 +370,6 @@ export function buildSandboxServiceBackends(
     const versionId = flow?.published_version_id ?? (flow ? getLatestDraft(flow.id)?.id : null);
     const version = versionId ? getFlowVersion(versionId) : null;
     if (!version) throw new Error('Target workflow version is unavailable');
-    assertWorkflowCapabilities(version.trigger);
     return { versionId: version.id, versionDigest: digest(version.trigger) };
   };
   const workflowsStart: WorkflowsStartFn = async (req, ctx) => {
@@ -337,7 +391,6 @@ export function buildSandboxServiceBackends(
 
   const services: SandboxApiServices = {
     credentialResolver: opts.credentialResolver,
-    assertFlowCapabilities: assertWorkflowCapabilities,
     llmChat: cancellableWorkflowService(llmChat),
     notify: cancellableWorkflowService(notify),
     contextProvider,

@@ -301,11 +301,11 @@ describe("Engine end-to-end (G+H pieces)", () => {
   const contextProvider: JarvisContextProvider = {
     vaultSearch: async () => {
       calls.context.push({ method: "vaultSearch" });
-      return [];
+      return { result: [] };
     },
-    vaultGetEntity: async () => null,
-    awarenessRecent: async () => [],
-    commitmentsList: async () => [],
+    vaultGetEntity: async () => ({ result: null }),
+    awarenessRecent: async () => ({ result: [] }),
+    commitmentsList: async () => ({ result: [] }),
   };
   const agentDelegate: AgentDelegateFn = async (req) => {
     calls.agent.push({ goal: req.goal });

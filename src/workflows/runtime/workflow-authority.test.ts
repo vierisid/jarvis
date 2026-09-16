@@ -15,7 +15,9 @@ import { getWorkflowDb } from '../db';
 import { updateRun } from '../db/repos/flow-run';
 import { updateDraftVersion, setSampleDataEntry, setSampleInputEntry } from '../db/repos/flow-version';
 import { resumeResolvedWorkflowEffects } from './effect-approval-scheduler';
-import { assertWorkflowCapabilities } from './effect-capabilities';
+import { cancelFlowRun } from '../db/repos/run-cancellation';
+import { WorkflowCancellationError } from './cancellation';
+import { checkpointExecution } from '../../actions/execution-scope';
 import { SandboxApi } from '../sandbox-api/server';
 import { EngineRuntime } from '../runner/engine-runtime/engine-runtime';
 import { buildEngineBundle } from '../runner/engine-runtime/build';
@@ -29,6 +31,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { createWorkflowRoutes } from '../api/routes';
+import { createJarvisContextVaultSearchRoute } from '../sandbox-api/routes/jarvis-context';
 import { getSidecarManager, setSidecarManagerRef } from '../../actions/tools/sidecar-route';
 import { CredentialResolver } from '../credentials/adapter';
 import { WorkflowEventBuffer } from './event-buffer';
@@ -39,12 +42,17 @@ import { noOpCodeSandbox } from '../activepieces/packages/server/engine/src/lib/
 beforeEach(() => { initWorkflowDb(':memory:'); });
 afterEach(() => { closeWorkflowDb(); });
 
-function fixture(route: 'tool' | 'notify' | 'agent' | 'workflow' = 'tool') {
+const PIECE_FOR_ROUTE = { tool: 'tool', notify: 'notify', agent: 'agent', workflow: 'trigger',
+  context: 'context', llm: 'ask' } as const;
+const ACTION_FOR_ROUTE = { tool: 'invoke', notify: 'notify', agent: 'delegate', workflow: 'run_workflow',
+  context: 'vault_search', llm: 'ask' } as const;
+
+function fixture(route: 'tool' | 'notify' | 'agent' | 'workflow' | 'context' | 'llm' = 'tool') {
   const flow = createFlow({});
   const version = createDraftVersion({ flowId: flow.id, displayName: 'Governed routine', trigger: {
     name: 'trigger', type: 'EMPTY', nextAction: { name: 'action', type: 'PIECE', settings: {
-      pieceName: `@jarvispieces/piece-jarvis-${route === 'workflow' ? 'trigger' : route}`, pieceVersion: '0.0.1',
-      actionName: ({ tool: 'invoke', notify: 'notify', agent: 'delegate', workflow: 'run_workflow' })[route], input: {},
+      pieceName: `@jarvispieces/piece-jarvis-${PIECE_FOR_ROUTE[route]}`, pieceVersion: '0.0.1',
+      actionName: ACTION_FOR_ROUTE[route], input: {},
     } },
   } });
   const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
@@ -58,7 +66,10 @@ function fixture(route: 'tool' | 'notify' | 'agent' | 'workflow' = 'tool') {
   const approvals = new ApprovalManager();
   const deliveredApprovals: string[] = [];
   const options: BuildServiceBackendsOptions = { credentialResolver: new CredentialResolver(),
-    llmManager: {} as any, toolRegistry: registry, authorityEngine: authority,
+    llmManager: { chat: async (messages: Array<{ role: string; content: string }>) => {
+      calls.push({ llm: messages[messages.length - 1]!.content });
+      return { content: 'model reply' };
+    } } as any, toolRegistry: registry, authorityEngine: authority,
     emergencyController: emergency, auditTrail: new AuditTrail(), eventBuffer: new WorkflowEventBuffer(),
     approvalManager: approvals, onWorkflowApproval: request => { deliveredApprovals.push(request.id); },
     channelService: { getChannelStatus: () => ({}), getBroadcastRecipient: () => 'recipient-at-review',
@@ -68,9 +79,14 @@ function fixture(route: 'tool' | 'notify' | 'agent' | 'workflow' = 'tool') {
   };
   const backends = buildSandboxServiceBackends(options);
   const context = { runId: run.id, projectId: DEFAULT_IDS.project, stepName: 'action', executionPath: [] };
-  const invoke = () => route === 'tool'
-    ? backends.toolsInvoke!({ toolName: 'write_file', params: { path: '/tmp/synthetic', content: 'hello' } }, context)
-    : backends.notify!({ message: 'Synthetic notification', channels: ['dashboard'], priority: 'normal' }, context);
+  const invoke = (): Promise<any> => {
+    if (route === 'context') return backends.contextProvider!.vaultSearch({ query: 'alice' }, context) as Promise<any>;
+    if (route === 'llm') return backends.llmChat!({ prompt: 'summarise the vault' }, context) as Promise<any>;
+    if (route === 'tool') {
+      return backends.toolsInvoke!({ toolName: 'write_file', params: { path: '/tmp/synthetic', content: 'hello' } }, context);
+    }
+    return backends.notify!({ message: 'Synthetic notification', channels: ['dashboard'], priority: 'normal' }, context);
+  };
   return { calls, authority, emergency, invoke, approvals, deliveredApprovals, backends, context, run, version, registry, options };
 }
 
@@ -105,10 +121,12 @@ describe('workflow effect boundary', () => {
     expect(calls).toEqual(['dashboard', '[URGENT] legacy']);
   });
 
-  for (const route of ['tool', 'notify'] as const) {
+  const CATEGORY_FOR_ROUTE = { tool: 'write_data', notify: 'send_message',
+    context: 'read_data', llm: 'read_data' } as const;
+  for (const route of ['tool', 'notify', 'context', 'llm'] as const) {
     test(`${route}: Authority denial prevents the effect`, async () => {
       const f = fixture(route);
-      f.authority.addOverride({ action: route === 'tool' ? 'write_data' : 'send_message', allowed: false });
+      f.authority.addOverride({ action: CATEGORY_FOR_ROUTE[route], allowed: false });
       await expect(f.invoke()).rejects.toThrow(/denied/i);
       expect(f.calls).toHaveLength(0);
     });
@@ -119,6 +137,59 @@ describe('workflow effect boundary', () => {
       expect(f.calls).toHaveLength(0);
     });
   }
+
+  test('context reads and prompts are recorded as durable effects, not passed straight through', async () => {
+    const ctx = fixture('context');
+    expect(await ctx.invoke()).toEqual({ result: [] });
+    expect(listWorkflowEffects(ctx.run.id)[0]).toMatchObject({ status: 'succeeded', route: 'context:vault_search',
+      toolName: 'workflow_vault_search', actionCategory: 'read_data',
+      arguments: { query: 'alice' }, target: { store: 'vault' } });
+
+    const llm = fixture('llm');
+    expect(await llm.invoke()).toMatchObject({ text: 'model reply' });
+    expect(llm.calls).toEqual([{ llm: 'summarise the vault' }]);
+    expect(listWorkflowEffects(llm.run.id)[0]).toMatchObject({ status: 'succeeded', route: 'llm',
+      toolName: 'workflow_ask', actionCategory: 'read_data',
+      arguments: { prompt: 'summarise the vault' }, target: { destination: 'llm-provider' } });
+  });
+
+  test('a governed read_data category pauses both halves of the exfiltration path', async () => {
+    for (const route of ['context', 'llm'] as const) {
+      const f = fixture(route);
+      f.authority.setGovernedCategories(['read_data']);
+      const pending = await f.invoke();
+      expect(pending.approval).toBeDefined();
+      // Nothing was read and no prompt reached the provider while it waits.
+      expect(f.calls).toHaveLength(0);
+      expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'pending', decision: 'approval_required' });
+      expect(f.deliveredApprovals).toHaveLength(1);
+    }
+  });
+
+  test('a pending context read answers 202 while a resolved one keeps its bare array shape', async () => {
+    const f = fixture('context');
+    f.authority.setGovernedCategories(['read_data']);
+    const route = createJarvisContextVaultSearchRoute({ contextProvider: f.backends.contextProvider! });
+    const call = () => route({
+      req: new Request('http://127.0.0.1/v1/jarvis/context/vault-search', {
+        method: 'POST', body: JSON.stringify({ query: 'alice' }),
+        headers: { 'X-Jarvis-Step-Name': 'action', 'X-Jarvis-Execution-Path': '[]' },
+      }),
+      claims: { runId: f.run.id, projectId: DEFAULT_IDS.project, sandboxId: 'sbx' } as any,
+      params: {},
+    });
+
+    const parked = await call();
+    expect(parked.status).toBe(202);
+    expect(await parked.json()).toMatchObject({ approval: { effectId: expect.any(String) } });
+
+    const effect = listWorkflowEffects(f.run.id)[0]!;
+    f.approvals.approve(effect.approvalId!, 'test');
+    const resolved = await call();
+    expect(resolved.status).toBe(200);
+    // The success shape is still the bare array the action declares in outputSample.
+    expect(await resolved.json()).toEqual([]);
+  });
 
   test('allowed effect executes once and returns its durable result on replay', async () => {
     const f = fixture();
@@ -220,6 +291,21 @@ describe('workflow effect boundary', () => {
     expect(f.calls).toHaveLength(0);
   });
 
+  test('a refused capability is audited, not silently rejected', async () => {
+    const f = fixture();
+    f.registry.register({ name: 'run_command', category: 'terminal', description: 'Synthetic shell', parameters: {},
+      execute: async () => 'ran' });
+    await expect(f.backends.toolsInvoke!({ toolName: 'run_command', params: { command: 'id' } }, f.context))
+      .rejects.toThrow(/opaque code\/UI effects/);
+    expect(f.calls).toHaveLength(0);
+    // The refusal happens before any effect record exists, so the audit row is
+    // the only trace of it. It records the tool's real category, not read_data.
+    const rows = new AuditTrail().query({ agentId: `workflow:${f.run.id}` });
+    expect(rows).toHaveLength(1);
+    expect(rows[0]).toMatchObject({ tool_name: 'run_command', action_category: 'execute_command',
+      authority_decision: 'denied', executed: 0 });
+  });
+
   test('unmapped tools do not default to read_data', async () => {
     const f = fixture();
     f.registry.register({ name: 'mystery_sender', description: 'Unknown effect', category: 'general', parameters: {},
@@ -288,6 +374,35 @@ describe('workflow effect boundary', () => {
     expect(f.calls).toHaveLength(0);
   });
 
+  test('a canceled run refuses through the shared cancellation fence', async () => {
+    const f = fixture();
+    cancelFlowRun(f.run.id);
+    // The boundary defers to runtime/cancellation rather than reading job rows,
+    // so it refuses on the same fence the daemon's other dispatch points use.
+    await expect(f.invoke()).rejects.toThrow(WorkflowCancellationError);
+    expect(f.calls).toHaveLength(0);
+  });
+
+  test('the ambient execution scope carries Authority state, not just cancellation', async () => {
+    const f = fixture();
+    let refusal: string | null = null;
+    // Deep dispatch points (TTS chunks, channel adapters) only have
+    // `checkpointExecution()`. Inside a governed effect that has to refuse on
+    // emergency state too, or a pause mid-fan-out would go unnoticed.
+    f.registry.unregister('write_file');
+    f.registry.register({ name: 'write_file', category: 'file-ops', description: 'Synthetic write', parameters: {},
+      execute: async () => {
+        f.emergency.pause();
+        try { checkpointExecution(); } catch (error) { refusal = (error as Error).message; throw error; }
+        f.calls.push('dispatched-after-pause');
+        return 'saved';
+      } });
+    await expect(f.backends.toolsInvoke!({ toolName: 'write_file',
+      params: { path: '/tmp/synthetic', content: 'hello' } }, f.context)).rejects.toThrow(/paused/i);
+    expect(refusal).toMatch(/paused/i);
+    expect(f.calls).toHaveLength(0);
+  });
+
   test('concurrent callers cannot dispatch the same effect twice', async () => {
     const f = fixture();
     let release!: () => void;
@@ -321,14 +436,6 @@ describe('workflow effect boundary', () => {
     expect(f.calls).toHaveLength(1);
     expect(listWorkflowEffects(f.run.id)[0]!.status).toBe('failed');
     expect(new AuditTrail().query({ agentId: `workflow:${f.run.id}` }).every(entry => entry.executed === 0)).toBe(true);
-  });
-
-  test('raw code and HTTP cannot enter through nested branches', () => {
-    for (const nested of [{ name: 'code', type: 'CODE' }, { name: 'http', type: 'PIECE', settings: { pieceName: '@activepieces/piece-http' } }]) {
-      expect(() => assertWorkflowCapabilities({ name: 'trigger', type: 'EMPTY', nextAction: {
-        name: 'router', type: 'ROUTER', children: [null, { name: 'loop', type: 'LOOP_ON_ITEMS', firstLoopAction: nested }],
-      } })).toThrow(/Unsupported/);
-    }
   });
 
   test('Authority waitpoints cannot be resumed through generic webhooks, and effects are inspectable', async () => {
@@ -433,6 +540,10 @@ describe('workflow effect boundary', () => {
       executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }),
     }) } });
     try {
+      // The fixture parks the run RUNNING so direct boundary calls resolve their
+      // identity. A worker-driven BEGIN owns that transition itself and refuses a
+      // run that is not QUEUED, so hand it back before enqueueing.
+      updateRun(f.run.id, { status: 'QUEUED' });
       enqueue({ jobType: 'RUN_FLOW', flowRunId: f.run.id, maxAttempts: 1, payload: { runId: f.run.id } });
       await worker.drain();
       expect(getFlowRun(f.run.id)!.status).toBe('FAILED');
@@ -463,6 +574,10 @@ describe('workflow effect boundary', () => {
       executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }),
     }) } });
     try {
+      // The fixture parks the run RUNNING so direct boundary calls resolve their
+      // identity. A worker-driven BEGIN owns that transition itself and refuses a
+      // run that is not QUEUED, so hand it back before enqueueing.
+      updateRun(f.run.id, { status: 'QUEUED' });
       enqueue({ jobType: 'RUN_FLOW', flowRunId: f.run.id, maxAttempts: 1, payload: {
         runId: f.run.id, stepNameToTest: 'action', sampleData: { before: { text: 'reviewed sample' } },
         sampleInputOverride: { action: { toolName: 'write_file', params: { path: '/preview', content: '{{before.text}}' } } },
@@ -508,6 +623,10 @@ describe('workflow effect boundary', () => {
       executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }),
     }) } });
     try {
+      // The fixture parks the run RUNNING so direct boundary calls resolve their
+      // identity. A worker-driven BEGIN owns that transition itself and refuses a
+      // run that is not QUEUED, so hand it back before enqueueing.
+      updateRun(f.run.id, { status: 'QUEUED' });
       enqueue({ jobType: 'RUN_FLOW', flowRunId: f.run.id, maxAttempts: 1, payload: { runId: f.run.id, payload: { items: [1, 2] } } });
       await worker.drain();
       expect(getFlowRun(f.run.id)!.status).toBe('PAUSED');

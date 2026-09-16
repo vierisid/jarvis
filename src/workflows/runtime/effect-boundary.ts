@@ -4,6 +4,8 @@ import type { EmergencyController } from '../../authority/emergency';
 import type { ApprovalManager, ApprovalRequest } from '../../authority/approval';
 import type { ActionCategory } from '../../roles/authority';
 import { getWorkflowDb } from '../db';
+import { assertRunNotCanceled } from './cancellation';
+import { withExecutionScope } from '../../actions/execution-scope';
 import { getFlowRun } from '../db/repos/flow-run';
 import { createWaitpoint } from '../db/repos/waitpoint';
 import { claimWorkflowEffect, getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
@@ -27,6 +29,24 @@ export type EffectReply = { result: unknown; approval?: never } | { approval: Wo
 /** The daemon owns policy, frozen arguments, approvals and the dispatch fence. */
 export class WorkflowEffectBoundary {
   constructor(private readonly deps: WorkflowAuthorityDependencies) {}
+
+  /**
+   * Record a capability we refused before an effect record could exist. A tool
+   * with no bounded Authority action never reaches `invoke`, and a refusal is
+   * exactly the event an operator needs in the audit trail, so log it here.
+   * Best effort: the refusal itself is raised by the caller either way.
+   */
+  auditRefusal(input: { context: WorkflowEffectContext; toolName: string; category: ActionCategory }): void {
+    try {
+      // The step name is engine-supplied provenance and is not validated on this
+      // path, so it is bounded before it reaches the audit row.
+      const step = (input.context.stepName ?? 'unknown step').slice(0, 120);
+      this.deps.auditTrail?.log({ agent_id: `workflow:${input.context.runId}`,
+        agent_name: `Workflow ${input.context.runId} / ${step}`,
+        tool_name: input.toolName, action_category: input.category,
+        authority_decision: 'denied', approval_id: null, executed: false });
+    } catch (error) { console.error('[Workflow Authority] refusal audit failed:', error); }
+  }
 
   async invoke(input: EffectInvocation): Promise<EffectReply> {
     const { authorityEngine: authority, emergencyController: emergency, auditTrail: audit, approvalManager: approvals } = this.deps;
@@ -65,10 +85,10 @@ export class WorkflowEffectBoundary {
       if (state !== 'normal' || configuredState !== 'normal') throw new Error(`Workflow effect blocked: system ${state !== 'normal' ? state : configuredState}`);
       const run = getFlowRun(record.runId);
       if (!run || run.status !== 'RUNNING') throw new Error(`Workflow effect blocked: run is ${run?.status ?? 'missing'}`);
-      // A canceled job can precede the run-status update. W5 can extend this
-      // boundary with in-flight cancellation without weakening this check.
-      const canceled = getWorkflowDb().query("SELECT id FROM workflow_job WHERE flow_run_id=? AND status='CANCELED' LIMIT 1").get(record.runId);
-      if (canceled) throw new Error('Workflow effect blocked: run job was canceled');
+      // Cancellation has one fence, owned by `runtime/cancellation`. Defer to it
+      // rather than reading job rows here, so the boundary and the daemon's
+      // other dispatch points can never disagree about whether a run is dead.
+      assertRunNotCanceled(record.runId);
       const decision = authority.checkAuthority({ agentId: `workflow:${record.runId}`, agentRoleId: 'workflow-default',
         agentAuthorityLevel: 0, toolName: input.toolName, toolCategory: input.toolCategory,
         actionCategory: input.category, temporaryGrants: new Map() });
@@ -133,7 +153,13 @@ export class WorkflowEffectBoundary {
     checkpoint();
     if (!claimWorkflowEffect(record)) throw new Error('Workflow effect was already claimed; replay blocked');
     try {
-      const result = await input.execute(JSON.parse(canonicalJson(record.arguments)), checkpoint);
+      // Publish the same checkpoint into the ambient execution scope. Deep
+      // dispatch points (TTS chunks, channel adapters) call
+      // `checkpointExecution()` for cancellation; inside a governed effect that
+      // has to mean Authority and emergency state as well. Scopes compose, so
+      // this adds to the run's cancellation fence rather than replacing it.
+      const result = await withExecutionScope(checkpoint,
+        () => input.execute(JSON.parse(canonicalJson(record.arguments)), checkpoint));
       record.result = result ?? null; record.status = 'succeeded'; record.finishedAt = Date.now();
       saveWorkflowEffect(record);
       if (record.approvalId) approvals!.markExecuted(record.approvalId, canonicalJson({ effectId: id, result: record.result }).slice(0, 2000));

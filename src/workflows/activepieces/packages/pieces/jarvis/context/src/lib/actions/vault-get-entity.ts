@@ -38,10 +38,10 @@ export const vaultGetEntityAction = createAction({
       throw new Error("jarvis-context.vault_get_entity: id is required");
     }
     return await postContext<VaultEntitySnapshot | null>(
-      context.server.apiUrl,
-      context.server.token,
+      context,
       "/v1/jarvis/context/vault-get-entity",
       { id },
+      null,
     );
   },
 });

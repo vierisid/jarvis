@@ -30,6 +30,53 @@ What it deliberately is NOT:
 - Not distributed. The job queue is SQLite-backed; the worker concurrency is 1 by default.
 - Not a marketplace. The set of installable pieces is the curated catalog under `src/workflows/pieces-library/` plus the Jarvis-authored pieces in the vendored tree. Users cannot side-load arbitrary npm packages.
 
+## Upgrade notes
+
+### Workflow effects now pass an Authority boundary
+
+Every `/v1/jarvis/*` call a step makes -- `tools`, `notify`, `agent`, `workflows`,
+`context` and `llm` -- goes through a daemon-owned gate before it dispatches.
+Practical consequences:
+
+- A denied Authority category, an emergency pause, or an emergency kill stops the
+  step instead of letting it run. The failure names the category that blocked it.
+- A category the user put under approval parks the run at a waitpoint and delivers
+  an approval request. The run resumes on approval and fails on denial or expiry.
+  This is why `jarvis-context` reads can now answer `202` instead of `200`.
+- Each effect is recorded in `workflow_effect` with its frozen arguments, target,
+  decision and outcome, readable at `GET /api/workflow-runs/:runId/effects`.
+- `jarvis-tool` only invokes tools with a bounded, declared Authority action (see
+  `BOUNDED_TOOLS` in `src/workflows/runtime/effect-capabilities.ts`). Tools whose
+  effect is a script or a click sequence -- `run_command`, `browser_click`,
+  `desktop_type` and friends -- need a typed `ToolDefinition.workflowEffect`
+  adapter first. A flow that called one of those directly now fails with
+  "Unsupported direct workflow capability".
+- Community pieces are unaffected by the gate: they run in the engine and never
+  reach the daemon's tool surface. They are also not governed by it. See
+  `src/workflows/pieces-library/README.md` for the curation path.
+
+### `{{ ... }}` expressions are data, not JavaScript
+
+The vendored engine's expression evaluator used `Function(...)`, so any inline
+expression ran arbitrary code inside the engine subprocess with host privileges.
+It is now a bounded data interpreter (`src/workflows/runtime/safe-expression.ts`).
+
+Supported: property references, dot/bracket/optional access, primitive literals,
+arrays and objects, arithmetic, comparisons, logical and nullish operators,
+ternaries, and `flattenNestedKeys(data, path)`.
+
+Not supported: method calls (`.map`, `.split`, `.toUpperCase`), constructors
+(`new Date()`), `JSON.parse`, assignment, spread, globals, and prototype access.
+
+An unsupported expression now **fails the step loudly** instead of silently
+resolving to an empty string, and the error quotes the expression that failed.
+Flows that relied on a JavaScript method in an input need the value reshaped
+upstream -- by the step that produces it, or by a piece that returns the shape
+you want.
+
+Limits per expression: 16,384 source characters, 2,048 tokens, depth 64, 10,000
+evaluation visits, and 1,048,576 accumulated output characters.
+
 ## Architecture
 
 ```
