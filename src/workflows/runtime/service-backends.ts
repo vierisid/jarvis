@@ -29,6 +29,7 @@ import { JarvisWorkflowRunnerAdapter } from "../adapters/workflow-runner";
 import type { LlmChatFn, LlmChatRequest, LlmChatResponse } from "../sandbox-api/routes/jarvis-llm";
 import type { SystemPromptParts } from "../../roles/prompt-builder";
 import type { ToolsInvokeFn } from "../sandbox-api/routes/jarvis-tools";
+import type { PieceAuthorizeFn } from "../sandbox-api/routes/jarvis-pieces";
 import type { NotifyFn } from "../sandbox-api/routes/jarvis-notify";
 import type { ContextReply, JarvisContextProvider } from "../sandbox-api/routes/jarvis-context";
 import type { AgentDelegateFn } from "../sandbox-api/routes/jarvis-agent";
@@ -40,6 +41,7 @@ import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
 import { WorkflowEffectBoundary, type WorkflowAuthorityDependencies } from './effect-boundary';
 import { refusedEffectCategory, toolEffectCapability } from './effect-capabilities';
+import { governedPieceToolDefinition, resolveGovernedPieceAction, sanitizePieceInput } from './piece-effects';
 import { getFlow } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
 import { digest, type WorkflowEffectContext } from './effect-context';
@@ -389,8 +391,49 @@ export function buildSandboxServiceBackends(
       : reply.result as Awaited<ReturnType<WorkflowsStartFn>>;
   };
 
+  /**
+   * Admission for a verified piece's action. The piece itself runs in the
+   * engine subprocess, so what passes through the boundary here is the
+   * decision to let it dispatch: the same Authority check, the same emergency
+   * and cancellation fences, the same durable record, audit row and approval
+   * waitpoint every other effect gets. The remote call happens in the
+   * subprocess once this returns, so the record is a dispatch authorization
+   * and not a completion receipt.
+   *
+   * A piece with no adapter is reported ungoverned and runs as it does today.
+   */
+  const pieceAuthorize: PieceAuthorizeFn = async (req, ctx) => {
+    const resolved = resolveGovernedPieceAction(req.piece, req.action);
+    if (!resolved) return { governed: false };
+    // The connection is stripped on the engine side before the input is sent;
+    // stripping it again here means neither path can put a credential into the
+    // durable record or the approval card.
+    const input = sanitizePieceInput(req.input);
+    const tool = governedPieceToolDefinition(resolved);
+    const capability = (() => {
+      try { return toolEffectCapability(tool); }
+      catch (error) {
+        effects.auditRefusal({ context: ctx, toolName: tool.name, category: refusedEffectCategory(tool) });
+        throw error;
+      }
+    })();
+    const reply = await effects.invoke({ context: ctx, piece: req.piece, action: req.action,
+      route: 'piece', toolName: tool.name, category: capability.category, toolCategory: tool.category,
+      // Digested over the whole resolved input, so a change to any prop -- not
+      // just the ones the card shows -- invalidates an approval granted earlier.
+      request: { piece: req.piece, action: req.action, input },
+      prepare: () => ({ arguments: input, target: capability.target(input) }),
+      validateTarget: (_args, target) => {
+        if (digest(capability.target(input)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
+      },
+      execute: async (_args, checkpoint) => { checkpoint(); return { dispatch: 'authorized' }; } });
+    return reply.approval ? { governed: true, dispatch: 'approval_required', approval: reply.approval }
+      : { governed: true, dispatch: 'authorized' };
+  };
+
   const services: SandboxApiServices = {
     credentialResolver: opts.credentialResolver,
+    pieceAuthorize: cancellableWorkflowService(pieceAuthorize),
     llmChat: cancellableWorkflowService(llmChat),
     notify: cancellableWorkflowService(notify),
     contextProvider,

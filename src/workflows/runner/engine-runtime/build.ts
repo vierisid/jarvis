@@ -205,6 +205,12 @@ function buildStagingPackageJson(): string {
  */
 const PATCHED_VENDOR_SOURCES = [
   '../../runtime/safe-expression.ts',
+  // Jarvis: the governed-piece admission gate. The adapter table and the
+  // engine-side client are daemon sources compiled INTO the bundle, so editing
+  // either without registering them here would leave a cached engine running
+  // the old table -- a stale bundle that silently governs the wrong actions.
+  '../../runtime/piece-effects.ts',
+  '../../runtime/piece-effect-guard.ts',
   'server/engine/src/lib/core/code/no-op-code-sandbox.ts',
   'server/engine/src/lib/variables/props-resolver.ts',
   'server/engine/src/lib/handler/piece-executor.ts',

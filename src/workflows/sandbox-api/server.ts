@@ -53,6 +53,10 @@ import {
   type ToolsInvokeFn,
 } from "./routes/jarvis-tools";
 import {
+  createJarvisPieceAuthorizeRoute,
+  type PieceAuthorizeFn,
+} from "./routes/jarvis-pieces";
+import {
   createJarvisNotifyRoute,
   type NotifyFn,
 } from "./routes/jarvis-notify";
@@ -109,6 +113,12 @@ export interface SandboxApiServices {
    * endpoint returns 503. The daemon wires this in with `ToolRegistry`.
    */
   toolsInvoke?: ToolsInvokeFn;
+  /**
+   * Admission backend for a governed piece's action, called by the engine
+   * before the piece runs. If unset the endpoint returns 503, which fails the
+   * step closed -- the engine only calls it for a piece with an adapter.
+   */
+  pieceAuthorize?: PieceAuthorizeFn;
   /**
    * Notification backend for the `jarvis-notify` piece. If unset, returns 503.
    */
@@ -254,6 +264,11 @@ export class SandboxApi {
         path: "/v1/jarvis/tools/invoke",
         method: "POST",
         handler: createJarvisToolsInvokeRoute(this.services),
+      },
+      {
+        path: "/v1/jarvis/pieces/authorize",
+        method: "POST",
+        handler: createJarvisPieceAuthorizeRoute(this.services),
       },
       {
         path: "/v1/jarvis/notify",

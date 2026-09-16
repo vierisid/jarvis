@@ -2,6 +2,7 @@ import { ActionContext, backwardCompatabilityContextUtils, ConstructToolParams, 
 import { AUTHENTICATION_PROPERTY_NAME, EngineGenericError, ExecutionType, FlowActionType, FlowRunStatus, GenericStepOutput, isNil, PausedFlowTimeoutError, PieceAction, RespondResponse, StepOutputStatus } from '@activepieces/shared'
 import type { ToolSet } from 'ai'
 import dayjs from 'dayjs'
+import { authorizePieceDispatch } from '../../../../../../../runtime/piece-effect-guard'
 import { continueIfFailureHandler, runWithExponentialBackoff } from '../helper/error-handling'
 import { pieceLoader } from '../helper/piece-loader'
 import { createFileUploader } from '../piece-context/file-uploader'
@@ -155,7 +156,27 @@ const executeAction: ActionHandler<PieceAction> = async ({ action, executionStat
         })
         const testSingleStepMode = !isNil(constants.stepNameToTest)
         const runMethodToExecute = (testSingleStepMode && !isNil(pieceAction.test)) ? pieceAction.test : pieceAction.run
-        const output = await runMethodToExecute(backwardCompatibleContext)
+        // Jarvis: a verified piece's action passes the daemon's Authority
+        // boundary before it touches the network. Ungoverned pieces are not
+        // asked about and run untouched. Re-runs on RESUME re-authorize rather
+        // than trusting the decision that parked the step.
+        const governance = await authorizePieceDispatch({
+            apiUrl: constants.internalApiUrl,
+            engineToken: constants.engineToken,
+            piece: action.settings.pieceName,
+            action: action.settings.actionName,
+            stepName: action.name,
+            executionPath: executionState.currentPath.path,
+            input: processedInput,
+        })
+        if (governance.governed && governance.dispatch === 'approval_required') {
+            // Same pause the jarvis-tool piece uses: park on the approval
+            // waitpoint without running the action.
+            params.hookResponse = { ...params.hookResponse, type: 'paused' }
+        }
+        const output = (governance.governed && governance.dispatch === 'approval_required')
+            ? { approval: governance.approval }
+            : await runMethodToExecute(backwardCompatibleContext)
         const newExecutionContext = executionState.addTags(params.hookResponse.tags)
 
         const webhookResponse = getResponse(params.hookResponse)
