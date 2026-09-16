@@ -3,7 +3,9 @@ package main
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 	"testing"
+	"time"
 )
 
 // axv builds the { value: ... } wrapper CDP uses for AX node fields.
@@ -196,5 +198,71 @@ func TestBuildAXElementsToleratesMissingPropertyValues(t *testing.T) {
 	}
 	if els[0]["checked"] == nil {
 		t.Fatal("a property with a value must be carried through")
+	}
+}
+
+// replyWith stands in for readLoop: it answers whatever command is in flight
+// with a canned CDP result, so a handler's parsing can be tested without a
+// real browser (same approach as the browser-readiness tests).
+func replyWith(c *cdpClient, result string) func() {
+	done := make(chan struct{})
+	go func() {
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			c.pendMu.Lock()
+			for id, ch := range c.pending {
+				delete(c.pending, id)
+				ch <- cdpReply{result: []byte(result)}
+			}
+			c.pendMu.Unlock()
+			time.Sleep(time.Millisecond)
+		}
+	}()
+	return func() { close(done) }
+}
+
+func TestEvalJSONParsesAPageObject(t *testing.T) {
+	c := newTestClient(&blackholeWriter{})
+	stop := replyWith(c, `{"result":{"type":"string","value":"{\"url\":\"https://mail.example/inbox\",\"title\":\"Inbox\"}"}}`)
+	defer stop()
+
+	got, err := c.evalJSON(`JSON.stringify({url: location.href, title: document.title})`)
+	if err != nil {
+		t.Fatalf("expected a parsed object, got error: %v", err)
+	}
+	if got["url"] != "https://mail.example/inbox" || got["title"] != "Inbox" {
+		t.Fatalf("unexpected page info: %v", got)
+	}
+}
+
+// A script that threw must surface as an error. Swallowing it is how a
+// snapshot ends up reporting elements while claiming a url it never read.
+func TestEvalJSONSurfacesPageExceptions(t *testing.T) {
+	c := newTestClient(&blackholeWriter{})
+	stop := replyWith(c, `{"result":{"type":"undefined"},"exceptionDetails":{"text":"Uncaught","exception":{"description":"TypeError: nope"}}}`)
+	defer stop()
+
+	got, err := c.evalJSON(`JSON.stringify({url: location.href})`)
+	if err == nil {
+		t.Fatalf("a page exception must be an error, got %v", got)
+	}
+	if !strings.Contains(err.Error(), "TypeError: nope") {
+		t.Errorf("error should name the page-side cause, got: %v", err)
+	}
+}
+
+// A reply that is not a JSON object (undefined, a bare number) is an error
+// too -- returning an empty map would read as "the page had no url".
+func TestEvalJSONRejectsNonObjectResults(t *testing.T) {
+	c := newTestClient(&blackholeWriter{})
+	stop := replyWith(c, `{"result":{"type":"undefined"}}`)
+	defer stop()
+
+	if _, err := c.evalJSON(`undefined`); err == nil {
+		t.Fatal("expected an error for a non-object result")
 	}
 }
