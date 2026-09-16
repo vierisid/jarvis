@@ -11,6 +11,10 @@ The Vault Extractor is an LLM-powered knowledge extraction system that automatic
 - **Commitment Tracking**: Detects promises, tasks, and reminders
 - **LLM-Powered**: Uses any LLM provider for intelligent extraction
 - **Deduplication**: Reuses existing entities to maintain graph integrity
+- **Provenance**: Every extracted claim is stored as inferred or reported evidence.
+  Extraction can never confirm a fact or supersede a confirmed correction -- only
+  an explicit decision in the Memory room can. See
+  `docs/superpowers/specs/2026-09-14-memory-provenance-design.md`.
 
 ## Architecture
 
@@ -70,6 +74,10 @@ const result = await extractAndStore(
     predicate: string;      // Property name (snake_case)
     object: string;         // Value
     confidence: number;     // 0.0-1.0
+    user_quote?: string;    // Supporting quote, kept only if it really is in the user message
+    scope?: string;         // Explicit context, e.g. work or personal
+    valid_from?: number;    // Explicit validity start, epoch ms
+    valid_to?: number;      // Explicit exclusive validity end, epoch ms
   }>;
   relationships: Array<{
     from: string;          // Entity name
@@ -327,12 +335,9 @@ Assistant: "I'll remember that Anna's birthday is March 15th!"
 ## Future Enhancements
 
 - [ ] Multi-turn context extraction
-- [ ] Confidence-based fact verification
-- [ ] Conflict resolution for contradictory facts
 - [ ] Entity disambiguation (multiple "Bob"s)
 - [ ] Automatic entity merging
 - [ ] Extraction quality metrics
 - [ ] Fine-tuned extraction models
 - [ ] Streaming extraction for long conversations
 - [ ] Multi-language support
-- [ ] Fact expiration and staleness tracking

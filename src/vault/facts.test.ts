@@ -7,6 +7,7 @@ import { initDatabase, closeDb, getDb } from './schema';
 import { createEntity, findEntities } from './entities';
 import { createFact, correctFact, findFacts, getFact, verifyFact, queryFact, updateFact, deleteFact } from './facts';
 import { getKnowledgeForMessage } from './retrieval';
+import { describeFact } from './fact-format';
 import { createFactDecisionRoutes } from './fact-routes';
 import { saveUserProfile, getUserProfile, appendUserProfileFact } from './user-profile';
 import { formatUserProfileForPrompt, USER_PROFILE_SETTING_KEY } from '../user/profile';
@@ -327,6 +328,60 @@ test('deleting a conflicting inference clears contested state without confirming
   const a = createFact(subject, 'preferred_editor', 'A', inference);
   const b = createFact(subject, 'preferred_editor', 'B', inference);
   deleteFact(b.id); expect(getFact(a.id)?.status).toBe('active'); expect(queryFact('Alex', 'preferred_editor')).toBeNull();
+});
+
+test('recall caps the evidence ledger so a repeated assertion cannot grow the prompt without bound', () => {
+  const fact = createFact(subject, 'location', 'Berlin', { ...inference, sourceRef: 'conversation:0', quote: 'I live in Berlin', basis: 'reported' });
+  const small = getKnowledgeForMessage('Alex').length;
+  for (let turn = 1; turn < 200; turn++) {
+    createFact(subject, 'location', 'Berlin', { ...inference, sourceRef: `conversation:${turn}`, quote: 'I live in Berlin', basis: 'reported' });
+  }
+  expect(getFact(fact.id)?.evidence).toHaveLength(200);
+  const large = getKnowledgeForMessage('Alex');
+  for (let turn = 200; turn < 400; turn++) {
+    createFact(subject, 'location', 'Berlin', { ...inference, sourceRef: `conversation:${turn}`, quote: 'I live in Berlin', basis: 'reported' });
+  }
+  // Doubling the ledger must not grow recall beyond the evidence_count digits.
+  expect(getKnowledgeForMessage('Alex').length - large.length).toBeLessThan(5);
+  expect(large.length).toBeLessThan(small * 2);
+  expect(large).toContain('"evidence_count":200');
+  expect(large).toContain('conversation:199');
+  expect(large).not.toContain('conversation:100');
+});
+
+test('recall shows the strongest evidence first and clips an overlong quote', () => {
+  const fact = createFact(subject, 'location', 'Berlin', { ...inference, sourceRef: 'old:1', quote: 'a'.repeat(400), basis: 'reported' });
+  for (const ref of ['noise:1', 'noise:2', 'noise:3']) createFact(subject, 'location', 'Berlin', { ...inference, sourceRef: ref });
+  verifyFact(fact.id, 'Checked with Alex');
+  const context = getKnowledgeForMessage('Alex');
+  expect(context).toContain('Checked with Alex');
+  expect(context).toContain('old:1');
+  expect(context).toContain(`${'a'.repeat(300)}...`);
+  expect(context).not.toContain('a'.repeat(301));
+});
+
+test('a person-facing fact summary stays readable and still carries the qualification', () => {
+  const inferred = createFact(subject, 'location', 'Berlin', inference);
+  expect(describeFact(getFact(inferred.id)!)).toBe('location: Berlin (inferred)');
+  const contested = createFact(subject, 'preferred_editor', 'Vim', inference);
+  createFact(subject, 'preferred_editor', 'Zed', inference);
+  expect(describeFact(getFact(contested.id)!)).toBe('preferred_editor: Vim (inferred, contested)');
+  expect(describeFact(verifyFact(contested.id, 'Checked'))).toBe('preferred_editor: Vim (confirmed)');
+});
+
+test('decision routes answer through the caller\'s response helper so they keep the API CORS scope', async () => {
+  const fact = createFact(subject, 'location', 'Berlin', inference);
+  const cors = (data: unknown, status = 200) => Response.json(data, { status, headers: { 'Access-Control-Allow-Origin': 'http://dashboard.test' } });
+  const routes = createFactDecisionRoutes(cors);
+  const req = (body: unknown, id = fact.id) => Object.assign(new Request('http://local', { method: 'POST', body: JSON.stringify(body) }), { params: { id } });
+  const ok = await routes['/api/vault/facts/:id/correct'].POST(req({ confirmed: true, reason: 'Moved', object: 'Hamburg' }));
+  expect(ok.headers.get('Access-Control-Allow-Origin')).toBe('http://dashboard.test');
+  const rejected = await routes['/api/vault/facts/:id/confirm'].POST(req({ reason: 'No confirmation' }));
+  expect(rejected.status).toBe(400);
+  expect(rejected.headers.get('Access-Control-Allow-Origin')).toBe('http://dashboard.test');
+  const missing = routes['/api/vault/facts/:id'].GET(Object.assign(new Request('http://local'), { params: { id: 'missing' } }));
+  expect(missing.status).toBe(404);
+  expect(missing.headers.get('Access-Control-Allow-Origin')).toBe('http://dashboard.test');
 });
 
 test('decision routes require explicit confirmation, validate input and expose history', async () => {

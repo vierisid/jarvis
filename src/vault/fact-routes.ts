@@ -1,7 +1,13 @@
 import { correctFact, verifyFact, getFact, FactInputError, factText } from './facts.ts';
 
 type FactRequest = Request & { params: { id: string } };
-async function decide(req: FactRequest, action: 'confirm' | 'correct'): Promise<Response> {
+/** Every neighbouring /api route answers through the daemon's CORS-scoped
+ *  helper. It is injected rather than imported so this module stays outside
+ *  the daemon's import cycle; the default only serves the tests. */
+export type FactResponder = (data: unknown, status?: number) => Response;
+const plain: FactResponder = (data, status = 200) => Response.json(data, { status });
+
+async function decide(req: FactRequest, action: 'confirm' | 'correct', json: FactResponder): Promise<Response> {
   try {
     const text = await req.text();
     if (text.length > 20000) throw new FactInputError('Request too large');
@@ -15,19 +21,19 @@ async function decide(req: FactRequest, action: 'confirm' | 'correct'): Promise<
     const reason = factText(input.reason, 'reason', 1000);
     const fact = action === 'confirm' ? verifyFact(req.params.id, reason)
       : correctFact(req.params.id, factText(input.object, 'object'), reason);
-    return Response.json(fact);
+    return json(fact);
   } catch (error) {
-    return Response.json({ error: error instanceof Error ? error.message : 'Could not save fact' },
-      { status: error instanceof FactInputError ? error.status : 500 });
+    return json({ error: error instanceof Error ? error.message : 'Could not save fact' },
+      error instanceof FactInputError ? error.status : 500);
   }
 }
-export function createFactDecisionRoutes() {
+export function createFactDecisionRoutes(json: FactResponder = plain) {
   return {
     '/api/vault/facts/:id': { GET: (req: FactRequest) => {
       const fact = getFact(req.params.id);
-      return fact ? Response.json(fact) : Response.json({ error: 'Fact not found' }, { status: 404 });
+      return fact ? json(fact) : json({ error: 'Fact not found' }, 404);
     } },
-    '/api/vault/facts/:id/confirm': { POST: (req: FactRequest) => decide(req, 'confirm') },
-    '/api/vault/facts/:id/correct': { POST: (req: FactRequest) => decide(req, 'correct') },
+    '/api/vault/facts/:id/confirm': { POST: (req: FactRequest) => decide(req, 'confirm', json) },
+    '/api/vault/facts/:id/correct': { POST: (req: FactRequest) => decide(req, 'correct', json) },
   };
 }

@@ -6,6 +6,11 @@ claims and stale corrections intact; replacing the graph would split existing ID
 - Recall includes fact ID, state, source, confidence, recorded/verified dates,
   validity interval, scope and source references/quotes. Missing dates remain
   unspecified. Repetition and a model score never establish confirmation.
+  A repeated assertion keeps adding evidence rows, so recall shows only the
+  strongest and most recent of them with a clipped quote, and reports the full
+  `evidence_count`; the prompt therefore stays bounded as the ledger grows.
+  Surfaces a person reads (suggestions, notifications) get a short qualified
+  line instead -- the machine-readable provenance is for a prompt.
 - A small explicit predicate registry defines aliases and single-value semantics.
   Birthday, name and named current preferences are single-valued within one scope
   and period. Locations, aliases, emails, jobs and unknown predicates preserve

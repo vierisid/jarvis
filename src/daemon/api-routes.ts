@@ -413,7 +413,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     },
 
     // --- Vault: Facts ---
-    ...createFactDecisionRoutes(),
+    ...createFactDecisionRoutes(json),
     '/api/vault/facts': {
       GET: (req: Request) => {
         const params = getSearchParams(req);

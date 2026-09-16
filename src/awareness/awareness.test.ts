@@ -3,6 +3,8 @@ import { initDatabase } from '../vault/schema.ts';
 import { ContextTracker } from './context-tracker.ts';
 import { SuggestionEngine } from './suggestion-engine.ts';
 import { ContextGraph } from './context-graph.ts';
+import { createEntity } from '../vault/entities.ts';
+import { createFact } from '../vault/facts.ts';
 import type { AwarenessConfig } from '../config/types.ts';
 import type { AwarenessEvent, ScreenContext } from './types.ts';
 import {
@@ -386,6 +388,39 @@ describe('SuggestionEngine', () => {
     // Same suggestion should be deduped
     const s2 = await engine.evaluate(context, events);
     expect(s2).toBeNull();
+  });
+
+  test('knowledge suggestion body is readable prose, not the recall prompt format', async () => {
+    const entity = createEntity('project', 'Phoenix');
+    createFact(entity.id, 'status', 'in review', { source: 'llm_extraction', confidence: 0.7,
+      sourceRef: 'conversation:1', quote: 'Phoenix is in review', basis: 'reported' });
+    const engine = new SuggestionEngine(0);
+
+    const context: ScreenContext = {
+      captureId: 'cap-knowledge',
+      timestamp: Date.now(),
+      appName: 'VS Code',
+      windowTitle: 'Phoenix roadmap',
+      url: null,
+      filePath: null,
+      ocrText: 'roadmap',
+      sessionId: 'sess-knowledge',
+      isSignificantChange: false,
+      isAppSwitch: false,
+    };
+
+    const events: AwarenessEvent[] = [{
+      type: 'context_changed',
+      data: { appName: 'VS Code', windowTitle: 'Phoenix roadmap' },
+      timestamp: Date.now(),
+    }];
+
+    const suggestion = await engine.evaluate(context, events);
+    expect(suggestion?.type).toBe('knowledge');
+    expect(suggestion!.body).toContain('status: in review (reported)');
+    // Provenance JSON, source refs and raw quotes belong in a prompt, not here.
+    expect(suggestion!.body).not.toContain('binding_eligible');
+    expect(suggestion!.body).not.toContain('conversation:1');
   });
 });
 
