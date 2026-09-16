@@ -7,6 +7,7 @@ import { createFlow } from "../db/repos/flow";
 import { createDraftVersion } from "../db/repos/flow-version";
 import { createFlowRun, getFlowRun, updateRun } from "../db/repos/flow-run";
 import { createWaitpoint, getWaitpoint } from "../db/repos/waitpoint";
+import { getRunCancellation } from "../db/repos/run-cancellation";
 import { createWorkflowRoutes } from "../api/routes";
 import { TimerWaitpointScheduler } from "../timer-scheduler";
 import { createRunFlowHandler, RUN_FLOW } from "../runner/handler";
@@ -189,7 +190,7 @@ describe("workflow retry containment", () => {
     });
   }
 
-  for (const invalid of ["BEGIN", "attempted", "canceled", "wrong payload run", "wrong row run", "wrong version", "wrong flow", "wrong job type", "malformed JSON", "unpaused run"] as const) {
+  for (const invalid of ["BEGIN", "attempted", "wrong payload run", "wrong row run", "wrong version", "wrong flow", "wrong job type", "malformed JSON", "unpaused run"] as const) {
     test(`recovery does not treat ${invalid} as a valid queued continuation`, () => {
       const { job, run } = workflowJob();
       claimNextJob();
@@ -202,12 +203,44 @@ describe("workflow retry containment", () => {
           executionType: invalid === "BEGIN" ? "BEGIN" : "RESUME" },
       });
       if (invalid === "attempted") getWorkflowDb().run("UPDATE workflow_job SET attempt = 1 WHERE id = ?", [continuation.id]);
-      if (invalid === "canceled") cancelJob(continuation.id);
       if (invalid === "malformed JSON") getWorkflowDb().run("UPDATE workflow_job SET payload = '{' WHERE id = ?", [continuation.id]);
       recoverOrphanedJobs();
       expect(getJob(job.id)?.status).toBe("FAILED");
       expect(getFlowRun(run.id)?.status).toBe("FAILED");
       expect(getFlowRun(run.id)?.failedStep?.errorMessage).toContain("Check completed effects");
+    });
+  }
+
+  // A canceled continuation is a deliberate stop, not an invalid replay: the
+  // original attempt is still retired, but the run must read STOPPED. Boot
+  // recovery has to agree, because retireWorkflowRetries writes FAILED with
+  // raw SQL that updateRun's cancellation fence never sees -- ordering behind
+  // recoverCanceledRuns is what keeps these runs STOPPED.
+  for (const shape of ["live cancel", "legacy canceled job"] as const) {
+    test(`recovery keeps a ${shape} stopped instead of failing it`, () => {
+      const { job, run } = workflowJob();
+      claimNextJob();
+      updateRun(run.id, { status: "PAUSED" });
+      const continuation = enqueue({ jobType: RUN_FLOW, flowRunId: run.id,
+        flowVersionId: run.flowVersionId, flowId: run.flowId,
+        payload: { runId: run.id, executionType: "RESUME" } });
+      if (shape === "live cancel") {
+        // cancelJob on a RUN_FLOW job escalates to its run.
+        cancelJob(continuation.id);
+        expect(getFlowRun(run.id)?.status).toBe("STOPPED");
+      } else {
+        // What an older daemon left behind: a canceled job, no fence record.
+        getWorkflowDb().run("UPDATE workflow_job SET status = 'CANCELED' WHERE id = ?", [continuation.id]);
+        expect(getRunCancellation(run.id)).toBeNull();
+      }
+      recoverOrphanedJobs();
+      expect(getJob(continuation.id)?.status).toBe("CANCELED");
+      expect(getJob(job.id)?.status).toBe("CANCELED");
+      expect(getFlowRun(run.id)?.status).toBe("STOPPED");
+      expect(getFlowRun(run.id)?.failedStep).toBeNull();
+      // The fence record is what survives a restart; this fixture's run never
+      // started, so its uncertainty flag is legitimately false.
+      expect(getRunCancellation(run.id)).not.toBeNull();
     });
   }
 
