@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { Database } from "bun:sqlite";
 import { spawnSync } from "node:child_process";
-import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../src/workflows/db/index";
@@ -207,14 +207,66 @@ describe("offline native credential migration", () => {
     expect(stored()).toEqual(after);
   });
 
-  test("held daemon lock blocks apply and rollback, but allows read-only inventory", () => {
+  test.each(["apply", "rollback"] as const)("%s succeeds when the daemon root aliases the data directory", mode => {
+    if (mode === "rollback") expect(run("apply").status).toBe(0);
+    const alias = join(dir, "home-alias");
+    symlinkSync(dir, alias, "dir");
+    // Canonicalize the directory even when no lock file exists yet.
+    expect(existsSync(lockPathFor(dir))).toBe(false);
+    const res = run(mode, [], { JARVIS_HOME: alias });
+    expect(res.status).toBe(0);
+    if (mode === "apply") {
+      expect(JSON.parse(res.stdout)).toMatchObject({ migrated: 2, alreadyEncrypted: 1 });
+      expect(stored().every(row => isEncrypted(row.value))).toBe(true);
+    } else {
+      expect(JSON.parse(res.stdout)).toMatchObject({ restored: 2 });
+      expect(stored()).toEqual(original);
+    }
+    expect(existsSync(lockPathFor(dir))).toBe(false);
+  });
+
+  test("held daemon lock through an alias blocks writes, but allows read-only inventory", () => {
+    const alias = join(dir, "home-alias");
+    symlinkSync(dir, alias, "dir");
+    const env = { JARVIS_HOME: alias };
     const lock = acquireLockAt(lockPathFor(dir), process.pid);
     expect(lock).not.toBeNull();
     try {
-      expect(run("apply").status).toBe(1);
-      expect(run("rollback").status).toBe(1);
-      expect(run("inventory").status).toBe(0);
+      for (const mode of ["apply", "rollback"] as const) {
+        const res = run(mode, [], env);
+        expect(res.status).toBe(1);
+        expect(res.stderr).toContain("Daemon or maintenance task is running");
+        expect(readFileSync(lockPathFor(dir), "utf8")).toBe(String(process.pid));
+      }
+      expect(run("inventory", [], env).status).toBe(0);
       expect(stored()).toEqual(original);
     } finally { lock?.release(); }
+  });
+
+  test.each(["daemon", "data"])("retains the distinct %s lock when the roots differ", held => {
+    expect(run("apply").status).toBe(0);
+    const before = stored();
+    const home = join(dir, "separate-home");
+    const lock = acquireLockAt(lockPathFor(held === "daemon" ? home : dir), process.pid);
+    expect(lock).not.toBeNull();
+    try {
+      for (const mode of ["apply", "rollback"] as const) {
+        const res = run(mode, [], { JARVIS_HOME: home });
+        expect(res.status).toBe(1);
+        expect(res.stderr).toContain("Daemon or maintenance task is running");
+        expect(stored()).toEqual(before);
+      }
+    } finally { lock?.release(); }
+    expect(run("rollback", [], { JARVIS_HOME: home }).status).toBe(0);
+    expect(stored()).toEqual(original);
+  });
+
+  test("creates a missing distinct daemon root before locking", () => {
+    const home = join(dir, "new", "daemon-home");
+    expect(existsSync(home)).toBe(false);
+    expect(run("apply", [], { JARVIS_HOME: home }).status).toBe(0);
+    expect(existsSync(home)).toBe(true);
+    expect(run("rollback", [], { JARVIS_HOME: home }).status).toBe(0);
+    expect(stored()).toEqual(original);
   });
 });

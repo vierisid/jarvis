@@ -1,8 +1,8 @@
 #!/usr/bin/env bun
 /** See docs/superpowers/specs/2026-09-16-native-credential-encryption.md before live use. */
 import { Database } from "bun:sqlite";
-import { readFileSync, realpathSync } from "node:fs";
-import { resolve } from "node:path";
+import { mkdirSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, resolve } from "node:path";
 import { acquireLockAt, lockPathFor } from "../src/daemon/pid";
 import { setEncryptionKey } from "../src/workflows/db/encryption";
 import {
@@ -63,7 +63,13 @@ async function main(): Promise<number> {
       const dataDir = realpathSync(options.get("--data-dir")!);
       // Match restore's locking contract, including JARVIS_HOME. Hold locks
       // throughout so the daemon cannot start after a one-time lock probe.
-      for (const path of new Set([lockPathFor(), lockPathFor(dataDir)])) {
+      const lockPaths = [lockPathFor(), lockPathFor(dataDir)].map(path => {
+        const lockDir = dirname(path);
+        mkdirSync(lockDir, { recursive: true });
+        // Resolve directory aliases before deduplication, even without a PID file.
+        return lockPathFor(realpathSync(lockDir));
+      });
+      for (const path of new Set(lockPaths)) {
         const lock = acquireLockAt(path, process.pid);
         if (!lock) throw new CredentialMigrationError("Daemon or maintenance task is running; stop it before migration.");
         locks.push(lock);

@@ -145,7 +145,9 @@ API writes and secret-free responses, restart reads, legacy compatibility and
 failed keys. Offline subprocess tests cover count-only inventory, mixed legacy
 and encrypted rows, unchanged keys/metadata, durable encrypted recovery,
 repeated apply/rollback, wrong/missing keys, corruption, transaction failures,
-changed/deleted rows, wrong database paths and held daemon locks.
+changed/deleted rows, wrong database paths and held daemon locks. Lock coverage
+includes aliased directories with no PID file, genuine held locks through an
+alias, distinct daemon/data roots and creation of a missing daemon root.
 
 Tests use temporary databases and synthetic values only. They establish neither
 a deployed credential count nor a live disclosure. Repository-wide verification
@@ -169,3 +171,9 @@ Verification on this branch:
 - The full repository suite/aggregate pre-commit hook was not rerun. Previous
   full-suite hangs remain outside this bounded change. Local commit creation
   uses a per-command hook override after the explicit checks above.
+- Review R1: canonicalize both lock directories before deduplicating, preventing
+  apply/rollback from acquiring the same file twice through a symlink. Both
+  alias regressions failed before the fix. The updated migration, daemon PID,
+  encryption and native credential write suites passed 77 tests with zero
+  failures; TypeScript, licensing, migration-DDL and template guards passed.
+  Packaging passed using Bun's packer (2 required paths, 2,511 files).
