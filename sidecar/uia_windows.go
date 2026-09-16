@@ -473,10 +473,7 @@ func controlTypeName(id int) string {
 // buildElementInfo extracts element properties into a map matching the expected JSON shape.
 func buildElementInfo(elem *ole.IDispatch, id, depth int) map[string]any {
 	x, y, w, h := uiaElementGetBoundingRect(elem)
-	name := uiaElementGetPropertyStr(elem, UIA_NamePropertyId)
-	if len(name) > 100 {
-		name = name[:100]
-	}
+	name := truncateRunes(uiaElementGetPropertyStr(elem, UIA_NamePropertyId), 100)
 	ctrl := controlTypeName(uiaElementGetPropertyInt(elem, UIA_ControlTypePropertyId))
 	autoID := uiaElementGetPropertyStr(elem, UIA_AutomationIdPropertyId)
 	return buildElementInfoPrefetched(elem, id, depth, name, ctrl, autoID, x, y, w, h)
@@ -486,7 +483,7 @@ func buildElementInfo(elem *ole.IDispatch, id, depth int) map[string]any {
 // read name/control-type/automation-id/bounds (the tree walk reads them for
 // ordinal computation) — avoids duplicate cross-process COM property reads.
 func buildElementInfoPrefetched(elem *ole.IDispatch, id, depth int, name, ctrl, autoID string, x, y, w, h int) map[string]any {
-	return map[string]any{
+	info := map[string]any{
 		"id":            id,
 		"name":          name,
 		"automation_id": autoID,
@@ -494,11 +491,18 @@ func buildElementInfoPrefetched(elem *ole.IDispatch, id, depth int, name, ctrl, 
 		"control_type":  ctrl,
 		"enabled":       uiaElementGetPropertyBool(elem, UIA_IsEnabledPropertyId),
 		"focusable":     uiaElementGetPropertyBool(elem, UIA_IsKeyboardFocusablePropertyId),
-		"offscreen":     uiaElementGetPropertyBool(elem, UIA_IsOffscreenPropertyId),
 		"rect":          map[string]any{"x": x, "y": y, "w": w, "h": h},
 		"patterns":      getSupportedPatterns(elem),
 		"depth":         depth,
 	}
+	// Only present when true. Every key here is pretty-printed straight into
+	// the model's context (routeToSidecar JSON.stringify), so a per-element
+	// "offscreen": false on every snapshot would be pure payload -- and
+	// offscreen is only ever interesting when it is the reason a click failed.
+	if uiaElementGetPropertyBool(elem, UIA_IsOffscreenPropertyId) {
+		info["offscreen"] = true
+	}
+	return info
 }
 
 // getSupportedPatterns checks which UIA patterns are available on an element.
@@ -599,15 +603,17 @@ func walkTree(state *uiaState, trueCond *ole.IDispatch, parent *ole.IDispatch, d
 			continue
 		}
 		x, y, w, h := uiaElementGetBoundingRect(child)
-		name := truncateRunes(uiaElementGetPropertyStr(child, UIA_NamePropertyId), 100)
-		kids = append(kids, childMeta{
-			elem:   child,
-			name:   name,
-			ctrl:   controlTypeName(uiaElementGetPropertyInt(child, UIA_ControlTypePropertyId)),
-			autoID: uiaElementGetPropertyStr(child, UIA_AutomationIdPropertyId),
-			x:      x, y: y, w: w, h: h,
-			visible: w > 0 && h > 0,
-		})
+		meta := childMeta{elem: child, x: x, y: y, w: w, h: h, visible: w > 0 && h > 0}
+		// Name/type/automation-id are cross-process COM reads. Semantic walks
+		// need them for every sibling (ordinals count skipped ones too, so an
+		// element's ordinal does not shift when a sibling becomes visible);
+		// a plain walk needs them only for the elements it emits.
+		if semantic || meta.visible || includeInvisible {
+			meta.name = truncateRunes(uiaElementGetPropertyStr(child, UIA_NamePropertyId), 100)
+			meta.ctrl = controlTypeName(uiaElementGetPropertyInt(child, UIA_ControlTypePropertyId))
+			meta.autoID = uiaElementGetPropertyStr(child, UIA_AutomationIdPropertyId)
+		}
+		kids = append(kids, meta)
 	}
 
 	// Ordinal disambiguates same-signature siblings (third "row" in a list).

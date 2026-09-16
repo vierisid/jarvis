@@ -56,11 +56,13 @@ var axInteractiveRoles = map[string]bool{
 	"option": true, "textfield": true, "MenuListOption": true,
 }
 
-// axStructuralRoles appear in ancestry paths but are not emitted themselves
-// unless named.
+// axIgnoredRoles are wrapper roles that carry no semantics of their own. They
+// are skipped when building an ancestry path, so a path reads as meaningful
+// containers rather than a chain of anonymous divs. A node with one of these
+// roles is still emitted if it has an accessible name -- named text is
+// context the model needs.
 var axIgnoredRoles = map[string]bool{
 	"none": true, "generic": true, "InlineTextBox": true, "LineBreak": true,
-	"StaticText": false, // emitted when named — text is context the model needs
 }
 
 const axMaxElements = 300
@@ -86,7 +88,12 @@ func makeBrowserAXSnapshotHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, fmt.Errorf("parse AX tree: %w", err)
 		}
 
-		pageInfo, _ := cdp.evalJSON(`JSON.stringify({url: location.href, title: document.title})`)
+		pageInfo, err := cdp.evalJSON(`JSON.stringify({url: location.href, title: document.title})`)
+		if err != nil {
+			// Reporting elements without saying which page they came from
+			// invites the agent to act on the wrong document.
+			return nil, fmt.Errorf("could not read page url/title: %w", err)
+		}
 
 		elements := buildAXElements(tree.Nodes)
 
@@ -132,10 +139,12 @@ func buildAXElements(nodes []axNode) []map[string]any {
 		return rev
 	}
 
-	// Ordinals among same-parent siblings with equal role+name.
+	// Ordinals among same-parent siblings with equal role+name. Keyed on the
+	// truncated name the sig is built from, so siblings that differ only past
+	// the cut still get distinct ordinals (and so distinct sigs).
 	ordCount := map[string]int{}
-	ordinalOf := func(n *axNode) int {
-		key := n.ParentID + "|" + n.Role.str() + "|" + n.Name.str()
+	ordinalOf := func(parentID, role, name string) int {
+		key := parentID + "|" + role + "|" + name
 		ord := ordCount[key]
 		ordCount[key]++
 		return ord
@@ -161,17 +170,16 @@ func buildAXElements(nodes []axNode) []map[string]any {
 			continue
 		}
 		role := n.Role.str()
-		name := n.Name.str()
+		name := truncateRunes(n.Name.str(), 100)
 		interactive := axInteractiveRoles[role]
+		// Unnamed and not interactive: a wrapper with nothing to act on or
+		// read. (This subsumes the ignored-roles check -- none of those roles
+		// is interactive, so a nameless one never gets this far.)
 		if !interactive && name == "" {
 			continue
 		}
-		if axIgnoredRoles[role] && name == "" {
-			continue
-		}
-		ord := ordinalOf(n)
+		ord := ordinalOf(n.ParentID, role, name)
 
-		name = truncateRunes(name, 100)
 		path := pathOf(n)
 		stableID := fmt.Sprintf("%d", n.BackendDOMNodeID)
 		el := map[string]any{
@@ -189,9 +197,12 @@ func buildAXElements(nodes []axNode) []map[string]any {
 			el["value"] = v
 		}
 		for _, p := range n.Properties {
+			if p.Value == nil || p.Value.Value == nil {
+				continue
+			}
 			switch p.Name {
 			case "disabled", "focused", "expanded", "checked", "selected":
-				el[p.Name] = json.RawMessage(p.Value.Value)
+				el[p.Name] = p.Value.Value
 			}
 		}
 		if interactive {
@@ -203,6 +214,9 @@ func buildAXElements(nodes []axNode) []map[string]any {
 
 	// All interactive elements, plus as much named-text context as fits.
 	out := interactiveEls
+	if out == nil {
+		out = []map[string]any{}
+	}
 	if budget := axMaxElements - len(out); budget > 0 {
 		if budget > len(contextEls) {
 			budget = len(contextEls)
@@ -247,13 +261,11 @@ func makeBrowserAXClickHandler(cfg *SidecarConfig) RPCHandler {
 		cx := (box.Model.Content[0] + box.Model.Content[4]) / 2
 		cy := (box.Model.Content[1] + box.Model.Content[5]) / 2
 
-		for _, evType := range []string{"mousePressed", "mouseReleased"} {
-			if _, err := cdp.send("Input.dispatchMouseEvent", map[string]any{
-				"type": evType, "x": cx, "y": cy,
-				"button": "left", "clickCount": 1,
-			}); err != nil {
-				return nil, fmt.Errorf("click dispatch failed: %w", err)
-			}
+		// Same dispatcher browser_click uses: it moves the pointer to the
+		// target first, so hover-gated controls (menus, Gmail's toolbars)
+		// react the way they do for a real user.
+		if err := dispatchClick(cdp, cx, cy, "left", false); err != nil {
+			return nil, fmt.Errorf("click dispatch failed: %w", err)
 		}
 
 		return &RPCResult{Result: map[string]any{
@@ -295,6 +307,11 @@ func makeBrowserAXSetValueHandler(cfg *SidecarConfig) RPCHandler {
 		if err := json.Unmarshal(raw, &resolved); err != nil || resolved.Object.ObjectID == "" {
 			return nil, fmt.Errorf("element %d resolved to no object", int64(backendID))
 		}
+		// resolveNode pins the node in the page's remote-object table; without
+		// this the handle outlives every call for the life of the document.
+		defer func() {
+			_, _ = cdp.send("Runtime.releaseObject", map[string]any{"objectId": resolved.Object.ObjectID})
+		}()
 
 		fnRaw, err := cdp.send("Runtime.callFunctionOn", map[string]any{
 			"objectId": resolved.Object.ObjectID,

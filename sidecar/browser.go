@@ -462,6 +462,46 @@ func (c *cdpClient) sendOnTimeout(sessionID, method string, params map[string]an
 	}
 }
 
+// evalJSON evaluates a page expression that returns a JSON string and
+// unmarshals it. A page exception is returned as an error rather than
+// swallowed into an empty result -- a handler that reports success on a
+// script that threw is how the agent ends up trusting data it never got.
+func (c *cdpClient) evalJSON(expression string) (map[string]any, error) {
+	raw, err := c.send("Runtime.evaluate", map[string]any{
+		"expression":    expression,
+		"returnByValue": true,
+	})
+	if err != nil {
+		return nil, err
+	}
+	var res struct {
+		Result struct {
+			Value string `json:"value"`
+		} `json:"result"`
+		ExceptionDetails *struct {
+			Text      string `json:"text"`
+			Exception struct {
+				Description string `json:"description"`
+			} `json:"exception"`
+		} `json:"exceptionDetails"`
+	}
+	if err := json.Unmarshal(raw, &res); err != nil {
+		return nil, fmt.Errorf("unexpected Runtime.evaluate reply: %w", err)
+	}
+	if res.ExceptionDetails != nil {
+		detail := res.ExceptionDetails.Exception.Description
+		if detail == "" {
+			detail = res.ExceptionDetails.Text
+		}
+		return nil, fmt.Errorf("page script threw: %s", detail)
+	}
+	out := map[string]any{}
+	if err := json.Unmarshal([]byte(res.Result.Value), &out); err != nil {
+		return nil, fmt.Errorf("page script did not return a JSON object: %w", err)
+	}
+	return out, nil
+}
+
 // waitForBrowserReady blocks until the freshly-spawned browser answers a
 // browser-level CDP command, or the deadline passes.
 //
