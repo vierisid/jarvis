@@ -273,6 +273,10 @@ export function recoverOrphanedJobs(): number {
   // release instead. (2) retireWorkflowRetries FAILs a run left QUEUED/RUNNING/
   // PAUSED with raw SQL, bypassing updateRun's fence -- so a legacy canceled job
   // has to reach STOPPED first or its run would settle as FAILED instead.
+  // Moving this call inside the transaction throws no error, because bun runs
+  // the inner transaction as a savepoint, so the mistake is silent; only
+  // 'recovery keeps a legacy canceled job stopped instead of failing it' in
+  // src/workflows/queue/queue.test.ts catches it.
   recoverCanceledRuns();
   const ts = nowMs();
   const d = db();

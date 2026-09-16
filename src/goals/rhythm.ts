@@ -12,6 +12,7 @@ import type { GoalEvent } from './events.ts';
 import * as vault from '../vault/goals.ts';
 import { getDb } from '../vault/schema.ts';
 import { createPlannedWork, listWorkItems, type WorkItem } from './work-items.ts';
+import { wrapUntrusted } from '../roles/untrusted.ts';
 
 export type MorningPlanResult = {
   checkIn: GoalCheckIn;
@@ -101,7 +102,7 @@ export class DailyRhythm {
     }
   }
 
-  private persistMorningPlan(plan: any, activeGoals: Goal[]): MorningPlanResult {
+  private persistMorningPlan(plan: Record<string, unknown>, activeGoals: Goal[]): MorningPlanResult {
     const strings = (value: unknown): string[] => Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : [];
     const focusAreas = strings(plan.focus_areas);
     const warnings = strings(plan.warnings);
@@ -122,6 +123,32 @@ export class DailyRhythm {
   }
 
   /**
+   * Work records for the evening prompt. Their free text is the user's own
+   * summaries and a failed step's error message, which can carry whatever a
+   * workflow read from outside, so the payload is framed as data and every
+   * field is clipped: 10 fields of 300 characters across at most 20 items
+   * keeps a day's records from crowding out the prompt itself. The verdicts
+   * stay authoritative: only an explicit result check records a work outcome,
+   * never this narration.
+   */
+  private eveningWorkContext(planId: string): string {
+    const clip = (value: string) => value.length > 300 ? `${value.slice(0, 300)}...` : value;
+    const items = listWorkItems({ planId }).slice(0, 20).map(w => ({
+      id: w.id, goalId: w.goalId, title: clip(w.title), status: w.status, runId: w.runId,
+      decision: w.decision ? { id: w.decision.id, outcome: w.decision.outcome, reason: clip(w.decision.reason) } : null,
+      blocker: w.blocker ? { kind: w.blocker.kind, ref: w.blocker.ref, reason: clip(w.blocker.reason) } : null,
+      resultCheck: w.resultCheck ? {
+        id: w.resultCheck.id, verdict: w.resultCheck.verdict, summary: clip(w.resultCheck.summary),
+        evidence: w.resultCheck.evidence.slice(0, 3).map(e => ({ ref: clip(e.ref), description: clip(e.description) })),
+        goalProgressId: w.resultCheck.goalProgressId,
+      } : null,
+    }));
+    if (!items.length) return '';
+    return `\nDurable work results (only resultCheck is a checked outcome):\n${
+      wrapUntrusted(JSON.stringify(items), 'today work records')}`;
+  }
+
+  /**
    * Run evening review session.
    */
   async runEveningReview(): Promise<EveningReviewResult> {
@@ -136,9 +163,7 @@ export class DailyRhythm {
     const morningContext = morningCheckIn
       ? `\nMorning plan:\n- Focus: ${morningCheckIn.summary}\n- Planned actions:\n${plannedActions.map(a => `  * ${a}`).join('\n')}`
       : '\nNo morning plan was created today.';
-    const workContext = morningCheckIn ? `\nDurable work results (only resultCheck is a checked outcome):\n${JSON.stringify(
-      listWorkItems({ planId: morningCheckIn.id }).map(w => ({ id: w.id, goalId: w.goalId, title: w.title, status: w.status, decision: w.decision, runId: w.runId, blocker: w.blocker, resultCheck: w.resultCheck ? { id: w.resultCheck.id, verdict: w.resultCheck.verdict, summary: w.resultCheck.summary, evidence: w.resultCheck.evidence, goalProgressId: w.resultCheck.goalProgressId } : null })),
-    )}` : '';
+    const workContext = morningCheckIn ? this.eveningWorkContext(morningCheckIn.id) : '';
 
     const prompt = [
       { role: 'system' as const, content: this.buildEveningPrompt() },

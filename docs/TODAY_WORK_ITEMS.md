@@ -25,6 +25,10 @@ commitment ID. `commitment_work` extends that record with:
 All new IDs are opaque strings. Existing check-in text remains `actions_planned`;
 `work_item_ids` lists its work IDs in action order. Morning results additionally
 return `workItems`. Legacy LLM string actions are supported and keep `goalId: null`.
+Plan output is untrusted: at most 20 entries are read, each needs non-empty
+title text of at most 10000 characters, and a `goal_id` is kept only when it
+names one of the active goals offered in that prompt. Focus areas and warnings
+keep only their string entries.
 On upgrade, existing text-only morning plans gain work records once, preserving
 their original date and action positions. No historic text is silently assigned
 to a goal or marked completed. `/api/goals/daily-actions` retains
@@ -78,21 +82,30 @@ snapshot if run history is later deleted; an unchecked missing run is blocked.
 An unresolved waitpoint blocks result checking when the run is still active or
 an older runtime incorrectly recorded SUCCEEDED. Terminal failures take precedence
 over leftover waitpoints and can receive a failed-result check, never a passed
-check or goal progress. A pause finishes the current queue job while keeping the run PAUSED
-with no finish time; the existing resume endpoint continues the same run.
+check or goal progress. A pause finishes the current queue job while keeping the
+run PAUSED with no finish time; the existing resume endpoint continues the
+same run.
 At startup, an interrupted execution that exhausted its attempts is recorded as
 FAILED with its partial outputs and an unknown-outcome explanation. It is never
 silently replayed. Inspect those outputs before recording a failed check or
-creating a new proposal. Recovery preserves terminal results and pending pauses;
-an exhausted resume with no remaining waitpoint is also recorded as a failure.
-Cancelling an unclaimed execution or resume records STOPPED atomically with the
-queue cancellation. Its original run ID and any partial outputs remain available
-for a failed-result check. Startup also repairs cancelled jobs left unfinished
-by older code, preserving terminal outcomes and later attempts. An already
-running executor remains responsible for reporting its actual outcome.
+creating a new proposal. Recovery preserves terminal results, and a pause that
+still has an unresolved waitpoint or a matching unattempted queued resume; an
+exhausted resume with neither is also recorded as a failure. A queued resume
+alone does not make an interrupted RUNNING execution resumable: that run is
+recorded as FAILED.
+Cancelling an execution or resume records STOPPED atomically with the queue
+cancellation, through the existing run-cancellation fence. A later write from a
+still-live executor cannot revoke that stop, so the blocker names the
+cancellation and whether the execution had already started; its original run ID
+and any partial outputs remain available for a failed-result check. Startup also
+repairs cancelled jobs left unfinished by older code, preserving terminal
+outcomes and later attempts.
 Evening review receives these linked decisions/results and is instructed not to
-count an already recorded goal progress entry again. Its independent goal review
-behavior is preserved; LLM narration never writes work-item verification.
+count an already recorded goal progress entry again. That payload shares a
+prompt with step error text, so each field is length-bounded and the block is
+wrapped in the repository's untrusted-content framing. Its independent goal
+review behavior is preserved; LLM narration never writes work-item
+verification.
 
 The schema is additive and installed by vault initialization, so goal rhythms do
 not require a workflow engine. Workflow configuration/execution requires the

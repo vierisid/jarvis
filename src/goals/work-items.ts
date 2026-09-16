@@ -11,6 +11,9 @@ export type WorkMode = 'manual' | 'workflow';
 export type WorkDecision = {
   id: string; outcome: 'accepted' | 'rejected'; reason: string; decidedBy: 'user'; decidedAt: number;
 };
+/** Why the work cannot progress. Each kind names the record it came from. */
+export type WorkBlockerKind = 'manual' | 'waitpoint' | 'missing_run' | 'run_failure' | 'result_check';
+export type WorkBlocker = { kind: WorkBlockerKind; ref: string | null; reason: string };
 export type ResultCheck = {
   id: string; verdict: 'passed' | 'failed'; summary: string;
   evidence: { ref: string; description: string }[];
@@ -27,7 +30,7 @@ export type WorkItem = {
   id: string; title: string; planId: string | null; actionIndex: number | null;
   goalId: string | null; mode: WorkMode; workflowId: string | null; workflowVersionId: string | null;
   input: Record<string, unknown>; decision: WorkDecision | null; runId: string | null;
-  run: FlowRun | null; blocker: { kind: string; ref: string | null; reason: string } | null;
+  run: FlowRun | null; blocker: WorkBlocker | null;
   resultCheck: ResultCheck | null;
   status: 'proposed' | 'rejected' | 'ready' | 'running' | 'blocked' | 'needs_check' | 'verified' | 'failed';
   createdAt: number; updatedAt: number;
@@ -55,6 +58,12 @@ function object(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new WorkItemError('Expected an object');
   return value as Record<string, unknown>;
 }
+function cancelledReason(run: FlowRun): string | null {
+  if (!run.cancellation) return null;
+  return run.cancellation.inFlightMayHaveCompleted
+    ? 'Execution was cancelled after it started. Inspect any partial results before proposing another run.'
+    : 'Execution was cancelled before it started.';
+}
 export function getWorkItem(id: string): WorkItem {
   const w = row(id);
   const commitment = getCommitment(id)!;
@@ -71,8 +80,10 @@ export function getWorkItem(id: string): WorkItem {
     } else if (!['QUEUED', 'RUNNING', 'PAUSED', 'SUCCEEDED'].includes(run.status)) {
       // A terminal failure can leave waitpoints behind. Those cannot be resumed
       // and must not hide the failure or prevent recording its checked outcome.
+      // A cancellation carries no failed step, so name the stop and say whether
+      // the execution had already started when the user stopped it.
       status = 'failed';
-      blocker = { kind: 'run_failure', ref: run.id, reason: run.failedStep?.errorMessage ?? run.status };
+      blocker = { kind: 'run_failure', ref: run.id, reason: run.failedStep?.errorMessage ?? cancelledReason(run) ?? run.status };
     } else if (run.status === 'PAUSED' || waitpoint) {
       blocker = { kind: 'waitpoint', ref: waitpoint?.id ?? run.id, reason: waitpoint ? `Waiting at ${waitpoint.stepName}` : 'Run is paused' };
       status = 'blocked';
