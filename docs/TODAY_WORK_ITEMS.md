@@ -103,10 +103,12 @@ repairs cancelled jobs left unfinished by older code, preserving terminal
 outcomes and later attempts.
 Evening review receives these linked decisions/results and is instructed not to
 count an already recorded goal progress entry again. That payload shares a
-prompt with step error text, so each field is length-bounded and the block is
-wrapped in the repository's untrusted-content framing. Its independent goal
-review behavior is preserved; LLM narration never writes work-item
-verification.
+prompt with step error text, so each field is length-bounded, and it shares one
+untrusted-content block with the goal review's own evidence bundle. Passed
+checks are the only source of the evening check-in's completed actions, and the
+review writes no goal score at all; see
+`docs/superpowers/specs/2026-09-15-goal-review-evidence.md`. LLM narration never
+writes work-item verification.
 
 The schema is additive and installed by vault initialization, so goal rhythms do
 not require a workflow engine. Workflow configuration/execution requires the

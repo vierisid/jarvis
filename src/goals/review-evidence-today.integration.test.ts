@@ -1,16 +1,14 @@
-/** Runs automatically when #450's actual work-item service is present. */
+/** End-to-end over the real Today work-item service, not a storage fixture. */
 import { expect, test } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { closeDb, initDatabase } from '../vault/schema.ts';
 import * as vault from '../vault/goals.ts';
 import { DailyRhythm } from './rhythm.ts';
+import * as work from './work-items.ts';
 
-const todayModule = new URL('./work-items.ts', import.meta.url);
-test.skipIf(!existsSync(todayModule))('actual Today checks stay linked after restart and cannot be scored twice', async () => {
-  // Dynamic until #450 merges; do not vendor its service onto this branch.
-  const work = await import(todayModule.href);
+test('actual Today checks stay linked after restart and cannot be scored twice', async () => {
   const directory = mkdtempSync(join(tmpdir(), 'jarvis-review-today-'));
   const path = join(directory, 'test.db');
   try {
@@ -30,10 +28,10 @@ test.skipIf(!existsSync(todayModule))('actual Today checks stay linked after res
     });
     closeDb(); initDatabase(path, { quiet: true });
     const review = new DailyRhythm({ chatTier: async (_t: string, _s: string, messages: any[]) => {
-      expect(messages[1].content).toContain(checked.resultCheck.id);
-      expect(messages[1].content).toContain(checked.resultCheck.goalProgressId);
+      expect(messages[1].content).toContain(checked.resultCheck!.id);
+      expect(messages[1].content).toContain(checked.resultCheck!.goalProgressId!);
       return { content: JSON.stringify({ score_updates: [
-        { goalId: goal.id, newScore: 0.9, reason: 'Count it again', evidenceIds: [`work_item:${scored.id}:check:${checked.resultCheck.id}`] },
+        { goalId: goal.id, newScore: 0.9, reason: 'Count it again', evidenceIds: [`work_item:${scored.id}:check:${checked.resultCheck!.id}`] },
       ] }) };
     } });
     const result = await review.runEveningReview();

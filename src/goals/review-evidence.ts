@@ -12,11 +12,11 @@ function clip(text: string, max = 500): string {
   let size = 0;
   for (const char of text) {
     const cost = JSON.stringify(char).length - 2;
-    if (size + cost > max - 1) break;
+    if (size + cost > max - 3) break;
     result += char;
     size += cost;
   }
-  return result + '…';
+  return result + '...';
 }
 const object = (value: unknown): value is Record<string, unknown> =>
   !!value && typeof value === 'object' && !Array.isArray(value);

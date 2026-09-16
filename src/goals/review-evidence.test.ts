@@ -22,12 +22,9 @@ const goal = () => vault.createGoal('Customer deployments', 'key_result', {
 const proposal = (goalId: string, evidenceIds: unknown = []) => ({ goalId, newScore: 0.9, reason: 'Progress', evidenceIds });
 const rhythm = (response: unknown) => new DailyRhythm({ chatTier: async () => ({ content: JSON.stringify(response) }) });
 
-/** Fixture for the optional #450 storage contract; production does not create this table here. */
+/** Writes a checked result straight into the real commitment_work storage, so a
+ * change to that contract fails here instead of being masked by a local table. */
 function checkedWork(goalId: string, overrides: Record<string, unknown> = {}) {
-  getDb().exec(`CREATE TABLE IF NOT EXISTS commitment_work (
-    work_id TEXT PRIMARY KEY REFERENCES commitments(id), goal_id TEXT, run_id TEXT,
-    result_check TEXT, updated_at INTEGER NOT NULL
-  )`);
   const work = createCommitment('Deploy the release');
   const check = {
     id: crypto.randomUUID(), verdict: 'passed', summary: 'Customer confirmed the deployment',

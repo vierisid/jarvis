@@ -146,8 +146,9 @@ export class DailyRhythm {
       } : null,
     }));
     if (!items.length) return '';
-    return `\nDurable work results (only resultCheck is a checked outcome):\n${
-      wrapUntrusted(JSON.stringify(items), 'today work records')}`;
+    // Returned unwrapped: the caller frames this and the evidence bundle in one
+    // untrusted block, so the prompt carries a single visible data boundary.
+    return `\n\nDurable work results (only resultCheck is a checked outcome):\n${JSON.stringify(items)}`;
   }
 
   /**
@@ -166,8 +167,9 @@ export class DailyRhythm {
       { role: 'system' as const, content: this.buildEveningPrompt() },
       {
         role: 'user' as const,
-        content: `Daily evidence bundle:\n${
-          wrapUntrusted(JSON.stringify(bundle), 'goal review evidence')}${workContext}\n\nReview the day. Respond with ONLY valid JSON.`,
+        content: `${wrapUntrusted(
+          `Daily evidence bundle:\n${JSON.stringify(bundle)}${workContext}`, 'goal review evidence',
+        )}\n\nReview the day. Respond with ONLY valid JSON.`,
       },
     ];
 

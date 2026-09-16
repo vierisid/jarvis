@@ -1,8 +1,5 @@
 # Automatic goal review evidence
 
-Branch: `fix/evidence-bound-goal-reviews`, based on freshly pulled main
-`06c12e65ca19ee160768aada9c73ccae951ce056`.
-
 ## Behavior
 
 An evening review cannot turn a valid goal ID and a plausible explanation into
@@ -18,9 +15,8 @@ Reviews receive and persist a versioned, ID-bound bundle with:
 - A local-calendar-day observation window ending before the LLM call.
 - Morning intentions, explicitly distinct from observations.
 - Activity notes and previous score entries with IDs, sources, types and times.
-- User-checked Today outcomes when the #450 storage contract is present,
-  including work/check/run IDs, verdict, evidence references, check provenance
-  and any already-applied goal-progress ID.
+- User-checked Today outcomes, including work/check/run IDs, verdict, evidence
+  references, check provenance and any already-applied goal-progress ID.
 - Truncation/omission indicators and the current automatic scoring policy.
 
 The prompt view contains at most 20 goals, five records per category per goal,
@@ -29,13 +25,19 @@ escape expansion. Whole records are removed from the largest goal if needed.
 Their stable IDs point to the full source records. Truncated evidence is never
 a basis for an automatic score.
 
+The bundle and the Today work records share one untrusted-content block, so the
+evening prompt carries a single visible data boundary around everything the
+model did not write itself.
+
 Stored morning actions are treated as untrusted JSON. Only nonblank strings
 enter the intention list; objects, nested arrays, nulls and other malformed
 entries are omitted before clipping. A malformed collection produces an empty
 list. New snapshots set `morningIntentions.invalidActionsOmitted` and
 `truncated` when invalid data was excluded, while preserving the original
 check-in for inspection. Older snapshots may omit the new optional flag.
-These omissions are not evidence that the user failed to act.
+These omissions are not evidence that the user failed to act. Morning planning
+now validates what it writes, so this path covers check-ins stored by earlier
+versions, which hold unvalidated model JSON despite the `string[]` annotation.
 
 Model proposals use `{ goalId, newScore, reason, evidenceIds }`. Validation
 rejects malformed values, goals outside the bundle, changed/deleted goals,
@@ -45,7 +47,9 @@ are stored, with an explicit marker if additional proposals were omitted.
 Only accepted writes belong in `scoreUpdates`; currently that list is empty.
 
 Completed-action records come from passed user checks in the input snapshot,
-never the model's `actions_completed` text. Failed checks remain visible as
+never the model's `actions_completed` text. Only goal-linked checked work
+reaches that list; the stored `review_evidence` beside it discloses what the
+window and the context limits left out. Failed checks remain visible as
 outcomes. Narrative assessment is model-generated commentary, not verified
 progress. The chat message explicitly reports that automatic scores are
 unchanged.
@@ -75,73 +79,20 @@ durable measurement ID to the goal ID, immutable criteria version, observed
 time, verification provenance and exact baseline-to-target score mapping. The
 model may cite the evaluator's assessment; it must not mint the mapping. The
 write boundary must re-read current evidence/criteria, reject stale or revoked
-measurements, and atomically consume each assessment once with its progress
-entry, new score and review audit. Add positive measured-progress and
-regression cases, concurrent correction, replay/restart and rollback tests
-before relaxing the current deny rule. Merely adding an evidence ID to the
-old `updateGoalScore` call is insufficient.
+measurements, refuse truncated bundles, and atomically consume each assessment
+once with its progress entry, new score and review audit. Add positive
+measured-progress and regression cases, concurrent correction, replay/restart
+and rollback tests before relaxing the current deny rule. Merely adding an
+evidence ID to the old `updateGoalScore` call is insufficient.
 
-## Open PR compatibility
+## Relationship to Today work items
 
-Checked open PRs #450, #454, #455, #456, #458, #459, #460, #461 and #462;
-none was merged when this branch was created. No previous feature branch was
-cherry-picked onto this branch.
+The evidence adapter reads the `commitment_work.result_check` contract directly
+rather than importing the work-item service, so goal rhythms keep working
+without the workflow schema. It selects by result-check time and goal ID,
+including work created on a previous day and work outside the morning plan.
+Malformed, unchecked, future and old records cannot become completed actions.
 
-The relevant dependency is #450 at
-`48e0cc7777744ef8f8bda8274e4010557ef4cdee`. The optional adapter reads its
-`commitment_work.result_check` contract without importing its service. It
-selects by result-check time and goal ID, including work created on a previous
-day and work outside the morning plan. Missing/unsupported schemas abstain
-from checked outcomes. Malformed, unchecked, future and old records cannot
-become completed actions.
-
-An isolated combination with the actual #450 branch was tested. Merge guidance:
-
-1. Keep #450's morning planning, `createPlannedWork` and `workItems` result.
-2. Keep this branch's evening bundle, validation and audit path. Its adapter
-   replaces #450's raw evening `listWorkItems` prompt block.
-3. Keep both additive schema blocks: `commitment_work`/backfill and
-   `goal_review_evidence`.
-4. Keep both check-in fields: `work_item_ids` and `review_evidence`.
-5. Run `bun test src/goals` and TypeScript in the combined checkout. The
-   Today integration test automatically runs when its real service exists.
-
-## Verification
-
-R1 follow-up:
-
-- Seven malformed-input cases failed before the fix; a further case verifies
-  the new qualification for valid input. The added coverage includes the
-  actual morning planner writing a structured action, database reopening
-  before the evening review, mixed/null/non-array stored inputs, malformed
-  entries after the context limit, preserved source records and LLM failure.
-- `bun test src/goals src/daemon/api-goal-review.test.ts`: 115 passed,
-  1 skipped, 0 failed. The skip awaits #450's actual service.
-- The same suites against the actual #450 combination: 138 passed,
-  0 skipped, 0 failed.
-- Final evidence tests: 31 passed. TypeScript passed in both checkouts;
-  daemon build and all four guards passed, with the package guard's Bun fallback.
-
-Initial implementation:
-
-- Three regressions failed before the fix: known-ID unsupported scoring,
-  direct `daily_review` writes, and missing ID-bound evening inputs.
-- `bun test src/goals src/vault`: 195 passed, 2 skipped, 0 failed. One skip
-  awaits #450's actual service; the other is the existing keychain environment
-  test. Includes malformed/unknown/missing IDs and scores, cross-goal evidence,
-  activity/history distinction, concurrent corrections, outcome timing,
-  bounded escaped context, rollback, LLM failure and fresh-process recovery.
-- Actual #450 combination, `JARVIS_TEST_ENGINE_BUILD=1 bun test src/goals`:
-  127 passed, 0 failed, including real checked work and replay protection.
-- Public API tests: 3 passed on this branch and 3 on the actual #450 combination.
-  Two initially reproduced misleading 404 responses before the API fix. Tests
-  cover abstention, finite score validation, unchanged manual scoring, unknown
-  IDs and stored evidence readback.
-- TypeScript passed in both checkouts. Daemon build and all four repository
-  guards passed; the package guard used its Bun fallback after npm produced no
-  parseable file list.
-
-The full repository suite and aggregate pre-commit hook are not claimed green.
-Their previously observed hangs/package-wrapper timeout remain documented in
-the project record. Local commits use a per-command hook override after
-explicit scoped verification; repository hook configuration is unchanged.
+The evening prompt keeps the plan-scoped work narration, which carries the
+in-flight records (decision, blocker, run status) that have no checked outcome
+yet and therefore cannot appear in the evidence bundle.
