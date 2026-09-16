@@ -147,9 +147,12 @@ subjects still do not enter. Development, both held-out splits and every quality
 ratio are unchanged at 100%.
 
 R8: ranking drops candidates before packing sees them, through the per-subject
-task filter and the floor. Those drops now set the same incomplete-record notice
-that the packing limits set, so a filtered slice is never presented as the whole
-record.
+task filter, the floor and the current-value filter. All of them now set the
+same incomplete-record notice that the packing limits set, so a filtered slice
+is never presented as the whole record. The current-value filter is the one that
+matters most: a superseded or expired value is withheld rather than shown
+qualified, so without the notice the block would read as a complete record that
+happens to contain no earlier value.
 
 ## Rebase onto the merged fact repository (2026-09-16)
 
@@ -163,7 +166,12 @@ evidence view this branch had, and it keeps `formatFact` and `describeFact`
 distinct, so the machine-readable provenance cannot leak into a notification
 body. This branch keeps only what it is for: ranking, selection and the bounded
 block around those lines. The separator defang moved into `fact-format.ts` with
-the formatter, so it now also covers the person-facing short form.
+the formatter, which also closes the same hole in the pre-existing `formatFact`;
+it stays off the person-facing short form, which has no fields to forge and
+should not have pipes rewritten out of file paths or shell snippets. Date
+rendering there is nullish- and range-tolerant again: `formatFact` runs while
+the system prompt is built and the caller turns any throw into an empty block,
+so one malformed timestamp would otherwise erase all memory silently.
 
 One of #456's assertions changed, and only the mechanism, not the property.
 `scope and disjoint validity periods remain separate; expired values cannot
@@ -171,10 +179,13 @@ bind` asserted that an expired value appears in recall marked `"validity":
 "outside recorded validity"` and `"binding_eligible":false`. Ranked recall
 selects only values that apply now, so it asserts instead that the expired
 editor and the expired address are absent while the current value is present,
-and that the expired row is still non-binding through `getFact`. That is the
-same guarantee enforced one step earlier: a stale value cannot be misread
-because it is never shown. It is a narrowing beyond #456's stated contract,
-which filters only `superseded`, and it is what the frozen evaluation measures.
+and that the expired row is still non-binding through `getFact`. This is a
+stronger guarantee against misreading, because withholding does not depend on
+the model honouring a qualification, and it is only equally strong against
+unreported omission because R8 now marks the block: withheld, not hidden. It is
+a narrowing beyond #456's stated contract, which filters only `superseded`, and
+it is what the frozen evaluation measures. The marking itself is kept alive and
+covered by a direct test of `formatFact`, since recall no longer reaches it.
 `contested` rows remain in recall, qualified, as that contract requires. The
 other two colliding assertions (the evidence ledger cap and the clipped quote)
 pass unchanged once recall uses `formatFact`.

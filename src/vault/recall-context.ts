@@ -26,6 +26,8 @@ export function packRecallContext(profiles: RecallProfile[], maxChars: number = 
     section.lines.push(value); length += extra; return true;
   };
   const facts = selected.map(profile => profile.facts.filter(fact => isCurrentRecallFact(fact, at)));
+  // Same rule as ranking: a record the truth filter removed is still omitted.
+  if (facts.some((list, i) => list.length < selected[i]!.facts.length)) omitted = true;
   const byId = facts.map(list => new Map(list.map(fact => [fact.id, fact])));
   const included = selected.map(() => new Set<string>());
   const aliases = selected.map((profile, i) => [...new Set(profile.matchedAliasIds ?? [])]

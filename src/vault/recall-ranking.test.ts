@@ -192,7 +192,9 @@ test('large evidence quotes cannot evict a short qualified fact or be silently t
   // The repository bounds the evidence view; packing must still fit the fact
   // and its qualification, and the clip must be visible rather than silent.
   expect(context).toContain('"evidence_count":4');
-  expect(context).toContain('...');
+  // The fact id is the handle back to the unclipped ledger.
+  expect(context).toContain(`"id":"${base.id}"`);
+  expect(context).toContain(`${'q'.repeat(300)}...`);
   expect(context).not.toContain('q'.repeat(301));
   expect(context.length).toBeLessThanOrEqual(RECALL_LIMITS.chars);
   expect(fact.evidence?.[0]?.quote).toEndWith('not yet approved');
@@ -211,10 +213,12 @@ test('many evidence records keep explicit omission counts and a stable ledger re
   // A growing ledger must not grow the prompt, and the qualification the
   // ranking layer selected on must survive the bound intact.
   expect(context).toContain('"evidence_count":100');
+  expect(context).toContain(`"id":"${base.id}"`);
   expect(context).toContain('"binding_eligible":false');
   expect(context).toContain('"state":"contested"');
   expect(context).toContain('"scope":"work"');
-  const shown = JSON.parse(context.slice(context.indexOf(' | evidence: ') + ' | evidence: '.length));
+  const factLine = context.split('\n').find(entry => entry.includes('endpoint: route.example'))!;
+  const shown = JSON.parse(factLine.slice(factLine.indexOf(' | evidence: ') + ' | evidence: '.length));
   expect(shown).toHaveLength(3);
   expect(shown[0].ref).toBe('turn:99');
   expect(context.length).toBeLessThanOrEqual(RECALL_LIMITS.chars);
@@ -470,8 +474,7 @@ test('default recall recovers qualified facts after a database restart', () => {
   } finally { closeDb(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-const hasC8 = Reflect.has(repository, 'correctFact');
-test.skipIf(!hasC8)('actual C8 value queries retain the correction through aliases, crowding and restart', () => {
+test('value queries retain the correction through aliases, crowding and restart', () => {
   closeDb();
   const dir = mkdtempSync(join(tmpdir(), 'jarvis-recall-correction-'));
   try {
@@ -510,7 +513,7 @@ test.skipIf(!hasC8)('actual C8 value queries retain the correction through alias
   } finally { closeDb(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test.skipIf(!hasC8)('actual C8 repeated evidence preserves corrected recall and the full ledger after restart', () => {
+test('repeated evidence preserves corrected recall and the full ledger after restart', () => {
   closeDb();
   const dir = mkdtempSync(join(tmpdir(), 'jarvis-recall-evidence-'));
   try {
@@ -537,7 +540,9 @@ test.skipIf(!hasC8)('actual C8 repeated evidence preserves corrected recall and 
     expect(after).toContain('"binding_eligible":true');
     // The prompt view is bounded and the clip is marked; the ledger is whole.
     expect(after).toContain('"evidence_count":5');
-    expect(after).toContain('...');
+    expect(after).toContain(`"id":"${current.id}"`);
+    // The quote is "<n>: " plus filler, so the 300-char clip lands mid-filler.
+    expect(after).toMatch(/\d: q{297}\.\.\./);
     expect(after).not.toContain('q'.repeat(301));
     const stored = repository.getFact(current.id) as RecallFact;
     expect(stored.evidence).toHaveLength(5);
@@ -545,7 +550,7 @@ test.skipIf(!hasC8)('actual C8 repeated evidence preserves corrected recall and 
   } finally { closeDb(); rmSync(dir, { recursive: true, force: true }); }
 });
 
-test.skipIf(!hasC8)('actual C8 corrections, periods and source ledger survive default recall', () => {
+test('corrections, periods and source ledger survive default recall', () => {
   const entity = createEntity('person', 'C8 integration');
   const create = repository.createFact as (id: string, predicate: string, object: string, options: Record<string, unknown>) => RecallFact;
   const correct = Reflect.get(repository, 'correctFact') as (id: string, object: string, reason: string) => RecallFact;

@@ -1,6 +1,5 @@
 import type { Entity } from './entities.ts';
 import type { Fact } from './facts.ts';
-import { appliesAt } from './fact-policy.ts';
 
 /** Ranking consumes the repository's truth metadata; it never creates it. */
 export type RecallFact = Fact;
@@ -43,9 +42,13 @@ export function recallTerms(text: string): string[] {
 }
 
 /** Default recall carries only what applies now; corrected and expired rows stay
- *  inspectable through the fact APIs. Contested rows are current and included. */
+ *  inspectable through the fact APIs. Contested rows are current and included.
+ *  The period test is nullish-tolerant where appliesAt is strict: a row without
+ *  the columns must read as unbounded, never as expired. */
 export function isCurrentRecallFact(fact: RecallFact, at = Date.now()): boolean {
-  return fact.status !== 'superseded' && fact.superseded_by == null && appliesAt(fact, at);
+  return fact.status !== 'superseded' && fact.superseded_by == null
+    && (fact.valid_from == null || fact.valid_from <= at)
+    && (fact.valid_to == null || at < fact.valid_to);
 }
 
 function mentioned(label: string, query: Set<string>, normalized: string): boolean {
@@ -100,6 +103,10 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
   if (!query.size && !selfOverview) return [];
   const normalized = normalizeRecallText(message);
   const current = facts.filter(fact => isCurrentRecallFact(fact, at));
+  // Superseded and out-of-period rows never reach the prompt, but they are still
+  // records this subject has: the block has to admit it is not the whole ledger.
+  const stored = new Map<string, number>();
+  for (const fact of facts) stored.set(fact.subject_id, (stored.get(fact.subject_id) ?? 0) + 1);
   // Every overview request is a self request; the two must not disagree, or a
   // message reads the whole vault and then scores as if it mentioned nobody.
   const selfQuery = selfOverview || /\b(?:my|mine|myself)\b/i.test(message)
@@ -192,7 +199,7 @@ export function rankRecall(message: string, entities: Entity[], facts: RecallFac
         matchedAliasIds: primary.filter(doc => doc.alias).map(doc => doc.fact.id),
         factDependencies: dependencies.filter(dependency => ids.has(dependency.factId)), score,
         taskMatch: hasTaskMatch, matchedTerms: [...matchedTerms], anchorTerms: [...anchorTerms],
-        omitted: ids.size < entityDocs.length });
+        omitted: ids.size < (stored.get(entity.id) ?? entityDocs.length) });
     }
   }
   results.sort((a, b) => near(a.score, b.score) || a.entity.name.localeCompare(b.entity.name) || a.entity.id.localeCompare(b.entity.id));
