@@ -7,6 +7,7 @@
 import type { Database } from "bun:sqlite";
 import { getWorkflowDb, DEFAULT_IDS } from "../index";
 import { apId } from "../ids";
+import { withOwnedFlowVersion } from "./flow-version-ownership";
 
 export type FlowStatus = "ENABLED" | "DISABLED";
 
@@ -121,11 +122,15 @@ export function touchFlow(id: string): void {
 }
 
 export function setPublishedVersion(id: string, versionId: string | null): void {
-  const res = db().run(
-    `UPDATE flow SET published_version_id = ?, updated = ? WHERE id = ?`,
-    [versionId, now(), id],
-  );
-  if (res.changes === 0) throw new Error(`setPublishedVersion: flow not found (id=${id})`);
+  const attach = () => {
+    const res = db().run(
+      `UPDATE flow SET published_version_id = ?, updated = ? WHERE id = ?`,
+      [versionId, now(), id],
+    );
+    if (res.changes === 0) throw new Error(`setPublishedVersion: flow not found (id=${id})`);
+  };
+  if (versionId === null) attach();
+  else withOwnedFlowVersion(id, versionId, attach);
 }
 
 export function updateFlowMetadata(id: string, metadata: Record<string, unknown> | null): void {

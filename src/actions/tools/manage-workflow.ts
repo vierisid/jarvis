@@ -46,7 +46,6 @@ import {
   getFlow,
   listFlows,
   parseFlowMetadata,
-  setPublishedVersion,
   updateFlowStatus,
   type FlowRow,
 } from "../../workflows/db/repos/flow.ts";
@@ -54,8 +53,8 @@ import {
   createDraftVersion,
   getFlowVersion,
   getLatestDraft,
-  lockVersion,
 } from "../../workflows/db/repos/flow-version.ts";
+import { publishFlowVersion } from "../../workflows/db/repos/flow-publication.ts";
 import {
   createFlowRun,
   getFlowRun,
@@ -405,7 +404,7 @@ function actSetStatus(
 }
 
 function actPublish(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unknown> {
-  let target = getLatestDraft(flow.id);
+  const target = getLatestDraft(flow.id);
   if (!target) {
     if (flow.published_version_id) {
       // Already published, nothing to do.
@@ -423,12 +422,8 @@ function actPublish(flow: FlowRow, deps: ManageWorkflowDeps): Record<string, unk
   // is not enrolled yet, and blocking someone's publish over a heuristic would
   // be worse than the mismatch it prevents.
   const warnings = publishOsWarnings(target.trigger, deps);
-  if (target.state !== "LOCKED") target = lockVersion(target.id);
-  setPublishedVersion(flow.id, target.id);
-  updateFlowStatus(flow.id, "ENABLED");
+  const { flow: updated } = publishFlowVersion(flow.id, target.id);
   void deps.triggerManager?.refresh(flow.id).catch(e => console.warn(`[manage-workflow] triggerManager.refresh failed: ${(e as Error).message}`));
-  const updated = getFlow(flow.id);
-  if (!updated) return { error: "flow vanished after publish" };
   return warnings.length > 0
     ? { ...summarizeFlow(updated), warnings }
     : summarizeFlow(updated);

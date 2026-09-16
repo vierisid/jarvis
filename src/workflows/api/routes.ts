@@ -33,7 +33,6 @@ import {
   getFlow,
   listFlows,
   parseFlowMetadata,
-  setPublishedVersion,
   updateFlowMetadata,
   updateFlowStatus,
   type FlowStatus,
@@ -49,6 +48,8 @@ import {
   setSampleInputEntry,
   updateDraftVersion,
 } from "../db/repos/flow-version";
+import { publishFlowVersion } from "../db/repos/flow-publication";
+import { FlowVersionRequestError, withOwnedFlowVersion } from "../db/repos/flow-version-ownership";
 import {
   getFlowVersionUiMeta,
   upsertFlowVersionUiMeta,
@@ -158,6 +159,7 @@ const trapErrors = async (fn: () => Promise<Response> | Response): Promise<Respo
   try {
     return await fn();
   } catch (e) {
+    if (e instanceof FlowVersionRequestError) return err(e.message, e.status);
     const msg = e instanceof Error ? e.message : String(e);
     if (/not found/i.test(msg)) return err(msg, 404);
     return err(msg, 500);
@@ -953,6 +955,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       GET: (req) =>
         trapErrors(() => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
+          if (!getFlow(id)) return err("flow not found", 404);
           return ok(listVersions(id));
         }),
       POST: (req) =>
@@ -963,6 +966,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             trigger?: Record<string, unknown>;
             uiMeta?: FlowVersionUiMeta;
           };
+          if (!getFlow(id)) return err("flow not found", 404);
           if (!body.displayName) return err("displayName is required");
           const version = createDraftVersion({
             flowId: id,
@@ -977,14 +981,14 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflows/:id/versions/:versionId": {
       GET: (req) =>
         trapErrors(() => {
-          const { versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
-          const v = getFlowVersion(versionId);
-          if (!v) return err("version not found", 404);
-          return ok({ ...v, uiMeta: getFlowVersionUiMeta(versionId) });
+          const { id, versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
+          return ok(withOwnedFlowVersion(id, versionId, () => ({
+            ...getFlowVersion(versionId)!, uiMeta: getFlowVersionUiMeta(versionId),
+          })));
         }),
       PATCH: (req) =>
         trapErrors(async () => {
-          const { versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
+          const { id, versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
           const body = (await req.json()) as {
             displayName?: string;
             trigger?: Record<string, unknown>;
@@ -994,12 +998,12 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             uiMeta?: FlowVersionUiMeta;
           };
           const { uiMeta, ...versionPatch } = body;
-          const v = updateDraftVersion(versionId, versionPatch);
-          // Sidecar write goes after the version update so a failed version
-          // update doesn't leave a half-orphan sidecar pointing at stale
-          // step names. The editor sends both together; either both land or
-          // neither does.
-          if (uiMeta) upsertFlowVersionUiMeta(versionId, uiMeta);
+          const v = withOwnedFlowVersion(id, versionId, () => {
+            const updated = updateDraftVersion(versionId, versionPatch);
+            // The content and its editor layout must commit together.
+            if (uiMeta) upsertFlowVersionUiMeta(versionId, uiMeta);
+            return updated;
+          });
           return ok(v);
         }),
     },
@@ -1007,11 +1011,11 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflows/:id/versions/:versionId/lock": {
       POST: (req) =>
         trapErrors(() => {
-          const { versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
+          const { id, versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
           // Lock mutates the same row state DRAFT -> LOCKED, so the sidecar
           // (keyed on versionId) already follows. No copy needed; mentioned
           // here so future readers know that's by design.
-          const locked = lockVersion(versionId);
+          const locked = withOwnedFlowVersion(id, versionId, () => lockVersion(versionId));
           const osWarnings = lockOsWarnings(locked.trigger);
           return ok(osWarnings.length > 0 ? { ...locked, osWarnings } : locked);
         }),
@@ -1028,7 +1032,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflows/:id/versions/:versionId/sample-data/:stepName": {
       PATCH: (req) =>
         trapErrors(async () => {
-          const { versionId, stepName } = (
+          const { id, versionId, stepName } = (
             req as RequestWithParams<{ id: string; versionId: string; stepName: string }>
           ).params;
           const body = (await req.json().catch(() => ({}))) as { output?: unknown };
@@ -1049,17 +1053,17 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               );
             }
           }
-          const v = setSampleDataEntry(versionId, stepName, output);
+          const v = withOwnedFlowVersion(id, versionId, () => setSampleDataEntry(versionId, stepName, output));
           return ok({ versionId: v.id, sampleData: v.sampleData });
         }),
       DELETE: (req) =>
         trapErrors(() => {
           // Clear all sample-data entries on this version. Sugar over the
           // per-step PATCH with null when the UI's "reset all" action fires.
-          const { versionId } = (
+          const { id, versionId } = (
             req as RequestWithParams<{ id: string; versionId: string; stepName: string }>
           ).params;
-          const v = replaceSampleData(versionId, null);
+          const v = withOwnedFlowVersion(id, versionId, () => replaceSampleData(versionId, null));
           return ok({ versionId: v.id, sampleData: v.sampleData });
         }),
     },
@@ -1070,7 +1074,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflows/:id/versions/:versionId/sample-input/:stepName": {
       PATCH: (req) =>
         trapErrors(async () => {
-          const { versionId, stepName } = (
+          const { id, versionId, stepName } = (
             req as RequestWithParams<{ id: string; versionId: string; stepName: string }>
           ).params;
           const body = (await req.json().catch(() => ({}))) as { input?: unknown };
@@ -1093,11 +1097,11 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               );
             }
           }
-          const v = setSampleInputEntry(
+          const v = withOwnedFlowVersion(id, versionId, () => setSampleInputEntry(
             versionId,
             stepName,
             input as Record<string, unknown> | null,
-          );
+          ));
           return ok({ versionId: v.id, sampleInput: v.sampleInput });
         }),
     },
@@ -1108,21 +1112,21 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           // Default semantic: lock the latest draft and set it as published.
           // Body can override with `{ versionId }` for explicit selection.
-          let versionId: string | undefined;
-          try {
-            const body = (await req.json()) as { versionId?: string };
-            versionId = body.versionId;
-          } catch {
-            /* empty body is fine */
+          const raw = await req.text();
+          let body: { versionId?: unknown } = {};
+          if (raw.trim()) {
+            try { body = JSON.parse(raw); }
+            catch { return err("publish body must be valid JSON", 400); }
+            if (!body || typeof body !== "object" || Array.isArray(body)) {
+              return err("publish body must be a JSON object", 400);
+            }
           }
-          let target = versionId ? getFlowVersion(versionId) : getLatestDraft(id);
-          if (!target) return err("no draft version to publish", 400);
-          if (target.state !== "LOCKED") target = lockVersion(target.id);
-          setPublishedVersion(id, target.id);
-          updateFlowStatus(id, "ENABLED");
+          if (body.versionId !== undefined && (typeof body.versionId !== "string" || !body.versionId.trim())) {
+            return err("versionId must be a non-empty string", 400);
+          }
+          const { flow, version } = publishFlowVersion(id, body.versionId);
           refreshTrigger(id);
-          const flow = getFlow(id);
-          return flow ? ok({ flow: serializeFlow(flow), version: target }) : err("flow not found", 404);
+          return ok({ flow: serializeFlow(flow), version });
         }),
     },
 

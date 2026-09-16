@@ -60,10 +60,11 @@ describe("flow repo", () => {
   test("updateFlowStatus and setPublishedVersion mutate fields", () => {
     const flow = createFlow();
     updateFlowStatus(flow.id, "ENABLED");
-    setPublishedVersion(flow.id, "fv_xyz");
+    const version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: "Published" }).id);
+    setPublishedVersion(flow.id, version.id);
     const got = getFlow(flow.id);
     expect(got?.status).toBe("ENABLED");
-    expect(got?.published_version_id).toBe("fv_xyz");
+    expect(got?.published_version_id).toBe(version.id);
   });
 
   test("metadata round-trips through JSON column", () => {
