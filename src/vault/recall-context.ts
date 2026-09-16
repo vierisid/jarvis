@@ -14,7 +14,11 @@ const omission = '\n\n[Additional memory omitted by context limits; this is not 
 const evidenceChars = 2000;
 const date = (value: number | null | undefined) => value == null || !Number.isFinite(value)
   || Math.abs(value) > 8.64e15 ? 'unspecified' : new Date(value).toISOString();
-const line = (value: string) => value.replace(/[\r\n]+/g, ' ');
+// Predicates, values and names are extracted from untrusted content, so they
+// must not be able to forge the line structure that qualifies them: neither a
+// new bullet nor the " | " separator that introduces the trusted metadata.
+// Same rule as defangDelimiters in roles/untrusted.ts.
+const line = (value: string) => value.replace(/[\r\n]+/g, ' ').replace(/\|/g, '/');
 
 /** Keep complete evidence entries where possible, with a bounded prompt view.
  * Quotes are omitted whole: truncation could remove a negation or condition.

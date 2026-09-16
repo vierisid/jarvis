@@ -67,8 +67,9 @@ export function expandRecallDependencies(ids: Iterable<string>, dependencies: Re
   return [...selected];
 }
 
+/** Whole words only: an embedded "me" (melatonin, meeting, same) is not a self request. */
 export function isRecallSelfOverview(message: string): boolean {
-  return /(?:what.*(?:know|remember).*(?:me|myself)|who am i)/i.test(message);
+  return /(?:\bwhat\b.*\b(?:know|remember)\b.*\b(?:me|myself)\b|\bwho am i\b)/i.test(message);
 }
 
 /** Full candidate scoring before limits. No model confidence is used for relevance. */
