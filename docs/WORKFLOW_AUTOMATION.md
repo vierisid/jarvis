@@ -172,6 +172,7 @@ src/workflows/
 
   queue/                        SQLite-backed job queue
     worker.ts                   WorkflowWorker: drains jobs, calls handler.ts
+    retry-policy.ts             One attempt per RUN_FLOW job + operator guidance
     queue.test.ts               Drain semantics + race-tolerant terminal-status
 
   db/                           Persistence
@@ -264,6 +265,37 @@ Following a single run from a user click to a SUCCEEDED row:
 7. On terminal status, the engine sends `WorkerContract.updateRunProgress(SUCCEEDED|FAILED|PAUSED)` plus `uploadRunLog` (zstd execution-state). The handler updates the row and releases the engine back to the pool.
 
 If a step calls `context.run.pause()` (e.g. waiting on a webhook), the engine sends PAUSED + the zstd backup. The daemon writes a `waitpoint` row and the run hangs. A later `POST /api/webhooks/waitpoints/:id` enqueues a `RESUME` job; the worker loads the backup, restores execution state via `execution-state-loader.ts`, and the engine picks up exactly where it paused.
+
+## Failure and restart: no automatic replay
+
+A flow step can deliver a real effect (send a message, hit an API, write a
+file) and the queue has no receipt for it, so `RUN_FLOW` is never retried
+automatically. `src/workflows/queue/retry-policy.ts` pins every `RUN_FLOW`
+job -- BEGIN and RESUME alike -- to a single attempt, whatever the caller
+asked for, and an expired `RUN_FLOW` lease is never stolen by another claim.
+Other job types keep the default three attempts with backoff.
+
+What that means in practice:
+
+- A step failure ends the run `FAILED` once. The reason lands in
+  `flow_run.failed_step.errorMessage` (chat `get_run`, the runs API and the
+  editor's run banner all read it) with guidance to check which effects
+  already completed before starting a new run.
+- A daemon crash or an over-deadline drain leaves the job `RUNNING`. The next
+  boot's `recoverOrphanedJobs()` retires it: the job goes `FAILED` and its
+  unfinished run goes `FAILED` too, in one transaction, keeping whatever step
+  outputs were recorded. It is NOT resumed -- the effects of the interrupted
+  step are unknown.
+- A run that had durably PAUSED is the exception: if it still has an open
+  waitpoint, or a fresh single-attempt `RESUME` job already queued for it,
+  boot recovery leaves it `PAUSED` so the planned continuation still fires.
+- Re-running is a user decision. A new run is a new `flow_run`; nothing in the
+  queue treats a fresh job as permission to replay an existing run, and the
+  handler refuses a BEGIN for a run that is not `QUEUED` or a RESUME for a run
+  that is not `PAUSED`.
+
+Durable per-effect receipts and reconciliation-based recovery are follow-up
+work; this policy is containment, not exactly-once execution.
 
 ## Pieces
 

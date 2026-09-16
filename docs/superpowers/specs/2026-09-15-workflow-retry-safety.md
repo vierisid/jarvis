@@ -92,21 +92,24 @@ Keep one copy of that contract, including nullable finish time and clearing
 it when a continuation starts. Preserve A1's immutable execution configuration.
 The worker-driven engine regression now records that configuration through
 its real BEGIN path, replacing A1's manual setup in that test; its executor
-unit tests still need their configuration fixtures. Apply
-[`workflow-retry-a1-test-compat.patch`](workflow-retry-a1-test-compat.patch)
-after merging A1: three engine test setups (six parameterized cases) must
-reset their direct-boundary RUNNING fixture to QUEUED before handing it to
-the worker. Production entry points already start QUEUED.
+unit tests still need their configuration fixtures. After merging A1, three
+setups in the `workflow effect boundary` describe of
+`src/workflows/runtime/workflow-authority.test.ts` (six parameterized cases)
+hand the worker a fixture run left in RUNNING by the direct boundary call; add
+`updateRun(f.run.id, { status: 'QUEUED' })` immediately before each of their
+`enqueue({ jobType: 'RUN_FLOW', ... })` calls. Production entry points already
+start QUEUED, so no source change is needed.
 
 PR #450 also edits queue recovery and the handler. Keep this branch's
 `retireWorkflowRetries(ts, true)` before re-queuing other job types, and keep
 #450's `reconcileCanceledRuns`, its legacy stranded-run repair and its
 cancel implementation. Keep the shared PAUSED result and null finish-time
 handling alongside the new handler entry guard. Union the queue tests and
-their imports/helpers. Apply the accompanying
-[`workflow-retry-today-test-compat.patch`](workflow-retry-today-test-compat.patch):
-a queued RESUME cannot make an interrupted RUNNING execution safe. That run
-must fail with guidance; a recorded PAUSED checkpoint remains resumable.
+their imports/helpers. In `src/goals/work-items.test.ts` (`Today work trace`),
+the assertion after `recoverOrphanedJobs()` must become
+`expect(getFlowRun(run.id)?.status).toBe('FAILED')`: a queued RESUME cannot
+make an interrupted RUNNING execution safe. That run must fail with guidance;
+a recorded PAUSED checkpoint remains resumable.
 These combinations were exercised in isolated checkouts, without importing
 either PR's commits into this branch.
 
