@@ -122,9 +122,16 @@ export interface PieceAgentDelegateInput {
   goal: string;
   role?: string;
   maxIterations?: number;
+  /**
+   * Tools that must have completed for the delegation to count as done. A
+   * finished conversation on its own is not a verified business outcome.
+   */
+  requiredTools?: string[];
+  /** Defaults to true. False returns a failed outcome as data for the graph. */
+  requireSuccess?: boolean;
 }
 
-export type PieceAgentRunStatus = "completed" | "max_iterations" | "error" | "canceled";
+export type PieceAgentRunStatus = "completed" | "max_iterations" | "error" | "canceled" | "approval_required";
 
 export interface PieceAgentToolCall {
   name: string;
@@ -142,6 +149,14 @@ export interface PieceAgentDelegateResult {
   status: PieceAgentRunStatus;
   /** Optional error detail when status='error'. */
   error?: string;
+  /** Present when status is `approval_required`: the workflow parks on this waitpoint. */
+  approval?: { effectId: string; approvalId: string; waitpointId: string };
+  /**
+   * The declared business outcome, present on every finished delegation:
+   * `succeeded` when the conversation finished and every required tool
+   * completed, otherwise an `error` naming what is missing.
+   */
+  outcome?: import("../../actions/action-outcome").ActionOutcome;
 }
 
 /**

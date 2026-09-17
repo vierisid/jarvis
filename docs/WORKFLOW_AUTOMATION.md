@@ -100,6 +100,27 @@ succeeded when the reply is not JSON. `/v1/jarvis/llm/chat` answers
   was the silent path this closes. A flow that meant to tolerate it needs the
   handled-result flag and a router branch on the outcome.
 
+### `jarvis-agent` pauses on approvals and declares its outcome
+
+A tool call inside a delegated sub-agent that needs approval no longer ends
+as a denial in the conversation. It becomes an `agent-tool:N` workflow
+effect, the run parks on its approval, and after the decision the same step
+runs again and the conversation continues where it stopped, in this process
+or the next. The sub-agent's message log is checkpointed in
+`workflow_delegation` while it waits and dropped when it finishes; a step the
+engine runs again after that answers from the record. A declined approval
+becomes `[APPROVAL DENIED]` in the conversation and the tool never runs.
+
+The step's `outcome` is its business contract. `Required tools` names the
+tools that must complete; `succeeded` means the conversation finished and
+each of them has a result and no error. Without them, `succeeded` only says
+the agent finished cleanly. A failed outcome (`REQUIRED_TOOL_NOT_COMPLETED`,
+`AGENT_INCOMPLETE`, `AGENT_ERROR`) answers 422 and stops the step; turn
+`Require the declared outcome` off to route on `{{step.outcome.status}}`
+instead. The sub-agent's audit rows now record what happened: a call that
+needed approval is `approval_required` and not executed, and an allowed call
+is recorded after it ran.
+
 ### Governed pieces
 
 The ten verified pieces -- gmail, slack, notion, openai, github, google-calendar,
