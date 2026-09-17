@@ -145,6 +145,29 @@ describe("native connections through the authenticated engine endpoint", () => {
     expect((await lookup("native", { pieceName: "" })).status).toBe(400);
   });
 
+  test("a query-less request resolves through the token claims, for any run in that project", async () => {
+    upsertConnection({ externalId: "claims-only", pieceName: "fixture-piece", pieceVersion: "1", displayName: "Scoped",
+      projectId: "claims-project", type: "OAUTH2", value: { access_token: "claims-project-token" } });
+    // No projectId query param at all: the only thing that can name the
+    // project is the verified token, so a default or a query fallback fails.
+    const url = `${api.baseUrl}/v1/worker/app-connections/claims-only`;
+    const first = await mint("claims-project");
+    const scoped = await fetch(url, { headers: { Authorization: `Bearer ${first.token}` } });
+    expect(scoped.status).toBe(200);
+    expect(await scoped.json()).toMatchObject({ projectIds: ["claims-project"],
+      value: { access_token: "claims-project-token" } });
+    // The boundary is the project, not the run: a second run in the same
+    // project reads the same row. Narrowing that is separate work, so this
+    // asserts today's scope rather than leaving it undescribed.
+    const second = await mint("claims-project");
+    expect(second.identity.runId).not.toBe(first.identity.runId);
+    expect((await fetch(url, { headers: { Authorization: `Bearer ${second.token}` } })).status).toBe(200);
+    // A run in another project never sees it, with no query param to fall
+    // back on. The explicit cross-project override is the 403 case above.
+    const outsider = await mint();
+    expect((await fetch(url, { headers: { Authorization: `Bearer ${outsider.token}` } })).status).toBe(404);
+  });
+
   test("preserves native error status and does not expose missing credentials", async () => {
     const id = await save("native");
     getWorkflowDb().run("UPDATE app_connection SET status = 'ERROR' WHERE id = ?", [id]);

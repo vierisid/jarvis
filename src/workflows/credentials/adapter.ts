@@ -74,6 +74,12 @@ export class CredentialResolver {
     return this.sources;
   }
 
+  /**
+   * Returns null when nothing owns `externalId`. Throws `AmbiguousConnectionError`
+   * when a piece-less lookup finds more than one row for the id in the project:
+   * an uncertain identity must fail the step, not pick a credential. Callers
+   * map it to a distinct status (the engine endpoint answers 409).
+   */
   async resolve(input: ResolveInput): Promise<ResolvedConnection | null> {
     if (input.externalId.startsWith(JARVIS_PREFIX)) {
       for (const source of this.sources) {

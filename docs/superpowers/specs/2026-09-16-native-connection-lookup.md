@@ -17,6 +17,15 @@ inactive, produce an ambiguity error. Explicit piece names remain exact
 filters and can disambiguate existing rows. Normal engine workflows using
 duplicate IDs must reconnect using distinct external IDs before running.
 
+The identity comes from the verified engine token's claims, never from the
+request: the project is read from the token and a query project that disagrees
+is refused. The claim that scopes the read is the project, not the run, so any
+live run in a project can obtain that project's connections. The project is
+already the unit the builder and the public connection API treat as one
+credential set, so this matches the stored scope rather than widening it.
+Binding a read to the connections its own locked flow version references would
+be narrower and is separate work.
+
 Alternatives considered were changing the upstream engine to carry piece
 identity on every request, or adding a project-wide unique constraint. The
 former would require carrying context through property resolution and dynamic
@@ -55,12 +64,16 @@ a locally built native fixture using the installed-piece loader. The fixture
 uses the resolved OAuth2 token against a loopback fake provider. No credential
 resolver, property resolver or action executor is mocked.
 
-Before the fix, five endpoint regressions failed and the native engine run
-failed before provider dispatch. The managed engine run already passed.
+Before the fix, seven of the nine endpoint regressions failed and the native
+engine run failed before provider dispatch. The managed engine run already
+passed.
+
 Coverage includes encoded external IDs, duplicates, corruption in an ambiguous
-candidate, exact piece filters, separate projects, mismatched query scope,
-missing/invalid/expired/terminated tokens, native statuses and managed-source
-priority. Engine ambiguity tests assert that the provider receives no request.
+candidate, exact piece filters, separate projects, mismatched query scope, a
+query-less request resolved from a non-default token project, two runs in one
+project, missing/invalid/expired/terminated tokens, native statuses and
+managed-source priority. Engine ambiguity tests assert that the provider
+receives no request.
 
 Run the engine integration explicitly with `JARVIS_TEST_ENGINE_BUILD=1`; without
 both a cached engine and build dependencies, or that opt-in, it follows the
@@ -69,24 +82,10 @@ in these tests are synthetic.
 
 ## Integration
 
-Main was pulled before branching and now includes goal-review PR #468. Open PRs
-were #473 (native credential encryption), #469 (structural runtime), #381
-(command deck/wake) and #280 (project documentation). Only #473 touches this
-fix's repository module: its encryption change affects write serialization,
-whereas this branch adds a separate read helper. Neither branch requires the
-other to function; both should be retained when merging. This branch leaves
-the known plaintext-insert fix to #473 and introduces no schema migration.
-
-Verification passed 224 tests across sandbox, credentials, DB, public API and
-real engine suites, plus TypeScript, the daemon build and all four repository
-guards. Packaging used Bun's packer (2 required paths, 2,516 files).
-
-In an isolated checkout on the same main, both actual #473 commits applied
-cleanly alongside this fix. The combined change passed 150 tests, including
-encrypted API saves through the real engine, native migration/rollback and
-managed sources, plus TypeScript. No #473 commit was added to this branch.
-After tightening the dependency opt-in, all 11 endpoint/engine tests passed
-again in both checkouts, with no skips.
-The full repository suite and its aggregate hook retain their previously
-documented timeout limitations; a per-command hook override follows the
-explicit checks rather than rerunning that aggregate hook.
+The native credential encryption work (#473) is the only other change to this
+fix's repository module, and the two do not overlap: encryption owns write
+serialization, this fix adds a read helper. Both read helpers go through the
+repository's own `rowToConnection`, so the decrypt boundary stays where it
+already is and a change to how values are stored needs no change here. This
+branch leaves the known plaintext-insert fix to #473 and adds no schema
+migration.
