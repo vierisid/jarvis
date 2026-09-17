@@ -1,7 +1,7 @@
 /**
  * Approval Manager — Handles the lifecycle of approval requests.
  *
- * Persists to SQLite: pending → approved → claimed → executed (with a receipt).
+ * Persists to SQLite: pending -> approved -> claimed -> executed (with a receipt).
  *
  * A decision and its execution are separate writes, so a crash can fall
  * between them. The claim marks that one executor took the approved request

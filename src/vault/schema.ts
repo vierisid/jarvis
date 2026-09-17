@@ -414,28 +414,45 @@ function createTables(db: Database): void {
   // receipt (committed, failed, blocked) or, after a restart, the reconciled
   // state of an approved row that never got one (not_started, unknown) and
   // the user's resolution of it (closed). Old rows read as unclaimed.
-  let receiptsIntroduced = false;
-  try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_claimed_at INTEGER`); receiptsIntroduced = true; } catch {}
-  try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_claimed_by TEXT`); } catch {}
-  try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_boot_id TEXT`); } catch {}
-  try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_outcome TEXT`); } catch {}
-  try { db.run(`ALTER TABLE approval_requests ADD COLUMN resolved_at INTEGER`); } catch {}
-  try { db.run(`ALTER TABLE approval_requests ADD COLUMN resolved_by TEXT`); } catch {}
-  try { db.run(`ALTER TABLE approval_requests ADD COLUMN resolution_note TEXT`); } catch {}
-  // Rows approved before receipts existed cannot be told apart: the old code
-  // wrote no claim, so whether one of them ran is unknowable. They are closed
-  // once, here, rather than offered as runnable with months-old arguments on
-  // the first boot after the upgrade. Only rows approved from now on are
-  // reconciled at startup.
-  if (receiptsIntroduced) {
-    db.run(
+  //
+  // The columns and the one-time closure below go in together or not at all.
+  // They are separate writes, and a crash between them would leave a database
+  // with the columns but no closure, which the next boot reads as already
+  // migrated: every pre-upgrade approved row would then reconcile to
+  // `not_started` and the dashboard would offer to run months-old arguments.
+  // SQLite rolls DDL back with the rest of a transaction, so the marker for
+  // "already migrated" (the columns existing) can never outlive the closure.
+  const approvalColumns = (db.query(`PRAGMA table_info(approval_requests)`).all() as Array<{ name: string }>)
+    .map((column) => column.name);
+  const receiptsIntroduced = !approvalColumns.includes('execution_outcome');
+  db.transaction(() => {
+    try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_claimed_at INTEGER`); } catch {}
+    try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_claimed_by TEXT`); } catch {}
+    try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_boot_id TEXT`); } catch {}
+    try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_outcome TEXT`); } catch {}
+    try { db.run(`ALTER TABLE approval_requests ADD COLUMN resolved_at INTEGER`); } catch {}
+    try { db.run(`ALTER TABLE approval_requests ADD COLUMN resolved_by TEXT`); } catch {}
+    try { db.run(`ALTER TABLE approval_requests ADD COLUMN resolution_note TEXT`); } catch {}
+    // Rows approved before receipts existed cannot be told apart: the old code
+    // wrote no claim, so whether one of them ran is unknowable. They are closed
+    // once, here, rather than offered as runnable with months-old arguments on
+    // the first boot after the upgrade. Only rows approved from now on are
+    // reconciled at startup.
+    if (!receiptsIntroduced) return;
+    const closed = db.run(
       `UPDATE approval_requests
          SET execution_outcome = 'closed', resolved_at = ?, resolved_by = 'migration',
              resolution_note = 'Approved before execution receipts existed; whether it ran is unknown, so it was not run again'
        WHERE status = 'approved' AND execution_mode != 'workflow'`,
       [Date.now()]
-    );
-  }
+    ).changes;
+    // Say so once, on stderr, so the closure is not an invisible state change.
+    // Stdout belongs to the CLIs that parse it; this runs in whichever process
+    // opens the vault first after the upgrade, daemon or CLI.
+    if (closed > 0) {
+      console.warn(`[Vault] Closed ${closed} approval(s) that were approved before execution receipts existed. Whether they ran is unknown, so none were run again; they read as closed in Authority.`);
+    }
+  })();
 
   // Authority: Audit trail
   db.run(`

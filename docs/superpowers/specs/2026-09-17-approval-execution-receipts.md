@@ -38,11 +38,11 @@ was already made.
 ## Invariants this protects
 
 - One execution per approval. `claimExecution` is a conditional update on
-  an approved, unclaimed row, so two surfaces resolving the same approval
-  at once run it once; the loser learns the row's state and does nothing.
-  `DeferredExecutor` claims before it checks emergency state or touches the
-  tool registry, and the inline gate, voice, notifications, channels and the
-  dashboard all run through it.
+  an approved, unclaimed row, the same CAS shape as `claimWorkflowEffect`,
+  so two surfaces resolving the same approval at once run it once; the loser
+  learns the row's state and does nothing. `DeferredExecutor` claims before
+  it checks emergency state and before it dispatches, and the inline gate,
+  voice, notifications, channels and the dashboard all run through it.
 - A restart never executes anything. `reconcileAfterRestart` runs once
   before the daemon serves and only writes states. A row claimed under
   another boot id becomes `unknown` and can never be claimed again, so the
@@ -53,7 +53,18 @@ was already made.
   `resolved_by = 'migration'`. The old code wrote no claim, so whether any
   of them ran is unknowable, and the first boot after the upgrade must not
   offer to run months-old arguments. Only rows approved from then on are
-  reconciled at startup.
+  reconciled at startup. Pending rows are not touched: the closure matches
+  `status = 'approved'`, so a decision the user has not made yet is still
+  theirs to make, and a closed row is unclaimable, so nothing it authorized
+  can run unreviewed.
+- The column additions and that closure are one transaction. They are
+  separate writes and SQLite rolls DDL back with the rest of a transaction,
+  so the marker for "already migrated" (the columns existing) cannot
+  outlive the closure. A crash between them would otherwise leave the next
+  boot reconciling every pre-upgrade approved row to `not_started` and the
+  dashboard offering to run months-old arguments. The process that performs
+  the closure warns once on stderr with the count, so it is not an
+  invisible state change.
 - A receipt is written only on an approved row, once. Each receipt names its
   outcome: `committed` when the tool returned, `failed` when it threw (a
   partial effect is possible), `blocked` when emergency state refused it.
@@ -64,8 +75,13 @@ was already made.
   changes nothing.
 - Workflow-owned approvals are excluded from reconciliation, from the
   migration closure and from the unresolved list. Their truth is the
-  `workflow_effect` record, which has its own claim, receipt and replay
-  refusal.
+  `workflow_effect` record, which has its own CAS claim, recorded outcome
+  and replay refusal. That outcome is not the same kind of receipt: for a
+  governed piece the HTTPS call happens in the engine subprocess after the
+  daemon authorizes it, so the effect record is a dispatch authorization,
+  not a delivery receipt (docs/WORKFLOW_AUTOMATION.md). The receipts here
+  cover the approvals the daemon itself dispatches, where the tool returns
+  in process before the receipt is written.
 - The status column keeps its five values. A closed row stays `approved`,
   which is what the user decided; the outcome and `resolved_by` say the
   execution was closed. Old rows read as unclaimed, so a database written
@@ -89,6 +105,17 @@ was already made.
 - It does not learn from resolutions. Running a not-started row once is
   not counted toward auto-approve suggestions beyond what the executor
   already records.
-- The dashboard closes without a note; only the API takes one. Channels
-  and notifications do not offer execute and close, and nobody is told at
-  boot that unresolved rows exist beyond the counts.
+- The dashboard closes without a note; only the API takes one, and no
+  surface renders `resolution_note` back. Channels and notifications do not
+  offer execute and close, and nobody is told at boot that unresolved rows
+  exist beyond the counts. The migration's closure is announced once on
+  stderr and otherwise reads as a `closed` chip in recent decisions.
+- It does not unblock a commitment that was waiting on such an approval.
+  `CommitmentExecutor` counts an `approved` row as still pending, and a
+  reconciled or closed row stays `approved`, so the commitment keeps
+  waiting exactly as it did before this change.
+- A lost claim is reported accurately only on the execute route, which
+  answers 409. `applyApprovalDecision` still reports its own dispatch as
+  executed and passes the executor's refusal text through as the result.
+  Approve is a CAS on a pending row, so only one surface reaches the
+  executor from there, which is why the branch is unreachable in practice.

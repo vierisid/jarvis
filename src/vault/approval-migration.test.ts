@@ -60,3 +60,35 @@ test('the upgrade closes approved rows written before receipts existed, once, an
   expect(next.getRequest(fresh.id)).toMatchObject({ execution_outcome: 'not_started' });
   expect(next.getRequest('approved-old')).toMatchObject({ execution_outcome: 'closed', resolved_by: 'migration' });
 });
+
+test('the columns and the closure land together: a failed closure rolls the columns back', () => {
+  const path = join(directory, 'vault.db');
+  legacyDatabase(path);
+  // A closure that cannot commit stands in for a crash between the column
+  // additions and the closure. Without one transaction the columns would
+  // survive, and the next boot would read them as "already migrated" and
+  // reconcile every pre-upgrade approved row to not_started instead.
+  const blocked = new Database(path);
+  blocked.run(`CREATE TRIGGER block_closure BEFORE UPDATE ON approval_requests
+               BEGIN SELECT RAISE(ABORT, 'closure blocked'); END`);
+  blocked.close();
+
+  // Pinned to the closure failing, so a future migration that throws earlier
+  // cannot make this pass without the columns ever having been added.
+  expect(() => initDatabase(path, { quiet: true })).toThrow(/closure blocked/);
+  closeDb();
+
+  const after = new Database(path);
+  const columns = (after.query(`PRAGMA table_info(approval_requests)`).all() as Array<{ name: string }>).map((c) => c.name);
+  expect(columns).not.toContain('execution_outcome');
+  expect(after.query(`SELECT status FROM approval_requests WHERE id = 'approved-old'`).get()).toEqual({ status: 'approved' });
+  after.run(`DROP TRIGGER block_closure`);
+  after.close();
+
+  // The retry on the next boot closes the row, so nothing offers to run it.
+  initDatabase(path, { quiet: true });
+  const mgr = new ApprovalManager(generateId());
+  expect(mgr.getRequest('approved-old')).toMatchObject({ execution_outcome: 'closed', resolved_by: 'migration' });
+  expect(mgr.reconcileAfterRestart()).toEqual({ demotedInline: 0, notStarted: 0, interrupted: 0 });
+  expect(mgr.getUnresolved()).toEqual([]);
+});
