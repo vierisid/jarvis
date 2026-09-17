@@ -168,6 +168,46 @@ describe("native connections through the authenticated engine endpoint", () => {
     expect((await fetch(url, { headers: { Authorization: `Bearer ${outsider.token}` } })).status).toBe(404);
   });
 
+  test("a token retired by a warm-engine rebind cannot read its old project's credential", async () => {
+    // The pooled engine keeps one sandboxId across runs, so `rebind()` hands
+    // the same warm process to a new (runId, projectId). Piece code from the
+    // finished run can retain its token in module-level state -- the process
+    // survives -- and the token's own projectId claim is what this route
+    // scopes by, so before the middleware compared tokens this returned 200
+    // with the retired project's plaintext access_token.
+    await save("warm-victim");
+    const sandboxId = "sandbox-reused-across-runs";
+    const retired = await api.signer.mint(
+      { sandboxId, runId: "run-retired", projectId: DEFAULT_IDS.project },
+      600,
+    );
+    api.registry.register({
+      sandboxId, runId: "run-retired", projectId: DEFAULT_IDS.project,
+      engineToken: retired.token, expiresAt: retired.expiresAt, terminatedAt: null,
+    });
+    const current = await api.signer.mint(
+      { sandboxId, runId: "run-next", projectId: "project-next" },
+      600,
+    );
+    api.registry.rebind(sandboxId, {
+      runId: "run-next", projectId: "project-next",
+      engineToken: current.token, expiresAt: current.expiresAt,
+    });
+
+    const url = `${api.baseUrl}/v1/worker/app-connections/warm-victim`;
+    const stale = await fetch(url, { headers: { Authorization: `Bearer ${retired.token}` } });
+    expect(stale.status).toBe(401);
+    const body = await stale.text();
+    expect(body).not.toContain(TOKEN);
+    // The response `id` used to echo `engine_run-retired_warm-victim`, which
+    // is the server plainly still acting as the run that was handed off.
+    expect(body).not.toContain("run-retired");
+    // The run that actually owns the sandbox is unaffected; it simply has no
+    // connection of its own in its own project.
+    expect((await fetch(url, { headers: { Authorization: `Bearer ${current.token}` } })).status)
+      .toBe(404);
+  });
+
   test("preserves native error status and does not expose missing credentials", async () => {
     const id = await save("native");
     getWorkflowDb().run("UPDATE app_connection SET status = 'ERROR' WHERE id = ?", [id]);

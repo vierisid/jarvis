@@ -21,6 +21,9 @@ import { createDraftVersion, lockVersion } from "../../db/repos/flow-version";
 import { createFlowRun } from "../../db/repos/flow-run";
 import { DEFAULT_IDS } from "../../db/schema";
 import { SandboxRegistry } from "../../sandbox-api/sandbox-registry";
+import { EngineTokenSigner } from "../../sandbox-api/engine-token";
+import { SandboxApi } from "../../sandbox-api/server";
+import { CredentialResolver } from "../../credentials/adapter";
 import type { EngineContract, EngineResponse } from "../../sandbox-api/contracts";
 import type { SpawnedEngine } from "./spawn";
 import { EngineHandle } from "./engine-runtime";
@@ -259,5 +262,188 @@ describe("EngineHandle operation lifecycle", () => {
 
     finishOperation!();
     await pending.catch(() => {});
+  });
+});
+
+/**
+ * The logs-upload URL across a warm rebind.
+ *
+ * `executeFlow` bakes the engineToken into `logsUploadUrl` as a query param,
+ * because the engine PUTs its zstd run-log backup there without auth headers
+ * (upstream shapes that endpoint after a presigned URL). Now that the sandbox
+ * API refuses a token the sandbox is no longer running under, that baked URL
+ * has to be regenerated whenever the pool rebinds the sandbox -- otherwise run
+ * logs start 401ing, silently, on every pooled run after the first.
+ *
+ * It is regenerated, because the pooled `acquire()` builds a fresh
+ * `EngineHandle` around the freshly minted token before sending EXECUTE_FLOW,
+ * and `logsUploadUrl` is derived from the handle. This pins that, end to end,
+ * against a real server: the URL the second handle bakes authenticates, and
+ * the one the first handle baked does not.
+ */
+describe("logsUploadUrl authentication across a rebind", () => {
+  let api: SandboxApi;
+  let registry: SandboxRegistry;
+  let signer: EngineTokenSigner;
+  let baseCodeDir: string;
+  let dataDir: string;
+  let previousDataDir: string | undefined;
+  let runOne: string;
+  let runTwo: string;
+  const sandboxId = "sandbox-pooled";
+
+  /** Fake engine that keeps each operation payload, not just its type. */
+  function capturingEngine(): EngineContract & { ops: Array<Record<string, unknown>> } {
+    const ops: Array<Record<string, unknown>> = [];
+    return {
+      ops,
+      async executeOperation(input) {
+        ops.push(input.operation as Record<string, unknown>);
+        return { status: "OK", response: undefined };
+      },
+    };
+  }
+
+  const flowVersion = (id: string): UpstreamFlowVersion => ({
+    id,
+    created: new Date(0).toISOString(),
+    updated: new Date(0).toISOString(),
+    flowId: "flow-pooled",
+    displayName: "pooled",
+    trigger: {
+      name: "trigger",
+      valid: true,
+      displayName: "Manual",
+      lastUpdatedDate: new Date(0).toISOString(),
+      type: "EMPTY",
+      settings: {},
+    },
+    updatedBy: null,
+    valid: true,
+    schemaVersion: null,
+    agentIds: [],
+    state: "LOCKED",
+    connectionIds: [],
+    backupFiles: null,
+    notes: [],
+  });
+
+  beforeEach(async () => {
+    initWorkflowDb(":memory:");
+    baseCodeDir = mkdtempSync(resolve(tmpdir(), "engine-logs-url-"));
+    // The logs route persists under this root; keep the uploads out of the
+    // developer's real ~/.jarvis tree.
+    dataDir = mkdtempSync(resolve(tmpdir(), "engine-logs-data-"));
+    previousDataDir = process.env.JARVIS_WORKFLOW_DATA_DIR;
+    process.env.JARVIS_WORKFLOW_DATA_DIR = dataDir;
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const version = createDraftVersion({ flowId: flow.id, displayName: "pooled" });
+    lockVersion(version.id);
+    runOne = createFlowRun({ flowId: flow.id, flowVersionId: version.id }).id;
+    runTwo = createFlowRun({ flowId: flow.id, flowVersionId: version.id }).id;
+    signer = new EngineTokenSigner();
+    registry = new SandboxRegistry();
+    api = new SandboxApi({
+      signer,
+      registry,
+      services: { credentialResolver: new CredentialResolver() },
+    });
+    await api.start({ port: 0 });
+  });
+
+  afterEach(async () => {
+    await api?.stop();
+    rmSync(baseCodeDir, { recursive: true, force: true });
+    rmSync(dataDir, { recursive: true, force: true });
+    if (previousDataDir === undefined) delete process.env.JARVIS_WORKFLOW_DATA_DIR;
+    else process.env.JARVIS_WORKFLOW_DATA_DIR = previousDataDir;
+    closeWorkflowDb();
+  });
+
+  function handleFor(
+    runId: string,
+    projectId: string,
+    token: string,
+    engine: EngineContract,
+  ): EngineHandle {
+    return new EngineHandle(
+      sandboxId,
+      runId,
+      projectId,
+      engine,
+      token,
+      fakeProc(),
+      registry,
+      5,
+      // Real baseUrl so the baked logs URL points at the live server, but a
+      // stubbed RPC lookup: this suite drives the handle against a fake
+      // engine, so there is no socket.io connection to re-resolve.
+      { baseUrl: api.baseUrl, workerRpc: { engineClient: () => engine } } as unknown as SandboxApi,
+      baseCodeDir,
+      async () => {},
+    );
+  }
+
+  const bakedUrl = (ops: Array<Record<string, unknown>>): string => {
+    const url = ops[0]?.logsUploadUrl;
+    expect(typeof url).toBe("string");
+    return url as string;
+  };
+
+  test("the URL the rebound run bakes uploads, and the retired run's URL is refused", async () => {
+    // Cold acquire for run one.
+    const first = await signer.mint(
+      { sandboxId, runId: runOne, projectId: "project-one" },
+      600,
+    );
+    registry.register({
+      sandboxId,
+      runId: runOne,
+      projectId: "project-one",
+      engineToken: first.token,
+      expiresAt: first.expiresAt,
+      terminatedAt: null,
+    });
+    const firstEngine = capturingEngine();
+    await handleFor(runOne, "project-one", first.token, firstEngine).executeFlow({
+      flowVersion: flowVersion("v-one"),
+    });
+    const firstUrl = bakedUrl(firstEngine.ops);
+    // Before the handoff, run one's own baked URL works.
+    expect((await fetch(firstUrl, { method: "PUT", body: "one" })).status).toBe(200);
+
+    // Warm acquire for run two: same process, new token, registry rebound.
+    const second = await signer.mint(
+      { sandboxId, runId: runTwo, projectId: "project-two" },
+      600,
+    );
+    registry.rebind(sandboxId, {
+      runId: runTwo,
+      projectId: "project-two",
+      engineToken: second.token,
+      expiresAt: second.expiresAt,
+    });
+    const secondEngine = capturingEngine();
+    await handleFor(runTwo, "project-two", second.token, secondEngine).executeFlow({
+      flowVersion: flowVersion("v-two"),
+    });
+    const secondUrl = bakedUrl(secondEngine.ops);
+
+    // The regeneration itself: a different URL, carrying the token the
+    // registry now holds.
+    expect(secondUrl).not.toBe(firstUrl);
+    expect(secondUrl).toContain(encodeURIComponent(second.token));
+    expect(registry.get(sandboxId)?.engineToken).toBe(second.token);
+
+    // Run two's run-log upload keeps working -- this is the regression the
+    // auth tightening could have caused.
+    const live = await fetch(secondUrl, { method: "PUT", body: "two" });
+    expect(live.status).toBe(200);
+    expect(await live.json()).toMatchObject({ ok: true });
+
+    // Run one's URL is dead the moment the engine is handed on.
+    const stale = await fetch(firstUrl, { method: "PUT", body: "one-again" });
+    expect(stale.status).toBe(401);
+    expect(await stale.json()).toMatchObject({ error: "engine token superseded" });
   });
 });

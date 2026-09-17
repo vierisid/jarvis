@@ -6,7 +6,7 @@
  */
 
 import { test, expect, describe, beforeAll, afterAll, beforeEach } from "bun:test";
-import { EngineTokenSigner } from "./engine-token";
+import { EngineTokenSigner, engineTokensEqual } from "./engine-token";
 import { SandboxRegistry } from "./sandbox-registry";
 import { SandboxApi } from "./server";
 import { CredentialResolver } from "../credentials/adapter";
@@ -67,6 +67,16 @@ describe("EngineTokenSigner", () => {
     const signer = new EngineTokenSigner();
     const { token } = await signer.mint(sampleIdentity(), -10);
     await expect(signer.verify(token)).rejects.toThrow();
+  });
+
+  test("engineTokensEqual matches only the identical string and tolerates a length mismatch", () => {
+    expect(engineTokensEqual("sentinel-token-value", "sentinel-token-value")).toBe(true);
+    expect(engineTokensEqual("sentinel-token-value", "sentinel-token-valuX")).toBe(false);
+    // `timingSafeEqual` throws on differing lengths, so the length guard has
+    // to absorb that rather than turn a superseded token into a 500.
+    expect(engineTokensEqual("short", "sentinel-token-value")).toBe(false);
+    expect(engineTokensEqual("", "")).toBe(true);
+    expect(engineTokensEqual("", "sentinel-token-value")).toBe(false);
   });
 });
 
