@@ -7,6 +7,7 @@
  *   - tampered ciphertext fails decryption (auth tag catches it)
  *   - wrong key fails decryption
  *   - legacy plaintext JSON passes through `decryptJson` unchanged
+ *   - parse failures before and after decryption never quote the value
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -20,6 +21,22 @@ import {
 
 const KEY_A = randomBytes(32);
 const KEY_B = randomBytes(32);
+
+/**
+ * The message `JSON.parse` produces for `input`. The leak tests below use it to
+ * pin that their sentinel really is one the parser quotes back: Bun echoes a
+ * bare identifier verbatim but truncates most other malformed input to its
+ * first token, so a sentinel chosen carelessly would satisfy `not.toContain`
+ * even if `decryptJson` started appending the parser message again.
+ */
+function parserMessageFor(input: string): string {
+  try {
+    JSON.parse(input);
+  } catch (error) {
+    return (error as Error).message;
+  }
+  throw new Error("sentinel must not be valid JSON");
+}
 
 beforeEach(() => setEncryptionKey(KEY_A));
 afterEach(() => setEncryptionKey(null));
@@ -71,7 +88,8 @@ describe("encryption", () => {
   });
 
   test("malformed legacy JSON errors never include credential text", () => {
-    const secret = "synthetic-malformed-credential-token";
+    const secret = "syntheticMalformedLegacyCredentialToken";
+    expect(parserMessageFor(secret)).toContain(secret);
     let message = "";
     try { decryptJson(secret); } catch (error) { message = (error as Error).message; }
     expect(message).toContain("legacy plaintext is not valid JSON");
@@ -79,7 +97,8 @@ describe("encryption", () => {
   });
 
   test("authenticated but invalid JSON errors never include decrypted credential text", () => {
-    const secret = "synthetic-invalid-decrypted-credential";
+    const secret = "syntheticInvalidDecryptedCredentialToken";
+    expect(parserMessageFor(secret)).toContain(secret);
     const iv = randomBytes(12);
     const cipher = createCipheriv("aes-256-gcm", KEY_A, iv);
     const ciphertext = Buffer.concat([cipher.update(secret, "utf8"), cipher.final()]);

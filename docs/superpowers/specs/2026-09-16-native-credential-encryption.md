@@ -1,7 +1,5 @@
 # Native credential encryption and legacy conversion
 
-Branch: `fix/native-credential-encryption`, from main `a8f0b903`.
-
 ## Write boundary
 
 `upsertConnection` now computes one `encryptJson(input.value)` before either
@@ -13,6 +11,34 @@ repository boundary. API responses continue to omit credential values.
 Legacy reads remain read-only. Malformed JSON errors omit parser snippets,
 which may contain secrets, both before and after decryption. Migration errors
 and output contain fixed messages/counts, never row values or key material.
+
+## What this protects, and what it does not
+
+The `enc1:` envelope is AES-256-GCM with a fresh 12-byte random IV per write
+and the auth tag stored beside the ciphertext. Reading an `enc1:` value fails
+closed: a wrong key, a truncated blob or a flipped byte raises instead of
+yielding a value. None of that is new here; only the write path is.
+
+Three limits are deliberate and must not be overstated:
+
+- The key is a local 0600 file (`~/.jarvis/cache/workflow-encryption.key`) or
+  an environment variable, which is how this project stores every other secret.
+  `src/vault/keychain.ts` records why no OS keychain is used. On a default
+  install the key therefore sits on the same filesystem as the database it
+  protects. This defends a database file or an archive that travels without the
+  key; it does not defend against anyone who can read the data directory.
+- The envelope carries no associated data, so a ciphertext is not bound to its
+  row. Anyone who can write the database can move a value between rows and the
+  result still authenticates. Binding would change the wire format and needs
+  its own conversion, so it is not part of this fix.
+- Reads still accept legacy plaintext JSON, because rows written by the
+  affected versions are plaintext. There is no strict mode that rejects
+  plaintext once a deployment has converted, so a database writer can replace
+  a ciphertext with plaintext of their choosing and the daemon accepts it.
+
+Losing the key is unrecoverable. `~/.jarvis/cache` is treated as disposable
+elsewhere in the project and `jarvis export --full` does not carry this key, so
+escrow it separately before converting anything.
 
 ## Source-version inventory and deployment prerequisite
 
@@ -150,30 +176,9 @@ includes aliased directories with no PID file, genuine held locks through an
 alias, distinct daemon/data roots and creation of a missing daemon root.
 
 Tests use temporary databases and synthetic values only. They establish neither
-a deployed credential count nor a live disclosure. Repository-wide verification
-results and any existing suite limitations are recorded with the implementation.
+a deployed credential count nor a live disclosure.
 
-Verification on this branch:
-
-- Three write regressions failed before the fix: plaintext INSERT through the
-  repository and POST, plus insertion despite an unusable key.
-- Broader run: 152 passed, zero failed across workflow DB/credentials/API,
-  migration, key rotation and backup/restore suites.
-- Final focused run after adding authenticated malformed-JSON coverage:
-  28 passed, zero failed. TypeScript and the daemon build passed.
-- Licensing, migration-DDL and template guards passed (100 templates, no
-  warnings/errors). Packaging passed with Bun's real packer (2 required paths,
-  2,511 files); npm pack stalled and exceeded the bounded wrapper, so the
-  npm release-packer result is not claimed verified.
-- An initial broad run lacked Bun on child-process PATH and failed eight
-  subprocess tests plus a pieces-library uninstall check. The corrected
-  environment passed all 152; the uninstall case also passed on untouched main.
-- The full repository suite/aggregate pre-commit hook was not rerun. Previous
-  full-suite hangs remain outside this bounded change. Local commit creation
-  uses a per-command hook override after the explicit checks above.
-- Review R1: canonicalize both lock directories before deduplicating, preventing
-  apply/rollback from acquiring the same file twice through a symlink. Both
-  alias regressions failed before the fix. The updated migration, daemon PID,
-  encryption and native credential write suites passed 77 tests with zero
-  failures; TypeScript, licensing, migration-DDL and template guards passed.
-  Packaging passed using Bun's packer (2 required paths, 2,511 files).
+The two error-message leak tests use identifier-shaped sentinels and first
+assert that `JSON.parse` quotes the sentinel back. Without that assertion the
+leak check passes whether or not `decryptJson` appends the parser message,
+because the parser truncates most malformed input to its first token.
