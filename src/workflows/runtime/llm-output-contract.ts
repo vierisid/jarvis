@@ -3,6 +3,10 @@
  * the reply text. The schema language is a closed subset of JSON Schema: every
  * keyword is either implemented here or refused when the step is declared, so
  * a constraint can never be ignored and then reported as success.
+ *
+ * Outcome messages quote schema keywords, JSON-pointer paths and property
+ * names, escaped and bounded because a reply's keys are model output. They
+ * never quote a reply's values.
  */
 import type { ActionOutcome } from '../../actions/action-outcome';
 
@@ -42,6 +46,10 @@ export const OUTPUT_SCHEMA_LIMITS = Object.freeze({
   enumValues: 64,
   /** Violations reported for one reply; the count of the rest is stated. */
   violations: 20,
+  /** Characters in a declared property name. */
+  nameLength: 128,
+  /** Characters of a reply's property name quoted in a message. */
+  nameExcerpt: 80,
 });
 
 const KEYWORDS = new Set([
@@ -55,6 +63,13 @@ const isRecord = (value: unknown): value is Record<string, unknown> =>
 const isPrimitive = (value: unknown): value is string | number | boolean | null =>
   value === null || ['string', 'number', 'boolean'].includes(typeof value);
 const own = (object: Record<string, unknown>, key: string) => Object.prototype.hasOwnProperty.call(object, key);
+/** RFC 6901 escaping, so a name cannot forge a path segment. */
+const pointer = (name: string) => name.replace(/~/gu, '~0').replace(/\//gu, '~1');
+/** A name quoted in a message: escaped and bounded, since a reply's keys are model output. */
+const label = (name: string) => {
+  const escaped = pointer(name);
+  return escaped.length > OUTPUT_SCHEMA_LIMITS.nameExcerpt ? `${escaped.slice(0, OUTPUT_SCHEMA_LIMITS.nameExcerpt)}...` : escaped;
+};
 
 /**
  * Accept a declaration or explain why it is not one this validator can honor.
@@ -109,13 +124,15 @@ function parseNode(value: unknown, path: string, depth: number, budget: { nodes:
     if (names.length > OUTPUT_SCHEMA_LIMITS.properties) fail(`"properties" exceeds ${OUTPUT_SCHEMA_LIMITS.properties} entries`);
     schema.properties = {};
     for (const name of names) {
+      if (name.length > OUTPUT_SCHEMA_LIMITS.nameLength) fail(`property name exceeds ${OUTPUT_SCHEMA_LIMITS.nameLength} characters`);
       if (forbiddenNames.has(name)) fail(`property name "${name}" is not allowed`);
-      schema.properties[name] = parseNode(properties[name], `${path}/properties/${name}`, depth + 1, budget);
+      schema.properties[name] = parseNode(properties[name], `${path}/properties/${pointer(name)}`, depth + 1, budget);
     }
   }
   if (own(value, 'required')) {
     const required = value.required;
     if (!Array.isArray(required) || required.some(name => typeof name !== 'string' || name.length === 0)) fail('"required" must be an array of property names');
+    if (required.some(name => (name as string).length > OUTPUT_SCHEMA_LIMITS.nameLength)) fail(`"required" names a property longer than ${OUTPUT_SCHEMA_LIMITS.nameLength} characters`);
     if (new Set(required).size !== required.length) fail('"required" lists a property twice');
     if (required.some(name => forbiddenNames.has(name as string))) fail('"required" names a property that is not allowed');
     schema.required = required as string[];
@@ -194,11 +211,11 @@ function check(value: unknown, schema: OutputSchema, path: string, report: (mess
   }
   if (schema.type === 'object') {
     const object = value as Record<string, unknown>;
-    for (const name of schema.required ?? []) if (!own(object, name)) report(`missing required property "${name}" at ${at}`);
+    for (const name of schema.required ?? []) if (!own(object, name)) report(`missing required property "${label(name)}" at ${at}`);
     for (const name of Object.keys(object)) {
       const declared = schema.properties && own(schema.properties, name) ? schema.properties[name] : undefined;
-      if (declared) check(object[name], declared, `${path}/${name}`, report);
-      else if (schema.additionalProperties === false) report(`unexpected property "${name}" at ${at}`);
+      if (declared) check(object[name], declared, `${path}/${pointer(name)}`, report);
+      else if (schema.additionalProperties === false) report(`unexpected property "${label(name)}" at ${at}`);
     }
   }
 }
@@ -206,7 +223,7 @@ function check(value: unknown, schema: OutputSchema, path: string, report: (mess
 /**
  * The reply has already been received, so a contract failure is an `error`
  * whose effect `may_have_occurred`: the provider was called and answered. The
- * message names the contract that failed, never the reply text; the text
+ * message names the contract that failed, never a reply value; the text
  * travels beside the outcome so a handled branch can still inspect it.
  */
 export function evaluateLlmOutput(input: { text: string; parseJson?: boolean; outputSchema?: OutputSchema }): LlmOutputEvaluation {

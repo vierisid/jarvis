@@ -29,7 +29,7 @@
 
 import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
 import { cancellableWorkflowService } from "../../runtime/cancellation";
-import { OutputSchemaError, parseOutputSchema, type OutputSchema } from '../../runtime/llm-output-contract';
+import { OutputSchemaError, evaluateLlmOutput, parseOutputSchema, type OutputSchema } from '../../runtime/llm-output-contract';
 import type { ActionOutcome } from '../../../actions/action-outcome';
 import { workflowEffectContext } from './effect-context';
 import type { WorkflowEffectContext, WorkflowApprovalPending } from '../../runtime/effect-context';
@@ -106,11 +106,23 @@ export function createJarvisLlmChatRoute(deps: JarvisLlmRouteDeps): RouteHandler
     }
     const reply = await cancellableWorkflowService(deps.llmChat)(body, workflowEffectContext(ctx));
     if (reply.approval) return json(reply, 202);
-    const outcome = reply.outcome ?? { status: 'succeeded' as const };
+    // A backend, or a receipt written before this contract existed, can answer
+    // with the text alone. The route owns the contract, so it evaluates that
+    // text itself instead of stamping success on it.
+    const completed = reply.outcome ? reply : evaluatedReply(reply, body);
+    const outcome = completed.outcome!;
     // HTTP success for a handled outcome acknowledges that the outcome was
-    // returned; it does not claim the reply met the contract.
+    // returned; it does not claim the reply met the contract. 409 and 502
+    // mirror the tool route; today's evaluation only yields succeeded or error.
     const status = outcome.status === 'succeeded' || raw.requireSuccess === false ? 200
       : outcome.status === 'blocked' ? 409 : outcome.status === 'error' ? 422 : 502;
-    return json({ ...reply, outcome }, status);
+    return json(completed, status);
   };
+}
+
+function evaluatedReply(reply: LlmChatResponse, request: LlmChatRequest): LlmChatResponse {
+  const { parsed: _unqualified, outcome: _absent, ...rest } = reply;
+  const evaluated = evaluateLlmOutput({ text: reply.text, ...(request.parseJson ? { parseJson: true } : {}),
+    ...(request.outputSchema ? { outputSchema: request.outputSchema } : {}) });
+  return 'parsed' in evaluated ? { ...rest, parsed: evaluated.parsed, outcome: evaluated.outcome } : { ...rest, outcome: evaluated.outcome };
 }

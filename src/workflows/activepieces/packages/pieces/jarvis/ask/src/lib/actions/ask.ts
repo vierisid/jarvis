@@ -68,7 +68,7 @@ export const askAction = createAction({
     requireSuccess: Property.Checkbox({
       displayName: "Require valid output",
       description:
-        "Stop the step when the reply misses the JSON or schema contract. Turn off only when a later step routes on {{step.outcome.status}} and handles the failure itself; `text` is still returned, `parsed` is not.",
+        "Stop the step when the reply misses the JSON or schema contract. Turn off only when a later step routes on {{step.outcome.status}} and handles the failure itself; `text` is still returned, `parsed` is not. On a failure, `outcome` also carries `code` and `message`.",
       required: false,
       defaultValue: true,
     }),

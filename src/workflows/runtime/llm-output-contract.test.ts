@@ -105,6 +105,25 @@ describe('output validation', () => {
     expect(({} as Record<string, unknown>).polluted).toBeUndefined();
   });
 
+  test('a hostile reply key is escaped and bounded in the message, and cannot forge a path', () => {
+    const closed = parseOutputSchema({ type: 'object', properties: { ok: { type: 'string' } }, additionalProperties: false });
+    const hostile = `x/../secret~${'A'.repeat(500)}`;
+    const [violation] = validateOutput({ [hostile]: 1 }, closed);
+    expect(violation).toBe(`unexpected property "${'x~1..~1secret~0' + 'A'.repeat(OUTPUT_SCHEMA_LIMITS.nameExcerpt - 'x~1..~1secret~0'.length)}..." at /`);
+    expect(violation!.length).toBeLessThan(OUTPUT_SCHEMA_LIMITS.nameExcerpt + 40);
+    // A declared name with a slash is escaped in the path, so the pointer stays unambiguous.
+    const nested = parseOutputSchema({ type: 'object', properties: { 'a/b': { type: 'number' } } });
+    expect(validateOutput({ 'a/b': 'no' }, nested)).toEqual(['expected number at /a~1b, got string']);
+  });
+
+  test('declared property names are bounded', () => {
+    const long = 'p'.repeat(OUTPUT_SCHEMA_LIMITS.nameLength + 1);
+    expect(() => parseOutputSchema({ type: 'object', properties: { [long]: { type: 'string' } } }))
+      .toThrow(`property name exceeds ${OUTPUT_SCHEMA_LIMITS.nameLength} characters`);
+    expect(() => parseOutputSchema({ type: 'object', required: [long] }))
+      .toThrow(`"required" names a property longer than ${OUTPUT_SCHEMA_LIMITS.nameLength} characters`);
+  });
+
   test('bounds the violation list and states how many were left out', () => {
     const closed = parseOutputSchema({ type: 'object', additionalProperties: false });
     const value = Object.fromEntries(Array.from({ length: OUTPUT_SCHEMA_LIMITS.violations + 5 }, (_, i) => [`k${i}`, i]));

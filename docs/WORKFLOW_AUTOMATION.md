@@ -81,7 +81,10 @@ succeeded when the reply is not JSON. `/v1/jarvis/llm/chat` answers
   paths that failed. Both are `error` with effect `may_have_occurred`: the
   provider was called and answered, so the receipt is a completed effect whose
   result carries the failed contract, and a restarted run reads that receipt
-  instead of calling the model again.
+  instead of calling the model again. This is the receipt rule every adapter
+  follows: an effect that completed records `succeeded` with its qualified
+  outcome inside `result`; an effect that did not complete records `failed`,
+  `blocked` or `unknown` with the outcome at the top level of the receipt.
 - By default a failed contract answers 422 and the step fails, so nothing
   downstream runs. Turn `Require valid output` off (`requireSuccess: false`)
   only when a later step routes on `{{step.outcome.status}}` and handles the

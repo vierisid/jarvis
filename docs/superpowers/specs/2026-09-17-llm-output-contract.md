@@ -30,24 +30,36 @@ that failed. A handled step routes on `{{step.outcome.status}}` and
   never ignored. The supported set is closed: `type`, `properties`,
   `required`, `additionalProperties` (boolean), `items`, `enum`, `minItems`,
   `maxItems`, `minLength`, `maxLength`, `minimum`, `maximum`, plus `title` and
-  `description` as documentation. Declarations are bounded (256 nodes, depth
-  8, 64 properties per object, 64 enum values) and property names that reach
-  the prototype are refused.
+  `description` as documentation. Declarations are bounded (256 nodes, nesting
+  depth 8 below the root, 64 properties per object, 64 enum values, property
+  names up to 128 characters) and property names that reach the prototype are
+  refused.
 - The piece takes the schema as text and parses it itself. The engine's JSON
   property processor drops a value it cannot parse, which would run the prompt
   with no contract at all; the piece fails the step before anything is sent.
-- The contract failure lives inside a completed effect. The provider call is
-  the effect: it happened once, the receipt is `succeeded` with the outcome in
-  its result, and a resumed or restarted run returns that receipt without a
-  second call. This is why the failure's effect is `may_have_occurred` and not
-  `not_started`.
+- The route owns the contract. A backend, or a receipt written before this
+  change, that answers with text alone is evaluated at the route; nothing that
+  asked for JSON is stamped `succeeded` because an outcome was missing.
+- The contract failure lives inside a completed effect, under the receipt
+  rule shared with A2 (#478) for every adapter: an effect that completed
+  records `succeeded` with its qualified outcome inside `result`; an effect
+  that did not complete records `failed`, `blocked` or `unknown` with the
+  outcome at the top level of the receipt. Top-level `outcome` therefore means
+  "did not complete". A completed LLM call never sets it, so A2's replay path,
+  which rethrows a top-level failure, never fires for a contract failure, and
+  a handled branch gets the receipt's text and outcome back. The provider call
+  is the effect: it happened once, and a resumed or restarted run returns the
+  receipt without a second call. This is why the failure's effect is
+  `may_have_occurred` and not `not_started`.
 - `requireSuccess` is not part of the effect request digest. An approval
   granted to a request from the previous piece still matches once the upgraded
   piece sends the default explicitly. `parseJson` and `outputSchema` stay in
   the digest and in the frozen arguments: they are part of what was reviewed,
   and a resumed run validates against the schema that was approved.
-- Outcome messages name paths and keywords, never the reply text. The text
-  travels beside the outcome for whoever needs it.
+- Outcome messages quote schema keywords, JSON-pointer paths and property
+  names, escaped and bounded because a reply's keys are model output. They
+  never quote a reply's values. The text travels beside the outcome for
+  whoever needs it.
 
 ## What this does not do
 
@@ -68,13 +80,6 @@ that failed. A handled step routes on `{{step.outcome.status}}` and
 `src/workflows/runner/engine-runtime/build-pieces.ts` are byte-identical
 copies of #478's, so whichever branch lands second merges without conflict.
 Both pieces, `jarvis-ask` here and `jarvis-tool` there, assert the same
-outcome shape; keep both.
-
-## Seeing it fail
-
-Run `src/workflows/runtime/llm-output-outcomes.test.ts` against unchanged
-main: a reply that is not JSON answers 200 with the text and no outcome, a
-schema is accepted and never checked, and the required/handled distinction
-does not exist. The real-engine cases show the required step stopping
-downstream work, the handled step routing on the outcome, and a schema that
-cannot be read failing before the model is called.
+outcome shape; keep both. The receipt rule above is the one both adapters
+follow; #478's durability section should state the same sentence so the two
+specs cannot be read as two conventions.
