@@ -67,6 +67,36 @@ Practical consequences:
   reach the daemon's tool surface. See `Governed pieces` below for the verified
   ten, and `src/workflows/pieces-library/README.md` for the curation path.
 
+### `jarvis-ask` answers with a typed outcome
+
+A step that asks for JSON no longer gets the reply text back as if it had
+succeeded when the reply is not JSON. `/v1/jarvis/llm/chat` answers
+`{ text, parsed?, outcome }`:
+
+- `outcome` is present on every completed call and uses the shared action
+  outcome vocabulary in `src/actions/action-outcome.ts`. `parsed` exists only
+  when JSON was requested and the outcome is `succeeded`.
+- `INVALID_JSON_OUTPUT` means the reply did not parse. `OUTPUT_SCHEMA_MISMATCH`
+  means it parsed but missed the declared schema, and the message names the
+  paths that failed. Both are `error` with effect `may_have_occurred`: the
+  provider was called and answered, so the receipt is a completed effect whose
+  result carries the failed contract, and a restarted run reads that receipt
+  instead of calling the model again.
+- By default a failed contract answers 422 and the step fails, so nothing
+  downstream runs. Turn `Require valid output` off (`requireSuccess: false`)
+  only when a later step routes on `{{step.outcome.status}}` and handles the
+  failure. That step still gets `text`; it never gets `parsed`.
+- `Output schema (JSON)` is a closed JSON Schema subset: `type`, `properties`,
+  `required`, `additionalProperties` (boolean), `items`, `enum`, `minItems`,
+  `maxItems`, `minLength`, `maxLength`, `minimum`, `maximum`. Any other keyword
+  is refused with 400 before the prompt is sent, so a constraint is never
+  skipped and then reported as met. The schema checks the reply; it does not
+  change the prompt, so ask for the shape in the prompt as well.
+- Flows that already had `Parse JSON` on now fail on a reply that is not bare
+  JSON, where they used to continue with the text and an empty `parsed`. That
+  was the silent path this closes. A flow that meant to tolerate it needs the
+  handled-result flag and a router branch on the outcome.
+
 ### Governed pieces
 
 The ten verified pieces -- gmail, slack, notion, openai, github, google-calendar,

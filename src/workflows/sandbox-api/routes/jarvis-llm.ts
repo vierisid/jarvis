@@ -1,17 +1,24 @@
 /**
  * `/v1/jarvis/llm/chat` -- backs the `jarvis-ask` piece's `ask` action.
  *
- * The piece-side action posts `{ prompt, system?, overrideSystem?,
- * parseJson? }` and expects back `{ text, parsed? }`. Implementation
- * here is a thin wrapper around a `LlmChatFn` injected via
- * `SandboxApiServices.llmChat`; the real LLM client is provided by the
- * daemon. Keeping the function pluggable lets tests substitute a
- * deterministic fake.
+ * The piece posts `{ prompt, system?, overrideSystem?, parseJson?,
+ * outputSchema?, requireSuccess? }` and receives `{ text, parsed?, outcome }`
+ * or a pending approval. Implementation here is a thin wrapper around an
+ * `LlmChatFn` injected via `SandboxApiServices.llmChat`; the real LLM client
+ * is provided by the daemon. Keeping the function pluggable lets tests
+ * substitute a deterministic fake.
  *
  * System-prompt semantics (decided in the daemon backend, not here):
  *   - default                   : Jarvis identity + role + personality
  *   - `system` set              : Jarvis prompt + "\n\n" + `system`
  *   - `system` + overrideSystem : `system` only (Jarvis context dropped)
+ *
+ * Output contract: a step that asked for JSON (`parseJson` or `outputSchema`)
+ * gets a typed `outcome`, and `parsed` exists only when that outcome is
+ * `succeeded`. A failed contract answers 422 and the piece stops the step;
+ * `requireSuccess: false` answers 200 with the same outcome so the graph can
+ * route on it. A schema declaration the validator cannot honor is refused
+ * with 400 before any prompt leaves the device.
  *
  * The endpoint is auth-gated like the rest of `/v1/*` (Bearer engineToken).
  * It is not exposed externally -- only the engine subprocess hits it. The call
@@ -22,6 +29,8 @@
 
 import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
 import { cancellableWorkflowService } from "../../runtime/cancellation";
+import { OutputSchemaError, parseOutputSchema, type OutputSchema } from '../../runtime/llm-output-contract';
+import type { ActionOutcome } from '../../../actions/action-outcome';
 import { workflowEffectContext } from './effect-context';
 import type { WorkflowEffectContext, WorkflowApprovalPending } from '../../runtime/effect-context';
 
@@ -35,14 +44,25 @@ export interface LlmChatRequest {
    * carries the Jarvis identity.
    */
   overrideSystem?: boolean;
+  /** Require the reply to be JSON. */
   parseJson?: boolean;
+  /**
+   * Closed JSON Schema subset the parsed reply must match (see
+   * `runtime/llm-output-contract.ts`). Implies `parseJson`.
+   */
+  outputSchema?: OutputSchema;
+  /** Defaults to true. False returns a handled outcome instead of failing the step. */
+  requireSuccess?: boolean;
 }
 
 export interface LlmChatResponse {
   text: string;
+  /** Present only when JSON was requested and `outcome.status` is `succeeded`. */
   parsed?: unknown;
   /** Present when Authority requires approval; the piece parks on the waitpoint. */
   approval?: WorkflowApprovalPending;
+  /** Present on every completed call. */
+  outcome?: ActionOutcome;
 }
 
 export type LlmChatFn = (
@@ -72,7 +92,25 @@ export function createJarvisLlmChatRoute(deps: JarvisLlmRouteDeps): RouteHandler
     if (typeof raw.system === "string") body.system = raw.system;
     if (raw.overrideSystem === true) body.overrideSystem = true;
     if (raw.parseJson === true) body.parseJson = true;
+    if (raw.requireSuccess !== undefined) {
+      if (typeof raw.requireSuccess !== 'boolean') return err('requireSuccess must be a boolean', 400);
+      body.requireSuccess = raw.requireSuccess;
+    }
+    if (raw.outputSchema !== undefined) {
+      try {
+        body.outputSchema = parseOutputSchema(raw.outputSchema);
+      } catch (error) {
+        if (error instanceof OutputSchemaError) return err(`outputSchema: ${error.message}`, 400);
+        throw error;
+      }
+    }
     const reply = await cancellableWorkflowService(deps.llmChat)(body, workflowEffectContext(ctx));
-    return json(reply);
+    if (reply.approval) return json(reply, 202);
+    const outcome = reply.outcome ?? { status: 'succeeded' as const };
+    // HTTP success for a handled outcome acknowledges that the outcome was
+    // returned; it does not claim the reply met the contract.
+    const status = outcome.status === 'succeeded' || raw.requireSuccess === false ? 200
+      : outcome.status === 'blocked' ? 409 : outcome.status === 'error' ? 422 : 502;
+    return json({ ...reply, outcome }, status);
   };
 }
