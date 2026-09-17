@@ -51,11 +51,15 @@ function toolAction(name: string, toolName: string, params: Record<string, unkno
 function fixture(connected = false, result: unknown = 'Desktop windows') {
   let dispatches = 0;
   const sidecar = { id: 'desktop-1', name: 'Test desktop', connected, capabilities: ['desktop'], os: 'windows' };
-  setSidecarManagerRef({ listSidecars: () => [sidecar], dispatchRPC: async () => { dispatches++; return result; } } as unknown as SidecarManager);
+  setSidecarManagerRef({ listSidecars: () => [sidecar], getConnectionSessionId: () => connected ? 'test-session' : null,
+    dispatchRPC: async () => { dispatches++; return result; } } as unknown as SidecarManager);
   const registry = new ToolRegistry();
   registry.register(desktopListWindowsTool);
   const downstream: unknown[] = [];
+  // Machine-independent recorder: this synthetic step must observe the desktop
+  // action's outcome, not inherit the run's binding through a bounded target.
   registry.register({ name: 'write_file', category: 'file-ops', description: 'Synthetic effect', parameters: {},
+    workflowEffect: { category: 'write_data', target: () => ({ store: 'synthetic-outcome-recorder' }) },
     execute: async args => { downstream.push(args); return 'receipt'; } });
   const flow = createFlow();
   const action = toolAction('action', 'desktop_list_windows', { target: sidecar.id });
@@ -86,11 +90,11 @@ describe('desktop outcome API and durable receipts', () => {
     const response = await f.call();
     expect(response.status).toBe(409);
     expect(await response.json()).toMatchObject({ toolName: 'desktop_list_windows', result: null,
-      outcome: { status: 'blocked', code: 'SIDECAR_OFFLINE', effect: 'not_started' } });
+      outcome: { status: 'blocked', code: 'WORKFLOW_MACHINE_OFFLINE', effect: 'not_started' } });
     expect(f.dispatches()).toBe(0);
     expect(listWorkflowEffects(f.run.id)).toMatchObject([{ status: 'blocked', runId: f.run.id,
       versionId: f.version.id, stepName: 'action', target: { sidecarId: f.sidecar.id },
-      outcome: { status: 'blocked', code: 'SIDECAR_OFFLINE' } }]);
+      outcome: { status: 'blocked', code: 'WORKFLOW_MACHINE_OFFLINE' } }]);
   });
 
   test('explicit availability probe returns blocked as graph data', async () => {
@@ -216,13 +220,13 @@ describe('desktop outcomes through the real engine and outer worker', () => {
       enqueue({ jobType: 'RUN_FLOW', flowRunId: f.run.id, maxAttempts: 1, payload: { runId: f.run.id } });
       await worker.drain();
       expect(getFlowRun(f.run.id)?.status).toBe(probe ? 'SUCCEEDED' : 'FAILED');
-      if (probe) expect(f.downstream).toEqual([{ path: '/synthetic', content: 'SIDECAR_OFFLINE' }]);
+      if (probe) expect(f.downstream).toEqual([{ path: '/synthetic', content: 'WORKFLOW_MACHINE_OFFLINE' }]);
       else {
         expect(f.downstream).toHaveLength(0);
         expect(getFlowRun(f.run.id)?.failedStep?.errorMessage).toContain('offline');
       }
       expect(f.dispatches()).toBe(0);
-      expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'blocked', outcome: { code: 'SIDECAR_OFFLINE' } });
+      expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'blocked', outcome: { code: 'WORKFLOW_MACHINE_OFFLINE' } });
     } finally { await runtime.shutdown(); await api.stop(); }
   }, 60_000);
 });

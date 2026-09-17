@@ -9,9 +9,9 @@
 
 import type { Database } from "bun:sqlite";
 import { getRunCancellation, type RunCancellation } from "./run-cancellation";
+import { getRunMachineBinding, type RunMachineBinding } from "./run-machine-binding";
 import { getWorkflowDb, DEFAULT_IDS } from "../index";
 import { apId } from "../ids";
-import { getRunMachineBinding, type RunMachineBinding } from './run-machine-binding';
 
 export type FlowRunStatus =
   | "QUEUED"

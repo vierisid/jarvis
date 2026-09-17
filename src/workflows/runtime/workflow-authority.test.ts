@@ -277,6 +277,9 @@ describe('workflow effect boundary', () => {
       const pending = await f.invoke();
       inventory = [{ id: 'computer-b', name: 'B', connected: true, capabilities: ['filesystem'] }];
       f.approvals.approve(pending.approval!.approvalId, 'test');
+      // The run is bound to the local host, so re-resolution no longer drifts
+      // onto computer-b and the write executes where it was approved. The
+      // guarantee is unchanged -- the new sidecar still cannot receive it.
       await f.invoke();
       expect(f.calls).toHaveLength(1);
       expect(f.calls[0]).not.toHaveProperty('target');

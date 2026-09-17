@@ -259,6 +259,70 @@ you want.
 Limits per expression: 16,384 source characters, 2,048 tokens, depth 64, 10,000
 evaluation visits, and 1,048,576 accumulated output characters.
 
+### A run is pinned to one computer and one connection
+
+A workflow run used to pick a machine per step. If the chosen computer dropped
+between two steps, the next step re-ran auto-selection and landed on whichever
+other sidecar happened to be connected -- and recorded that as a success. A
+click, a keystroke or a command could therefore execute on a machine nobody
+reviewed.
+
+The first machine operation in a run now pins the run to one computer and to
+that computer's exact control socket, durably, in
+`workflow_run_machine_binding`. `GET /api/workflow-runs/:runId` exposes it as
+`machineBinding`. The binding is written once inside an immediate transaction
+and is never rewritten: there is no in-place retarget, no automatic retry and
+no fallback to another sidecar.
+
+Later dispatches -- including delegated-agent tool calls, approval resumes and
+the RPC send inside `SidecarManager` itself -- are checked against it. What was
+a silent switch is now a typed `blocked` outcome with `effect: 'not_started'`:
+
+- `WORKFLOW_MACHINE_OFFLINE` -- the bound computer is offline or no longer
+  enrolled.
+- `WORKFLOW_SESSION_CHANGED` -- it reconnected, so this is a different socket
+  than the one the work was reviewed against. A daemon restart has the same
+  effect for local execution.
+- `WORKFLOW_CAPABILITY_UNAVAILABLE` -- the bound computer no longer advertises
+  the capability the step needs.
+- `WORKFLOW_RETARGET_REQUIRED` -- the step asked for a different computer than
+  the run is bound to.
+- `WORKFLOW_TARGET_AMBIGUOUS` -- an explicit name matched no device or several.
+- `WORKFLOW_MACHINE_UNAVAILABLE` -- nothing capable is connected and local
+  execution is disabled.
+- `WORKFLOW_BINDING_LEGACY` -- the run already did machine work under an older
+  binary, so it has no verifiable connection generation to adopt.
+
+Every one of these says no action was dispatched. Earlier receipts in the same
+run keep their results, including a result that arrives after the machine
+dropped, so recovery is to review the recorded effects and start a new run with
+an explicit target and fresh approvals -- not to replay completed work. A
+workflow that deliberately used two different computers in one run needs two
+reviewed runs.
+
+Only steps that touch a machine bind one, so a flow that never leaves the
+daemon is unaffected, and ordinary chat routing is untouched.
+
+### Previews resolve saved samples, but not for perception steps
+
+Testing a single step reuses the version's saved sample data for the steps it
+depends on. Those samples have no trusted machine or connection provenance: a
+window id or element id captured from an earlier preview may name something on
+a machine that is gone, or something that has since moved.
+
+A preview of a desktop, browser or screenshot step is therefore refused with
+`WORKFLOW_SAMPLE_BINDING_UNKNOWN` when the step's input references another
+step's saved output. The guard reads the dispatching step's expressions -- the
+child a router or loop actually runs, the run's frozen input override, and
+nested and loop-derived references, taking both branches of a ternary -- and it
+only looks at which steps an expression names, never at what the sample
+contains. Fields inside a sample's JSON cannot claim provenance for it.
+
+What still works unchanged: unrelated saved samples, the tested step's own
+auto-captured output, literal inputs, the current trigger payload, and every
+non-machine preview. To get past the refusal, run the perception step again in
+a full run.
+
 ## Architecture
 
 ```

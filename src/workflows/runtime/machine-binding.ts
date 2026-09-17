@@ -14,6 +14,11 @@ import { workflowExpressionReferences } from './safe-expression';
 // A new daemon process cannot reuse local UI references or an old approval.
 const localSessionId = randomUUID();
 
+// Capabilities whose arguments name something observed on a screen: a window,
+// an element, a region. A saved sample of one is only meaningful for the
+// machine and connection it was captured on.
+const PERCEPTION_CAPABILITIES: SidecarCapability[] = ['desktop', 'browser', 'screenshot'];
+
 function identify(selector: string, inventory: SidecarInfo[]): SidecarInfo {
   const exact = inventory.find(s => s.id === selector);
   if (exact) return exact;
@@ -97,7 +102,7 @@ export function withWorkflowMachineBinding<T>(ctx: { runId: string; projectId: s
       const manager = getSidecarManager();
       const inventory = manager?.listSidecars() ?? [];
       const prior = getRunMachineBinding(ctx.runId);
-      if ((!capability && !prior) || (capability && ['desktop', 'browser', 'screenshot'].includes(capability))) {
+      if ((!capability && !prior) || (capability && PERCEPTION_CAPABILITIES.includes(capability))) {
         if (previewUsesUnqualifiedSamples(ctx.runId, ctx.stepName)) {
           machineBindingBlocked('WORKFLOW_SAMPLE_BINDING_UNKNOWN', 'Referenced test outputs have no verified machine/session provenance. Run the required perception steps again in a full run.');
         }

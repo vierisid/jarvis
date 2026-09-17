@@ -51,21 +51,25 @@ content within a connection.
 - Tool target selection and the sidecar routing helper enforce that binding.
   The manager repeats the machine/session check synchronously before sending
   RPCs and notifications on the socket, after the existing execution checkpoint.
-- A pre-dispatch failure records `blocked` with `effect: 'not_started'`. Earlier
-  successful receipts remain successful, including a late result from an action
-  that already started. Stored terminal effects are returned without redispatch.
-- M7 retains its per-tool Authority checks. A delegated loop receives the blocked
-  tool error and cannot move its subsequent call to another computer. Its final
-  narrative is not independent verification of the tool's business outcome.
+- A refusal at the dispatch checkpoint records `blocked` with
+  `effect: 'not_started'` on the effect it was about to authorize. A refusal
+  during selection happens before any effect is recorded, so it leaves no
+  receipt; nothing was authorized and nothing is uncertain. Either way the
+  caller receives the typed outcome. Earlier successful receipts remain
+  successful, including a late result from an action that already started, and
+  stored terminal effects are returned without redispatch.
+- The delegated-agent loop retains its per-tool Authority checks. It receives the
+  blocked tool error and cannot move its subsequent call to another computer. Its
+  final narrative is not independent verification of the tool's business outcome.
 
 Failure codes are `WORKFLOW_MACHINE_OFFLINE`, `WORKFLOW_SESSION_CHANGED`,
 `WORKFLOW_CAPABILITY_UNAVAILABLE`, `WORKFLOW_RETARGET_REQUIRED`,
 `WORKFLOW_TARGET_AMBIGUOUS`, `WORKFLOW_MACHINE_UNAVAILABLE`,
 `WORKFLOW_BINDING_IDENTITY`, `WORKFLOW_BINDING_LEGACY` and
-`WORKFLOW_SAMPLE_BINDING_UNKNOWN`. They use A2's shared `ActionOutcomeError` shape.
-Main's existing sandbox error handling fails the step honestly. With A2 merged,
-the API exposes typed outcomes and its explicit probe option can branch on them.
-A probe's handler must not itself require the unavailable computer.
+`WORKFLOW_SAMPLE_BINDING_UNKNOWN`. They use the shared `ActionOutcomeError`
+shape, so the tools API exposes them as typed outcomes and its explicit probe
+option can branch on them instead of reading display text. A probe's handler
+must not itself require the unavailable computer.
 
 ## Retargeting, previews and recovery
 
@@ -95,65 +99,45 @@ review and perception.
 
 ## Integration
 
-Branch `fix/workflow-machine-binding` starts at pulled main `07fecdc8`.
-Open PRs checked: #478 (A2), #477 (version ownership), #476 (native lookup),
-#475 (tool parameter schema), #473 (encryption), #381 (sidecar wake), #280 (docs).
-No sibling branch is merged into this branch.
+This work shares the typed `ActionOutcome` shape, the registry's
+`ActionOutcomeError` passthrough and the qualified effect receipt with the
+desktop-outcome contract. In `sidecar-route.ts` both preambles are load
+bearing and must coexist: the machine-scope fence resolves and asserts the
+bound target first, then the typed/legacy `fail` helper classifies whatever
+the sidecar itself reports. The scope check has to sit ahead of that split
+because a binding failure must stay an exception even for callers that still
+receive display text.
 
-A2 #478 shares the outcome type, registry preservation and qualified effect
-receipt plumbing. Those shared changes are identical. Combining the branches
-requires retaining both import groups and both preambles in `sidecar-route.ts`:
-keep A2's typed-error helper and A6's machine-scope check before routing. The
-remaining source changes applied cleanly in the isolated integration checkout.
-Preserve #475's parameter metadata and #381's sidecar wake changes when merging.
+Reconciling the desktop-outcome tests with this change needs three edits, all
+of them consequences of the binding and none of them a relaxed dispatch check:
 
-The accompanying `2026-09-17-workflow-machine-binding-a2-tests.patch` updates
-A2's synthetic fixtures for the new session API, the earlier run-level offline
-code and a machine-independent outcome recorder. It only applies once A2's test
-file exists; it does not relax dispatch checks. The probe still reaches its
-handler through the real engine and worker.
+- The synthetic sidecar manager gains `getConnectionSessionId`, returning a
+  session only while it reports itself connected. Selection needs a connection
+  generation, so a stub without it cannot bind.
+- The run-level offline code becomes `WORKFLOW_MACHINE_OFFLINE`. The binding
+  fence runs before the router's own inventory checks, so it is the binding,
+  not `routeToSidecar`, that refuses an offline machine inside a workflow.
+- The synthetic downstream recorder declares its own `workflowEffect` target
+  (`store: 'synthetic-outcome-recorder'`). Without it the recorder is treated
+  as a bounded machine tool, inherits the run's binding and is blocked by the
+  same offline machine whose outcome it exists to observe. A probe's handler
+  must not itself require the unavailable computer.
 
-```sh
-git apply --unidiff-zero docs/superpowers/specs/2026-09-17-workflow-machine-binding-a2-tests.patch
-```
+The probe still reaches its handler through the real engine and outer worker.
 
 The new table is additive. Old binaries ignore it, so rolling back also loses
 the dispatch guarantee; stop affected runs before operating an older binary.
-No live device, credential or deployed database was inspected or migrated.
 
-## Verification
+## Coverage
 
-Four tests failed on unchanged main: disconnect between steps, connection
-replacement during approval, missing later capability and explicit retarget.
-The final tests also exercise fresh-process recovery, concurrent runs and
-first steps, immutable successful/late receipts, revoked IDs, ambiguous names,
-local-host pinning, hosted fallback refusal, old-receipt upgrade refusal, UI
-preview inputs, fresh-run approvals, the real manager socket boundary and the
-actual M7 tool loop.
-
-Real outer-worker tests cover a successful two-step run on one computer, a
-disconnect between steps and a paused approval resumed after socket replacement.
-Relevant tests, TypeScript, daemon build and the repository guards are run for
-the final implementation. The isolated A2 combination also runs both outcome
-contracts, the real required-action/probe graphs and Authority regressions.
-The pre-existing aggregate full-suite/hook timeout limitation remains. Packaging
-uses the guard's Bun packer path; no full-suite or live-provider claim is made.
-
-Recorded results on 17 September: 234 tests passed across ten relevant files,
-followed by 79 final binding/Authority tests after the last preview guard change.
-The A2 combination passed 102 outcome/binding/Authority tests, then 46 final
-binding/outcome tests. The binding file contains 21 cases. TypeScript passed in
-both checkouts; daemon build and all four guards passed (100 templates, zero
-errors/warnings; both required package paths present). Four unchanged-main
-regressions failed before implementation. Full-suite results are not claimed.
-
-Review R1: six safe-preview regressions failed before the correction. The final
-88 binding/expression tests pass, including a real API/engine/worker sequence
-that repeats auto-captured previews, accepts unrelated samples and fresh trigger
-payloads, and then blocks a referenced saved output. Nested expressions, frozen
-overrides, loop-derived samples and child dispatches are covered. The isolated
-A2 combination passes 62 binding/outcome tests. TypeScript passes in both
-checkouts; daemon build and all four guards pass. The broader API suite still
-hits its previously recorded catalog-deletion failure (expected 200, got 404),
-so no complete-suite pass is claimed. The local commit uses the existing
-per-command hook override after these explicit checks.
+The behaviours a change here must keep: a disconnect between steps, a
+connection replaced while an approval is pending, a capability that disappears
+after selection, an explicit retarget, an ambiguous or revoked name, a frozen
+ID that must not be re-matched by name, concurrent runs and concurrent first
+steps, a slow result committed after its machine dropped, local-host pinning
+when a sidecar connects later, refusal to fall back locally when local tools
+are disabled, an old receipt that cannot acquire a replacement session,
+recovery in a fresh process, the real manager's socket-generation fence, the
+delegated-agent loop, and the preview provenance guard across nested, frozen
+override, loop-derived and router-child inputs. The binding tests exercise
+these through the real engine and outer worker as well as the service backends.
