@@ -19,7 +19,7 @@ import { WorkflowEventBuffer } from './event-buffer';
 import { buildSandboxServiceBackends } from './service-backends';
 import { createJarvisLlmChatRoute, type LlmChatFn } from '../sandbox-api/routes/jarvis-llm';
 import { SandboxApi } from '../sandbox-api/server';
-import { buildEngineBundle, findCachedBundle, ENGINE_BUILD_PATHS } from '../runner/engine-runtime/build';
+import { buildEngineBundle, ENGINE_BUILD_PATHS } from '../runner/engine-runtime/build';
 import { buildAllJarvisPieces, buildPiece } from '../runner/engine-runtime/build-pieces';
 import { EngineRuntime } from '../runner/engine-runtime/engine-runtime';
 import { EngineFlowExecutor } from '../runner/engine-runtime/engine-flow-executor';
@@ -38,7 +38,6 @@ afterEach(() => {
 });
 
 const INVOICE_SCHEMA = { type: 'object', properties: { total: { type: 'number' } }, required: ['total'] };
-const skipEngine = findCachedBundle() === null && process.env.JARVIS_TEST_ENGINE_BUILD !== '1';
 
 function askAction(input: Record<string, unknown>): FlowTriggerNode {
   return { name: 'ask', type: 'PIECE', displayName: 'ask', settings: {
@@ -228,6 +227,10 @@ describe('LLM output contract through the route and the durable receipt', () => 
   });
 });
 
+// Deliberately not gated on a cached bundle or `JARVIS_TEST_ENGINE_BUILD`,
+// like the desktop-outcome suite: this is the headline evidence, and a gate
+// on a cache another test file happens to fill would skip or run depending on
+// the order `bun test` picks up files in.
 describe('LLM output contract through the real engine', () => {
   async function runFlow(f: ReturnType<typeof fixture>, trigger: FlowTriggerNode) {
     updateDraftVersion(f.version.id, { trigger });
@@ -247,7 +250,7 @@ describe('LLM output contract through the real engine', () => {
     } finally { await runtime.shutdown(); await api.stop(); }
   }
 
-  test.skipIf(skipEngine)('required malformed JSON fails the step and nothing downstream runs', async () => {
+  test('required malformed JSON fails the step and nothing downstream runs', async () => {
     const f = fixture('Here you go: {"total": 12}');
     const ask = askAction({ parseJson: true });
     ask.nextAction = toolAction('deliver', { path: '/synthetic', content: 'should not run' });
@@ -259,7 +262,7 @@ describe('LLM output contract through the real engine', () => {
     expect(listWorkflowEffects(f.run.id)).toMatchObject([{ status: 'succeeded', route: 'llm', result: { outcome: { code: 'INVALID_JSON_OUTPUT' } } }]);
   }, 60_000);
 
-  test.skipIf(skipEngine)('a handled step routes on the outcome and the branch reads the code and the text', async () => {
+  test('a handled step routes on the outcome and the branch reads the code and the text', async () => {
     const f = fixture('not json');
     const ask = askAction({ parseJson: true, requireSuccess: false });
     ask.nextAction = { name: 'contract', type: 'ROUTER', settings: { executionType: 'EXECUTE_FIRST_MATCH', branches: [
@@ -275,7 +278,7 @@ describe('LLM output contract through the real engine', () => {
     expect(f.downstream).toEqual([{ path: '/synthetic', content: 'INVALID_JSON_OUTPUT', reply: 'not json' }]);
   }, 60_000);
 
-  test.skipIf(skipEngine)('a reply that meets the schema feeds its parsed fields downstream', async () => {
+  test('a reply that meets the schema feeds its parsed fields downstream', async () => {
     const f = fixture('{"total": 42}');
     const ask = askAction({ outputSchema: JSON.stringify(INVOICE_SCHEMA) });
     ask.nextAction = toolAction('deliver', { path: '/synthetic', content: '{{ask.parsed.total}}' });
@@ -285,7 +288,7 @@ describe('LLM output contract through the real engine', () => {
     expect(String((f.downstream[0] as { content: unknown }).content)).toBe('42');
   }, 60_000);
 
-  test.skipIf(skipEngine)('a schema that is not JSON fails the step before any prompt is sent', async () => {
+  test('a schema that is not JSON fails the step before any prompt is sent', async () => {
     const f = fixture('{"total": 42}');
     const ask = askAction({ outputSchema: '{"type": "object"' });
     ask.nextAction = toolAction('deliver', { path: '/synthetic', content: 'should not run' });
@@ -318,39 +321,39 @@ describe('compiled ask piece asserts the outcome', () => {
     } finally { server.stop(true); }
   }
 
-  test.skipIf(skipEngine)('a required step throws the outcome message, whatever the HTTP status', async () => {
+  test('a required step throws the outcome message, whatever the HTTP status', async () => {
     await expect(invoke({ text: 'not json', outcome: failure }, 422)).rejects.toThrow('synthetic contract failure');
     await expect(invoke({ text: 'not json', outcome: failure }, 200)).rejects.toThrow('synthetic contract failure');
   }, 60_000);
 
-  test.skipIf(skipEngine)('a handled step returns the failure for the graph', async () => {
+  test('a handled step returns the failure for the graph', async () => {
     const reply = { text: 'not json', outcome: failure };
     expect(await invoke(reply, 200, { requireSuccess: false })).toEqual(reply);
   }, 60_000);
 
-  test.skipIf(skipEngine)('a missing or malformed outcome fails closed', async () => {
+  test('a missing or malformed outcome fails closed', async () => {
     for (const outcome of [undefined, null, { status: 'success' }, { status: 'error' }]) {
       await expect(invoke({ text: 'legacy', outcome }, 200, { requireSuccess: false })).rejects.toThrow('lacks an action outcome');
     }
   }, 60_000);
 
-  test.skipIf(skipEngine)('a refused request is reported with its status and reason', async () => {
+  test('a refused request is reported with its status and reason', async () => {
     await expect(invoke({ error: 'outputSchema: unsupported schema keyword "pattern" at /' }, 400))
       .rejects.toThrow('daemon responded 400: {"error":"outputSchema: unsupported schema keyword');
   }, 60_000);
 
-  test.skipIf(skipEngine)('an approval pauses before the piece expects an outcome', async () => {
+  test('an approval pauses before the piece expects an outcome', async () => {
     await expect(invoke({ text: '', approval: { effectId: 'effect', approvalId: 'approval', waitpointId: 'wait' } }, 202))
       .rejects.toThrow('waiting for approval');
   }, 60_000);
 
-  test.skipIf(skipEngine)('a schema that is not JSON fails before the daemon is called', async () => {
+  test('a schema that is not JSON fails before the daemon is called', async () => {
     await expect(invoke({ text: '{}', parsed: {}, outcome: { status: 'succeeded' } }, 200, { outputSchema: '{"type":' }))
       .rejects.toThrow('outputSchema is not valid JSON');
     expect(requests).toBe(0);
   }, 60_000);
 
-  test.skipIf(skipEngine)('a met contract returns text, parsed and the outcome', async () => {
+  test('a met contract returns text, parsed and the outcome', async () => {
     const reply = { text: '{"a":1}', parsed: { a: 1 }, outcome: { status: 'succeeded' } };
     expect(await invoke(reply, 200, { outputSchema: '{"type":"object"}' })).toEqual(reply);
     expect(requests).toBe(1);

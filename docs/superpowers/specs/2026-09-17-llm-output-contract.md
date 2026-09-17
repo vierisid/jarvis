@@ -58,8 +58,30 @@ that failed. A handled step routes on `{{step.outcome.status}}` and
   and a resumed run validates against the schema that was approved.
 - Outcome messages quote schema keywords, JSON-pointer paths and property
   names, escaped and bounded because a reply's keys are model output. They
-  never quote a reply's values. The text travels beside the outcome for
-  whoever needs it.
+  never quote a reply's values. A quoted reply key is pointer-escaped so it
+  cannot forge a path segment, and its quotes and control characters are
+  escaped so it cannot close the quoted fragment or add lines of its own: the
+  message reaches `flow_run.failed_step.errorMessage`, which `manage_workflow`
+  reads back, and 80 characters of reply key must not pass for text the
+  message wrote itself. The text travels beside the outcome for whoever needs
+  it.
+
+## Validation
+
+- An unchanged-main checkout reproduces the defect through the real engine:
+  a step with `Parse JSON` on whose reply is prose reaches `SUCCEEDED`, the
+  downstream step runs, and the effect receipt stores the prose as a
+  successful result with no `parsed` and no outcome.
+- `src/workflows/runtime/llm-output-contract.ts` is covered directly by
+  `llm-output-contract.test.ts`: the closed keyword set, the declaration
+  budgets, every validation keyword, the bounded violation list, and messages
+  that quote no reply value and neutralize a hostile reply key.
+- `llm-output-outcomes.test.ts` covers the route statuses, the durable
+  receipt across a database reopen, a legacy text-only receipt evaluated at
+  the route, approval pause with resume against the approved schema, and the
+  handled-outcome branch. Its engine and compiled-piece cases are
+  deliberately NOT gated on a cached bundle or `JARVIS_TEST_ENGINE_BUILD=1`,
+  so the headline evidence runs in CI rather than skipping there.
 
 ## What this does not do
 
@@ -76,8 +98,9 @@ that failed. A handled step routes on `{{step.outcome.status}}` and
 
 ## Relationship to A2 (#478)
 
-This branch is rebased onto main after #478 merged and uses main's
-`src/actions/action-outcome.ts` as it is, including the empty-message
-fallback in `ActionOutcomeError`. Both pieces, `jarvis-ask` here and
-`jarvis-tool` there, assert the same outcome shape. The receipt rule above
-is stated in both specs so they cannot be read as two conventions.
+`src/actions/action-outcome.ts` is used as A2 left it, including the
+empty-message fallback in `ActionOutcomeError`. Both pieces, `jarvis-ask`
+here and `jarvis-tool` there, assert the same outcome shape, and
+`pieceHash()` already mixes that file into every Jarvis piece bundle, so an
+`ask` bundle cannot keep an old assertion. The receipt rule above is stated
+in both specs so they cannot be read as two conventions.

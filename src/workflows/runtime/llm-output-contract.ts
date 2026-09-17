@@ -65,9 +65,18 @@ const isPrimitive = (value: unknown): value is string | number | boolean | null 
 const own = (object: Record<string, unknown>, key: string) => Object.prototype.hasOwnProperty.call(object, key);
 /** RFC 6901 escaping, so a name cannot forge a path segment. */
 const pointer = (name: string) => name.replace(/~/gu, '~0').replace(/\//gu, '~1');
-/** A name quoted in a message: escaped and bounded, since a reply's keys are model output. */
+/**
+ * A name quoted in a message: escaped and bounded, since a reply's keys are
+ * model output and the message ends up in a durable run error that a tool can
+ * read back. Pointer escaping keeps a name from forging a path segment; the
+ * quote and control-character escaping keeps it from closing the quoted
+ * fragment or adding lines of its own, which is how 80 characters of reply
+ * key would otherwise read as text of the message's own.
+ */
 const label = (name: string) => {
-  const escaped = pointer(name);
+  const escaped = pointer(name)
+    .replace(/["\\]/gu, '\\$&')
+    .replace(/\p{C}/gu, character => `\\u${character.codePointAt(0)!.toString(16).padStart(4, '0')}`);
   return escaped.length > OUTPUT_SCHEMA_LIMITS.nameExcerpt ? `${escaped.slice(0, OUTPUT_SCHEMA_LIMITS.nameExcerpt)}...` : escaped;
 };
 
