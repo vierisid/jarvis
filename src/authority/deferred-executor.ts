@@ -3,7 +3,7 @@
  */
 
 import type { ToolRegistry } from '../actions/tools/registry.ts';
-import type { ApprovalManager, ApprovalRequest } from './approval.ts';
+import { executionState, type ApprovalManager, type ApprovalRequest } from './approval.ts';
 import type { AuditTrail } from './audit.ts';
 import type { AuthorityLearner } from './learning.ts';
 import type { EmergencyController } from './emergency.ts';
@@ -42,9 +42,10 @@ export class DeferredExecutor {
   }
 
   /**
-   * Execute a previously approved request.
+   * Execute a previously approved request. `claimedBy` names the surface
+   * that runs it (dashboard, voice, inline gate) and lands in the claim.
    */
-  async executeApproved(requestId: string): Promise<string> {
+  async executeApproved(requestId: string, claimedBy = 'deferred-executor'): Promise<string> {
     const request = this.approvalManager.getRequest(requestId);
     if (!request || request.status !== 'approved') {
       return `Error: Request ${requestId} not found or not in approved state`;
@@ -58,13 +59,21 @@ export class DeferredExecutor {
       return 'Error: No tool registry configured';
     }
 
+    // One executor per approval. A second caller, or a daemon restarted after
+    // the claim, cannot dispatch the same approved action again; the receipt
+    // or the reconciled state says what became of the first attempt.
+    if (!this.approvalManager.claimExecution(requestId, claimedBy)) {
+      const current = this.approvalManager.getRequest(requestId);
+      return `Error: Request ${requestId} was already taken for execution (${current ? executionState(current) : 'missing'}); check its receipt before deciding on another run`;
+    }
+
     // Emergency gate: an approval clicked while the system is paused/killed
     // must not execute. Close the request out (mirroring the error path)
     // so it doesn't linger as an approved-but-never-executed zombie.
     if (this.emergencyController && !this.emergencyController.canExecute()) {
       const state = this.emergencyController.getState();
       const blocked = `[SYSTEM ${state.toUpperCase()}] Approved action ${request.tool_name} was NOT executed: all tool execution is suspended because the user has ${state} the system.`;
-      this.approvalManager.markExecuted(requestId, blocked);
+      this.approvalManager.markExecuted(requestId, blocked, 'blocked');
       this.onResult?.(requestId, request, blocked);
       return blocked;
     }
@@ -78,8 +87,8 @@ export class DeferredExecutor {
 
       const executionTimeMs = Date.now() - startTime;
 
-      // Mark as executed
-      this.approvalManager.markExecuted(requestId, result.slice(0, 2000));
+      // The receipt: the tool returned.
+      this.approvalManager.markExecuted(requestId, result.slice(0, 2000), 'committed');
 
       // Log to audit trail
       this.auditTrail.log({
@@ -110,7 +119,9 @@ export class DeferredExecutor {
       return result;
     } catch (err) {
       const errorStr = `Error executing ${request.tool_name}: ${err instanceof Error ? err.message : String(err)}`;
-      this.approvalManager.markExecuted(requestId, errorStr);
+      // The receipt: the tool threw. The call was dispatched, so a partial
+      // effect is possible; the row is executed with a failed outcome.
+      this.approvalManager.markExecuted(requestId, errorStr, 'failed');
       this.onResult?.(requestId, request, errorStr);
       return errorStr;
     }

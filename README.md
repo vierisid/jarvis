@@ -510,7 +510,7 @@ Full details: [docs/TELEMETRY.md](docs/TELEMETRY.md).
 
 ## 🔒 Security
 
-JARVIS includes a built-in authority engine that gates every action at runtime. All tool executions are logged in an audit trail, and sensitive operations require explicit approval via the dashboard, Telegram, or Discord. Emergency pause and kill controls are always available.
+JARVIS includes a built-in authority engine that gates every action at runtime. All tool executions are logged in an audit trail, and sensitive operations require explicit approval via the dashboard, Telegram, or Discord. Emergency pause and kill controls are always available. An approved action that a restart interrupted before its receipt shows up in Authority as unresolved: it is never rerun on its own, and you decide whether to run it once or close it.
 
 If you discover a security vulnerability, please report it privately by emailing the maintainer rather than opening a public issue.
 

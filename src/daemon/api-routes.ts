@@ -8,7 +8,8 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import { DEBUG_RPC_HEADER, debugRpcGate, debugRpcTokenMatches } from './debug-rpc-gate.ts';
 import type { HealthMonitor } from './health.ts';
-import { applyApprovalDecision } from './approval-decision.ts';
+import { applyApprovalDecision, applyExecutionResolution } from './approval-decision.ts';
+import { executionState } from '../authority/approval.ts';
 import { createWorkItemRoutes } from '../goals/work-item-routes.ts';
 import { isPermissionName, readSystemPermissions, requestSystemPermission } from './system-permissions.ts';
 import { PANEL_SESSION_COOKIE } from '../sidecar/panel-sessions.ts';
@@ -3076,6 +3077,8 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           enabled: true,
           emergency_state: emergency.getState(),
           pending_approvals: approvals?.getPending().length ?? 0,
+          // Approved before a restart and never receipted; they need a decision too.
+          unresolved_approvals: approvals?.getUnresolved().length ?? 0,
           config: engine.getConfig(),
         });
       },
@@ -3089,12 +3092,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         const rows =
           status === 'pending'
             ? ctx.approvalManager.getPending()
-            : ctx.approvalManager.getHistory({
-                limit: parseInt(params.get('limit') ?? '50') || 50,
-                action: (params.get('action') as ActionCategory) || undefined,
-                agentId: params.get('agent_id') || undefined,
-                status: (params.get('status') as any) || undefined,
-              });
+            : status === 'unresolved'
+              ? ctx.approvalManager.getUnresolved()
+              : ctx.approvalManager.getHistory({
+                  limit: parseInt(params.get('limit') ?? '50') || 50,
+                  action: (params.get('action') as ActionCategory) || undefined,
+                  agentId: params.get('agent_id') || undefined,
+                  status: (params.get('status') as any) || undefined,
+                });
 
         // Phase 5B audit fix: enrich the REST response with the same
         // `intent` + `impact` fields the WS broadcasts already carry, so
@@ -3107,6 +3112,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
 
         const enriched = rows.map((r) => ({
           ...r,
+          execution_state: executionState(r),
           impact: impactFromCategory(r.action_category as ActionCategory),
           intent:
             wsService?.computeApprovalIntent?.(r) ??
@@ -3144,6 +3150,43 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           wsService: ctx.wsService,
         });
         if (outcome.status === 'already_decided') return error('Request not found or already decided', 404);
+        return json({ ok: true });
+      },
+    },
+
+    // An approval a restart left without a receipt. `execute` runs it once,
+    // and only when nothing happened; `close` resolves it without running.
+    '/api/authority/approvals/:id/execute': {
+      POST: async (req: Request & { params: { id: string } }) => {
+        if (!ctx.approvalManager || !ctx.deferredExecutor) {
+          return error('Authority system not configured', 500);
+        }
+        const outcome = await applyExecutionResolution('execute', req.params.id, 'dashboard', {
+          approvalManager: ctx.approvalManager,
+          deferredExecutor: ctx.deferredExecutor,
+          wsService: ctx.wsService,
+        });
+        if (outcome.status === 'not_unresolved') return error('Request not found or not awaiting a decision', 404);
+        if (outcome.status === 'not_executable') return error(outcome.reason, 409);
+        if (outcome.status !== 'executed') return error('Unexpected resolution outcome', 500);
+        return json({ ok: true, result: outcome.result.slice(0, 500) });
+      },
+    },
+
+    '/api/authority/approvals/:id/close': {
+      POST: async (req: Request & { params: { id: string } }) => {
+        if (!ctx.approvalManager || !ctx.deferredExecutor) {
+          return error('Authority system not configured', 500);
+        }
+        const body = (await req.json().catch(() => ({}))) as { note?: unknown };
+        const note = typeof body.note === 'string' ? body.note.slice(0, 500) : undefined;
+        const outcome = await applyExecutionResolution('close', req.params.id, 'dashboard', {
+          approvalManager: ctx.approvalManager,
+          deferredExecutor: ctx.deferredExecutor,
+          wsService: ctx.wsService,
+        }, note);
+        if (outcome.status === 'not_unresolved') return error('Request not found or not awaiting a decision', 404);
+        if (outcome.status !== 'closed') return error('Unexpected resolution outcome', 500);
         return json({ ok: true });
       },
     },
@@ -3440,6 +3483,21 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
                 summary: `${a.tool_name} · ${a.action_category}`,
                 meta: a.urgency,
                 status: { label: 'Pending', tone: 'warn' },
+              });
+              added++;
+            }
+            // Approved before a restart and never receipted: still a decision.
+            for (const a of mgr.getUnresolved()) {
+              if (added >= perType) break;
+              if (!matches(a.reason) && !matches(a.tool_name) && !matches(a.action_category)) continue;
+              results.push({
+                type: 'authority',
+                id: a.id,
+                ref: a.id,
+                title: a.reason || a.tool_name,
+                summary: `${a.tool_name} · ${a.action_category}`,
+                meta: a.urgency,
+                status: { label: a.execution_outcome === 'unknown' ? 'Interrupted' : 'Not started', tone: 'warn' },
               });
               added++;
             }

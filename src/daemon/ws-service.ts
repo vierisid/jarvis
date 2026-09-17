@@ -2377,7 +2377,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           // endpoint: inline requests are executed by the blocked gate.
           if (this.deferredExecutor && approved.tool_name !== 'request_approval' && approved.execution_mode !== 'inline') {
             try {
-              await this.deferredExecutor.executeApproved(latest.id);
+              await this.deferredExecutor.executeApproved(latest.id, 'voice');
             } catch (err) {
               console.warn('[WSService] voice-approved execution failed:', err);
             }

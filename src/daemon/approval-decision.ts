@@ -3,6 +3,10 @@
  * REST, chat channels, OS-notification buttons): flip the request, run the
  * deferred executor where the request isn't owned by a blocked in-process
  * caller, record denials, and broadcast so dashboard cards update.
+ *
+ * `applyExecutionResolution` is the second decision a user can face: an
+ * approved request that a restart left without a receipt. Running it is
+ * allowed only when nothing happened; closing it is always allowed.
  */
 
 import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts';
@@ -38,7 +42,7 @@ export async function applyApprovalDecision(
       // (request_approval tool / authority gate) once it sees the status flip —
       // executing here would run the tool twice.
       try {
-        result = await deferredExecutor.executeApproved(requestId);
+        result = await deferredExecutor.executeApproved(requestId, decidedBy);
         executed = true;
       } catch (err) {
         error = err instanceof Error ? err.message : String(err);
@@ -56,4 +60,47 @@ export async function applyApprovalDecision(
   deferredExecutor.recordDenial(denied);
   wsService?.broadcastApprovalUpdate(denied);
   return { status: 'denied', request: denied };
+}
+
+export type ExecutionResolutionOutcome =
+  /** Not found, or not an approved row that a restart left unresolved. */
+  | { status: 'not_unresolved' }
+  /** Unresolved, but running it is not an option; closing is. */
+  | { status: 'not_executable'; reason: string }
+  | { status: 'executed'; result: string; request: ApprovalRequest }
+  | { status: 'closed'; request: ApprovalRequest };
+
+export async function applyExecutionResolution(
+  action: 'execute' | 'close',
+  requestId: string,
+  resolvedBy: string,
+  deps: ApprovalDecisionDeps,
+  note?: string,
+): Promise<ExecutionResolutionOutcome> {
+  const { approvalManager, deferredExecutor, wsService } = deps;
+  const current = approvalManager.getRequest(requestId);
+  const outcome = current?.execution_outcome ?? null;
+  if (!current || current.status !== 'approved' || (outcome !== 'not_started' && outcome !== 'unknown')) {
+    return { status: 'not_unresolved' };
+  }
+
+  if (action === 'close') {
+    if (!approvalManager.closeUnresolved(requestId, resolvedBy, note)) return { status: 'not_unresolved' };
+    const updated = approvalManager.getRequest(requestId) ?? current;
+    wsService?.broadcastApprovalUpdate(updated);
+    return { status: 'closed', request: updated };
+  }
+
+  if (outcome === 'unknown') {
+    return { status: 'not_executable', reason: 'The earlier attempt was interrupted and may have run. Check what happened, then close it.' };
+  }
+  if (current.tool_name === 'request_approval') {
+    return { status: 'not_executable', reason: 'An intent grant has nothing to run on its own; the conversation that asked for it is gone. Close it.' };
+  }
+  // Runs through the same claim as every execution, so this is exactly one
+  // attempt even if two surfaces resolve the same row at once.
+  const result = await deferredExecutor.executeApproved(requestId, resolvedBy);
+  const updated = approvalManager.getRequest(requestId) ?? current;
+  wsService?.broadcastApprovalUpdate(updated);
+  return { status: 'executed', result, request: updated };
 }

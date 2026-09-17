@@ -46,7 +46,13 @@ export interface ApprovalRequest {
   executed_at: number | null;
   execution_result: string | null;
   created_at: number;
+  execution_mode?: "inline" | "deferred" | "workflow";
+  execution_outcome?: "committed" | "failed" | "blocked" | "not_started" | "unknown" | "closed" | null;
+  resolved_at?: number | null;
+  resolved_by?: string | null;
+  resolution_note?: string | null;
   // enrichment from server
+  execution_state?: string;
   intent?: string;
   impact?: "read" | "write" | "external" | "destructive";
 }
@@ -108,6 +114,8 @@ export interface AuthorityStatus {
   enabled: boolean;
   emergency_state: EmergencyState;
   pending_approvals: number;
+  /** Approved before a restart and never receipted; they need a decision too. */
+  unresolved_approvals?: number;
   config?: AuthorityConfig;
 }
 
@@ -129,6 +137,7 @@ interface ActionResult {
 export function useAuthorityData() {
   const [status, setStatus] = useState<AuthorityStatus | null>(null);
   const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
+  const [unresolvedApprovals, setUnresolvedApprovals] = useState<ApprovalRequest[]>([]);
   const [historyApprovals, setHistoryApprovals] = useState<ApprovalRequest[]>([]);
   const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
   const [auditStats, setAuditStats] = useState<AuditStats | null>(null);
@@ -142,7 +151,7 @@ export function useAuthorityData() {
     if (inFlightRef.current) return;
     inFlightRef.current = true;
     try {
-      const [sResp, pResp, hResp, aResp, asResp, cResp, lResp] = await Promise.all([
+      const [sResp, pResp, hResp, aResp, asResp, cResp, lResp, uResp] = await Promise.all([
         fetch("/api/authority/status"),
         fetch("/api/authority/approvals?status=pending"),
         fetch("/api/authority/approvals?limit=20"),
@@ -150,9 +159,11 @@ export function useAuthorityData() {
         fetch("/api/authority/audit/stats"),
         fetch("/api/authority/config"),
         fetch("/api/authority/learning/suggestions"),
+        fetch("/api/authority/approvals?status=unresolved"),
       ]);
       if (sResp.ok) setStatus((await sResp.json()) as AuthorityStatus);
       if (pResp.ok) setPendingApprovals((await pResp.json()) as ApprovalRequest[]);
+      if (uResp.ok) setUnresolvedApprovals((await uResp.json()) as ApprovalRequest[]);
       if (hResp.ok) setHistoryApprovals((await hResp.json()) as ApprovalRequest[]);
       if (aResp.ok) setAuditEntries((await aResp.json()) as AuditEntry[]);
       if (asResp.ok) setAuditStats((await asResp.json()) as AuditStats);
@@ -201,6 +212,35 @@ export function useAuthorityData() {
       return { ok: false, message: err instanceof Error ? err.message : "Failed" };
     }
   }, [refresh]);
+
+  // Resolutions for approvals a restart left without a receipt. The server
+  // refuses to run an interrupted one and says why; surface that reason.
+  const resolveUnresolved = useCallback(
+    async (id: string, action: "execute" | "close", done: string): Promise<ActionResult> => {
+      try {
+        const resp = await fetch(`/api/authority/approvals/${encodeURIComponent(id)}/${action}`, {
+          method: "POST",
+        });
+        if (!resp.ok) {
+          const body = (await resp.json().catch(() => null)) as { error?: string } | null;
+          throw new Error(body?.error ?? `HTTP ${resp.status}`);
+        }
+        refresh();
+        return { ok: true, message: done };
+      } catch (err) {
+        return { ok: false, message: err instanceof Error ? err.message : "Failed" };
+      }
+    },
+    [refresh],
+  );
+  const executeUnresolved = useCallback(
+    (id: string) => resolveUnresolved(id, "execute", "Ran once."),
+    [resolveUnresolved],
+  );
+  const closeUnresolved = useCallback(
+    (id: string) => resolveUnresolved(id, "close", "Closed without running."),
+    [resolveUnresolved],
+  );
 
   const updateConfig = useCallback(async (patch: Partial<AuthorityConfig>): Promise<ActionResult> => {
     try {
@@ -298,15 +338,17 @@ export function useAuthorityData() {
     const denied = historyApprovals.filter((a) => a.status === "denied").length;
     return {
       pending: pendingApprovals.length,
+      unresolved: unresolvedApprovals.length,
       allowed,
       denied,
       total,
     };
-  }, [pendingApprovals, historyApprovals]);
+  }, [pendingApprovals, unresolvedApprovals, historyApprovals]);
 
   return {
     status,
     pendingApprovals,
+    unresolvedApprovals,
     historyApprovals,
     auditEntries,
     auditStats,
@@ -318,6 +360,8 @@ export function useAuthorityData() {
     refresh,
     approve,
     deny,
+    executeUnresolved,
+    closeUnresolved,
     updateConfig,
     quickOverride,
     acceptSuggestion,

@@ -1166,7 +1166,7 @@ export class AgentOrchestrator {
             // The approve endpoints skip execution for inline requests; we
             // are the single executor. executeApproved handles markExecuted,
             // audit, and approval learning.
-            return frame(await this.deferredExecutor!.executeApproved(request.id));
+            return frame(await this.deferredExecutor!.executeApproved(request.id, 'inline-gate'));
           case 'executed':
             // Another path already ran it (shouldn't happen for inline
             // requests; tolerated for robustness). Surface its result.
@@ -1188,7 +1188,7 @@ export class AgentOrchestrator {
             if (!this.approvalManager.demoteToDeferred(request.id)) {
               const recheck = this.approvalManager.getRequest(request.id);
               if (recheck?.status === 'approved') {
-                return frame(await this.deferredExecutor!.executeApproved(request.id));
+                return frame(await this.deferredExecutor!.executeApproved(request.id, 'inline-gate'));
               }
               if (recheck?.status === 'executed') {
                 return frame(recheck.execution_result ?? `[EXECUTED] ${toolCall.name} completed.`);

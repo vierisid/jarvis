@@ -3973,12 +3973,17 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     deferredExecutor.setLearner(learner);
     // Approved actions must respect the kill switch too, not just the gate.
     deferredExecutor.setEmergencyController(emergencyController);
-    // Inline requests are owned by an authority gate blocked in-process;
-    // any that survived a restart have no gate anymore, so hand them to
-    // the deferred path or approving them would execute nothing.
-    const orphanedInline = approvalManager.demoteAllPendingInline();
-    if (orphanedInline > 0) {
-      console.log(`[Daemon] Demoted ${orphanedInline} orphaned inline approval(s) to deferred`);
+    // Startup reconciliation. Inline requests are owned by an authority gate
+    // blocked in-process; any that survived a restart have no gate anymore,
+    // so they go to the deferred path. An approved request that never got a
+    // receipt either never started (nothing happened) or was interrupted
+    // (it may have). Neither is run here; both wait for the user in Authority.
+    const reconciled = approvalManager.reconcileAfterRestart();
+    if (reconciled.demotedInline > 0) {
+      console.log(`[Daemon] Demoted ${reconciled.demotedInline} orphaned inline approval(s) to deferred`);
+    }
+    if (reconciled.notStarted > 0 || reconciled.interrupted > 0) {
+      console.log(`[Daemon] Approved actions left unresolved by the last shutdown: ${reconciled.notStarted} never started, ${reconciled.interrupted} interrupted. Awaiting a decision in Authority.`);
     }
     // Phase 6.3.5b — let WS service resolve approvals from voice intents.
     wsService.setApprovalManager(approvalManager);
@@ -4150,7 +4155,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (connected.length === 0) return;
         const enrolled = sidecarManager.listSidecars().length || connected.length;
         const payload = {
-          waiting: approvalManager.getPending().length,
+          waiting: approvalManager.getPending().length + approvalManager.getUnresolved().length,
           paused: emergencyController.getState() === 'paused',
           brain_online: true,
           port: config.port,

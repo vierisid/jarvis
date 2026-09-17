@@ -1,7 +1,15 @@
 /**
  * Approval Manager — Handles the lifecycle of approval requests.
  *
- * Persists to SQLite: pending → approved/denied → executed
+ * Persists to SQLite: pending → approved → claimed → executed (with a receipt).
+ *
+ * A decision and its execution are separate writes, so a crash can fall
+ * between them. The claim marks that one executor took the approved request
+ * before dispatch; the receipt records what that execution produced. After a
+ * restart, an approved row without a receipt is reconciled as `not_started`
+ * (never claimed: nothing happened) or `unknown` (claimed by a previous
+ * process: the effect may have happened). Neither is replayed; both wait for
+ * the user, who can run a not-started row once or close either.
  */
 
 import { getDb, generateId } from '../vault/schema.ts';
@@ -23,6 +31,21 @@ export type ApprovalUrgency = 'urgent' | 'normal';
  */
 export type ApprovalExecutionMode = 'inline' | 'deferred' | 'workflow';
 
+/** What a receipt says the execution produced. */
+export type ApprovalReceiptOutcome = 'committed' | 'failed' | 'blocked';
+
+/**
+ * What happened to an approved request's execution:
+ *  - committed, failed, blocked: a receipt; the row is `executed`.
+ *  - not_started: reconciled after a restart. Approved, never claimed, so no
+ *    effect happened. The user may run it once or close it.
+ *  - unknown: reconciled after a restart. Claimed by a previous process that
+ *    never wrote a receipt, so the effect may have happened. Never run again
+ *    automatically; the user checks what happened and closes it.
+ *  - closed: the user resolved a not_started or unknown row without running it.
+ */
+export type ApprovalExecutionOutcome = ApprovalReceiptOutcome | 'not_started' | 'unknown' | 'closed';
+
 export type ApprovalRequest = {
   id: string;
   agent_id: string;
@@ -40,9 +63,44 @@ export type ApprovalRequest = {
   executed_at: number | null;
   execution_result: string | null;
   created_at: number;
+  /** Set when an executor took the approved request; null until then. */
+  execution_claimed_at?: number | null;
+  execution_claimed_by?: string | null;
+  /** The daemon process that claimed it; a different boot never wrote our receipt. */
+  execution_boot_id?: string | null;
+  execution_outcome?: ApprovalExecutionOutcome | null;
+  resolved_at?: number | null;
+  resolved_by?: string | null;
+  resolution_note?: string | null;
 };
 
+/**
+ * One word for where a request stands, for lists and cards. Pending rows
+ * await a decision; approved rows are awaiting execution, in flight, or
+ * reconciled; executed rows carry their receipt's outcome.
+ */
+export type ApprovalExecutionState =
+  | 'pending' | 'denied' | 'expired'
+  | 'awaiting_execution' | 'in_flight'
+  | ApprovalExecutionOutcome;
+
+export function executionState(request: ApprovalRequest): ApprovalExecutionState {
+  if (request.status === 'executed') return request.execution_outcome ?? 'committed';
+  if (request.status !== 'approved') return request.status;
+  if (request.execution_outcome) return request.execution_outcome;
+  return request.execution_claimed_at ? 'in_flight' : 'awaiting_execution';
+}
+
+const UNRESOLVED = `status = 'approved' AND execution_outcome IN ('not_started', 'unknown')`;
+
 export class ApprovalManager {
+  /** Identity of this process. A claim carrying another boot id never got its receipt from us. */
+  readonly bootId: string;
+
+  constructor(bootId: string = generateId()) {
+    this.bootId = bootId;
+  }
+
   /**
    * Create a new approval request and persist to DB.
    */
@@ -86,6 +144,13 @@ export class ApprovalManager {
       executed_at: null,
       execution_result: null,
       created_at: now,
+      execution_claimed_at: null,
+      execution_claimed_by: null,
+      execution_boot_id: null,
+      execution_outcome: null,
+      resolved_at: null,
+      resolved_by: null,
+      resolution_note: null,
     };
   }
 
@@ -174,16 +239,93 @@ export class ApprovalManager {
   }
 
   /**
-   * Mark an approved request as executed with its result.
+   * Take an approved request for execution. Exactly one caller wins: the
+   * update is conditional on the row being approved and unclaimed, or
+   * reconciled as not started, which is the user's explicit second run.
+   * Returns false when another executor holds it, when it was reconciled as
+   * `unknown` (its effect may already have happened), or when it was closed.
    */
-  markExecuted(requestId: string, executionResult: string): void {
+  claimExecution(requestId: string, claimedBy: string): boolean {
+    const db = getDb();
+    const result = db.run(
+      `UPDATE approval_requests
+         SET execution_claimed_at = ?, execution_claimed_by = ?, execution_boot_id = ?, execution_outcome = NULL
+       WHERE id = ? AND status = 'approved' AND execution_claimed_at IS NULL
+         AND (execution_outcome IS NULL OR execution_outcome = 'not_started')`,
+      [Date.now(), claimedBy, this.bootId, requestId]
+    );
+    return result.changes > 0;
+  }
+
+  /**
+   * Record the receipt of an approved request's execution. `committed` is
+   * the tool returning, `failed` the tool throwing, `blocked` a refusal under
+   * emergency state. Only an approved row can receive a receipt; returns
+   * whether one was written.
+   */
+  markExecuted(requestId: string, executionResult: string, outcome: ApprovalReceiptOutcome = 'committed'): boolean {
     const db = getDb();
     const now = Date.now();
 
-    db.run(
-      `UPDATE approval_requests SET status = 'executed', executed_at = ?, execution_result = ? WHERE id = ?`,
-      [now, executionResult, requestId]
+    const result = db.run(
+      `UPDATE approval_requests SET status = 'executed', executed_at = ?, execution_result = ?, execution_outcome = ?
+       WHERE id = ? AND status = 'approved'`,
+      [now, executionResult, outcome, requestId]
     );
+    return result.changes > 0;
+  }
+
+  /**
+   * Startup reconciliation, run once before anything can execute. Pending
+   * inline rows lose their gate on restart and go to the deferred path. An
+   * approved row with a claim from another process and no receipt is
+   * `unknown`: the effect may have happened. An approved row never claimed
+   * is `not_started`: nothing happened. Neither is run here. Workflow-owned
+   * rows are left alone; their truth is the workflow effect record.
+   */
+  reconcileAfterRestart(): { demotedInline: number; notStarted: number; interrupted: number } {
+    const db = getDb();
+    const demotedInline = this.demoteAllPendingInline();
+    const interrupted = db.run(
+      `UPDATE approval_requests SET execution_outcome = 'unknown'
+       WHERE status = 'approved' AND execution_claimed_at IS NOT NULL AND execution_outcome IS NULL
+         AND execution_mode != 'workflow' AND (execution_boot_id IS NULL OR execution_boot_id != ?)`,
+      [this.bootId]
+    ).changes;
+    const notStarted = db.run(
+      `UPDATE approval_requests SET execution_outcome = 'not_started'
+       WHERE status = 'approved' AND execution_claimed_at IS NULL AND execution_outcome IS NULL
+         AND execution_mode != 'workflow'`
+    ).changes;
+    return { demotedInline, notStarted, interrupted };
+  }
+
+  /**
+   * Approved rows that need the user: reconciled as not started or unknown
+   * and not yet closed. These are absent from `getPending()` on purpose;
+   * approving them again is impossible and running them is a separate,
+   * explicit decision.
+   */
+  getUnresolved(): ApprovalRequest[] {
+    const db = getDb();
+    return db.query(
+      `SELECT * FROM approval_requests WHERE ${UNRESOLVED} ORDER BY decided_at DESC, created_at DESC`
+    ).all() as ApprovalRequest[];
+  }
+
+  /**
+   * Resolve an unresolved row without running it. The status stays
+   * `approved`, which is what the user decided; the outcome says the
+   * execution was closed and by whom.
+   */
+  closeUnresolved(requestId: string, resolvedBy: string, note?: string): boolean {
+    const db = getDb();
+    const result = db.run(
+      `UPDATE approval_requests SET execution_outcome = 'closed', resolved_at = ?, resolved_by = ?, resolution_note = ?
+       WHERE id = ? AND ${UNRESOLVED}`,
+      [Date.now(), resolvedBy, note ?? null, requestId]
+    );
+    return result.changes > 0;
   }
 
   /**

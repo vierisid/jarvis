@@ -181,6 +181,7 @@ export function AuthorityRoomBody({ mode }: { mode: RoomBodyMode }) {
       {(mode === "inline" || activeTab === "approvals") && (
         <ApprovalsTab
           pending={data.pendingApprovals}
+          unresolved={data.unresolvedApprovals}
           history={data.historyApprovals}
           loading={data.loading}
           onApprove={async (id) => {
@@ -189,6 +190,14 @@ export function AuthorityRoomBody({ mode }: { mode: RoomBodyMode }) {
           }}
           onDeny={async (id) => {
             const r = await data.deny(id);
+            setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
+          }}
+          onExecute={async (id) => {
+            const r = await data.executeUnresolved(id);
+            setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
+          }}
+          onClose={async (id) => {
+            const r = await data.closeUnresolved(id);
             setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
           }}
         />
@@ -357,16 +366,22 @@ function StatCard({
 
 function ApprovalsTab({
   pending,
+  unresolved,
   history,
   loading,
   onApprove,
   onDeny,
+  onExecute,
+  onClose,
 }: {
   pending: ReturnType<typeof useAuthorityData>["pendingApprovals"];
+  unresolved: ReturnType<typeof useAuthorityData>["unresolvedApprovals"];
   history: ReturnType<typeof useAuthorityData>["historyApprovals"];
   loading: boolean;
   onApprove: (id: string) => void;
   onDeny: (id: string) => void;
+  onExecute: (id: string) => void;
+  onClose: (id: string) => void;
 }) {
   const recentDecisions = history.filter((a) => a.status !== "pending").slice(0, 20);
 
@@ -392,6 +407,22 @@ function ApprovalsTab({
         )}
       </section>
 
+      {unresolved.length > 0 && (
+        <section className="v2-auth__section">
+          <div className="v2-auth__section-head">
+            <h3 className="v2-auth__section-title">Approved, not finished</h3>
+            <span className="v2-auth__section-count">{unresolved.length}</span>
+          </div>
+          <ul className="v2-auth__pending-list">
+            {unresolved.map((a) => (
+              <li key={a.id}>
+                <UnresolvedApprovalCard approval={a} onExecute={onExecute} onClose={onClose} />
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+
       <section className="v2-auth__section">
         <div className="v2-auth__section-head">
           <h3 className="v2-auth__section-title">Recent decisions</h3>
@@ -410,7 +441,7 @@ function ApprovalsTab({
                   tone={a.status === "approved" || a.status === "executed" ? "ok" : a.status === "denied" ? "accent" : "neutral"}
                   dot
                 >
-                  {a.status}
+                  {a.execution_state ?? a.status}
                 </Chip>
               </li>
             ))}
@@ -472,6 +503,72 @@ function PendingApprovalCard({
           <Icon icon={Check} size="sm" />
           Approve
         </button>
+      </div>
+    </article>
+  );
+}
+
+/**
+ * An approval decided before a restart that never got a receipt. Not
+ * started: nothing happened, so it can run once. Interrupted: it may have
+ * happened, so the only action is to check and close.
+ */
+function UnresolvedApprovalCard({
+  approval,
+  onExecute,
+  onClose,
+}: {
+  approval: ReturnType<typeof useAuthorityData>["unresolvedApprovals"][number];
+  onExecute: (id: string) => void;
+  onClose: (id: string) => void;
+}) {
+  const interrupted = approval.execution_outcome === "unknown";
+  const canRun = !interrupted && approval.tool_name !== "request_approval";
+  return (
+    <article
+      className="v2-auth__pending"
+      data-urgency={approval.urgency}
+      data-tone={interrupted ? "warn" : "neutral"}
+    >
+      <header className="v2-auth__pending-head">
+        <div className="v2-auth__pending-meta">
+          <Chip tone={interrupted ? "warn" : "neutral"} dot>
+            {interrupted ? "interrupted" : "not started"}
+          </Chip>
+          <span className="v2-auth__pending-time">
+            {formatTime(approval.decided_at ?? approval.created_at)}
+          </span>
+        </div>
+        <span className="v2-auth__pending-agent">{approval.agent_name}</span>
+      </header>
+      <div className="v2-auth__pending-intent">{approval.intent ?? approval.reason}</div>
+      <div className="v2-auth__pending-meta-row">
+        <span className="v2-auth__pending-tool">{approval.tool_name}</span>
+        <span className="v2-auth__pending-cat">
+          {interrupted
+            ? "Approved, then Jarvis stopped mid-run. It may have happened: check, then close."
+            : "Approved, then Jarvis stopped before it ran. Nothing happened."}
+        </span>
+      </div>
+      <div className="v2-auth__pending-actions">
+        <button
+          type="button"
+          className="v2-auth__btn v2-auth__btn--secondary"
+          onClick={() => onClose(approval.id)}
+        >
+          <Icon icon={X} size="sm" />
+          Close
+        </button>
+        {canRun && (
+          <button
+            type="button"
+            className="v2-auth__btn v2-auth__btn--primary"
+            onClick={() => onExecute(approval.id)}
+          >
+            <Icon icon={Check} size="sm" />
+            Run now
+          </button>
+        )}
       </div>
     </article>
   );

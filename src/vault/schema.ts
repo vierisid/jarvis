@@ -408,6 +408,19 @@ function createTables(db: Database): void {
   // approve endpoints only flip the status. 'deferred' keeps the legacy
   // execute-on-approve behavior.
   try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_mode TEXT NOT NULL DEFAULT 'deferred'`); } catch {}
+  // Migration: execution claim and receipt. The claim columns record that one
+  // executor took the approved request before dispatch, so a second caller or
+  // a restarted daemon cannot run it again. `execution_outcome` qualifies the
+  // receipt (committed, failed, blocked) or, after a restart, the reconciled
+  // state of an approved row that never got one (not_started, unknown) and
+  // the user's resolution of it (closed). Old rows read as unclaimed.
+  try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_claimed_at INTEGER`); } catch {}
+  try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_claimed_by TEXT`); } catch {}
+  try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_boot_id TEXT`); } catch {}
+  try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_outcome TEXT`); } catch {}
+  try { db.run(`ALTER TABLE approval_requests ADD COLUMN resolved_at INTEGER`); } catch {}
+  try { db.run(`ALTER TABLE approval_requests ADD COLUMN resolved_by TEXT`); } catch {}
+  try { db.run(`ALTER TABLE approval_requests ADD COLUMN resolution_note TEXT`); } catch {}
 
   // Authority: Audit trail
   db.run(`
