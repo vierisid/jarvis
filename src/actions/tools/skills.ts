@@ -84,19 +84,30 @@ function liveDeps(explicitTarget?: string): SkillRuntimeDeps {
       }
       await manager.dispatchRPC(id, 'click_element', { element_id: sessionId, action, value }, RPC_TIMEOUT);
     },
-    raw: async (action, value) => {
+    raw: async (kind, action, value) => {
+      // navigate is inherently a browser action and launch_app inherently a
+      // desktop one, whatever the step says. press_keys exists on both, so it
+      // follows the step's surface: sending it to the desktop provider for a
+      // browser step would inject an OS-level keystroke into whatever window
+      // happens to be in the foreground, which for a step like the Slack
+      // seed's Enter is the send.
       if (action === 'navigate') {
         await manager.dispatchRPC(sidecarIdFor(targetFor('browser')), 'browser_navigate', { url: value }, RPC_TIMEOUT);
         return;
       }
-      const id = sidecarIdFor(targetFor('desktop'));
-      if (action === 'launch_app') {
-        await manager.dispatchRPC(id, 'launch_app', { executable: value }, RPC_TIMEOUT);
-      } else if (action === 'press_keys') {
-        await manager.dispatchRPC(id, 'press_keys', { keys: value }, RPC_TIMEOUT);
-      } else {
-        throw new Error(`unsupported raw action "${action}"`);
+      if (action === 'press_keys') {
+        if (kind === 'browser') {
+          await manager.dispatchRPC(sidecarIdFor(targetFor('browser')), 'browser_press_key', { key: value }, RPC_TIMEOUT);
+        } else {
+          await manager.dispatchRPC(sidecarIdFor(targetFor('desktop')), 'press_keys', { keys: value }, RPC_TIMEOUT);
+        }
+        return;
       }
+      if (action === 'launch_app') {
+        await manager.dispatchRPC(sidecarIdFor(targetFor('desktop')), 'launch_app', { executable: value }, RPC_TIMEOUT);
+        return;
+      }
+      throw new Error(`unsupported raw action "${action}"`);
     },
   };
 }

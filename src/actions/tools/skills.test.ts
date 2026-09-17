@@ -97,6 +97,20 @@ describe('skill tools', () => {
       expect(out).toContain('completed');
       expect(calls[0]).toEqual({ method: 'browser_navigate', params: { url: 'https://x.test' } });
     });
+
+    test('a browser key press goes to the browser provider, not the machine foreground window', async () => {
+      const calls: Call[] = [];
+      setSidecarManagerRef(fakeManager(calls));
+      upsertSkill({ name: 'slackish', steps: [{ action: 'press_keys', surface: 'browser', value: 'enter' }] });
+      expect(String(await runSkillTool.execute({ name: 'slackish' }))).toContain('completed');
+      expect(calls).toEqual([{ method: 'browser_press_key', params: { key: 'enter' } }]);
+
+      const deskCalls: Call[] = [];
+      setSidecarManagerRef(fakeManager(deskCalls));
+      upsertSkill({ name: 'deskish', steps: [{ action: 'press_keys', surface: 'desktop', value: 'enter' }] });
+      expect(String(await runSkillTool.execute({ name: 'deskish' }))).toContain('completed');
+      expect(deskCalls).toEqual([{ method: 'press_keys', params: { keys: 'enter' } }]);
+    });
   });
 
   describe('manage_skills', () => {

@@ -41,8 +41,12 @@ export type SkillRuntimeDeps = {
   snapshot: (kind: SurfaceKind) => Promise<SkillSurface>;
   /** Perform an action on a resolved session id. */
   act: (kind: SurfaceKind, sessionId: number, action: string, value?: string) => Promise<void>;
-  /** Non-element actions (launch_app, navigate, press_keys). */
-  raw: (action: string, value?: string) => Promise<void>;
+  /**
+   * Non-element actions (launch_app, navigate, press_keys). Takes the step's
+   * surface so a key press on a browser step goes to the browser and not to
+   * the machine's foreground window.
+   */
+  raw: (kind: SurfaceKind, action: string, value?: string) => Promise<void>;
   /** Optional settle delay hook (overridable in tests). */
   sleep?: (ms: number) => Promise<void>;
 };
@@ -135,7 +139,7 @@ export async function runSkill(
       // the action; there may be no window at all yet (launch_app).
       if (step.postcondition) before = await snapshotSafe(kind);
       try {
-        await deps.raw(step.action, value);
+        await deps.raw(kind, step.action, value);
       } catch (err) {
         return fail(i, step.action, msg(err));
       }

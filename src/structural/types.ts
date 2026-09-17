@@ -99,6 +99,12 @@ export type UiaSemanticElement = {
   path?: SemanticPathSegment[];
   ordinal?: number;
   sig?: string;
+  /**
+   * Current text of a field with the Value pattern, emitted by the semantic
+   * walk. Never present for a password field. Without it a value_equals
+   * postcondition reads every desktop field as empty and can never hold.
+   */
+  value?: string;
 };
 
 /**
@@ -130,7 +136,7 @@ export function semanticNodeFromUia(el: UiaSemanticElement): SemanticNode {
     },
     role: el.control_type,
     name: el.name,
-    value: null,
+    value: el.value ?? null,
     state: {
       enabled: el.enabled,
       focusable: el.focusable,

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'bun:test';
 import { runSkill, validateSteps, type SkillRuntimeDeps, type SkillSurface } from './runtime.ts';
 import type { Skill, SkillStep } from './types.ts';
-import type { SemanticNode, SemanticRef } from '../structural/types.ts';
+import { surfaceFromUia, type SemanticNode, type SemanticRef } from '../structural/types.ts';
 
 function node(role: string, name: string, sig: string, sessionId: number, focused = false): SemanticNode {
   return {
@@ -26,9 +26,9 @@ function skill(steps: SkillStep[], params: Skill['params'] = []): Skill {
 type Act = [number, string, string?];
 
 /** Deps whose snapshot returns a scripted sequence of surfaces (last one repeats). */
-function scriptedDeps(surfaces: Array<SkillSurface | Error>): { deps: SkillRuntimeDeps; acts: Act[]; raws: Array<[string, string?]>; snapshots: () => number } {
+function scriptedDeps(surfaces: Array<SkillSurface | Error>): { deps: SkillRuntimeDeps; acts: Act[]; raws: Array<[string, string, string?]>; snapshots: () => number } {
   const acts: Act[] = [];
-  const raws: Array<[string, string?]> = [];
+  const raws: Array<[string, string, string?]> = [];
   let i = 0;
   const deps: SkillRuntimeDeps = {
     snapshot: async () => {
@@ -37,7 +37,7 @@ function scriptedDeps(surfaces: Array<SkillSurface | Error>): { deps: SkillRunti
       return s;
     },
     act: async (_k, sid, action, value) => { acts.push([sid, action, value]); },
-    raw: async (action, value) => { raws.push([action, value]); },
+    raw: async (kind, action, value) => { raws.push([kind, action, value]); },
     sleep: async () => {},
   };
   return { deps, acts, raws, snapshots: () => i };
@@ -221,7 +221,53 @@ describe('runSkill', () => {
     const { deps, raws } = scriptedDeps([{ nodes: [] }]);
     const res = await runSkill(s, {}, deps);
     expect(res.ok).toBe(true);
-    expect(raws[0]).toEqual(['launch_app', 'notepad.exe']);
+    expect(raws[0]).toEqual(['desktop', 'launch_app', 'notepad.exe']);
+  });
+
+  it('value_equals holds on a desktop surface, whose fields carry their text', async () => {
+    // The Go semantic walk emits `value` for any element with a Value
+    // pattern; semanticNodeFromUia must carry it onto the node or every
+    // recorded set_value step fails its derived value_equals.
+    const uia = {
+      window_title: 'Untitled - Notepad', pid: 42,
+      elements: [{
+        id: 7, name: 'Subject', automation_id: 'subj', class_name: 'Edit',
+        control_type: 'Edit', enabled: true, focusable: true,
+        rect: { x: 0, y: 0, w: 10, h: 10 }, patterns: ['Value'], depth: 1,
+        path: [{ role: 'Window', name: 'Untitled - Notepad' }], ordinal: 0,
+        sig: 'subj-sig', value: 'hello',
+      }],
+    };
+    const surface = surfaceFromUia(uia);
+    expect(surface.nodes[0]!.value).toBe('hello');
+
+    const s = skill([{
+      action: 'set_value',
+      surface: 'desktop',
+      ref: { role: 'Edit', name: 'Subject', stableId: 'subj', path: [{ role: 'Window', name: 'Untitled - Notepad' }], ordinal: 0, sig: 'subj-sig' },
+      value: '{{subject}}',
+      postcondition: { kind: 'value_equals', value: '{{subject}}' },
+    }], [{ name: 'subject', type: 'string', description: '', required: true }]);
+
+    const deps: SkillRuntimeDeps = {
+      snapshot: async () => ({ nodes: surface.nodes, title: surface.root.title }),
+      act: async () => {},
+      raw: async () => {},
+      sleep: async () => {},
+    };
+    const res = await runSkill(s, { subject: 'hello' }, deps);
+    expect(res.ok).toBe(true);
+    expect(res.steps[0]!.detail).toContain('value equals');
+  });
+
+  it('a key press follows the step surface: browser steps do not reach the desktop provider', async () => {
+    const desktop = scriptedDeps([{ nodes: [] }]);
+    await runSkill(skill([{ action: 'press_keys', value: 'enter' }]), {}, desktop.deps);
+    expect(desktop.raws[0]).toEqual(['desktop', 'press_keys', 'enter']);
+
+    const browser = scriptedDeps([{ nodes: [] }]);
+    await runSkill(skill([{ action: 'press_keys', surface: 'browser', value: 'enter' }]), {}, browser.deps);
+    expect(browser.raws[0]).toEqual(['browser', 'press_keys', 'enter']);
   });
 
   it('a browser step snapshots and acts on the browser surface', async () => {
