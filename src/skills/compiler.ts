@@ -1,20 +1,24 @@
 /**
- * Skill compiler — turns a recorded interaction sequence into a Skill.
+ * Skill compiler: turns a recorded interaction sequence into a Skill.
  *
- * Three transformations, per the roadmap:
- *  1. Coalesce — a click that focuses a field immediately followed by typing
+ * Three transformations:
+ *  1. Coalesce: a click that focuses a field immediately followed by typing
  *     into that same field becomes one `set_value` step (the natural unit).
- *  2. Parameterize — typed values become named params so the skill is reusable
+ *  2. Parameterize: typed values become named params so the skill is reusable
  *     (heuristic naming here; an optional LLM pass can rename/describe later).
- *  3. Derive postconditions — a set_value gets a value_equals check; a click
- *     that is the last interaction on a surface gets a light window/title check.
+ *     No typed value, secret or not, is ever stored: a step always carries
+ *     `{{param}}`.
+ *  3. Derive postconditions: a set_value gets a value_equals check; a click
+ *     that is the last interaction on a surface gets surface_changed (the
+ *     click did something); launch_app gets window_appeared. Each is verified
+ *     against a before/after surface pair at run time, never vacuously.
  *
  * Redaction already happened at capture (recorder.ts): a {{REDACTED}} value
- * becomes a required param instead of a hard-coded secret.
+ * becomes a required secret param instead of a hard-coded secret.
  */
 
 import type { RawInteraction } from './recorder.ts';
-import type { Skill, SkillParam, SkillStep } from './types.ts';
+import type { SkillParam, SkillStep } from './types.ts';
 
 export type CompileOptions = {
   name: string;
@@ -26,7 +30,7 @@ export type CompiledSkill = {
   name: string;
   app: string;
   description: string;
-  match: { keywords?: string[]; domains?: string[]; processNames?: string[] };
+  match: { keywords?: string[]; processNames?: string[] };
   params: SkillParam[];
   steps: SkillStep[];
   provenance: 'recorded';
@@ -72,48 +76,51 @@ export function compileSkill(interactions: RawInteraction[], opts: CompileOption
   const usedNames = new Set<string>();
   const steps: SkillStep[] = [];
   const apps = new Set<string>();
-  const domains = new Set<string>();
 
   for (let i = 0; i < coalesced.length; i++) {
     const it = coalesced[i]!;
     if (it.app) apps.add(it.app);
-    if (it.url) {
-      try { domains.add(new URL(it.url).hostname); } catch { /* not a url */ }
-    }
+    const surface = it.surface ?? 'desktop';
 
     if (it.action === 'set_value') {
+      if (!it.ref) continue; // nothing to replay against
       const pname = paramNameFor(it, usedNames);
-      const wasRedacted = it.value === '{{REDACTED}}';
+      const wasRedacted = it.value === '{{REDACTED}}' || it.secure === true;
       params.push({
         name: pname,
         type: 'string',
-        description: `Value for ${it.ref?.name || 'field'}${wasRedacted ? ' (was a secret; not stored)' : ''}`,
+        description: `Value for ${it.ref.name || 'field'}${wasRedacted ? ' (was a secret; not stored)' : ''}`,
         required: true,
+        ...(wasRedacted ? { secret: true } : {}),
       });
       steps.push({
         action: 'set_value',
+        surface,
         ref: it.ref,
         value: `{{${pname}}}`,
         // A secret field's value_equals would leak nothing useful and often
         // won't read back (masked), so skip its postcondition.
         postcondition: wasRedacted ? undefined : { kind: 'value_equals', value: `{{${pname}}}` },
-        note: `type into ${it.ref?.name || 'field'}`,
+        note: `type into ${it.ref.name || 'field'}`,
       });
     } else if (it.action === 'click') {
-      const isLastOnSurface = i === coalesced.length - 1 || coalesced[i + 1]!.surface !== it.surface;
+      if (!it.ref) continue;
+      const isLastOnSurface = i === coalesced.length - 1 || (coalesced[i + 1]!.surface ?? 'desktop') !== surface;
       steps.push({
         action: 'click',
+        surface,
         ref: it.ref,
-        // A terminal click (submit/next) usually changes the window/title.
-        postcondition: isLastOnSurface ? { kind: 'title_changed' } : undefined,
-        note: `click ${it.ref?.name || 'element'}`,
+        // A terminal click (submit/next) must visibly do something: the
+        // element goes away, the title changes, or new content appears.
+        postcondition: isLastOnSurface ? { kind: 'surface_changed' } : undefined,
+        note: `click ${it.ref.name || 'element'}`,
       });
     } else if (it.action === 'launch_app') {
-      steps.push({ action: 'launch_app', value: it.value, postcondition: { kind: 'window_appeared' } });
+      steps.push({ action: 'launch_app', surface: 'desktop', value: it.value, postcondition: { kind: 'window_appeared' } });
     } else if (it.action === 'navigate') {
-      steps.push({ action: 'navigate', value: it.value });
+      steps.push({ action: 'navigate', surface: 'browser', value: it.value });
     } else if (it.action === 'press_keys') {
-      steps.push({ action: 'press_keys', value: it.value });
+      steps.push({ action: 'press_keys', surface, value: it.value });
     }
   }
 
@@ -124,23 +131,10 @@ export function compileSkill(interactions: RawInteraction[], opts: CompileOption
     description: opts.description ?? `Recorded skill for ${app || 'an app'}`,
     match: {
       keywords: app ? [app.toLowerCase()] : undefined,
-      domains: domains.size ? [...domains] : undefined,
+      processNames: apps.size ? [...apps].map((a) => a.toLowerCase()) : undefined,
     },
     params,
     steps,
     provenance: 'recorded',
-  };
-}
-
-/** Convenience: compile straight into an upsertable shape. */
-export function compiledToUpsert(c: CompiledSkill): Omit<Skill, 'id' | 'version' | 'enabled' | 'successCount' | 'runCount' | 'createdAt' | 'updatedAt'> & { steps: SkillStep[] } {
-  return {
-    name: c.name,
-    app: c.app,
-    description: c.description,
-    match: c.match,
-    params: c.params,
-    steps: c.steps,
-    provenance: c.provenance,
   };
 }

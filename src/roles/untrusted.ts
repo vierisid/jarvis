@@ -46,6 +46,12 @@ const UNTRUSTED_TOOL_NAMES: ReadonlySet<string> = new Set([
   // tells the model to do.
   'ui_snapshot',
   'ui_act',
+  // Skills. run_skill's result quotes live field text and the names of
+  // whatever appeared on the surface; record_skill's compiled steps and
+  // parameter names come from the accessible names of fields on the pages
+  // and windows the person used. Both are outside content.
+  'run_skill',
+  'record_skill',
 ]);
 
 export function isUntrustedSourceTool(name: string, category: string | undefined): boolean {

@@ -573,6 +573,9 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 	// Start observers (clipboard, etc.) — cancelled when connection drops
 	obsCtx, obsCancel := context.WithCancel(ctx)
 	defer obsCancel()
+	// A recording cannot outlive the connection that started it: the brain
+	// owns the session, and without it nothing would ever send recorder_stop.
+	defer stopRecording("disconnect")
 
 	sendFn := func(ctx context.Context, event SidecarEvent, binaryData []byte) error {
 		return c.sendEvent(ctx, event, binaryData)
@@ -586,8 +589,10 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 
 	StartObservers(obsCtx, c.config, c.availableCaps, sendFn)
 	// Give the skill recorder access to the event channel so recorder_start
-	// can stream ui_interaction events to the brain.
+	// can stream ui_interaction events to the brain, and the pebble so a live
+	// recording is visible.
 	setRecorderSender(obsCtx, sendFn)
+	setRecorderIndicator(c.pebble)
 
 	// "Open dashboard at startup" — the user asked to see the full window and
 	// not just the pebble. Placed after the c.mu block above so obsCtx is

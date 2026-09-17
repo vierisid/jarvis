@@ -17,7 +17,8 @@ import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
-import { getActionForTool } from '../authority/tool-action-map.ts';
+import { resolveToolGate } from '../authority/tool-action-map.ts';
+import { combineDecisions } from '../authority/engine.ts';
 import { markUntrustedToolResult, markUntrustedToolFailure, isTaintSourceTool } from '../roles/untrusted.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { mergeProfiles, taintProfile, type TaintGating } from '../authority/taint-gating.ts';
@@ -153,18 +154,32 @@ async function executeTool(
     }
 
     const tool = registry.get(toolCall.name);
-    const actionCategory = getActionForTool(toolCall.name, tool?.category ?? 'unknown');
+    const gate = resolveToolGate(tool, toolCall.name, toolCall.arguments);
+    const actionCategory = gate.actionCategory;
 
-    const decision = engine.checkAuthority({
+    // A call the person must confirm cannot be made by a sub-agent at all.
+    if (gate.confirm === 'always') {
+      auditTrail?.log({
+        agent_id: agent.id,
+        agent_name: agent.agent.role.name,
+        tool_name: toolCall.name,
+        action_category: actionCategory,
+        authority_decision: 'denied',
+        executed: false,
+      });
+      return `[AUTHORITY DENIED] ${toolCall.name} requires the user's confirmation. Sub-agents cannot request approvals directly.`;
+    }
+
+    const decision = combineDecisions(gate.categories.map((category) => engine.checkAuthority({
       agentId: agent.id,
       agentAuthorityLevel: agent.agent.authority.max_authority_level,
       agentRoleId: agent.agent.role.id,
       toolName: toolCall.name,
       toolCategory: tool?.category ?? 'unknown',
-      actionCategory,
+      actionCategory: category,
       temporaryGrants: temporaryGrants ?? new Map(),
       profile: profile ?? null,
-    });
+    })));
 
     auditTrail?.log({
       agent_id: agent.id,

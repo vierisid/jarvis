@@ -29,7 +29,11 @@ const BOUNDED_TOOLS = new Set<string>([
  */
 const OPAQUE_TOOLS = new Set(['run_command', 'browser_evaluate', 'browser_navigate', 'browser_click',
   'browser_type', 'browser_upload_file', 'browser_press_key', 'browser_hover', 'browser_scroll',
-  'desktop_click', 'desktop_type', 'desktop_press_keys', 'desktop_launch_app', 'desktop_focus_window']);
+  'desktop_click', 'desktop_type', 'desktop_press_keys', 'desktop_launch_app', 'desktop_focus_window',
+  // A skill is a stored click sequence and a recording installs input hooks;
+  // neither has a workflow adapter, and the agent-path gate that classifies a
+  // run per step (ToolDefinition.authorityGate) is not consulted here.
+  'run_skill', 'record_skill', 'manage_skills']);
 
 export const BOUNDED_TOOL_NAMES: ReadonlySet<string> = BOUNDED_TOOLS;
 export const OPAQUE_TOOL_NAMES: ReadonlySet<string> = OPAQUE_TOOLS;

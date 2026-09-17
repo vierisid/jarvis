@@ -3,6 +3,8 @@
  */
 
 import type { ActionCategory } from '../roles/authority.ts';
+import { AUTHORITY_REQUIREMENTS } from '../roles/authority.ts';
+import type { ToolDefinition, ToolGate } from '../actions/tools/registry.ts';
 
 /**
  * Explicit mapping from tool name -> ActionCategory
@@ -58,6 +60,18 @@ export const TOOL_ACTION_MAP: Record<string, ActionCategory> = {
   // this to access_browser.
   ui_snapshot: 'read_data',
   ui_act: 'control_app',
+
+  // Skills. These entries are the FLOOR, not the whole story: run_skill
+  // replays whatever steps the named skill holds, so each tool also carries
+  // an `authorityGate` (src/actions/tools/skills.ts) that the gate sites
+  // consult per call through resolveToolGate below. run_skill is gated on
+  // the worst case across the skill's steps (a click on Send in a mail app
+  // is send_email); record_skill installs system-wide input hooks and always
+  // needs the person's confirmation on a card; manage_skills is a read
+  // except delete, which the gate raises to delete_data.
+  run_skill: 'control_app',
+  record_skill: 'control_app',
+  manage_skills: 'read_data',
 
   // Lists connected sidecars. Reached read_data only via the default at the
   // bottom of getActionForTool; spelled out so builtin-tool-coverage.test.ts
@@ -118,4 +132,81 @@ export function getActionForTool(toolName: string, toolCategory: string): Action
     return CATEGORY_ACTION_MAP[toolCategory];
   }
   return 'read_data';
+}
+
+/**
+ * Severity order for categories that share a required level, so "stricter"
+ * is a total order and a worst case is deterministic. Higher index is
+ * stricter.
+ */
+const SEVERITY_TIE_ORDER: readonly ActionCategory[] = [
+  'read_data', 'spawn_agent', 'write_data', 'send_message', 'access_browser',
+  'control_app', 'execute_command', 'install_software', 'send_email',
+  'terminate_agent', 'modify_settings', 'delete_data', 'make_payment',
+];
+
+export function severityRank(category: ActionCategory): number {
+  const level = AUTHORITY_REQUIREMENTS[category] ?? 0;
+  const tie = SEVERITY_TIE_ORDER.indexOf(category);
+  return level * 100 + (tie < 0 ? 0 : tie);
+}
+
+/** The stricter of two categories: higher required level, then SEVERITY_TIE_ORDER. */
+export function stricterCategory(a: ActionCategory, b: ActionCategory): ActionCategory {
+  return severityRank(b) > severityRank(a) ? b : a;
+}
+
+export type ResolvedToolGate = {
+  /** The most severe category the call reaches; the audit row and the card carry it. */
+  actionCategory: ActionCategory;
+  /** Every category the call must clear, floor included, most severe first. */
+  categories: ActionCategory[];
+  /** The static entry for the tool; what an above_level substitution still requires. */
+  floorCategory: ActionCategory;
+  intent?: string;
+  confirm?: ToolGate['confirm'];
+};
+
+/**
+ * Resolve what a call must clear: the static entry for the tool, raised by
+ * the tool's own per-call gate when it declares one. A gate that throws is
+ * treated as absent for classification but recorded, so a broken gate never
+ * lowers a call. Every gate site (orchestrator, realtime, sub-agents) goes
+ * through here so the rule cannot drift between them.
+ */
+export function resolveToolGate(
+  tool: Pick<ToolDefinition, 'category' | 'authorityGate'> | undefined,
+  toolName: string,
+  params: Record<string, unknown>,
+): ResolvedToolGate {
+  const floorCategory = getActionForTool(toolName, tool?.category ?? 'unknown');
+  if (!tool?.authorityGate) return { actionCategory: floorCategory, categories: [floorCategory], floorCategory };
+  let gate: ToolGate | null = null;
+  try {
+    gate = tool.authorityGate(params);
+  } catch (err) {
+    console.warn(`[Authority] ${toolName} authorityGate threw; using the static category:`, err instanceof Error ? err.message : err);
+  }
+  if (!gate) return { actionCategory: floorCategory, categories: [floorCategory], floorCategory };
+  const known = (c: ActionCategory) => Object.hasOwn(AUTHORITY_REQUIREMENTS, c);
+  const declared = [gate.actionCategory, ...(gate.actionCategories ?? [])].filter(known);
+  const categories = [...new Set([floorCategory, ...declared])].sort((a, b) => severityRank(b) - severityRank(a));
+  return {
+    actionCategory: categories[0]!,
+    categories,
+    floorCategory,
+    intent: gate.intent,
+    confirm: gate.confirm,
+  };
+}
+
+/**
+ * The approval-request `context` for a gated call. JSON so the dashboard's
+ * intent formatter can read the sentence and the voice path can see that a
+ * click is required; the plain "Agent attempted" string stays for tools
+ * without a gate.
+ */
+export function gateContext(gate: ResolvedToolGate, toolName: string, params: Record<string, unknown>): string {
+  if (!gate.intent) return `Agent attempted: ${toolName}(${JSON.stringify(params).slice(0, 200)})`;
+  return JSON.stringify({ intent: gate.intent, ...(gate.confirm === 'always' ? { confirm: 'always' } : {}) });
 }

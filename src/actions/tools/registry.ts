@@ -27,6 +27,35 @@ export function isToolResult(v: unknown): v is ToolResult {
   return v !== null && typeof v === 'object' && 'content' in (v as object) && Array.isArray((v as ToolResult).content);
 }
 
+/**
+ * Per-call authority resolution for a tool whose effect is decided by what
+ * the call will do, not by the tool's name: run_skill replays whatever steps
+ * the named skill holds, record_skill installs input hooks.
+ *
+ *   actionCategory  what this call reaches. The orchestrator gates on the
+ *                   stricter of this and the tool's TOOL_ACTION_MAP entry, so
+ *                   a gate can raise a call, never lower it below the floor.
+ *   intent          card-ready sentence naming what will actually happen,
+ *                   with resolved values ("click Send (sends email)").
+ *   confirm         'always': the person must confirm this call on a card
+ *                   whatever the agent's level. 'above_level': a category the
+ *                   agent's level cannot clear becomes an approval card instead
+ *                   of a denial, the substitution request_approval makes for a
+ *                   declared intent. Absent: the engine's decision stands.
+ */
+export type ToolGate = {
+  actionCategory: import('../../roles/authority').ActionCategory;
+  /**
+   * Every category the call reaches when it spans more than one (a skill
+   * that clicks controls and sends a message). The call must clear each of
+   * them: a config that governs send_message stops such a skill even though
+   * control_app is the higher level. Defaults to [actionCategory].
+   */
+  actionCategories?: import('../../roles/authority').ActionCategory[];
+  intent: string;
+  confirm?: 'always' | 'above_level';
+};
+
 export type ToolDefinition = {
   name: string;
   description: string;
@@ -38,6 +67,13 @@ export type ToolDefinition = {
     category: import('../../roles/authority').ActionCategory;
     target: (params: Record<string, unknown>) => Record<string, unknown>;
   };
+  /**
+   * Trusted per-call gate, never accepted from model input. Consulted by every
+   * authority gate site (orchestrator text and realtime paths, sub-agents)
+   * before the engine is asked. Returning null leaves the static mapping in
+   * force. Must be cheap and must not act.
+   */
+  authorityGate?: (params: Record<string, unknown>) => ToolGate | null;
 };
 
 export class ToolRegistry {

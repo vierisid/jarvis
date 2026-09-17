@@ -48,6 +48,13 @@ export type AuthorityDecision = {
   contextRule?: string;
   /** Set when a per-orchestrator profile tightened the base decision; its label. */
   profileLabel?: string;
+  /**
+   * Set when the ONLY reason for a denial is the numeric level check: no
+   * grant, override or context rule spoke, and no profile cap. A tool gate
+   * that declares `confirm: 'above_level'` may turn such a denial into an
+   * approval request; every other denial stands.
+   */
+  deniedByLevel?: true;
 };
 
 /**
@@ -183,6 +190,7 @@ export class AuthorityEngine {
         requiresApproval: false,
         reason: `Authority level ${effectiveLevel} is below required ${requiredLevel} for ${actionCategory}`,
         actionCategory,
+        deniedByLevel: true,
       };
     }
 
@@ -334,6 +342,29 @@ export class AuthorityEngine {
     }
     return null;
   }
+}
+
+/**
+ * Fold the decisions for every category one call reaches into the one the
+ * call gets. A denial wins over an approval, an approval over an allow. Among
+ * denials, one that is not a pure level shortfall wins, so a caller that may
+ * substitute an approval for a level shortfall can see when that is the only
+ * thing standing. Among approvals, the most severe category's decision is
+ * kept so the card is labelled with it. Pure; empty input is an error.
+ */
+export function combineDecisions(decisions: readonly AuthorityDecision[]): AuthorityDecision {
+  if (decisions.length === 0) throw new Error('combineDecisions: no decisions');
+  const denied = decisions.filter((d) => !d.allowed);
+  if (denied.length > 0) {
+    const hard = denied.find((d) => !d.deniedByLevel);
+    if (hard) return hard;
+    return denied.reduce((a, b) => (AUTHORITY_REQUIREMENTS[b.actionCategory] > AUTHORITY_REQUIREMENTS[a.actionCategory] ? b : a));
+  }
+  const approvals = decisions.filter((d) => d.requiresApproval);
+  if (approvals.length > 0) {
+    return approvals.reduce((a, b) => (AUTHORITY_REQUIREMENTS[b.actionCategory] > AUTHORITY_REQUIREMENTS[a.actionCategory] ? b : a));
+  }
+  return decisions.reduce((a, b) => (AUTHORITY_REQUIREMENTS[b.actionCategory] > AUTHORITY_REQUIREMENTS[a.actionCategory] ? b : a));
 }
 
 /**

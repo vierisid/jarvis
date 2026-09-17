@@ -1,35 +1,35 @@
-import { afterEach, describe, expect, test } from 'bun:test';
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
 import { closeDb, initDatabase } from '../vault/schema.ts';
-import { listSkills, upsertSkill, getSkillByName } from '../vault/skills.ts';
-import { seedSkills, SEED_SKILL_NAMES } from './seeds.ts';
-import { runSkill, type SkillRuntimeDeps } from './runtime.ts';
+import { listSkills, upsertSkill, getSkillByName, setSkillSigningKey } from '../vault/skills.ts';
+import { seedSkills } from './seeds.ts';
+import { runSkill, validateSteps, type SkillRuntimeDeps } from './runtime.ts';
+import { resolveSkillEffect } from './effects.ts';
+
+const SEED_NAMES = ['gcal-create-event', 'gmail-compose', 'notion-new-page', 'sheets-append-row', 'slack-send-message'];
 
 describe('seed skills', () => {
-  afterEach(() => closeDb());
+  beforeEach(() => { initDatabase(':memory:'); setSkillSigningKey(Buffer.alloc(32, 7)); });
+  afterEach(() => { closeDb(); setSkillSigningKey(null); });
 
-  test('seeds all starter skills with valid, parseable structure', () => {
-    initDatabase(':memory:');
+  test('seeds all starter skills as signed, runnable browser skills', () => {
     seedSkills();
     const seeded = listSkills(true);
-    expect(seeded.map((s) => s.name).sort()).toEqual([...SEED_SKILL_NAMES].sort());
-    // every step has an action; element steps carry a ref
+    expect(seeded.map((s) => s.name).sort()).toEqual(SEED_NAMES);
     for (const s of seeded) {
-      expect(s.steps.length).toBeGreaterThan(0);
-      for (const step of s.steps) {
-        expect(step.action).toBeTruthy();
-      }
+      expect(s.integrity).toBe('ok');
+      expect(validateSteps(s.steps)).toBeNull();
+      // Web apps: every step runs on the browser surface.
+      expect(s.steps.every((step) => step.surface === 'browser')).toBe(true);
       // params referenced in steps exist in the param list
       const declared = new Set(s.params.map((p) => p.name));
       const used = JSON.stringify(s.steps).match(/\{\{(\w+)\}\}/g) ?? [];
       for (const u of used) {
-        const nm = u.replace(/[{}]/g, '');
-        expect(declared.has(nm)).toBe(true);
+        expect(declared.has(u.replace(/[{}]/g, ''))).toBe(true);
       }
     }
   });
 
-  test('is idempotent and preserves a user-edited skill of the same name', () => {
-    initDatabase(':memory:');
+  test('is idempotent and preserves a user-recorded skill of the same name', () => {
     // User records their own gmail-compose before seeding.
     upsertSkill({ name: 'gmail-compose', description: 'MY version', steps: [{ action: 'wait', ms: 1 }], provenance: 'recorded' });
     seedSkills();
@@ -37,12 +37,25 @@ describe('seed skills', () => {
     const g = getSkillByName('gmail-compose')!;
     expect(g.description).toBe('MY version'); // not clobbered
     expect(g.provenance).toBe('recorded');
+    expect(g.version).toBe(1);
     // other seeds still installed once
     expect(listSkills(true).filter((s) => s.name === 'slack-send-message')).toHaveLength(1);
   });
 
+  test('the shipped effects are what the gate sees: gmail sends email, slack sends a message', () => {
+    seedSkills();
+    const gmail = resolveSkillEffect(getSkillByName('gmail-compose')!, { to: 'a@b.com', subject: 'hi', body: 'x' });
+    expect(gmail.category).toBe('send_email');
+    expect(gmail.intent).toContain('click Send (sends email)');
+    expect(gmail.intent).toContain('"a@b.com" into To recipients');
+    const slack = resolveSkillEffect(getSkillByName('slack-send-message')!, { text: 'yo' });
+    expect(slack.categories).toEqual(['control_app', 'send_message']);
+    expect(slack.intent).toContain('press enter (sends a message)');
+    const sheets = resolveSkillEffect(getSkillByName('sheets-append-row')!, { value: '1' });
+    expect(sheets.categories).toEqual(['control_app']);
+  });
+
   test('gmail-compose runs end-to-end against a scripted surface', async () => {
-    initDatabase(':memory:');
     seedSkills();
     const gmail = getSkillByName('gmail-compose')!;
 
@@ -59,11 +72,12 @@ describe('seed skills', () => {
     // Track set values so value_equals on Subject passes, and simulate Send
     // removing the Compose button (element_gone).
     let sent = false;
+    const kinds: string[] = [];
     const deps: SkillRuntimeDeps = {
-      snapshot: async () => ({
-        nodes: sent ? nodes.filter((n) => n.name !== 'Send') : nodes,
-        title: 'Compose',
-      }),
+      snapshot: async (kind) => {
+        kinds.push(kind);
+        return { nodes: sent ? nodes.filter((n) => n.name !== 'Send') : nodes, title: 'Compose' };
+      },
       act: async (_k, sid, action, value) => {
         const n = nodes.find((x) => x.sessionId === sid)!;
         if (action === 'set_value') n.value = value ?? '';
@@ -76,5 +90,6 @@ describe('seed skills', () => {
     const res = await runSkill(gmail, { to: 'a@b.com', subject: 'hi', body: 'hello' }, deps);
     expect(res.ok).toBe(true);
     expect(nodes.find((n) => n.name === 'Subject')!.value).toBe('hi');
+    expect(new Set(kinds)).toEqual(new Set(['browser']));
   });
 });

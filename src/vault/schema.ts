@@ -920,9 +920,11 @@ function createTables(db: Database): void {
   }
 
   // Skills: parameterized, verified, replayable procedures. The structural-
-  // runtime replacement for markdown webapp_templates — steps address elements
+  // runtime replacement for markdown webapp_templates: steps address elements
   // by durable SemanticRef and carry postconditions. `match`, `params`, and
-  // `steps` are JSON blobs (see src/skills/types.ts).
+  // `steps` are JSON blobs (see src/skills/types.ts). `content_mac` binds the
+  // reviewed content to the row (see src/vault/skills.ts); a row without one
+  // is listed but never run.
   db.run(`
     CREATE TABLE IF NOT EXISTS skills (
       id TEXT PRIMARY KEY,
@@ -936,6 +938,7 @@ function createTables(db: Database): void {
         CHECK(provenance IN ('recorded', 'authored', 'marketplace')),
       version INTEGER NOT NULL DEFAULT 1,
       enabled INTEGER NOT NULL DEFAULT 1,
+      content_mac TEXT,
       success_count INTEGER NOT NULL DEFAULT 0,
       run_count INTEGER NOT NULL DEFAULT 0,
       verified_at INTEGER,
@@ -944,6 +947,8 @@ function createTables(db: Database): void {
       CHECK(enabled IN (0, 1))
     )
   `);
+  // Migration: sign rows written by a pre-release build of this table.
+  try { db.run('ALTER TABLE skills ADD COLUMN content_mac TEXT'); } catch {}
   db.run(`CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_skills_enabled ON skills(enabled)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_skills_app ON skills(app)`);

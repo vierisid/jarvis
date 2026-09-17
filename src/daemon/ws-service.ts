@@ -17,7 +17,7 @@ import type { Commitment } from '../vault/commitments.ts';
 import type { ContentItem } from '../vault/content-pipeline.ts';
 import type { STTProvider, TTSProvider } from '../comms/voice.ts';
 import { setDefaultCwd } from '../actions/tools/builtin.ts';
-import type { ApprovalRequest, ApprovalManager } from '../authority/approval.ts';
+import { approvalIntentFromContext, approvalNeedsClick, type ApprovalRequest, type ApprovalManager } from '../authority/approval.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
 import { TAINT_PROFILE_LABEL } from '../authority/taint-gating.ts';
@@ -2339,7 +2339,11 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         // non-destructive require confidence ≥ 0.85. Gate decision is a
         // pure helper so it's unit-testable without spinning up the
         // approval pipeline. See gateVoiceApprovalResolution.
-        const gate = gateVoiceApprovalResolution(latest.action_category as ActionCategory, confidence);
+        // A request the gated tool marked click-only (record_skill start)
+        // is treated like a destructive one: the card must be clicked.
+        const gate = approvalNeedsClick(latest)
+          ? { kind: 'clarify' as const, reason: 'destructive_impact' as const, message: 'This action requires dashboard confirmation. Please click the approval card.' }
+          : gateVoiceApprovalResolution(latest.action_category as ActionCategory, confidence);
         if (gate.kind === 'clarify') {
           // Pending approval STAYS in the queue — user can resolve via
           // dashboard click. We log a 'voice' channel audit row marked
@@ -2786,6 +2790,10 @@ function formatApprovalIntent(request: ApprovalRequest): string {
 }
 
 function synthesizeApprovalIntent(request: ApprovalRequest): string {
+  // A gated tool (run_skill, record_skill, manage_skills delete) writes the
+  // sentence that names what will actually happen, with resolved values.
+  const gated = approvalIntentFromContext(request);
+  if (gated) return gated;
 
   let args: Record<string, unknown> = {};
   try {

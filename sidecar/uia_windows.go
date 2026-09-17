@@ -215,55 +215,252 @@ func uiaGetFocusedElement(automation *ole.IDispatch) (*ole.IDispatch, error) {
 	return elem, nil
 }
 
-// focusedElementInfo captures the focused element's identity for a recorded
-// interaction: role, name, automation id, whether it is a secure (password)
-// field, plus a durable sig. Ancestry path is left empty here — the recorder
-// trades a full ancestry walk for low per-keystroke latency; the resolver's
-// role+name+ordinal rung still re-finds these at replay time.
-type focusedElementInfo struct {
-	Role     string
-	Name     string
-	AutoID   string
-	Secure   bool
-	Sig      string
+// recordedElement is what the skill recorder captures for one interaction:
+// the element's identity as the snapshot walk would emit it (same name
+// limits, same ancestry path, same sibling ordinal, therefore the same sig),
+// plus the app and window it lives in and, for a commit, the field's value.
+type recordedElement struct {
+	Role    string
+	Name    string
+	AutoID  string
+	Secure  bool
+	Path    []map[string]any
+	Ordinal int
+	Sig     string
+	App     string
+	Title   string
+	Value   string
+	HasVal  bool
 }
 
-func uiaFocusedElementInfo(state *uiaState) (*focusedElementInfo, error) {
-	elem, err := uiaGetFocusedElement(state.automation)
+// uiaElementFromPoint returns the element under a screen point.
+func uiaElementFromPoint(automation *ole.IDispatch, x, y int) (*ole.IDispatch, error) {
+	var elem *ole.IDispatch
+	// IUIAutomation::ElementFromPoint = vtable[7]. POINT is 8 bytes and is
+	// passed by value in one register on x64: x in the low dword, y high.
+	pt := uintptr(uint64(uint32(int32(x))) | uint64(uint32(int32(y)))<<32)
+	hr, _, _ := syscall.SyscallN(
+		vtblOffset(automation, 7),
+		uintptr(unsafe.Pointer(automation)),
+		pt,
+		uintptr(unsafe.Pointer(&elem)),
+	)
+	if hr != 0 {
+		return nil, uiaOpError("ElementFromPoint", hr)
+	}
+	if elem == nil {
+		return nil, fmt.Errorf("no element at point")
+	}
+	return elem, nil
+}
+
+// uiaRawViewWalker returns IUIAutomation's raw-view tree walker, whose parent
+// chain matches the children FindAll(TrueCondition) enumerates.
+func uiaRawViewWalker(automation *ole.IDispatch) (*ole.IDispatch, error) {
+	var walker *ole.IDispatch
+	// IUIAutomation::get_RawViewWalker = vtable[16]
+	hr, _, _ := syscall.SyscallN(
+		vtblOffset(automation, 16),
+		uintptr(unsafe.Pointer(automation)),
+		uintptr(unsafe.Pointer(&walker)),
+	)
+	if hr != 0 || walker == nil {
+		return nil, uiaOpError("get_RawViewWalker", hr)
+	}
+	return walker, nil
+}
+
+// uiaWalkerGetParent returns the parent of elem in the walker's view, or nil
+// at the desktop root.
+func uiaWalkerGetParent(walker, elem *ole.IDispatch) (*ole.IDispatch, error) {
+	var parent *ole.IDispatch
+	// IUIAutomationTreeWalker::GetParentElement = IUnknown(3) + offset 0 = vtable[3]
+	hr, _, _ := syscall.SyscallN(
+		vtblOffset(walker, 3),
+		uintptr(unsafe.Pointer(walker)),
+		uintptr(unsafe.Pointer(elem)),
+		uintptr(unsafe.Pointer(&parent)),
+	)
+	if hr != 0 {
+		return nil, uiaOpError("GetParentElement", hr)
+	}
+	return parent, nil
+}
+
+// uiaCompareElements reports whether two element interfaces refer to the same
+// UI element (runtime-id comparison), which pointer equality does not.
+func uiaCompareElements(automation, a, b *ole.IDispatch) bool {
+	var same int32
+	// IUIAutomation::CompareElements = vtable[3]
+	hr, _, _ := syscall.SyscallN(
+		vtblOffset(automation, 3),
+		uintptr(unsafe.Pointer(automation)),
+		uintptr(unsafe.Pointer(a)),
+		uintptr(unsafe.Pointer(b)),
+		uintptr(unsafe.Pointer(&same)),
+	)
+	return hr == 0 && same != 0
+}
+
+// interactableControlTypes are the control types a click is "on" even when
+// the hit-test lands on a child text or image inside them.
+var interactableControlTypes = map[string]bool{
+	"Button": true, "CheckBox": true, "ComboBox": true, "Edit": true, "Hyperlink": true,
+	"ListItem": true, "MenuItem": true, "RadioButton": true, "SplitButton": true,
+	"TabItem": true, "TreeItem": true, "Slider": true, "Spinner": true, "Document": true,
+}
+
+// uiaRecordedElement captures the element the person just acted on. For a
+// click it hit-tests the click point and climbs at most a few levels to the
+// enclosing control (a button's label text is not what the skill should
+// address); for a commit it takes the keyboard-focused element, which is the
+// field that was typed into.
+//
+// The ancestry path and sibling ordinal are computed exactly as walkTree
+// does for a snapshot: the path starts at the top-level window (the child
+// of the desktop root), each segment is {role, name cut at pathNameRunes},
+// and the ordinal counts every earlier raw-view sibling with the same
+// control type and name. That is what makes the recorded sig equal the
+// live one, so the resolver's sig rung (1.0) re-finds the element at replay.
+func uiaRecordedElement(state *uiaState, kind string, x, y int) (*recordedElement, error) {
+	var elem *ole.IDispatch
+	var err error
+	if kind == "click" {
+		elem, err = uiaElementFromPoint(state.automation, x, y)
+	} else {
+		elem, err = uiaGetFocusedElement(state.automation)
+	}
 	if err != nil {
 		return nil, err
 	}
 	defer elem.Release()
 
-	role := controlTypeName(uiaElementGetPropertyInt(elem, UIA_ControlTypePropertyId))
-	name := uiaElementGetPropertyStr(elem, UIA_NamePropertyId)
-	if len(name) > 100 {
-		name = name[:100]
+	walker, err := uiaRawViewWalker(state.automation)
+	if err != nil {
+		return nil, err
 	}
-	autoID := uiaElementGetPropertyStr(elem, UIA_AutomationIdPropertyId)
-	secure := uiaElementGetPropertyBool(elem, UIA_IsPasswordPropertyId)
-	return &focusedElementInfo{
-		Role:   role,
-		Name:   name,
-		AutoID: autoID,
-		Secure: secure,
-		Sig:    semanticSig(role, name, autoID, nil, 0),
-	}, nil
-}
+	defer walker.Release()
 
-// uiaFocusedValue returns the focused element's Value-pattern value (empty
-// string if unsupported). Used by the recorder to capture a committed field.
-func uiaFocusedValue(state *uiaState) (string, error) {
-	elem, err := uiaGetFocusedElement(state.automation)
-	if err != nil {
-		return "", err
+	// Climb from a passive child (Text, Image, Group) to the control that
+	// owns it, so the ref addresses what the person meant to click.
+	if kind == "click" {
+		for climb := 0; climb < 4; climb++ {
+			ctrl := controlTypeName(uiaElementGetPropertyInt(elem, UIA_ControlTypePropertyId))
+			if interactableControlTypes[ctrl] || len(getSupportedPatterns(elem)) > 0 {
+				break
+			}
+			parent, perr := uiaWalkerGetParent(walker, elem)
+			if perr != nil || parent == nil {
+				break
+			}
+			// Do not climb past a window or pane: a click on empty canvas
+			// stays a click on the canvas.
+			pctrl := controlTypeName(uiaElementGetPropertyInt(parent, UIA_ControlTypePropertyId))
+			if pctrl == "Window" || pctrl == "Pane" {
+				parent.Release()
+				break
+			}
+			elem.Release()
+			elem = parent
+		}
 	}
-	defer elem.Release()
-	v, err := patternGetValue(elem)
-	if err != nil {
-		return "", nil // unsupported → no value, not an error for the recorder
+
+	rec := &recordedElement{}
+	rec.Role = controlTypeName(uiaElementGetPropertyInt(elem, UIA_ControlTypePropertyId))
+	rec.Name = truncateRunes(uiaElementGetPropertyStr(elem, UIA_NamePropertyId), elementNameRunes)
+	rec.AutoID = uiaElementGetPropertyStr(elem, UIA_AutomationIdPropertyId)
+	rec.Secure = uiaElementGetPropertyBool(elem, UIA_IsPasswordPropertyId)
+	if pid := uiaElementGetPropertyInt(elem, UIA_ProcessIdPropertyId); pid > 0 {
+		rec.App = processBaseName(uint32(pid))
 	}
-	return v, nil
+
+	// Ancestors from the immediate parent up to the top-level window. The
+	// desktop root (whose own parent is nil) is excluded, like the walk.
+	var chain []*ole.IDispatch
+	defer func() {
+		for _, a := range chain {
+			a.Release()
+		}
+	}()
+	cur := elem
+	for {
+		parent, perr := uiaWalkerGetParent(walker, cur)
+		if perr != nil || parent == nil {
+			break
+		}
+		grand, gerr := uiaWalkerGetParent(walker, parent)
+		if gerr != nil || grand == nil {
+			// parent is the desktop root: stop, cur is the top-level window.
+			parent.Release()
+			break
+		}
+		grand.Release()
+		chain = append(chain, parent)
+		cur = parent
+		if len(chain) > 64 {
+			break
+		}
+	}
+
+	// chain is [parent, grandparent, ..., topWindow]; the path reads root first.
+	for i := len(chain) - 1; i >= 0; i-- {
+		a := chain[i]
+		name := uiaElementGetPropertyStr(a, UIA_NamePropertyId)
+		if i == len(chain)-1 {
+			rec.Title = name
+			rec.Path = append(rec.Path, windowSegment(name))
+			continue
+		}
+		ctrl := controlTypeName(uiaElementGetPropertyInt(a, UIA_ControlTypePropertyId))
+		rec.Path = append(rec.Path, pathSegment(ctrl, truncateRunes(name, elementNameRunes)))
+	}
+	if rec.Path == nil {
+		rec.Path = []map[string]any{}
+	}
+
+	// Ordinal among raw-view siblings under the immediate parent.
+	if len(chain) > 0 {
+		if trueCond, cerr := uiaCreateTrueCondition(state.automation); cerr == nil {
+			if arr, ferr := uiaElementFindAll(chain[0], TreeScope_Children, trueCond); ferr == nil && arr != nil {
+				count := uiaArrayLength(arr)
+				keys := make([]siblingKey, 0, count)
+				self := -1
+				for i := 0; i < count; i++ {
+					sib := uiaArrayGetElement(arr, i)
+					if sib == nil {
+						keys = append(keys, siblingKey{})
+						continue
+					}
+					keys = append(keys, siblingKey{
+						Ctrl: controlTypeName(uiaElementGetPropertyInt(sib, UIA_ControlTypePropertyId)),
+						Name: truncateRunes(uiaElementGetPropertyStr(sib, UIA_NamePropertyId), elementNameRunes),
+					})
+					if self < 0 && uiaCompareElements(state.automation, sib, elem) {
+						self = i
+					}
+					sib.Release()
+				}
+				if self >= 0 {
+					rec.Ordinal = siblingOrdinal(keys, self)
+				}
+				arr.Release()
+			}
+			trueCond.Release()
+		}
+	}
+
+	rec.Sig = semanticSig(rec.Role, rec.Name, rec.AutoID, rec.Path, rec.Ordinal)
+
+	// The committed value comes from the Value pattern of the same element,
+	// read in this same COM call so focus cannot move between the two reads.
+	// A secure field yields no value; the brain treats it as redacted.
+	if kind == "commit" && !rec.Secure {
+		if v, verr := patternGetValue(elem); verr == nil {
+			rec.Value = v
+			rec.HasVal = true
+		}
+	}
+	return rec, nil
 }
 
 func uiaCreateTrueCondition(automation *ole.IDispatch) (*ole.IDispatch, error) {
@@ -544,7 +741,7 @@ func controlTypeName(id int) string {
 // buildElementInfo extracts element properties into a map matching the expected JSON shape.
 func buildElementInfo(elem *ole.IDispatch, id, depth int) map[string]any {
 	x, y, w, h := uiaElementGetBoundingRect(elem)
-	name := truncateRunes(uiaElementGetPropertyStr(elem, UIA_NamePropertyId), 100)
+	name := truncateRunes(uiaElementGetPropertyStr(elem, UIA_NamePropertyId), elementNameRunes)
 	ctrl := controlTypeName(uiaElementGetPropertyInt(elem, UIA_ControlTypePropertyId))
 	autoID := uiaElementGetPropertyStr(elem, UIA_AutomationIdPropertyId)
 	return buildElementInfoPrefetched(elem, id, depth, name, ctrl, autoID, x, y, w, h)
@@ -574,6 +771,15 @@ func buildElementInfoPrefetched(elem *ole.IDispatch, id, depth int, name, ctrl, 
 		info["offscreen"] = true
 	}
 	return info
+}
+
+func hasPattern(patterns []string, name string) bool {
+	for _, p := range patterns {
+		if p == name {
+			return true
+		}
+	}
+	return false
 }
 
 // getSupportedPatterns checks which UIA patterns are available on an element.
@@ -680,7 +886,7 @@ func walkTree(state *uiaState, trueCond *ole.IDispatch, parent *ole.IDispatch, d
 		// element's ordinal does not shift when a sibling becomes visible);
 		// a plain walk needs them only for the elements it emits.
 		if semantic || meta.visible || includeInvisible {
-			meta.name = truncateRunes(uiaElementGetPropertyStr(child, UIA_NamePropertyId), 100)
+			meta.name = truncateRunes(uiaElementGetPropertyStr(child, UIA_NamePropertyId), elementNameRunes)
 			meta.ctrl = controlTypeName(uiaElementGetPropertyInt(child, UIA_ControlTypePropertyId))
 			meta.autoID = uiaElementGetPropertyStr(child, UIA_AutomationIdPropertyId)
 		}
@@ -700,14 +906,21 @@ func walkTree(state *uiaState, trueCond *ole.IDispatch, parent *ole.IDispatch, d
 				info["path"] = path
 				info["ordinal"] = ord
 				info["sig"] = semanticSig(k.ctrl, k.name, k.autoID, path, ord)
+				// The field's current text, so a value_equals postcondition
+				// can be verified on the desktop surface. Never for a
+				// password field (#465).
+				if patterns, _ := info["patterns"].([]string); hasPattern(patterns, "Value") && !uiaElementGetPropertyBool(k.elem, UIA_IsPasswordPropertyId) {
+					if v, verr := patternGetValue(k.elem); verr == nil && v != "" {
+						info["value"] = truncateRunes(v, 200)
+					}
+				}
 			}
 			*results = append(*results, info)
 		}
 
-		childName := truncateRunes(k.name, 40)
 		childPath := path
 		if semantic {
-			childPath = append(append([]map[string]any{}, path...), map[string]any{"role": k.ctrl, "name": childName})
+			childPath = append(append([]map[string]any{}, path...), pathSegment(k.ctrl, k.name))
 		}
 		walkTree(state, trueCond, k.elem, depth+1, maxDepth, includeInvisible, semantic, childPath, results)
 
@@ -744,8 +957,7 @@ func uiaInspect(state *uiaState, pid, maxDepth int, includeInvisible, semantic b
 
 	var rootPath []map[string]any
 	if semantic {
-		rootName := truncateRunes(windowTitle, 40)
-		rootPath = []map[string]any{{"role": "Window", "name": rootName}}
+		rootPath = []map[string]any{windowSegment(windowTitle)}
 	}
 
 	var elements []map[string]any

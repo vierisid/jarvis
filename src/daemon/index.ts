@@ -20,7 +20,8 @@ import { activeTurns } from "./active-turns.ts";
 import { writeLockedPort } from "./pid.ts";
 import { AgentService } from "./agent-service.ts";
 import { initDebugRpcGate, MIN_SECRET_LENGTH } from "./debug-rpc-gate.ts";
-import { getRecorder } from "../skills/recorder.ts";
+import { getRecorder, parseInteractionEvent } from "../skills/recorder.ts";
+import { onRecordingStopped } from "../actions/tools/skills.ts";
 import { createObservation } from "../vault/observations.ts";
 import { ObserverService, mapEventType } from "./observer-service.ts";
 import { WebSocketService } from "./ws-service.ts";
@@ -560,9 +561,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }
 
     // 2a-ter. Seed the starter skills (structural replacement for templates).
-    // Only fills absent skills, so recorded/edited skills are preserved.
-    const { seedSkills } = await import('../skills/seeds.ts');
-    seedSkills();
+    // Only fills absent skills, so recorded skills are preserved. Signing
+    // needs the keychain, which is why this runs after the relocation above.
+    try {
+      const { seedSkills } = await import('../skills/seeds.ts');
+      seedSkills();
+    } catch (err) {
+      console.error('[Daemon] Seeding starter skills failed; continuing without them:', err);
+    }
 
     // 2b. Load all LLM settings (providers, credentials, single-LLM default,
     // tiers) from the DB + encrypted keychain. This is the sole source of LLM
@@ -1756,26 +1762,28 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
       });
 
-      // Skill recorder — while a record_skill session is live, the sidecar
-      // emits ui_interaction events (each click/commit + the focused
-      // element's SemanticRef). Buffer them for the compiler. Redaction
-      // happens inside the recorder at push time.
+      // Skill recorder: while a record_skill session is live, the sidecar
+      // emits ui_interaction events (each click/commit + the acted element's
+      // SemanticRef). Buffer them for the compiler. Redaction happens inside
+      // the recorder at push time, and this is the ONLY consumer: the
+      // generic listener below skips these types, so the raw value never
+      // reaches a dashboard socket or the coalescer. A malformed event is
+      // dropped, never coerced into a click.
       sidecarManager.onEvent(async (_sidecarId, event) => {
+        if (event.event_type === 'ui_recording') {
+          const p = (event.payload ?? {}) as { state?: string; reason?: string };
+          if (p.state === 'stopped') onRecordingStopped(typeof p.reason === 'string' ? p.reason : 'sidecar');
+          return;
+        }
         if (event.event_type !== 'ui_interaction') return;
         const rec = getRecorder();
         if (!rec.isRecording()) return;
-        const p = (event.payload ?? {}) as Record<string, unknown>;
-        rec.push({
-          action: (p.action as 'click' | 'set_value' | 'press_keys' | 'launch_app' | 'navigate') ?? 'click',
-          ref: p.ref as import('../structural/types.ts').SemanticRef | undefined,
-          value: typeof p.value === 'string' ? p.value : undefined,
-          ts: typeof p.ts === 'number' ? p.ts : Date.now(),
-          app: typeof p.app === 'string' ? p.app : undefined,
-          title: typeof p.title === 'string' ? p.title : undefined,
-          url: typeof p.url === 'string' ? p.url : undefined,
-          surface: p.surface === 'browser' ? 'browser' : 'desktop',
-          secure: p.secure === true,
-        });
+        const interaction = parseInteractionEvent(event.payload);
+        if (!interaction) {
+          console.warn('[Daemon] Dropped malformed ui_interaction event from the sidecar');
+          return;
+        }
+        rec.push(interaction);
       });
 
       // W6-T1 — pebble eye glyph fires when sidecar emits a screen_capture
@@ -5512,9 +5520,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     };
     const observerWarnedTypes = new Set<string>();
 
+    // Recorder events carry the committed value of the field the person just
+    // typed into. They are consumed by the recorder listener alone; a
+    // dashboard broadcast or a coalescer slot would bypass its redaction.
+    const recorderEventTypes = ['ui_interaction', 'ui_recording'];
+
     sidecarManager.onEvent((sidecarId, event) => {
       // Skip events already routed to awareness service to avoid double processing
       if (awarenessService && awarenessEventTypes.includes(event.event_type)) return;
+      if (recorderEventTypes.includes(event.event_type)) return;
 
       const payloadObj: Record<string, unknown> =
         typeof event.payload === 'object' && event.payload !== null

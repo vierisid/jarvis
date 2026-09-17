@@ -947,11 +947,12 @@ export class AgentService implements Service, IAgentService {
         console.error('[AgentService] Error retrieving knowledge:', err);
       }
 
-      // Inject the compact skill index. Webapp templates are delivered by
-      // browsed URL at browse time (webapp-template-injection.ts), so skills
-      // are the only message-time playbook injection.
+      // Inject the compact skill index, skills matching this message first.
+      // Webapp templates are delivered by browsed URL at browse time
+      // (webapp-template-injection.ts), so skills are the only message-time
+      // playbook injection.
       try {
-        const skillIndex = buildSkillIndex();
+        const skillIndex = buildSkillIndex(userMessage);
         if (skillIndex) {
           context.skillIndex = skillIndex;
         }

@@ -1,13 +1,18 @@
 /**
- * Seed skills — hand-authored to validate the Skill schema and the run_skill
+ * Seed skills: hand-authored to validate the Skill schema and the run_skill
  * path before the recorder generates them.
  *
  * These reference elements by role+name with an EMPTY sig: a durable sig only
  * exists after a live snapshot, so hand-authored skills rely on the resolver's
- * name/ordinal/path rungs instead. Accessible names on real web apps drift
- * (locale, A/B tests, redesigns), so treat these as starting points to be
- * tuned during on-machine validation — or, better, re-recorded by
- * demonstration, which captures real sigs.
+ * name/ordinal/path rungs instead. They are web apps, so every step runs on
+ * the browser surface (CDP accessibility tree, ARIA roles). Accessible names
+ * on real web apps drift (locale, A/B tests, redesigns), so treat these as
+ * starting points to be tuned during on-machine validation, or re-recorded
+ * by demonstration, which captures real sigs.
+ *
+ * Steps that reach beyond the app declare their `effect`, so the authority
+ * gate names it on the approval card even if the classifier's heuristics
+ * were to miss it.
  */
 
 import { upsertSkill, getSkillByName } from '../vault/skills.ts';
@@ -44,7 +49,7 @@ const SEEDS: SeedSkill[] = [
       { action: 'set_value', ref: nameRef('textbox', 'To recipients'), value: '{{to}}' },
       { action: 'set_value', ref: nameRef('textbox', 'Subject'), value: '{{subject}}', postcondition: { kind: 'value_equals', value: '{{subject}}' } },
       { action: 'set_value', ref: nameRef('textbox', 'Message Body'), value: '{{body}}' },
-      { action: 'click', ref: nameRef('button', 'Send'), postcondition: { kind: 'element_gone' }, note: 'send closes the compose window' },
+      { action: 'click', ref: nameRef('button', 'Send'), effect: 'send_email', postcondition: { kind: 'element_gone' }, note: 'send closes the compose window' },
     ],
   },
   {
@@ -59,7 +64,7 @@ const SEEDS: SeedSkill[] = [
       { action: 'click', ref: nameRef('button', 'Create'), postcondition: { kind: 'element_present' } },
       { action: 'click', ref: nameRef('menuitem', 'Event') },
       { action: 'set_value', ref: nameRef('textbox', 'Add title'), value: '{{title}}', postcondition: { kind: 'value_equals', value: '{{title}}' } },
-      { action: 'click', ref: nameRef('button', 'Save'), postcondition: { kind: 'element_gone' } },
+      { action: 'click', ref: nameRef('button', 'Save'), effect: 'write_data', postcondition: { kind: 'element_gone' } },
     ],
   },
   {
@@ -101,23 +106,27 @@ const SEEDS: SeedSkill[] = [
     ],
     steps: [
       { action: 'set_value', ref: nameRef('textbox', 'Message input'), value: '{{text}}' },
-      { action: 'press_keys', value: 'enter', postcondition: { kind: 'value_equals', value: '' }, note: 'sending clears the composer' },
+      // The ref on a press_keys step is for verification only: sending
+      // clears the composer.
+      { action: 'press_keys', value: 'enter', ref: nameRef('textbox', 'Message input'), effect: 'send_message', postcondition: { kind: 'value_equals', value: '' }, note: 'sending clears the composer' },
     ],
   },
 ];
 
 /**
- * Seed the 5 starter skills. Upserts, so safe to run every startup — but it
- * will NOT clobber a skill a user recorded/edited under the same name if it
- * has diverged (upsert bumps version and overwrites; recorded skills should
- * use distinct names). Only seeds when the skill is absent to preserve user
- * edits.
+ * Seed the starter skills. Only fills a name that is absent, so a skill the
+ * user recorded under the same name is preserved. A seed row whose integrity
+ * check fails is re-written from the shipped content: nothing user-made is
+ * lost, because an unsigned or tampered row is never run anyway.
  */
 export function seedSkills(): void {
   for (const seed of SEEDS) {
-    if (getSkillByName(seed.name)) continue; // preserve user edits/recordings
-    upsertSkill({ ...seed, provenance: 'authored' });
+    const existing = getSkillByName(seed.name);
+    if (existing && (existing.integrity === 'ok' || existing.provenance !== 'authored')) continue;
+    upsertSkill({
+      ...seed,
+      steps: seed.steps.map((s) => ({ ...s, surface: s.surface ?? 'browser' })),
+      provenance: 'authored',
+    });
   }
 }
-
-export const SEED_SKILL_NAMES = SEEDS.map((s) => s.name);

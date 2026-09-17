@@ -36,7 +36,8 @@ describe('builtin tool Authority coverage', () => {
     // Tools whose effect reaches outside the daemon must clear more than
     // level 1. This is the property `ui_act` violated.
     const actors = ['ui_act', 'desktop_click', 'desktop_type', 'desktop_press_keys',
-      'desktop_launch_app', 'desktop_focus_window', 'browser_click', 'browser_type', 'run_command'];
+      'desktop_launch_app', 'desktop_focus_window', 'browser_click', 'browser_type', 'run_command',
+      'run_skill', 'record_skill'];
     for (const name of actors) {
       const tool = BUILTIN_TOOLS.find((t) => t.name === name);
       expect(tool).toBeDefined();

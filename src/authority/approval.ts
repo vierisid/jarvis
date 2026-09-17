@@ -99,6 +99,36 @@ const UNRESOLVED = `status = 'approved' AND execution_outcome IN ('not_started',
  */
 const PROCESS_BOOT_ID = generateId();
 
+/**
+ * True when the request must be resolved by a click, never by voice or an
+ * auto-approval: the gated tool declared `confirm: 'always'` (its context is
+ * the JSON the orchestrator wrote for it). Installing input hooks is the
+ * case today. Destructive impacts are handled separately by the voice gate.
+ */
+export function approvalNeedsClick(request: Pick<ApprovalRequest, 'context'>): boolean {
+  const raw = request.context ?? '';
+  if (!raw.startsWith('{')) return false;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    return !!parsed && typeof parsed === 'object' && (parsed as Record<string, unknown>).confirm === 'always';
+  } catch {
+    return false;
+  }
+}
+
+/** The card sentence a gated tool wrote into the request context, if any. */
+export function approvalIntentFromContext(request: Pick<ApprovalRequest, 'context'>): string | null {
+  const raw = request.context ?? '';
+  if (!raw.startsWith('{')) return null;
+  try {
+    const parsed: unknown = JSON.parse(raw);
+    const intent = parsed && typeof parsed === 'object' ? (parsed as Record<string, unknown>).intent : undefined;
+    return typeof intent === 'string' && intent.trim() ? intent.trim() : null;
+  } catch {
+    return null;
+  }
+}
+
 export class ApprovalManager {
   /** Identity of this process. A claim carrying another boot id never got its receipt from us. */
   readonly bootId: string;

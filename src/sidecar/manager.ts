@@ -74,6 +74,28 @@ export interface SidecarAudioChannel {
   sendFlush(): void;
 }
 
+/**
+ * Every sidecar event type delivered to `onEvent` listeners. An event type
+ * missing from this list is silently dropped by the scheduler, so a listener
+ * in daemon/index.ts that switches on a type not listed here never fires.
+ * Append; never replace the list (a replacement once took the pebble, tray,
+ * panels, region capture, wake word and realtime voice offline).
+ */
+export const SIDECAR_EVENT_TYPES: readonly string[] = [
+  'screen_capture', 'context_changed', 'idle_detected', 'clipboard_change', 'file_change',
+  'process_started', 'process_stopped', 'notification',
+  'pebble.summon', 'pebble.palette', 'pebble.blind_toggle', 'pebble.open_answer',
+  'panel.bounds_changed', 'panel.closed',
+  'audio.session_start', 'audio.session_end', 'audio.wake_segment',
+  'region.captured', 'region.cancelled',
+  'sub_pebble.clicked', 'sub_pebble.open_full',
+  'pebble.realtime_start', 'pebble.realtime_stop', 'pebble.audio_frame', 'pebble.mic_blocked',
+  'tray.set_pause', 'tray.set_mute', 'notify.action',
+  // Skill recorder: one event per click/commit while a recording is live,
+  // and one when the sidecar ends the recording (cap hit, RPC stop).
+  'ui_interaction', 'ui_recording',
+];
+
 export class SidecarManager implements Service {
   readonly name = 'sidecar-manager';
 
@@ -218,14 +240,13 @@ export class SidecarManager implements Service {
         }
       });
 
-      // Register handlers for each sidecar observer event type
-      const sidecarEventTypes = ['screen_capture', 'context_changed', 'idle_detected', 'clipboard_change', 'file_change', 'process_started', 'process_stopped', 'notification', 'ui_interaction'];
+      // Register handlers for each sidecar event type the daemon listens to.
       const sidecarEventHandler = async (sidecarId: string, event: SidecarEvent) => {
         for (const listener of this.eventListeners) {
           listener(sidecarId, event);
         }
       };
-      for (const type of sidecarEventTypes) {
+      for (const type of SIDECAR_EVENT_TYPES) {
         this.scheduler.on(type, sidecarEventHandler);
       }
       // Realtime voice events bypass the 1-per-tick queue: realtime_start must

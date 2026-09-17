@@ -32,7 +32,8 @@ import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts'
 import type { AuditTrail } from '../authority/audit.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
-import { getActionForTool } from '../authority/tool-action-map.ts';
+import { resolveToolGate, gateContext } from '../authority/tool-action-map.ts';
+import { combineDecisions, type AuthorityDecision } from '../authority/engine.ts';
 import { progressAcknowledgement } from './progress.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 
@@ -1084,18 +1085,54 @@ export class AgentOrchestrator {
     }
     if (this.authorityEngine && primary) {
       const tool = this.toolRegistry.get(toolCall.name);
-      const actionCategory = getActionForTool(toolCall.name, tool?.category ?? 'unknown');
-
-      const decision = this.authorityEngine.checkAuthority({
+      // What this call reaches: the tool's static category, raised by its
+      // own per-call gate when it has one (run_skill classifies the stored
+      // steps it is about to replay).
+      const gate = resolveToolGate(tool, toolCall.name, toolCall.arguments);
+      const check = (category: ActionCategory): AuthorityDecision => this.authorityEngine!.checkAuthority({
         agentId: primary.id,
         agentAuthorityLevel: primary.agent.authority.max_authority_level,
         agentRoleId: primary.agent.role.id,
         toolName: toolCall.name,
         toolCategory: tool?.category ?? 'unknown',
-        actionCategory,
+        actionCategory: category,
         temporaryGrants: this.temporaryGrants,
         profile: this.getEffectiveProfile(),
       });
+
+      // The call must clear every category it reaches (a skill that clicks
+      // and sends a message is checked as control_app AND send_message).
+      let decision = combineDecisions(gate.categories.map(check));
+
+      // A gated call whose worst case is above the agent's level turns into
+      // an approval instead of a denial, provided the agent clears the
+      // tool's floor on its own: the same substitution request_approval
+      // makes for a declared intent. Only a pure level shortfall qualifies;
+      // an override, a context rule or a profile cap that denies still
+      // denies.
+      if (gate.confirm === 'above_level' && !decision.allowed && decision.deniedByLevel && decision.actionCategory !== gate.floorCategory) {
+        const floor = check(gate.floorCategory);
+        if (floor.allowed) {
+          decision = {
+            ...floor,
+            allowed: true,
+            requiresApproval: true,
+            actionCategory: decision.actionCategory,
+            reason: `${decision.actionCategory} is above this agent's authority level and requires user approval`,
+          };
+        }
+      }
+
+      // A call that must be confirmed by the person is never auto-allowed,
+      // whatever the level, the overrides or the learned approvals say.
+      if (gate.confirm === 'always' && decision.allowed && !decision.requiresApproval) {
+        decision = { ...decision, requiresApproval: true, reason: `${toolCall.name} requires user approval` };
+      }
+
+      // The category the decision was made on: the worst case when allowed,
+      // the one that denied or asked for approval otherwise. The audit row
+      // and the card carry it.
+      const actionCategory = decision.actionCategory;
 
       // Determine decision type for audit
       const decisionType = decision.allowed
@@ -1136,7 +1173,7 @@ export class AgentOrchestrator {
           actionCategory,
           urgency,
           reason: decision.reason,
-          context: `Agent attempted: ${toolCall.name}(${JSON.stringify(toolCall.arguments).slice(0, 200)})`,
+          context: gateContext(gate, toolCall.name, toolCall.arguments),
           executionMode: inline ? 'inline' : 'deferred',
         });
 
@@ -1302,7 +1339,8 @@ export class AgentOrchestrator {
 
     const primary = this.getPrimary();
     const tool = this.toolRegistry.get(name);
-    const actionCategory = getActionForTool(name, tool?.category ?? 'unknown');
+    const gate = resolveToolGate(tool, name, args);
+    const actionCategory = gate.actionCategory;
 
     const logAudit = (decision: 'allowed' | 'denied' | 'approval_required', executed: boolean) => {
       if (!primary) return;
@@ -1319,23 +1357,31 @@ export class AgentOrchestrator {
     };
 
     // 2. User backstop: categories that stay blocked even under auto-approve.
-    if (opts.blockedCategories?.includes(actionCategory)) {
+    const blocked = gate.categories.find((c) => opts.blockedCategories?.includes(c));
+    if (blocked) {
       logAudit('denied', false);
-      return `[BLOCKED] ${name} (${actionCategory}) is in the realtime blocked-categories list and was not executed.`;
+      return `[BLOCKED] ${name} (${blocked}) is in the realtime blocked-categories list and was not executed.`;
+    }
+
+    // 2b. A call the person must confirm on a card cannot be auto-approved by
+    // a voice session. Refuse, and let the model say so.
+    if (gate.confirm === 'always') {
+      logAudit('denied', false);
+      return `[BLOCKED] ${name} needs the user's confirmation in the dashboard and cannot be started from a voice session. Tell the user what you wanted to do and ask them to confirm it there.`;
     }
 
     // 3. Authority check — hard denies enforced; approval auto-granted.
     if (this.authorityEngine && primary) {
-      const decision = this.authorityEngine.checkAuthority({
+      const decision = combineDecisions(gate.categories.map((category) => this.authorityEngine!.checkAuthority({
         agentId: primary.id,
         agentAuthorityLevel: primary.agent.authority.max_authority_level,
         agentRoleId: primary.agent.role.id,
         toolName: name,
         toolCategory: tool?.category ?? 'unknown',
-        actionCategory,
+        actionCategory: category,
         temporaryGrants: this.temporaryGrants,
         profile: this.getEffectiveProfile(),
-      });
+      })));
 
       if (!decision.allowed) {
         logAudit('denied', false);

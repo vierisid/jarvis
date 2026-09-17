@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test';
-import { runSkill, type SkillRuntimeDeps, type SkillSurface } from './runtime.ts';
+import { runSkill, validateSteps, type SkillRuntimeDeps, type SkillSurface } from './runtime.ts';
 import type { Skill, SkillStep } from './types.ts';
 import type { SemanticNode, SemanticRef } from '../structural/types.ts';
 
@@ -18,23 +18,29 @@ function ref(role: string, name: string, sig: string): SemanticRef {
 function skill(steps: SkillStep[], params: Skill['params'] = []): Skill {
   return {
     id: 's', name: 'test', app: '', description: '', match: {}, params, steps,
-    provenance: 'authored', version: 1, enabled: true, successCount: 0, runCount: 0,
+    provenance: 'authored', version: 1, enabled: true, integrity: 'ok', successCount: 0, runCount: 0,
     createdAt: 0, updatedAt: 0,
   };
 }
 
-/** Deps whose snapshot returns a scripted sequence of surfaces. */
-function scriptedDeps(surfaces: SkillSurface[]): { deps: SkillRuntimeDeps; acts: Array<[number, string, string?]>; raws: Array<[string, string?]> } {
-  const acts: Array<[number, string, string?]> = [];
+type Act = [number, string, string?];
+
+/** Deps whose snapshot returns a scripted sequence of surfaces (last one repeats). */
+function scriptedDeps(surfaces: Array<SkillSurface | Error>): { deps: SkillRuntimeDeps; acts: Act[]; raws: Array<[string, string?]>; snapshots: () => number } {
+  const acts: Act[] = [];
   const raws: Array<[string, string?]> = [];
   let i = 0;
   const deps: SkillRuntimeDeps = {
-    snapshot: async () => surfaces[Math.min(i++, surfaces.length - 1)]!,
+    snapshot: async () => {
+      const s = surfaces[Math.min(i++, surfaces.length - 1)]!;
+      if (s instanceof Error) throw s;
+      return s;
+    },
     act: async (_k, sid, action, value) => { acts.push([sid, action, value]); },
     raw: async (action, value) => { raws.push([action, value]); },
     sleep: async () => {},
   };
-  return { deps, acts, raws };
+  return { deps, acts, raws, snapshots: () => i };
 }
 
 describe('runSkill', () => {
@@ -46,12 +52,11 @@ describe('runSkill', () => {
       [{ action: 'set_value', ref: ref('Edit', 'Body', 'body-sig'), value: '{{text}}', postcondition: { kind: 'value_equals', value: '{{text}}' } }],
       [{ name: 'text', type: 'string', description: 't', required: true }],
     );
-    // value_equals compares against the *stored* value, so the postcondition
-    // template is filled at author-time in the seed; here we assert the acted value.
     const { deps, acts } = scriptedDeps([{ nodes: [target] }, { nodes: [after] }]);
     const res = await runSkill(s, { text: 'hello world' }, deps);
     expect(acts[0]).toEqual([7, 'set_value', 'hello world']);
     expect(res.steps[0]!.ok).toBe(true);
+    expect(res.steps[0]!.healed).toBeUndefined();
   });
 
   it('rejects missing required params before doing anything', async () => {
@@ -63,6 +68,33 @@ describe('runSkill', () => {
     expect(acts).toHaveLength(0);
   });
 
+  it('rejects an enum param outside its options before doing anything', async () => {
+    const s = skill(
+      [{ action: 'set_value', ref: ref('Edit', 'Priority', 'p'), value: '{{level}}' }],
+      [{ name: 'level', type: 'enum', description: '', required: true, options: ['low', 'high'] }],
+    );
+    const { deps, acts } = scriptedDeps([{ nodes: [node('Edit', 'Priority', 'p', 1)] }]);
+    const res = await runSkill(s, { level: 'urgent' }, deps);
+    expect(res.ok).toBe(false);
+    expect(res.steps[0]!.detail).toContain('must be one of: low, high');
+    expect(acts).toHaveLength(0);
+  });
+
+  it('refuses a malformed skill (unknown action, missing ref) before dispatching', async () => {
+    const bad = skill([{ action: 'hover' as unknown as SkillStep['action'], ref: ref('Button', 'x', 'x') }]);
+    const { deps, acts, raws } = scriptedDeps([{ nodes: [node('Button', 'x', 'x', 1)] }]);
+    const res = await runSkill(bad, {}, deps);
+    expect(res.ok).toBe(false);
+    expect(res.failedAt).toBe(-1);
+    expect(res.steps[0]!.detail).toContain('unknown action "hover"');
+    expect(acts).toHaveLength(0);
+    expect(raws).toHaveLength(0);
+
+    expect(validateSteps([{ action: 'click' }])).toContain('no target ref');
+    expect(validateSteps([{ action: 'launch_app' }])).toContain('no value');
+    expect(validateSteps([])).toContain('no steps');
+  });
+
   it('fails the step when the ref cannot be resolved', async () => {
     const s = skill([{ action: 'click', ref: ref('Button', 'Send', 'send-sig') }]);
     const { deps } = scriptedDeps([{ nodes: [node('Button', 'Discard', 'other', 1)] }]);
@@ -72,20 +104,113 @@ describe('runSkill', () => {
     expect(res.steps[0]!.detail).toContain('could not locate');
   });
 
-  it('self-heals a failed postcondition on retry', async () => {
+  it('fails the step, not the process, when there is no surface to capture', async () => {
+    const s = skill([{ action: 'click', ref: ref('Button', 'Send', 'send-sig') }]);
+    const { deps, acts } = scriptedDeps([new Error('no foreground window found')]);
+    const res = await runSkill(s, {}, deps);
+    expect(res.ok).toBe(false);
+    expect(res.failedAt).toBe(0);
+    expect(res.steps[0]!.detail).toContain('could not capture the desktop surface');
+    expect(res.steps[0]!.detail).toContain('no foreground window');
+    expect(acts).toHaveLength(0);
+  });
+
+  it('a raw step whose target app is absent fails with the sidecar message', async () => {
+    const s = skill([{ action: 'launch_app', value: 'nope.exe', postcondition: { kind: 'window_appeared' } }, { action: 'wait', ms: 1 }]);
+    const { deps } = scriptedDeps([{ nodes: [] }]);
+    deps.raw = async () => { throw new Error('launch_app: executable not found: nope.exe'); };
+    const res = await runSkill(s, {}, deps);
+    expect(res.ok).toBe(false);
+    expect(res.failedAt).toBe(0);
+    expect(res.steps[0]!.detail).toContain('executable not found');
+    expect(res.steps).toHaveLength(1);
+  });
+
+  it('verifies after re-observing without dispatching the action again', async () => {
     const btn = node('Button', 'Send', 'send-sig', 3);
-    const dialogGone = node('Button', 'Send', 'send-sig', 3); // still there first check
     const s = skill([{ action: 'click', ref: ref('Button', 'Send', 'send-sig'), postcondition: { kind: 'element_gone' } }]);
-    // snapshots: [pre-act], [verify#1 still present], [re-resolve surface], [verify#2 gone]
-    const { deps } = scriptedDeps([
+    // snapshots: [pre-act], [verify#1 still present], [re_resolve re-read: gone]
+    const { deps, acts } = scriptedDeps([
       { nodes: [btn] },
-      { nodes: [dialogGone] },
       { nodes: [btn] },
       { nodes: [] },
     ]);
     const res = await runSkill(s, {}, deps);
     expect(res.ok).toBe(true);
     expect(res.steps[0]!.healed).toBe(true);
+    expect(acts).toHaveLength(1);
+  });
+
+  it('never re-dispatches: an unconfirmed Send is clicked exactly once and reported', async () => {
+    const btn = node('Button', 'Send', 'send-sig', 3);
+    const s = skill([{ action: 'click', ref: ref('Button', 'Send', 'send-sig'), postcondition: { kind: 'element_gone' } }]);
+    // The button never goes away.
+    const { deps, acts, snapshots } = scriptedDeps([{ nodes: [btn] }]);
+    const res = await runSkill(s, {}, deps);
+    expect(acts).toHaveLength(1);
+    expect(res.ok).toBe(false);
+    expect(res.failedAt).toBe(0);
+    expect(res.steps[0]!.detail).toContain('NOT repeated');
+    expect(res.steps[0]!.detail).toContain('still present');
+    // pre-act + first check + re_resolve + settle = 4 reads, then report.
+    expect(snapshots()).toBe(4);
+  });
+
+  it('fallback: skip lets an unverifiable step pass, still without a second dispatch', async () => {
+    const field = node('Edit', 'Type to continue', 'tc', 9);
+    const s = skill([{ action: 'set_value', ref: ref('Edit', 'Type to continue', 'tc'), value: 'x', postcondition: { kind: 'value_equals', value: 'x' }, fallback: 'skip' }]);
+    const { deps, acts } = scriptedDeps([{ nodes: [field] }]);
+    const res = await runSkill(s, {}, deps);
+    expect(res.ok).toBe(true);
+    expect(res.steps[0]!.detail).toContain('skipped per step fallback');
+    expect(acts).toHaveLength(1);
+  });
+
+  it('title_changed compares against the title captured before the step, not any non-empty title', async () => {
+    const btn = node('Button', 'Next', 'next', 2);
+    const s = skill([{ action: 'click', ref: ref('Button', 'Next', 'next'), postcondition: { kind: 'title_changed' } }]);
+    // Same title before and after: a no-op click must not pass.
+    const same = scriptedDeps([{ nodes: [btn], title: 'Step 1' }]);
+    const r1 = await runSkill(s, {}, same.deps);
+    expect(r1.ok).toBe(false);
+    expect(r1.steps[0]!.detail).toContain('title is still');
+
+    const changed = scriptedDeps([{ nodes: [btn], title: 'Step 1' }, { nodes: [btn], title: 'Step 2' }]);
+    const r2 = await runSkill(s, {}, changed.deps);
+    expect(r2.ok).toBe(true);
+  });
+
+  it('window_appeared fails on an unchanged surface and passes on new content', async () => {
+    const s = skill([{ action: 'launch_app', value: 'notepad.exe', postcondition: { kind: 'window_appeared' } }]);
+    const same = scriptedDeps([{ nodes: [node('Document', 'Text Editor', 'te', 1)], title: 'Untitled - Notepad' }]);
+    const r1 = await runSkill(s, {}, same.deps);
+    expect(r1.ok).toBe(false);
+    expect(r1.steps[0]!.detail).toContain('unchanged');
+
+    const opened = scriptedDeps([
+      { nodes: [node('Pane', 'Desktop', 'd', 1)], title: 'Desktop' },
+      { nodes: [node('Document', 'Text Editor', 'te', 2)], title: 'Untitled - Notepad' },
+    ]);
+    const r2 = await runSkill(s, {}, opened.deps);
+    expect(r2.ok).toBe(true);
+    expect(r2.steps[0]!.detail).toContain('title changed');
+  });
+
+  it('surface_changed holds when the clicked element is gone or content appeared, fails when nothing moved', async () => {
+    const send = node('Button', 'Send', 'send', 5);
+    const s = skill([{ action: 'click', ref: ref('Button', 'Send', 'send'), postcondition: { kind: 'surface_changed' } }]);
+
+    const gone = scriptedDeps([{ nodes: [send], title: 'Inbox' }, { nodes: [], title: 'Inbox' }]);
+    expect((await runSkill(s, {}, gone.deps)).ok).toBe(true);
+
+    const toast = scriptedDeps([{ nodes: [send], title: 'Inbox' }, { nodes: [send, node('Text', 'Message sent', 'ms', 6)], title: 'Inbox' }]);
+    expect((await runSkill(s, {}, toast.deps)).ok).toBe(true);
+
+    const nothing = scriptedDeps([{ nodes: [send], title: 'Inbox' }]);
+    const r = await runSkill(s, {}, nothing.deps);
+    expect(r.ok).toBe(false);
+    expect(r.steps[0]!.detail).toContain('surface is unchanged');
+    expect(nothing.acts).toHaveLength(1);
   });
 
   it('runs raw actions (launch_app) and wait steps', async () => {
@@ -97,5 +222,20 @@ describe('runSkill', () => {
     const res = await runSkill(s, {}, deps);
     expect(res.ok).toBe(true);
     expect(raws[0]).toEqual(['launch_app', 'notepad.exe']);
+  });
+
+  it('a browser step snapshots and acts on the browser surface', async () => {
+    const seen: string[] = [];
+    const btn = node('button', 'Compose', 'c', 11);
+    const s = skill([{ action: 'click', surface: 'browser', ref: ref('button', 'Compose', 'c') }]);
+    const deps: SkillRuntimeDeps = {
+      snapshot: async (kind) => { seen.push(`snap:${kind}`); return { nodes: [btn] }; },
+      act: async (kind) => { seen.push(`act:${kind}`); },
+      raw: async () => {},
+      sleep: async () => {},
+    };
+    const res = await runSkill(s, {}, deps);
+    expect(res.ok).toBe(true);
+    expect(seen).toEqual(['snap:browser', 'act:browser']);
   });
 });

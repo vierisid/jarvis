@@ -211,6 +211,11 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('- Pass `verify` to `ui_act` for consequential steps (e.g. verify="window_appeared" after opening a dialog, "element_gone" after closing one, "value_equals" after set_value).');
   lines.push('- `ui_act` dispatches the action EXACTLY ONCE and never re-sends it. A result marked NOT VERIFIED means the outcome could not be confirmed, NOT that nothing happened - the click may well have landed. Read the diff it returns before deciding whether to act again, and never blind-retry something that sends, buys, or deletes.');
   lines.push('');
+  lines.push('Skills:');
+  lines.push('- `run_skill` replays a stored, verified procedure (see the skill index in this prompt) so you do not click through it yourself. It is checked against your authority for the most consequential step it contains (a click on Send in a mail app counts as sending email), so it can ask the user for approval or be denied; read its result, it never repeats a failed step.');
+  lines.push('- `record_skill action="start"` asks the user to confirm on a card; recording begins only when they approve. You cannot start it yourself. Then wait for the user to do the task and say they are done before calling stop with a name. A name that already exists is never overwritten.');
+  lines.push('- `manage_skills` lists skills; delete asks the user.');
+  lines.push('');
 
   // --- Desktop ---
   lines.push('## Desktop Automation (low-level)');

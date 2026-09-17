@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test';
 import { compileSkill } from './compiler.ts';
-import { redactInteraction, looksSecret, SkillRecorder, type RawInteraction } from './recorder.ts';
+import { parseInteractionEvent, redactInteraction, looksSecret, SkillRecorder, type RawInteraction } from './recorder.ts';
 import type { SemanticRef } from '../structural/types.ts';
 
 function ref(role: string, name: string, sig = ''): SemanticRef {
@@ -24,15 +24,64 @@ describe('recorder redaction', () => {
     expect(r.secure).toBe(true);
   });
 
-  it('SkillRecorder buffers redacted interactions', () => {
+  it('SkillRecorder buffers redacted interactions and keeps them pending after end', () => {
     const rec = new SkillRecorder();
-    rec.start('s1', 1000);
-    rec.push(ev({ action: 'set_value', ref: ref('textbox', 'Password'), value: 'secret!' }));
-    rec.push(ev({ action: 'click', ref: ref('button', 'Login') }));
-    const session = rec.stop();
+    rec.start('s1', 1000, 60_000);
+    rec.push(ev({ action: 'set_value', ref: ref('textbox', 'Password'), value: 'secret!' }), 1001);
+    rec.push(ev({ action: 'click', ref: ref('button', 'Login') }), 1002);
+    const session = rec.end('stop', 1003);
     expect(session!.interactions).toHaveLength(2);
     expect(session!.interactions[0]!.value).toBe('{{REDACTED}}');
     expect(rec.isRecording()).toBe(false);
+    // Pending until taken: a stop that could not save can retry.
+    expect(rec.pending()!.id).toBe('s1');
+    rec.push(ev({ action: 'click', ref: ref('button', 'Late') }), 1004);
+    expect(rec.pending()!.interactions).toHaveLength(2);
+    expect(rec.takePending()!.id).toBe('s1');
+    expect(rec.pending()).toBeNull();
+  });
+
+  it('a session stops accepting interactions at its deadline', () => {
+    const rec = new SkillRecorder();
+    rec.start('s2', 1000, 500);
+    rec.push(ev({ action: 'click', ref: ref('button', 'A') }), 1400);
+    expect(rec.isRecording(1499)).toBe(true);
+    expect(rec.isRecording(1500)).toBe(false);
+    rec.push(ev({ action: 'click', ref: ref('button', 'B') }), 1600);
+    expect(rec.end('cap', 1600)!.interactions.map((i) => i.ref!.name)).toEqual(['A']);
+  });
+});
+
+describe('parseInteractionEvent', () => {
+  const goodRef = { role: 'Button', name: 'Send', path: [], ordinal: 0, sig: 'abc' };
+
+  it('accepts a well-formed click and a commit', () => {
+    const click = parseInteractionEvent({ action: 'click', ref: goodRef, ts: 5, app: 'chrome', title: 'Inbox', surface: 'desktop' })!;
+    expect(click.action).toBe('click');
+    expect(click.app).toBe('chrome');
+    expect(click.title).toBe('Inbox');
+    const commit = parseInteractionEvent({ action: 'set_value', ref: goodRef, value: 'hi', secure: false })!;
+    expect(commit.value).toBe('hi');
+    expect(commit.secure).toBe(false);
+  });
+
+  it('drops an unknown action instead of coercing it to a click', () => {
+    expect(parseInteractionEvent({ action: 'hover', ref: goodRef })).toBeNull();
+    expect(parseInteractionEvent({ ref: goodRef })).toBeNull();
+  });
+
+  it('drops an element action without a well-formed ref', () => {
+    expect(parseInteractionEvent({ action: 'click' })).toBeNull();
+    expect(parseInteractionEvent({ action: 'click', ref: { role: 'Button' } })).toBeNull();
+    expect(parseInteractionEvent({ action: 'set_value', ref: 'Send', value: 'x' })).toBeNull();
+    expect(parseInteractionEvent(null)).toBeNull();
+    expect(parseInteractionEvent('click')).toBeNull();
+  });
+
+  it('a secure commit without a value is kept (the brain treats it as redacted)', () => {
+    const r = parseInteractionEvent({ action: 'set_value', ref: goodRef, secure: true })!;
+    expect(r.secure).toBe(true);
+    expect(r.value).toBeUndefined();
   });
 });
 
@@ -47,7 +96,7 @@ describe('compileSkill', () => {
     expect(skill.steps[0]!.action).toBe('set_value');
   });
 
-  it('parameterizes typed values and names params from field labels', () => {
+  it('parameterizes typed values and names params from field labels; no literal is stored', () => {
     const skill = compileSkill(
       [
         ev({ action: 'set_value', ref: ref('textbox', 'Subject'), value: 'Hi there' }),
@@ -58,29 +107,50 @@ describe('compileSkill', () => {
     expect(skill.params.map((p) => p.name)).toEqual(['subject', 'message_body']);
     expect(skill.steps[0]!.value).toBe('{{subject}}');
     expect(skill.steps[0]!.postcondition).toEqual({ kind: 'value_equals', value: '{{subject}}' });
+    expect(JSON.stringify(skill)).not.toContain('Hi there');
+    expect(JSON.stringify(skill)).not.toContain('body text');
   });
 
-  it('turns a redacted secret into a param with NO value_equals postcondition', () => {
+  it('turns a redacted secret into a secret param with NO value_equals postcondition', () => {
     const skill = compileSkill(
-      [ev({ action: 'set_value', ref: ref('textbox', 'Password'), value: '{{REDACTED}}' })],
+      [ev({ action: 'set_value', ref: ref('textbox', 'Password'), value: '{{REDACTED}}', secure: true })],
       { name: 'login' },
     );
     expect(skill.params).toHaveLength(1);
+    expect(skill.params[0]!.secret).toBe(true);
     expect(skill.steps[0]!.postcondition).toBeUndefined(); // masked field won't read back
   });
 
-  it('gives a terminal click a title_changed postcondition and derives domains', () => {
+  it('gives a terminal click a surface_changed postcondition and keeps the surface on every step', () => {
     const skill = compileSkill(
       [
-        ev({ action: 'set_value', ref: ref('textbox', 'To'), value: 'a@b.com', url: 'https://mail.google.com/x' }),
-        ev({ action: 'click', ref: ref('button', 'Send'), url: 'https://mail.google.com/x' }),
+        ev({ action: 'set_value', ref: ref('textbox', 'To'), value: 'a@b.com', surface: 'desktop', app: 'chrome' }),
+        ev({ action: 'click', ref: ref('button', 'Send'), surface: 'desktop', app: 'chrome' }),
       ],
       { name: 'gmail', app: 'Gmail' },
     );
     const send = skill.steps[skill.steps.length - 1]!;
     expect(send.action).toBe('click');
-    expect(send.postcondition).toEqual({ kind: 'title_changed' });
-    expect(skill.match.domains).toContain('mail.google.com');
+    expect(send.postcondition).toEqual({ kind: 'surface_changed' });
+    expect(skill.steps.every((s) => s.surface === 'desktop')).toBe(true);
+    expect(skill.app).toBe('Gmail');
+    expect(skill.match.processNames).toEqual(['chrome']);
+  });
+
+  it('a browser recording compiles to browser steps', () => {
+    const skill = compileSkill([ev({ action: 'click', ref: ref('button', 'Compose'), surface: 'browser' })], { name: 'b' });
+    expect(skill.steps[0]!.surface).toBe('browser');
+  });
+
+  it('derives the app from the recorded process name', () => {
+    const skill = compileSkill([ev({ action: 'click', ref: ref('Button', 'OK'), app: 'notepad' })], { name: 'n' });
+    expect(skill.app).toBe('notepad');
+    expect(skill.match.keywords).toEqual(['notepad']);
+  });
+
+  it('skips element interactions that carry no ref instead of emitting an unreplayable step', () => {
+    const skill = compileSkill([ev({ action: 'click' }), ev({ action: 'press_keys', value: 'enter' })], { name: 'k' });
+    expect(skill.steps.map((s) => s.action)).toEqual(['press_keys']);
   });
 
   it('dedupes param names from identically-labeled fields', () => {
