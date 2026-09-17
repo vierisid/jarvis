@@ -5,6 +5,7 @@
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeWorkflowDb, initWorkflowDb } from "../db/index";
+import { setEncryptionKey } from "../db/encryption";
 import { queueStats } from "../db/repos/job-queue";
 import {
   createWorkflowRoutes,
@@ -17,13 +18,17 @@ import { sampleCatalog } from "../runtime/test-fixtures";
 
 let routes: WorkflowRouteMap;
 
+// Pin the connection-encryption key: without it the module resolves the
+// developer's real key file (and generates one into their live data dir).
 beforeEach(() => {
   initWorkflowDb(":memory:");
+  setEncryptionKey(Buffer.alloc(32, 0x12));
   routes = createWorkflowRoutes();
 });
 
 afterEach(() => {
   closeWorkflowDb();
+  setEncryptionKey(null);
 });
 
 function reqWithParams<P extends Record<string, string>>(

@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeWorkflowDb, DEFAULT_IDS, initWorkflowDb } from "../db/index";
+import { setEncryptionKey } from "../db/encryption";
 import { upsertConnection } from "../db/repos/app-connection";
 import {
   CredentialResolver,
@@ -8,12 +9,16 @@ import {
   type ResolvedConnection,
 } from "./adapter";
 
+// Pin the connection-encryption key: without it the module resolves the
+// developer's real key file (and generates one into their live data dir).
 beforeEach(() => {
   initWorkflowDb(":memory:");
+  setEncryptionKey(Buffer.alloc(32, 0x13));
 });
 
 afterEach(() => {
   closeWorkflowDb();
+  setEncryptionKey(null);
 });
 
 // Lightweight test stubs. The live sources (`JarvisGoogleConnectionSource`,

@@ -17,7 +17,9 @@
  * server-authored config.yaml are never included.
  *
  * `--full` additionally includes the plaintext secrets: google-tokens.json,
- * the sidecar signing keys, and the keychain pair (.secrets.enc/.secrets.key)
+ * the sidecar signing keys, workflow-encryption.key (the only thing that can
+ * read the encrypted app_connection rows the DB snapshot already carries),
+ * and the keychain pair (.secrets.enc/.secrets.key)
  * that holds the LLM provider credentials and the STT/TTS API keys — so a
  * restore works without re-connecting anything. That is the variant hosting
  * backups use; the default keeps the archive far less sensitive for
@@ -70,6 +72,12 @@ import { Database } from 'bun:sqlite';
 import { loadConfig } from '../config/loader.ts';
 import { acquireLockAt, lockPathFor } from '../daemon/pid.ts';
 import { keychainDir, migrateKeychain } from '../vault/keychain.ts';
+import {
+  KEY_FILE_NAME as WORKFLOW_KEY_FILE,
+  migrateWorkflowEncryptionKey,
+  resolveKeyFile as resolveWorkflowKeyFile,
+  workflowKeyTarget,
+} from '../workflows/db/encryption.ts';
 import { getInstalledVersion } from './version.ts';
 
 interface CliIo {
@@ -101,7 +109,18 @@ export interface ExportManifest {
  * target) and machine-specific on self-host.
  */
 const BASE_ENTRIES = ['pieces', 'content', 'realtime-budget.json'];
-const SECRET_ENTRIES = ['google-tokens.json', 'sidecar-keys', '.secrets.enc', '.secrets.key'];
+const SECRET_ENTRIES = [
+  'google-tokens.json',
+  'sidecar-keys',
+  '.secrets.enc',
+  '.secrets.key',
+  // The AES key for the encrypted `app_connection.value` rows the DB snapshot
+  // already carries. Without it a restore brings back every workflow
+  // credential as undecryptable ciphertext, silently. It is a single name at
+  // the data-dir root like the rest of this list because it MOVED there -- it
+  // used to live under `cache/`, which this export excludes as ephemeral.
+  WORKFLOW_KEY_FILE,
+];
 
 /** Entries restored with tightened modes (plaintext secrets). */
 const SECRET_MODES: Record<string, { dir?: number; file: number }> = {
@@ -109,6 +128,7 @@ const SECRET_MODES: Record<string, { dir?: number; file: number }> = {
   'sidecar-keys': { dir: 0o700, file: 0o600 },
   '.secrets.enc': { file: 0o600 },
   '.secrets.key': { file: 0o600 },
+  [WORKFLOW_KEY_FILE]: { file: 0o600 },
 };
 
 function sqliteQuotePath(path: string): string {
@@ -210,8 +230,17 @@ export async function cmdExport(args: string[], io: CliIo = defaultIo): Promise<
       // it from wherever it actually is keeps `--full` complete either way —
       // and it is now the only place any API key exists.
       const secretsDir = keychainDir();
-      const sourceDir = (entry: string): string =>
-        entry === '.secrets.enc' || entry === '.secrets.key' ? secretsDir : dataDir;
+      // Same treatment for the workflow encryption key: it normally sits at
+      // the data-dir root, but an install this version has not booted yet
+      // still has it under `cache/` (or, on a JARVIS_HOME install, under
+      // ~/.jarvis/cache). Take it from wherever it resolves so `--full` is
+      // complete before AND after the relocation.
+      const workflowKeyDir = dirname(resolveWorkflowKeyFile());
+      const sourceDir = (entry: string): string => {
+        if (entry === '.secrets.enc' || entry === '.secrets.key') return secretsDir;
+        if (entry === WORKFLOW_KEY_FILE) return workflowKeyDir;
+        return dataDir;
+      };
 
       const entries = [...BASE_ENTRIES, ...(full ? SECRET_ENTRIES : [])].filter((e) =>
         existsSync(join(sourceDir(e), e)),
@@ -517,6 +546,32 @@ export async function cmdRestore(
             io.err(
               `warning: the restored keychain stayed in ${dataDir} and will not be read from there `
               + `(moving it to ${secretsTarget} failed: ${e instanceof Error ? e.message : String(e)})`,
+            );
+          }
+        }
+
+        // Same for the workflow encryption key: the daemon resolves it from its
+        // own secrets dir, which is data_dir on a JARVIS_HOME install but can
+        // be ~/.jarvis (or JARVIS_SECRETS_DIR) otherwise. A key restored into
+        // data_dir where nothing reads it is a brain whose workflow
+        // credentials are all undecryptable ciphertext. Never fatal, for the
+        // same reason as the keychain above: the data is already committed.
+        const workflowKeyTargetPath = workflowKeyTarget();
+        const restoredWorkflowKey = join(dataDir, WORKFLOW_KEY_FILE);
+        if (workflowKeyTargetPath !== restoredWorkflowKey && existsSync(restoredWorkflowKey)) {
+          try {
+            if (migrateWorkflowEncryptionKey(restoredWorkflowKey, workflowKeyTargetPath)) {
+              io.err(`Workflow encryption key placed at ${workflowKeyTargetPath} (where the daemon reads it).`);
+            } else {
+              io.err(
+                `warning: the restored workflow encryption key stayed at ${restoredWorkflowKey} -- `
+                + `${workflowKeyTargetPath} already holds one and was left untouched`,
+              );
+            }
+          } catch (e) {
+            io.err(
+              `warning: the restored workflow encryption key stayed at ${restoredWorkflowKey} and will not be `
+              + `read from there (moving it to ${workflowKeyTargetPath} failed: ${e instanceof Error ? e.message : String(e)})`,
             );
           }
         }

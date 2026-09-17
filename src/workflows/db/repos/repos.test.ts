@@ -1,5 +1,6 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
 import { closeWorkflowDb, DEFAULT_IDS, initWorkflowDb } from "../index";
+import { setEncryptionKey } from "../encryption";
 import {
   createFlow,
   deleteFlow,
@@ -30,12 +31,16 @@ import {
   upsertConnection,
 } from "./app-connection";
 
+// Pin the connection-encryption key: without it the module resolves the
+// developer's real key file (and generates one into their live data dir).
 beforeEach(() => {
   initWorkflowDb(":memory:");
+  setEncryptionKey(Buffer.alloc(32, 0x11));
 });
 
 afterEach(() => {
   closeWorkflowDb();
+  setEncryptionKey(null);
 });
 
 describe("flow repo", () => {

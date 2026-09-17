@@ -3,11 +3,25 @@
  * blobs. Wraps `serialize(value)` so OAuth tokens, API keys, etc. don't sit
  * in the workflow DB as plaintext.
  *
- * Key sourcing:
+ * Key sourcing, in order:
  *   1. `JARVIS_WORKFLOW_ENCRYPTION_KEY` env var (64-char hex = 32 bytes).
- *   2. Otherwise: generate a fresh random key on first call and persist it
- *      to `~/.jarvis/cache/workflow-encryption.key` with 0600 perms. Same
- *      file is reused on subsequent boots so existing rows stay decryptable.
+ *   2. `JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE`, an explicit single file.
+ *   3. Otherwise `<data dir>/workflow-encryption.key`, where the data dir is
+ *      `JARVIS_SECRETS_DIR` or `JARVIS_HOME` when set and `~/.jarvis`
+ *      otherwise -- the same resolution `src/vault/keychain.ts` uses for
+ *      `.secrets.key`. Generated on first use with 0600 perms and reused on
+ *      later boots so existing rows stay decryptable.
+ *
+ * Why the data-dir ROOT and not `cache/`. Until this moved, the key lived at
+ * `~/.jarvis/cache/workflow-encryption.key`: a directory `jarvis export`
+ * excludes as ephemeral, that `docs/PIECE_VERIFICATION.md` tells people to
+ * delete, and that a plain `rm -rf ~/.jarvis/cache` wipes. A backup of the
+ * data dir therefore carried every encrypted credential and nothing that
+ * could decrypt them. At the root the key is captured by any data-dir backup
+ * as a matter of course, and `jarvis export --full` lists it beside
+ * `.secrets.key`. The old path is still READ (see `keyFileCandidates`) and
+ * relocated once, at daemon boot, by
+ * `migrateWorkflowEncryptionKeyToDataDir()`.
  *
  * Wire formats (stored in `app_connection.value`):
  *   `enc1a:<base64(iv | authTag | ciphertext)>`  -- current. GCM runs with
@@ -51,13 +65,20 @@ import {
 } from "node:crypto";
 import {
   chmodSync,
+  closeSync,
+  constants as fsConstants,
   existsSync,
+  fsyncSync,
   mkdirSync,
+  openSync,
   readFileSync,
-  writeFileSync,
+  renameSync,
+  rmSync,
+  unlinkSync,
+  writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 const ALGO = "aes-256-gcm";
 const KEY_BYTES = 32;
@@ -117,9 +138,304 @@ function associatedData(binding: CredentialRowBinding): Buffer {
  */
 let strictCredentials = false;
 
-const DEFAULT_KEY_FILE = resolve(homedir(), ".jarvis", "cache", "workflow-encryption.key");
+/** Single name at the data-dir root, like `.secrets.key`. */
+export const KEY_FILE_NAME = "workflow-encryption.key";
+
+/** Where the key lived before it moved to the data-dir root. */
+const LEGACY_SUBDIR = "cache";
 
 let cachedKey: Buffer | null = null;
+/** Warn once per process, not once per key resolution. */
+let warnedAboutRivalKeys = false;
+
+/** The pre-`JARVIS_HOME` root, used only as the last read fallback. */
+function legacyRootDir(): string {
+  return join(homedir(), ".jarvis");
+}
+
+/**
+ * The data dir this install keeps its secrets in, ignoring what is on disk.
+ * Deliberately identical to `keychain.ts`'s `configuredDir()`: the workflow
+ * key and `.secrets.key` are both local secret material for one install, and
+ * two different answers to "which data dir" is how the key ended up outside
+ * every backup of the database it protects.
+ *
+ * `JARVIS_SECRETS_DIR` is honoured as well as `JARVIS_HOME` so a test or an
+ * operator has ONE lever that keeps every secret out of the real `~/.jarvis`.
+ */
+function configuredDir(): string {
+  const override = process.env["JARVIS_SECRETS_DIR"] || process.env["JARVIS_HOME"];
+  return override ? resolve(override) : legacyRootDir();
+}
+
+/**
+ * Guard in the spirit of `keychainDir()`'s: under `bun test` (bun sets
+ * NODE_ENV=test) with nothing pinned, key resolution lands on the
+ * DEVELOPER'S real store. A test file missing its setup would read their real
+ * key, or generate one into their live data dir -- where, now that the root
+ * takes precedence, it would win over their actual key on the next boot.
+ *
+ * Scoped to the two operations that touch key MATERIAL (`getKey` and the boot
+ * relocation) rather than to path resolution, so computing or reporting a
+ * path stays a pure function that never throws. Tests either inject a key
+ * with `setEncryptionKey`, or point JARVIS_HOME / JARVIS_SECRETS_DIR at a
+ * temp dir.
+ */
+function assertKeyAccessAllowedUnderTest(): void {
+  if (process.env["NODE_ENV"] !== "test") return;
+  if (process.env["JARVIS_SECRETS_DIR"] || process.env["JARVIS_HOME"]) return;
+  if (process.env["JARVIS_WORKFLOW_ENCRYPTION_KEY"]) return;
+  if (process.env["JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE"]) return;
+  throw new Error(
+    "Refusing to touch the real workflow encryption key under test: inject one with "
+    + "setEncryptionKey(), or point JARVIS_HOME / JARVIS_SECRETS_DIR at a temp dir in your "
+    + "test setup (see src/workflows/db/encryption-key-path.test.ts)",
+  );
+}
+
+/** Where the key belongs for a given data dir. */
+export function workflowKeyTarget(dir: string = configuredDir()): string {
+  return join(dir, KEY_FILE_NAME);
+}
+
+/**
+ * Every path a key may legitimately be found at, most authoritative first:
+ *
+ *   1. `<dir>/workflow-encryption.key`       -- where it belongs now
+ *   2. `<dir>/cache/workflow-encryption.key` -- the old layout, and where
+ *      `rotate-encryption-key.ts --data-dir <dir>` used to write
+ *   3. `~/.jarvis/cache/workflow-encryption.key` -- the hardcoded pre-
+ *      `JARVIS_HOME` path, which is where a `JARVIS_HOME` install's key
+ *      actually is today (see #481 item 3)
+ */
+export function keyFileCandidates(dir: string = configuredDir()): string[] {
+  return [
+    ...ownCandidates(dir),
+    join(legacyRootDir(), LEGACY_SUBDIR, KEY_FILE_NAME),
+  ].filter((path, index, all) => all.indexOf(path) === index);
+}
+
+/** The candidates that belong to THIS data dir: the root and its own cache/. */
+function ownCandidates(dir: string): string[] {
+  return [workflowKeyTarget(dir), join(dir, LEGACY_SUBDIR, KEY_FILE_NAME)];
+}
+
+/**
+ * The key file actually in use: the explicit override, else the first
+ * candidate that exists, else the target (nothing on disk yet -- a first run
+ * generates it there).
+ *
+ * Both paths populated. The target WINS when it exists, because the only
+ * thing that ever creates it is a verified migration of the old file or a
+ * fresh generation, and the migration refuses to overwrite it. So a target
+ * that exists is the newest key this install wrote, and an old file left
+ * behind (an interrupted migration, an archive restored in the old layout)
+ * is stale by construction. A rival that differs is still worth saying out
+ * loud -- picking wrong makes every credential undecryptable, and the
+ * operator is the only one who can tell us which database this is. See
+ * `rivalKeyWarning`.
+ */
+export function resolveKeyFile(dir: string = configuredDir()): string {
+  const explicit = process.env["JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE"];
+  if (explicit) return explicit;
+  const present = keyFileCandidates(dir).filter((path) => existsSync(path));
+  if (present.length === 0) return workflowKeyTarget(dir);
+  if (!warnedAboutRivalKeys) {
+    const warning = rivalKeyWarning(dir);
+    if (warning) {
+      warnedAboutRivalKeys = true;
+      console.warn(warning);
+    }
+  }
+  return present[0]!;
+}
+
+/**
+ * The warning for "this data dir holds two key files and they are not the
+ * same key", or null when there is nothing to say. `resolveKeyFile` emits it
+ * once per process; it is a pure function here so the message is testable
+ * without depending on whether something earlier already spent that flag.
+ *
+ * Deliberately scoped to this data dir's OWN two paths. The shared
+ * `~/.jarvis/cache` fallback is another install's key by definition once this
+ * one has its own, so a difference there is the expected steady state on a
+ * multi-instance host, not a problem to report.
+ *
+ * Says nothing about the key bytes themselves, only which paths disagree.
+ */
+export function rivalKeyWarning(dir: string = configuredDir()): string | null {
+  const [winner, ...rest] = ownCandidates(dir).filter((path) => existsSync(path));
+  if (!winner) return null;
+  const rivals = rest.filter((path) => readIfKey(path) !== readIfKey(winner));
+  if (rivals.length === 0) return null;
+  return (
+    `[WorkflowEncryption] Using the key at ${winner} and IGNORING a different key at `
+    + `${rivals.join(", ")}. If workflow credentials fail to decrypt, the ignored file is `
+    + `probably the one that matches this database -- move it to ${winner} (keeping a copy).`
+  );
+}
+
+/** File contents, or null when unreadable. Never used to make a key. */
+function readIfKey(path: string): string | null {
+  try {
+    return readFileSync(path, "utf8").trim();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * True when a key can be produced WITHOUT generating a new one. Pure lookup:
+ * it deliberately does not apply the under-test guard, so asking the question
+ * is always safe -- only `getKey()` and the boot relocation, which touch key
+ * material, refuse.
+ */
+export function hasResolvableEncryptionKey(): boolean {
+  if (cachedKey) return true;
+  if (process.env["JARVIS_WORKFLOW_ENCRYPTION_KEY"]) return true;
+  return existsSync(resolveKeyFile());
+}
+
+function parseKeyHex(hex: string, path: string): Buffer {
+  if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
+    throw new Error(
+      `Encryption key file ${path} is malformed (expected 64 hex chars; got ${hex.length})`,
+    );
+  }
+  return Buffer.from(hex, "hex");
+}
+
+/**
+ * Create `path` holding `hex` with 0600 from the first byte: written to a
+ * temp sibling, fsynced, renamed over the target, and the parent directory
+ * fsynced too. A crash can leave the temp file behind but never a truncated
+ * or world-readable key, and never a half-written target.
+ */
+function persistKeyFile(path: string, hex: string): void {
+  mkdirSync(dirname(path), { recursive: true });
+  const tmp = `${path}.tmp`;
+  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW;
+  const fd = openSync(tmp, flags, 0o600);
+  try {
+    writeSync(fd, `${hex}\n`);
+    fsyncSync(fd);
+  } catch (err) {
+    closeSync(fd);
+    try { unlinkSync(tmp); } catch { /* best effort */ }
+    throw err;
+  }
+  closeSync(fd);
+  try { chmodSync(tmp, 0o600); } catch { /* best-effort on Windows / restricted FSes */ }
+  try {
+    renameSync(tmp, path);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* best effort */ }
+    throw err;
+  }
+  fsyncDir(dirname(path));
+}
+
+/** Make a directory entry (a rename, an unlink) durable. Best-effort. */
+function fsyncDir(dir: string): void {
+  let fd: number | null = null;
+  try {
+    fd = openSync(dir, "r");
+    fsyncSync(fd);
+  } catch {
+    // Not every platform allows fsync on a directory handle; the rename is
+    // still atomic, so the worst case is losing the ordering guarantee.
+  } finally {
+    if (fd !== null) {
+      try { closeSync(fd); } catch { /* best effort */ }
+    }
+  }
+}
+
+/**
+ * Place one key file at `to` from `from`: copy durably, read the copy back and
+ * compare, and only then (unless `keepSource`) remove the original.
+ *
+ * Crash safety. `to` is created by rename from a temp sibling and fsynced
+ * before `from` is touched, so at every instant a readable key exists at
+ * `from`, at `to`, or at both -- never at neither. Both-populated resolves to
+ * `to` (same bytes), so an interrupted relocation is indistinguishable from a
+ * finished one to the next boot.
+ *
+ * Refuses when `to` already exists: overwriting it would replace the key this
+ * install last wrote with an older one, and every row encrypted since would
+ * stop decrypting. Same reasoning as `migrateKeychain`'s `hasKeychain(to)`
+ * guard.
+ */
+export function migrateWorkflowEncryptionKey(
+  from: string,
+  to: string,
+  options: {
+    /** Leave the original in place; see the shared-legacy-root case below. */
+    keepSource?: boolean;
+    /** Test-only fault injection: called after the copy is durable and
+     * verified and before the original is removed, so tests can interrupt the
+     * one window where two copies exist. Never set in production. */
+    _hooks?: { beforeRemovingOld?: () => void };
+  } = {},
+): boolean {
+  if (from === to || !existsSync(from) || existsSync(to)) return false;
+  const hex = readFileSync(from, "utf8").trim();
+  parseKeyHex(hex, from); // refuse to propagate a corrupt key
+  persistKeyFile(to, hex);
+  if (readIfKey(to) !== hex) {
+    rmSync(to, { force: true });
+    throw new Error(`Copying the workflow encryption key to ${to} did not verify; it stays at ${from}`);
+  }
+  if (options.keepSource) {
+    console.log(`[WorkflowEncryption] Copied the workflow encryption key from ${from} to ${to}; backups of the data dir now include it`);
+    return true;
+  }
+  options._hooks?.beforeRemovingOld?.();
+  rmSync(from, { force: true });
+  fsyncDir(dirname(from));
+  console.log(
+    `[WorkflowEncryption] Moved the workflow encryption key from ${from} to ${to}; `
+    + `backups of the data dir now include it`,
+  );
+  return true;
+}
+
+/**
+ * Relocate a key still sitting in `cache/` into the data-dir root.
+ *
+ * Called once at daemon boot. Deliberately NOT triggered by path resolution,
+ * for the same reason `migrateKeychainToDataDir` isn't: a CLI, a test, or any
+ * process that merely reads a credential must never move the key out from
+ * under the machine it is running on. Resolution reads the old path happily,
+ * so nothing depends on this having run.
+ *
+ * Move within this install's own data dir, COPY out of the shared one. Every
+ * `JARVIS_HOME` instance on a host reads the same
+ * `~/.jarvis/cache/workflow-encryption.key` today (#481 item 3), so the first
+ * instance to boot must not move it: the next instance would come up to a
+ * database full of ciphertext and no key. Copying gives each instance its own
+ * key at its own root -- backed up with its own data dir -- and leaves the
+ * shared file exactly as authoritative as it was for whoever else still
+ * reads it.
+ */
+export function migrateWorkflowEncryptionKeyToDataDir(): boolean {
+  // An explicit key source makes any file on disk irrelevant -- and possibly
+  // an unrelated leftover. Moving that to the root would plant a key a later
+  // boot (env var gone) would trust.
+  if (process.env["JARVIS_WORKFLOW_ENCRYPTION_KEY"]) return false;
+  if (process.env["JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE"]) return false;
+  assertKeyAccessAllowedUnderTest();
+  const dir = configuredDir();
+  const target = workflowKeyTarget(dir);
+  if (existsSync(target)) return false;
+  const own = join(dir, LEGACY_SUBDIR, KEY_FILE_NAME);
+  if (existsSync(own)) return migrateWorkflowEncryptionKey(own, target);
+  const shared = join(legacyRootDir(), LEGACY_SUBDIR, KEY_FILE_NAME);
+  if (shared !== own && existsSync(shared)) {
+    return migrateWorkflowEncryptionKey(shared, target, { keepSource: true });
+  }
+  return false;
+}
 
 /**
  * Resolve the encryption key. Cached after first call. If callers want to
@@ -127,6 +443,7 @@ let cachedKey: Buffer | null = null;
  */
 function getKey(): Buffer {
   if (cachedKey) return cachedKey;
+  assertKeyAccessAllowedUnderTest();
   const env = process.env["JARVIS_WORKFLOW_ENCRYPTION_KEY"];
   if (env) {
     if (!/^[0-9a-fA-F]{64}$/.test(env)) {
@@ -137,26 +454,17 @@ function getKey(): Buffer {
     cachedKey = Buffer.from(env, "hex");
     return cachedKey;
   }
-  const file = process.env["JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE"] ?? DEFAULT_KEY_FILE;
+  const file = resolveKeyFile();
   if (existsSync(file)) {
-    const hex = readFileSync(file, "utf8").trim();
-    if (!/^[0-9a-fA-F]{64}$/.test(hex)) {
-      throw new Error(
-        `Encryption key file ${file} is malformed (expected 64 hex chars; got ${hex.length})`,
-      );
-    }
-    cachedKey = Buffer.from(hex, "hex");
+    cachedKey = parseKeyHex(readFileSync(file, "utf8").trim(), file);
     return cachedKey;
   }
-  // Generate + persist with 0600 perms.
+  // Nothing anywhere: first run. Generate at the target path with 0600.
+  // Callers that must NOT reach this point (a database that already holds
+  // `enc1:` rows) assert first -- see `assertEncryptionKeyForStoredCredentials`
+  // in src/workflows/db/index.ts.
   const fresh = randomBytes(KEY_BYTES);
-  mkdirSync(dirname(file), { recursive: true });
-  writeFileSync(file, fresh.toString("hex") + "\n");
-  try {
-    chmodSync(file, 0o600);
-  } catch {
-    // best-effort on Windows / restricted FSes
-  }
+  persistKeyFile(file, fresh.toString("hex"));
   cachedKey = fresh;
   return cachedKey;
 }

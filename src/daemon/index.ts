@@ -510,6 +510,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       try { return getDb(); } catch { return null; }
     });
 
+    // 2.0b. Relocate a workflow encryption key still sitting in `cache/` into
+    // the data-dir root, BEFORE the workflow schema check below and before any
+    // credential is read. `cache/` is documented as disposable and is excluded
+    // from `jarvis export`, so a key left there is absent from every backup of
+    // the database it protects. Resolution still reads the old path, so this
+    // having failed is never fatal: worst case the key stays where it is.
+    const { migrateWorkflowEncryptionKeyToDataDir } = await import('../workflows/db/encryption.ts');
+    try {
+      migrateWorkflowEncryptionKeyToDataDir();
+    } catch (err) {
+      console.error('[Daemon] Workflow encryption key relocation failed; continuing with the existing path:', err);
+    }
+
     // 2.1. Add workflow tables (flow / flow_run / flow_version /
     // app_connection / waitpoint / store_entry / workflow_file /
     // workflow_job / trigger_event) to the shared Jarvis DB. Idempotent.

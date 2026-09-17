@@ -10,8 +10,11 @@
  *   bun run scripts/rotate-encryption-key.ts [--data-dir <path>]
  *
  * Steps:
- *   1. Read the current key from `~/.jarvis/cache/workflow-encryption.key`
- *      (or `--key-file`).
+ *   1. Read the current key from `<data-dir>/workflow-encryption.key` (or
+ *      `--key-file`). An install this brain has not booted yet still has it
+ *      under `cache/`; the shared resolver in `src/workflows/db/encryption.ts`
+ *      finds it there too, and rotation writes the new key back to whichever
+ *      path it read -- the daemon relocates it to the root at next boot.
  *   2. Decrypt every `app_connection.value` row with the current key.
  *   3. Generate a fresh 32-byte key, persist to `<keyfile>.new` with 0600.
  *   4. Re-encrypt every row with the new key inside one DB transaction.
@@ -54,6 +57,7 @@ import {
   encryptBoundJson,
   encryptJson,
   isRowBound,
+  resolveKeyFile,
   setEncryptionKey,
   type CredentialRowBinding,
 } from "../src/workflows/db/encryption";
@@ -66,15 +70,18 @@ interface CliArgs {
 }
 
 function parseArgs(): CliArgs {
-  const defaultDataDir = resolve(homedir(), ".jarvis");
+  const defaultDataDir = resolve(process.env["JARVIS_HOME"] || resolve(homedir(), ".jarvis"));
   let dataDir = defaultDataDir;
+  let scopedToDataDir = false;
   let keyFile: string | null = null;
   let dbPath: string | null = null;
   const argv = process.argv.slice(2);
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
-    if (a === "--data-dir") dataDir = resolve(argv[++i]!);
-    else if (a === "--key-file") keyFile = resolve(argv[++i]!);
+    if (a === "--data-dir") {
+      dataDir = resolve(argv[++i]!);
+      scopedToDataDir = true;
+    } else if (a === "--key-file") keyFile = resolve(argv[++i]!);
     else if (a === "--db") dbPath = resolve(argv[++i]!);
     else if (a === "--allow-running-daemon") {
       // Already consumed before parseArgs; recognized here so it doesn't error.
@@ -84,7 +91,7 @@ function parseArgs(): CliArgs {
           "Usage: bun run scripts/rotate-encryption-key.ts [options]",
           "",
           "Options:",
-          "  --data-dir <path>   Override the Jarvis data dir (default ~/.jarvis)",
+          "  --data-dir <path>   Override the Jarvis data dir (default JARVIS_HOME or ~/.jarvis)",
           "  --key-file <path>   Override the keychain file path",
           "  --db <path>         Override the SQLite DB path",
           "",
@@ -101,7 +108,12 @@ function parseArgs(): CliArgs {
   }
   return {
     dataDir,
-    keyFile: keyFile ?? resolve(dataDir, "cache", "workflow-encryption.key"),
+    // Resolved through the same helper the daemon uses, so this script and a
+    // JARVIS_HOME install cannot disagree about where the key is. An explicit
+    // `--data-dir` scopes the search to that dir (plus the shared legacy
+    // path); without one, the module's own resolution applies, which also
+    // honours JARVIS_SECRETS_DIR.
+    keyFile: keyFile ?? (scopedToDataDir ? resolveKeyFile(dataDir) : resolveKeyFile()),
     dbPath: dbPath ?? resolve(dataDir, "jarvis.db"),
   };
 }
