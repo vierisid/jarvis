@@ -8,8 +8,9 @@
  */
 
 import { test, expect, describe, beforeAll, afterAll } from "bun:test";
-import { existsSync } from "node:fs";
-import { resolve } from "node:path";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { join, resolve } from "node:path";
+import { tmpdir } from "node:os";
 import { closeWorkflowDb, initWorkflowDb } from "../../db";
 import { createFlow, setFlowCodeStepsEnabled } from "../../db/repos/flow";
 import { publishFlowVersion } from "../../db/repos/flow-publication";
@@ -476,6 +477,15 @@ describe("Engine end-to-end (G+H pieces)", () => {
   test.skipIf(skipE2eTests)(
     "a CODE step is refused at publish without the per-flow opt-in, and runs once it has it",
     async () => {
+      // The CODE step writes to an absolute path outside the flow's world.
+      // That is the privilege the gate exists for -- a child process, not an
+      // isolate -- and it doubles as the only out-of-band proof available
+      // here that the step really executed: `executeFlow` leaves
+      // `flow_run.steps` null (the worker handler is what accumulates step
+      // outputs), so a SUCCEEDED status alone could not tell a step that ran
+      // from a step that was skipped.
+      const probeDir = mkdtempSync(join(tmpdir(), "jarvis-code-gate-"));
+      const probe = join(probeDir, "doubled.txt");
       const flow = createFlow({ projectId: DEFAULT_IDS.project });
       const trigger: FlowTriggerNode = {
         name: "trigger",
@@ -502,7 +512,11 @@ describe("Engine end-to-end (G+H pieces)", () => {
               input: { n: 21 },
               sourceCode: {
                 packageJson: "{}",
-                code: "exports.code = async (inputs) => ({ doubled: Number(inputs.n) * 2 });",
+                code:
+                  "exports.code = async (inputs) => {" +
+                  `  require('node:fs').writeFileSync(${JSON.stringify(probe)}, String(Number(inputs.n) * 2));` +
+                  "  return { doubled: Number(inputs.n) * 2 };" +
+                  "};",
               },
             },
           },
@@ -533,8 +547,12 @@ describe("Engine end-to-end (G+H pieces)", () => {
           console.error(`[engine stderr]\n${stderrBuf.slice(0, 4000)}`);
         }
         expect(finalRun.status).toBe("SUCCEEDED");
+        // SUCCEEDED on its own would also pass if the engine had skipped the
+        // CODE step inside the loop body, so read the probe the step wrote.
+        expect(readFileSync(probe, "utf8")).toBe("42");
       } finally {
         await handle.release();
+        rmSync(probeDir, { recursive: true, force: true });
       }
       expect(getFlowRun(run.id)?.status).toBe("SUCCEEDED");
     },

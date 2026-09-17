@@ -12,6 +12,7 @@ import type { Database } from "bun:sqlite";
 import { getWorkflowDb } from "../index";
 import { apId } from "../ids";
 import { touchFlow } from "./flow";
+import { assertCodeStepsAllowedForLiveDraft } from "./flow-code-steps";
 
 export type FlowVersionState = "DRAFT" | "LOCKED";
 
@@ -220,6 +221,9 @@ export function createDraftVersion(input: CreateDraftVersionInput): FlowVersion 
   const id = apId();
   const ts = now();
   const trigger = input.trigger ?? {};
+  // A new draft becomes the LATEST draft, which is the version an ENABLED
+  // flow with nothing published actually runs. See the gate's own comment.
+  assertCodeStepsAllowedForLiveDraft(input.flowId, trigger);
   db().run(
     `INSERT INTO flow_version (
       id, flow_id, display_name, trigger, state, valid, schema_version, updated_by,
@@ -277,6 +281,9 @@ export function updateDraftVersion(id: string, patch: UpdateDraftVersionInput): 
   const existing = getFlowVersionRow(id);
   if (!existing) throw new Error(`updateDraftVersion: not found (id=${id})`);
   if (existing.state === "LOCKED") throw new Error(`updateDraftVersion: cannot modify LOCKED version (id=${id})`);
+  // A draft is mutated in place, so writing a CODE step into the draft an
+  // ENABLED flow is already running would deploy it without passing publish.
+  if (patch.trigger !== undefined) assertCodeStepsAllowedForLiveDraft(existing.flow_id, patch.trigger);
 
   const next: FlowVersionRow = {
     ...existing,

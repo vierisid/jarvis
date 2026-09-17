@@ -91,6 +91,11 @@ export function createFlow(input: CreateFlowInput = {}): FlowRow {
   );
   const row = getFlow(id);
   if (!row) throw new Error(`createFlow: row missing immediately after insert (id=${id})`);
+  // A flow created ENABLED skipped `updateFlowStatus`, so it skipped the CODE
+  // gate. It has no versions yet, so there is nothing for the gate to refuse
+  // today -- asserting anyway keeps "every path to ENABLED passes the gate"
+  // true by construction rather than by the caller happening to be harmless.
+  if (status === "ENABLED") assertFlowCodeStepsAllowed(id, "enable");
   return row;
 }
 

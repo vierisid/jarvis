@@ -45,6 +45,7 @@ import {
   type EngineScheduleOptions,
   type FlowVersion,
 } from "../../db/repos/flow-version";
+import { ungrantedCodeSteps } from "../../db/repos/flow-code-steps";
 import { createFlowRun } from "../../db/repos/flow-run";
 import { enqueue, countQueued } from "../../db/repos/job-queue";
 import { RUN_FLOW } from "../handler";
@@ -273,6 +274,24 @@ export class TriggerManager {
     if (!version) return;
     const trigger = version.trigger as unknown as TriggerNode | null;
     if (!trigger || typeof trigger !== "object") return;
+
+    // CODE gate backstop. Registration is the last point at which a version
+    // becomes autonomously runnable, and it is not per execution, so declining
+    // here is not the run-time refusal that got #459's allowlist pulled. It
+    // catches the one thing the publish and enable gates cannot see: which
+    // DRAFT is "latest" moves with any write that bumps a draft's `updated`,
+    // so a CODE draft that was not live when the flow was enabled can become
+    // live later. A published flow always carries the grant, so this can only
+    // decline a flow that was never publishable in the first place.
+    const ungranted = ungrantedCodeSteps(flow, version.trigger);
+    if (ungranted) {
+      this.log(
+        `flow ${flow.id}: not registering a trigger -- version ${versionId} has CODE step(s) ` +
+          `${ungranted.map((name) => `"${name}"`).join(", ")} and code steps are not enabled for this flow ` +
+          `(POST /api/workflows/${flow.id}/code-steps {"enabled": true})`,
+      );
+      return;
+    }
 
     if (trigger.type === "EMPTY") return; // manual-run only
 

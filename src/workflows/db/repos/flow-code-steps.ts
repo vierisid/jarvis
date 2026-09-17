@@ -36,13 +36,24 @@ import type { FlowTriggerNode } from "./flow-version";
 export const CODE_STEPS_REFUSAL_CODE = "CODE_STEPS_NOT_ENABLED";
 
 /** What the caller was trying to do, so the refusal can name it. */
-export type CodeStepIntent = "publish" | "enable" | "run";
+export type CodeStepIntent = "publish" | "enable" | "run" | "save";
 
-const INTENT_TEXT: Record<CodeStepIntent, string> = {
-  publish: "to publish",
-  enable: "before it can be turned on",
-  run: "to run it",
+/** Lead sentence, then the clause naming what the grant would unblock. */
+const INTENT_TEXT: Record<CodeStepIntent, { lead: string; unblocks: string }> = {
+  publish: { lead: "This flow contains", unblocks: "to publish" },
+  enable: { lead: "This flow contains", unblocks: "before it can be turned on" },
+  run: { lead: "This flow contains", unblocks: "to run it" },
+  // A save into the draft an ENABLED flow is already running is a deploy, so
+  // it gets its own wording: the flow does not contain the step yet.
+  save: { lead: "This edit adds", unblocks: "before saving one into the draft it is running" },
 };
+
+/**
+ * Names quoted in a refusal before it starts summarizing. A version can carry
+ * any number of CODE steps and the message is thrown, logged and shown; six is
+ * plenty to identify the problem.
+ */
+const MAX_NAMED_STEPS = 6;
 
 export class CodeStepsRefusedError extends Error {
   readonly code = CODE_STEPS_REFUSAL_CODE;
@@ -64,11 +75,14 @@ export class CodeStepsRefusedError extends Error {
  * reader can act on without going to find the source.
  */
 function refusalMessage(flowId: string, intent: CodeStepIntent, stepNames: string[]): string {
+  const { lead, unblocks } = INTENT_TEXT[intent];
   const plural = stepNames.length > 1;
-  const named = stepNames.map((name) => `"${name}"`).join(", ");
+  const shown = stepNames.slice(0, MAX_NAMED_STEPS).map((name) => `"${name}"`).join(", ");
+  const rest = stepNames.length - Math.min(stepNames.length, MAX_NAMED_STEPS);
+  const named = rest > 0 ? `${shown} and ${rest} more` : shown;
   return (
-    `This flow contains ${plural ? `${stepNames.length} CODE steps` : "a CODE step"} (${named}). ` +
-    `Enable code steps for this flow ${INTENT_TEXT[intent]}. ` +
+    `${lead} ${plural ? `${stepNames.length} CODE steps` : "a CODE step"} (${named}). ` +
+    `Enable code steps for this flow ${unblocks}. ` +
     `A CODE step runs arbitrary JavaScript in the workflow engine's child process with this machine's ` +
     `full privileges -- it is a separate process, not an isolate -- so it stays off until it is turned on ` +
     `for this flow: POST /api/workflows/${flowId}/code-steps {"enabled": true}`
@@ -91,6 +105,12 @@ function parseTrigger(raw: string): FlowTriggerNode | null {
  */
 export function assertCodeStepsAllowed(flowId: string, versionId: string, intent: CodeStepIntent): void {
   const db = getWorkflowDb();
+  // Three early returns below hand back "allowed" without looking at a graph:
+  // a flow that does not exist, a version that does not exist, and a trigger
+  // that will not parse. None of them can run a CODE step, and each already
+  // fails with a better message in its own caller -- `publishFlowVersion`
+  // checks the flow, `getLatestDraft` parses the trigger. The gate is not the
+  // right place to re-report somebody else's 404.
   const flow = db
     .query<{ code_steps_enabled: number }, [string]>(`SELECT code_steps_enabled FROM flow WHERE id = ?`)
     .get(flowId);
@@ -130,4 +150,59 @@ export function assertFlowCodeStepsAllowed(flowId: string, intent: CodeStepInten
     .get(flowId);
   if (!target?.version_id) return;
   assertCodeStepsAllowed(flowId, target.version_id, intent);
+}
+
+/**
+ * Gate a trigger graph about to be WRITTEN onto the draft an ENABLED flow is
+ * already running.
+ *
+ * The transition gate on `updateFlowStatus` checks the version that is live at
+ * the moment somebody enables the flow -- but a DRAFT row is mutated in place,
+ * and `TriggerManager` resolves `published ?? latest draft`, so without this
+ * the graph behind a registered cron could acquire a CODE step afterwards and
+ * the invariant would quietly stop holding. `createDraftVersion` and
+ * `updateDraftVersion` are the only two writers of `flow_version.trigger`, so
+ * gating both closes it structurally rather than by enumeration.
+ *
+ * Only for a flow that is ENABLED with NO published version, which is the one
+ * shape where a draft is what actually runs. With a published version the
+ * draft is inert until publish, and publish has its own gate -- editing a
+ * draft there stays free, which is what keeps this out of the way of ordinary
+ * authoring.
+ */
+export function assertCodeStepsAllowedForLiveDraft(flowId: string, trigger: unknown): void {
+  const flow = getWorkflowDb()
+    .query<{ status: string; published_version_id: string | null; code_steps_enabled: number }, [string]>(
+      `SELECT status, published_version_id, code_steps_enabled FROM flow WHERE id = ?`,
+    )
+    .get(flowId);
+  if (!flow || flow.code_steps_enabled === 1) return;
+  if (flow.status !== "ENABLED" || flow.published_version_id !== null) return;
+  const stepNames = findCodeStepNames(trigger as FlowTriggerNode);
+  if (stepNames.length === 0) return;
+  throw new CodeStepsRefusedError(refusalMessage(flowId, "save", stepNames), flowId, "", stepNames);
+}
+
+/**
+ * CODE steps in `trigger` that this flow has no permission to run, or null
+ * when there is nothing to report. Used by `TriggerManager` to decline the
+ * subscription instead of registering it.
+ *
+ * Registration -- at boot, and on refresh after a publish or a status change
+ * -- is the last point at which a version becomes autonomously runnable, and
+ * it is NOT per execution, so declining here is not the run-time refusal that
+ * got #459's allowlist pulled. It is the backstop for the one thing the
+ * authoring gates cannot see: which DRAFT is "latest" moves with any write
+ * that bumps a draft's `updated`, so a CODE draft that was not live when the
+ * flow was enabled can become live later. A published flow always carries the
+ * grant (publish requires it, the upgrade grandfathered it), so this can only
+ * ever decline a flow that was never publishable in the first place.
+ */
+export function ungrantedCodeSteps(
+  flow: { id: string; code_steps_enabled: number },
+  trigger: unknown,
+): string[] | null {
+  if (flow.code_steps_enabled === 1) return null;
+  const stepNames = findCodeStepNames(trigger as FlowTriggerNode);
+  return stepNames.length > 0 ? stepNames : null;
 }

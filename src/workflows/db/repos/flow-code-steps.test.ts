@@ -26,9 +26,18 @@ import {
   updateFlowStatus,
   type FlowRow,
 } from "./flow";
-import { createDraftVersion, getFlowVersion, type FlowTriggerNode } from "./flow-version";
+import {
+  createDraftVersion,
+  getFlowVersion,
+  getLatestDraft,
+  setSampleDataEntry,
+  updateDraftVersion,
+  type FlowTriggerNode,
+} from "./flow-version";
 import { publishFlowVersion } from "./flow-publication";
-import { assertCodeStepsAllowed, CodeStepsRefusedError } from "./flow-code-steps";
+import { assertCodeStepsAllowed, CodeStepsRefusedError, ungrantedCodeSteps } from "./flow-code-steps";
+import { TriggerManager } from "../../runner/triggers/manager";
+import { WorkflowEventBus } from "../../runtime/event-bus";
 import { countQueued } from "./job-queue";
 import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -100,6 +109,26 @@ function routerWithCode(): FlowTriggerNode {
   };
 }
 
+/** A registrable cron trigger whose chain ends in a CODE step. */
+function cronWithCode(): FlowTriggerNode {
+  return {
+    name: "trigger",
+    type: "PIECE_TRIGGER",
+    settings: { pieceName: "schedule", triggerName: "every_hour", input: { cron_expression: "0 * * * *" } },
+    nextAction: { ...CODE_STEP },
+  };
+}
+
+/** The same cron trigger with no CODE step, so registration must succeed. */
+function cronClean(): FlowTriggerNode {
+  return {
+    name: "trigger",
+    type: "PIECE_TRIGGER",
+    settings: { pieceName: "schedule", triggerName: "every_hour", input: { cron_expression: "0 * * * *" } },
+    nextAction: { name: "step_1", type: "PIECE", settings: { pieceName: "p", actionName: "a" } },
+  };
+}
+
 function cleanChain(): FlowTriggerNode {
   return {
     name: "trigger",
@@ -138,6 +167,7 @@ async function call(path: string, method: "GET" | "POST" | "PATCH", id: string, 
   return { status: response.status, body: (await response.json()) as Record<string, unknown> };
 }
 
+const silent = () => undefined;
 const tool = () => createManageWorkflowTool();
 
 async function runTool(action: string, params: Record<string, unknown> = {}) {
@@ -173,7 +203,11 @@ describe("CODE detection walks the whole graph", () => {
     const self = { name: "loop", type: "PIECE" } as FlowTriggerNode;
     self.nextAction = self;
     expect(walkFlowNodes(self).length).toBe(1);
-    expect(walkFlowNodes({ name: "n", type: "ROUTER", children: "not an array" } as never)).toHaveLength(1);
+    // A non-array `children` must be ignored, not spread. An object is the
+    // shape that would throw without the Array.isArray guard; a string would
+    // iterate harmlessly and prove nothing.
+    expect(walkFlowNodes({ name: "n", type: "ROUTER", children: { 0: { name: "c", type: "CODE" } } } as never))
+      .toHaveLength(1);
     expect(findCodeStepNames(null)).toEqual([]);
     expect(findCodeStepNames({ type: "CODE" } as FlowTriggerNode)).toEqual(["<unnamed>"]);
   });
@@ -386,6 +420,138 @@ describe("POST /api/workflows/:id/code-steps", () => {
   });
 });
 
+/* ----------------------------------------------- the live draft */
+
+/**
+ * The transition gate on `updateFlowStatus` checks the version that is live
+ * when somebody enables the flow, but a DRAFT row is mutated in place and
+ * `TriggerManager` resolves `published ?? latest draft`. Without a gate on the
+ * writers, the graph behind an already-registered cron could acquire a CODE
+ * step afterwards. `createDraftVersion` and `updateDraftVersion` are the only
+ * two writers of `flow_version.trigger`.
+ */
+describe("a CODE step cannot be written into the draft an ENABLED flow is running", () => {
+  /** ENABLED with nothing published: its latest draft is what runs. */
+  function liveFlow() {
+    const { flow, version } = fixture(cleanChain(), "Live cron");
+    updateFlowStatus(flow.id, "ENABLED");
+    return { flow, version };
+  }
+
+  test("updating the live draft to add a CODE step is refused", () => {
+    const { flow, version } = liveFlow();
+    expect(() => updateDraftVersion(version.id, { trigger: chainWithCode() })).toThrow(
+      "This edit adds a CODE step",
+    );
+    // The draft still runs the graph it ran before.
+    expect(findCodeStepNames(getFlowVersion(version.id)!.trigger)).toEqual([]);
+  });
+
+  test("the same edit nested in a LOOP or a ROUTER branch is refused", () => {
+    for (const build of [loopWithCode, routerWithCode]) {
+      const { version } = liveFlow();
+      expect(() => updateDraftVersion(version.id, { trigger: build() })).toThrow(CodeStepsRefusedError);
+    }
+  });
+
+  test("creating a NEW draft with a CODE step on a live flow is refused", () => {
+    const { flow } = liveFlow();
+    expect(() => createDraftVersion({ flowId: flow.id, displayName: "v2", trigger: chainWithCode() })).toThrow(
+      CodeStepsRefusedError,
+    );
+  });
+
+  test("the refusal says the edit adds one, not that the flow contains one, and how to allow it", () => {
+    const { flow, version } = liveFlow();
+    let message = "";
+    try { updateDraftVersion(version.id, { trigger: chainWithCode() }); } catch (e) { message = (e as Error).message; }
+    expect(message).toContain("This edit adds a CODE step");
+    expect(message).toContain('"compute_totals"');
+    expect(message).toContain("before saving one into the draft it is running");
+    expect(message).toContain(`POST /api/workflows/${flow.id}/code-steps`);
+  });
+
+  test("the HTTP version PATCH answers 403 for the same edit", async () => {
+    const { flow, version } = liveFlow();
+    const req = new Request("http://localhost/api/workflows/x/versions/y", {
+      method: "PATCH",
+      body: JSON.stringify({ trigger: chainWithCode() }),
+      headers: { "Content-Type": "application/json" },
+    }) as Request & { params: Record<string, string> };
+    req.params = { id: flow.id, versionId: version.id };
+    const response = await routes["/api/workflows/:id/versions/:versionId"]!.PATCH!(req);
+    expect(response.status).toBe(403);
+  });
+
+  test("editing a draft is untouched when the flow is DISABLED, or has a published version", () => {
+    // Disabled: publish is still ahead of it, so authoring stays free.
+    const parked = fixture(cleanChain(), "Parked");
+    expect(() => updateDraftVersion(parked.version.id, { trigger: chainWithCode() })).not.toThrow();
+
+    // Published: the draft is inert until the next publish, which has its own
+    // gate, so editing it must not be refused either.
+    const { flow } = fixture(cleanChain(), "Published");
+    publishFlowVersion(flow.id);
+    const draft = createDraftVersion({ flowId: flow.id, displayName: "Published", trigger: cleanChain() });
+    expect(() => updateDraftVersion(draft.id, { trigger: chainWithCode() })).not.toThrow();
+  });
+
+  test("the edit is allowed once the flow is opted in", () => {
+    const { flow, version } = liveFlow();
+    setFlowCodeStepsEnabled(flow.id, true);
+    expect(() => updateDraftVersion(version.id, { trigger: chainWithCode() })).not.toThrow();
+  });
+});
+
+/* -------------------------------------- the trigger-registration backstop */
+
+describe("an ungranted CODE version is not registered as a trigger", () => {
+  test("ungrantedCodeSteps names the steps only when the flow lacks the grant", () => {
+    const { flow } = fixture(chainWithCode());
+    const row = getFlow(flow.id)!;
+    expect(ungrantedCodeSteps(row, chainWithCode())).toEqual(["compute_totals"]);
+    expect(ungrantedCodeSteps(row, cleanChain())).toBeNull();
+    setFlowCodeStepsEnabled(flow.id, true);
+    expect(ungrantedCodeSteps(getFlow(flow.id)!, chainWithCode())).toBeNull();
+  });
+
+  test("a CODE draft promoted to latest behind the enable gate is declined at registration", async () => {
+    // The residual the authoring gates cannot see: the flow was enabled while
+    // a CODE-free draft was newest, so a stale CODE draft can be promoted by
+    // any write that bumps its `updated`.
+    const flow = createFlow();
+    const stale = createDraftVersion({ flowId: flow.id, displayName: "Stale", trigger: cronWithCode() });
+    // `getLatestDraft` orders by `updated`, which has millisecond resolution,
+    // so the two drafts have to land in different milliseconds for "latest"
+    // to mean anything here.
+    await Bun.sleep(2);
+    const live = createDraftVersion({ flowId: flow.id, displayName: "Live", trigger: cronClean() });
+    updateFlowStatus(flow.id, "ENABLED");
+    expect(getLatestDraft(flow.id)!.id).toBe(live.id);
+    // Promote the stale CODE draft by touching its sample data -- a write the
+    // authoring gates do not see, because it does not touch the graph.
+    await Bun.sleep(2);
+    setSampleDataEntry(stale.id, "step_1", { touched: true });
+    expect(getLatestDraft(flow.id)!.id).toBe(stale.id);
+
+    const manager = new TriggerManager({ eventBus: new WorkflowEventBus(), log: silent });
+    await manager.start();
+    expect(manager.list()).toHaveLength(0);
+    await manager.stop();
+  });
+
+  test("the same cron flow registers normally once it is opted in", async () => {
+    const flow = createFlow();
+    createDraftVersion({ flowId: flow.id, displayName: "Cron code", trigger: cronWithCode() });
+    setFlowCodeStepsEnabled(flow.id, true);
+    updateFlowStatus(flow.id, "ENABLED");
+    const manager = new TriggerManager({ eventBus: new WorkflowEventBus(), log: silent });
+    await manager.start();
+    expect(manager.list().map((s) => s.flowId)).toEqual([flow.id]);
+    await manager.stop();
+  });
+});
+
 /* ------------------------------------------------------- grandfathering */
 
 /**
@@ -484,6 +650,29 @@ describe("existing flows are grandfathered on upgrade", () => {
       (flowId) => {
         expect(flowCodeStepsEnabled(getFlow(flowId)!)).toBe(false);
         expect(() => publishFlowVersion(flowId)).toThrow(CodeStepsRefusedError);
+      },
+    );
+  });
+
+  test("a revoked grant is not handed back by a later boot", () => {
+    // The point of keying the backfill on the ALTER: the upgrade grants once.
+    // If the key were "this flow runs CODE", every restart would undo a user
+    // who took the permission away.
+    onLegacyDb(
+      () => {
+        const flow = createFlow();
+        const version = createDraftVersion({ flowId: flow.id, displayName: "Nightly", trigger: chainWithCode() });
+        getWorkflowDb().run(`UPDATE flow_version SET state = 'LOCKED' WHERE id = ?`, [version.id]);
+        getWorkflowDb().run(`UPDATE flow SET published_version_id = ?, status = 'ENABLED' WHERE id = ?`, [version.id, flow.id]);
+        return flow.id;
+      },
+      (flowId) => {
+        expect(getFlow(flowId)!.code_steps_grant).toBe("upgrade");
+        setFlowCodeStepsEnabled(flowId, false);
+        // Every later boot re-runs the schema.
+        createSchema(getWorkflowDb());
+        createSchema(getWorkflowDb());
+        expect(flowCodeStepsEnabled(getFlow(flowId)!)).toBe(false);
       },
     );
   });

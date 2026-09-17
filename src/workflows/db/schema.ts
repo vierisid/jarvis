@@ -297,23 +297,30 @@ function applyAdditiveColumnMigrations(db: Database): void {
     { table: "flow", column: "code_steps_grant", ddl: "ALTER TABLE flow ADD COLUMN code_steps_grant TEXT" },
     { table: "flow", column: "code_steps_granted_at", ddl: "ALTER TABLE flow ADD COLUMN code_steps_granted_at INTEGER" },
   ];
-  const added = new Set<string>();
-  for (const m of migrations) {
-    const cols = db.query(`PRAGMA table_info(${m.table})`).all() as Array<{ name: string }>;
-    if (cols.some((c) => c.name === m.column)) continue;
-    db.exec(m.ddl);
-    added.add(`${m.table}.${m.column}`);
-  }
-  // Data backfills run after ALL the ALTERs, never inline with one of them:
-  // this one writes three columns and would fail if it ran between two.
-  //
-  // It fires only when THIS boot introduced the gate's columns, which can only
-  // happen on a database that predates them. A fresh database gets them from
-  // CREATE TABLE, adds nothing, and never backfills -- right, since it has no
-  // flows that predate the gate. Any of the three counts, so a boot that died
-  // between two ALTERs still backfills on its next attempt.
-  const gateColumns = ["code_steps_enabled", "code_steps_grant", "code_steps_granted_at"];
-  if (gateColumns.some((column) => added.has(`flow.${column}`))) grandfatherRunningCodeFlows(db);
+  // One transaction around the ALTERs AND the backfill they key. SQLite DDL is
+  // transactional, and the coupling matters: the backfill is keyed on the
+  // ALTER having fired, so a crash in the window AFTER the last ALTER and
+  // BEFORE the backfill would leave the columns in place, the next boot with
+  // nothing to add, and the grandfathered grants lost for good. Committing
+  // them together means the upgrade either happened or it did not.
+  db.transaction(() => {
+    const added = new Set<string>();
+    for (const m of migrations) {
+      const cols = db.query(`PRAGMA table_info(${m.table})`).all() as Array<{ name: string }>;
+      if (cols.some((c) => c.name === m.column)) continue;
+      db.exec(m.ddl);
+      added.add(`${m.table}.${m.column}`);
+    }
+    // The backfill runs after ALL the ALTERs, never inline with one of them:
+    // it writes three columns and would fail if it ran between two.
+    //
+    // It fires only when THIS transaction introduced the gate's columns, which
+    // can only happen on a database that predates them. A fresh database gets
+    // them from CREATE TABLE, adds nothing, and never backfills -- right,
+    // since it has no flows that predate the gate.
+    const gateColumns = ["code_steps_enabled", "code_steps_grant", "code_steps_granted_at"];
+    if (gateColumns.some((column) => added.has(`flow.${column}`))) grandfatherRunningCodeFlows(db);
+  })();
 }
 
 /**

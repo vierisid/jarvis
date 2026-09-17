@@ -137,6 +137,22 @@ The refusal happens at AUTHORING time, never per execution:
   `manage_workflow run`, and a nested `run_workflow` step). This is defence in
   depth, not the primary gate, and it can only ever refuse an UNPUBLISHED
   draft: publish already requires the grant, so a published flow carries it.
+- Writing a CODE step INTO the draft an ENABLED flow is already running is
+  refused as well. A flow that is ENABLED with nothing published runs its
+  latest draft, and a draft row is mutated in place, so that save is a deploy:
+  without this the graph behind a registered cron could pick up a CODE step
+  after the enable gate had passed. `createDraftVersion` and
+  `updateDraftVersion` are the only two writers of `flow_version.trigger`, so
+  both carry the check. Editing a draft on a DISABLED flow, or on one that has
+  a published version, stays completely free -- publish is still ahead of it.
+- Finally, `TriggerManager` declines to register a subscription for a version
+  with an ungranted CODE step, and logs why. Registration happens at boot and
+  on refresh, not per execution, so this is not #459's run-time refusal; it is
+  the backstop for the one thing the authoring gates cannot see, namely that
+  "latest draft" moves with any write that bumps a draft's `updated`, so a
+  CODE draft that was not live when the flow was enabled can become live
+  later. A published flow always carries the grant, so this can only ever
+  decline a flow that was never publishable.
 
 Nothing is refused per execution. That was the flaw in the allowlist cut from
 #459: it refused at run time, so a cron- or webhook-triggered flow published
@@ -160,10 +176,15 @@ with `{"enabled": false}`. Every other flow -- including one holding an
 unpublished CODE draft -- starts at OFF.
 
 Revoking with `{"enabled": false}` takes the permission away from the next
-publish, enable or run. It does not unpublish the version or stop a run already
-in flight, and an already-ENABLED flow keeps firing on its trigger -- the gate
-is an authoring-time boundary, on purpose, and disabling the flow is what stops
-a schedule.
+publish, enable, run or draft write, and from the next trigger registration --
+so a live schedule keeps firing until the daemon restarts or the flow is
+refreshed, and then stops. It does not unpublish the version and it does not
+stop a run already in flight. Disabling the flow is what stops a schedule
+immediately. The grant is not handed back later: the upgrade backfill is keyed
+on the columns being introduced, so a revoked permission stays revoked across
+restarts. The other side of that key is that a build rolled back below this
+version and then rolled forward again will not re-grandfather a flow published
+in between; such a flow needs the opt-in like any other.
 
 Three deliberate omissions:
 
@@ -545,7 +566,7 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | GET | `/api/workflows/:id/versions` | Version history |
 | POST | `/api/workflows/:id/versions` | New draft version |
 | GET | `/api/workflows/:id/versions/:vid` | Get version |
-| POST | `/api/workflows/:id/versions/:vid/lock` | Publish + register triggers |
+| POST | `/api/workflows/:id/versions/:vid/lock` | Freeze a draft (DRAFT -> LOCKED). Does not publish and does not refresh triggers |
 | POST | `/api/workflows/:id/versions/:vid/sample-data/:step` | Set per-step sample output |
 | POST | `/api/workflows/:id/versions/:vid/sample-input/:step` | Set per-step sample input override |
 | POST | `/api/workflows/:id/publish` | Publish latest draft (403 when the version has a CODE step and CODE is off for the flow) |
