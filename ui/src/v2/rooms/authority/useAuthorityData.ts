@@ -221,12 +221,13 @@ export function useAuthorityData() {
         const resp = await fetch(`/api/authority/approvals/${encodeURIComponent(id)}/${action}`, {
           method: "POST",
         });
-        if (!resp.ok) {
-          const body = (await resp.json().catch(() => null)) as { error?: string } | null;
-          throw new Error(body?.error ?? `HTTP ${resp.status}`);
-        }
+        const body = (await resp.json().catch(() => null)) as { error?: string; result?: string } | null;
+        if (!resp.ok) throw new Error(body?.error ?? `HTTP ${resp.status}`);
         refresh();
-        return { ok: true, message: done };
+        // For a row that came from a conversation, this toast is the only
+        // place the user will ever see what the tool returned.
+        const result = typeof body?.result === "string" && body.result.trim() ? `: ${body.result.slice(0, 120)}` : "";
+        return { ok: true, message: `${done}${result}` };
       } catch (err) {
         return { ok: false, message: err instanceof Error ? err.message : "Failed" };
       }
@@ -234,7 +235,7 @@ export function useAuthorityData() {
     [refresh],
   );
   const executeUnresolved = useCallback(
-    (id: string) => resolveUnresolved(id, "execute", "Ran once."),
+    (id: string) => resolveUnresolved(id, "execute", "Ran once"),
     [resolveUnresolved],
   );
   const closeUnresolved = useCallback(

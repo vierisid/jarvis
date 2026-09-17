@@ -44,19 +44,29 @@ export class DeferredExecutor {
   /**
    * Execute a previously approved request. `claimedBy` names the surface
    * that runs it (dashboard, voice, inline gate) and lands in the claim.
+   * The string is what the conversation or the channel shows the user.
    */
   async executeApproved(requestId: string, claimedBy = 'deferred-executor'): Promise<string> {
+    return (await this.executeApprovedWithReceipt(requestId, claimedBy)).result;
+  }
+
+  /**
+   * The same execution, reporting whether this call held the claim. A caller
+   * that must not report a lost claim as a run (the execute route) reads
+   * `claimed`; `result` is the receipt text, or why nothing ran.
+   */
+  async executeApprovedWithReceipt(requestId: string, claimedBy = 'deferred-executor'): Promise<{ claimed: boolean; result: string }> {
     const request = this.approvalManager.getRequest(requestId);
     if (!request || request.status !== 'approved') {
-      return `Error: Request ${requestId} not found or not in approved state`;
+      return { claimed: false, result: `Error: Request ${requestId} not found or not in approved state` };
     }
 
     if (request.execution_mode === 'workflow') {
-      return 'Workflow-owned approval: execution must resume through its recorded effect boundary';
+      return { claimed: false, result: 'Workflow-owned approval: execution must resume through its recorded effect boundary' };
     }
 
     if (!this.toolRegistry) {
-      return 'Error: No tool registry configured';
+      return { claimed: false, result: 'Error: No tool registry configured' };
     }
 
     // One executor per approval. A second caller, or a daemon restarted after
@@ -64,7 +74,7 @@ export class DeferredExecutor {
     // or the reconciled state says what became of the first attempt.
     if (!this.approvalManager.claimExecution(requestId, claimedBy)) {
       const current = this.approvalManager.getRequest(requestId);
-      return `Error: Request ${requestId} was already taken for execution (${current ? executionState(current) : 'missing'}); check its receipt before deciding on another run`;
+      return { claimed: false, result: `Error: Request ${requestId} was already taken for execution (${current ? executionState(current) : 'missing'}); check its receipt before deciding on another run` };
     }
 
     // Emergency gate: an approval clicked while the system is paused/killed
@@ -75,7 +85,7 @@ export class DeferredExecutor {
       const blocked = `[SYSTEM ${state.toUpperCase()}] Approved action ${request.tool_name} was NOT executed: all tool execution is suspended because the user has ${state} the system.`;
       this.approvalManager.markExecuted(requestId, blocked, 'blocked');
       this.onResult?.(requestId, request, blocked);
-      return blocked;
+      return { claimed: true, result: blocked };
     }
 
     const startTime = Date.now();
@@ -116,14 +126,14 @@ export class DeferredExecutor {
       // Notify
       this.onResult?.(requestId, request, result);
 
-      return result;
+      return { claimed: true, result };
     } catch (err) {
       const errorStr = `Error executing ${request.tool_name}: ${err instanceof Error ? err.message : String(err)}`;
       // The receipt: the tool threw. The call was dispatched, so a partial
       // effect is possible; the row is executed with a failed outcome.
       this.approvalManager.markExecuted(requestId, errorStr, 'failed');
       this.onResult?.(requestId, request, errorStr);
-      return errorStr;
+      return { claimed: true, result: errorStr };
     }
   }
 

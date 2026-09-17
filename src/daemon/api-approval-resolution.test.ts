@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
-import { closeDb, initDatabase } from '../vault/schema.ts';
+import { closeDb, generateId, initDatabase } from '../vault/schema.ts';
 import { ApprovalManager, type ApprovalRequest } from '../authority/approval.ts';
 import { AuditTrail } from '../authority/audit.ts';
 import { DeferredExecutor } from '../authority/deferred-executor.ts';
@@ -13,7 +13,7 @@ type Handler = (req: Request & { params: { id: string } }) => Response | Promise
 
 /** An approval decided before a restart, then the daemon coming back and reconciling. */
 function harness(interrupted = false) {
-  const before = new ApprovalManager();
+  const before = new ApprovalManager(generateId());
   const req = before.createRequest({ agentId: 'a1', agentName: 'PA', toolName: 'send_email',
     toolArguments: { to: 'x@example.com' }, actionCategory: 'send_email', urgency: 'normal', reason: 'Send the invoice', context: '' });
   before.approve(req.id, 'dashboard');
@@ -79,6 +79,15 @@ test('an interrupted approval refuses execute and accepts close with a note', as
     resolution_note: 'Checked the outbox: it was sent' });
   expect(await (await h.call('/api/authority/approvals', 'GET', '?status=unresolved')).json()).toEqual([]);
   expect(h.broadcasts).toHaveLength(1);
+});
+
+test('close tolerates a missing or non-object body and refuses a non-string note', async () => {
+  const h = harness();
+  expect((await h.call('/api/authority/approvals/:id/close', 'POST', '', { note: 123 })).status).toBe(400);
+  expect(h.mgr.getRequest(h.req.id)).toMatchObject({ execution_outcome: 'not_started' });
+  const closed = await h.call('/api/authority/approvals/:id/close', 'POST', '', null);
+  expect(closed.status).toBe(200);
+  expect(h.mgr.getRequest(h.req.id)).toMatchObject({ execution_outcome: 'closed', resolution_note: null });
 });
 
 test('approve and deny have nothing to flip on an unresolved row', async () => {

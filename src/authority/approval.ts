@@ -93,11 +93,17 @@ export function executionState(request: ApprovalRequest): ApprovalExecutionState
 
 const UNRESOLVED = `status = 'approved' AND execution_outcome IN ('not_started', 'unknown')`;
 
+/**
+ * One id per process, so every manager in this daemon agrees on which claims
+ * are its own. Tests pass an explicit id to stand in for a previous boot.
+ */
+const PROCESS_BOOT_ID = generateId();
+
 export class ApprovalManager {
   /** Identity of this process. A claim carrying another boot id never got its receipt from us. */
   readonly bootId: string;
 
-  constructor(bootId: string = generateId()) {
+  constructor(bootId: string = PROCESS_BOOT_ID) {
     this.bootId = bootId;
   }
 

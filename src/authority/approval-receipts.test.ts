@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { closeDb, initDatabase } from '../vault/schema.ts';
+import { closeDb, generateId, initDatabase } from '../vault/schema.ts';
 import { ApprovalManager, executionState, type ApprovalExecutionMode, type ApprovalRequest } from './approval.ts';
 import { AuditTrail } from './audit.ts';
 import { DeferredExecutor } from './deferred-executor.ts';
@@ -25,7 +25,7 @@ function executor(mgr: ApprovalManager, run: () => Promise<string>) {
 }
 /** The daemon coming back: a manager with a new boot id that reconciles before serving. */
 function restart() {
-  const next = new ApprovalManager();
+  const next = new ApprovalManager(generateId());
   const counts = next.reconcileAfterRestart();
   return { mgr: next, counts };
 }
@@ -227,6 +227,47 @@ describe('reconciliation after a restart', () => {
     await applyExecutionResolution('execute', req.id, 'dashboard', deps);
     expect(broadcasts).toHaveLength(1);
     expect(broadcasts[0]).toMatchObject({ id: req.id, status: 'executed', execution_outcome: 'committed' });
+  });
+
+  test('every manager in a process shares one boot id unless told otherwise', () => {
+    expect(new ApprovalManager().bootId).toBe(new ApprovalManager().bootId);
+    expect(new ApprovalManager(generateId()).bootId).not.toBe(new ApprovalManager().bootId);
+  });
+
+  test('reconciliation is idempotent', () => {
+    const before = new ApprovalManager(generateId());
+    const notStarted = request(before);
+    before.approve(notStarted.id, 'dashboard');
+    const interrupted = request(before);
+    before.approve(interrupted.id, 'dashboard');
+    before.claimExecution(interrupted.id, 'dashboard');
+    const { mgr: after, counts } = restart();
+    expect(counts).toEqual({ demotedInline: 0, notStarted: 1, interrupted: 1 });
+    const rows = [after.getRequest(notStarted.id), after.getRequest(interrupted.id)];
+    expect(after.reconcileAfterRestart()).toEqual({ demotedInline: 0, notStarted: 0, interrupted: 0 });
+    expect([after.getRequest(notStarted.id), after.getRequest(interrupted.id)]).toEqual(rows);
+  });
+
+  test('a claim lost between the check and the run is reported as such, never as a run', async () => {
+    const before = new ApprovalManager(generateId());
+    const req = request(before);
+    before.approve(req.id, 'dashboard');
+    const { mgr: after } = restart();
+    let runs = 0;
+    // Another surface closes the row after the resolution's check passed and
+    // before the executor claims it.
+    class RacedExecutor extends DeferredExecutor {
+      override executeApprovedWithReceipt(requestId: string, claimedBy?: string) {
+        expect(after.closeUnresolved(requestId, 'channel')).toBe(true);
+        return super.executeApprovedWithReceipt(requestId, claimedBy);
+      }
+    }
+    const raced = new RacedExecutor(after, new AuditTrail());
+    raced.setToolRegistry({ execute: async () => { runs++; return 'sent'; } } as unknown as ToolRegistry);
+    const outcome = await applyExecutionResolution('execute', req.id, 'dashboard', { approvalManager: after, deferredExecutor: raced });
+    expect(outcome).toMatchObject({ status: 'not_executable', reason: expect.stringContaining('took this approval first (closed)') });
+    expect(runs).toBe(0);
+    expect(after.getRequest(req.id)).toMatchObject({ status: 'approved', execution_outcome: 'closed', resolved_by: 'channel' });
   });
 
   test('execution state names every stage', () => {

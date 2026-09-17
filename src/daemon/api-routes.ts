@@ -3166,7 +3166,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           deferredExecutor: ctx.deferredExecutor,
           wsService: ctx.wsService,
         });
-        if (outcome.status === 'not_unresolved') return error('Request not found or not awaiting a decision', 404);
+        if (outcome.status === 'not_unresolved') return error('Request not found or not left unresolved by a restart', 404);
         if (outcome.status === 'not_executable') return error(outcome.reason, 409);
         if (outcome.status !== 'executed') return error('Unexpected resolution outcome', 500);
         return json({ ok: true, result: outcome.result.slice(0, 500) });
@@ -3178,14 +3178,17 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         if (!ctx.approvalManager || !ctx.deferredExecutor) {
           return error('Authority system not configured', 500);
         }
-        const body = (await req.json().catch(() => ({}))) as { note?: unknown };
-        const note = typeof body.note === 'string' ? body.note.slice(0, 500) : undefined;
+        // No body, an empty body or a non-object body all mean "no note".
+        const body = (await req.json().catch(() => null)) as unknown;
+        const rawNote = body && typeof body === 'object' ? (body as { note?: unknown }).note : undefined;
+        if (rawNote !== undefined && typeof rawNote !== 'string') return error('note must be a string', 400);
+        const note = rawNote?.slice(0, 500);
         const outcome = await applyExecutionResolution('close', req.params.id, 'dashboard', {
           approvalManager: ctx.approvalManager,
           deferredExecutor: ctx.deferredExecutor,
           wsService: ctx.wsService,
         }, note);
-        if (outcome.status === 'not_unresolved') return error('Request not found or not awaiting a decision', 404);
+        if (outcome.status === 'not_unresolved') return error('Request not found or not left unresolved by a restart', 404);
         if (outcome.status !== 'closed') return error('Unexpected resolution outcome', 500);
         return json({ ok: true });
       },

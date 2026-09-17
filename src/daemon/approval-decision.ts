@@ -98,9 +98,13 @@ export async function applyExecutionResolution(
     return { status: 'not_executable', reason: 'An intent grant has nothing to run on its own; the conversation that asked for it is gone. Close it.' };
   }
   // Runs through the same claim as every execution, so this is exactly one
-  // attempt even if two surfaces resolve the same row at once.
-  const result = await deferredExecutor.executeApproved(requestId, resolvedBy);
+  // attempt even if two surfaces resolve the same row at once. A claim lost
+  // between the check above and the run is reported as such, not as a run.
+  const { claimed, result } = await deferredExecutor.executeApprovedWithReceipt(requestId, resolvedBy);
   const updated = approvalManager.getRequest(requestId) ?? current;
+  if (!claimed) {
+    return { status: 'not_executable', reason: `Another surface took this approval first (${updated.execution_outcome ?? 'in flight'}); its receipt will say what happened.` };
+  }
   wsService?.broadcastApprovalUpdate(updated);
   return { status: 'executed', result, request: updated };
 }

@@ -129,7 +129,12 @@ export function AuthorityRoomBody({ mode }: { mode: RoomBodyMode }) {
 
       {/* Stats strip */}
       <div className="v2-auth__stats">
-        <StatCard label="Pending" value={data.stats.pending} sub="awaiting decision" tone={data.stats.pending > 0 ? "accent" : "neutral"} />
+        <StatCard
+          label="Pending"
+          value={data.stats.pending + data.stats.unresolved}
+          sub={data.stats.unresolved > 0 ? `${data.stats.unresolved} approved, not finished` : "awaiting decision"}
+          tone={data.stats.pending + data.stats.unresolved > 0 ? "accent" : "neutral"}
+        />
         <StatCard label="Default level" value={data.config?.default_level ?? "—"} sub="1-10 authority floor" />
         <StatCard label="Allowed (recent)" value={data.stats.allowed} sub={`of ${data.stats.total}`} />
         <StatCard label="Denied (recent)" value={data.stats.denied} sub="last 20 decisions" />
@@ -153,9 +158,9 @@ export function AuthorityRoomBody({ mode }: { mode: RoomBodyMode }) {
             >
               <Icon icon={TAB_ICON[t]} size="sm" />
               <span>{TAB_LABEL[t]}</span>
-              {t === "approvals" && data.stats.pending > 0 && (
+              {t === "approvals" && data.stats.pending + data.stats.unresolved > 0 && (
                 <span className="v2-auth__tab-badge" data-tone="accent">
-                  {data.stats.pending}
+                  {data.stats.pending + data.stats.unresolved}
                 </span>
               )}
               {t === "learning" && data.suggestions.length > 0 && (
@@ -383,7 +388,11 @@ function ApprovalsTab({
   onExecute: (id: string) => void;
   onClose: (id: string) => void;
 }) {
-  const recentDecisions = history.filter((a) => a.status !== "pending").slice(0, 20);
+  // Unresolved rows have their own section above; listing them here too would
+  // show the same row twice.
+  const recentDecisions = history
+    .filter((a) => a.status !== "pending" && a.execution_state !== "not_started" && a.execution_state !== "unknown")
+    .slice(0, 20);
 
   return (
     <div className="v2-auth__approvals">

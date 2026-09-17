@@ -414,13 +414,28 @@ function createTables(db: Database): void {
   // receipt (committed, failed, blocked) or, after a restart, the reconciled
   // state of an approved row that never got one (not_started, unknown) and
   // the user's resolution of it (closed). Old rows read as unclaimed.
-  try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_claimed_at INTEGER`); } catch {}
+  let receiptsIntroduced = false;
+  try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_claimed_at INTEGER`); receiptsIntroduced = true; } catch {}
   try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_claimed_by TEXT`); } catch {}
   try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_boot_id TEXT`); } catch {}
   try { db.run(`ALTER TABLE approval_requests ADD COLUMN execution_outcome TEXT`); } catch {}
   try { db.run(`ALTER TABLE approval_requests ADD COLUMN resolved_at INTEGER`); } catch {}
   try { db.run(`ALTER TABLE approval_requests ADD COLUMN resolved_by TEXT`); } catch {}
   try { db.run(`ALTER TABLE approval_requests ADD COLUMN resolution_note TEXT`); } catch {}
+  // Rows approved before receipts existed cannot be told apart: the old code
+  // wrote no claim, so whether one of them ran is unknowable. They are closed
+  // once, here, rather than offered as runnable with months-old arguments on
+  // the first boot after the upgrade. Only rows approved from now on are
+  // reconciled at startup.
+  if (receiptsIntroduced) {
+    db.run(
+      `UPDATE approval_requests
+         SET execution_outcome = 'closed', resolved_at = ?, resolved_by = 'migration',
+             resolution_note = 'Approved before execution receipts existed; whether it ran is unknown, so it was not run again'
+       WHERE status = 'approved' AND execution_mode != 'workflow'`,
+      [Date.now()]
+    );
+  }
 
   // Authority: Audit trail
   db.run(`
