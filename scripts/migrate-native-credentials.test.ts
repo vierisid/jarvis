@@ -5,7 +5,13 @@ import { existsSync, mkdtempSync, readFileSync, rmSync, statSync, symlinkSync, w
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../src/workflows/db/index";
-import { decryptJson, encryptJson, isEncrypted, setEncryptionKey } from "../src/workflows/db/encryption";
+import {
+  decryptBoundJson, encryptJson, isEncrypted, isRowBound, requireEncryptedCredentials,
+  setEncryptionKey, setRequireEncryptedCredentials, type CredentialRowBinding,
+} from "../src/workflows/db/encryption";
+import {
+  applyStrictCredentialEncryptionSetting, enableStrictCredentialEncryption, inventoryNativeCredentials,
+} from "../src/workflows/db/credential-migration";
 import { getConnection, upsertConnection } from "../src/workflows/db/repos/app-connection";
 import { acquireLockAt, lockPathFor } from "../src/daemon/pid";
 
@@ -17,6 +23,7 @@ let dbPath: string;
 let keyFile: string;
 let recovery: string;
 let original: Array<{ id: string; value: string; updated: number }>;
+type IdentityRow = CredentialRowBinding & { value: string };
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), "jarvis-credential-migration-"));
@@ -29,8 +36,13 @@ beforeEach(() => {
   for (const externalId of ["a", "b", "c"]) {
     const row = upsertConnection({ externalId, displayName: externalId, type: "OAUTH2",
       pieceName: "fixture", pieceVersion: "1", value: { access_token: TOKEN + externalId } });
-    if (externalId !== "c") getWorkflowDb().run("UPDATE app_connection SET value = ? WHERE id = ?", [
-      ' { "access_token" : "' + TOKEN + externalId + '" } ', row.id,
+    // a, b: legacy plaintext. c: the unbound `enc1:` envelope #473 wrote, which
+    // `upsertConnection` no longer produces but every converted install holds.
+    getWorkflowDb().run("UPDATE app_connection SET value = ? WHERE id = ?", [
+      externalId === "c"
+        ? encryptJson({ access_token: TOKEN + externalId })
+        : ' { "access_token" : "' + TOKEN + externalId + '" } ',
+      row.id,
     ]);
   }
   closeWorkflowDb();
@@ -41,6 +53,7 @@ beforeEach(() => {
 afterEach(() => {
   closeWorkflowDb();
   setEncryptionKey(null);
+  setRequireEncryptedCredentials(false);
   rmSync(dir, { recursive: true, force: true });
 });
 
@@ -55,14 +68,27 @@ function stored() {
   ).all());
 }
 
-function run(mode: "inventory" | "apply" | "rollback", extra: string[] = [], envOverrides: Record<string, string> = {}) {
+/** Every row with the identity columns an `enc1a:` blob is sealed against. */
+function identities(): IdentityRow[] {
+  return query(db => db.query<
+    { id: string; project_id: string; piece_name: string; external_id: string; value: string }, []
+  >("SELECT id, project_id, piece_name, external_id, value FROM app_connection ORDER BY id").all())
+    .map(row => ({
+      id: row.id, projectId: row.project_id, pieceName: row.piece_name,
+      externalId: row.external_id, value: row.value,
+    }));
+}
+
+type Mode = "inventory" | "apply" | "rollback" | "bind" | "rollback-binding";
+
+function run(mode: Mode, extra: string[] = [], envOverrides: Record<string, string> = {}) {
   const env: Record<string, string | undefined> = { ...process.env, JARVIS_HOME: dir };
   delete env.JARVIS_WORKFLOW_ENCRYPTION_KEY;
   delete env.JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE;
   Object.assign(env, envOverrides);
   const args = [SCRIPT, mode, "--db", dbPath];
   if (mode !== "inventory") args.push("--data-dir", dir, "--recovery", recovery);
-  if (mode === "apply") args.push("--deployment-version", "0.13.7-fixture");
+  if (mode === "apply" || mode === "bind") args.push("--deployment-version", "0.13.7-fixture");
   if (mode !== "inventory" && !Object.hasOwn(envOverrides, "JARVIS_WORKFLOW_ENCRYPTION_KEY")) {
     args.push("--key-file", keyFile);
   }
@@ -81,7 +107,7 @@ describe("offline native credential migration", () => {
     const res = run("inventory");
     expect(res.status).toBe(0);
     expect(JSON.parse(res.stdout)).toEqual({ mode: "inventory", deploymentVersion: "unknown",
-      total: 3, encrypted: 1, legacy: 2, invalidLegacy: 0 });
+      total: 3, encrypted: 1, rowBound: 0, legacy: 2, invalidLegacy: 0 });
     expect(stored()).toEqual(original);
     expect(existsSync(keyFile)).toBe(false);
     expect(existsSync(recovery)).toBe(false);
@@ -103,7 +129,9 @@ describe("offline native credential migration", () => {
     expect(readFileSync(keyFile, "utf8")).toBe(KEY.toString("hex"));
     setEncryptionKey(KEY);
     initWorkflowDb(dbPath);
-    for (const row of after) expect(getConnection(row.id)?.value).toEqual(decryptJson(row.value) as Record<string, unknown>);
+    for (const row of identities()) {
+      expect(getConnection(row.id)?.value).toEqual(decryptBoundJson(row.value, row) as Record<string, unknown>);
+    }
     closeWorkflowDb();
     setEncryptionKey(null);
 
@@ -268,5 +296,261 @@ describe("offline native credential migration", () => {
     expect(existsSync(home)).toBe(true);
     expect(run("rollback", [], { JARVIS_HOME: home }).status).toBe(0);
     expect(stored()).toEqual(original);
+  });
+});
+
+describe("offline credential binding conversion", () => {
+  /** The fixture holds two legacy plaintext rows and one unbound `enc1:` row. */
+  test("binds plaintext and enc1: rows in one pass and leaves reads working", () => {
+    expect(JSON.parse(run("bind").stdout)).toMatchObject({ bound: 3, alreadyBound: 0 });
+    const after = identities();
+    expect(after.every(row => isRowBound(row.value))).toBe(true);
+    for (const row of after) {
+      // Timestamps and metadata untouched; only `value` changes.
+      expect(stored().find(r => r.id === row.id)!.updated)
+        .toBe(original.find(r => r.id === row.id)!.updated);
+      expect(row.value).not.toContain(TOKEN);
+    }
+    const journal = readFileSync(recovery, "utf8");
+    expect(isEncrypted(journal)).toBe(true);
+    expect(journal).not.toContain(TOKEN);
+    expect(statSync(recovery).mode & 0o777).toBe(0o600);
+    setEncryptionKey(KEY);
+    initWorkflowDb(dbPath);
+    for (const row of after) {
+      expect(getConnection(row.id)?.value).toEqual(decryptBoundJson(row.value, row) as Record<string, unknown>);
+    }
+    expect(inventoryNativeCredentials(getWorkflowDb()))
+      .toEqual({ total: 3, encrypted: 3, rowBound: 3, legacy: 0, invalidLegacy: 0 });
+  });
+
+  test("a bound row's value column no longer reads under another row", () => {
+    expect(run("bind").status).toBe(0);
+    const rows = identities();
+    const donor = rows[0]!;
+    const victim = rows[1]!;
+    query(db => db.run("UPDATE app_connection SET value = ? WHERE id = ?", [donor.value, victim.id]));
+    setEncryptionKey(KEY);
+    initWorkflowDb(dbPath);
+    expect(() => getConnection(victim.id)).toThrow(/auth verification failed/);
+  });
+
+  test("repeated bind is a no-op and retains its recovery record", () => {
+    expect(run("bind").status).toBe(0);
+    const after = stored();
+    const journal = readFileSync(recovery, "utf8");
+    expect(JSON.parse(run("bind").stdout)).toMatchObject({ bound: 0, alreadyBound: 3 });
+    expect(stored()).toEqual(after);
+    expect(readFileSync(recovery, "utf8")).toBe(journal);
+  });
+
+  test("rollback-binding restores the exact original bytes and is itself repeatable", () => {
+    expect(run("bind").status).toBe(0);
+    const journal = readFileSync(recovery, "utf8");
+    expect(JSON.parse(run("rollback-binding").stdout)).toMatchObject({ restored: 3, alreadyOriginal: 0 });
+    expect(stored()).toEqual(original);
+    expect(JSON.parse(run("rollback-binding").stdout)).toMatchObject({ restored: 0, alreadyOriginal: 3 });
+    expect(stored()).toEqual(original);
+    expect(readFileSync(recovery, "utf8")).toBe(journal);
+  });
+
+  test("a mid-transaction abort leaves every row original and the journal replayable", () => {
+    const last = original.at(-1)!;
+    // Abort after some rows have already been updated inside the transaction.
+    query(db => db.exec("CREATE TRIGGER fail_binding BEFORE UPDATE OF value ON app_connection "
+      + "WHEN OLD.id = '" + last.id + "' BEGIN SELECT RAISE(ABORT, '" + TOKEN + "'); END"));
+    expect(run("bind").status).toBe(1);
+    // Crash before commit: no row changed, but the journal is already durable.
+    expect(stored()).toEqual(original);
+    expect(existsSync(recovery)).toBe(true);
+    expect(readFileSync(recovery, "utf8")).not.toContain(TOKEN);
+    query(db => db.exec("DROP TRIGGER fail_binding"));
+    // The retained journal still rolls back cleanly, so nothing is stranded.
+    expect(JSON.parse(run("rollback-binding").stdout)).toMatchObject({ restored: 0, alreadyOriginal: 3 });
+    expect(stored()).toEqual(original);
+  });
+
+  test("a rollback-binding abort is atomic", () => {
+    expect(run("bind").status).toBe(0);
+    const bound = stored();
+    query(db => db.exec("CREATE TRIGGER fail_binding_rollback BEFORE UPDATE OF value ON app_connection "
+      + "WHEN OLD.id = '" + original.at(-1)!.id + "' BEGIN SELECT RAISE(ABORT, '" + TOKEN + "'); END"));
+    expect(run("rollback-binding").status).toBe(1);
+    expect(stored()).toEqual(bound);
+  });
+
+  test.each([TOKEN, "null", "[]", "enc1:bad", "enc1a:bad"])(
+    "an unreadable credential blocks every binding write: %s", bad => {
+      query(db => db.run("UPDATE app_connection SET value = ? WHERE id = ?", [bad, original[1]!.id]));
+      const before = stored();
+      const res = run("bind");
+      expect(res.status).toBe(1);
+      expect(res.stderr).toContain("unreadable credential");
+      expect(stored()).toEqual(before);
+      expect(existsSync(recovery)).toBe(false);
+    });
+
+  test("bind refuses a relabelled bound row instead of re-sealing it", () => {
+    expect(run("bind").status).toBe(0);
+    const before = stored();
+    // A writer who moved a bound row's labels must not be able to launder the
+    // rearrangement by running the conversion again.
+    query(db => db.run("UPDATE app_connection SET piece_name = ? WHERE id = ?",
+      ["fixture-relabelled", identities()[0]!.id]));
+    const res = run("bind");
+    expect(res.status).toBe(1);
+    expect(res.stderr).toContain("unreadable credential");
+    expect(stored()).toEqual(before);
+  });
+
+  test("an existing recovery file blocks binding without overwriting it", () => {
+    writeFileSync(recovery, "retained binding recovery fixture");
+    expect(run("bind").status).toBe(1);
+    expect(stored()).toEqual(original);
+    expect(readFileSync(recovery, "utf8")).toBe("retained binding recovery fixture");
+  });
+
+  test("a wrong key never binds or changes a credential", () => {
+    writeFileSync(keyFile, Buffer.alloc(32, 22).toString("hex"));
+    expect(run("bind").status).toBe(1);
+    expect(stored()).toEqual(original);
+    expect(existsSync(recovery)).toBe(false);
+  });
+
+  test.each(["updated", "deleted"])("rollback-binding refuses a credential %s since binding", change => {
+    expect(run("bind").status).toBe(0);
+    const id = original[0]!.id;
+    query(db => change === "deleted"
+      ? db.run("DELETE FROM app_connection WHERE id = ?", [id])
+      : db.run("UPDATE app_connection SET value = ? WHERE id = ?", ["{\"secret\":\"new-fixture\"}", id]));
+    const changed = stored();
+    expect(run("rollback-binding").status).toBe(1);
+    expect(stored()).toEqual(changed);
+  });
+
+  test("rollback-binding refuses a tampered journal or a different database", () => {
+    expect(run("bind").status).toBe(0);
+    const bound = stored();
+    const oldPath = dbPath;
+    const differentPath = join(dir, "different.db");
+    query(db => db.run("VACUUM INTO ?", [differentPath]));
+    dbPath = differentPath;
+    expect(run("rollback-binding").status).toBe(1);
+    dbPath = oldPath;
+    expect(stored()).toEqual(bound);
+    const bytes = readFileSync(recovery, "utf8");
+    writeFileSync(recovery, bytes.slice(0, 10) + "!" + bytes.slice(11));
+    expect(run("rollback-binding").status).toBe(1);
+    expect(stored()).toEqual(bound);
+  });
+
+  test("the binding journal and the #473 journal do not accept each other", () => {
+    expect(run("bind").status).toBe(0);
+    const bound = stored();
+    // `rollback` reads a `jarvis-native-credentials-v1` record; the binding
+    // journal is a different format and must be refused, not half-applied.
+    expect(run("rollback").status).toBe(1);
+    expect(stored()).toEqual(bound);
+    expect(run("rollback-binding").status).toBe(0);
+    expect(stored()).toEqual(original);
+    // And the reverse: a v1 journal is not a binding journal.
+    rmSync(recovery);
+    expect(run("apply").status).toBe(0);
+    const applied = stored();
+    expect(run("rollback-binding").status).toBe(1);
+    expect(stored()).toEqual(applied);
+  });
+
+  test("a held daemon lock blocks binding writes", () => {
+    const lock = acquireLockAt(lockPathFor(dir), process.pid);
+    expect(lock).not.toBeNull();
+    try {
+      for (const mode of ["bind", "rollback-binding"] as const) {
+        const res = run(mode);
+        expect(res.status).toBe(1);
+        expect(res.stderr).toContain("Daemon or maintenance task is running");
+      }
+      expect(stored()).toEqual(original);
+    } finally { lock?.release(); }
+  });
+});
+
+describe("strict credential encryption gate", () => {
+  test("refuses to enable while a readable plaintext row remains", () => {
+    setEncryptionKey(KEY);
+    initWorkflowDb(dbPath);
+    expect(() => enableStrictCredentialEncryption(getWorkflowDb()))
+      .toThrow(/2 plaintext credential row\(s\) remain/);
+    // A refused enable leaves the gate exactly where it was.
+    expect(requireEncryptedCredentials()).toBe(false);
+    expect(getConnection(original[0]!.id)?.value).toBeTruthy();
+  });
+
+  test("enables once the conversion reports no legacy rows", () => {
+    expect(run("bind").status).toBe(0);
+    setEncryptionKey(KEY);
+    initWorkflowDb(dbPath);
+    expect(enableStrictCredentialEncryption(getWorkflowDb())).toEqual({ legacy: 0 });
+    expect(requireEncryptedCredentials()).toBe(true);
+    const id = identities()[0]!.id;
+    expect(getConnection(id)?.value).toBeTruthy();
+    // With the gate closed, swapping a ciphertext for attacker plaintext is
+    // refused instead of believed.
+    getWorkflowDb().run("UPDATE app_connection SET value = ? WHERE id = ?",
+      [JSON.stringify({ access_token: "synthetic-attacker-plaintext" }), id]);
+    expect(() => getConnection(id)).toThrow(/plaintext credential refused/);
+  });
+
+  test("a refusal never downgrades an already-strict daemon", () => {
+    expect(run("bind").status).toBe(0);
+    setEncryptionKey(KEY);
+    initWorkflowDb(dbPath);
+    enableStrictCredentialEncryption(getWorkflowDb());
+    // An attacker who can write the table can make legacy > 0 again. That
+    // must not be a way to turn the gate back off.
+    getWorkflowDb().run("UPDATE app_connection SET value = ? WHERE id = ?",
+      [JSON.stringify({ access_token: "synthetic-downgrade-attempt" }), identities()[0]!.id]);
+    expect(() => enableStrictCredentialEncryption(getWorkflowDb())).toThrow(/plaintext credential row/);
+    expect(requireEncryptedCredentials()).toBe(true);
+  });
+
+  test("the #473 conversion alone is enough to close the gate", () => {
+    // `apply` leaves unbound `enc1:` rows. Strict mode is about the absence of
+    // an envelope, so those still read and the gate can still close.
+    expect(run("apply").status).toBe(0);
+    setEncryptionKey(KEY);
+    initWorkflowDb(dbPath);
+    expect(enableStrictCredentialEncryption(getWorkflowDb())).toEqual({ legacy: 0 });
+    for (const row of identities()) expect(getConnection(row.id)?.value).toBeTruthy();
+  });
+
+  test.each([
+    ["no variable", {}, false],
+    ["an unrecognised value", { JARVIS_REQUIRE_ENCRYPTED_CREDENTIALS: "true" }, false],
+    ["the opt-in", { JARVIS_REQUIRE_ENCRYPTED_CREDENTIALS: "1" }, true],
+  ] as const)("the boot setting reads %s", (_label, env, expected) => {
+    expect(run("bind").status).toBe(0);
+    setEncryptionKey(KEY);
+    initWorkflowDb(dbPath);
+    expect(applyStrictCredentialEncryptionSetting(getWorkflowDb(), env)).toBe(expected);
+    expect(requireEncryptedCredentials()).toBe(expected);
+  });
+
+  test("the boot setting propagates the refusal, so startup fails on a false assertion", () => {
+    setEncryptionKey(KEY);
+    initWorkflowDb(dbPath);
+    expect(() => applyStrictCredentialEncryptionSetting(getWorkflowDb(),
+      { JARVIS_REQUIRE_ENCRYPTED_CREDENTIALS: "1" })).toThrow(/plaintext credential row/);
+    expect(requireEncryptedCredentials()).toBe(false);
+  });
+
+  test("an invalid legacy row does not block the gate forever", () => {
+    expect(run("bind").status).toBe(0);
+    const id = identities()[0]!.id;
+    query(db => db.run("UPDATE app_connection SET value = ? WHERE id = ?", ["not-json-at-all", id]));
+    setEncryptionKey(KEY);
+    initWorkflowDb(dbPath);
+    expect(inventoryNativeCredentials(getWorkflowDb())).toMatchObject({ legacy: 0, invalidLegacy: 1 });
+    expect(enableStrictCredentialEncryption(getWorkflowDb())).toEqual({ legacy: 0 });
   });
 });

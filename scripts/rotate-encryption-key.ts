@@ -2,6 +2,11 @@
 /**
  * Rotate the at-rest encryption key used for `app_connection.value`.
  *
+ * Envelopes are preserved, not normalized: a row-bound `enc1a:` row is
+ * re-sealed row-bound under the new key, an `enc1:` or legacy plaintext row
+ * is re-sealed as `enc1:`. Rotation must never be the thing that drops a
+ * row binding.
+ *
  *   bun run scripts/rotate-encryption-key.ts [--data-dir <path>]
  *
  * Steps:
@@ -45,9 +50,12 @@ import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { randomBytes } from "node:crypto";
 import {
-  decryptJson,
+  decryptBoundJson,
+  encryptBoundJson,
   encryptJson,
+  isRowBound,
   setEncryptionKey,
+  type CredentialRowBinding,
 } from "../src/workflows/db/encryption";
 import { isLocked, lockPathFor } from "../src/daemon/pid";
 
@@ -113,7 +121,14 @@ function loadKeyOrExit(path: string): Buffer {
 
 interface ConnectionRow {
   id: string;
+  project_id: string;
+  piece_name: string;
+  external_id: string;
   value: string;
+}
+
+function bindingFor(row: ConnectionRow): CredentialRowBinding {
+  return { id: row.id, projectId: row.project_id, pieceName: row.piece_name, externalId: row.external_id };
 }
 
 async function main(): Promise<void> {
@@ -183,15 +198,21 @@ async function main(): Promise<void> {
   setEncryptionKey(oldKey);
   const db = new Database(args.dbPath);
   const rows = db
-    .prepare("SELECT id, value FROM app_connection")
+    .prepare("SELECT id, project_id, piece_name, external_id, value FROM app_connection")
     .all() as ConnectionRow[];
   console.log(`[rotate] DB ${args.dbPath}: ${rows.length} connection(s) to rotate`);
 
-  const decrypted: Array<{ id: string; plaintext: unknown }> = [];
+  // Carry each row's envelope forward. Re-wrapping a row-bound `enc1a:` value
+  // as unbound `enc1:` would silently undo the row binding, so rotation
+  // preserves whichever envelope the row already had. A legacy plaintext row
+  // becomes `enc1:`, matching what this script has always done; run
+  // `migrate-native-credentials.ts bind` to reach the bound envelope.
+  const decrypted: Array<{ id: string; plaintext: unknown; binding: CredentialRowBinding; bound: boolean }> = [];
   for (const row of rows) {
     try {
-      const plaintext = decryptJson(row.value, `app_connection ${row.id}`);
-      decrypted.push({ id: row.id, plaintext });
+      const binding = bindingFor(row);
+      const plaintext = decryptBoundJson(row.value, binding, `app_connection ${row.id}`);
+      decrypted.push({ id: row.id, plaintext, binding, bound: isRowBound(row.value) });
     } catch (e) {
       console.error(`[rotate] FAIL on ${row.id}: ${(e as Error).message}`);
       console.error("[rotate] aborting -- no changes written.");
@@ -217,8 +238,8 @@ async function main(): Promise<void> {
   const update = db.prepare("UPDATE app_connection SET value = ?, updated = ? WHERE id = ?");
   const now = Date.now();
   const tx = db.transaction((items: typeof decrypted) => {
-    for (const { id, plaintext } of items) {
-      const ciphertext = encryptJson(plaintext);
+    for (const { id, plaintext, binding, bound } of items) {
+      const ciphertext = bound ? encryptBoundJson(plaintext, binding) : encryptJson(plaintext);
       update.run(ciphertext, now, id);
     }
   });

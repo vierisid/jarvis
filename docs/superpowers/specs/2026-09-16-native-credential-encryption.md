@@ -30,7 +30,9 @@ Three limits are deliberate and must not be overstated:
 - The envelope carries no associated data, so a ciphertext is not bound to its
   row. Anyone who can write the database can move a value between rows and the
   result still authenticates. Binding would change the wire format and needs
-  its own conversion, so it is not part of this fix.
+  its own conversion, so it is not part of this fix. Both limits below were
+  removed afterwards by the `enc1a:` envelope and strict mode; see
+  `2026-09-17-credential-row-binding.md` for what replaced them.
 - Reads still accept legacy plaintext JSON, because rows written by the
   affected versions are plaintext. There is no strict mode that rejects
   plaintext once a deployment has converted, so a database writer can replace

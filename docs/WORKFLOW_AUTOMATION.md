@@ -545,7 +545,7 @@ user steps.
 
 All workflow tables live in `~/.jarvis/jarvis.db` (the same SQLite file as the rest of Jarvis). Schema: `src/workflows/db/schema.ts`. Repos: `src/workflows/db/repos/`.
 
-Connection secrets are encrypted at rest with AES-256-GCM. Wrapping format: `enc1:<iv>:<tag>:<ciphertext>`. The key comes from `JARVIS_WORKFLOW_ENCRYPTION_KEY` (env) or `~/.jarvis/cache/workflow-encryption.key` (auto-generated, `chmod 0600`). Legacy plaintext rows are accepted transparently for backwards compat.
+Connection secrets are encrypted at rest with AES-256-GCM. Wrapping format: `enc1a:<base64(iv | tag | ciphertext)>`, with the row's `(id, project_id, piece_name, external_id)` passed as GCM associated data so a stored value only authenticates against the row it was written for. The older unbound `enc1:` format is still read; convert it with `bun scripts/migrate-native-credentials.ts bind`. The key comes from `JARVIS_WORKFLOW_ENCRYPTION_KEY` (env) or `~/.jarvis/cache/workflow-encryption.key` (auto-generated, `chmod 0600`). Legacy plaintext rows are accepted transparently for backwards compat; set `JARVIS_REQUIRE_ENCRYPTED_CREDENTIALS=1` once conversion is done to refuse them.
 
 To rotate the key, run `scripts/rotate-encryption-key.ts`. It decrypts every row with the old key, re-encrypts with the new key, and atomically swaps the keychain. It refuses to run while the daemon is up (checks the daemon lock file).
 

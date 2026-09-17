@@ -517,6 +517,19 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     ensureWorkflowSchema();
     logWithTimestamp('Workflow schema ready');
 
+    // 2.1a. Opt-in strict credential encryption. Off unless the operator sets
+    // JARVIS_REQUIRE_ENCRYPTED_CREDENTIALS=1, because every release from
+    // v0.6.0 to v0.13.7 wrote plaintext `app_connection.value` rows and
+    // refusing those before a deployment has converted would lock it out of
+    // credentials it still needs. The gate refuses if unconverted rows
+    // remain, and that refusal reaches the startup catch below, so the daemon
+    // does not come up on a false assertion. See the helper for why.
+    const { applyStrictCredentialEncryptionSetting } = await import('../workflows/db/credential-migration.ts');
+    const { getWorkflowDb } = await import('../workflows/db/index.ts');
+    if (applyStrictCredentialEncryptionSetting(getWorkflowDb())) {
+      logWithTimestamp('Strict credential encryption enabled (plaintext credentials refused)');
+    }
+
     // 2a. Seed webapp templates (upserts, safe to run every startup)
     const { seedWebappTemplates } = await import('../vault/webapp-template-seeds.ts');
     seedWebappTemplates();
