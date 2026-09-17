@@ -109,6 +109,12 @@ database is reopened, returns the same failure without dispatching again.
 Reconnecting the machine does not silently replay a previously blocked action.
 No database migration is necessary: status is text and the receipt is JSON.
 
+Adapters whose effect did complete follow the other half of the same rule:
+they record `succeeded` with a qualified outcome inside `result`, so a
+top-level `outcome` on a receipt always means the effect did not complete.
+`jarvis-ask`'s JSON contract failures are the first case; see
+`2026-09-17-llm-output-contract.md`.
+
 Terminality itself is not new: any non-`pending` effect already refused replay
 before this change, and the CAS dispatch fence plus the re-`checkpoint()`
 immediately before dispatch are untouched. What is new is that the receipt is

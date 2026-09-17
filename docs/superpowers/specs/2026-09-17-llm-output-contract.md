@@ -74,12 +74,10 @@ that failed. A handled step routes on `{{step.outcome.status}}` and
 - The receipt records what the model answered and whether it met the
   contract. It does not establish that a met contract is a correct answer.
 
-## Merging with #478 (A2)
+## Relationship to A2 (#478)
 
-`src/actions/action-outcome.ts` and the hash line added to
-`src/workflows/runner/engine-runtime/build-pieces.ts` are byte-identical
-copies of #478's, so whichever branch lands second merges without conflict.
-Both pieces, `jarvis-ask` here and `jarvis-tool` there, assert the same
-outcome shape; keep both. The receipt rule above is the one both adapters
-follow; #478's durability section should state the same sentence so the two
-specs cannot be read as two conventions.
+This branch is rebased onto main after #478 merged and uses main's
+`src/actions/action-outcome.ts` as it is, including the empty-message
+fallback in `ActionOutcomeError`. Both pieces, `jarvis-ask` here and
+`jarvis-tool` there, assert the same outcome shape. The receipt rule above
+is stated in both specs so they cannot be read as two conventions.
