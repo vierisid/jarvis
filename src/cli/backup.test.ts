@@ -6,6 +6,30 @@ import { Database } from 'bun:sqlite';
 import { cmdExport, cmdRestore, EXPORT_FORMAT, type ExportManifest } from './backup.ts';
 import { acquireLockAt } from '../daemon/pid.ts';
 import { getSecret, setSecrets } from '../vault/keychain.ts';
+import {
+  decryptBoundJson,
+  encryptBoundJson,
+  isEncrypted,
+  isRowBound,
+  setEncryptionKey,
+} from '../workflows/db/encryption.ts';
+
+/**
+ * Obviously-fake workflow encryption key: 32 bytes of 0xC3, in the hex form
+ * the key file stores. The DB snapshot below carries one row-bound `enc1a:`
+ * connection encrypted with it, so the round-trip test can prove the restored
+ * archive actually yields a readable credential rather than just a file of
+ * the right length.
+ */
+const WORKFLOW_KEY_HEX = Buffer.alloc(32, 0xc3).toString('hex');
+const WORKFLOW_SECRET = 'SENTINEL_WORKFLOW_CONNECTION_VALUE';
+/** The row identity the ciphertext below is sealed against. */
+const WORKFLOW_BINDING = {
+  id: 'conn-1',
+  projectId: 'jrv_proj_default',
+  pieceName: 'sentinel-piece',
+  externalId: 'sentinel-external',
+};
 
 /**
  * cmdExport/cmdRestore resolve the data dir through loadConfig(), which honors
@@ -31,6 +55,27 @@ function seedDataDir(dataDir: string): void {
   db.exec('PRAGMA journal_mode=WAL');
   db.exec('CREATE TABLE facts (id INTEGER PRIMARY KEY, body TEXT NOT NULL)');
   db.exec("INSERT INTO facts (body) VALUES ('the-user-likes-tea'), ('meeting-at-nine')");
+  // One encrypted workflow connection, so a restore can be checked for
+  // "credential readable" and not merely "file present". Only the columns the
+  // ciphertext is bound to; the real schema lives in the workflow db tests.
+  db.exec(`CREATE TABLE app_connection (
+    id TEXT PRIMARY KEY, project_id TEXT NOT NULL,
+    piece_name TEXT NOT NULL, external_id TEXT NOT NULL, value TEXT NOT NULL)`);
+  setEncryptionKey(Buffer.from(WORKFLOW_KEY_HEX, 'hex'));
+  try {
+    db.run(
+      'INSERT INTO app_connection (id, project_id, piece_name, external_id, value) VALUES (?, ?, ?, ?, ?)',
+      [
+        WORKFLOW_BINDING.id,
+        WORKFLOW_BINDING.projectId,
+        WORKFLOW_BINDING.pieceName,
+        WORKFLOW_BINDING.externalId,
+        encryptBoundJson({ secret: WORKFLOW_SECRET }, WORKFLOW_BINDING),
+      ],
+    );
+  } finally {
+    setEncryptionKey(null);
+  }
   db.close();
 
   mkdirSync(join(dataDir, 'pieces', 'my-piece'), { recursive: true });
@@ -43,6 +88,7 @@ function seedDataDir(dataDir: string): void {
   Bun.write(join(dataDir, 'sidecar-keys', 'private.pem'), 'FAKE KEY\n');
   Bun.write(join(dataDir, '.secrets.enc'), 'ENCRYPTED-KEYCHAIN\n');
   Bun.write(join(dataDir, '.secrets.key'), 'deadbeef\n');
+  Bun.write(join(dataDir, 'workflow-encryption.key'), `${WORKFLOW_KEY_HEX}\n`);
   // Never exported: server-authored config + ephemeral state.
   Bun.write(join(dataDir, 'config.yaml'), 'daemon:\n  port: 3142\n');
   mkdirSync(join(dataDir, 'logs'), { recursive: true });
@@ -102,6 +148,7 @@ describe('jarvis export', () => {
     expect(entries).not.toContain('sidecar-keys');
     expect(entries).not.toContain('.secrets.enc');
     expect(entries).not.toContain('.secrets.key');
+    expect(entries).not.toContain('workflow-encryption.key');
     expect(entries).not.toContain('config.yaml');
     expect(entries).not.toContain('logs');
     expect(entries).not.toContain('jarvis.db-wal');
@@ -119,6 +166,9 @@ describe('jarvis export', () => {
     expect(entries).toContain('sidecar-keys');
     expect(entries).toContain('.secrets.enc');
     expect(entries).toContain('.secrets.key');
+    // The DB snapshot carries encrypted app_connection rows; without this the
+    // archive restores every workflow credential as unreadable ciphertext.
+    expect(entries).toContain('workflow-encryption.key');
     expect(entries).not.toContain('config.yaml');
   });
 
@@ -279,6 +329,59 @@ describe('jarvis restore', () => {
     // restore must work without re-connecting anything.
     expect(await Bun.file(join(dataDir, '.secrets.enc')).text()).toBe('ENCRYPTED-KEYCHAIN\n');
     expect(statSync(join(dataDir, '.secrets.key')).mode & 0o777).toBe(0o600);
+  });
+
+  test('round-trip: the workflow encryption key comes back and its credential decrypts', async () => {
+    // The point of #480: `--full` snapshots the encrypted app_connection rows,
+    // so it has to carry the only thing that can read them. A restore that
+    // brings back the ciphertext and not the key loses every workflow
+    // credential permanently, with no error at restore time.
+    const archive = join(root, 'wf.tar');
+    expect(await cmdExport(['--out', archive, '--full'], capture().io)).toBe(0);
+
+    rmSync(dataDir, { recursive: true });
+    mkdirSync(dataDir, { recursive: true });
+    expect(await cmdRestore([archive], capture().io)).toBe(0);
+
+    const keyPath = join(dataDir, 'workflow-encryption.key');
+    expect(existsSync(keyPath)).toBe(true);
+    expect(statSync(keyPath).mode & 0o777).toBe(0o600);
+    const restoredHex = (await Bun.file(keyPath).text()).trim();
+    expect(restoredHex).toBe(WORKFLOW_KEY_HEX);
+
+    // Decrypt the restored row with the restored key -- end to end.
+    const db = new Database(join(dataDir, 'jarvis.db'), { readonly: true });
+    const stored = (db.query('SELECT value FROM app_connection WHERE id = ?')
+      .get(WORKFLOW_BINDING.id) as { value: string }).value;
+    db.close();
+    expect(isEncrypted(stored)).toBe(true);
+    expect(isRowBound(stored)).toBe(true);
+    setEncryptionKey(Buffer.from(restoredHex, 'hex'));
+    try {
+      expect(decryptBoundJson(stored, WORKFLOW_BINDING)).toEqual({ secret: WORKFLOW_SECRET });
+    } finally {
+      setEncryptionKey(null);
+    }
+  });
+
+  test('--full picks the workflow key up from cache/ on an install that has not been relocated yet', async () => {
+    // Before this brain relocated it, the key lived under the data dir's
+    // `cache/` -- a directory export excludes as ephemeral. Take it from
+    // wherever it resolves, and restore it to the root where it belongs.
+    rmSync(join(dataDir, 'workflow-encryption.key'), { force: true });
+    mkdirSync(join(dataDir, 'cache'), { recursive: true });
+    await Bun.write(join(dataDir, 'cache', 'workflow-encryption.key'), `${WORKFLOW_KEY_HEX}\n`);
+
+    const archive = join(root, 'wf-legacy.tar');
+    expect(await cmdExport(['--out', archive, '--full'], capture().io)).toBe(0);
+    expect(await tarEntries(archive)).toContain('workflow-encryption.key');
+
+    rmSync(dataDir, { recursive: true });
+    mkdirSync(dataDir, { recursive: true });
+    expect(await cmdRestore([archive], capture().io)).toBe(0);
+    expect((await Bun.file(join(dataDir, 'workflow-encryption.key')).text()).trim())
+      .toBe(WORKFLOW_KEY_HEX);
+    expect(existsSync(join(dataDir, 'cache'))).toBe(false);
   });
 
   test('refuses while the daemon holds its lock', async () => {

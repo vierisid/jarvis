@@ -1,14 +1,16 @@
 /**
  * `app_connection` repository: per-piece credentials (OAuth tokens, API keys,
- * etc.). Inserts and updates share the encrypting serializer. Reads accept
- * encrypted values and legacy JSON; reading a legacy row does not rewrite it.
- * The credential adapter also resolves Jarvis-managed OAuth stores.
+ * etc.). Inserts and updates share the encrypting serializer, which binds the
+ * ciphertext to the row's identity tuple so a stored value cannot be moved to
+ * another row. Reads accept row-bound values, unbound `enc1:` values and
+ * legacy JSON; reading a legacy row does not rewrite it. The credential
+ * adapter also resolves Jarvis-managed OAuth stores.
  */
 
 import type { Database } from "bun:sqlite";
 import { getWorkflowDb, DEFAULT_IDS } from "../index";
 import { apId } from "../ids";
-import { decryptJson, encryptJson } from "../encryption";
+import { decryptBoundJson, encryptBoundJson, type CredentialRowBinding } from "../encryption";
 
 export type AppConnectionType =
   | "OAUTH2"
@@ -81,6 +83,20 @@ function now(): number {
   return Date.now();
 }
 
+/**
+ * The identity a row's ciphertext is sealed against. Read straight off the
+ * row, so a writer who moves a blob between rows presents the wrong tuple and
+ * GCM refuses it.
+ */
+function bindingFor(row: Pick<AppConnectionRow, "id" | "project_id" | "piece_name" | "external_id">): CredentialRowBinding {
+  return {
+    id: row.id,
+    projectId: row.project_id,
+    pieceName: row.piece_name,
+    externalId: row.external_id,
+  };
+}
+
 function rowToConnection(row: AppConnectionRow): AppConnection {
   return {
     id: row.id,
@@ -93,7 +109,7 @@ function rowToConnection(row: AppConnectionRow): AppConnection {
     pieceVersion: row.piece_version,
     projectId: row.project_id,
     ownerId: row.owner_id,
-    value: decryptJson(row.value, `app_connection ${row.id}`) as Record<string, unknown>,
+    value: decryptBoundJson(row.value, bindingFor(row), `app_connection ${row.id}`) as Record<string, unknown>,
     metadata: row.metadata ? (JSON.parse(row.metadata) as Record<string, unknown>) : null,
     preSelectForNewProjects: row.pre_select_for_new_projects !== 0,
     created: row.created,
@@ -108,8 +124,17 @@ function rowToConnection(row: AppConnectionRow): AppConnection {
 export function upsertConnection(input: UpsertConnectionInput): AppConnection {
   const projectId = input.projectId ?? DEFAULT_IDS.project;
   const existing = getConnectionByExternalId(projectId, input.pieceName, input.externalId);
+  // The row id is part of the sealed identity, so it has to exist before the
+  // ciphertext does. An update reuses the existing id; an insert mints one
+  // here rather than below.
+  const id = existing?.id ?? apId();
   // Resolve encryption before either write. A key failure must never save JSON.
-  const storedValue = encryptJson(input.value);
+  const storedValue = encryptBoundJson(input.value, {
+    id,
+    projectId,
+    pieceName: input.pieceName,
+    externalId: input.externalId,
+  });
   const ts = now();
   if (existing) {
     db().run(
@@ -135,14 +160,13 @@ export function upsertConnection(input: UpsertConnectionInput): AppConnection {
             ? 1
             : 0,
         ts,
-        existing.id,
+        id,
       ],
     );
-    const updated = getConnection(existing.id);
+    const updated = getConnection(id);
     if (!updated) throw new Error(`upsertConnection: row missing after update`);
     return updated;
   }
-  const id = apId();
   db().run(
     `INSERT INTO app_connection (
       id, external_id, display_name, type, scope, status, piece_name, piece_version,

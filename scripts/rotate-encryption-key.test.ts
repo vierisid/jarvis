@@ -7,6 +7,8 @@
  *   - The keychain file is replaced atomically (no leftover `.new`).
  *   - Refuses to run when JARVIS_WORKFLOW_ENCRYPTION_KEY is set.
  *   - Refuses to run when a `.new` sidecar exists (crash-recovery branch).
+ *   - A row-bound `enc1a:` row stays row-bound under the new key: rotation
+ *     must never quietly re-wrap it as unbound `enc1:`.
  */
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
@@ -23,7 +25,10 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
-import { decryptJson, encryptJson, setEncryptionKey } from "../src/workflows/db/encryption";
+import {
+  decryptBoundJson, decryptJson, encryptBoundJson, encryptJson, isRowBound, setEncryptionKey,
+  type CredentialRowBinding,
+} from "../src/workflows/db/encryption";
 import { initWorkflowDb, closeWorkflowDb } from "../src/workflows/db/index";
 import { createSchema } from "../src/workflows/db/schema";
 
@@ -33,6 +38,11 @@ let dataDir: string;
 let keyFile: string;
 let dbPath: string;
 let originalKey: Buffer;
+
+/** Identity of the seeded row-bound connection. */
+const BOUND: CredentialRowBinding = {
+  id: "conn_c", projectId: "jrv_proj_default", pieceName: "piece", externalId: "conn_c",
+};
 
 // Explicit budget: this hook builds a real schema'd SQLite DB and writes two
 // encrypted rows. That is ~140ms on a dev box, but it timed out CI against
@@ -63,9 +73,11 @@ beforeEach(() => {
   const db = getWorkflowDb();
   const now = Date.now();
   // Minimal columns -- everything required by NOT NULL + the value column we'll rotate.
-  for (const { id, value } of [
-    { id: "conn_a", value: { access_token: "secret-a", refresh_token: "rt-a" } },
-    { id: "conn_b", value: { api_key: "secret-b" } },
+  for (const { id, value, stored } of [
+    { id: "conn_a", value: { access_token: "secret-a", refresh_token: "rt-a" }, stored: encryptJson },
+    { id: "conn_b", value: { api_key: "secret-b" }, stored: encryptJson },
+    // Row-bound, i.e. what every row looks like after the binding conversion.
+    { id: BOUND.id, value: { api_key: "secret-c" }, stored: (v: unknown) => encryptBoundJson(v, BOUND) },
   ]) {
     db.run(
       `INSERT INTO app_connection (
@@ -73,7 +85,7 @@ beforeEach(() => {
         project_id, owner_id, value, metadata, pre_select_for_new_projects, created, updated
       ) VALUES (?, ?, ?, ?, 'PROJECT', 'ACTIVE', 'piece', '0.0.0',
         'jrv_proj_default', NULL, ?, NULL, 0, ?, ?)`,
-      [id, id, `name-${id}`, "OAUTH2", encryptJson(value), now, now],
+      [id, id, `name-${id}`, "OAUTH2", stored(value), now, now],
     );
   }
   closeWorkflowDb();
@@ -221,5 +233,26 @@ describe("rotate-encryption-key", () => {
     const res = runScript();
     expect(res.status).toBe(0);
     expect(res.stderr).toMatch(/nothing to rotate/i);
+  }, TEST_TIMEOUT_MS);
+
+  test("rotation preserves each row's envelope instead of dropping the row binding", () => {
+    expect(runScript().status).toBe(0);
+    const newKey = Buffer.from(readFileSync(keyFile, "utf8").trim(), "hex");
+    setEncryptionKey(newKey);
+    const db = new Database(dbPath);
+    try {
+      const rows = db.prepare("SELECT id, value FROM app_connection ORDER BY id").all() as Array<{
+        id: string; value: string;
+      }>;
+      // enc1: rows stay enc1:, the enc1a: row stays enc1a:.
+      expect(rows.map(row => isRowBound(row.value))).toEqual([false, false, true]);
+      const bound = rows[2]!.value;
+      expect(decryptBoundJson(bound, BOUND)).toEqual({ api_key: "secret-c" });
+      // Still refuses to open under any other row identity, which is the
+      // property a re-wrap as enc1: would have silently destroyed.
+      expect(() => decryptBoundJson(bound, { ...BOUND, id: "conn_a" })).toThrow(/auth verification failed/);
+    } finally {
+      db.close();
+    }
   }, TEST_TIMEOUT_MS);
 });

@@ -21,7 +21,8 @@ yielding a value. None of that is new here; only the write path is.
 
 Three limits are deliberate and must not be overstated:
 
-- The key is a local 0600 file (`~/.jarvis/cache/workflow-encryption.key`) or
+- The key is a local 0600 file (`<data dir>/workflow-encryption.key`; it lived
+  at `~/.jarvis/cache/workflow-encryption.key` when this spec was written) or
   an environment variable, which is how this project stores every other secret.
   `src/vault/keychain.ts` records why no OS keychain is used. On a default
   install the key therefore sits on the same filesystem as the database it
@@ -30,7 +31,9 @@ Three limits are deliberate and must not be overstated:
 - The envelope carries no associated data, so a ciphertext is not bound to its
   row. Anyone who can write the database can move a value between rows and the
   result still authenticates. Binding would change the wire format and needs
-  its own conversion, so it is not part of this fix.
+  its own conversion, so it is not part of this fix. Both limits below were
+  removed afterwards by the `enc1a:` envelope and strict mode; see
+  `2026-09-17-credential-row-binding.md` for what replaced them.
 - Reads still accept legacy plaintext JSON, because rows written by the
   affected versions are plaintext. There is no strict mode that rejects
   plaintext once a deployment has converted, so a database writer can replace
@@ -150,14 +153,16 @@ Use a consistent SQLite snapshot and protect the entire export with an
 independent backup-encryption mechanism. Validate restores in isolation with
 the exact key and the fixed reader before changing retention or deleting data.
 
-The current `jarvis export` produces a plain tar. Its curated secret list does
-not include `workflow-encryption.key`; `--full` does not solve that omission,
-nor does it capture an environment-managed workflow key. Explicit separate
-key escrow is required. Archives of this shared DB can contain plaintext
-native credentials from affected writes even without `--full`. Restrict and
-encrypt retained backups; inventory who/what can read them and plan expiry or
-replacement according to the deployment's retention requirements. After
-restoring an older snapshot, repeat inventory and conversion before service.
+`jarvis export` produces a plain tar. Its curated secret list did not include
+`workflow-encryption.key` when this spec was written, so `--full` did not
+solve that omission; it does now that the key sits at the data-dir root. An
+environment-managed workflow key is still never captured, so a deployment that
+supplies `JARVIS_WORKFLOW_ENCRYPTION_KEY` still needs explicit separate key
+escrow. Archives of this shared DB can contain plaintext native credentials
+from affected writes even without `--full`. Restrict and encrypt retained
+backups; inventory who/what can read them and plan expiry or replacement
+according to the deployment's retention requirements. After restoring an older
+snapshot, repeat inventory and conversion before service.
 
 No backup deletion, key rotation, database compaction or deployed migration is
 performed by this patch. These require the actual deployment and backup

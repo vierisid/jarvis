@@ -6,20 +6,33 @@ import { dirname, resolve } from "node:path";
 import { acquireLockAt, lockPathFor } from "../src/daemon/pid";
 import { setEncryptionKey } from "../src/workflows/db/encryption";
 import {
-  CredentialMigrationError, inventoryNativeCredentials, migrateNativeCredentials, rollbackNativeCredentials,
+  bindNativeCredentials, CredentialMigrationError, inventoryNativeCredentials, migrateNativeCredentials,
+  rollbackCredentialBinding, rollbackNativeCredentials,
 } from "../src/workflows/db/credential-migration";
 
 const USAGE = [
   "bun scripts/migrate-native-credentials.ts inventory --db <file> [--deployment-version <version>]",
   "bun scripts/migrate-native-credentials.ts apply --db <file> --data-dir <dir> --deployment-version <version> --recovery <new-file> [--key-file <existing-key>]",
   "bun scripts/migrate-native-credentials.ts rollback --db <file> --data-dir <dir> --recovery <file> [--key-file <existing-key>]",
+  "bun scripts/migrate-native-credentials.ts bind --db <file> --data-dir <dir> --deployment-version <version> --recovery <new-file> [--key-file <existing-key>]",
+  "bun scripts/migrate-native-credentials.ts rollback-binding --db <file> --data-dir <dir> --recovery <file> [--key-file <existing-key>]",
   "Use the existing key file OR JARVIS_WORKFLOW_ENCRYPTION_KEY, never both. Keys are never generated.",
-  "Stop the daemon and its supervisor before apply/rollback. Rollback restores legacy plaintext.",
+  "Stop the daemon and its supervisor before any write mode. Rollback restores legacy plaintext.",
+  "bind re-wraps plaintext and enc1: rows into the row-bound enc1a: envelope; run it before",
+  "enabling JARVIS_REQUIRE_ENCRYPTED_CREDENTIALS. Use rollback-binding, not rollback, to reverse it.",
 ].join("\n");
+
+const MODES = ["inventory", "apply", "rollback", "bind", "rollback-binding"] as const;
+type Mode = (typeof MODES)[number];
+/** Modes that need a key, the locks and a recovery path. */
+const WRITES: readonly Mode[] = ["apply", "rollback", "bind", "rollback-binding"];
+/** Modes that create a journal and therefore pin the deployed version. */
+const CONVERTS: readonly Mode[] = ["apply", "bind"];
 
 function parseArgs(argv: string[]) {
   const [mode, ...rest] = argv;
-  if (mode !== "inventory" && mode !== "apply" && mode !== "rollback") throw new Error();
+  if (!MODES.includes(mode as Mode)) throw new Error();
+  const writes = WRITES.includes(mode as Mode);
   const options = new Map<string, string>();
   const allowed = new Set(["--db", "--data-dir", "--key-file", "--recovery", "--deployment-version"]);
   for (let i = 0; i < rest.length; i += 2) {
@@ -29,9 +42,9 @@ function parseArgs(argv: string[]) {
     options.set(flag, value);
   }
   if (!options.has("--db")) throw new Error();
-  if (mode !== "inventory" && (!options.has("--data-dir") || !options.has("--recovery"))) throw new Error();
-  if (mode === "apply" && !options.get("--deployment-version")?.trim()) throw new Error();
-  return { mode, options };
+  if (writes && (!options.has("--data-dir") || !options.has("--recovery"))) throw new Error();
+  if (CONVERTS.includes(mode as Mode) && !options.get("--deployment-version")?.trim()) throw new Error();
+  return { mode: mode as Mode, options, writes };
 }
 
 function loadExistingKey(keyFile: string | undefined): Buffer {
@@ -54,12 +67,12 @@ async function main(): Promise<number> {
   let args: ReturnType<typeof parseArgs>;
   try { args = parseArgs(process.argv.slice(2)); }
   catch { console.error(USAGE); return 2; }
-  const { mode, options } = args;
+  const { mode, options, writes } = args;
   const locks: Array<{ release(): void }> = [];
   let db: Database | undefined;
   try {
     const dbPath = realpathSync(options.get("--db")!);
-    if (mode !== "inventory") {
+    if (writes) {
       const dataDir = realpathSync(options.get("--data-dir")!);
       // Match restore's locking contract, including JARVIS_HOME. Hold locks
       // throughout so the daemon cannot start after a one-time lock probe.
@@ -76,13 +89,18 @@ async function main(): Promise<number> {
       }
       setEncryptionKey(loadExistingKey(options.get("--key-file")));
     }
-    db = new Database(dbPath, { readonly: mode === "inventory", readwrite: mode !== "inventory", create: false });
-    if (mode !== "inventory") db.exec("PRAGMA synchronous = FULL");
+    db = new Database(dbPath, { readonly: !writes, readwrite: writes, create: false });
+    if (writes) db.exec("PRAGMA synchronous = FULL");
+    const recoveryPath = writes ? resolve(options.get("--recovery")!) : "";
     const result = mode === "inventory"
       ? { deploymentVersion: options.get("--deployment-version") ?? "unknown", ...inventoryNativeCredentials(db) }
       : mode === "apply"
-        ? migrateNativeCredentials(db, resolve(options.get("--recovery")!), options.get("--deployment-version")!)
-        : rollbackNativeCredentials(db, resolve(options.get("--recovery")!));
+        ? migrateNativeCredentials(db, recoveryPath, options.get("--deployment-version")!)
+        : mode === "bind"
+          ? bindNativeCredentials(db, recoveryPath, options.get("--deployment-version")!)
+          : mode === "rollback"
+            ? rollbackNativeCredentials(db, recoveryPath)
+            : rollbackCredentialBinding(db, recoveryPath);
     console.log(JSON.stringify({ mode, ...result }));
     return 0;
   } catch (error) {

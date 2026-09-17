@@ -8,11 +8,21 @@
  */
 
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
-import { existsSync } from "node:fs";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { resolve } from "node:path";
 import { closeWorkflowDb, initWorkflowDb } from "../../db";
 import { CredentialResolver } from "../../credentials/adapter";
 import { SandboxApi } from "../../sandbox-api/server";
+import { workflowLogsBase } from "../../sandbox-api/config";
+import { DEFAULT_IDS } from "../../db/schema";
+import { createFlow } from "../../db/repos/flow";
+import {
+  createDraftVersion,
+  getFlowVersion,
+  lockVersion,
+  updateDraftVersion,
+} from "../../db/repos/flow-version";
+import { createFlowRun } from "../../db/repos/flow-run";
 import {
   ENGINE_BUILD_PATHS,
   buildEngineBundle,
@@ -171,5 +181,63 @@ describe("EngineRuntime pool", () => {
       expect(api.registry.get(sandbox1)).toBeNull();
     },
     60_000,
+  );
+
+  // The engine PUTs its zstd run-log backup to a URL with the engineToken
+  // baked into the query string, built at EXECUTE_FLOW time. Now that the
+  // sandbox API refuses a token the sandbox is no longer running under, that
+  // URL has to be rebuilt on every acquire or the second and every later run
+  // through a warm engine would silently lose its run log to a 401. Two real
+  // flows through one pooled process, both backups on disk.
+  test.skipIf(skipBundleTests)(
+    "a run through the rebound warm engine still uploads its run log",
+    async () => {
+      // Its own pooled runtime: the shared one is shut down by the test
+      // above, and this test needs a live warm slot across two acquires.
+      let cached = findCachedBundle();
+      if (!cached) cached = await buildEngineBundle();
+      const pooled = new EngineRuntime({ api, bundlePath: cached.bundlePath, pool: true });
+      const trigger = { name: "trigger", type: "EMPTY" as const, settings: {} };
+      const runIds: string[] = [];
+      let sandbox: string | null = null;
+      try {
+        for (const label of ["warm-logs-1", "warm-logs-2"]) {
+          const flow = createFlow({ projectId: DEFAULT_IDS.project });
+          const v = createDraftVersion({ flowId: flow.id, displayName: label, trigger });
+          updateDraftVersion(v.id, { trigger, valid: true });
+          lockVersion(v.id);
+          const run = createFlowRun({
+            flowId: flow.id,
+            flowVersionId: v.id,
+            environment: "TESTING",
+          });
+          runIds.push(run.id);
+          const handle = await pooled.acquire({
+            runId: run.id,
+            projectId: DEFAULT_IDS.project,
+          });
+          // Same warm process across both runs -- otherwise this test is not
+          // exercising the rebind at all.
+          if (sandbox === null) sandbox = handle.sandboxId;
+          else expect(handle.sandboxId).toBe(sandbox);
+          try {
+            await handle.executeFlow({ flowVersion: getFlowVersion(v.id)! });
+          } finally {
+            await handle.release();
+          }
+        }
+        for (const runId of runIds) {
+          const backup = resolve(workflowLogsBase(), `${runId}.bin`);
+          expect(existsSync(backup)).toBe(true);
+          expect(readFileSync(backup).byteLength).toBeGreaterThan(0);
+        }
+      } finally {
+        await pooled.shutdown();
+        for (const runId of runIds) {
+          rmSync(resolve(workflowLogsBase(), `${runId}.bin`), { force: true });
+        }
+      }
+    },
+    120_000,
   );
 });

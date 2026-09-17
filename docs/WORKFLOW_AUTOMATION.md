@@ -67,6 +67,39 @@ Practical consequences:
   reach the daemon's tool surface. See `Governed pieces` below for the verified
   ten, and `src/workflows/pieces-library/README.md` for the curation path.
 
+### `jarvis-ask` answers with a typed outcome
+
+A step that asks for JSON no longer gets the reply text back as if it had
+succeeded when the reply is not JSON. `/v1/jarvis/llm/chat` answers
+`{ text, parsed?, outcome }`:
+
+- `outcome` is present on every completed call and uses the shared action
+  outcome vocabulary in `src/actions/action-outcome.ts`. `parsed` exists only
+  when JSON was requested and the outcome is `succeeded`.
+- `INVALID_JSON_OUTPUT` means the reply did not parse. `OUTPUT_SCHEMA_MISMATCH`
+  means it parsed but missed the declared schema, and the message names the
+  paths that failed. Both are `error` with effect `may_have_occurred`: the
+  provider was called and answered, so the receipt is a completed effect whose
+  result carries the failed contract, and a restarted run reads that receipt
+  instead of calling the model again. This is the receipt rule every adapter
+  follows: an effect that completed records `succeeded` with its qualified
+  outcome inside `result`; an effect that did not complete records `failed`,
+  `blocked` or `unknown` with the outcome at the top level of the receipt.
+- By default a failed contract answers 422 and the step fails, so nothing
+  downstream runs. Turn `Require valid output` off (`requireSuccess: false`)
+  only when a later step routes on `{{step.outcome.status}}` and handles the
+  failure. That step still gets `text`; it never gets `parsed`.
+- `Output schema (JSON)` is a closed JSON Schema subset: `type`, `properties`,
+  `required`, `additionalProperties` (boolean), `items`, `enum`, `minItems`,
+  `maxItems`, `minLength`, `maxLength`, `minimum`, `maximum`. Any other keyword
+  is refused with 400 before the prompt is sent, so a constraint is never
+  skipped and then reported as met. The schema checks the reply; it does not
+  change the prompt, so ask for the shape in the prompt as well.
+- Flows that already had `Parse JSON` on now fail on a reply that is not bare
+  JSON, where they used to continue with the text and an empty `parsed`. That
+  was the silent path this closes. A flow that meant to tolerate it needs the
+  handled-result flag and a router branch on the outcome.
+
 ### Governed pieces
 
 The ten verified pieces -- gmail, slack, notion, openai, github, google-calendar,
@@ -649,7 +682,9 @@ user steps.
 
 All workflow tables live in `~/.jarvis/jarvis.db` (the same SQLite file as the rest of Jarvis). Schema: `src/workflows/db/schema.ts`. Repos: `src/workflows/db/repos/`.
 
-Connection secrets are encrypted at rest with AES-256-GCM. Wrapping format: `enc1:<iv>:<tag>:<ciphertext>`. The key comes from `JARVIS_WORKFLOW_ENCRYPTION_KEY` (env) or `~/.jarvis/cache/workflow-encryption.key` (auto-generated, `chmod 0600`). Legacy plaintext rows are accepted transparently for backwards compat.
+Connection secrets are encrypted at rest with AES-256-GCM. Wrapping format: `enc1a:<base64(iv | tag | ciphertext)>`, with the row's `(id, project_id, piece_name, external_id)` passed as GCM associated data so a stored value only authenticates against the row it was written for. The older unbound `enc1:` format is still read; convert it with `bun scripts/migrate-native-credentials.ts bind`. The key comes from `JARVIS_WORKFLOW_ENCRYPTION_KEY` (env), `JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE` (an explicit file), or `<data dir>/workflow-encryption.key` (auto-generated, `chmod 0600`) -- the data dir being `JARVIS_SECRETS_DIR` or `JARVIS_HOME` when set and `~/.jarvis` otherwise, the same resolution `.secrets.key` uses. It sits at the data-dir ROOT so any backup of the data dir carries it and `jarvis export --full` lists it; it used to live under `cache/`, which is excluded from exports and documented as disposable. A key still found at the old path is read, and relocated once at daemon boot. Legacy plaintext rows are accepted transparently for backwards compat; set `JARVIS_REQUIRE_ENCRYPTED_CREDENTIALS=1` once conversion is done to refuse them.
+
+If `app_connection` holds encrypted rows in either envelope and no key can be resolved, the daemon refuses to start rather than generating a fresh one: a new key cannot decrypt those rows, and writing with it would overwrite the last copy of the ciphertext. Restore the key file (or set the env var) and start again.
 
 To rotate the key, run `scripts/rotate-encryption-key.ts`. It decrypts every row with the old key, re-encrypts with the new key, and atomically swaps the keychain. It refuses to run while the daemon is up (checks the daemon lock file).
 

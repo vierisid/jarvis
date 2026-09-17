@@ -13,7 +13,7 @@
  */
 
 import { SignJWT, jwtVerify } from "jose";
-import { randomBytes } from "node:crypto";
+import { randomBytes, timingSafeEqual } from "node:crypto";
 import type { EngineTokenClaims, SandboxIdentity } from "./types";
 
 const ALG = "HS256";
@@ -68,4 +68,24 @@ export class EngineTokenSigner {
       exp: payload.exp,
     };
   }
+}
+
+/**
+ * Compare a presented engine token against the one a sandbox is currently
+ * running under, without leaking the stored value through response timing.
+ *
+ * The caller has already proved the presented token carries our signature, so
+ * it is a token we issued -- but possibly one we issued for a run that has
+ * since been retired. A plain `!==` on the two strings would short-circuit at
+ * the first differing character, which is enough for a holder of any valid
+ * token to walk the live token out one character at a time and then act as the
+ * run that actually owns the sandbox. Lengths are compared first (and leak
+ * only the token length, which is fixed by the JWT shape anyway) because
+ * `timingSafeEqual` throws on a length mismatch.
+ */
+export function engineTokensEqual(presented: string, current: string): boolean {
+  const a = Buffer.from(presented, "utf8");
+  const b = Buffer.from(current, "utf8");
+  if (a.byteLength !== b.byteLength) return false;
+  return timingSafeEqual(a, b);
 }

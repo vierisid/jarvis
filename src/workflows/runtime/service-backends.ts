@@ -45,6 +45,7 @@ import { governedPieceToolDefinition, resolveGovernedPieceAction, sanitizePieceI
 import { getFlow } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
 import { digest, type WorkflowEffectContext } from './effect-context';
+import { evaluateLlmOutput } from './llm-output-contract';
 
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
   credentialResolver: CredentialResolver;
@@ -144,24 +145,26 @@ export function buildSandboxServiceBackends(
       ...(system !== undefined ? { system } : {}),
       ...(systemParts !== undefined ? { systemParts } : {}),
     });
-    if (req.parseJson) {
-      try {
-        return { text: reply.text, parsed: JSON.parse(reply.text) };
-      } catch {
-        // Fall back to the raw text; the piece-side action surfaces both
-        // fields so the caller can handle parse failures explicitly.
-        return { text: reply.text };
-      }
-    }
-    return { text: reply.text };
+    // The provider has answered, so the contract check qualifies a completed
+    // call rather than blocking one: `parsed` exists only when the reply met
+    // the request, and the outcome names the contract that failed otherwise.
+    const evaluated = evaluateLlmOutput({ text: reply.text, ...(req.parseJson ? { parseJson: true } : {}),
+      ...(req.outputSchema ? { outputSchema: req.outputSchema } : {}) });
+    return 'parsed' in evaluated ? { text: reply.text, parsed: evaluated.parsed, outcome: evaluated.outcome }
+      : { text: reply.text, outcome: evaluated.outcome };
   };
   const llmChat: LlmChatFn = async (req, ctx) => {
+    // requireSuccess controls how the caller handles the receipt, not what
+    // leaves the device. Keeping it out of the effect identity lets an
+    // approval granted to an older piece resume once the upgraded piece
+    // starts sending the default explicitly.
+    const { requireSuccess: _handled, ...effectRequest } = req;
     const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-ask', action: 'ask',
       route: 'llm', toolName: 'workflow_ask', category: 'read_data', toolCategory: 'llm',
-      request: { ...req },
+      request: { ...effectRequest },
       // The prompt is the payload that leaves the device, so it is what gets
       // frozen and reviewed -- not the daemon-composed system prompt above.
-      prepare: () => ({ arguments: { ...req }, target: { destination: 'llm-provider', overrideSystem: req.overrideSystem === true } }),
+      prepare: () => ({ arguments: { ...effectRequest }, target: { destination: 'llm-provider', overrideSystem: req.overrideSystem === true } }),
       execute: async (args, checkpoint) => { checkpoint(); return callLlm(args as unknown as LlmChatRequest); },
     });
     return reply.approval ? { text: '', approval: reply.approval } : reply.result as LlmChatResponse;

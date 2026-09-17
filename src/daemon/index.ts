@@ -510,12 +510,38 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       try { return getDb(); } catch { return null; }
     });
 
+    // 2.0b. Relocate a workflow encryption key still sitting in `cache/` into
+    // the data-dir root, BEFORE the workflow schema check below and before any
+    // credential is read. `cache/` is documented as disposable and is excluded
+    // from `jarvis export`, so a key left there is absent from every backup of
+    // the database it protects. Resolution still reads the old path, so this
+    // having failed is never fatal: worst case the key stays where it is.
+    const { migrateWorkflowEncryptionKeyToDataDir } = await import('../workflows/db/encryption.ts');
+    try {
+      migrateWorkflowEncryptionKeyToDataDir();
+    } catch (err) {
+      console.error('[Daemon] Workflow encryption key relocation failed; continuing with the existing path:', err);
+    }
+
     // 2.1. Add workflow tables (flow / flow_run / flow_version /
     // app_connection / waitpoint / store_entry / workflow_file /
     // workflow_job / trigger_event) to the shared Jarvis DB. Idempotent.
     // Single file => single backup unit.
     ensureWorkflowSchema();
     logWithTimestamp('Workflow schema ready');
+
+    // 2.1a. Opt-in strict credential encryption. Off unless the operator sets
+    // JARVIS_REQUIRE_ENCRYPTED_CREDENTIALS=1, because every release from
+    // v0.6.0 to v0.13.7 wrote plaintext `app_connection.value` rows and
+    // refusing those before a deployment has converted would lock it out of
+    // credentials it still needs. The gate refuses if unconverted rows
+    // remain, and that refusal reaches the startup catch below, so the daemon
+    // does not come up on a false assertion. See the helper for why.
+    const { applyStrictCredentialEncryptionSetting } = await import('../workflows/db/credential-migration.ts');
+    const { getWorkflowDb } = await import('../workflows/db/index.ts');
+    if (applyStrictCredentialEncryptionSetting(getWorkflowDb())) {
+      logWithTimestamp('Strict credential encryption enabled (plaintext credentials refused)');
+    }
 
     // 2a. Seed webapp templates (upserts, safe to run every startup)
     const { seedWebappTemplates } = await import('../vault/webapp-template-seeds.ts');
