@@ -366,6 +366,10 @@ export const desktopClickTool: ToolDefinition = {
       description: 'The [id] of the element to interact with (from desktop_snapshot or desktop_find_element)',
       required: true,
     },
+    // The enum is ENFORCED by ToolRegistry, not just advertised, so it is a
+    // gate: an action the sidecar gains but this list does not is unreachable
+    // from the agent. The accepted set lives in the sidecar (Go), with no
+    // shared TS definition to pin this to, so add new actions in both places.
     action: {
       type: 'string',
       description: 'Action to perform (default click). invoke/toggle/select/set_value/get_value/get_text/expand/collapse/scroll_into_view are Windows-only; macOS and Linux support click/double_click/right_click/focus.',

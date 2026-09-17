@@ -6,10 +6,14 @@ export type ToolParameter = {
   description: string;
   required: boolean;
   /**
-   * Allowed values, emitted as JSON-Schema `enum`. Small and local models
-   * frequently invent invalid values when a set of choices is only described
-   * in prose; a real enum constrains them. Prefer this over listing the
-   * options in the description.
+   * Allowed values for a string parameter. Emitted as JSON-Schema `enum` in
+   * the model-facing schema AND enforced in `validateParameters`, so it is a
+   * constraint and not just a hint: small and local models routinely invent
+   * values when the choices are only described in prose, and an advertised
+   * but unchecked enum only moves that failure one layer down, into the
+   * sidecar or the provider.
+   *
+   * Prefer this over listing the options in the description.
    */
   enum?: string[];
 };
@@ -144,6 +148,23 @@ export class ToolRegistry {
       if (typeof paramDef.required !== 'boolean') {
         throw new Error(`Parameter '${paramName}' in tool '${tool.name}' must specify if it's required`);
       }
+
+      // `validateParameters` can only enforce an enum on a string value, so a
+      // declared enum anywhere else would advertise a constraint that is
+      // never checked. Fail at registration instead of shipping the no-op.
+      if (paramDef.enum !== undefined) {
+        if (!Array.isArray(paramDef.enum) || paramDef.enum.length === 0) {
+          throw new Error(`Parameter '${paramName}' in tool '${tool.name}' has an empty enum`);
+        }
+        if (paramDef.type.toLowerCase() !== 'string') {
+          throw new Error(
+            `Parameter '${paramName}' in tool '${tool.name}' declares an enum but is type '${paramDef.type}'; enums are only enforced for strings`
+          );
+        }
+        if (paramDef.enum.some((v) => typeof v !== 'string')) {
+          throw new Error(`Parameter '${paramName}' in tool '${tool.name}' has a non-string enum value`);
+        }
+      }
     }
   }
 
@@ -176,6 +197,25 @@ export class ToolRegistry {
           throw new Error(
             `Parameter '${paramName}' for tool '${tool.name}' must be ${expectedType}, got ${actualType}`
           );
+        }
+
+        // An out-of-enum value is rejected here, with the allowed values in
+        // the message: the orchestrator turns a throw into the tool result
+        // the model reads, so an invented action gets corrected on the next
+        // turn instead of reaching the sidecar as an opaque failure.
+        //
+        // Matched case-insensitively on purpose. Callers that already worked
+        // keep working (`parsePostcondition` lowercases its input, and stored
+        // workflow steps were written before any enum existed), and the value
+        // is passed through unchanged rather than normalised, so this only
+        // ever narrows what is rejected -- it never alters what a tool sees.
+        if (paramDef.enum && paramDef.enum.length > 0 && typeof value === 'string') {
+          const allowed = paramDef.enum;
+          if (!allowed.some((v) => v.toLowerCase() === value.toLowerCase())) {
+            throw new Error(
+              `Parameter '${paramName}' for tool '${tool.name}' must be one of: ${allowed.join(', ')} (got "${value}")`
+            );
+          }
         }
       }
     }
