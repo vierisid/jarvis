@@ -144,6 +144,8 @@ export type SubAgentResult = {
   paused?: SubAgentPause;
   /** Set on `error` when the governed dispatch raised it, not the model or the loop. */
   dispatchError?: boolean;
+  /** The enclosing execution was cancelled between turns; nothing more started. */
+  canceled?: boolean;
 };
 
 export type ProgressCallback = (event: {
@@ -233,6 +235,11 @@ type AuthorityContext = {
   governedTools?: GovernedToolDispatch;
 };
 
+/** The enclosing execution scope refused to let another action start. */
+class SubAgentCanceled extends Error {
+  constructor(readonly raised: unknown) { super(raised instanceof Error ? raised.message : String(raised)); this.name = 'SubAgentCanceled'; }
+}
+
 type ToolDispatch =
   | { text: string; failed?: boolean }
   | { paused: Omit<SubAgentPause, 'remaining' | 'iteration'> };
@@ -298,7 +305,7 @@ async function executeTool(
         authority_decision: 'denied',
         executed: false,
       });
-      return { text: `[AUTHORITY DENIED] ${toolCall.name} requires the user's confirmation. Sub-agents cannot request approvals directly.` };
+      return { text: `[AUTHORITY DENIED] ${toolCall.name} requires the user's confirmation. Sub-agents cannot request approvals directly.`, failed: true };
     }
 
     const decision = combineDecisions(gate.categories.map((category) => engine.checkAuthority({
@@ -350,7 +357,7 @@ async function executeTool(
         audit('approval_required', false, governed.approval.approvalId);
         return { paused: { toolCall, sequence, actionCategory, toolCategory, principal, reason: decision.reason, approval: governed.approval } };
       }
-      audit(governed.kind === 'denied' ? 'denied' : 'approval_required', governed.kind !== 'denied');
+      audit(governed.kind === 'denied' ? 'denied' : 'approval_required', governed.kind === 'executed');
       return governedText(authorityCtx, toolCall, toolCategory, governed);
     }
   }
@@ -458,6 +465,10 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     ...partial,
   });
 
+  // A cancellation is not an agent error: the caller stopped the run and
+  // must not record anything for it.
+  const fence = () => { try { checkpointExecution(); } catch (err) { throw new SubAgentCanceled(err); } };
+
   const noteToolCall = (tc: LLMToolCall) => {
     toolsUsed.push(tc.name);
     if (onProgress) {
@@ -475,7 +486,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   const dispatchCalls = async (calls: LLMToolCall[], iteration: number): Promise<SubAgentPause | null> => {
     for (let index = 0; index < calls.length; index++) {
       const tc = calls[index]!;
-      checkpointExecution();
+      fence();
       noteToolCall(tc);
       sequence += 1;
       const dispatched = await executeTool(toolRegistry, tc, sequence, authorityCtx);
@@ -494,7 +505,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       // answers from the decision that was made; then the rest of its turn.
       const pending = resume.pending;
       if (!governedTools || !authorityCtx) throw new Error('Cannot resume a paused sub-agent without a governed tool dispatch');
-      checkpointExecution();
+      fence();
       let governed: GovernedToolResult;
       try {
         governed = await governedTools({ toolCall: pending.toolCall, sequence: pending.sequence, actionCategory: pending.actionCategory,
@@ -505,6 +516,8 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       if (governed.kind === 'paused') return finish({ success: true, response: '', terminationReason: 'paused', paused: { ...pending, approval: governed.approval } });
       record(pending.toolCall, governedText(authorityCtx, pending.toolCall, pending.toolCategory, governed));
       const pause = await dispatchCalls(pending.remaining, pending.iteration);
+      // A turn is durable only while the run is still alive.
+      fence();
       if (pause) return finish({ success: true, response: '', terminationReason: 'paused', paused: pause });
       startIteration = pending.iteration + 1;
       onTurn?.(state(startIteration));
@@ -512,9 +525,9 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
 
     // Tool execution loop
     for (let iteration = startIteration; iteration < maxIterations; iteration++) {
-      checkpointExecution();
+      fence();
       const llmResponse: LLMResponse = await llmManager.chatTier('medium', 'sub_agent', messages, { tools });
-      checkpointExecution();
+      fence();
 
       totalUsage.input += llmResponse.usage.input_tokens;
       totalUsage.output += llmResponse.usage.output_tokens;
@@ -533,6 +546,8 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
         }
 
         const pause = await dispatchCalls(llmResponse.tool_calls, iteration);
+        // A turn is durable only while the run is still alive.
+        fence();
         if (pause) return finish({ success: true, response: '', terminationReason: 'paused', paused: pause });
         onTurn?.(state(iteration + 1));
         continue;
@@ -559,7 +574,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     console.error(`[SubAgent:${agentName}] Error:`, errorMsg);
 
     return finish({ success: false, response: `Sub-agent error: ${errorMsg}`, terminationReason: 'error',
-      ...(err instanceof GovernedDispatchError ? { dispatchError: true } : {}) });
+      ...(err instanceof GovernedDispatchError ? { dispatchError: true } : err instanceof SubAgentCanceled ? { canceled: true } : {}) });
   } finally {
     agent.idle();
   }

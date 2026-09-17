@@ -5,6 +5,7 @@ import { AuthorityEngine } from '../authority/engine';
 import { EmergencyController } from '../authority/emergency';
 import { ActionOutcomeError } from '../actions/action-outcome';
 import type { LLMToolCall } from '../llm/provider';
+import { withExecutionScope } from '../actions/execution-scope';
 
 const approval = { effectId: 'effect', approvalId: 'approval', waitpointId: 'waitpoint' };
 const write = (id: string): LLMToolCall => ({ id, name: 'write_file', arguments: { path: '/tmp/synthetic', content: 'hello' } });
@@ -173,6 +174,18 @@ describe('governed tool calls in a sub-agent', () => {
     expect(runs).toEqual([]);
   });
 
+  test('a cancellation from the enclosing execution scope is reported as canceled, not as an agent error', async () => {
+    const { r } = registry();
+    const a = authority();
+    let stopped = false;
+    const result = await withExecutionScope(() => { if (stopped) throw new Error('run stopped'); }, () =>
+      runSubAgent({ agent: agent(), task: 'save', context: '', llmManager: llm([[write('c1')], [write('c2')]]).manager, toolRegistry: r,
+        authorityEngine: a.engine, auditTrail: a.audit, maxIterations: 3,
+        governedTools: async () => { stopped = true; return { kind: 'executed', result: 'saved' }; } }));
+    expect(result).toMatchObject({ terminationReason: 'error', canceled: true, response: expect.stringContaining('run stopped') });
+    expect(result.dispatchError).toBeUndefined();
+  });
+
   test('a failed dispatch under approval is a marked failure the agent sees, and a raised one is this run\'s error', async () => {
     const { r } = registry();
     const a = authority();
@@ -183,7 +196,7 @@ describe('governed tool calls in a sub-agent', () => {
     expect(failed.terminationReason).toBe('completed');
     expect(toolMessages(failed)[0]![1]).toContain('boom');
     expect(failed.failedToolCalls).toEqual(['c1']);
-    expect(a.rows).toEqual([expect.objectContaining({ authority_decision: 'approval_required', executed: true })]);
+    expect(a.rows).toEqual([expect.objectContaining({ authority_decision: 'approval_required', executed: false })]);
 
     const b = authority();
     const raised = await runSubAgent({ agent: agent(), task: 'save', context: '', llmManager: llm([[write('c1')]]).manager, toolRegistry: r,

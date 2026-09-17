@@ -1,3 +1,4 @@
+import type { ActionOutcome } from "../../actions/action-outcome";
 /**
  * Jarvis-native pieces -- shared types.
  *
@@ -156,7 +157,7 @@ export interface PieceAgentDelegateResult {
    * `succeeded` when the conversation finished and every required tool
    * completed, otherwise an `error` naming what is missing.
    */
-  outcome?: import("../../actions/action-outcome").ActionOutcome;
+  outcome?: ActionOutcome;
 }
 
 /**

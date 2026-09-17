@@ -19,6 +19,8 @@ import { ApprovalManager } from '../../authority/approval';
 import { CredentialResolver } from '../credentials/adapter';
 import { WorkflowEventBuffer } from './event-buffer';
 import { buildSandboxServiceBackends } from './service-backends';
+import { WorkflowEffectBoundary } from './effect-boundary';
+import { checkpointExecution } from '../../actions/execution-scope';
 import { digest } from './effect-context';
 import { resumeResolvedWorkflowEffects } from './effect-approval-scheduler';
 import { createJarvisAgentDelegateRoute } from '../sandbox-api/routes/jarvis-agent';
@@ -39,7 +41,7 @@ beforeEach(() => {
 afterEach(() => { closeWorkflowDb(); rmSync(directory, { recursive: true, force: true }); });
 
 const PIECE = '@jarvispieces/piece-jarvis-agent';
-const ROLE = { id: 'workflow-default', name: 'Workflow role', description: '', responsibilities: [], tools: ['file-ops', 'terminal'] };
+const ROLE = { id: 'note-writer', name: 'Workflow role', description: '', responsibilities: [], tools: ['file-ops', 'terminal'] };
 const ARGS = { path: '/tmp/synthetic', content: 'hello' };
 type Turn = { call: string; args?: Record<string, unknown> } | 'finish';
 const WRITE_THEN_FINISH: Turn[] = [{ call: 'write_file', args: ARGS }, 'finish'];
@@ -48,7 +50,7 @@ const WRITE_THEN_FINISH: Turn[] = [{ call: 'write_file', args: ARGS }, 'finish']
 function createRun(input: Record<string, unknown> = {}, loop = false) {
   const flow = createFlow({});
   const delegate: FlowTriggerNode = { name: 'delegate', type: 'PIECE', displayName: 'delegate', settings: { pieceName: PIECE,
-    pieceVersion: '0.0.1', actionName: 'delegate', input: { goal: 'Save the note', maxIterations: 4, ...input } } };
+    pieceVersion: '0.0.1', actionName: 'delegate', input: { goal: 'Save the note', maxIterations: 4, role: ROLE.id, ...input } } };
   const version = createDraftVersion({ flowId: flow.id, displayName: 'Delegated routine', trigger: { name: 'trigger', type: 'EMPTY',
     nextAction: loop ? { name: 'loop', type: 'LOOP_ON_ITEMS', settings: { items: '{{trigger.items}}' }, firstLoopAction: delegate } : delegate } });
   const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, status: 'RUNNING' });
@@ -63,7 +65,11 @@ type Options = {
   childLevel?: number;
   /** Behaviour of the synthetic tools. */
   writeThrows?: boolean;
+  /** The write pauses the system and hits the boundary's fence while it runs. */
+  writeInterrupts?: boolean;
   readFails?: boolean;
+  /** The read cancels the run while the turn is still going. */
+  readCancels?: boolean;
 };
 
 /** Real backends, boundary, Authority and SQLite; only the model and the tools are scripted. */
@@ -72,9 +78,9 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
   let effects = 0, llmCalls = 0;
   const registry = new ToolRegistry();
   registry.register({ name: 'write_file', category: 'file-ops', description: 'Synthetic write', parameters: {},
-    execute: async () => { effects++; if (opts.writeThrows) throw new Error('disk full'); return 'saved'; } });
+    execute: async () => { effects++; if (opts.writeThrows) throw new Error('disk full'); if (opts.writeInterrupts) { emergency.pause(); checkpointExecution(); } return 'saved'; } });
   registry.register({ name: 'read_file', category: 'file-ops', description: 'Synthetic read', parameters: {},
-    execute: async () => { if (opts.readFails) throw new ActionOutcomeError({ status: 'error', code: 'SYNTHETIC', message: 'unreadable', effect: 'not_started' }); return 'contents'; } });
+    execute: async () => { if (opts.readFails) throw new ActionOutcomeError({ status: 'error', code: 'SYNTHETIC', message: 'unreadable', effect: 'not_started' }); if (opts.readCancels) cancelFlowRun(ids.run.id); return 'contents'; } });
   registry.register({ name: 'run_script', category: 'terminal', description: 'Synthetic command', parameters: {}, execute: async () => { effects++; return 'ran'; } });
   registry.register({ name: 'run_command', category: 'terminal', description: 'Synthetic shell', parameters: {}, execute: async () => { effects++; return 'ran'; } });
   const authority = new AuthorityEngine({ default_level: opts.authority?.default_level ?? 10,
@@ -82,6 +88,7 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
     context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' });
   const approvals = new ApprovalManager();
   const emergency = new EmergencyController();
+  const auditTrail = new AuditTrail();
   const child = () => {
     const history: Array<{ role: string; content: unknown }> = [];
     return { id: 'child', agent: { role: ROLE, authority: { allowed_tools: ROLE.tools, max_authority_level: opts.childLevel ?? 10 } },
@@ -89,7 +96,7 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
       getMessages: () => history };
   };
   const services = buildSandboxServiceBackends({ credentialResolver: new CredentialResolver(), eventBuffer: new WorkflowEventBuffer(),
-    toolRegistry: registry, authorityEngine: authority, emergencyController: emergency, auditTrail: new AuditTrail(),
+    toolRegistry: registry, authorityEngine: authority, emergencyController: emergency, auditTrail,
     approvalManager: approvals,
     agentOrchestrator: { getPrimary: () => ({ id: 'primary' }), spawnSubAgent: child, terminateAgent: () => {} } as any,
     agentSpecialists: new Map([[ROLE.id, ROLE]]) as any,
@@ -106,13 +113,13 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
     channelService: {} as any, wsService: {} as any });
   const context = (path: Array<[string, number]> = []) => ({ runId: ids.run.id, projectId: DEFAULT_IDS.project, stepName: 'delegate', executionPath: path });
   const delegate = (extra: Record<string, unknown> = {}, path: Array<[string, number]> = []) =>
-    services.agentDelegate!({ goal: 'Save the note', maxIterations: 4, ...extra }, context(path));
+    services.agentDelegate!({ goal: 'Save the note', maxIterations: 4, role: ROLE.id, ...extra }, context(path));
   const route = (body: Record<string, unknown> = {}) => createJarvisAgentDelegateRoute(services)({
     req: new Request('http://127.0.0.1/v1/jarvis/agent/delegate', { method: 'POST',
       headers: { 'X-Jarvis-Step-Name': 'delegate', 'X-Jarvis-Execution-Path': '[]' },
-      body: JSON.stringify({ goal: 'Save the note', maxIterations: 4, ...body }) }),
+      body: JSON.stringify({ goal: 'Save the note', maxIterations: 4, role: ROLE.id, ...body }) }),
     claims: { runId: ids.run.id, projectId: DEFAULT_IDS.project, sandboxId: 'test' } as any, params: {} });
-  return { services, approvals, emergency, delegate, route, effects: () => effects, llmCalls: () => llmCalls };
+  return { services, approvals, emergency, authority, auditTrail, delegate, route, effects: () => effects, llmCalls: () => llmCalls };
 }
 
 const audit = () => (getWorkflowDb().query('SELECT agent_id, tool_name, authority_decision, executed FROM audit_trail ORDER BY rowid')
@@ -130,29 +137,34 @@ describe('delegated approvals through the workflow effect boundary', () => {
 
     const effects = listWorkflowEffects(ids.run.id);
     expect(effects).toHaveLength(2);
-    expect(effects[0]).toMatchObject({ route: 'agent', status: 'succeeded', result: { dispatch: 'authorized' }, target: { role: 'workflow-default' } });
+    expect(effects[0]).toMatchObject({ route: 'agent', status: 'succeeded', result: { dispatch: 'authorized' }, target: { role: ROLE.id } });
     expect(effects[1]).toMatchObject({ route: 'agent-tool:1', status: 'pending', toolName: 'write_file', actionCategory: 'write_data',
       decision: 'approval_required', stepName: 'delegate', versionId: ids.version.id, arguments: ARGS,
-      target: { tool: 'write_file', sequence: 1 }, approvalId: reply.approval!.approvalId, waitpointId: reply.approval!.waitpointId });
+      target: { tool: 'write_file', sequence: 1, principal: { agentId: 'child', agentRoleId: ROLE.id, agentAuthorityLevel: 10 } },
+      approvalId: reply.approval!.approvalId, waitpointId: reply.approval!.waitpointId });
     const [pending] = f.approvals.getPending();
     expect(f.approvals.getPending()).toHaveLength(1);
-    expect(pending).toMatchObject({ tool_name: 'write_file', execution_mode: 'workflow', action_category: 'write_data' });
+    expect(pending).toMatchObject({ tool_name: 'write_file', execution_mode: 'workflow', action_category: 'write_data',
+      agent_name: `Workflow: Delegated routine as ${ROLE.id}` });
     // Frozen arguments, canonical key order; the approval is bound to exactly these.
     expect(JSON.parse(pending!.tool_arguments)).toEqual(ARGS);
     expect(JSON.parse(pending!.context)).toMatchObject({ effectId: reply.approval!.effectId, runId: ids.run.id, stepName: 'delegate',
-      versionId: ids.version.id, target: { tool: 'write_file', sequence: 1 } });
+      versionId: ids.version.id, target: { tool: 'write_file', sequence: 1, principal: { agentRoleId: ROLE.id } } });
 
     const checkpoint = getDelegation(delegationId(ids.run.id));
-    expect(checkpoint).toMatchObject({ status: 'paused', runId: ids.run.id, stepName: 'delegate', roleId: 'workflow-default',
+    expect(checkpoint).toMatchObject({ status: 'paused', runId: ids.run.id, stepName: 'delegate', roleId: ROLE.id,
       goal: 'Save the note', sequence: 1, iteration: 0, taint: [], failedToolCalls: [],
       pending: { toolCall: { id: 'call-1', name: 'write_file', arguments: ARGS }, sequence: 1, remaining: [], iteration: 0,
-        approval: reply.approval, principal: { agentId: 'child', agentRoleId: 'workflow-default', agentAuthorityLevel: 10 } } });
+        approval: reply.approval, principal: { agentId: 'child', agentRoleId: ROLE.id, agentAuthorityLevel: 10 } } });
     expect(checkpoint!.messages.at(-1)).toMatchObject({ role: 'assistant' });
     expect(audit()).toEqual([
       [`workflow:${ids.run.id}`, 'workflow_delegate', 'allowed', true],
       [`workflow:${ids.run.id}`, 'write_file', 'approval_required', false],
       ['child', 'write_file', 'approval_required', false],
     ]);
+    // The boundary's row says who was judged.
+    const names = (getWorkflowDb().query('SELECT agent_name FROM audit_trail WHERE tool_name = ? ORDER BY rowid').all('write_file') as Array<{ agent_name: string }>);
+    expect(names[0]!.agent_name).toContain(`as ${ROLE.id} (level 10)`);
   });
 
   test('approval resumes the delegation: the tool runs once and the conversation finishes', async () => {
@@ -177,7 +189,7 @@ describe('delegated approvals through the workflow effect boundary', () => {
 
     // The engine running the step again gets the record, not a new conversation, with the declaration it asks with now.
     expect(await f.delegate()).toEqual(done);
-    expect((await f.delegate({ requiredTools: ['read_file'] })).outcome).toMatchObject({ status: 'error', code: 'REQUIRED_TOOL_NOT_COMPLETED' });
+    expect((await f.delegate({ requiredTools: ['read_file'] })).outcome).toMatchObject({ status: 'error', code: 'REQUIRED_TOOL_NOT_COMPLETED', effect: 'not_started' });
     expect(f.effects()).toBe(1);
     expect(f.llmCalls()).toBe(2);
   });
@@ -211,7 +223,7 @@ describe('delegated approvals through the workflow effect boundary', () => {
   test('a role-scoped rule that requires approval parks the run even when the category is not governed globally', async () => {
     const ids = createRun();
     const f = backends(ids, { authority: { governed_categories: [],
-      overrides: [{ action: 'write_data', role_id: 'workflow-default', allowed: true, requires_approval: true }] } });
+      overrides: [{ action: 'write_data', role_id: ROLE.id, allowed: true, requires_approval: true }] } });
     const reply = await f.delegate();
     expect(reply.status).toBe('approval_required');
     expect(f.effects()).toBe(0);
@@ -330,6 +342,53 @@ describe('delegated approvals through the workflow effect boundary', () => {
     expect(checkpoint.messages.filter(m => m.role === 'tool')).toHaveLength(1);
     expect(cancelFlowRun(ids.run.id).accepted).toBe(true);
     expect(getDelegation(delegationId(ids.run.id))).toBeNull();
+  });
+
+  test('a gate that required approval is never relaxed by the boundary\'s own recomputation', async () => {
+    const ids = createRun();
+    const f = backends(ids);
+    const boundary = new WorkflowEffectBoundary({ authorityEngine: f.authority, emergencyController: f.emergency, auditTrail: f.auditTrail, approvalManager: f.approvals });
+    let ran = 0;
+    const invoke = (approvalRequired: boolean) => boundary.invoke({
+      context: { runId: ids.run.id, projectId: DEFAULT_IDS.project, stepName: 'delegate', executionPath: [] },
+      piece: PIECE, action: 'delegate', route: `agent-tool:${approvalRequired ? 2 : 1}`, toolName: 'read_file', category: 'read_data', toolCategory: 'file-ops',
+      request: { toolName: 'read_file', arguments: {} }, prepare: () => ({ arguments: {}, target: { tool: 'read_file' } }),
+      principal: { agentId: 'child', agentRoleId: ROLE.id, agentAuthorityLevel: 10, profile: null }, approvalRequired,
+      execute: async () => { ran++; return 'contents'; } });
+    // Reading is not governed here, so the boundary on its own runs it.
+    expect(await invoke(false)).toEqual({ result: 'contents' });
+    expect(ran).toBe(1);
+    // The same call with the gate's requirement parks instead.
+    const forced = await invoke(true);
+    expect(forced.approval).toMatchObject({ approvalId: expect.any(String), waitpointId: expect.any(String) });
+    expect(ran).toBe(1);
+    expect(listWorkflowEffects(ids.run.id).find(e => e.route === 'agent-tool:2')).toMatchObject({ status: 'pending', decision: 'approval_required',
+      reason: expect.stringContaining('approval required by the calling gate') });
+  });
+
+  test('a fence raised inside the tool under its approval is a failed effect the agent continues from, with its receipt', async () => {
+    const ids = createRun();
+    const f = backends(ids, { writeInterrupts: true });
+    const parked = await f.delegate({ requiredTools: ['write_file'] });
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    const done = await f.delegate({ requiredTools: ['write_file'] });
+    expect(done.status).toBe('completed');
+    expect(done.toolCalls[0]!.error).not.toMatch(/APPROVAL DENIED/);
+    expect(done.toolCalls[0]!.error).toContain('system paused');
+    expect(done.outcome).toMatchObject({ status: 'error', code: 'REQUIRED_TOOL_NOT_COMPLETED', effect: 'may_have_occurred' });
+    expect(listWorkflowEffects(ids.run.id)[1]).toMatchObject({ route: 'agent-tool:1', status: 'failed', outcome: { code: 'TOOL_FAILED', effect: 'may_have_occurred' } });
+    // The approval row is not the receipt for a workflow effect; the effect record is (A4 leaves workflow-owned rows to it).
+    expect(f.approvals.getRequest(parked.approval!.approvalId)).toMatchObject({ status: 'approved' });
+    expect(f.effects()).toBe(1);
+  });
+
+  test('a run cancelled inside a turn answers canceled and writes no conversation back', async () => {
+    const ids = createRun();
+    const f = backends(ids, { script: [{ call: 'read_file' }, { call: 'write_file', args: ARGS }, 'finish'], readCancels: true });
+    const done = await f.delegate();
+    expect(done).toMatchObject({ status: 'canceled', outcome: { status: 'error', code: 'AGENT_CANCELED' } });
+    expect(getDelegation(delegationId(ids.run.id))).toBeNull();
+    expect(f.effects()).toBe(0);
   });
 
   test('an edited version cannot resume a parked delegation', async () => {

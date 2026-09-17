@@ -75,6 +75,9 @@ export type RunSubAgentFn = (opts: RunSubAgentOptions) => Promise<SubAgentResult
  * continue later: where its checkpoint lives, what it is bound to, and how a
  * governed tool call reaches the effect boundary.
  */
+/** What a checkpoint row holds beyond its identity, role and goal. */
+type DelegationState = Omit<DelegationCheckpoint, keyof DelegationContinuation["identity"] | "roleId" | "goal" | "updatedAt">;
+
 export interface DelegationContinuation {
   identity: {
     id: string;
@@ -156,7 +159,10 @@ export function delegationOutcome(
   const unmet = requiredTools.filter(name =>
     !result.toolCalls.some(call => call.name === name && call.result !== undefined && call.error === undefined));
   if (unmet.length > 0) {
-    return { status: "error", code: "REQUIRED_TOOL_NOT_COMPLETED", effect: "may_have_occurred",
+    // A tool that was never called did nothing; one that was called and did
+    // not complete may have.
+    const attempted = unmet.some(name => result.toolCalls.some(call => call.name === name));
+    return { status: "error", code: "REQUIRED_TOOL_NOT_COMPLETED", effect: attempted ? "may_have_occurred" : "not_started",
       message: `The delegated agent finished without completing: ${unmet.join(", ")}` };
   }
   return { status: "succeeded" };
@@ -232,8 +238,12 @@ export class M7AgentDelegator implements PieceAgentDelegator {
       const child = this.orchestrator.spawnSubAgent(parent.id, role);
       childId = child.id;
       const registry = this.scopedRegistry(child.agent.authority.allowed_tools);
-      const base = { ...(continuation?.identity ?? {}), roleId, goal: input.goal } as Omit<DelegationCheckpoint,
-        "status" | "messages" | "toolsUsed" | "tokensUsed" | "sequence" | "iteration" | "taint" | "failedToolCalls" | "updatedAt">;
+      // The durable side of a delegation exists only with a continuation.
+      const durable = continuation ? {
+        save: (state: DelegationState): void =>
+          continuation.save({ ...continuation.identity, roleId, goal: input.goal, ...state, updatedAt: Date.now() }),
+        dispatch: (call: GovernedToolCall) => continuation.dispatch(registry, call),
+      } : null;
 
       const result: SubAgentResult = await this.runSubAgentFn({
         agent: child,
@@ -248,11 +258,11 @@ export class M7AgentDelegator implements PieceAgentDelegator {
         ...(this.auditTrail ? { auditTrail: this.auditTrail } : {}),
         ...(this.emergencyController ? { emergencyController: this.emergencyController } : {}),
         ...(this.temporaryGrants ? { temporaryGrants: this.temporaryGrants } : {}),
-        ...(continuation ? {
-          governedTools: call => continuation.dispatch(registry, call),
+        ...(durable ? {
+          governedTools: durable.dispatch,
           // After every completed turn the conversation is durable, so a run
           // that dies mid-conversation continues from here, not from scratch.
-          onTurn: state => continuation.save({ ...base, ...state, status: "running", updatedAt: Date.now() }),
+          onTurn: state => durable.save({ ...state, status: "running" }),
         } : {}),
         ...(resume ? { resume } : {}),
       });
@@ -261,15 +271,14 @@ export class M7AgentDelegator implements PieceAgentDelegator {
       // which only carries user/assistant turns). The local log has every
       // assistant tool_calls block + matching tool result.
       const toolCalls = extractToolCallsTrace(result.messages, this.traceResultMaxChars, new Set(result.failedToolCalls ?? []));
-      const now = Date.now();
       const stateOf = (iteration: number) => ({ messages: result.messages, toolsUsed: result.toolsUsed, tokensUsed: result.tokensUsed,
         sequence: result.sequence ?? result.paused?.sequence ?? 0, iteration, taint: result.taint ?? [],
         failedToolCalls: result.failedToolCalls ?? [] });
 
       if (result.terminationReason === "paused") {
         // The dispatch only exists with a continuation, so a pause always has somewhere to go.
-        if (!continuation || !result.paused) throw new Error("paused without a continuation");
-        continuation.save({ ...base, ...stateOf(result.paused.iteration), status: "paused", pending: result.paused, updatedAt: now });
+        if (!durable || !result.paused) throw new Error("paused without a continuation");
+        durable.save({ ...stateOf(result.paused.iteration), status: "paused", pending: result.paused });
         return { finalMessage: "", toolCalls, status: "approval_required", approval: result.paused.approval };
       }
 
@@ -281,13 +290,21 @@ export class M7AgentDelegator implements PieceAgentDelegator {
         return errorResult(result.response, toolCalls);
       }
 
+      if (result.terminationReason === "error" && result.canceled) {
+        // The run was stopped between turns. Its delegation rows are already
+        // gone; nothing is written back.
+        const canceled: PieceAgentDelegateResult = { finalMessage: "", toolCalls, status: "canceled", error: result.response };
+        canceled.outcome = delegationOutcome(canceled, input.requiredTools);
+        return canceled;
+      }
+
       const finished: PieceAgentDelegateResult = result.terminationReason === "error"
         ? errorResult(result.response, toolCalls)
         : { finalMessage: result.response, toolCalls,
             status: result.terminationReason === "max_iterations" ? "max_iterations" : "completed" };
       finished.outcome = delegationOutcome(finished, input.requiredTools);
       // The log is dropped once the result exists; the trace is in the step output.
-      continuation?.save({ ...base, ...stateOf(0), messages: [], status: "completed", result: finished, updatedAt: now });
+      durable?.save({ ...stateOf(0), messages: [], status: "completed", result: finished });
       return finished;
     } catch (e) {
       // spawnSubAgent or runSubAgent threw an unhandled exception. Surface
@@ -323,7 +340,7 @@ export function extractToolCallsTrace(
   messages: LLMMessage[],
   maxResultChars: number,
   /** Tool call ids the runner reported as failed, denied or refused. */
-  failed: ReadonlySet<string> = new Set(),
+  failed: Set<string>,
 ): PieceAgentToolCall[] {
   const responseById = new Map<string, string>();
   for (const msg of messages) {
@@ -352,11 +369,9 @@ export function extractToolCallsTrace(
           result.length > maxResultChars
             ? result.slice(0, maxResultChars) + `... (truncated, was ${result.length} chars)`
             : result;
-        // The runner says which calls failed, were denied or refused. The
-        // prefix match remains for logs recorded before it did.
-        if (failed.has(call.id) || result.startsWith("[AUTHORITY DENIED]") || result.startsWith("[APPROVAL DENIED]") || result.startsWith("Error executing ")) {
-          entry.error = result;
-        }
+        // The runner marks which calls failed, were denied or refused; the
+        // text of a result is never read for it.
+        if (failed.has(call.id)) entry.error = result;
       }
       trace.push(entry);
     }

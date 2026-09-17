@@ -38,6 +38,10 @@ export interface EffectInvocation {
 }
 export type EffectReply = { result: unknown; approval?: never } | { approval: WorkflowApprovalPending; result?: never };
 
+/** The durable identity of an effect: one per run, step, loop position and route. */
+export const workflowEffectId = (runId: string, stepName: string, executionPath: Array<[string, number]>, route: string) =>
+  'wfe_' + digest([runId, stepName, executionPath, route]);
+
 /** The daemon owns policy, frozen arguments, approvals and the dispatch fence. */
 export class WorkflowEffectBoundary {
   constructor(private readonly deps: WorkflowAuthorityDependencies) {}
@@ -64,7 +68,7 @@ export class WorkflowEffectBoundary {
     const { authorityEngine: authority, emergencyController: emergency, auditTrail: audit, approvalManager: approvals } = this.deps;
     if (!authority || !emergency || !audit) throw new Error('Workflow Authority is unavailable; execution denied');
     const resolved = resolveEffectContext(input.context, input.piece, input.action);
-    const id = 'wfe_' + digest([resolved.run.id, resolved.stepName, resolved.executionPath, input.route]);
+    const id = workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, input.route);
     let effect = getWorkflowEffect(id);
     if (effect && (effect.requestDigest !== digest(input.request) || effect.versionDigest !== resolved.versionDigest
       || effect.toolName !== input.toolName || effect.actionCategory !== input.category)) {
@@ -88,8 +92,11 @@ export class WorkflowEffectBoundary {
       saveWorkflowEffect(effect!);
     }
     const record = effect!;
+    // The trail names who was judged: the workflow itself, or the sub-agent a
+    // delegated call was judged as.
+    const judged = input.principal ? ` / as ${input.principal.agentRoleId} (level ${input.principal.agentAuthorityLevel})` : '';
     const log = (executed: boolean) => audit.log({ agent_id: `workflow:${record.runId}`,
-      agent_name: `Workflow ${resolved.version.displayName} / ${record.stepName} / ${record.id}`,
+      agent_name: `Workflow ${resolved.version.displayName} / ${record.stepName} / ${record.id}${judged}`,
       tool_name: record.toolName, action_category: input.category,
       authority_decision: record.decision === 'denied' ? 'denied' : record.approvalId ? 'approval_required' : 'allowed',
       approval_id: record.approvalId, executed });
@@ -126,7 +133,8 @@ export class WorkflowEffectBoundary {
       if (!record.approvalId) {
         let request!: ApprovalRequest;
         getWorkflowDb().transaction(() => {
-          request = approvals.createRequest({ agentId: `workflow:${record.runId}`, agentName: `Workflow: ${resolved.version.displayName}`,
+          request = approvals.createRequest({ agentId: `workflow:${record.runId}`,
+            agentName: `Workflow: ${resolved.version.displayName}${input.principal ? ` as ${input.principal.agentRoleId}` : ''}`,
             toolName: input.toolName, toolArguments: record.arguments, actionCategory: input.category,
             urgency: 'normal', reason: decision.reason,
             context: canonicalJson({ effectId: id, runId: record.runId, versionId: record.versionId,

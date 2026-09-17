@@ -110,9 +110,10 @@ where it stopped, in this process or the next. The sub-agent's message log is
 checkpointed in `workflow_delegation` after every turn and while it waits,
 dropped when it finishes or the run is cancelled; a step the engine runs
 again after that answers from the record. A declined approval becomes
-`[APPROVAL DENIED]` in the conversation and the tool never runs. The tools
-the direct tool piece refuses as opaque (`run_command`, browser clicks and
-typing) are refused here too.
+`[APPROVAL DENIED]` in the conversation and the tool never runs. A tool the
+direct tool piece refuses as opaque (`run_command`, browser clicks and
+typing) is refused here too when it would need approval; one the sub-agent's
+Authority allows outright runs inside the sub-agent as before.
 
 The step's `outcome` is its business contract. `Required tools` names the
 tools that must complete; `succeeded` means the conversation finished and

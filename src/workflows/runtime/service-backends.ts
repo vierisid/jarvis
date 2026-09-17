@@ -40,7 +40,8 @@ import type { SandboxApiServices } from "../sandbox-api/server";
 import type { CredentialResolver } from "../credentials/adapter";
 import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
-import { WorkflowEffectBoundary, type WorkflowAuthorityDependencies } from './effect-boundary';
+import { WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
+import { getWorkflowEffect } from '../db/repos/workflow-effect';
 import { OPAQUE_TOOL_NAMES, refusedEffectCategory, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, resolveGovernedPieceAction, sanitizePieceInput } from './piece-effects';
@@ -396,7 +397,10 @@ export function buildSandboxServiceBackends(
             // Judged as the sub-agent the gate judged it for, and never
             // concluded to need less than the gate required.
             principal: call.principal, approvalRequired: true,
-            prepare: () => ({ arguments: { ...call.toolCall.arguments }, target: { tool: call.toolCall.name, sequence: call.sequence } }),
+            // The target names who asked, so the card and the record are bound
+            // to the principal and not only to the tool.
+            prepare: () => ({ arguments: { ...call.toolCall.arguments }, target: { tool: call.toolCall.name, sequence: call.sequence,
+              principal: { agentId: call.principal.agentId, agentRoleId: call.principal.agentRoleId, agentAuthorityLevel: call.principal.agentAuthorityLevel } } }),
             execute: async (args, checkpoint) => {
               checkpoint();
               try {
@@ -414,16 +418,17 @@ export function buildSandboxServiceBackends(
           if (inner.approval) return { kind: 'paused', approval: inner.approval };
           return { kind: 'executed', result: String(inner.result ?? '') };
         } catch (error) {
+          // The record the boundary left decides what the agent sees, never
+          // the message: a blocked effect (the user's decision, an Authority
+          // refusal for this principal, emergency state, a refused target) is
+          // a denial, a failed one a failure the agent continues from. A
+          // refusal that left no final record (a changed version, an
+          // uncertain or already claimed earlier attempt) is this run's
+          // error, not the delegation's.
           const message = error instanceof Error ? error.message : String(error);
-          // Answers the agent can act on: the user's decision, an Authority
-          // refusal for this principal, an effect the boundary blocked for
-          // good (emergency state, a run no longer running), and a tool that
-          // failed under its approval. A refusal that leaves the effect as it
-          // was, a changed version or an uncertain or already claimed earlier
-          // attempt, is this run's error, not the delegation's.
-          if (/^Workflow approval (denied|expired)/.test(message) || /^Authority denied/.test(message)
-            || /^Workflow effect blocked/.test(message)) return { kind: 'denied', reason: message };
-          if (error instanceof ActionOutcomeError) return { kind: 'failed', result: message };
+          const recorded = getWorkflowEffect(workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, `agent-tool:${call.sequence}`));
+          if (recorded?.status === 'blocked') return { kind: 'denied', reason: recorded.error ?? message };
+          if (recorded?.status === 'failed' || recorded?.status === 'unknown') return { kind: 'failed', result: recorded.error ?? message };
           throw error;
         }
       },

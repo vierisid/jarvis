@@ -43,7 +43,8 @@ asked with now.
 - The audit row says what happened. `approval_required` and `denied` rows
   carry `executed: false`, an `allowed` row is written after the tool
   returned or threw, and an attempt the dispatch itself failed still gets
-  its row. The boundary audits the dispatch it makes under an approval.
+  its row. The boundary audits the dispatch it makes under an approval and
+  names the principal it judged; the approval names it too.
 - One dispatch per approved call. The `agent-tool:N` effect has the same
   claim, receipt and replay refusal as every other workflow effect. Asked
   again, the boundary answers from the record. A second surface cannot run
@@ -64,18 +65,21 @@ asked with now.
 - The same envelope as the direct tool piece. A tool whose effect a
   category cannot describe (`run_command`, browser clicks and typing) is
   refused before it reaches the boundary; the agent sees the refusal.
-- A blocked call is a denial the agent sees. When the boundary refuses the
-  pending call on resume and finalizes its effect as blocked (emergency
-  state, a run no longer running), the call is over for good, as it is for a
-  direct tool; the conversation continues with `[APPROVAL DENIED]` and the
-  declared outcome reports it. A refusal that leaves the effect as it was
-  (a changed version, an uncertain or already claimed earlier attempt) is
-  this run's error, not the delegation's: the step fails without touching
-  the checkpoint.
+- The record decides what the agent sees. After a refusal the dispatch
+  reads the effect record the boundary left, never the error text. A
+  `blocked` effect (the user's decision, an Authority refusal, emergency
+  state, a run no longer running, a refused target) is over for good, as it
+  is for a direct tool: the conversation continues with `[APPROVAL DENIED]`
+  and the declared outcome reports it. A `failed` effect is a failure the
+  agent continues from. A refusal that left no final record (a changed
+  version, an uncertain or already claimed earlier attempt) is this run's
+  error, not the delegation's: the step fails without touching the
+  checkpoint.
 - A finished conversation is not a business outcome. Without
   `requiredTools`, `succeeded` says only that the agent finished cleanly.
 - A stopped run keeps no conversation. Cancelling a run deletes its
-  delegation rows; deleting the run cascades.
+  delegation rows, and a delegation the cancel interrupts answers
+  `canceled` and writes nothing back; deleting the run cascades.
 
 ## What this does not do
 
@@ -94,8 +98,13 @@ asked with now.
   the delegation finishes or the run is cancelled, and deleted with the
   run. A parked run whose approval is never decided keeps it until then.
 - Required tools are matched by name in the trace. A tool that ran twice
-  counts once.
+  counts once. An unmet tool that was never called reports `not_started`;
+  one that was called and did not complete reports `may_have_occurred`.
 - Temporary grants are not carried to the boundary; a workflow sub-agent
   inherits none.
+- The approval row is not the receipt for a delegated call; the
+  `agent-tool:N` effect record is, as the approval receipts contract leaves
+  workflow-owned rows to their effect record. A call that ran writes its
+  receipt as before; one that failed or was blocked leaves the row approved.
 - The LLM-only fallback (no orchestrator wired) has no tools and no
   pauses; its outcome is evaluated at the route from its status.

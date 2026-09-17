@@ -353,6 +353,16 @@ describe("M7AgentDelegator with a continuation", () => {
     expect(out).toMatchObject({ status: "error", error: expect.stringContaining("system paused") });
     expect(stored()).toBe(before);
   });
+
+  test("a cancellation the runner reports answers canceled and writes nothing back", async () => {
+    const before = checkpoint({ status: "running", iteration: 1, sequence: 1 });
+    const { c, stored } = continuation(before);
+    const stopped = delegator(async () => ({ success: false, response: "Sub-agent error: run stopped", toolsUsed: [],
+      tokensUsed: { input: 0, output: 0 }, terminationReason: "error", messages: [], canceled: true }));
+    const out = await stopped.delegate({ goal: "find X" }, c);
+    expect(out).toMatchObject({ status: "canceled", outcome: { status: "error", code: "AGENT_CANCELED" } });
+    expect(stored()).toBe(before);
+  });
 });
 
 describe("extractToolCallsTrace", () => {
@@ -372,7 +382,7 @@ describe("extractToolCallsTrace", () => {
       { role: "tool", content: "page title: X", tool_call_id: "call_2" },
       { role: "assistant", content: "X is foo." },
     ];
-    const trace = extractToolCallsTrace(messages, 1000);
+    const trace = extractToolCallsTrace(messages, 1000, new Set());
     expect(trace).toHaveLength(2);
     expect(trace[0]).toEqual({
       name: "vault_search",
@@ -383,7 +393,7 @@ describe("extractToolCallsTrace", () => {
     expect(trace[1]?.result).toBe("page title: X");
   });
 
-  test("surfaces authority denials + execution errors as `error`", () => {
+  test("surfaces the calls the runner marked as `error`", () => {
     const messages: LLMMessage[] = [
       {
         role: "assistant",
@@ -404,7 +414,7 @@ describe("extractToolCallsTrace", () => {
         tool_call_id: "c2",
       },
     ];
-    const trace = extractToolCallsTrace(messages, 1000);
+    const trace = extractToolCallsTrace(messages, 1000, new Set(["c1", "c2"]));
     expect(trace[0]?.error).toMatch(/AUTHORITY DENIED/);
     expect(trace[1]?.error).toMatch(/Error executing send_email/);
   });
@@ -419,7 +429,7 @@ describe("extractToolCallsTrace", () => {
       },
       { role: "tool", content: long, tool_call_id: "c1" },
     ];
-    const trace = extractToolCallsTrace(messages, 100);
+    const trace = extractToolCallsTrace(messages, 100, new Set());
     expect(trace[0]?.result).toMatch(/^a{100}\.\.\. \(truncated, was 2500 chars\)$/);
   });
 
@@ -432,7 +442,7 @@ describe("extractToolCallsTrace", () => {
       },
       // no tool reply (mid-loop crash)
     ];
-    const trace = extractToolCallsTrace(messages, 1000);
+    const trace = extractToolCallsTrace(messages, 1000, new Set());
     expect(trace).toHaveLength(1);
     expect(trace[0]?.result).toBeUndefined();
     expect(trace[0]?.error).toBeUndefined();
