@@ -1,8 +1,5 @@
 # Workflow version ownership and atomic publication
 
-N1. Branch `fix/workflow-version-ownership`, based on freshly pulled main
-`07fecdc8`.
-
 ## Contract
 
 Every request under `/api/workflows/:id/versions/:versionId` must identify a
@@ -15,7 +12,9 @@ creation also return 404 for a missing parent.
 The shared `assertFlowVersionOwnership` checks the relation in SQLite before
 JSON parsing. `withOwnedFlowVersion` keeps that check and its synchronous
 operation in one transaction. Request bodies are consumed before entering the
-transaction. A version edit and its editor metadata now commit together.
+transaction, so the check always runs after the asynchronous boundary and sees
+the state the write will act on. A version edit and its editor metadata now
+commit together.
 
 `publishFlowVersion(flowId, versionId?)` is the shared HTTP/chat publication
 boundary. It uses an immediate SQLite transaction to select the version, check
@@ -35,39 +34,51 @@ role; production publication callers use `publishFlowVersion` to lock and
 enable atomically. Chat retains its existing already-published/no-draft no-op
 and advisory OS warnings.
 
+## Invariants this protects
+
+`flow.published_version_id` is always null, or a version whose `flow_id` is
+that flow. The repository setter, not just the route, is what holds this.
+
+A LOCKED version's content stays immutable: `updateDraftVersion`,
+`setSampleDataEntry`, `setSampleInputEntry`, `replaceSampleData` and
+`mergeRunOutputsIntoSampleData` all refuse a LOCKED row, and re-publishing an
+already locked version mutates the flow row rather than the version. Only
+`setEngineTriggerState` writes to a locked row, and only the daemon-owned
+`engine_listeners` / `engine_schedule` columns.
+
+Both invariants are load-bearing for two existing consumers. Today work items
+require the referenced version to belong to the selected flow and to be LOCKED
+(`docs/TODAY_WORK_ITEMS.md`), and re-check both inside the run transaction.
+Authority pins an approved effect to the run's version and digest
+(`docs/superpowers/specs/2026-09-15-workflow-authority-design.md`). Reaching
+`lockVersion` or `setPublishedVersion` through another flow's route let an
+unreviewed draft be promoted to LOCKED, or a foreign version be spliced in as
+a flow's published version, either of which would make those checks describe
+something the user never approved.
+
 ## Verification
 
-The final 44-case regression file produced 30 failures on unchanged main in
-an isolated checkout. It covers all six nested read/write operations, unknown
-identities, malformed foreign version content, invalid publication bodies,
-explicit draft/locked selection, scoped latest selection and the lower-level
-setter. Snapshots compare complete flow, version and editor metadata rows.
+`src/workflows/api/version-ownership.test.ts` covers all six nested
+read/write operations against a wrong parent, a missing parent and an unknown
+version; malformed foreign version content, to show the relation is checked
+before the row is parsed; invalid and malformed publication bodies; explicit
+draft and explicit locked selection; latest-draft selection scoped to the
+owning flow; and the lower-level setter. Assertions snapshot the complete
+flow, version and editor metadata rows, so a rejected request has to leave the
+database byte-identical.
 
-Synthetic SQLite failures during attachment, enabling and editor metadata
-writing prove rollback. The chat publication case checks the same rollback,
-and a body-read test deletes the version before the handler resumes to ensure
-ownership is checked after the asynchronous boundary. Valid operations and
-existing publication warnings remain covered by the surrounding suites.
+Rollback is shown with synthetic `RAISE(ABORT)` triggers on attachment, on
+enabling and on the editor metadata write, for both the HTTP and the chat
+publication entry point. One case deletes the version while the handler is
+awaiting its request body, to pin the ordering rule above.
 
-- 329 tests passed across API, DB, chat, trigger, sandbox and goal work-item
-  suites, including all 44 new cases.
-- TypeScript, daemon build and all four repository guards passed. The build
-  includes the flock asset; packaging used Bun's packer (2 required paths,
-  2,530 files).
-- Full-repository testing and the aggregate commit hook were not rerun because
-  of the previously recorded timeout limitations. The local commit uses a
-  per-command hook override after these explicit checks.
+`src/workflows/db/repos/repos.test.ts` covers the setter against a real owned
+version, and keeps its existing missing-flow case. The unowned, missing and
+`null`-clearing cases for the setter live with the rest of the new coverage.
 
-## Integration and limits
+## Limits
 
-At branch creation, open PRs were #476 (native lookup), #473 (encryption),
-#475 (small-model interface), #381 (command deck/wake) and #280 (project docs).
-None touches this fix's routes or flow/version repositories. Main now includes
-#469 (structural runtime) and #474 (governed pieces). No sibling commits were
-merged into this branch.
-
-W3 activation/preflight work should reuse this publication boundary. This fix
-does not add connector validation, cross-tenant authorization, remote-trigger
-rollback or a migration for previously corrupted publication pointers. Tests
-use synthetic local records and effects; no deployed workflows were inspected
-or executed.
+This fix does not add connector validation, cross-tenant authorization,
+remote-trigger rollback, or a migration for publication pointers already
+corrupted by the previous behavior. W3 activation/preflight work should reuse
+this publication boundary rather than re-deriving it.

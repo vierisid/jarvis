@@ -470,6 +470,14 @@ Mounted under `/api/workflows/*`. Source: `src/workflows/api/routes.ts`.
 | POST | `/api/webhooks/waitpoints/:id` | Resume a paused flow (idempotent: 410 on second hit) |
 | POST | `/api/workflow-runs/:runId/cancel` | Close the run's dispatch fence (idempotent; `accepted: false` once finished) |
 
+Every `/api/workflows/:id/versions/:vid` route requires `:vid` to be a version
+of `:id`. A wrong-parent, missing or unknown version returns 404 without
+reading the version or touching either flow, and `POST /api/workflows/:id/publish`
+returns 404 for an explicit `versionId` belonging to another flow. That publish
+body must be empty, `{}`, or `{ versionId }` with a non-empty string; malformed
+JSON and non-object bodies return 400 instead of falling back to the latest
+draft. `flow.published_version_id` can only ever name a version of that flow.
+
 The engine subprocess hits `/v1/*` on the same daemon (the SandboxApi). Those routes are documented in the `sandbox-api/routes/` files; users never call them.
 
 ## NL composer and `manage_workflow`
