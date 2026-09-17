@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { initWorkflowDb, closeWorkflowDb, getWorkflowDb, DEFAULT_IDS } from '../db';
 import { createFlow } from '../db/repos/flow';
-import { createDraftVersion, updateDraftVersion } from '../db/repos/flow-version';
+import { createDraftVersion, getFlowVersion, setSampleDataEntry, updateDraftVersion } from '../db/repos/flow-version';
 import { createFlowRun, ensureRunExecutionConfig, getFlowRun, updateRun } from '../db/repos/flow-run';
 import { ToolRegistry } from '../../actions/tools/registry';
 import { desktopListWindowsTool, desktopScreenshotTool } from '../../actions/tools/desktop';
@@ -31,6 +31,7 @@ import { createRunFlowHandler } from '../runner/handler';
 import { Worker } from '../queue/worker';
 import { enqueue } from '../db/repos/job-queue';
 import { resumeResolvedWorkflowEffects } from './effect-approval-scheduler';
+import { createWorkflowRoutes } from '../api/routes';
 
 const originalManager = getSidecarManager();
 const originalNoLocal = isNoLocalTools();
@@ -192,6 +193,8 @@ test('old machine receipts cannot acquire a replacement session after upgrade', 
 
 test('UI previews cannot carry old sample assumptions to a newly selected machine', async () => {
   const f = fixture();
+  f.version.trigger.nextAction!.nextAction!.settings!.input = { params: { pid: '{{ first.pid }}' } };
+  updateDraftVersion(f.version.id, { trigger: f.version.trigger });
   ensureRunExecutionConfig(f.run.id, { stepNameToTest: 'second', sampleData: { first: { element_id: 17, pid: 1234 } } });
   await expect(f.invoke('second', { target: 'b' })).rejects.toThrow(/test outputs.*provenance/);
   withWorkflowMachineBinding({ runId: f.run.id, projectId: DEFAULT_IDS.project }, () => resolveToolTarget('b', 'filesystem', 'read_file'));
@@ -199,6 +202,127 @@ test('UI previews cannot carry old sample assumptions to a newly selected machin
   expect(f.calls).toEqual([]);
   expect(f.approvals.getPending()).toHaveLength(0);
 });
+
+for (const input of [
+  { params: {} },
+  { params: { title: 'first.pid' } },
+  { params: { title: '{{ "first.pid" }}' } },
+  { params: { pid: '{{ 100 + 23 }}' } },
+]) test(`literal UI previews ignore unrelated samples: ${JSON.stringify(input)}`, async () => {
+  const f = fixture();
+  f.version.trigger.nextAction!.nextAction!.settings!.input = input;
+  updateDraftVersion(f.version.id, { trigger: f.version.trigger });
+  ensureRunExecutionConfig(f.run.id, { stepNameToTest: 'second', sampleData: { first: { pid: 123 }, second: { old: true } } });
+  await f.invoke('second');
+  expect(f.calls).toEqual(['a']);
+});
+
+test('a literal preview input override replaces the saved UI dependency', async () => {
+  const f = fixture();
+  f.version.trigger.nextAction!.nextAction!.settings!.input = { params: { pid: '{{ first.pid }}' } };
+  updateDraftVersion(f.version.id, { trigger: f.version.trigger });
+  ensureRunExecutionConfig(f.run.id, { stepNameToTest: 'second', sampleData: { first: { pid: 123 } },
+    sampleInputOverride: { second: { toolName: 'desktop_list_windows', params: {} } } });
+  await f.invoke('second');
+  expect(f.calls).toEqual(['a']);
+});
+
+for (const source of ['first.pid', 'first[third.key]', 'true ? first.pid : 0',
+  'flattenNestedKeys(first.windows, ["pid"])', '({ value: [first?.pid] })']) {
+  test(`preview overrides cannot reuse unqualified samples: ${source}`, async () => {
+    const f = fixture();
+    ensureRunExecutionConfig(f.run.id, { stepNameToTest: 'second', sampleData: { first: { pid: 123 }, third: { key: 'pid' } },
+      sampleInputOverride: { second: { params: { nested: [{ value: `{{ ${source} }}` }] } } } });
+    await expect(f.invoke('second')).rejects.toThrow(/test outputs.*provenance/);
+    expect(f.calls).toEqual([]);
+  });
+}
+
+test('a preview uses its current trigger payload rather than the trigger sample', async () => {
+  const f = fixture();
+  f.version.trigger.nextAction!.nextAction!.settings!.input = { params: { target: '{{ trigger.target }}' } };
+  updateDraftVersion(f.version.id, { trigger: f.version.trigger });
+  ensureRunExecutionConfig(f.run.id, { stepNameToTest: 'second', sampleData: { trigger: { target: 'b' } } });
+  await f.invoke('second', { target: 'a' });
+  expect(f.calls).toEqual(['a']);
+});
+
+for (const [previewStep, source] of [['second', 'first.windows'], ['second', 'trigger.windows'], ['loop', 'first.windows']]) test(`loop preview inputs retain sample provenance: ${previewStep} / ${source}`, async () => {
+  const f = fixture();
+  const inner = f.version.trigger.nextAction!.nextAction!;
+  inner.settings!.input = { params: { pid: '{{ loop.item.pid }}' } };
+  f.version.trigger.nextAction!.nextAction = { name: 'loop', type: 'LOOP_ON_ITEMS',
+    settings: { items: `{{ ${source} }}` }, firstLoopAction: inner };
+  updateDraftVersion(f.version.id, { trigger: f.version.trigger });
+  ensureRunExecutionConfig(f.run.id, { stepNameToTest: previewStep, sampleData: {
+    first: { windows: [{ pid: 123 }] }, trigger: { windows: [{ pid: 456 }] },
+  } });
+  await expect(f.invoke('second')).rejects.toThrow(/test outputs.*provenance/);
+  expect(f.calls).toEqual([]);
+});
+
+test('a router preview checks the input of the child that actually dispatches', async () => {
+  const f = fixture();
+  const inner = f.version.trigger.nextAction!.nextAction!;
+  inner.settings!.input = { params: { pid: '{{ first.pid }}' } };
+  f.version.trigger.nextAction!.nextAction = { name: 'router', type: 'ROUTER', settings: {}, children: [inner] };
+  updateDraftVersion(f.version.id, { trigger: f.version.trigger });
+  ensureRunExecutionConfig(f.run.id, { stepNameToTest: 'router', sampleData: { first: { pid: 123 } } });
+  await expect(f.invoke('second')).rejects.toThrow(/test outputs.*provenance/);
+  expect(f.calls).toEqual([]);
+});
+
+test('API previews can repeat after auto-capture and with unrelated saved outputs', async () => {
+  const f = fixture();
+  const step: any = { name: 'first', type: 'PIECE', settings: {
+    pieceName: '@jarvispieces/piece-jarvis-tool', pieceVersion: '0.0.1', actionName: 'invoke',
+    input: { toolName: 'desktop_list_windows', params: {} },
+  } };
+  updateDraftVersion(f.version.id, { trigger: { name: 'trigger', type: 'EMPTY', nextAction: step } });
+  const routes = createWorkflowRoutes();
+  const api = new SandboxApi({ services: f.backend() }); await api.start({ port: 0 });
+  const bundle = await buildEngineBundle(); await buildAllJarvisPieces();
+  const runtime = new EngineRuntime({ api, bundlePath: bundle.bundlePath });
+  const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({ executor: new EngineFlowExecutor(runtime, { terminalTimeoutMs: 3000 }) }) } });
+  try {
+    for (let attempt = 0; attempt < 4; attempt++) {
+      if (attempt === 2) setSampleDataEntry(f.version.id, 'trigger', { unrelated: 'business data', target: 'b' });
+      if (attempt === 3) {
+        step.settings.input.params = { target: '{{ trigger.target }}' };
+        updateDraftVersion(f.version.id, { trigger: { name: 'trigger', type: 'EMPTY', nextAction: step } });
+      }
+      const req = Object.assign(new Request(`http://localhost/api/workflows/${f.flow.id}/run`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stepNameToTest: 'first', environment: 'TESTING', payload: { target: 'a' } }),
+      }), { params: { id: f.flow.id } });
+      const response = await routes['/api/workflows/:id/run']!.POST!(req);
+      expect(response.status).toBe(202);
+      const run = await response.json() as { id: string };
+      await worker.drain();
+      expect(getFlowRun(run.id)?.status).toBe('SUCCEEDED');
+      expect(listWorkflowEffects(run.id)[0]?.status).toBe('succeeded');
+      expect(getFlowVersion(f.version.id)?.sampleData?.first).toBeDefined();
+    }
+    expect(f.calls).toEqual(['a', 'a', 'a', 'a']);
+    // The same real API/engine path must still refuse an input that consumes
+    // the earlier step's captured output in a new run.
+    step.nextAction = { ...step, name: 'second', settings: { ...step.settings,
+      input: { toolName: 'desktop_list_windows', params: { target: '{{ first.result }}' } },
+    } };
+    updateDraftVersion(f.version.id, { trigger: { name: 'trigger', type: 'EMPTY', nextAction: step } });
+    const req = Object.assign(new Request(`http://localhost/api/workflows/${f.flow.id}/run`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ stepNameToTest: 'second', environment: 'TESTING' }),
+    }), { params: { id: f.flow.id } });
+    const response = await routes['/api/workflows/:id/run']!.POST!(req);
+    expect(response.status).toBe(202);
+    const run = await response.json() as { id: string };
+    await worker.drain();
+    expect(getFlowRun(run.id)?.status).toBe('FAILED');
+    expect(getFlowRun(run.id)?.failedStep?.errorMessage).toContain('provenance');
+    expect(f.calls).toHaveLength(4);
+  } finally { await runtime.shutdown(); await api.stop(); }
+}, 60_000);
 
 test('a pause on the same connection retains the binding and fresh runs can choose a new target', async () => {
   const f = fixture();

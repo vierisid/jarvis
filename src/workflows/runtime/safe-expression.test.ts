@@ -1,9 +1,17 @@
 import { describe, expect, test } from 'bun:test';
-import { evaluateWorkflowExpression as evaluate, WorkflowExpressionError } from './safe-expression';
+import { evaluateWorkflowExpression as evaluate, workflowExpressionReferences, WorkflowExpressionError } from './safe-expression';
 import { noOpCodeSandbox } from '../activepieces/packages/server/engine/src/lib/core/code/no-op-code-sandbox';
 
 /** Upper bound on the guidance suffix, so the excerpt assertion stays meaningful. */
 const GUIDANCE_MAX = 600;
+
+test('dependency inspection distinguishes roots from literal text, keys and property names', () => {
+  expect([...workflowExpressionReferences('({ first: "first.pid", pid: 123 })')]).toEqual([]);
+  const references = workflowExpressionReferences('flag ? first[third.key] : flattenNestedKeys(second.rows, ["first"])');
+  expect([...references].sort()).toEqual(['first', 'flag', 'second', 'third']);
+  expect([...workflowExpressionReferences('[first?.pid, -other.count, first.pid + 1]')].sort()).toEqual(['first', 'other']);
+  expect(() => workflowExpressionReferences('first.getPid()')).toThrow(WorkflowExpressionError);
+});
 
 describe('workflow data expressions', () => {
   const context = { trigger: { amount: 12, rows: [{ name: 'Café' }, { name: '東京' }], key: 'amount' },

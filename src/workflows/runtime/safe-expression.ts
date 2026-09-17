@@ -171,6 +171,28 @@ class Parser {
   }
 }
 
+/** Static input dependencies, including both conditional branches. Never reads
+ * values or executes the expression; literals and property names are not roots. */
+export function workflowExpressionReferences(script: string): Set<string> {
+  const references = new Set<string>();
+  const pending = [new Parser(tokenize(script)).parse()];
+  while (pending.length) {
+    const node = pending.pop()!;
+    switch (node.kind) {
+      case 'reference': references.add(node.name); break;
+      case 'literal': break;
+      case 'array': pending.push(...node.items); break;
+      case 'object': pending.push(...node.entries.map(([, value]) => value)); break;
+      case 'member': pending.push(node.object, node.key); break;
+      case 'unary': pending.push(node.value); break;
+      case 'binary': pending.push(node.left, node.right); break;
+      case 'conditional': pending.push(node.condition, node.yes, node.no); break;
+      case 'flatten': pending.push(node.data, node.path); break;
+    }
+  }
+  return references;
+}
+
 /** Shared budget bounds evaluation, flatten traversal and materialized output. */
 class Budget {
   private visits = 0;

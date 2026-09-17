@@ -81,12 +81,17 @@ session. They cannot acquire a replacement binding on upgrade. New delegated
 receipts carry a binding-contract marker so their first machine call can bind
 after the delegation request was recorded.
 
-Saved desktop/browser/screenshot preview outputs lack session provenance. A
-preview with such prior outputs cannot establish a new UI binding; run the
-required perception steps again in a full run. Literal previews and ordinary
-non-UI samples remain available. No earlier approval, machine binding or test
-receipt is copied to a newly created run. Same-session pause/resume retains
-the existing binding. A connection change requires fresh review and perception.
+Saved preview outputs lack trusted session provenance. A UI preview whose input
+references those outputs must run the required perception steps again in a full
+run. The guard checks the dispatching step's expressions and frozen input
+override, including nested and loop-derived references. It conservatively checks
+both conditional branches; arbitrary provenance fields inside sample JSON do not
+establish trust. Unrelated samples, the tested step's own auto-captured output,
+literal previews and current trigger payloads do not block fresh perception.
+Non-UI previews retain their existing behavior. No earlier approval, machine
+binding or test receipt is copied to a newly created run. Same-session
+pause/resume retains the existing binding. A connection change requires fresh
+review and perception.
 
 ## Integration
 
@@ -141,3 +146,14 @@ binding/outcome tests. The binding file contains 21 cases. TypeScript passed in
 both checkouts; daemon build and all four guards passed (100 templates, zero
 errors/warnings; both required package paths present). Four unchanged-main
 regressions failed before implementation. Full-suite results are not claimed.
+
+Review R1: six safe-preview regressions failed before the correction. The final
+88 binding/expression tests pass, including a real API/engine/worker sequence
+that repeats auto-captured previews, accepts unrelated samples and fresh trigger
+payloads, and then blocks a referenced saved output. Nested expressions, frozen
+overrides, loop-derived samples and child dispatches are covered. The isolated
+A2 combination passes 62 binding/outcome tests. TypeScript passes in both
+checkouts; daemon build and all four guards pass. The broader API suite still
+hits its previously recorded catalog-deletion failure (expected 200, got 404),
+so no complete-suite pass is claimed. The local commit uses the existing
+per-command hook override after these explicit checks.
