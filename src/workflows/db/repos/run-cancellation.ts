@@ -1,5 +1,6 @@
 import { getWorkflowDb } from "../index";
 import { signalRunCanceled } from "../../runtime/cancellation-signals";
+import { deleteDelegations } from "./delegation";
 
 export interface RunCancellation {
   runId: string;
@@ -46,6 +47,8 @@ export function cancelFlowRun(runId: string): {
         AND (flow_run_id = ? OR (flow_run_id IS NULL AND CASE WHEN json_valid(payload) THEN json_extract(payload, '$.runId') END = ?))`, [ts, runId, runId]);
     db.run("UPDATE flow_run SET status = 'STOPPED', finish_time = ?, updated = ? WHERE id = ?",
       [cancellation.acknowledgedAt, ts, runId]);
+    // A stopped run never resumes a delegated conversation; drop its log.
+    deleteDelegations(runId);
     return { accepted: true, jobCanceled: jobs.changes > 0, cancellation };
   }).immediate();
   // Never announce cancellation until the write transaction commits.

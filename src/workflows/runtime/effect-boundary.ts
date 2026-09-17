@@ -1,4 +1,4 @@
-import type { AuthorityEngine } from '../../authority/engine';
+import type { AuthorityEngine, AuthorityProfile } from '../../authority/engine';
 import type { AuditTrail } from '../../authority/audit';
 import type { EmergencyController } from '../../authority/emergency';
 import type { ApprovalManager, ApprovalRequest } from '../../authority/approval';
@@ -17,6 +17,14 @@ export interface WorkflowAuthorityDependencies {
   approvalManager?: ApprovalManager;
   onWorkflowApproval?: (request: ApprovalRequest) => void | Promise<void>;
 }
+/**
+ * Who an effect is dispatched for when it is not the workflow itself. A
+ * delegated sub-agent's gate judged the call with this identity; the boundary
+ * judges it again with the same one, never with a looser one.
+ */
+export type EffectPrincipal = {
+  agentId: string; agentRoleId: string; agentAuthorityLevel: number; profile?: AuthorityProfile | null;
+};
 export interface EffectInvocation {
   context: WorkflowEffectContext; piece: string; action: string; route: string;
   toolName: string; category: ActionCategory; toolCategory: string;
@@ -24,6 +32,9 @@ export interface EffectInvocation {
   prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown> };
   validateTarget?: (args: Record<string, unknown>, target: Record<string, unknown>) => void;
   execute: (args: Record<string, unknown>, checkpoint: () => void) => Promise<unknown>;
+  principal?: EffectPrincipal;
+  /** The caller's gate already found this effect needs approval; the boundary never concludes otherwise. */
+  approvalRequired?: boolean;
 }
 export type EffectReply = { result: unknown; approval?: never } | { approval: WorkflowApprovalPending; result?: never };
 
@@ -92,10 +103,16 @@ export class WorkflowEffectBoundary {
       // rather than reading job rows here, so the boundary and the daemon's
       // other dispatch points can never disagree about whether a run is dead.
       assertRunNotCanceled(record.runId);
-      const decision = authority.checkAuthority({ agentId: `workflow:${record.runId}`, agentRoleId: 'workflow-default',
-        agentAuthorityLevel: 0, toolName: input.toolName, toolCategory: input.toolCategory,
-        actionCategory: input.category, temporaryGrants: new Map() });
+      const who = input.principal ?? { agentId: `workflow:${record.runId}`, agentRoleId: 'workflow-default', agentAuthorityLevel: 0, profile: null };
+      const decision = authority.checkAuthority({ agentId: who.agentId, agentRoleId: who.agentRoleId,
+        agentAuthorityLevel: who.agentAuthorityLevel, toolName: input.toolName, toolCategory: input.toolCategory,
+        actionCategory: input.category, temporaryGrants: new Map(), profile: who.profile ?? null });
       if (!decision.allowed) throw new Error(`Authority denied ${input.toolName}: ${decision.reason}`);
+      // A gate that already required approval for this principal is never
+      // overruled by a recomputation here that happens to be looser.
+      if (input.approvalRequired && !decision.requiresApproval) {
+        return { ...decision, requiresApproval: true, reason: `${decision.reason}; approval required by the calling gate` };
+      }
       return decision;
     };
     let decision;

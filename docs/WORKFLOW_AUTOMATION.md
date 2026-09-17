@@ -104,12 +104,15 @@ succeeded when the reply is not JSON. `/v1/jarvis/llm/chat` answers
 
 A tool call inside a delegated sub-agent that needs approval no longer ends
 as a denial in the conversation. It becomes an `agent-tool:N` workflow
-effect, the run parks on its approval, and after the decision the same step
-runs again and the conversation continues where it stopped, in this process
-or the next. The sub-agent's message log is checkpointed in
-`workflow_delegation` while it waits and dropped when it finishes; a step the
-engine runs again after that answers from the record. A declined approval
-becomes `[APPROVAL DENIED]` in the conversation and the tool never runs.
+effect judged as the sub-agent itself, the run parks on its approval, and
+after the decision the same step runs again and the conversation continues
+where it stopped, in this process or the next. The sub-agent's message log is
+checkpointed in `workflow_delegation` after every turn and while it waits,
+dropped when it finishes or the run is cancelled; a step the engine runs
+again after that answers from the record. A declined approval becomes
+`[APPROVAL DENIED]` in the conversation and the tool never runs. The tools
+the direct tool piece refuses as opaque (`run_command`, browser clicks and
+typing) are refused here too.
 
 The step's `outcome` is its business contract. `Required tools` names the
 tools that must complete; `succeeded` means the conversation finished and

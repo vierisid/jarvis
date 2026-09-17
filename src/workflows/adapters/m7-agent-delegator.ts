@@ -60,6 +60,7 @@ import {
   type GovernedToolResult,
   type RunSubAgentOptions,
   type SubAgentResult,
+  type SubAgentResume,
 } from "../../agents/sub-agent-runner";
 
 /**
@@ -208,7 +209,10 @@ export class M7AgentDelegator implements PieceAgentDelegator {
     // A step the engine runs again answers from its record: the finished
     // result, or a refusal when what the checkpoint was bound to has changed.
     const checkpoint = continuation?.load() ?? null;
-    if (checkpoint?.status === "completed" && checkpoint.result) return checkpoint.result;
+    if (checkpoint?.status === "completed" && checkpoint.result) {
+      // The declaration is not part of the record's identity, so it is applied as asked now.
+      return { ...checkpoint.result, outcome: delegationOutcome(checkpoint.result, input.requiredTools) };
+    }
     if (checkpoint && continuation) {
       if (checkpoint.versionDigest !== continuation.identity.versionDigest) {
         return errorResult("Workflow version changed while the delegation was paused; start a new run");
@@ -217,23 +221,26 @@ export class M7AgentDelegator implements PieceAgentDelegator {
         return errorResult("Delegation input changed while it was paused; start a new run");
       }
     }
-    const resume = checkpoint?.status === "paused" && checkpoint.pending
+    const resume: SubAgentResume | undefined = checkpoint && checkpoint.status !== "completed"
       ? { messages: checkpoint.messages, toolsUsed: checkpoint.toolsUsed, tokensUsed: checkpoint.tokensUsed,
-          sequence: checkpoint.sequence, pending: checkpoint.pending }
+          sequence: checkpoint.sequence, iteration: checkpoint.iteration, taint: checkpoint.taint,
+          failedToolCalls: checkpoint.failedToolCalls, ...(checkpoint.pending ? { pending: checkpoint.pending } : {}) }
       : undefined;
 
     let childId: string | null = null;
     try {
       const child = this.orchestrator.spawnSubAgent(parent.id, role);
       childId = child.id;
-      const scopedRegistry = this.scopedRegistry(child.agent.authority.allowed_tools);
+      const registry = this.scopedRegistry(child.agent.authority.allowed_tools);
+      const base = { ...(continuation?.identity ?? {}), roleId, goal: input.goal } as Omit<DelegationCheckpoint,
+        "status" | "messages" | "toolsUsed" | "tokensUsed" | "sequence" | "iteration" | "taint" | "failedToolCalls" | "updatedAt">;
 
       const result: SubAgentResult = await this.runSubAgentFn({
         agent: child,
         task: input.goal,
         context: "",
         llmManager: this.llmManager,
-        toolRegistry: scopedRegistry,
+        toolRegistry: registry,
         // Clamped as well as validated at the route: this adapter is also
         // reachable without it, and 200 is the primary loop's own ceiling.
         maxIterations: Math.min(input.maxIterations ?? this.defaultMaxIterations, 200),
@@ -241,23 +248,37 @@ export class M7AgentDelegator implements PieceAgentDelegator {
         ...(this.auditTrail ? { auditTrail: this.auditTrail } : {}),
         ...(this.emergencyController ? { emergencyController: this.emergencyController } : {}),
         ...(this.temporaryGrants ? { temporaryGrants: this.temporaryGrants } : {}),
-        ...(continuation ? { governedTools: call => continuation.dispatch(scopedRegistry, call) } : {}),
+        ...(continuation ? {
+          governedTools: call => continuation.dispatch(registry, call),
+          // After every completed turn the conversation is durable, so a run
+          // that dies mid-conversation continues from here, not from scratch.
+          onTurn: state => continuation.save({ ...base, ...state, status: "running", updatedAt: Date.now() }),
+        } : {}),
         ...(resume ? { resume } : {}),
       });
 
       // Walk the runSubAgent-supplied message log (NOT child.getMessages(),
       // which only carries user/assistant turns). The local log has every
       // assistant tool_calls block + matching tool result.
-      const toolCalls = extractToolCallsTrace(result.messages, this.traceResultMaxChars);
+      const toolCalls = extractToolCallsTrace(result.messages, this.traceResultMaxChars, new Set(result.failedToolCalls ?? []));
       const now = Date.now();
+      const stateOf = (iteration: number) => ({ messages: result.messages, toolsUsed: result.toolsUsed, tokensUsed: result.tokensUsed,
+        sequence: result.sequence ?? result.paused?.sequence ?? 0, iteration, taint: result.taint ?? [],
+        failedToolCalls: result.failedToolCalls ?? [] });
 
-      const sequence = result.sequence ?? 0;
-      if (result.terminationReason === "paused" && result.paused) {
-        if (!continuation) return errorResult("The delegation paused on an approval with nowhere to keep it", toolCalls);
-        continuation.save({ ...continuation.identity, roleId, goal: input.goal, status: "paused",
-          messages: result.messages, toolsUsed: result.toolsUsed, tokensUsed: result.tokensUsed,
-          sequence, pending: result.paused, updatedAt: now });
+      if (result.terminationReason === "paused") {
+        // The dispatch only exists with a continuation, so a pause always has somewhere to go.
+        if (!continuation || !result.paused) throw new Error("paused without a continuation");
+        continuation.save({ ...base, ...stateOf(result.paused.iteration), status: "paused", pending: result.paused, updatedAt: now });
         return { finalMessage: "", toolCalls, status: "approval_required", approval: result.paused.approval };
+      }
+
+      if (result.terminationReason === "error" && result.dispatchError) {
+        // The boundary refused or failed the call (emergency, changed version,
+        // an uncertain earlier attempt). That is this run's answer, not the
+        // delegation's: the checkpoint keeps its state so a later run can
+        // resume once the condition clears.
+        return errorResult(result.response, toolCalls);
       }
 
       const finished: PieceAgentDelegateResult = result.terminationReason === "error"
@@ -266,9 +287,7 @@ export class M7AgentDelegator implements PieceAgentDelegator {
             status: result.terminationReason === "max_iterations" ? "max_iterations" : "completed" };
       finished.outcome = delegationOutcome(finished, input.requiredTools);
       // The log is dropped once the result exists; the trace is in the step output.
-      continuation?.save({ ...continuation.identity, roleId, goal: input.goal, status: "completed",
-        messages: [], toolsUsed: result.toolsUsed, tokensUsed: result.tokensUsed,
-        sequence, result: finished, updatedAt: now });
+      continuation?.save({ ...base, ...stateOf(0), messages: [], status: "completed", result: finished, updatedAt: now });
       return finished;
     } catch (e) {
       // spawnSubAgent or runSubAgent threw an unhandled exception. Surface
@@ -303,6 +322,8 @@ export class M7AgentDelegator implements PieceAgentDelegator {
 export function extractToolCallsTrace(
   messages: LLMMessage[],
   maxResultChars: number,
+  /** Tool call ids the runner reported as failed, denied or refused. */
+  failed: ReadonlySet<string> = new Set(),
 ): PieceAgentToolCall[] {
   const responseById = new Map<string, string>();
   for (const msg of messages) {
@@ -331,11 +352,9 @@ export function extractToolCallsTrace(
           result.length > maxResultChars
             ? result.slice(0, maxResultChars) + `... (truncated, was ${result.length} chars)`
             : result;
-        // The sub-agent runner formats authority denials, approval denials
-        // and tool errors as prefixed strings inside the result. Surface
-        // them as `error` so the workflow step can branch on it. Heuristic
-        // match -- the runner is the only source of these prefixes.
-        if (result.startsWith("[AUTHORITY DENIED]") || result.startsWith("[APPROVAL DENIED]") || result.startsWith("Error executing ")) {
+        // The runner says which calls failed, were denied or refused. The
+        // prefix match remains for logs recorded before it did.
+        if (failed.has(call.id) || result.startsWith("[AUTHORITY DENIED]") || result.startsWith("[APPROVAL DENIED]") || result.startsWith("Error executing ")) {
           entry.error = result;
         }
       }

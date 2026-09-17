@@ -41,7 +41,8 @@ import type { CredentialResolver } from "../credentials/adapter";
 import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
 import { WorkflowEffectBoundary, type WorkflowAuthorityDependencies } from './effect-boundary';
-import { refusedEffectCategory, toolEffectCapability } from './effect-capabilities';
+import { OPAQUE_TOOL_NAMES, refusedEffectCategory, toolEffectCapability } from './effect-capabilities';
+import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, resolveGovernedPieceAction, sanitizePieceInput } from './piece-effects';
 import { getFlow } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
@@ -382,24 +383,47 @@ export function buildSandboxServiceBackends(
       // an approval when the category is governed, dispatched once, and
       // answered from its record when the resumed conversation asks again.
       dispatch: async (registry, call) => {
+        // The same rule as the direct tool piece: a category cannot describe
+        // what a script or a click sequence will do, so it is not approvable
+        // here either. The agent learns it was refused.
+        if (OPAQUE_TOOL_NAMES.has(call.toolCall.name)) {
+          return { kind: 'denied', reason: `Unsupported workflow capability: ${call.toolCall.name} has opaque code/UI effects; use a typed governed adapter.` };
+        }
         try {
           const inner = await effects.invoke({ context: ctx, piece: AGENT_PIECE, action: 'delegate',
             route: `agent-tool:${call.sequence}`, toolName: call.toolCall.name, category: call.actionCategory,
             toolCategory: call.toolCategory, request: { toolName: call.toolCall.name, arguments: call.toolCall.arguments },
+            // Judged as the sub-agent the gate judged it for, and never
+            // concluded to need less than the gate required.
+            principal: call.principal, approvalRequired: true,
             prepare: () => ({ arguments: { ...call.toolCall.arguments }, target: { tool: call.toolCall.name, sequence: call.sequence } }),
             execute: async (args, checkpoint) => {
               checkpoint();
-              const raw = await registry.execute(call.toolCall.name, args);
-              return typeof raw === 'string' ? raw : JSON.stringify(raw);
+              try {
+                const raw = await registry.execute(call.toolCall.name, args);
+                return typeof raw === 'string' ? raw : JSON.stringify(raw);
+              } catch (error) {
+                // A tool that failed under its approval is a typed failure, so
+                // the boundary records the outcome and answers the same way
+                // when the resumed conversation asks again.
+                if (error instanceof ActionOutcomeError) throw error;
+                throw new ActionOutcomeError({ status: 'error', code: 'TOOL_FAILED', effect: 'may_have_occurred',
+                  message: `Error executing ${call.toolCall.name}: ${error instanceof Error ? error.message : String(error)}` });
+              }
             } });
           if (inner.approval) return { kind: 'paused', approval: inner.approval };
           return { kind: 'executed', result: String(inner.result ?? '') };
         } catch (error) {
           const message = error instanceof Error ? error.message : String(error);
-          // The user's decision is an answer the agent can act on; every
-          // other refusal (emergency, changed version, uncertain replay)
-          // ends the delegation as an error.
-          if (/^Workflow approval (denied|expired)/.test(message)) return { kind: 'denied', reason: message };
+          // Answers the agent can act on: the user's decision, an Authority
+          // refusal for this principal, an effect the boundary blocked for
+          // good (emergency state, a run no longer running), and a tool that
+          // failed under its approval. A refusal that leaves the effect as it
+          // was, a changed version or an uncertain or already claimed earlier
+          // attempt, is this run's error, not the delegation's.
+          if (/^Workflow approval (denied|expired)/.test(message) || /^Authority denied/.test(message)
+            || /^Workflow effect blocked/.test(message)) return { kind: 'denied', reason: message };
+          if (error instanceof ActionOutcomeError) return { kind: 'failed', result: message };
           throw error;
         }
       },

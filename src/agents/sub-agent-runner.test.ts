@@ -1,12 +1,15 @@
 import { describe, expect, test } from 'bun:test';
-import { runSubAgent, type GovernedToolCall, type GovernedToolDispatch, type SubAgentResult } from './sub-agent-runner';
+import { runSubAgent, type GovernedToolCall, type GovernedToolDispatch, type SubAgentCheckpoint, type SubAgentResult } from './sub-agent-runner';
 import { ToolRegistry } from '../actions/tools/registry';
 import { AuthorityEngine } from '../authority/engine';
+import { EmergencyController } from '../authority/emergency';
+import { ActionOutcomeError } from '../actions/action-outcome';
 import type { LLMToolCall } from '../llm/provider';
 
 const approval = { effectId: 'effect', approvalId: 'approval', waitpointId: 'waitpoint' };
 const write = (id: string): LLMToolCall => ({ id, name: 'write_file', arguments: { path: '/tmp/synthetic', content: 'hello' } });
 const read = (id: string): LLMToolCall => ({ id, name: 'read_file', arguments: { path: '/tmp/synthetic' } });
+const principal = { agentId: 'child', agentRoleId: 'fixture', agentAuthorityLevel: 10 };
 
 function agent() {
   const history: Array<{ role: string; content: unknown }> = [];
@@ -17,12 +20,16 @@ function agent() {
   } as any;
 }
 
-function registry(readThrows = false) {
+function registry(reads: 'ok' | 'throws' | 'typed-failure' = 'ok') {
   const runs: string[] = [];
   const r = new ToolRegistry();
   r.register({ name: 'write_file', category: 'file-ops', description: 'synthetic', parameters: {}, execute: async () => { runs.push('write_file'); return 'saved'; } });
   r.register({ name: 'read_file', category: 'file-ops', description: 'synthetic', parameters: {}, execute: async () => {
-    runs.push('read_file'); if (readThrows) throw new Error('disk gone'); return 'contents'; } });
+    runs.push('read_file');
+    if (reads === 'throws') throw new Error('disk gone');
+    if (reads === 'typed-failure') throw new ActionOutcomeError({ status: 'error', code: 'SYNTHETIC', message: 'typed failure', effect: 'may_have_occurred' });
+    return 'contents';
+  } });
   return { r, runs };
 }
 
@@ -45,6 +52,10 @@ function authority(governed: string[] = ['write_data']) {
 }
 
 const toolMessages = (result: SubAgentResult) => result.messages.filter(m => m.role === 'tool').map(m => [m.tool_call_id, m.content as string] as const);
+const resumeFrom = (r: SubAgentResult, extra: Partial<SubAgentCheckpoint> = {}) => ({
+  messages: r.messages, toolsUsed: r.toolsUsed, tokensUsed: r.tokensUsed, sequence: r.sequence!, iteration: r.paused!.iteration,
+  taint: r.taint ?? [], failedToolCalls: r.failedToolCalls ?? [], pending: r.paused!, ...extra,
+});
 
 describe('governed tool calls in a sub-agent', () => {
   test('without a governed dispatch, a call that needs approval is refused and audited as needing approval', async () => {
@@ -56,6 +67,7 @@ describe('governed tool calls in a sub-agent', () => {
     expect(result.terminationReason).toBe('completed');
     expect(runs).toEqual([]);
     expect(toolMessages(result)[0]![1]).toContain('requires user approval');
+    expect(result.failedToolCalls).toEqual(['c1']);
     expect(a.rows).toEqual([expect.objectContaining({ tool_name: 'write_file', authority_decision: 'approval_required', executed: false })]);
   });
 
@@ -64,13 +76,31 @@ describe('governed tool calls in a sub-agent', () => {
     const ok = await runSubAgent({ agent: agent(), task: 'read', context: '', llmManager: llm([[read('c1')]]).manager,
       toolRegistry: registry().r, authorityEngine: a.engine, auditTrail: a.audit, maxIterations: 3 });
     expect(ok.terminationReason).toBe('completed');
+    expect(ok.failedToolCalls).toEqual([]);
     expect(a.rows).toEqual([expect.objectContaining({ tool_name: 'read_file', authority_decision: 'allowed', executed: true })]);
 
     const b = authority();
     const failed = await runSubAgent({ agent: agent(), task: 'read', context: '', llmManager: llm([[read('c1')]]).manager,
-      toolRegistry: registry(true).r, authorityEngine: b.engine, auditTrail: b.audit, maxIterations: 3 });
+      toolRegistry: registry('throws').r, authorityEngine: b.engine, auditTrail: b.audit, maxIterations: 3 });
     expect(toolMessages(failed)[0]![1]).toContain('disk gone');
+    expect(failed.failedToolCalls).toEqual(['c1']);
     expect(b.rows).toEqual([expect.objectContaining({ authority_decision: 'allowed', executed: false })]);
+  });
+
+  test('failures are marked on the result rather than inferred from text', async () => {
+    const a = authority(['write_data']);
+    const typed = await runSubAgent({ agent: agent(), task: 'read', context: '', llmManager: llm([[read('c1')]]).manager,
+      toolRegistry: registry('typed-failure').r, authorityEngine: a.engine, auditTrail: a.audit, maxIterations: 3 });
+    // A typed failure has no error prefix in its text; the mark is the only honest signal.
+    expect(toolMessages(typed)[0]![1]).not.toMatch(/^Error executing/);
+    expect(typed.failedToolCalls).toEqual(['c1']);
+
+    const emergency = new EmergencyController();
+    emergency.pause();
+    const suspended = await runSubAgent({ agent: agent(), task: 'read', context: '', llmManager: llm([[read('c1')]]).manager,
+      toolRegistry: registry().r, authorityEngine: a.engine, emergencyController: emergency, maxIterations: 3 });
+    expect(toolMessages(suspended)[0]![1]).toContain('[SYSTEM PAUSED]');
+    expect(suspended.failedToolCalls).toEqual(['c1']);
   });
 
   test('a pause stops the run before any effect and keeps the calls its turn did not reach', async () => {
@@ -83,11 +113,14 @@ describe('governed tool calls in a sub-agent', () => {
       toolRegistry: r, authorityEngine: a.engine, auditTrail: a.audit, governedTools, maxIterations: 3 });
     expect(result.terminationReason).toBe('paused');
     expect(result.paused).toMatchObject({ toolCall: write('c1'), sequence: 1, actionCategory: 'write_data', toolCategory: 'file-ops',
-      approval, remaining: [read('c2')], iteration: 0 });
+      principal, approval, remaining: [read('c2')], iteration: 0 });
     expect(result.sequence).toBe(1);
     expect(runs).toEqual([]);
     expect(model.calls()).toBe(1);
-    expect(asked).toEqual([{ toolCall: write('c1'), sequence: 1, actionCategory: 'write_data', toolCategory: 'file-ops' }]);
+    // The dispatch is asked as the principal the gate judged, with the gate's reason.
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({ toolCall: write('c1'), sequence: 1, actionCategory: 'write_data', toolCategory: 'file-ops',
+      principal: { ...principal, profile: null }, reason: expect.stringContaining('write_data') });
     // The assistant turn is in the log; no tool result exists yet for either call.
     expect(result.messages.at(-1)).toMatchObject({ role: 'assistant', tool_calls: [write('c1'), read('c2')] });
     expect(toolMessages(result)).toEqual([]);
@@ -106,15 +139,17 @@ describe('governed tool calls in a sub-agent', () => {
     const resumed = await runSubAgent({ agent: agent(), task: 'save then read', context: '', llmManager: model.manager,
       toolRegistry: r, authorityEngine: a.engine, auditTrail: a.audit, maxIterations: 3,
       governedTools: async call => { asked.push(call); return { kind: 'executed', result: 'saved by the boundary' }; },
-      resume: { messages: paused.messages, toolsUsed: paused.toolsUsed, tokensUsed: paused.tokensUsed, sequence: paused.sequence!, pending: paused.paused! } });
+      resume: resumeFrom(paused) });
     expect(resumed.terminationReason).toBe('completed');
     expect(resumed.response).toBe('All done');
-    expect(asked).toEqual([{ toolCall: write('c1'), sequence: 1, actionCategory: 'write_data', toolCategory: 'file-ops' }]);
+    expect(asked).toHaveLength(1);
+    expect(asked[0]).toMatchObject({ toolCall: write('c1'), sequence: 1, principal: { ...principal, profile: null } });
     expect(runs).toEqual(['read_file']);
     expect(toolMessages(resumed).map(([id]) => id)).toEqual(['c1', 'c2']);
     expect(toolMessages(resumed)[0]![1]).toContain('saved by the boundary');
     expect(toolMessages(resumed)[1]![1]).toContain('contents');
     expect(resumed.sequence).toBe(2);
+    expect(resumed.failedToolCalls).toEqual([]);
     expect(resumed.toolsUsed).toEqual(['write_file', 'read_file']);
     expect(model.calls()).toBe(2);
     // The gate audited the pause; the resumed dispatch is audited by its boundary, not here.
@@ -122,7 +157,7 @@ describe('governed tool calls in a sub-agent', () => {
       ['write_file', 'approval_required', false], ['read_file', 'allowed', true]]);
   });
 
-  test('a decision against the paused call becomes a result the agent can act on', async () => {
+  test('a decision against the paused call becomes a marked failure the agent can act on', async () => {
     const { r, runs } = registry();
     const a = authority();
     const model = llm([[write('c1')]]);
@@ -131,10 +166,32 @@ describe('governed tool calls in a sub-agent', () => {
     const resumed = await runSubAgent({ agent: agent(), task: 'save', context: '', llmManager: model.manager, toolRegistry: r,
       authorityEngine: a.engine, auditTrail: a.audit, maxIterations: 3,
       governedTools: async () => ({ kind: 'denied', reason: 'Workflow approval denied; effect was not executed' }),
-      resume: { messages: paused.messages, toolsUsed: paused.toolsUsed, tokensUsed: paused.tokensUsed, sequence: paused.sequence!, pending: paused.paused! } });
+      resume: resumeFrom(paused) });
     expect(resumed.terminationReason).toBe('completed');
     expect(toolMessages(resumed)[0]![1]).toMatch(/^\[APPROVAL DENIED\] write_file: Workflow approval denied/);
+    expect(resumed.failedToolCalls).toEqual(['c1']);
     expect(runs).toEqual([]);
+  });
+
+  test('a failed dispatch under approval is a marked failure the agent sees, and a raised one is this run\'s error', async () => {
+    const { r } = registry();
+    const a = authority();
+    const model = llm([[write('c1')]]);
+    const failed = await runSubAgent({ agent: agent(), task: 'save', context: '', llmManager: model.manager, toolRegistry: r,
+      authorityEngine: a.engine, auditTrail: a.audit, maxIterations: 3,
+      governedTools: async () => ({ kind: 'failed', result: 'Effect dispatch failed; partial effects may have occurred: boom' }) });
+    expect(failed.terminationReason).toBe('completed');
+    expect(toolMessages(failed)[0]![1]).toContain('boom');
+    expect(failed.failedToolCalls).toEqual(['c1']);
+    expect(a.rows).toEqual([expect.objectContaining({ authority_decision: 'approval_required', executed: true })]);
+
+    const b = authority();
+    const raised = await runSubAgent({ agent: agent(), task: 'save', context: '', llmManager: llm([[write('c1')]]).manager, toolRegistry: r,
+      authorityEngine: b.engine, auditTrail: b.audit, maxIterations: 3,
+      governedTools: async () => { throw new Error('Workflow effect outcome is uncertain or still in flight; automatic replay is blocked'); } });
+    expect(raised).toMatchObject({ terminationReason: 'error', dispatchError: true, response: expect.stringContaining('uncertain') });
+    // The attempt still has its audit row.
+    expect(b.rows).toEqual([expect.objectContaining({ authority_decision: 'approval_required', executed: false })]);
   });
 
   test('a second governed call in the resumed turn pauses again with what is still unreached', async () => {
@@ -148,12 +205,44 @@ describe('governed tool calls in a sub-agent', () => {
     const again = await runSubAgent({ agent: agent(), task: 'save twice', context: '', llmManager: model.manager, toolRegistry: r,
       authorityEngine: a.engine, auditTrail: a.audit, maxIterations: 3,
       governedTools: async call => call.sequence === 1 ? { kind: 'executed', result: 'saved' } : { kind: 'paused', approval: second },
-      resume: { messages: paused.messages, toolsUsed: paused.toolsUsed, tokensUsed: paused.tokensUsed, sequence: paused.sequence!, pending: paused.paused! } });
+      resume: resumeFrom(paused) });
     expect(again.terminationReason).toBe('paused');
     expect(again.paused).toMatchObject({ toolCall: write('c2'), sequence: 2, approval: second, remaining: [read('c3')], iteration: 0 });
     expect(toolMessages(again).map(([id]) => id)).toEqual(['c1']);
     expect(runs).toEqual([]);
     expect(model.calls()).toBe(1);
+  });
+
+  test('taint the agent had read travels with the checkpoint and is restored on resume', async () => {
+    const { r } = registry();
+    const a = authority();
+    const model = llm([[write('c1')]]);
+    const paused = await runSubAgent({ agent: agent(), task: 'save', context: '', llmManager: model.manager, toolRegistry: r,
+      authorityEngine: a.engine, maxIterations: 3, governedTools: async () => ({ kind: 'paused', approval }) });
+    expect(paused.taint).toEqual([]);
+    const resumed = await runSubAgent({ agent: agent(), task: 'save', context: '', llmManager: model.manager, toolRegistry: r,
+      authorityEngine: a.engine, maxIterations: 3, governedTools: async () => ({ kind: 'executed', result: 'saved' }),
+      resume: resumeFrom(paused, { taint: ['web_search'] }) });
+    expect(resumed.taint).toEqual(['web_search']);
+  });
+
+  test('every completed turn is reported as resumable state, and a run resumes from it with nothing pending', async () => {
+    const { r, runs } = registry();
+    const a = authority();
+    const states: SubAgentCheckpoint[] = [];
+    const model = llm([[read('c1')], [read('c2')]]);
+    const result = await runSubAgent({ agent: agent(), task: 'read twice', context: '', llmManager: model.manager, toolRegistry: r,
+      authorityEngine: a.engine, maxIterations: 5, onTurn: state => states.push({ ...state, messages: [...state.messages] }) });
+    expect(result.terminationReason).toBe('completed');
+    expect(states.map(s => [s.iteration, s.sequence, s.messages.filter(m => m.role === 'tool').length])).toEqual([[1, 1, 1], [2, 2, 2]]);
+    // A new process after the first turn: the model is asked once more, the first read is not repeated.
+    const runsBefore = runs.length;
+    const continued = await runSubAgent({ agent: agent(), task: 'read twice', context: '', llmManager: llm([]).manager, toolRegistry: r,
+      authorityEngine: a.engine, maxIterations: 5, resume: { ...states[0]!, pending: undefined } });
+    expect(continued.terminationReason).toBe('completed');
+    expect(runs.length).toBe(runsBefore);
+    expect(continued.messages.filter(m => m.role === 'tool')).toHaveLength(1);
+    expect(continued.sequence).toBe(1);
   });
 
   test('a paused run cannot be resumed without a governed dispatch', async () => {
@@ -163,8 +252,7 @@ describe('governed tool calls in a sub-agent', () => {
     const paused = await runSubAgent({ agent: agent(), task: 'save', context: '', llmManager: model.manager, toolRegistry: r,
       authorityEngine: a.engine, maxIterations: 3, governedTools: async () => ({ kind: 'paused', approval }) });
     const resumed = await runSubAgent({ agent: agent(), task: 'save', context: '', llmManager: model.manager, toolRegistry: r,
-      authorityEngine: a.engine, maxIterations: 3,
-      resume: { messages: paused.messages, toolsUsed: paused.toolsUsed, tokensUsed: paused.tokensUsed, sequence: paused.sequence!, pending: paused.paused! } });
+      authorityEngine: a.engine, maxIterations: 3, resume: resumeFrom(paused) });
     expect(resumed.terminationReason).toBe('error');
     expect(resumed.response).toContain('Cannot resume');
   });

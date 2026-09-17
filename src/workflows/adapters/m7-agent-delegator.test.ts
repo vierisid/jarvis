@@ -14,10 +14,12 @@
 import { describe, expect, test } from "bun:test";
 import type { LLMMessage } from "../../llm/provider";
 import type { RoleDefinition } from "../../roles/types";
-import type { SubAgentResult } from "../../agents/sub-agent-runner";
+import type { RunSubAgentOptions, SubAgentPause, SubAgentResult } from "../../agents/sub-agent-runner";
+import type { DelegationCheckpoint } from "../db/repos/delegation";
 import {
   M7AgentDelegator,
   extractToolCallsTrace,
+  type DelegationContinuation,
   type RunSubAgentFn,
 } from "./m7-agent-delegator";
 
@@ -277,6 +279,79 @@ describe("M7AgentDelegator", () => {
       args: JSON.stringify({ q: "X" }),
       result: "found 3 entities",
     });
+  });
+});
+
+describe("M7AgentDelegator with a continuation", () => {
+  const identity = { id: "wfd_test", runId: "run", stepName: "delegate", executionPath: [] as Array<[string, number]>, versionDigest: "v1" };
+  const pending: SubAgentPause = { toolCall: { id: "c1", name: "write_file", arguments: {} }, sequence: 1, actionCategory: "write_data",
+    toolCategory: "file-ops", principal: { agentId: "child", agentRoleId: "workflow-default", agentAuthorityLevel: 10, profile: null },
+    reason: "governed", approval: { effectId: "e", approvalId: "a", waitpointId: "w" }, remaining: [], iteration: 0 };
+  const checkpoint = (over: Partial<DelegationCheckpoint>): DelegationCheckpoint => ({ ...identity, roleId: "workflow-default",
+    goal: "find X", status: "running", messages: [], toolsUsed: [], tokensUsed: { input: 0, output: 0 }, sequence: 0, iteration: 1,
+    taint: [], failedToolCalls: [], updatedAt: 0, ...over });
+  function continuation(initial: DelegationCheckpoint | null = null) {
+    let stored = initial;
+    const c: DelegationContinuation = { identity, load: () => stored, save: cp => { stored = cp; },
+      dispatch: async () => ({ kind: "executed", result: "ok" }) };
+    return { c, stored: () => stored };
+  }
+  const delegator = (runner: RunSubAgentFn) => new M7AgentDelegator({
+    orchestrator: makeOrchestratorStub({ primary: { id: "primary", canSpawn: true } }).orchestrator as never,
+    llmManager: {} as never, specialists: new Map([["workflow-default", makeRole("workflow-default")]]), runSubAgentFn: runner });
+  const neverRuns: RunSubAgentFn = async () => { throw new Error("should not run"); };
+
+  test("a finished record answers without a new conversation, with the declaration asked now", async () => {
+    const done = { finalMessage: "X is foo.", toolCalls: [{ name: "vault_search", result: "found" }], status: "completed" as const,
+      outcome: { status: "succeeded" as const } };
+    const { c } = continuation(checkpoint({ status: "completed", result: done }));
+    const out = await delegator(neverRuns).delegate({ goal: "find X", requiredTools: ["write_file"] }, c);
+    expect(out).toMatchObject({ status: "completed", finalMessage: "X is foo.", outcome: { status: "error", code: "REQUIRED_TOOL_NOT_COMPLETED" } });
+    expect((await delegator(neverRuns).delegate({ goal: "find X" }, c)).outcome).toEqual({ status: "succeeded" });
+  });
+
+  test("a checkpoint bound to another version, goal or role refuses to resume", async () => {
+    for (const [over, goal] of [[{ versionDigest: "v2" }, "find X"], [{}, "find Y"], [{ roleId: "other" }, "find X"]] as const) {
+      const { c } = continuation(checkpoint({ status: "paused", pending, ...over }));
+      const out = await delegator(neverRuns).delegate({ goal }, c);
+      expect(out.status).toBe("error");
+      expect(out.error).toMatch(/changed/);
+    }
+  });
+
+  test("a running checkpoint resumes after its last completed turn, and a crash inside a turn leaves the last one in place", async () => {
+    const { c, stored } = continuation(checkpoint({ status: "running", iteration: 2, sequence: 3, messages: [{ role: "user", content: "find X" }] }));
+    let seen: RunSubAgentOptions["resume"];
+    const crashed = delegator(async opts => {
+      seen = opts.resume;
+      opts.onTurn?.({ ...opts.resume!, iteration: 3, sequence: 4 });
+      throw new Error("process died");
+    });
+    const out = await crashed.delegate({ goal: "find X" }, c);
+    expect(seen).toMatchObject({ iteration: 2, sequence: 3 });
+    expect(seen?.pending).toBeUndefined();
+    expect(out.status).toBe("error");
+    expect(stored()).toMatchObject({ status: "running", iteration: 3, sequence: 4 });
+  });
+
+  test("a pause is checkpointed with its pending call and answered as approval_required", async () => {
+    const { c, stored } = continuation();
+    const paused = delegator(async () => ({ success: true, response: "", toolsUsed: ["write_file"], tokensUsed: { input: 1, output: 1 },
+      terminationReason: "paused", messages: [{ role: "assistant", content: "", tool_calls: [pending.toolCall] }], sequence: 1,
+      failedToolCalls: [], taint: ["web_search"], paused: pending }));
+    const out = await paused.delegate({ goal: "find X" }, c);
+    expect(out).toMatchObject({ status: "approval_required", approval: pending.approval });
+    expect(stored()).toMatchObject({ status: "paused", sequence: 1, iteration: 0, taint: ["web_search"], pending, roleId: "workflow-default", goal: "find X" });
+  });
+
+  test("an error the dispatch raised is this run's answer and leaves the checkpoint untouched", async () => {
+    const before = checkpoint({ status: "paused", pending });
+    const { c, stored } = continuation(before);
+    const refused = delegator(async () => ({ success: false, response: "Sub-agent error: Workflow effect blocked: system paused",
+      toolsUsed: [], tokensUsed: { input: 0, output: 0 }, terminationReason: "error", messages: [], dispatchError: true }));
+    const out = await refused.delegate({ goal: "find X" }, c);
+    expect(out).toMatchObject({ status: "error", error: expect.stringContaining("system paused") });
+    expect(stored()).toBe(before);
   });
 });
 
