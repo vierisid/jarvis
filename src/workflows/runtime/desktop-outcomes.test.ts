@@ -6,6 +6,7 @@ import { closeWorkflowDb, initWorkflowDb, DEFAULT_IDS } from '../db';
 import { createFlow } from '../db/repos/flow';
 import { createDraftVersion, updateDraftVersion, type FlowTriggerNode } from '../db/repos/flow-version';
 import { createFlowRun, getFlowRun, updateRun } from '../db/repos/flow-run';
+import { cancelFlowRun } from '../db/repos/run-cancellation';
 import { listWorkflowEffects } from '../db/repos/workflow-effect';
 import { enqueue } from '../db/repos/job-queue';
 import { ToolRegistry } from '../../actions/tools/registry';
@@ -148,6 +149,14 @@ describe('desktop outcome API and durable receipts', () => {
     else f.emergency[state]();
     await expect(f.call({ requireSuccess: false })).rejects.toThrow(/denied|paused|killed/i);
     expect(f.dispatches()).toBe(0);
+  });
+
+  test('a probe cannot turn a canceled run into a handled outcome', async () => {
+    const f = fixture(true);
+    cancelFlowRun(f.run.id);
+    await expect(f.call({ requireSuccess: false })).rejects.toThrow(/cancel/i);
+    expect(f.dispatches()).toBe(0);
+    expect(listWorkflowEffects(f.run.id)[0]?.outcome).toBeUndefined();
   });
 
   test('probe still pauses for approval and reports offline after approval', async () => {

@@ -187,9 +187,10 @@ export function buildSandboxServiceBackends(
         })();
         const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-tool', action: 'invoke',
           route: 'tool', toolName: tool.name, category: capability.category, toolCategory: tool.category,
-          // requireSuccess controls how the caller handles the receipt, not
-          // the effect's identity. Keep pre-upgrade pending approvals valid
-          // when the updated piece starts sending the default explicitly.
+          // Spelled out rather than spread: the request is what the effect's
+          // identity digest is taken over, so only the two fields that decide
+          // WHAT is dispatched belong in it. A reply-handling flag added to
+          // the route's body must never invalidate a pending approval.
           request: { toolName: req.toolName, params: req.params }, prepare: () => {
             const args = capability.prepareArguments(req.params);
             return { arguments: args, target: capability.target(args) };

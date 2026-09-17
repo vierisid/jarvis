@@ -1,7 +1,8 @@
 /**
  * `/v1/jarvis/tools/invoke` -- backs the `jarvis-tool` piece's `invoke` action.
  *
- * The piece posts `{ toolName, params, requireSuccess? }` and receives
+ * The piece posts `{ toolName, params, requireSuccess? }` (the last a
+ * reply-handling flag read only here) and receives
  * `{ result, toolName, outcome }` or a pending approval. This wraps a
  * `ToolsInvokeFn` injected via `SandboxApiServices.toolsInvoke`. Tool
  * discovery / execution lives in the daemon's `ToolRegistry`; if no fn is
@@ -17,8 +18,6 @@ import type { WorkflowEffectContext, WorkflowApprovalPending } from '../../runti
 export interface ToolsInvokeRequest {
   toolName: string;
   params: Record<string, unknown>;
-  /** Defaults to true. False explicitly returns a handled outcome for probes. */
-  requireSuccess?: boolean;
 }
 
 export interface ToolsInvokeResponse {
@@ -66,7 +65,10 @@ export function createJarvisToolsInvokeRoute(
     let reply: ToolsInvokeResponse;
     try {
       reply = await cancellableWorkflowService(deps.toolsInvoke)(
-        { toolName: raw.toolName, params, ...(raw.requireSuccess !== undefined ? { requireSuccess: raw.requireSuccess } : {}) },
+        // `requireSuccess` stays on this side of the boundary on purpose: it
+        // decides how the reply is reported, never what is dispatched, so it
+        // must not reach the effect record or its request digest.
+        { toolName: raw.toolName, params },
         workflowEffectContext(ctx),
       );
     } catch (error) {

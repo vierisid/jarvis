@@ -11,7 +11,10 @@ export type ActionOutcome = { status: 'succeeded' } | ActionFailure;
 
 export class ActionOutcomeError extends Error {
   constructor(public readonly outcome: ActionFailure) {
-    super(outcome.message);
+    // An outcome can arrive over the wire with an empty message. Falling back
+    // to the code keeps every consumer -- a durable record, a model-visible
+    // tool result, a failed step -- from reporting a failure as blank text.
+    super(outcome.message || `${outcome.status}: ${outcome.code}`);
     this.name = 'ActionOutcomeError';
   }
 }

@@ -10,7 +10,8 @@ import { ToolRegistry, type ToolDefinition, isToolResult } from '../actions/tool
 import { toolDefToLLMTool } from '../actions/tools/builtin.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
-import { markUntrustedToolResult, markUntrustedToolBlocks, isTaintSourceTool } from '../roles/untrusted.ts';
+import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFailure, isTaintSourceTool } from '../roles/untrusted.ts';
+import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { taintProfile, mergeProfiles, TAINT_PROFILE_LABEL, type TaintGating } from '../authority/taint-gating.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
 
@@ -1251,6 +1252,14 @@ export class AgentOrchestrator {
       // Outside content (pages, screen text, clipboard, files) is framed as data.
       return markUntrustedToolResult(toolCall.name, category, result);
     } catch (err) {
+      // A typed failure carries the same text the tool used to RETURN, so it
+      // gets the same treatment: an offline sidecar's message is harmless, a
+      // remote handler's rejection is content from the other trust domain.
+      if (err instanceof ActionOutcomeError) {
+        const category = this.toolRegistry.get(toolCall.name)?.category;
+        this.noteTaint(toolCall.name, category);
+        return markUntrustedToolFailure(toolCall.name, category, err.message, MAX_TOOL_RESULT_CHARS);
+      }
       return `Error executing ${toolCall.name}: ${err instanceof Error ? err.message : String(err)}`;
     }
   }
@@ -1362,6 +1371,10 @@ export class AgentOrchestrator {
       }
       return markUntrustedToolResult(name, category, result);
     } catch (err) {
+      if (err instanceof ActionOutcomeError) {
+        this.noteTaint(name, tool?.category);
+        return markUntrustedToolFailure(name, tool?.category, err.message, MAX_TOOL_RESULT_CHARS);
+      }
       return `Error executing ${name}: ${err instanceof Error ? err.message : String(err)}`;
     }
   }

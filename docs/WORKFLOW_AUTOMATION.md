@@ -45,6 +45,18 @@ Practical consequences:
   This is why `jarvis-context` reads can now answer `202` instead of `200`.
 - Each effect is recorded in `workflow_effect` with its frozen arguments, target,
   decision and outcome, readable at `GET /api/workflow-runs/:runId/effects`.
+- A tool that fails reports a typed outcome rather than a result that happens to
+  read like an error: `blocked` (a known prerequisite, e.g. the machine is
+  offline) answers `409`, `error` (the remote handler reported failure) `422`,
+  and `unknown` (completion could not be established) `502`. `jarvis-tool`
+  requires success by default and asserts the outcome itself, so an HTTP `200`
+  alone cannot satisfy a step. Clearing its `Require successful action` box is
+  for an explicit availability probe: the call answers `200` with the unchanged
+  failure outcome so the graph can route on `{{step.outcome.status}}` or its
+  stable `code`. It changes how the reply is reported, never what is dispatched,
+  and it does not bypass Authority, emergency state, cancellation or approval.
+  Every one of these is a terminal receipt: repeating the step, or restarting
+  the daemon, returns the same failure without dispatching again.
 - `jarvis-tool` only invokes tools with a bounded, declared Authority action (see
   `BOUNDED_TOOLS` in `src/workflows/runtime/effect-capabilities.ts`). Tools whose
   effect is a script or a click sequence -- `run_command`, `browser_click`,

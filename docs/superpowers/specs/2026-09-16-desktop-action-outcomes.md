@@ -30,9 +30,24 @@ Failures also carry `code`, `message` and `effect`, with `effect` equal to
 blocked; unclassified local controller exceptions remain unknown.
 
 Classification does not inspect arbitrary returned text for `Error:`. A
-window title can legitimately contain that text. Native sidecar negative
-receipts (`success: false`) and unverified launch windows are handled as
-failure/uncertainty without claiming that the process was never started.
+window title can legitimately contain that text. A native negative receipt
+(`success: false`) is a failure the handler reported about itself, and the
+whole reply travels in the message so the pid and the handler's own note are
+not lost.
+
+`window_visible: null` is deliberately NOT a failure. The sidecar sets it
+beside `success: true` for "the process is alive and I could not look for its
+window" -- a Wayland session, a box without xdotool, an unprompted Mac -- and
+`launchResultLinux` / `launchResultDarwin` exist to stop that being reported
+as failure, because a model told the launch failed launches the app again.
+That reply is returned as data, note included.
+
+A typed failure is still a tool result. On the daemon's own tool paths the
+message is capped and framed with the same untrusted-content wrapper, and
+taints the turn the same way, as the text did when it was returned rather
+than thrown: an outside-content tool's failure text can carry a sidecar's own
+error string, so moving to typed failures must not quietly hand the model
+unframed content.
 
 ## API and graph behavior
 
@@ -77,9 +92,10 @@ cancellation, approval requirements and unsupported-capability refusals still
 apply. Existing explicit engine failure-handling settings remain explicit
 graph policy; this change does not prohibit them.
 
-`requireSuccess` changes receipt handling, not the dispatched operation.
-It is excluded from the effect request digest, so a pending approval created
-by an older piece can resume when the new piece sends the default explicitly.
+`requireSuccess` changes receipt handling, not the dispatched operation. It
+is read in the route and never passed to the service function, so it cannot
+reach the effect record or its request digest: a pending approval created by
+an older piece resumes when the new piece sends the default explicitly.
 Tool name, arguments, workflow version, target and run/step identity retain
 their existing validation.
 
@@ -93,6 +109,20 @@ database is reopened, returns the same failure without dispatching again.
 Reconnecting the machine does not silently replay a previously blocked action.
 No database migration is necessary: status is text and the receipt is JSON.
 
+Terminality itself is not new: any non-`pending` effect already refused replay
+before this change, and the CAS dispatch fence plus the re-`checkpoint()`
+immediately before dispatch are untouched. What is new is that the receipt is
+legible -- a caller learns `blocked` versus `error` versus `unknown` and a
+stable code instead of a prose string, and a failure can no longer arrive
+shaped like a successful result.
+
+The record remains a dispatch AUTHORIZATION, not a completion receipt. A
+`succeeded` status still means only that the adapter returned; `outcome` is
+written on the failure path alone, and `{ status: 'succeeded' }` is synthesized
+at the route rather than stored. A daemon that dies between the claim and a
+reply leaves `dispatching`, which still blocks automatic replay and still
+requires a human decision.
+
 This is not automatic reconciliation, a universal UI-success assertion, or a
 retroactive repair of historical text-only success receipts. Late detached
 completions still require reconciliation. A new run requires an explicit
@@ -101,32 +131,25 @@ tools have not all adopted typed failures; their normal returns retain the
 existing adapter contract. W7 and further effect adapters should reuse this
 outcome vocabulary and qualify their own completion evidence.
 
-## Open PR interactions
-
-Open PRs were inspected before implementation: #477 (version ownership),
-#476 (native lookup), #475 (small-model interface), #473 (credential
-encryption), #381 (command deck/wake), and #280 (project docs).
-No unmerged fix was needed. #475 edits desktop action parameter schemas and
-registry parameter metadata; preserve those additions alongside these outcome
-imports and error propagation. #381 also touches the sidecar manager; retain
-its wake work alongside typed RPC error construction.
-
 ## Validation
 
-- An isolated unchanged-main worktree reproduced the original defect through
-  the real engine and outer worker: the required offline workflow reached
-  `SUCCEEDED`. The new integration/compiled-piece cases produced 17 failures
-  on main, including HTTP-200 failures being accepted and missing outcomes.
-- Branch tests cover all nine offline desktop routes, disabled/unavailable
-  capabilities, remote error codes, uncertain dispatch, local missing
-  elements, result compatibility, required HTTP status, explicit probes,
-  durable restart/replay, Authority/emergency refusal and approval handling.
-- Real engine tests prove the required call stops downstream execution and
-  an explicit probe selects the offline router branch. Existing worker
-  approval pause/resume and cancellation tests remain part of validation.
-- Passed 329 tests across 12 relevant files, followed by 83 final outcome and
-  Authority tests. TypeScript, daemon build, EE import guard, migration guard,
-  template lint and package-content checks passed (Bun packer).
-  Full-repository testing is not claimed; its aggregate pre-commit test command
-  has an existing timeout/hang limitation. The local commit uses a per-command
-  hook override after these explicit checks.
+- An unchanged-main checkout reproduces the defect through the real engine and
+  outer worker: the required offline workflow reaches `SUCCEEDED` and its
+  effect record stores the offline text as a successful result.
+- `src/workflows/runtime/desktop-outcomes.test.ts` covers the API statuses,
+  the durable receipt across a database reopen, a reconnected machine not
+  replaying a blocked action, Authority/emergency/cancellation refusal of an
+  explicit probe, approval pause and resume, and approval identity across a
+  piece upgrade. Its engine and compiled-piece cases are deliberately NOT
+  gated on `JARVIS_TEST_ENGINE_BUILD=1`, so the headline evidence runs in CI
+  rather than skipping there.
+- `src/actions/tools/sidecar-route.test.ts` covers all nine offline desktop
+  routes, missing machines, disabled and unavailable capabilities, remote
+  error codes, uncertain dispatch, a negative receipt carrying its reply, an
+  unverified launch window staying a success, and data containing `Error:`.
+- `src/agents/untrusted-results.test.ts` and `src/agents/taint-gating.test.ts`
+  hold a typed desktop failure to the untrusted-content wrapper and the turn
+  taint.
+
+This is not automatic reconciliation, a universal UI-success assertion, or a
+retroactive repair of historical text-only success receipts.

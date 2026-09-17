@@ -118,6 +118,25 @@ export function markUntrustedToolResult(name: string, category: string | undefin
   return wrapUntrusted(result.slice(0, idx), name) + result.slice(idx);
 }
 
+/**
+ * A tool that fails by throwing is still reporting a tool result, and an
+ * outside-content tool's failure text can carry remote data -- a sidecar's own
+ * error string, a rejected reply echoed back. Cap and frame it exactly as the
+ * same text was framed when it was returned instead of thrown, so moving a
+ * tool to typed failures cannot quietly hand the model unframed content.
+ */
+export function markUntrustedToolFailure(
+  name: string,
+  category: string | undefined,
+  message: string,
+  maxChars: number,
+): string {
+  const capped = message.length > maxChars
+    ? message.slice(0, maxChars) + `\n... (truncated, was ${message.length} chars)`
+    : message;
+  return markUntrustedToolResult(name, category, capped);
+}
+
 /** Same for multi-modal results: text blocks are wrapped, images untouched. */
 export function markUntrustedToolBlocks(name: string, category: string | undefined, blocks: ContentBlock[]): ContentBlock[] {
   if (!isUntrustedSourceTool(name, category)) return blocks;

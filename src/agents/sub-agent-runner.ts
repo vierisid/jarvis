@@ -18,7 +18,8 @@ import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { getActionForTool } from '../authority/tool-action-map.ts';
-import { markUntrustedToolResult, isTaintSourceTool } from '../roles/untrusted.ts';
+import { markUntrustedToolResult, markUntrustedToolFailure, isTaintSourceTool } from '../roles/untrusted.ts';
+import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { mergeProfiles, taintProfile, type TaintGating } from '../authority/taint-gating.ts';
 
 const MAX_TOOL_ITERATIONS = 100; // Lower than primary's 200 — sub-agents should be focused
@@ -196,6 +197,12 @@ async function executeTool(
 
     return markUntrustedToolResult(toolCall.name, category, result);
   } catch (err) {
+    // Same reasoning as the orchestrator: a typed failure is a tool result.
+    if (err instanceof ActionOutcomeError) {
+      const category = registry.get(toolCall.name)?.category;
+      if (authorityCtx && isTaintSourceTool(toolCall.name, category)) authorityCtx.taint.add(toolCall.name);
+      return markUntrustedToolFailure(toolCall.name, category, err.message, MAX_TOOL_RESULT_CHARS);
+    }
     return `Error executing ${toolCall.name}: ${err instanceof Error ? err.message : String(err)}`;
   }
 }

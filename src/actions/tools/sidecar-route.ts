@@ -205,15 +205,20 @@ export async function routeToSidecar(
       return fail('unknown', 'SIDECAR_TIMEOUT', `Error [${describeMachine(sidecar)}]: "${method}" did not complete within the timeout. The action may or may not have taken effect — do NOT assume it succeeded; verify the current state (e.g. take a snapshot) before continuing.`, 'may_have_occurred');
     }
 
-    // launch_app can report a spawned process without a verified window.
-    // A failed assertion is not evidence that nothing happened remotely.
+    // A structured negative receipt is a failure the handler reported about
+    // itself, so it is an outcome rather than a value -- and the whole reply
+    // is carried so the pid and the handler's own note are not lost.
+    //
+    // `window_visible: null` is deliberately NOT one of these. The sidecar
+    // sets it alongside `success: true` for "the process is alive and I could
+    // not look for its window" (Wayland, no xdotool, an unprompted Mac), and
+    // its handlers exist to stop that being reported as a failure: called one,
+    // the model relaunches an app that is already open. See
+    // launchResultLinux / launchResultDarwin.
     if (typedErrors && result && typeof result === 'object') {
       const reply = result as Record<string, unknown>;
       if (reply.success === false) {
         return fail('error', 'SIDECAR_ACTION_FAILED', `Error [${describeMachine(sidecar)}]: "${method}" reported failure: ${JSON.stringify(reply)}`, 'may_have_occurred');
-      }
-      if (method === 'launch_app' && reply.window_visible === null) {
-        return fail('unknown', 'DESKTOP_WINDOW_UNVERIFIED', `Error [${describeMachine(sidecar)}]: The process was started but its window could not be verified. Check the desktop before retrying.`, 'may_have_occurred');
       }
     }
 

@@ -49,11 +49,26 @@ describe('typed desktop outcomes', () => {
     ['remote rejection', async () => { throw new SidecarRPCError('ACTION_FAILED', 'failed after starting'); }, 'error', 'ACTION_FAILED'],
     ['missing method', async () => { throw new SidecarRPCError('METHOD_NOT_FOUND', 'not enabled'); }, 'blocked', 'METHOD_NOT_FOUND'],
     ['negative receipt', async () => ({ success: false, window_visible: false }), 'error', 'SIDECAR_ACTION_FAILED'],
-    ['unverified window', async () => ({ success: true, window_visible: null }), 'unknown', 'DESKTOP_WINDOW_UNVERIFIED'],
   ] as const) test(label, async () => {
     setSidecarManagerRef(stubManager([mac], dispatch));
     await expect(routeToSidecarAction(mac.id, 'launch_app', {}, 'desktop')).rejects.toMatchObject({
       outcome: { status, code, effect: status === 'blocked' ? 'not_started' : 'may_have_occurred' },
+    });
+  });
+
+  test('an unverified launch window stays an unverified success, note and pid intact', async () => {
+    // launchResultLinux/launchResultDarwin report this as success on purpose:
+    // calling it a failure makes the model launch an app that is already open.
+    const reply = { success: true, window_visible: null, pid: 4242, note: 'could NOT be checked' };
+    setSidecarManagerRef(stubManager([mac], async () => reply));
+    expect(JSON.parse(await routeToSidecarAction(mac.id, 'launch_app', {}, 'desktop'))).toEqual(reply);
+  });
+
+  test('a reported failure carries the whole reply so the pid and note survive', async () => {
+    setSidecarManagerRef(stubManager([mac], async () => ({ success: false, pid: 7, note: 'no window appeared' })));
+    await expect(routeToSidecarAction(mac.id, 'launch_app', {}, 'desktop')).rejects.toMatchObject({
+      outcome: { status: 'error', code: 'SIDECAR_ACTION_FAILED', effect: 'may_have_occurred',
+        message: expect.stringContaining('no window appeared') },
     });
   });
 
