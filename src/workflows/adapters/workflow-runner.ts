@@ -27,6 +27,7 @@ import { createFlowRun, getFlowRun } from "../db/repos/flow-run";
 import { enqueue } from "../db/repos/job-queue";
 import { RUN_FLOW } from "../runner/handler";
 import { assertRunNotCanceled } from "../runtime/cancellation";
+import { assertCodeStepsAllowed } from "../db/repos/flow-code-steps";
 
 /**
  * Upper bound on how far up the parent-run chain we walk when checking
@@ -109,6 +110,12 @@ export class JarvisWorkflowRunnerAdapter implements PieceWorkflowRunner {
     if (!getFlowVersion(versionId)) {
       throw new WorkflowRunnerError("VERSION_MISSING", `flow version ${versionId} missing`);
     }
+    // A nested `run_workflow` step is a third way to reach a version without
+    // publishing it -- the target resolves to `published ?? latest draft` just
+    // like the direct-run routes -- so the CODE gate applies here too. It can
+    // only ever refuse an unpublished draft: publish already requires the
+    // grant, so a published child flow carries it and keeps running.
+    assertCodeStepsAllowed(flow.id, versionId, "run");
     const run = createFlowRun({
       flowId: flow.id,
       flowVersionId: versionId,

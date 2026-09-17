@@ -30,9 +30,11 @@ import { getWorkflowDb } from '../db';
 import {
   createFlow,
   deleteFlow,
+  flowCodeStepsEnabled,
   getFlow,
   listFlows,
   parseFlowMetadata,
+  setFlowCodeStepsEnabled,
   updateFlowMetadata,
   updateFlowStatus,
   type FlowStatus,
@@ -49,6 +51,7 @@ import {
   updateDraftVersion,
 } from "../db/repos/flow-version";
 import { publishFlowVersion } from "../db/repos/flow-publication";
+import { assertCodeStepsAllowed, CodeStepsRefusedError } from "../db/repos/flow-code-steps";
 import { FlowVersionRequestError, withOwnedFlowVersion } from "../db/repos/flow-version-ownership";
 import {
   getFlowVersionUiMeta,
@@ -160,6 +163,9 @@ const trapErrors = async (fn: () => Promise<Response> | Response): Promise<Respo
     return await fn();
   } catch (e) {
     if (e instanceof FlowVersionRequestError) return err(e.message, e.status);
+    // A refused CODE step is a permission answer, not a bad request: the flow
+    // is well-formed and the caller is told exactly which grant is missing.
+    if (e instanceof CodeStepsRefusedError) return err(e.message, e.status);
     const msg = e instanceof Error ? e.message : String(e);
     if (/not found/i.test(msg)) return err(msg, 404);
     return err(msg, 500);
@@ -1106,6 +1112,40 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    // The per-flow CODE-step opt-in. Its own route, taking nothing but the
+    // boolean: the permission is never a field on a body that also carries
+    // other changes, so no generic flow update can grant or drop it by
+    // accident, and granting it is always a deliberate, separate act.
+    //
+    // Deliberately NOT exposed through `manage_workflow`. The threat the gate
+    // exists for is an untrusted LLM-authored FlowVersion, and a tool action
+    // that let the model grant itself the permission would be the gate
+    // granting its own exception.
+    "/api/workflows/:id/code-steps": {
+      POST: (req) =>
+        trapErrors(async () => {
+          const { id } = (req as RequestWithParams<{ id: string }>).params;
+          if (!getFlow(id)) return err("flow not found", 404);
+          const raw = await req.text();
+          let body: { enabled?: unknown } = {};
+          if (raw.trim()) {
+            try { body = JSON.parse(raw); }
+            catch { return err("code-steps body must be valid JSON", 400); }
+            if (!body || typeof body !== "object" || Array.isArray(body)) {
+              return err("code-steps body must be a JSON object", 400);
+            }
+          }
+          if (typeof body.enabled !== "boolean") {
+            return err('enabled must be a boolean ({"enabled": true} permits CODE steps for this flow)', 400);
+          }
+          // Revoking does NOT stop a run already in flight or unpublish the
+          // version; it takes the permission away from the next publish,
+          // enable or run, which is the same authoring-time boundary the
+          // grant itself lives on.
+          return ok(serializeFlow(setFlowCodeStepsEnabled(id, body.enabled, "user")));
+        }),
+    },
+
     "/api/workflows/:id/publish": {
       POST: (req) =>
         trapErrors(async () => {
@@ -1169,6 +1209,13 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             ? (draftId ?? flow.published_version_id ?? null)
             : (flow.published_version_id ?? draftId ?? null);
           if (!versionId) return err("flow has no published or draft version", 400);
+          // Defence in depth, not the primary gate. Publish already refuses a
+          // CODE step this flow was not opted into, so no PUBLISHED flow can
+          // reach here without the grant and no working automation starts
+          // failing. What this catches is the direct-run shortcut: an
+          // unpublished draft asked to run once, which is still an authoring
+          // moment with someone reading the reply.
+          assertCodeStepsAllowed(id, versionId, "run");
 
           const run = createFlowRun({
             flowId: id,
@@ -1334,6 +1381,15 @@ function serializeFlow(row: ReturnType<typeof getFlow> | NonNullable<ReturnType<
     publishedVersionId: row.published_version_id,
     displayName: version?.displayName ?? null,
     metadata: parseFlowMetadata(row),
+    // Surfaced so the dashboard can show that this flow may run CODE and,
+    // when `grantedBy` is `upgrade`, that the permission was inherited from a
+    // flow that already ran one rather than chosen. A grant nobody can see is
+    // not much better than no gate at all.
+    codeSteps: {
+      enabled: flowCodeStepsEnabled(row),
+      grantedBy: row.code_steps_grant,
+      grantedAt: row.code_steps_granted_at,
+    },
     created: row.created,
     updated: row.updated,
   };

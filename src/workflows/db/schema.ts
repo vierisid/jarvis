@@ -14,6 +14,8 @@
  */
 
 import type { Database } from "bun:sqlite";
+import { hasCodeStep } from "./flow-graph";
+import type { FlowTriggerNode } from "./repos/flow-version";
 
 export const DEFAULT_IDS = {
   user: "jrv_user_default",
@@ -42,6 +44,20 @@ const STATEMENTS: string[] = [
     template_id TEXT,
     time_saved_per_run INTEGER,
     metadata TEXT,
+    -- Per-flow opt-in for CODE steps. A CODE step runs arbitrary JavaScript in
+    -- the engine's child process with this machine's privileges, so a flow
+    -- containing one is refused at publish until the flag is set FOR THAT FLOW
+    -- (see repos/flow-code-steps.ts). Deliberately its own column, not a key
+    -- in metadata: the metadata blob is replaced wholesale by
+    -- PATCH /api/workflows/:id, and a privilege grant must not be something an
+    -- unrelated write can hand out or discard by accident.
+    code_steps_enabled INTEGER NOT NULL DEFAULT 0,
+    -- 'user' when a human turned it on, 'upgrade' when the flag was
+    -- grandfathered onto a flow that was already running CODE before the gate
+    -- existed. Kept so the dashboard can show WHY a flow has the permission
+    -- and the user can take it back.
+    code_steps_grant TEXT,
+    code_steps_granted_at INTEGER,
     created INTEGER NOT NULL,
     updated INTEGER NOT NULL
   )`,
@@ -270,10 +286,87 @@ function applyAdditiveColumnMigrations(db: Database): void {
     // exercise a step manually with curated parameters without
     // re-editing the production input. Production runs ignore this map.
     { table: "flow_version", column: "sample_input", ddl: "ALTER TABLE flow_version ADD COLUMN sample_input TEXT" },
+    // code_steps_*: per-flow opt-in for CODE steps (see the flow table above).
+    // The grant defaults to OFF, so a flow authored after this version has to
+    // be opted in explicitly before it can publish.
+    {
+      table: "flow",
+      column: "code_steps_enabled",
+      ddl: "ALTER TABLE flow ADD COLUMN code_steps_enabled INTEGER NOT NULL DEFAULT 0",
+    },
+    { table: "flow", column: "code_steps_grant", ddl: "ALTER TABLE flow ADD COLUMN code_steps_grant TEXT" },
+    { table: "flow", column: "code_steps_granted_at", ddl: "ALTER TABLE flow ADD COLUMN code_steps_granted_at INTEGER" },
   ];
+  const added = new Set<string>();
   for (const m of migrations) {
     const cols = db.query(`PRAGMA table_info(${m.table})`).all() as Array<{ name: string }>;
     if (cols.some((c) => c.name === m.column)) continue;
     db.exec(m.ddl);
+    added.add(`${m.table}.${m.column}`);
+  }
+  // Data backfills run after ALL the ALTERs, never inline with one of them:
+  // this one writes three columns and would fail if it ran between two.
+  //
+  // It fires only when THIS boot introduced the gate's columns, which can only
+  // happen on a database that predates them. A fresh database gets them from
+  // CREATE TABLE, adds nothing, and never backfills -- right, since it has no
+  // flows that predate the gate. Any of the three counts, so a boot that died
+  // between two ALTERs still backfills on its next attempt.
+  const gateColumns = ["code_steps_enabled", "code_steps_grant", "code_steps_granted_at"];
+  if (gateColumns.some((column) => added.has(`flow.${column}`))) grandfatherRunningCodeFlows(db);
+}
+
+/**
+ * One-time grandfathering for the CODE-step gate.
+ *
+ * Refusing at publish is the right place for a flow someone is authoring, but
+ * a version bump is not an authoring moment: an automation that has been
+ * running a CODE step on a cron for months must not stop because the daemon
+ * restarted on a newer build, and the user must not silently acquire the new
+ * permission on flows that never used it.
+ *
+ * So the grant is written only for flows that are runnable RIGHT NOW (ENABLED,
+ * or carrying a published version) whose runnable version actually contains a
+ * CODE step -- the exact set that would otherwise break -- and it is stamped
+ * `upgrade` so the dashboard can say the permission was inherited and the user
+ * can revoke it. Every other flow, including one holding an unpublished CODE
+ * draft, starts at OFF and has to be opted in.
+ *
+ * `updated` is deliberately NOT touched: the workflows list orders by
+ * `flow.updated DESC`, and reshuffling someone's list on an upgrade would be a
+ * visible side effect of a migration that is supposed to change nothing.
+ */
+function grandfatherRunningCodeFlows(db: Database): void {
+  const candidates = db
+    .query<{ id: string; version_id: string | null }, []>(
+      `SELECT f.id AS id,
+              COALESCE(f.published_version_id,
+                       (SELECT v.id FROM flow_version v
+                         WHERE v.flow_id = f.id AND v.state = 'DRAFT'
+                         ORDER BY v.updated DESC LIMIT 1)) AS version_id
+         FROM flow f
+        WHERE f.status = 'ENABLED' OR f.published_version_id IS NOT NULL`,
+    )
+    .all();
+  const at = Date.now();
+  for (const candidate of candidates) {
+    if (!candidate.version_id) continue;
+    const row = db
+      .query<{ trigger: string }, [string]>(`SELECT trigger FROM flow_version WHERE id = ?`)
+      .get(candidate.version_id);
+    if (!row) continue;
+    let trigger: FlowTriggerNode | null = null;
+    try {
+      trigger = JSON.parse(row.trigger) as FlowTriggerNode;
+    } catch {
+      // An unparseable trigger cannot be shown to contain a CODE step, and a
+      // migration is the wrong place to fail a boot over one bad row.
+      continue;
+    }
+    if (!hasCodeStep(trigger)) continue;
+    db.run(`UPDATE flow SET code_steps_enabled = 1, code_steps_grant = 'upgrade', code_steps_granted_at = ? WHERE id = ?`, [
+      at,
+      candidate.id,
+    ]);
   }
 }

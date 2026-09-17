@@ -16,6 +16,7 @@
 
 import { json, err, parseJsonObject, type RouteContext, type RouteHandler } from "./shared";
 import { cancellableWorkflowService } from "../../runtime/cancellation";
+import { CODE_STEPS_REFUSAL_CODE } from "../../db/repos/flow-code-steps";
 import { workflowEffectContext } from './effect-context';
 import type { WorkflowEffectContext, WorkflowApprovalPending } from '../../runtime/effect-context';
 
@@ -88,6 +89,10 @@ export function createJarvisWorkflowsStartRoute(
         if (code === "SELF_RECURSION") return err(message, 409);
         if (code === "VERSION_MISSING") return err(message, 422);
         if (code === "MISSING_REF") return err(message, 400);
+        // The per-flow CODE opt-in is missing on the target flow. A permission
+        // answer, so 403 rather than the generic 500 -- the piece surfaces the
+        // message, which names the flow and the grant it needs.
+        if (code === CODE_STEPS_REFUSAL_CODE) return err(message, 403);
       }
       throw e;
     }

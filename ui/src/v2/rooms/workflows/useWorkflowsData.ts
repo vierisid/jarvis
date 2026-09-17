@@ -23,6 +23,20 @@ export interface Flow {
   status: FlowStatus;
   publishedVersionId: string | null;
   metadata: Record<string, unknown> | null;
+  /**
+   * Per-flow CODE-step permission. A flow containing a CODE step cannot be
+   * published, enabled or run until this is on, because a CODE step runs
+   * arbitrary JavaScript with the machine's full privileges. `grantedBy` is
+   * `upgrade` when the permission was inherited from a flow that was already
+   * running a CODE step before the gate existed, rather than chosen. Granted
+   * and revoked through `POST /api/workflows/:id/code-steps`; see
+   * `docs/WORKFLOW_AUTOMATION.md`.
+   */
+  codeSteps?: {
+    enabled: boolean;
+    grantedBy: "user" | "upgrade" | null;
+    grantedAt: number | null;
+  };
   created: number;
   updated: number;
   /** Filled in by the hook from /workflows/:id (latestDraft.displayName). */

@@ -55,6 +55,7 @@ import {
   getLatestDraft,
 } from "../../workflows/db/repos/flow-version.ts";
 import { publishFlowVersion } from "../../workflows/db/repos/flow-publication.ts";
+import { assertCodeStepsAllowed } from "../../workflows/db/repos/flow-code-steps.ts";
 import {
   createFlowRun,
   getFlowRun,
@@ -173,6 +174,12 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       "  delete { flow }                     Permanently remove.",
       "  list_runs { flow?, limit? }         Recent runs (per flow or across all).",
       "  get_run { run_id }                  Full run detail with step outputs.",
+      "",
+      "A flow containing a CODE step runs arbitrary JavaScript with this machine's full",
+      "privileges, so `publish`, `enable` and `run` are REFUSED for it until the user turns",
+      "code steps on for that one flow. The error explains how; relay it and let the user",
+      "decide. Do not retry, and do not try to route around it -- there is no tool action",
+      "that grants the permission, by design.",
     ].join("\n"),
     category: "automation",
     parameters: {
@@ -360,6 +367,12 @@ function actGet(flow: FlowRow): Record<string, unknown> {
 function actRun(flow: FlowRow, payload?: Record<string, unknown>): Record<string, unknown> {
   const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
   if (!versionId) throw new Error("workflow has no draft or published version to run");
+  // Same gate the HTTP `/run` route applies, for the same reason: this action
+  // will happily run an UNPUBLISHED draft, so without it the publish refusal
+  // would be one `run` call wide. The thrown message goes straight back to the
+  // model as the tool result, so it relays the opt-in instruction to the user
+  // instead of retrying.
+  assertCodeStepsAllowed(flow.id, versionId, "run");
   const run = createFlowRun({
     flowId: flow.id,
     flowVersionId: versionId,
