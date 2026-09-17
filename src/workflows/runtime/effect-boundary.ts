@@ -70,6 +70,7 @@ export class WorkflowEffectBoundary {
         executionPath: resolved.executionPath, route: input.route, toolName: input.toolName,
         actionCategory: input.category, requestDigest: digest(input.request), ...prepared,
         provenance: { source: 'workflow-runtime', sandboxId: input.context.sandboxId ?? null,
+          machineBindingVersion: 1,
           triggeredBy: resolved.run.triggeredBy, environment: resolved.run.environment,
           piece: input.piece, action: input.action },
         decision: 'unresolved', reason: '', status: 'pending', approvalId: null, waitpointId: null, createdAt: Date.now() };
@@ -153,7 +154,15 @@ export class WorkflowEffectBoundary {
       }
       if (current.requiresApproval && !record.approvalId) throw new Error('Workflow Authority now requires approval; effect was not dispatched');
     };
-    checkpoint();
+    try { checkpoint(); } catch (error) {
+      // A rejected target/session has not reached the dispatch claim. Preserve
+      // that fact separately from uncertainty about already-started effects.
+      if (error instanceof ActionOutcomeError) {
+        record.outcome = error.outcome; record.status = 'blocked'; record.error = error.message;
+        record.finishedAt = Date.now(); saveWorkflowEffect(record); log(false);
+      }
+      throw error;
+    }
     if (!claimWorkflowEffect(record)) throw new Error('Workflow effect was already claimed; replay blocked');
     try {
       // Publish the same checkpoint into the ambient execution scope. Deep

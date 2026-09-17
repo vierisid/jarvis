@@ -23,6 +23,11 @@ export const DEFAULT_IDS = {
 } as const;
 
 const STATEMENTS: string[] = [
+  // Immutable per-run machine and connection generation. No in-place retarget.
+  `CREATE TABLE IF NOT EXISTS workflow_run_machine_binding (
+    run_id TEXT PRIMARY KEY REFERENCES flow_run(id) ON DELETE CASCADE,
+    record TEXT NOT NULL
+  )`,
   // Cancellation is a durable dispatch fence, separate from effect receipts.
   `CREATE TABLE IF NOT EXISTS workflow_run_cancellation (
     run_id TEXT PRIMARY KEY REFERENCES flow_run(id) ON DELETE CASCADE,

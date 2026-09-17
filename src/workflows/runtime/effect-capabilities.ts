@@ -7,6 +7,7 @@ import { getDefaultCwd } from '../../actions/tools/local-tools-guard';
 import type { SidecarCapability } from '../../sidecar/types';
 import { resolve } from 'node:path';
 import { homedir } from 'node:os';
+import { getMachineScope } from '../../actions/machine-scope';
 
 /**
  * Tools whose effect is bounded enough to describe a review target (a sidecar
@@ -39,11 +40,14 @@ function boundedTarget(tool: string, params: Record<string, unknown>): Record<st
     : tool.includes('clipboard') ? 'clipboard' : tool === 'get_system_info' ? 'system_info'
     : tool === 'capture_screen' || tool === 'desktop_screenshot' ? 'screenshot'
     : tool.startsWith('browser_') ? 'browser' : 'desktop';
-  const selector = typeof params.target === 'string' && params.target.trim() ? params.target : autoTargetForCapability(capability);
+  const scope = getMachineScope();
+  const selector = scope ? scope.resolveTarget(params.target, capability)
+    : typeof params.target === 'string' && params.target.trim() ? params.target : autoTargetForCapability(capability);
   const sidecar = selector ? findSidecar(selector, getSidecarManager()?.listSidecars() ?? []) : null;
-  if (selector && !sidecar) throw new Error(`Workflow target unavailable: ${selector}`);
-  const path = params.path == null ? null : sidecar ? params.path : resolve(getDefaultCwd() || homedir(), String(params.path));
-  return { tool, sidecarId: sidecar?.id ?? null, path, selection: sidecar ? 'pinned-sidecar' : 'local-host' };
+  if (selector && !sidecar && !scope) throw new Error(`Workflow target unavailable: ${selector}`);
+  const path = params.path == null ? null : selector ? params.path : resolve(getDefaultCwd() || homedir(), String(params.path));
+  return { tool, sidecarId: scope ? selector : sidecar?.id ?? null, path, selection: selector ? 'pinned-sidecar' : 'local-host',
+    ...(scope ? { machineBinding: scope.binding(), capability } : {}) };
 }
 
 /**

@@ -26,6 +26,8 @@ import { RPCTracker, SidecarRPCError } from './rpc.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { BinarySpool, type BinarySpoolStats } from './binary-spool.ts';
 import { SidecarConnection } from './connection.ts';
+import { assertMachineDispatch } from '../actions/machine-scope';
+import { checkpointExecution } from '../actions/execution-scope';
 import { PanelSessionStore, vaultPanelSessionSink, type PanelSession, type PanelSocket } from './panel-sessions.ts';
 import { classifySidecarVersion, SIDECAR_MIN_VERSION, SIDECAR_RECOMMENDED_VERSION } from './compat.ts';
 import { chmodWithWarning, secureDirectory, secureWriteFile } from '../util/fs-secure.ts';
@@ -93,6 +95,7 @@ export class SidecarManager implements Service {
   private rpcTracker: RPCTracker;
   private binarySpool: BinarySpool;
   private sidecarConnections = new Map<string, SidecarConnection>();
+  private connectionSessions = new WeakMap<SidecarConnection, string>();
   private revocationSweepTimer: ReturnType<typeof setInterval> | null = null;
   /** Panel webview sessions (panel-sessions.ts). Owned here because this is
    *  what knows about enrollment and revocation, which is what bounds them. */
@@ -570,6 +573,18 @@ export class SidecarManager implements Service {
     return this.connected.has(id);
   }
 
+  /** Daemon-owned generation for this exact socket, never a sidecar-provided ID. */
+  getConnectionSessionId(id: string): string | null {
+    const connection = this.sidecarConnections.get(id);
+    if (!connection) return null;
+    let session = this.connectionSessions.get(connection);
+    if (!session) {
+      session = generateId();
+      this.connectionSessions.set(connection, session);
+    }
+    return session;
+  }
+
   // --------------- Protocol: Token Validation ---------------
 
   /**
@@ -875,6 +890,8 @@ export class SidecarManager implements Service {
     params: Record<string, unknown> = {},
     timeouts: RPCTimeouts = DEFAULT_RPC_TIMEOUTS,
   ): Promise<unknown> {
+    checkpointExecution();
+    assertMachineDispatch(sidecarId);
     const connection = this.sidecarConnections.get(sidecarId);
     if (!connection) {
       throw new ActionOutcomeError({ status: 'blocked', code: 'SIDECAR_OFFLINE',
@@ -902,6 +919,8 @@ export class SidecarManager implements Service {
    * per call is pure overhead. Silently drops if the sidecar isn't connected.
    */
   dispatchNotify(sidecarId: string, method: string, params: Record<string, unknown> = {}): void {
+    checkpointExecution();
+    assertMachineDispatch(sidecarId);
     const connection = this.sidecarConnections.get(sidecarId);
     if (!connection) return;
     connection.sendRPC({ type: 'rpc_request', id: generateId(), method, params });

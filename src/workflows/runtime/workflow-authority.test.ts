@@ -256,7 +256,7 @@ describe('workflow effect boundary', () => {
   test('builtin target is pinned to the reviewed sidecar, not a later default', async () => {
     const previous = getSidecarManager();
     let inventory = [{ id: 'computer-a', name: 'A', connected: true, capabilities: ['filesystem'] }];
-    setSidecarManagerRef({ listSidecars: () => inventory } as any);
+    setSidecarManagerRef({ listSidecars: () => inventory, getConnectionSessionId: (id: string) => `session-${id}` } as any);
     try {
       const f = fixture(); f.authority.setGovernedCategories(['write_data']);
       const pending = await f.invoke();
@@ -277,8 +277,10 @@ describe('workflow effect boundary', () => {
       const pending = await f.invoke();
       inventory = [{ id: 'computer-b', name: 'B', connected: true, capabilities: ['filesystem'] }];
       f.approvals.approve(pending.approval!.approvalId, 'test');
-      await expect(f.invoke()).rejects.toThrow(/target changed/);
-      expect(f.calls).toHaveLength(0);
+      await f.invoke();
+      expect(f.calls).toHaveLength(1);
+      expect(f.calls[0]).not.toHaveProperty('target');
+      expect(listWorkflowEffects(f.run.id)[0]!.target).toMatchObject({ selection: 'local-host', sidecarId: null });
     } finally { setSidecarManagerRef(previous as any); }
   });
 

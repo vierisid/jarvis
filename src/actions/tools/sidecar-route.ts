@@ -17,6 +17,7 @@ import {
 import { isNoLocalTools } from './local-tools-guard.ts';
 import { ActionOutcomeError, type ActionFailure } from '../action-outcome.ts';
 import { SidecarRPCError } from '../../sidecar/rpc.ts';
+import { getMachineScope } from '../machine-scope.ts';
 
 let sidecarManager: SidecarManager | null = null;
 
@@ -39,6 +40,12 @@ export function getSidecarManager(): SidecarManager | null {
  * connected, instead of falling back to legacy local controllers.
  */
 export function autoTargetForCapability(cap: SidecarCapability): string | null {
+  const scope = getMachineScope();
+  if (scope) {
+    const target = scope.resolveTarget(undefined, cap);
+    scope.assertDispatch(target, cap);
+    return target;
+  }
   if (!sidecarManager) return null;
   for (const s of sidecarManager.listSidecars()) {
     if (!s.connected) continue;
@@ -111,7 +118,9 @@ export function resolveToolTarget(
   tool: string,
 ): string | null {
   const named = typeof explicit === 'string' && explicit.trim() ? explicit : null;
-  const target = named ?? autoTargetForCapability(capability);
+  const scope = getMachineScope();
+  const target = scope ? scope.resolveTarget(named, capability) : named ?? autoTargetForCapability(capability);
+  scope?.assertDispatch(target, capability);
   console.log(
     target
       ? `[${capability}] ${tool} -> sidecar stack (target=${target}, ${named ? 'explicit' : 'auto'})`
@@ -157,6 +166,13 @@ export async function routeToSidecar(
   requiredCapability: SidecarCapability,
   typedErrors = false,
 ): Promise<string> {
+  // Ahead of the typed/legacy split: a workflow binding failure must stay an
+  // exception even for tools that have not adopted typed outcomes.
+  const scope = getMachineScope();
+  if (scope) {
+    target = scope.resolveTarget(target, requiredCapability)!;
+    scope.assertDispatch(target, requiredCapability);
+  }
   // Keep legacy text callers stable while desktop tools adopt the typed
   // contract. Classification happens here, never by parsing display text.
   const fail = (status: ActionFailure['status'], code: string, message: string,

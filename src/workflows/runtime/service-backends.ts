@@ -46,6 +46,9 @@ import { getFlow } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
 import { digest, type WorkflowEffectContext } from './effect-context';
 import { evaluateLlmOutput } from './llm-output-contract';
+import { withWorkflowMachineBinding } from './machine-binding';
+import { getMachineScope } from '../../actions/machine-scope';
+import type { SidecarCapability } from '../../sidecar/types';
 
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
   credentialResolver: CredentialResolver;
@@ -200,6 +203,7 @@ export function buildSandboxServiceBackends(
           },
           validateTarget: (args, target) => {
             if (digest(capability.target(args)) !== digest(target)) throw new Error('Workflow execution target changed after review; dispatch blocked');
+            if (target.machineBinding) getMachineScope()?.assertDispatch(target.sidecarId as string | null, target.capability as SidecarCapability);
           },
           execute: async (args, checkpoint) => { checkpoint(); return toolAdapter.execute(req.toolName, args); } });
         return reply.approval ? { result: null, toolName: req.toolName, approval: reply.approval }
@@ -451,11 +455,11 @@ export function buildSandboxServiceBackends(
     llmChat: cancellableWorkflowService(llmChat),
     notify: cancellableWorkflowService(notify),
     contextProvider,
-    agentDelegate: cancellableWorkflowService(agentDelegate),
+    agentDelegate: cancellableWorkflowService((req, ctx) => withWorkflowMachineBinding(ctx, () => agentDelegate(req, ctx))),
     eventsPoll,
     workflowsStart: cancellableWorkflowService(workflowsStart),
     ...(opts.resumeUrlPrefix !== undefined ? { resumeUrlPrefix: opts.resumeUrlPrefix } : {}),
   };
-  if (toolsInvoke) services.toolsInvoke = cancellableWorkflowService(toolsInvoke);
+  if (toolsInvoke) services.toolsInvoke = cancellableWorkflowService((req, ctx) => withWorkflowMachineBinding(ctx, () => toolsInvoke(req, ctx)));
   return services;
 }
