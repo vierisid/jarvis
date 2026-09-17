@@ -194,7 +194,7 @@ export const uiSnapshotTool: ToolDefinition = {
     'Perceive the current app or web page as an accessibility tree: an interactable-first list of elements, each with an [id] you pass to ui_act. This is the PRIMARY way to see UI - prefer it over screenshots. Reports a structural coverage %; when coverage is low the surface is canvas/custom-drawn and you should fall back to a screenshot. Set kind="browser" for the web page, "desktop" for a native window (optionally target a pid).',
   category: 'ui',
   parameters: {
-    kind: { type: 'string', description: 'What to perceive: "desktop" (native window) or "browser" (web page). Default "desktop".', required: false },
+    kind: { type: 'string', description: 'What to perceive: "desktop" (native window) or "browser" (web page). Default "desktop".', required: false, enum: ['desktop', 'browser'] },
     pid: { type: 'number', description: 'Desktop only: window PID (from desktop_list_windows). Omit for the foreground window.', required: false },
     full: { type: 'boolean', description: 'Return the full tree instead of the salience-filtered interactable view. Default false - only set when the element you need is missing from the filtered list.', required: false },
     target: { type: 'string', description: 'Sidecar name/ID (omit to auto-select the connected one).', required: false },
@@ -234,9 +234,9 @@ export const uiActTool: ToolDefinition = {
   category: 'ui',
   parameters: {
     element_id: { type: 'number', description: 'The [id] of the target element from a recent ui_snapshot. The id carries its own window/page and sidecar, so there is nothing else to pass.', required: true },
-    action: { type: 'string', description: 'One of: click, set_value, toggle, select, expand, collapse, focus, scroll_into_view, get_value. Default click. Browser elements support only click and set_value.', required: false },
+    action: { type: 'string', description: 'What to do to the element. Default click. Browser elements support only click and set_value.', required: false, enum: ['click', 'set_value', 'toggle', 'select', 'expand', 'collapse', 'focus', 'scroll_into_view', 'get_value'] },
     value: { type: 'string', description: 'The text to set (required for set_value; also the expected text for verify="value_equals").', required: false },
-    verify: { type: 'string', description: 'Optional postcondition: window_appeared, element_gone, element_present, focus_moved, title_changed, or value_equals.', required: false },
+    verify: { type: 'string', description: 'Optional postcondition to confirm after acting; on failure the runtime re-reads the surface before reporting.', required: false, enum: ['window_appeared', 'element_gone', 'element_present', 'focus_moved', 'title_changed', 'value_equals'] },
   },
   execute: async (params) => {
     const action = (params.action as string) || 'click';

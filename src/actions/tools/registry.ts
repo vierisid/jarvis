@@ -5,6 +5,13 @@ export type ToolParameter = {
   type: string;
   description: string;
   required: boolean;
+  /**
+   * Allowed values, emitted as JSON-Schema `enum`. Small and local models
+   * frequently invent invalid values when a set of choices is only described
+   * in prose; a real enum constrains them. Prefer this over listing the
+   * options in the description.
+   */
+  enum?: string[];
 };
 
 export type ToolResult = {

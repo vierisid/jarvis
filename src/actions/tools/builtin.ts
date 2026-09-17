@@ -39,10 +39,15 @@ export function toolDefToLLMTool(tool: ToolDefinition): LLMTool {
   const required: string[] = [];
 
   for (const [name, param] of Object.entries(tool.parameters)) {
-    properties[name] = {
+    const schema: Record<string, unknown> = {
       type: param.type,
       description: param.description,
     };
+    // Emit the enum so the model is given the allowed values by the schema
+    // itself, not a prose list it can ignore. `ToolRegistry` enforces the
+    // same set on execution, so what is advertised is what is accepted.
+    if (param.enum && param.enum.length > 0) schema.enum = param.enum;
+    properties[name] = schema;
     if (param.required) {
       required.push(name);
     }
