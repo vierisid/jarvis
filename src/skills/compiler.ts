@@ -37,6 +37,19 @@ export type CompiledSkill = {
   provenance: 'recorded';
 };
 
+/**
+ * Process names of the Windows Start / Search UI. Typing an app name there
+ * and pressing Enter is how most people open an app, but it cannot be
+ * replayed as a field edit: the search UI is not on screen at replay time.
+ * It compiles to a launch_app step instead, and clicks inside the search UI
+ * (picking the result) are dropped.
+ */
+const WINDOWS_SEARCH_HOSTS: ReadonlySet<string> = new Set(['searchhost', 'searchapp', 'searchui', 'startmenuexperiencehost']);
+
+function isWindowsSearchHost(it: RawInteraction): boolean {
+  return it.app !== undefined && WINDOWS_SEARCH_HOSTS.has(it.app.toLowerCase());
+}
+
 function refFocusesSameField(clickRef: RawInteraction, typeInto: RawInteraction): boolean {
   if (!clickRef.ref || !typeInto.ref) return false;
   return clickRef.ref.sig !== '' && clickRef.ref.sig === typeInto.ref.sig
@@ -80,8 +93,20 @@ export function compileSkill(interactions: RawInteraction[], opts: CompileOption
 
   for (let i = 0; i < coalesced.length; i++) {
     const it = coalesced[i]!;
-    if (it.app) apps.add(it.app);
     const surface = it.surface ?? 'desktop';
+
+    if (isWindowsSearchHost(it)) {
+      const typed = it.value?.trim() ?? '';
+      const redacted = it.value === '{{REDACTED}}' || it.secure === true;
+      if (it.action === 'set_value' && typed && !redacted) {
+        const last = steps[steps.length - 1];
+        if (!(last && last.action === 'launch_app' && last.value === typed)) {
+          steps.push({ action: 'launch_app', surface: 'desktop', value: typed, postcondition: { kind: 'window_appeared' }, note: `open ${typed} from Windows search` });
+        }
+      }
+      continue;
+    }
+    if (it.app) apps.add(it.app);
 
     if (it.action === 'set_value') {
       if (!it.ref) continue; // nothing to replay against

@@ -38,6 +38,7 @@ const (
 	UIA_AutomationIdPropertyId        = 30011
 	UIA_ClassNamePropertyId           = 30012
 	UIA_IsPasswordPropertyId          = 30019
+	UIA_NativeWindowHandlePropertyId  = 30020
 	UIA_IsOffscreenPropertyId         = 30022
 )
 
@@ -231,8 +232,13 @@ type recordedElement struct {
 	Title   string
 	Value   string
 	HasVal  bool
-	// Owning process, so the recorder can ignore its own windows.
+	// Owning process of the element itself.
 	Pid uint32
+	// Owning process of the top-level window the element sits in. A WebView2
+	// panel's controls belong to msedgewebview2.exe while the window that
+	// hosts them belongs to the sidecar, so this is what identifies Jarvis's
+	// own panels.
+	WindowPid uint32
 }
 
 // uiaElementFromPoint returns the element under a screen point.
@@ -511,6 +517,9 @@ func uiaRecordedElement(state *uiaState, kind string, x, y int) (*recordedElemen
 		if i == len(chain)-1 {
 			rec.Title = name
 			rec.Path = append(rec.Path, windowSegment(name))
+			if hwnd := uiaElementGetPropertyInt(a, UIA_NativeWindowHandlePropertyId); hwnd != 0 {
+				rec.WindowPid = win32GetWindowPid(uintptr(hwnd))
+			}
 			continue
 		}
 		ctrl := controlTypeName(uiaElementGetPropertyInt(a, UIA_ControlTypePropertyId))

@@ -232,6 +232,14 @@ func recorderWorker(h *recorderHook, evCh <-chan recorderEvent) {
 	}
 }
 
+// isOwnWindow reports whether the element lives in one of the sidecar's own
+// windows. The chat panel is a WebView2 control whose elements belong to
+// msedgewebview2.exe, so the element's own process is not enough; the
+// hosting top-level window is the sidecar's.
+func isOwnWindow(rec *recordedElement) bool {
+	return rec.Pid == ownPid || rec.WindowPid == ownPid
+}
+
 func releasePendingField() {
 	if recPendingElem != nil {
 		recPendingElem.Release()
@@ -250,7 +258,7 @@ func captureTypingField() {
 		if err != nil {
 			return nil, err
 		}
-		if rec.Pid == ownPid {
+		if isOwnWindow(rec) {
 			// Typing into Jarvis's own window (the chat panel, the connect
 			// window) is never part of a demonstration.
 			return nil, nil
@@ -321,9 +329,10 @@ func captureClick(x, y int) {
 	if !ok || rec == nil {
 		return
 	}
-	if rec.Pid == ownPid {
+	if isOwnWindow(rec) {
 		// A click on Jarvis's own window (saying "done" in the chat) is not
 		// part of the demonstration.
+		log.Printf("[recorder] ignored click on Jarvis's own window (%s %q)", rec.Role, rec.Name)
 		return
 	}
 	payload := interactionPayload(rec)

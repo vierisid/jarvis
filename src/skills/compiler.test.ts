@@ -147,6 +147,31 @@ describe('compileSkill', () => {
     expect(skill.match.processNames).toEqual(['chrome']);
   });
 
+  it('typing an app name into Windows search becomes a launch step, and search clicks are dropped', () => {
+    const skill = compileSkill(
+      [
+        ev({ action: 'click', ref: ref('Edit', 'Search box'), app: 'SearchHost', surface: 'desktop' }),
+        ev({ action: 'set_value', ref: ref('Edit', 'Search box'), value: 'notepad', app: 'SearchHost', surface: 'desktop' }),
+        ev({ action: 'click', ref: ref('ListItem', 'Notepad, App'), app: 'SearchHost', surface: 'desktop' }),
+        ev({ action: 'set_value', ref: ref('Document', 'Text editor'), value: 'coffee 4 euros', app: 'Notepad', surface: 'desktop' }),
+      ],
+      { name: 'notepad-expenses' },
+    );
+    expect(skill.steps.map((s) => s.action)).toEqual(['launch_app', 'set_value']);
+    expect(skill.steps[0]).toMatchObject({ action: 'launch_app', value: 'notepad', postcondition: { kind: 'window_appeared' } });
+    expect(skill.params.map((p) => p.name)).toEqual(['text_editor']);
+    expect(skill.app).toBe('Notepad');
+    expect(skill.match.processNames).toEqual(['notepad']);
+  });
+
+  it('a redacted value typed into Windows search is dropped, not launched', () => {
+    const skill = compileSkill(
+      [ev({ action: 'set_value', ref: ref('Edit', 'Search box'), value: '{{REDACTED}}', secure: true, app: 'SearchHost' })],
+      { name: 'x' },
+    );
+    expect(skill.steps).toHaveLength(0);
+  });
+
   it('a browser recording compiles to browser steps', () => {
     const skill = compileSkill([ev({ action: 'click', ref: ref('button', 'Compose'), surface: 'browser' })], { name: 'b' });
     expect(skill.steps[0]!.surface).toBe('browser');
