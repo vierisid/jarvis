@@ -186,3 +186,29 @@ func TestRecorderCapIsClamped(t *testing.T) {
 		t.Fatalf("above ceiling must clamp to %s, got %s", recorderMaxCap, got)
 	}
 }
+
+func TestRecorderEventsCarryTheEnvelopeTheBrainAccepts(t *testing.T) {
+	// The brain's validator (src/sidecar/validator.ts) rejects any frame whose
+	// type is not rpc_result, rpc_progress or sidecar_event, so a recorder
+	// event without the envelope is dropped before any listener sees it.
+	h := newRecorderHarness(t)
+	emitInteraction(map[string]any{"action": "click"})
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if len(h.events) != 1 {
+		t.Fatalf("expected one event, got %d", len(h.events))
+	}
+	ev := h.events[0]
+	if ev.Type != "sidecar_event" {
+		t.Fatalf("type must be sidecar_event, got %q", ev.Type)
+	}
+	if ev.EventType != "ui_interaction" {
+		t.Fatalf("event_type: %q", ev.EventType)
+	}
+	if ev.Timestamp == 0 {
+		t.Fatal("timestamp must be set")
+	}
+	if ev.Priority != "normal" {
+		t.Fatalf("priority: %q", ev.Priority)
+	}
+}

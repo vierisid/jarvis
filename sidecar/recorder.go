@@ -80,6 +80,21 @@ func setRecorderIndicator(p PebbleService) {
 	recorderOpMu.Unlock()
 }
 
+// recorderFrame builds the frame the brain accepts. The envelope matters:
+// the brain's validator drops any frame whose `type` is not one of
+// rpc_result / rpc_progress / sidecar_event before it reaches a listener, so
+// an event built with only EventType and Payload is silently lost. Every
+// observer sets these three fields; the recorder must too.
+func recorderFrame(eventType string, payload map[string]any) SidecarEvent {
+	return SidecarEvent{
+		Type:      "sidecar_event",
+		EventType: eventType,
+		Timestamp: time.Now().UnixMilli(),
+		Priority:  "normal",
+		Payload:   payload,
+	}
+}
+
 func recorderEmit(eventType string, payload map[string]any) {
 	recorderMu.Lock()
 	ctx, send := recorderCtx, recorderSend
@@ -87,7 +102,9 @@ func recorderEmit(eventType string, payload map[string]any) {
 	if send == nil || ctx == nil {
 		return
 	}
-	_ = send(ctx, SidecarEvent{EventType: eventType, Payload: payload}, nil)
+	if err := send(ctx, recorderFrame(eventType, payload), nil); err != nil {
+		log.Printf("[recorder] send %s failed: %v", eventType, err)
+	}
 }
 
 // emitInteraction sends one ui_interaction event to the brain. The payload

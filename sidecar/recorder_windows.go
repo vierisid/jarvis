@@ -27,6 +27,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -239,7 +240,7 @@ func releasePendingField() {
 // keystroke, so its committed value can be read later even if focus has
 // moved on by then (Tab, click-away).
 func captureTypingField() {
-	_, _ = comThread.call(func(state *uiaState) (any, error) {
+	_, err := comThread.call(func(state *uiaState) (any, error) {
 		releasePendingField()
 		rec, err := uiaRecordedElement(state, "focus", 0, 0)
 		if err != nil {
@@ -253,6 +254,9 @@ func captureTypingField() {
 		recPendingInfo = rec
 		return nil, nil
 	})
+	if err != nil {
+		log.Printf("[recorder] capture failed (typing): %v", err)
+	}
 }
 
 // flushTypingField emits the pending field as a set_value carrying its
@@ -272,7 +276,11 @@ func flushTypingField() {
 		releasePendingField()
 		return &rec, nil
 	})
-	if err != nil || val == nil {
+	if err != nil {
+		log.Printf("[recorder] capture failed (flush): %v", err)
+		return
+	}
+	if val == nil {
 		return
 	}
 	rec, ok := val.(*recordedElement)
@@ -284,6 +292,8 @@ func flushTypingField() {
 	if rec.HasVal {
 		payload["value"] = rec.Value
 	}
+	// The value itself is never logged.
+	log.Printf("[recorder] set_value: %s %q (secure=%v, app=%s)", rec.Role, rec.Name, rec.Secure, rec.App)
 	emitInteraction(payload)
 }
 
@@ -295,6 +305,7 @@ func captureClick(x, y int) {
 		return uiaRecordedElement(state, "click", x, y)
 	})
 	if err != nil {
+		log.Printf("[recorder] capture failed (click at %d,%d): %v", x, y, err)
 		return
 	}
 	rec, ok := val.(*recordedElement)
@@ -303,6 +314,7 @@ func captureClick(x, y int) {
 	}
 	payload := interactionPayload(rec)
 	payload["action"] = "click"
+	log.Printf("[recorder] click: %s %q (app=%s)", rec.Role, rec.Name, rec.App)
 	emitInteraction(payload)
 }
 
