@@ -6,15 +6,16 @@
  *     into that same field becomes one `set_value` step (the natural unit).
  *  2. Parameterize: typed values become named params so the skill is reusable
  *     (heuristic naming here; an optional LLM pass can rename/describe later).
- *     No typed value, secret or not, is ever stored: a step always carries
- *     `{{param}}`.
+ *     A step always carries `{{param}}`, never the literal. The text the
+ *     person typed is kept as the param's DEFAULT, so the skill runs as
+ *     demonstrated when the caller supplies nothing and the model can name
+ *     what will be typed on the approval card. The exception is a value the
+ *     redaction rules flagged (recorder.ts): that param is required, marked
+ *     secret, and has no default, so the secret is never stored.
  *  3. Derive postconditions: a set_value gets a value_equals check; a click
  *     that is the last interaction on a surface gets surface_changed (the
  *     click did something); launch_app gets window_appeared. Each is verified
  *     against a before/after surface pair at run time, never vacuously.
- *
- * Redaction already happened at capture (recorder.ts): a {{REDACTED}} value
- * becomes a required secret param instead of a hard-coded secret.
  */
 
 import type { RawInteraction } from './recorder.ts';
@@ -35,6 +36,19 @@ export type CompiledSkill = {
   steps: SkillStep[];
   provenance: 'recorded';
 };
+
+/**
+ * Process names of the Windows Start / Search UI. Typing an app name there
+ * and pressing Enter is how most people open an app, but it cannot be
+ * replayed as a field edit: the search UI is not on screen at replay time.
+ * It compiles to a launch_app step instead, and clicks inside the search UI
+ * (picking the result) are dropped.
+ */
+const WINDOWS_SEARCH_HOSTS: ReadonlySet<string> = new Set(['searchhost', 'searchapp', 'searchui', 'startmenuexperiencehost']);
+
+function isWindowsSearchHost(it: RawInteraction): boolean {
+  return it.app !== undefined && WINDOWS_SEARCH_HOSTS.has(it.app.toLowerCase());
+}
 
 function refFocusesSameField(clickRef: RawInteraction, typeInto: RawInteraction): boolean {
   if (!clickRef.ref || !typeInto.ref) return false;
@@ -79,19 +93,33 @@ export function compileSkill(interactions: RawInteraction[], opts: CompileOption
 
   for (let i = 0; i < coalesced.length; i++) {
     const it = coalesced[i]!;
-    if (it.app) apps.add(it.app);
     const surface = it.surface ?? 'desktop';
+
+    if (isWindowsSearchHost(it)) {
+      const typed = it.value?.trim() ?? '';
+      const redacted = it.value === '{{REDACTED}}' || it.secure === true;
+      if (it.action === 'set_value' && typed && !redacted) {
+        const last = steps[steps.length - 1];
+        if (!(last && last.action === 'launch_app' && last.value === typed)) {
+          steps.push({ action: 'launch_app', surface: 'desktop', value: typed, postcondition: { kind: 'window_appeared' }, note: `open ${typed} from Windows search` });
+        }
+      }
+      continue;
+    }
+    if (it.app) apps.add(it.app);
 
     if (it.action === 'set_value') {
       if (!it.ref) continue; // nothing to replay against
       const pname = paramNameFor(it, usedNames);
-      const wasRedacted = it.value === '{{REDACTED}}' || it.secure === true;
+      const wasRedacted = it.value === '{{REDACTED}}' || it.secure === true || it.value === undefined;
       params.push({
         name: pname,
         type: 'string',
-        description: `Value for ${it.ref.name || 'field'}${wasRedacted ? ' (was a secret; not stored)' : ''}`,
-        required: true,
-        ...(wasRedacted ? { secret: true } : {}),
+        description: wasRedacted
+          ? `Value for ${it.ref.name || 'field'} (was a secret; not stored, must be supplied)`
+          : `Value for ${it.ref.name || 'field'} (defaults to what was typed when recording)`,
+        required: wasRedacted,
+        ...(wasRedacted ? { secret: true } : { default: it.value }),
       });
       steps.push({
         action: 'set_value',

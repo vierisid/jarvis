@@ -85,6 +85,12 @@ export type SkillParam = {
   required: boolean;
   /** enum only. */
   options?: string[];
+  /**
+   * Value used when the caller supplies none. The compiler stores the text
+   * the person typed during the demonstration here, unless the redaction
+   * rules flagged it: a secret param never has a default and is required.
+   */
+  default?: string;
   /** The recorded value was redacted; approval cards and logs never print it. */
   secret?: boolean;
 };
@@ -153,6 +159,22 @@ export function toRuntimePostcondition(
     case 'focus_moved':
       return { kind: 'focus_moved', fromRef: ref };
   }
+}
+
+/**
+ * The arguments a run uses: the caller's values over the params' defaults.
+ * A param with no default and no value stays absent, so validation can
+ * report it when it is required. Every consumer that reasons about a run
+ * (the runtime, the effect classifier, the approval card) resolves through
+ * here, so a default is never applied in one place and missed in another.
+ */
+export function resolveArgs(params: SkillParam[], args: Record<string, string>): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const p of params) {
+    if (p.default !== undefined) out[p.name] = p.default;
+  }
+  for (const [k, v] of Object.entries(args)) out[k] = v;
+  return out;
 }
 
 /** Substitute {{param}} placeholders in a value using the provided args. */

@@ -96,7 +96,7 @@ describe('compileSkill', () => {
     expect(skill.steps[0]!.action).toBe('set_value');
   });
 
-  it('parameterizes typed values and names params from field labels; no literal is stored', () => {
+  it('parameterizes typed values, names params from field labels, and keeps the typed text as the default', () => {
     const skill = compileSkill(
       [
         ev({ action: 'set_value', ref: ref('textbox', 'Subject'), value: 'Hi there' }),
@@ -105,20 +105,30 @@ describe('compileSkill', () => {
       { name: 'compose' },
     );
     expect(skill.params.map((p) => p.name)).toEqual(['subject', 'message_body']);
+    // The step never carries the literal; the param's default does.
     expect(skill.steps[0]!.value).toBe('{{subject}}');
     expect(skill.steps[0]!.postcondition).toEqual({ kind: 'value_equals', value: '{{subject}}' });
-    expect(JSON.stringify(skill)).not.toContain('Hi there');
-    expect(JSON.stringify(skill)).not.toContain('body text');
+    expect(skill.params[0]).toMatchObject({ required: false, default: 'Hi there' });
+    expect(skill.params[1]).toMatchObject({ required: false, default: 'body text' });
+    expect(skill.params[0]!.secret).toBeUndefined();
   });
 
-  it('turns a redacted secret into a secret param with NO value_equals postcondition', () => {
+  it('turns a redacted secret into a required secret param with no default and NO value_equals postcondition', () => {
     const skill = compileSkill(
       [ev({ action: 'set_value', ref: ref('textbox', 'Password'), value: '{{REDACTED}}', secure: true })],
       { name: 'login' },
     );
     expect(skill.params).toHaveLength(1);
-    expect(skill.params[0]!.secret).toBe(true);
+    expect(skill.params[0]).toMatchObject({ required: true, secret: true });
+    expect(skill.params[0]!.default).toBeUndefined();
+    expect(JSON.stringify(skill)).not.toContain('REDACTED');
     expect(skill.steps[0]!.postcondition).toBeUndefined(); // masked field won't read back
+  });
+
+  it('a secure field with no value at all (password field the sidecar withheld) is also required with no default', () => {
+    const skill = compileSkill([ev({ action: 'set_value', ref: ref('Edit', 'PIN'), secure: true })], { name: 'pin' });
+    expect(skill.params[0]).toMatchObject({ required: true, secret: true });
+    expect(skill.params[0]!.default).toBeUndefined();
   });
 
   it('gives a terminal click a surface_changed postcondition and keeps the surface on every step', () => {
@@ -135,6 +145,31 @@ describe('compileSkill', () => {
     expect(skill.steps.every((s) => s.surface === 'desktop')).toBe(true);
     expect(skill.app).toBe('Gmail');
     expect(skill.match.processNames).toEqual(['chrome']);
+  });
+
+  it('typing an app name into Windows search becomes a launch step, and search clicks are dropped', () => {
+    const skill = compileSkill(
+      [
+        ev({ action: 'click', ref: ref('Edit', 'Search box'), app: 'SearchHost', surface: 'desktop' }),
+        ev({ action: 'set_value', ref: ref('Edit', 'Search box'), value: 'notepad', app: 'SearchHost', surface: 'desktop' }),
+        ev({ action: 'click', ref: ref('ListItem', 'Notepad, App'), app: 'SearchHost', surface: 'desktop' }),
+        ev({ action: 'set_value', ref: ref('Document', 'Text editor'), value: 'coffee 4 euros', app: 'Notepad', surface: 'desktop' }),
+      ],
+      { name: 'notepad-expenses' },
+    );
+    expect(skill.steps.map((s) => s.action)).toEqual(['launch_app', 'set_value']);
+    expect(skill.steps[0]).toMatchObject({ action: 'launch_app', value: 'notepad', postcondition: { kind: 'window_appeared' } });
+    expect(skill.params.map((p) => p.name)).toEqual(['text_editor']);
+    expect(skill.app).toBe('Notepad');
+    expect(skill.match.processNames).toEqual(['notepad']);
+  });
+
+  it('a redacted value typed into Windows search is dropped, not launched', () => {
+    const skill = compileSkill(
+      [ev({ action: 'set_value', ref: ref('Edit', 'Search box'), value: '{{REDACTED}}', secure: true, app: 'SearchHost' })],
+      { name: 'x' },
+    );
+    expect(skill.steps).toHaveLength(0);
   });
 
   it('a browser recording compiles to browser steps', () => {

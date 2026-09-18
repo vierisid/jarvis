@@ -29,7 +29,7 @@
 import type { ActionCategory } from '../roles/authority.ts';
 import { AUTHORITY_REQUIREMENTS } from '../roles/authority.ts';
 import { severityRank, stricterCategory } from '../authority/tool-action-map.ts';
-import { fillParams, isSkillAction, type Skill, type SkillParam, type SkillStep } from './types.ts';
+import { fillParams, isSkillAction, resolveArgs, type Skill, type SkillParam, type SkillStep } from './types.ts';
 
 export const SKILL_EFFECT_FLOOR: ActionCategory = 'control_app';
 
@@ -184,7 +184,10 @@ export function classifyStep(
 
 const MAX_INTENT_STEPS = 8;
 
-export function resolveSkillEffect(skill: Skill, args: Record<string, string>): SkillEffect {
+export function resolveSkillEffect(skill: Skill, callerArgs: Record<string, string>): SkillEffect {
+  // The card shows the values the run will actually type: the caller's over
+  // the recorded defaults, exactly as the runtime resolves them.
+  const args = resolveArgs(skill.params, callerArgs);
   const steps = skill.steps.map((s, i) => classifyStep(s, i, skill, args));
   let category: ActionCategory = SKILL_EFFECT_FLOOR;
   const reached = new Set<ActionCategory>([SKILL_EFFECT_FLOOR]);

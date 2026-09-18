@@ -129,6 +129,16 @@ describe('resolveSkillEffect', () => {
     expect(e.intent).not.toContain('123456');
   });
 
+  test('the intent resolves recorded defaults, and a caller value overrides them', () => {
+    const s = skill([
+      { action: 'set_value', ref: ref('Document', 'Text editor'), value: '{{text_editor}}' },
+    ], { name: 'notepad-expenses', app: 'Notepad', params: [
+      { name: 'text_editor', type: 'string', description: '', required: false, default: 'coffee 4 euros' },
+    ] });
+    expect(resolveSkillEffect(s, {}).intent).toContain('type "coffee 4 euros" into Text editor');
+    expect(resolveSkillEffect(s, { text_editor: 'taxi 12' }).intent).toContain('type "taxi 12" into Text editor');
+  });
+
   test('a malformed skill is invalid and gated as the unresolved category', () => {
     const s = skill([{ action: 'click', ref: ref('button', 'OK') }, { action: 'swipe' as unknown as SkillStep['action'] }]);
     const e = resolveSkillEffect(s, {});

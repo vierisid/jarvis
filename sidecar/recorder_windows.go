@@ -27,6 +27,8 @@ package main
 
 import (
 	"fmt"
+	"log"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -72,6 +74,9 @@ type recorderHook struct {
 var (
 	hookMu             sync.Mutex
 	activeRecorderHook *recorderHook
+
+	// ownPid identifies the sidecar's own windows, which are never recorded.
+	ownPid = uint32(os.Getpid())
 
 	// The field being typed into, owned by the COM thread: only closures run
 	// through comThread.call touch these.
@@ -227,6 +232,14 @@ func recorderWorker(h *recorderHook, evCh <-chan recorderEvent) {
 	}
 }
 
+// isOwnWindow reports whether the element lives in one of the sidecar's own
+// windows. The chat panel is a WebView2 control whose elements belong to
+// msedgewebview2.exe, so the element's own process is not enough; the
+// hosting top-level window is the sidecar's.
+func isOwnWindow(rec *recordedElement) bool {
+	return rec.Pid == ownPid || rec.WindowPid == ownPid
+}
+
 func releasePendingField() {
 	if recPendingElem != nil {
 		recPendingElem.Release()
@@ -239,11 +252,16 @@ func releasePendingField() {
 // keystroke, so its committed value can be read later even if focus has
 // moved on by then (Tab, click-away).
 func captureTypingField() {
-	_, _ = comThread.call(func(state *uiaState) (any, error) {
+	_, err := comThread.call(func(state *uiaState) (any, error) {
 		releasePendingField()
 		rec, err := uiaRecordedElement(state, "focus", 0, 0)
 		if err != nil {
 			return nil, err
+		}
+		if isOwnWindow(rec) {
+			// Typing into Jarvis's own window (the chat panel, the connect
+			// window) is never part of a demonstration.
+			return nil, nil
 		}
 		elem, err := uiaGetFocusedElement(state.automation)
 		if err != nil {
@@ -253,6 +271,9 @@ func captureTypingField() {
 		recPendingInfo = rec
 		return nil, nil
 	})
+	if err != nil {
+		log.Printf("[recorder] capture failed (typing): %v", err)
+	}
 }
 
 // flushTypingField emits the pending field as a set_value carrying its
@@ -272,7 +293,11 @@ func flushTypingField() {
 		releasePendingField()
 		return &rec, nil
 	})
-	if err != nil || val == nil {
+	if err != nil {
+		log.Printf("[recorder] capture failed (flush): %v", err)
+		return
+	}
+	if val == nil {
 		return
 	}
 	rec, ok := val.(*recordedElement)
@@ -284,6 +309,8 @@ func flushTypingField() {
 	if rec.HasVal {
 		payload["value"] = rec.Value
 	}
+	// The value itself is never logged.
+	log.Printf("[recorder] set_value: %s %q (secure=%v, app=%s)", rec.Role, rec.Name, rec.Secure, rec.App)
 	emitInteraction(payload)
 }
 
@@ -295,14 +322,22 @@ func captureClick(x, y int) {
 		return uiaRecordedElement(state, "click", x, y)
 	})
 	if err != nil {
+		log.Printf("[recorder] capture failed (click at %d,%d): %v", x, y, err)
 		return
 	}
 	rec, ok := val.(*recordedElement)
 	if !ok || rec == nil {
 		return
 	}
+	if isOwnWindow(rec) {
+		// A click on Jarvis's own window (saying "done" in the chat) is not
+		// part of the demonstration.
+		log.Printf("[recorder] ignored click on Jarvis's own window (%s %q)", rec.Role, rec.Name)
+		return
+	}
 	payload := interactionPayload(rec)
 	payload["action"] = "click"
+	log.Printf("[recorder] click: %s %q (app=%s)", rec.Role, rec.Name, rec.App)
 	emitInteraction(payload)
 }
 

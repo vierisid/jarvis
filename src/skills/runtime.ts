@@ -25,6 +25,7 @@ import type { SemanticNode } from '../structural/types.ts';
 import {
   fillParams,
   isSkillAction,
+  resolveArgs,
   stepSurface,
   toRuntimePostcondition,
   type SerializablePostcondition,
@@ -33,6 +34,8 @@ import {
   type SkillStep,
   type SurfaceKind,
 } from './types.ts';
+
+export { resolveArgs };
 
 export type SkillSurface = { nodes: SemanticNode[]; title?: string };
 
@@ -100,10 +103,11 @@ const EMPTY: SkillSurface = { nodes: [] };
 
 export async function runSkill(
   skill: Skill,
-  args: Record<string, string>,
+  callerArgs: Record<string, string>,
   deps: SkillRuntimeDeps,
 ): Promise<SkillRunResult> {
   const sleep = deps.sleep ?? ((ms: number) => new Promise((r) => setTimeout(r, ms)));
+  const args = resolveArgs(skill.params, callerArgs);
   const argErr = validateArgs(skill.params, args);
   if (argErr) {
     return { ok: false, steps: [{ index: -1, action: 'validate', ok: false, detail: argErr }], failedAt: -1 };

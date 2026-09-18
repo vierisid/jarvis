@@ -187,7 +187,28 @@ describe('skill tools', () => {
       expect(skill.integrity).toBe('ok');
       expect(skill.steps.map((s) => s.action)).toEqual(['click', 'set_value']);
       expect(skill.steps[1]!.value).toBe('{{subject}}');
+      // The typed text is the default, so the skill runs with no values.
+      expect(skill.params[0]).toMatchObject({ name: 'subject', required: false, default: 'hello' });
+      expect(saved).toContain('subject (default: what was typed)');
       expect(rec.pending()).toBeNull();
+    });
+
+    test('a recorded skill runs with no values and the card shows the recorded default', async () => {
+      const calls: Call[] = [];
+      setSidecarManagerRef(fakeManager(calls, { tree: [el(1, 'Edit', 'Text editor')] }));
+      upsertSkill({
+        name: 'notepad-daily-expenses', app: 'notepad', provenance: 'recorded',
+        params: [{ name: 'text_editor', type: 'string', description: '', required: false, default: 'coffee 4 euros' }],
+        steps: [{ action: 'set_value', ref: { role: 'Edit', name: 'Text editor', path: [], ordinal: 0, sig: 'sig-Text editor' }, value: '{{text_editor}}' }],
+      });
+      const gate = runSkillTool.authorityGate!({ name: 'notepad-daily-expenses' })!;
+      expect(gate.intent).toContain('type "coffee 4 euros" into Text editor');
+      const out = String(await runSkillTool.execute({ name: 'notepad-daily-expenses' }));
+      expect(out).toContain('completed');
+      expect(calls[1]!.params).toEqual({ element_id: 1, action: 'set_value', value: 'coffee 4 euros' });
+      const over = String(await runSkillTool.execute({ name: 'notepad-daily-expenses', params: { text_editor: 'taxi 12' } }));
+      expect(over).toContain('completed');
+      expect(calls[3]!.params).toEqual({ element_id: 1, action: 'set_value', value: 'taxi 12' });
     });
 
     test('a sidecar-side end (cap) closes the brain session so stop reports it', async () => {
