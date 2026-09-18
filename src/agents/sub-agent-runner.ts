@@ -5,6 +5,15 @@
  * Mirrors orchestrator.processMessage() but parameterized on agent
  * instead of hardcoded to primary. Supports progress callbacks for
  * real-time streaming to clients.
+ *
+ * A tool call the gate says needs approval has two honest answers. Without a
+ * governed dispatch there is nobody to hold the approval, so the call is
+ * denied and audited as needing approval. With one, the dispatch decides:
+ * it can run the tool under an approval it already holds, report a denial
+ * or a failure, or pause. A pause ends this run before any effect, and the
+ * caller keeps the message log so a later run can resume exactly where it
+ * stopped. A caller can also checkpoint after every completed turn and
+ * resume from there when nothing was pending.
  */
 
 import type { AgentInstance } from './agent.ts';
@@ -30,12 +39,85 @@ const MAX_TOOL_RESULT_CHARS = 6000;
  * Why the loop ended. `completed` is the happy path (LLM stopped requesting
  * tools). `max_iterations` means we exhausted the iteration cap with the
  * model still asking for tools -- callers should treat the answer as
- * partial. `error` is set when an exception escaped the loop. Surfacing
- * this lets workflow callers (jarvis-agent.delegate) map directly to the
- * piece's `{completed | max_iterations | error}` status field instead of
- * inferring from `success` + `response`.
+ * partial. `error` is set when an exception escaped the loop. `paused`
+ * means a governed tool call is waiting on an approval; nothing ran for it
+ * and `paused` on the result says what is waiting. Surfacing this lets
+ * workflow callers (jarvis-agent.delegate) map directly to the piece's
+ * status field instead of inferring from `success` + `response`.
  */
-export type SubAgentTerminationReason = 'completed' | 'max_iterations' | 'error';
+export type SubAgentTerminationReason = 'completed' | 'max_iterations' | 'error' | 'paused';
+
+/** A durable approval the caller will wait on before the paused tool can run. */
+export type SubAgentApprovalRef = { effectId: string; approvalId: string; waitpointId: string };
+
+/** The identity the gate judged a call with; the dispatch judges it with the same one. */
+export type SubAgentPrincipal = {
+  agentId: string;
+  agentRoleId: string;
+  agentAuthorityLevel: number;
+  /** The parent's restrictions merged with this run's taint at the time of the call. */
+  profile: AuthorityProfile | null;
+};
+
+export type GovernedToolCall = {
+  toolCall: LLMToolCall;
+  /** Position of this call in the whole run, first call is 1; stable across a resume. */
+  sequence: number;
+  actionCategory: ActionCategory;
+  toolCategory: string;
+  principal: SubAgentPrincipal;
+  /** Why the gate required approval. */
+  reason: string;
+};
+
+export type GovernedToolResult =
+  | { kind: 'executed'; result: string }
+  /** The dispatch ran the tool, or found its record, and it failed. */
+  | { kind: 'failed'; result: string }
+  | { kind: 'denied'; reason: string }
+  | { kind: 'paused'; approval: SubAgentApprovalRef };
+
+/**
+ * Dispatch for a tool call the gate says needs approval. It owns the
+ * approval: it may run the tool under one it already holds, report that the
+ * user declined or that the run failed, or pause the run at a durable
+ * waitpoint. It is asked again for the same call on resume and must then
+ * answer from what was decided.
+ */
+export type GovernedToolDispatch = (call: GovernedToolCall) => Promise<GovernedToolResult>;
+
+/** An error the dispatch raised, as opposed to the model or the loop. */
+export class GovernedDispatchError extends Error {
+  override readonly name = 'GovernedDispatchError';
+  constructor(message: string, readonly raised: unknown) { super(message); }
+}
+
+export type SubAgentPause = GovernedToolCall & {
+  approval: SubAgentApprovalRef;
+  /** Tool calls from the same assistant turn that were not reached. */
+  remaining: LLMToolCall[];
+  /** The loop iteration the pause happened in; resume continues after it. */
+  iteration: number;
+};
+
+/** The state a caller keeps between turns, and everything a paused run needs to continue later. */
+export type SubAgentCheckpoint = {
+  messages: LLMMessage[];
+  toolsUsed: string[];
+  tokensUsed: { input: number; output: number };
+  sequence: number;
+  /** The next loop iteration to run when nothing is pending. */
+  iteration: number;
+  /** Outside content the run had read; restored so a resumed agent stays gated. */
+  taint: string[];
+  /** Tool call ids whose result was a failure, denial or refusal. */
+  failedToolCalls: string[];
+};
+
+export type SubAgentResume = SubAgentCheckpoint & {
+  /** Present when the run paused on a governed call; absent to continue after a completed turn. */
+  pending?: SubAgentPause;
+};
 
 export type SubAgentResult = {
   success: boolean;
@@ -52,6 +134,18 @@ export type SubAgentResult = {
    * which only sees the simple user/assistant turns. Returned even on error.
    */
   messages: LLMMessage[];
+  /** Tool calls dispatched so far in this run, including a paused one. Absent from results built elsewhere. */
+  sequence?: number;
+  /** Tool call ids whose result was a failure, denial or refusal, so a trace need not guess from text. */
+  failedToolCalls?: string[];
+  /** Outside content the run read. */
+  taint?: string[];
+  /** Set when `terminationReason` is `paused`. */
+  paused?: SubAgentPause;
+  /** Set on `error` when the governed dispatch raised it, not the model or the loop. */
+  dispatchError?: boolean;
+  /** The enclosing execution was cancelled between turns; nothing more started. */
+  canceled?: boolean;
 };
 
 export type ProgressCallback = (event: {
@@ -78,6 +172,12 @@ export type RunSubAgentOptions = {
   profile?: AuthorityProfile | null;
   /** Taint gating for what the sub-agent itself reads during its run. */
   taintGating?: TaintGating | null;
+  /** Holds approvals for governed tool calls. Absent: such calls are denied. */
+  governedTools?: GovernedToolDispatch;
+  /** Called after every completed tool turn with the state a later run could continue from. */
+  onTurn?: (state: SubAgentCheckpoint) => void;
+  /** Continue a run from its saved state instead of starting one. */
+  resume?: SubAgentResume;
 };
 
 /**
@@ -122,6 +222,47 @@ function getLLMTools(registry: ToolRegistry): LLMTool[] | undefined {
   return registry.list().map(toolDefToLLMTool);
 }
 
+type AuthorityContext = {
+  agent: AgentInstance;
+  engine: AuthorityEngine;
+  auditTrail?: AuditTrail;
+  emergencyController?: EmergencyController;
+  temporaryGrants?: Map<string, ActionCategory[]>;
+  profile?: AuthorityProfile | null;
+  taintGating?: TaintGating | null;
+  /** Outside content the sub-agent read so far in this run. */
+  taint: Set<string>;
+  governedTools?: GovernedToolDispatch;
+};
+
+/** The enclosing execution scope refused to let another action start. */
+class SubAgentCanceled extends Error {
+  constructor(readonly raised: unknown) { super(raised instanceof Error ? raised.message : String(raised)); this.name = 'SubAgentCanceled'; }
+}
+
+type ToolDispatch =
+  | { text: string; failed?: boolean }
+  | { paused: Omit<SubAgentPause, 'remaining' | 'iteration'> };
+
+const denialText = (name: string, reason: string) =>
+  `[APPROVAL DENIED] ${name}: ${reason} Do not retry the action; report that it was not performed.`;
+
+function boundedResult(raw: unknown): string {
+  let result: string = typeof raw === 'string' ? raw : JSON.stringify(raw);
+  if (result.length > MAX_TOOL_RESULT_CHARS) {
+    result = result.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${result.length} chars)`;
+  }
+  return result;
+}
+
+/** Turn the dispatch's answer for a governed call into the tool's result. */
+function governedText(ctx: AuthorityContext, toolCall: LLMToolCall, toolCategory: string, governed: Exclude<GovernedToolResult, { kind: 'paused' }>): { text: string; failed?: boolean } {
+  if (governed.kind === 'denied') return { text: denialText(toolCall.name, governed.reason), failed: true };
+  if (governed.kind === 'failed') return { text: markUntrustedToolFailure(toolCall.name, toolCategory, governed.result, MAX_TOOL_RESULT_CHARS), failed: true };
+  if (isTaintSourceTool(toolCall.name, toolCategory)) ctx.taint.add(toolCall.name);
+  return { text: markUntrustedToolResult(toolCall.name, toolCategory, boundedResult(governed.result)) };
+}
+
 /**
  * Execute a single tool call via a ToolRegistry.
  * Includes optional authority gate for sub-agents.
@@ -129,31 +270,28 @@ function getLLMTools(registry: ToolRegistry): LLMTool[] | undefined {
 async function executeTool(
   registry: ToolRegistry,
   toolCall: LLMToolCall,
-  authorityCtx?: {
-    agent: AgentInstance;
-    engine: AuthorityEngine;
-    auditTrail?: AuditTrail;
-    emergencyController?: EmergencyController;
-    temporaryGrants?: Map<string, ActionCategory[]>;
-    profile?: AuthorityProfile | null;
-    taintGating?: TaintGating | null;
-    /** Outside content the sub-agent read so far in this run. */
-    taint: Set<string>;
-  }
-): Promise<string> {
+  sequence: number,
+  authorityCtx?: AuthorityContext,
+): Promise<ToolDispatch> {
+  // The audit row says what happened, so it is written once the outcome is
+  // known: a refusal or a pause with `executed: false`, an execution after
+  // the tool returned. Nothing is recorded as executed before it ran.
+  let audit: ((decision: 'allowed' | 'denied' | 'approval_required', executed: boolean, approvalId?: string) => void) | null = null;
+
   // Authority gate (if engine provided)
   if (authorityCtx) {
-    const { agent, engine, auditTrail, emergencyController, temporaryGrants, taintGating, taint } = authorityCtx;
+    const { agent, engine, auditTrail, emergencyController, temporaryGrants, taintGating, taint, governedTools } = authorityCtx;
     // The parent's restrictions plus whatever this run has read itself: a
     // browsing specialist that read a page cannot then write or run clean.
     const profile = mergeProfiles(authorityCtx.profile ?? null, taintProfile(taintGating ?? null, taint));
 
     // Emergency check
     if (emergencyController && !emergencyController.canExecute()) {
-      return `[SYSTEM ${emergencyController.getState().toUpperCase()}] Tool execution suspended.`;
+      return { text: `[SYSTEM ${emergencyController.getState().toUpperCase()}] Tool execution suspended.`, failed: true };
     }
 
     const tool = registry.get(toolCall.name);
+    const toolCategory = tool?.category ?? 'unknown';
     const gate = resolveToolGate(tool, toolCall.name, toolCall.arguments);
     const actionCategory = gate.actionCategory;
 
@@ -167,7 +305,7 @@ async function executeTool(
         authority_decision: 'denied',
         executed: false,
       });
-      return `[AUTHORITY DENIED] ${toolCall.name} requires the user's confirmation. Sub-agents cannot request approvals directly.`;
+      return { text: `[AUTHORITY DENIED] ${toolCall.name} requires the user's confirmation. Sub-agents cannot request approvals directly.`, failed: true };
     }
 
     const decision = combineDecisions(gate.categories.map((category) => engine.checkAuthority({
@@ -175,28 +313,52 @@ async function executeTool(
       agentAuthorityLevel: agent.agent.authority.max_authority_level,
       agentRoleId: agent.agent.role.id,
       toolName: toolCall.name,
-      toolCategory: tool?.category ?? 'unknown',
+      toolCategory,
       actionCategory: category,
       temporaryGrants: temporaryGrants ?? new Map(),
       profile: profile ?? null,
     })));
 
-    auditTrail?.log({
+    audit = (authorityDecision, executed, approvalId) => auditTrail?.log({
       agent_id: agent.id,
       agent_name: agent.agent.role.name,
       tool_name: toolCall.name,
       action_category: actionCategory,
-      authority_decision: decision.allowed ? 'allowed' : 'denied',
-      executed: decision.allowed,
+      authority_decision: authorityDecision,
+      approval_id: approvalId ?? null,
+      executed,
     });
 
     if (!decision.allowed) {
-      return `[AUTHORITY DENIED] ${toolCall.name}: ${decision.reason}`;
+      audit('denied', false);
+      return { text: `[AUTHORITY DENIED] ${toolCall.name}: ${decision.reason}`, failed: true };
     }
 
-    // Sub-agents don't get approval flow — they're denied outright for governed actions
     if (decision.requiresApproval) {
-      return `[AUTHORITY DENIED] ${toolCall.name} requires user approval. Sub-agents cannot request approvals directly.`;
+      if (!governedTools) {
+        // Nobody can hold the approval, so the call is refused. The row says
+        // approval was required and nothing ran.
+        audit('approval_required', false);
+        return { text: `[AUTHORITY DENIED] ${toolCall.name} requires user approval. Sub-agents cannot request approvals directly.`, failed: true };
+      }
+      // The dispatch judges the call with the same identity the gate did,
+      // runs it under its own durable record and audits that dispatch; the
+      // row written here records only the gate's decision.
+      const principal: SubAgentPrincipal = { agentId: agent.id, agentRoleId: agent.agent.role.id,
+        agentAuthorityLevel: agent.agent.authority.max_authority_level, profile: profile ?? null };
+      let governed: GovernedToolResult;
+      try {
+        governed = await governedTools({ toolCall, sequence, actionCategory, toolCategory, principal, reason: decision.reason });
+      } catch (err) {
+        audit('approval_required', false);
+        throw new GovernedDispatchError(err instanceof Error ? err.message : String(err), err);
+      }
+      if (governed.kind === 'paused') {
+        audit('approval_required', false, governed.approval.approvalId);
+        return { paused: { toolCall, sequence, actionCategory, toolCategory, principal, reason: decision.reason, approval: governed.approval } };
+      }
+      audit(governed.kind === 'denied' ? 'denied' : 'approval_required', governed.kind === 'executed');
+      return governedText(authorityCtx, toolCall, toolCategory, governed);
     }
   }
 
@@ -204,21 +366,17 @@ async function executeTool(
     const raw = await registry.execute(toolCall.name, toolCall.arguments);
     const category = registry.get(toolCall.name)?.category;
     if (authorityCtx && isTaintSourceTool(toolCall.name, category)) authorityCtx.taint.add(toolCall.name);
-    let result: string = typeof raw === 'string' ? raw : JSON.stringify(raw);
-
-    if (result.length > MAX_TOOL_RESULT_CHARS) {
-      result = result.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${result.length} chars)`;
-    }
-
-    return markUntrustedToolResult(toolCall.name, category, result);
+    audit?.('allowed', true);
+    return { text: markUntrustedToolResult(toolCall.name, category, boundedResult(raw)) };
   } catch (err) {
+    audit?.('allowed', false);
     // Same reasoning as the orchestrator: a typed failure is a tool result.
     if (err instanceof ActionOutcomeError) {
       const category = registry.get(toolCall.name)?.category;
       if (authorityCtx && isTaintSourceTool(toolCall.name, category)) authorityCtx.taint.add(toolCall.name);
-      return markUntrustedToolFailure(toolCall.name, category, err.message, MAX_TOOL_RESULT_CHARS);
+      return { text: markUntrustedToolFailure(toolCall.name, category, err.message, MAX_TOOL_RESULT_CHARS), failed: true };
     }
-    return `Error executing ${toolCall.name}: ${err instanceof Error ? err.message : String(err)}`;
+    return { text: `Error executing ${toolCall.name}: ${err instanceof Error ? err.message : String(err)}`, failed: true };
   }
 }
 
@@ -244,10 +402,13 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     temporaryGrants,
     profile,
     taintGating,
+    governedTools,
+    onTurn,
+    resume,
   } = opts;
 
   // Build authority context if engine provided
-  const authorityCtx = authorityEngine ? {
+  const authorityCtx: AuthorityContext | undefined = authorityEngine ? {
     agent,
     engine: authorityEngine,
     auditTrail,
@@ -255,41 +416,118 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     temporaryGrants,
     profile,
     taintGating,
-    taint: new Set<string>(),
+    taint: new Set<string>(resume?.taint ?? []),
+    governedTools,
   } : undefined;
+  const taint = authorityCtx?.taint ?? new Set<string>(resume?.taint ?? []);
 
   const agentName = agent.agent.role.name;
   const agentId = agent.id;
-  const toolsUsed: string[] = [];
-  const totalUsage = { input: 0, output: 0 };
+  const toolsUsed: string[] = resume ? [...resume.toolsUsed] : [];
+  const totalUsage = resume ? { ...resume.tokensUsed } : { input: 0, output: 0 };
+  const failedToolCalls: string[] = resume ? [...resume.failedToolCalls] : [];
+  let sequence = resume?.sequence ?? 0;
 
   // Set the task on the agent
   agent.setTask(task);
   agent.activate();
 
-  // Build system prompt (static half cache-marked, per-task context dynamic)
-  const systemPrompt = buildSubAgentPromptParts(agent, context);
-
-  // Add the task as a user message
-  agent.addMessage('user', task);
-
-  // Build messages array
-  const messages: LLMMessage[] = [
-    { role: 'system', content: systemPrompt.static, cache: true },
-    ...(systemPrompt.dynamic ? [{ role: 'system', content: systemPrompt.dynamic } satisfies LLMMessage] : []),
-    ...agent.getMessages(),
-  ];
+  // A resumed run continues its saved log; a fresh one starts from the
+  // system prompt (static half cache-marked, per-task context dynamic).
+  let messages: LLMMessage[];
+  if (resume) {
+    messages = resume.messages;
+  } else {
+    const systemPrompt = buildSubAgentPromptParts(agent, context);
+    agent.addMessage('user', task);
+    messages = [
+      { role: 'system', content: systemPrompt.static, cache: true },
+      ...(systemPrompt.dynamic ? [{ role: 'system', content: systemPrompt.dynamic } satisfies LLMMessage] : []),
+      ...agent.getMessages(),
+    ];
+  }
 
   const tools = getLLMTools(toolRegistry);
   let finalText = '';
   let reachedFinal = false;
 
+  const state = (iteration: number): SubAgentCheckpoint => ({
+    messages, toolsUsed: [...toolsUsed], tokensUsed: { ...totalUsage }, sequence, iteration,
+    taint: [...taint], failedToolCalls: [...failedToolCalls],
+  });
+  const finish = (partial: Pick<SubAgentResult, 'success' | 'response' | 'terminationReason'> & Partial<SubAgentResult>): SubAgentResult => ({
+    toolsUsed: [...new Set(toolsUsed)],
+    tokensUsed: totalUsage,
+    messages,
+    sequence,
+    failedToolCalls: [...failedToolCalls],
+    taint: [...taint],
+    ...partial,
+  });
+
+  // A cancellation is not an agent error: the caller stopped the run and
+  // must not record anything for it.
+  const fence = () => { try { checkpointExecution(); } catch (err) { throw new SubAgentCanceled(err); } };
+
+  const noteToolCall = (tc: LLMToolCall) => {
+    toolsUsed.push(tc.name);
+    if (onProgress) {
+      onProgress({ type: 'tool_call', agentName, agentId, data: { name: tc.name, arguments: tc.arguments } });
+    }
+  };
+
+  const record = (tc: LLMToolCall, dispatched: { text: string; failed?: boolean }) => {
+    messages.push({ role: 'tool', content: dispatched.text, tool_call_id: tc.id });
+    if (dispatched.failed) failedToolCalls.push(tc.id);
+    console.log(`[SubAgent:${agentName}] Tool ${tc.name} -> ${dispatched.text.slice(0, 100)}...`);
+  };
+
+  /** Dispatch a turn's tool calls in order; a pause returns what was not reached. */
+  const dispatchCalls = async (calls: LLMToolCall[], iteration: number): Promise<SubAgentPause | null> => {
+    for (let index = 0; index < calls.length; index++) {
+      const tc = calls[index]!;
+      fence();
+      noteToolCall(tc);
+      sequence += 1;
+      const dispatched = await executeTool(toolRegistry, tc, sequence, authorityCtx);
+      if ('paused' in dispatched) {
+        return { ...dispatched.paused, remaining: calls.slice(index + 1), iteration };
+      }
+      record(tc, dispatched);
+    }
+    return null;
+  };
+
   try {
+    let startIteration = resume?.iteration ?? 0;
+    if (resume?.pending) {
+      // The paused call goes back through the same dispatch, which now
+      // answers from the decision that was made; then the rest of its turn.
+      const pending = resume.pending;
+      if (!governedTools || !authorityCtx) throw new Error('Cannot resume a paused sub-agent without a governed tool dispatch');
+      fence();
+      let governed: GovernedToolResult;
+      try {
+        governed = await governedTools({ toolCall: pending.toolCall, sequence: pending.sequence, actionCategory: pending.actionCategory,
+          toolCategory: pending.toolCategory, principal: pending.principal, reason: pending.reason });
+      } catch (err) {
+        throw new GovernedDispatchError(err instanceof Error ? err.message : String(err), err);
+      }
+      if (governed.kind === 'paused') return finish({ success: true, response: '', terminationReason: 'paused', paused: { ...pending, approval: governed.approval } });
+      record(pending.toolCall, governedText(authorityCtx, pending.toolCall, pending.toolCategory, governed));
+      const pause = await dispatchCalls(pending.remaining, pending.iteration);
+      // A turn is durable only while the run is still alive.
+      fence();
+      if (pause) return finish({ success: true, response: '', terminationReason: 'paused', paused: pause });
+      startIteration = pending.iteration + 1;
+      onTurn?.(state(startIteration));
+    }
+
     // Tool execution loop
-    for (let iteration = 0; iteration < maxIterations; iteration++) {
-      checkpointExecution();
+    for (let iteration = startIteration; iteration < maxIterations; iteration++) {
+      fence();
       const llmResponse: LLMResponse = await llmManager.chatTier('medium', 'sub_agent', messages, { tools });
-      checkpointExecution();
+      fence();
 
       totalUsage.input += llmResponse.usage.input_tokens;
       totalUsage.output += llmResponse.usage.output_tokens;
@@ -307,31 +545,11 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
           onProgress({ type: 'text', agentName, agentId, data: llmResponse.content });
         }
 
-        // Execute each tool
-        for (const tc of llmResponse.tool_calls) {
-          checkpointExecution();
-          toolsUsed.push(tc.name);
-
-          // Notify about tool call
-          if (onProgress) {
-            onProgress({
-              type: 'tool_call',
-              agentName,
-              agentId,
-              data: { name: tc.name, arguments: tc.arguments },
-            });
-          }
-
-          const result = await executeTool(toolRegistry, tc, authorityCtx);
-          messages.push({
-            role: 'tool',
-            content: result,
-            tool_call_id: tc.id,
-          });
-
-          console.log(`[SubAgent:${agentName}] Tool ${tc.name} -> ${result.slice(0, 100)}...`);
-        }
-
+        const pause = await dispatchCalls(llmResponse.tool_calls, iteration);
+        // A turn is durable only while the run is still alive.
+        fence();
+        if (pause) return finish({ success: true, response: '', terminationReason: 'paused', paused: pause });
+        onTurn?.(state(iteration + 1));
         continue;
       }
 
@@ -350,26 +568,13 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     // Add final response to agent's history
     agent.addMessage('assistant', finalText);
 
-    return {
-      success: true,
-      response: finalText,
-      toolsUsed: [...new Set(toolsUsed)],
-      tokensUsed: totalUsage,
-      terminationReason: reachedFinal ? 'completed' : 'max_iterations',
-      messages,
-    };
+    return finish({ success: true, response: finalText, terminationReason: reachedFinal ? 'completed' : 'max_iterations' });
   } catch (err) {
     const errorMsg = err instanceof Error ? err.message : String(err);
     console.error(`[SubAgent:${agentName}] Error:`, errorMsg);
 
-    return {
-      success: false,
-      response: `Sub-agent error: ${errorMsg}`,
-      toolsUsed: [...new Set(toolsUsed)],
-      tokensUsed: totalUsage,
-      terminationReason: 'error',
-      messages,
-    };
+    return finish({ success: false, response: `Sub-agent error: ${errorMsg}`, terminationReason: 'error',
+      ...(err instanceof GovernedDispatchError ? { dispatchError: true } : err instanceof SubAgentCanceled ? { canceled: true } : {}) });
   } finally {
     agent.idle();
   }

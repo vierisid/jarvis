@@ -1,4 +1,4 @@
-import type { AuthorityEngine } from '../../authority/engine';
+import type { AuthorityEngine, AuthorityProfile } from '../../authority/engine';
 import type { AuditTrail } from '../../authority/audit';
 import type { EmergencyController } from '../../authority/emergency';
 import type { ApprovalManager, ApprovalRequest } from '../../authority/approval';
@@ -17,6 +17,14 @@ export interface WorkflowAuthorityDependencies {
   approvalManager?: ApprovalManager;
   onWorkflowApproval?: (request: ApprovalRequest) => void | Promise<void>;
 }
+/**
+ * Who an effect is dispatched for when it is not the workflow itself. A
+ * delegated sub-agent's gate judged the call with this identity; the boundary
+ * judges it again with the same one, never with a looser one.
+ */
+export type EffectPrincipal = {
+  agentId: string; agentRoleId: string; agentAuthorityLevel: number; profile?: AuthorityProfile | null;
+};
 export interface EffectInvocation {
   context: WorkflowEffectContext; piece: string; action: string; route: string;
   toolName: string; category: ActionCategory; toolCategory: string;
@@ -24,8 +32,15 @@ export interface EffectInvocation {
   prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown> };
   validateTarget?: (args: Record<string, unknown>, target: Record<string, unknown>) => void;
   execute: (args: Record<string, unknown>, checkpoint: () => void) => Promise<unknown>;
+  principal?: EffectPrincipal;
+  /** The caller's gate already found this effect needs approval; the boundary never concludes otherwise. */
+  approvalRequired?: boolean;
 }
 export type EffectReply = { result: unknown; approval?: never } | { approval: WorkflowApprovalPending; result?: never };
+
+/** The durable identity of an effect: one per run, step, loop position and route. */
+export const workflowEffectId = (runId: string, stepName: string, executionPath: Array<[string, number]>, route: string) =>
+  'wfe_' + digest([runId, stepName, executionPath, route]);
 
 /** The daemon owns policy, frozen arguments, approvals and the dispatch fence. */
 export class WorkflowEffectBoundary {
@@ -53,7 +68,7 @@ export class WorkflowEffectBoundary {
     const { authorityEngine: authority, emergencyController: emergency, auditTrail: audit, approvalManager: approvals } = this.deps;
     if (!authority || !emergency || !audit) throw new Error('Workflow Authority is unavailable; execution denied');
     const resolved = resolveEffectContext(input.context, input.piece, input.action);
-    const id = 'wfe_' + digest([resolved.run.id, resolved.stepName, resolved.executionPath, input.route]);
+    const id = workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, input.route);
     let effect = getWorkflowEffect(id);
     if (effect && (effect.requestDigest !== digest(input.request) || effect.versionDigest !== resolved.versionDigest
       || effect.toolName !== input.toolName || effect.actionCategory !== input.category)) {
@@ -77,8 +92,11 @@ export class WorkflowEffectBoundary {
       saveWorkflowEffect(effect!);
     }
     const record = effect!;
+    // The trail names who was judged: the workflow itself, or the sub-agent a
+    // delegated call was judged as.
+    const judged = input.principal ? ` / as ${input.principal.agentRoleId} (level ${input.principal.agentAuthorityLevel})` : '';
     const log = (executed: boolean) => audit.log({ agent_id: `workflow:${record.runId}`,
-      agent_name: `Workflow ${resolved.version.displayName} / ${record.stepName} / ${record.id}`,
+      agent_name: `Workflow ${resolved.version.displayName} / ${record.stepName} / ${record.id}${judged}`,
       tool_name: record.toolName, action_category: input.category,
       authority_decision: record.decision === 'denied' ? 'denied' : record.approvalId ? 'approval_required' : 'allowed',
       approval_id: record.approvalId, executed });
@@ -92,10 +110,16 @@ export class WorkflowEffectBoundary {
       // rather than reading job rows here, so the boundary and the daemon's
       // other dispatch points can never disagree about whether a run is dead.
       assertRunNotCanceled(record.runId);
-      const decision = authority.checkAuthority({ agentId: `workflow:${record.runId}`, agentRoleId: 'workflow-default',
-        agentAuthorityLevel: 0, toolName: input.toolName, toolCategory: input.toolCategory,
-        actionCategory: input.category, temporaryGrants: new Map() });
+      const who = input.principal ?? { agentId: `workflow:${record.runId}`, agentRoleId: 'workflow-default', agentAuthorityLevel: 0, profile: null };
+      const decision = authority.checkAuthority({ agentId: who.agentId, agentRoleId: who.agentRoleId,
+        agentAuthorityLevel: who.agentAuthorityLevel, toolName: input.toolName, toolCategory: input.toolCategory,
+        actionCategory: input.category, temporaryGrants: new Map(), profile: who.profile ?? null });
       if (!decision.allowed) throw new Error(`Authority denied ${input.toolName}: ${decision.reason}`);
+      // A gate that already required approval for this principal is never
+      // overruled by a recomputation here that happens to be looser.
+      if (input.approvalRequired && !decision.requiresApproval) {
+        return { ...decision, requiresApproval: true, reason: `${decision.reason}; approval required by the calling gate` };
+      }
       return decision;
     };
     let decision;
@@ -109,7 +133,8 @@ export class WorkflowEffectBoundary {
       if (!record.approvalId) {
         let request!: ApprovalRequest;
         getWorkflowDb().transaction(() => {
-          request = approvals.createRequest({ agentId: `workflow:${record.runId}`, agentName: `Workflow: ${resolved.version.displayName}`,
+          request = approvals.createRequest({ agentId: `workflow:${record.runId}`,
+            agentName: `Workflow: ${resolved.version.displayName}${input.principal ? ` as ${input.principal.agentRoleId}` : ''}`,
             toolName: input.toolName, toolArguments: record.arguments, actionCategory: input.category,
             urgency: 'normal', reason: decision.reason,
             context: canonicalJson({ effectId: id, runId: record.runId, versionId: record.versionId,

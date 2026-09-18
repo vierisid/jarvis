@@ -142,6 +142,18 @@ const STATEMENTS: string[] = [
   `CREATE INDEX IF NOT EXISTS idx_workflow_effect_run ON workflow_effect(run_id)`,
   `CREATE INDEX IF NOT EXISTS idx_workflow_effect_pending ON workflow_effect(status)`,
 
+  // A delegated sub-agent's conversation while its run waits on a tool
+  // approval, and its finished result so a re-run step returns that instead
+  // of starting a new conversation. One row per step instance.
+  `CREATE TABLE IF NOT EXISTS workflow_delegation (
+    id TEXT PRIMARY KEY,
+    run_id TEXT NOT NULL REFERENCES flow_run(id) ON DELETE CASCADE,
+    status TEXT NOT NULL,
+    record TEXT NOT NULL,
+    updated_at INTEGER NOT NULL
+  )`,
+  `CREATE INDEX IF NOT EXISTS idx_workflow_delegation_run ON workflow_delegation(run_id)`,
+
   // --- Credentials per piece (OAuth tokens, API keys, etc.) ---
   // Sensitive `value` is stored as JSON; encryption-at-rest via the keychain
   // is layered in at the repository level (Phase 2 step 15).

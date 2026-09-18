@@ -24,7 +24,8 @@ import { JarvisToolRegistryAdapter } from "../adapters/tool-registry";
 import { JarvisNotifierAdapter, type NotifierDeps } from "../adapters/notifier";
 import { JarvisContextProviderAdapter } from "../adapters/context-provider";
 import { LlmOnlyAgentDelegator } from "../adapters/agent-delegator";
-import { M7AgentDelegator } from "../adapters/m7-agent-delegator";
+import { M7AgentDelegator, type DelegationContinuation } from "../adapters/m7-agent-delegator";
+import { getDelegation, saveDelegation } from "../db/repos/delegation";
 import { JarvisWorkflowRunnerAdapter } from "../adapters/workflow-runner";
 import type { LlmChatFn, LlmChatRequest, LlmChatResponse } from "../sandbox-api/routes/jarvis-llm";
 import type { SystemPromptParts } from "../../roles/prompt-builder";
@@ -39,12 +40,14 @@ import type { SandboxApiServices } from "../sandbox-api/server";
 import type { CredentialResolver } from "../credentials/adapter";
 import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
-import { WorkflowEffectBoundary, type WorkflowAuthorityDependencies } from './effect-boundary';
-import { refusedEffectCategory, toolEffectCapability } from './effect-capabilities';
+import { WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
+import { getWorkflowEffect } from '../db/repos/workflow-effect';
+import { OPAQUE_TOOL_NAMES, refusedEffectCategory, toolEffectCapability } from './effect-capabilities';
+import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, resolveGovernedPieceAction, sanitizePieceInput } from './piece-effects';
 import { getFlow } from '../db/repos/flow';
 import { getFlowVersion, getLatestDraft } from '../db/repos/flow-version';
-import { digest, type WorkflowEffectContext } from './effect-context';
+import { digest, resolveEffectContext, type WorkflowEffectContext } from './effect-context';
 import { evaluateLlmOutput } from './llm-output-contract';
 import { withWorkflowMachineBinding } from './machine-binding';
 import { getMachineScope } from '../../actions/machine-scope';
@@ -85,6 +88,12 @@ export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependenci
    */
   agentOrchestrator?: AgentOrchestrator;
   agentSpecialists?: Map<string, RoleDefinition>;
+  /**
+   * Builds the tool registry a delegated sub-agent may call, from its role's
+   * allowed categories. Production leaves this unset and gets the builtin
+   * tools; tests supply synthetic ones so an approved call has no real effect.
+   */
+  agentScopedRegistry?: (allowedCategories: string[]) => ToolRegistry;
   authorityEngine?: AuthorityEngine;
   auditTrail?: AuditTrail;
   emergencyController?: EmergencyController;
@@ -335,7 +344,7 @@ export function buildSandboxServiceBackends(
   const m7Ready =
     opts.agentOrchestrator !== undefined && opts.agentSpecialists !== undefined
     && opts.authorityEngine !== undefined && opts.auditTrail !== undefined && opts.emergencyController !== undefined;
-  const agentAdapter = m7Ready
+  const m7 = m7Ready
     ? new M7AgentDelegator({
         orchestrator: opts.agentOrchestrator!,
         llmManager: opts.llmManager,
@@ -343,22 +352,88 @@ export function buildSandboxServiceBackends(
         ...(opts.authorityEngine ? { authorityEngine: opts.authorityEngine } : {}),
         ...(opts.auditTrail ? { auditTrail: opts.auditTrail } : {}),
         ...(opts.emergencyController ? { emergencyController: opts.emergencyController } : {}),
+        ...(opts.agentScopedRegistry ? { scopedRegistry: opts.agentScopedRegistry } : {}),
       })
-    : new LlmOnlyAgentDelegator(llmClient);
+    : null;
+  const llmOnlyDelegator = new LlmOnlyAgentDelegator(llmClient);
+  const AGENT_PIECE = '@jarvispieces/piece-jarvis-agent';
   const agentDelegate: AgentDelegateFn = async (req, ctx) => {
-    if (!m7Ready) return agentAdapter.delegate(req); // LLM-only fallback has no tool effects.
-    const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-agent', action: 'delegate',
+    if (!m7) return llmOnlyDelegator.delegate(req); // LLM-only fallback has no tool effects.
+    // How the caller handles the outcome is not part of what is dispatched.
+    const { requiredTools: _required, requireSuccess: _handled, ...effectRequest } = req;
+    // The decision to delegate at all. The sub-agent's governed tool calls
+    // each pass the boundary below as their own effects; this record only
+    // says delegation was allowed, so a step the engine runs again resumes
+    // the conversation instead of asking to delegate a second time.
+    const reply = await effects.invoke({ context: ctx, piece: AGENT_PIECE, action: 'delegate',
       route: 'agent', toolName: 'workflow_delegate', category: 'spawn_agent', toolCategory: 'delegation',
-      request: { ...req }, prepare: () => ({ arguments: { ...req }, target: { role: req.role ?? 'workflow-default' } }),
-      execute: async (args, checkpoint) => {
-        checkpoint();
-        // The M7 runner still applies its own role, taint, Authority and
-        // emergency gates to every child tool. Approval here grants delegation only.
-        return agentAdapter.delegate(args as unknown as Parameters<typeof agentAdapter.delegate>[0]);
-      },
+      request: { ...effectRequest }, prepare: () => ({ arguments: { ...effectRequest }, target: { role: req.role ?? 'workflow-default' } }),
+      execute: async (_args, checkpoint) => { checkpoint(); return { dispatch: 'authorized' }; },
     });
-    return reply.approval ? { finalMessage: '', toolCalls: [], status: 'approval_required', approval: reply.approval }
-      : reply.result as Awaited<ReturnType<AgentDelegateFn>>;
+    if (reply.approval) return { finalMessage: '', toolCalls: [], status: 'approval_required', approval: reply.approval };
+    const resolved = resolveEffectContext(ctx, AGENT_PIECE, 'delegate');
+    const id = 'wfd_' + digest([resolved.run.id, resolved.stepName, resolved.executionPath]);
+    const continuation: DelegationContinuation = {
+      identity: { id, runId: resolved.run.id, stepName: resolved.stepName, executionPath: resolved.executionPath,
+        versionDigest: resolved.versionDigest },
+      load: () => getDelegation(id),
+      save: saveDelegation,
+      // A governed call inside the sub-agent is a workflow effect of its own:
+      // bound to the run, version, step and loop position by the boundary,
+      // to the tool and its frozen arguments by the request digest, parked on
+      // an approval when the category is governed, dispatched once, and
+      // answered from its record when the resumed conversation asks again.
+      dispatch: async (registry, call) => {
+        // The same rule as the direct tool piece: a category cannot describe
+        // what a script or a click sequence will do, so it is not approvable
+        // here either. The agent learns it was refused.
+        if (OPAQUE_TOOL_NAMES.has(call.toolCall.name)) {
+          return { kind: 'denied', reason: `Unsupported workflow capability: ${call.toolCall.name} has opaque code/UI effects; use a typed governed adapter.` };
+        }
+        try {
+          const inner = await effects.invoke({ context: ctx, piece: AGENT_PIECE, action: 'delegate',
+            route: `agent-tool:${call.sequence}`, toolName: call.toolCall.name, category: call.actionCategory,
+            toolCategory: call.toolCategory, request: { toolName: call.toolCall.name, arguments: call.toolCall.arguments },
+            // Judged as the sub-agent the gate judged it for, and never
+            // concluded to need less than the gate required.
+            principal: call.principal, approvalRequired: true,
+            // The target names who asked, so the card and the record are bound
+            // to the principal and not only to the tool.
+            prepare: () => ({ arguments: { ...call.toolCall.arguments }, target: { tool: call.toolCall.name, sequence: call.sequence,
+              principal: { agentId: call.principal.agentId, agentRoleId: call.principal.agentRoleId, agentAuthorityLevel: call.principal.agentAuthorityLevel } } }),
+            execute: async (args, checkpoint) => {
+              checkpoint();
+              try {
+                const raw = await registry.execute(call.toolCall.name, args);
+                return typeof raw === 'string' ? raw : JSON.stringify(raw);
+              } catch (error) {
+                // A tool that failed under its approval is a typed failure, so
+                // the boundary records the outcome and answers the same way
+                // when the resumed conversation asks again.
+                if (error instanceof ActionOutcomeError) throw error;
+                throw new ActionOutcomeError({ status: 'error', code: 'TOOL_FAILED', effect: 'may_have_occurred',
+                  message: `Error executing ${call.toolCall.name}: ${error instanceof Error ? error.message : String(error)}` });
+              }
+            } });
+          if (inner.approval) return { kind: 'paused', approval: inner.approval };
+          return { kind: 'executed', result: String(inner.result ?? '') };
+        } catch (error) {
+          // The record the boundary left decides what the agent sees, never
+          // the message: a blocked effect (the user's decision, an Authority
+          // refusal for this principal, emergency state, a refused target) is
+          // a denial, a failed one a failure the agent continues from. A
+          // refusal that left no final record (a changed version, an
+          // uncertain or already claimed earlier attempt) is this run's
+          // error, not the delegation's.
+          const message = error instanceof Error ? error.message : String(error);
+          const recorded = getWorkflowEffect(workflowEffectId(resolved.run.id, resolved.stepName, resolved.executionPath, `agent-tool:${call.sequence}`));
+          if (recorded?.status === 'blocked') return { kind: 'denied', reason: recorded.error ?? message };
+          if (recorded?.status === 'failed' || recorded?.status === 'unknown') return { kind: 'failed', result: recorded.error ?? message };
+          throw error;
+        }
+      },
+    };
+    return m7.delegate(req, continuation);
   };
 
   const eventsPoll: EventsPollFn = async (req) => {
