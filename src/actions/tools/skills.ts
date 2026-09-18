@@ -33,10 +33,11 @@ import { runSkill, type SkillRuntimeDeps } from '../../skills/runtime.ts';
 import {
   deleteSkill, getSkillByName, listRunnableSkills, listSkills, matchSkills, recordSkillRun, upsertSkill,
 } from '../../vault/skills.ts';
-import { skillIndexLine, type Skill, type SurfaceKind } from '../../skills/types.ts';
+import { skillIndexLine, stepSurface, type Skill, type SurfaceKind } from '../../skills/types.ts';
 import { resolveSkillEffect } from '../../skills/effects.ts';
 import { getRecorder, type RecordingEndReason } from '../../skills/recorder.ts';
 import { compileSkill } from '../../skills/compiler.ts';
+import { ActionOutcomeError, type ActionFailure } from '../action-outcome.ts';
 
 const RPC_TIMEOUT = { initial: 30_000, max: 60_000 };
 /** Hard cap on a recording session; the sidecar enforces the same cap on its hooks. */
@@ -125,6 +126,26 @@ function argsFrom(raw: unknown): Record<string, string> | string {
   return out;
 }
 
+/**
+ * The surface a skill runs on, for the workflow effect target: browser-only,
+ * desktop-only, or mixed. wait steps have no surface.
+ */
+function skillSurface(skill: Skill): 'browser' | 'desktop' | 'mixed' {
+  const kinds = new Set(skill.steps.filter((st) => st.action !== 'wait').map((st) => stepSurface(st)));
+  if (kinds.size === 0) return 'desktop';
+  if (kinds.size === 1) return [...kinds][0]!;
+  return 'mixed';
+}
+
+/**
+ * A failure is thrown as a typed outcome (#478), never returned as an error
+ * string: a workflow step must fail when a skill cannot run or stops part
+ * way, and the chat path renders the same message as a tool result.
+ */
+function fail(outcome: ActionFailure): never {
+  throw new ActionOutcomeError(outcome);
+}
+
 function integrityNote(s: Skill): string {
   if (s.integrity === 'ok') return '';
   return s.integrity === 'unsigned'
@@ -147,48 +168,64 @@ export const runSkillTool: ToolDefinition = {
     if (!skill) return null;
     const args = argsFrom(params.params);
     const effect = resolveSkillEffect(skill, typeof args === 'string' ? {} : args);
-    return { actionCategory: effect.category, actionCategories: effect.categories, intent: effect.intent, confirm: 'above_level' };
+    return {
+      actionCategory: effect.category,
+      actionCategories: effect.categories,
+      intent: effect.intent,
+      confirm: 'above_level',
+      subject: { skill: skill.name, version: skill.version, integrity: skill.integrity, surface: skillSurface(skill) },
+    };
   },
   execute: async (params) => {
     const name = params.name as string;
     const skill = getSkillByName(name);
     if (!skill) {
       const avail = listRunnableSkills().map((s) => s.name).join(', ') || 'none';
-      return `Error: no skill named "${name}". Available: ${avail}`;
+      fail({ status: 'blocked', code: 'SKILL_NOT_FOUND', effect: 'not_started', message: `Error: no skill named "${name}". Available: ${avail}` });
     }
-    if (!skill.enabled) return `Error: skill "${skill.name}" is disabled.`;
+    if (!skill.enabled) fail({ status: 'blocked', code: 'SKILL_DISABLED', effect: 'not_started', message: `Error: skill "${skill.name}" is disabled.` });
     if (skill.integrity !== 'ok') {
-      return `Error: skill "${skill.name}" cannot run${integrityNote(skill)}.`;
+      fail({ status: 'blocked', code: 'SKILL_NOT_RUNNABLE', effect: 'not_started', message: `Error: skill "${skill.name}" cannot run${integrityNote(skill)}.` });
     }
     const args = argsFrom(params.params);
-    if (typeof args === 'string') return `Error: ${args}`;
+    if (typeof args === 'string') fail({ status: 'blocked', code: 'SKILL_BAD_PARAMS', effect: 'not_started', message: `Error: ${args}` });
     const effect = resolveSkillEffect(skill, args);
-    if (effect.invalid) return `Error: skill "${skill.name}" cannot run: ${effect.invalid}.`;
+    if (effect.invalid) fail({ status: 'blocked', code: 'SKILL_INVALID', effect: 'not_started', message: `Error: skill "${skill.name}" cannot run: ${effect.invalid}.` });
 
     let deps: SkillRuntimeDeps;
     try {
       deps = liveDeps((params.target as string | undefined)?.trim() || undefined);
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      fail({ status: 'blocked', code: 'SKILL_NO_SIDECAR', effect: 'not_started', message: `Error: ${err instanceof Error ? err.message : String(err)}` });
     }
 
+    let result;
     try {
-      const result = await runSkill(skill, args, deps);
-      recordSkillRun(skill.id, result.ok);
-      const lines = [`Skill "${skill.name}" ${result.ok ? 'completed' : `FAILED at step ${(result.failedAt ?? 0) + 1}`}:`];
-      for (const s of result.steps) {
-        const mark = s.ok ? '[ok]' : '[failed]';
-        const healed = s.healed ? ' (verified after re-observing)' : '';
-        lines.push(`  ${mark} step ${s.index + 1} ${s.action}${healed}: ${s.detail}`);
-      }
-      if (!result.ok) {
-        lines.push('Do NOT assume the overall task succeeded: the skill stopped at the failed step above. Nothing was retried. Read what changed before deciding whether to act again, and never repeat a step that sends, buys or deletes without checking first.');
-      }
-      return lines.join('\n');
+      result = await runSkill(skill, args, deps);
     } catch (err) {
       recordSkillRun(skill.id, false);
-      return `Error running skill "${name}": ${err instanceof Error ? err.message : String(err)}`;
+      // The runtime only throws from inside a step, so something may have run.
+      fail({ status: 'error', code: 'SKILL_RUN_ERROR', effect: 'may_have_occurred', message: `Error running skill "${name}": ${err instanceof Error ? err.message : String(err)}` });
     }
+    recordSkillRun(skill.id, result.ok);
+    const lines = [`Skill "${skill.name}" ${result.ok ? 'completed' : `FAILED at step ${(result.failedAt ?? 0) + 1}`}:`];
+    for (const s of result.steps) {
+      const mark = s.ok ? '[ok]' : '[failed]';
+      const healed = s.healed ? ' (verified after re-observing)' : '';
+      lines.push(`  ${mark} step ${s.index + 1} ${s.action}${healed}: ${s.detail}`);
+    }
+    if (result.ok) return lines.join('\n');
+    lines.push('Do NOT assume the overall task succeeded: the skill stopped at the failed step above. Nothing was retried. Read what changed before deciding whether to act again, and never repeat a step that sends, buys or deletes without checking first.');
+    // failedAt -1 is argument or step validation: nothing was dispatched.
+    // Anything later ran the earlier steps, and the failed step itself was
+    // dispatched once unless its target could not be found.
+    const nothingRan = result.failedAt === -1;
+    fail({
+      status: nothingRan ? 'blocked' : 'error',
+      code: nothingRan ? 'SKILL_BAD_PARAMS' : 'SKILL_STEP_FAILED',
+      effect: nothingRan ? 'not_started' : 'may_have_occurred',
+      message: lines.join('\n'),
+    });
   },
 };
 

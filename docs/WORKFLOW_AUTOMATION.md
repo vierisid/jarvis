@@ -63,6 +63,18 @@ Practical consequences:
   `desktop_type` and friends -- need a typed `ToolDefinition.workflowEffect`
   adapter first. A flow that called one of those directly now fails with
   "Unsupported direct workflow capability".
+- `run_skill` is the one click sequence a flow may invoke, because a skill is
+  reviewed content with its own per-step classification (`GATED_TOOLS` in the
+  same file). A step `{ toolName: "run_skill", params: { name, params } }` is
+  gated on every category the skill's stored steps reach, worst case first (a
+  click on Send in a mail app is `send_email`); the approval card reads what
+  will actually happen with the resolved parameter values; the effect target
+  records the skill's name and version and pins the run to one machine, so a
+  skill re-recorded after review, or a different computer, blocks dispatch. A
+  skill that cannot run (unknown, disabled, integrity failed, bad parameters)
+  is a `blocked` outcome with nothing started; a skill that stops part way is
+  an `error` outcome whose earlier steps may have run. Recording and deleting
+  skills stay chat-side.
 - Community pieces are unaffected by the gate: they run in the engine and never
   reach the daemon's tool surface. See `Governed pieces` below for the verified
   ten, and `src/workflows/pieces-library/README.md` for the curation path.

@@ -8,7 +8,12 @@ import { describe, expect, test } from 'bun:test';
 import { TOOL_ACTION_MAP } from '../../authority/tool-action-map';
 import { AUTHORITY_REQUIREMENTS } from '../../roles/authority';
 import type { ToolDefinition } from '../../actions/tools/registry';
-import { BOUNDED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, toolEffectCapability } from './effect-capabilities';
+import { BOUNDED_TOOL_NAMES, GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, toolEffectCapability } from './effect-capabilities';
+import { runSkillTool } from '../../actions/tools/skills';
+import { getSidecarManager, setSidecarManagerRef } from '../../actions/tools/sidecar-route';
+import { closeDb, initDatabase } from '../../vault/schema';
+import { setSkillSigningKey, upsertSkill } from '../../vault/skills';
+import type { SidecarManager } from '../../sidecar/manager';
 
 const tool = (name: string, extra: Partial<ToolDefinition> = {}): ToolDefinition => ({
   name, description: 'synthetic', category: 'general', parameters: {}, execute: async () => null, ...extra,
@@ -45,4 +50,56 @@ describe('bounded tool classification', () => {
     const declared = tool('read_file', { workflowEffect: { category: 'send_email', target: () => ({ to: 'x' }) } });
     expect(toolEffectCapability(declared).category).toBe('send_email');
   });
+});
+
+describe('gated tool classification (run_skill)', () => {
+  const originalManager = getSidecarManager();
+  const withVault = (fn: () => void) => {
+    initDatabase(':memory:'); setSkillSigningKey(Buffer.alloc(32, 4));
+    try { fn(); } finally { closeDb(); setSkillSigningKey(null); setSidecarManagerRef(originalManager as unknown as SidecarManager); }
+  };
+
+  test('run_skill is gated, not bounded and not opaque', () => {
+    expect(GATED_TOOL_NAMES.has('run_skill')).toBe(true);
+    expect(BOUNDED_TOOL_NAMES.has('run_skill')).toBe(false);
+    expect(OPAQUE_TOOL_NAMES.has('run_skill')).toBe(false);
+    expect(OPAQUE_TOOL_NAMES.has('record_skill')).toBe(true);
+    expect(OPAQUE_TOOL_NAMES.has('manage_skills')).toBe(true);
+    expect(refusedEffectCategory(runSkillTool)).toBe('control_app');
+  });
+
+  test('the capability is resolved from the stored steps: category, reached categories, target and intent', () => withVault(() => {
+    setSidecarManagerRef({ listSidecars: () => [{ id: 'pc-1', name: 'PC', connected: true, capabilities: ['desktop', 'browser'] }] } as unknown as SidecarManager);
+    upsertSkill({ name: 'gmail-send', app: 'Gmail', steps: [
+      { action: 'click', surface: 'browser', ref: { role: 'button', name: 'Compose', path: [], ordinal: 0, sig: '' } },
+      { action: 'click', surface: 'browser', ref: { role: 'button', name: 'Send', path: [], ordinal: 0, sig: '' } },
+    ] });
+    const cap = toolEffectCapability(runSkillTool, { name: 'gmail-send' });
+    expect(cap.category).toBe('send_email');
+    expect(cap.categories).toEqual(['send_email', 'control_app']);
+    const target = cap.target({ name: 'gmail-send' });
+    expect(target).toMatchObject({ tool: 'run_skill', skill: 'gmail-send', version: 1, integrity: 'ok', surface: 'browser', capability: 'browser', sidecarId: 'pc-1', selection: 'pinned-sidecar' });
+    expect(String(target.intent)).toContain('click Send (sends email)');
+    expect(cap.prepareArguments({ name: 'gmail-send' })).toEqual({ name: 'gmail-send', target: 'pc-1' });
+  }));
+
+  test('a desktop or mixed skill pins through the desktop capability', () => withVault(() => {
+    setSidecarManagerRef({ listSidecars: () => [{ id: 'pc-1', name: 'PC', connected: true, capabilities: ['desktop', 'browser'] }] } as unknown as SidecarManager);
+    upsertSkill({ name: 'notepad', app: 'Notepad', steps: [
+      { action: 'launch_app', value: 'notepad' },
+      { action: 'set_value', surface: 'desktop', ref: { role: 'Document', name: 'Text editor', path: [], ordinal: 0, sig: '' }, value: 'x' },
+    ] });
+    const cap = toolEffectCapability(runSkillTool, { name: 'notepad' });
+    expect(cap.category).toBe('control_app');
+    expect(cap.target({ name: 'notepad' })).toMatchObject({ surface: 'desktop', capability: 'desktop' });
+  }));
+
+  test('an unknown skill is refused as an unsupported capability', () => withVault(() => {
+    expect(() => toolEffectCapability(runSkillTool, { name: 'nope' })).toThrow(/Unsupported direct workflow capability: run_skill/);
+  }));
+
+  test('a trusted workflowEffect declaration still wins over the gate', () => withVault(() => {
+    const declared = { ...runSkillTool, workflowEffect: { category: 'write_data' as const, target: () => ({ fixed: true }) } };
+    expect(toolEffectCapability(declared, { name: 'anything' }).category).toBe('write_data');
+  }));
 });

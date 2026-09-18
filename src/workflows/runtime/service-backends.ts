@@ -42,7 +42,7 @@ import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
 import { WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
 import { getWorkflowEffect } from '../db/repos/workflow-effect';
-import { OPAQUE_TOOL_NAMES, refusedEffectCategory, toolEffectCapability } from './effect-capabilities';
+import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, resolveGovernedPieceAction, sanitizePieceInput } from './piece-effects';
 import { getFlow } from '../db/repos/flow';
@@ -192,7 +192,7 @@ export function buildSandboxServiceBackends(
         }
         const tool = opts.toolRegistry!.get(req.toolName)!;
         const capability = (() => {
-          try { return toolEffectCapability(tool); }
+          try { return toolEffectCapability(tool, req.params); }
           catch (error) {
             // Refusing a capability is a governance decision, so it is audited
             // even though no durable effect record exists for it yet.
@@ -201,7 +201,7 @@ export function buildSandboxServiceBackends(
           }
         })();
         const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-tool', action: 'invoke',
-          route: 'tool', toolName: tool.name, category: capability.category, toolCategory: tool.category,
+          route: 'tool', toolName: tool.name, category: capability.category, categories: capability.categories, toolCategory: tool.category,
           // Spelled out rather than spread: the request is what the effect's
           // identity digest is taken over, so only the two fields that decide
           // WHAT is dispatched belong in it. A reply-handling flag added to
@@ -389,6 +389,18 @@ export function buildSandboxServiceBackends(
         // here either. The agent learns it was refused.
         if (OPAQUE_TOOL_NAMES.has(call.toolCall.name)) {
           return { kind: 'denied', reason: `Unsupported workflow capability: ${call.toolCall.name} has opaque code/UI effects; use a typed governed adapter.` };
+        }
+        // A gated tool is approvable only THROUGH its adapter, and the adapter
+        // runs in `toolsInvoke`, not here. Everything that makes run_skill
+        // reviewable comes from `toolEffectCapability`: the resolved sentence
+        // on the card, the skill's name and version in the target so a
+        // re-recorded skill cannot dispatch under the old approval, and the
+        // pinned sidecar. This path builds its own target from the principal
+        // and has no validateTarget, so a gated tool would get a card naming
+        // only the tool. Refuse it here rather than approve it unreviewed;
+        // a flow step is how a skill runs in a workflow.
+        if (GATED_TOOL_NAMES.has(call.toolCall.name)) {
+          return { kind: 'denied', reason: `Unsupported workflow capability: ${call.toolCall.name} is only approvable through its typed adapter; call it as a flow step, not from a delegated agent.` };
         }
         try {
           const inner = await effects.invoke({ context: ctx, piece: AGENT_PIECE, action: 'delegate',

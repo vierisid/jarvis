@@ -1,4 +1,4 @@
-import type { AuthorityEngine, AuthorityProfile } from '../../authority/engine';
+import { combineDecisions, type AuthorityEngine, type AuthorityProfile } from '../../authority/engine';
 import type { AuditTrail } from '../../authority/audit';
 import type { EmergencyController } from '../../authority/emergency';
 import type { ApprovalManager, ApprovalRequest } from '../../authority/approval';
@@ -28,6 +28,13 @@ export type EffectPrincipal = {
 export interface EffectInvocation {
   context: WorkflowEffectContext; piece: string; action: string; route: string;
   toolName: string; category: ActionCategory; toolCategory: string;
+  /**
+   * Every category the effect reaches when it spans more than one (a skill
+   * that clicks controls and sends a message). Each is checked and the
+   * decisions fold as the chat gate folds them; `category` stays the worst
+   * case and is what the record carries. Defaults to [category].
+   */
+  categories?: ActionCategory[];
   request: Record<string, unknown>;
   prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown> };
   validateTarget?: (args: Record<string, unknown>, target: Record<string, unknown>) => void;
@@ -111,9 +118,20 @@ export class WorkflowEffectBoundary {
       // other dispatch points can never disagree about whether a run is dead.
       assertRunNotCanceled(record.runId);
       const who = input.principal ?? { agentId: `workflow:${record.runId}`, agentRoleId: 'workflow-default', agentAuthorityLevel: 0, profile: null };
-      const decision = authority.checkAuthority({ agentId: who.agentId, agentRoleId: who.agentRoleId,
-        agentAuthorityLevel: who.agentAuthorityLevel, toolName: input.toolName, toolCategory: input.toolCategory,
-        actionCategory: input.category, temporaryGrants: new Map(), profile: who.profile ?? null });
+      // Fold first, then ratchet. Every category the effect reaches is judged
+      // as the SAME principal -- its level and its merged profile apply to
+      // each one, not just to the nominal category -- and `combineDecisions`
+      // folds them the way the chat gate does. The fold can only tighten: it
+      // returns a denial if any category denies, else an approval if any
+      // requires one, so it can never clear an approval another category
+      // asked for. The caller's ratchet then applies to that folded result,
+      // so a gate that already required approval cannot be talked out of it
+      // by a looser recomputation here, and the fold cannot bypass it.
+      const categories = input.categories?.length ? input.categories : [input.category];
+      const decision = combineDecisions(categories.map((actionCategory) => authority.checkAuthority({
+        agentId: who.agentId, agentRoleId: who.agentRoleId, agentAuthorityLevel: who.agentAuthorityLevel,
+        toolName: input.toolName, toolCategory: input.toolCategory,
+        actionCategory, temporaryGrants: new Map(), profile: who.profile ?? null })));
       if (!decision.allowed) throw new Error(`Authority denied ${input.toolName}: ${decision.reason}`);
       // A gate that already required approval for this principal is never
       // overruled by a recomputation here that happens to be looser.
@@ -133,12 +151,17 @@ export class WorkflowEffectBoundary {
       if (!record.approvalId) {
         let request!: ApprovalRequest;
         getWorkflowDb().transaction(() => {
+          // A gated tool's target carries the sentence its card should show
+          // ("click Send (sends email)" with the resolved values); the card
+          // is labelled with the category the decision was made on.
+          const intent = typeof record.target.intent === 'string' ? record.target.intent : undefined;
           request = approvals.createRequest({ agentId: `workflow:${record.runId}`,
             agentName: `Workflow: ${resolved.version.displayName}${input.principal ? ` as ${input.principal.agentRoleId}` : ''}`,
-            toolName: input.toolName, toolArguments: record.arguments, actionCategory: input.category,
-            urgency: 'normal', reason: decision.reason,
+            toolName: input.toolName, toolArguments: record.arguments, actionCategory: decision.actionCategory,
+            urgency: decision.actionCategory === 'make_payment' ? 'urgent' : 'normal', reason: decision.reason,
             context: canonicalJson({ effectId: id, runId: record.runId, versionId: record.versionId,
-              stepName: record.stepName, executionPath: record.executionPath, target: record.target }), executionMode: 'workflow' });
+              stepName: record.stepName, executionPath: record.executionPath, target: record.target,
+              ...(intent ? { intent } : {}) }), executionMode: 'workflow' });
           record.approvalId = request.id;
           record.waitpointId = createWaitpoint({ flowRunId: record.runId, projectId: record.projectId,
             stepName: record.stepName, type: 'MANUAL' }).id;
