@@ -40,7 +40,7 @@ export const invokeAction = createAction({
     toolName: Property.ShortText({
       displayName: "Tool name",
       description:
-        "Exact id of a tool with a supported Authority capability (e.g. read_file, write_file). Raw commands and ambiguous UI actions require a governed adapter.",
+        "Exact id of a tool with a supported Authority capability (e.g. read_file, write_file), or run_skill to replay a recorded skill by name (params: { name, params }). Raw commands and ad-hoc UI clicks require a governed adapter.",
       required: true,
     }),
     params: Property.Json({

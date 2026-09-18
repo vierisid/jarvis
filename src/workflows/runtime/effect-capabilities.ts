@@ -1,7 +1,7 @@
 import type { ToolDefinition } from '../../actions/tools/registry';
 import type { ActionCategory } from '../../roles/authority';
 import { AUTHORITY_REQUIREMENTS } from '../../roles/authority';
-import { TOOL_ACTION_MAP } from '../../authority/tool-action-map';
+import { TOOL_ACTION_MAP, severityRank } from '../../authority/tool-action-map';
 import { autoTargetForCapability, findSidecar, getSidecarManager } from '../../actions/tools/sidecar-route';
 import { getDefaultCwd } from '../../actions/tools/local-tools-guard';
 import type { SidecarCapability } from '../../sidecar/types';
@@ -31,13 +31,71 @@ const BOUNDED_TOOLS = new Set<string>([
 const OPAQUE_TOOLS = new Set(['run_command', 'browser_evaluate', 'browser_navigate', 'browser_click',
   'browser_type', 'browser_upload_file', 'browser_press_key', 'browser_hover', 'browser_scroll',
   'desktop_click', 'desktop_type', 'desktop_press_keys', 'desktop_launch_app', 'desktop_focus_window',
-  // A skill is a stored click sequence and a recording installs input hooks;
-  // neither has a workflow adapter, and the agent-path gate that classifies a
-  // run per step (ToolDefinition.authorityGate) is not consulted here.
-  'run_skill', 'record_skill', 'manage_skills']);
+  // Recording installs input hooks behind a click the person makes; listing
+  // and deleting skills is chat-side housekeeping. Neither belongs in a flow.
+  'record_skill', 'manage_skills']);
+
+/**
+ * Tools whose effect is decided per call by their own `authorityGate`, not by
+ * a name. `run_skill` replays whatever the named skill holds, so its category
+ * is the worst case across the stored steps (a click on Send in a mail app is
+ * send_email), its card names what will happen with the resolved values, and
+ * its target carries the skill's name and version, so an approval reviewed
+ * against one version cannot dispatch another. This is the typed adapter the
+ * boundary asks for: the classification lives in `src/skills/effects.ts` and
+ * is the same one the chat path uses.
+ */
+const GATED_TOOLS = new Set(['run_skill']);
 
 export const BOUNDED_TOOL_NAMES: ReadonlySet<string> = BOUNDED_TOOLS;
 export const OPAQUE_TOOL_NAMES: ReadonlySet<string> = OPAQUE_TOOLS;
+export const GATED_TOOL_NAMES: ReadonlySet<string> = GATED_TOOLS;
+
+function pinnedSidecar(capability: SidecarCapability, requested: unknown): { sidecarId: string | null; selection: string; machineBinding?: unknown } {
+  const scope = getMachineScope();
+  const selector = scope ? scope.resolveTarget(requested, capability)
+    : typeof requested === 'string' && requested.trim() ? requested : autoTargetForCapability(capability);
+  const sidecar = selector ? findSidecar(selector, getSidecarManager()?.listSidecars() ?? []) : null;
+  if (selector && !sidecar && !scope) throw new Error(`Workflow target unavailable: ${selector}`);
+  return { sidecarId: scope ? selector : sidecar?.id ?? null, selection: selector ? 'pinned-sidecar' : 'local-host',
+    ...(scope ? { machineBinding: scope.binding() } : {}) };
+}
+
+/**
+ * Capability for a gated tool. The gate runs at review time with the frozen
+ * arguments; what it returns is what the effect record, the approval card and
+ * the dispatch check are all built from.
+ */
+function gatedCapability(tool: ToolDefinition, params: Record<string, unknown>) {
+  const gate = tool.authorityGate?.(params);
+  if (!gate) {
+    throw new Error(`Unsupported direct workflow capability: ${tool.name} cannot resolve what it would do for ${JSON.stringify(params).slice(0, 120)} (unknown skill?)`);
+  }
+  const floor = TOOL_ACTION_MAP[tool.name] ?? 'execute_command';
+  const known = (c: ActionCategory) => Object.hasOwn(AUTHORITY_REQUIREMENTS, c);
+  const categories = [...new Set([floor, gate.actionCategory, ...(gate.actionCategories ?? [])].filter(known))]
+    .sort((a, b) => severityRank(b) - severityRank(a));
+  const surface = gate.subject?.surface;
+  // A browser-only skill is pinned through the browser capability; anything
+  // that touches a native window needs the desktop one.
+  const capability: SidecarCapability = surface === 'browser' ? 'browser' : 'desktop';
+  const target = (args: Record<string, unknown>): Record<string, unknown> => ({
+    tool: tool.name,
+    ...pinnedSidecar(capability, args.target),
+    capability,
+    ...(gate.subject ?? {}),
+    intent: gate.intent,
+  });
+  return {
+    category: categories[0]!,
+    categories,
+    target,
+    prepareArguments: (args: Record<string, unknown>) => {
+      const pinned = pinnedSidecar(capability, args.target);
+      return { ...args, ...(pinned.sidecarId ? { target: pinned.sidecarId } : {}) };
+    },
+  };
+}
 
 function boundedTarget(tool: string, params: Record<string, unknown>): Record<string, unknown> {
   const capability: SidecarCapability = tool.includes('file') || tool === 'list_directory' ? 'filesystem'
@@ -64,14 +122,15 @@ export function refusedEffectCategory(tool: ToolDefinition): ActionCategory {
   return tool.workflowEffect?.category ?? TOOL_ACTION_MAP[tool.name] ?? 'execute_command';
 }
 
-export function toolEffectCapability(tool: ToolDefinition) {
+export function toolEffectCapability(tool: ToolDefinition, params: Record<string, unknown> = {}) {
   if (OPAQUE_TOOLS.has(tool.name)) throw new Error(`Unsupported direct workflow capability: ${tool.name} has opaque code/UI effects; use a typed governed adapter`);
+  if (GATED_TOOLS.has(tool.name) && !tool.workflowEffect) return gatedCapability(tool, params);
   const category = tool.workflowEffect?.category
     ?? (BOUNDED_TOOLS.has(tool.name) ? TOOL_ACTION_MAP[tool.name] : undefined);
   if (!category || !Object.hasOwn(AUTHORITY_REQUIREMENTS, category)) {
     throw new Error(`Unsupported direct workflow capability: ${tool.name} has no declared Authority action`);
   }
-  return { category, target: tool.workflowEffect?.target ?? ((params: Record<string, unknown>) => boundedTarget(tool.name, params)),
+  return { category, categories: [category], target: tool.workflowEffect?.target ?? ((params: Record<string, unknown>) => boundedTarget(tool.name, params)),
     prepareArguments: (params: Record<string, unknown>) => {
       if (tool.workflowEffect) return params;
       const target = boundedTarget(tool.name, params);
