@@ -46,6 +46,13 @@ export function isToolResult(v: unknown): v is ToolResult {
 export type ToolGate = {
   actionCategory: import('../../roles/authority').ActionCategory;
   /**
+   * What the call acts on, as durable identity: for run_skill the skill's
+   * name, version and surface. The workflow effect boundary records it as the
+   * effect's target, so an approval reviewed against one version of a skill
+   * cannot dispatch another. Plain JSON, no secrets.
+   */
+  subject?: Record<string, unknown>;
+  /**
    * Every category the call reaches when it spans more than one (a skill
    * that clicks controls and sends a message). The call must clear each of
    * them: a config that governs send_message stops such a skill even though

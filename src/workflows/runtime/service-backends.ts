@@ -183,7 +183,7 @@ export function buildSandboxServiceBackends(
         }
         const tool = opts.toolRegistry!.get(req.toolName)!;
         const capability = (() => {
-          try { return toolEffectCapability(tool); }
+          try { return toolEffectCapability(tool, req.params); }
           catch (error) {
             // Refusing a capability is a governance decision, so it is audited
             // even though no durable effect record exists for it yet.
@@ -192,7 +192,7 @@ export function buildSandboxServiceBackends(
           }
         })();
         const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-tool', action: 'invoke',
-          route: 'tool', toolName: tool.name, category: capability.category, toolCategory: tool.category,
+          route: 'tool', toolName: tool.name, category: capability.category, categories: capability.categories, toolCategory: tool.category,
           // Spelled out rather than spread: the request is what the effect's
           // identity digest is taken over, so only the two fields that decide
           // WHAT is dispatched belong in it. A reply-handling flag added to

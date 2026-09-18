@@ -6,6 +6,7 @@ import { closeDb, getDb, initDatabase } from '../../vault/schema.ts';
 import { getSkillByName, setSkillSigningKey, upsertSkill } from '../../vault/skills.ts';
 import { getRecorder } from '../../skills/recorder.ts';
 import type { UiaSemanticElement } from '../../structural/types.ts';
+import { ActionOutcomeError, type ActionFailure } from '../action-outcome.ts';
 
 const priorManager = getSidecarManager();
 afterAll(() => {
@@ -13,6 +14,17 @@ afterAll(() => {
 });
 
 type Call = { method: string; params: Record<string, unknown> };
+
+/** The typed failure a rejected run_skill carries (#478 contract). */
+async function outcomeOf(p: Promise<unknown>): Promise<ActionFailure> {
+  try {
+    const v = await p;
+    throw new Error(`expected a typed failure, got a result: ${String(v).slice(0, 120)}`);
+  } catch (err) {
+    if (err instanceof ActionOutcomeError) return err.outcome;
+    throw err;
+  }
+}
 
 function el(id: number, control_type: string, name: string, extra: Partial<UiaSemanticElement> = {}): UiaSemanticElement {
   return {
@@ -55,15 +67,27 @@ describe('skill tools', () => {
       expect(runSkillTool.authorityGate!({ name: 'nope' })).toBeNull();
     });
 
-    test('refuses a tampered skill before touching the sidecar', async () => {
+    test('refuses a tampered skill before touching the sidecar, as a blocked outcome', async () => {
       const calls: Call[] = [];
       setSidecarManagerRef(fakeManager(calls));
       const s = upsertSkill({ name: 'note', steps: [{ action: 'click', ref: { role: 'Button', name: 'OK', path: [], ordinal: 0, sig: '' } }] });
       getDb().prepare("UPDATE skills SET steps_json = '[]' WHERE id = ?").run(s.id);
-      const out = String(await runSkillTool.execute({ name: 'note' }));
-      expect(out).toContain('cannot run');
-      expect(out).toContain('content changed outside Jarvis');
+      const failure = await outcomeOf(runSkillTool.execute({ name: 'note' }));
+      expect(failure).toMatchObject({ status: 'blocked', code: 'SKILL_NOT_RUNNABLE', effect: 'not_started' });
+      expect(failure.message).toContain('content changed outside Jarvis');
       expect(calls).toHaveLength(0);
+    });
+
+    test('an unknown skill, bad params and a missing sidecar are blocked outcomes with nothing started', async () => {
+      setSidecarManagerRef(fakeManager([]));
+      expect(await outcomeOf(runSkillTool.execute({ name: 'nope' }))).toMatchObject({ status: 'blocked', code: 'SKILL_NOT_FOUND', effect: 'not_started' });
+      upsertSkill({ name: 'k', steps: [{ action: 'wait', ms: 1 }] });
+      expect(await outcomeOf(runSkillTool.execute({ name: 'k', params: 'x' }))).toMatchObject({ status: 'blocked', code: 'SKILL_BAD_PARAMS' });
+      setSidecarManagerRef({ listSidecars: () => [], dispatchRPC: async () => ({}) } as unknown as SidecarManager);
+      upsertSkill({ name: 'd', steps: [{ action: 'click', ref: { role: 'Button', name: 'OK', path: [], ordinal: 0, sig: '' } }] });
+      const missing = await outcomeOf(runSkillTool.execute({ name: 'd' }));
+      expect(missing).toMatchObject({ status: 'error', code: 'SKILL_STEP_FAILED' });
+      expect(missing.message).toContain('no connected sidecar');
     });
 
     test('runs a desktop skill through the sidecar and reports each step', async () => {
@@ -78,15 +102,17 @@ describe('skill tools', () => {
       expect(getSkillByName('ok')!.runCount).toBe(1);
     });
 
-    test('a failed step is reported as failed and never retried', async () => {
+    test('a failed step is an error outcome that may have had an effect, and is never retried', async () => {
       const calls: Call[] = [];
       setSidecarManagerRef(fakeManager(calls, { tree: [el(1, 'Button', 'Send')] }));
       upsertSkill({ name: 'send', steps: [{ action: 'click', ref: { role: 'Button', name: 'Send', path: [], ordinal: 0, sig: 'sig-Send' }, postcondition: { kind: 'element_gone' } }] });
-      const out = String(await runSkillTool.execute({ name: 'send' }));
-      expect(out).toContain('FAILED at step 1');
-      expect(out).toContain('NOT repeated');
+      const failure = await outcomeOf(runSkillTool.execute({ name: 'send' }));
+      expect(failure).toMatchObject({ status: 'error', code: 'SKILL_STEP_FAILED', effect: 'may_have_occurred' });
+      expect(failure.message).toContain('FAILED at step 1');
+      expect(failure.message).toContain('NOT repeated');
       expect(calls.filter((c) => c.method === 'click_element')).toHaveLength(1);
       expect(getSkillByName('send')!.successCount).toBe(0);
+      expect(getSkillByName('send')!.runCount).toBe(1);
     });
 
     test('a browser skill refuses actions the browser provider does not have', async () => {
