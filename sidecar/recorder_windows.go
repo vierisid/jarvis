@@ -28,6 +28,7 @@ package main
 import (
 	"fmt"
 	"log"
+	"os"
 	"runtime"
 	"sync"
 	"sync/atomic"
@@ -73,6 +74,9 @@ type recorderHook struct {
 var (
 	hookMu             sync.Mutex
 	activeRecorderHook *recorderHook
+
+	// ownPid identifies the sidecar's own windows, which are never recorded.
+	ownPid = uint32(os.Getpid())
 
 	// The field being typed into, owned by the COM thread: only closures run
 	// through comThread.call touch these.
@@ -246,6 +250,11 @@ func captureTypingField() {
 		if err != nil {
 			return nil, err
 		}
+		if rec.Pid == ownPid {
+			// Typing into Jarvis's own window (the chat panel, the connect
+			// window) is never part of a demonstration.
+			return nil, nil
+		}
 		elem, err := uiaGetFocusedElement(state.automation)
 		if err != nil {
 			return nil, err
@@ -310,6 +319,11 @@ func captureClick(x, y int) {
 	}
 	rec, ok := val.(*recordedElement)
 	if !ok || rec == nil {
+		return
+	}
+	if rec.Pid == ownPid {
+		// A click on Jarvis's own window (saying "done" in the chat) is not
+		// part of the demonstration.
 		return
 	}
 	payload := interactionPayload(rec)

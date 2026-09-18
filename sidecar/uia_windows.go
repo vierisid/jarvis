@@ -231,6 +231,8 @@ type recordedElement struct {
 	Title   string
 	Value   string
 	HasVal  bool
+	// Owning process, so the recorder can ignore its own windows.
+	Pid uint32
 }
 
 // uiaElementFromPoint returns the element under a screen point.
@@ -252,6 +254,105 @@ func uiaElementFromPoint(automation *ole.IDispatch, x, y int) (*ole.IDispatch, e
 		return nil, fmt.Errorf("no element at point")
 	}
 	return elem, nil
+}
+
+// uiaElementFromHandle returns the element for a top-level window handle.
+func uiaElementFromHandle(automation *ole.IDispatch, hwnd uintptr) (*ole.IDispatch, error) {
+	var elem *ole.IDispatch
+	// IUIAutomation::ElementFromHandle = vtable[6]
+	hr, _, _ := syscall.SyscallN(
+		vtblOffset(automation, 6),
+		uintptr(unsafe.Pointer(automation)),
+		hwnd,
+		uintptr(unsafe.Pointer(&elem)),
+	)
+	if hr != 0 || elem == nil {
+		return nil, uiaOpError("ElementFromHandle", hr)
+	}
+	return elem, nil
+}
+
+// maxOverlayDescendants bounds the fallback search below; a browser window
+// can expose tens of thousands of nodes and each rect read is a cross-process
+// call.
+const maxOverlayDescendants = 1500
+
+// uiaClickedElement resolves the element the person clicked at (x, y).
+//
+// A plain hit test returns the topmost window under the cursor, and on many
+// machines that is a transparent overlay (GPU vendor overlays, screen
+// recorders, remote-control layers) rather than the app that received the
+// click. When the hit-test element belongs to a process other than the
+// foreground window's, the click is attributed to the foreground window
+// instead: first its keyboard-focused element (a click usually focuses the
+// control it landed on), then the smallest descendant of that window whose
+// bounds contain the point.
+func uiaClickedElement(state *uiaState, x, y int) (*ole.IDispatch, error) {
+	hit, err := uiaElementFromPoint(state.automation, x, y)
+	if err != nil {
+		return nil, err
+	}
+	fg := win32GetForegroundWindow()
+	fgPid := win32GetWindowPid(fg)
+	hitPid := uint32(uiaElementGetPropertyInt(hit, UIA_ProcessIdPropertyId))
+	if fg == 0 || fgPid == 0 || hitPid == fgPid {
+		return hit, nil
+	}
+	overlay := processBaseName(hitPid)
+	hit.Release()
+
+	if focused, ferr := uiaGetFocusedElement(state.automation); ferr == nil {
+		if uint32(uiaElementGetPropertyInt(focused, UIA_ProcessIdPropertyId)) == fgPid {
+			return focused, nil
+		}
+		focused.Release()
+	}
+
+	window, werr := uiaElementFromHandle(state.automation, fg)
+	if werr != nil {
+		return nil, fmt.Errorf("click landed on %q, an overlay above the foreground window, and the window could not be read: %w", overlay, werr)
+	}
+	defer window.Release()
+	trueCond, cerr := uiaCreateTrueCondition(state.automation)
+	if cerr != nil {
+		return nil, cerr
+	}
+	defer trueCond.Release()
+	arr, aerr := uiaElementFindAll(window, TreeScope_Descendants, trueCond)
+	if aerr != nil || arr == nil {
+		return nil, fmt.Errorf("click landed on %q, an overlay above the foreground window; its tree could not be read", overlay)
+	}
+	defer arr.Release()
+	count := uiaArrayLength(arr)
+	if count > maxOverlayDescendants {
+		count = maxOverlayDescendants
+	}
+	var best *ole.IDispatch
+	bestArea := int64(-1)
+	for i := 0; i < count; i++ {
+		el := uiaArrayGetElement(arr, i)
+		if el == nil {
+			continue
+		}
+		ex, ey, ew, eh := uiaElementGetBoundingRect(el)
+		if ew <= 0 || eh <= 0 || x < ex || x >= ex+ew || y < ey || y >= ey+eh {
+			el.Release()
+			continue
+		}
+		area := int64(ew) * int64(eh)
+		if best == nil || area < bestArea {
+			if best != nil {
+				best.Release()
+			}
+			best, bestArea = el, area
+			continue
+		}
+		el.Release()
+	}
+	if best == nil {
+		return nil, fmt.Errorf("click landed on %q, an overlay above the foreground window, and no control of that window contains the point", overlay)
+	}
+	return best, nil
 }
 
 // uiaRawViewWalker returns IUIAutomation's raw-view tree walker, whose parent
@@ -326,7 +427,7 @@ func uiaRecordedElement(state *uiaState, kind string, x, y int) (*recordedElemen
 	var elem *ole.IDispatch
 	var err error
 	if kind == "click" {
-		elem, err = uiaElementFromPoint(state.automation, x, y)
+		elem, err = uiaClickedElement(state, x, y)
 	} else {
 		elem, err = uiaGetFocusedElement(state.automation)
 	}
@@ -371,6 +472,7 @@ func uiaRecordedElement(state *uiaState, kind string, x, y int) (*recordedElemen
 	rec.AutoID = uiaElementGetPropertyStr(elem, UIA_AutomationIdPropertyId)
 	rec.Secure = uiaElementGetPropertyBool(elem, UIA_IsPasswordPropertyId)
 	if pid := uiaElementGetPropertyInt(elem, UIA_ProcessIdPropertyId); pid > 0 {
+		rec.Pid = uint32(pid)
 		rec.App = processBaseName(uint32(pid))
 	}
 
