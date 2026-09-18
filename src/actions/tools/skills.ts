@@ -250,7 +250,7 @@ export function onRecordingStopped(reason: string): void {
 export const recordSkillTool: ToolDefinition = {
   name: 'record_skill',
   description:
-    'Learn a new skill by watching the user do a task once. action="start" asks the user to confirm on a card; recording begins only when they approve it, and it stops on its own after 10 minutes. The user then performs the task while you wait. action="stop" with a name compiles what was demonstrated into a reusable, parameterized skill. Typed values become parameters and secrets are redacted automatically. A name that already exists is never overwritten: pick a new name, or delete the old skill first with manage_skills.',
+    'Learn a new skill by watching the user do a task once. action="start" asks the user to confirm on a card; recording begins only when they approve it, and it stops on its own after 10 minutes. The user then performs the task while you wait. action="stop" with a name compiles what was demonstrated into a reusable, parameterized skill. Typed text becomes a parameter whose default is what the user typed, so the skill runs as demonstrated with no values; passwords and other secrets are redacted and must be supplied at run time. A name that already exists is never overwritten: pick a new name, or delete the old skill first with manage_skills.',
   category: 'ui',
   parameters: {
     action: { type: 'string', description: 'start or stop.', required: true, enum: ['start', 'stop'] },
@@ -317,10 +317,11 @@ export const recordSkillTool: ToolDefinition = {
       const saved = upsertSkill({ ...compiled, provenance: 'recorded' });
       recorder.takePending();
       const steps = saved.steps.map((s, i) => `  ${i + 1}. ${s.note ?? s.action}${s.postcondition ? ` [verify: ${s.postcondition.kind}]` : ''}`);
+      const paramList = saved.params.map((p) => (p.required ? `${p.name} (required, secret)` : `${p.name} (default: what was typed)`)).join(', ') || 'none';
       return [
-        `Saved skill "${saved.name}" (v${saved.version}) with ${saved.steps.length} steps and ${saved.params.length} parameters (${saved.params.map((p) => p.name).join(', ') || 'none'})${ended}.`,
+        `Saved skill "${saved.name}" (v${saved.version}) with ${saved.steps.length} steps and ${saved.params.length} parameters: ${paramList}${ended}.`,
         ...steps,
-        'Show these steps to the user so they can check them. Run it with run_skill.',
+        'Show these steps to the user so they can check them. Run it with run_skill; parameters with a default can be omitted.',
       ].join('\n');
     }
 

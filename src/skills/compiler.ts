@@ -6,15 +6,16 @@
  *     into that same field becomes one `set_value` step (the natural unit).
  *  2. Parameterize: typed values become named params so the skill is reusable
  *     (heuristic naming here; an optional LLM pass can rename/describe later).
- *     No typed value, secret or not, is ever stored: a step always carries
- *     `{{param}}`.
+ *     A step always carries `{{param}}`, never the literal. The text the
+ *     person typed is kept as the param's DEFAULT, so the skill runs as
+ *     demonstrated when the caller supplies nothing and the model can name
+ *     what will be typed on the approval card. The exception is a value the
+ *     redaction rules flagged (recorder.ts): that param is required, marked
+ *     secret, and has no default, so the secret is never stored.
  *  3. Derive postconditions: a set_value gets a value_equals check; a click
  *     that is the last interaction on a surface gets surface_changed (the
  *     click did something); launch_app gets window_appeared. Each is verified
  *     against a before/after surface pair at run time, never vacuously.
- *
- * Redaction already happened at capture (recorder.ts): a {{REDACTED}} value
- * becomes a required secret param instead of a hard-coded secret.
  */
 
 import type { RawInteraction } from './recorder.ts';
@@ -85,13 +86,15 @@ export function compileSkill(interactions: RawInteraction[], opts: CompileOption
     if (it.action === 'set_value') {
       if (!it.ref) continue; // nothing to replay against
       const pname = paramNameFor(it, usedNames);
-      const wasRedacted = it.value === '{{REDACTED}}' || it.secure === true;
+      const wasRedacted = it.value === '{{REDACTED}}' || it.secure === true || it.value === undefined;
       params.push({
         name: pname,
         type: 'string',
-        description: `Value for ${it.ref.name || 'field'}${wasRedacted ? ' (was a secret; not stored)' : ''}`,
-        required: true,
-        ...(wasRedacted ? { secret: true } : {}),
+        description: wasRedacted
+          ? `Value for ${it.ref.name || 'field'} (was a secret; not stored, must be supplied)`
+          : `Value for ${it.ref.name || 'field'} (defaults to what was typed when recording)`,
+        required: wasRedacted,
+        ...(wasRedacted ? { secret: true } : { default: it.value }),
       });
       steps.push({
         action: 'set_value',

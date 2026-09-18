@@ -96,7 +96,7 @@ describe('compileSkill', () => {
     expect(skill.steps[0]!.action).toBe('set_value');
   });
 
-  it('parameterizes typed values and names params from field labels; no literal is stored', () => {
+  it('parameterizes typed values, names params from field labels, and keeps the typed text as the default', () => {
     const skill = compileSkill(
       [
         ev({ action: 'set_value', ref: ref('textbox', 'Subject'), value: 'Hi there' }),
@@ -105,20 +105,30 @@ describe('compileSkill', () => {
       { name: 'compose' },
     );
     expect(skill.params.map((p) => p.name)).toEqual(['subject', 'message_body']);
+    // The step never carries the literal; the param's default does.
     expect(skill.steps[0]!.value).toBe('{{subject}}');
     expect(skill.steps[0]!.postcondition).toEqual({ kind: 'value_equals', value: '{{subject}}' });
-    expect(JSON.stringify(skill)).not.toContain('Hi there');
-    expect(JSON.stringify(skill)).not.toContain('body text');
+    expect(skill.params[0]).toMatchObject({ required: false, default: 'Hi there' });
+    expect(skill.params[1]).toMatchObject({ required: false, default: 'body text' });
+    expect(skill.params[0]!.secret).toBeUndefined();
   });
 
-  it('turns a redacted secret into a secret param with NO value_equals postcondition', () => {
+  it('turns a redacted secret into a required secret param with no default and NO value_equals postcondition', () => {
     const skill = compileSkill(
       [ev({ action: 'set_value', ref: ref('textbox', 'Password'), value: '{{REDACTED}}', secure: true })],
       { name: 'login' },
     );
     expect(skill.params).toHaveLength(1);
-    expect(skill.params[0]!.secret).toBe(true);
+    expect(skill.params[0]).toMatchObject({ required: true, secret: true });
+    expect(skill.params[0]!.default).toBeUndefined();
+    expect(JSON.stringify(skill)).not.toContain('REDACTED');
     expect(skill.steps[0]!.postcondition).toBeUndefined(); // masked field won't read back
+  });
+
+  it('a secure field with no value at all (password field the sidecar withheld) is also required with no default', () => {
+    const skill = compileSkill([ev({ action: 'set_value', ref: ref('Edit', 'PIN'), secure: true })], { name: 'pin' });
+    expect(skill.params[0]).toMatchObject({ required: true, secret: true });
+    expect(skill.params[0]!.default).toBeUndefined();
   });
 
   it('gives a terminal click a surface_changed postcondition and keeps the surface on every step', () => {

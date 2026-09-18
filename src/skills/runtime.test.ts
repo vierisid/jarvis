@@ -59,6 +59,32 @@ describe('runSkill', () => {
     expect(res.steps[0]!.healed).toBeUndefined();
   });
 
+  it('fills a missing param from its default and lets a caller value override it', async () => {
+    const field = node('Edit', 'Text editor', 'te', 4);
+    const s = skill(
+      [{ action: 'set_value', ref: ref('Edit', 'Text editor', 'te'), value: '{{text_editor}}' }],
+      [{ name: 'text_editor', type: 'string', description: '', required: false, default: 'coffee 4 euros' }],
+    );
+    const a = scriptedDeps([{ nodes: [field] }]);
+    expect((await runSkill(s, {}, a.deps)).ok).toBe(true);
+    expect(a.acts[0]).toEqual([4, 'set_value', 'coffee 4 euros']);
+    const b = scriptedDeps([{ nodes: [field] }]);
+    expect((await runSkill(s, { text_editor: 'taxi 12' }, b.deps)).ok).toBe(true);
+    expect(b.acts[0]).toEqual([4, 'set_value', 'taxi 12']);
+  });
+
+  it('a required secret param with no default is still refused when missing', async () => {
+    const s = skill(
+      [{ action: 'set_value', ref: ref('Edit', 'Password', 'pw'), value: '{{password}}' }],
+      [{ name: 'password', type: 'string', description: '', required: true, secret: true }],
+    );
+    const { deps, acts } = scriptedDeps([{ nodes: [node('Edit', 'Password', 'pw', 1)] }]);
+    const res = await runSkill(s, {}, deps);
+    expect(res.ok).toBe(false);
+    expect(res.steps[0]!.detail).toContain('missing required parameter "password"');
+    expect(acts).toHaveLength(0);
+  });
+
   it('rejects missing required params before doing anything', async () => {
     const s = skill([{ action: 'click', ref: ref('Button', 'Send', 'x') }], [{ name: 'to', type: 'string', description: '', required: true }]);
     const { deps, acts } = scriptedDeps([{ nodes: [] }]);

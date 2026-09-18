@@ -59,8 +59,11 @@ structural runtime; `record_skill` compiles one from a demonstration;
   hex patterns) runs before anything is buffered. The recorder listener is
   the only consumer of `ui_interaction`; the generic sidecar-event listener
   skips it, so the raw value reaches no dashboard socket and no coalescer
-  slot. No typed value, secret or not, is ever stored: a step always carries
-  `{{param}}`.
+  slot. A step always carries `{{param}}`, never a literal. The text typed
+  during the demonstration is kept as that param's default, so the skill runs
+  as demonstrated and the approval card can name what will be typed; a value
+  the redaction rules flagged has no default, is marked secret and must be
+  supplied at run time. What the redaction rules miss is therefore stored.
 
 **Replay**
 
@@ -82,6 +85,10 @@ structural runtime; `record_skill` compiles one from a demonstration;
 - The effect classifier is heuristic. An author or the recorder can under-
   describe a button ("Continue" that charges a card). The floor is
   `control_app`; declaring `effect` on a step is how an author closes that gap.
+- Redaction is heuristic too (secure flag, field-name hints, card, `sk-` and
+  long hex patterns). Typed text it does not flag lands in the vault as a
+  parameter default. A secret typed into a field the rules do not recognise is
+  stored until the skill is deleted.
 - Recording is Windows only. macOS and Linux refuse `recorder_start`.
 - Live recording and replay have not yet been validated on a Windows machine;
   the Windows cross-build compiles and the state machine is unit-tested.
