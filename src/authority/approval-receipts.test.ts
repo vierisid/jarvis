@@ -20,7 +20,7 @@ function request(mgr: ApprovalManager, overrides: { toolName?: string; execution
 }
 function executor(mgr: ApprovalManager, run: () => Promise<string>) {
   const ex = new DeferredExecutor(mgr, new AuditTrail());
-  ex.setToolRegistry({ execute: run } as unknown as ToolRegistry);
+  ex.setToolRegistry({ get: () => undefined, execute: run } as unknown as ToolRegistry);
   return ex;
 }
 /** The daemon coming back: a manager with a new boot id that reconciles before serving. */
@@ -263,7 +263,7 @@ describe('reconciliation after a restart', () => {
       }
     }
     const raced = new RacedExecutor(after, new AuditTrail());
-    raced.setToolRegistry({ execute: async () => { runs++; return 'sent'; } } as unknown as ToolRegistry);
+    raced.setToolRegistry({ get: () => undefined, execute: async () => { runs++; return 'sent'; } } as unknown as ToolRegistry);
     const outcome = await applyExecutionResolution('execute', req.id, 'dashboard', { approvalManager: after, deferredExecutor: raced });
     expect(outcome).toMatchObject({ status: 'not_executable', reason: expect.stringContaining('took this approval first (closed)') });
     expect(runs).toBe(0);

@@ -32,7 +32,7 @@ export const TAINT_PROFILE_LABEL = 'outside content read this turn';
 export const DEFAULT_TAINT_GOVERNED: readonly ActionCategory[] = [
   'execute_command',
   'write_data',
-  'control_app',
+  'control_app', // Includes raw browser mutations through resolveToolGate, not browser reads.
   'delete_data',
   'install_software',
   'modify_settings',

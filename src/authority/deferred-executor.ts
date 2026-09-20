@@ -3,7 +3,8 @@
  */
 
 import type { ToolRegistry } from '../actions/tools/registry.ts';
-import { executionState, type ApprovalManager, type ApprovalRequest } from './approval.ts';
+import { executionState, approvalNeedsClick, type ApprovalManager, type ApprovalRequest } from './approval.ts';
+import { resolveToolGate } from './tool-action-map';
 import type { AuditTrail } from './audit.ts';
 import type { AuthorityLearner } from './learning.ts';
 import type { EmergencyController } from './emergency.ts';
@@ -92,6 +93,13 @@ export class DeferredExecutor {
 
     try {
       const args = JSON.parse(request.tool_arguments);
+      const gate = resolveToolGate(this.toolRegistry.get(request.tool_name), request.tool_name, args);
+      if (gate.confirm === 'always' && !approvalNeedsClick(request)) {
+        const blocked = `Approved action ${request.tool_name} was NOT executed: this approval predates the required UI review. Request a fresh dashboard review.`;
+        this.approvalManager.markExecuted(requestId, blocked, 'blocked');
+        this.onResult?.(requestId, request, blocked);
+        return { claimed: true, result: blocked };
+      }
       const raw = await this.toolRegistry.execute(request.tool_name, args);
       const result = typeof raw === 'string' ? raw : JSON.stringify(raw);
 

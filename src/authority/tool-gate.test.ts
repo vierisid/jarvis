@@ -24,11 +24,12 @@ describe('resolveToolGate', () => {
     expect(down.actionCategory).toBe('control_app');
   });
 
-  test('a gate that returns null or throws leaves the floor in force', () => {
+  test('a null gate leaves the floor; a broken gate demands explicit review', () => {
     expect(resolveToolGate(tool('run_skill', { authorityGate: () => null }), 'run_skill', {}).actionCategory).toBe('control_app');
     const broken = resolveToolGate(tool('run_skill', { authorityGate: () => { throw new Error('boom'); } }), 'run_skill', {});
     expect(broken.actionCategory).toBe('control_app');
-    expect(broken.intent).toBeUndefined();
+    expect(broken.intent).toContain('classifier failed');
+    expect(broken.confirm).toBe('always');
   });
 
   test('a gate cannot name a category the engine does not know', () => {
@@ -61,8 +62,8 @@ describe('gateContext and the approval helpers', () => {
   });
 
   test('an ungated call keeps the plain context and neither helper fires', () => {
-    const ctx = gateContext(resolveToolGate(tool('desktop_click'), 'desktop_click', { element_id: 3 }), 'desktop_click', { element_id: 3 });
-    expect(ctx.startsWith('Agent attempted: desktop_click(')).toBe(true);
+    const ctx = gateContext(resolveToolGate(tool('read_file'), 'read_file', { path: '/tmp/a' }), 'read_file', { path: '/tmp/a' });
+    expect(ctx.startsWith('Agent attempted: read_file(')).toBe(true);
     expect(approvalNeedsClick({ context: ctx })).toBe(false);
     expect(approvalIntentFromContext({ context: ctx })).toBeNull();
     expect(approvalNeedsClick({ context: '{not json' })).toBe(false);

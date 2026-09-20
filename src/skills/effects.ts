@@ -10,8 +10,10 @@
  * Rules:
  *   - Every acting step is at least control_app: the floor is the same
  *     category as desktop_click, because that is what it dispatches.
- *   - An author-declared `effect` on a step can raise it above the floor,
- *     never lower it.
+ *   - An author-declared `effect` adds a check; it never removes a detected
+ *     effect, even when the declared category has a higher severity.
+ *   - Acting steps without a business-effect hint/declaration need explicit
+ *     review. A hint is not proof of an arbitrary event handler's semantics.
  *   - The classifier raises a step from what the skill's app and the target's
  *     accessible name say: "Send" in a mail app sends email, Enter in a
  *     messaging composer sends a message, "Pay"/"Checkout" pays,
@@ -30,6 +32,7 @@ import type { ActionCategory } from '../roles/authority.ts';
 import { AUTHORITY_REQUIREMENTS } from '../roles/authority.ts';
 import { severityRank, stricterCategory } from '../authority/tool-action-map.ts';
 import { fillParams, isSkillAction, resolveArgs, type Skill, type SkillParam, type SkillStep } from './types.ts';
+import { uiEffectHints } from '../authority/ui-intent';
 
 export const SKILL_EFFECT_FLOOR: ActionCategory = 'control_app';
 
@@ -52,6 +55,8 @@ export type StepEffect = {
   reached: ActionCategory[];
   /** Short present-tense description, e.g. `click Send (sends email)`. */
   summary: string;
+  /** No business-effect hint/declaration is available for this acting step. */
+  uncertain?: boolean;
 };
 
 export type SkillEffect = {
@@ -64,15 +69,8 @@ export type SkillEffect = {
   invalid?: string;
   /** Card-ready sentence with resolved parameter values. */
   intent: string;
+  requiresReview: boolean;
 };
-
-const MAIL_CONTEXT = /gmail|outlook|\bmail\b|mail\.|proton|thunderbird|yahoo|fastmail|hey\.com/i;
-const MESSAGING_CONTEXT = /slack|teams|discord|whatsapp|telegram|messenger|signal|imessage|\bsms\b|\bchat\b|linkedin|twitter|x\.com|bluesky|mastodon|reddit/i;
-
-const PAYMENT_RE = /\b(pay|pay now|purchase|buy|buy now|checkout|check out|place (your )?order|confirm (payment|purchase|order)|subscribe|complete (purchase|order|payment))\b/i;
-const DELETE_RE = /\b(delete|remove|trash|erase|discard|uninstall|permanently|empty (bin|trash))\b/i;
-const SEND_RE = /^(send|send (now|email|mail|message|it|reply)|reply|reply all|forward|post|publish|submit|tweet|share)$/i;
-const SETTINGS_RE = /^(save (settings|changes|preferences)|apply|grant|allow access|change password|update (settings|permissions))$/i;
 
 const SECRET_PARAM_NAME = /password|passcode|passwd|\bpin\b|secret|cvv|token|api[_-]?key|otp/i;
 
@@ -80,19 +78,6 @@ function skillContext(skill: Pick<Skill, 'name' | 'app' | 'match'>): string {
   return [skill.name, skill.app, ...(skill.match.domains ?? []), ...(skill.match.processNames ?? []), ...(skill.match.keywords ?? [])]
     .filter(Boolean)
     .join(' ');
-}
-
-function classifyTerminal(name: string, ctx: string): ActionCategory | null {
-  const n = name.trim();
-  if (!n) return null;
-  if (PAYMENT_RE.test(n)) return 'make_payment';
-  if (DELETE_RE.test(n)) return 'delete_data';
-  if (SETTINGS_RE.test(n)) return 'modify_settings';
-  if (SEND_RE.test(n)) {
-    if (MAIL_CONTEXT.test(ctx)) return 'send_email';
-    return 'send_message';
-  }
-  return null;
 }
 
 function categoryVerb(category: ActionCategory): string {
@@ -143,24 +128,18 @@ export function classifyStep(
   const target = step.ref?.name?.trim() || step.ref?.role || 'element';
 
   // What the step does beyond controlling the app, if anything.
-  let semantic: ActionCategory | null = null;
+  const semantics = uiEffectHints(step.action, step.ref?.name ?? '', ctx, filled ?? '');
   let summary: string;
   switch (step.action) {
     case 'wait':
       return { index, category: 'read_data', reached: ['read_data'], summary: `wait ${step.ms ?? 500}ms` };
     case 'click':
-      semantic = classifyTerminal(step.ref?.name ?? '', ctx);
       summary = `click ${target}`;
       break;
     case 'set_value':
       summary = `type ${shortValue(filled, secret)} into ${target}`;
       break;
     case 'press_keys': {
-      const keys = (filled ?? '').toLowerCase();
-      const plainEnter = /(^|\+|\s)(enter|return)$/.test(keys) && !/ctrl|cmd|meta|alt/.test(keys);
-      const chordEnter = /(ctrl|cmd|meta)\+(enter|return)$/.test(keys);
-      if (plainEnter && MESSAGING_CONTEXT.test(ctx)) semantic = 'send_message';
-      if (chordEnter && MAIL_CONTEXT.test(ctx)) semantic = 'send_email';
       summary = `press ${filled ?? ''}`.trim();
       break;
     }
@@ -171,15 +150,19 @@ export function classifyStep(
       summary = `launch ${shortValue(filled, secret)}`;
       break;
   }
-  if (step.effect && Object.hasOwn(AUTHORITY_REQUIREMENTS, step.effect)) {
-    semantic = semantic ? stricterCategory(semantic, step.effect) : step.effect;
+  if (step.effect && Object.hasOwn(AUTHORITY_REQUIREMENTS, step.effect) && step.effect !== 'read_data') {
+    semantics.push(step.effect);
   }
-  // read_data is not an effect: an author cannot declare a click a read.
-  if (semantic === 'read_data') semantic = null;
-  const category = semantic ? stricterCategory(SKILL_EFFECT_FLOOR, semantic) : SKILL_EFFECT_FLOOR;
-  const reached = semantic && semantic !== SKILL_EFFECT_FLOOR ? [category, semantic === category ? SKILL_EFFECT_FLOOR : semantic] : [SKILL_EFFECT_FLOOR];
-  if (semantic && semantic !== SKILL_EFFECT_FLOOR) summary += ` (${categoryVerb(semantic)})`;
-  return { index, category, reached, summary };
+  // Severity is for display only. A declared payment/delete must never erase
+  // an inferred send: every reached category keeps its own deny/approval rule.
+  const reached = [...new Set<ActionCategory>([SKILL_EFFECT_FLOOR, ...semantics])]
+    .sort((a, b) => severityRank(b) - severityRank(a));
+  const category = reached[0]!;
+  for (const semantic of new Set(semantics)) {
+    if (semantic !== SKILL_EFFECT_FLOOR) summary += ` (${categoryVerb(semantic)})`;
+  }
+  const uncertain = !semantics.some(c => c !== SKILL_EFFECT_FLOOR);
+  return { index, category, reached, summary, uncertain };
 }
 
 const MAX_INTENT_STEPS = 8;
@@ -204,6 +187,7 @@ export function resolveSkillEffect(skill: Skill, callerArgs: Record<string, stri
   const shown = acting.slice(0, MAX_INTENT_STEPS).map((s) => s.summary);
   const more = acting.length > MAX_INTENT_STEPS ? `; +${acting.length - MAX_INTENT_STEPS} more steps` : '';
   const where = skill.app ? ` in ${skill.app}` : '';
-  const intent = `Run skill "${skill.name}"${where} (v${skill.version}, ${skill.provenance}): ${shown.join('; ')}${more}`;
-  return { category, categories, steps, invalid, intent };
+  const requiresReview = acting.some(s => s.uncertain);
+  const intent = `Run skill "${skill.name}"${where} (v${skill.version}, ${skill.provenance}): ${shown.join('; ')}${more}${requiresReview ? '. Business effect unknown for some UI steps; review the current screen and the full procedure before approving.' : ''} UI effect labels are hints, not verified business outcomes.`;
+  return { category, categories, steps, invalid, intent, requiresReview };
 }

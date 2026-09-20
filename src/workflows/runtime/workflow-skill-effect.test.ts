@@ -212,6 +212,14 @@ describe('run_skill as a workflow effect', () => {
       { action: 'click', surface: 'browser', ref: { role: 'button', name: 'Archive', path: [], ordinal: 0, sig: 'arch' } },
     ] });
     const f = fixture();
+    // "Archive" matches no business-effect hint, so the procedure is reviewed
+    // before anything is clicked: an unclassified acting step is a click
+    // nothing can describe. Only then does the partial failure below happen.
+    const pending = await f.invoke({ name: 'two-steps' });
+    expect(pending.approval).toBeDefined();
+    expect(calls.filter((c) => c.method === 'browser_ax_click')).toHaveLength(0);
+    expect(JSON.parse(f.approvals.getRequest(pending.approval!.approvalId)!.context!)).toMatchObject({ confirm: 'always' });
+    f.approvals.approve(pending.approval!.approvalId, 'user');
     await expect(f.invoke({ name: 'two-steps' })).rejects.toBeInstanceOf(ActionOutcomeError);
     const effect = listWorkflowEffects(f.run.id)[0]!;
     expect(effect.status).toBe('failed');

@@ -2,6 +2,7 @@ import { combineDecisions, type AuthorityEngine, type AuthorityProfile } from '.
 import type { AuditTrail } from '../../authority/audit';
 import type { EmergencyController } from '../../authority/emergency';
 import type { ApprovalManager, ApprovalRequest } from '../../authority/approval';
+import { approvalNeedsClick } from '../../authority/approval';
 import type { ActionCategory } from '../../roles/authority';
 import { getWorkflowDb } from '../db';
 import { assertRunNotCanceled } from './cancellation';
@@ -36,6 +37,8 @@ export interface EffectInvocation {
    */
   categories?: ActionCategory[];
   request: Record<string, unknown>;
+  /** A reviewed UI capability cannot be auto-allowed by category overrides. */
+  confirmation?: { confirm: 'always'; intent: string };
   prepare: () => { arguments: Record<string, unknown>; target: Record<string, unknown> };
   validateTarget?: (args: Record<string, unknown>, target: Record<string, unknown>) => void;
   execute: (args: Record<string, unknown>, checkpoint: () => void) => Promise<unknown>;
@@ -133,6 +136,10 @@ export class WorkflowEffectBoundary {
         toolName: input.toolName, toolCategory: input.toolCategory,
         actionCategory, temporaryGrants: new Map(), profile: who.profile ?? null })));
       if (!decision.allowed) throw new Error(`Authority denied ${input.toolName}: ${decision.reason}`);
+      // A capability whose UI effect cannot be described is reviewed whatever
+      // the category check concluded; the card carries the uncertainty.
+      if (input.confirmation) return { ...decision, requiresApproval: true,
+        reason: `${decision.reason}; ${input.toolName} requires user review of uncertain UI effects` };
       // A gate that already required approval for this principal is never
       // overruled by a recomputation here that happens to be looser.
       if (input.approvalRequired && !decision.requiresApproval) {
@@ -154,13 +161,19 @@ export class WorkflowEffectBoundary {
           // A gated tool's target carries the sentence its card should show
           // ("click Send (sends email)" with the resolved values); the card
           // is labelled with the category the decision was made on.
-          const intent = typeof record.target.intent === 'string' ? record.target.intent : undefined;
+          // A tool with no adapter target of its own still names its review
+          // sentence through `confirmation`.
+          const intent = typeof record.target.intent === 'string' ? record.target.intent : input.confirmation?.intent;
           request = approvals.createRequest({ agentId: `workflow:${record.runId}`,
             agentName: `Workflow: ${resolved.version.displayName}${input.principal ? ` as ${input.principal.agentRoleId}` : ''}`,
             toolName: input.toolName, toolArguments: record.arguments, actionCategory: decision.actionCategory,
             urgency: decision.actionCategory === 'make_payment' ? 'urgent' : 'normal', reason: decision.reason,
             context: canonicalJson({ effectId: id, runId: record.runId, versionId: record.versionId,
               stepName: record.stepName, executionPath: record.executionPath, target: record.target,
+              // Mandatory review has to be visible in the context, not only in
+              // the decision: `approvalNeedsClick` reads it, so voice and
+              // auto-approval cannot satisfy this card.
+              ...(input.confirmation ? { confirm: input.confirmation.confirm } : {}),
               ...(intent ? { intent } : {}) }), executionMode: 'workflow' });
           record.approvalId = request.id;
           record.waitpointId = createWaitpoint({ flowRunId: record.runId, projectId: record.projectId,
@@ -182,6 +195,9 @@ export class WorkflowEffectBoundary {
       const approval = approvals.getRequest(record.approvalId!);
       if (!approval || approval.execution_mode !== 'workflow' || digest(JSON.parse(approval.tool_arguments)) !== digest(record.arguments)) {
         throw new Error('Workflow approval does not match the recorded effect');
+      }
+      if (input.confirmation && !approvalNeedsClick(approval)) {
+        throw new Error('Workflow approval predates required UI review; start a new reviewed run');
       }
       if (approval.status === 'pending') return { approval: { effectId: id, approvalId: approval.id, waitpointId: record.waitpointId! } };
       if (approval.status !== 'approved') {

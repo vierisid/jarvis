@@ -5,6 +5,7 @@
 import type { ActionCategory } from '../roles/authority.ts';
 import { AUTHORITY_REQUIREMENTS } from '../roles/authority.ts';
 import type { ToolDefinition, ToolGate } from '../actions/tools/registry.ts';
+import { rawUiGate } from './ui-intent';
 
 /**
  * Explicit mapping from tool name -> ActionCategory
@@ -52,12 +53,9 @@ export const TOOL_ACTION_MAP: Record<string, ActionCategory> = {
   // would have to pick one category for both and would hand the read-only
   // snapshot write authority.
   //
-  // One tool drives both surfaces, and an action category cannot vary per
-  // call, so ui_act is control_app even when it is acting on a browser page
-  // -- stricter than browser_click's access_browser. Deliberate: the strict
-  // side is the safe side, and control_app is the only one of the two that
-  // the background-agent and taint-gating profiles govern. Do not "correct"
-  // this to access_browser.
+  // This is only a floor. resolveToolGate adds control_app and mandatory
+  // review to raw browser mutations; ui_act also adds business-effect hints
+  // from the addressed surface. access_browser alone never grants mutation.
   ui_snapshot: 'read_data',
   ui_act: 'control_app',
 
@@ -169,10 +167,9 @@ export type ResolvedToolGate = {
 
 /**
  * Resolve what a call must clear: the static entry for the tool, raised by
- * the tool's own per-call gate when it declares one. A gate that throws is
- * treated as absent for classification but recorded, so a broken gate never
- * lowers a call. Every gate site (orchestrator, realtime, sub-agents) goes
- * through here so the rule cannot drift between them.
+ * the tool's own per-call gate when it declares one. Raw UI actions always
+ * need review. A broken classifier also needs review, never automatic
+ * execution under the floor alone. All agent gate sites use this resolver.
  */
 export function resolveToolGate(
   tool: Pick<ToolDefinition, 'category' | 'authorityGate'> | undefined,
@@ -180,23 +177,24 @@ export function resolveToolGate(
   params: Record<string, unknown>,
 ): ResolvedToolGate {
   const floorCategory = getActionForTool(toolName, tool?.category ?? 'unknown');
-  if (!tool?.authorityGate) return { actionCategory: floorCategory, categories: [floorCategory], floorCategory };
+  const uiGate = rawUiGate(toolName, params);
   let gate: ToolGate | null = null;
   try {
-    gate = tool.authorityGate(params);
-  } catch (err) {
-    console.warn(`[Authority] ${toolName} authorityGate threw; using the static category:`, err instanceof Error ? err.message : err);
+    gate = tool?.authorityGate?.(params) ?? null;
+  } catch {
+    gate = { actionCategory: floorCategory, confirm: 'always',
+      intent: `Review ${toolName}. Business effect unknown: its effect classifier failed; no automatic execution is permitted.` };
   }
-  if (!gate) return { actionCategory: floorCategory, categories: [floorCategory], floorCategory };
+  if (!gate && !uiGate) return { actionCategory: floorCategory, categories: [floorCategory], floorCategory };
   const known = (c: ActionCategory) => Object.hasOwn(AUTHORITY_REQUIREMENTS, c);
-  const declared = [gate.actionCategory, ...(gate.actionCategories ?? [])].filter(known);
+  const declared = [gate, uiGate].flatMap(g => g ? [g.actionCategory, ...(g.actionCategories ?? [])] : []).filter(known);
   const categories = [...new Set([floorCategory, ...declared])].sort((a, b) => severityRank(b) - severityRank(a));
   return {
     actionCategory: categories[0]!,
     categories,
     floorCategory,
-    intent: gate.intent,
-    confirm: gate.confirm,
+    intent: gate?.intent ?? uiGate?.intent,
+    confirm: uiGate?.confirm === 'always' ? 'always' : gate?.confirm,
   };
 }
 

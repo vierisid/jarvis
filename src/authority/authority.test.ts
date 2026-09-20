@@ -464,6 +464,7 @@ describe('ApprovalManager', () => {
 
     let executions = 0;
     const registry = {
+      get: () => undefined,
       execute: async () => { executions++; return '{"ok":true}'; },
     } as unknown as ToolRegistry;
     const executor = new DeferredExecutor(mgr, new AuditTrail());
@@ -497,6 +498,7 @@ describe('ApprovalManager', () => {
 
     let executions = 0;
     const registry = {
+      get: () => undefined,
       execute: async () => { executions++; return 'sent'; },
     } as unknown as ToolRegistry;
     const executor = new DeferredExecutor(mgr, new AuditTrail());

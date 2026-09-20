@@ -172,7 +172,9 @@ export const runSkillTool: ToolDefinition = {
       actionCategory: effect.category,
       actionCategories: effect.categories,
       intent: effect.intent,
-      confirm: 'above_level',
+      // An acting step with no business-effect hint or declaration is a click
+      // nothing can describe, so the person reviews the procedure on a card.
+      confirm: effect.requiresReview ? 'always' : 'above_level',
       subject: { skill: skill.name, version: skill.version, integrity: skill.integrity, surface: skillSurface(skill) },
     };
   },

@@ -22,7 +22,7 @@ function harness(interrupted = false) {
   mgr.reconcileAfterRestart();
   let runs = 0;
   const executor = new DeferredExecutor(mgr, new AuditTrail());
-  executor.setToolRegistry({ execute: async () => { runs++; return 'sent'; } } as unknown as ToolRegistry);
+  executor.setToolRegistry({ get: () => undefined, execute: async () => { runs++; return 'sent'; } } as unknown as ToolRegistry);
   const broadcasts: ApprovalRequest[] = [];
   const routes = createApiRoutes({ config: {}, agentService: {}, approvalManager: mgr, deferredExecutor: executor,
     authorityEngine: { getConfig: () => ({ governed_categories: [] }) },

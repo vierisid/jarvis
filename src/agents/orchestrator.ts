@@ -1104,13 +1104,13 @@ export class AgentOrchestrator {
       // and sends a message is checked as control_app AND send_message).
       let decision = combineDecisions(gate.categories.map(check));
 
-      // A gated call whose worst case is above the agent's level turns into
+      // A gated call (above_level or mandatory review) whose worst case is above the agent's level turns into
       // an approval instead of a denial, provided the agent clears the
       // tool's floor on its own: the same substitution request_approval
       // makes for a declared intent. Only a pure level shortfall qualifies;
       // an override, a context rule or a profile cap that denies still
       // denies.
-      if (gate.confirm === 'above_level' && !decision.allowed && decision.deniedByLevel && decision.actionCategory !== gate.floorCategory) {
+      if (gate.confirm && !decision.allowed && decision.deniedByLevel && decision.actionCategory !== gate.floorCategory) {
         const floor = check(gate.floorCategory);
         if (floor.allowed) {
           decision = {

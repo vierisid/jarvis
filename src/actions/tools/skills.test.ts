@@ -61,7 +61,7 @@ describe('skill tools', () => {
       });
       const gate = runSkillTool.authorityGate!({ name: 'mail', params: {} })!;
       expect(gate.actionCategory).toBe('send_email');
-      expect(gate.confirm).toBe('above_level');
+      expect(gate.confirm).toBe('always'); // The preceding untyped UI steps also need review.
       expect(gate.intent).toContain('click Send (sends email)');
       // Unknown skill: no gate, the static floor applies and execute reports the miss.
       expect(runSkillTool.authorityGate!({ name: 'nope' })).toBeNull();

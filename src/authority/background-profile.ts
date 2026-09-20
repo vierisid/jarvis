@@ -6,7 +6,8 @@
  * input (OCR text, email snippets, clipboard content). It therefore runs
  * under the shared authority config plus the restrictions built here: any
  * action that changes the machine needs the user's approval, while reading
- * and browsing stay autonomous so error research keeps working.
+ * and browser snapshots stay autonomous. Raw UI navigation and interaction
+ * also carry control_app and require explicit review via resolveToolGate.
  *
  * The user tunes this under `authority.background`, read and written through
  * GET/POST /api/authority/config alongside the shared authority settings.

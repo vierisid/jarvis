@@ -21,6 +21,7 @@ import { verifyPostcondition, nextHealRung, type Postcondition, type HealRung } 
 import { resolveRef } from '../../structural/resolver.ts';
 import { recordPerception } from '../../structural/telemetry.ts';
 import type { SemanticNode, SemanticSurface } from '../../structural/types.ts';
+import { uiEffectHints } from '../../authority/ui-intent';
 
 const ACT_RPC_TIMEOUT = { initial: 30_000, max: 60_000 };
 /** Below this the surface is mostly canvas/custom-drawn and vision wins. */
@@ -49,6 +50,8 @@ type AddressedElement = {
   /** Canonical sidecar id, not the name the caller happened to use. */
   target: string;
   pid?: number;
+  title: string;
+  url?: string;
 };
 
 const addressed = new Map<number, AddressedElement>();
@@ -69,7 +72,7 @@ function addressSurface(surface: SemanticSurface, kind: CaptureKind, target: str
   const canonical = canonicalTarget(target);
   const ids = surface.nodes.map((node) => {
     const id = nextId++;
-    addressed.set(id, { node, kind, target: canonical, pid });
+    addressed.set(id, { node, kind, target: canonical, pid, title: surface.root.title ?? '', url: surface.root.url });
     return id;
   });
   snapshotIds.push(ids);
@@ -232,6 +235,18 @@ export const uiActTool: ToolDefinition = {
   description:
     'Act on an element from a recent ui_snapshot by its [id], then VERIFY the effect. Actions: click, set_value (needs value), toggle, select, expand, collapse, focus, scroll_into_view, get_value. Optionally pass verify to confirm the outcome (window_appeared | element_gone | element_present | focus_moved | title_changed | value_equals). The action is dispatched EXACTLY ONCE and is never re-sent: if verification does not hold, the runtime re-reads the surface a couple of times and then reports the outcome as unconfirmed, with a diff of what changed. Decide from that diff whether to act again - an unconfirmed action may still have happened. Always returns what actually changed, so you do not need a separate snapshot to check.',
   category: 'ui',
+  authorityGate: (params) => {
+    if (params.action === 'get_value') return null;
+    const entry = addressed.get(params.element_id as number);
+    if (!entry) return null; // rawUiGate still demands review; execute refuses a missing ref.
+    const hints = uiEffectHints(String(params.action || 'click'), entry.node.name,
+      `${entry.title} ${entry.url ?? ''}`, String(params.value ?? ''));
+    return { actionCategory: 'control_app',
+      actionCategories: [...hints, ...(entry.kind === 'browser' ? ['access_browser' as const] : [])],
+      confirm: 'always',
+      intent: `Review ${String(params.action || 'click')} on ${entry.kind} element [${params.element_id}] ${JSON.stringify(entry.node.name)} on ${entry.target}. Business effect unknown beyond UI hints${hints.length ? ` (${hints.join(', ')})` : ''}; inspect the current screen and arguments. UI labels do not prove what an action will do.`,
+    };
+  },
   parameters: {
     element_id: { type: 'number', description: 'The [id] of the target element from a recent ui_snapshot. The id carries its own window/page and sidecar, so there is nothing else to pass.', required: true },
     action: { type: 'string', description: 'What to do to the element. Default click. Browser elements support only click and set_value.', required: false, enum: ['click', 'set_value', 'toggle', 'select', 'expand', 'collapse', 'focus', 'scroll_into_view', 'get_value'] },
@@ -264,6 +279,9 @@ export const uiActTool: ToolDefinition = {
       const pre = await captureSurface({ kind, target, pid, full: false });
       before = pre.surface.nodes;
       beforeTitle = pre.surface.root.title;
+      if (!READ_ONLY_ACTIONS.has(action) && (pre.surface.root.url !== entry.url || (pre.surface.root.title ?? '') !== entry.title)) {
+        return 'Error: the UI surface changed since review - nothing was done; take a fresh ui_snapshot and review the action again';
+      }
     } catch (err) {
       return `Error: could not re-capture the surface before acting (${err instanceof Error ? err.message : String(err)}) - nothing was done`;
     }
@@ -275,6 +293,9 @@ export const uiActTool: ToolDefinition = {
     }
 
     const pc = parsePostcondition(params.verify, actedRef, beforeTitle, value);
+    if (!READ_ONLY_ACTIONS.has(action) && (live.node.name !== actedRef.name || live.node.role !== actedRef.role)) {
+      return 'Error: the UI control changed since review - nothing was done; take a fresh ui_snapshot and review the action again';
+    }
     if (typeof pc === 'string') return `Error: ${pc} - nothing was done`;
 
     let actResult: unknown;

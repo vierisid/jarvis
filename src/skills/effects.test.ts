@@ -107,7 +107,7 @@ describe('resolveSkillEffect', () => {
     expect(e.categories).toEqual(['send_email', 'control_app']);
     expect(e.invalid).toBeUndefined();
     expect(e.intent).toBe(
-      'Run skill "gmail-compose" in Gmail (v3, authored): click Compose; type "a@b.com" into To recipients; type "Quarterly numbers for the board meeti..." into Subject; click Send (sends email)',
+      'Run skill "gmail-compose" in Gmail (v3, authored): click Compose; type "a@b.com" into To recipients; type "Quarterly numbers for the board meeti..." into Subject; click Send (sends email). Business effect unknown for some UI steps; review the current screen and the full procedure before approving. UI effect labels are hints, not verified business outcomes.',
     );
   });
 

@@ -46,9 +46,9 @@ export type SkillStep = {
   postcondition?: SerializablePostcondition;
   /**
    * What the step does beyond controlling the app, declared by the author.
-   * The authority gate takes the stricter of this and its own classification
-   * of the step (src/skills/effects.ts); it can raise a step's category, never
-   * lower it below the control_app floor.
+   * The authority gate checks this AND its own classification of the step
+   * (src/skills/effects.ts), in addition to the control_app floor. A more
+   * severe declaration never hides a detected effect's separate policy.
    */
   effect?: ActionCategory;
   /** skip: an unverifiable step does not fail the run. The only fallback the runtime honours. */

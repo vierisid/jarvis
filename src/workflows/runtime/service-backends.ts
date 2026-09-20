@@ -42,6 +42,7 @@ import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
 import { WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
 import { getWorkflowEffect } from '../db/repos/workflow-effect';
+import { resolveToolGate } from '../../authority/tool-action-map';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, resolveGovernedPieceAction, sanitizePieceInput } from './piece-effects';
@@ -200,7 +201,9 @@ export function buildSandboxServiceBackends(
             throw error;
           }
         })();
+        const gate = resolveToolGate(tool, req.toolName, req.params);
         const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-tool', action: 'invoke',
+          ...(gate.confirm === 'always' ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review this UI effect' } } : {}),
           route: 'tool', toolName: tool.name, category: capability.category, categories: capability.categories, toolCategory: tool.category,
           // Spelled out rather than spread: the request is what the effect's
           // identity digest is taken over, so only the two fields that decide

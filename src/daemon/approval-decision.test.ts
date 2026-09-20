@@ -34,6 +34,7 @@ describe('applyApprovalDecision', () => {
     executor = new DeferredExecutor(mgr, new AuditTrail());
     executions = 0;
     executor.setToolRegistry({
+      get: () => undefined,
       execute: async () => { executions++; return 'sent'; },
     } as unknown as ToolRegistry);
     broadcasts = [];
@@ -87,6 +88,7 @@ describe('applyApprovalDecision', () => {
 
   test('tool failure is captured in the result and the request closed out', async () => {
     executor.setToolRegistry({
+      get: () => undefined,
       execute: async () => { throw new Error('smtp down'); },
     } as unknown as ToolRegistry);
     const req = makeRequest(mgr);

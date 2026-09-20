@@ -7,7 +7,7 @@ import { ToolRegistry } from '../../actions/tools/registry';
 import { AuthorityEngine } from '../../authority/engine';
 import { AuditTrail } from '../../authority/audit';
 import { EmergencyController } from '../../authority/emergency';
-import { ApprovalManager } from '../../authority/approval';
+import { ApprovalManager, approvalNeedsClick } from '../../authority/approval';
 import { DeferredExecutor } from '../../authority/deferred-executor';
 import { applyApprovalDecision } from '../../daemon/approval-decision';
 import { listWorkflowEffects, saveWorkflowEffect } from '../db/repos/workflow-effect';
@@ -91,6 +91,39 @@ function fixture(route: 'tool' | 'notify' | 'agent' | 'workflow' | 'context' | '
 }
 
 describe('workflow effect boundary', () => {
+  test('a per-call UI review survives allowed policy and resumes exactly once', async () => {
+    const f = fixture();
+    f.registry.get('write_file')!.authorityGate = () => ({ actionCategory: 'write_data', confirm: 'always',
+      intent: 'Business effect unknown; review this synthetic capability' });
+    const pending = await f.invoke();
+    expect(pending.approval).toBeDefined();
+    expect(f.calls).toHaveLength(0);
+    expect(approvalNeedsClick(f.approvals.getRequest(pending.approval.approvalId)!)).toBe(true);
+    f.approvals.approve(pending.approval.approvalId, 'user');
+    expect((await f.invoke()).result).toBe('saved');
+    expect((await f.invoke()).result).toBe('saved');
+    expect(f.calls).toHaveLength(1);
+  });
+
+  test('an explicit UI review never turns a policy denial into an approval', async () => {
+    const f = fixture();
+    f.registry.get('write_file')!.authorityGate = () => ({ actionCategory: 'write_data', confirm: 'always', intent: 'Review' });
+    f.authority.addOverride({ action: 'write_data', allowed: false });
+    await expect(f.invoke()).rejects.toThrow('Authority denied');
+    expect(f.calls).toHaveLength(0);
+    expect(f.approvals.getPending()).toHaveLength(0);
+  });
+
+  test('an old category-only approval cannot satisfy a new UI review requirement', async () => {
+    const f = fixture();
+    f.authority.setGovernedCategories(['write_data']);
+    const pending = await f.invoke();
+    f.approvals.approve(pending.approval.approvalId, 'user');
+    f.registry.get('write_file')!.authorityGate = () => ({ actionCategory: 'write_data', confirm: 'always', intent: 'Review' });
+    await expect(f.invoke()).rejects.toThrow('predates required UI review');
+    expect(f.calls).toHaveLength(0);
+  });
+
   test('inline expressions cannot call the host fetch function', async () => {
     const original = globalThis.fetch;
     let calls = 0;

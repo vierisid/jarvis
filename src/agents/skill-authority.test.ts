@@ -158,10 +158,10 @@ describe('run_skill gate in the orchestrator', () => {
     expect(calls).toEqual(['run_skill']);
   });
 
-  test('a tool without a gate keeps its static category', async () => {
+  test('a raw desktop click needs review even without a custom gate', async () => {
     const { orch, calls } = build(5);
-    expect(await exec(orch, 'desktop_click')).toBe('clicked');
-    expect(calls).toEqual(['desktop_click']);
+    expect(String(await exec(orch, 'desktop_click'))).toContain('[AWAITING_APPROVAL]');
+    expect(calls).toEqual([]);
   });
 });
 
