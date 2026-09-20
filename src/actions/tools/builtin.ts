@@ -985,7 +985,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
   // agent's would let one conversation's browsing suppress the playbook in
   // the other's history.
   const templateDelivery = new WebappTemplateDelivery();
-  return [
+  const tools: ToolDefinition[] = [
     {
       name: 'browser_navigate',
       description: browserNavigateTool.description,
@@ -1124,4 +1124,8 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       },
     },
   ];
+  for (const tool of tools) {
+    tool.captureApprovalGuard = () => ctrl.captureApprovalGuard(tool.name === 'browser_navigate');
+  }
+  return tools;
 }

@@ -36,6 +36,15 @@ Known business mutations should use the existing governed connector adapters
 - Structural action IDs remain tied to their captured surface. Before acting,
   a changed page URL, title, control name or role requires a fresh snapshot and
   review. The action is still dispatched at most once.
+- Agent UI approvals retain their originating tool registry and any captured
+  session/subject guard until resolution. Deferred background actions execute
+  on the isolated background browser, never the main browser. A stopped,
+  disconnected or replaced background session cannot reuse an approval.
+- Structural approvals retain the addressed snapshot entry, not just its
+  numeric ID. Agent UI bindings are deliberately process-local: after restart,
+  approving a pending request or resolving a never-started request records a
+  blocked outcome and asks for a fresh review. Non-UI approval recovery and
+  workflow-owned effect recovery keep their existing contracts.
 - Capability-specific mandatory review is carried into workflow effect
   approvals. It cannot be removed by an allow override. Existing frozen
   arguments, waitpoints, target checks and receipts still own resume/replay.

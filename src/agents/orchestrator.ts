@@ -1175,6 +1175,7 @@ export class AgentOrchestrator {
           reason: decision.reason,
           context: gateContext(gate, toolCall.name, toolCall.arguments),
           executionMode: inline ? 'inline' : 'deferred',
+          toolRegistry: this.toolRegistry,
         });
 
         // Emit approval request event

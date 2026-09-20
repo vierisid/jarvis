@@ -134,6 +134,7 @@ export class BrowserController {
   private port: number;
   private profileDir: string | undefined;
   private _connected = false;
+  private approvalEpoch = 0;
   private runningBrowser: RunningBrowser | null = null;
   // Coordinates stored from last snapshot — not sent to LLM
   private elementCoords = new Map<number, { x: number; y: number }>();
@@ -164,6 +165,7 @@ export class BrowserController {
    */
   async connect(): Promise<void> {
     if (this._connected) return;
+    this.approvalEpoch++;
 
     // browser.local: false is enforced HERE, not only in launchChrome:
     // connect() first probes the CDP port and attaches to whatever is
@@ -702,6 +704,7 @@ export class BrowserController {
    * Disconnect from Chrome. If we auto-launched Chrome, stop it too.
    */
   async disconnect(): Promise<void> {
+    this.approvalEpoch++;
     if (this._connected) {
       await this.cdp.close();
       this._connected = false;
@@ -718,6 +721,16 @@ export class BrowserController {
 
   get connected(): boolean {
     return this._connected;
+  }
+
+  /** A reviewed call cannot reconnect to a different CDP page/session.
+   * Initial navigation may connect lazily, provided nothing changed meanwhile. */
+  captureApprovalGuard(allowInitialConnection = false): () => boolean {
+    const epoch = this.approvalEpoch;
+    const connected = this._connected;
+    return () => this.approvalEpoch === epoch && (connected
+      ? this._connected && this.cdp.isOpen
+      : allowInitialConnection && !this._connected);
   }
 
   private async ensureConnected(): Promise<void> {

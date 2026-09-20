@@ -235,6 +235,13 @@ export const uiActTool: ToolDefinition = {
   description:
     'Act on an element from a recent ui_snapshot by its [id], then VERIFY the effect. Actions: click, set_value (needs value), toggle, select, expand, collapse, focus, scroll_into_view, get_value. Optionally pass verify to confirm the outcome (window_appeared | element_gone | element_present | focus_moved | title_changed | value_equals). The action is dispatched EXACTLY ONCE and is never re-sent: if verification does not hold, the runtime re-reads the surface a couple of times and then reports the outcome as unconfirmed, with a diff of what changed. Decide from that diff whether to act again - an unconfirmed action may still have happened. Always returns what actually changed, so you do not need a separate snapshot to check.',
   category: 'ui',
+  captureApprovalGuard: (params) => {
+    const id = params.element_id as number;
+    const entry = addressed.get(id);
+    // Compare the captured object, not its recyclable numeric ID. The
+    // approval manager also refuses bindings lost on daemon restart.
+    return () => !!entry && addressed.get(id) === entry;
+  },
   authorityGate: (params) => {
     if (params.action === 'get_value') return null;
     const entry = addressed.get(params.element_id as number);

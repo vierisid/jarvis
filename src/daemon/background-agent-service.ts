@@ -77,8 +77,8 @@ export class BackgroundAgentService implements Service, IAgentService {
    *
    * No deferred executor is wired on purpose: approvals from the background
    * agent are created in deferred mode, so the turn returns AWAITING_APPROVAL
-   * immediately and the daemon's DeferredExecutor runs the tool when the user
-   * approves it from the dashboard, chat or a notification.
+   * immediately. UI requests retain this orchestrator's registry, so the
+   * daemon's DeferredExecutor uses the originating browser when approved.
    */
   setAuthority(opts: {
     engine: AuthorityEngine;
@@ -177,6 +177,9 @@ export class BackgroundAgentService implements Service, IAgentService {
     if (primary) {
       this.orchestrator.terminateAgent(primary.id);
     }
+
+    // Pending UI approvals must not launch/reuse this browser after stop.
+    this.orchestrator.getToolRegistry()?.clear();
 
     if (this.bgBrowser.connected) {
       await this.bgBrowser.disconnect();

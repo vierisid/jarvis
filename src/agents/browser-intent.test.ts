@@ -16,6 +16,10 @@ import { runSkillTool } from '../actions/tools/skills';
 import { getSidecarManager, setSidecarManagerRef } from '../actions/tools/sidecar-route';
 import { upsertSkill, setSkillSigningKey } from '../vault/skills';
 import type { RoleDefinition } from '../roles/types';
+import { applyApprovalDecision, applyExecutionResolution } from '../daemon/approval-decision';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 
 const role = { id: 'personal-assistant', name: 'PA', description: 't', responsibilities: [],
   tools: ['browser', 'desktop', 'ui'], authority_level: 10 } as unknown as RoleDefinition;
@@ -25,10 +29,10 @@ type Exec = { executeTool: (tc: { id: string; name: string; arguments: Record<st
 const exec = (o: AgentOrchestrator, name: string, args: Record<string, unknown> = {}, taint = new Set<string>()) =>
   (o as unknown as Exec).executeTool({ id: 'call', name, arguments: args }, undefined, taint);
 
-function fixture(definitions: ToolDefinition[], config: Partial<AuthorityConfig> = {}, level = 10) {
+function fixture(definitions: ToolDefinition[], config: Partial<AuthorityConfig> = {}, level = 10, realExecution = false) {
   const calls: string[] = [];
   const registry = new ToolRegistry();
-  for (const tool of definitions) registry.register({ ...tool, execute: async () => { calls.push(tool.name); return 'executed'; } });
+  for (const tool of definitions) registry.register(realExecution ? tool : { ...tool, execute: async () => { calls.push(tool.name); return 'executed'; } });
   const approvals = new ApprovalManager();
   const audit = new AuditTrail();
   const engine = new AuthorityEngine({ ...baseConfig, ...config });
@@ -113,6 +117,133 @@ describe('ambiguous UI effects require review at real agent gates', () => {
     executor.setToolRegistry(f.registry);
     expect(await executor.executeApproved(old.id)).toContain('predates the required UI review');
     expect(f.calls).toEqual([]);
+  });
+});
+
+describe('UI approval execution stays bound to its origin', () => {
+  function browser() {
+    const clicks: number[] = [];
+    let session = 1;
+    let connected = true;
+    return {
+      clicks,
+      replaceSession: () => { session++; },
+      disconnect: () => { connected = false; },
+      click: async (id: number) => { clicks.push(id); return 'clicked'; },
+      captureApprovalGuard: () => {
+        const captured = session;
+        return () => connected && session === captured;
+      },
+    };
+  }
+
+  test('a background approval runs the originating browser, never the main registry', async () => {
+    const bg = browser();
+    const main = browser();
+    const f = fixture(createBrowserTools(bg as never), {}, 10, true);
+    f.orch.setAuthorityProfile(buildBackgroundProfile());
+    const mainRegistry = new ToolRegistry();
+    for (const tool of createBrowserTools(main as never)) mainRegistry.register(tool);
+    const executor = new DeferredExecutor(f.approvals, f.audit);
+    executor.setToolRegistry(mainRegistry);
+    await exec(f.orch, 'browser_click', { element_id: 7 });
+    const request = f.approvals.getPending()[0]!;
+    const deps = { approvalManager: f.approvals, deferredExecutor: executor };
+    await applyApprovalDecision('approve', request.id, 'dashboard', deps);
+    await executor.executeApproved(request.id);
+    expect(bg.clicks).toEqual([7]);
+    expect(main.clicks).toEqual([]);
+    expect(f.approvals.getRequest(request.id)?.execution_outcome).toBe('committed');
+  });
+
+  test.each(['disconnect', 'replaceSession', 'unregister'] as const)('a lost background session cannot fall back to main: %s', async change => {
+    const bg = browser();
+    const main = browser();
+    const f = fixture(createBrowserTools(bg as never), {}, 10, true);
+    const mainRegistry = new ToolRegistry();
+    for (const tool of createBrowserTools(main as never)) mainRegistry.register(tool);
+    const executor = new DeferredExecutor(f.approvals, f.audit);
+    executor.setToolRegistry(mainRegistry);
+    await exec(f.orch, 'browser_click', { element_id: 7 });
+    const request = f.approvals.getPending()[0]!;
+    if (change === 'unregister') f.registry.clear();
+    else bg[change]();
+    await applyApprovalDecision('approve', request.id, 'dashboard', { approvalManager: f.approvals, deferredExecutor: executor });
+    expect(bg.clicks).toEqual([]);
+    expect(main.clicks).toEqual([]);
+    expect(f.approvals.getRequest(request.id)?.execution_outcome).toBe('blocked');
+  });
+
+  async function structural(name: string, actions: string[]) {
+    setSidecarManagerRef({ listSidecars: () => [{ id: 'sc', name: 'pc', connected: true, capabilities: ['browser'] }],
+      dispatchRPC: async (_id: string, method: string) => {
+        if (method !== 'browser_ax_snapshot') { actions.push(method); return { success: true }; }
+        return { url: 'https://mail.google.com/', title: 'Gmail', elements: [
+          { ax_id: 'a', backend_node_id: 42, role: 'button', name, interactive: true, sig: 'ref' },
+        ] };
+      } } as never);
+    const text = String(await uiSnapshotTool.execute({ kind: 'browser', target: 'sc' }));
+    return Number(text.match(/\[(\d+)\] button/)![1]);
+  }
+
+  test.each(['pending', 'approved'] as const)('persisted %s structural approval cannot use a recycled ID after restart', async state => {
+    const dir = mkdtempSync(join(tmpdir(), 'jarvis-ui-approval-'));
+    const file = join(dir, 'vault.db');
+    closeDb();
+    try {
+      initDatabase(file);
+      const actions: string[] = [];
+      const id = await structural('Continue', actions);
+      const f = fixture([uiActTool], { overrides: [{ action: 'send_email', allowed: false }] }, 10, true);
+      await exec(f.orch, 'ui_act', { element_id: id });
+      const request = f.approvals.getPending()[0]!;
+      if (state === 'approved') f.approvals.approve(request.id, 'dashboard');
+      closeDb();
+      resetUiSnapshots();
+      initDatabase(file);
+      const after = new ApprovalManager('new-process');
+      after.reconcileAfterRestart();
+      expect(await structural('Send', actions)).toBe(id);
+      const executor = new DeferredExecutor(after, f.audit);
+      executor.setToolRegistry(f.registry);
+      const deps = { approvalManager: after, deferredExecutor: executor };
+      if (state === 'pending') await applyApprovalDecision('approve', request.id, 'dashboard', deps);
+      else await applyExecutionResolution('execute', request.id, 'dashboard', deps);
+      expect(actions).toEqual([]);
+      expect(after.getRequest(request.id)?.execution_outcome).toBe('blocked');
+      expect(after.getRequest(request.id)?.execution_result).toContain('fresh');
+    } finally {
+      closeDb();
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  test('a live structural approval still dispatches once', async () => {
+    const actions: string[] = [];
+    const id = await structural('Continue', actions);
+    const f = fixture([uiActTool], {}, 10, true);
+    await exec(f.orch, 'ui_act', { element_id: id });
+    const request = f.approvals.getPending()[0]!;
+    const executor = new DeferredExecutor(f.approvals, f.audit);
+    executor.setToolRegistry(f.registry);
+    await applyApprovalDecision('approve', request.id, 'dashboard', { approvalManager: f.approvals, deferredExecutor: executor });
+    await executor.executeApproved(request.id);
+    expect(actions).toEqual(['browser_ax_click']);
+  });
+
+  test('replacing a structural snapshot invalidates its approval within the same manager', async () => {
+    const actions: string[] = [];
+    const id = await structural('Continue', actions);
+    const f = fixture([uiActTool], {}, 10, true);
+    await exec(f.orch, 'ui_act', { element_id: id });
+    const request = f.approvals.getPending()[0]!;
+    resetUiSnapshots();
+    expect(await structural('Send', actions)).toBe(id);
+    const executor = new DeferredExecutor(f.approvals, f.audit);
+    executor.setToolRegistry(f.registry);
+    await applyApprovalDecision('approve', request.id, 'dashboard', { approvalManager: f.approvals, deferredExecutor: executor });
+    expect(actions).toEqual([]);
+    expect(f.approvals.getRequest(request.id)?.execution_outcome).toBe('blocked');
   });
 });
 

@@ -14,6 +14,8 @@
 
 import { getDb, generateId } from '../vault/schema.ts';
 import type { ActionCategory } from '../roles/authority.ts';
+import type { ToolDefinition, ToolRegistry } from '../actions/tools/registry.ts';
+import { rawUiGate } from './ui-intent';
 
 export type ApprovalStatus = 'pending' | 'approved' | 'denied' | 'expired' | 'executed';
 export type ApprovalUrgency = 'urgent' | 'normal';
@@ -132,6 +134,12 @@ export function approvalIntentFromContext(request: Pick<ApprovalRequest, 'contex
 export class ApprovalManager {
   /** Identity of this process. A claim carrying another boot id never got its receipt from us. */
   readonly bootId: string;
+  // UI dispatch is process-bound: durable approvals survive a restart, but
+  // browser controllers and structural element IDs do not. A missing binding
+  // must require fresh review, never fall back to the main agent's registry.
+  private uiExecutions = new Map<string, {
+    registry: ToolRegistry; tool: ToolDefinition; arguments: string; current: () => boolean;
+  }>();
 
   constructor(bootId: string = PROCESS_BOOT_ID) {
     this.bootId = bootId;
@@ -150,18 +158,34 @@ export class ApprovalManager {
     reason: string;
     context: string;
     executionMode?: ApprovalExecutionMode;
+    /** Trusted originating registry, supplied by the agent, never model input. */
+    toolRegistry?: ToolRegistry;
   }): ApprovalRequest {
     const db = getDb();
     const id = generateId();
     const now = Date.now();
     const toolArgs = JSON.stringify(params.toolArguments);
     const executionMode = params.executionMode ?? 'deferred';
+    const tool = params.toolRegistry?.get(params.toolName);
+    let current: (() => boolean) | undefined;
+    if (tool && rawUiGate(params.toolName, params.toolArguments)) {
+      try {
+        current = tool.captureApprovalGuard?.(JSON.parse(toolArgs)) ?? (() => true);
+      } catch {
+        // A failed subject capture must not create an executable approval.
+        current = () => false;
+      }
+    }
 
     db.run(
       `INSERT INTO approval_requests (id, agent_id, agent_name, tool_name, tool_arguments, action_category, urgency, reason, context, status, execution_mode, created_at)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)`,
       [id, params.agentId, params.agentName, params.toolName, toolArgs, params.actionCategory, params.urgency, params.reason, params.context, executionMode, now]
     );
+
+    if (tool && current && params.toolRegistry) {
+      this.uiExecutions.set(id, { registry: params.toolRegistry, tool, arguments: toolArgs, current });
+    }
 
     return {
       id,
@@ -188,6 +212,18 @@ export class ApprovalManager {
       resolved_by: null,
       resolution_note: null,
     };
+  }
+
+  /** Resolve only the exact live implementation/subject captured for this row. */
+  getUiExecutionRegistry(request: ApprovalRequest): ToolRegistry | null {
+    const binding = this.uiExecutions.get(request.id);
+    if (!binding || binding.arguments !== request.tool_arguments ||
+        binding.registry.get(request.tool_name) !== binding.tool) return null;
+    try {
+      return binding.current() ? binding.registry : null;
+    } catch {
+      return null;
+    }
   }
 
   /**
@@ -238,6 +274,7 @@ export class ApprovalManager {
     );
 
     if (result.changes === 0) return null;
+    this.uiExecutions.delete(requestId);
     return this.getRequest(requestId);
   }
 
@@ -308,6 +345,7 @@ export class ApprovalManager {
        WHERE id = ? AND status = 'approved'`,
       [now, executionResult, outcome, requestId]
     );
+    if (result.changes > 0) this.uiExecutions.delete(requestId);
     return result.changes > 0;
   }
 
@@ -320,6 +358,7 @@ export class ApprovalManager {
    * rows are left alone; their truth is the workflow effect record.
    */
   reconcileAfterRestart(): { demotedInline: number; notStarted: number; interrupted: number } {
+    this.uiExecutions.clear();
     const db = getDb();
     const demotedInline = this.demoteAllPendingInline();
     const interrupted = db.run(
@@ -361,6 +400,7 @@ export class ApprovalManager {
        WHERE id = ? AND ${UNRESOLVED}`,
       [Date.now(), resolvedBy, note ?? null, requestId]
     );
+    if (result.changes > 0) this.uiExecutions.delete(requestId);
     return result.changes > 0;
   }
 
@@ -419,6 +459,9 @@ export class ApprovalManager {
       `UPDATE approval_requests SET status = 'expired' WHERE status = 'pending' AND created_at < ?`,
       [cutoff]
     );
+    for (const id of this.uiExecutions.keys()) {
+      if (this.getRequest(id)?.status === 'expired') this.uiExecutions.delete(id);
+    }
     return result.changes;
   }
 

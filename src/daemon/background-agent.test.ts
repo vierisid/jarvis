@@ -62,6 +62,56 @@ describe('createBrowserTools', () => {
 });
 
 describe('BrowserController parameterization', () => {
+  test('approval guards reject a disconnected or replaced CDP session', async () => {
+    let peer: { close(): void } | undefined;
+    const server = Bun.serve({
+      port: 0,
+      fetch(req, server) {
+        const path = new URL(req.url).pathname;
+        if (path === '/page') {
+          if (server.upgrade(req)) return;
+          return new Response('upgrade failed', { status: 400 });
+        }
+        return Response.json(path === '/json/list'
+          ? [{ type: 'page', webSocketDebuggerUrl: `ws://127.0.0.1:${server.port}/page` }]
+          : {});
+      },
+      websocket: {
+        open(ws) { peer = ws; },
+        message(ws, message) {
+          const request = JSON.parse(String(message));
+          ws.send(JSON.stringify({ id: request.id, result: {} }));
+        },
+      },
+    });
+    const ctrl = new BrowserController(server.port!);
+    try {
+      const initialNavigation = ctrl.captureApprovalGuard(true);
+      expect(initialNavigation()).toBe(true);
+      expect(ctrl.captureApprovalGuard()()).toBe(false);
+      await ctrl.connect();
+      expect(initialNavigation()).toBe(false);
+      const original = ctrl.captureApprovalGuard();
+      expect(original()).toBe(true);
+      await ctrl.disconnect();
+      expect(original()).toBe(false);
+      await ctrl.connect();
+      expect(original()).toBe(false);
+      const replacement = ctrl.captureApprovalGuard();
+      expect(replacement()).toBe(true);
+      peer!.close();
+      for (let i = 0; i < 100 && replacement(); i++) await Bun.sleep(5);
+      expect(replacement()).toBe(false);
+      await ctrl.disconnect();
+      const lazy = ctrl.captureApprovalGuard(true);
+      await ctrl.disconnect();
+      expect(lazy()).toBe(false);
+    } finally {
+      await ctrl.disconnect();
+      server.stop(true);
+    }
+  });
+
   test('accepts custom port', () => {
     const ctrl = new BrowserController(9223);
     // Should not throw — port is stored internally
