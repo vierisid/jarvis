@@ -1,6 +1,9 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { openRoom, type RoomKey } from "../router";
 import { useLiveData, type LiveData } from "./LiveDataContext";
+import { useAuthorityInbox } from "../rooms/authority/useAuthorityData";
+import { availabilityLabel, combinedAvailability, readArray, readObject, useRemoteData, type RemoteSource } from "../hooks/useRemoteData";
+import { RemoteNotice, RemoteSection } from "../ui/RemoteSection";
 import type { ConnectionState } from "./Header";
 
 /**
@@ -14,7 +17,7 @@ import type { ConnectionState } from "./Header";
 
 type WSize = 1 | 2;
 type LayoutItem = { id: string; size: WSize };
-type RenderCtx = { live: LiveData; onApprove: (id: string) => void; onCancel: (id: string) => void };
+type RenderCtx = { live: LiveData; inbox: ReturnType<typeof useAuthorityInbox>; connection: ConnectionState; onApprove: (id: string) => void; onCancel: (id: string) => void };
 type WidgetDef = {
   id: string;
   group: "run" | "know" | "guard" | "build" | "system";
@@ -84,29 +87,11 @@ function taskRows(live: LiveData) {
   return [...seen.values()].slice(0, 4);
 }
 
-/* ── async room-data widgets ──
-   The rooms below aren't in the live stream, so each widget fetches its room's
-   API directly and polls. Every one degrades to its honest empty state on a
-   fresh install (no data) or a failed request — nothing fake ever renders. */
-function useWidgetData<T>(url: string, pollMs = 15000): { data: T | null; loaded: boolean } {
-  const [data, setData] = useState<T | null>(null);
-  const [loaded, setLoaded] = useState(false);
-  useEffect(() => {
-    let cancelled = false;
-    const load = () => {
-      if (document.hidden) return; // don't poll hidden tabs; refresh on return
-      fetch(url)
-        .then((r) => (r.ok ? r.json() : null))
-        .then((d) => { if (!cancelled) { setData((d ?? null) as T | null); setLoaded(true); } })
-        .catch(() => { if (!cancelled) setLoaded(true); });
-    };
-    load();
-    const t = window.setInterval(load, pollMs);
-    const onVisible = () => { if (!document.hidden) load(); };
-    document.addEventListener("visibilitychange", onVisible);
-    return () => { cancelled = true; window.clearInterval(t); document.removeEventListener("visibilitychange", onVisible); };
-  }, [url, pollMs]);
-  return { data, loaded };
+/* Each HTTP widget owns its snapshot and availability. A service failure is
+ * distinct from a successful, empty response, including after a good poll. */
+function useWidgetData<T>(source: RemoteSource, decode: (value: unknown) => T, pollMs = 15000) {
+  const resource = useRemoteData(source, decode, pollMs);
+  return { ...resource, loaded: resource.data !== null };
 }
 
 function relPast(ts: number): string {
@@ -135,58 +120,74 @@ function Stat({ n, unit, sub }: { n: React.ReactNode; unit?: string; sub?: React
 }
 function Loading() { return <Empty><span className="dim">Loading…</span></Empty>; }
 
+function calendarUrl(): string {
+  const now = Date.now();
+  return `/api/calendar?range_start=${now}&range_end=${now + 7 * 86400000}`;
+}
+
 function CalendarWidget() {
   const now = Date.now();
-  const { data, loaded } = useWidgetData<Array<{ title: string; timestamp: number }>>(
-    `/api/calendar?range_start=${now}&range_end=${now + 7 * 86400000}`);
+  const resource = useWidgetData<Array<{ title: string; timestamp: number }>>(
+    calendarUrl, readArray<{ title: string; timestamp: number }>);
+  const { data, loaded } = resource;
   const up = Array.isArray(data) ? data.filter((e) => e.timestamp >= now).sort((a, b) => a.timestamp - b.timestamp) : [];
   const next = up[0];
   return (<><WHeader label="calendar · next" room="calendar" />
+    <RemoteSection label="Calendar" resource={resource} empty={up.length === 0}>
     {next ? <Stat n={up.length} unit={up.length === 1 ? "commitment" : "commitments"} sub={<>Next: <b>{next.title}</b> · {relSoon(next.timestamp)}</>} />
-      : loaded ? <Empty>No commitments this week. <span className="dim">Connect a calendar in Settings.</span></Empty> : <Loading />}</>);
+      : loaded ? <Empty>No commitments this week. <span className="dim">Connect a calendar in Settings.</span></Empty> : <Loading />}</RemoteSection></>);
 }
 
 function MemoryWidget() {
-  const { data, loaded } = useWidgetData<Array<{ predicate: string; object: string; created_at: number; basis: string; status: string }>>("/api/vault/facts");
+  const resource = useWidgetData<Array<{ predicate: string; object: string; created_at: number; basis: string; status: string }>>("/api/vault/facts", readArray<{ predicate: string; object: string; created_at: number; basis: string; status: string }>);
+  const { data, loaded } = resource;
   const facts = Array.isArray(data) ? [...data].sort((a, b) => b.created_at - a.created_at) : [];
   const newest = facts[0];
   return (<><WHeader label="memory · new" room="memory" />
+    <RemoteSection label="Memory" resource={resource} empty={Array.isArray(data) && data.length === 0}>
     {newest ? <Stat n={facts.length} unit={facts.length === 1 ? "fact" : "facts"} sub={<>Newest: {deslug(newest.predicate)} <b>{newest.object}</b> · {newest.basis} · {newest.status}</>} />
-      : loaded ? <Empty>New facts Jarvis learns surface here. <span className="dim">Browse the vault in Memory.</span></Empty> : <Loading />}</>);
+      : loaded ? <Empty>New facts Jarvis learns surface here. <span className="dim">Browse the vault in Memory.</span></Empty> : <Loading />}</RemoteSection></>);
 }
 
 function GoalsWidget() {
-  const { data, loaded } = useWidgetData<Array<{ status: string; health: string }>>("/api/goals");
+  const resource = useWidgetData<Array<{ status: string; health: string }>>("/api/goals", readArray<{ status: string; health: string }>);
+  const { data, loaded } = resource;
   const goals = Array.isArray(data) ? data : [];
   const active = goals.filter((g) => g.status === "active");
   const onTrack = active.filter((g) => g.health === "on_track").length;
   return (<><WHeader label="goals · health" room="goals" />
+    <RemoteSection label="Goals" resource={resource} empty={Array.isArray(data) && data.length === 0}>
     {goals.length ? <Stat n={active.length} unit={active.length === 1 ? "active goal" : "active goals"} sub={active.length ? <>{onTrack} on track · {active.length - onTrack} need attention</> : "None active"} />
-      : loaded ? <Empty>No goals set yet. <span className="dim">Define objectives in Goals to track them here.</span></Empty> : <Loading />}</>);
+      : loaded ? <Empty>No goals set yet. <span className="dim">Define objectives in Goals to track them here.</span></Empty> : <Loading />}</RemoteSection></>);
 }
 
 function WorkflowsWidget() {
-  const { data, loaded } = useWidgetData<Array<Record<string, unknown>>>("/api/workflows");
+  const resource = useWidgetData<Array<Record<string, unknown>>>("/api/workflows", readArray<Record<string, unknown>>);
+  const { data, loaded } = resource;
   const flows = Array.isArray(data) ? data : [];
   const live = flows.filter((f) => f.enabled === true || f.published === true || f.status === "published").length;
   return (<><WHeader label="workflows" room="workflows" />
+    <RemoteSection label="Workflows" resource={resource} empty={Array.isArray(data) && data.length === 0}>
     {flows.length ? <Stat n={flows.length} unit={flows.length === 1 ? "workflow" : "workflows"} sub={live ? `${live} enabled` : "None enabled yet"} />
-      : loaded ? <Empty>Saved automations show their status here. <span className="dim">Open Workflows to build one.</span></Empty> : <Loading />}</>);
+      : loaded ? <Empty>Saved automations show their status here. <span className="dim">Open Workflows to build one.</span></Empty> : <Loading />}</RemoteSection></>);
 }
 
 function AuthorityAuditWidget() {
-  const { data, loaded } = useWidgetData<Array<{ tool_name: string; authority_decision: string; created_at: number }>>("/api/authority/audit?limit=20");
+  const resource = useWidgetData<Array<{ tool_name: string; authority_decision: string; created_at: number }>>("/api/authority/audit?limit=20", readArray<{ tool_name: string; authority_decision: string; created_at: number }>);
+  const { data, loaded } = resource;
   const rows = Array.isArray(data) ? [...data].sort((a, b) => b.created_at - a.created_at) : [];
   const latest = rows[0];
   return (<><WHeader label="authority · audit" room="authority" />
+    <RemoteSection label="Authority audit" resource={resource} empty={Array.isArray(data) && data.length === 0}>
     {latest ? <Stat n={rows.length} unit="recent" sub={<>Latest: <b>{deslug(latest.tool_name)}</b> · {relPast(latest.created_at)}</>} />
-      : loaded ? <Empty>The audit trail of approved actions lands here. <span className="dim">Open Authority for the full log.</span></Empty> : <Loading />}</>);
+      : loaded ? <Empty>The audit trail of approved actions lands here. <span className="dim">Open Authority for the full log.</span></Empty> : <Loading />}</RemoteSection></>);
 }
 
 function UsageWidget() {
-  const now = Date.now();
-  const { data, loaded } = useWidgetData<Record<string, unknown>>(
-    `/api/usage?range_start=${now - 7 * 86400000}&range_end=${now}`);
+  const [now] = useState(Date.now);
+  const resource = useWidgetData<Record<string, unknown>>(
+    `/api/usage?range_start=${now - 7 * 86400000}&range_end=${now}`, readObject<Record<string, unknown>>);
+  const { data, loaded } = resource;
   // Shape varies; defensively pull a token total from the likely fields.
   const d = (data ?? {}) as Record<string, any>;
   const tokens: number | null =
@@ -196,35 +197,68 @@ function UsageWidget() {
     Array.isArray(d.rows) ? d.rows.reduce((s: number, r: any) => s + (Number(r?.tokens) || 0), 0) : null;
   const fmt = (n: number) => n >= 1e6 ? `${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `${(n / 1e3).toFixed(1)}K` : String(n);
   return (<><WHeader label="usage · week" room="usage" />
+    <RemoteSection label="Usage" resource={resource} empty={!(tokens != null && tokens > 0)}>
     {tokens != null && tokens > 0 ? <Stat n={fmt(tokens)} unit="tokens" sub="Last 7 days · all models" />
-      : loaded ? <Empty>Weekly token spend by model appears here. <span className="dim">See the full meter in Usage.</span></Empty> : <Loading />}</>);
+      : loaded ? <Empty>Weekly token spend by model appears here. <span className="dim">See the full meter in Usage.</span></Empty> : <Loading />}</RemoteSection></>);
 }
 
 function WorkspacesWidget() {
-  const { data, loaded } = useWidgetData<Array<{ status: string; gitDirty?: boolean }>>("/api/sites/projects");
+  const resource = useWidgetData<Array<{ status: string; gitDirty?: boolean }>>("/api/sites/projects", readArray<{ status: string; gitDirty?: boolean }>);
+  const { data, loaded } = resource;
   const projects = Array.isArray(data) ? data : [];
   const running = projects.filter((p) => p.status === "running").length;
   const dirty = projects.filter((p) => p.gitDirty).length;
   return (<><WHeader label="workspaces" room="workspaces" />
+    <RemoteSection label="Workspaces" resource={resource} empty={Array.isArray(data) && data.length === 0}>
     {projects.length ? <Stat n={projects.length} unit={projects.length === 1 ? "project" : "projects"} sub={<>{running} running{dirty ? ` · ${dirty} with changes` : ""}</>} />
-      : loaded ? <Empty>Project dev servers and git status show here. <span className="dim">Open Workspaces.</span></Empty> : <Loading />}</>);
+      : loaded ? <Empty>Project dev servers and git status show here. <span className="dim">Open Workspaces.</span></Empty> : <Loading />}</RemoteSection></>);
 }
 
 function ToolsWidget() {
-  const { data, loaded } = useWidgetData<Array<Record<string, unknown>>>("/api/tools");
+  const resource = useWidgetData<Array<Record<string, unknown>>>("/api/tools", readArray<Record<string, unknown>>);
+  const { data, loaded } = resource;
   const tools = Array.isArray(data) ? data : [];
   const enabled = tools.filter((t) => t.enabled !== false).length;
   return (<><WHeader label="tools" room="tools" />
+    <RemoteSection label="Tools" resource={resource} empty={Array.isArray(data) && data.length === 0}>
     {tools.length ? <Stat n={tools.length} unit={tools.length === 1 ? "capability" : "capabilities"} sub={`${enabled} enabled`} />
-      : loaded ? <Empty>The capability catalogue lives in Tools. <span className="dim">Open it to manage flags.</span></Empty> : <Loading />}</>);
+      : loaded ? <Empty>The capability catalogue lives in Tools. <span className="dim">Open it to manage flags.</span></Empty> : <Loading />}</RemoteSection></>);
 }
 
 function SettingsWidget() {
-  const { data, loaded } = useWidgetData<{ status?: string }>("/api/auth/google/status");
+  const resource = useWidgetData<{ status?: string }>("/api/auth/google/status", readObject<{ status?: string }>);
+  const { data, loaded } = resource;
   const connected = data?.status === "connected";
   return (<><WHeader label="settings" room="settings" />
+    <RemoteSection label="Settings" resource={resource}>
     {loaded ? <Stat n={connected ? "Connected" : "Set up"} sub={connected ? "Google · providers, voice, channels" : "Connect Google, providers, voice & channels"} />
-      : <Loading />}</>);
+      : <Loading />}</RemoteSection></>);
+}
+
+function inboxSummary(live: LiveData, inbox: ReturnType<typeof useAuthorityInbox>, connection: ConnectionState) {
+  const ids = new Set([...live.approvals.map(a => a.id), ...(inbox.pending.data ?? []).map(a => a.id), ...(inbox.unresolved.data ?? []).map(a => a.id)]);
+  const state = combinedAvailability(inbox.pending, inbox.unresolved);
+  return { count: ids.size, state: state === "ready" && connection !== "live" ? "stale" as const : state };
+}
+
+function WaitingWidget({ live, inbox, connection, onApprove, onCancel }: RenderCtx) {
+  const { count, state } = inboxSummary(live, inbox, connection);
+  const liveIds = new Set(live.approvals.map(a => a.id));
+  const saved = (inbox.pending.data ?? []).filter(a => !liveIds.has(a.id));
+  return <>
+    <WHeader label={`waiting on you · ${state === "ready" ? count : "—"}`} room="authority" tone="hold" />
+    <RemoteNotice label="Pending approvals" resource={inbox.pending} />
+    <RemoteNotice label="Unfinished approvals" resource={inbox.unresolved} />
+    {connection !== "live" && <div className="v2-remote-state" role="status">Live requests unavailable. Reconnect to confirm what is waiting; displayed requests are last known.</div>}
+    {live.approvals.slice(0, 3).map(a => <div className="rs-apr" key={a.id}>
+      <div className="t1"><span className="rs-dot" />{a.category} · {a.toolName}</div>
+      <div className="t2">{a.intent}</div>
+      <div className="bs"><button className="b1" disabled={connection !== "live"} onClick={() => onApprove(a.id)}>Yes · approve</button><button className="b2" disabled={connection !== "live"} onClick={() => onCancel(a.id)}>Cancel</button></div>
+    </div>)}
+    {saved.slice(0, 3).map(a => <Row key={a.id} room="authority" dot="var(--hold)"><b>{a.tool_name}</b> · {a.reason}</Row>)}
+    {(inbox.unresolved.data?.length ?? 0) > 0 && <Row room="authority" dot="var(--hold)">{inbox.unresolved.data!.length} approved, not finished. Open Authority to resolve.</Row>}
+    {state === "ready" && count === 0 && <Empty>Approvals land here when an action needs your yes. <span className="dim">Nothing waits right now.</span></Empty>}
+  </>;
 }
 
 /* ── the widget catalog — one+ per room, broadly composable ── */
@@ -240,14 +274,7 @@ const WIDGETS: Record<string, WidgetDef> = {
   },
   waiting: {
     id: "waiting", group: "guard", dot: "var(--hold)", desc: "Pending approvals, resolvable in place. Pins to the top while amber.", defaultSize: 1,
-    render: ({ live, onApprove, onCancel }) => (<><WHeader label={`waiting on you · ${live.approvals.length}`} room="authority" tone="hold" />
-      {live.approvals.length ? live.approvals.slice(0, 3).map((a) => (
-        <div className="rs-apr" key={a.id}>
-          <div className="t1"><span className="rs-dot" />{a.category} · {a.toolName}</div>
-          <div className="t2">{a.intent}</div>
-          <div className="bs"><button className="b1" onClick={() => onApprove(a.id)}>Yes · approve</button><button className="b2" onClick={() => onCancel(a.id)}>Cancel</button></div>
-        </div>
-      )) : <Empty>Approvals land here when an action needs your yes. <span className="dim">Nothing waits right now.</span></Empty>}</>),
+    render: (ctx) => <WaitingWidget {...ctx} />,
   },
   today: {
     id: "today", group: "guard", dot: "var(--ok)", desc: "Runs and outcomes since midnight, tones included.", defaultSize: 2,
@@ -264,11 +291,12 @@ const WIDGETS: Record<string, WidgetDef> = {
   },
   vitals: {
     id: "vitals", group: "system", dot: "var(--faint)", desc: "Agents active, approvals waiting, events today.", defaultSize: 1,
-    render: ({ live }) => {
+    render: ({ live, inbox, connection }) => {
+      const { count, state } = inboxSummary(live, inbox, connection);
       const active = agentRows(live).filter((a) => a.running).length;
       return (<><WHeader label="vitals" /><div className="rs-vit">
         <div className="v"><span className="k">agents</span><div className="n">{active}<span> active</span></div></div>
-        <div className="v"><span className="k">waiting</span><div className="n">{live.approvals.length}</div></div>
+        <div className="v"><span className="k">waiting</span><div className="n">{state === "ready" ? count : "—"}{state !== "ready" && <span> {availabilityLabel(state)}</span>}</div></div>
         <div className="v"><span className="k">events</span><div className="n">{todayRows(live).length}<span> today</span></div></div>
       </div></>);
     },
@@ -364,6 +392,7 @@ export function NowRoom({
   onCancel: (id: string) => void;
 }) {
   const live = useLiveData();
+  const inbox = useAuthorityInbox();
   const [layout, setLayout] = useState<LayoutItem[]>(loadLayout);
   const [catalogOpen, setCatalogOpen] = useState(false);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -375,7 +404,8 @@ export function NowRoom({
   const commit = useCallback((l: LayoutItem[]) => { setLayout(l); persist(l); }, []);
 
   const offline = connection === "offline";
-  const amberPinned = live.approvals.length > 0;
+  const summary = inboxSummary(live, inbox, connection);
+  const amberPinned = summary.count > 0 || summary.state !== "ready";
 
   // waiting-on-you is force-present (and immovable) while amber.
   const items = useMemo(() => {
@@ -386,7 +416,7 @@ export function NowRoom({
 
   const available = useMemo(() => CATALOG_ORDER.filter((id) => !items.some((i) => i.id === id)), [items]);
 
-  const ctx: RenderCtx = { live, onApprove, onCancel };
+  const ctx: RenderCtx = { live, inbox, connection, onApprove, onCancel };
 
   const remove = (id: string) => { if (id === "waiting" && amberPinned) return; commit(layout.filter((i) => i.id !== id)); };
   const resize = (id: string) => commit(layout.map((i) => (i.id === id ? { ...i, size: (i.size === 2 ? 1 : 2) as WSize } : i)));
@@ -414,7 +444,7 @@ export function NowRoom({
   const onDragEnd = () => { setDragId(null); setOverId(null); persist(layoutRef.current); };
 
   return (
-    <div className={`rs-surface${offline ? " dim" : ""}${arranging ? " editing" : ""}`}>
+    <div className={`rs-surface${arranging ? " editing" : ""}`}>
       {offline && (
         <div className="rs-notice">
           <div className="gd2" />

@@ -850,15 +850,6 @@
   padding: var(--s-2) 0;
 }
 
-.v2-goals__error {
-  padding: var(--s-3) var(--s-6);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  color: var(--accent);
-  font-family: var(--font-sans);
-  font-size: var(--text-xs);
-  border-bottom: var(--hair-soft);
-}
-
 .v2-goals__toast {
   position: absolute;
   right: var(--s-4);
@@ -896,7 +887,6 @@
 .v2-goals__stat,
 .v2-goals__side,
 .v2-goals__dialog,
-.v2-goals__error,
 .v2-goals__sky,
 .v2-goals__gantt,
 .v2-goals__mcard { border-radius: var(--corner); }

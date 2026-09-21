@@ -57,6 +57,12 @@
   animation: v2-auth-pulse 1s ease-in-out infinite;
 }
 
+.v2-auth__emergency[data-state="unknown"] .v2-auth__emergency-dot,
+.v2-auth__emergency[data-stale="true"] .v2-auth__emergency-dot {
+  background: var(--hold);
+  animation: none;
+}
+
 @keyframes v2-auth-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
   50%      { opacity: 0.5; transform: scale(1.4); }
@@ -801,15 +807,6 @@
   color: var(--ink-3);
   font-style: italic;
   padding: var(--s-2) 0;
-}
-
-.v2-auth__error {
-  padding: var(--s-3) var(--s-6);
-  background: color-mix(in srgb, var(--accent) 8%, transparent);
-  color: var(--accent);
-  font-family: var(--font-sans);
-  font-size: var(--text-xs);
-  border-bottom: var(--hair-soft);
 }
 
 .v2-auth__toast {

@@ -15,6 +15,8 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
+import { RemoteNotice, RemoteSection } from "../../ui/RemoteSection";
+import { availabilityLabel, combinedAvailability } from "../../hooks/useRemoteData";
 import { Chip, Icon } from "../../ui";
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
@@ -61,6 +63,7 @@ export type RoomBodyMode = "inline" | "expanded";
 
 export function AuthorityRoomBody({ mode }: { mode: RoomBodyMode }) {
   const data = useAuthorityData();
+  const inboxState = combinedAvailability(data.sections.pending, data.sections.unresolved);
   const [activeTab, setActiveTab] = useState<TabId>("approvals");
   const TAB_KEYS = useMemo(() => Object.keys(TAB_LABEL) as TabId[], []);
   const tabsApi = useRovingTabs<TabId>(TAB_KEYS, activeTab, setActiveTab, "v2-auth");
@@ -119,8 +122,10 @@ export function AuthorityRoomBody({ mode }: { mode: RoomBodyMode }) {
   return (
     <div className={`v2-auth v2-auth--${mode}`}>
       {/* Always-visible Emergency band */}
+      <RemoteNotice label="Emergency status" resource={data.sections.status} />
       <EmergencyBand
-        state={data.status?.emergency_state ?? "normal"}
+        state={data.status?.emergency_state}
+        stale={data.sections.status.availability === "stale"}
         onTransition={async (t) => {
           const r = await data.setEmergency(t);
           setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
@@ -131,13 +136,13 @@ export function AuthorityRoomBody({ mode }: { mode: RoomBodyMode }) {
       <div className="v2-auth__stats">
         <StatCard
           label="Pending"
-          value={data.stats.pending + data.stats.unresolved}
-          sub={data.stats.unresolved > 0 ? `${data.stats.unresolved} approved, not finished` : "awaiting decision"}
+          value={inboxState === "ready" ? data.stats.pending + data.stats.unresolved : "—"}
+          sub={inboxState !== "ready" ? availabilityLabel(inboxState) : data.stats.unresolved > 0 ? `${data.stats.unresolved} approved, not finished` : "awaiting decision"}
           tone={data.stats.pending + data.stats.unresolved > 0 ? "accent" : "neutral"}
         />
-        <StatCard label="Default level" value={data.config?.default_level ?? "—"} sub="1-10 authority floor" />
-        <StatCard label="Allowed (recent)" value={data.stats.allowed} sub={`of ${data.stats.total}`} />
-        <StatCard label="Denied (recent)" value={data.stats.denied} sub="last 20 decisions" />
+        <StatCard label="Default level" value={data.sections.config.availability === "ready" ? data.config!.default_level : "—"} sub={data.sections.config.availability === "ready" ? "1-10 authority floor" : availabilityLabel(data.sections.config.availability)} />
+        <StatCard label="Allowed (recent)" value={data.sections.history.availability === "ready" ? data.stats.allowed : "—"} sub={data.sections.history.availability === "ready" ? "last 20 decisions" : availabilityLabel(data.sections.history.availability)} />
+        <StatCard label="Denied (recent)" value={data.sections.history.availability === "ready" ? data.stats.denied : "—"} sub={data.sections.history.availability === "ready" ? "last 20 decisions" : availabilityLabel(data.sections.history.availability)} />
       </div>
 
       {/* Tabs */}
@@ -158,12 +163,12 @@ export function AuthorityRoomBody({ mode }: { mode: RoomBodyMode }) {
             >
               <Icon icon={TAB_ICON[t]} size="sm" />
               <span>{TAB_LABEL[t]}</span>
-              {t === "approvals" && data.stats.pending + data.stats.unresolved > 0 && (
+              {t === "approvals" && inboxState === "ready" && data.stats.pending + data.stats.unresolved > 0 && (
                 <span className="v2-auth__tab-badge" data-tone="accent">
                   {data.stats.pending + data.stats.unresolved}
                 </span>
               )}
-              {t === "learning" && data.suggestions.length > 0 && (
+              {t === "learning" && data.sections.suggestions.availability === "ready" && data.suggestions.length > 0 && (
                 <span className="v2-auth__tab-badge">{data.suggestions.length}</span>
               )}
             </button>
@@ -180,15 +185,13 @@ export function AuthorityRoomBody({ mode }: { mode: RoomBodyMode }) {
         </div>
       )}
 
-      {data.error && <div className="v2-auth__error">{data.error}</div>}
-
       {/* Content */}
       {(mode === "inline" || activeTab === "approvals") && (
         <ApprovalsTab
           pending={data.pendingApprovals}
           unresolved={data.unresolvedApprovals}
           history={data.historyApprovals}
-          loading={data.loading}
+          sections={data.sections}
           onApprove={async (id) => {
             const r = await data.approve(id);
             setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
@@ -209,6 +212,7 @@ export function AuthorityRoomBody({ mode }: { mode: RoomBodyMode }) {
       )}
       {mode === "expanded" && activeTab === "audit" && (
         <AuditTab
+          sections={data.sections}
           entries={filteredAudit}
           totalCount={data.auditEntries.length}
           stats={data.auditStats}
@@ -216,23 +220,27 @@ export function AuthorityRoomBody({ mode }: { mode: RoomBodyMode }) {
           onFilterChange={setAuditFilter}
         />
       )}
-      {mode === "expanded" && activeTab === "grants" && data.config && (
-        <GrantsTab
-          config={data.config}
-          onUpdate={async (patch) => {
-            const r = await data.updateConfig(patch);
-            setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
-          }}
-          onQuickOverride={async (action, allow) => {
-            const r = await data.quickOverride(action, allow);
-            setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
-          }}
-        />
+      {mode === "expanded" && activeTab === "grants" && (
+        <RemoteSection label="Authority configuration" resource={data.sections.config}>
+          {data.config && (
+          <GrantsTab
+            config={data.config}
+            onUpdate={async (patch) => {
+              const r = await data.updateConfig(patch);
+              setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
+            }}
+            onQuickOverride={async (action, allow) => {
+              const r = await data.quickOverride(action, allow);
+              setToast({ text: r.message, tone: r.ok ? "ok" : "warn" });
+            }}
+          />)}
+        </RemoteSection>
       )}
-      {mode === "expanded" && activeTab === "learning" && data.config && (
+      {mode === "expanded" && activeTab === "learning" && (
         <LearningTab
-          enabled={data.config.learning.enabled}
-          threshold={data.config.learning.suggest_threshold}
+          sections={data.sections}
+          enabled={data.config?.learning.enabled ?? false}
+          threshold={data.config?.learning.suggest_threshold ?? 1}
           suggestions={data.suggestions}
           onUpdate={async (patch) => {
             const r = await data.updateConfig({
@@ -276,21 +284,23 @@ export function AuthorityRoom() {
 
 function EmergencyBand({
   state,
+  stale,
   onTransition,
 }: {
-  state: EmergencyState;
+  state: EmergencyState | undefined;
+  stale: boolean;
   onTransition: (t: "pause" | "resume" | "kill" | "reset") => void;
 }) {
   return (
-    <div className="v2-auth__emergency" data-state={state}>
+    <div className="v2-auth__emergency" data-state={state ?? "unknown"} data-stale={stale}>
       <div className="v2-auth__emergency-meta">
         <span className="v2-auth__emergency-dot" aria-hidden="true" />
         <span className="v2-auth__emergency-label">
-          Emergency · {state === "normal" ? "all systems normal" : state === "paused" ? "execution paused" : "killed"}
+          {stale ? "Last known emergency state" : "Emergency"} · {state === undefined ? "status unknown" : state === "normal" ? "all systems normal" : state === "paused" ? "execution paused" : "killed"}
         </span>
       </div>
       <div className="v2-auth__emergency-actions">
-        {state === "normal" && (
+        {(state === "normal" || state === undefined) && (
           <>
             <button
               type="button"
@@ -373,7 +383,7 @@ function ApprovalsTab({
   pending,
   unresolved,
   history,
-  loading,
+  sections,
   onApprove,
   onDeny,
   onExecute,
@@ -382,7 +392,7 @@ function ApprovalsTab({
   pending: ReturnType<typeof useAuthorityData>["pendingApprovals"];
   unresolved: ReturnType<typeof useAuthorityData>["unresolvedApprovals"];
   history: ReturnType<typeof useAuthorityData>["historyApprovals"];
-  loading: boolean;
+  sections: ReturnType<typeof useAuthorityData>["sections"];
   onApprove: (id: string) => void;
   onDeny: (id: string) => void;
   onExecute: (id: string) => void;
@@ -399,63 +409,67 @@ function ApprovalsTab({
       <section className="v2-auth__section">
         <div className="v2-auth__section-head">
           <h3 className="v2-auth__section-title">Pending</h3>
-          <span className="v2-auth__section-count">{pending.length}</span>
+          <span className="v2-auth__section-count">{sections.pending.availability === "ready" ? pending.length : "—"}</span>
         </div>
-        {loading && pending.length === 0 ? (
-          <div className="v2-auth__empty">Loading…</div>
-        ) : pending.length === 0 ? (
-          <div className="v2-auth__empty">No pending approvals.</div>
-        ) : (
-          <ul className="v2-auth__pending-list">
-            {pending.map((a) => (
-              <li key={a.id}>
-                <PendingApprovalCard approval={a} onApprove={onApprove} onDeny={onDeny} />
-              </li>
-            ))}
-          </ul>
-        )}
+        <RemoteSection label="Pending approvals" resource={sections.pending} empty={pending.length === 0}>
+          {pending.length === 0 ? (
+            <div className="v2-auth__empty">No pending approvals.</div>
+          ) : (
+            <ul className="v2-auth__pending-list">
+              {pending.map((a) => (
+                <li key={a.id}>
+                  <PendingApprovalCard approval={a} onApprove={onApprove} onDeny={onDeny} />
+                </li>
+              ))}
+            </ul>
+          )}
+        </RemoteSection>
       </section>
 
-      {unresolved.length > 0 && (
+      {(unresolved.length > 0 || sections.unresolved.availability !== "ready") && (
         <section className="v2-auth__section">
           <div className="v2-auth__section-head">
             <h3 className="v2-auth__section-title">Approved, not finished</h3>
-            <span className="v2-auth__section-count">{unresolved.length}</span>
+            <span className="v2-auth__section-count">{sections.unresolved.availability === "ready" ? unresolved.length : "—"}</span>
           </div>
-          <ul className="v2-auth__pending-list">
-            {unresolved.map((a) => (
-              <li key={a.id}>
-                <UnresolvedApprovalCard approval={a} onExecute={onExecute} onClose={onClose} />
-              </li>
-            ))}
-          </ul>
+          <RemoteSection label="Unfinished approvals" resource={sections.unresolved} empty={unresolved.length === 0}>
+            <ul className="v2-auth__pending-list">
+              {unresolved.map((a) => (
+                <li key={a.id}>
+                  <UnresolvedApprovalCard approval={a} onExecute={onExecute} onClose={onClose} />
+                </li>
+              ))}
+            </ul>
+          </RemoteSection>
         </section>
       )}
 
       <section className="v2-auth__section">
         <div className="v2-auth__section-head">
           <h3 className="v2-auth__section-title">Recent decisions</h3>
-          <span className="v2-auth__section-count">{recentDecisions.length}</span>
+          <span className="v2-auth__section-count">{sections.history.availability === "ready" ? recentDecisions.length : "—"}</span>
         </div>
-        {recentDecisions.length === 0 ? (
-          <div className="v2-auth__empty">No recent decisions.</div>
-        ) : (
-          <ul className="v2-auth__history-list">
-            {recentDecisions.map((a) => (
-              <li key={a.id} className="v2-auth__history-row">
-                <span className="v2-auth__history-time">{formatTime(a.created_at)}</span>
-                <span className="v2-auth__history-agent">{a.agent_name}</span>
-                <span className="v2-auth__history-tool">{a.tool_name}</span>
-                <Chip
-                  tone={a.status === "approved" || a.status === "executed" ? "ok" : a.status === "denied" ? "accent" : "neutral"}
-                  dot
-                >
-                  {a.execution_state ?? a.status}
-                </Chip>
-              </li>
-            ))}
-          </ul>
-        )}
+        <RemoteSection label="Recent decisions" resource={sections.history} empty={recentDecisions.length === 0}>
+          {recentDecisions.length === 0 ? (
+            <div className="v2-auth__empty">No recent decisions.</div>
+          ) : (
+            <ul className="v2-auth__history-list">
+              {recentDecisions.map((a) => (
+                <li key={a.id} className="v2-auth__history-row">
+                  <span className="v2-auth__history-time">{formatTime(a.created_at)}</span>
+                  <span className="v2-auth__history-agent">{a.agent_name}</span>
+                  <span className="v2-auth__history-tool">{a.tool_name}</span>
+                  <Chip
+                    tone={a.status === "approved" || a.status === "executed" ? "ok" : a.status === "denied" ? "accent" : "neutral"}
+                    dot
+                  >
+                    {a.execution_state ?? a.status}
+                  </Chip>
+                </li>
+              ))}
+            </ul>
+          )}
+        </RemoteSection>
       </section>
     </div>
   );
@@ -586,12 +600,14 @@ function UnresolvedApprovalCard({
 /* ─────────── Audit tab ─────────── */
 
 function AuditTab({
+  sections,
   entries,
   totalCount,
   stats,
   filter,
   onFilterChange,
 }: {
+  sections: ReturnType<typeof useAuthorityData>["sections"];
   entries: AuditEntry[];
   totalCount: number;
   stats: ReturnType<typeof useAuthorityData>["auditStats"];
@@ -600,15 +616,17 @@ function AuditTab({
 }) {
   return (
     <div className="v2-auth__audit">
-      {stats && (
-        <div className="v2-auth__audit-stats">
-          <StatCard label="Total" value={stats.total} sub="all decisions" />
-          <StatCard label="Allowed" value={stats.allowed} sub="auto-approved" />
-          <StatCard label="Denied" value={stats.denied} sub="rejected" tone={stats.denied > 0 ? "warn" : "neutral"} />
-          <StatCard label="Required approval" value={stats.approvalRequired} sub="user-decided" />
-        </div>
-      )}
+      <RemoteSection label="Audit statistics" resource={sections.auditStats}>
+        {stats && (
+          <div className="v2-auth__audit-stats">
+            <StatCard label="Total" value={stats.total} sub="all decisions" />
+            <StatCard label="Allowed" value={stats.allowed} sub="auto-approved" />
+            <StatCard label="Denied" value={stats.denied} sub="rejected" tone={stats.denied > 0 ? "warn" : "neutral"} />
+            <StatCard label="Required approval" value={stats.approvalRequired} sub="user-decided" />
+          </div>
+        )}
 
+      </RemoteSection>
       <div className="v2-auth__filter-row" role="tablist" aria-label="Filter audit entries">
         {(Object.keys(AUDIT_FILTER_LABEL) as AuditFilter[]).map((f) => (
           <button
@@ -622,39 +640,42 @@ function AuditTab({
           </button>
         ))}
         <span className="v2-auth__filter-meta">
-          {entries.length} of {totalCount}
+          {sections.audit.availability === "ready" ? `${entries.length} of ${totalCount}`
+            : sections.audit.availability === "stale" ? `Last known: ${entries.length} of ${totalCount}` : "—"}
         </span>
       </div>
 
-      {entries.length === 0 ? (
-        <div className="v2-auth__empty">No audit entries match the current filter.</div>
-      ) : (
-        <ul className="v2-auth__audit-list">
-          {entries.map((e) => (
-            <li key={e.id} className="v2-auth__audit-row" data-decision={e.authority_decision}>
-              <span className="v2-auth__audit-time">{formatTime(e.created_at)}</span>
-              <Chip
-                tone={
-                  e.authority_decision === "allowed"
-                    ? "ok"
-                    : e.authority_decision === "denied"
-                      ? "accent"
-                      : "warn"
-                }
-                dot
-              >
-                {e.authority_decision.replace("_", " ")}
-              </Chip>
-              <span className="v2-auth__audit-agent">{e.agent_name}</span>
-              <span className="v2-auth__audit-tool">{e.tool_name}</span>
-              <span className="v2-auth__audit-cat">{e.action_category}</span>
-              {e.execution_time_ms != null && (
-                <span className="v2-auth__audit-ms">{e.execution_time_ms}ms</span>
-              )}
-            </li>
-          ))}
-        </ul>
-      )}
+      <RemoteSection label="Audit entries" resource={sections.audit} empty={entries.length === 0}>
+        {entries.length === 0 ? (
+          <div className="v2-auth__empty">No audit entries match the current filter.</div>
+        ) : (
+          <ul className="v2-auth__audit-list">
+            {entries.map((e) => (
+              <li key={e.id} className="v2-auth__audit-row" data-decision={e.authority_decision}>
+                <span className="v2-auth__audit-time">{formatTime(e.created_at)}</span>
+                <Chip
+                  tone={
+                    e.authority_decision === "allowed"
+                      ? "ok"
+                      : e.authority_decision === "denied"
+                        ? "accent"
+                        : "warn"
+                  }
+                  dot
+                >
+                  {e.authority_decision.replace("_", " ")}
+                </Chip>
+                <span className="v2-auth__audit-agent">{e.agent_name}</span>
+                <span className="v2-auth__audit-tool">{e.tool_name}</span>
+                <span className="v2-auth__audit-cat">{e.action_category}</span>
+                {e.execution_time_ms != null && (
+                  <span className="v2-auth__audit-ms">{e.execution_time_ms}ms</span>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </RemoteSection>
     </div>
   );
 }
@@ -915,6 +936,7 @@ function ContextRuleTable({
 /* ─────────── Learning tab ─────────── */
 
 function LearningTab({
+  sections,
   enabled,
   threshold,
   suggestions,
@@ -922,6 +944,7 @@ function LearningTab({
   onAccept,
   onDismiss,
 }: {
+  sections: ReturnType<typeof useAuthorityData>["sections"];
   enabled: boolean;
   threshold: number;
   suggestions: LearningSuggestion[];
@@ -931,78 +954,82 @@ function LearningTab({
 }) {
   return (
     <div className="v2-auth__learning">
-      <section className="v2-auth__section">
-        <div className="v2-auth__section-head">
-          <h3 className="v2-auth__section-title">Learning</h3>
-          <button
-            type="button"
-            className="v2-auth__chip"
-            data-active={enabled}
-            onClick={() => onUpdate({ enabled: !enabled })}
-          >
-            {enabled ? "Enabled" : "Disabled"}
-          </button>
-        </div>
-        <p className="v2-auth__section-desc">
-          Suggests auto-approve overrides when you've approved the same action repeatedly.
-        </p>
+      <RemoteSection label="Learning configuration" resource={sections.config}>
+        <section className="v2-auth__section">
+          <div className="v2-auth__section-head">
+            <h3 className="v2-auth__section-title">Learning</h3>
+            <button
+              type="button"
+              className="v2-auth__chip"
+              data-active={enabled}
+              onClick={() => onUpdate({ enabled: !enabled })}
+            >
+              {enabled ? "Enabled" : "Disabled"}
+            </button>
+          </div>
+          <p className="v2-auth__section-desc">
+            Suggests auto-approve overrides when you've approved the same action repeatedly.
+          </p>
 
-        <div className="v2-auth__threshold-row">
-          <label className="v2-auth__label">
-            Suggest after {threshold} consecutive approvals
-          </label>
-          <input
-            type="range"
-            min={1}
-            max={50}
-            step={1}
-            value={threshold}
-            onChange={(e) => onUpdate({ suggest_threshold: parseInt(e.target.value, 10) })}
-            className="v2-auth__slider"
-            disabled={!enabled}
-            aria-label="Suggestion threshold"
-          />
-        </div>
-      </section>
+          <div className="v2-auth__threshold-row">
+            <label className="v2-auth__label">
+              Suggest after {threshold} consecutive approvals
+            </label>
+            <input
+              type="range"
+              min={1}
+              max={50}
+              step={1}
+              value={threshold}
+              onChange={(e) => onUpdate({ suggest_threshold: parseInt(e.target.value, 10) })}
+              className="v2-auth__slider"
+              disabled={!enabled}
+              aria-label="Suggestion threshold"
+            />
+          </div>
+        </section>
+      </RemoteSection>
 
       <section className="v2-auth__section">
         <div className="v2-auth__section-head">
           <h3 className="v2-auth__section-title">Suggestions</h3>
-          <span className="v2-auth__section-count">{suggestions.length}</span>
+          <span className="v2-auth__section-count">{sections.suggestions.availability === "ready" ? suggestions.length : "—"}</span>
         </div>
-        {suggestions.length === 0 ? (
-          <div className="v2-auth__empty">No suggestions yet — keep approving and we'll surface patterns.</div>
-        ) : (
-          <ul className="v2-auth__suggestions">
-            {suggestions.map((s) => (
-              <li key={`${s.actionCategory}-${s.toolName}`} className="v2-auth__suggestion">
-                <div className="v2-auth__suggestion-meta">
-                  <Chip tone="ok" dot>{s.consecutiveApprovals}× approved</Chip>
-                  <span className="v2-auth__suggestion-tool">{s.toolName}</span>
-                </div>
-                <div className="v2-auth__suggestion-text">
-                  Auto-allow <strong>{s.actionCategory.replace(/_/g, " ")}</strong> when called via <code>{s.toolName}</code>?
-                </div>
-                <div className="v2-auth__suggestion-actions">
-                  <button
-                    type="button"
-                    className="v2-auth__btn v2-auth__btn--secondary"
-                    onClick={() => onDismiss(s.actionCategory, s.toolName)}
-                  >
-                    Dismiss
-                  </button>
-                  <button
-                    type="button"
-                    className="v2-auth__btn v2-auth__btn--primary"
-                    onClick={() => onAccept(s.actionCategory, s.toolName)}
-                  >
-                    Accept
-                  </button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
+        <RemoteSection label="Learning suggestions" resource={sections.suggestions} empty={suggestions.length === 0}>
+          {suggestions.length === 0 ? (
+            <div className="v2-auth__empty">No suggestions yet — keep approving and we'll surface patterns.</div>
+          ) : (
+            <ul className="v2-auth__suggestions">
+              {suggestions.map((s) => (
+                <li key={`${s.actionCategory}-${s.toolName}`} className="v2-auth__suggestion">
+                  <div className="v2-auth__suggestion-meta">
+                    <Chip tone="ok" dot>{s.consecutiveApprovals}× approved</Chip>
+                    <span className="v2-auth__suggestion-tool">{s.toolName}</span>
+                  </div>
+                  <div className="v2-auth__suggestion-text">
+                    Auto-allow <strong>{s.actionCategory.replace(/_/g, " ")}</strong> when called via <code>{s.toolName}</code>?
+                  </div>
+                  <div className="v2-auth__suggestion-actions">
+                    <button
+                      type="button"
+                      className="v2-auth__btn v2-auth__btn--secondary"
+                      onClick={() => onDismiss(s.actionCategory, s.toolName)}
+                    >
+                      Dismiss
+                    </button>
+                    <button
+                      type="button"
+                      className="v2-auth__btn v2-auth__btn--primary"
+                      onClick={() => onAccept(s.actionCategory, s.toolName)}
+                    >
+                      Accept
+                    </button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </RemoteSection>
       </section>
     </div>
   );

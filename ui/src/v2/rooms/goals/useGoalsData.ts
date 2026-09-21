@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo } from "react";
+
+import { readArray, readObject, useRemoteData } from "../../hooks/useRemoteData";
 
 const POLL_INTERVAL_MS = 8000;
 
@@ -71,42 +73,18 @@ interface ActionResult {
  * goal.
  */
 export function useGoalsData() {
-  const [goals, setGoals] = useState<Goal[]>([]);
-  const [metrics, setMetrics] = useState<GoalsMetrics | null>(null);
-  const [overdue, setOverdue] = useState<Goal[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const inFlightRef = useRef(false);
-
+  const goalData = useRemoteData("/api/goals?limit=200", readArray<Goal>, POLL_INTERVAL_MS);
+  const metricData = useRemoteData("/api/goals/metrics", readMetrics, POLL_INTERVAL_MS);
+  const overdueData = useRemoteData("/api/goals/overdue", readArray<Goal>, POLL_INTERVAL_MS);
+  const goals = goalData.data ?? EMPTY_GOALS;
+  const metrics = metricData.data;
+  const overdue = overdueData.data ?? EMPTY_GOALS;
+  const sections = { goals: goalData, metrics: metricData, overdue: overdueData };
+  const loading = Object.values(sections).some(s => s.availability === "loading");
+  const error = Object.values(sections).map(s => s.error).filter(Boolean).join(" ") || null;
   const refresh = useCallback(async () => {
-    if (inFlightRef.current) return;
-    inFlightRef.current = true;
-    try {
-      const [gResp, mResp, oResp] = await Promise.all([
-        fetch("/api/goals?limit=200"),
-        fetch("/api/goals/metrics"),
-        fetch("/api/goals/overdue"),
-      ]);
-      if (gResp.ok) setGoals((await gResp.json()) as Goal[]);
-      if (mResp.ok) setMetrics((await mResp.json()) as GoalsMetrics);
-      if (oResp.ok) setOverdue((await oResp.json()) as Goal[]);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load goals");
-    } finally {
-      inFlightRef.current = false;
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-    const id = window.setInterval(() => {
-      if (typeof document !== "undefined" && document.hidden) return;
-      refresh();
-    }, POLL_INTERVAL_MS);
-    return () => window.clearInterval(id);
-  }, [refresh]);
+    await Promise.all([goalData.refresh(), metricData.refresh(), overdueData.refresh()]);
+  }, [goalData.refresh, metricData.refresh, overdueData.refresh]);
 
   /** Roots = top-level objectives (no parent). */
   const roots = useMemo(
@@ -226,6 +204,7 @@ export function useGoalsData() {
   );
 
   return {
+    sections,
     goals,
     roots,
     childrenByParent,
@@ -240,4 +219,12 @@ export function useGoalsData() {
     updateStatus,
     updateHealth,
   };
+}
+
+const EMPTY_GOALS: Goal[] = [];
+function readMetrics(value: unknown): GoalsMetrics {
+  const metrics = readObject<GoalsMetrics>(value);
+  const fields: (keyof GoalsMetrics)[] = ["total", "active", "completed", "failed", "killed", "avg_score", "on_track", "at_risk", "behind", "critical", "overdue"];
+  if (fields.some(key => typeof metrics[key] !== "number" || !Number.isFinite(metrics[key]))) throw new Error("Unexpected metrics.");
+  return metrics;
 }

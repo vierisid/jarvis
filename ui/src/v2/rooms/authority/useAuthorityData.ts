@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useMemo } from "react";
+
+import { readArray, readObject, useRemoteData } from "../../hooks/useRemoteData";
 
 const POLL_INTERVAL_MS = 5000;
 
@@ -125,7 +127,7 @@ interface ActionResult {
 }
 
 /**
- * Authority Room data hook — polls 5 endpoints in parallel + exposes
+ * Authority Room data hook — polls 8 endpoints independently + exposes
  * write actions for approve/deny, config mutations, learning accept/
  * dismiss, emergency state changes, and the new quick-override (voice
  * "grant Jarvis email access" path).
@@ -135,57 +137,27 @@ interface ActionResult {
  * but config still loads.
  */
 export function useAuthorityData() {
-  const [status, setStatus] = useState<AuthorityStatus | null>(null);
-  const [pendingApprovals, setPendingApprovals] = useState<ApprovalRequest[]>([]);
-  const [unresolvedApprovals, setUnresolvedApprovals] = useState<ApprovalRequest[]>([]);
-  const [historyApprovals, setHistoryApprovals] = useState<ApprovalRequest[]>([]);
-  const [auditEntries, setAuditEntries] = useState<AuditEntry[]>([]);
-  const [auditStats, setAuditStats] = useState<AuditStats | null>(null);
-  const [config, setConfig] = useState<AuthorityConfig | null>(null);
-  const [suggestions, setSuggestions] = useState<LearningSuggestion[]>([]);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const inFlightRef = useRef(false);
-
+  const inbox = useAuthorityInbox();
+  const statusData = useRemoteData("/api/authority/status", readStatus, POLL_INTERVAL_MS);
+  const historyData = useRemoteData("/api/authority/approvals?limit=20", readArray<ApprovalRequest>, POLL_INTERVAL_MS);
+  const auditData = useRemoteData("/api/authority/audit?limit=100", readArray<AuditEntry>, POLL_INTERVAL_MS);
+  const auditStatsData = useRemoteData("/api/authority/audit/stats", readAuditStats, POLL_INTERVAL_MS);
+  const configData = useRemoteData("/api/authority/config", readConfig, POLL_INTERVAL_MS);
+  const suggestionData = useRemoteData("/api/authority/learning/suggestions", readArray<LearningSuggestion>, POLL_INTERVAL_MS);
+  const status = statusData.data;
+  const pendingApprovals = inbox.pending.data ?? EMPTY_APPROVALS;
+  const unresolvedApprovals = inbox.unresolved.data ?? EMPTY_APPROVALS;
+  const historyApprovals = historyData.data ?? EMPTY_APPROVALS;
+  const auditEntries = auditData.data ?? EMPTY_AUDIT;
+  const auditStats = auditStatsData.data;
+  const config = configData.data;
+  const suggestions = suggestionData.data ?? EMPTY_SUGGESTIONS;
+  const sections = { ...inbox, status: statusData, history: historyData, audit: auditData, auditStats: auditStatsData, config: configData, suggestions: suggestionData };
+  const loading = Object.values(sections).some(s => s.availability === "loading");
+  const error = Object.values(sections).map(s => s.error).filter(Boolean).join(" ") || null;
   const refresh = useCallback(async () => {
-    if (inFlightRef.current) return;
-    inFlightRef.current = true;
-    try {
-      const [sResp, pResp, hResp, aResp, asResp, cResp, lResp, uResp] = await Promise.all([
-        fetch("/api/authority/status"),
-        fetch("/api/authority/approvals?status=pending"),
-        fetch("/api/authority/approvals?limit=20"),
-        fetch("/api/authority/audit?limit=100"),
-        fetch("/api/authority/audit/stats"),
-        fetch("/api/authority/config"),
-        fetch("/api/authority/learning/suggestions"),
-        fetch("/api/authority/approvals?status=unresolved"),
-      ]);
-      if (sResp.ok) setStatus((await sResp.json()) as AuthorityStatus);
-      if (pResp.ok) setPendingApprovals((await pResp.json()) as ApprovalRequest[]);
-      if (uResp.ok) setUnresolvedApprovals((await uResp.json()) as ApprovalRequest[]);
-      if (hResp.ok) setHistoryApprovals((await hResp.json()) as ApprovalRequest[]);
-      if (aResp.ok) setAuditEntries((await aResp.json()) as AuditEntry[]);
-      if (asResp.ok) setAuditStats((await asResp.json()) as AuditStats);
-      if (cResp.ok) setConfig((await cResp.json()) as AuthorityConfig);
-      if (lResp.ok) setSuggestions((await lResp.json()) as LearningSuggestion[]);
-      setError(null);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load authority data");
-    } finally {
-      inFlightRef.current = false;
-      setLoading(false);
-    }
-  }, []);
-
-  useEffect(() => {
-    refresh();
-    const id = window.setInterval(() => {
-      if (typeof document !== "undefined" && document.hidden) return;
-      refresh();
-    }, POLL_INTERVAL_MS);
-    return () => window.clearInterval(id);
-  }, [refresh]);
+    await Promise.all([inbox.pending.refresh(), inbox.unresolved.refresh(), statusData.refresh(), historyData.refresh(), auditData.refresh(), auditStatsData.refresh(), configData.refresh(), suggestionData.refresh()]);
+  }, [inbox.pending.refresh, inbox.unresolved.refresh, statusData.refresh, historyData.refresh, auditData.refresh, auditStatsData.refresh, configData.refresh, suggestionData.refresh]);
 
   const approve = useCallback(async (id: string): Promise<ActionResult> => {
     try {
@@ -347,6 +319,7 @@ export function useAuthorityData() {
   }, [pendingApprovals, unresolvedApprovals, historyApprovals]);
 
   return {
+    sections,
     status,
     pendingApprovals,
     unresolvedApprovals,
@@ -369,4 +342,33 @@ export function useAuthorityData() {
     dismissSuggestion,
     setEmergency,
   };
+}
+
+const EMPTY_APPROVALS: ApprovalRequest[] = [];
+const EMPTY_AUDIT: AuditEntry[] = [];
+const EMPTY_SUGGESTIONS: LearningSuggestion[] = [];
+
+/** Also used by Now: a connected event stream alone is not an inbox snapshot. */
+export function useAuthorityInbox() {
+  const pending = useRemoteData("/api/authority/approvals?status=pending", readArray<ApprovalRequest>, POLL_INTERVAL_MS);
+  const unresolved = useRemoteData("/api/authority/approvals?status=unresolved", readArray<ApprovalRequest>, POLL_INTERVAL_MS);
+  return { pending, unresolved };
+}
+function readStatus(value: unknown): AuthorityStatus {
+  const status = readObject<AuthorityStatus>(value);
+  if (!["normal", "paused", "killed"].includes(status.emergency_state)) throw new Error("Unexpected emergency state.");
+  return status;
+}
+function readConfig(value: unknown): AuthorityConfig {
+  const config = readObject<AuthorityConfig>(value);
+  if (typeof config.default_level !== "number" || !Array.isArray(config.governed_categories) ||
+      !Array.isArray(config.overrides) || !Array.isArray(config.context_rules) ||
+      typeof config.learning?.enabled !== "boolean" || typeof config.learning?.suggest_threshold !== "number") throw new Error("Unexpected configuration.");
+  return config;
+}
+function readAuditStats(value: unknown): AuditStats {
+  const stats = readObject<AuditStats>(value);
+  if ([stats.total, stats.allowed, stats.denied, stats.approvalRequired].some(n => typeof n !== "number" || !Number.isFinite(n))) throw new Error("Unexpected audit statistics.");
+  readObject(stats.byCategory);
+  return stats;
 }

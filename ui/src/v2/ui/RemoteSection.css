@@ -1,0 +1,30 @@
+.v2-remote-state {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin: 8px 0;
+  padding: 12px;
+  border: 1px solid var(--rule);
+  border-radius: var(--corner-sm, 9px 2px 9px 9px);
+  background: var(--panel2);
+  color: var(--ink2);
+  font-size: 13px;
+  line-height: 1.5;
+  overflow-wrap: anywhere;
+}
+.v2-remote-state strong { color: var(--hold-tx); font-weight: 500; }
+.v2-remote-state[data-availability="loading"] strong { color: var(--ink2); }
+.v2-remote-state button {
+  flex-shrink: 0;
+  min-height: 32px;
+  padding: 4px 10px;
+  border: 1px solid var(--rule);
+  border-radius: var(--corner-sm, 9px 2px 9px 9px);
+  background: var(--raise);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+.v2-remote-state button:hover { background: var(--panel); }
+.v2-remote-state button:focus-visible { outline: 2px solid var(--ink); outline-offset: 2px; }

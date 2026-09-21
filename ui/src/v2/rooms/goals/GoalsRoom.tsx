@@ -12,6 +12,8 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { Chip, Icon } from "../../ui";
+import { RemoteNotice, RemoteSection } from "../../ui/RemoteSection";
+import { availabilityLabel } from "../../hooks/useRemoteData";
 import { RoomShell } from "../RoomShell";
 import { useRoomActions } from "../useRoomActionBus";
 import { useRovingTabs } from "../useRovingTabs";
@@ -170,28 +172,28 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
       <div className="v2-goals__stats">
         <StatCard
           label="Active"
-          value={data.metrics?.active ?? 0}
-          sub={`of ${data.metrics?.total ?? 0} total`}
+          value={data.sections.metrics.availability === "ready" ? data.metrics!.active : "—"}
+          sub={data.sections.metrics.availability === "ready" ? `of ${data.metrics!.total} total` : availabilityLabel(data.sections.metrics.availability)}
         />
         <StatCard
           label="Avg score"
           value={
-            data.metrics
+            data.sections.metrics.availability === "ready" && data.metrics
               ? `${Math.round(data.metrics.avg_score * 100)}%`
               : "—"
           }
-          sub="across all goals"
+          sub={data.sections.metrics.availability === "ready" ? "across all goals" : availabilityLabel(data.sections.metrics.availability)}
         />
         <StatCard
           label="Overdue"
-          value={data.overdue.length}
-          sub="active + past deadline"
+          value={data.sections.overdue.availability === "ready" ? data.overdue.length : "—"}
+          sub={data.sections.overdue.availability === "ready" ? "active + past deadline" : availabilityLabel(data.sections.overdue.availability)}
           tone={data.overdue.length > 0 ? "warn" : "neutral"}
         />
         <StatCard
           label="Critical"
-          value={data.metrics?.critical ?? 0}
-          sub="health = critical"
+          value={data.sections.metrics.availability === "ready" ? data.metrics!.critical : "—"}
+          sub={data.sections.metrics.availability === "ready" ? "health = critical" : availabilityLabel(data.sections.metrics.availability)}
           tone={(data.metrics?.critical ?? 0) > 0 ? "accent" : "neutral"}
         />
       </div>
@@ -265,33 +267,36 @@ export function GoalsRoomBody({ mode }: { mode: RoomBodyMode }) {
         </button>
       </div>
 
-      {data.error && <div className="v2-goals__error">{data.error}</div>}
+      <RemoteNotice label="Goal metrics" resource={data.sections.metrics} />
+      <RemoteNotice label="Overdue goals" resource={data.sections.overdue} />
 
       {/* Content */}
-      {mode === "inline" && (
-        <Constellation
-          roots={data.roots.filter((g) => visibleIds.has(g.id))}
-          childrenByParent={data.childrenByParent}
-          visibleIds={visibleIds}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-          loading={data.loading}
-        />
-      )}
-      {mode === "expanded" && activeTab === "constellation" && (
-        <ConstellationSky
-          roots={data.roots.filter((g) => visibleIds.has(g.id))}
-          childrenByParent={data.childrenByParent}
-          visibleIds={visibleIds}
-          selectedId={selectedId}
-          onSelect={setSelectedId}
-          loading={data.loading}
-        />
-      )}
-      {mode === "expanded" && activeTab === "timeline" && (
-        <Timeline goals={filteredGoals} selectedId={selectedId} onSelect={setSelectedId} />
-      )}
-      {mode === "expanded" && activeTab === "metrics" && data.metrics && (
+      <RemoteSection label="Goals" resource={data.sections.goals} empty={filteredGoals.length === 0}>
+        {mode === "inline" && (
+          <Constellation
+            roots={data.roots.filter((g) => visibleIds.has(g.id))}
+            childrenByParent={data.childrenByParent}
+            visibleIds={visibleIds}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            loading={data.sections.goals.availability === "loading"}
+          />
+        )}
+        {mode === "expanded" && activeTab === "constellation" && (
+          <ConstellationSky
+            roots={data.roots.filter((g) => visibleIds.has(g.id))}
+            childrenByParent={data.childrenByParent}
+            visibleIds={visibleIds}
+            selectedId={selectedId}
+            onSelect={setSelectedId}
+            loading={data.sections.goals.availability === "loading"}
+          />
+        )}
+        {mode === "expanded" && activeTab === "timeline" && (
+          <Timeline goals={filteredGoals} selectedId={selectedId} onSelect={setSelectedId} />
+        )}
+      </RemoteSection>
+      {mode === "expanded" && activeTab === "metrics" && data.metrics && data.sections.goals.data && (
         <Metrics metrics={data.metrics} goals={filteredGoals} />
       )}
 
