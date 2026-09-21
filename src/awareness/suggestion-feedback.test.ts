@@ -14,6 +14,9 @@ import { SuggestionComposer, attachSuggestionDraft, claimSuggestionComposition, 
   recoverExpiredCompositions } from './suggestion-composer.ts';
 import { createSuggestionFeedbackRoutes } from './suggestion-feedback-routes.ts';
 import type { ComposeResult } from '../actions/tools/workflow-composer.ts';
+import { composePersistedFlow } from '../actions/tools/persisted-workflow-composer.ts';
+import { getWorkflowComposition } from '../workflows/db/repos/workflow-composition.ts';
+import { sampleCatalog } from '../workflows/runtime/test-fixtures.ts';
 
 let directory: string;
 let path: string;
@@ -119,6 +122,37 @@ describe('durable suggestion feedback', () => {
 });
 
 describe('composition job and draft recovery', () => {
+  test('the production composer retains the accepted outcome during repair and links its durable record', async () => {
+    const suggestion = proposal();
+    const accepted = acceptSuggestion(suggestion.id, acceptance);
+    let calls = 0;
+    worker = new SuggestionComposer(request => composePersistedFlow({
+      pieceRegistry: sampleCatalog(), llm: { async chat({ prompt }) {
+        const context = JSON.parse(prompt.split('Composition context (JSON):\n')[1]!);
+        expect(context.jobSpecification.name).toBe(acceptance.name);
+        expect(context.jobSpecification.description).toContain(acceptance.description);
+        expect(context.jobSpecification.description).toContain(acceptance.expectedOutcome);
+        if (++calls === 1) return { text: '{unfinished' };
+        expect(context.previousResponse).toBe('{unfinished');
+        return { text: JSON.stringify(result.flow) };
+      } },
+    }, request));
+    worker.start(); await worker.idle(); worker.stop();
+    expect(calls).toBe(2);
+    const job = getCompositionRow(suggestion.id)!;
+    expect(job.state).toBe('draft_ready');
+    const metadata = JSON.parse(getFlow(job.flow_id!)!.metadata!);
+    expect(metadata.opportunityId).toBe(suggestion.id);
+    expect(metadata.compositionId).toBe(accepted.composition!.id);
+    expect(metadata.compositionRecordId).toBeString();
+    closeDb(); initWorkflowDb(path);
+    expect(getWorkflowComposition(metadata.compositionRecordId)).toMatchObject({
+      state: 'VALIDATED', specification: { schemaVersion: 1, name: acceptance.name },
+      previousGraph: result.flow, errors: [],
+    });
+    expect(getWorkflowComposition(metadata.compositionRecordId)!.specification.description).toContain(acceptance.expectedOutcome);
+  });
+
   test('concurrent accepts and workers create exactly one disabled draft, outside the LLM transaction', async () => {
     const suggestion = proposal();
     const gate = deferred<ComposeResult>();

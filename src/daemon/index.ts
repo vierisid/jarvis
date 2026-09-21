@@ -79,7 +79,7 @@ import { AWARENESS_EVENT_TYPE_MAP, OBSERVER_EVENT_TYPE_MAP } from "../workflows/
 import { WorkflowEventBus } from "../workflows/runtime/event-bus.ts";
 import { WorkflowEventBuffer } from "../workflows/runtime/event-buffer.ts";
 import { createComposerLlmClient } from "../actions/tools/composer-llm.ts";
-import { composeFlow } from '../actions/tools/workflow-composer.ts';
+import { composePersistedFlow } from '../actions/tools/persisted-workflow-composer.ts';
 import { SuggestionComposer } from '../awareness/suggestion-composer.ts';
 import {
   bootstrapWorkflowEngine,
@@ -4903,7 +4903,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       }
       if (workflowPieceCatalog) {
         const pieceRegistry = workflowPieceCatalog;
-        suggestionComposer = new SuggestionComposer(request => composeFlow({
+        suggestionComposer = new SuggestionComposer(request => composePersistedFlow({
           llm: composeLlm, pieceRegistry,
           tools: composerToolRegistry?.listDetailed(),
           specialistRoles: Array.from(agentService.getSpecialists().values()).map(r => ({

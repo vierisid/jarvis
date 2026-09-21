@@ -11,6 +11,8 @@ import type {
   LLMStreamEvent,
 } from "../../llm/provider.ts";
 import { createComposerLlmClient } from "./composer-llm.ts";
+import { composeFlow } from "./workflow-composer.ts";
+import { sampleCatalog } from "../../workflows/runtime/test-fixtures.ts";
 
 type Call = { messages: LLMMessage[]; options?: LLMOptions };
 
@@ -159,6 +161,31 @@ describe("createComposerLlmClient: which model writes the workflow", () => {
 });
 
 describe("createComposerLlmClient: request shape", () => {
+  test("stateless repair calls reach the provider with the original intent and previous candidate", async () => {
+    const request = { name: "Weekly private digest", description:
+      "Every Monday at 09:00 UTC, prepare Markdown for the dashboard only. Never email it or delete tasks." };
+    const first = '{"displayName":"Weekly private digest","trigger":';
+    const high = new RecordingProvider("high-model");
+    high.chat = async (messages, options) => {
+      high.calls.push({ messages, options });
+      return { content: high.calls.length === 1 ? first : JSON.stringify({
+        displayName: request.name, trigger: { name: "trigger", type: "EMPTY" },
+      }), model: high.name, tool_calls: [], finish_reason: "stop",
+        usage: { input_tokens: 1, output_tokens: 1 } };
+    };
+    const client = createComposerLlmClient(managerWith({ high }));
+    const result = await composeFlow({ llm: { chat: client.chat }, pieceRegistry: sampleCatalog() }, request);
+    expect(result.ok).toBe(true);
+    expect(high.calls).toHaveLength(2);
+    const messages = high.calls[1]!.messages;
+    expect(messages.map(message => message.role)).toEqual(["system", "user"]);
+    const prompt = messages[1]!.content as string;
+    const context = JSON.parse(prompt.split("Composition context (JSON):\n")[1]!);
+    expect(context.jobSpecification).toEqual({ schemaVersion: 1, ...request });
+    expect(context.previousResponse).toBe(first);
+    expect(context.errors[0]).toContain("not valid JSON");
+  });
+
   test("sends system then user, and caps output on both paths", async () => {
     // The cap is load-bearing: Ollama's default num_predict is 128, which
     // truncates every compose reply mid-JSON. Both paths must agree on it or

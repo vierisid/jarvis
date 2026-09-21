@@ -43,7 +43,8 @@ export function attachSuggestionDraft(job: CompositionRow, result: Extract<Compo
       return false;
     }
     const request = JSON.parse(job.request) as CompositionRequest;
-    const flow = createFlow({ metadata: { opportunityId: job.suggestion_id, compositionId: job.id, feedbackId: job.feedback_id } });
+    const flow = createFlow({ metadata: { opportunityId: job.suggestion_id, compositionId: job.id, feedbackId: job.feedback_id,
+      ...(result.compositionRecordId ? { compositionRecordId: result.compositionRecordId } : {}) } });
     const version = createDraftVersion({ flowId: flow.id, displayName: result.flow.displayName.trim() || request.name,
       trigger: result.flow.trigger });
     getDb().run(`UPDATE suggestion_composition_jobs SET state = 'draft_ready', flow_id = ?, version_id = ?,

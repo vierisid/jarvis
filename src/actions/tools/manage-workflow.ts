@@ -24,6 +24,7 @@ import type { ToolDefinition } from "./registry.ts";
 import type { TriggerManager } from "../../workflows/runner/triggers/manager.ts";
 import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
 import type { ComposerLlmClient } from "./workflow-composer.ts";
+import { composePersistedFlow } from "./persisted-workflow-composer.ts";
 
 /**
  * Minimal tool-registry shape the composer surfaces in its planner prompt.
@@ -69,12 +70,12 @@ import {
   osCheckContextFor,
   type ExecutionTarget,
 } from "../../util/execution-environment.ts";
-import {
-  composeFlow,
-  type ComposedFlow,
-  type ComposerLibraryEntry,
-  type ComposerSpecialistRole,
-  type ComposerToolSpec,
+import type {
+  ComposeDeps,
+  ComposedFlow,
+  ComposerLibraryEntry,
+  ComposerSpecialistRole,
+  ComposerToolSpec,
 } from "./workflow-composer.ts";
 
 export interface ManageWorkflowDeps {
@@ -485,7 +486,7 @@ async function actCompose(
     };
   }
 
-  const composeDeps: Parameters<typeof composeFlow>[0] = {
+  const composeDeps: ComposeDeps = {
     llm: deps.llm,
     pieceRegistry: deps.pieceRegistry,
   };
@@ -508,13 +509,14 @@ async function actCompose(
     const targets = deps.executionTargets();
     if (targets.length > 0) composeDeps.executionTargets = targets;
   }
-  const result = await composeFlow(composeDeps, { name, description });
+  const result = await composePersistedFlow(composeDeps, { name, description });
 
   if (!result.ok) {
     return {
       ok: false,
       errors: result.errors,
       rawResponse: capRawResponse(result.rawResponse),
+      compositionRecordId: result.compositionRecordId,
       ...(result.suggestedInstalls && result.suggestedInstalls.length > 0
         ? { suggestedInstalls: result.suggestedInstalls }
         : {}),
@@ -523,7 +525,7 @@ async function actCompose(
 
   // Persist as a fresh flow + draft version. The flow is created DISABLED;
   // the user must publish + enable explicitly.
-  const flow = createFlow();
+  const flow = createFlow({ metadata: { compositionRecordId: result.compositionRecordId } });
   const flowName = result.flow.displayName.trim() || name;
   const version = createDraftVersion({
     flowId: flow.id,
@@ -534,6 +536,7 @@ async function actCompose(
     ok: true,
     flow: summarizeFlow(getFlow(flow.id) ?? flow),
     versionId: version.id,
+    compositionRecordId: result.compositionRecordId,
   };
 }
 

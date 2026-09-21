@@ -23,6 +23,18 @@ export const DEFAULT_IDS = {
 } as const;
 
 const STATEMENTS: string[] = [
+  // Authoring provenance, not an execution queue. Never replay on startup.
+  `CREATE TABLE IF NOT EXISTS workflow_composition (
+    id TEXT PRIMARY KEY,
+    project_id TEXT NOT NULL,
+    specification TEXT NOT NULL,
+    state TEXT NOT NULL CHECK(state IN ('COMPOSING', 'VALIDATED', 'FAILED')),
+    previous_response TEXT,
+    previous_graph TEXT,
+    errors TEXT NOT NULL DEFAULT '[]',
+    created INTEGER NOT NULL,
+    updated INTEGER NOT NULL
+  )`,
   // Immutable per-run machine and connection generation. No in-place retarget.
   `CREATE TABLE IF NOT EXISTS workflow_run_machine_binding (
     run_id TEXT PRIMARY KEY REFERENCES flow_run(id) ON DELETE CASCADE,

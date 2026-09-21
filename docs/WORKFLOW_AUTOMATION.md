@@ -706,6 +706,40 @@ The primary agent has a `manage_workflow` tool registered (`src/actions/tools/ma
 
 Source: `src/actions/tools/manage-workflow.ts` and `src/actions/tools/workflow-composer.ts`. The composer's role profile lives in `roles/specialists/workflow-default.yaml`.
 
+### Intent-preserving repair
+
+Every repair prompt carries the same versioned job specification, the latest raw
+candidate response, the last parseable graph and the current parse/validation
+errors. This applies to one-shot repairs, inline JSON and `submit_flow` feedback,
+including a first-turn tool response that falls back to one-shot composition.
+Malformed text does not erase the last parseable graph. The specification is
+authoritative over conflicting candidate data; repair instructions explicitly
+preserve the requested trigger, output, destination and negative constraints.
+
+Specification version 1 is `{ schemaVersion: 1, name, description }`. It preserves
+the caller's wording rather than inferring structured constraints with another
+model. For accepted suggestions, the description includes the accepted expected
+outcome. Structural validation still cannot prove fidelity to arbitrary natural
+language; the regression tests exercise context transport with synthetic providers,
+not live-model success rates.
+
+Both production entry points use `composePersistedFlow`, which saves the
+specification to `workflow_composition` before the first provider request and
+checkpoints each candidate before another repair. Each write commits separately;
+no database transaction spans an LLM call. Records retain full candidate text even
+when the chat tool caps its returned `rawResponse`. The resulting flow metadata
+contains `compositionRecordId`; chat also returns that ID on success or a normal
+composition failure. The record is readable with `getWorkflowComposition(id)`.
+
+Records have three states: `COMPOSING`, `VALIDATED` (structural checks passed), and
+`FAILED`. `VALIDATED` does not mean a draft was attached, published, or executed.
+An interrupted attempt may remain `COMPOSING` with its last checkpoint after a
+restart; this table is authoring provenance, not a queue, and never resumes work
+or spends on its own. Suggestion retries continue to use their existing explicit
+job contract. The new table is additive; older binaries can ignore it without
+rewriting existing flows. Like draft graphs, these records contain user content
+in the shared database and its backups.
+
 ## Visual editor (UI)
 
 Lives in `ui/src/v2/rooms/workflows/`. Built on `@xyflow/react`.
@@ -732,7 +766,7 @@ reading `/api/awareness/routines` and `/api/awareness/compositions`. The legacy 
 Accepting a proposal (`POST /api/awareness/suggestions/:id/accept`) does not compose
 inline. It saves the user-confirmed request as one row in `suggestion_composition_jobs`
 and returns. `SuggestionComposer` (`src/awareness/suggestion-composer.ts`) then claims
-the job under a lease token, calls `composeFlow` with the same deps `manage_workflow`
+the job under a lease token, calls `composePersistedFlow` with the same deps `manage_workflow`
 uses, and commits the flow, its draft version and the job result in a single
 transaction -- the LLM call itself never runs inside a transaction. An interrupted or
 timed-out attempt keeps the saved request and requires an explicit retry, so a crash
