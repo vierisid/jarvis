@@ -6,7 +6,8 @@ import type {
   LLMStreamEvent,
   LLMErrorCode,
 } from './provider.ts';
-import { classifyErrorString, LLMProviderError } from './provider.ts';
+import { classifyErrorString, getLLMErrorCode, LLMProviderError } from './provider.ts';
+import { abortableDelay, raceWithSignal } from '../util/abort.ts';
 import {
   type Tier,
   type TierAssignment,
@@ -169,21 +170,23 @@ export class LLMManager {
     run: (signal: AbortSignal) => Promise<T>,
     provider: string,
     callerSignal?: AbortSignal,
+    checkDeadline?: () => void,
   ): Promise<T> {
     const controller = new AbortController();
     const signal = callerSignal ? AbortSignal.any([callerSignal, controller.signal]) : controller.signal;
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const timeout = new Promise<never>((_, reject) => {
-      timer = setTimeout(() => {
-        const err = new Error(`LLM request to ${provider} timed out after ${LLMManager.REQUEST_TIMEOUT_MS}ms`);
-        // Reject FIRST: a provider can reject synchronously inside abort(), and
-        // the race must settle with the timeout, not with "aborted".
-        reject(err);
-        controller.abort(err);
-      }, LLMManager.REQUEST_TIMEOUT_MS);
-    });
+    const timer = setTimeout(() => controller.abort(new LLMProviderError(
+      `LLM request to ${provider} timed out after ${LLMManager.REQUEST_TIMEOUT_MS}ms`, 'network',
+    )), LLMManager.REQUEST_TIMEOUT_MS);
     try {
-      return await Promise.race([run(signal), timeout]);
+      // An abort timer can be delayed by synchronous work or microtasks.
+      // Check the absolute deadline at the actual provider-attempt boundary.
+      checkDeadline?.();
+      const result = await raceWithSignal(signal, () => run(signal));
+      checkDeadline?.();
+      return result;
+    } catch (error) {
+      checkDeadline?.();
+      throw error;
     } finally {
       clearTimeout(timer);
     }
@@ -201,7 +204,7 @@ export class LLMManager {
 
     const msg = error.message.toLowerCase();
     // Retry on network/timeout errors, not on auth/validation errors
-    return msg.includes('timeout') ||
+    return msg.includes('timeout') || /\btimed\s+out\b/.test(msg) ||
       msg.includes('econnrefused') ||
       msg.includes('enotfound') ||
       msg.includes('network') ||
@@ -246,11 +249,13 @@ export class LLMManager {
   private async waitForRetry(
     retryAfterMs: number | undefined,
     budget: { remainingMs: number },
+    signal?: AbortSignal,
   ): Promise<boolean> {
+    signal?.throwIfAborted();
     if (retryAfterMs === undefined || retryAfterMs <= 0) return true;
     if (retryAfterMs > budget.remainingMs) return false;
     budget.remainingMs -= retryAfterMs;
-    await new Promise<void>((resolve) => setTimeout(resolve, retryAfterMs));
+    await abortableDelay(retryAfterMs, signal);
     return true;
   }
 
@@ -378,7 +383,7 @@ export class LLMManager {
       } catch (err) {
         options?.signal?.throwIfAborted();
         const msg = err instanceof Error ? err.message : String(err);
-        const code = err instanceof LLMProviderError ? err.code : classifyErrorString(msg);
+        const code = getLLMErrorCode(err);
         lastFailureCode = code;
         const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
         if (retryAfterMs !== undefined) lastRetryAfterMs = retryAfterMs;
@@ -509,6 +514,7 @@ export class LLMManager {
           (signal) => provider.chat(messages, { ...options, signal }),
           provider.name,
           options?.signal,
+          options?.checkDeadline,
         );
         options?.signal?.throwIfAborted();
         if (LLMManager.isDebugging && attempt > 1) {
@@ -519,7 +525,7 @@ export class LLMManager {
         options?.signal?.throwIfAborted();
         const errorMsg = err instanceof Error ? err.message : String(err);
         errors.push(`attempt ${attempt}: ${errorMsg}`);
-        lastCode = err instanceof LLMProviderError ? err.code : classifyErrorString(errorMsg);
+        lastCode = getLLMErrorCode(err);
         lastRetryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
         const shouldRetry = this.shouldRetry(err);
         console.error(
@@ -528,7 +534,7 @@ export class LLMManager {
         if (!shouldRetry || attempt === LLMManager.MAX_RETRIES_PER_PROVIDER) break;
         const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
         if (failFastOnRateLimit && lastCode === 'rate_limit') break;
-        if (!await this.waitForRetry(retryAfterMs, retryBudget)) break;
+        if (!await this.waitForRetry(retryAfterMs, retryBudget, options?.signal)) break;
       }
     }
     throw new LLMProviderError(
@@ -629,6 +635,7 @@ export class LLMManager {
     overridePrimary: string | null,
     options?: LLMOptions
   ): Promise<LLMResponse> {
+    options?.signal?.throwIfAborted();
     const failures: string[] = [];
 
     for (const providerName of this.getProviderSequence(overridePrimary)) {
@@ -641,17 +648,20 @@ export class LLMManager {
       const errors: string[] = [];
       const retryBudget = this.newRetryBudget();
       for (let attempt = 1; attempt <= LLMManager.MAX_RETRIES_PER_PROVIDER; attempt++) {
+        options?.signal?.throwIfAborted();
         try {
           const result = await this.withTimeout(
             (signal) => provider.chat(messages, { ...options, signal }),
             providerName,
             options?.signal,
+            options?.checkDeadline,
           );
           if (LLMManager.isDebugging && attempt > 1) {
             console.log(`[DEBUG] LLM ${providerName} succeeded on retry attempt ${attempt}`);
           }
           return result;
         } catch (err) {
+          options?.signal?.throwIfAborted();
           const errorMsg = err instanceof Error ? err.message : String(err);
           errors.push(`attempt ${attempt}: ${errorMsg}`);
 
@@ -662,7 +672,7 @@ export class LLMManager {
 
           if (!shouldRetry) break;
           const retryAfterMs = err instanceof LLMProviderError ? err.retryAfterMs : undefined;
-          if (attempt < LLMManager.MAX_RETRIES_PER_PROVIDER && !await this.waitForRetry(retryAfterMs, retryBudget)) break;
+          if (attempt < LLMManager.MAX_RETRIES_PER_PROVIDER && !await this.waitForRetry(retryAfterMs, retryBudget, options?.signal)) break;
         }
       }
 

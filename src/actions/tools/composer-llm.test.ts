@@ -202,11 +202,8 @@ describe("createComposerLlmClient: request shape", () => {
 
 describe("createComposerLlmClient: errors the composer depends on", () => {
   test("a rejected `tools` parameter still reaches the composer, classifiable", async () => {
-    // composeWithTools CATCHES this and falls back to the one-shot prompt --
-    // but only for codes outside {rate_limit, network, server, auth,
-    // forbidden}. So what has to survive the manager's rewrapping is not the
-    // wording, it is the CLASSIFICATION. Assert the thing the composer
-    // actually branches on.
+    // Only an explicit tool-support failure allows one-shot fallback. Its
+    // classification must survive the manager's aggregation of attempts.
     const high = new RecordingProvider("high-model", new Error("tools is not supported by this model"));
     const client = createComposerLlmClient(managerWith({ high }));
 
@@ -217,14 +214,14 @@ describe("createComposerLlmClient: errors the composer depends on", () => {
       caught = e;
     }
     expect(caught).toBeInstanceOf(LLMProviderError);
-    expect((caught as LLMProviderError).code).toBe("unknown");
-    expect(classifyErrorString((caught as Error).message)).toBe("unknown");
+    expect((caught as LLMProviderError).code).toBe("unsupported_tools");
+    expect(classifyErrorString((caught as Error).message)).toBe("unsupported_tools");
   });
 
   test("a request the high model itself rejects is not re-sent to medium", async () => {
     // Quietly re-running a rejected compose on the weaker model would undo
     // the point of routing to `high`. Note this holds for errors the manager
-    // classifies as `unknown`; see the next test for the ones where failover
+    // classifies as `unsupported_tools`; see the next test for the ones where failover
     // is deliberate manager policy.
     const high = new RecordingProvider("high-model", new Error("tools is not supported by this model"));
     const medium = new RecordingProvider("medium-model");

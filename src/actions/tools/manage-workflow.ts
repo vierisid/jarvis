@@ -514,6 +514,7 @@ async function actCompose(
     return {
       ok: false,
       errors: result.errors,
+      ...(result.errorCode ? { errorCode: result.errorCode } : {}),
       rawResponse: capRawResponse(result.rawResponse),
       ...(result.suggestedInstalls && result.suggestedInstalls.length > 0
         ? { suggestedInstalls: result.suggestedInstalls }

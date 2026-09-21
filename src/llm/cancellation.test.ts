@@ -75,9 +75,13 @@ for (const path of ['tools', 'text', 'fallback'] as const) {
     const abort = new AbortController(); let calls = 0;
     const reply = () => { calls++; abort.abort(new Error('Composition stopped')); };
     const llm: ComposerLlmClient = {
-      async chat(input) { expect(input.signal).toBe(abort.signal); reply(); return { text: 'invalid JSON' }; },
+      async chat(input) {
+        expect(input.signal?.aborted).toBe(false); reply();
+        expect(input.signal?.aborted).toBe(true); return { text: 'invalid JSON' };
+      },
       ...(path !== 'text' ? { async chatTools(_messages: unknown, _tools: unknown, signal?: AbortSignal) {
-        expect(signal).toBe(abort.signal); reply();
+        expect(signal?.aborted).toBe(false); reply();
+        expect(signal?.aborted).toBe(true);
         if (path === 'fallback') throw new Error('tools unsupported');
         return { content: '', tool_calls: [{ id: '1', name: 'list_pieces', arguments: {} }] };
       } } : {}),

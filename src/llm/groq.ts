@@ -173,7 +173,7 @@ export class GroqProvider implements LLMProvider {
 
   async chat(messages: LLMMessage[], options: LLMOptions = {}): Promise<LLMResponse> {
     let response = await this.sendRequest(
-      this.buildRequestBody(messages, options, false, GroqProvider.SAFE_PROMPT_CHAR_BUDGET), options.signal
+      this.buildRequestBody(messages, options, false, GroqProvider.SAFE_PROMPT_CHAR_BUDGET), options.signal, options.checkDeadline
     );
 
     if (!response.ok) {
@@ -182,7 +182,7 @@ export class GroqProvider implements LLMProvider {
         throw this.httpError(response, errorText);
       }
       response = await this.sendRequest(
-        this.buildRequestBody(messages, options, false, GroqProvider.RETRY_PROMPT_CHAR_BUDGET), options.signal
+        this.buildRequestBody(messages, options, false, GroqProvider.RETRY_PROMPT_CHAR_BUDGET), options.signal, options.checkDeadline
       );
       if (!response.ok) {
         const retryError = await response.text();
@@ -390,7 +390,9 @@ export class GroqProvider implements LLMProvider {
     return body;
   }
 
-  private async sendRequest(body: Record<string, unknown>, signal?: AbortSignal): Promise<Response> {
+  private async sendRequest(body: Record<string, unknown>, signal?: AbortSignal, checkDeadline?: () => void): Promise<Response> {
+    const serializedBody = JSON.stringify(body);
+    checkDeadline?.();
     signal?.throwIfAborted();
     return fetch(this.apiUrl, {
       signal,
@@ -399,7 +401,7 @@ export class GroqProvider implements LLMProvider {
         'Authorization': `Bearer ${this.apiKey}`,
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(body),
+      body: serializedBody,
     });
   }
 

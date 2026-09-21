@@ -70,19 +70,11 @@ const COMPOSER_MAX_TOKENS = 8192;
  * 8192 output tokens, so a slow high-tier model (a reasoning model, or a
  * large local one) is likelier to cross it than a medium one was.
  *
- * What happens then, precisely, because it is not what the manager's own
- * retry policy suggests: `withTimeout` rejects with "... timed out after
- * 90000ms", and both `classifyErrorString` and `shouldRetry` look for the
- * substring "timeout", which that message does not contain. So the failure
- * classifies as `unknown`: it is NOT retried, and on tool-loop turn 1 the
- * composer treats it as a tools-unsupported signal and falls back to the
- * one-shot prompt, which can burn another 90s before failing. Budget ~180s
- * worst case, and do not expect to see it retried.
- *
- * (That "timed out" / "timeout" mismatch is a latent bug in the manager
- * affecting every subsystem, not something this module should paper over.
- * Raising the ceiling would mean giving LLMOptions a timeout, which is a
- * change to shared LLM infrastructure and deliberately not made here.)
+ * Per-request timeouts are typed network failures and may consume the
+ * manager's bounded retry allowance. The composer imposes one three-minute
+ * deadline across ALL calls, retries, waits and fallback, and passes its
+ * cancellation signal through this adapter. Timeout never implies missing
+ * tool support; only an explicit unsupported-tools error permits that fallback.
  *
  * `high` falls up to `medium` on its own (see TIER_FALLBACK in
  * src/llm/tiers.ts). That matters for an install that configures only
@@ -138,11 +130,13 @@ export function createComposerLlmClient(manager: LLMManager): ComposerLlmClient 
     manager.chatTier(COMPOSER_TIER, COMPOSER_SUBSYSTEM, messages, options);
 
   return {
-    async chat(input: { prompt: string; system?: string; signal?: AbortSignal }): Promise<{ text: string }> {
+    async chat(input: Parameters<ComposerLlmClient["chat"]>[0]): Promise<{ text: string }> {
       const messages: LLMMessage[] = [];
       if (input.system !== undefined) messages.push({ role: "system", content: input.system });
       messages.push({ role: "user", content: input.prompt });
-      const reply = await route(messages, { max_tokens: COMPOSER_MAX_TOKENS, signal: input.signal });
+      const reply = await route(messages, {
+        max_tokens: COMPOSER_MAX_TOKENS, signal: input.signal, checkDeadline: input.checkDeadline,
+      });
       return { text: textOf(reply.content) };
     },
 
@@ -150,22 +144,23 @@ export function createComposerLlmClient(manager: LLMManager): ComposerLlmClient 
     // (list_pieces / get_piece_details / ...) instead of a full catalog dump.
     // ComposerChatMessage / ComposerToolDef alias LLMMessage / LLMTool, so
     // this is a passthrough. A provider that rejects the `tools` parameter
-    // must see its error REACH the composer: on turn 1, and only for codes
-    // that are not rate_limit / network / server / auth / forbidden, the loop
-    // catches it and falls back to the one-shot `chat` path above. Anything
-    // transient is surfaced to the caller instead. `finish_reason` is passed
+    // must see its error REACH the composer: on turn 1, only an explicit
+    // unsupported-tools error permits fallback to the one-shot `chat` path.
+    // Other provider failures are surfaced to the caller. `finish_reason` is passed
     // through so the loop can tell a reply truncated at the token cap (a
     // dropped submit_flow) from real prose.
     async chatTools(
       messages: ComposerChatMessage[],
       tools: ComposerToolDef[],
       signal?: AbortSignal,
+      checkDeadline?: () => void,
     ): Promise<ComposerChatReply> {
       const reply = await route(messages, {
         max_tokens: COMPOSER_MAX_TOKENS,
         tools,
         tool_choice: "auto",
         signal,
+        checkDeadline,
       });
       return {
         content: textOf(reply.content),

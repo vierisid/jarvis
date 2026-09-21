@@ -48,6 +48,7 @@ export type LLMErrorCode =
   | 'rate_limit'   // 429, quota exhausted
   | 'network'      // timeout, connection refused, 502/503/504
   | 'bad_request'  // 400/422, invalid parameters
+  | 'unsupported_tools' // explicit lack of tool-calling support, not an arbitrary 400
   | 'not_found'    // 404, model/resource missing
   | 'server'       // generic 5xx
   // Hosted (usejarvis_ai) outcomes that retrying cannot change. None of them
@@ -82,6 +83,17 @@ export class LLMProviderError extends Error {
     super(message);
     this.name = 'LLMProviderError';
   }
+}
+
+/** Typed outcomes take precedence. A generic HTTP 400 may be refined only
+ * when its body explicitly identifies unsupported tool calling.
+ */
+export function getLLMErrorCode(error: unknown): LLMErrorCode {
+  if (error instanceof LLMProviderError) {
+    if (error.code === 'bad_request' && classifyErrorString(error.message) === 'unsupported_tools') return 'unsupported_tools';
+    return error.code;
+  }
+  return classifyErrorString(error instanceof Error ? error.message : String(error));
 }
 
 /**
@@ -154,13 +166,18 @@ export function classifyErrorString(raw: string | undefined | null): LLMErrorCod
   ) return 'rate_limit';
   if (
     /\b(502|503|504)\b/.test(s) ||
-    s.includes('timeout') || s.includes('temporarily unavailable') ||
+    s.includes('timeout') || /\btimed\s+out\b/.test(s) || s.includes('temporarily unavailable') ||
     s.includes('econnrefused') || s.includes('enotfound') ||
     s.includes('network')
   ) return 'network';
   if (/\b404\b/.test(s) || s.includes('not found') || s.includes('model_not_found')) return 'not_found';
-  if (/\b(400|422)\b/.test(s) || s.includes('bad request') || s.includes('invalid_request')) return 'bad_request';
   if (/\b5\d\d\b/.test(s) || s.includes('internal server error')) return 'server';
+  if (
+    /\b(?:tools?|tool[_ -](?:calling|use)|function[_ -]calling)['"]?\s+(?:(?:is|are)\s+)?(?:not supported|unsupported)\b/.test(s) ||
+    /\b(?:does not|doesn't|do not|cannot)\s+support\s+(?:tools?|tool[_ -](?:calling|use)|function[_ -]calling)\b/.test(s) ||
+    /\bunsupported (?:parameter|field)\s*:\s*['"]?(?:tools|tool_choice)\b/.test(s)
+  ) return 'unsupported_tools';
+  if (/\b(400|422)\b/.test(s) || s.includes('bad request') || s.includes('invalid_request')) return 'bad_request';
   return 'unknown';
 }
 
@@ -179,6 +196,12 @@ export type LLMOptions = {
    * further retries and tier failover.
    */
   signal?: AbortSignal;
+  /**
+   * Check the caller's absolute monotonic deadline, aborting its signal and
+   * throwing when expired. Non-streaming routing calls this before every
+   * provider attempt and after settlement, even if the abort timer is delayed.
+   */
+  checkDeadline?: () => void;
 };
 
 export interface LLMProvider {

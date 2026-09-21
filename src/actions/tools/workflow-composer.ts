@@ -14,7 +14,8 @@ import type {
 } from "../../workflows/runtime/piece-input.ts";
 import type { PieceLookup } from "../../workflows/runtime/piece-catalog.ts";
 import type { LLMMessage, LLMResponse, LLMTool, LLMToolCall } from "../../llm/provider.ts";
-import { classifyErrorString, LLMProviderError } from "../../llm/provider.ts";
+import { getLLMErrorCode, type LLMErrorCode } from "../../llm/provider.ts";
+import { CompositionTimeoutError, withCompositionBudget } from "./composition-budget.ts";
 
 /**
  * LLM-client shape the composer needs. `chat` is the mandatory single-shot
@@ -28,11 +29,12 @@ import { classifyErrorString, LLMProviderError } from "../../llm/provider.ts";
  * module.
  */
 export interface ComposerLlmClient {
-  chat(input: { prompt: string; system?: string; signal?: AbortSignal }): Promise<{ text: string }>;
+  chat(input: { prompt: string; system?: string; signal?: AbortSignal; checkDeadline?: () => void }): Promise<{ text: string }>;
   chatTools?(
     messages: ComposerChatMessage[],
     tools: ComposerToolDef[],
     signal?: AbortSignal,
+    checkDeadline?: () => void,
   ): Promise<ComposerChatReply>;
 }
 
@@ -152,6 +154,7 @@ export interface ComposeFail {
    * built from what is installed (via its `report_blocked` tool).
    */
   suggestedInstalls?: SuggestedInstall[];
+  errorCode?: LLMErrorCode | 'composition_timeout';
 }
 
 export type ComposeResult = ComposeOk | ComposeFail;
@@ -281,6 +284,10 @@ export interface ComposeDeps {
    * `submit_flow` attempts (each failed validation feeds back the same way).
    */
   maxAttempts?: number;
+  /** Total wall-clock budget across discovery, repairs, provider retries and
+   * fallback. Default three minutes; independent of per-provider timeouts.
+   */
+  totalTimeoutMs?: number;
 }
 
 /**
@@ -310,7 +317,7 @@ export interface ComposeDeps {
  *   - Latency: each attempt is a full LLM round-trip (1-10s on local
  *     models). Hard cap keeps the user-visible delay bounded.
  */
-export async function composeFlow(
+async function composeFlowWithinBudget(
   deps: ComposeDeps,
   req: ComposeRequest,
 ): Promise<ComposeResult> {
@@ -399,6 +406,7 @@ async function composeOneShot(
       // won't help. Bail out immediately rather than burning attempts.
       return {
         ok: false,
+        errorCode: getLLMErrorCode(e),
         errors: [`LLM call failed: ${(e as Error).message}`],
         rawResponse: lastRaw,
       };
@@ -488,7 +496,7 @@ const TOOL_LOOP_MAX_NUDGES = 2;
  * result) or report_blocked (structured "install X first" failure).
  *
  * Returns null when the FIRST turn shows the client/model won't do tools
- * (provider error, or a reply with neither tool calls nor a parseable flow):
+ * (explicit unsupported-tools error, or a reply with no calls/parseable flow):
  * the caller then falls back to the one-shot path, which is designed for
  * exactly those models. After turn 1 there is no fallback -- failures are
  * returned as ComposeFail like the one-shot path would.
@@ -531,38 +539,17 @@ async function composeWithTools(
     } catch (e) {
       req.signal?.throwIfAborted();
       const message = (e as Error).message;
-      // A mid-loop failure is a transient/provider error; retrying from scratch
-      // without tools would discard progress for no better odds, so bail.
-      if (turn === 1) {
-        // On turn 1 a failure *might* mean the provider rejected the tools
-        // parameter, in which case the one-shot path still has a chance. But
-        // don't misdiagnose transient/auth failures as "no tool support":
-        // classify the error and only fall back for bad-request / unknown
-        // codes (the shapes a rejected-tools-param error takes). Clearly
-        // transient (rate_limit, network, server) or auth/permission failures are surfaced
-        // as-is -- dropping tools won't fix them and hides the real cause.
-        // Prefer the typed code: a hosted content-policy block, used-up usage
-        // or a restricted account still carries a "(400)"/"(429)" marker in
-        // its text, and re-sending the same request without tools would only
-        // repeat what was refused.
-        const code = e instanceof LLMProviderError ? e.code : classifyErrorString(message);
-        if (
-          code === "rate_limit" || code === "network" || code === "server" ||
-          code === "auth" || code === "forbidden" ||
-          code === "content_policy" || code === "quota_exhausted" || code === "restricted"
-        ) {
-          logAttempt(turn, "tool-loop-error", `tool call failed (${code}); not falling back: ${message}`);
-          return {
-            ok: false,
-            errors: [`LLM call failed: ${message}`],
-            rawResponse: lastRaw,
-          };
-        }
-        logAttempt(turn, "tool-loop-error", `tool call errored (${code}); falling back to one-shot: ${message}`);
+      const code = getLLMErrorCode(e);
+      // Dropping tools only addresses an explicit capability failure. Unknown
+      // failures and arbitrary 400s must not silently repeat the request.
+      if (turn === 1 && code === 'unsupported_tools') {
+        logAttempt(turn, "tool-loop-error", `tools unsupported; falling back to one-shot: ${message}`);
         return null;
       }
+      logAttempt(turn, "tool-loop-error", `tool call failed (${code}); not falling back: ${message}`);
       return {
         ok: false,
+        errorCode: code,
         errors: [`LLM call failed: ${message}`],
         rawResponse: lastRaw,
       };
@@ -1892,4 +1879,37 @@ function stripJsonFence(text: string): string {
     if (start >= 0 && end > start) s = s.slice(start, end + 1);
   }
   return s;
+}
+
+/** Bound every composition path to one deadline, including provider retries. */
+export async function composeFlow(
+  deps: ComposeDeps,
+  req: ComposeRequest,
+): Promise<ComposeResult> {
+  const request = { ...req };
+  try {
+    return await withCompositionBudget((signal, check) => {
+      const llm: ComposerLlmClient = {
+        async chat(input) {
+          check();
+          const reply = await deps.llm.chat({ ...input, signal, checkDeadline: check });
+          check();
+          return reply;
+        },
+        ...(deps.llm.chatTools ? { async chatTools(messages: ComposerChatMessage[], tools: ComposerToolDef[]) {
+          check();
+          const reply = await deps.llm.chatTools!(messages, tools, signal, check);
+          check();
+          return reply;
+        } } : {}),
+      };
+      return composeFlowWithinBudget({ ...deps, llm }, { ...request, signal });
+    }, request.signal, deps.totalTimeoutMs);
+  } catch (error) {
+    request.signal?.throwIfAborted();
+    if (error instanceof CompositionTimeoutError) {
+      return { ok: false, errorCode: error.code, errors: [error.message], rawResponse: null };
+    }
+    throw error;
+  }
 }
