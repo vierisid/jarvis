@@ -201,4 +201,3 @@ export function realtimeToolDecision(all: readonly ToolDefinition[]): FilterDeci
   return unfiltered(all, 'realtime sessions have a fixed tool list: no per-turn refilter, no working escape hatch');
 }
 
-export { DISCOVER_TOOLS };

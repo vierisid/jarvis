@@ -91,7 +91,13 @@ const PINNED_REF = `${PINNED.provider}:${PINNED.model}`;
 const FILTER_ON: ToolFilterPolicy = {
   enabled: true,
   maxParamsB: 1000,             // the harness pins its own model; do not size-gate it
-  models: [PINNED_REF],
+  // Both the pinned ref AND the bare provider name. The gate also checks
+  // the model-less candidate `tierCandidates` appends to recover a
+  // provider's own default, which is unknowable and therefore ineligible;
+  // allowlisting the bare name is how an operator says "whatever this
+  // provider defaults to is fine". Without it the harness measures nothing
+  // and its own guard refuses to print a number.
+  models: [PINNED_REF, PINNED.provider],
 };
 
 // ------------------------------------------------------------------ helpers

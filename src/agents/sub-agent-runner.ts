@@ -22,6 +22,7 @@ import type { LLMMessage, LLMResponse, LLMToolCall, LLMTool } from '../llm/provi
 import { ToolRegistry, type ToolDefinition } from '../actions/tools/registry.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
 import type { TierMap } from '../llm/tiers.ts';
+import type { LLMProviderEntry } from '../config/types.ts';
 import { decideTools } from '../actions/tools/tool-relevance/filter.ts';
 import { DISCOVER_TOOLS, ToolExposureLedger } from '../actions/tools/tool-relevance/ledger.ts';
 import { interceptDiscovery, DISCOVER_TOOLS_LLM } from '../actions/tools/tool-relevance/discover.ts';
@@ -166,6 +167,14 @@ export type RunSubAgentOptions = {
   context: string;
   llmManager: LLMManager;
   toolRegistry: ToolRegistry;
+  /**
+   * Provider entries from the post-DB-merge `llm` config, for the tool
+   * filter's model-class gate. Absent means the classifier reads a
+   * provider's KIND from its NAME, which is right for the canonical
+   * entries and fails closed (ineligible, so unfiltered) for custom-named
+   * ones -- so a custom-named ollama instance simply never filters here.
+   */
+  toolFilterProviders?: Record<string, LLMProviderEntry | undefined>;
   onProgress?: ProgressCallback;
   maxIterations?: number;
   // Authority engine components (optional — if not provided, no gate applied)
@@ -261,6 +270,7 @@ function getLLMTools(
   messages: readonly LLMMessage[],
   ledger: ToolExposureLedger,
   tiers: TierMap,
+  providers: Record<string, LLMProviderEntry | undefined> | undefined,
 ): { llm: LLMTool[] | undefined; exposed: ReadonlySet<string> } {
   if (registry.count() === 0) return { llm: undefined, exposed: new Set() };
   const all = registry.list();
@@ -271,7 +281,7 @@ function getLLMTools(
     // The sub-agent loop always runs on the medium tier (see chatTier below).
     tier: 'medium',
     tiers,
-    providers: undefined,
+    providers,
   });
   // DISCOVER_TOOLS_LLM rather than the converted definition:
   // toolDefToLLMTool drops `items` from an array parameter.
@@ -452,6 +462,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     context,
     llmManager,
     toolRegistry,
+    toolFilterProviders,
     onProgress,
     maxIterations = MAX_TOOL_ITERATIONS,
     authorityEngine,
@@ -510,7 +521,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   // seeded from it and admissions survive a pause.
   const exposure = new ToolExposureLedger();
   exposure.seedFromMessages(resume?.messages, (n) => toolRegistry.has(n));
-  let toolSet = getLLMTools(toolRegistry, messages, exposure, tierMapOf(llmManager));
+  let toolSet = getLLMTools(toolRegistry, messages, exposure, tierMapOf(llmManager), toolFilterProviders);
   let tools = toolSet.llm;
   let finalText = '';
   let reachedFinal = false;
@@ -549,6 +560,14 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   /** Dispatch a turn's tool calls in order; a pause returns what was not reached. */
   /** Set when a discover_tools admission widened the exposed set. */
   let exposureWidened = false;
+
+  /** Recompute the offered set after an admission, and only after one. */
+  const refreshToolsIfWidened = () => {
+    if (!exposureWidened) return;
+    exposureWidened = false;
+    toolSet = getLLMTools(toolRegistry, messages, exposure, tierMapOf(llmManager), toolFilterProviders);
+    tools = toolSet.llm;
+  };
 
   const dispatchCalls = async (calls: LLMToolCall[], iteration: number): Promise<SubAgentPause | null> => {
     for (let index = 0; index < calls.length; index++) {
@@ -628,6 +647,13 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       // A turn is durable only while the run is still alive.
       fence();
       if (pause) return finish({ success: true, response: '', terminationReason: 'paused', paused: pause });
+      // A discover_tools call inside `pending.remaining` widens the set
+      // here, and the loop below calls the provider immediately. Without
+      // this the admission would only land one provider call later. Masked
+      // today because `seedFromMessages` also parses admissions out of
+      // `resume.messages`, which is exactly the kind of coupling nobody
+      // remembers when they change the other side.
+      refreshToolsIfWidened();
       startIteration = pending.iteration + 1;
       onTurn?.(state(startIteration));
     }
@@ -658,11 +684,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
         // A turn is durable only while the run is still alive.
         fence();
         if (pause) return finish({ success: true, response: '', terminationReason: 'paused', paused: pause });
-        if (exposureWidened) {
-          exposureWidened = false;
-          toolSet = getLLMTools(toolRegistry, messages, exposure, tierMapOf(llmManager));
-          tools = toolSet.llm;
-        }
+        refreshToolsIfWidened();
         onTurn?.(state(iteration + 1));
         continue;
       }
