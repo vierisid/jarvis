@@ -102,11 +102,6 @@ export interface SpawnEngineOptions {
  * field 22), or null off Linux. Travels with the owner pid so an engine can
  * tell "my owner is alive" from "something else now has my owner's pid".
  */
-/** The directory holding a bundle's `main.js`. */
-function resolveBundleDir(bundlePath: string): string {
-  return dirname(bundlePath);
-}
-
 function ownerStartTime(): string | null {
   try {
     const stat = readFileSync("/proc/self/stat", "utf8");
@@ -234,9 +229,8 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   // is not "nobody needs this". Best-effort: a read-only shared bundle root
   // is not ours to touch.
   try {
-    const dir = resolveBundleDir(opts.bundlePath);
     const when = new Date();
-    utimesSync(dir, when, when);
+    utimesSync(dirname(opts.bundlePath), when, when);
   } catch {
     /* read-only or gone: only costs prune protection, never correctness */
   }
