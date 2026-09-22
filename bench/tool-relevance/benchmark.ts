@@ -54,6 +54,8 @@ const MODEL_REF = opt('--model');
 const BASE_URL = opt('--base-url', process.env.OLLAMA_HOST || 'http://127.0.0.1:11434')!;
 const LIMIT = Number.parseInt(opt('--limit', '0')!, 10);
 const ISSUE_ONLY = has('--issue-only');
+/** Substring filter on case id, so a single expensive case can be re-run. */
+const CASE_MATCH = opt('--case', '')!;
 const FORCE_CPU = has('--cpu');
 const NUM_CTX = Number.parseInt(opt('--num-ctx', '16384')!, 10) || 0;
 const REQUEST_TIMEOUT_MS = Number.parseInt(opt('--timeout-s', '2400')!, 10) * 1000;
@@ -234,7 +236,12 @@ async function reportAccuracy(all: ToolDefinition[]): Promise<void> {
   const modelId = MODEL_REF.split(':').slice(1).join(':') || MODEL_REF;
 
   let cases = ISSUE_ONLY ? ISSUE_CASES : allCases(all);
+  if (CASE_MATCH) cases = cases.filter((c) => c.id.includes(CASE_MATCH));
   if (LIMIT > 0) cases = cases.slice(0, LIMIT);
+  if (cases.length === 0) {
+    console.error(`no cases matched --case "${CASE_MATCH}"`);
+    process.exit(2);
+  }
 
   console.log(`\n=== Tool selection accuracy: ${modelId} via ${BASE_URL} ===`);
   console.log(`${cases.length} cases x 2 calls. A cold full-set prefill was measured at`);
