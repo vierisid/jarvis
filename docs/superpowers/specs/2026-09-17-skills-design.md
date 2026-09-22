@@ -29,10 +29,13 @@ structural runtime; `record_skill` compiles one from a demonstration;
   voice session cannot start it; a sub-agent is denied it; the card cannot be
   approved by voice.
 - Every gate site (orchestrator text path, realtime path, sub-agent runner)
-  resolves the call through `resolveToolGate`, and the workflow effect
-  boundary refuses the skill tools as opaque.
-- `run_skill` and `record_skill` results are framed as outside content and
-  taint the turn.
+  resolves the call through `resolveToolGate`. The workflow effect boundary
+  refuses `record_skill` and `manage_skills` as opaque; `run_skill` reaches it
+  through the gated adapter that runs this same per-step resolution
+  (`docs/superpowers/specs/2026-09-18-workflow-run-skill-effect.md`).
+- On the chat paths, `run_skill` and `record_skill` results are framed as
+  outside content and taint the turn. A flow's step output is not framed: the
+  workflow route frames no tool result, `run_skill` included.
 
 **Integrity**
 

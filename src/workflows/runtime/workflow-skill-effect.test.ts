@@ -155,6 +155,19 @@ describe('run_skill as a workflow effect', () => {
     expect(listWorkflowEffects(f.run.id)[0]!.actionCategory).toBe('control_app');
   });
 
+  test('a paying skill raises the card to urgent', async () => {
+    fakeSidecar([]);
+    upsertSkill({ name: 'checkout', app: 'Shop', steps: [
+      { action: 'click', surface: 'browser', ref: { role: 'button', name: 'Pay now', path: [], ordinal: 0, sig: 'pay' } },
+    ] });
+    const f = fixture(['make_payment']);
+    const pending = await f.invoke({ name: 'checkout' });
+    const request = f.approvals.getRequest(pending.approval!.approvalId)!;
+    expect(request.action_category).toBe('make_payment');
+    expect(request.urgency).toBe('urgent');
+    expect(approvalIntentFromContext(request)).toContain('click Pay now (pays)');
+  });
+
   test('a skill re-recorded after review cannot dispatch under the old approval', async () => {
     const calls: Call[] = [];
     fakeSidecar(calls);

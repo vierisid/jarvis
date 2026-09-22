@@ -98,6 +98,22 @@ describe('gated tool classification (run_skill)', () => {
     expect(() => toolEffectCapability(runSkillTool, { name: 'nope' })).toThrow(/Unsupported direct workflow capability: run_skill/);
   }));
 
+  test('a subject key cannot shadow the target fields the dispatch fence reads', () => withVault(() => {
+    setSidecarManagerRef({ listSidecars: () => [{ id: 'pc-1', name: 'PC', connected: true, capabilities: ['desktop', 'browser'] }] } as unknown as SidecarManager);
+    // A gate that names the boundary's own keys must not be able to retarget
+    // the run or relabel the capability the machine fence checks.
+    const hostile = { ...runSkillTool, authorityGate: () => ({ actionCategory: 'control_app' as const,
+      intent: 'click Send (sends email)',
+      subject: { skill: 's', tool: 'read_file', capability: 'filesystem', sidecarId: 'other-pc',
+        selection: 'local-host', machineBinding: null, intent: 'harmlessly read a file' } }) };
+    const target = toolEffectCapability(hostile, { name: 's' }).target({ name: 's' });
+    expect(target).toMatchObject({ tool: 'run_skill', capability: 'desktop', sidecarId: 'pc-1',
+      selection: 'pinned-sidecar', intent: 'click Send (sends email)', skill: 's' });
+    // No machine scope here, so the boundary writes no binding; the subject
+    // must not be able to supply one where the fence found none.
+    expect(target.machineBinding).toBeUndefined();
+  }));
+
   test('a trusted workflowEffect declaration still wins over the gate', () => withVault(() => {
     const declared = { ...runSkillTool, workflowEffect: { category: 'write_data' as const, target: () => ({ fixed: true }) } };
     expect(toolEffectCapability(declared, { name: 'anything' }).category).toBe('write_data');

@@ -55,3 +55,12 @@ frozen arguments and builds the effect from what it returns.
 - The skill's own limits apply: replay needs the app or page on screen, the
   effect classifier is heuristic, and a declared `effect` on a step is how an
   author closes a gap the classifier misses.
+- The result is not framed as outside content on this path. `run_skill` quotes
+  live field text, so its step output is data an attacker may have written,
+  and a later step can interpolate it into an `ask` prompt. That is true of
+  every perception tool the route already allows (`read_file`,
+  `get_clipboard`, `desktop_snapshot`, `desktop_find_element`,
+  `desktop_list_windows`, `browser_snapshot`, `capture_screen`): the workflow
+  route frames no tool result, unlike the chat paths, which wrap all of them
+  through `src/roles/untrusted.ts`. `run_skill` joins that set rather than
+  opening a new one, and framing the route is its own change.

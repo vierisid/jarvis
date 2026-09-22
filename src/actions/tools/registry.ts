@@ -49,7 +49,10 @@ export type ToolGate = {
    * What the call acts on, as durable identity: for run_skill the skill's
    * name, version and surface. The workflow effect boundary records it as the
    * effect's target, so an approval reviewed against one version of a skill
-   * cannot dispatch another. Plain JSON, no secrets.
+   * cannot dispatch another. Plain JSON, no secrets. The boundary owns the
+   * target keys its dispatch fence reads and drops any subject key that names
+   * one (`tool`, `capability`, `sidecarId`, `selection`, `machineBinding`,
+   * `intent`), so a gate cannot retarget a run by naming a key the same way.
    */
   subject?: Record<string, unknown>;
   /**

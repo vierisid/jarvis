@@ -47,6 +47,9 @@ const OPAQUE_TOOLS = new Set(['run_command', 'browser_evaluate', 'browser_naviga
  */
 const GATED_TOOLS = new Set(['run_skill']);
 
+/** Target keys the boundary owns; a tool's gate subject cannot set them. */
+const RESERVED_TARGET_KEYS = new Set(['tool', 'capability', 'sidecarId', 'selection', 'machineBinding', 'intent']);
+
 export const BOUNDED_TOOL_NAMES: ReadonlySet<string> = BOUNDED_TOOLS;
 export const OPAQUE_TOOL_NAMES: ReadonlySet<string> = OPAQUE_TOOLS;
 export const GATED_TOOL_NAMES: ReadonlySet<string> = GATED_TOOLS;
@@ -79,11 +82,19 @@ function gatedCapability(tool: ToolDefinition, params: Record<string, unknown>) 
   // A browser-only skill is pinned through the browser capability; anything
   // that touches a native window needs the desktop one.
   const capability: SidecarCapability = surface === 'browser' ? 'browser' : 'desktop';
+  // `sidecarId`, `capability` and `machineBinding` in this record are what
+  // validateTarget digests and what the machine-binding fence reads before
+  // dispatch, so the boundary owns those keys outright: a subject key that
+  // names one is dropped rather than allowed to shadow it. Spread order alone
+  // is not enough, because `machineBinding` is only written when a scope
+  // exists and a subject could otherwise supply one where none does.
+  const subject = Object.fromEntries(Object.entries(gate.subject ?? {})
+    .filter(([key]) => !RESERVED_TARGET_KEYS.has(key)));
   const target = (args: Record<string, unknown>): Record<string, unknown> => ({
+    ...subject,
     tool: tool.name,
     ...pinnedSidecar(capability, args.target),
     capability,
-    ...(gate.subject ?? {}),
     intent: gate.intent,
   });
   return {
