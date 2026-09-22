@@ -26,6 +26,7 @@ package main
 // from the caller's goroutine); recorder.go turns that into an RPC error.
 
 import (
+	"errors"
 	"fmt"
 	"log"
 	"os"
@@ -233,11 +234,11 @@ func recorderWorker(h *recorderHook, evCh <-chan recorderEvent) {
 }
 
 // isOwnWindow reports whether the element lives in one of the sidecar's own
-// windows. The chat panel is a WebView2 control whose elements belong to
-// msedgewebview2.exe, so the element's own process is not enough; the
-// hosting top-level window is the sidecar's.
+// windows, and is never recorded. The decision table (including the
+// fail-closed case where the hosting window is unknown) is ownWindowVerdict
+// in recorder.go, which is unit-tested on every platform.
 func isOwnWindow(rec *recordedElement) bool {
-	return rec.Pid == ownPid || rec.WindowPid == ownPid
+	return ownWindowVerdict(rec.Pid, rec.HostPid, ownPid, rec.HostKnown)
 }
 
 func releasePendingField() {
@@ -261,7 +262,7 @@ func captureTypingField() {
 		if isOwnWindow(rec) {
 			// Typing into Jarvis's own window (the chat panel, the connect
 			// window) is never part of a demonstration.
-			return nil, nil
+			return nil, errOwnWindow
 		}
 		elem, err := uiaGetFocusedElement(state.automation)
 		if err != nil {
@@ -271,6 +272,13 @@ func captureTypingField() {
 		recPendingInfo = rec
 		return nil, nil
 	})
+	if errors.Is(err, errOwnWindow) {
+		// Typing into Jarvis's own window is not a fault, just not a step.
+		// Logged anyway: "I recorded nothing" is diagnosed from this log, and
+		// a silent drop is exactly what makes that hard.
+		log.Print("[recorder] ignored typing into Jarvis's own window")
+		return
+	}
 	if err != nil {
 		log.Printf("[recorder] capture failed (typing): %v", err)
 	}
@@ -321,6 +329,14 @@ func captureClick(x, y int) {
 	val, err := comThread.call(func(state *uiaState) (any, error) {
 		return uiaRecordedElement(state, "click", x, y)
 	})
+	if errors.Is(err, errOwnWindow) {
+		// A click on Jarvis's own window (saying "done" in the chat) is not
+		// part of the demonstration. Dropped inside uiaClickedElement, before
+		// the foreground re-attribution could turn it into a step in the
+		// app behind the panel.
+		log.Printf("[recorder] ignored click on Jarvis's own window at %d,%d", x, y)
+		return
+	}
 	if err != nil {
 		log.Printf("[recorder] capture failed (click at %d,%d): %v", x, y, err)
 		return
@@ -330,8 +346,7 @@ func captureClick(x, y int) {
 		return
 	}
 	if isOwnWindow(rec) {
-		// A click on Jarvis's own window (saying "done" in the chat) is not
-		// part of the demonstration.
+		// Belt and braces: the element the re-attribution settled on is ours.
 		log.Printf("[recorder] ignored click on Jarvis's own window (%s %q)", rec.Role, rec.Name)
 		return
 	}

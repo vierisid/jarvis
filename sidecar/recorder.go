@@ -25,6 +25,7 @@ package main
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log"
 	"sync"
@@ -78,6 +79,35 @@ func setRecorderIndicator(p PebbleService) {
 	recorderOpMu.Lock()
 	recorderPebble = p
 	recorderOpMu.Unlock()
+}
+
+// errOwnWindow marks an interaction that belongs to one of Jarvis's own
+// windows. It is not a capture failure -- the element was read fine and is
+// deliberately not recorded -- so the capture paths log it as an ignore
+// rather than a fault, and never as an empty result the caller has to guess
+// the meaning of.
+var errOwnWindow = errors.New("element belongs to one of Jarvis's own windows")
+
+// ownWindowVerdict decides whether an interaction must be dropped because it
+// belongs to one of Jarvis's own windows.
+//
+//   - elemPid is the process owning the element itself.
+//   - hostPid is the process owning the top-level window hosting it, and
+//     hostKnown says whether that window could be established at all.
+//   - ownPid is the sidecar's own process.
+//
+// elemPid alone never identifies a panel: the chat panel is a WebView2
+// control whose elements belong to msedgewebview2.exe while the window
+// belongs to the sidecar. And this FAILS CLOSED -- an element whose hosting
+// window is unknown is treated as ours -- because an unknown host cannot be
+// shown NOT to be a panel, and silently recording what the person typed into
+// Jarvis is the worse of the two outcomes. Dropping a step the person can
+// re-record is the cheaper one.
+func ownWindowVerdict(elemPid, hostPid, ownPid uint32, hostKnown bool) bool {
+	if elemPid == ownPid || hostPid == ownPid {
+		return true
+	}
+	return !hostKnown
 }
 
 // recorderFrame builds the frame the brain accepts. The envelope matters:

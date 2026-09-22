@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"fmt"
 	"sync"
 	"testing"
 	"time"
@@ -210,5 +211,53 @@ func TestRecorderEventsCarryTheEnvelopeTheBrainAccepts(t *testing.T) {
 	}
 	if ev.Priority != "normal" {
 		t.Fatalf("priority: %q", ev.Priority)
+	}
+}
+
+func TestOwnWindowVerdictIdentifiesJarvisPanelsAndFailsClosed(t *testing.T) {
+	const own = uint32(4242)
+	const webview = uint32(9001) // msedgewebview2.exe hosting a panel's content
+	const otherApp = uint32(777)
+
+	cases := []struct {
+		name      string
+		elemPid   uint32
+		hostPid   uint32
+		hostKnown bool
+		want      bool
+	}{
+		// A native control of one of our own windows (the connect window).
+		{"own process", own, own, true, true},
+		// The reported defect: the chat panel is WebView2, so the element
+		// belongs to msedgewebview2.exe and only the hosting window is ours.
+		{"webview content hosted by our window", webview, own, true, true},
+		// An ordinary app: record it.
+		{"another app", otherApp, otherApp, true, false},
+		// A webview belonging to somebody else's app (Teams, Spotify): record it.
+		{"webview hosted by another app", webview, otherApp, true, false},
+		// Fail closed: an element whose hosting window could not be
+		// established cannot be shown NOT to be one of our panels.
+		{"unknown host", webview, 0, false, true},
+		{"unknown host, ordinary-looking element", otherApp, 0, false, true},
+	}
+	for _, c := range cases {
+		if got := ownWindowVerdict(c.elemPid, c.hostPid, own, c.hostKnown); got != c.want {
+			t.Errorf("%s: ownWindowVerdict(elem=%d, host=%d, own=%d, known=%v) = %v, want %v",
+				c.name, c.elemPid, c.hostPid, own, c.hostKnown, got, c.want)
+		}
+	}
+}
+
+func TestOwnWindowErrorIsDistinguishableFromACaptureFailure(t *testing.T) {
+	// The capture paths log a fault but drop an own-window element quietly,
+	// so the two must not be conflated.
+	if !errors.Is(errOwnWindow, errOwnWindow) {
+		t.Fatal("errOwnWindow must match itself")
+	}
+	if errors.Is(errors.New("ElementFromPoint failed"), errOwnWindow) {
+		t.Fatal("an unrelated capture failure must not read as an own-window drop")
+	}
+	if errors.Is(fmt.Errorf("wrapped: %w", errOwnWindow), errOwnWindow) != true {
+		t.Fatal("a wrapped errOwnWindow must still be recognised")
 	}
 }
