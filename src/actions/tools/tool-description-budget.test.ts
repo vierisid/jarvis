@@ -201,14 +201,17 @@ describe('#504 enum values match the implementation', () => {
   for (const [tool, file] of sources) {
     it(`${tool.name} advertises exactly the actions its switch handles`, () => {
       const src = readFileSync(new URL(file, import.meta.url), 'utf8');
-      const handled = [...src.matchAll(/^\s*case ["']([a-z_]+)["']:/gm)].map(m => m[1]!);
+      // Deduped: a value can be cased more than once in a file (#503 added a
+      // second run/delete switch for the authority gates), and this compares
+      // sets, not occurrences.
+      const handled = [...new Set([...src.matchAll(/^\s*case ["']([a-z_]+)["']:/gm)].map(m => m[1]!))];
       const advertised = tool.parameters.action?.enum ?? [];
       expect(advertised.length).toBeGreaterThan(0);
       // Set EQUALITY, both directions. Advertising a value the switch does
       // not handle is the obvious bug; the dangerous one is the reverse --
       // a new `case` whose value is missing from the enum is hard-rejected
       // by validateParameters, so the feature ships unreachable.
-      expect([...advertised].sort()).toEqual([...handled].sort());
+      expect([...new Set(advertised)].sort()).toEqual([...handled].sort());
     });
   }
 });
