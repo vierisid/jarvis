@@ -35,8 +35,6 @@ import {
   type SurfaceKind,
 } from './types.ts';
 
-export { resolveArgs };
-
 export type SkillSurface = { nodes: SemanticNode[]; title?: string };
 
 export type SkillRuntimeDeps = {
