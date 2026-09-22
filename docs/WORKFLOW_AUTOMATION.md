@@ -850,7 +850,7 @@ Knobs (env var wins over the `workflows` config section):
 
 | Variable | Default | Meaning |
 | --- | --- | --- |
-| `JARVIS_ENGINE_SHUTDOWN_GRACE_MS` | owner's kill grace - 250ms | How long the engine keeps flushing after SIGTERM before exiting. Warned about if set at or above the owner's SIGKILL deadline. |
+| `JARVIS_ENGINE_SHUTDOWN_GRACE_MS` | derived: strictly inside the owner's SIGKILL deadline | How long the engine keeps flushing after SIGTERM before exiting. Derived from the owner's kill grace so the two cannot drift; setting it at or above that deadline is warned about. |
 | `JARVIS_ENGINE_ORPHAN_POLL_MS` | 5000 | Orphan-watchdog interval inside the engine. 0 disables it. |
 | `JARVIS_ENGINE_CACHE_MAX_BUNDLES` / `workflows.engineCacheMaxBundles` | 3 | Bundles kept in `~/.jarvis/cache/engine`. 0 disables the count cap. |
 | `JARVIS_ENGINE_CACHE_MAX_AGE_DAYS` / `workflows.engineCacheMaxAgeDays` | 14 | Age past which an untouched bundle is deleted. 0 disables the age cap. |
