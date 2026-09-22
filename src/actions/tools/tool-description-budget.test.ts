@@ -34,6 +34,7 @@ import { documentTool } from './documents.ts';
 import { createManageGoalsTool } from './goals.ts';
 import { createManageWorkflowTool } from './manage-workflow.ts';
 import { createRequestApprovalTool } from './approval-tool.ts';
+import { renderToolSpecLines } from './workflow-composer.ts';
 
 const stub = (x: unknown) => x as never;
 
@@ -198,14 +199,51 @@ describe('#504 enum values match the implementation', () => {
   ];
 
   for (const [tool, file] of sources) {
-    it(`${tool.name} advertises only actions its switch handles`, () => {
+    it(`${tool.name} advertises exactly the actions its switch handles`, () => {
       const src = readFileSync(new URL(file, import.meta.url), 'utf8');
-      const handled = new Set(
-        [...src.matchAll(/^\s*case ["']([a-z_]+)["']:/gm)].map(m => m[1]!),
-      );
+      const handled = [...src.matchAll(/^\s*case ["']([a-z_]+)["']:/gm)].map(m => m[1]!);
       const advertised = tool.parameters.action?.enum ?? [];
       expect(advertised.length).toBeGreaterThan(0);
-      for (const value of advertised) expect(handled).toContain(value);
+      // Set EQUALITY, both directions. Advertising a value the switch does
+      // not handle is the obvious bug; the dangerous one is the reverse --
+      // a new `case` whose value is missing from the enum is hard-rejected
+      // by validateParameters, so the feature ships unreachable.
+      expect([...advertised].sort()).toEqual([...handled].sort());
     });
   }
+});
+
+/**
+ * The composer is a THIRD model-facing surface, and it renders its own
+ * summary rather than the JSON schema. When #504 moved action values from
+ * prose into `enum`, that surface stopped showing them until `enum` was
+ * plumbed through -- and an unrendered enum is worse than prose, because
+ * `validateParameters` rejects the guess the composer then has to make.
+ */
+describe('#504 the composer surface shows enum values', () => {
+  it('renders the allowed values on the param line', () => {
+    const lines = renderToolSpecLines({
+      name: 'content_pipeline',
+      description: 'Track publishable content.',
+      params: [
+        { name: 'action', type: 'string', required: true, description: 'What to do.', enum: ['list', 'get'] },
+        { name: 'id', type: 'string', required: false, description: 'Content item id.' },
+      ],
+    });
+    expect(lines.join('\n')).toContain('param action (string, REQUIRED, one of: list|get)');
+    // A param without an enum must not grow an empty "one of:".
+    expect(lines.join('\n')).toContain('param id (string)');
+    expect(lines.join('\n')).not.toContain('one of: )');
+  });
+
+  it('carries enum through the tool spec the daemon hands the composer', () => {
+    // Mirrors the mapping at src/daemon/index.ts listDetailed(). If that
+    // drops `enum`, the composer is back to guessing.
+    const mapped = Object.entries(contentPipelineTool.parameters).map(([name, p]) => ({
+      name, type: p.type, required: p.required, description: p.description, enum: p.enum,
+    }));
+    const action = mapped.find(p => p.name === 'action')!;
+    expect(action.enum).toEqual(contentPipelineTool.parameters.action!.enum!);
+    expect(renderToolSpecLines({ name: 'x', params: mapped }).join('\n')).toContain('one of: list|get|');
+  });
 });

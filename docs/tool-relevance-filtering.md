@@ -886,11 +886,13 @@ The percentages are slightly *smaller* than before #504 because both arms
 shrank: the filter now has less fat to remove. The absolute saving per case
 is what improved.
 
-Confirmed live against the real tokenizer, not only in bytes: on
-`open notepad and type hello`, `qwen38-fast` reports **10,404 prompt tokens
-unfiltered and 4,938 filtered, -52.5%**, against the -53.8% this table
-predicts from bytes. The model called `desktop_launch_app` correctly in both
-arms.
+Confirmed live against the real tokenizer, not only in bytes - but **before
+#504**, against the 39,420 B registry: on `open notepad and type hello`,
+`qwen38-fast` reported **10,404 prompt tokens unfiltered and 4,938 filtered,
+-52.5%**, against the **-53.8%** the pre-#504 table predicted from bytes. The
+model called `desktop_launch_app` correctly in both arms. The row in the table
+above now reads -49.0% because both arms shrank, so these token counts do not
+corroborate it; re-take the live run to confirm the post-#504 figure.
 
 Four things worth saying plainly, because #475 was rejected partly for not
 saying them:
@@ -946,10 +948,16 @@ imperative "You MUST call this FIRST", and the `commitments` /
 `manage_workflow` cross-reference. Shorter was available; correct was not
 shorter.
 
+All figures here are the **no-library** `manage_workflow` build, which is what
+`bench/tool-relevance/registry.ts` constructs. The daemon builds the *library*
+variant (carrying the `suggestedInstalls` paragraph) for every install that is
+not host-managed, i.e. the common one; there the numbers are 39,873 -> 35,297 B,
+**-4,576 B / -11.5%** - slightly better than the headline, not worse.
+
 Sizes are `JSON.stringify(toolDefToLLMTool(t)).length`, the unit the bench
 uses. That counts UTF-16 code units, so it undercounts UTF-8 bytes wherever a
 description carried a non-ASCII character; #504 removed the em dashes and
-arrows from these six, which is why the two measures now nearly agree.
+arrows from these six, so for all six the two measures now agree exactly.
 
 ---
 
@@ -1059,8 +1067,10 @@ described in prose - has still never been tested.
 **What would settle it.** The comparison is a before/after on tool-selection
 accuracy across the same case set, holding the filter constant and varying
 only the descriptions. It needs one thing this box does not have: a reachable
-model in the target class (ideally <= 20B, so the eligibility gate gives a
-verdict on the real population rather than on an allowlisted exception).
+model in the target class (ideally <= 20B). Note the harness always sets
+`maxParamsB: 1000` and allowlists the pinned ref, so a small model is still an
+allowlisted exception - its size buys a realistic *population*, not a real
+verdict from the gate.
 
 ```
 # 1. A reachable model in the target class.
@@ -1078,9 +1088,16 @@ git switch perf/504-trim-tool-descriptions
 bun bench/tool-relevance/benchmark.ts --accuracy \
   --model ollama:qwen2.5:7b --limit 46 | tee /tmp/acc-after.txt
 
-# 4. Compare correct / wrong / no-call and the substitution rate.
-diff <(grep -E 'accuracy|substitut|no-call' /tmp/acc-before.txt) \
-     <(grep -E 'accuracy|substitut|no-call' /tmp/acc-after.txt)
+# 4. Compare the three summary lines. Case-insensitive, and matching the
+#    harness's real labels: "correct tool:", "no tool called:",
+#    "SUBSTITUTIONS:".
+diff <(grep -iE 'correct tool|no tool called|substitut' /tmp/acc-before.txt) \
+     <(grep -iE 'correct tool|no tool called|substitut' /tmp/acc-after.txt)
+
+# 5. Per-tool rows for criterion 2 below; these carry none of the tokens
+#    above, so they need their own comparison.
+diff <(grep -E '^(gen|issue)/' /tmp/acc-before.txt) \
+     <(grep -E '^(gen|issue)/' /tmp/acc-after.txt)
 ```
 
 Read the result against these, in order:
@@ -1108,8 +1125,8 @@ Read the result against these, in order:
    the generated rows as a smoke test only.
 
 Until that run exists, the defensible claim for #504 is exactly: a measured
--11.1% schema-byte reduction with every load-bearing discriminator,
-precondition and side effect preserved by review and pinned by
+-11.1% schema-byte reduction with the load-bearing discriminators,
+preconditions and side effects that review identified preserved and pinned by
 `src/actions/tools/tool-description-budget.test.ts` - and selection accuracy
 **unmeasured**.
 
@@ -1124,9 +1141,18 @@ honour and that the registry rejects violations of, naming the allowed values
 in the error. It directly offsets the "terser description is a weaker signal"
 risk for the one parameter that most determines whether a call is usable.
 
-An enum was added **only** where it is behaviour-equivalent - where the values
-match the `execute()` switch exactly, so a value that would now be rejected by
-`validateParameters` already hit the `default:` branch and returned an error.
+An enum was added **only** where the advertised values match the `execute()`
+switch exactly, so no call that used to work can now be rejected. The value
+sets are equivalent; the failure *shape* is not, and that is worth stating
+rather than glossing. Before, an unknown action fell to a `default:` branch
+that **returned** `Unknown action: "..."` - a successful tool result, so a
+`jarvis-tool:invoke` step carried on. Now `validateParameters` **throws**, and
+`sandbox-api/routes/jarvis-tools.ts` rethrows anything that is not an
+`ActionOutcomeError`, so a stored workflow step fails hard instead of
+continuing past a soft error. For the LLM tool-call surface that is a strict
+improvement (the error names the allowed values); for a stored workflow it is
+a real behaviour change beyond description text. Those `default:` branches are
+now unreachable through `registry.execute`.
 It was deliberately **not** added to `request_approval.action_category`:
 `VALID_CATEGORIES` is `Object.keys(AUTHORITY_REQUIREMENTS)`, 13 categories, of
 which the description advertises 8. An 8-value enum there would have narrowed

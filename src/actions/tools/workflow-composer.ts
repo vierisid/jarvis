@@ -1307,7 +1307,7 @@ function renderSpecialistRoles(roles: ComposerSpecialistRole[] | undefined): str
  * then each param with type and REQUIRED flag. Shared by the one-shot prompt
  * listing and the get_tool_details tool.
  */
-function renderToolSpecLines(t: ComposerToolSpec): string[] {
+export function renderToolSpecLines(t: ComposerToolSpec): string[] {
   const lines = [`- ${t.name}${t.description ? `: ${firstLine(t.description)}` : ""}`];
   for (const p of t.params) {
     const req = p.required ? ", REQUIRED" : "";
