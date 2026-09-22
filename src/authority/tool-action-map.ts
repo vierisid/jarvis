@@ -8,9 +8,12 @@ import type { ToolDefinition, ToolGate } from '../actions/tools/registry.ts';
 import { rawUiGate } from './ui-intent';
 
 /**
- * Explicit mapping from tool name -> ActionCategory
+ * Explicit mapping from tool name -> ActionCategory.
+ *
+ * Frozen: this is the gate's own lookup table, and an accidental write to it
+ * fails open (see the note on `resolveToolGate`'s floor validation).
  */
-export const TOOL_ACTION_MAP: Record<string, ActionCategory> = {
+export const TOOL_ACTION_MAP: Readonly<Record<string, ActionCategory>> = Object.freeze({
   // Terminal
   run_command: 'execute_command',
 
@@ -102,12 +105,56 @@ export const TOOL_ACTION_MAP: Record<string, ActionCategory> = {
   // authority check (it IS the authority mechanism). Mapped here anyway for
   // audit trail completeness — it's effectively a read of the user's will.
   request_approval: 'read_data',
-};
+
+  // Workflow automation. FLOOR only: `manage_workflow` multiplexes eleven
+  // actions, from `list` to `delete`, and one category cannot be honest for
+  // all of them. A flat `execute_command` would hard-deny `list` below level
+  // 5 and, because every `destructive` impact is in the realtime
+  // DEFAULT_BLOCKED_CATEGORIES, would block "what workflows do I have?" by
+  // voice on a default install. So the floor is the common mutating case and
+  // the tool's own `authorityGate` (src/actions/tools/manage-workflow.ts)
+  // raises `run` to execute_command and `delete` to delete_data per call.
+  // Both carry confirm: 'above_level', which turns a level shortfall into an
+  // approval card instead of a refusal.
+  manage_workflow: 'write_data',
+
+  // Site builder. Registered only when `sites.enabled` (default true), from
+  // createSiteBuilderTools (src/sites/builder-tools.ts). All eight were
+  // unmapped and resolved to read_data (#503).
+  site_read_file: 'read_data',
+  site_list_files: 'read_data',
+  // Model-chosen content at a model-chosen in-project path. Same capability
+  // as the builtin write_file, so the same category.
+  site_write_file: 'write_data',
+  // Fixed argv (`git add` / `git commit`); the message is an argv element,
+  // never shell-interpolated.
+  site_git_commit: 'write_data',
+  // Publishes the project to the user's configured GitHub remote. Sending
+  // local bytes out is a write to the outside world here: the same reading,
+  // and the same category, as browser_upload_file above. Note the taxonomy
+  // has no level-3 "external write", so IMPACT_MAP calls this 'write'.
+  site_github_push: 'write_data',
+  // FLOOR only. `rmSync(path, { force: true })` on a single in-project file.
+  // delete_data is the honest category but it is level 9, which is a refusal
+  // and not a prompt for every shipped role, so it is raised per call by the
+  // tool's authorityGate with confirm: 'above_level' instead.
+  site_delete_file: 'write_data',
+  // FLOOR only. Spawns the template CLI (`bunx create-vite` and friends) and
+  // then `make install`: third-party package code runs on the user's machine.
+  // The template is a fixed allowlist and the project id is charset-sanitised,
+  // so this is not ARBITRARY execution, but it is execution. Its authorityGate
+  // raises the honest install_software (level 7) per call.
+  site_create_project: 'execute_command',
+  // A real shell: Bun.spawn(['sh', '-c', cmd]) with a model-chosen command.
+  // The reason #503 exists. `cwd` is the project, but nothing confines the
+  // shell to it.
+  site_run_command: 'execute_command',
+});
 
 /**
  * Fallback mapping from tool category -> ActionCategory
  */
-export const CATEGORY_ACTION_MAP: Record<string, ActionCategory> = {
+export const CATEGORY_ACTION_MAP: Readonly<Record<string, ActionCategory>> = Object.freeze({
   terminal: 'execute_command',
   'file-ops': 'write_data',
   browser: 'access_browser',
@@ -116,20 +163,45 @@ export const CATEGORY_ACTION_MAP: Record<string, ActionCategory> = {
   content: 'write_data',
   tasks: 'write_data',
   productivity: 'read_data',
-};
+});
 
 /**
- * Resolve the ActionCategory for a given tool.
- * Checks explicit tool name map first, then falls back to category map, then defaults to read_data.
+ * Resolve the ActionCategory for a given tool: explicit tool name, then the
+ * category map, then the fail-closed default.
+ *
+ * Two things here are deliberate and load-bearing.
+ *
+ * `Object.hasOwn`, not `if (MAP[name])`. Both maps are object literals, so
+ * the truthiness test is satisfied by an INHERITED key: a tool named
+ * `constructor` or `toString` read as mapped and returned a Function. That
+ * value reached `checkAuthority`, where `AUTHORITY_REQUIREMENTS[<function>]`
+ * is undefined and `effectiveLevel < undefined` is false -- so the level
+ * check PASSED and the call ran ungated at any level. The equivalent
+ * predicate in tool-relevance/authority-classes.ts already used
+ * `Object.hasOwn` for exactly this reason; this is the other half of it.
+ *
+ * The default is `execute_command`, not `read_data`. A tool nobody classified
+ * is not evidence that it is harmless -- #503 is precisely that mistake, and
+ * it shipped a `sh -c` shell at level 1. The workflow effect boundary already
+ * takes this position for the same lookup ("a tool with no declared action at
+ * all audits as the most severe one, never as read_data",
+ * workflows/runtime/effect-capabilities.ts). Throwing was considered and
+ * rejected: this runs on the dispatch path, and an exception would fail the
+ * whole turn rather than deny one call.
+ *
+ * Reaching the default now means a registered tool that nobody mapped, which
+ * `builtin-tool-coverage.test.ts` fails on. Unknown NAMES do not reach it:
+ * the gate sites short-circuit a name the registry does not hold, so a
+ * hallucinated tool still gets "no tool named ..." and not an approval card.
  */
 export function getActionForTool(toolName: string, toolCategory: string): ActionCategory {
-  if (TOOL_ACTION_MAP[toolName]) {
-    return TOOL_ACTION_MAP[toolName];
+  if (Object.hasOwn(TOOL_ACTION_MAP, toolName)) {
+    return TOOL_ACTION_MAP[toolName]!;
   }
-  if (CATEGORY_ACTION_MAP[toolCategory]) {
-    return CATEGORY_ACTION_MAP[toolCategory];
+  if (Object.hasOwn(CATEGORY_ACTION_MAP, toolCategory)) {
+    return CATEGORY_ACTION_MAP[toolCategory]!;
   }
-  return 'read_data';
+  return 'execute_command';
 }
 
 /**
@@ -176,7 +248,13 @@ export function resolveToolGate(
   toolName: string,
   params: Record<string, unknown>,
 ): ResolvedToolGate {
-  const floorCategory = getActionForTool(toolName, tool?.category ?? 'unknown');
+  // Validate the floor the same way a declared gate category is validated
+  // below. It cannot be bogus today -- Object.hasOwn guards both lookups and
+  // both maps are typed -- but the failure mode if that ever regresses is
+  // fail-OPEN, not closed: AUTHORITY_REQUIREMENTS[bogus] is undefined and
+  // `effectiveLevel < undefined` is false, so the level check passes.
+  const rawFloor = getActionForTool(toolName, tool?.category ?? 'unknown');
+  const floorCategory: ActionCategory = Object.hasOwn(AUTHORITY_REQUIREMENTS, rawFloor) ? rawFloor : 'execute_command';
   const uiGate = rawUiGate(toolName, params);
   let gate: ToolGate | null = null;
   try {

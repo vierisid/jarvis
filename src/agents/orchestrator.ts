@@ -31,6 +31,7 @@ export function seedTaintFromHistory(history: LLMMessage[], taint: Set<string>, 
 import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
+import { ABOVE_LEVEL_SUBSTITUTION } from '../authority/deferred-executor.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { resolveToolGate, gateContext } from '../authority/tool-action-map.ts';
 import { decideTools, realtimeToolDecision } from '../actions/tools/tool-relevance/filter.ts';
@@ -1327,6 +1328,18 @@ export class AgentOrchestrator {
       // Fail closed: a wired gate with nobody to evaluate for must not run the tool.
       return `[AUTHORITY DENIED] Cannot execute ${toolCall.name}: no primary agent is active.`;
     }
+    // A name the registry does not hold is not a governance decision. Dispatch
+    // would throw "not found in registry" a few lines below anyway, so gating
+    // it first only produces a misleading [AUTHORITY DENIED] (which reads to
+    // the model as "you lack the authority" rather than "that tool does not
+    // exist"), an audit row for a call that cannot happen, and -- since the
+    // unmapped default is execute_command, a governed category under the
+    // background and taint profiles -- a real approval card for an invented
+    // tool. A model steered by injected page text can emit those at will.
+    if (!this.toolRegistry.has(toolCall.name)) {
+      return `Error: no tool named "${toolCall.name}" is available. Call discover_tools to see what is.`;
+    }
+
     if (this.authorityEngine && primary) {
       const tool = this.toolRegistry.get(toolCall.name);
       // What this call reaches: the tool's static category, raised by its
@@ -1362,7 +1375,26 @@ export class AgentOrchestrator {
             allowed: true,
             requiresApproval: true,
             actionCategory: decision.actionCategory,
-            reason: `${decision.actionCategory} is above this agent's authority level and requires user approval`,
+            // Carry the floor's profile label through. deferred-executor
+            // keeps taint-gated approvals out of the approval learner by
+            // looking for TAINT_PROFILE_LABEL in `reason`; rewriting `reason`
+            // from scratch silently exempted every substituted approval from
+            // that exclusion, so routine approvals here could train a
+            // suggestion to auto-allow the whole category -- globally, for
+            // every tool, and evaluated before the level check.
+            //
+            // The label goes INSIDE the sentence, not appended after it:
+            // formatApprovalIntent decides whether the engine wrote this
+            // reason, and one of its two tests is
+            // `endsWith('requires user approval')`. For the TAINT label
+            // specifically its other test (`includes(TAINT_PROFILE_LABEL)`)
+            // would still match a trailing parenthetical -- but the
+            // background profile's label has no such second test, so
+            // appending would make its card lead with this sentence instead
+            // of the one naming the actual effect.
+            reason: `${decision.actionCategory} ${ABOVE_LEVEL_SUBSTITUTION}`
+              + `${floor.profileLabel ? ` (${floor.profileLabel})` : ''}`
+              + ` and requires user approval`,
           };
         }
       }
@@ -1580,6 +1612,13 @@ export class AgentOrchestrator {
     if (this.emergencyController && !this.emergencyController.canExecute()) {
       const state = this.emergencyController.getState();
       return `[SYSTEM ${state.toUpperCase()}] Tool execution is currently suspended.`;
+    }
+
+    // Same reason as the task path: an unknown name is not a governance
+    // decision, and on an open mic it must not become a blocked-category
+    // announcement about a tool that does not exist.
+    if (!this.toolRegistry.has(name)) {
+      return `Error: no tool named "${name}" is available.`;
     }
 
     const primary = this.getPrimary();

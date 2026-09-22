@@ -12,6 +12,17 @@ import type { EmergencyController } from './emergency.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { TAINT_PROFILE_LABEL } from './taint-gating.ts';
 
+/**
+ * The phrase in the reason of an approval that was SUBSTITUTED for a level
+ * denial (`confirm: 'above_level'`), rather than requested on its own merits.
+ *
+ * Exported and interpolated by the one place that writes it, the substitution
+ * in `AgentOrchestrator.executeToolInner`, so the producer and the consumer
+ * cannot drift. Matched as a substring, the same way TAINT_PROFILE_LABEL is
+ * above it.
+ */
+export const ABOVE_LEVEL_SUBSTITUTION = "is above this agent's authority level";
+
 export type ExecutionResultCallback = (requestId: string, request: ApprovalRequest, result: string) => void;
 
 export class DeferredExecutor {
@@ -129,10 +140,25 @@ export class DeferredExecutor {
         execution_time_ms: executionTimeMs,
       });
 
-      // Record approval for learning. Taint-gated approvals are excluded:
-      // an override the learner would suggest cannot lift a profile gate,
-      // so the suggestion would be dead on arrival.
-      if (!(request.reason ?? '').includes(TAINT_PROFILE_LABEL)) {
+      // Record approval for learning. Two kinds are excluded.
+      //
+      // Taint-gated: an override the learner would suggest cannot lift a
+      // profile gate, so the suggestion would be dead on arrival.
+      //
+      // Above-level substitutions: the opposite problem, and live rather
+      // than dead. A `confirm: 'above_level'` card says "this one call
+      // reached a category above this agent's level" -- it is not the
+      // person endorsing the category. But `getSuggestions` emits a
+      // per-CATEGORY override with no tool and no role, and an override is
+      // evaluated BEFORE the level check, so accepting one would auto-allow
+      // that category for every tool at every level. `site_delete_file`
+      // (#503) makes this concrete: it is an approval on every single call,
+      // so five routine project-file deletions would offer to auto-allow
+      // `delete_data` everywhere.
+      const reason = request.reason ?? '';
+      const learnable = !reason.includes(TAINT_PROFILE_LABEL)
+        && !reason.includes(ABOVE_LEVEL_SUBSTITUTION);
+      if (learnable) {
         this.learner?.recordDecision(
           request.action_category as ActionCategory,
           request.tool_name,
