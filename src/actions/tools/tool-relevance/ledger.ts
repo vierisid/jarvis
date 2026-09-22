@@ -69,13 +69,23 @@ export class ToolExposureLedger {
    *
    * Seeding is additive, like every other write.
    */
-  seedFromMessages(messages: readonly LLMMessage[] | undefined): void {
+  seedFromMessages(
+    messages: readonly LLMMessage[] | undefined,
+    /**
+     * Restricts what can be seeded to names that actually exist. Without
+     * it a conversation carrying model-invented tool names would grow the
+     * ledger with strings that match nothing, forever -- and the names in
+     * a `discover_tools` call are model-authored input.
+     */
+    isKnown?: (name: string) => boolean,
+  ): void {
     if (!messages) return;
+    const ok = (n: string) => (isKnown ? isKnown(n) : true);
     for (const m of messages) {
       if (m.role !== 'assistant' || !m.tool_calls) continue;
       for (const tc of m.tool_calls) {
-        this.add(tc.name);
-        if (tc.name === DISCOVER_TOOLS) this.add(...admittedNames(tc.arguments));
+        if (ok(tc.name)) this.add(tc.name);
+        if (tc.name === DISCOVER_TOOLS) this.add(...admittedNames(tc.arguments).filter(ok));
       }
     }
   }

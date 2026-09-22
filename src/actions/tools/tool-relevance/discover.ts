@@ -53,6 +53,20 @@ export const DISCOVER_TOOLS_DEFINITION: ToolDefinition = {
   execute: async () => 'discover_tools is handled by the agent loop, not the registry.',
 };
 
+/**
+ * The model-facing schema, with `items` on the array.
+ *
+ * This exists separately because `toolDefToLLMTool` copies only `type`,
+ * `description` and `enum` -- `ToolParameter` has no `items` field -- so
+ * routing the ToolDefinition through the converter emits
+ * `{"type":"array"}` with no element type. Gemini's function-declaration
+ * schema requires `items` for an ARRAY, and that path is reachable: the
+ * allowlist is checked before the frontier veto precisely so an operator
+ * can benchmark whatever they like.
+ *
+ * The call sites append THIS, after the conversion, rather than letting the
+ * definition go through it.
+ */
 export const DISCOVER_TOOLS_LLM: LLMTool = {
   name: DISCOVER_TOOLS_DEFINITION.name,
   description: DISCOVER_TOOLS_DEFINITION.description,
@@ -105,6 +119,56 @@ export type DiscoverOutcome = {
   /** Names admitted, for the audit row. Empty for a plain catalogue read. */
   admitted: string[];
 };
+
+/**
+ * One interception point, shared by every tool loop.
+ *
+ * An earlier version left each of the four call sites to remember the
+ * emergency check and the audit row itself, with the contract written only
+ * in a comment. Predictably, the sub-agent site had neither: a halted system
+ * would still enumerate its catalogue there, and a sub-agent admission left
+ * no trace anywhere, ever. Making it a function with required dependencies
+ * is the difference between a rule and a hope.
+ *
+ * Returns null when this is not a discovery call, so a caller can use it as
+ * a guard.
+ */
+export type DiscoveryContext = {
+  /** Registry tools, for the catalogue and for validating admissions. */
+  all: readonly ToolDefinition[];
+  ledger: ToolExposureLedger;
+  /** Names the model can currently see. NOT the full registry. */
+  exposed: ReadonlySet<string>;
+  /** False when the relevance filter is off; the hatch is then inert. */
+  filterEnabled: boolean;
+  /** The emergency state when execution is suspended, else null. */
+  haltedState?: () => string | null;
+  /** Called with the admitted names when the exposed set actually grew. */
+  onAdmitted?: (admitted: string[]) => void;
+};
+
+export function interceptDiscovery(
+  toolName: string,
+  args: unknown,
+  ctx: DiscoveryContext,
+): { result: string; grew: boolean } | null {
+  if (toolName !== DISCOVER_TOOLS) return null;
+  // With the filter off nothing was hidden, so there is nothing to discover.
+  // Answering anyway would make a disabled feature model-callable, which is
+  // not the no-op the default posture promises.
+  if (!ctx.filterEnabled) return null;
+
+  const halted = ctx.haltedState?.() ?? null;
+  if (halted) {
+    return { result: `[SYSTEM ${halted.toUpperCase()}] Tool discovery is suspended.`, grew: false };
+  }
+
+  const before = ctx.ledger.size;
+  const outcome = handleDiscoverTools(args, ctx.all, ctx.ledger, ctx.exposed);
+  const grew = ctx.ledger.size > before;
+  if (outcome.admitted.length > 0) ctx.onAdmitted?.(outcome.admitted);
+  return { result: outcome.result, grew };
+}
 
 /**
  * Handle one `discover_tools` call.

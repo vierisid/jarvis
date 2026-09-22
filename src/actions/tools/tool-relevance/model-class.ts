@@ -83,8 +83,17 @@ export function classifyModel(
   //    mechanism the benchmark needs. Checked before the veto so an operator
   //    can benchmark whatever they like on purpose -- but see the note below:
   //    the allowlist is an operator's deliberate act on their own install.
+  // A model-less candidate is the provider's own default, and nothing can
+  // tell us what that is. Allowlisting the bare provider name is the only
+  // way to say "whatever this provider defaults to is fine".
   if (policy.models.some((m) => m.toLowerCase() === full.toLowerCase())) {
     return { eligible: true, reason: `allowlisted (${full})` };
+  }
+  if (!model) {
+    return {
+      eligible: false,
+      reason: `provider "${ref.provider}" with no model id: its default is unknowable, so it cannot be cleared`,
+    };
   }
 
   if (vetoed(model) || vetoed(ref.provider)) {
@@ -127,6 +136,35 @@ export function tierCandidateRefs(tier: Tier, tiers: TierMap): ModelRef[] {
     if (a) out.push({ provider: a.provider, model: a.model });
   }
   return out;
+}
+
+/**
+ * Provider kinds whose built-in default model is only a guess, so
+ * `LLMManager.tierCandidates` never retries them without an explicit model
+ * (`LLMProvider.placeholderDefaultModel`). Mirrored here because the set
+ * decides whether a model-less candidate is reachable at all.
+ */
+const PLACEHOLDER_DEFAULT_KINDS: ReadonlySet<string> = new Set([
+  'ollama', 'openai_compatible', 'litellm',
+]);
+
+/**
+ * Expand an assignment into every ref a call could actually land on.
+ *
+ * `tierCandidates` appends the same provider with NO model alongside each
+ * assignment, to recover the provider's own default before crossing a
+ * provider boundary. That candidate is real: when the pinned model 404s,
+ * `chatTier` deletes `options.model` and retries, and the provider answers
+ * with whatever it defaults to -- which nothing in this codebase can
+ * enumerate, since `LLMProvider` exposes only `name`.
+ *
+ * It is skipped for the placeholder-default kinds, exactly as the manager
+ * skips it. That is what keeps an ollama-only tier map eligible while any
+ * cloud provider in the chain makes the whole call ineligible.
+ */
+function expandCandidate(ref: ModelRef, kind: string): ModelRef[] {
+  if (!ref.model || PLACEHOLDER_DEFAULT_KINDS.has(kind)) return [ref];
+  return [ref, { provider: ref.provider, model: undefined }];
 }
 
 /**
@@ -182,15 +220,19 @@ export function isTierEligible(
     return { eligible: false, reason: `tier "${tier}" resolves to no provider` };
   }
 
-  for (const ref of candidates) {
-    const kind = providerKinds?.[ref.provider]?.kind ?? ref.provider;
-    const decision = classifyModel(ref, kind, policy);
-    if (!decision.eligible) {
-      // Name the candidate that blocked it, not just the requested tier: the
-      // confusing case is the one where the requested tier IS eligible and a
-      // fall-up candidate is not.
-      return { eligible: false, reason: `failover candidate ineligible: ${decision.reason}` };
+  let checked = 0;
+  for (const assignment of candidates) {
+    const kind = providerKinds?.[assignment.provider]?.kind ?? assignment.provider;
+    for (const ref of expandCandidate(assignment, kind)) {
+      checked += 1;
+      const decision = classifyModel(ref, kind, policy);
+      if (!decision.eligible) {
+        // Name the candidate that blocked it, not just the requested tier:
+        // the confusing case is the one where the requested tier IS
+        // eligible and a fall-up candidate is not.
+        return { eligible: false, reason: `failover candidate ineligible: ${decision.reason}` };
+      }
     }
   }
-  return { eligible: true, reason: `all ${candidates.length} tier candidate(s) eligible` };
+  return { eligible: true, reason: `all ${checked} reachable candidate(s) eligible` };
 }

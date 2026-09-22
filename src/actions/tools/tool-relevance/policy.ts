@@ -39,7 +39,22 @@ export const DISABLED_POLICY: ToolFilterPolicy = Object.freeze({
 
 let current: ToolFilterPolicy = DISABLED_POLICY;
 
+/**
+ * The live policy.
+ *
+ * The env kill switch is re-read on every call, not just at boot. That is
+ * the difference between a switch an operator can actually reach and one
+ * that needs a restart: `JARVIS_TOOL_FILTER=off` now takes effect on the
+ * next turn. Reading one env var per turn is nothing next to a provider
+ * round trip, and the alternative -- a boot-frozen value -- was documented
+ * as "the switch an operator reaches for at 3am" while not being one.
+ *
+ * `off` can only ever disable. It cannot enable something the resolved
+ * policy did not already allow, so this cannot turn the filter on by
+ * surprise.
+ */
 export function getToolFilterPolicy(): ToolFilterPolicy {
+  if (current.enabled && envOverride() === false) return DISABLED_POLICY;
   return current;
 }
 

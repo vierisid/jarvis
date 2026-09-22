@@ -240,6 +240,38 @@ describe('the tier gate and the failover hole', () => {
     expect(isTierEligible('medium', tiers, kinds, ON, 'medium').eligible).toBe(true);
   });
 
+  test("a cloud provider's own default model is a candidate, and blocks filtering", () => {
+    // `tierCandidates` appends the same provider with NO model alongside
+    // each assignment, to recover the provider's default before crossing a
+    // provider boundary. When the pinned model 404s, chatTier deletes
+    // options.model and retries -- and that default is unknowable here,
+    // since LLMProvider exposes only `name`. An unclassifiable candidate
+    // must therefore block, or an allowlisted "gw:small-7b" would hand the
+    // filtered list to whatever the gateway defaults to.
+    const tiers: TierMap = { medium: { provider: 'gw', model: 'small-7b' } };
+    const kindsGw = { gw: { kind: 'openai' as const } };
+    const allowlisted: ToolFilterPolicy = { enabled: true, maxParamsB: 20, models: ['gw:small-7b'] };
+    const d = isTierEligible('medium', tiers, kindsGw, allowlisted);
+    expect(d.eligible).toBe(false);
+    expect(d.reason).toContain('no model id');
+  });
+
+  test('a placeholder-default provider has no model-less candidate, so ollama still filters', () => {
+    // The manager skips the model-less candidate for providers whose
+    // built-in default is only a guess (ollama, openai_compatible,
+    // litellm). Mirroring that is what keeps the feature usable at all:
+    // without it, nothing would ever be eligible.
+    const tiers: TierMap = { medium: { provider: 'ollama', model: 'qwen2.5:7b' } };
+    expect(isTierEligible('medium', tiers, kinds, ON).eligible).toBe(true);
+  });
+
+  test('allowlisting the bare provider name clears its default model', () => {
+    const tiers: TierMap = { medium: { provider: 'gw', model: 'small-7b' } };
+    const kindsGw = { gw: { kind: 'openai' as const } };
+    const p: ToolFilterPolicy = { enabled: true, maxParamsB: 20, models: ['gw:small-7b', 'gw'] };
+    expect(isTierEligible('medium', tiers, kindsGw, p).eligible).toBe(true);
+  });
+
   test('the environment configured on this machine is not eligible', () => {
     // All four tiers point at openai:gpt-5.4* here, so the filter cannot
     // engage even with enabled: true. The benchmark has to pin its own model.

@@ -57,8 +57,10 @@ export type FilterContext = {
 export type FilterDecision = {
   /** What to send. Never empty when `all` is non-empty. */
   tools: ToolDefinition[];
-  /** True when `tools` is a strict subset and the hatch should be offered. */
+  /** True when `tools` is a strict subset and the hatch was appended. */
   filtered: boolean;
+  /** The names the model can see. Drives the discover_tools catalogue. */
+  exposed: ReadonlySet<string>;
   /** Why, for the log line and the benchmark. */
   reason: string;
   failures: InvariantFailure[];
@@ -99,7 +101,7 @@ function noteViolation(failures: readonly FilterFailure[]): void {
 }
 
 const unfiltered = (all: readonly ToolDefinition[], reason: string): FilterDecision =>
-  ({ tools: [...all], filtered: false, reason, failures: [] });
+  ({ tools: [...all], filtered: false, exposed: new Set(all.map((t) => t.name)), reason, failures: [] });
 
 /**
  * Decide the tool set for one turn.
@@ -134,7 +136,10 @@ export function decideTools(ctx: FilterContext): FilterDecision {
     const result = normalizeToolSet(all, candidate);
     if (result.failedOpen) {
       noteViolation(result.failures);
-      return { tools: [...all], filtered: false, reason: 'invariant violation', failures: result.failures };
+      return {
+        tools: [...all], filtered: false, exposed: new Set(all.map((t) => t.name)),
+        reason: 'invariant violation', failures: result.failures,
+      };
     }
 
     if (result.tools.length >= all.length) {
@@ -152,12 +157,20 @@ export function decideTools(ctx: FilterContext): FilterDecision {
     const tools = [...result.tools, DISCOVER_TOOLS_DEFINITION];
     if (!tools.some((t) => t.name === DISCOVER_TOOLS)) {
       noteViolation([{ invariant: 'I4', detail: 'escape hatch missing from a filtered set' }]);
-      return { tools: [...all], filtered: false, reason: 'escape hatch missing', failures: [] };
+      return {
+        tools: [...all], filtered: false, exposed: new Set(all.map((t) => t.name)),
+        reason: 'escape hatch missing', failures: [],
+      };
     }
 
     return {
       tools,
       filtered: true,
+      // The names the model can actually see. The catalogue renders
+      // available-vs-hidden against THIS; handing it the full registry
+      // instead marks everything available and quietly breaks the discovery
+      // half of the escape hatch.
+      exposed: new Set(tools.map((t) => t.name)),
       reason: `${result.tools.length}/${all.length} tools`
         + (result.repaired.length > 0 ? `; framing repair restored ${result.repaired.length}` : ''),
       failures: [],

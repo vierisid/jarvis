@@ -35,7 +35,8 @@ import type { EmergencyController } from '../authority/emergency.ts';
 import { resolveToolGate, gateContext } from '../authority/tool-action-map.ts';
 import { decideTools, realtimeToolDecision } from '../actions/tools/tool-relevance/filter.ts';
 import { DISCOVER_TOOLS, ToolExposureLedger } from '../actions/tools/tool-relevance/ledger.ts';
-import { handleDiscoverTools } from '../actions/tools/tool-relevance/discover.ts';
+import { interceptDiscovery, DISCOVER_TOOLS_LLM } from '../actions/tools/tool-relevance/discover.ts';
+import { getToolFilterPolicy } from '../actions/tools/tool-relevance/policy.ts';
 import type { LLMProviderEntry } from '../config/types.ts';
 import { combineDecisions, type AuthorityDecision } from '../authority/engine.ts';
 import { progressAcknowledgement } from './progress.ts';
@@ -494,6 +495,10 @@ export class AgentOrchestrator {
     // Terminate this agent
     agent.terminate();
     this.hierarchy.removeAgent(agentId);
+    // The exposure ledger is keyed by agent id and only ever grows, so a
+    // terminated agent's entry would otherwise sit in the map for the life
+    // of the process.
+    this.exposureLedgers.delete(agentId);
   }
 
   getPrimary(): AgentInstance | undefined {
@@ -576,7 +581,7 @@ export class AgentOrchestrator {
         // Execute each tool and add results
         let widened = false;
         for (const tc of llmResponse.tool_calls) {
-          const discovery = this.handleDiscoveryCall(tc, decided.defs, ledger);
+          const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger);
           if (discovery) {
             widened ||= discovery.grew;
             messages.push({ role: 'tool', content: discovery.result, tool_call_id: tc.id });
@@ -585,7 +590,7 @@ export class AgentOrchestrator {
           // Everything the model actually calls stays exposed for the rest
           // of the conversation, so a later turn cannot strip a tool an
           // in-flight task is using.
-          ledger.add(tc.name);
+          this.noteToolUse(ledger, tc.name);
           const result = await this.executeTool(tc, undefined, turnTaint);
           messages.push({
             role: 'tool',
@@ -694,7 +699,7 @@ export class AgentOrchestrator {
     // task record and replayed as opts.history -- so the ledger can be
     // seeded from it, which restores admissions across a pause/resume.
     const ledger = new ToolExposureLedger();
-    ledger.seedFromMessages(opts.history);
+    ledger.seedFromMessages(opts.history, (n) => this.toolRegistry?.has(n) ?? false);
     let decided = this.decideTurnTools(messages, opts.tier, ledger);
     // ask_for_clarification is appended AFTER the filter, and is therefore
     // never part of its accounting. #475's fail-open guard counted it as
@@ -771,13 +776,13 @@ export class AgentOrchestrator {
 
         let widened = false;
         for (const tc of llmResponse.tool_calls) {
-          const discovery = this.handleDiscoveryCall(tc, decided.defs, ledger);
+          const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger);
           if (discovery) {
             widened ||= discovery.grew;
             messages.push({ role: 'tool', content: discovery.result, tool_call_id: tc.id });
             continue;
           }
-          ledger.add(tc.name);
+          this.noteToolUse(ledger, tc.name);
           const result = await this.executeTool(tc, opts.signal, turnTaint);
           toolsExecuted++;
           messages.push({
@@ -1054,13 +1059,13 @@ export class AgentOrchestrator {
       // Execute each tool and add results
       let widened = false;
       for (const tc of toolCalls) {
-        const discovery = this.handleDiscoveryCall(tc, decided.defs, ledger);
+        const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger);
         if (discovery) {
           widened ||= discovery.grew;
           messages.push({ role: 'tool', content: discovery.result, tool_call_id: tc.id });
           continue;
         }
-        ledger.add(tc.name);
+        this.noteToolUse(ledger, tc.name);
         const result = await this.executeTool(tc, undefined, turnTaint);
         messages.push({
           role: 'tool',
@@ -1168,10 +1173,10 @@ export class AgentOrchestrator {
     tier: Tier,
     ledger: ToolExposureLedger,
     fallbackTier?: Tier,
-  ): { llm: LLMTool[] | undefined; defs: ToolDefinition[]; filtered: boolean } {
+  ): { llm: LLMTool[] | undefined; exposed: ReadonlySet<string> } {
     if (!this.toolRegistry || this.toolRegistry.count() === 0) {
       // undefined, not []: the providers treat the two differently.
-      return { llm: undefined, defs: [], filtered: false };
+      return { llm: undefined, exposed: new Set() };
     }
     const all = this.toolRegistry.list();
     const decision = decideTools({
@@ -1191,11 +1196,13 @@ export class AgentOrchestrator {
       })(),
       providers: this.toolFilterProviders,
     });
-    return {
-      llm: decision.tools.map(toolDefToLLMTool),
-      defs: all,
-      filtered: decision.filtered,
-    };
+    // The escape hatch goes on the wire as DISCOVER_TOOLS_LLM, not through
+    // toolDefToLLMTool: the converter drops `items` from an array parameter
+    // (ToolParameter has no such field), and Gemini rejects an ARRAY with no
+    // element type.
+    const llm = decision.tools.map((t) =>
+      (t.name === DISCOVER_TOOLS ? DISCOVER_TOOLS_LLM : toolDefToLLMTool(t)));
+    return { llm, exposed: decision.exposed };
   }
 
   /**
@@ -1213,36 +1220,53 @@ export class AgentOrchestrator {
    */
   private handleDiscoveryCall(
     tc: LLMToolCall,
-    exposed: readonly ToolDefinition[],
+    exposed: ReadonlySet<string>,
     ledger: ToolExposureLedger,
   ): { result: string; grew: boolean } | null {
-    if (tc.name !== DISCOVER_TOOLS) return null;
-    if (this.emergencyController && !this.emergencyController.canExecute()) {
-      const state = this.emergencyController.getState();
-      return { result: `[SYSTEM ${state.toUpperCase()}] Tool discovery is suspended.`, grew: false };
-    }
-    const all = this.toolRegistry?.list() ?? [];
-    const before = ledger.size;
-    const outcome = handleDiscoverTools(tc.arguments, all, ledger, new Set(exposed.map((t) => t.name)));
-    if (outcome.admitted.length > 0) {
-      const agent = this.getPrimary();
-      try {
-        this.auditTrail?.log({
-          agent_id: agent?.id ?? 'unknown',
-          agent_name: this.auditAgentName(agent?.agent.role.name ?? 'unknown'),
-          tool_name: `${DISCOVER_TOOLS}(${outcome.admitted.join(',')})`,
-          action_category: 'read_data',
-          authority_decision: 'allowed',
-          executed: true,
-        });
-      } catch (err) {
-        // An audit failure must not take the turn down, but it must be
-        // visible: this row is the only record that the exposed set widened.
-        console.warn('[Orchestrator] could not audit a discover_tools admission:',
-          err instanceof Error ? err.message : err);
-      }
-    }
-    return { result: outcome.result, grew: ledger.size > before };
+    return interceptDiscovery(tc.name, tc.arguments, {
+      all: this.toolRegistry?.list() ?? [],
+      ledger,
+      exposed,
+      filterEnabled: getToolFilterPolicy().enabled,
+      haltedState: () =>
+        (this.emergencyController && !this.emergencyController.canExecute()
+          ? this.emergencyController.getState()
+          : null),
+      onAdmitted: (admitted) => {
+        const agent = this.getPrimary();
+        try {
+          this.auditTrail?.log({
+            agent_id: agent?.id ?? 'unknown',
+            agent_name: this.auditAgentName(agent?.agent.role.name ?? 'unknown'),
+            tool_name: `${DISCOVER_TOOLS}(${admitted.join(',')})`,
+            action_category: 'read_data',
+            authority_decision: 'allowed',
+            executed: true,
+          });
+        } catch (err) {
+          // An audit failure must not take the turn down, but it must be
+          // visible: this row is the only record that the exposed set grew.
+          console.warn('[Orchestrator] could not audit a discover_tools admission:',
+            err instanceof Error ? err.message : err);
+        }
+      },
+    });
+  }
+
+  /**
+   * Record a dispatched tool in the conversation's exposure ledger.
+   *
+   * Two guards, both learned the hard way:
+   *   - only REGISTERED names, so a model that emits nonsense tool names
+   *     cannot grow an unbounded set of strings that lives as long as the
+   *     process;
+   *   - nothing at all when the filter is off, so the default posture is a
+   *     genuine no-op rather than "inert except for the bookkeeping".
+   */
+  private noteToolUse(ledger: ToolExposureLedger, name: string): void {
+    if (!getToolFilterPolicy().enabled) return;
+    if (!this.toolRegistry?.has(name)) return;
+    ledger.add(name);
   }
 
   /**

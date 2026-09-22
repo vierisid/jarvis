@@ -4144,6 +4144,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     settingsReload.registerApplier('llm', async (cfg) => {
       const { hotReloadLLMProviders } = await import('./llm-settings.ts');
       hotReloadLLMProviders(cfg, agentService.getLLMManager());
+      // `mergeLLMSettingsIntoConfig` REPLACES `config.llm.providers` rather
+      // than mutating it, so the orchestrator's boot-time reference is
+      // detached on every reload. Re-hand it, or the tool filter keeps
+      // classifying provider kinds from a snapshot that no longer matches
+      // the tier map it is being asked about -- and a provider re-pointed
+      // from a local endpoint to a remote one would still read as local.
+      agentService.getOrchestrator().setToolFilterProviders(cfg.llm?.providers);
     });
 
     // authority — keep the engine's construction-time snapshot in sync on a

@@ -24,7 +24,8 @@ import { checkpointExecution } from '../actions/execution-scope.ts';
 import type { TierMap } from '../llm/tiers.ts';
 import { decideTools } from '../actions/tools/tool-relevance/filter.ts';
 import { DISCOVER_TOOLS, ToolExposureLedger } from '../actions/tools/tool-relevance/ledger.ts';
-import { handleDiscoverTools } from '../actions/tools/tool-relevance/discover.ts';
+import { interceptDiscovery, DISCOVER_TOOLS_LLM } from '../actions/tools/tool-relevance/discover.ts';
+import { getToolFilterPolicy } from '../actions/tools/tool-relevance/policy.ts';
 import { toolDefToLLMTool, BUILTIN_TOOLS } from '../actions/tools/builtin.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
@@ -260,8 +261,8 @@ function getLLMTools(
   messages: readonly LLMMessage[],
   ledger: ToolExposureLedger,
   tiers: TierMap,
-): { llm: LLMTool[] | undefined; defs: ToolDefinition[] } {
-  if (registry.count() === 0) return { llm: undefined, defs: [] };
+): { llm: LLMTool[] | undefined; exposed: ReadonlySet<string> } {
+  if (registry.count() === 0) return { llm: undefined, exposed: new Set() };
   const all = registry.list();
   const decision = decideTools({
     all,
@@ -272,7 +273,11 @@ function getLLMTools(
     tiers,
     providers: undefined,
   });
-  return { llm: decision.tools.map(toolDefToLLMTool), defs: all };
+  // DISCOVER_TOOLS_LLM rather than the converted definition:
+  // toolDefToLLMTool drops `items` from an array parameter.
+  const llm = decision.tools.map((t) =>
+    (t.name === DISCOVER_TOOLS ? DISCOVER_TOOLS_LLM : toolDefToLLMTool(t)));
+  return { llm, exposed: decision.exposed };
 }
 
 type AuthorityContext = {
@@ -504,7 +509,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   // checkpoint and `resume.messages` restores it -- so the ledger can be
   // seeded from it and admissions survive a pause.
   const exposure = new ToolExposureLedger();
-  exposure.seedFromMessages(resume?.messages);
+  exposure.seedFromMessages(resume?.messages, (n) => toolRegistry.has(n));
   let toolSet = getLLMTools(toolRegistry, messages, exposure, tierMapOf(llmManager));
   let tools = toolSet.llm;
   let finalText = '';
@@ -553,16 +558,39 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       // it is answered here rather than dispatched. It carries no authority
       // and touches nothing; admission only widens what the next provider
       // call is offered, and the coupling invariant is re-checked then.
-      if (tc.name === DISCOVER_TOOLS) {
-        const before = exposure.size;
-        const outcome = handleDiscoverTools(
-          tc.arguments, toolRegistry.list(), exposure,
-          new Set((tools ?? []).map((t) => t.name)),
-        );
-        if (exposure.size > before) exposureWidened = true;
+      const discovery = interceptDiscovery(tc.name, tc.arguments, {
+        all: toolRegistry.list(),
+        ledger: exposure,
+        exposed: toolSet.exposed,
+        filterEnabled: getToolFilterPolicy().enabled,
+        // The same emergency predicate `executeTool` applies below. Without
+        // it a halted system would still enumerate its catalogue here, which
+        // is the one thing this branch skips by sitting before dispatch.
+        haltedState: () =>
+          (authorityCtx?.emergencyController && !authorityCtx.emergencyController.canExecute()
+            ? authorityCtx.emergencyController.getState()
+            : null),
+        onAdmitted: (admitted) => {
+          try {
+            authorityCtx?.auditTrail?.log({
+              agent_id: agentId,
+              agent_name: agentName,
+              tool_name: `${DISCOVER_TOOLS}(${admitted.join(',')})`,
+              action_category: 'read_data',
+              authority_decision: 'allowed',
+              executed: true,
+            });
+          } catch (err) {
+            console.warn(`[SubAgent:${agentName}] could not audit a discover_tools admission:`,
+              err instanceof Error ? err.message : err);
+          }
+        },
+      });
+      if (discovery) {
+        if (discovery.grew) exposureWidened = true;
         noteToolCall(tc);
         sequence += 1;
-        record(tc, { text: outcome.result });
+        record(tc, { text: discovery.result });
         continue;
       }
       noteToolCall(tc);
@@ -571,9 +599,9 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       if ('paused' in dispatched) {
         return { ...dispatched.paused, remaining: calls.slice(index + 1), iteration };
       }
-      // Whatever the sub-agent actually called stays exposed for the rest
-      // of the run.
-      exposure.add(tc.name);
+      // Whatever the sub-agent actually called stays exposed for the rest of
+      // the run -- registered names only, and only while the filter is on.
+      if (getToolFilterPolicy().enabled && toolRegistry.has(tc.name)) exposure.add(tc.name);
       record(tc, dispatched);
     }
     return null;

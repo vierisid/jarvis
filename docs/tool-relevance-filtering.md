@@ -583,6 +583,14 @@ not:
 `getRealtimeTools()` has no tier at all and the realtime model is named by the
 connect URL, not the tier map - see §6.
 
+**The escape hatch goes on the wire as a hand-written schema**, not through
+`toolDefToLLMTool`. That converter copies only `type`, `description` and
+`enum`, because `ToolParameter` has no `items` field - so a `ToolDefinition`
+with an array parameter emits `{"type":"array"}` with no element type, which
+Gemini's function-declaration schema rejects. That path is reachable: the
+allowlist is deliberately checked before the frontier veto so an operator
+can benchmark whatever they like.
+
 ---
 
 ## 5. The escape hatch
@@ -604,13 +612,23 @@ Admission is **not** exempt from the invariants: re-admitting `run_command`
 re-admits `PERCEPTION(A)` with it, because normalisation runs on every
 computed set.
 
+The catalogue renders available-vs-hidden against **the set the model can
+actually see**, not the registry. An earlier version passed the full
+registry, so every tool read `[available]`, the model was told nothing was
+hidden, and the discovery half of the hatch was dead while the `names` half
+still worked. A test pins a `[hidden]` marker.
+
 Three implementation points an earlier draft got wrong or omitted:
 
 - **It is not an existing pattern.** `request_approval` is a *registered*
   registry tool whose authority check is bypassed by name; only
   `ask_for_clarification` is handled inline, and only at one of the four
-  loops. So this is four new inline branches, written against one shared
-  helper rather than copied four ways.
+  loops. So this is new inline branches at each site - and they call ONE
+  shared function, `interceptDiscovery`, which takes the emergency check and
+  the audit hook as required dependencies. Writing the contract in a comment
+  and leaving each site to honour it was tried first, and the sub-agent site
+  promptly had neither: a halted system still enumerated its catalogue
+  there, and a sub-agent admission left no trace anywhere.
 - **It must be gated and audited.** A synthetic inline tool bypasses the
   emergency controller and the audit trail. `discover_tools({names})` is
   attacker-steerable input that durably widens the exposed set, so it runs
@@ -744,11 +762,28 @@ sample below documents the default rather than creating it.
 `config.example.yaml` carries the block, commented out, so the switch is
 discoverable.
 
-The policy is resolved once at boot into a module-level holder whose
-hard-coded initial value is `enabled: false`, so every path not wired to the
-daemon - tests, scripts, a standalone sub-agent runner - is unfiltered unless
-it opts in. **Model classification is not frozen with it** (§4): the policy is
-boot-time, the classification is per call.
+The policy is resolved at boot into a module-level holder whose hard-coded
+initial value is `enabled: false`, so every path not wired to the daemon -
+tests, scripts, a standalone sub-agent runner - is unfiltered unless it opts
+in.
+
+Two things are deliberately **not** frozen with it:
+
+- **The env kill switch is re-read on every policy read.** An earlier
+  version froze it at boot, which made `JARVIS_TOOL_FILTER=off` need a
+  restart while this document called it "the switch an operator reaches for
+  at 3am". It now takes effect on the next turn. It can only ever disable -
+  it cannot enable something the resolved policy did not already allow - so
+  re-reading it cannot turn the filter on by surprise. Re-reading one env
+  var per turn costs nothing next to a provider round trip.
+- **Model classification** (§4), because the `llm` section is
+  hot-reloadable. `setToolFilterProviders` is re-called from the `llm`
+  reload applier: `mergeLLMSettingsIntoConfig` REPLACES
+  `config.llm.providers` rather than mutating it, so a boot-time reference
+  is detached on every settings save, and a provider re-pointed from a
+  local endpoint to a remote one would otherwise still classify as local.
+
+The config half of the switch still needs a reload to take effect.
 
 On hosted installs neither `config.yaml` nor the process environment is
 reachable by the account owner, so there the kill switch is an ops action.
