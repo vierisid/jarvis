@@ -440,7 +440,11 @@ func uiaRecordedElement(state *uiaState, kind string, x, y int) (*recordedElemen
 	if err != nil {
 		return nil, err
 	}
-	defer elem.Release()
+	// Closure, not `defer elem.Release()`: the climb below reassigns elem,
+	// and a method-value defer would capture the receiver as it is HERE --
+	// releasing the pre-climb element a second time (the loop already
+	// released it) and leaking the one we end up recording.
+	defer func() { elem.Release() }()
 
 	walker, err := uiaRawViewWalker(state.automation)
 	if err != nil {
