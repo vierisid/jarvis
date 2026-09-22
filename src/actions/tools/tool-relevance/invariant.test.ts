@@ -54,12 +54,13 @@ describe('classification', () => {
   });
 
   test('an unmapped tool gets rank Infinity, so it can never reach the floor', () => {
-    // `getActionForTool` defaults an unmapped tool to read_data (rank 100).
-    // On main both `manage_workflow` and `site_run_command` -- a real shell --
-    // are unmapped. Neither is in BUILTIN_TOOLS, so this is checked with a
-    // stand-in shaped like one of them.
+    // This filter does not trust `getActionForTool`'s default for an unmapped
+    // tool, whatever that default is. #503 mapped `manage_workflow` and the
+    // eight site-builder tools (and made the default fail closed), so the
+    // stand-in here is a name in no map at all -- the property under test is
+    // "unmapped", not "site-builder".
     const unmapped: ToolDefinition = {
-      name: 'site_run_command', description: 'shell', category: 'site-builder',
+      name: 'some_unregistered_shell', description: 'shell', category: 'site-builder',
       parameters: {}, execute: async () => '',
     };
     expect(hasExplicitAction(unmapped)).toBe(false);

@@ -122,6 +122,18 @@ export interface ManageWorkflowDeps {
   executionTargets?: () => ExecutionTarget[];
 }
 
+/**
+ * One model-supplied value, safe to put in an approval headline. The card
+ * renders the intent sentence and nothing else, so an uncapped flow name can
+ * run past the real sentence and append reassuring prose after it. Both call
+ * sites put it LAST, where there is nothing after it to impersonate, so the
+ * budget is generous enough to show a real name rather than hide it.
+ */
+function forCard(value: unknown, max = 600): string {
+  const s = String(value ?? "").replace(/\s+/g, " ").trim();
+  return s.length > max ? `${s.slice(0, max - 3)}...` : s;
+}
+
 export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDefinition {
   // No library index => the composer has no search_library tool and can never
   // return suggestedInstalls, so the paragraph describing them is dropped
@@ -211,6 +223,51 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
           "if the user described what the flow should DO, call `compose` instead. Defaults to false.",
         required: false,
       },
+    },
+    /**
+     * Per-action Authority, because one category cannot be honest for eleven
+     * actions.
+     *
+     * The TOOL_ACTION_MAP entry is the FLOOR (write_data) and covers the
+     * ordinary mutating actions. This raises the two that reach further:
+     * `run` queues a flow and is execute_command; `delete` removes one for
+     * good and is delete_data, the same category manage_skills gives its own
+     * delete. Reads return null and pay the floor only.
+     *
+     * `confirm: 'above_level'` is what keeps an honest category from becoming
+     * a dead end: at the gate, a pure level shortfall on a category ABOVE the
+     * floor the agent already clears is substituted for an approval card
+     * rather than a refusal. Without it, `delete` (level 9) would simply be
+     * denied for every shipped role.
+     *
+     * Kept total and dependency-free -- it switches on `params.action` and
+     * nothing else. A gate that throws is caught at the call site and
+     * escalated to confirm: 'always', so a DB read in here would turn a
+     * transient error into a mandatory card.
+     */
+    authorityGate: (params) => {
+      switch (String(params.action ?? "")) {
+        case "run":
+          return { actionCategory: "execute_command", confirm: "above_level",
+            intent: `Run workflow: ${forCard(params.flow)}` };
+        case "delete":
+          return { actionCategory: "delete_data", confirm: "above_level",
+            intent: `Permanently delete workflow: ${forCard(params.flow)}` };
+        default:
+          // list / get / list_runs / get_run are reads; compose / create /
+          // enable / disable / publish are writes the floor already covers.
+          //
+          // `publish` and `enable` are the arguable ones: enabling registers
+          // the flow's cron/webhook, so they ARM the same execution that
+          // `run` is raised for. They stay at the floor because the exposure
+          // is bounded twice over -- CODE steps are refused at publish,
+          // enable AND run unless a human opted that flow in, and every
+          // effect a flow dispatches is re-gated at the workflow effect
+          // boundary, which refuses opaque tools outright. Raising them would
+          // put an approval card in front of ordinary workflow authoring for
+          // no authority gained.
+          return null;
+      }
     },
     execute: async (params) => {
       const action = String(params.action ?? "");

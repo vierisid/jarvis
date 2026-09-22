@@ -111,19 +111,20 @@ design adds, and §2.4 explains why each class is drawn where it is.
 `severityRank(getActionForTool(name, category))` from
 `src/authority/tool-action-map.ts`: the same number the gate sites use.
 
-**With one correction.** `getActionForTool` falls through to `read_data`
-(rank 100) for any tool absent from both `TOOL_ACTION_MAP` and
-`CATEGORY_ACTION_MAP`. That default is safe for gating decisions made
-elsewhere but disastrous here - it would score an unmapped shell as a level-1
+**With one correction.** `getActionForTool` used to fall through to
+`read_data` (rank 100) for any tool absent from both `TOOL_ACTION_MAP` and
+`CATEGORY_ACTION_MAP` - which would score an unmapped shell as a level-1
 read. So for filter purposes:
 
 > **An unmapped tool has rank infinity.** Never floor-eligible, always a
 > union trigger.
 
-This is not hypothetical. `manage_workflow` (category `automation`) and all
+This was not hypothetical. `manage_workflow` (category `automation`) and all
 eight site-builder tools (category `site-builder`), including
-`site_run_command` - a second `Bun.spawn(['sh','-c',cmd])` - are unmapped and
-currently resolve to `read_data`. See §11.
+`site_run_command` - a second `Bun.spawn(['sh','-c',cmd])` - were unmapped and
+resolved to `read_data`. #503 fixed the map itself and made the fallback fail
+closed to `execute_command`; see §11. The rank-infinity rule stays regardless,
+so the filter does not depend on the map staying complete.
 
 ### 2.2 Axis B - outside reach
 
@@ -275,7 +276,7 @@ FLOOR is computed by the §3 rule; the column shows what it evaluates to today.
 | `list_directory` | file-ops | read_data | 100 | **fetch** | 471 | DROP |
 | `delegate_task` | delegation | spawn_agent | 101 | **fetch** | 754* | DROP |
 | `manage_agents` | delegation | spawn_agent | 101 | **fetch** | 1275* | DROP |
-| `manage_workflow` | automation | *(unmapped)* | inf | **fetch** | 2599 | DROP |
+| `manage_workflow` | automation | write_data (floor) | 302 | **fetch** | 2599 | DROP |
 | `manage_skills` | ui | read_data | 100 | replay | 440 | DROP |
 | `list_sidecars` | sidecar | read_data | 100 | replay | 503 | DROP |
 | `create_document` | documents | write_data | 302 | replay | 1163 | DROP |
@@ -300,10 +301,13 @@ lower bound.
 
 Not in the table and handled separately: the eight `site-builder` tools,
 registered into the live orchestrator registry only when sites are enabled
-(`src/daemon/index.ts`). All are unmapped, so all are rank `inf` and, being
-undeclared, class `fetch`. `site_run_command` is a shell. They are never
-floor-eligible and always union triggers, which is the correct treatment
-without needing a per-tool declaration.
+(`src/daemon/index.ts`). Since #503 each carries an explicit action
+(`site_run_command` and `site_create_project` are `execute_command`, the
+writes `write_data`, the two reads `read_data`), so the rank-infinity lock no
+longer applies to them. Being undeclared here they are class `fetch`, which
+is what keeps them out of the floor and makes them union triggers - and
+`coverage.test.ts` now pins that reach for all eight by name, because `reach`
+is the only lock left.
 
 `ask_for_clarification` is not a registry tool - it is synthetic and appended
 after filtering; see §3.
@@ -1163,19 +1167,25 @@ rest - a real behaviour change, not a description edit.
 
 ## 11. Authority-map gaps found while writing this
 
-Pre-existing, independent of the filter, reported so they are not lost:
+Pre-existing, independent of the filter, reported so they are not lost. The
+first three were fixed by #503; the last is still open.
 
-- **`manage_workflow`** (category `automation`) has no `TOOL_ACTION_MAP` entry
-  and `automation` has no `CATEGORY_ACTION_MAP` entry, so `getActionForTool`
-  resolves it to `read_data`, rank 100. It can `run`, `publish`, `enable` and
-  `delete` workflows.
-- **The eight site-builder tools** (category `site-builder`, registered at
+- ~~**`manage_workflow`** (category `automation`) has no `TOOL_ACTION_MAP`
+  entry and `automation` has no `CATEGORY_ACTION_MAP` entry, so
+  `getActionForTool` resolves it to `read_data`, rank 100. It can `run`,
+  `publish`, `enable` and `delete` workflows.~~ FIXED in #503: floor
+  `write_data`, with a per-action `authorityGate` raising `run` to
+  `execute_command` and `delete` to `delete_data`.
+- ~~**The eight site-builder tools** (category `site-builder`, registered at
   runtime when sites are enabled) are likewise unmapped and resolve to
   `read_data`. One of them, **`site_run_command`, is a
-  `Bun.spawn(['sh','-c',cmd])` shell gated at level 1.**
-- `builtin-tool-coverage.test.ts` exists precisely to prevent this and its
+  `Bun.spawn(['sh','-c',cmd])` shell gated at level 1.**~~ FIXED in #503.
+- ~~`builtin-tool-coverage.test.ts` exists precisely to prevent this and its
   header describes this exact failure - but it walks `BUILTIN_TOOLS`, and none
-  of these tools is in `BUILTIN_TOOLS`.
+  of these tools is in `BUILTIN_TOOLS`.~~ FIXED in #503: it now derives its
+  set from the real tool factories via
+  `src/actions/tools/production-registry.ts`, which the benchmark in
+  `bench/tool-relevance/` shares, so the two cannot drift.
 - **`commitments` is mapped `write_data`** (level 3). Per §2.3 it is not a
   data write at all: it schedules an arbitrary unattended agent turn with a
   5-second default cancel window. That is the same complaint this list makes
@@ -1185,9 +1195,9 @@ Pre-existing, independent of the filter, reported so they are not lost:
   it through `request_approval`.
 
 Raising `site_run_command` to `execute_command` changes live gating for an
-existing feature, so it is **not** done in this branch. The filter is designed
-to be safe in spite of it: §2.1 gives an unmapped tool rank infinity, so all
-of these are permanently floor-ineligible and permanently I1 triggers.
+existing feature, so it was **not** done in this branch; #503 did it. The
+filter was designed to be safe in spite of the gap and still is: §2.1 gives an
+unmapped tool rank infinity, independent of what the action map contains.
 
 ---
 

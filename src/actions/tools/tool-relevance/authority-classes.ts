@@ -220,18 +220,21 @@ export function hasExplicitAction(tool: ToolDefinition): boolean {
 /**
  * Authority rank, with the one correction this filter needs.
  *
- * `getActionForTool` falls through to `read_data` (rank 100) for a tool in
- * neither action map. That default is tolerable where it is consumed today,
- * but here it would score an UNMAPPED SHELL as a level-1 read: both
- * `manage_workflow` (category "automation") and `site_run_command` (category
- * "site-builder", a real `Bun.spawn(['sh','-c',cmd])`) are unmapped on main.
- * `builtin-tool-coverage.test.ts` exists to prevent exactly that and would
- * have caught it, but it walks BUILTIN_TOOLS and neither tool is in it.
+ * `getActionForTool` used to fall through to `read_data` (rank 100) for a
+ * tool in neither action map, which scored an UNMAPPED SHELL as a level-1
+ * read: both `manage_workflow` (category "automation") and `site_run_command`
+ * (category "site-builder", a real `Bun.spawn(['sh','-c',cmd])`) were unmapped.
+ * `builtin-tool-coverage.test.ts` existed to prevent exactly that and would
+ * have caught it, but it walked BUILTIN_TOOLS and neither tool is in it.
  *
- * So an unmapped tool gets rank Infinity here: never floor-eligible, always
- * an invariant trigger. Fixing the action map itself is a separate change
- * (it raises live gating for an existing feature); this filter is built to be
- * safe in spite of the gap rather than to depend on it being closed.
+ * #503 closed both halves: all nine daemon-registered tools now carry
+ * explicit entries, the coverage test derives its set from the real tool
+ * factories rather than from BUILTIN_TOOLS, and the fallback itself fails
+ * closed to `execute_command`.
+ *
+ * This function keeps rank Infinity for an unmapped tool regardless: never
+ * floor-eligible, always an invariant trigger. The filter is built to be safe
+ * in spite of the gap rather than to depend on it staying closed.
  */
 export function authorityRank(tool: ToolDefinition): number {
   // Synthetic tools are rank 100 by fiat. They are not registry tools, so

@@ -358,6 +358,14 @@ async function executeTool(
       return { text: `[SYSTEM ${emergencyController.getState().toUpperCase()}] Tool execution suspended.`, failed: true };
     }
 
+    // An unknown name is not a governance decision: dispatch rejects it
+    // anyway, and gating it first turns "that tool does not exist" into
+    // "[AUTHORITY DENIED] ... level 4 is below required 5", which tells a
+    // sub-agent to give up on a capability it actually has.
+    if (!registry.has(toolCall.name)) {
+      return { text: `Error: no tool named "${toolCall.name}" is available.`, failed: true };
+    }
+
     const tool = registry.get(toolCall.name);
     const toolCategory = tool?.category ?? 'unknown';
     const gate = resolveToolGate(tool, toolCall.name, toolCall.arguments);

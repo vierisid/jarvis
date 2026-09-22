@@ -130,7 +130,17 @@ function boundedTarget(tool: string, params: Record<string, unknown>): Record<st
  * declared action at all audits as the most severe one, never as `read_data`.
  */
 export function refusedEffectCategory(tool: ToolDefinition): ActionCategory {
-  return tool.workflowEffect?.category ?? TOOL_ACTION_MAP[tool.name] ?? 'execute_command';
+  // `Object.hasOwn`, not a raw index with `??`: `TOOL_ACTION_MAP['constructor']`
+  // is a Function, which is not nullish, so `??` would not fire and the audit
+  // row would carry a Function as its action_category.
+  //
+  // Note the map entry is a FLOOR and can sit deliberately below the tool's
+  // worst case -- `manage_workflow` is write_data with its `delete` raised per
+  // call by an authorityGate (#503). So this can under-state a refusal; it
+  // never over-states one, and an unmapped tool still audits as the most
+  // severe category rather than as a read.
+  if (tool.workflowEffect?.category) return tool.workflowEffect.category;
+  return Object.hasOwn(TOOL_ACTION_MAP, tool.name) ? TOOL_ACTION_MAP[tool.name]! : 'execute_command';
 }
 
 export function toolEffectCapability(tool: ToolDefinition, params: Record<string, unknown> = {}) {

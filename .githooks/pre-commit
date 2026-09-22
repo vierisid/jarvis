@@ -13,23 +13,70 @@ bun run scripts/lint-webapp-templates.ts
 echo "[pre-commit] Checking the published tarball still ships what consumers read..."
 bun run scripts/check-package-files.ts
 
-# Bound the test step with a wall-clock timeout. A test that spawns the
-# engine subprocess and forgets to reap it can hang `bun test --bail`
-# indefinitely (observed once in late-May 2026, never reproduced). 240s
-# is roughly 4x the steady-state runtime, leaving headroom for a slow
-# disk / cold cache but cutting off the indefinite case so the commit
-# fails loudly instead of blocking the terminal.
-echo "[pre-commit] Running tests (240s timeout)..."
+# Bound the test step with a wall-clock timeout. What this guards is not a
+# slow test -- bun's own per-test timeout already fails those -- but a runner
+# that never exits after the last test because something spawned a child and
+# never reaped it (observed once in late-May 2026; the engine case was fixed
+# in #501). Unbounded, that hangs the terminal instead of failing the commit.
+#
+# The suite measured 206s on a developer machine, idle, in 2026-09 (#505), so
+# the cap is roughly 1.75x steady state. Loose on purpose: a cold cache or a
+# loaded machine must not trip it, and much past this a human reaches for
+# Ctrl-C first, which throws away the diagnostic the cap exists to print.
+# Two full suites sharing a machine can still exceed this (nearer 2x): that
+# case is accepted rather than covered, which is why the message below leads
+# with slowness instead of blaming a leak.
+#
+# --kill-after bounds shutdown, not runtime, so it does NOT scale with the
+# cap: `bun test` runs no `exit` handlers when signalled (measured -- see the
+# installExitNet() note in engine-runtime/spawn.ts), and nothing in the test
+# process registers a SIGTERM listener, so it dies on the cap's signal and 124
+# is the normal outcome (the 124 path was measured; a test that one day
+# imports daemon/index.ts would turn it into 137, which is handled below). The
+# 15s also has to cover the engine shim's own post-SIGTERM grace
+# (ENGINE_SHUTDOWN_GRACE_DEFAULT_MS, 1s, or the 1.6s spawn.ts derives from the
+# owner's 2s kill grace), since timeout signals the whole process group and
+# any child is in it.
+#
+# Keep the cap in one variable: it is quoted in the message too, and four
+# hand-maintained copies is how the old comment came to claim "4x" about a cap
+# that was 1.17x.
+TEST_TIMEOUT_S=360
+echo "[pre-commit] Running tests (${TEST_TIMEOUT_S}s timeout)..."
 set +e
-timeout --kill-after=15s 240s bun test --bail
+timeout --kill-after=15s "${TEST_TIMEOUT_S}s" bun test --bail
 rc=$?
 set -e
 if [ "$rc" != "0" ]; then
+  # 124: the cap fired and SIGTERM worked. 137: killed outright, which the cap
+  # causes only when SIGTERM was ignored -- the OOM killer produces it too, so
+  # do not assert the cap was reached.
   if [ "$rc" = "124" ] || [ "$rc" = "137" ]; then
-    echo "[pre-commit] FAILED: tests exceeded the 240s timeout."
-    echo "  A test process likely leaked a child (engine bundle?) and stalled."
-    echo "  Suggestion: run \`bun test --bail\` interactively and watch which file hangs;"
-    echo "  if it's an engine test, check its afterAll for missing release()/shutdown()."
+    # One group, one `|| true`: a write error (the terminal went away) must
+    # not abort the hook before the sweep below and `exit "$rc"`.
+    {
+      if [ "$rc" = "124" ]; then
+        echo "[pre-commit] FAILED: the test step did not finish inside the ${TEST_TIMEOUT_S}s cap."
+      else
+        echo "[pre-commit] FAILED: the test step was killed (SIGKILL). Either it ignored"
+        echo "  the ${TEST_TIMEOUT_S}s cap's SIGTERM, or something else killed it: check dmesg for"
+        echo "  the OOM killer before reading on."
+      fi
+      cat <<'EOF'
+  Most likely the suite was simply slow here: a cold cache, a loaded machine,
+  or another checkout running its tests at the same time. The cap sits well
+  above the recorded steady-state runtime, so re-run the suite on an idle
+  machine before assuming a bug.
+  Failing that, a test may have leaked a child (engine bundle) and left the
+  runner unable to exit -- the signature is every test passing, then nothing.
+  The sweep below (scripts/reap-engines.ts) names any engine still alive with
+  its pid and owner, and an orphan with its bundle too. Absence there is not
+  evidence: the cap signals the whole process group, so a leaked child is
+  usually killed alongside the runner and the sweep still prints "no orphaned
+  engine subprocesses". If it is a leak, the usual cause is a missing
+  release() in try/finally or shutdown() in afterAll.
+EOF
+    } || true
   fi
   # Sweep stragglers: any orphaned engine subprocess from a hung test
   # would otherwise survive the hook and confuse the next attempt.
