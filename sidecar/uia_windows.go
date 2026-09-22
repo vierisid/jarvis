@@ -354,7 +354,7 @@ func uiaClickedElement(state *uiaState, walker *ole.IDispatch, x, y int) (*ole.I
 	hostPid, hostKnown := uiaHostingWindowPid(walker, hit)
 	if ownWindowVerdict(hitPid, hostPid, ownPid, hostKnown) {
 		hit.Release()
-		return nil, errOwnWindow
+		return nil, fmt.Errorf("%w: %s", errOwnWindow, ownWindowReason(hitPid, hostPid, ownPid, hostKnown))
 	}
 
 	fg := win32GetForegroundWindow()

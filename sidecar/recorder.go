@@ -110,6 +110,20 @@ func ownWindowVerdict(elemPid, hostPid, ownPid uint32, hostKnown bool) bool {
 	return !hostKnown
 }
 
+// ownWindowReason explains an ownWindowVerdict of true, so the two causes are
+// distinguishable in sidecar.log. They are not the same thing to a person
+// asking why the recorder ignored what they just did: one is working as
+// intended, the other is a UIA read this machine would not answer.
+func ownWindowReason(elemPid, hostPid, ownPid uint32, hostKnown bool) string {
+	if elemPid == ownPid || hostPid == ownPid {
+		return "one of Jarvis's own windows"
+	}
+	if !hostKnown {
+		return "an element whose hosting window could not be read, dropped rather than risk recording a Jarvis panel"
+	}
+	return "not one of Jarvis's own windows"
+}
+
 // recorderFrame builds the frame the brain accepts. The envelope matters:
 // the brain's validator drops any frame whose `type` is not one of
 // rpc_result / rpc_progress / sidecar_event before it reaches a listener, so

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -245,6 +246,25 @@ func TestOwnWindowVerdictIdentifiesJarvisPanelsAndFailsClosed(t *testing.T) {
 			t.Errorf("%s: ownWindowVerdict(elem=%d, host=%d, own=%d, known=%v) = %v, want %v",
 				c.name, c.elemPid, c.hostPid, own, c.hostKnown, got, c.want)
 		}
+	}
+}
+
+func TestOwnWindowReasonNamesWhichOfTheTwoDropsItWas(t *testing.T) {
+	const own = uint32(4242)
+	// A drop the person should read as working as intended.
+	panel := ownWindowReason(9001, own, own, true)
+	if !strings.Contains(panel, "Jarvis's own window") {
+		t.Errorf("a panel drop must say so, got %q", panel)
+	}
+	// A drop caused by a UIA read this machine would not answer. Saying
+	// "Jarvis's own window" here would send someone looking in the wrong
+	// place for why their typing was ignored.
+	unknown := ownWindowReason(777, 0, own, false)
+	if strings.Contains(unknown, "Jarvis's own window") {
+		t.Errorf("an unreadable-host drop must not be reported as a panel, got %q", unknown)
+	}
+	if !strings.Contains(unknown, "hosting window could not be read") {
+		t.Errorf("an unreadable-host drop must say what failed, got %q", unknown)
 	}
 }
 

@@ -262,7 +262,7 @@ func captureTypingField() {
 		if isOwnWindow(rec) {
 			// Typing into Jarvis's own window (the chat panel, the connect
 			// window) is never part of a demonstration.
-			return nil, errOwnWindow
+			return nil, fmt.Errorf("%w: %s", errOwnWindow, ownWindowReason(rec.Pid, rec.HostPid, ownPid, rec.HostKnown))
 		}
 		elem, err := uiaGetFocusedElement(state.automation)
 		if err != nil {
@@ -273,10 +273,10 @@ func captureTypingField() {
 		return nil, nil
 	})
 	if errors.Is(err, errOwnWindow) {
-		// Typing into Jarvis's own window is not a fault, just not a step.
-		// Logged anyway: "I recorded nothing" is diagnosed from this log, and
-		// a silent drop is exactly what makes that hard.
-		log.Print("[recorder] ignored typing into Jarvis's own window")
+		// Not a fault, just not a step. Logged anyway, with which of the two
+		// reasons it was: "the recorder ignored my typing" is diagnosed from
+		// this log, and a silent drop is what makes that hard.
+		log.Printf("[recorder] ignored typing: %v", err)
 		return
 	}
 	if err != nil {
@@ -334,7 +334,7 @@ func captureClick(x, y int) {
 		// part of the demonstration. Dropped inside uiaClickedElement, before
 		// the foreground re-attribution could turn it into a step in the
 		// app behind the panel.
-		log.Printf("[recorder] ignored click on Jarvis's own window at %d,%d", x, y)
+		log.Printf("[recorder] ignored click at %d,%d: %v", x, y, err)
 		return
 	}
 	if err != nil {
