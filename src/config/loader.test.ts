@@ -532,3 +532,82 @@ describe('Path Expansion', () => {
     expect(loaded.daemon.db_path).toBe('/absolute/db.db');
   });
 });
+
+/**
+ * The SYSTEM-owned `tools:` section (docs/tool-relevance-filtering.md).
+ *
+ * A comment in types.ts used to claim that any new top-level key is
+ * "silently dropped on every load", which is why `log_file_path` lives under
+ * `daemon:`. That is over-broad: only the sections LISTED in
+ * USER_OWNED_SECTIONS are replaced, and deepMerge copies unknown keys
+ * through. These tests pin the real behaviour, so nobody restores a discard
+ * that does not exist and quietly disables the filter's kill switch.
+ */
+describe('tools: relevance filter config', () => {
+  beforeEach(async () => {
+    await createTestConfigPath();
+  });
+
+  afterEach(async () => {
+    delete process.env.JARVIS_TOOL_FILTER;
+    await rm(TEST_CONFIG_DIR, { recursive: true, force: true });
+  });
+
+  const write = async (body: string) => {
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(TEST_CONFIG_PATH, body);
+  };
+
+  test('a tools block survives loadConfig while a user-owned section does not', async () => {
+    await write([
+      'tools:',
+      '  relevance_filter:',
+      '    enabled: true',
+      '    max_params_b: 9',
+      '    models:',
+      '      - "ollama:qwen2.5:7b"',
+      'personality:',
+      '  assistant_name: ShouldBeDiscarded',
+      '',
+    ].join('\n'));
+    const config = await loadConfig(TEST_CONFIG_PATH);
+    expect(config.tools?.relevance_filter?.enabled).toBe(true);
+    expect(config.tools?.relevance_filter?.max_params_b).toBe(9);
+    expect(config.tools?.relevance_filter?.models).toEqual(['ollama:qwen2.5:7b']);
+    // The contrast that makes the point: `personality` IS user-owned, so the
+    // file has no authority over it and it comes back as the default.
+    expect(config.personality.assistant_name).not.toBe('ShouldBeDiscarded');
+  });
+
+  test('tools is not a user-owned section', () => {
+    expect(USER_OWNED_SECTIONS as readonly string[]).not.toContain('tools');
+  });
+
+  test('absent means off: no tools block leaves it undefined', async () => {
+    await write('daemon:\n  port: 3142\n');
+    const config = await loadConfig(TEST_CONFIG_PATH);
+    expect(config.tools).toBeUndefined();
+    expect(DEFAULT_CONFIG).not.toHaveProperty('tools');
+  });
+
+  test('JARVIS_TOOL_FILTER=off overrides an enabled file', async () => {
+    await write('tools:\n  relevance_filter:\n    enabled: true\n');
+    process.env.JARVIS_TOOL_FILTER = 'off';
+    const config = await loadConfig(TEST_CONFIG_PATH);
+    expect(config.tools?.relevance_filter?.enabled).toBe(false);
+  });
+
+  test('JARVIS_TOOL_FILTER=on enables it with no tools block at all', async () => {
+    await write('daemon:\n  port: 3142\n');
+    process.env.JARVIS_TOOL_FILTER = 'on';
+    const config = await loadConfig(TEST_CONFIG_PATH);
+    expect(config.tools?.relevance_filter?.enabled).toBe(true);
+  });
+
+  test('an unrecognised JARVIS_TOOL_FILTER value is ignored, not guessed at', async () => {
+    await write('tools:\n  relevance_filter:\n    enabled: true\n');
+    process.env.JARVIS_TOOL_FILTER = 'perhaps';
+    const config = await loadConfig(TEST_CONFIG_PATH);
+    expect(config.tools?.relevance_filter?.enabled).toBe(true);
+  });
+});

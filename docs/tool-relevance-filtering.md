@@ -915,6 +915,59 @@ model:
   substitution on a case that wanted a framed tool is a stop;
 - the I5 violation counter at zero over the whole run.
 
+### What has actually been measured, and what has not
+
+Stated precisely, because "we ran a benchmark" is exactly the kind of claim
+#483 was filed about.
+
+**Measured, offline, over the real 42-tool registry** (reproducible with
+`bun bench/tool-relevance/benchmark.ts`):
+
+- schema-byte savings per case: -40.3% worst, -92.7% best, -61.0% aggregate
+  over 46 cases;
+- the I5 invariant-violation counter at **zero** across all 46.
+
+**Measured live, against `qwen38-fast` (27.3B, Q4_K) on ollama**, one case:
+
+- `open notepad and type hello`: **10,404 prompt tokens unfiltered vs 4,938
+  filtered, -52.5%** by the model's own tokenizer, against -53.8% predicted
+  from bytes. The model called `desktop_launch_app` correctly in **both**
+  arms.
+
+**NOT measured. The default must not be flipped until these exist:**
+
+- **Substitution rate is unproven.** The run reports `0 over 0 framed-read
+  cases`, which is not evidence of anything. The two framed-read cases
+  errored, and the only local model then became unreachable mid-session (an
+  in-place ollama update removed the binary). This is the single most
+  important number in this document and it has no value yet.
+- **No small model was ever available.** Every local model on the reference
+  box is 27B or 30B, over the 20B `max_params_b` default, and had to be
+  allowlisted explicitly to measure at all. The population this feature
+  exists for was never tested.
+- **Cache and latency are unmeasured.** The one live run produced
+  23,808 ms full vs 205,151 ms filtered, which is *not* a filter effect: the
+  full call ran against a warm model and the filtered call then presented a
+  different prefix and paid a full re-prefill. That is prompt-cache
+  invalidation in miniature, and it is the term that could make the whole
+  feature a net loss. It needs a proper warm/cold protocol.
+- **Accuracy has a sample size of one.**
+
+To reproduce once a model is reachable:
+
+```
+# offline, seconds
+bun bench/tool-relevance/benchmark.ts
+
+# live; --model is required and must match a ref the gate will allowlist
+bun bench/tool-relevance/benchmark.ts --accuracy \
+  --model ollama:<tag> --case summarise-url
+```
+
+The harness refuses to print a pass on zero successful cases, and exits
+nonzero on a partial run. A "0 substitutions" line accompanied by
+"NO RESULT" or "PARTIAL RESULT" is not a green light.
+
 ---
 
 ## 11. Authority-map gaps found while writing this
