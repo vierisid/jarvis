@@ -48,6 +48,9 @@ describe("EngineRuntime (D1: spawn + handshake)", () => {
   });
 
   afterAll(async () => {
+    // Engines first: reclaim anything this runtime spawned while the
+    // SandboxApi it talks to is still up (#491).
+    await runtime?.shutdown();
     await api.stop();
     closeWorkflowDb();
   });
@@ -138,6 +141,9 @@ describe("EngineRuntime (D3: end-to-end CODE flow)", () => {
   });
 
   afterAll(async () => {
+    // Engines first: reclaim anything this runtime spawned while the
+    // SandboxApi it talks to is still up (#491).
+    await runtime?.shutdown();
     await api.stop();
     closeWorkflowDb();
   });

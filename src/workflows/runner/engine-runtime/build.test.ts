@@ -21,6 +21,7 @@ import {
   ENGINE_ESBUILD_CONFIG,
   ENGINE_REQUEST_BASE_SHIM,
 } from "./build";
+import { ENGINE_LIFECYCLE_SHIM, ENGINE_OWNER_PID_ENV } from "./engine-lifecycle";
 
 describe("engine bundle build", () => {
   describe("Request base-URL shim (banner)", () => {
@@ -74,7 +75,35 @@ describe("engine bundle build", () => {
       // name survived in a comment, and it could not see the banner being
       // unwired from the esbuild call at all -- which is the failure that
       // matters, because it changes the bytes the engine runs.
-      expect(ENGINE_ESBUILD_CONFIG.banner.js).toBe(ENGINE_REQUEST_BASE_SHIM);
+      expect(ENGINE_ESBUILD_CONFIG.banner.js).toContain(ENGINE_REQUEST_BASE_SHIM);
+    });
+
+    test("the lifecycle shim is wired in, and FIRST", () => {
+      // Order is load-bearing, not cosmetic: the shim's SIGTERM handler has to
+      // be registered before upstream's run-progress listener so the flush
+      // still runs and then the process actually exits (#491). Unwire this and
+      // the engine goes back to ignoring SIGTERM, silently.
+      const js = ENGINE_ESBUILD_CONFIG.banner.js;
+      expect(js).toContain(ENGINE_LIFECYCLE_SHIM);
+      expect(js.indexOf(ENGINE_LIFECYCLE_SHIM)).toBeLessThan(
+        js.indexOf(ENGINE_REQUEST_BASE_SHIM),
+      );
+      // It must also carry the pieces the reaper and the runtime rely on.
+      expect(js).toContain("SIGTERM");
+      expect(js).toContain(ENGINE_OWNER_PID_ENV);
+    });
+
+    test("removing the lifecycle shim would invalidate every cached bundle", () => {
+      // The hash has to move when the shim does, or hosts keep serving an
+      // engine that ignores SIGTERM from a cache whose name still looks right.
+      const digest = (cfg: unknown) =>
+        createHash("sha256").update(JSON.stringify(cfg)).digest("hex");
+      const withShim = { ...ENGINE_ESBUILD_CONFIG, banner: ENGINE_ESBUILD_CONFIG.banner };
+      const withoutShim = {
+        ...ENGINE_ESBUILD_CONFIG,
+        banner: { js: ENGINE_REQUEST_BASE_SHIM },
+      };
+      expect(digest(withShim)).not.toBe(digest(withoutShim));
     });
 
     test("the build config is part of the bundle cache key", () => {

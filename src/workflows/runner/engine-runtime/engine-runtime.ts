@@ -586,6 +586,18 @@ export class EngineRuntime {
    * `.unref()`-ed so the timer alone doesn't keep the daemon alive.
    */
   private idleEvictionTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * Every engine THIS runtime spawned and has not yet seen exit -- parked,
+   * acquired, or mid-handshake. `shutdown()` reclaims all of them.
+   *
+   * Before this existed, `shutdown()` only reclaimed the ONE engine parked in
+   * the warm slot, so an engine that was still acquired when its owner shut
+   * down (a test whose assertion threw between `acquire()` and `release()`, a
+   * daemon shutting down under a running flow) simply carried on. That is the
+   * "no parent, no consumer" process #491 found still alive 82 minutes later.
+   * Entries drop themselves when the process exits, so this never grows.
+   */
+  private readonly spawned = new Set<{ sandboxId: string; proc: SpawnedEngine }>();
 
   constructor(opts: EngineRuntimeOptions) {
     this.api = opts.api;
@@ -707,9 +719,15 @@ export class EngineRuntime {
       devPieces: this.devPieces,
       cwd: this.cwd,
       env: this.spawnEnvOverride,
+      // Keep the engine's own post-SIGTERM flush window inside the deadline
+      // we SIGKILL it on, so the two can't drift apart (see spawn.ts).
+      ownerKillGraceMs: this.killGraceMs,
     };
     if (this.runtime !== undefined) spawnOptions.runtime = this.runtime;
     const proc = spawnEngine(spawnOptions);
+    const owned = { sandboxId, proc };
+    this.spawned.add(owned);
+    void proc.exited.then(() => this.spawned.delete(owned));
 
     // CRITICAL: drain the engine's stdout + stderr or the engine WILL hang.
     // The bundle is spawned with `stdio: [ignore, pipe, pipe]` and the
@@ -851,25 +869,42 @@ export class EngineRuntime {
   }
 
   /**
-   * Tear down the warm pool. Called by the daemon's shutdown path after
-   * the worker has stopped accepting jobs. Safe to call when pooling is
-   * disabled (no-op).
+   * Tear down everything this runtime spawned: the warm pool AND any engine
+   * still acquired. Called by the daemon's shutdown path after the worker has
+   * stopped accepting jobs, and by test teardown. Safe to call when pooling is
+   * disabled, when nothing is running, and more than once.
+   *
+   * Reclaiming the still-acquired engines too is deliberate: after shutdown
+   * nothing can drive them and nothing else will ever kill them, so leaving
+   * them up produces exactly the orphan in #491. A caller that wants an engine
+   * to survive should not be shutting its runtime down.
    */
   async shutdown(): Promise<void> {
     // Cancel the eviction timer first -- otherwise it fires post-shutdown
     // and the kill-then-terminate against an already-gone engine surfaces
     // as noise in logs.
     this.clearIdleEvictionTimer();
-    if (!this.idleEngine) return;
-    const engine = this.idleEngine;
     this.idleEngine = null;
-    engine.proc.kill("SIGTERM");
+
+    const victims = [...this.spawned].filter((e) => e.proc.alive());
+    if (victims.length === 0) return;
+    // Revoke first: an engine given its grace period must not be able to act
+    // on the daemon's behalf on the way out.
+    for (const e of victims) this.api.registry.terminate(e.sandboxId);
+    for (const e of victims) e.proc.kill("SIGTERM");
     await Promise.race([
-      engine.proc.exited,
+      Promise.all(victims.map((e) => e.proc.exited)),
       new Promise<void>((res) => setTimeout(res, this.killGraceMs)),
     ]);
-    engine.proc.kill("SIGKILL");
-    this.api.registry.terminate(engine.sandboxId);
+    // Whatever is left ignored the polite signal (a pre-shim cached bundle, or
+    // an engine wedged in native code). Take it.
+    const stubborn = victims.filter((e) => e.proc.alive());
+    if (stubborn.length === 0) return;
+    for (const e of stubborn) e.proc.kill("SIGKILL");
+    await Promise.race([
+      Promise.all(stubborn.map((e) => e.proc.exited)),
+      new Promise<void>((res) => setTimeout(res, 500)),
+    ]);
   }
 }
 
