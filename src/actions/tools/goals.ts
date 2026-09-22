@@ -25,22 +25,21 @@ export function createManageGoalsTool(deps: GoalToolDeps): ToolDefinition {
   return {
     name: 'manage_goals',
     description: [
-      'Manage OKR-style goals with hierarchical structure (objective → key_result → milestone → task → daily_action).',
-      'Google-style 0.0-1.0 scoring (0.7 = good, 1.0 = aimed too low).',
-      '',
-      'Actions: create, list, get, score, update_status, update, decompose, replan, estimate,',
-      '         morning_plan, evening_review, metrics, delete, tree, overdue, escalations',
+      'Manage OKR-style goals: a hierarchy from objective down to daily_action, scored 0.0-1.0.',
+      'Google-style scoring: 0.7 = good, 1.0 = aimed too low.',
+      'For one-off tasks with a due date, use commitments instead.',
     ].join('\n'),
     category: 'goals',
     parameters: {
       action: {
         type: 'string',
-        description: 'The action to perform',
+        description: 'What to do.',
+        enum: ['create', 'list', 'get', 'score', 'update_status', 'update', 'decompose', 'replan', 'estimate', 'morning_plan', 'evening_review', 'metrics', 'delete', 'tree', 'overdue', 'escalations'],
         required: true,
       },
       text: {
         type: 'string',
-        description: 'Natural language goal description (for "create")',
+        description: 'Natural-language goal, for create.',
         required: false,
       },
       goal_id: {
@@ -50,7 +49,7 @@ export function createManageGoalsTool(deps: GoalToolDeps): ToolDefinition {
       },
       score: {
         type: 'number',
-        description: 'Score value 0.0-1.0 (for "score")',
+        description: '0.0-1.0, for score.',
         required: false,
       },
       reason: {
@@ -60,37 +59,37 @@ export function createManageGoalsTool(deps: GoalToolDeps): ToolDefinition {
       },
       status: {
         type: 'string',
-        description: 'New status (for "update_status"): draft, active, paused, completed, failed, killed',
+        description: 'draft, active, paused, completed, failed, killed.',
         required: false,
       },
       title: {
         type: 'string',
-        description: 'Goal title (for quick "create" without NL)',
+        description: 'Title, for a quick create without text.',
         required: false,
       },
       level: {
         type: 'string',
-        description: 'Goal level: objective, key_result, milestone, task, daily_action',
+        description: 'objective, key_result, milestone, task, daily_action.',
         required: false,
       },
       parent_id: {
         type: 'string',
-        description: 'Parent goal ID (for "create")',
+        description: 'Parent goal id, for create.',
         required: false,
       },
       filter_status: {
         type: 'string',
-        description: 'Filter by status (for "list")',
+        description: 'Filter list by status.',
         required: false,
       },
       filter_level: {
         type: 'string',
-        description: 'Filter by level (for "list")',
+        description: 'Filter list by level.',
         required: false,
       },
       limit: {
         type: 'number',
-        description: 'Max results (for "list")',
+        description: 'Max results for list.',
         required: false,
       },
     },
