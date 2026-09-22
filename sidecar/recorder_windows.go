@@ -137,8 +137,14 @@ const hookSampleBudget = 40 * time.Millisecond
 // does no I/O: the worker prints it.
 func (h *recorderHook) noteSlowSample(d time.Duration) {
 	h.slowSamples.Add(1)
-	if ns := int64(d); ns > h.slowestNs.Load() {
-		h.slowestNs.Store(ns)
+	// CompareAndSwap rather than load-then-store: the worker's Swap(0) can
+	// land in between, and a plain store would then resurrect a previous
+	// batch's worst time into the next report.
+	for ns := int64(d); ; {
+		worst := h.slowestNs.Load()
+		if ns <= worst || h.slowestNs.CompareAndSwap(worst, ns) {
+			return
+		}
 	}
 }
 
@@ -382,6 +388,11 @@ func recorderWorker(h *recorderHook, evCh <-chan recorderEvent) {
 	for {
 		select {
 		case <-h.stopCh:
+			// Also here, not only per event: if the samples got slow
+			// enough that Windows started skipping the hook, the events
+			// that would have carried this report are the ones that never
+			// arrived.
+			h.reportSlowSamples()
 			_, _ = comThread.call(func(state *uiaState) (any, error) {
 				releasePendingField()
 				return nil, nil

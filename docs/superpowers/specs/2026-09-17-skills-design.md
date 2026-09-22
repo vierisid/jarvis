@@ -114,8 +114,10 @@ structural runtime; `record_skill` compiles one from a demonstration;
   decided by `clickAttribution` in `sidecar/recorder.go`, which is unit-tested
   on every platform). Resolution still happens ~60ms later, so the recorder
   now **drops** a click it cannot place instead of guessing, and a dropped
-  click is a step the demonstration silently lacks. It is always logged with
-  its reason. Three cases drop by design:
+  click is a step the demonstration silently lacks. Every drop the decision
+  makes is logged with its reason (a click lost to a full event queue in the
+  hook is not: that one predates this and is still silent). Four cases drop
+  by design:
   - the window that received the click no longer exists by the time UIA is
     asked. A menu item and a dialog button destroy their own window when
     invoked, so those clicks are usually lost. This replaces a worse
@@ -126,11 +128,14 @@ structural runtime; `record_skill` compiles one from a demonstration;
   - another window held the mouse capture (dismissing an open menu by
     clicking away is the common case), so the window under the pointer
     received nothing.
+  - the window's handle has since been reused by another process, which is
+    a destroyed window by another name.
   - nothing could be established about where the click went.
 - What a click can still be misattributed to: an overlay that genuinely takes
   the click is recorded as itself, and a window that re-lays-out its own
   contents within the settle can hand back a different control of the *same*
-  window. Attribution across windows -- the app-switch case -- is what the
-  click-time capture fixes.
+  window. A drag is recorded as a click where it was released. Attribution
+  across windows -- the app-switch case -- is what the click-time capture
+  fixes.
 - A skill's `match` context (URL, process) orders the prompt index by
   message text today; the active window is not yet threaded into it.

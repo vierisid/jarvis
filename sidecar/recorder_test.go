@@ -658,7 +658,14 @@ func TestClickAttributionDropsAClickAnotherWindowHadCaptured(t *testing.T) {
 	// one, when no menu was involved (a drag in another app, say).
 	silent := away
 	silent.MenuUp = false
-	if _, reason := clickAttribution(silent); strings.Contains(reason, "menu") {
+	got, reason = clickAttribution(silent)
+	if got != clickTargetDrop {
+		// Not just the wording: the rule must be about the capture, not
+		// about the menu. Narrowed to menus it would silently record every
+		// other captured click against the window under the pointer.
+		t.Errorf("a captured click with no menu must still drop, got %s (%s)", got, reason)
+	}
+	if strings.Contains(reason, "menu") {
 		t.Errorf("a capture drop with no menu must not mention one, got %q", reason)
 	}
 }
@@ -680,6 +687,8 @@ func TestPressSiteStillAppliesBoundsTheClickToWhatWasPressed(t *testing.T) {
 		{"one pixel past the slop in y", 500, 400, true, 500, 405, false},
 		{"a drag across the screen", 500, 400, true, 900, 700, false},
 		{"no press was seen", 0, 0, false, 500, 400, false},
+		// The same point, so only the flag can say there was no press.
+		{"no press was seen, release at the zero point", 0, 0, false, 0, 0, false},
 		// A press whose coordinates happen to be the zero point is still a
 		// press: sampled, not the zero value, is what says so.
 		{"press at the origin", 0, 0, true, 0, 0, true},

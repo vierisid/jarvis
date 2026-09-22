@@ -246,13 +246,18 @@ type clickFacts struct {
 //     and not a fault either. This is where #493's panel rule now lives: the
 //     chat panel takes its clicks, so WindowFromPoint names it, and it is
 //     ours whatever process the WebView2 content inside it belongs to.
-//  3. That window is gone, or its handle now belongs to someone else. Its
+//  3. Another window held the mouse capture, so it received this click
+//     wherever the pointer was and the window under the pointer received
+//     nothing. Dismissing an open menu by clicking away is the everyday
+//     case, and the control that happens to sit under the pointer there is
+//     a particularly plausible thing to invent.
+//  4. That window is gone, or its handle now belongs to someone else. Its
 //     controls went with it; re-pointing the click at whatever replaced it
 //     is exactly the fabrication this fails closed to avoid.
-//  4. The hit element is hosted by that same window: it is what was clicked.
+//  5. The hit element is hosted by that same window: it is what was clicked.
 //     This covers hosted content of every kind, because the comparison is on
 //     the window, not on the process.
-//  5. Otherwise the hit element belongs to a different top-level window, so
+//  6. Otherwise the hit element belongs to a different top-level window, so
 //     something is drawn over the window that received the click (a GPU
 //     overlay, a screen recorder, a remote-control layer, or one of Jarvis's
 //     own click-through surfaces). Attribute to the recorded hosting window
@@ -278,7 +283,9 @@ type clickFacts struct {
 func clickAttribution(f clickFacts) (clickTarget, string) {
 	switch {
 	case f.HostHwnd == 0 || f.HostPid == 0:
-		return clickTargetDrop, "no window was recorded under the pointer when the click happened, so the window that received it is unknown"
+		return clickTargetDrop, fmt.Sprintf(
+			"no window was recorded under the pointer when the click happened (hwnd %#x, pid %d), so the window that received it is unknown; foreground was hwnd %#x, pid %d",
+			f.HostHwnd, f.HostPid, f.FgHwnd, f.FgPid)
 
 	case f.OwnPid != 0 && f.HostPid == f.OwnPid:
 		return clickTargetOwnWindow, fmt.Sprintf(
@@ -286,8 +293,8 @@ func clickAttribution(f clickFacts) (clickTarget, string) {
 
 	case f.CaptureHwnd != 0 && f.CaptureHwnd != f.HostHwnd:
 		return clickTargetDrop, fmt.Sprintf(
-			"window %#x held the mouse capture%s, so it received this click rather than the window under the pointer (hwnd %#x, pid %d)",
-			f.CaptureHwnd, menuNote(f), f.HostHwnd, f.HostPid)
+			"window %#x held the mouse capture%s, so it received this click rather than the window under the pointer (hwnd %#x, pid %d)%s",
+			f.CaptureHwnd, menuNote(f), f.HostHwnd, f.HostPid, foregroundNote(f))
 
 	case !f.HostStillExists:
 		return clickTargetDrop, fmt.Sprintf(
@@ -384,6 +391,12 @@ const clickSlopPx = 4
 // travelled: a drag from one window to another releases somewhere the press
 // says nothing about, and attributing it to the pressed window would be the
 // same invention this whole path exists to prevent.
+//
+// False does not mean the click is dropped. The caller re-samples at the
+// release instead, so a drag is still recorded -- as a click where it was
+// released, which is what the recorder did before any of this and is not
+// part of what #499 is fixing. What this rule guarantees is only that the
+// window recorded and the point everything resolves at are the same place.
 func pressSiteStillApplies(pressedX, pressedY int, sampled bool, releaseX, releaseY int) bool {
 	if !sampled {
 		return false
