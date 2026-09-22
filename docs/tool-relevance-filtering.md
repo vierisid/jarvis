@@ -275,13 +275,13 @@ FLOOR is computed by the §3 rule; the column shows what it evaluates to today.
 | `list_directory` | file-ops | read_data | 100 | **fetch** | 471 | DROP |
 | `delegate_task` | delegation | spawn_agent | 101 | **fetch** | 754* | DROP |
 | `manage_agents` | delegation | spawn_agent | 101 | **fetch** | 1275* | DROP |
-| `manage_workflow` | automation | *(unmapped)* | inf | **fetch** | 2460 | DROP |
+| `manage_workflow` | automation | *(unmapped)* | inf | **fetch** | 2599 | DROP |
 | `manage_skills` | ui | read_data | 100 | replay | 440 | DROP |
 | `list_sidecars` | sidecar | read_data | 100 | replay | 503 | DROP |
 | `create_document` | documents | write_data | 302 | replay | 1163 | DROP |
-| `content_pipeline` | content | write_data | 302 | replay | 1580 | DROP |
-| `commitments` | tasks | write_data | 302 | **fetch** | 1334 | DROP |
-| `manage_goals` | goals | write_data | 302 | replay | 1363 | DROP |
+| `content_pipeline` | content | write_data | 302 | replay | 1569 | DROP |
+| `commitments` | tasks | write_data | 302 | **fetch** | 1420 | DROP |
+| `manage_goals` | goals | write_data | 302 | replay | 1405 | DROP |
 | `research_queue` | productivity | read_data | 100 | **fetch** | 859 | DROP |
 | `desktop_click` | desktop | control_app | 505 | inert | 1131 | DROP |
 | `desktop_type` | desktop | control_app | 505 | inert | 549 | DROP |
@@ -291,7 +291,7 @@ FLOOR is computed by the §3 rule; the column shows what it evaluates to today.
 | `write_file` | file-ops | write_data | 302 | inert | 555 | DROP |
 | `set_clipboard` | general | write_data | 302 | inert | 414 | DROP |
 | `get_system_info` | general | read_data | 100 | inert | 360 | **FLOOR** |
-| `request_approval` | authority | read_data | 100 | inert | 1456 | **FLOOR** |
+| `request_approval` | authority | read_data | 100 | inert | 1546 | **FLOOR** |
 
 `*` The two delegation tools are built by a factory that embeds the registered
 specialist list in the description, so their real size grows with the number
@@ -850,7 +850,7 @@ Measured by running the filter over the real registry, not estimated.
 Reproduce with `bun bench/tool-relevance/benchmark.ts`, which prints every
 figure below and recomputes them from code, so they cannot go stale.
 
-`A` = 42 tools, **34,704 bytes** of emitted JSON schema (the 33
+`A` = 42 tools, **35,050 bytes** of emitted JSON schema (the 33
 `BUILTIN_TOOLS` at 22,445 B plus nine daemon-registered tools). Calibrated
 against a real tokenizer on `qwen38-fast` (27.3B, Q4_K, ollama): the full
 33-tool set is **6,091 prompt tokens**, giving **~3.83 bytes/token** for
@@ -861,25 +861,25 @@ Was 39,420 B before #504 trimmed the six fattest daemon descriptions; see
 
 | set | tools | bytes |
 |---|---|---|
-| full `A` | 42 | 34,704 |
-| `FLOOR(A)` | 2 | 1,816 |
+| full `A` | 42 | 35,050 |
+| `FLOOR(A)` | 2 | 1,906 |
 | `PERCEPTION(A)` (the I1 union) | 16 | 11,384 |
-| invariant triggers | 18 | 17,104 |
-| `replay` | 5 | 5,049 |
+| invariant triggers | 18 | 17,329 |
+| `replay` | 5 | 5,080 |
 
 The five cases from #483's own measurement table, plus its mid-task repro:
 
 | case | tools | bytes | saving |
 |---|---|---|---|
-| `open notepad and type hello` | 24/42 | 17,784 | **-48.8%** |
-| `research the competitor landscape and write it up` | 24/42 | 17,381 | **-49.9%** |
-| `summarise this article https://example.com/post/1` | 21/42 | 15,913 | **-54.1%** |
-| `set a goal to ship the release this week` | 4/42 | 3,778 | **-89.1%** |
-| `schedule a daily check of the dashboard` | 22/42 | 17,676 | **-49.1%** |
-| `open notepad` then `now remember that I did that` | 25/42 | 19,118 | **-44.9%** |
+| `open notepad and type hello` | 24/42 | 17,874 | **-49.0%** |
+| `research the competitor landscape and write it up` | 24/42 | 17,471 | **-50.2%** |
+| `summarise this article https://example.com/post/1` | 21/42 | 15,992 | **-54.4%** |
+| `set a goal to ship the release this week` | 4/42 | 3,910 | **-88.8%** |
+| `schedule a daily check of the dashboard` | 22/42 | 17,905 | **-48.9%** |
+| `open notepad` then `now remember that I did that` | 25/42 | 19,294 | **-45.0%** |
 
 Over all 46 cases (the six above plus one generated per droppable tool):
-**-56.2% aggregate**, best -93.0%, worst **-40.1%**, and zero invariant
+**-56.3% aggregate**, best -92.9%, worst **-40.1%**, and zero invariant
 violations.
 
 The percentages are slightly *smaller* than before #504 because both arms
@@ -913,29 +913,38 @@ saying them:
    saving.
 
 **The cheapest win needed none of this.** Those six daemon tool
-descriptions were 14,072 B, 36% of the budget. #504 trimmed them to 9,356 B
+descriptions were 14,072 B, 36% of the budget. #504 trimmed them to 9,702 B
 with no invariant, no gate and no security review, because removing words
-removes no capability. That is **-4,716 B (-33.5%) off the six, -12.0% off
+removes no capability. That is **-4,370 B (-31.1%) off the six, -11.1% off
 every request**, and it compounds with the filter rather than competing with
 it: the filter drops whole schemas, this shrinks the ones that remain -
 including the floor that every request pays for regardless.
 
 | tool | before | after | saving |
 |---|---|---|---|
-| `manage_workflow` | 4,785 | 2,460 | -48.6% |
-| `content_pipeline` | 2,498 | 1,580 | -36.7% |
-| `request_approval` | 1,902 | 1,456 | -23.4% |
-| `commitments` | 1,841 | 1,334 | -27.5% |
+| `manage_workflow` | 4,785 | 2,599 | -45.7% |
+| `content_pipeline` | 2,498 | 1,569 | -37.2% |
+| `request_approval` | 1,902 | 1,546 | -18.7% |
+| `commitments` | 1,841 | 1,420 | -22.9% |
 | `create_document` | 1,597 | 1,163 | -27.2% |
-| `manage_goals` | 1,449 | 1,363 | -5.9% |
-| **six** | **14,072** | **9,356** | **-33.5%** |
-| whole registry | 39,420 | 34,704 | -12.0% |
+| `manage_goals` | 1,449 | 1,405 | -3.0% |
+| **six** | **14,072** | **9,702** | **-31.1%** |
+| whole registry | 39,420 | 35,050 | -11.1% |
 | every other tool | 25,348 | 25,348 | 0 |
 
 `manage_goals` barely moved on purpose: 75% of it is parameters, ~540 B of
 that is the structural floor of 12 param entries that no description edit can
 touch, and the trim there was partly spent on an `enum` for its 16-value
 `action` param. Bytes are not the only axis - see the note on enums below.
+
+An earlier draft of #504 reached 9,356 B. Review put 346 B back, and each
+restoration was information the emitted schema carried nowhere else: the
+`list_runs` per-flow filter, the `empty` flag's steering toward `compose`
+(shortened to "required by create", it read as a formality to satisfy and
+invited the silent-empty-flow it exists to prevent), `request_approval`'s
+imperative "You MUST call this FIRST", and the `commitments` /
+`manage_workflow` cross-reference. Shorter was available; correct was not
+shorter.
 
 Sizes are `JSON.stringify(toolDefToLLMTool(t)).length`, the unit the bench
 uses. That counts UTF-16 code units, so it undercounts UTF-8 bytes wherever a
@@ -988,7 +997,7 @@ Stated precisely, because "we ran a benchmark" is exactly the kind of claim
 **Measured, offline, over the real 42-tool registry** (reproducible with
 `bun bench/tool-relevance/benchmark.ts`):
 
-- schema-byte savings per case: -40.1% worst, -93.0% best, -56.2% aggregate
+- schema-byte savings per case: -40.1% worst, -92.9% best, -56.3% aggregate
   over 46 cases (re-measured after #504; -40.3% / -92.7% / -61.0% before it);
 - the I5 invariant-violation counter at **zero** across all 46.
 
@@ -1099,7 +1108,7 @@ Read the result against these, in order:
    the generated rows as a smoke test only.
 
 Until that run exists, the defensible claim for #504 is exactly: a measured
--12.0% schema-byte reduction with every load-bearing discriminator,
+-11.1% schema-byte reduction with every load-bearing discriminator,
 precondition and side effect preserved by review and pinned by
 `src/actions/tools/tool-description-budget.test.ts` - and selection accuracy
 **unmeasured**.

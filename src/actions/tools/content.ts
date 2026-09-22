@@ -21,7 +21,7 @@ import {
 export const contentPipelineTool: ToolDefinition = {
   name: 'content_pipeline',
   description: [
-    'Track a piece of publishable content (video, post, article, newsletter) through its pipeline stages.',
+    'Track publishable content (video, post, article, newsletter) through its pipeline stages.',
     'Stages: ' + CONTENT_STAGES.join(' -> ') + '.',
     'advance and regress step one stage along that ladder; add_note and',
     'get_notes attach notes to a stage. For a one-off report or download, use',

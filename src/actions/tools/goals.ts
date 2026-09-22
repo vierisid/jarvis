@@ -59,7 +59,7 @@ export function createManageGoalsTool(deps: GoalToolDeps): ToolDefinition {
       },
       status: {
         type: 'string',
-        description: 'draft, active, paused, completed, failed, killed.',
+        description: 'New status for update_status: draft, active, paused, completed, failed, killed.',
         required: false,
       },
       title: {
@@ -69,7 +69,7 @@ export function createManageGoalsTool(deps: GoalToolDeps): ToolDefinition {
       },
       level: {
         type: 'string',
-        description: 'objective, key_result, milestone, task, daily_action.',
+        description: 'Goal level: objective, key_result, milestone, task, daily_action.',
         required: false,
       },
       parent_id: {

@@ -44,8 +44,8 @@ export function createRequestApprovalTool(deps: RequestApprovalDeps): ToolDefini
     name: 'request_approval',
     category: 'authority',
     description:
-      `Request the user's explicit approval BEFORE performing a gated action ` +
-      `(see action_category for the list). Blocks until they decide.\n\n` +
+      `Request the user's explicit approval BEFORE performing a gated action.\n` +
+      `You MUST call this FIRST, not after (see action_category for the list). Blocks until they decide.\n\n` +
       `This applies REGARDLESS of which low-level tools you plan to use. ` +
       `If you plan to click the Send button in a Gmail compose window via browser_click, ` +
       `call request_approval with action_category='send_email' FIRST. ` +
@@ -61,9 +61,9 @@ export function createRequestApprovalTool(deps: RequestApprovalDeps): ToolDefini
         description:
           'One of: send_email, send_message (any channel: Slack, Telegram, Discord, SMS), ' +
           'make_payment (any purchase or subscription), install_software (install, upgrade ' +
-          'or removal), modify_settings, delete_data (files, records, any persistent state), ' +
-          'execute_command (a shell command that MUTATES state: git push, rm, npm install), ' +
-          'terminate_agent.',
+          'or removal), modify_settings (system or account settings), delete_data (files, ' +
+          'records, any persistent state), execute_command (a shell command that MUTATES ' +
+          'state: git push, rm, npm install), terminate_agent (stop a running agent).',
         required: true,
       },
       intent: {

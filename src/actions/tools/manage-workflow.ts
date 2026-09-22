@@ -174,7 +174,7 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       },
       flow: {
         type: "string",
-        description: "Workflow display name (case-insensitive) or id. Required for get/run/enable/disable/publish/delete.",
+        description: "Workflow display name (case-insensitive) or id. Required for get/run/enable/disable/publish/delete; optional filter for list_runs.",
         required: false,
       },
       name: {
@@ -207,7 +207,8 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       empty: {
         type: "boolean",
         description:
-          "Set true to confirm a blank canvas with no steps. Required by create; defaults to false.",
+          "Confirms the user wants a blank canvas with no steps. Required by `create` when no `description` is given; " +
+          "if the user described what the flow should DO, call `compose` instead. Defaults to false.",
         required: false,
       },
     },

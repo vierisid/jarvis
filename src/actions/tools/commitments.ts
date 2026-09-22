@@ -18,8 +18,9 @@ const VALID_PRIORITIES = ['low', 'normal', 'high', 'critical'];
 export const commitmentsTool: ToolDefinition = {
   name: 'commitments',
   description: [
-    'Track tasks and commitments: one-off things to be done, each with a due date and a status.',
+    'Track tasks and commitments: one-off things to do, each with an optional due date and a status.',
     'For OKR-style goals with a hierarchy and scoring, use manage_goals instead.',
+    'For something that should run repeatedly or on a schedule, use manage_workflow.',
   ].join('\n'),
   category: 'tasks',
   parameters: {
