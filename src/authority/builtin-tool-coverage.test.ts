@@ -17,6 +17,7 @@
 import { describe, expect, test } from 'bun:test';
 import { BUILTIN_TOOLS } from '../actions/tools/builtin.ts';
 import { TOOL_ACTION_MAP, getActionForTool } from './tool-action-map.ts';
+import { REVIEWED_UI_TOOLS } from './ui-intent.ts';
 import { AUTHORITY_REQUIREMENTS } from '../roles/authority.ts';
 
 describe('builtin tool Authority coverage', () => {
@@ -51,5 +52,49 @@ describe('builtin tool Authority coverage', () => {
     expect(TOOL_ACTION_MAP['ui_act']).toBe('control_app');
     expect(TOOL_ACTION_MAP['ui_act']).toBe(TOOL_ACTION_MAP['desktop_click']);
     expect(TOOL_ACTION_MAP['ui_snapshot']).toBe('read_data');
+  });
+});
+
+/**
+ * The same drift, one layer up. `REVIEWED_UI_TOOLS` (src/authority/ui-intent.ts)
+ * is what makes a raw browser/desktop/structural mutation carry control_app and
+ * a mandatory card; a tool missing from it keeps its static category and runs
+ * with no review, which is the ungated state this boundary exists to end. The
+ * set is matched by tool NAME, so a rename or a newly registered mutation is
+ * silent: nothing throws, the tool simply stops being reviewed. These tests
+ * force every tool in the three acting categories to be classified explicitly.
+ */
+describe('mandatory UI review coverage', () => {
+  const UI_CATEGORIES: ReadonlySet<string> = new Set(['browser', 'desktop', 'ui']);
+
+  /**
+   * Observations. Note that browser_snapshot and browser_screenshot map to
+   * access_browser rather than read_data, so "not a read_data entry" cannot
+   * separate reads from mutations here -- they have to be named.
+   */
+  const UI_CATEGORY_READS: ReadonlySet<string> = new Set([
+    'browser_snapshot', 'browser_screenshot',
+    'desktop_list_windows', 'desktop_snapshot', 'desktop_screenshot', 'desktop_find_element',
+    'ui_snapshot', 'manage_skills',
+  ]);
+
+  /** Replay/record a stored sequence; classified per call by their own authorityGate. */
+  const PER_CALL_GATED: ReadonlySet<string> = new Set(['run_skill', 'record_skill']);
+
+  test('every browser, desktop and structural builtin is explicitly classified', () => {
+    const unclassified = BUILTIN_TOOLS
+      .filter((t) => UI_CATEGORIES.has(t.category))
+      .filter((t) => !REVIEWED_UI_TOOLS.has(t.name) && !UI_CATEGORY_READS.has(t.name) && !PER_CALL_GATED.has(t.name))
+      .map((t) => `${t.name} (category "${t.category}")`);
+    expect(unclassified).toEqual([]);
+  });
+
+  test('a reviewed name is never classified as a read as well', () => {
+    expect([...REVIEWED_UI_TOOLS].filter((name) => UI_CATEGORY_READS.has(name))).toEqual([]);
+  });
+
+  test('every reviewed name is a builtin that still exists', () => {
+    const names = new Set(BUILTIN_TOOLS.map((t) => t.name));
+    expect([...REVIEWED_UI_TOOLS].filter((name) => !names.has(name))).toEqual([]);
   });
 });

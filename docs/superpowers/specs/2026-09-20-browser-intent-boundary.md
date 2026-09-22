@@ -68,12 +68,14 @@ preserve its principal-bound decision and approval-required flag alongside
 the mandatory-review confirmation. Do not replace those with workflow defaults.
 
 The #494 partial-failure test must approve the previously unclassified Archive
-step before exercising its failure. Apply the adjacent
-`2026-09-20-a5-pr494-test.patch` after combining that PR. It asserts no click
-before review, preserves the click-only approval context, then exercises the
-original failure and no-replay assertions. The three source overlaps are in
-`skills.ts`, `effect-boundary.ts` (keep both intent and confirmation), and
-`service-backends.ts` (keep both categories and confirmation).
+step before exercising its failure. In
+`workflows/runtime/workflow-skill-effect.test.ts`, the two-step case has to
+invoke once and assert a pending approval with no `browser_ax_click`
+dispatched and a `confirm: 'always'` approval context, approve it, and only
+then exercise the original failure and no-replay assertions. The three source
+overlaps are in `skills.ts`, `effect-boundary.ts` (keep both intent and
+confirmation), and `service-backends.ts` (keep both categories and
+confirmation).
 
 ## Limits
 

@@ -51,8 +51,9 @@ export type AuthorityDecision = {
   /**
    * Set when the ONLY reason for a denial is the numeric level check: no
    * grant, override or context rule spoke, and no profile cap. A tool gate
-   * that declares `confirm: 'above_level'` may turn such a denial into an
-   * approval request; every other denial stands.
+   * that declares a `confirm` -- `'above_level'` or a mandatory `'always'`
+   * review -- may turn such a denial into an approval request, provided the
+   * agent clears the tool's own floor; every other denial stands.
    */
   deniedByLevel?: true;
 };

@@ -181,7 +181,8 @@ export function resolveToolGate(
   let gate: ToolGate | null = null;
   try {
     gate = tool?.authorityGate?.(params) ?? null;
-  } catch {
+  } catch (err) {
+    console.warn(`[Authority] ${toolName} authorityGate threw; requiring explicit review:`, err instanceof Error ? err.message : err);
     gate = { actionCategory: floorCategory, confirm: 'always',
       intent: `Review ${toolName}. Business effect unknown: its effect classifier failed; no automatic execution is permitted.` };
   }

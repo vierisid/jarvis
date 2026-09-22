@@ -33,7 +33,7 @@ export function uiEffectHints(action: string, name: string, context: string, val
 // Applies by tool identity, including createBrowserTools' isolated controller
 // and tools exposed to sub-agents. A model-supplied intent/effect never opts a
 // raw action out. Screenshots and snapshots remain available without a card.
-const REVIEWED_UI_TOOLS = new Set([
+export const REVIEWED_UI_TOOLS: ReadonlySet<string> = new Set([
   'browser_navigate', 'browser_click', 'browser_type', 'browser_press_key',
   'browser_upload_file', 'browser_hover', 'browser_scroll', 'browser_evaluate',
   'desktop_click', 'desktop_type', 'desktop_press_keys', 'desktop_launch_app',
