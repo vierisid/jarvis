@@ -198,12 +198,13 @@ export async function bootstrapWorkflowEngine(
     opts.skipEngineMaintenance ?? process.env["NODE_ENV"] === "test";
   if (!skipMaintenance) {
     void (async () => {
-      let liveElsewhere: string[] = [];
+      // Null (not empty) until the reap succeeds: an empty list would tell
+      // the pruner "nothing is running, and I checked", when in fact nobody
+      // checked. It falls back to scanning for itself.
+      let liveElsewhere: string[] | null = null;
       try {
         const { reaped, live } = await reapOrphanedEngines({ log: (m) => log(m) });
         if (reaped.length === 0) log("no orphaned engine subprocesses found");
-        // Bundles other live engines are executing: hand them straight to the
-        // pruner rather than making it walk /proc all over again.
         liveElsewhere = live.map((e) => resolve(e.bundlePath, ".."));
       } catch (e) {
         log(`engine reap failed (continuing): ${(e as Error).message}`);
@@ -211,7 +212,10 @@ export async function bootstrapWorkflowEngine(
       try {
         pruneEngineBundleCache({
           ...(opts.engineCacheRetention ?? {}),
-          protect: [resolve(cached.bundlePath, ".."), ...liveElsewhere],
+          protect: [resolve(cached.bundlePath, "..")],
+          // The reap above already walked /proc; hand its answer over rather
+          // than paying for a second walk on the boot path.
+          ...(liveElsewhere ? { inUseBundleDirs: liveElsewhere } : {}),
           log: (m) => log(m),
         });
       } catch (e) {

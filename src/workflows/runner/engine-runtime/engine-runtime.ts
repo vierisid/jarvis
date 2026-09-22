@@ -859,7 +859,12 @@ export class EngineRuntime {
     // engine here would sit in the slot with nothing left to evict it.
     if (this.closed) {
       engine.proc.kill("SIGTERM");
-      setTimeout(() => engine.proc.kill("SIGKILL"), this.killGraceMs).unref();
+      setTimeout(() => {
+      // Only if it is still running: signalling through a handle whose
+      // process has already been reaped is the one thing this module must
+      // never risk on a shared machine.
+      if (engine.proc.alive()) engine.proc.kill("SIGKILL");
+    }, this.killGraceMs).unref();
       this.api.registry.terminate(engine.sandboxId);
       return;
     }
@@ -870,7 +875,12 @@ export class EngineRuntime {
     }
     // Slot full -- kill the duplicate.
     engine.proc.kill("SIGTERM");
-    setTimeout(() => engine.proc.kill("SIGKILL"), this.killGraceMs).unref();
+    setTimeout(() => {
+      // Only if it is still running: signalling through a handle whose
+      // process has already been reaped is the one thing this module must
+      // never risk on a shared machine.
+      if (engine.proc.alive()) engine.proc.kill("SIGKILL");
+    }, this.killGraceMs).unref();
     this.api.registry.terminate(engine.sandboxId);
   }
 
@@ -889,7 +899,12 @@ export class EngineRuntime {
       this.idleEngine = null;
       // Same SIGTERM-then-SIGKILL grace pattern as `EngineHandle.killAndTerminate`.
       engine.proc.kill("SIGTERM");
-      setTimeout(() => engine.proc.kill("SIGKILL"), this.killGraceMs).unref();
+      setTimeout(() => {
+      // Only if it is still running: signalling through a handle whose
+      // process has already been reaped is the one thing this module must
+      // never risk on a shared machine.
+      if (engine.proc.alive()) engine.proc.kill("SIGKILL");
+    }, this.killGraceMs).unref();
       this.api.registry.terminate(engine.sandboxId);
     }, this.poolIdleTtlMs);
     // unref so a parked engine alone doesn't keep the daemon's event loop

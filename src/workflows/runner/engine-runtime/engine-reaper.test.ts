@@ -481,6 +481,49 @@ describe("pruning the bundle cache", () => {
     expect(r.deleted).not.toContain(resolve(root, "running"));
   });
 
+  test("protected bundles do not eat the keep budget", () => {
+    // Three checkouts, each protecting its own bundle, with keep=3. If
+    // protections counted against the budget it would already be spent and
+    // every other bundle would go -- including ones that are merely old, not
+    // abandoned. The budget governs the UNPROTECTED remainder.
+    const root = cacheWith([
+      { name: "p1", ageMs: 1_000 },
+      { name: "p2", ageMs: 2_000 },
+      { name: "p3", ageMs: 3_000 },
+      { name: "spare1", ageMs: 10 * 24 * 60 * 60_000 },
+      { name: "spare2", ageMs: 11 * 24 * 60 * 60_000 },
+      { name: "junk", ageMs: 12 * 24 * 60 * 60_000 },
+    ]);
+    const r = pruneEngineBundleCache({
+      root,
+      keep: 2,
+      maxAgeMs: 0,
+      recentlyUsedMs: 0,
+      protect: [resolve(root, "p1"), resolve(root, "p2"), resolve(root, "p3")],
+    });
+    // All three protected survive, plus the two newest unprotected ones.
+    for (const name of ["p1", "p2", "p3", "spare1", "spare2"]) {
+      expect(existsSync(resolve(root, name))).toBe(true);
+    }
+    expect(r.deleted.map((d) => d.split("/").pop())).toEqual(["junk"]);
+  });
+
+  test("an in-use list from the caller replaces the process scan", () => {
+    const root = cacheWith([
+      { name: "new", ageMs: 1_000 },
+      { name: "elsewhere", ageMs: 400 * 24 * 60 * 60_000 },
+    ]);
+    const r = pruneEngineBundleCache({
+      root,
+      keep: 1,
+      maxAgeMs: 1_000,
+      recentlyUsedMs: 0,
+      inUseBundleDirs: [resolve(root, "elsewhere")],
+    });
+    expect(existsSync(resolve(root, "elsewhere"))).toBe(true);
+    expect(r.deleted).not.toContain(resolve(root, "elsewhere"));
+  });
+
   test("refuses to prune a shared read-only bundle root", () => {
     // Host-owned, shared between tenants, and never ours to delete from.
     const root = cacheWith([{ name: "old", ageMs: 400 * 24 * 60 * 60_000 }]);

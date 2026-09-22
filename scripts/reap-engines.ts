@@ -58,11 +58,18 @@ if (orphans.length === 0) {
     console.log(`[reap-engines] --dry-run: left ${orphans.length} orphan(s) alone`);
     if (failOnLeak) process.exitCode = 1;
   } else {
+    // Reported from the reap, not from the scan above: an orphan whose own
+    // watchdog fired in between is gone rather than reclaimed, and saying
+    // "reclaimed 1" about a process we never signalled is how a sweep starts
+    // being believed for the wrong reasons.
     const { reaped, survived } = await reapOrphanedEngines({
+      only: orphans.map((e) => e.pid),
       log: (line) => console.log(`[reap-engines] ${line}`),
     });
+    const gone = orphans.length - reaped.length - survived.length;
     console.log(
       `[reap-engines] reclaimed ${reaped.length} orphaned engine subprocess(es)` +
+        (gone > 0 ? `; ${gone} had already exited` : "") +
         (survived.length > 0 ? `; ${survived.length} survived SIGKILL` : ""),
     );
     if (failOnLeak && orphans.length > 0) process.exitCode = 1;

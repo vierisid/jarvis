@@ -375,6 +375,14 @@ export interface PruneOptions {
    * exercised without spawning anything.
    */
   scan?: ReapOptions;
+  /**
+   * Bundle dirs a live engine is already known to be running from. A caller
+   * that has just reaped (and therefore just walked `/proc`) passes its
+   * result here and the pruner skips a second walk -- that walk reads three
+   * files per process on the machine, synchronously, on the daemon's boot
+   * path.
+   */
+  inUseBundleDirs?: string[];
 }
 
 export interface PruneResult {
@@ -412,24 +420,10 @@ function dirSize(dir: string): number {
   return total;
 }
 
-/**
- * Mark a bundle directory as in use, so the pruner's recently-used
- * protection can see it. Called when a bundle is resolved and when one is
- * spawned from; failure is ignored (a read-only shared root is not ours to
- * touch, and a missed touch only costs protection, never correctness of the
- * other rules).
- */
-export function touchBundleDir(bundlePathOrDir: string): void {
-  const dir = bundlePathOrDir.endsWith("main.js")
-    ? resolve(bundlePathOrDir, "..")
-    : resolve(bundlePathOrDir);
-  try {
-    const when = new Date();
-    utimesSync(dir, when, when);
-  } catch {
-    /* read-only, gone, or not ours */
-  }
-}
+// Note: the "mark a bundle as in use" touch lives at its two call sites
+// (`findCachedBundle` in build.ts, `spawnEngine` in spawn.ts) rather than as a
+// helper here. This module imports `build.ts`, so a helper here that they
+// imported back would close an import cycle for two lines of `utimesSync`.
 
 /**
  * Prune the per-user engine bundle cache.
@@ -457,10 +451,11 @@ export function touchBundleDir(bundlePathOrDir: string): void {
  *     and its next run fails with ENOENT until it rebuilds;
  *   - anything the caller lists in `protect`.
  *
- * What is left is sorted newest-first by mtime; everything past `keep`, and
- * anything older than `maxAgeMs`, goes. Note the count cap is per MACHINE,
- * not per checkout: several active worktrees can legitimately need more
- * bundles than the default, which is what the recently-used rule is for.
+ * What is left -- the UNPROTECTED bundles -- is sorted newest-first by mtime;
+ * everything past `keep` of those, and anything older than `maxAgeMs`, goes.
+ * The caps apply only to that remainder: the count cap is per MACHINE, not
+ * per checkout, so several active worktrees would otherwise spend the whole
+ * budget between them and take each other's bundles down with them.
  */
 export function pruneEngineBundleCache(opts?: PruneOptions): PruneResult {
   const root = resolve(opts?.root ?? ENGINE_BUILD_PATHS.BUNDLE_ROOT);
@@ -494,9 +489,15 @@ export function pruneEngineBundleCache(opts?: PruneOptions): PruneResult {
     // Hashing reads vendored sources; if that fails we simply protect less,
     // and the in-use scans below still cover anything actually running.
   }
-  // Anything a live engine is executing, ours or another checkout's.
-  for (const e of findEngineProcesses(opts?.scan)) {
-    protectedDirs.add(resolve(e.bundlePath, ".."));
+  // Anything a live engine is executing, ours or another checkout's. A caller
+  // that already walked /proc hands the answer over instead of paying for a
+  // second walk.
+  if (opts?.inUseBundleDirs) {
+    for (const dir of opts.inUseBundleDirs) protectedDirs.add(resolve(dir));
+  } else {
+    for (const e of findEngineProcesses(opts?.scan)) {
+      protectedDirs.add(resolve(e.bundlePath, ".."));
+    }
   }
   // Anything THIS process is running, which needs no procfs.
   for (const e of liveEngines()) {
@@ -534,9 +535,13 @@ export function pruneEngineBundleCache(opts?: PruneOptions): PruneResult {
   candidates.sort((a, b) => b.mtimeMs - a.mtimeMs);
   const deleted: string[] = [];
   let freedBytes = 0;
-  // Protected bundles already count against the budget: `keep` is how many
-  // bundles the cache may hold in total, not how many extra it may hold.
-  let keptCount = kept.length;
+  // The budget applies to bundles nothing is protecting. Counting protected
+  // ones against it would mean that on a machine with `keep` active worktrees
+  // -- each holding its own bundle, each protected -- the budget is already
+  // spent and EVERY other bundle goes on the next boot, including one a
+  // colleague's checkout will want again on Monday. Protections beat caps;
+  // that is what makes them protections.
+  let keptCount = 0;
   for (const c of candidates) {
     const tooMany = keep > 0 && keptCount >= keep;
     const tooOld = maxAgeMs > 0 && now - c.mtimeMs > maxAgeMs;

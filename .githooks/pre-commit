@@ -41,7 +41,9 @@ if [ "$rc" != "0" ]; then
   # identity: our marker in the process environment, our uid, an argv naming
   # its own bundle, and an owner that is provably gone. A pooled engine
   # belonging to a live daemon is left running.
-  bun run scripts/reap-engines.ts 2>/dev/null || true
+  # stderr is kept: a reaper that crashes must not fail silently, which is
+  # what the pkill line did for however long it was wrong.
+  bun run scripts/reap-engines.ts || true
   exit "$rc"
 fi
 

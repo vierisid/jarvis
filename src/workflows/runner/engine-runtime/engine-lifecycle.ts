@@ -58,6 +58,11 @@
  * travels with the pid (`/proc/<pid>/stat` field 22, Linux) and a mismatch
  * counts as "owner gone". Where procfs is unavailable the probe degrades to
  * the pid alone.
+ *
+ * Note the shim treats an EPERM from that probe as "owner alive" while
+ * `engine-reaper.ts` treats it as "pid recycled". Both err toward doing
+ * nothing in their own context -- here, staying up; there, not signalling on
+ * that basis alone -- so they are deliberately different, not inconsistent.
  */
 
 /** Env var marking a process as an engine WE spawned. Value is versioned so a

@@ -15,18 +15,27 @@
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 
 const SPAWN_MODULE = resolve(import.meta.dir, "spawn.ts");
 
+// Both stand-ins self-destruct. A `spawnSync` timeout here -- or the
+// pre-commit hook's `timeout --kill-after` -- SIGKILLs the child that owns
+// them, and a SIGKILLed Bun runs no exit handler, so nothing in this PR would
+// ever reclaim them: they are not engines by the reaper's definition unless
+// they are named like one (see `writeStandIn()` below), and the in-process registry
+// died with its process. On a shared machine that is a permanent leak from
+// the very file that proves leaks get caught.
+const SELF_DESTRUCT = `setTimeout(() => process.exit(3), 60000);`;
 /** Stays up until signalled; dies on SIGTERM (runtime default). */
-const COOPERATIVE = `setInterval(() => {}, 1000); console.log("up");`;
+const COOPERATIVE = `setInterval(() => {}, 1000); ${SELF_DESTRUCT} console.log("up");`;
 /** Deaf to SIGTERM, exactly like a pre-shim engine bundle. */
 const DEAF = `
 process.on("SIGTERM", () => {});
 setInterval(() => {}, 1000);
+${SELF_DESTRUCT}
 console.log("up");
 `;
 
@@ -39,9 +48,27 @@ afterEach(() => {
   }
 });
 
+/** Write a file into this test's temp dir, verbatim. */
 function write(name: string, body: string): string {
   tmp ??= mkdtempSync(resolve(tmpdir(), "jarvis-engine-teardown-"));
   const path = resolve(tmp, name);
+  writeFileSync(path, body);
+  return path;
+}
+
+/**
+ * Write a stand-in engine as `<name>/main.js`.
+ *
+ * The filename is the point: `engine-reaper.ts` will not treat a process as
+ * an engine of ours unless its argv names a `main.js` it also records in its
+ * environment. Belt and braces with the self-destruct above -- if a stand-in
+ * ever does get stranded, `scripts/reap-engines.ts` can reclaim it.
+ */
+function writeStandIn(name: string, body: string): string {
+  tmp ??= mkdtempSync(resolve(tmpdir(), "jarvis-engine-teardown-"));
+  const dir = resolve(tmp, name);
+  mkdirSync(dir, { recursive: true });
+  const path = resolve(dir, "main.js");
   writeFileSync(path, body);
   return path;
 }
@@ -96,7 +123,7 @@ const alive = (pid: number) => { try { process.kill(pid, 0); return true; } catc
 
 describe("live engine registry", () => {
   test("tracks a spawned engine and forgets it once it exits", () => {
-    const enginePath = write("coop.js", COOPERATIVE);
+    const enginePath = writeStandIn("coop", COOPERATIVE);
     const r = runChild(`${preamble(enginePath)}
 const e = await start("sandbox-a");
 if (liveEngines().length !== 1) throw new Error("not tracked: " + String(liveEngines().length));
@@ -113,7 +140,7 @@ console.log("OK");
   }, 60_000);
 
   test("killLiveEngines reclaims every engine it spawned", () => {
-    const enginePath = write("coop.js", COOPERATIVE);
+    const enginePath = writeStandIn("coop", COOPERATIVE);
     const r = runChild(`${preamble(enginePath)}
 const a = await start("sandbox-a");
 const b = await start("sandbox-b");
@@ -131,7 +158,7 @@ console.log("OK");
   test("killLiveEngines escalates to SIGKILL for an engine that ignores SIGTERM", () => {
     // The transition case that must keep working: a bundle cached before the
     // lifecycle shim existed, or an engine wedged in native code.
-    const enginePath = write("deaf.js", DEAF);
+    const enginePath = writeStandIn("deaf", DEAF);
     const r = runChild(`${preamble(enginePath)}
 const e = await start("sandbox-deaf");
 const t0 = Date.now();
@@ -146,7 +173,7 @@ console.log("OK");
   }, 60_000);
 
   test("killLiveEngines on an empty registry is a no-op", () => {
-    const enginePath = write("coop.js", COOPERATIVE);
+    const enginePath = writeStandIn("coop", COOPERATIVE);
     const r = runChild(`${preamble(enginePath)}
 const reclaimed = await killLiveEngines();
 if (reclaimed.length !== 0) throw new Error("reclaimed something from nothing");
@@ -162,7 +189,7 @@ describe("exit net", () => {
     // Not the loud guard -- the plain safety net for any process (a script, a
     // daemon) that exits without tidying up. It can only SIGKILL, because an
     // `exit` handler cannot wait for anything.
-    const enginePath = write("coop.js", COOPERATIVE);
+    const enginePath = writeStandIn("coop", COOPERATIVE);
     const r = runChild(`${preamble(enginePath)}
 const e = await start("sandbox-abandoned");
 process.stdout.write("PID:" + e.pid + "\\n");
@@ -218,7 +245,7 @@ describe("leaked engine guard", () => {
   }
 
   test("a suite that leaves an engine running fails the run, loudly", () => {
-    const enginePath = write("coop.js", COOPERATIVE);
+    const enginePath = writeStandIn("coop", COOPERATIVE);
     const r = runInnerSuite(`
 import { test, expect } from "bun:test";
 import { spawnEngine } from ${JSON.stringify(SPAWN_MODULE)};
@@ -258,7 +285,7 @@ test("leaks an engine", () => {
   }, 180_000);
 
   test("a suite that cleans up passes, with nothing printed", () => {
-    const enginePath = write("coop.js", COOPERATIVE);
+    const enginePath = writeStandIn("coop", COOPERATIVE);
     const r = runInnerSuite(`
 import { test, expect } from "bun:test";
 import { spawnEngine } from ${JSON.stringify(SPAWN_MODULE)};
@@ -283,7 +310,7 @@ test("tidies up after itself", async () => {
   }, 180_000);
 
   test("honours the JARVIS_ALLOW_LEAKED_ENGINES escape hatch", () => {
-    const enginePath = write("coop.js", COOPERATIVE);
+    const enginePath = writeStandIn("coop", COOPERATIVE);
     const r = runInnerSuite(
       `
 import { test, expect } from "bun:test";
