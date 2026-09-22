@@ -12,6 +12,7 @@ import { cancelFlowRun } from '../db/repos/run-cancellation';
 import { enqueue } from '../db/repos/job-queue';
 import { ToolRegistry } from '../../actions/tools/registry';
 import { ActionOutcomeError } from '../../actions/action-outcome';
+import type { ActionCategory } from '../../roles/authority';
 import { AuthorityEngine } from '../../authority/engine';
 import { AuditTrail } from '../../authority/audit';
 import { EmergencyController } from '../../authority/emergency';
@@ -83,6 +84,10 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
     execute: async () => { if (opts.readFails) throw new ActionOutcomeError({ status: 'error', code: 'SYNTHETIC', message: 'unreadable', effect: 'not_started' }); if (opts.readCancels) cancelFlowRun(ids.run.id); return 'contents'; } });
   registry.register({ name: 'run_script', category: 'terminal', description: 'Synthetic command', parameters: {}, execute: async () => { effects++; return 'ran'; } });
   registry.register({ name: 'run_command', category: 'terminal', description: 'Synthetic shell', parameters: {}, execute: async () => { effects++; return 'ran'; } });
+  // A gated tool: approvable in a flow step through its adapter, never here.
+  registry.register({ name: 'run_skill', category: 'automation', description: 'Synthetic skill replay', parameters: {},
+    authorityGate: () => ({ actionCategory: 'send_email', intent: 'click Send (sends email)' }),
+    execute: async () => { effects++; return 'replayed'; } });
   const authority = new AuthorityEngine({ default_level: opts.authority?.default_level ?? 10,
     governed_categories: (opts.authority?.governed_categories ?? ['write_data']) as any, overrides: (opts.authority?.overrides ?? []) as any,
     context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' });
@@ -259,6 +264,20 @@ describe('delegated approvals through the workflow effect boundary', () => {
     expect(listWorkflowEffects(ids.run.id).map(e => e.route)).toEqual(['agent']);
   });
 
+  test('a gated tool is refused here too: its adapter only runs on the flow step path', async () => {
+    const ids = createRun();
+    const f = backends(ids, { script: [{ call: 'run_skill', args: { name: 'gmail-send' } }, 'finish'],
+      authority: { governed_categories: ['send_email'] } });
+    const done = await f.delegate({ requiredTools: ['run_skill'] });
+    expect(done.status).toBe('completed');
+    expect(done.toolCalls[0]!.error).toMatch(/^\[APPROVAL DENIED\] run_skill: Unsupported workflow capability/);
+    expect(done.toolCalls[0]!.error).toMatch(/only approvable through its typed adapter/);
+    // Nothing replayed, no record, and no card that would have named only the tool.
+    expect(f.effects()).toBe(0);
+    expect(f.approvals.getPending()).toEqual([]);
+    expect(listWorkflowEffects(ids.run.id).map(e => e.route)).toEqual(['agent']);
+  });
+
   test('a required tool that failed with a typed outcome is not completed', async () => {
     const ids = createRun();
     const f = backends(ids, { script: [{ call: 'read_file', args: { path: '/tmp/synthetic' } }, 'finish'], readFails: true });
@@ -364,6 +383,35 @@ describe('delegated approvals through the workflow effect boundary', () => {
     expect(ran).toBe(1);
     expect(listWorkflowEffects(ids.run.id).find(e => e.route === 'agent-tool:2')).toMatchObject({ status: 'pending', decision: 'approval_required',
       reason: expect.stringContaining('approval required by the calling gate') });
+  });
+
+  test('every reached category is judged as the principal, and the gate\'s requirement still ratchets on top', async () => {
+    const ids = createRun();
+    const f = backends(ids);
+    const boundary = new WorkflowEffectBoundary({ authorityEngine: f.authority, emergencyController: f.emergency, auditTrail: f.auditTrail, approvalManager: f.approvals });
+    let ran = 0;
+    const invoke = (route: string, categories: ActionCategory[] | undefined, approvalRequired: boolean) => boundary.invoke({
+      context: { runId: ids.run.id, projectId: DEFAULT_IDS.project, stepName: 'delegate', executionPath: [] },
+      piece: PIECE, action: 'delegate', route, toolName: 'read_file', category: 'read_data', toolCategory: 'file-ops',
+      ...(categories ? { categories } : {}),
+      request: { toolName: 'read_file', arguments: { route } }, prepare: () => ({ arguments: { route }, target: { tool: 'read_file' } }),
+      principal: { agentId: 'child', agentRoleId: ROLE.id, agentAuthorityLevel: 10, profile: null }, approvalRequired,
+      execute: async () => { ran++; return 'contents'; } });
+    // read_data alone is not governed, so the nominal category would run.
+    expect(await invoke('agent-tool:10', ['read_data'], false)).toEqual({ result: 'contents' });
+    expect(ran).toBe(1);
+    // The same nominal category, now declaring it also reaches write_data,
+    // which IS governed: the fold parks it and the card is labelled with the
+    // category that asked, not with the nominal one.
+    const folded = await invoke('agent-tool:11', ['read_data', 'write_data'], false);
+    expect(folded.approval).toBeDefined();
+    expect(ran).toBe(1);
+    expect(f.approvals.getRequest(folded.approval!.approvalId)!.action_category).toBe('write_data');
+    // The fold and the ratchet compose: a gate that already required approval
+    // cannot be relaxed by the fold, and the fold cannot bypass the ratchet.
+    const both = await invoke('agent-tool:12', ['read_data', 'write_data'], true);
+    expect(both.approval).toBeDefined();
+    expect(ran).toBe(1);
   });
 
   test('a fence raised inside the tool under its approval is a failed effect the agent continues from, with its receipt', async () => {
