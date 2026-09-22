@@ -125,7 +125,7 @@ describe('extra additions', () => {
     expect(out).toEqual({ PATH: '/usr/bin', PORT: '3000', HOST: '127.0.0.1', NODE_ENV: 'development' });
   });
 
-  test('are written even when the base has a same-named entry', () => {
+  test('an extra is written even when the base supplies the same name (base entry is dropped first)', () => {
     // Named for what it actually proves. A real base-vs-extra override is not
     // reachable: no EXTRA_ENV_KEYS member is allowlisted, so the base value is
     // dropped before the extras loop runs. The disjointness test below is what

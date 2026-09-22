@@ -27,15 +27,18 @@
  * LANG, TERM, TMPDIR and BUN_INSTALL: `bunx create-vite` scaffolds, `bunx
  * create-next-app` scaffolds from a cold cache with a fresh HOME, `make
  * install` (`bun install`) resolves and installs, and `make dev` (`bunx vite`)
- * serves real HTML. Everything beyond those six is for environments unlike a
- * default Linux box -- proxied networks, Windows, relocated caches -- not for
- * the common case.
+ * serves real HTML. Most of what is beyond those six is for environments
+ * unlike a default Linux box -- proxied networks, Windows, relocated caches.
+ * The exceptions, forwarded for their own reasons rather than for the measured
+ * happy path, are `USER` / `LOGNAME` / `SHELL`: git falls back to `USER` and
+ * `LOGNAME` to build an identity when `~/.gitconfig` supplies none, which is
+ * the failure mode described further down.
  *
  * Prior art, deliberately not merged: src/workflows/runner/engine-runtime/
  * spawn.ts builds its own 7-name allowlist for the same reason ("we avoid
  * blasting the whole process.env into the engine"): PATH, HOME, TMPDIR, LANG,
  * LC_ALL, TZ and BUN_RUNTIME_TRANSPILER_CACHE_PATH, plus two engine lifecycle
- * knobs. All but BUN_RUNTIME_TRANSPILER_CACHE_PATH are covered here. It is
+ * knobs. Everything but those two knobs is covered here. It is
  * load-bearing for a different subsystem with a different release cadence, so
  * it stays where it is. If a third copy ever appears, consolidate onto this one
  * rather than forking again -- see the standing rule in src/util/redact.ts.
@@ -177,6 +180,11 @@ export const SUBPROCESS_ENV_ALLOWLIST: readonly string[] = Object.freeze([
   // *auth* lives in ~/.npmrc, not here; an NPM_TOKEN-style name is excluded by
   // the allowlist and would be caught by the backstop anyway.
   'BUN_INSTALL', 'BUN_INSTALL_CACHE_DIR', 'BUN_INSTALL_BIN', 'BUN_CONFIG_REGISTRY',
+  // Not a secret, and the sibling allowlist in engine-runtime/spawn.ts already
+  // forwards it: a child bun process otherwise recompiles against a relocated
+  // transpiler cache. Bun is fail-open on an unreadable cache dir, so this
+  // cannot break a spawn.
+  'BUN_RUNTIME_TRANSPILER_CACHE_PATH',
   'NPM_CONFIG_REGISTRY', 'NPM_CONFIG_CACHE', 'NPM_CONFIG_PREFIX', 'NPM_CONFIG_USERCONFIG',
   // npm exports the lowercase spelling to child processes, and POSIX name
   // comparison is case-sensitive, so the uppercase entries alone would silently

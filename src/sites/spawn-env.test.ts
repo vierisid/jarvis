@@ -28,6 +28,7 @@ import { afterAll, describe, expect, test } from 'bun:test';
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import ts from 'typescript';
 import { SUBPROCESS_ENV_ALLOWLIST } from '../util/subprocess-env.ts';
 
 /** Synthetic. Never a real secret, and never printed on failure. */
@@ -42,7 +43,16 @@ const PROBE = join(import.meta.dir, 'fixtures', 'spawn-env-probe.ts');
 /** Variables a POSIX shell sets for itself; not inherited from the parent. */
 const SHELL_INJECTED = new Set(['PWD', 'SHLVL', '_', 'OLDPWD']);
 
-/** Per-site additions each spawn is entitled to, keyed by dump name prefix. */
+/**
+ * Per-site additions each spawn is PERMITTED (not required) to carry, keyed by
+ * dump name. An allowance only: that a given site actually sets its addition is
+ * asserted individually by the tests below.
+ *
+ * `/^git-/` is deliberately broad. `git config` is spawned both by
+ * GitManager.init (through run(), which does set GIT_TERMINAL_PROMPT) and by
+ * the static getGlobalAuthor (which does not), and both land under the same
+ * dump name, so the allowance has to cover either.
+ */
 const EXTRAS_BY_DUMP: Array<[RegExp, string[]]> = [
   [/^make-dev$/, ['PORT', 'HOST', 'NODE_ENV']],
   [/^git-/, ['GIT_TERMINAL_PROMPT']],
@@ -276,73 +286,32 @@ describe('site-builder spawns do not inherit the daemon environment', () => {
   }, 30_000);
 });
 
+
 describe('no site-builder spawn may be added without sanitizing its env', () => {
   // The reason this issue existed: sanitizedEnv() was already in the tree and
   // 8 of 9 spawns simply did not call it. A per-call-site test cannot catch the
   // TENTH spawn, written next month. This one can.
-  const SPAWN_IDIOMS = [
-    'Bun.spawnSync(',
-    'Bun.spawn(',
-    'spawnSync(',
-    'spawn(',
-    'execSync(',
-    'execFileSync(',
-    'execFile(',
-    'exec(',
-  ];
+  //
+  // It walks the TypeScript AST rather than scanning text. A hand-rolled
+  // scanner was tried first and was silently blind: it had no regex-literal
+  // state, so the `"` inside `/\/home\/[^\s"']*/g` at proxy.ts:128 opened a
+  // phantom string and blanked the rest of that file. Any spawn below it was
+  // invisible, with no failure to notice. Parsing removes that whole class of
+  // bug, along with division-vs-comment and template-interpolation ambiguity.
+
+  /** Exact callee spellings. `RE.exec(...)` is not one, so it cannot false-positive. */
+  const SPAWN_CALLEES = new Set([
+    'Bun.spawn', 'Bun.spawnSync',
+    'spawn', 'spawnSync',
+    'exec', 'execSync', 'execFile', 'execFileSync',
+  ]);
 
   /**
    * The positive control in the probe fixture spawns with an inherited env on
-   * purpose. Exempt it by exact path rather than by skipping subdirectories,
-   * and assert the exemption still points at a real file so a rename fails
-   * loudly instead of silently widening it.
+   * purpose. Exempt it by exact path, and assert the path still resolves so a
+   * rename fails loudly instead of silently widening the exemption.
    */
   const EXEMPT = [join(import.meta.dir, 'fixtures', 'spawn-env-probe.ts')];
-
-  /**
-   * Blank out string literals, template literals and comments, preserving
-   * length and newlines so offsets and line numbers stay correct.
-   *
-   * Without this the paren walker below is defeated by an unbalanced paren
-   * inside a string -- and `sh -c "... ("` is an entirely ordinary thing to
-   * write at these call sites. Worse, the walker would run past the real end
-   * of the call and swallow the NEXT spawn too, hiding two leaks at once.
-   */
-  function blankLiterals(source: string): string {
-    const out = source.split('');
-    let i = 0;
-    while (i < source.length) {
-      const ch = source[i]!;
-      const next = source[i + 1];
-
-      if (ch === '/' && next === '/') {
-        while (i < source.length && source[i] !== '\n') out[i++] = ' ';
-        continue;
-      }
-      if (ch === '/' && next === '*') {
-        out[i++] = ' '; out[i++] = ' ';
-        while (i < source.length && !(source[i] === '*' && source[i + 1] === '/')) {
-          if (source[i] !== '\n') out[i] = ' ';
-          i++;
-        }
-        if (i < source.length) { out[i++] = ' '; out[i++] = ' '; }
-        continue;
-      }
-      if (ch === '"' || ch === "'" || ch === '`') {
-        const quote = ch;
-        i++; // keep the opening quote
-        while (i < source.length && source[i] !== quote) {
-          if (source[i] === '\\') { out[i] = ' '; i++; if (i < source.length && source[i] !== '\n') out[i] = ' '; i++; continue; }
-          if (source[i] !== '\n') out[i] = ' ';
-          i++;
-        }
-        i++; // skip the closing quote
-        continue;
-      }
-      i++;
-    }
-    return out.join('');
-  }
 
   /** Every .ts file under src/sites, recursively, excluding test files. */
   function sourceFiles(dir: string): string[] {
@@ -355,57 +324,104 @@ describe('no site-builder spawn may be added without sanitizing its env', () => 
     return found;
   }
 
+  /** Report every spawn in `source` that does not pass env: sanitizedEnv(...). */
+  function findOffenders(source: string, label: string): string[] {
+    const offenders: string[] = [];
+    const sf = ts.createSourceFile(label, source, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const lineOf = (node: ts.Node) => sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
+
+    const visit = (node: ts.Node): void => {
+      // `Bun.$`make dev`` inherits the environment and has no sanitized form
+      // here, so it is always an offender.
+      if (ts.isTaggedTemplateExpression(node)) {
+        const tag = node.tag.getText(sf);
+        if (tag === 'Bun.$' || tag === '$') {
+          offenders.push(`${label}:${lineOf(node)} (${tag} shell inherits the env; use Bun.spawn with env: sanitizedEnv())`);
+        }
+      }
+
+      if (ts.isCallExpression(node)) {
+        const callee = node.expression.getText(sf);
+        if (SPAWN_CALLEES.has(callee)) {
+          const options = node.arguments.find(ts.isObjectLiteralExpression);
+          const envProp = options?.properties.find(
+            (p): p is ts.PropertyAssignment => ts.isPropertyAssignment(p) && p.name.getText(sf) === 'env',
+          );
+
+          if (!envProp) {
+            offenders.push(`${label}:${lineOf(node)} (${callee} passes no env, so it inherits the daemon's)`);
+          } else {
+            // Must be exactly a sanitizedEnv(...) call. A substring check would
+            // accept `{ ...sanitizedEnv(), ...process.env }`, which is the most
+            // plausible future regression and a total leak.
+            const init = envProp.initializer;
+            const sanitized = ts.isCallExpression(init) && init.expression.getText(sf) === 'sanitizedEnv';
+            if (!sanitized) {
+              offenders.push(`${label}:${lineOf(node)} (${callee} env must be exactly sanitizedEnv(...), got: ${init.getText(sf).replace(/\s+/g, ' ').slice(0, 60)})`);
+            }
+          }
+        }
+      }
+
+      ts.forEachChild(node, visit);
+    };
+
+    visit(sf);
+    return offenders;
+  }
+
   test('the guard exemption still points at a real file', () => {
     for (const path of EXEMPT) expect(existsSync(path)).toBe(true);
   });
 
   test('every spawn under src/sites passes env: sanitizedEnv', () => {
     const offenders: string[] = [];
-
     for (const file of sourceFiles(import.meta.dir)) {
       if (EXEMPT.includes(file)) continue;
-
-      const raw = readFileSync(file, 'utf8');
-      const source = blankLiterals(raw);
-      const relative = file.slice(import.meta.dir.length + 1);
-      const seen = new Set<number>();
-
-      for (const idiom of SPAWN_IDIOMS) {
-        let index = source.indexOf(idiom);
-        while (index !== -1) {
-          // Longest idiom wins: `Bun.spawn(` also ends with `spawn(`.
-          const alreadyCounted = [...seen].some(s => s <= index && index < s + 20 && source.startsWith(idiom, index));
-          const end = index + idiom.length - 1;
-
-          if (!alreadyCounted && !seen.has(index)) {
-            let depth = 0;
-            let cursor = end;
-            for (; cursor < source.length; cursor++) {
-              if (source[cursor] === '(') depth++;
-              else if (source[cursor] === ')') {
-                depth--;
-                if (depth === 0) break;
-              }
-            }
-            if (cursor >= source.length) {
-              offenders.push(`${relative}:${raw.slice(0, index).split('\n').length} (unbalanced call, cannot verify)`);
-            } else {
-              // Read the ORIGINAL text so `sanitizedEnv(` is still visible.
-              const call = raw.slice(index, cursor + 1);
-              if (!call.includes('sanitizedEnv(')) {
-                offenders.push(`${relative}:${raw.slice(0, index).split('\n').length} (${idiom})`);
-              }
-            }
-            for (let m = index; m < index + idiom.length; m++) seen.add(m);
-          }
-          index = source.indexOf(idiom, index + 1);
-        }
-      }
+      offenders.push(...findOffenders(readFileSync(file, 'utf8'), file.slice(import.meta.dir.length + 1)));
     }
 
     // If this fails: the listed spawn runs code from a model-written project
     // tree and must pass `env: sanitizedEnv()` (plus any per-site additions as
     // its argument). See src/util/subprocess-env.ts.
     expect(offenders).toEqual([]);
+  });
+
+  // The guard is the only layer protecting spawns that do not exist yet, so
+  // the shapes it must catch are pinned here rather than checked by hand once.
+  describe('the guard catches evasions', () => {
+    const cases: Array<[string, string]> = [
+      ['a plain unsanitized spawn', `Bun.spawn(['echo'], { cwd: d, stdout: 'pipe' });`],
+      ['an unbalanced paren inside a string', `Bun.spawn(['sh', '-c', 'echo hi ('], { cwd: d });`],
+      ['a regex literal containing a quote (proxy.ts:128 shape)', `const RE = /\\/home\\/[^\\s"']*/g;\nBun.spawn(['echo'], { cwd: d });`],
+      ['Bun.spawnSync', `Bun.spawnSync(['echo'], { cwd: d });`],
+      ['node child_process exec', `execSync('echo hi', { cwd: d });`],
+      ['a spread that re-adds the daemon env', `Bun.spawn(['echo'], { env: { ...sanitizedEnv(), ...process.env } });`],
+      ['a sanitizedEnv call parked on the wrong property', `Bun.spawn(['echo'], { cwd: d, note: sanitizedEnv() });`],
+      ['a second spawn adjacent to a sanitized one', `Bun.spawn(['a'], { env: sanitizedEnv() });spawn(['b'], { cwd: d });`],
+      ['a template literal with interpolation', `Bun.spawn([\`\${bin} run\`], { cwd: d });`],
+      ['Bun.$ shell', 'Bun.$`make dev`.cwd(d);'],
+    ];
+
+    for (const [name, code] of cases) {
+      test(name, () => {
+        expect(findOffenders(code, 'synthetic.ts')).not.toEqual([]);
+      });
+    }
+
+    const allowed: Array<[string, string]> = [
+      ['a correctly sanitized spawn', `Bun.spawn(['echo'], { cwd: d, env: sanitizedEnv() });`],
+      ['a sanitized spawn with extras', `Bun.spawn(['echo'], { env: sanitizedEnv({ PORT: '1' }) });`],
+      ['a spawn mentioned only in a line comment', `// Bun.spawn(['echo'], { cwd: d })`],
+      ['a spawn mentioned only in a block comment', `/* Bun.spawn(['echo'], {}) */`],
+      ['regex .exec(), which is not a spawn', `const m = RE.exec(input);`],
+      ['a string that merely mentions a spawn', `const doc = "call Bun.spawn( with env";`],
+    ];
+
+    for (const [name, code] of allowed) {
+      test(`no false positive: ${name}`, () => {
+        expect(findOffenders(code, 'synthetic.ts')).toEqual([]);
+      });
+    }
   });
 });
