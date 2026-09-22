@@ -77,8 +77,11 @@ structural runtime; `record_skill` compiles one from a demonstration;
   step. `title_changed` and `window_appeared` fail on an unchanged surface;
   `surface_changed` (the compiler's default for a terminal click) holds only
   when the element is gone, the title changed or new content appeared.
-- Each step carries its surface; a recorded browser skill replays on the
-  browser provider, and the seeds run on it.
+- Each step carries its surface; a browser step replays on the browser
+  provider, and the seeds run on it. Recording cannot produce one yet: the
+  Windows recorder stamps every interaction `surface: "desktop"`
+  (`interactionPayload` in `sidecar/recorder_windows.go`), so a browser skill
+  has to be authored, not demonstrated.
 
 ## What this does not guarantee
 
@@ -90,7 +93,14 @@ structural runtime; `record_skill` compiles one from a demonstration;
   parameter default. A secret typed into a field the rules do not recognise is
   stored until the skill is deleted.
 - Recording is Windows only. macOS and Linux refuse `recorder_start`.
-- Live recording and replay have not yet been validated on a Windows machine;
-  the Windows cross-build compiles and the state machine is unit-tested.
+- Recording has been exercised on a Windows machine: that is how the event
+  envelope, the click attribution and the Jarvis-panel defects were found,
+  each read off a live `sidecar.log`, and a recording there produced the
+  expected steps. Replaying a recorded skill end to end has not been
+  validated on a real machine. The COM paths carry no automated coverage
+  either: `uiaClickedElement`, the hosting-window lookup and `isOwnWindow`'s
+  Windows half only compile in CI, so a change to them is verified by hand.
+- The recorder records only desktop surfaces, so a demonstrated skill never
+  contains a browser step (see Replay).
 - A skill's `match` context (URL, process) orders the prompt index by
   message text today; the active window is not yet threaded into it.
