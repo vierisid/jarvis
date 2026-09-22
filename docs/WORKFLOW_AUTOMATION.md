@@ -837,6 +837,25 @@ To re-sync with a newer upstream Activepieces release, edit `UPSTREAM_PIN_TAG` +
 
 The CI guard `scripts/check-no-ee-imports.ts` runs on pre-commit and on every PR. It refuses any import or vendored path that touches Activepieces' `/ee/` (Enterprise License) tree.
 
+### Engine subprocess lifecycle (who kills the engine)
+
+The engine is **pooled across runs by design**, so an engine that is merely still running is working as intended. An engine with no owner is not. Four things keep that from happening (added for #491, where one survived its parent by 82 minutes and ignored SIGTERM):
+
+- **The engine exits on SIGTERM.** Upstream registers a SIGTERM listener that flushes run progress and never exits, which silently removes the runtime's default terminate-on-signal. A shim prepended by the esbuild banner (`engine-lifecycle.ts`) registers first, lets that flush run, then restores the default disposition and re-raises the signal. The shim is part of the bundle hash, so changing it invalidates cached bundles.
+- **The engine exits when its owner dies.** The same shim polls whether the pid that spawned it is still alive (signal 0 plus a `/proc` start-time comparison, because Bun caches `process.ppid` at first access and a reparenting check would never fire).
+- **The owner reclaims what it spawned.** `spawn.ts` keeps a registry of live engines; `EngineRuntime.shutdown()` kills every engine it spawned, not just the parked one; a `bun test` run that ends with one still alive is reclaimed and **fails the run** via the guard in `src/test-preload.ts` (`JARVIS_ALLOW_LEAKED_ENGINES=1` to opt out while reproducing).
+- **Known residue:** a CODE action's own `bun --eval` child inherits the engine's environment but is deliberately never matched by the reaper (it may be mid-step), so reaping its engine orphans it in turn. It holds no pool state and no socket, and `engine-reaper.ts` documents how to match it by ppid if they ever start accumulating.
+- **The daemon reaps and prunes at startup.** `engine-reaper.ts` kills engines whose owner is provably gone -- matched by our marker env var, our uid and an argv naming their own bundle, never by process-name pattern -- and prunes `~/.jarvis/cache/engine` by count and age, never touching the bundle in use, a bundle a running engine is executing, or a shared read-only root. `bun run scripts/reap-engines.ts [--dry-run]` does the same by hand.
+
+Knobs (env var wins over the `workflows` config section):
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `JARVIS_ENGINE_SHUTDOWN_GRACE_MS` | derived: strictly inside the owner's SIGKILL deadline | How long the engine keeps flushing after SIGTERM before exiting. Derived from the owner's kill grace so the two cannot drift; setting it at or above that deadline is warned about. |
+| `JARVIS_ENGINE_ORPHAN_POLL_MS` | 5000 | Orphan-watchdog interval inside the engine. 0 disables it. |
+| `JARVIS_ENGINE_CACHE_MAX_BUNDLES` / `workflows.engineCacheMaxBundles` | 3 | Bundles kept in `~/.jarvis/cache/engine`. 0 disables the count cap. |
+| `JARVIS_ENGINE_CACHE_MAX_AGE_DAYS` / `workflows.engineCacheMaxAgeDays` | 14 | Age past which an untouched bundle is deleted. 0 disables the age cap. |
+
 ## Testing
 
 Three test layers, run from cheap to expensive:

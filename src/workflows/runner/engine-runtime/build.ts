@@ -26,12 +26,14 @@ import {
   existsSync,
   writeFileSync,
   readFileSync,
+  utimesSync,
 } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { homedir } from "node:os";
 import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { UPSTREAM_PIN_SHA, UPSTREAM_PIN_TAG } from "../../activepieces/upstream-pin";
+import { ENGINE_LIFECYCLE_SHIM } from "./engine-lifecycle";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -310,7 +312,11 @@ export const ENGINE_ESBUILD_CONFIG = {
   // (see SPIKE-SANDBOXING.md). utf-8-validate / bufferutil are optional ws deps.
   external: ["isolated-vm", "utf-8-validate", "bufferutil"],
   get banner() {
-    return { js: ENGINE_REQUEST_BASE_SHIM };
+    // Lifecycle shim FIRST: it installs the SIGTERM/SIGINT handlers and the
+    // orphan watchdog, and its handler must be registered before upstream's
+    // run-progress listener (which flushes but never exits) so the flush runs
+    // inside a window that ends in an exit. See engine-lifecycle.ts.
+    return { js: `${ENGINE_LIFECYCLE_SHIM}\n${ENGINE_REQUEST_BASE_SHIM}` };
   },
 } as const;
 
@@ -512,6 +518,17 @@ export function findCachedBundle(opts?: {
   const shared = findSharedBundle(opts?.sharedRoot);
   if (shared) return { bundlePath: shared.bundlePath, hash: shared.hash };
   const hash = bundleHash();
-  const bundlePath = resolve(BUNDLE_ROOT, hash, "main.js");
-  return existsSync(bundlePath) ? { bundlePath, hash } : null;
+  const bundleDir = resolve(BUNDLE_ROOT, hash);
+  const bundlePath = resolve(bundleDir, "main.js");
+  if (!existsSync(bundlePath)) return null;
+  // Mark it as in use for the cache pruner (#491): a daemon that resolves a
+  // bundle needs it for its whole life, not just while an engine happens to
+  // be running from it. Best-effort; a missed touch only costs protection.
+  try {
+    const when = new Date();
+    utimesSync(bundleDir, when, when);
+  } catch {
+    /* read-only or gone */
+  }
+  return { bundlePath, hash };
 }

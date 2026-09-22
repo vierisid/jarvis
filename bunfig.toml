@@ -1,0 +1,13 @@
+# Bun configuration. Test-only today.
+#
+# `preload` runs once per `bun test` invocation, before any test file, and
+# lifecycle hooks registered there wrap the WHOLE run rather than each file --
+# which is the only place a "did this run leave a subprocess behind?" check can
+# both run and be heard. See src/test-preload.ts.
+#
+# Bun does NOT search parent directories for this file, so a `bun test` run
+# started from a subdirectory silently gets no preload and no leak guard.
+# `package.json`'s test script passes --preload explicitly for that reason;
+# naming the same file both ways loads it once, not twice (verified).
+[test]
+preload = ["./src/test-preload.ts"]

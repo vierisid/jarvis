@@ -103,7 +103,39 @@ structural runtime; `record_skill` compiles one from a demonstration;
   validated on a real machine. The COM paths carry no automated coverage
   either: `uiaClickedElement`, the hosting-window lookup and `isOwnWindow`'s
   Windows half only compile in CI, so a change to them is verified by hand.
+  The decisions they make are pulled out into `recorder.go` -- `clickAttribution`,
+  `ownWindowVerdict`, `pressSiteStillApplies`, `packPoint`, `pointInRect` --
+  where they are tested on every platform; what remains untested there is the
+  syscalls and the COM calls themselves.
 - The recorder records only desktop surfaces, so a demonstrated skill never
   contains a browser step (see Replay).
+- A click is attributed to the window that received it, recorded in the mouse
+  hook when the button went down (`clickSite` in `sidecar/recorder_windows.go`,
+  decided by `clickAttribution` in `sidecar/recorder.go`, which is unit-tested
+  on every platform). Resolution still happens ~60ms later, so the recorder
+  now **drops** a click it cannot place instead of guessing, and a dropped
+  click is a step the demonstration silently lacks. Every drop the decision
+  makes is logged with its reason (a click lost to a full event queue in the
+  hook is not: that one predates this and is still silent). Four cases drop
+  by design:
+  - the window that received the click no longer exists by the time UIA is
+    asked. A menu item and a dialog button destroy their own window when
+    invoked, so those clicks are usually lost. This replaces a worse
+    behaviour rather than a working one: before, the late hit test landed on
+    whatever had taken that window's place and recorded a confident step
+    against it. Recovering these needs the element read before the settle,
+    which is its own change.
+  - another window held the mouse capture (dismissing an open menu by
+    clicking away is the common case), so the window under the pointer
+    received nothing.
+  - the window's handle has since been reused by another process, which is
+    a destroyed window by another name.
+  - nothing could be established about where the click went.
+- What a click can still be misattributed to: an overlay that genuinely takes
+  the click is recorded as itself, and a window that re-lays-out its own
+  contents within the settle can hand back a different control of the *same*
+  window. A drag is recorded as a click where it was released. Attribution
+  across windows -- the app-switch case -- is what the click-time capture
+  fixes.
 - A skill's `match` context (URL, process) orders the prompt index by
   message text today; the active window is not yet threaded into it.

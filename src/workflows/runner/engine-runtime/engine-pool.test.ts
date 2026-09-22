@@ -161,22 +161,31 @@ describe("EngineRuntime pool", () => {
       const pid1 = h1.pid;
       await h1.release();
 
-      const h2 = await runtime!.acquire({
-        runId: "run_pool_2",
-        projectId: "jrv_proj_default",
-      });
-      // Same engine: same sandboxId, same pid.
-      expect(h2.sandboxId).toBe(sandbox1);
-      expect(h2.pid).toBe(pid1);
-      // But rebound to the new run.
-      expect(h2.runId).toBe("run_pool_2");
-      // Registry agrees.
-      expect(api.registry.byRunId("run_pool_2")?.sandboxId).toBe(sandbox1);
-      expect(api.registry.byRunId("run_pool_1")).toBeNull();
-      await h2.release();
-
-      // shutdown() reaps the warm engine.
-      await runtime!.shutdown();
+      // An assertion throwing between acquire and release used to abandon a
+      // live engine that nothing would ever reclaim -- shutdown() only knew
+      // about the PARKED one. Both halves are covered now, but the finally
+      // still belongs here: a leaked engine should not depend on the guard.
+      try {
+        const h2 = await runtime!.acquire({
+          runId: "run_pool_2",
+          projectId: "jrv_proj_default",
+        });
+        try {
+          // Same engine: same sandboxId, same pid.
+          expect(h2.sandboxId).toBe(sandbox1);
+          expect(h2.pid).toBe(pid1);
+          // But rebound to the new run.
+          expect(h2.runId).toBe("run_pool_2");
+          // Registry agrees.
+          expect(api.registry.byRunId("run_pool_2")?.sandboxId).toBe(sandbox1);
+          expect(api.registry.byRunId("run_pool_1")).toBeNull();
+        } finally {
+          await h2.release();
+        }
+      } finally {
+        // shutdown() reaps the warm engine.
+        await runtime!.shutdown();
+      }
       // After shutdown the registry record is terminated.
       expect(api.registry.get(sandbox1)).toBeNull();
     },

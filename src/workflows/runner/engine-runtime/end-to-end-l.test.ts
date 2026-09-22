@@ -101,6 +101,9 @@ describe("Phase L: plumbing smoke (connection resolver + store + run-progress)",
   });
 
   afterAll(async () => {
+    // Engines first: reclaim anything this runtime spawned while the
+    // SandboxApi it talks to is still up (#491).
+    await runtime?.shutdown();
     await api.stop();
     closeWorkflowDb();
   });

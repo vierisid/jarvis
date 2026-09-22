@@ -57,6 +57,15 @@ daemon:
 # prebuilt piece-metadata cache file. Paths may contain ${version}, expanded
 # from the JARVIS_VERSION env var, for machines that keep artifacts per
 # installed version. Omit any of them and jarvis does that work itself.
+#
+# The daemon also prunes its OWN engine bundle cache (~/.jarvis/cache/engine)
+# at startup: each change to the engine source builds a new content-addressed
+# bundle and they used to accumulate forever. The bundle in use, any bundle a
+# running engine is executing, and anything used in the last 24h are never
+# deleted. Tune with the JARVIS_ENGINE_CACHE_MAX_BUNDLES /
+# JARVIS_ENGINE_CACHE_MAX_AGE_DAYS env vars (0 disables that cap) -- only the
+# three path keys below are read from THIS file; the rest of `workflows` is
+# user-owned and comes from the dashboard.
 # workflows:
 #   engine_dir: /opt/jarvis-engine/${version}
 #   pieces_dir: /opt/jarvis-pieces/${version}

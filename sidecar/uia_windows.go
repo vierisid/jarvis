@@ -247,12 +247,11 @@ type recordedElement struct {
 func uiaElementFromPoint(automation *ole.IDispatch, x, y int) (*ole.IDispatch, error) {
 	var elem *ole.IDispatch
 	// IUIAutomation::ElementFromPoint = vtable[7]. POINT is 8 bytes and is
-	// passed by value in one register on x64: x in the low dword, y high.
-	pt := uintptr(uint64(uint32(int32(x))) | uint64(uint32(int32(y)))<<32)
+	// passed by value in one register on x64 (see packPoint).
 	hr, _, _ := syscall.SyscallN(
 		vtblOffset(automation, 7),
 		uintptr(unsafe.Pointer(automation)),
-		pt,
+		packPoint(x, y),
 		uintptr(unsafe.Pointer(&elem)),
 	)
 	if hr != 0 {
@@ -295,6 +294,17 @@ func uiaElementFromHandle(automation *ole.IDispatch, hwnd uintptr) (*ole.IDispat
 // decide what to record must drop the element rather than record it, because
 // an element with no hosting window cannot be shown NOT to be a panel.
 func uiaHostingWindowPid(walker, elem *ole.IDispatch) (uint32, bool) {
+	_, pid, ok := uiaHostingWindow(walker, elem)
+	return pid, ok
+}
+
+// uiaHostingWindow is uiaHostingWindowPid plus the window itself. The handle
+// is what says whether two elements live in the SAME window, which pids
+// cannot: cross-process hosting is ordinary on Windows (a UWP app's frame
+// belongs to ApplicationFrameHost.exe, any WebView2 app's content belongs to
+// msedgewebview2.exe), so a process difference inside one window is not an
+// overlay and must not be read as one.
+func uiaHostingWindow(walker, elem *ole.IDispatch) (uintptr, uint32, bool) {
 	cur := elem
 	// Ancestors this function opened, released on the way out. elem itself is
 	// owned by the caller and must outlive us.
@@ -306,8 +316,9 @@ func uiaHostingWindowPid(walker, elem *ole.IDispatch) (uint32, bool) {
 	}()
 	for climb := 0; climb < 64; climb++ {
 		if hwnd := uiaElementGetPropertyInt(cur, UIA_NativeWindowHandlePropertyId); hwnd != 0 {
-			if pid := win32GetWindowPid(win32RootWindow(uintptr(hwnd))); pid != 0 {
-				return pid, true
+			root := win32RootWindow(uintptr(hwnd))
+			if pid := win32GetWindowPid(root); pid != 0 {
+				return root, pid, true
 			}
 		}
 		parent, perr := uiaWalkerGetParent(walker, cur)
@@ -317,7 +328,7 @@ func uiaHostingWindowPid(walker, elem *ole.IDispatch) (uint32, bool) {
 		opened = append(opened, parent)
 		cur = parent
 	}
-	return 0, false
+	return 0, 0, false
 }
 
 // maxOverlayDescendants bounds the fallback search below; a browser window
@@ -325,66 +336,106 @@ func uiaHostingWindowPid(walker, elem *ole.IDispatch) (uint32, bool) {
 // call.
 const maxOverlayDescendants = 1500
 
-// uiaClickedElement resolves the element the person clicked at (x, y).
+// uiaClickedElement resolves the element the person clicked at (x, y), given
+// what the hook recorded about where that click went (site).
 //
 // A plain hit test returns the topmost window under the cursor, and on many
 // machines that is a transparent overlay (GPU vendor overlays, screen
 // recorders, remote-control layers) rather than the app that received the
-// click. When the hit-test element belongs to a process other than the
-// foreground window's, the click is attributed to the foreground window
-// instead: first its keyboard-focused element (a click usually focuses the
-// control it landed on), then the smallest descendant of that window whose
-// bounds contain the point.
+// click -- #493. But this runs 60ms or more after the click, on a serialised
+// COM thread, so it cannot be told from the world it can see WHICH window
+// received it: by now the person may have switched apps, and reading that as
+// "an overlay is covering the foreground window" attributed clicks to
+// controls nobody touched (#499).
 //
-// The own-window test happens HERE, on the element actually under the cursor,
-// before any of that re-attribution. It has to: a Jarvis panel is topmost but
-// need not be the foreground window, so its pid would differ from the
-// foreground window's and the re-attribution below would discard the panel
-// element and hand back a control of whatever app is foreground -- turning a
-// click the person made in Jarvis into a recorded step in their app. Testing
-// the returned element instead of the hit element cannot catch that, because
-// by then the panel element is gone. Returns errOwnWindow so the caller
-// drops the click.
-func uiaClickedElement(state *uiaState, walker *ole.IDispatch, x, y int) (*ole.IDispatch, error) {
+// So the window that received the click is not inferred here at all. It was
+// recorded when the click happened (site.HostHwnd) and everything read here
+// is checked against it: the decision is clickAttribution in recorder.go,
+// which is unit-tested on every platform because none of this is.
+//
+//   - hit: the element under the cursor is hosted by the recorded window.
+//   - host window: something is drawn over that window, so the click is
+//     re-pointed into it -- #493's fix, aimed at the window that took the
+//     click rather than at whatever is foreground now.
+//   - own window: the click went to one of Jarvis's own windows.
+//     errOwnWindow, and the caller drops it quietly.
+//   - drop: the recorded window is gone or was never established.
+//     errClickUnattributable, and the caller drops it loudly. Fail closed:
+//     a missing step can be re-recorded, an invented one is trusted.
+func uiaClickedElement(state *uiaState, walker *ole.IDispatch, x, y int, site clickSite) (*ole.IDispatch, error) {
 	hit, err := uiaElementFromPoint(state.automation, x, y)
 	if err != nil {
 		return nil, err
 	}
-	hitPid := uint32(uiaElementGetPropertyInt(hit, UIA_ProcessIdPropertyId))
-	hostPid, hostKnown := uiaHostingWindowPid(walker, hit)
-	if ownWindowVerdict(hitPid, hostPid, ownPid, hostKnown) {
-		hit.Release()
-		return nil, fmt.Errorf("%w: %s", errOwnWindow, ownWindowReason(hitPid, hostPid, ownPid, hostKnown))
+	hitHost, _, _ := uiaHostingWindow(walker, hit)
+	exists, pidNow := win32WindowStillThere(site.HostHwnd)
+	facts := clickFacts{
+		HostHwnd:        site.HostHwnd,
+		HostPid:         site.HostPid,
+		FgHwnd:          site.FgHwnd,
+		FgPid:           site.FgPid,
+		CaptureHwnd:     site.CaptureHwnd,
+		MenuUp:          site.MenuUp,
+		HostStillExists: exists,
+		HostPidNow:      pidNow,
+		HitPid:          uint32(uiaElementGetPropertyInt(hit, UIA_ProcessIdPropertyId)),
+		HitHostHwnd:     hitHost,
+		CurrentFgPid:    win32GetWindowPid(win32GetForegroundWindow()),
+		OwnPid:          ownPid,
 	}
 
-	fg := win32GetForegroundWindow()
-	fgPid := win32GetWindowPid(fg)
-	if fg == 0 || fgPid == 0 || hitPid == fgPid {
+	switch target, reason := clickAttribution(facts); target {
+	case clickTargetHit:
 		return hit, nil
+	case clickTargetOwnWindow:
+		hit.Release()
+		return nil, fmt.Errorf("%w: %s", errOwnWindow, reason)
+	case clickTargetHostWindow:
+		hit.Release()
+		return uiaElementInClickedWindow(state, walker, site, x, y, reason)
+	default:
+		hit.Release()
+		return nil, fmt.Errorf("%w: %s", errClickUnattributable, reason)
 	}
-	overlay := processBaseName(hitPid)
-	hit.Release()
+}
 
+// uiaElementInClickedWindow finds the control of the window that received the
+// click (site.HostHwnd) at the click point, for the case where something else
+// is drawn on top of it.
+//
+// It tries the keyboard-focused element first -- a click usually focuses the
+// control it lands on, and that is one read rather than a whole tree walk --
+// but only when that element is hosted by the very window that received the
+// click AND its bounds contain the point. Same process is not enough: focus
+// may have moved to another window of the same app in the meantime, and the
+// focused control of a window is often not the one under the pointer. Both
+// checks exist so this path cannot hand back a plausible control the person
+// never touched.
+func uiaElementInClickedWindow(state *uiaState, walker *ole.IDispatch, site clickSite, x, y int, reason string) (*ole.IDispatch, error) {
 	if focused, ferr := uiaGetFocusedElement(state.automation); ferr == nil {
-		if uint32(uiaElementGetPropertyInt(focused, UIA_ProcessIdPropertyId)) == fgPid {
+		host, _, ok := uiaHostingWindow(walker, focused)
+		fx, fy, fw, fh := uiaElementGetBoundingRect(focused)
+		if ok && host == site.HostHwnd && pointInRect(x, y, fx, fy, fw, fh) {
 			return focused, nil
 		}
 		focused.Release()
 	}
 
-	window, werr := uiaElementFromHandle(state.automation, fg)
+	window, werr := uiaElementFromHandle(state.automation, site.HostHwnd)
 	if werr != nil {
-		return nil, fmt.Errorf("click landed on %q, an overlay above the foreground window, and the window could not be read: %w", overlay, werr)
+		return nil, fmt.Errorf("%w: %s, and that window could not be read: %v", errClickUnattributable, reason, werr)
 	}
 	defer window.Release()
 	trueCond, cerr := uiaCreateTrueCondition(state.automation)
 	if cerr != nil {
-		return nil, cerr
+		// Wrapped like its neighbours: this is still a dropped click, and
+		// the click-time facts in reason are what make it diagnosable.
+		return nil, fmt.Errorf("%w: %s, and no condition could be built to read it: %v", errClickUnattributable, reason, cerr)
 	}
 	defer trueCond.Release()
 	arr, aerr := uiaElementFindAll(window, TreeScope_Descendants, trueCond)
 	if aerr != nil || arr == nil {
-		return nil, fmt.Errorf("click landed on %q, an overlay above the foreground window; its tree could not be read", overlay)
+		return nil, fmt.Errorf("%w: %s, and that window's tree could not be read", errClickUnattributable, reason)
 	}
 	defer arr.Release()
 	count := uiaArrayLength(arr)
@@ -399,7 +450,7 @@ func uiaClickedElement(state *uiaState, walker *ole.IDispatch, x, y int) (*ole.I
 			continue
 		}
 		ex, ey, ew, eh := uiaElementGetBoundingRect(el)
-		if ew <= 0 || eh <= 0 || x < ex || x >= ex+ew || y < ey || y >= ey+eh {
+		if !pointInRect(x, y, ex, ey, ew, eh) {
 			el.Release()
 			continue
 		}
@@ -414,7 +465,7 @@ func uiaClickedElement(state *uiaState, walker *ole.IDispatch, x, y int) (*ole.I
 		el.Release()
 	}
 	if best == nil {
-		return nil, fmt.Errorf("click landed on %q, an overlay above the foreground window, and no control of that window contains the point", overlay)
+		return nil, fmt.Errorf("%w: %s, and no control of that window contains the point", errClickUnattributable, reason)
 	}
 	return best, nil
 }
@@ -487,7 +538,7 @@ var interactableControlTypes = map[string]bool{
 // and the ordinal counts every earlier raw-view sibling with the same
 // control type and name. That is what makes the recorded sig equal the
 // live one, so the resolver's sig rung (1.0) re-finds the element at replay.
-func uiaRecordedElement(state *uiaState, kind string, x, y int) (*recordedElement, error) {
+func uiaRecordedElement(state *uiaState, kind string, x, y int, site clickSite) (*recordedElement, error) {
 	// The walker comes first: the click path needs it to find the window
 	// hosting the element under the cursor before it decides whether the
 	// click is even ours to record.
@@ -499,7 +550,7 @@ func uiaRecordedElement(state *uiaState, kind string, x, y int) (*recordedElemen
 
 	var elem *ole.IDispatch
 	if kind == "click" {
-		elem, err = uiaClickedElement(state, walker, x, y)
+		elem, err = uiaClickedElement(state, walker, x, y, site)
 	} else {
 		elem, err = uiaGetFocusedElement(state.automation)
 	}
@@ -1409,6 +1460,8 @@ var (
 	procGetForegroundWindow   = user32.NewProc("GetForegroundWindow")
 	procGetWindowThreadProcId = user32.NewProc("GetWindowThreadProcessId")
 	procGetAncestor           = user32.NewProc("GetAncestor")
+	procWindowFromPoint       = user32.NewProc("WindowFromPoint")
+	procGetGUIThreadInfo      = user32.NewProc("GetGUIThreadInfo")
 	procSetCursorPos          = user32.NewProc("SetCursorPos")
 	procMouseEvent            = user32.NewProc("mouse_event")
 	procSetForegroundWindow   = user32.NewProc("SetForegroundWindow")
@@ -1444,6 +1497,78 @@ func win32RootWindow(hwnd uintptr) uintptr {
 		return hwnd
 	}
 	return root
+}
+
+// guiThreadInfo mirrors Win32's GUITHREADINFO. Field order and widths are
+// the SDK's: two DWORDs, six HWNDs, then a RECT, which is 72 bytes on amd64.
+// cbSize must be set or the call fails.
+type guiThreadInfo struct {
+	CbSize        uint32
+	Flags         uint32
+	HwndActive    uintptr
+	HwndFocus     uintptr
+	HwndCapture   uintptr
+	HwndMenuOwner uintptr
+	HwndMoveSize  uintptr
+	HwndCaret     uintptr
+	RcCaret       struct{ Left, Top, Right, Bottom int32 }
+}
+
+const (
+	guiInMenuMode     = 0x00000004
+	guiSystemMenuMode = 0x00000008
+	guiPopupMenuMode  = 0x00000010
+)
+
+// win32ForegroundGUIInfo reads the input state of the foreground thread:
+// which window holds the mouse capture, and whether a menu is up. It is a
+// kernel-side read with no message send, so it is safe from a low-level
+// hook callback.
+//
+// ok is false when the call fails, and every caller must then behave as if
+// it had never asked. Failing that way round is deliberate: this guard
+// exists to suppress clicks, and a guard that cannot read the state must
+// not start suppressing everything.
+func win32ForegroundGUIInfo() (guiThreadInfo, bool) {
+	var gui guiThreadInfo
+	gui.CbSize = uint32(unsafe.Sizeof(gui))
+	// idThread 0 means the foreground thread.
+	r, _, _ := procGetGUIThreadInfo.Call(0, uintptr(unsafe.Pointer(&gui)))
+	if r == 0 {
+		return guiThreadInfo{}, false
+	}
+	return gui, true
+}
+
+// win32WindowFromPoint returns the window under a screen point -- the one
+// that would receive a click there. It hit-tests, so a window that declares
+// itself transparent to the mouse is skipped in favour of the window behind
+// it, which is what makes it a better answer than the topmost window UIA's
+// own hit test returns.
+//
+// The result can be a child window; resolve it through win32RootWindow to
+// get the top-level window a person would name.
+func win32WindowFromPoint(x, y int) uintptr {
+	hwnd, _, _ := procWindowFromPoint.Call(packPoint(x, y))
+	return hwnd
+}
+
+// win32WindowStillThere reports whether hwnd still exists, and which process
+// owns it now.
+//
+// Both halves matter to a caller checking a handle it recorded earlier:
+// Windows reuses HWND values, so a handle that still answers IsWindow can be
+// a different window wearing a dead one's number, and only the owning
+// process tells the two apart.
+func win32WindowStillThere(hwnd uintptr) (exists bool, pid uint32) {
+	if hwnd == 0 {
+		return false, 0
+	}
+	alive, _, _ := procIsWindow.Call(hwnd)
+	if alive == 0 {
+		return false, 0
+	}
+	return true, win32GetWindowPid(hwnd)
 }
 
 const (

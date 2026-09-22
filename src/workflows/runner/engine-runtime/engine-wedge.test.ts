@@ -123,9 +123,9 @@ describe("a live engine that stops answering", () => {
       // transport failure makes one unfit.
       expect(handle.isAbandoned).toBe(true);
       } finally {
-        // An acquired-but-unreleased engine survives `runtime.shutdown()` --
-        // that only clears the warm slot -- and then reconnect-loops against a
-        // closed port forever. A failed assertion must not leak one.
+        // `runtime.shutdown()` reclaims acquired engines too now (#491), but
+        // releasing here is still the right thing: an engine reconnect-looping
+        // against a closed port until afterAll runs is nobody's idea of tidy.
         await handle.release();
       }
     },
