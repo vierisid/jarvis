@@ -213,6 +213,82 @@ describe('I1 - framing non-regression', () => {
   });
 });
 
+describe('identity and shape of the returned set', () => {
+  // These are regressions for probes that broke an earlier version of
+  // normalizeToolSet. Each one was a real hole.
+
+  test('duplicates in the candidate cannot reach the output', () => {
+    // A tool list with a repeated name is an API error at most providers.
+    const rc = byName('run_command');
+    const r = normalizeToolSet(A, [...A.filter(isFloorEligible), rc, rc, rc]);
+    expect(r.failedOpen).toBe(false);
+    const out = r.tools.map((t) => t.name);
+    expect(out.length).toBe(new Set(out).size);
+
+    const doubledFloor = [...A.filter(isFloorEligible), ...A.filter(isFloorEligible)];
+    const r2 = normalizeToolSet(A, doubledFloor);
+    const out2 = r2.tools.map((t) => t.name);
+    expect(out2.length).toBe(new Set(out2).size);
+  });
+
+  test('a stub object reusing a registered name cannot replace the real tool', () => {
+    // Otherwise the model is shown a schema the registry will not honour.
+    const stub: ToolDefinition = {
+      name: 'browser_snapshot', description: 'STUB', category: 'general',
+      parameters: {}, execute: async () => '',
+    };
+    const r = normalizeToolSet(A, [...A.filter(isFloorEligible), stub]);
+    expect(r.failedOpen).toBe(false);
+    const got = r.tools.find((t) => t.name === 'browser_snapshot');
+    expect(got).toBe(byName('browser_snapshot'));
+    expect(got!.description).not.toBe('STUB');
+  });
+
+  test('a stub named like a perception tool does not satisfy the invariant', () => {
+    // The stub has category 'general', so it is not framed and cannot stand
+    // in for the real browser tool the repair owes.
+    const stubs = A.filter(isFramedPerception).map((t): ToolDefinition => ({
+      name: t.name, description: 'STUB', category: 'general', parameters: {}, execute: async () => '',
+    }));
+    const r = normalizeToolSet(A, [...A.filter(isFloorEligible), byName('run_command'), ...stubs]);
+    expect(r.failedOpen).toBe(false);
+    for (const t of A.filter(isFramedPerception)) {
+      expect(r.tools.find((x) => x.name === t.name)).toBe(t);
+    }
+  });
+
+  test('every returned object is the registered one, in registry order', () => {
+    const r = normalizeToolSet(A, [byName('run_command'), ...A.filter(isFloorEligible)]);
+    for (const t of r.tools) expect(t).toBe(byName(t.name));
+    const order = r.tools.map((t) => t.name);
+    expect(order).toEqual(A.filter((t) => order.includes(t.name)).map((t) => t.name));
+  });
+});
+
+describe('a scoped registry that never had perception tools', () => {
+  test('keeping the shell is allowed when the call site offered no framed reader', () => {
+    // The sub-agent case: `createScopedToolRegistry(['terminal','file-ops'])`
+    // yields [run_command, read_file, write_file, list_directory]. I1 is
+    // quantified over PERCEPTION(all), so there is nothing to restore beyond
+    // read_file. This is the status quo for that agent, not a regression the
+    // filter introduced -- and it must NOT be "fixed" by having the filter
+    // add tools the call site never registered.
+    const scoped = A.filter((t) => ['run_command', 'read_file', 'write_file', 'list_directory'].includes(t.name));
+    const r = normalizeToolSet(scoped, scoped);
+    expect(r.failedOpen).toBe(false);
+    expect(r.tools.map((t) => t.name)).toContain('run_command');
+    expect(r.tools.every((t) => scoped.includes(t))).toBe(true);
+  });
+
+  test('a registry with no framed reader at all still keeps the shell', () => {
+    const shellOnly = A.filter((t) => isFloorEligible(t) || t.name === 'run_command');
+    const r = normalizeToolSet(shellOnly, shellOnly);
+    expect(r.failedOpen).toBe(false);
+    expect(r.tools.filter(isFramedPerception)).toHaveLength(0);
+    expect(r.tools.some((t) => t.name === 'run_command')).toBe(true);
+  });
+});
+
 describe('I3 - subset and floor, the #475 off-by-one', () => {
   test('a floor tool dropped by the candidate fails open to the full list', () => {
     const floor = A.filter(isFloorEligible);
@@ -234,46 +310,17 @@ describe('I3 - subset and floor, the #475 off-by-one', () => {
     expect(r.failures[0]!.invariant).toBe('I3-subset');
   });
 
-  test('a synthetic name is allowed through the subset check', () => {
-    // `discover_tools` is by construction not a registry tool. Checking the
-    // subset against `all` alone would fail on every filtered turn and send
-    // the filter fail-open forever -- silently disabling the feature.
+  test('a synthetic tool in the candidate fails open rather than passing through', () => {
+    // Synthetics are appended by the call site AFTER filtering, the way
+    // `ask_for_clarification` already is. Nothing here accepts them, so
+    // there is no name-exemption list for a caller to misuse.
     const synth: ToolDefinition = {
       name: 'discover_tools', description: 'x', category: 'general',
       parameters: {}, execute: async () => '',
     };
-    const r = normalizeToolSet(A, [...A.filter(isFloorEligible), synth], ['discover_tools']);
-    expect(r.failedOpen).toBe(false);
-    expect(r.tools.map((t) => t.name)).toContain('discover_tools');
-  });
-
-  test('a synthetic tool does not itself trigger the perception union', () => {
-    // `discover_tools` is not in the registry, so `outsideReach` defaults it
-    // to `fetch`. Left unhandled, the escape hatch would drag 9.7 kB of
-    // browser schema into every turn it appears in -- i.e. into every
-    // filtered turn, which is all of them.
-    const synth: ToolDefinition = {
-      name: 'discover_tools', description: 'x', category: 'general',
-      parameters: {}, execute: async () => '',
-    };
-    const quiet = [...A.filter(isFloorEligible), synth];
-    expect(checkFramingInvariant(A, quiet, ['discover_tools'])).toBeNull();
-    const r = normalizeToolSet(A, quiet, ['discover_tools']);
-    expect(r.failedOpen).toBe(false);
-    expect(r.repaired).toEqual([]);
-    expect(r.tools.some(isFramedPerception)).toBe(false);
-  });
-
-  test('a synthetic tool survives a repair triggered by a real tool', () => {
-    const synth: ToolDefinition = {
-      name: 'discover_tools', description: 'x', category: 'general',
-      parameters: {}, execute: async () => '',
-    };
-    const r = normalizeToolSet(A, [...A.filter(isFloorEligible), byName('run_command'), synth], ['discover_tools']);
-    expect(r.failedOpen).toBe(false);
-    expect(r.repaired.length).toBeGreaterThan(0);
-    expect(r.tools.map((t) => t.name)).toContain('discover_tools');
-    expect(r.tools.map((t) => t.name)).toContain('run_command');
+    const r = normalizeToolSet(A, [...A.filter(isFloorEligible), synth]);
+    expect(r.failedOpen).toBe(true);
+    expect(r.failures[0]!.invariant).toBe('I3-subset');
   });
 
   test('the guard does not depend on how many tools are registered', () => {

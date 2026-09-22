@@ -12,6 +12,23 @@
  *
  * Nothing here reads the conversation. A filter whose repair step could be
  * steered by the message would be the same bug in a new place.
+ *
+ * Two structural rules keep the surface small, both learned from probing an
+ * earlier version of this file:
+ *
+ *   1. It deals ONLY in registry tools. Synthetic tools (`discover_tools`,
+ *      `ask_for_clarification`, the realtime nav tools) are appended by the
+ *      call site AFTER filtering -- which is how `ask_for_clarification`
+ *      already works. An earlier version took a `synthetic` name list and
+ *      exempted those names from trigger detection; passing a REAL tool's
+ *      name in that list then suppressed it as a trigger and let the framed
+ *      readers be dropped while the shell stayed. There is now no such
+ *      parameter to misuse.
+ *   2. The output is always rebuilt from `all` by name. The candidate
+ *      supplies names, never objects. That makes duplicates impossible,
+ *      keeps the input's order (a reshuffle would invalidate the provider's
+ *      cached prefix for nothing), and stops a caller passing a stub object
+ *      that reuses a registered tool's name but carries a different schema.
  */
 
 import type { ToolDefinition } from '../registry.ts';
@@ -23,12 +40,12 @@ import {
 
 /** Why a returned set is the full input rather than a filtered one. */
 export type InvariantFailure = {
-  invariant: 'I1' | 'I3-subset' | 'I3-floor' | 'I4';
+  invariant: 'I1' | 'I3-subset' | 'I3-floor';
   detail: string;
 };
 
 export type NormalizeResult = {
-  /** The tools to offer. Order follows the input list exactly. */
+  /** The tools to offer. Always objects from `all`, in `all`'s order. */
   tools: ToolDefinition[];
   /** True when `tools` is the untouched input because a check failed. */
   failedOpen: boolean;
@@ -48,19 +65,18 @@ const names = (ts: Iterable<ToolDefinition>) => [...ts].map((t) => t.name);
  * Contrapositive, which is #483 requirement 4 verbatim: if any framed
  * perception tool is dropped, every unframed-fetch tool and every
  * above-access_browser tool is dropped with it.
+ *
+ * Quantified over `PERCEPTION(all)`, not over some global ideal: the filter
+ * can only ever offer what the call site registered. A scoped sub-agent
+ * registry of `[run_command, read_file, write_file, list_directory]` has no
+ * browser tool to restore, so keeping the shell there is the status quo for
+ * that agent and not a regression this filter introduced.
  */
 export function checkFramingInvariant(
   all: readonly ToolDefinition[],
   selected: readonly ToolDefinition[],
-  synthetic: readonly string[] = [],
 ): InvariantFailure | null {
-  // Synthetic tools are inert by fiat: `ask_for_clarification` asks the
-  // person a question, `discover_tools` lists names, the realtime nav tools
-  // drive the dashboard. None can reach outside content, and none is in the
-  // registry -- so `outsideReach` would default them to `fetch` and they
-  // would drag the whole perception union into every filtered turn.
-  const synth = new Set(synthetic);
-  const triggers = selected.filter((t) => !synth.has(t.name) && isInvariantTrigger(t));
+  const triggers = selected.filter(isInvariantTrigger);
   if (triggers.length === 0) return null;
   const have = new Set(selected.map((t) => t.name));
   const missing = all.filter((t) => isFramedPerception(t) && !have.has(t.name));
@@ -74,68 +90,49 @@ export function checkFramingInvariant(
 }
 
 /**
- * Apply the union repair: restore every framed reader the input had.
- *
- * Union, never subtraction. Both restore I1, but union only ever moves the
- * set toward the full list, so it cannot remove a capability the task needs.
- * Subtraction would let a crafted message delete `run_command` from a turn
- * where the person genuinely asked to run a command -- a steerable
- * denial-of-capability, which is a new bug of the same family.
- */
-function repair(
-  all: readonly ToolDefinition[],
-  selected: readonly ToolDefinition[],
-): { tools: ToolDefinition[]; added: string[] } {
-  const have = new Set(selected.map((t) => t.name));
-  const added = all.filter((t) => isFramedPerception(t) && !have.has(t.name));
-  if (added.length === 0) return { tools: [...selected], added: [] };
-  const keep = new Set([...have, ...added.map((t) => t.name)]);
-  const registered = new Set(all.map((t) => t.name));
-  // Rebuild from `all` so the input's order is preserved exactly: a recompute
-  // that reshuffles the list would invalidate the provider's cached prefix
-  // for no reason. Synthetic entries are not in `all`, so they are carried
-  // over separately -- rebuilding from `all` alone would silently delete the
-  // escape hatch on exactly the turns that need it most.
-  const rebuilt = all.filter((t) => keep.has(t.name));
-  const carried = selected.filter((t) => !registered.has(t.name));
-  return { tools: [...rebuilt, ...carried], added: names(added) };
-}
-
-/**
  * Normalise a candidate set and verify every invariant on the result.
  *
- * `synthetic` names tools the call site appends that are not registry tools
- * (`ask_for_clarification`, `discover_tools`, the realtime nav tools). The
- * subset check runs against `A+ = all + synthetic`; stating it over `all`
- * alone would make I3 fail on every filtered turn, since `discover_tools` is
- * by construction not in the registry -- which would send this function
- * fail-open forever and silently disable the feature.
+ * `candidate` is read for its NAMES only. Anything it carries that is not in
+ * `all` is a caller bug and fails open rather than being laundered into the
+ * result.
  */
 export function normalizeToolSet(
   all: readonly ToolDefinition[],
   candidate: readonly ToolDefinition[],
-  synthetic: readonly string[] = [],
 ): NormalizeResult {
   const failures: InvariantFailure[] = [];
-  const allNames = new Set([...all.map((t) => t.name), ...synthetic]);
+  const registered = new Map(all.map((t) => [t.name, t]));
 
-  // I3 (subset). Checked on the CANDIDATE, before any repair: a candidate
-  // carrying a tool the call site never offered is a caller bug, and the
-  // repair would otherwise launder it into the result.
-  const foreign = candidate.filter((t) => !allNames.has(t.name));
+  // I3 (subset), checked on the CANDIDATE before any repair.
+  const foreign = candidate.filter((t) => !registered.has(t.name));
   if (foreign.length > 0) {
     failures.push({ invariant: 'I3-subset', detail: `not in the input list: ${names(foreign).join(', ')}` });
     return { tools: [...all], failedOpen: true, failures, repaired: [] };
   }
 
-  const violation = checkFramingInvariant(all, candidate, synthetic);
-  const { tools, added } = violation
-    ? repair(all, candidate)
-    : { tools: [...candidate], added: [] as string[] };
+  // Canonicalise immediately: from here on the candidate is a set of names
+  // and every object comes from `all`.
+  const keep = new Set(candidate.map((t) => t.name));
+  const build = () => all.filter((t) => keep.has(t.name));
+
+  let repaired: string[] = [];
+  if (checkFramingInvariant(all, build())) {
+    // Union, never subtraction. Both restore I1, but union only ever moves
+    // the set toward the full list, so it cannot remove a capability the
+    // task needs. Subtraction would let a crafted message delete
+    // `run_command` from a turn where the person genuinely asked to run a
+    // command -- a steerable denial-of-capability, a new bug of the same
+    // family as the one this invariant exists to stop.
+    const added = all.filter((t) => isFramedPerception(t) && !keep.has(t.name));
+    for (const t of added) keep.add(t.name);
+    repaired = names(added);
+  }
+
+  const tools = build();
 
   // Re-verify on the REPAIRED set. The repair is not trusted to be correct;
   // it is checked like anything else.
-  const after = checkFramingInvariant(all, tools, synthetic);
+  const after = checkFramingInvariant(all, tools);
   if (after) failures.push(after);
 
   // I3 (floor). A set containment test against the tools the call site
@@ -143,8 +140,7 @@ export function normalizeToolSet(
   // list, which is the off-by-one that made #475's guard unreachable
   // (`ask_for_clarification` is appended after filtering and can never be
   // counted; `request_approval` is only conditionally registered).
-  const have = new Set(tools.map((t) => t.name));
-  const missingFloor = all.filter((t) => isFloorEligible(t) && !have.has(t.name));
+  const missingFloor = all.filter((t) => isFloorEligible(t) && !keep.has(t.name));
   if (missingFloor.length > 0) {
     failures.push({ invariant: 'I3-floor', detail: `floor tools dropped: ${names(missingFloor).join(', ')}` });
   }
@@ -152,5 +148,5 @@ export function normalizeToolSet(
   if (failures.length > 0) {
     return { tools: [...all], failedOpen: true, failures, repaired: [] };
   }
-  return { tools, failedOpen: false, failures: [], repaired: added };
+  return { tools, failedOpen: false, failures: [], repaired };
 }

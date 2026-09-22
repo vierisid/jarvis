@@ -477,6 +477,41 @@ export type LLMConfig = {
   prompt_cache?: boolean;
 };
 
+/**
+ * Tool-relevance filtering (docs/tool-relevance-filtering.md).
+ *
+ * SYSTEM-owned and file-authoritative: `tools` is deliberately NOT in
+ * USER_OWNED_SECTIONS, so a block in config.yaml survives loadConfig and the
+ * dashboard cannot turn this on. It is a safety-relevant switch, not a
+ * preference.
+ *
+ * Absent means off. `JARVIS_TOOL_FILTER=off` forces it off regardless of what
+ * is written here, and is the kill switch an operator reaches for.
+ */
+export type ToolsConfig = {
+  relevance_filter?: {
+    /**
+     * Master switch. Absent or false means no call site ever filters, which
+     * is the shipped default: #483 requires a benchmark on real small models
+     * before this can be turned on by default.
+     */
+    enabled?: boolean;
+    /**
+     * Parameter-count ceiling, in billions, for the ollama auto-eligibility
+     * rule. A model whose id carries no anchored parameter tag is never
+     * auto-eligible. Default 20.
+     */
+    max_params_b?: number;
+    /**
+     * Explicit "provider:model" refs to treat as eligible regardless of the
+     * heuristics. This is the deterministic mechanism and the only one the
+     * benchmark needs; the heuristics exist so an ordinary ollama install
+     * does not have to enumerate its models.
+     */
+    models?: string[];
+  };
+};
+
 export type JarvisConfig = {
   /**
    * Hosted-LLM access (SYSTEM-owned, file-authoritative): written by the
@@ -616,9 +651,13 @@ export type JarvisConfig = {
      * `ProtectSystem=strict` with `ReadWritePaths=/home/%i /run/jarvis`.
      *
      * Lives under `daemon:` (rather than a `logging:` section of its own)
-     * because loadConfig DISCARDS every section outside the system-owned set -
-     * see USER_OWNED_SECTIONS below. A new top-level key would be silently
-     * dropped on every load. `~/` is expanded by loadConfig.
+     * because loadConfig REPLACES every section listed in USER_OWNED_SECTIONS
+     * with its default, and a `logging:` section would have been a user-owned
+     * one. Note the narrower rule: it is only the LISTED sections that are
+     * discarded. An unlisted top-level key survives, because loadConfig
+     * deep-merges the parsed file over DEFAULT_CONFIG and deepMerge copies
+     * unknown keys through - which is how the system-owned `tools:` section
+     * (see ToolsConfig) reaches the runtime. `~/` is expanded by loadConfig.
      *
      * No DEFAULT_CONFIG entry, on the drain_deadline_ms precedent: absent must
      * stay distinguishable from "set to the default", and the fallback is
@@ -674,6 +713,8 @@ export type JarvisConfig = {
     auto_commit: boolean;
     max_concurrent_servers: number;
   };
+  /** Tool-relevance filtering. SYSTEM-owned; absent means off. */
+  tools?: ToolsConfig;
   authority: AuthorityConfig;
   heartbeat: HeartbeatConfig;
   cron?: SystemCronConfig;

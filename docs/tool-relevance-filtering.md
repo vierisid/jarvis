@@ -279,11 +279,29 @@ The contract. Each is stated formally and each gets a test whose fixtures are
 derived from `BUILTIN_TOOLS`, so a future edit that breaks one fails the
 suite.
 
-`A` is the tool list the call site would otherwise send. `SYNTHETIC` is the
-named set of non-registry tools the loops append
-(`ask_for_clarification`, `discover_tools`, and the realtime nav tools),
-all `inert` and rank 100 by fiat. `A⁺ = A ∪ SYNTHETIC`. `S` is what the
-filter returns.
+`A` is the tool list the call site would otherwise send, and `S` is what the
+filter returns. Both contain **registry tools only**.
+
+`SYNTHETIC` - `ask_for_clarification`, `discover_tools`, the realtime nav
+tools - is appended by the call site *after* filtering, which is how
+`ask_for_clarification` already works today. The invariant layer never sees
+them. An earlier draft passed synthetic names into the checker so they could
+be exempted from trigger detection; probing that version showed the exemption
+list was itself the hole - naming a *real* tool in it (`['run_command']`)
+suppressed it as a trigger and let the framed readers be dropped while the
+shell stayed. There is now no such parameter to misuse, and `A⁺` is a notion
+the checker no longer needs.
+
+Two structural rules on the returned set, both regressions from that probing:
+
+- **The output is rebuilt from `A` by name.** The candidate contributes names,
+  never objects. Duplicates therefore cannot reach the provider (a repeated
+  tool name is an API error at most of them), the order is always `A`'s (a
+  reshuffle would invalidate the cached prefix for nothing), and a caller
+  cannot pass a stub that reuses a registered tool's name while carrying a
+  different schema.
+- **A candidate tool absent from `A` fails open**, rather than being carried
+  into the result.
 
 - `FRAMED(X)` = `{ t ∈ X : reach(t) = framed }`
 - `PERCEPTION(X)` = `{ t ∈ FRAMED(X) : rank(t) ≤ 504 }` - the framed *readers*
@@ -385,7 +403,7 @@ it. This is stated rather than hidden.
 
 ### I3 - Subset and floor
 
-> `S ⊆ A⁺` and `FLOOR(A) ⊆ S`.
+> `S ⊆ A` and `FLOOR(A) ⊆ S`.
 
 The filter never invents a tool, and the low-authority always-set is present
 whenever registered. `FLOOR` is computed from `A`, so a conditionally
@@ -393,13 +411,21 @@ registered tool that is absent is simply absent - no count, no threshold. This
 is the fix for #483 defect 4: **a set containment check against the actual
 input list, never a length comparison against a hard-coded name list.**
 
-Stating I3 over `A⁺` rather than `A` is deliberate: `discover_tools` is not a
-registry tool, and an earlier draft's `S ⊆ A` would have made I3 fail on every
-filtered turn, sending I5 fail-open forever.
+I1 is likewise quantified over `PERCEPTION(A)` - what the call site actually
+registered, not some global ideal. A scoped sub-agent registry of
+`[run_command, read_file, write_file, list_directory]` has no browser tool to
+restore, so keeping the shell there is that agent's status quo rather than a
+regression this filter introduced. The filter must never add a tool the call
+site did not offer, and a test pins that.
 
 ### I4 - Escape hatch present
 
-> Whenever `S ⊂ A` (something was dropped), `discover_tools ∈ S`.
+> Whenever `S ⊂ A` (something was dropped), the call site appends
+> `discover_tools` to what it sends.
+
+Checked at the filter entry point rather than inside the invariant layer,
+since that layer deals only in registry tools. Appending an `inert` synthetic
+cannot violate I1, so the two checks are independent.
 
 ### I5 - Fail open, loudly
 
