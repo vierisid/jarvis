@@ -19,8 +19,12 @@
 import type { AgentInstance } from './agent.ts';
 import type { LLMManager } from '../llm/manager.ts';
 import type { LLMMessage, LLMResponse, LLMToolCall, LLMTool } from '../llm/provider.ts';
-import { ToolRegistry } from '../actions/tools/registry.ts';
+import { ToolRegistry, type ToolDefinition } from '../actions/tools/registry.ts';
 import { checkpointExecution } from '../actions/execution-scope.ts';
+import type { TierMap } from '../llm/tiers.ts';
+import { decideTools } from '../actions/tools/tool-relevance/filter.ts';
+import { DISCOVER_TOOLS, ToolExposureLedger } from '../actions/tools/tool-relevance/ledger.ts';
+import { handleDiscoverTools } from '../actions/tools/tool-relevance/discover.ts';
 import { toolDefToLLMTool, BUILTIN_TOOLS } from '../actions/tools/builtin.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
@@ -215,11 +219,60 @@ function buildSubAgentPromptParts(agent: AgentInstance, context: string): { stat
 }
 
 /**
- * Get LLM-formatted tools from a scoped ToolRegistry.
+ * Get LLM-formatted tools from a scoped ToolRegistry, with the relevance
+ * filter applied.
+ *
+ * This site matters more than it looks. The scoped registry for the DEFAULT
+ * delegation target, `research-analyst`, is `[browser, terminal, file-ops]`
+ * -- all ten browser tools plus `run_command`, `read_file`, `write_file` and
+ * `list_directory`. That is precisely the "drop the browser group, keep the
+ * shell" shape #475 was rejected for, so the coupling invariant is more
+ * load-bearing here than on the main agent, not less.
+ *
+ * Note the other direction too: some scoped registries have no framed
+ * perception tool at all (`software-engineer` is terminal + file-ops). The
+ * invariant is quantified over what the call site registered, so retaining
+ * the shell there is that agent's status quo rather than a regression -- and
+ * the filter must never add a tool the registry does not contain.
  */
-function getLLMTools(registry: ToolRegistry): LLMTool[] | undefined {
-  if (registry.count() === 0) return undefined;
-  return registry.list().map(toolDefToLLMTool);
+/**
+ * The tier map, if this manager has one.
+ *
+ * The filter must never be able to break a call site. Embedded and test
+ * callers pass a minimal LLM manager stub with only `chatTier` on it, and an
+ * unguarded `llmManager.getTierMap()` turns "no optimisation" into "the
+ * sub-agent throws before its first turn". An absent map means no tier
+ * resolves, which the eligibility gate reads as ineligible -- unfiltered,
+ * which is the correct fallback.
+ */
+function tierMapOf(manager: LLMManager): TierMap {
+  const fn = (manager as Partial<LLMManager>).getTierMap;
+  if (typeof fn !== 'function') return {};
+  try {
+    return fn.call(manager) ?? {};
+  } catch {
+    return {};
+  }
+}
+
+function getLLMTools(
+  registry: ToolRegistry,
+  messages: readonly LLMMessage[],
+  ledger: ToolExposureLedger,
+  tiers: TierMap,
+): { llm: LLMTool[] | undefined; defs: ToolDefinition[] } {
+  if (registry.count() === 0) return { llm: undefined, defs: [] };
+  const all = registry.list();
+  const decision = decideTools({
+    all,
+    messages,
+    ledger,
+    // The sub-agent loop always runs on the medium tier (see chatTier below).
+    tier: 'medium',
+    tiers,
+    providers: undefined,
+  });
+  return { llm: decision.tools.map(toolDefToLLMTool), defs: all };
 }
 
 type AuthorityContext = {
@@ -447,7 +500,13 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     ];
   }
 
-  const tools = getLLMTools(toolRegistry);
+  // The sub-agent buffer IS durable -- `state()` captures it whole into the
+  // checkpoint and `resume.messages` restores it -- so the ledger can be
+  // seeded from it and admissions survive a pause.
+  const exposure = new ToolExposureLedger();
+  exposure.seedFromMessages(resume?.messages);
+  let toolSet = getLLMTools(toolRegistry, messages, exposure, tierMapOf(llmManager));
+  let tools = toolSet.llm;
   let finalText = '';
   let reachedFinal = false;
 
@@ -483,16 +542,38 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   };
 
   /** Dispatch a turn's tool calls in order; a pause returns what was not reached. */
+  /** Set when a discover_tools admission widened the exposed set. */
+  let exposureWidened = false;
+
   const dispatchCalls = async (calls: LLMToolCall[], iteration: number): Promise<SubAgentPause | null> => {
     for (let index = 0; index < calls.length; index++) {
       const tc = calls[index]!;
       fence();
+      // The escape hatch is synthetic and never in the scoped registry, so
+      // it is answered here rather than dispatched. It carries no authority
+      // and touches nothing; admission only widens what the next provider
+      // call is offered, and the coupling invariant is re-checked then.
+      if (tc.name === DISCOVER_TOOLS) {
+        const before = exposure.size;
+        const outcome = handleDiscoverTools(
+          tc.arguments, toolRegistry.list(), exposure,
+          new Set((tools ?? []).map((t) => t.name)),
+        );
+        if (exposure.size > before) exposureWidened = true;
+        noteToolCall(tc);
+        sequence += 1;
+        record(tc, { text: outcome.result });
+        continue;
+      }
       noteToolCall(tc);
       sequence += 1;
       const dispatched = await executeTool(toolRegistry, tc, sequence, authorityCtx);
       if ('paused' in dispatched) {
         return { ...dispatched.paused, remaining: calls.slice(index + 1), iteration };
       }
+      // Whatever the sub-agent actually called stays exposed for the rest
+      // of the run.
+      exposure.add(tc.name);
       record(tc, dispatched);
     }
     return null;
@@ -549,6 +630,11 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
         // A turn is durable only while the run is still alive.
         fence();
         if (pause) return finish({ success: true, response: '', terminationReason: 'paused', paused: pause });
+        if (exposureWidened) {
+          exposureWidened = false;
+          toolSet = getLLMTools(toolRegistry, messages, exposure, tierMapOf(llmManager));
+          tools = toolSet.llm;
+        }
         onTurn?.(state(iteration + 1));
         continue;
       }

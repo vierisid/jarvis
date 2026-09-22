@@ -130,6 +130,31 @@ export function tierCandidateRefs(tier: Tier, tiers: TierMap): ModelRef[] {
 }
 
 /**
+ * Every model a call could land on, including the CALLER-SUPPLIED fallback.
+ *
+ * `TIER_FALLBACK` is not the whole story. `streamTierWithFallback` retries on
+ * a tier the caller passes as an argument, and `agent-service` calls
+ * `streamMessage(..., 'conversation', ..., 'medium')` -- while
+ * `TIER_FALLBACK.conversation` is deliberately empty, because the
+ * conversation tier's presence is a mode switch rather than a fall-up. So
+ * `tierCandidateRefs('conversation', ...)` never sees `medium`, and a gate
+ * built on it alone would filter for a small conversation model and then
+ * hand the filtered list to the frontier task model the moment the local one
+ * errored before first output. That is requirement 1 violated in exactly the
+ * degraded case it is meant to cover.
+ */
+export function allReachableRefs(tier: Tier, fallbackTier: Tier | undefined, tiers: TierMap): ModelRef[] {
+  const refs = tierCandidateRefs(tier, tiers);
+  if (!fallbackTier || fallbackTier === tier) return refs;
+  const seen = new Set(refs.map((r) => `${r.provider}:${r.model ?? ''}`));
+  for (const r of tierCandidateRefs(fallbackTier, tiers)) {
+    const key = `${r.provider}:${r.model ?? ''}`;
+    if (!seen.has(key)) { seen.add(key); refs.push(r); }
+  }
+  return refs;
+}
+
+/**
  * The gate. Filter only when EVERY candidate the call could land on is
  * eligible.
  *
@@ -148,10 +173,11 @@ export function isTierEligible(
   tiers: TierMap,
   providerKinds: Record<string, LLMProviderEntry | undefined> | undefined,
   policy: ToolFilterPolicy,
+  fallbackTier?: Tier,
 ): EligibilityDecision {
   if (!policy.enabled) return { eligible: false, reason: 'filter disabled by policy' };
 
-  const candidates = tierCandidateRefs(tier, tiers);
+  const candidates = allReachableRefs(tier, fallbackTier, tiers);
   if (candidates.length === 0) {
     return { eligible: false, reason: `tier "${tier}" resolves to no provider` };
   }

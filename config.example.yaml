@@ -100,6 +100,21 @@ personality:
     - "respectful"
     - "adaptive"
 
+# Tool relevance filtering. Shortens the tool list sent to small/local models
+# to save schema tokens. OFF by default and unbenchmarked -- see
+# docs/tool-relevance-filtering.md before switching it on.
+#
+# Kill switch: JARVIS_TOOL_FILTER=off forces it off whatever is written here.
+# tools:
+#   relevance_filter:
+#     enabled: false
+#     # Parameter ceiling, in billions, for the ollama auto-eligibility rule.
+#     max_params_b: 20
+#     # Explicit "provider:model" refs to treat as eligible. This is the only
+#     # route for LM Studio / llama.cpp / vLLM, which all arrive as
+#     # `openai_compatible` and carry no signal the classifier can use.
+#     models: []
+
 authority:
   # Default authority level (0-5)
   # 0: No permission (ask for everything)

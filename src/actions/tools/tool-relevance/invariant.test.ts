@@ -116,18 +116,46 @@ describe('classification', () => {
     }
   });
 
-  test('perception is the framed readers only, excluding the framed actors', () => {
-    const perception = A.filter(isFramedPerception);
-    expect(names(perception)).toContain('browser_navigate');
-    expect(names(perception)).toContain('ui_snapshot');
-    expect(names(perception)).toContain('desktop_snapshot');
-    expect(names(perception)).toContain('read_file');
-    expect(names(perception)).toContain('get_clipboard');
-    // Framed ACTORS above access_browser are excluded from the union set.
-    for (const n of ['ui_act', 'run_skill', 'record_skill', 'browser_evaluate']) {
-      expect(isFramedPerception(byName(n))).toBe(false);
+  test('perception is the framed readers, actors excluded, regardless of rank', () => {
+    const perception = names(A.filter(isFramedPerception));
+    for (const n of ['browser_navigate', 'ui_snapshot', 'desktop_snapshot', 'read_file', 'get_clipboard']) {
+      expect(perception).toContain(n);
+    }
+    // Framed ACTORS are excluded by name, not by rank.
+    for (const n of ['run_skill', 'record_skill', 'browser_upload_file']) {
+      expect(`${n}:${isFramedPerception(byName(n))}`).toBe(`${n}:false`);
+    }
+  });
+
+  test('a framed reader above the rank ceiling is still perception', () => {
+    // Rank lies about both of these, in opposite directions, which is why
+    // membership is no longer a rank test.
+    //
+    // ui_act is 505 because that is the floor for its WORST action, but
+    // `get_value` is in its own READ_ONLY_ACTIONS and its authorityGate
+    // returns null for it, and `expand` / `scroll_into_view` are the only
+    // way to reveal collapsed content for the next ui_snapshot. Without it
+    // the desktop surface gets framed eyes and no framed hands, and the
+    // model reaches for capture_screen instead -- which is `fetch`.
+    //
+    // browser_evaluate is execute_command/506, the SAME rank as
+    // run_command. Dropping the framed one while keeping the unframed one
+    // is a rank tie, not a step down.
+    for (const n of ['ui_act', 'browser_evaluate']) {
+      expect(`${n}:${isFramedPerception(byName(n))}`).toBe(`${n}:true`);
       expect(authorityRank(byName(n))).toBeGreaterThan(PERCEPTION_RANK_CEILING);
     }
+  });
+
+  test('browser_upload_file is framed but never force-added', () => {
+    // It maps to write_data (302), so a `rank <= 504` rule swept this
+    // exfiltration path into every turn that kept the shell.
+    const up = byName('browser_upload_file');
+    expect(outsideReach(up)).toBe('framed');
+    expect(authorityRank(up)).toBeLessThan(PERCEPTION_RANK_CEILING);
+    expect(isFramedPerception(up)).toBe(false);
+    const r = normalizeToolSet(A, [...A.filter(isFloorEligible), byName('run_command')]);
+    expect(r.repaired).not.toContain('browser_upload_file');
   });
 
   test('every above-access_browser tool is a trigger, framed or not', () => {

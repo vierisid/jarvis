@@ -121,6 +121,28 @@ export function applyEnvOverrides(config: JarvisConfig): void {
     const v = env.JARVIS_REALTIME_VOICE.trim().toLowerCase();
     config.voice.realtime.enabled = v !== '' && v !== '0' && v !== 'false' && v !== 'no';
   }
+
+  // Tool relevance filtering (docs/tool-relevance-filtering.md). The kill
+  // switch: `off` wins over the config file, which is what an operator
+  // reaches for when the filter misbehaves. Applied here so it survives the
+  // user-section discard the same way JARVIS_WAKE_ENGINE does -- although
+  // `tools` is not a user-owned section, so it would survive anyway.
+  //
+  // An unrecognised value is ignored rather than guessed at; the policy
+  // resolver (actions/tools/tool-relevance/policy.ts) re-reads the same env
+  // var and owns the precedence rules.
+  if (env.JARVIS_TOOL_FILTER !== undefined) {
+    const v = env.JARVIS_TOOL_FILTER.trim().toLowerCase();
+    const on = v === 'on' || v === '1' || v === 'true' || v === 'yes';
+    const off = v === 'off' || v === '0' || v === 'false' || v === 'no';
+    if (on || off) {
+      if (!config.tools) config.tools = {};
+      if (!config.tools.relevance_filter) config.tools.relevance_filter = {};
+      config.tools.relevance_filter.enabled = on;
+    } else {
+      console.warn(`[Config] Invalid JARVIS_TOOL_FILTER="${env.JARVIS_TOOL_FILTER}" - must be on|off; ignoring.`);
+    }
+  }
 }
 
 export async function loadConfig(configPath?: string): Promise<JarvisConfig> {

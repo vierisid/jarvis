@@ -4795,6 +4795,22 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     await registry.startAll();
 
     // 10a-post. Wire authority components that need running services
+    // Tool relevance filtering (docs/tool-relevance-filtering.md). Resolved
+    // once here from the SYSTEM-owned `tools:` config section plus
+    // JARVIS_TOOL_FILTER; absent config means OFF, and `=off` beats
+    // everything. Only the POLICY is frozen -- which model a tier resolves
+    // to is classified per call, because `llm` is hot-reloadable.
+    {
+      const { toolFilterPolicyFromConfig, setToolFilterPolicy } = await import('../actions/tools/tool-relevance/policy.ts');
+      const policy = toolFilterPolicyFromConfig(jarvisConfig);
+      setToolFilterPolicy(policy);
+      orchestrator.setToolFilterProviders(jarvisConfig.llm?.providers);
+      if (policy.enabled) {
+        console.warn('[Daemon] Tool relevance filtering is ON. It is default-off and '
+          + 'unbenchmarked; set JARVIS_TOOL_FILTER=off to disable.');
+      }
+    }
+
     const toolRegistry = orchestrator.getToolRegistry();
     if (toolRegistry) {
       deferredExecutor.setToolRegistry(toolRegistry);

@@ -87,3 +87,6 @@ id_ecdsa
 *.key.pem
 *-key.pem
 privkey.pem
+
+# Agent scratch space (throwaway measurement scripts)
+.scratch/

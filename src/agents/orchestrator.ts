@@ -33,6 +33,10 @@ import type { AuditTrail } from '../authority/audit.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { resolveToolGate, gateContext } from '../authority/tool-action-map.ts';
+import { decideTools, realtimeToolDecision } from '../actions/tools/tool-relevance/filter.ts';
+import { DISCOVER_TOOLS, ToolExposureLedger } from '../actions/tools/tool-relevance/ledger.ts';
+import { handleDiscoverTools } from '../actions/tools/tool-relevance/discover.ts';
+import type { LLMProviderEntry } from '../config/types.ts';
 import { combineDecisions, type AuthorityDecision } from '../authority/engine.ts';
 import { progressAcknowledgement } from './progress.ts';
 import { runWithOrigin } from '../llm/origin.ts';
@@ -177,6 +181,18 @@ export class AgentOrchestrator {
   private realtimeTaint: Set<string> = new Set();
   /** Logged once: tools ran with no authority engine wired (tests, embedded use). */
   private warnedNoAuthority = false;
+  /**
+   * Grow-only tool exposure, one ledger per conversation (keyed by agent id).
+   * Empty and inert unless the relevance filter is switched on.
+   */
+  private exposureLedgers = new Map<string, ToolExposureLedger>();
+  /**
+   * Provider entries from the post-DB-merge `llm` config, for model-class
+   * eligibility. Absent is safe: the classifier then reads a provider's KIND
+   * from its NAME, which is correct for the canonical entries and fails
+   * closed (ineligible, so unfiltered) for custom-named ones.
+   */
+  private toolFilterProviders: Record<string, LLMProviderEntry | undefined> | undefined;
 
   constructor() {
     this.hierarchy = new AgentHierarchy();
@@ -206,7 +222,23 @@ export class AgentOrchestrator {
    */
   getRealtimeTools(): LLMTool[] {
     if (!this.toolRegistry || this.toolRegistry.count() === 0) return [];
-    return this.toolRegistry.list().map(toolDefToLLMTool);
+    // Routed through the same gate as every other call site so the decision
+    // is explicit and testable rather than realtime simply being forgotten
+    // the way it was in #475 -- but the gate always says no here. A realtime
+    // session's tools are fixed when buildSessionUpdate runs, so a filter
+    // would break per-turn re-filtering AND the escape hatch at once:
+    // `discover_tools` could not take effect, because the session's tool
+    // list cannot change. A dead-end hatch is worse than no filter.
+    return realtimeToolDecision(this.toolRegistry.list()).tools.map(toolDefToLLMTool);
+  }
+
+  /**
+   * Provider entries for model-class eligibility. Called by the daemon after
+   * the DB merge; also re-callable on an `llm` hot reload, since the tier
+   * map and the provider set can both change under a running orchestrator.
+   */
+  setToolFilterProviders(providers: Record<string, LLMProviderEntry | undefined> | undefined): void {
+    this.toolFilterProviders = providers;
   }
 
   // --- Authority setters ---
@@ -521,7 +553,12 @@ export class AgentOrchestrator {
       ...primary.getMessages(),
     ];
 
-    const tools = this.getLLMTools();
+    // Decided once for the turn and held across the loop. Recomputing per
+    // iteration would invalidate the provider's cached prefix every time,
+    // because the tool list sits at the head of it.
+    const ledger = this.ledgerFor(primary.id);
+    let decided = this.decideTurnTools(messages, tier, ledger);
+    let tools = decided.llm;
     let finalText = '';
 
     // Tool execution loop
@@ -537,7 +574,18 @@ export class AgentOrchestrator {
         });
 
         // Execute each tool and add results
+        let widened = false;
         for (const tc of llmResponse.tool_calls) {
+          const discovery = this.handleDiscoveryCall(tc, decided.defs, ledger);
+          if (discovery) {
+            widened ||= discovery.grew;
+            messages.push({ role: 'tool', content: discovery.result, tool_call_id: tc.id });
+            continue;
+          }
+          // Everything the model actually calls stays exposed for the rest
+          // of the conversation, so a later turn cannot strip a tool an
+          // in-flight task is using.
+          ledger.add(tc.name);
           const result = await this.executeTool(tc, undefined, turnTaint);
           messages.push({
             role: 'tool',
@@ -554,6 +602,14 @@ export class AgentOrchestrator {
               finalText += '\n' + docMarker[0] + '\n';
             }
           }
+        }
+
+        // An admission is the one thing that justifies recomputing the tool
+        // list mid-turn: it is the escape hatch, and it would be pointless
+        // if the newly admitted tools only appeared on the next user turn.
+        if (widened) {
+          decided = this.decideTurnTools(messages, tier, ledger);
+          tools = decided.llm;
         }
 
         // Continue loop to re-call LLM with tool results
@@ -633,8 +689,18 @@ export class AgentOrchestrator {
         ];
 
     // Include the standard tools plus the special clarification tool.
-    const baseTools = this.getLLMTools() ?? [];
-    const tools: LLMTool[] = [...baseTools, ASK_FOR_CLARIFICATION_TOOL];
+    //
+    // The task path's buffer IS durable -- it is persisted whole onto the
+    // task record and replayed as opts.history -- so the ledger can be
+    // seeded from it, which restores admissions across a pause/resume.
+    const ledger = new ToolExposureLedger();
+    ledger.seedFromMessages(opts.history);
+    let decided = this.decideTurnTools(messages, opts.tier, ledger);
+    // ask_for_clarification is appended AFTER the filter, and is therefore
+    // never part of its accounting. #475's fail-open guard counted it as
+    // though it were a registry tool, which is half of why that guard could
+    // never fire.
+    let tools: LLMTool[] = [...(decided.llm ?? []), ASK_FOR_CLARIFICATION_TOOL];
 
     let finalText = '';
     // Seeded from the resumed buffer, not 0: a task that ran tools before it
@@ -679,6 +745,21 @@ export class AgentOrchestrator {
             content: `[Paused: asked user "${question}" - resume will append the user's reply.]`,
             tool_call_id: clarifyCall.id,
           });
+          // Every OTHER call in the same batch needs a result too. The
+          // assistant message above carries the whole tool_calls array, and
+          // a tool_use with no matching tool_result is rejected by the
+          // providers when this conversation is replayed on resume. Latent
+          // before `discover_tools` existed; likely now, because a confused
+          // small model will ask for a tool and say "I need more info" in
+          // the same batch.
+          for (const other of llmResponse.tool_calls) {
+            if (other.id === clarifyCall.id) continue;
+            messages.push({
+              role: 'tool',
+              content: '[Not run: the task paused to ask the user a question first.]',
+              tool_call_id: other.id,
+            });
+          }
           return { kind: 'paused', question, conversation: messages };
         }
 
@@ -688,7 +769,15 @@ export class AgentOrchestrator {
           tool_calls: llmResponse.tool_calls,
         });
 
+        let widened = false;
         for (const tc of llmResponse.tool_calls) {
+          const discovery = this.handleDiscoveryCall(tc, decided.defs, ledger);
+          if (discovery) {
+            widened ||= discovery.grew;
+            messages.push({ role: 'tool', content: discovery.result, tool_call_id: tc.id });
+            continue;
+          }
+          ledger.add(tc.name);
           const result = await this.executeTool(tc, opts.signal, turnTaint);
           toolsExecuted++;
           messages.push({
@@ -696,6 +785,10 @@ export class AgentOrchestrator {
             content: result,
             tool_call_id: tc.id,
           });
+        }
+        if (widened) {
+          decided = this.decideTurnTools(messages, opts.tier, ledger);
+          tools = [...(decided.llm ?? []), ASK_FOR_CLARIFICATION_TOOL];
         }
         continue;
       }
@@ -846,7 +939,15 @@ export class AgentOrchestrator {
       ...primary.getMessages(),
     ];
 
-    const tools = this.getLLMTools();
+    // `fallbackTier` MUST reach the gate. It is a caller-supplied retry
+    // tier, not a TIER_FALLBACK one -- agent-service passes 'medium' here
+    // with tier 'conversation', and TIER_FALLBACK.conversation is
+    // deliberately empty. Without it the gate would clear a small local
+    // conversation model and then hand the filtered list to the frontier
+    // task model the instant the local one died before first output.
+    const ledger = this.ledgerFor(primary.id);
+    let decided = this.decideTurnTools(messages, tier, ledger, fallbackTier);
+    let tools = decided.llm;
     const totalUsage = { input_tokens: 0, output_tokens: 0 };
     let finalText = '';
     let responseModel = 'unknown';
@@ -951,7 +1052,15 @@ export class AgentOrchestrator {
       });
 
       // Execute each tool and add results
+      let widened = false;
       for (const tc of toolCalls) {
+        const discovery = this.handleDiscoveryCall(tc, decided.defs, ledger);
+        if (discovery) {
+          widened ||= discovery.grew;
+          messages.push({ role: 'tool', content: discovery.result, tool_call_id: tc.id });
+          continue;
+        }
+        ledger.add(tc.name);
         const result = await this.executeTool(tc, undefined, turnTaint);
         messages.push({
           role: 'tool',
@@ -968,6 +1077,11 @@ export class AgentOrchestrator {
             yield { type: 'text' as const, text: '\n' + docMarker[0] + '\n' };
           }
         }
+      }
+
+      if (widened) {
+        decided = this.decideTurnTools(messages, activeTier, ledger, fallbackTier);
+        tools = decided.llm;
       }
 
       // Continue loop — will stream next LLM response
@@ -1015,7 +1129,7 @@ export class AgentOrchestrator {
   // --- Private helpers ---
 
   /**
-   * Get LLM-formatted tools from the ToolRegistry.
+   * Get LLM-formatted tools from the ToolRegistry, unfiltered.
    */
   private getLLMTools(): LLMTool[] | undefined {
     if (!this.toolRegistry || this.toolRegistry.count() === 0) {
@@ -1023,6 +1137,112 @@ export class AgentOrchestrator {
     }
 
     return this.toolRegistry.list().map(toolDefToLLMTool);
+  }
+
+  /**
+   * The grow-only exposure ledger for one conversation.
+   *
+   * Held here rather than derived from the history because neither
+   * `processMessage` nor `streamMessage` persists tool calls at all:
+   * `AgentInstance.addMessage` takes only user/assistant/system text, so the
+   * assistant-with-tool_calls messages and every tool result live in the
+   * loop-local buffer and are gone when the turn ends. Reading "tools
+   * already used" back out of `getMessages()` would always come up empty,
+   * which is #483's mid-task stripping defect exactly. See ledger.ts.
+   */
+  private ledgerFor(agentId: string): ToolExposureLedger {
+    let l = this.exposureLedgers.get(agentId);
+    if (!l) {
+      l = new ToolExposureLedger();
+      this.exposureLedgers.set(agentId, l);
+    }
+    return l;
+  }
+
+  /**
+   * Decide the tool list for ONE TURN. Call before the tool loop and hold
+   * the result across it; see filter.ts on why this is not per iteration.
+   */
+  private decideTurnTools(
+    messages: readonly LLMMessage[],
+    tier: Tier,
+    ledger: ToolExposureLedger,
+    fallbackTier?: Tier,
+  ): { llm: LLMTool[] | undefined; defs: ToolDefinition[]; filtered: boolean } {
+    if (!this.toolRegistry || this.toolRegistry.count() === 0) {
+      // undefined, not []: the providers treat the two differently.
+      return { llm: undefined, defs: [], filtered: false };
+    }
+    const all = this.toolRegistry.list();
+    const decision = decideTools({
+      all,
+      messages,
+      ledger,
+      tier,
+      fallbackTier,
+      // Guarded: embedded and test callers pass a minimal LLM manager stub,
+      // and the filter must never be the thing that breaks a call site. No
+      // tier map means no tier resolves, which the gate reads as
+      // ineligible -- unfiltered, the correct fallback.
+      tiers: (() => {
+        const fn = (this.llmManager as Partial<LLMManager> | null)?.getTierMap;
+        if (typeof fn !== 'function' || !this.llmManager) return {};
+        try { return fn.call(this.llmManager) ?? {}; } catch { return {}; }
+      })(),
+      providers: this.toolFilterProviders,
+    });
+    return {
+      llm: decision.tools.map(toolDefToLLMTool),
+      defs: all,
+      filtered: decision.filtered,
+    };
+  }
+
+  /**
+   * Intercept `discover_tools` before dispatch.
+   *
+   * Returns null when this is not a discovery call. Otherwise it handles the
+   * call inline -- the tool is synthetic and is never in the registry -- and
+   * returns the tool result plus whether the exposed set grew, which tells
+   * the loop to recompute its tool list before the next provider call.
+   *
+   * Two things the `ask_for_clarification` precedent does NOT give us and
+   * that are done explicitly here: the emergency-stop check (a halted system
+   * must not enumerate its catalogue) and an audit row. `discover_tools`
+   * takes model-authored input and durably widens the exposed set.
+   */
+  private handleDiscoveryCall(
+    tc: LLMToolCall,
+    exposed: readonly ToolDefinition[],
+    ledger: ToolExposureLedger,
+  ): { result: string; grew: boolean } | null {
+    if (tc.name !== DISCOVER_TOOLS) return null;
+    if (this.emergencyController && !this.emergencyController.canExecute()) {
+      const state = this.emergencyController.getState();
+      return { result: `[SYSTEM ${state.toUpperCase()}] Tool discovery is suspended.`, grew: false };
+    }
+    const all = this.toolRegistry?.list() ?? [];
+    const before = ledger.size;
+    const outcome = handleDiscoverTools(tc.arguments, all, ledger, new Set(exposed.map((t) => t.name)));
+    if (outcome.admitted.length > 0) {
+      const agent = this.getPrimary();
+      try {
+        this.auditTrail?.log({
+          agent_id: agent?.id ?? 'unknown',
+          agent_name: this.auditAgentName(agent?.agent.role.name ?? 'unknown'),
+          tool_name: `${DISCOVER_TOOLS}(${outcome.admitted.join(',')})`,
+          action_category: 'read_data',
+          authority_decision: 'allowed',
+          executed: true,
+        });
+      } catch (err) {
+        // An audit failure must not take the turn down, but it must be
+        // visible: this row is the only record that the exposed set widened.
+        console.warn('[Orchestrator] could not audit a discover_tools admission:',
+          err instanceof Error ? err.message : err);
+      }
+    }
+    return { result: outcome.result, grew: ledger.size > before };
   }
 
   /**

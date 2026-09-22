@@ -16,7 +16,7 @@ import {
   toolFilterPolicyFromConfig,
   type ToolFilterPolicy,
 } from './policy.ts';
-import { classifyModel, isTierEligible, parseParamsB, tierCandidateRefs } from './model-class.ts';
+import { allReachableRefs, classifyModel, isTierEligible, parseParamsB, tierCandidateRefs } from './model-class.ts';
 
 const ON: ToolFilterPolicy = { enabled: true, maxParamsB: 20, models: [] };
 
@@ -202,6 +202,42 @@ describe('the tier gate and the failover hole', () => {
     };
     expect(tierCandidateRefs('conversation', tiers)).toEqual([{ provider: 'ollama', model: 'qwen2.5:7b' }]);
     expect(isTierEligible('conversation', tiers, kinds, ON).eligible).toBe(true);
+  });
+
+  test('a caller-supplied fallbackTier is classified too', () => {
+    // The hole TIER_FALLBACK cannot see. agent-service calls
+    // streamMessage(..., 'conversation', 'chat_orchestrator_image', 'medium'),
+    // and TIER_FALLBACK.conversation is deliberately EMPTY because the
+    // conversation tier's presence is a mode switch, not a fall-up. So
+    // tierCandidateRefs('conversation') never contains the medium
+    // assignment, and a gate built on it alone clears a small local
+    // conversation model and then hands the filtered list to the frontier
+    // task model the instant the local one errors before first output.
+    const tiers: TierMap = {
+      conversation: { provider: 'ollama', model: 'qwen2.5:7b' },
+      medium: { provider: 'openai', model: 'gpt-5.4' },
+    };
+    expect(tierCandidateRefs('conversation', tiers)).toHaveLength(1);
+    expect(isTierEligible('conversation', tiers, kinds, ON).eligible).toBe(true);
+
+    expect(allReachableRefs('conversation', 'medium', tiers)).toHaveLength(2);
+    const d = isTierEligible('conversation', tiers, kinds, ON, 'medium');
+    expect(d.eligible).toBe(false);
+    expect(d.reason).toContain('failover candidate');
+  });
+
+  test('an all-local conversation plus fallback stays eligible', () => {
+    const tiers: TierMap = {
+      conversation: { provider: 'ollama', model: 'qwen2.5:7b' },
+      medium: { provider: 'ollama', model: 'llama3.1:8b' },
+    };
+    expect(isTierEligible('conversation', tiers, kinds, ON, 'medium').eligible).toBe(true);
+  });
+
+  test('a fallbackTier equal to the tier changes nothing', () => {
+    const tiers: TierMap = { medium: { provider: 'ollama', model: 'qwen2.5:7b' } };
+    expect(allReachableRefs('medium', 'medium', tiers)).toHaveLength(1);
+    expect(isTierEligible('medium', tiers, kinds, ON, 'medium').eligible).toBe(true);
   });
 
   test('the environment configured on this machine is not eligible', () => {

@@ -40,7 +40,7 @@ import {
 
 /** Why a returned set is the full input rather than a filtered one. */
 export type InvariantFailure = {
-  invariant: 'I1' | 'I3-subset' | 'I3-floor';
+  invariant: 'I1' | 'I3-subset' | 'I3-floor' | 'I5-threw';
   detail: string;
 };
 
@@ -100,6 +100,30 @@ export function normalizeToolSet(
   all: readonly ToolDefinition[],
   candidate: readonly ToolDefinition[],
 ): NormalizeResult {
+  // I5 lives here rather than at each call site so all four of them inherit
+  // it instead of each having to remember. "Fail open" means the caller gets
+  // the list it passed in; with an empty `all` there is nothing to fall back
+  // to, and returning an empty set to a caller that only checks `failedOpen`
+  // would ship a turn with no tools at all.
+  if (all.length === 0) {
+    return { tools: [], failedOpen: false, failures: [], repaired: [] };
+  }
+  try {
+    return normalizeInner(all, candidate);
+  } catch (err) {
+    return {
+      tools: [...all],
+      failedOpen: true,
+      failures: [{ invariant: 'I5-threw', detail: err instanceof Error ? err.message : String(err) }],
+      repaired: [],
+    };
+  }
+}
+
+function normalizeInner(
+  all: readonly ToolDefinition[],
+  candidate: readonly ToolDefinition[],
+): NormalizeResult {
   const failures: InvariantFailure[] = [];
   const registered = new Map(all.map((t) => [t.name, t]));
 
@@ -130,8 +154,19 @@ export function normalizeToolSet(
 
   const tools = build();
 
-  // Re-verify on the REPAIRED set. The repair is not trusted to be correct;
-  // it is checked like anything else.
+  // Re-verify on the repaired set.
+  //
+  // Honest note: as `repair` is written this cannot fire. It unions in EVERY
+  // missing member of PERCEPTION(all), so `missing` is necessarily empty
+  // afterwards, and on the no-repair path the identical call already
+  // returned null on the identical set. Deleting these two lines passes the
+  // whole suite and no test can catch it.
+  //
+  // It stays because it is a tripwire for the next edit to `repair`, which
+  // is the one function here whose output is not otherwise checked. Treat it
+  // as an assertion, not as coverage. `checkFramingInvariant` is tested
+  // directly against a deliberately under-repaired set so the CHECKER is
+  // known to work even though this wiring is unreachable.
   const after = checkFramingInvariant(all, tools);
   if (after) failures.push(after);
 
