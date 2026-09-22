@@ -9,27 +9,10 @@ import type { ToolDefinition } from '../actions/tools/registry.ts';
 import type { ProjectManager } from './project-manager.ts';
 import type { GitManager } from './git-manager.ts';
 import type { GitHubManager } from './github-manager.ts';
+import { sanitizedEnv } from '../util/subprocess-env.ts';
 
 /** Block patterns for long-running dev servers that conflict with the managed server */
 const BLOCKED_SERVER_PATTERNS = /\b(make\s+dev|bun\s+--hot|vite\s*$|next\s+dev|npm\s+run\s+dev|yarn\s+dev)\b/i;
-
-/** Env keys that must never leak to subprocesses */
-const SECRET_ENV_PATTERNS = [
-  /api[_-]?key/i, /secret/i, /token/i, /password/i, /credential/i,
-  /^JARVIS_API_KEY$/, /^JARVIS_AUTH_TOKEN$/, /^JARVIS_OPENAI_KEY$/,
-  /^JARVIS_OPENROUTER_KEY$/, /^ANTHROPIC_API_KEY$/, /^OPENAI_API_KEY$/,
-];
-
-/** Build a sanitized env with secrets stripped */
-function sanitizedEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value === undefined) continue;
-    if (SECRET_ENV_PATTERNS.some(p => p.test(key))) continue;
-    env[key] = value;
-  }
-  return env;
-}
 
 export function createSiteBuilderTools(
   projectManager: ProjectManager,

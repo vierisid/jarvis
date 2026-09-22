@@ -8,6 +8,7 @@
 
 import { getSecret, setSecret, deleteSecret, hasSecret } from '../vault/keychain.ts';
 import type { GitRemoteStatus, GitHubRepoOptions } from './types.ts';
+import { sanitizedEnv } from '../util/subprocess-env.ts';
 
 const TOKEN_KEY = 'github.personal_access_token';
 const API_BASE = 'https://api.github.com';
@@ -304,14 +305,18 @@ export class GitHubManager {
    * Run a git command via Bun.spawn.
    */
   private async git(cwd: string, args: string[]): Promise<string> {
+    // Sanitized, not inherited - same reasoning as GitManager.run(): these
+    // commands execute .git/hooks out of a model-written project tree.
+    //
+    // NOTE this closes the ENV channel only. push()/pull() still put the PAT in
+    // the remote URL they pass as ARGV, which is visible in `ps` and is handed
+    // to a pre-push hook as $1/$2. Tracked separately; see the header of
+    // src/util/subprocess-env.ts.
     const proc = Bun.spawn(['git', ...args], {
       cwd,
       stdout: 'pipe',
       stderr: 'pipe',
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0',
-      },
+      env: sanitizedEnv({ GIT_TERMINAL_PROMPT: '0' }),
     });
 
     const stdout = await new Response(proc.stdout).text();

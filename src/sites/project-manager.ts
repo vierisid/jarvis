@@ -11,6 +11,7 @@ import { join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { readdirSync, statSync, existsSync, mkdirSync, rmSync } from 'node:fs';
 import { isWithin } from '../util/path.ts';
+import { sanitizedEnv } from '../util/subprocess-env.ts';
 
 const META_FILE = '.jarvis-project.json';
 
@@ -143,6 +144,7 @@ export class ProjectManager {
         cwd: this.projectsDir,
         stdout: 'pipe',
         stderr: 'pipe',
+        env: sanitizedEnv(),
       });
       const exitCode = await proc.exited;
       if (exitCode !== 0) {
@@ -171,6 +173,7 @@ export class ProjectManager {
       cwd: projectPath,
       stdout: 'pipe',
       stderr: 'pipe',
+      env: sanitizedEnv(),
     });
     await installProc.exited;
 

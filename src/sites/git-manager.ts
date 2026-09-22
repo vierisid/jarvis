@@ -5,6 +5,7 @@
  */
 
 import type { GitCommit, GitBranch } from './types.ts';
+import { sanitizedEnv } from '../util/subprocess-env.ts';
 
 export class GitManager {
   /**
@@ -12,7 +13,7 @@ export class GitManager {
    */
   static async isInstalled(): Promise<boolean> {
     try {
-      const proc = Bun.spawn(['git', '--version'], { stdout: 'pipe', stderr: 'pipe' });
+      const proc = Bun.spawn(['git', '--version'], { stdout: 'pipe', stderr: 'pipe', env: sanitizedEnv() });
       const stdout = await new Response(proc.stdout).text();
       return (await proc.exited) === 0;
     } catch {
@@ -27,12 +28,12 @@ export class GitManager {
     let name: string | null = null;
     let email: string | null = null;
     try {
-      const proc = Bun.spawn(['git', 'config', '--global', 'user.name'], { stdout: 'pipe', stderr: 'pipe' });
+      const proc = Bun.spawn(['git', 'config', '--global', 'user.name'], { stdout: 'pipe', stderr: 'pipe', env: sanitizedEnv() });
       const out = await new Response(proc.stdout).text();
       if ((await proc.exited) === 0) name = out.trim() || null;
     } catch {}
     try {
-      const proc = Bun.spawn(['git', 'config', '--global', 'user.email'], { stdout: 'pipe', stderr: 'pipe' });
+      const proc = Bun.spawn(['git', 'config', '--global', 'user.email'], { stdout: 'pipe', stderr: 'pipe', env: sanitizedEnv() });
       const out = await new Response(proc.stdout).text();
       if ((await proc.exited) === 0) email = out.trim() || null;
     } catch {}
@@ -217,14 +218,15 @@ export class GitManager {
    * Run a git command in the project directory.
    */
   private async run(cwd: string, args: string[]): Promise<string> {
+    // Sanitized, not inherited: git runs whatever hooks live in the project
+    // tree's .git/hooks, and that tree is written by the model. Stripping the
+    // inherited GIT_* also stops a hook-invoked daemon's GIT_DIR/GIT_INDEX_FILE
+    // from pointing these commands at the wrong repository.
     const proc = Bun.spawn(['git', ...args], {
       cwd,
       stdout: 'pipe',
       stderr: 'pipe',
-      env: {
-        ...process.env,
-        GIT_TERMINAL_PROMPT: '0',
-      },
+      env: sanitizedEnv({ GIT_TERMINAL_PROMPT: '0' }),
     });
 
     const stdout = await new Response(proc.stdout).text();
