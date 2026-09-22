@@ -57,10 +57,18 @@ daemon:
 # prebuilt piece-metadata cache file. Paths may contain ${version}, expanded
 # from the JARVIS_VERSION env var, for machines that keep artifacts per
 # installed version. Omit any of them and jarvis does that work itself.
+#
+# The daemon also prunes its OWN engine bundle cache (~/.jarvis/cache/engine)
+# at startup: each change to the engine source builds a new content-addressed
+# bundle and they used to accumulate forever. The bundle in use, and any
+# bundle a running engine is executing, are never deleted. Set either knob to
+# 0 to disable that cap (both 0 = never prune).
 # workflows:
 #   engine_dir: /opt/jarvis-engine/${version}
 #   pieces_dir: /opt/jarvis-pieces/${version}
 #   piece_metadata_cache: /opt/jarvis-cache/${version}/piece-metadata.json
+#   engineCacheMaxBundles: 3    # keep at most this many bundles (default 3)
+#   engineCacheMaxAgeDays: 14   # delete bundles untouched this long (default 14)
 
 # Authentication — JWT-only by DEFAULT. The dashboard, API, and WebSocket
 # require a token from an enrolled device. Correct setup order:

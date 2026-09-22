@@ -219,3 +219,42 @@ export function resolveEngineIdleTtlMs(
   }
   return raw;
 }
+
+/**
+ * Engine bundle cache retention, same precedence shape as the idle TTL above:
+ * the env var wins over the user-owned `workflows` setting so a fleet
+ * operator can tune it from the unit file.
+ *
+ * Unlike the TTL, 0 is MEANINGFUL here and is accepted: it disables that one
+ * cap (keep every bundle / never expire by age). Disabling both leaves the
+ * cache unpruned, which is the pre-#491 behaviour and a legitimate choice for
+ * a host that manages the directory itself. Negative or non-numeric values
+ * are ignored with a warning.
+ */
+export function resolveEngineCacheRetention(
+  configured: { maxBundles?: number; maxAgeDays?: number },
+  env: Record<string, string | undefined> = process.env,
+): { keep?: number; maxAgeMs?: number } {
+  const read = (
+    envName: string,
+    configuredValue: number | undefined,
+    settingName: string,
+  ): number | undefined => {
+    const envRaw = env[envName];
+    const raw = envRaw !== undefined ? Number(envRaw) : configuredValue;
+    if (raw === undefined) return undefined;
+    if (!Number.isFinite(raw) || raw < 0) {
+      console.warn(
+        `[Daemon] Ignoring ${JSON.stringify(envRaw ?? configuredValue)} for ${envRaw !== undefined ? envName : settingName}: must be a non-negative number; using default`,
+      );
+      return undefined;
+    }
+    return raw;
+  };
+  const keep = read('JARVIS_ENGINE_CACHE_MAX_BUNDLES', configured.maxBundles, 'workflows.engineCacheMaxBundles');
+  const maxAgeDays = read('JARVIS_ENGINE_CACHE_MAX_AGE_DAYS', configured.maxAgeDays, 'workflows.engineCacheMaxAgeDays');
+  const out: { keep?: number; maxAgeMs?: number } = {};
+  if (keep !== undefined) out.keep = keep;
+  if (maxAgeDays !== undefined) out.maxAgeMs = maxAgeDays * 24 * 60 * 60_000;
+  return out;
+}

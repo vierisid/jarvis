@@ -27,6 +27,10 @@ import {
   findCachedBundle,
 } from "../runner/engine-runtime/build";
 import { buildAllJarvisPieces } from "../runner/engine-runtime/build-pieces";
+import {
+  pruneEngineBundleCache,
+  reapOrphanedEngines,
+} from "../runner/engine-runtime/engine-reaper";
 import { EngineRuntime } from "../runner/engine-runtime/engine-runtime";
 import {
   SandboxApi,
@@ -80,6 +84,17 @@ export interface BootstrapWorkflowEngineOptions {
   sharedPiecesDir?: string | null;
   sharedCacheFile?: string | null;
   engineCacheRoot?: string | null;
+  /**
+   * Engine bundle cache retention (see `pruneEngineBundleCache`). Omitted
+   * fields take the pruner's defaults; `{ keep: 0, maxAgeMs: 0 }` disables
+   * pruning entirely.
+   */
+  engineCacheRetention?: { keep?: number; maxAgeMs?: number };
+  /**
+   * Skip the start-up reap + prune. Tests that must not touch the real
+   * `~/.jarvis/cache` or signal anything set this.
+   */
+  skipEngineMaintenance?: boolean;
 }
 
 export interface BootstrapWorkflowEngineResult {
@@ -167,6 +182,31 @@ export async function bootstrapWorkflowEngine(
     labelled("sandbox-api-start", api.start({ host: opts.host ?? "127.0.0.1", port: 0 })),
   ]);
   log(`bundle + pieces + sandbox api ready in ${Date.now() - t0}ms (${api.baseUrl})`);
+
+  // 3b. Reclaim what previous runs left behind (#491). Deliberately AFTER the
+  // bundle is resolved: the pruner protects the bundle we are about to use,
+  // and the reaper's grace window must not sit in front of the boot path.
+  // Both are best-effort -- neither is worth failing a daemon start over --
+  // and both are no-ops on a machine with nothing to clean.
+  if (!opts.skipEngineMaintenance) {
+    void (async () => {
+      try {
+        const { reaped } = await reapOrphanedEngines({ log: (m) => log(m) });
+        if (reaped.length === 0) log("no orphaned engine subprocesses found");
+      } catch (e) {
+        log(`engine reap failed (continuing): ${(e as Error).message}`);
+      }
+      try {
+        pruneEngineBundleCache({
+          ...(opts.engineCacheRetention ?? {}),
+          protect: [resolve(cached.bundlePath, "..")],
+          log: (m) => log(m),
+        });
+      } catch (e) {
+        log(`engine bundle cache prune failed (continuing): ${(e as Error).message}`);
+      }
+    })();
+  }
 
   // 4. Build the EngineRuntime against the bundle. One runtime is shared
   // across all RUN_FLOW jobs + trigger hook calls. Pooling is enabled so

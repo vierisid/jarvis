@@ -15,7 +15,7 @@ import { ServiceRegistry } from "./services.ts";
 import { HealthMonitor } from "./health.ts";
 import { loadConfig } from "../config/loader.ts";
 import { installLogFileSink, logFileIsProcessStdio } from "../util/log-file.ts";
-import { resolveEngineIdleTtlMs } from "./config-merge.ts";
+import { resolveEngineCacheRetention, resolveEngineIdleTtlMs } from "./config-merge.ts";
 import { activeTurns } from "./active-turns.ts";
 import { writeLockedPort } from "./pid.ts";
 import { AgentService } from "./agent-service.ts";
@@ -4638,6 +4638,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         },
         log: (line) => console.log(`[Daemon] ${line}`),
         engineIdleTtlMs: resolveEngineIdleTtlMs(jarvisConfig.workflows?.engineIdleTtlMs),
+        engineCacheRetention: resolveEngineCacheRetention({
+          ...(jarvisConfig.workflows?.engineCacheMaxBundles !== undefined
+            ? { maxBundles: jarvisConfig.workflows.engineCacheMaxBundles }
+            : {}),
+          ...(jarvisConfig.workflows?.engineCacheMaxAgeDays !== undefined
+            ? { maxAgeDays: jarvisConfig.workflows.engineCacheMaxAgeDays }
+            : {}),
+        }),
         sharedPiecesDir: sharedRuntime.piecesDir,
         sharedCacheFile: sharedRuntime.metadataCacheFile,
         engineCacheRoot: sharedRuntime.engineCacheRoot,

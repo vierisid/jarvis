@@ -33,7 +33,15 @@ if [ "$rc" != "0" ]; then
   fi
   # Sweep stragglers: any orphaned engine subprocess from a hung test
   # would otherwise survive the hook and confuse the next attempt.
-  pkill -f "engine-bundle" 2>/dev/null || true
+  #
+  # This used to be `pkill -f "engine-bundle"`, which matched nothing -- the
+  # engine's command line is `bun --smol ~/.jarvis/cache/engine/<hash>/main.js`
+  # -- and the obvious "fix" (`pkill -f main.js`) would kill unrelated work on
+  # a machine running more than one checkout. The script below reaps by
+  # identity: our marker in the process environment, our uid, an argv naming
+  # its own bundle, and an owner that is provably gone. A pooled engine
+  # belonging to a live daemon is left running.
+  bun run scripts/reap-engines.ts 2>/dev/null || true
   exit "$rc"
 fi
 

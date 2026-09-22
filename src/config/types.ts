@@ -300,6 +300,21 @@ export type WorkflowConfig = {
    */
   engineIdleTtlMs?: number;
   /**
+   * How many engine bundles `~/.jarvis/cache/engine` may hold, newest first.
+   * Each distinct engine source state builds its own ~7MB content-addressed
+   * bundle and nothing used to remove the old ones (13 bundles / 93MB when
+   * this was reported). Default 3. 0 means "never prune by count". The
+   * bundle in use and any bundle a running engine is executing are always
+   * kept, whatever this says. Overridden by JARVIS_ENGINE_CACHE_MAX_BUNDLES.
+   */
+  engineCacheMaxBundles?: number;
+  /**
+   * Delete engine bundles untouched for this many days. Default 14. 0 means
+   * "never prune by age". Same protections as above apply. Overridden by
+   * JARVIS_ENGINE_CACHE_MAX_AGE_DAYS.
+   */
+  engineCacheMaxAgeDays?: number;
+  /**
    * Where the workflow runtime finds READY-MADE artifacts instead of
    * building/installing its own. All optional; each path may contain a
    * `${version}` placeholder expanded from the `JARVIS_VERSION` env var
