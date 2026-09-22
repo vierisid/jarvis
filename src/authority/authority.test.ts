@@ -3,7 +3,8 @@ import { initDatabase, closeDb, getDb } from '../vault/schema.ts';
 import { AuthorityEngine, type AuthorityConfig } from './engine.ts';
 import { ApprovalManager } from './approval.ts';
 import { AuditTrail } from './audit.ts';
-import { DeferredExecutor } from './deferred-executor.ts';
+import { DeferredExecutor, ABOVE_LEVEL_SUBSTITUTION } from './deferred-executor.ts';
+import { TAINT_PROFILE_LABEL } from './taint-gating.ts';
 import type { ToolRegistry } from '../actions/tools/registry.ts';
 import { AuthorityLearner } from './learning.ts';
 import { EmergencyController } from './emergency.ts';
@@ -226,8 +227,23 @@ describe('getActionForTool', () => {
     expect(getActionForTool('some_terminal_tool', 'terminal')).toBe('execute_command');
   });
 
-  test('defaults to read_data for completely unknown tools', () => {
-    expect(getActionForTool('unknown_tool', 'unknown_category')).toBe('read_data');
+  test('defaults to execute_command for completely unknown tools', () => {
+    // Fail closed. This used to be read_data, which is how #503 shipped a
+    // `sh -c` shell (site_run_command) gated at level 1: nobody had mapped
+    // it, and "unmapped" was read as "harmless".
+    expect(getActionForTool('unknown_tool', 'unknown_category')).toBe('execute_command');
+  });
+
+  test('an inherited Object.prototype key is not a mapping', () => {
+    // `if (TOOL_ACTION_MAP[name])` was truthy for these and returned a
+    // Function, which then passed the level check because
+    // `AUTHORITY_REQUIREMENTS[<function>]` is undefined and
+    // `level < undefined` is false. They must take the fail-closed default.
+    for (const name of ['constructor', 'toString', 'valueOf', 'hasOwnProperty']) {
+      expect(`${name}:${getActionForTool(name, 'unknown_category')}`).toBe(`${name}:execute_command`);
+    }
+    // Same hole on the category side.
+    expect(getActionForTool('some_tool', 'constructor')).toBe('execute_command');
   });
 });
 
@@ -650,5 +666,68 @@ describe('AuthorityLearner', () => {
 
     learner.markSuggestionSent('send_email', 'send_email');
     expect(learner.getSuggestions().length).toBe(0);
+  });
+});
+
+/**
+ * Which approvals are allowed to train the learner.
+ *
+ * `getSuggestions` emits a per-CATEGORY override with no tool and no role,
+ * and an override is evaluated BEFORE the level check, so accepting one
+ * auto-allows that category for every tool at every level. Two kinds of
+ * approval therefore must not feed it, and neither had a test:
+ *
+ *   taint-gated   an override cannot lift a profile gate, so the suggestion
+ *                 would be dead on arrival.
+ *   above_level   the card stood in for a level shortfall on ONE tool; it is
+ *                 not the person endorsing the category. #503 made this
+ *                 concrete: `site_delete_file` is an approval on every call,
+ *                 so five routine deletions would offer to auto-allow
+ *                 `delete_data` everywhere.
+ *
+ * Both are recognised by a substring of the reason, which couples this to
+ * the wording the orchestrator and the taint profile write. That coupling is
+ * the thing these tests exist to pin.
+ */
+describe('approval learning exclusions', () => {
+  const runApproved = async (reason: string): Promise<string[]> => {
+    const mgr = new ApprovalManager();
+    const recorded: string[] = [];
+    const executor = new DeferredExecutor(mgr, new AuditTrail());
+    executor.setToolRegistry({
+      get: () => undefined,
+      execute: async () => 'ok',
+    } as unknown as ToolRegistry);
+    executor.setLearner({
+      recordDecision: (category: ActionCategory, tool: string) => { recorded.push(`${tool}:${category}`); },
+    } as unknown as AuthorityLearner);
+
+    const req = mgr.createRequest({
+      agentId: 'a1', agentName: 'PA', toolName: 'site_delete_file',
+      toolArguments: { path: 'a.ts' }, actionCategory: 'delete_data',
+      urgency: 'normal', reason, context: '',
+    });
+    mgr.approve(req.id, 'dashboard');
+    await executor.executeApproved(req.id);
+    return recorded;
+  };
+
+  test('an ordinary approval trains the learner', async () => {
+    expect(await runApproved('delete_data is a governed action requiring user approval'))
+      .toEqual(['site_delete_file:delete_data']);
+  });
+
+  test('a taint-gated approval does not', async () => {
+    expect(await runApproved(`${TAINT_PROFILE_LABEL}: write_data requires user approval`)).toEqual([]);
+  });
+
+  test('an above_level substitution does not', async () => {
+    // The exact sentence the orchestrator writes for a substituted approval.
+    expect(await runApproved(`delete_data ${ABOVE_LEVEL_SUBSTITUTION} and requires user approval`)).toEqual([]);
+  });
+
+  test('and not when it also carries a profile label', async () => {
+    expect(await runApproved(
+      `delete_data ${ABOVE_LEVEL_SUBSTITUTION} (${TAINT_PROFILE_LABEL}) and requires user approval`)).toEqual([]);
   });
 });

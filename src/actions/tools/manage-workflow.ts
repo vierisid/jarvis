@@ -122,6 +122,18 @@ export interface ManageWorkflowDeps {
   executionTargets?: () => ExecutionTarget[];
 }
 
+/**
+ * One model-supplied value, safe to put in an approval headline. The card
+ * renders the intent sentence and nothing else, so an uncapped flow name can
+ * run past the real sentence and append reassuring prose after it. Both call
+ * sites put it LAST, where there is nothing after it to impersonate, so the
+ * budget is generous enough to show a real name rather than hide it.
+ */
+function forCard(value: unknown, max = 600): string {
+  const s = String(value ?? "").replace(/\s+/g, " ").trim();
+  return s.length > max ? `${s.slice(0, max - 3)}...` : s;
+}
+
 export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDefinition {
   // No library index => the composer has no search_library tool and can never
   // return suggestedInstalls, so the paragraph describing them is dropped
@@ -136,48 +148,30 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
     description: [
       "Create, run, and manage the user's Jarvis workflows (automations).",
       "",
-      "When the user says things like \"make a workflow that ...\", \"automate X\",",
-      "\"create a flow that does Y every morning\", \"set up an automation for Z\", call",
-      "`compose` with a `name` you propose and the `description` quoting their request.",
-      "When the user says \"run my morning brief\" or \"trigger the daily summary\", call `run`.",
-      "Use the other actions to introspect (`list`, `get`, `list_runs`, `get_run`) or",
-      "lifecycle-manage (`enable`, `disable`, `publish`, `delete`) existing flows.",
-      "",
-      "Most actions accept a `flow` parameter resolving a display name (case-insensitive) or id.",
-      "Runs are referenced by `run_id` (returned by `run` or `list_runs`).",
-      "",
-      "Actions:",
-      "  compose { name, description }       PRIMARY action for \"create a workflow that ...\" requests.",
-      "                                      Builds a draft flow from a plain-English description (LLM-backed).",
-      "                                      On success returns { ok: true, flow, versionId }.",
-      "                                      On failure returns { ok: false, errors, rawResponse }: read the errors,",
-      "                                      refine the description with concrete piece/tool names, and call again.",
+      "compose { name, description } is the PRIMARY action: use it whenever the user",
+      "describes what an automation should DO (\"make a workflow that ...\", \"automate X",
+      "every morning\"). It drafts a flow from plain English (LLM-backed). On",
+      "{ ok: false, errors } read the errors, refine the description with concrete",
+      "piece/tool names, and call compose again.",
       ...(hasLibrary
         ? [
-            "                                      A failure may also carry suggestedInstalls: [{ id, displayName, reason }] --",
-            "                                      community-library pieces that would make the request possible. Relay them",
-            "                                      to the user (pieces are installed from the dashboard's Library page) and",
-            "                                      offer to compose again after installing; do NOT retry compose unchanged.",
+            "A failure may also carry suggestedInstalls: community-library pieces that would",
+            "make the request possible. Relay them (the user installs them from the",
+            "dashboard's Library page) and offer to compose again after; do NOT retry",
+            "compose unchanged.",
           ]
         : []),
-      "                                      Composed flows are DISABLED; follow up with `publish` once the user",
-      "                                      confirms, then optionally `run` to test.",
-      "  create { name, empty: true }        Create an EMPTY workflow with a manual trigger (no steps). The `empty: true`",
-      "                                      flag is REQUIRED -- without it the tool refuses and tells you to use `compose`.",
-      "                                      Only use this when the user explicitly asked for a blank canvas. If they",
-      "                                      described what the workflow should DO, use `compose` with their request as",
-      "                                      the description; never use `create` for that case.",
-      "  list                                Return every workflow's id, name, status, last-updated.",
-      "  get { flow }                        Full detail (latest version, published id, recent metadata).",
-      "  run { flow, payload? }              Queue a run; returns the run_id.",
-      "  enable / disable { flow }           Toggle status.",
-      "  publish { flow }                    Lock the latest draft and set as the published version (also enables it).",
-      "  delete { flow }                     Permanently remove.",
-      "  list_runs { flow?, limit? }         Recent runs (per flow or across all).",
-      "  get_run { run_id }                  Full run detail with step outputs.",
+      "Composed flows are DISABLED: publish once the user confirms, then run to test.",
+      "create makes an EMPTY workflow with a manual trigger and REQUIRES empty: true.",
+      "Use it only for an explicitly blank canvas, never for a workflow the user",
+      "described -- that case is always compose.",
+      "",
+      "Other actions: list, get (full detail), run (queues a run, returns run_id),",
+      "enable, disable, publish (locks the latest draft and enables it), delete",
+      "(permanent), list_runs, get_run (full run detail with step outputs).",
       "",
       "A flow containing a CODE step runs arbitrary JavaScript with this machine's full",
-      "privileges, so `publish`, `enable` and `run` are REFUSED for it until the user turns",
+      "privileges, so publish, enable and run are REFUSED for it until the user turns",
       "code steps on for that one flow. The error explains how; relay it and let the user",
       "decide. Do not retry, and do not try to route around it -- there is no tool action",
       "that grants the permission, by design.",
@@ -186,52 +180,94 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
     parameters: {
       action: {
         type: "string",
-        description:
-          'One of: "compose" | "create" | "list" | "get" | "run" | "enable" | "disable" | "publish" | "delete" | "list_runs" | "get_run". ' +
-          'Use "compose" (not "create") when the user describes what the workflow should do; "create" only makes an empty flow.',
+        description: "What to do.",
+        enum: ["compose", "create", "list", "get", "run", "enable", "disable", "publish", "delete", "list_runs", "get_run"],
         required: true,
       },
       flow: {
         type: "string",
-        description: "Workflow display name (case-insensitive) or id. Required for get/run/enable/disable/publish/delete; optional for list_runs.",
+        description: "Workflow display name (case-insensitive) or id. Required for get/run/enable/disable/publish/delete; optional filter for list_runs.",
         required: false,
       },
       name: {
         type: "string",
-        description: 'Display name for the new workflow. Required for "create" and "compose". Pick a short, descriptive title.',
+        description: "Short descriptive display name. Required for create and compose.",
         required: false,
       },
       payload: {
         type: "object",
-        description: 'Optional JSON object passed as the trigger payload of the run (for "run"). Use when the flow expects input data.',
+        description: "Trigger payload for run, when the flow expects input data.",
         required: false,
       },
       run_id: {
         type: "string",
-        description: 'Run id (for "get_run"). Returned by "run" or "list_runs".',
+        description: "Run id for get_run; returned by run and list_runs.",
         required: false,
       },
       description: {
         type: "string",
         description:
-          'Plain-English description of what the workflow should do (for "compose"). Quote the user verbatim when possible, ' +
-          'and include trigger details (schedule, webhook, manual) and any concrete services / actions (e.g. "send a Gmail to ..."). ' +
-          'On {ok:false,errors} replies, refine this with the names called out in the errors and call compose again.',
+          'What the workflow should do, for compose. Quote the user where possible, and include the trigger ' +
+          '(schedule, webhook, manual) and any concrete services / actions (e.g. "send a Gmail to ...").',
         required: false,
       },
       limit: {
         type: "number",
-        description: 'Cap for "list_runs" (default 25).',
+        description: "Cap for list_runs (default 25).",
         required: false,
       },
       empty: {
         type: "boolean",
         description:
-          'Required when calling `create` without a `description`. Confirms "yes, the user wants a blank canvas with no steps." ' +
-          'If the user described what the workflow should do, do NOT pass empty -- call `compose` instead with that description. ' +
-          'Defaults to false.',
+          "Confirms the user wants a blank canvas with no steps. Required by `create` when no `description` is given; " +
+          "if the user described what the flow should DO, call `compose` instead. Defaults to false.",
         required: false,
       },
+    },
+    /**
+     * Per-action Authority, because one category cannot be honest for eleven
+     * actions.
+     *
+     * The TOOL_ACTION_MAP entry is the FLOOR (write_data) and covers the
+     * ordinary mutating actions. This raises the two that reach further:
+     * `run` queues a flow and is execute_command; `delete` removes one for
+     * good and is delete_data, the same category manage_skills gives its own
+     * delete. Reads return null and pay the floor only.
+     *
+     * `confirm: 'above_level'` is what keeps an honest category from becoming
+     * a dead end: at the gate, a pure level shortfall on a category ABOVE the
+     * floor the agent already clears is substituted for an approval card
+     * rather than a refusal. Without it, `delete` (level 9) would simply be
+     * denied for every shipped role.
+     *
+     * Kept total and dependency-free -- it switches on `params.action` and
+     * nothing else. A gate that throws is caught at the call site and
+     * escalated to confirm: 'always', so a DB read in here would turn a
+     * transient error into a mandatory card.
+     */
+    authorityGate: (params) => {
+      switch (String(params.action ?? "")) {
+        case "run":
+          return { actionCategory: "execute_command", confirm: "above_level",
+            intent: `Run workflow: ${forCard(params.flow)}` };
+        case "delete":
+          return { actionCategory: "delete_data", confirm: "above_level",
+            intent: `Permanently delete workflow: ${forCard(params.flow)}` };
+        default:
+          // list / get / list_runs / get_run are reads; compose / create /
+          // enable / disable / publish are writes the floor already covers.
+          //
+          // `publish` and `enable` are the arguable ones: enabling registers
+          // the flow's cron/webhook, so they ARM the same execution that
+          // `run` is raised for. They stay at the floor because the exposure
+          // is bounded twice over -- CODE steps are refused at publish,
+          // enable AND run unless a human opted that flow in, and every
+          // effect a flow dispatches is re-gated at the workflow effect
+          // boundary, which refuses opaque tools outright. Raising them would
+          // put an approval card in front of ordinary workflow authoring for
+          // no authority gained.
+          return null;
+      }
     },
     execute: async (params) => {
       const action = String(params.action ?? "");

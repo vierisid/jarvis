@@ -44,43 +44,38 @@ export function createRequestApprovalTool(deps: RequestApprovalDeps): ToolDefini
     name: 'request_approval',
     category: 'authority',
     description:
-      `Request the user's explicit approval BEFORE performing a gated action.\n\n` +
-      `You MUST call this tool first whenever you are about to:\n` +
-      `  - send_email: send an email to anyone\n` +
-      `  - send_message: send a message to anyone (Slack, Telegram, Discord, SMS, etc.)\n` +
-      `  - make_payment: any financial transaction, purchase, subscription\n` +
-      `  - install_software: install, upgrade, or remove any package or app\n` +
-      `  - modify_settings: change system or account settings\n` +
-      `  - delete_data: delete files, records, or any persistent state\n` +
-      `  - execute_command: run shell commands that mutate state (git push, rm, npm install, etc.)\n` +
-      `  - terminate_agent: stop a running agent\n\n` +
+      `Request the user's explicit approval BEFORE performing a gated action.\n` +
+      `You MUST call this FIRST, not after (see action_category for the list). Blocks until they decide.\n\n` +
       `This applies REGARDLESS of which low-level tools you plan to use. ` +
       `If you plan to click the Send button in a Gmail compose window via browser_click, ` +
       `call request_approval with action_category='send_email' FIRST. ` +
-      `Do NOT write "APPROVAL REQUIRED" messages yourself — always use this tool.\n\n` +
-      `The tool returns one of:\n` +
-      `  [APPROVED] — user granted permission. Proceed with the action now.\n` +
-      `  [DENIED]   — user refused. STOP. Tell the user the action was blocked.\n` +
-      `  [EXPIRED]  — user did not respond in time. Ask them directly before proceeding.\n\n` +
-      `Do not call this tool for read-only actions (reading files, browsing info pages, running ls, etc.).`,
+      `Do NOT write "APPROVAL REQUIRED" messages yourself - always use this tool.\n\n` +
+      `Returns one of:\n` +
+      `  [APPROVED] proceed with the action now.\n` +
+      `  [DENIED]   STOP. Tell the user the action was blocked.\n` +
+      `  [EXPIRED]  no answer in time. Ask them directly before proceeding.\n\n` +
+      `Not for read-only actions (reading files, browsing info pages, running ls).`,
     parameters: {
       action_category: {
         type: 'string',
         description:
-          "One of: send_email, send_message, make_payment, install_software, " +
-          "modify_settings, delete_data, execute_command, terminate_agent",
+          'One of: send_email, send_message (any channel: Slack, Telegram, Discord, SMS), ' +
+          'make_payment (any purchase or subscription), install_software (install, upgrade ' +
+          'or removal), modify_settings (system or account settings), delete_data (files, ' +
+          'records, any persistent state), execute_command (a shell command that MUTATES ' +
+          'state: git push, rm, npm install), terminate_agent (stop a running agent).',
         required: true,
       },
       intent: {
         type: 'string',
         description:
-          'Short imperative sentence (1 line) describing exactly what you will do. ' +
-          'Example: "Send email to alice@example.com with subject \'Weekly Update\'"',
+          'One imperative line saying exactly what you will do, e.g. ' +
+          '"Send email to alice@example.com with subject \'Weekly Update\'".',
         required: true,
       },
       context: {
         type: 'string',
-        description: 'Optional 1–2 sentence explanation of why you want to do it.',
+        description: 'Optional: why, in 1-2 sentences.',
         required: false,
       },
     },

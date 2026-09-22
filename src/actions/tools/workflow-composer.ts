@@ -238,6 +238,14 @@ export interface ComposerToolParam {
   type: string;
   required: boolean;
   description?: string;
+  /**
+   * Allowed values, when the tool declares them. Rendered into the spec line:
+   * `validateParameters` REJECTS an out-of-enum value, so a composer that
+   * cannot see the list has to guess and its guess becomes a run-time
+   * failure. Tools moved their `action` value list out of prose and into
+   * `enum` in #504, so this is now the only place those values appear.
+   */
+  enum?: string[];
 }
 
 /**
@@ -1299,12 +1307,13 @@ function renderSpecialistRoles(roles: ComposerSpecialistRole[] | undefined): str
  * then each param with type and REQUIRED flag. Shared by the one-shot prompt
  * listing and the get_tool_details tool.
  */
-function renderToolSpecLines(t: ComposerToolSpec): string[] {
+export function renderToolSpecLines(t: ComposerToolSpec): string[] {
   const lines = [`- ${t.name}${t.description ? `: ${firstLine(t.description)}` : ""}`];
   for (const p of t.params) {
     const req = p.required ? ", REQUIRED" : "";
+    const choices = p.enum?.length ? `, one of: ${p.enum.join("|")}` : "";
     const desc = p.description ? ` -- ${firstLine(p.description)}` : "";
-    lines.push(`    param ${p.name} (${p.type}${req})${desc}`);
+    lines.push(`    param ${p.name} (${p.type}${req}${choices})${desc}`);
   }
   return lines;
 }

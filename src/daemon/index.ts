@@ -4897,6 +4897,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                   type: p.type,
                   required: p.required,
                   description: p.description,
+                  enum: p.enum,
                 })),
               })),
           }

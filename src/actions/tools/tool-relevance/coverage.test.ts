@@ -206,12 +206,44 @@ describe('daemon-registered tool classification', () => {
   });
 
   test('the site-builder tools are never floor-eligible and always triggers', () => {
-    // Unmapped in TOOL_ACTION_MAP and undeclared here, so rank Infinity and
-    // reach `fetch`. One of them, site_run_command, is a real shell.
+    // Since #503 all eight carry explicit TOOL_ACTION_MAP entries, so the
+    // rank lock that used to keep them out of the floor (Infinity) is gone
+    // and `reach` is now the ONLY thing holding them out: undeclared here,
+    // so `fetch`. That is why every one of them is pinned by name in
+    // EXPECTED_SITE_BUILDER below -- reclassifying `site_read_file`
+    // (read_data, rank 100) as `inert` would otherwise make it
+    // floor-eligible, i.e. pinned into every turn and removable by nothing.
     for (const name of ['site_run_command', 'site_write_file', 'site_read_file', 'site_github_push']) {
       const t = { name, description: 'x', category: 'site-builder', parameters: {}, execute: async () => '' };
       expect(`${name}:${outsideReach(t)}`).toBe(`${name}:fetch`);
       expect(`${name}:${isFloorEligible(t)}`).toBe(`${name}:false`);
+    }
+  });
+
+  /**
+   * All eight, pinned by name. The loop above covers four; this covers the
+   * set, so adding a site tool forces a reach decision here the way
+   * EXPECTED_RUNTIME does for the other daemon-registered tools.
+   */
+  const EXPECTED_SITE_BUILDER: Record<string, OutsideReach> = {
+    // The model picks the path and the command, and the result is the
+    // project's own bytes or a shell's stdout, unframed. All `fetch`.
+    site_read_file: 'fetch',
+    site_list_files: 'fetch',
+    site_write_file: 'fetch',
+    site_delete_file: 'fetch',
+    site_create_project: 'fetch',
+    site_run_command: 'fetch',
+    site_git_commit: 'fetch',
+    site_github_push: 'fetch',
+  };
+
+  test('every site-builder tool has a pinned reach and stays out of the floor', () => {
+    for (const [name, reach] of Object.entries(EXPECTED_SITE_BUILDER)) {
+      const t = { name, description: 'x', category: 'site-builder', parameters: {}, execute: async () => '' };
+      expect(`${name}:${outsideReach(t)}`).toBe(`${name}:${reach}`);
+      expect(`${name}:${isFloorEligible(t)}`).toBe(`${name}:false`);
+      expect(`${name}:${isInvariantTrigger(t)}`).toBe(`${name}:true`);
     }
   });
 });

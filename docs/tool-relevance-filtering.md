@@ -111,19 +111,20 @@ design adds, and §2.4 explains why each class is drawn where it is.
 `severityRank(getActionForTool(name, category))` from
 `src/authority/tool-action-map.ts`: the same number the gate sites use.
 
-**With one correction.** `getActionForTool` falls through to `read_data`
-(rank 100) for any tool absent from both `TOOL_ACTION_MAP` and
-`CATEGORY_ACTION_MAP`. That default is safe for gating decisions made
-elsewhere but disastrous here - it would score an unmapped shell as a level-1
+**With one correction.** `getActionForTool` used to fall through to
+`read_data` (rank 100) for any tool absent from both `TOOL_ACTION_MAP` and
+`CATEGORY_ACTION_MAP` - which would score an unmapped shell as a level-1
 read. So for filter purposes:
 
 > **An unmapped tool has rank infinity.** Never floor-eligible, always a
 > union trigger.
 
-This is not hypothetical. `manage_workflow` (category `automation`) and all
+This was not hypothetical. `manage_workflow` (category `automation`) and all
 eight site-builder tools (category `site-builder`), including
-`site_run_command` - a second `Bun.spawn(['sh','-c',cmd])` - are unmapped and
-currently resolve to `read_data`. See §11.
+`site_run_command` - a second `Bun.spawn(['sh','-c',cmd])` - were unmapped and
+resolved to `read_data`. #503 fixed the map itself and made the fallback fail
+closed to `execute_command`; see §11. The rank-infinity rule stays regardless,
+so the filter does not depend on the map staying complete.
 
 ### 2.2 Axis B - outside reach
 
@@ -275,13 +276,13 @@ FLOOR is computed by the §3 rule; the column shows what it evaluates to today.
 | `list_directory` | file-ops | read_data | 100 | **fetch** | 471 | DROP |
 | `delegate_task` | delegation | spawn_agent | 101 | **fetch** | 754* | DROP |
 | `manage_agents` | delegation | spawn_agent | 101 | **fetch** | 1275* | DROP |
-| `manage_workflow` | automation | *(unmapped)* | inf | **fetch** | 4785 | DROP |
+| `manage_workflow` | automation | write_data (floor) | 302 | **fetch** | 2599 | DROP |
 | `manage_skills` | ui | read_data | 100 | replay | 440 | DROP |
 | `list_sidecars` | sidecar | read_data | 100 | replay | 503 | DROP |
-| `create_document` | documents | write_data | 302 | replay | 1597 | DROP |
-| `content_pipeline` | content | write_data | 302 | replay | 2498 | DROP |
-| `commitments` | tasks | write_data | 302 | **fetch** | 1841 | DROP |
-| `manage_goals` | goals | write_data | 302 | replay | 1449 | DROP |
+| `create_document` | documents | write_data | 302 | replay | 1163 | DROP |
+| `content_pipeline` | content | write_data | 302 | replay | 1569 | DROP |
+| `commitments` | tasks | write_data | 302 | **fetch** | 1420 | DROP |
+| `manage_goals` | goals | write_data | 302 | replay | 1405 | DROP |
 | `research_queue` | productivity | read_data | 100 | **fetch** | 859 | DROP |
 | `desktop_click` | desktop | control_app | 505 | inert | 1131 | DROP |
 | `desktop_type` | desktop | control_app | 505 | inert | 549 | DROP |
@@ -291,7 +292,7 @@ FLOOR is computed by the §3 rule; the column shows what it evaluates to today.
 | `write_file` | file-ops | write_data | 302 | inert | 555 | DROP |
 | `set_clipboard` | general | write_data | 302 | inert | 414 | DROP |
 | `get_system_info` | general | read_data | 100 | inert | 360 | **FLOOR** |
-| `request_approval` | authority | read_data | 100 | inert | 1902 | **FLOOR** |
+| `request_approval` | authority | read_data | 100 | inert | 1546 | **FLOOR** |
 
 `*` The two delegation tools are built by a factory that embeds the registered
 specialist list in the description, so their real size grows with the number
@@ -300,10 +301,13 @@ lower bound.
 
 Not in the table and handled separately: the eight `site-builder` tools,
 registered into the live orchestrator registry only when sites are enabled
-(`src/daemon/index.ts`). All are unmapped, so all are rank `inf` and, being
-undeclared, class `fetch`. `site_run_command` is a shell. They are never
-floor-eligible and always union triggers, which is the correct treatment
-without needing a per-tool declaration.
+(`src/daemon/index.ts`). Since #503 each carries an explicit action
+(`site_run_command` and `site_create_project` are `execute_command`, the
+writes `write_data`, the two reads `read_data`), so the rank-infinity lock no
+longer applies to them. Being undeclared here they are class `fetch`, which
+is what keeps them out of the floor and makes them union triggers - and
+`coverage.test.ts` now pins that reach for all eight by name, because `reach`
+is the only lock left.
 
 `ask_for_clarification` is not a registry tool - it is synthetic and appended
 after filtering; see §3.
@@ -850,51 +854,58 @@ Measured by running the filter over the real registry, not estimated.
 Reproduce with `bun bench/tool-relevance/benchmark.ts`, which prints every
 figure below and recomputes them from code, so they cannot go stale.
 
-`A` = 42 tools, **39,420 bytes** of emitted JSON schema (the 33
+`A` = 42 tools, **35,050 bytes** of emitted JSON schema (the 33
 `BUILTIN_TOOLS` at 22,445 B plus nine daemon-registered tools). Calibrated
 against a real tokenizer on `qwen38-fast` (27.3B, Q4_K, ollama): the full
 33-tool set is **6,091 prompt tokens**, giving **~3.83 bytes/token** for
 these schemas, so a bytes/4 estimate undercounts by about 8%.
 
+Was 39,420 B before #504 trimmed the six fattest daemon descriptions; see
+"The cheapest win" below for the before/after.
+
 | set | tools | bytes |
 |---|---|---|
-| full `A` | 42 | 39,420 |
-| `FLOOR(A)` | 2 | 2,262 |
+| full `A` | 42 | 35,050 |
+| `FLOOR(A)` | 2 | 1,906 |
 | `PERCEPTION(A)` (the I1 union) | 16 | 11,384 |
-| invariant triggers | 18 | 19,936 |
-| `replay` | 5 | 6,487 |
+| invariant triggers | 18 | 17,329 |
+| `replay` | 5 | 5,080 |
 
 The five cases from #483's own measurement table, plus its mid-task repro:
 
 | case | tools | bytes | saving |
 |---|---|---|---|
-| `open notepad and type hello` | 24/42 | 18,230 | **-53.8%** |
-| `research the competitor landscape and write it up` | 24/42 | 18,261 | **-53.7%** |
-| `summarise this article https://example.com/post/1` | 21/42 | 17,277 | **-56.2%** |
-| `set a goal to ship the release this week` | 4/42 | 4,310 | **-89.1%** |
-| `schedule a daily check of the dashboard` | 22/42 | 20,447 | **-48.1%** |
-| `open notepad` then `now remember that I did that` | 25/42 | 20,071 | **-49.1%** |
+| `open notepad and type hello` | 24/42 | 17,874 | **-49.0%** |
+| `research the competitor landscape and write it up` | 24/42 | 17,471 | **-50.2%** |
+| `summarise this article https://example.com/post/1` | 21/42 | 15,992 | **-54.4%** |
+| `set a goal to ship the release this week` | 4/42 | 3,910 | **-88.8%** |
+| `schedule a daily check of the dashboard` | 22/42 | 17,905 | **-48.9%** |
+| `open notepad` then `now remember that I did that` | 25/42 | 19,294 | **-45.0%** |
 
 Over all 46 cases (the six above plus one generated per droppable tool):
-**-61.0% aggregate**, best -92.7%, worst **-40.3%**, and zero invariant
+**-56.3% aggregate**, best -92.9%, worst **-40.1%**, and zero invariant
 violations.
 
-Confirmed live against the real tokenizer, not only in bytes: on
-`open notepad and type hello`, `qwen38-fast` reports **10,404 prompt tokens
-unfiltered and 4,938 filtered, -52.5%**, against the -53.8% this table
-predicts from bytes. The model called `desktop_launch_app` correctly in both
-arms.
+The percentages are slightly *smaller* than before #504 because both arms
+shrank: the filter now has less fat to remove. The absolute saving per case
+is what improved.
+
+Confirmed live against the real tokenizer, not only in bytes - but **before
+#504**, against the 39,420 B registry: on `open notepad and type hello`,
+`qwen38-fast` reported **10,404 prompt tokens unfiltered and 4,938 filtered,
+-52.5%**, against the **-53.8%** the pre-#504 table predicted from bytes. The
+model called `desktop_launch_app` correctly in both arms. The row in the table
+above now reads -49.0% because both arms shrank, so these token counts do not
+corroborate it; re-take the live run to confirm the post-#504 figure.
 
 Four things worth saying plainly, because #475 was rejected partly for not
 saying them:
 
 1. **The worst case is about -40%, not -4%.** An earlier draft of this
    design computed the floor from `reach = none ∧ rank ≤ 302` and put the
-   six fattest daemon tools (`manage_workflow` 4,785 B, `content_pipeline`
-   2,498, `request_approval` 1,902, `commitments` 1,841, `create_document`
-   1,597, `manage_goals` 1,449 - 36% of the budget) into the *undroppable*
-   floor. It measured -3.9% to -56.4% on these same cases. Shrinking the
-   floor to two tools and adding the `replay` class is what moved it.
+   six fattest daemon tools into the *undroppable* floor. It measured -3.9%
+   to -56.4% on these same cases. Shrinking the floor to two tools and
+   adding the `replay` class is what moved it.
 2. **Almost every realistic turn trips I1**, because `ui_act` and
    `browser_evaluate` are both framed readers *and* rank above
    `access_browser`. That is intended: the saving comes from dropping the
@@ -907,10 +918,50 @@ saying them:
    prompt-cache invalidation, which is unmeasured and could exceed the
    saving.
 
-**And the cheapest win needs none of this.** Those six daemon tool
-descriptions are 14,072 B, 36% of the budget, and trimming them needs no
-invariant, no gate and no security review. Out of scope here, but it should
-be an issue: it is a larger expected saving than the filter.
+**The cheapest win needed none of this.** Those six daemon tool
+descriptions were 14,072 B, 36% of the budget. #504 trimmed them to 9,702 B
+with no invariant, no gate and no security review, because removing words
+removes no capability. That is **-4,370 B (-31.1%) off the six, -11.1% off
+every request**, and it compounds with the filter rather than competing with
+it: the filter drops whole schemas, this shrinks the ones that remain -
+including the floor that every request pays for regardless.
+
+| tool | before | after | saving |
+|---|---|---|---|
+| `manage_workflow` | 4,785 | 2,599 | -45.7% |
+| `content_pipeline` | 2,498 | 1,569 | -37.2% |
+| `request_approval` | 1,902 | 1,546 | -18.7% |
+| `commitments` | 1,841 | 1,420 | -22.9% |
+| `create_document` | 1,597 | 1,163 | -27.2% |
+| `manage_goals` | 1,449 | 1,405 | -3.0% |
+| **six** | **14,072** | **9,702** | **-31.1%** |
+| whole registry | 39,420 | 35,050 | -11.1% |
+| every other tool | 25,348 | 25,348 | 0 |
+
+`manage_goals` barely moved on purpose: 75% of it is parameters, ~540 B of
+that is the structural floor of 12 param entries that no description edit can
+touch, and the trim there was partly spent on an `enum` for its 16-value
+`action` param. Bytes are not the only axis - see the note on enums below.
+
+An earlier draft of #504 reached 9,356 B. Review put 346 B back, and each
+restoration was information the emitted schema carried nowhere else: the
+`list_runs` per-flow filter, the `empty` flag's steering toward `compose`
+(shortened to "required by create", it read as a formality to satisfy and
+invited the silent-empty-flow it exists to prevent), `request_approval`'s
+imperative "You MUST call this FIRST", and the `commitments` /
+`manage_workflow` cross-reference. Shorter was available; correct was not
+shorter.
+
+All figures here are the **no-library** `manage_workflow` build, which is what
+`bench/tool-relevance/registry.ts` constructs. The daemon builds the *library*
+variant (carrying the `suggestedInstalls` paragraph) for every install that is
+not host-managed, i.e. the common one; there the numbers are 39,873 -> 35,297 B,
+**-4,576 B / -11.5%** - slightly better than the headline, not worse.
+
+Sizes are `JSON.stringify(toolDefToLLMTool(t)).length`, the unit the bench
+uses. That counts UTF-16 code units, so it undercounts UTF-8 bytes wherever a
+description carried a non-ASCII character; #504 removed the em dashes and
+arrows from these six, so for all six the two measures now agree exactly.
 
 ---
 
@@ -958,8 +1009,8 @@ Stated precisely, because "we ran a benchmark" is exactly the kind of claim
 **Measured, offline, over the real 42-tool registry** (reproducible with
 `bun bench/tool-relevance/benchmark.ts`):
 
-- schema-byte savings per case: -40.3% worst, -92.7% best, -61.0% aggregate
-  over 46 cases;
+- schema-byte savings per case: -40.1% worst, -92.9% best, -56.3% aggregate
+  over 46 cases (re-measured after #504; -40.3% / -92.7% / -61.0% before it);
 - the I5 invariant-violation counter at **zero** across all 46.
 
 **Measured live, against `qwen38-fast` (27.3B, Q4_K) on ollama**, one case:
@@ -1003,23 +1054,138 @@ The harness refuses to print a pass on zero successful cases, and exits
 nonzero on a partial run. A "0 substitutions" line accompanied by
 "NO RESULT" or "PARTIAL RESULT" is not a green light.
 
+### Selection accuracy after the #504 description trim: NOT MEASURED
+
+#504 shortened the text the model uses to *choose* a tool. A terser
+description is a weaker selection signal, so the trim carries a risk the byte
+count cannot see, and that risk has **not been measured**. No number below is
+estimated, inferred or predicted; there is no number.
+
+Why not: the blocker recorded above has not moved. Every local model on the
+reference box is 27B or 30B, over the 20B `max_params_b` default, and the one
+that was reachable (`qwen38-fast`) disappeared mid-session when an in-place
+ollama update removed the binary. The population this matters for - small and
+local models, the ones that invent parameter values when the choices are only
+described in prose - has still never been tested.
+
+**What would settle it.** The comparison is a before/after on tool-selection
+accuracy across the same case set, holding the filter constant and varying
+only the descriptions. It needs one thing this box does not have: a reachable
+model in the target class (ideally <= 20B). Note the harness always sets
+`maxParamsB: 1000` and allowlists the pinned ref, so a small model is still an
+allowlisted exception - its size buys a realistic *population*, not a real
+verdict from the gate.
+
+```
+# 1. A reachable model in the target class.
+ollama pull qwen2.5:7b        # or any <= 20B instruct model with tool support
+ollama list                   # confirm it is actually there
+
+# 2. Baseline: descriptions as they were BEFORE the trim.
+#    2478625 is the commit #502 landed on, i.e. the parent of #504.
+git switch --detach 2478625
+bun bench/tool-relevance/benchmark.ts --accuracy \
+  --model ollama:qwen2.5:7b --limit 46 | tee /tmp/acc-before.txt
+
+# 3. After: the trimmed descriptions.
+git switch perf/504-trim-tool-descriptions
+bun bench/tool-relevance/benchmark.ts --accuracy \
+  --model ollama:qwen2.5:7b --limit 46 | tee /tmp/acc-after.txt
+
+# 4. Compare the three summary lines. Case-insensitive, and matching the
+#    harness's real labels: "correct tool:", "no tool called:",
+#    "SUBSTITUTIONS:".
+diff <(grep -iE 'correct tool|no tool called|substitut' /tmp/acc-before.txt) \
+     <(grep -iE 'correct tool|no tool called|substitut' /tmp/acc-after.txt)
+
+# 5. Per-tool rows for criterion 2 below; these carry none of the tokens
+#    above, so they need their own comparison.
+diff <(grep -E '^(gen|issue)/' /tmp/acc-before.txt) \
+     <(grep -E '^(gen|issue)/' /tmp/acc-after.txt)
+```
+
+Read the result against these, in order:
+
+1. **Substitution rate must stay at zero** in the *after* arm. This is the
+   number #475 never took and it outranks the byte saving: if a shorter
+   description pushes the model onto `run_command` for a case that wanted a
+   framed read, the trim has laundered authority and must be reverted on that
+   tool regardless of what it saved.
+2. **Per-tool accuracy, not just the aggregate.** The trim is six independent
+   rewrites and the aggregate can absorb one tool collapsing. Compare
+   `gen/<tool>` rows one to one; the six to watch are `manage_workflow`,
+   `content_pipeline`, `request_approval`, `commitments`, `create_document`
+   and `manage_goals`.
+3. **The confusable pairs specifically.** The rewrites lean on explicit
+   cross-references to keep neighbours apart, and those are what a small
+   model is most likely to miss: `create_document` vs `content_pipeline` vs
+   `write_file`, and `commitments` vs `manage_goals`. A wrong pick *within* a
+   pair is the failure mode to look for, and it is invisible in a
+   correct/wrong total that counts both as one miss.
+4. **Caveat on the generated cases.** `generatedCases()` builds each prompt
+   from `firstSentence(t.description)`, so the trim changed the prompts as
+   well as the schemas. The `gen/*` arms are therefore *not* a clean A/B. The
+   six `ISSUE_CASES` prompts are fixed and are the honest comparison; treat
+   the generated rows as a smoke test only.
+
+Until that run exists, the defensible claim for #504 is exactly: a measured
+-11.1% schema-byte reduction with the load-bearing discriminators,
+preconditions and side effects that review identified preserved and pinned by
+`src/actions/tools/tool-description-budget.test.ts` - and selection accuracy
+**unmeasured**.
+
+### A note on enums, added by #504
+
+`ToolParameter.enum` (`src/actions/tools/registry.ts`) is emitted into the
+model-facing schema *and* enforced in `validateParameters`. #504 moved the
+`action` value list of five tools out of prose and into an enum, which costs
+a few hundred bytes rather than saving them. That is deliberate: a prose list
+is a hint a small model can ignore, an enum is a constraint it is trained to
+honour and that the registry rejects violations of, naming the allowed values
+in the error. It directly offsets the "terser description is a weaker signal"
+risk for the one parameter that most determines whether a call is usable.
+
+An enum was added **only** where the advertised values match the `execute()`
+switch exactly, so no call that used to work can now be rejected. The value
+sets are equivalent; the failure *shape* is not, and that is worth stating
+rather than glossing. Before, an unknown action fell to a `default:` branch
+that **returned** `Unknown action: "..."` - a successful tool result, so a
+`jarvis-tool:invoke` step carried on. Now `validateParameters` **throws**, and
+`sandbox-api/routes/jarvis-tools.ts` rethrows anything that is not an
+`ActionOutcomeError`, so a stored workflow step fails hard instead of
+continuing past a soft error. For the LLM tool-call surface that is a strict
+improvement (the error names the allowed values); for a stored workflow it is
+a real behaviour change beyond description text. Those `default:` branches are
+now unreachable through `registry.execute`.
+It was deliberately **not** added to `request_approval.action_category`:
+`VALID_CATEGORIES` is `Object.keys(AUTHORITY_REQUIREMENTS)`, 13 categories, of
+which the description advertises 8. An 8-value enum there would have narrowed
+what the tool accepts and rejected `access_browser`, `control_app` and the
+rest - a real behaviour change, not a description edit.
+
 ---
 
 ## 11. Authority-map gaps found while writing this
 
-Pre-existing, independent of the filter, reported so they are not lost:
+Pre-existing, independent of the filter, reported so they are not lost. The
+first three were fixed by #503; the last is still open.
 
-- **`manage_workflow`** (category `automation`) has no `TOOL_ACTION_MAP` entry
-  and `automation` has no `CATEGORY_ACTION_MAP` entry, so `getActionForTool`
-  resolves it to `read_data`, rank 100. It can `run`, `publish`, `enable` and
-  `delete` workflows.
-- **The eight site-builder tools** (category `site-builder`, registered at
+- ~~**`manage_workflow`** (category `automation`) has no `TOOL_ACTION_MAP`
+  entry and `automation` has no `CATEGORY_ACTION_MAP` entry, so
+  `getActionForTool` resolves it to `read_data`, rank 100. It can `run`,
+  `publish`, `enable` and `delete` workflows.~~ FIXED in #503: floor
+  `write_data`, with a per-action `authorityGate` raising `run` to
+  `execute_command` and `delete` to `delete_data`.
+- ~~**The eight site-builder tools** (category `site-builder`, registered at
   runtime when sites are enabled) are likewise unmapped and resolve to
   `read_data`. One of them, **`site_run_command`, is a
-  `Bun.spawn(['sh','-c',cmd])` shell gated at level 1.**
-- `builtin-tool-coverage.test.ts` exists precisely to prevent this and its
+  `Bun.spawn(['sh','-c',cmd])` shell gated at level 1.**~~ FIXED in #503.
+- ~~`builtin-tool-coverage.test.ts` exists precisely to prevent this and its
   header describes this exact failure - but it walks `BUILTIN_TOOLS`, and none
-  of these tools is in `BUILTIN_TOOLS`.
+  of these tools is in `BUILTIN_TOOLS`.~~ FIXED in #503: it now derives its
+  set from the real tool factories via
+  `src/actions/tools/production-registry.ts`, which the benchmark in
+  `bench/tool-relevance/` shares, so the two cannot drift.
 - **`commitments` is mapped `write_data`** (level 3). Per §2.3 it is not a
   data write at all: it schedules an arbitrary unattended agent turn with a
   5-second default cancel window. That is the same complaint this list makes
@@ -1029,9 +1195,9 @@ Pre-existing, independent of the filter, reported so they are not lost:
   it through `request_approval`.
 
 Raising `site_run_command` to `execute_command` changes live gating for an
-existing feature, so it is **not** done in this branch. The filter is designed
-to be safe in spite of it: §2.1 gives an unmapped tool rank infinity, so all
-of these are permanently floor-ineligible and permanently I1 triggers.
+existing feature, so it was **not** done in this branch; #503 did it. The
+filter was designed to be safe in spite of the gap and still is: §2.1 gives an
+unmapped tool rank infinity, independent of what the action map contains.
 
 ---
 

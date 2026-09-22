@@ -1,8 +1,12 @@
 /**
  * The workflow effect boundary classifies a tool through the daemon's
  * `TOOL_ACTION_MAP`. These tests fail if the bounded-tool allowlist and that
- * map drift apart, or if an unclassified tool starts inheriting the permissive
- * `read_data` default that `getActionForTool` hands the agent path.
+ * map drift apart, or if a bounded tool loses its explicit classification.
+ *
+ * The agent path's default used to be the permissive `read_data`; since #503
+ * it fails closed to `execute_command`, matching what this boundary has
+ * always done. Neither default is a substitute for an explicit entry, which
+ * is what these tests and `builtin-tool-coverage.test.ts` require.
  */
 import { describe, expect, test } from 'bun:test';
 import { TOOL_ACTION_MAP } from '../../authority/tool-action-map';
@@ -21,7 +25,9 @@ const tool = (name: string, extra: Partial<ToolDefinition> = {}): ToolDefinition
 
 describe('bounded tool classification', () => {
   test('every bounded tool resolves to a real Authority action in TOOL_ACTION_MAP', () => {
-    const missing = [...BOUNDED_TOOL_NAMES].filter(name => !TOOL_ACTION_MAP[name]);
+    // Object.hasOwn, not truthiness: the map is an object literal, so
+    // `TOOL_ACTION_MAP['constructor']` is truthy and would read as mapped.
+    const missing = [...BOUNDED_TOOL_NAMES].filter(name => !Object.hasOwn(TOOL_ACTION_MAP, name));
     expect(missing).toEqual([]);
     for (const name of BOUNDED_TOOL_NAMES) {
       expect(Object.hasOwn(AUTHORITY_REQUIREMENTS, TOOL_ACTION_MAP[name]!)).toBe(true);
