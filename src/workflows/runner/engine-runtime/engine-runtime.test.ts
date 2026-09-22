@@ -332,6 +332,7 @@ describe("EngineRuntime shutdown reclaims what release() did not", () => {
       // The interleaving that a one-shot snapshot of "engines to kill" would
       // miss: shutdown decides what to kill while an acquire is still inside
       // its token mint, and the engine appears afterwards.
+      const before = new Set(liveEngines().map((e) => e.pid));
       const runtime = new EngineRuntime({ api, bundlePath: bundlePath! });
       const flow = createFlow({ projectId: DEFAULT_IDS.project });
       const v = createDraftVersion({ flowId: flow.id, displayName: "racing" });
@@ -363,8 +364,11 @@ describe("EngineRuntime shutdown reclaims what release() did not", () => {
         // reclaimed the process rather than leaving it running.
         expect(alive(outcome.pid)).toBe(false);
       }
-      // Either way nothing of ours is still running.
-      const leftovers = liveEngines().filter((e) => e.bundlePath === bundlePath);
+      // Either way nothing THIS test started is still running. Compared as a
+      // delta against the engines already tracked when the test began: the
+      // registry is process-global, so asserting it is empty would make this
+      // test fail for something another suite did.
+      const leftovers = liveEngines().filter((e) => !before.has(e.pid));
       expect(leftovers).toEqual([]);
     },
     30_000,
