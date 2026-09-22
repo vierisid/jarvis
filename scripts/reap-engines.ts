@@ -39,27 +39,35 @@ for (const e of live) {
   );
 }
 
+// Exit codes are set rather than forced with process.exit(), so the
+// diagnostics above are actually flushed -- they are the reason the hook
+// runs this at all.
 if (orphans.length === 0) {
   console.log("[reap-engines] no orphaned engine subprocesses");
-  process.exit(0);
-}
+} else {
+  for (const e of orphans) {
+    const age = e.startedAt
+      ? `${Math.round((Date.now() - e.startedAt) / 60_000)}min old`
+      : "age unknown";
+    console.log(
+      `[reap-engines] ORPHAN pid ${e.pid} (owner ${e.ownerPid} gone, ${age}, bundle ${e.bundlePath})`,
+    );
+  }
 
-for (const e of orphans) {
-  const age = e.startedAt
-    ? `${Math.round((Date.now() - e.startedAt) / 60_000)}min old`
-    : "age unknown";
-  console.log(
-    `[reap-engines] ORPHAN pid ${e.pid} (owner ${e.ownerPid} gone, ${age}, bundle ${e.bundlePath})`,
-  );
+  if (dryRun) {
+    console.log(`[reap-engines] --dry-run: left ${orphans.length} orphan(s) alone`);
+    if (failOnLeak) process.exitCode = 1;
+  } else {
+    const { reaped, survived } = await reapOrphanedEngines({
+      log: (line) => console.log(`[reap-engines] ${line}`),
+    });
+    console.log(
+      `[reap-engines] reclaimed ${reaped.length} orphaned engine subprocess(es)` +
+        (survived.length > 0 ? `; ${survived.length} survived SIGKILL` : ""),
+    );
+    if (failOnLeak && orphans.length > 0) process.exitCode = 1;
+    // A process that outlived SIGKILL is worth a non-zero exit on its own:
+    // nothing else is going to clear it.
+    if (survived.length > 0) process.exitCode = 1;
+  }
 }
-
-if (dryRun) {
-  console.log(`[reap-engines] --dry-run: left ${orphans.length} orphan(s) alone`);
-  process.exit(failOnLeak ? 1 : 0);
-}
-
-const { reaped } = await reapOrphanedEngines({
-  log: (line) => console.log(`[reap-engines] ${line}`),
-});
-console.log(`[reap-engines] reclaimed ${reaped.length} orphaned engine subprocess(es)`);
-process.exit(failOnLeak && reaped.length > 0 ? 1 : 0);

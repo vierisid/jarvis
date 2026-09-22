@@ -18,6 +18,7 @@ import { CredentialResolver } from "../../credentials/adapter";
 import { SandboxApi } from "../../sandbox-api/server";
 import { findCachedBundle, buildEngineBundle } from "./build";
 import { EngineRuntime } from "./engine-runtime";
+import { liveEngines } from "./spawn";
 import type { FlowTriggerNode } from "../../db/repos/flow-version";
 
 const buildOptIn = process.env.JARVIS_TEST_ENGINE_BUILD === "1";
@@ -233,4 +234,139 @@ describe("EngineRuntime (D1: error paths)", () => {
       closeWorkflowDb();
     }
   });
+
+  test("acquire after shutdown is refused rather than silently orphaning an engine", async () => {
+    // A runtime that has been shut down reclaims nothing it spawns after the
+    // fact, so anything it spawned would be exactly the "no parent, no
+    // consumer" process #491 is about. Refuse instead. Needs no bundle: the
+    // check precedes every spawn.
+    initWorkflowDb(":memory:");
+    const api = new SandboxApi({
+      services: { credentialResolver: new CredentialResolver() },
+    });
+    await api.start({ port: 0 });
+    try {
+      const runtime = new EngineRuntime({ api, bundlePath: "/nonexistent/main.js" });
+      await runtime.shutdown();
+      // Idempotent: a second shutdown is a no-op, not an error.
+      await runtime.shutdown();
+      await expect(
+        runtime.acquire({ runId: "run_after_shutdown", projectId: DEFAULT_IDS.project }),
+      ).rejects.toThrow(/after shutdown/);
+    } finally {
+      await api.stop();
+      closeWorkflowDb();
+    }
+  });
+});
+
+describe("EngineRuntime shutdown reclaims what release() did not", () => {
+  // The behaviour #491 turns on: before this, shutdown() knew only about the
+  // ONE engine parked in the warm slot, so an engine still acquired when its
+  // owner shut down just carried on -- which is how a test whose assertion
+  // threw between acquire() and release() left a process running for 82
+  // minutes.
+  let api: SandboxApi;
+  let bundlePath: string | null = null;
+
+  beforeAll(async () => {
+    initWorkflowDb(":memory:");
+    api = new SandboxApi({
+      services: { credentialResolver: new CredentialResolver() },
+    });
+    await api.start({ port: 0 });
+    let cached = initialCached;
+    if (!cached && buildOptIn) cached = await buildEngineBundle();
+    bundlePath = cached?.bundlePath ?? null;
+  });
+
+  afterAll(async () => {
+    await api.stop();
+    closeWorkflowDb();
+  });
+
+  const alive = (pid: number): boolean => {
+    try {
+      // Existence check only. This pid came from an engine we spawned.
+      process.kill(pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  test.skipIf(skipBundleTests)(
+    "an acquired, never-released engine is killed by shutdown()",
+    async () => {
+      const runtime = new EngineRuntime({ api, bundlePath: bundlePath! });
+      const flow = createFlow({ projectId: DEFAULT_IDS.project });
+      const v = createDraftVersion({ flowId: flow.id, displayName: "abandoned" });
+      lockVersion(v.id);
+      const run = createFlowRun({
+        flowId: flow.id,
+        flowVersionId: v.id,
+        environment: "TESTING",
+      });
+
+      const handle = await runtime.acquire({
+        runId: run.id,
+        projectId: DEFAULT_IDS.project,
+      });
+      const pid = handle.pid;
+      expect(alive(pid)).toBe(true);
+      expect(api.registry.get(handle.sandboxId)).not.toBeNull();
+
+      // Note: NO release(). This is the leak being closed.
+      await runtime.shutdown();
+
+      expect(alive(pid)).toBe(false);
+      // And its sandbox is revoked, so a zombie could not act through it.
+      expect(api.registry.get(handle.sandboxId)).toBeNull();
+    },
+    30_000,
+  );
+
+  test.skipIf(skipBundleTests)(
+    "an acquire racing shutdown() does not leave an engine behind",
+    async () => {
+      // The interleaving that a one-shot snapshot of "engines to kill" would
+      // miss: shutdown decides what to kill while an acquire is still inside
+      // its token mint, and the engine appears afterwards.
+      const runtime = new EngineRuntime({ api, bundlePath: bundlePath! });
+      const flow = createFlow({ projectId: DEFAULT_IDS.project });
+      const v = createDraftVersion({ flowId: flow.id, displayName: "racing" });
+      lockVersion(v.id);
+      const run = createFlowRun({
+        flowId: flow.id,
+        flowVersionId: v.id,
+        environment: "TESTING",
+      });
+
+      const acquiring = runtime
+        .acquire({ runId: run.id, projectId: DEFAULT_IDS.project })
+        .catch((e: Error) => e);
+      // Let the acquire get as far as its first await, then pull the rug.
+      await new Promise((r) => setTimeout(r, 5));
+      await runtime.shutdown();
+      const outcome = await acquiring;
+
+      if (outcome instanceof Error) {
+        // Refused outright (`closed` was set before it spawned), or its
+        // engine was reclaimed mid-handshake by the shutdown that was
+        // already under way. Both are the fix working; what must not happen
+        // is an acquire that succeeds and leaves a process nobody owns.
+        expect(outcome.message).toMatch(
+          /shut down|after shutdown|exited before handshake/,
+        );
+      } else {
+        // It won the race and got a real handle; shutdown must still have
+        // reclaimed the process rather than leaving it running.
+        expect(alive(outcome.pid)).toBe(false);
+      }
+      // Either way nothing of ours is still running.
+      const leftovers = liveEngines().filter((e) => e.bundlePath === bundlePath);
+      expect(leftovers).toEqual([]);
+    },
+    30_000,
+  );
 });

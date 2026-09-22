@@ -598,6 +598,15 @@ export class EngineRuntime {
    * Entries drop themselves when the process exits, so this never grows.
    */
   private readonly spawned = new Set<{ sandboxId: string; proc: SpawnedEngine }>();
+  /**
+   * Set by `shutdown()`. Without it, an `acquire()` already past its
+   * `await signer.mint()` when shutdown ran would spawn an engine that
+   * shutdown had already decided which processes to kill -- and nothing in
+   * this runtime would ever come back for it. That engine is precisely the
+   * "no parent, no consumer" process #491 is about, so once a runtime is
+   * shut down it spawns nothing and parks nothing.
+   */
+  private closed = false;
 
   constructor(opts: EngineRuntimeOptions) {
     this.api = opts.api;
@@ -640,6 +649,12 @@ export class EngineRuntime {
   }
 
   async acquire(opts: AcquireOptions): Promise<EngineHandle> {
+    if (this.closed) {
+      throw new Error(
+        "EngineRuntime.acquire after shutdown(): this runtime no longer reclaims " +
+          "anything it spawns. Build a new EngineRuntime instead.",
+      );
+    }
     // Warm path: reuse the idle engine if pooling is on and one is parked.
     // Mint a fresh engineToken bound to the new (runId, projectId) and
     // rebind the registry sandbox; the engine's own SANDBOX_ID env was
@@ -728,6 +743,18 @@ export class EngineRuntime {
     const owned = { sandboxId, proc };
     this.spawned.add(owned);
     void proc.exited.then(() => this.spawned.delete(owned));
+    // Closing the race with `shutdown()`: either it snapshotted after the add
+    // above (so it owns this engine), or it set `closed` before the add, and
+    // we see it here. There is no third interleaving -- the add and this
+    // check are synchronous with the spawn.
+    if (this.closed) {
+      this.spawned.delete(owned);
+      proc.kill("SIGKILL");
+      this.api.registry.terminate(sandboxId);
+      throw new Error(
+        `EngineRuntime shut down while acquiring sandbox ${sandboxId}; engine pid ${proc.pid} killed`,
+      );
+    }
 
     // CRITICAL: drain the engine's stdout + stderr or the engine WILL hang.
     // The bundle is spawned with `stdio: [ignore, pipe, pipe]` and the
@@ -827,6 +854,15 @@ export class EngineRuntime {
       this.api.registry.terminate(engine.sandboxId);
       return;
     }
+    // A release that lands during or after `shutdown()` must not re-park the
+    // engine: shutdown has already cancelled the eviction timer, so a parked
+    // engine here would sit in the slot with nothing left to evict it.
+    if (this.closed) {
+      engine.proc.kill("SIGTERM");
+      setTimeout(() => engine.proc.kill("SIGKILL"), this.killGraceMs).unref();
+      this.api.registry.terminate(engine.sandboxId);
+      return;
+    }
     if (this.idleEngine === null) {
       this.idleEngine = engine;
       this.armIdleEvictionTimer();
@@ -883,28 +919,49 @@ export class EngineRuntime {
     // Cancel the eviction timer first -- otherwise it fires post-shutdown
     // and the kill-then-terminate against an already-gone engine surfaces
     // as noise in logs.
+    this.closed = true;
     this.clearIdleEvictionTimer();
     this.idleEngine = null;
 
-    const victims = [...this.spawned].filter((e) => e.proc.alive());
+    const owned = [...this.spawned];
+    // Revoke every sandbox this runtime ever registered, alive or not: a
+    // record left un-terminated is one a zombie engine could still act
+    // through, and the eviction timer that would have cleaned it up has just
+    // been cancelled. `terminate` is idempotent.
+    for (const e of owned) this.api.registry.terminate(e.sandboxId);
+
+    const victims = owned.filter((e) => e.proc.alive());
     if (victims.length === 0) return;
-    // Revoke first: an engine given its grace period must not be able to act
-    // on the daemon's behalf on the way out.
-    for (const e of victims) this.api.registry.terminate(e.sandboxId);
     for (const e of victims) e.proc.kill("SIGTERM");
-    await Promise.race([
-      Promise.all(victims.map((e) => e.proc.exited)),
-      new Promise<void>((res) => setTimeout(res, this.killGraceMs)),
-    ]);
+    await this.raceExit(victims, this.killGraceMs);
     // Whatever is left ignored the polite signal (a pre-shim cached bundle, or
     // an engine wedged in native code). Take it.
     const stubborn = victims.filter((e) => e.proc.alive());
     if (stubborn.length === 0) return;
     for (const e of stubborn) e.proc.kill("SIGKILL");
-    await Promise.race([
-      Promise.all(stubborn.map((e) => e.proc.exited)),
-      new Promise<void>((res) => setTimeout(res, 500)),
-    ]);
+    await this.raceExit(stubborn, 500);
+  }
+
+  /**
+   * Wait for all of `engines` to exit, or `timeoutMs`, whichever comes first
+   * -- clearing the timer when they beat it, so a clean shutdown does not
+   * hold the daemon's event loop open for the full grace window.
+   */
+  private async raceExit(
+    engines: Array<{ proc: SpawnedEngine }>,
+    timeoutMs: number,
+  ): Promise<void> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      await Promise.race([
+        Promise.all(engines.map((e) => e.proc.exited)),
+        new Promise<void>((res) => {
+          timer = setTimeout(res, timeoutMs);
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 }
 

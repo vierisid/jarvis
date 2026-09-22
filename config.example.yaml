@@ -60,15 +60,16 @@ daemon:
 #
 # The daemon also prunes its OWN engine bundle cache (~/.jarvis/cache/engine)
 # at startup: each change to the engine source builds a new content-addressed
-# bundle and they used to accumulate forever. The bundle in use, and any
-# bundle a running engine is executing, are never deleted. Set either knob to
-# 0 to disable that cap (both 0 = never prune).
+# bundle and they used to accumulate forever. The bundle in use, any bundle a
+# running engine is executing, and anything used in the last 24h are never
+# deleted. Tune with the JARVIS_ENGINE_CACHE_MAX_BUNDLES /
+# JARVIS_ENGINE_CACHE_MAX_AGE_DAYS env vars (0 disables that cap) -- only the
+# three path keys below are read from THIS file; the rest of `workflows` is
+# user-owned and comes from the dashboard.
 # workflows:
 #   engine_dir: /opt/jarvis-engine/${version}
 #   pieces_dir: /opt/jarvis-pieces/${version}
 #   piece_metadata_cache: /opt/jarvis-cache/${version}/piece-metadata.json
-#   engineCacheMaxBundles: 3    # keep at most this many bundles (default 3)
-#   engineCacheMaxAgeDays: 14   # delete bundles untouched this long (default 14)
 
 # Authentication — JWT-only by DEFAULT. The dashboard, API, and WebSocket
 # require a token from an enrolled device. Correct setup order:

@@ -240,7 +240,11 @@ export function resolveEngineCacheRetention(
     configuredValue: number | undefined,
     settingName: string,
   ): number | undefined => {
-    const envRaw = env[envName];
+    // An empty value is how a unit file blanks a variable, and `Number('')`
+    // is 0 -- which is meaningful here (it disables the cap). Treat blank as
+    // "not set" so `JARVIS_ENGINE_CACHE_MAX_BUNDLES=` cannot silently turn
+    // pruning off.
+    const envRaw = env[envName]?.trim() ? env[envName] : undefined;
     const raw = envRaw !== undefined ? Number(envRaw) : configuredValue;
     if (raw === undefined) return undefined;
     if (!Number.isFinite(raw) || raw < 0) {

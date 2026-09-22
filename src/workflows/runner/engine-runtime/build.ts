@@ -26,6 +26,7 @@ import {
   existsSync,
   writeFileSync,
   readFileSync,
+  utimesSync,
 } from "node:fs";
 import { resolve, dirname } from "node:path";
 import { homedir } from "node:os";
@@ -517,6 +518,17 @@ export function findCachedBundle(opts?: {
   const shared = findSharedBundle(opts?.sharedRoot);
   if (shared) return { bundlePath: shared.bundlePath, hash: shared.hash };
   const hash = bundleHash();
-  const bundlePath = resolve(BUNDLE_ROOT, hash, "main.js");
-  return existsSync(bundlePath) ? { bundlePath, hash } : null;
+  const bundleDir = resolve(BUNDLE_ROOT, hash);
+  const bundlePath = resolve(bundleDir, "main.js");
+  if (!existsSync(bundlePath)) return null;
+  // Mark it as in use for the cache pruner (#491): a daemon that resolves a
+  // bundle needs it for its whole life, not just while an engine happens to
+  // be running from it. Best-effort; a missed touch only costs protection.
+  try {
+    const when = new Date();
+    utimesSync(bundleDir, when, when);
+  } catch {
+    /* read-only or gone */
+  }
+  return { bundlePath, hash };
 }

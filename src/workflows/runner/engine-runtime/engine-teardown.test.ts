@@ -48,8 +48,8 @@ function write(name: string, body: string): string {
 
 /**
  * Run a script in a child bun process and return its exit status + output.
- * The child inherits nothing that matters; NODE_ENV is set explicitly per
- * test because the leak guard keys off it.
+ * The child inherits nothing that matters, so each test states the env it
+ * needs (the escape hatch the guard honours, for instance).
  */
 function runChild(
   body: string,

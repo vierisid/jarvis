@@ -91,8 +91,14 @@ export interface BootstrapWorkflowEngineOptions {
    */
   engineCacheRetention?: { keep?: number; maxAgeMs?: number };
   /**
-   * Skip the start-up reap + prune. Tests that must not touch the real
-   * `~/.jarvis/cache` or signal anything set this.
+   * Skip the start-up reap + prune.
+   *
+   * Defaults to TRUE under `bun test` (NODE_ENV=test), because both halves
+   * reach outside the process: one signals other processes on the machine,
+   * the other deletes from the developer's real `~/.jarvis/cache`. A test
+   * that boots the daemon should not do either by accident -- same reasoning
+   * as the key guard in `src/workflows/db/encryption.ts`. Pass `false`
+   * explicitly to exercise maintenance from a test (with a temp cache dir).
    */
   skipEngineMaintenance?: boolean;
 }
@@ -188,24 +194,33 @@ export async function bootstrapWorkflowEngine(
   // and the reaper's grace window must not sit in front of the boot path.
   // Both are best-effort -- neither is worth failing a daemon start over --
   // and both are no-ops on a machine with nothing to clean.
-  if (!opts.skipEngineMaintenance) {
+  const skipMaintenance =
+    opts.skipEngineMaintenance ?? process.env["NODE_ENV"] === "test";
+  if (!skipMaintenance) {
     void (async () => {
+      let liveElsewhere: string[] = [];
       try {
-        const { reaped } = await reapOrphanedEngines({ log: (m) => log(m) });
+        const { reaped, live } = await reapOrphanedEngines({ log: (m) => log(m) });
         if (reaped.length === 0) log("no orphaned engine subprocesses found");
+        // Bundles other live engines are executing: hand them straight to the
+        // pruner rather than making it walk /proc all over again.
+        liveElsewhere = live.map((e) => resolve(e.bundlePath, ".."));
       } catch (e) {
         log(`engine reap failed (continuing): ${(e as Error).message}`);
       }
       try {
         pruneEngineBundleCache({
           ...(opts.engineCacheRetention ?? {}),
-          protect: [resolve(cached.bundlePath, "..")],
+          protect: [resolve(cached.bundlePath, ".."), ...liveElsewhere],
           log: (m) => log(m),
         });
       } catch (e) {
         log(`engine bundle cache prune failed (continuing): ${(e as Error).message}`);
       }
-    })();
+    })().catch(() => {
+      // Even the log sink can throw. Startup maintenance is never worth an
+      // unhandled rejection.
+    });
   }
 
   // 4. Build the EngineRuntime against the bundle. One runtime is shared

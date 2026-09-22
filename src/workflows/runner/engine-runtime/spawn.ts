@@ -22,6 +22,8 @@
  */
 
 import { spawn, type ChildProcess } from "node:child_process";
+import { readFileSync, utimesSync } from "node:fs";
+import { dirname } from "node:path";
 import {
   ENGINE_BUNDLE_ENV,
   ENGINE_MARKER_ENV,
@@ -32,7 +34,13 @@ import {
   ENGINE_SHUTDOWN_GRACE_ENV,
   ENGINE_STARTED_AT_ENV,
 } from "./engine-lifecycle";
-import { readFileSync } from "node:fs";
+
+/**
+ * Headroom between the engine's own post-SIGTERM flush window and the
+ * owner's SIGKILL deadline: enough for the exit itself to land before the
+ * owner stops being polite.
+ */
+const GRACE_HEADROOM_MS = 250;
 
 export interface SpawnedEngine {
   pid: number;
@@ -94,6 +102,11 @@ export interface SpawnEngineOptions {
  * field 22), or null off Linux. Travels with the owner pid so an engine can
  * tell "my owner is alive" from "something else now has my owner's pid".
  */
+/** The directory holding a bundle's `main.js`. */
+function resolveBundleDir(bundlePath: string): string {
+  return dirname(bundlePath);
+}
+
 function ownerStartTime(): string | null {
   try {
     const stat = readFileSync("/proc/self/stat", "utf8");
@@ -155,9 +168,16 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   const ownerKillGraceMs = opts.ownerKillGraceMs;
   if (ownerKillGraceMs !== undefined) {
     const override = process.env[ENGINE_SHUTDOWN_GRACE_ENV]?.trim();
-    if (override) {
-      const parsed = Number.parseInt(override, 10);
-      if (Number.isFinite(parsed) && parsed >= ownerKillGraceMs) {
+    const parsed = override ? Number.parseInt(override, 10) : Number.NaN;
+    const overrideUsable = Number.isFinite(parsed) && parsed >= 0;
+    if (override && !overrideUsable) {
+      console.warn(
+        `[engine-spawn] ignoring ${ENGINE_SHUTDOWN_GRACE_ENV}=${JSON.stringify(override)}: ` +
+          `must be a non-negative number of ms`,
+      );
+    }
+    if (overrideUsable) {
+      if (parsed >= ownerKillGraceMs) {
         console.warn(
           `[engine-spawn] ${ENGINE_SHUTDOWN_GRACE_ENV}=${override} is >= the owner's ` +
             `${ownerKillGraceMs}ms SIGKILL deadline; the engine will be killed before it ` +
@@ -165,7 +185,18 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
         );
       }
     } else {
-      env[ENGINE_SHUTDOWN_GRACE_ENV] = String(Math.max(250, ownerKillGraceMs - 250));
+      // Always strictly inside the owner's deadline, including for the very
+      // short grace periods tests use: a flush window that outlives the
+      // SIGKILL behind it is the drift this derivation exists to prevent.
+      env[ENGINE_SHUTDOWN_GRACE_ENV] = String(
+        Math.max(
+          0,
+          Math.min(
+            ownerKillGraceMs - GRACE_HEADROOM_MS,
+            Math.floor(ownerKillGraceMs * 0.8),
+          ),
+        ),
+      );
     }
   }
   env["SANDBOX_ID"] = opts.sandboxId;
@@ -197,6 +228,19 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
     stdio: ["ignore", "pipe", "pipe"],
   });
 
+  // Mark the bundle as in use so the cache pruner leaves it alone. A daemon
+  // holds one bundle for its whole life but only runs a process from it some
+  // of the time (the idle pool evicts after minutes), so "no engine running"
+  // is not "nobody needs this". Best-effort: a read-only shared bundle root
+  // is not ours to touch.
+  try {
+    const dir = resolveBundleDir(opts.bundlePath);
+    const when = new Date();
+    utimesSync(dir, when, when);
+  } catch {
+    /* read-only or gone: only costs prune protection, never correctness */
+  }
+
   let isAlive = true;
   const tracked: TrackedEngine = {
     pid: child.pid ?? -1,
@@ -208,6 +252,18 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   LIVE_ENGINES.add(tracked);
   installExitNet();
 
+  // Liveness follows `exit` (the process is gone), NOT `close` (its stdio
+  // pipes are also closed). They usually fire together, but a CODE action's
+  // own subprocess inherits the engine's stdout and can hold the pipes open
+  // after the engine itself is dead -- which would leave `alive()` true for a
+  // corpse, cost every teardown its full grace window, and make the leak
+  // guard report a pid that no longer exists.
+  child.on("exit", () => {
+    isAlive = false;
+    LIVE_ENGINES.delete(tracked);
+  });
+  // `exited` still resolves on `close`, so a caller awaiting it has the
+  // engine's last output before it continues.
   const exited = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>(
     (res) => {
       child.on("close", (code, signal) => {
@@ -382,11 +438,11 @@ function installExitNet(): void {
  * deliberately reproducing the leak.
  */
 export async function assertNoLeakedEngines(opts?: { graceMs?: number }): Promise<void> {
-  const leaked = liveEngines();
-  if (leaked.length === 0) return;
   // Reclaim FIRST, unconditionally: whether or not we are allowed to complain
-  // about it, the machine should not be left carrying these.
-  await killLiveEngines(opts);
+  // about it, the machine should not be left carrying these. The return value
+  // is the list as it was before the kills.
+  const leaked = await killLiveEngines(opts);
+  if (leaked.length === 0) return;
   const detail = leaked
     .map(
       (e) =>

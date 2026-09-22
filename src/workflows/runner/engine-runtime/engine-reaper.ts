@@ -33,14 +33,24 @@
  *   - its owner pid is no longer alive, or is alive but started at a
  *     different time than recorded -- i.e. the number was recycled.
  *
- * Anything that fails a check is left strictly alone. There is no pattern
- * matching on process names or command lines anywhere in here, which is the
- * mistake that makes a reaper dangerous on a shared machine (the pre-commit
- * hook's `pkill -f engine-bundle` matched nothing at all, but the next
- * pattern someone reaches for would match everything).
+ * Anything that fails a check is left strictly alone, and every condition is
+ * re-checked immediately before each signal, because a pid can be freed and
+ * reused while we are working. There is no pattern matching on process names
+ * or command lines anywhere in here, which is the mistake that makes a reaper
+ * dangerous on a shared machine (the pre-commit hook's `pkill -f
+ * engine-bundle` matched nothing at all, but the next pattern someone reaches
+ * for would match everything).
+ *
+ * KNOWN RESIDUE: a CODE action's own subprocess (`bun --eval ...`, spawned by
+ * the engine with no env of its own) inherits the marker but is deliberately
+ * NOT matched -- it may be mid-step, and killing it would fail a live
+ * workflow. When its engine is reaped it is orphaned in turn. It carries no
+ * pooled state and no socket, so it is a much smaller version of this
+ * problem, but it is not zero; if those start accumulating, match them by
+ * their ppid being a just-reaped engine rather than by the marker alone.
  */
 
-import { readFileSync, readdirSync, rmSync, statSync } from "node:fs";
+import { lstatSync, readFileSync, readdirSync, rmSync, statSync, utimesSync } from "node:fs";
 import { resolve } from "node:path";
 import {
   ENGINE_BUNDLE_ENV,
@@ -51,6 +61,7 @@ import {
   ENGINE_STARTED_AT_ENV,
 } from "./engine-lifecycle";
 import { ENGINE_BUILD_PATHS, bundleHash } from "./build";
+import { liveEngines } from "./spawn";
 
 /** An engine process found on this machine. */
 export interface FoundEngine {
@@ -61,6 +72,13 @@ export interface FoundEngine {
   ownerPid: number;
   /** Epoch ms recorded at spawn, or null when absent/unparseable. */
   startedAt: number | null;
+  /**
+   * The process's OWN start time in clock ticks (`/proc/<pid>/stat` field
+   * 22). Re-checked before every signal: a pid identified during the scan
+   * can exit and be reused before the kill lands, and on a machine shared
+   * with other same-uid work that would mean signalling a stranger.
+   */
+  startTicks: string | null;
   /** True when the owner is gone (or its pid has been recycled). */
   orphaned: boolean;
 }
@@ -74,6 +92,17 @@ export interface ReapOptions {
   graceMs?: number;
   /** Log sink for what was reclaimed. Default: silent. */
   log?: (line: string) => void;
+  /**
+   * Restrict the reap to these pids. A test that spawns one stand-in engine
+   * uses this so it cannot reach anything else on the machine; production
+   * callers leave it unset and reap every orphan.
+   */
+  only?: number[];
+  /**
+   * Override the uid every candidate must match. Tests use it to prove the
+   * uid gate actually excludes other users' processes.
+   */
+  uid?: number;
 }
 
 const DEFAULT_GRACE_MS = 2_000;
@@ -84,7 +113,7 @@ function defaultKill(pid: number, signal: NodeJS.Signals | 0): void {
 
 /** Parse a NUL-separated /proc environ blob into a map. */
 function parseEnviron(raw: string): Record<string, string> {
-  const out: Record<string, string> = {};
+  const out: Record<string, string> = Object.create(null) as Record<string, string>;
   for (const entry of raw.split("\0")) {
     if (!entry) continue;
     const eq = entry.indexOf("=");
@@ -142,7 +171,11 @@ function ownerIsAlive(
 export function findEngineProcesses(opts?: ReapOptions): FoundEngine[] {
   const procRoot = opts?.procRoot ?? "/proc";
   const kill = opts?.kill ?? defaultKill;
-  const ourUid = typeof process.getuid === "function" ? process.getuid() : null;
+  const ourUid = opts?.uid ?? (typeof process.getuid === "function" ? process.getuid() : null);
+  // No way to tell whose processes these are means no way to tell ours from
+  // anyone else's, and the uid check is load-bearing. Find nothing rather
+  // than quietly drop a condition.
+  if (ourUid === null) return [];
 
   let entries: string[];
   try {
@@ -155,49 +188,92 @@ export function findEngineProcesses(opts?: ReapOptions): FoundEngine[] {
   for (const entry of entries) {
     if (!/^\d+$/.test(entry)) continue;
     const pid = Number.parseInt(entry, 10);
-    if (pid === process.pid) continue;
-    const dir = resolve(procRoot, entry);
-
-    // Our uid only. A process we cannot own is never ours to signal.
-    if (ourUid !== null) {
-      try {
-        if (statSync(dir).uid !== ourUid) continue;
-      } catch {
-        continue; // vanished mid-scan
-      }
-    }
-
-    let env: Record<string, string>;
-    try {
-      env = parseEnviron(readFileSync(resolve(dir, "environ"), "utf8"));
-    } catch {
-      continue; // no permission or the process exited: not ours to touch
-    }
-    if (env[ENGINE_MARKER_ENV] !== ENGINE_MARKER_VALUE) continue;
-
-    const bundlePath = env[ENGINE_BUNDLE_ENV];
-    if (!bundlePath || !bundlePath.endsWith("main.js")) continue;
-    // argv must actually name that bundle -- this is what separates the
-    // engine from the CODE-action children that inherited its environment.
-    let argv: string[];
-    try {
-      argv = readFileSync(resolve(dir, "cmdline"), "utf8").split("\0").filter(Boolean);
-    } catch {
-      continue;
-    }
-    if (!argv.includes(bundlePath)) continue;
-
-    const ownerPid = Number.parseInt(env[ENGINE_OWNER_PID_ENV] ?? "", 10);
-    const startedAtRaw = Number.parseInt(env[ENGINE_STARTED_AT_ENV] ?? "", 10);
-    found.push({
-      pid,
-      bundlePath,
-      ownerPid: Number.isInteger(ownerPid) ? ownerPid : -1,
-      startedAt: Number.isFinite(startedAtRaw) ? startedAtRaw : null,
-      orphaned: !ownerIsAlive(procRoot, ownerPid, env[ENGINE_OWNER_START_ENV], kill),
-    });
+    const engine = identifyEngine(procRoot, pid, ourUid, kill);
+    if (engine) found.push(engine);
   }
   return found;
+}
+
+/**
+ * Is `pid` an engine of ours right now? Returns its details, or null for
+ * anything that fails a single condition.
+ *
+ * Kept as one function so the scan and the re-check before each signal ask
+ * exactly the same question -- a pid identified during a scan can exit and
+ * have its number reused before the kill lands, and "it was ours a second
+ * ago" is not a good enough reason to signal a stranger.
+ */
+function identifyEngine(
+  procRoot: string,
+  pid: number,
+  ourUid: number,
+  kill: (pid: number, signal: NodeJS.Signals | 0) => void,
+): FoundEngine | null {
+  if (pid === process.pid) return null;
+  const dir = resolve(procRoot, String(pid));
+
+  // Our uid only. A process we cannot own is never ours to signal.
+  try {
+    if (statSync(dir).uid !== ourUid) return null;
+  } catch {
+    return null; // vanished mid-scan
+  }
+
+  let env: Record<string, string>;
+  try {
+    env = parseEnviron(readFileSync(resolve(dir, "environ"), "utf8"));
+  } catch {
+    return null; // no permission or the process exited: not ours to touch
+  }
+  if (env[ENGINE_MARKER_ENV] !== ENGINE_MARKER_VALUE) return null;
+
+  const bundlePath = env[ENGINE_BUNDLE_ENV];
+  if (!bundlePath || !bundlePath.endsWith("main.js")) return null;
+  // argv must actually name that bundle -- this is what separates the engine
+  // from the CODE-action children that inherited its environment.
+  let argv: string[];
+  try {
+    argv = readFileSync(resolve(dir, "cmdline"), "utf8").split("\0").filter(Boolean);
+  } catch {
+    return null;
+  }
+  if (!argv.includes(bundlePath)) return null;
+
+  const ownerPid = Number.parseInt(env[ENGINE_OWNER_PID_ENV] ?? "", 10);
+  const startedAtRaw = Number.parseInt(env[ENGINE_STARTED_AT_ENV] ?? "", 10);
+  // An engine with no usable owner pid is NOT an orphan: "we cannot tell who
+  // owns this" must not read as "nobody does". Everything else here errs the
+  // same way.
+  const ownerUnknown = !Number.isInteger(ownerPid) || ownerPid <= 0;
+  return {
+    pid,
+    bundlePath,
+    ownerPid: ownerUnknown ? -1 : ownerPid,
+    startedAt: Number.isFinite(startedAtRaw) ? startedAtRaw : null,
+    startTicks: startTimeOf(procRoot, pid),
+    orphaned: ownerUnknown
+      ? false
+      : !ownerIsAlive(procRoot, ownerPid, env[ENGINE_OWNER_START_ENV], kill),
+  };
+}
+
+/**
+ * The same process we identified earlier, still an engine, still orphaned?
+ * Guards every signal against the pid having been recycled in between.
+ */
+function stillOurs(
+  procRoot: string,
+  ourUid: number,
+  kill: (pid: number, signal: NodeJS.Signals | 0) => void,
+  e: FoundEngine,
+): boolean {
+  const now = identifyEngine(procRoot, e.pid, ourUid, kill);
+  if (!now) return false;
+  if (now.bundlePath !== e.bundlePath) return false;
+  // Start time is the only thing that distinguishes this process from a new
+  // one wearing its pid. Where procfs gave us nothing, the rest still stands.
+  if (e.startTicks !== null && now.startTicks !== e.startTicks) return false;
+  return now.orphaned;
 }
 
 /**
@@ -211,37 +287,41 @@ export function findEngineProcesses(opts?: ReapOptions): FoundEngine[] {
  */
 export async function reapOrphanedEngines(
   opts?: ReapOptions,
-): Promise<{ reaped: FoundEngine[]; live: FoundEngine[] }> {
+): Promise<{ reaped: FoundEngine[]; live: FoundEngine[]; survived: FoundEngine[] }> {
+  const procRoot = opts?.procRoot ?? "/proc";
   const kill = opts?.kill ?? defaultKill;
   const graceMs = opts?.graceMs ?? DEFAULT_GRACE_MS;
   const log = opts?.log;
-  const all = findEngineProcesses(opts);
-  const orphans = all.filter((e) => e.orphaned);
-  const live = all.filter((e) => !e.orphaned);
-  if (orphans.length === 0) return { reaped: [], live };
+  const ourUid = opts?.uid ?? (typeof process.getuid === "function" ? process.getuid() : null);
+  if (ourUid === null) return { reaped: [], live: [], survived: [] };
 
-  const stillThere = (pid: number): boolean => {
-    try {
-      kill(pid, 0);
-      return true;
-    } catch {
-      return false;
-    }
-  };
+  const all = findEngineProcesses(opts);
+  const only = opts?.only ? new Set(opts.only) : null;
+  const scoped = only ? all.filter((e) => only.has(e.pid)) : all;
+  const orphans = scoped.filter((e) => e.orphaned);
+  const live = scoped.filter((e) => !e.orphaned);
+  if (orphans.length === 0) return { reaped: [], live, survived: [] };
+
+  // Re-verified before EVERY signal, not just once at scan time. In the
+  // seconds this function can span, an orphan may exit on its own (its
+  // in-bundle watchdog does exactly that) and its pid be handed to something
+  // else with the same uid -- another agent's bun, on this machine.
+  const ours = (e: FoundEngine): boolean => stillOurs(procRoot, ourUid, kill, e);
 
   for (const e of orphans) {
+    if (!ours(e)) continue;
     try {
       kill(e.pid, "SIGTERM");
     } catch {
-      /* exited between the scan and now */
+      /* exited between the check and now */
     }
   }
   const deadline = Date.now() + graceMs;
-  while (orphans.some((e) => stillThere(e.pid)) && Date.now() < deadline) {
+  while (orphans.some(ours) && Date.now() < deadline) {
     await new Promise((r) => setTimeout(r, 50));
   }
   for (const e of orphans) {
-    if (!stillThere(e.pid)) continue;
+    if (!ours(e)) continue;
     try {
       kill(e.pid, "SIGKILL");
     } catch {
@@ -249,16 +329,24 @@ export async function reapOrphanedEngines(
     }
   }
 
+  // Report what actually went, not what we aimed at: a process in
+  // uninterruptible sleep survives even SIGKILL, and a caller that fails a
+  // build on "engines were leaked" deserves the truth.
+  const survived = orphans.filter(ours);
+  const reaped = orphans.filter((e) => !survived.includes(e));
   if (log) {
-    for (const e of orphans) {
+    for (const e of reaped) {
       const age = e.startedAt ? `${Math.round((Date.now() - e.startedAt) / 60_000)}min` : "unknown age";
       log(
         `reaped orphaned engine pid ${e.pid} (owner ${e.ownerPid} gone, ${age}, ` +
           `bundle ${e.bundlePath})`,
       );
     }
+    for (const e of survived) {
+      log(`WARNING: orphaned engine pid ${e.pid} survived SIGKILL (bundle ${e.bundlePath})`);
+    }
   }
-  return { reaped: orphans, live };
+  return { reaped, live, survived };
 }
 
 export interface PruneOptions {
@@ -274,6 +362,19 @@ export interface PruneOptions {
   log?: (line: string) => void;
   /** Injectable clock for tests. */
   now?: number;
+  /**
+   * How recently a bundle must have been used to be protected outright,
+   * regardless of the caps. A bundle's dir mtime is touched whenever it is
+   * resolved or spawned from, so this is "somebody is actually using this".
+   * Default 24h. 0 disables the protection.
+   */
+  recentlyUsedMs?: number;
+  /**
+   * Passed to the in-use process scan. Tests point it at a fixture tree so
+   * the "a bundle a live engine is executing is never deleted" rule can be
+   * exercised without spawning anything.
+   */
+  scan?: ReapOptions;
 }
 
 export interface PruneResult {
@@ -286,6 +387,8 @@ export interface PruneResult {
 export const DEFAULT_KEEP_BUNDLES = 3;
 /** Delete bundles untouched for this long when nothing says otherwise. */
 export const DEFAULT_MAX_AGE_MS = 14 * 24 * 60 * 60_000;
+/** A bundle used this recently is in active use and is never pruned. */
+export const DEFAULT_RECENTLY_USED_MS = 24 * 60 * 60_000;
 
 function dirSize(dir: string): number {
   let total = 0;
@@ -297,7 +400,10 @@ function dirSize(dir: string): number {
   }
   for (const name of names) {
     try {
-      const s = statSync(resolve(dir, name));
+      // lstat, not stat: a symlink must be counted as a link, not followed.
+      // Following one would let a link cycle turn this into an unbounded
+      // synchronous walk on the daemon's boot path.
+      const s = lstatSync(resolve(dir, name));
       total += s.isDirectory() ? dirSize(resolve(dir, name)) : s.size;
     } catch {
       /* vanished */
@@ -307,13 +413,32 @@ function dirSize(dir: string): number {
 }
 
 /**
+ * Mark a bundle directory as in use, so the pruner's recently-used
+ * protection can see it. Called when a bundle is resolved and when one is
+ * spawned from; failure is ignored (a read-only shared root is not ours to
+ * touch, and a missed touch only costs protection, never correctness of the
+ * other rules).
+ */
+export function touchBundleDir(bundlePathOrDir: string): void {
+  const dir = bundlePathOrDir.endsWith("main.js")
+    ? resolve(bundlePathOrDir, "..")
+    : resolve(bundlePathOrDir);
+  try {
+    const when = new Date();
+    utimesSync(dir, when, when);
+  } catch {
+    /* read-only, gone, or not ours */
+  }
+}
+
+/**
  * Prune the per-user engine bundle cache.
  *
  * Never prunes a SHARED bundle root: those are built and owned by the host,
  * read-only to us, and shared between tenants. Callers pass their own root
  * only for tests.
  *
- * Protection rules, in order:
+ * Protection rules, all of which beat both caps:
  *   - the bundle for the CURRENT source hash is always kept, however old it
  *     is (it is what the next boot will use, and rebuilding costs a staging
  *     install);
@@ -321,17 +446,37 @@ function dirSize(dir: string): number {
  *     engines belonging to another checkout's daemon on this machine. Ripping
  *     a `main.js` out from under a running engine is exactly the kind of
  *     mysterious failure a cache cleanup must never cause;
+ *   - any bundle THIS process has an engine running from (`liveEngines()`),
+ *     which also covers platforms with no procfs, where the scan above finds
+ *     nothing at all;
+ *   - any bundle used within `recentlyUsedMs` (default 24h). A daemon holds
+ *     its bundle path for its whole life but only has a process running some
+ *     of the time -- the idle pool evicts after five minutes -- so "no engine
+ *     running right now" is nowhere near "nobody needs this". Without this
+ *     rule, one checkout's boot-time prune deletes another checkout's bundle
+ *     and its next run fails with ENOENT until it rebuilds;
  *   - anything the caller lists in `protect`.
  *
  * What is left is sorted newest-first by mtime; everything past `keep`, and
- * anything older than `maxAgeMs`, goes.
+ * anything older than `maxAgeMs`, goes. Note the count cap is per MACHINE,
+ * not per checkout: several active worktrees can legitimately need more
+ * bundles than the default, which is what the recently-used rule is for.
  */
 export function pruneEngineBundleCache(opts?: PruneOptions): PruneResult {
-  const root = opts?.root ?? ENGINE_BUILD_PATHS.BUNDLE_ROOT;
+  const root = resolve(opts?.root ?? ENGINE_BUILD_PATHS.BUNDLE_ROOT);
   const keep = opts?.keep ?? DEFAULT_KEEP_BUNDLES;
   const maxAgeMs = opts?.maxAgeMs ?? DEFAULT_MAX_AGE_MS;
+  const recentlyUsedMs = opts?.recentlyUsedMs ?? DEFAULT_RECENTLY_USED_MS;
   const now = opts?.now ?? Date.now();
   const log = opts?.log;
+
+  // A shared root is built and owned by the host, read-only to us and shared
+  // between tenants. Deleting from it is never ours to do; enforce that here
+  // rather than relying on every caller to know it.
+  const shared = process.env["JARVIS_ENGINE_CACHE_ROOT"]?.trim();
+  if (shared && resolve(shared) === root) {
+    return { deleted: [], kept: [], freedBytes: 0 };
+  }
 
   let names: string[];
   try {
@@ -347,10 +492,14 @@ export function pruneEngineBundleCache(opts?: PruneOptions): PruneResult {
     protectedDirs.add(resolve(root, bundleHash()));
   } catch {
     // Hashing reads vendored sources; if that fails we simply protect less,
-    // and the in-use scan below still covers anything actually running.
+    // and the in-use scans below still cover anything actually running.
   }
   // Anything a live engine is executing, ours or another checkout's.
-  for (const e of findEngineProcesses()) {
+  for (const e of findEngineProcesses(opts?.scan)) {
+    protectedDirs.add(resolve(e.bundlePath, ".."));
+  }
+  // Anything THIS process is running, which needs no procfs.
+  for (const e of liveEngines()) {
     protectedDirs.add(resolve(e.bundlePath, ".."));
   }
 
@@ -364,12 +513,18 @@ export function pruneEngineBundleCache(opts?: PruneOptions): PruneResult {
     const dir = resolve(root, name);
     let s;
     try {
-      s = statSync(dir);
+      // lstat: a symlink in the cache root is not a bundle dir of ours, and
+      // rmSync would only remove the link while dirSize walked the target.
+      s = lstatSync(dir);
     } catch {
       continue;
     }
     if (!s.isDirectory()) continue;
     if (protectedDirs.has(dir)) {
+      kept.push(dir);
+      continue;
+    }
+    if (recentlyUsedMs > 0 && now - s.mtimeMs <= recentlyUsedMs) {
       kept.push(dir);
       continue;
     }

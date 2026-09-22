@@ -25,7 +25,7 @@
  *      every upstream sync and registered in PATCHED_VENDOR_SOURCES; the
  *      banner survives a sync untouched.
  *   2. The banner runs before ANY module is imported, so the handler is
- *      installed before upstream's — and listeners fire in registration
+ *      installed before upstream's, and listeners fire in registration
  *      order, which means upstream's flush still runs, it just now runs
  *      inside a bounded window that ends in an exit.
  *   3. The banner is already inside `bundleHash()` (the config object is
@@ -75,12 +75,18 @@ export const ENGINE_OWNER_PID_ENV = "JARVIS_ENGINE_OWNER_PID";
 export const ENGINE_OWNER_START_ENV = "JARVIS_ENGINE_OWNER_START";
 /** Absolute path of the bundle the engine is running. */
 export const ENGINE_BUNDLE_ENV = "JARVIS_ENGINE_BUNDLE";
-/** Epoch ms at spawn — lets a reaper report the age of what it reclaimed. */
+/** Epoch ms at spawn: lets a reaper report the age of what it reclaimed. */
 export const ENGINE_STARTED_AT_ENV = "JARVIS_ENGINE_STARTED_AT";
 /**
  * How long the engine keeps running after SIGTERM so upstream's own
  * (asynchronous) run-progress flush can finish, before it exits anyway.
- * Default 1000ms, comfortably inside the owner's 2s SIGKILL backstop.
+ *
+ * Normally NOT set by hand: `spawnEngine` derives it from the owner's own
+ * SIGKILL deadline so the two cannot drift apart (a flush window that
+ * outlives the deadline behind it means being killed mid-flush every time).
+ * Set explicitly, it wins, and a value at or above that deadline is warned
+ * about at spawn. The constant below applies only to an engine started with
+ * no owner deadline at all.
  */
 export const ENGINE_SHUTDOWN_GRACE_ENV = "JARVIS_ENGINE_SHUTDOWN_GRACE_MS";
 /** Orphan-watchdog poll interval. Default 5000ms; 0 disables the watchdog. */
@@ -98,7 +104,7 @@ export const ENGINE_ORPHAN_POLL_DEFAULT_MS = 5_000;
  * boot. Every observable effect is guarded.
  *
  * Note the two unref()s. Neither the grace timer nor the watchdog interval may
- * hold the event loop open by itself — an engine whose work is done should
+ * hold the event loop open by itself: an engine whose work is done should
  * still be allowed to exit naturally.
  */
 export const ENGINE_LIFECYCLE_SHIM = `(() => {
@@ -168,6 +174,14 @@ export const ENGINE_LIFECYCLE_SHIM = `(() => {
   // us. Once it is gone we are doing work for nobody -- exit rather than sit
   // on timers, sockets and ~100MB until the machine reboots. No grace window
   // on this path: there is nobody left to flush anything to.
+  if (ownerPid > 0 && pollMs === 0) {
+    // Say so: the var is inherited from the owner's environment, so one stray
+    // export disables the watchdog for every engine on the machine, and the
+    // symptom (an orphan that lingers) looks exactly like the bug it fixes.
+    try {
+      process.stderr.write("[engine] orphan watchdog disabled (" + ${JSON.stringify(ENGINE_ORPHAN_POLL_ENV)} + "=0)\\n");
+    } catch (_e) { /* no stderr: nothing to do about it */ }
+  }
   if (ownerPid > 0 && pollMs > 0) {
     var watchdog = setInterval(function () {
       if (ownerGone()) {

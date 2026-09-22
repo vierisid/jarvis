@@ -10,15 +10,23 @@
  * recorded pid rather than as a dead process on a shared machine.
  *
  * One test at the end does the real thing end to end, against a process it
- * spawned itself.
+ * spawned itself -- and passes `only: [pid]` so that even then the reaper
+ * cannot reach anything else running here.
  *
  * Pruning always runs against a temp cache dir. Never `~/.jarvis/cache`.
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
 import { spawn } from "node:child_process";
-import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
-import { existsSync } from "node:fs";
+import {
+  existsSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  utimesSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { resolve } from "node:path";
 import {
@@ -87,8 +95,18 @@ function engineEnv(over: Record<string, string> = {}): Record<string, string> {
   };
 }
 
-/** A kill that records instead of signalling; `alive` decides probe results. */
-function recordingKill(alive: Set<number>): {
+/**
+ * A kill that records instead of signalling; `alive` decides probe results.
+ *
+ * When a fixture tree is supplied, a fatal signal also removes that pid's
+ * `/proc` entry -- the reaper re-reads it before every signal, so a fake
+ * machine where killing changes nothing would let the tests pass a reaper
+ * that signals the same pid forever.
+ */
+function recordingKill(
+  alive: Set<number>,
+  procRoot?: string,
+): {
   calls: Array<{ pid: number; signal: NodeJS.Signals | 0 }>;
   kill: (pid: number, signal: NodeJS.Signals | 0) => void;
 } {
@@ -102,7 +120,10 @@ function recordingKill(alive: Set<number>): {
         err.code = "ESRCH";
         throw err;
       }
-      if (signal === "SIGTERM" || signal === "SIGKILL") alive.delete(pid);
+      if (signal === "SIGTERM" || signal === "SIGKILL") {
+        alive.delete(pid);
+        if (procRoot) rmSync(resolve(procRoot, String(pid)), { recursive: true, force: true });
+      }
     },
   };
 }
@@ -187,6 +208,46 @@ describe("identifying an engine of ours", () => {
     const { kill } = recordingKill(new Set());
     expect(findEngineProcesses({ procRoot: resolve(tmpDir(), "nope"), kill })).toEqual([]);
   });
+
+  test("ignores a process belonging to another user", () => {
+    // The fixture tree is owned by us, so the uid to match is overridden
+    // instead. Same effect: the candidate's owner is not the uid we accept.
+    const procRoot = tmpDir();
+    fakeProcess(procRoot, 1234, { env: engineEnv(), argv: ["bun", "--smol", BUNDLE] });
+    const { kill } = recordingKill(new Set());
+    const ourUid = typeof process.getuid === "function" ? process.getuid() : 0;
+
+    expect(findEngineProcesses({ procRoot, kill, uid: ourUid })).toHaveLength(1);
+    expect(findEngineProcesses({ procRoot, kill, uid: ourUid + 1 })).toHaveLength(0);
+  });
+
+  test("an owner pid we are not allowed to signal counts as recycled, not alive", () => {
+    // EPERM means that pid belongs to somebody else now. Our engine passed
+    // the uid gate, so its real owner could not have been another user's.
+    const procRoot = tmpDir();
+    fakeProcess(procRoot, 1234, { env: engineEnv(), argv: ["bun", "--smol", BUNDLE] });
+    const kill = (_pid: number, _signal: NodeJS.Signals | 0): void => {
+      const err = new Error("operation not permitted") as NodeJS.ErrnoException;
+      err.code = "EPERM";
+      throw err;
+    };
+
+    expect(findEngineProcesses({ procRoot, kill })[0]!.orphaned).toBe(true);
+  });
+
+  test("an engine with no usable owner pid is left alone, not assumed abandoned", () => {
+    // "We cannot tell who owns this" must never read as "nobody does".
+    const procRoot = tmpDir();
+    fakeProcess(procRoot, 1234, {
+      env: engineEnv({ [ENGINE_OWNER_PID_ENV]: "" }),
+      argv: ["bun", "--smol", BUNDLE],
+    });
+    const { kill } = recordingKill(new Set());
+
+    const found = findEngineProcesses({ procRoot, kill });
+    expect(found).toHaveLength(1);
+    expect(found[0]!.orphaned).toBe(false);
+  });
 });
 
 describe("reaping", () => {
@@ -198,7 +259,7 @@ describe("reaping", () => {
       argv: ["bun", "--smol", BUNDLE],
     });
     fakeProcess(procRoot, 999002, { env: {}, argv: ["bun", "daemon"], startTicks: "5000" });
-    const { kill, calls } = recordingKill(new Set([1234, 5678, 999002]));
+    const { kill, calls } = recordingKill(new Set([1234, 5678, 999002]), procRoot);
 
     const { reaped, live } = await reapOrphanedEngines({ procRoot, kill, graceMs: 1_000 });
     expect(reaped.map((e) => e.pid)).toEqual([1234]);
@@ -219,7 +280,12 @@ describe("reaping", () => {
         err.code = "ESRCH";
         throw err;
       }
-      if (signal === "SIGKILL") alive.delete(pid); // deaf to SIGTERM
+      if (signal === "SIGKILL") {
+        // Deaf to SIGTERM; only SIGKILL ends it, and the fake machine has to
+        // reflect that or the re-check before each signal never settles.
+        alive.delete(pid);
+        rmSync(resolve(procRoot, String(pid)), { recursive: true, force: true });
+      }
     };
 
     const { reaped } = await reapOrphanedEngines({ procRoot, kill, graceMs: 200 });
@@ -228,6 +294,54 @@ describe("reaping", () => {
       { pid: 1234, signal: "SIGTERM" },
       { pid: 1234, signal: "SIGKILL" },
     ]);
+  });
+
+  test("re-checks identity before signalling, so a recycled pid is spared", async () => {
+    // The pid exists at scan time and is ours; by the time the signal would
+    // go out the process is gone and something else has the number. Modelled
+    // by rewriting the fixture between the scan and the kill.
+    const procRoot = tmpDir();
+    fakeProcess(procRoot, 1234, { env: engineEnv(), argv: ["bun", "--smol", BUNDLE] });
+    const calls: Array<{ pid: number; signal: NodeJS.Signals | 0 }> = [];
+    let firstProbe = true;
+    const kill = (pid: number, signal: NodeJS.Signals | 0): void => {
+      if (signal !== 0) calls.push({ pid, signal });
+      if (pid === 999001) {
+        if (firstProbe) {
+          firstProbe = false;
+          // Owner is gone -> pid 1234 is an orphan, as far as the scan sees.
+          const err = new Error("gone") as NodeJS.ErrnoException;
+          err.code = "ESRCH";
+          throw err;
+        }
+      }
+    };
+    const found = findEngineProcesses({ procRoot, kill });
+    expect(found[0]!.orphaned).toBe(true);
+
+    // Now 1234 is somebody else's shell: same pid, no marker.
+    rmSync(resolve(procRoot, "1234"), { recursive: true, force: true });
+    fakeProcess(procRoot, 1234, { env: { PATH: "/usr/bin" }, argv: ["zsh"] });
+
+    const { reaped } = await reapOrphanedEngines({ procRoot, kill, graceMs: 100 });
+    expect(reaped).toEqual([]);
+    expect(calls).toEqual([]); // nothing was signalled at all
+  });
+
+  test("`only` confines a reap to the pids the caller names", async () => {
+    const procRoot = tmpDir();
+    fakeProcess(procRoot, 1234, { env: engineEnv(), argv: ["bun", "--smol", BUNDLE] });
+    fakeProcess(procRoot, 4567, { env: engineEnv(), argv: ["bun", "--smol", BUNDLE] });
+    const { kill, calls } = recordingKill(new Set([1234, 4567]), procRoot);
+
+    const { reaped } = await reapOrphanedEngines({
+      procRoot,
+      kill,
+      graceMs: 500,
+      only: [4567],
+    });
+    expect(reaped.map((e) => e.pid)).toEqual([4567]);
+    expect(calls).toEqual([{ pid: 4567, signal: "SIGTERM" }]);
   });
 
   test("does nothing at all when there is nothing to reap", async () => {
@@ -264,7 +378,7 @@ describe("pruning the bundle cache", () => {
       { name: "ccc", ageMs: 3_000 },
       { name: "ddd", ageMs: 4_000 },
     ]);
-    const r = pruneEngineBundleCache({ root, keep: 2, maxAgeMs: 0 });
+    const r = pruneEngineBundleCache({ root, keep: 2, maxAgeMs: 0, recentlyUsedMs: 0 });
     expect(r.deleted.map((d) => d.split("/").pop()).sort()).toEqual(["ccc", "ddd"]);
     expect(existsSync(resolve(root, "aaa"))).toBe(true);
     expect(existsSync(resolve(root, "bbb"))).toBe(true);
@@ -318,9 +432,68 @@ describe("pruning the bundle cache", () => {
   test("ignores stray files next to the bundle dirs", () => {
     const root = cacheWith([{ name: "a", ageMs: 1_000 }]);
     writeFileSync(resolve(root, "notes.txt"), "hi");
-    const r = pruneEngineBundleCache({ root, keep: 0, maxAgeMs: 1 });
+    const r = pruneEngineBundleCache({ root, keep: 0, maxAgeMs: 1, recentlyUsedMs: 0 });
     expect(existsSync(resolve(root, "notes.txt"))).toBe(true);
     expect(r.deleted.map((d) => d.split("/").pop())).toEqual(["a"]);
+  });
+
+  test("keeps a bundle used recently, whatever the caps say", () => {
+    // The steady state of a second checkout: its daemon is alive and holding
+    // this bundle, but its pooled engine was evicted minutes ago so there is
+    // no process to find. Deleting it here breaks that daemon's next run.
+    const root = cacheWith([
+      { name: "mine", ageMs: 1_000 },
+      { name: "theirs", ageMs: 60 * 60_000 }, // an hour old: still in use
+    ]);
+    const r = pruneEngineBundleCache({
+      root,
+      keep: 1,
+      maxAgeMs: 60_000,
+      recentlyUsedMs: 24 * 60 * 60_000,
+    });
+    expect(r.deleted).toEqual([]);
+    expect(existsSync(resolve(root, "theirs"))).toBe(true);
+  });
+
+  test("keeps a bundle a live engine process is executing", () => {
+    // Even when the bundle is ancient and the caps say it should go: an
+    // engine is running out of it right now.
+    const root = cacheWith([
+      { name: "new1", ageMs: 1_000 },
+      { name: "running", ageMs: 400 * 24 * 60 * 60_000 },
+    ]);
+    const procRoot = resolve(tmpDir(), "fakeproc");
+    mkdirSync(procRoot, { recursive: true });
+    const runningBundle = resolve(root, "running", "main.js");
+    fakeProcess(procRoot, 2468, {
+      env: engineEnv({ [ENGINE_BUNDLE_ENV]: runningBundle }),
+      argv: ["bun", "--smol", runningBundle],
+    });
+
+    const r = pruneEngineBundleCache({
+      root,
+      keep: 1,
+      maxAgeMs: 1_000,
+      recentlyUsedMs: 0,
+      scan: { procRoot, kill: recordingKill(new Set()).kill },
+    });
+    expect(existsSync(resolve(root, "running"))).toBe(true);
+    expect(r.deleted).not.toContain(resolve(root, "running"));
+  });
+
+  test("refuses to prune a shared read-only bundle root", () => {
+    // Host-owned, shared between tenants, and never ours to delete from.
+    const root = cacheWith([{ name: "old", ageMs: 400 * 24 * 60 * 60_000 }]);
+    const previous = process.env["JARVIS_ENGINE_CACHE_ROOT"];
+    process.env["JARVIS_ENGINE_CACHE_ROOT"] = root;
+    try {
+      const r = pruneEngineBundleCache({ root, keep: 0, maxAgeMs: 1, recentlyUsedMs: 0 });
+      expect(r.deleted).toEqual([]);
+      expect(existsSync(resolve(root, "old"))).toBe(true);
+    } finally {
+      if (previous === undefined) delete process.env["JARVIS_ENGINE_CACHE_ROOT"];
+      else process.env["JARVIS_ENGINE_CACHE_ROOT"] = previous;
+    }
   });
 });
 
@@ -379,10 +552,21 @@ child.stdout.once("data", () => {
       setTimeout(() => rej(new Error("launcher never exited")), 20_000);
     });
 
+    /**
+     * Running, as opposed to gone OR a zombie. A reaped orphan is reparented
+     * to a subreaper that may not have called wait() yet, and a zombie still
+     * answers `kill(pid, 0)` -- it holds no memory, no timers and no sockets,
+     * so treating it as alive would fail this test for the wrong reason.
+     */
     const alive = (): boolean => {
       try {
         process.kill(pid, 0);
-        return true;
+      } catch {
+        return false;
+      }
+      try {
+        const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+        return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0] !== "Z";
       } catch {
         return false;
       }
@@ -396,8 +580,12 @@ child.stdout.once("data", () => {
       expect(found[0]!.orphaned).toBe(true);
       expect(found[0]!.bundlePath).toBe(bundlePath);
 
-      const { reaped } = await reapOrphanedEngines({ graceMs: 2_000 });
-      expect(reaped.map((e) => e.pid)).toContain(pid);
+      // `only` keeps this confined to the process this test started. Without
+      // it, a test run would reap every orphaned engine on the machine --
+      // including another worktree's, which is exactly the blast radius this
+      // whole module is written to avoid.
+      const { reaped } = await reapOrphanedEngines({ graceMs: 2_000, only: [pid] });
+      expect(reaped.map((e) => e.pid)).toEqual([pid]);
       expect(alive()).toBe(false);
     } finally {
       // Its own bundle path is unique to this temp dir, so this can only ever

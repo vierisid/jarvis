@@ -306,6 +306,10 @@ export type WorkflowConfig = {
    * this was reported). Default 3. 0 means "never prune by count". The
    * bundle in use and any bundle a running engine is executing are always
    * kept, whatever this says. Overridden by JARVIS_ENGINE_CACHE_MAX_BUNDLES.
+   *
+   * Like `engineIdleTtlMs`, this is USER-owned: it comes from the dashboard /
+   * user settings, not from `config.yaml` (the loader keeps only
+   * WORKFLOW_SYSTEM_KEYS from the file). Fleet operators use the env var.
    */
   engineCacheMaxBundles?: number;
   /**
