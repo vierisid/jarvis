@@ -135,14 +135,18 @@ export class GitManager {
    * Create a new branch.
    */
   async createBranch(projectPath: string, name: string): Promise<void> {
-    await this.run(projectPath, ['checkout', '-b', name]);
+    await this.checkBranchName(projectPath, name);
+    await this.run(projectPath, ['switch', '-c', name]);
   }
 
   /**
    * Switch to an existing branch.
    */
   async switchBranch(projectPath: string, name: string): Promise<void> {
-    await this.run(projectPath, ['checkout', name]);
+    await this.checkBranchName(projectPath, name);
+    // `switch`, not `checkout`: checkout takes a name that is also a path
+    // ("src") as a pathspec and overwrites that path's uncommitted changes.
+    await this.run(projectPath, ['switch', '--', name]);
   }
 
   /**
@@ -197,6 +201,7 @@ export class GitManager {
    * Merge a branch into the current branch.
    */
   async merge(projectPath: string, branch: string): Promise<{ success: boolean; conflicts?: string[] }> {
+    await this.checkBranchName(projectPath, branch);
     try {
       await this.run(projectPath, ['merge', branch]);
       return { success: true };
@@ -222,6 +227,8 @@ export class GitManager {
    * Rebase current branch onto another branch.
    */
   async rebase(projectPath: string, ontoBranch: string): Promise<{ success: boolean; conflicts?: string[] }> {
+    // Outside the try, which turns every failure into `success: false`.
+    await this.checkBranchName(projectPath, ontoBranch);
     try {
       await this.run(projectPath, ['rebase', ontoBranch]);
       return { success: true };
@@ -245,7 +252,26 @@ export class GitManager {
    * Delete a branch.
    */
   async deleteBranch(projectPath: string, name: string): Promise<void> {
+    await this.checkBranchName(projectPath, name);
     await this.run(projectPath, ['branch', '-d', name]);
+  }
+
+  /**
+   * Refuse a branch name before it reaches git's argv (#520). The names come
+   * from the dashboard, and git reads one that starts with `-` as an option:
+   * `--orphan=x` or `--detach` change what checkout does, and
+   * `rebase --exec=<cmd>` runs a command. The dash check has to come first,
+   * since check-ref-format would read the name as an option too; after it,
+   * check-ref-format rejects everything else git would not take as a branch.
+   */
+  private async checkBranchName(projectPath: string, name: string): Promise<void> {
+    const invalid = new Error(`Invalid branch name: "${String(name)}"`);
+    if (typeof name !== 'string' || !name || name.startsWith('-')) throw invalid;
+    try {
+      await this.run(projectPath, ['check-ref-format', '--branch', name]);
+    } catch {
+      throw invalid;
+    }
   }
 
   /**

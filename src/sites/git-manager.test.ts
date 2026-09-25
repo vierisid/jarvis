@@ -7,7 +7,7 @@
  */
 
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
-import { appendFileSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
@@ -108,5 +108,41 @@ describe('planted config does not run code through the daemon', () => {
     executable(join(root, 'gpg.sh'), touch());
     expect((await git.getLog(repo, 1)).length).toBe(1);
     expect(existsSync(marker)).toBe(false);
+  });
+});
+
+describe('branch names cannot become options (#520)', () => {
+  const OPTIONS = ['--orphan=x', '--detach', '-f', '--force', '--exec=touch RAN', '-D', '-'];
+  const MALFORMED = ['', 'a..b', 'HEAD', 'with space', 'trailing.lock', 'x~1'];
+
+  test.each([...OPTIONS, ...MALFORMED])('every branch call refuses %j', async (name) => {
+    const head = await git.getCurrentBranch(repo);
+    await expect(git.createBranch(repo, name)).rejects.toThrow('Invalid branch name');
+    await expect(git.switchBranch(repo, name)).rejects.toThrow('Invalid branch name');
+    await expect(git.merge(repo, name)).rejects.toThrow('Invalid branch name');
+    await expect(git.rebase(repo, name)).rejects.toThrow('Invalid branch name');
+    await expect(git.deleteBranch(repo, name)).rejects.toThrow('Invalid branch name');
+    expect(await git.getCurrentBranch(repo)).toBe(head);
+    expect((await git.getBranches(repo)).map((b) => b.name)).toEqual([head]);
+    expect(existsSync(join(repo, 'RAN'))).toBe(false);
+  });
+
+  test('switchBranch never checks out a path of the same name', async () => {
+    writeFileSync(join(repo, 'src', 'a.txt'), 'uncommitted\n');
+    await expect(git.switchBranch(repo, 'src')).rejects.toThrow();
+    expect(readFileSync(join(repo, 'src', 'a.txt'), 'utf-8')).toBe('uncommitted\n');
+  });
+
+  test('ordinary branch operations still work', async () => {
+    const base = await git.getCurrentBranch(repo);
+    await git.createBranch(repo, 'feature/x');
+    expect(await git.getCurrentBranch(repo)).toBe('feature/x');
+    writeFileSync(join(repo, 'src', 'b.txt'), 'b\n');
+    await git.autoCommit(repo, 'add b');
+    await git.switchBranch(repo, base);
+    expect(await git.getCurrentBranch(repo)).toBe(base);
+    expect((await git.merge(repo, 'feature/x')).success).toBe(true);
+    await git.deleteBranch(repo, 'feature/x');
+    expect((await git.getBranches(repo)).map((b) => b.name)).toEqual([base]);
   });
 });
