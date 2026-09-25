@@ -28,6 +28,7 @@ import {
   keyFileCandidates,
   migrateWorkflowEncryptionKey,
   migrateWorkflowEncryptionKeyToDataDir,
+  createOrAdoptKey,
   persistKeyFile,
   resolveKeyFile,
   rivalKeyWarning,
@@ -579,6 +580,15 @@ describe("creating the key file is create-if-absent", () => {
     expect(readKey(path)).toBe(KEY_NEW);
     expect(statSync(path).mode & 0o777).toBe(0o600);
     expect(readdirSync(dataDir)).toEqual([KEY_FILE_NAME]);
+  });
+
+  test("a first save that loses the race uses the winner's key, not its own", () => {
+    // Deterministic form of the concurrent test below: the "winner" is
+    // already on disk when this process's generation reaches the link.
+    const path = join(dataDir, KEY_FILE_NAME);
+    writeKey(path, KEY_OLD);
+    expect(createOrAdoptKey(path).toString("hex")).toBe(KEY_OLD);
+    expect(readKey(path)).toBe(KEY_OLD);
   });
 
   test("an existing key is adopted, never overwritten", () => {

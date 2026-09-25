@@ -608,10 +608,20 @@ function getKey(): Buffer {
   // that key. Installs whose key lives in a file are never flagged and
   // generate as usual.
   if (hadEnvWorkflowKey()) throw parentKeyMismatch(null, file);
-  // Adopt whatever is on disk if another first boot got there first.
-  const { hex } = persistKeyFile(file, randomBytes(KEY_BYTES).toString("hex"));
-  cachedKey = parseKeyHex(hex, file);
+  cachedKey = createOrAdoptKey(file);
   return cachedKey;
+}
+
+/**
+ * A fresh key at `file` -- or, when another first boot got there first, the
+ * key on disk. Returning the key persistKeyFile reports, never the one
+ * generated here, is what keeps two racing first boots on one key.
+ *
+ * Exported for tests: the race itself is timing-dependent, this is not.
+ */
+export function createOrAdoptKey(file: string): Buffer {
+  const { hex } = persistKeyFile(file, randomBytes(KEY_BYTES).toString("hex"));
+  return parseKeyHex(hex, file);
 }
 
 /**
