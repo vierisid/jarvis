@@ -209,7 +209,8 @@ describe('branch names cannot become options (#520)', () => {
       // Positive control: the stand-in is really on PATH and would approve.
       await git.switchBranch(repo, 'feature');
     } finally {
-      process.env.PATH = savedPath;
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
     }
     const calls = readFileSync(log, 'utf-8');
     expect(calls).not.toContain('--orphan=x');
@@ -228,6 +229,16 @@ describe('branch names cannot become options (#520)', () => {
     expect(await git.getCurrentBranch(repo)).toBe(base);
     expect((await git.merge(repo, 'feature/x')).success).toBe(true);
     await git.deleteBranch(repo, 'feature/x');
+    expect((await git.getBranches(repo)).map((b) => b.name)).toEqual([base]);
+  });
+
+  // Names that merely resemble the refused ones.
+  test.each(['page_head', 'my_head', 'headline', 'v1.0', 'refsx/y', 'at@home'])('%j is an ordinary branch', async (name) => {
+    const base = await git.getCurrentBranch(repo);
+    await git.createBranch(repo, name);
+    expect(await git.getCurrentBranch(repo)).toBe(name);
+    await git.switchBranch(repo, base);
+    await git.deleteBranch(repo, name);
     expect((await git.getBranches(repo)).map((b) => b.name)).toEqual([base]);
   });
 });

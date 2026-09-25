@@ -46,6 +46,12 @@ export const PROJECT_GIT_PINS = [
   '-c', 'commit.gpgSign=false',
 ];
 
+/** HEAD and the pseudo-refs git writes next to it. */
+const PSEUDO_REFS = new Set([
+  'HEAD', 'FETCH_HEAD', 'ORIG_HEAD', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'REBASE_HEAD',
+  'BISECT_HEAD', 'AUTO_MERGE',
+]);
+
 export class GitManager {
   /**
    * Check if git is installed on the system.
@@ -266,18 +272,19 @@ export class GitManager {
    * from the dashboard, and git reads one that starts with `-` as an option:
    * `--orphan=x` or `--detach` change what checkout does, and
    * `rebase --exec=<cmd>` runs a command. The dash check has to come first,
-   * since check-ref-format would read the name as an option too; after it,
-   * check-ref-format rejects everything else git would not take as a branch.
+   * since check-ref-format would read the name as an option too. After it:
+   * a short list of names that are valid refnames but not branches, then
+   * check-ref-format, whose output must equal the input.
    */
   private async checkBranchName(projectPath: string, name: string): Promise<void> {
     const invalid = new Error(`Invalid branch name: "${String(name)}"`);
     if (typeof name !== 'string' || !name || name.startsWith('-')) throw invalid;
-    // Names check-ref-format passes but that do not mean a branch here:
-    // `@` is HEAD, HEAD and the *_HEAD pseudo-refs (FETCH_HEAD, ORIG_HEAD,
-    // MERGE_HEAD) name whatever git last left there -- case-insensitively, as
-    // a case-insensitive filesystem would read them -- and a full `refs/...`
-    // name is a ref path, not a branch.
-    if (name === '@' || /^(?:[a-z_]+_)?head$/i.test(name) || name.startsWith('refs/')) throw invalid;
+    // Names check-ref-format passes but that do not mean a branch here: `@`
+    // is HEAD, HEAD and git's pseudo-refs name whatever git last left there
+    // (compared case-insensitively, as a case-insensitive filesystem would
+    // read them), and a full `refs/...` name is a ref path, not a branch.
+    // A fixed list, not `*_HEAD`: `page_head` is an ordinary branch.
+    if (name === '@' || PSEUDO_REFS.has(name.toUpperCase()) || name.startsWith('refs/')) throw invalid;
     let normalized: string;
     try {
       normalized = (await this.run(projectPath, ['check-ref-format', '--branch', name])).trim();
