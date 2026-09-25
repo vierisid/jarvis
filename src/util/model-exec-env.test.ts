@@ -10,11 +10,13 @@ import { join, relative, sep } from 'node:path';
 import ts from 'typescript';
 import {
   DAEMON_SECRET_ENV_NAMES,
+  JARVIS_INTERNAL_ENV_NAMES,
   JARVIS_SETTINGS_ENV_NAMES,
   isDaemonSecretEnvName,
   modelExecEnv,
   stripDaemonSecrets,
 } from './model-exec-env.ts';
+import { MODEL_EXEC_MARKER_ENV, isModelExecProcess, modelExecDaemonWarning } from './model-exec-marker.ts';
 
 const SENTINEL = 'sentinel-do-not-log';
 
@@ -93,6 +95,14 @@ describe('the daemon-secret rule', () => {
     }
   });
 
+  test('the engine wiring names are known, internal, and stripped', () => {
+    for (const name of JARVIS_INTERNAL_ENV_NAMES) {
+      expect({ name, stripped: isDaemonSecretEnvName(name) }).toEqual({ name, stripped: true });
+      expect(JARVIS_SETTINGS_ENV_NAMES).not.toContain(name);
+      expect(DAEMON_SECRET_ENV_NAMES).not.toContain(name);
+    }
+  });
+
   test("the user's shell and desktop survive whole, their own credentials included", () => {
     expect(stripDaemonSecrets(USER_ENV)).toEqual(USER_ENV);
   });
@@ -107,6 +117,14 @@ describe('the daemon-secret rule', () => {
 });
 
 describe('modelExecEnv()', () => {
+  test('marks the child JARVIS_MODEL_EXEC=1, and no extra can take the mark off', () => {
+    expect(modelExecEnv()[MODEL_EXEC_MARKER_ENV]).toBe('1');
+    expect(modelExecEnv({ [MODEL_EXEC_MARKER_ENV]: undefined })[MODEL_EXEC_MARKER_ENV]).toBe('1');
+    expect(modelExecEnv({ [MODEL_EXEC_MARKER_ENV]: '0' })[MODEL_EXEC_MARKER_ENV]).toBe('1');
+    // A setting, so a grandchild started by that child keeps it too.
+    expect(isDaemonSecretEnvName(MODEL_EXEC_MARKER_ENV)).toBe(false);
+  });
+
   test('an extra cannot put a daemon secret back, nor can a spread of process.env', () => {
     const had = process.env.JARVIS_GITHUB_TOKEN;
     process.env.JARVIS_GITHUB_TOKEN = SENTINEL;
@@ -205,11 +223,48 @@ describe('every JARVIS_ env name in src/, bin/ and scripts/ is classified', () =
     // If this fails you added a JARVIS_ variable. It is stripped from
     // run_command, launched apps and the browser until classified: add it to
     // JARVIS_SETTINGS_ENV_NAMES in util/model-exec-env.ts if a `jarvis` CLI
-    // run from the model's shell needs it, or to DAEMON_SECRET_ENV_NAMES if it
-    // holds a secret.
-    const secret = new Set(DAEMON_SECRET_ENV_NAMES);
-    const setting = new Set(JARVIS_SETTINGS_ENV_NAMES);
-    const unclassified = [...names].filter(([n]) => !secret.has(n) && !setting.has(n)).map(([n, f]) => `${n} (${f})`);
+    // run from the model's shell needs it, to DAEMON_SECRET_ENV_NAMES if it
+    // holds a secret, or to JARVIS_INTERNAL_ENV_NAMES if the daemon only sets
+    // it on processes it starts itself.
+    const known = new Set([...DAEMON_SECRET_ENV_NAMES, ...JARVIS_SETTINGS_ENV_NAMES, ...JARVIS_INTERNAL_ENV_NAMES]);
+    const unclassified = [...names].filter(([n]) => !known.has(n)).map(([n, f]) => `${n} (${f})`);
     expect(unclassified).toEqual([]);
+  });
+
+  test('the three buckets do not overlap', () => {
+    const all = [...DAEMON_SECRET_ENV_NAMES, ...JARVIS_SETTINGS_ENV_NAMES, ...JARVIS_INTERNAL_ENV_NAMES];
+    expect(new Set(all).size).toBe(all.length);
+  });
+});
+
+describe('the model-exec marker (#514)', () => {
+  test('is recognised only as exactly "1"', () => {
+    expect(isModelExecProcess({ [MODEL_EXEC_MARKER_ENV]: '1' })).toBe(true);
+    for (const v of [undefined, '', '0', 'true']) {
+      expect({ v, marked: isModelExecProcess({ [MODEL_EXEC_MARKER_ENV]: v }) }).toEqual({ v, marked: false });
+    }
+  });
+
+  test('no warning on the normal path: a daemon the user or a service manager starts', () => {
+    expect(modelExecDaemonWarning({})).toBeNull();
+    expect(modelExecDaemonWarning({}, 'cli')).toBeNull();
+  });
+
+  test('under the marker, the daemon and the CLI name what is missing', () => {
+    const env = { [MODEL_EXEC_MARKER_ENV]: '1' };
+    for (const text of [modelExecDaemonWarning(env)!, modelExecDaemonWarning(env, 'cli')!]) {
+      expect(text).toContain('JARVIS_WORKFLOW_ENCRYPTION_KEY');
+      expect(text).toContain('JARVIS_GITHUB_TOKEN');
+    }
+    // The CLI cannot tell whether a service manager does the restart.
+    expect(modelExecDaemonWarning(env, 'cli')).toContain('systemd or launchd is unaffected');
+  });
+
+  test('names only what is actually missing, and is silent when nothing is', () => {
+    // Passed inside the command, or re-exported by the shell's rc.
+    const withKey = { [MODEL_EXEC_MARKER_ENV]: '1', JARVIS_WORKFLOW_ENCRYPTION_KEY: 'x' };
+    expect(modelExecDaemonWarning(withKey)).not.toContain('JARVIS_WORKFLOW_ENCRYPTION_KEY');
+    expect(modelExecDaemonWarning(withKey)).toContain('JARVIS_GITHUB_TOKEN');
+    expect(modelExecDaemonWarning({ ...withKey, JARVIS_GITHUB_TOKEN: 'y' })).toBeNull();
   });
 });

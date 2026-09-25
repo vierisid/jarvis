@@ -71,6 +71,7 @@
  * edit to it rebuilds every engine and piece. This module does not import it
  * either, so it stays independent of that file's patterns.
  */
+import { MODEL_EXEC_MARKER_ENV } from './model-exec-marker.ts';
 
 /**
  * The daemon's secrets, by exact name, compared upper-cased. The JARVIS_ ones
@@ -129,19 +130,23 @@ export const DAEMON_SECRET_ENV_NAMES: readonly string[] = Object.freeze([
  * without strict mode. The files the locations name are same-uid readable
  * whether or not the pointer is forwarded.
  *
- * One cost remains and is accepted: a daemon started from run_command by a
- * user whose workflow key lives ONLY in JARVIS_WORKFLOW_ENCRYPTION_KEY comes
- * up without it and falls back to the key file (encryption.ts getKey):
+ * One cost remains: a daemon started from run_command (`jarvis restart` in an
+ * install no service manager owns) by a user whose workflow key lives ONLY in
+ * JARVIS_WORKFLOW_ENCRYPTION_KEY comes up without it and falls back to the key
+ * file (encryption.ts getKey):
  *   - no key file, encrypted rows stored: it refuses to boot rather than
  *     generate a fresh key (assertEncryptionKeyForStoredCredentials in
  *     workflows/db/index.ts);
- *   - no key file, no encrypted rows: it generates one, and any credential it
- *     then saves is encrypted under that file key, which the service daemon
- *     -- preferring the env key -- cannot decrypt;
+ *   - no key file, no encrypted rows: saving a credential fails. modelExecEnv
+ *     marks its children JARVIS_MODEL_EXEC=1, and under that marker getKey
+ *     refuses to GENERATE a key, which would otherwise split credentials
+ *     between a file key and the env key the user's own next restart prefers
+ *     (util/model-exec-marker.ts). An install WITHOUT an env key never lands
+ *     here: an unmarked daemon writes its key file at boot;
  *   - a stale key file: it is used, and stored rows fail to decrypt.
- * Likewise it comes up without JARVIS_GITHUB_TOKEN. A daemon that needs its
- * secrets is restarted by the service manager or by `jarvis restart` from the
- * user's own terminal, not from a model shell.
+ * Likewise it comes up without JARVIS_GITHUB_TOKEN. The daemon and `jarvis
+ * start/restart/update` say so when marked. A daemon that needs its secrets is
+ * restarted by the service manager or from the user's own terminal.
  */
 export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   // Where things are.
@@ -156,20 +161,34 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   'JARVIS_TELEMETRY', 'JARVIS_TELEMETRY_DEBUG', 'JARVIS_TOOL_FILTER',
   'JARVIS_WAKE_ENGINE', 'JARVIS_REALTIME_VOICE', 'JARVIS_AMBIENT_UI',
   'JARVIS_ALLOW_LEAKED_ENGINES',
-  // Workflow engine tuning and lifecycle. The engine gets these from its own
-  // allowlist (engine-runtime/spawn.ts); none is a credential.
+  // Workflow engine tuning, read by the daemon. None is a credential.
   'JARVIS_WORKFLOW_FLOW_TIMEOUT_SECONDS', 'JARVIS_WORKFLOW_STREAM_STEP_PROGRESS',
   'JARVIS_WORKFLOW_TERMINAL_TIMEOUT_MS', 'JARVIS_ENGINE_HANDSHAKE_TIMEOUT_MS',
   'JARVIS_ENGINE_IDLE_TTL_MS', 'JARVIS_ENGINE_CACHE_MAX_AGE_DAYS',
   'JARVIS_ENGINE_CACHE_MAX_BUNDLES', 'JARVIS_ENGINE_SHUTDOWN_GRACE_MS',
-  'JARVIS_ENGINE_ORPHAN_POLL_MS', 'JARVIS_ENGINE_MARKER', 'JARVIS_ENGINE_OWNER_PID',
-  'JARVIS_ENGINE_OWNER_START', 'JARVIS_ENGINE_BUNDLE', 'JARVIS_ENGINE_STARTED_AT',
+  'JARVIS_ENGINE_ORPHAN_POLL_MS',
+  // Set on every model-directed child by modelExecEnv(), and must survive into
+  // what it starts: see util/model-exec-marker.ts.
+  MODEL_EXEC_MARKER_ENV,
   // Test seam (cli/version.ts): a substitute git binary.
   'JARVIS_GIT_BIN',
   // Read by the Go sidecar (sidecar/), which a user may start from
   // run_command. The classification test scans TS/JS only, so these are
   // listed by hand; a telemetry opt-out must survive.
   'JARVIS_SIDECAR_TELEMETRY', 'JARVIS_SIDECAR_TELEMETRY_DEBUG', 'JARVIS_HOSTED_URL',
+]);
+
+/**
+ * JARVIS_* names that are neither secrets nor settings: wiring the daemon sets
+ * on the processes it starts itself, never read from its own environment. The
+ * engine's identity and lifecycle markers (engine-lifecycle.ts), which the
+ * reaper uses to recognise an engine. Known, internal, and stripped like any
+ * unlisted JARVIS_ name -- a model-directed child has no business carrying
+ * one. Listed so the classification test knows them.
+ */
+export const JARVIS_INTERNAL_ENV_NAMES: readonly string[] = Object.freeze([
+  'JARVIS_ENGINE_MARKER', 'JARVIS_ENGINE_OWNER_PID', 'JARVIS_ENGINE_OWNER_START',
+  'JARVIS_ENGINE_BUNDLE', 'JARVIS_ENGINE_STARTED_AT',
 ]);
 
 const SECRET_EXACT: ReadonlySet<string> = new Set(DAEMON_SECRET_ENV_NAMES);
@@ -199,7 +218,9 @@ export function stripDaemonSecrets(base: Record<string, string | undefined>): Re
 
 /**
  * The environment for a model-directed child: the daemon's, with `extra` on
- * top, minus the daemon's secrets. An `undefined` in `extra` removes the key
+ * top, minus the daemon's secrets, plus `JARVIS_MODEL_EXEC=1`
+ * (util/model-exec-marker.ts), set last so no `extra` can drop it. An
+ * `undefined` in `extra` removes the key
  * -- the key as spelled: on Windows, where process.env holds `Path`, an extra
  * `PATH` sits beside it rather than replacing it.
  *
@@ -210,5 +231,5 @@ export function stripDaemonSecrets(base: Record<string, string | undefined>): Re
  * restores the leak.
  */
 export function modelExecEnv(extra?: Record<string, string | undefined>): Record<string, string> {
-  return stripDaemonSecrets({ ...process.env, ...extra });
+  return { ...stripDaemonSecrets({ ...process.env, ...extra }), [MODEL_EXEC_MARKER_ENV]: '1' };
 }

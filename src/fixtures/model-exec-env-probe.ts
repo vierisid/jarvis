@@ -102,8 +102,8 @@ switch (site) {
     break;
   }
 
-  // desktop-notify.ts: the PowerShell toast, where model- or workflow-authored
-  // text is interpolated into a script. The test puts a fake `which` (no
+  // desktop-notify.ts: the PowerShell toast, an interpreter run for model- or
+  // workflow-authored text (as base64 data since #515). The test puts a fake `which` (no
   // notify-send, yes powershell.exe) and a fake powershell.exe first on PATH,
   // which is how this path is chosen on WSL.
   case 'desktop-notify': {

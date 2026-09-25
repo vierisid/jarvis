@@ -412,6 +412,16 @@ settings, `SSH_AUTH_SOCK`, `DISPLAY`, proxies, your own `GITHUB_TOKEN` or
   exported one of these for a CLI of your own and want the assistant to run
   that CLI, pass the key inside the command.
 
+These processes are marked `JARVIS_MODEL_EXEC=1`. If the assistant starts
+Jarvis itself with `jarvis start`, `restart` or `update`, and no systemd or
+launchd service does it, the new daemon comes up without the secrets above
+and logs a warning saying so. If your workflow encryption key lives only in
+`JARVIS_WORKFLOW_ENCRYPTION_KEY`, that daemon will not generate a replacement
+key, so a key minted there cannot split your credentials: saving a workflow
+credential fails until you restart Jarvis from your own terminal or service
+manager. An install without an env key is unaffected, because Jarvis writes
+its key file on its first normal start.
+
 Like the install sanitizing above, this is environment hygiene, not a
 sandbox. The commands run as the daemon's user, so they can still read
 `/proc/<daemon pid>/environ` and the daemon's `~/.jarvis`. Keeping a secret

@@ -359,3 +359,94 @@ describe("relocating the key into the data dir", () => {
     expect(existsSync(join(dataDir, KEY_FILE_NAME))).toBe(false);
   }, SUBPROCESS_TIMEOUT_MS);
 });
+
+// #514: a daemon started from a command the assistant ran (run_command's
+// modelExecEnv marks it JARVIS_MODEL_EXEC=1) has no JARVIS_WORKFLOW_ENCRYPTION_KEY
+// even when the user's daemon did. Minting a key there would split
+// credentials across two keys. See util/model-exec-marker.ts.
+describe("a daemon started from the assistant's shell", () => {
+  test("refuses to GENERATE a key, and writes nothing", () => {
+    const outcome = inFakeHome<{ error: string | null; wrote: boolean }>(
+      `let error = null;
+       try { key.encryptJson({ token: "x" }); } catch (e) { error = String(e.message); }
+       const fs = await import("node:fs");
+       return { error, wrote: fs.existsSync(key.workflowKeyTarget()) };`,
+      { JARVIS_HOME: dataDir, JARVIS_MODEL_EXEC: "1" },
+    );
+    expect(outcome.error).toContain("Refusing to generate a workflow encryption key");
+    expect(outcome.error).toContain("JARVIS_MODEL_EXEC=1");
+    expect(outcome.wrote).toBe(false);
+    expect(existsSync(join(dataDir, KEY_FILE_NAME))).toBe(false);
+  }, SUBPROCESS_TIMEOUT_MS);
+
+  test("still READS an existing key file", () => {
+    writeKey(join(dataDir, KEY_FILE_NAME), KEY_NEW);
+    const blob = inFakeHome<string>(
+      `return key.encryptJson({ token: "SENTINEL_MODEL_EXEC_READ" });`,
+      { JARVIS_HOME: dataDir, JARVIS_MODEL_EXEC: "1" },
+    );
+    process.env.JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE = join(dataDir, KEY_FILE_NAME);
+    expect(decryptJson(blob)).toEqual({ token: "SENTINEL_MODEL_EXEC_READ" });
+  }, SUBPROCESS_TIMEOUT_MS);
+
+  test("still uses an env key it was given", () => {
+    const blob = inFakeHome<string>(
+      `return key.encryptJson({ token: "SENTINEL_MODEL_EXEC_ENV" });`,
+      { JARVIS_HOME: dataDir, JARVIS_MODEL_EXEC: "1", JARVIS_WORKFLOW_ENCRYPTION_KEY: KEY_OLD },
+    );
+    process.env.JARVIS_WORKFLOW_ENCRYPTION_KEY = KEY_OLD;
+    expect(decryptJson(blob)).toEqual({ token: "SENTINEL_MODEL_EXEC_ENV" });
+  }, SUBPROCESS_TIMEOUT_MS);
+
+  test("any other value of the marker is the normal first run: a key is generated", () => {
+    const wrote = inFakeHome<boolean>(
+      `key.encryptJson({ token: "x" });
+       return (await import("node:fs")).existsSync(key.workflowKeyTarget());`,
+      { JARVIS_HOME: dataDir, JARVIS_MODEL_EXEC: "0" },
+    );
+    expect(wrote).toBe(true);
+  }, SUBPROCESS_TIMEOUT_MS);
+});
+
+// #514: the refusal above is only sound if a normally started daemon without
+// an env key has already written its key file -- otherwise a fresh install
+// that has not saved a credential yet looks exactly like an env-key user.
+describe("the key file is created at boot", () => {
+  test("by an unmarked daemon with no key anywhere, once", () => {
+    const outcome = inFakeHome<{ first: boolean; second: boolean; exists: boolean }>(
+      `const first = key.ensureWorkflowEncryptionKeyAtBoot();
+       const second = key.ensureWorkflowEncryptionKeyAtBoot();
+       return { first, second, exists: (await import("node:fs")).existsSync(key.workflowKeyTarget()) };`,
+      { JARVIS_HOME: dataDir },
+    );
+    expect(outcome).toEqual({ first: true, second: false, exists: true });
+  }, SUBPROCESS_TIMEOUT_MS);
+
+  test("then a marked daemon restarted from the assistant's shell reads it and can save", () => {
+    inFakeHome<boolean>(`return key.ensureWorkflowEncryptionKeyAtBoot();`, { JARVIS_HOME: dataDir });
+    const blob = inFakeHome<string>(
+      `return key.encryptJson({ token: "SENTINEL_AFTER_BOOT_KEY" });`,
+      { JARVIS_HOME: dataDir, JARVIS_MODEL_EXEC: "1" },
+    );
+    process.env.JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE = join(dataDir, KEY_FILE_NAME);
+    expect(decryptJson(blob)).toEqual({ token: "SENTINEL_AFTER_BOOT_KEY" });
+  }, SUBPROCESS_TIMEOUT_MS);
+
+  test("not when an env key is set: no file the env key would shadow", () => {
+    const outcome = inFakeHome<{ created: boolean; exists: boolean }>(
+      `const created = key.ensureWorkflowEncryptionKeyAtBoot();
+       return { created, exists: (await import("node:fs")).existsSync(key.workflowKeyTarget()) };`,
+      { JARVIS_HOME: dataDir, JARVIS_WORKFLOW_ENCRYPTION_KEY: KEY_OLD },
+    );
+    expect(outcome).toEqual({ created: false, exists: false });
+  }, SUBPROCESS_TIMEOUT_MS);
+
+  test("not under the marker", () => {
+    const outcome = inFakeHome<{ created: boolean; exists: boolean }>(
+      `const created = key.ensureWorkflowEncryptionKeyAtBoot();
+       return { created, exists: (await import("node:fs")).existsSync(key.workflowKeyTarget()) };`,
+      { JARVIS_HOME: dataDir, JARVIS_MODEL_EXEC: "1" },
+    );
+    expect(outcome).toEqual({ created: false, exists: false });
+  }, SUBPROCESS_TIMEOUT_MS);
+});

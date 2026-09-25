@@ -114,7 +114,11 @@ const EXEMPT: Record<string, Exemption> = {
     calls: { runNative: 1 },
   },
   'actions/app-control/linux.ts': {
-    reason: 'xdotool/wmctrl/xprop/import via Bun `$`: ' + DESKTOP_SESSION + ' Model text reaches them only as escaped argv. launchApp, the model-chosen executable, is in MODEL_EXEC.',
+    reason:
+      'xdotool/wmctrl/xprop/import via Bun `$`: ' + DESKTOP_SESSION + ' Model text reaches xdotool as argv: ' +
+      'Bun `$` escapes it for the shell, NOT for xdotool\'s option parser, so typed text starting with `-` is ' +
+      'read as an option (`type --file=<path>` types out a file) -- #518. launchApp, the model-chosen ' +
+      'executable, is in MODEL_EXEC.',
     calls: {
       'LinuxAppController.captureScreen': 3,
       'LinuxAppController.captureWindow': 2,
@@ -561,8 +565,14 @@ function scanSource(source: string, label: string): ScanResult {
         }
       }
     }
-    // Every relative module this file loads, for the import tests below.
-    const loaded = (ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
+    // Every local module this file loads at RUNTIME, for the import tests
+    // below. `import type` / `export type` / `import x = require()` marked
+    // type-only are erased and load nothing.
+    const typeOnly = (ts.isImportDeclaration(node) && !!node.importClause?.isTypeOnly)
+      || (ts.isExportDeclaration(node) && node.isTypeOnly)
+      || (ts.isImportEqualsDeclaration(node) && node.isTypeOnly);
+    const loaded = typeOnly ? null
+      : (ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
       && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)
       ? node.moduleSpecifier.text
       : ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)
@@ -1250,7 +1260,8 @@ describe('the guard catches evasions', () => {
   test('imports are recorded resolved, whatever the extension or form', () => {
     const scan = scanSource(
       `import { a } from './util/model-exec-env.ts';\nexport * from './actions/index.js';\n` +
-      `const t = await import('./actions/terminal/executor');\nimport { b } from '@/actions/browser/chrome-launcher';`,
+      `const t = await import('./actions/terminal/executor');\nimport { b } from '@/actions/browser/chrome-launcher';\n` +
+      `import type { T } from './actions/app-control/linux';\nexport type { U } from './actions/app-control/native-exec';`,
       'sites/synthetic.ts',
     );
     expect(scan.imports).toEqual([

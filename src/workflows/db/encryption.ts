@@ -79,6 +79,7 @@ import {
 } from "node:fs";
 import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
+import { MODEL_EXEC_MARKER_ENV, isModelExecProcess } from "../../util/model-exec-marker.ts";
 
 const ALGO = "aes-256-gcm";
 const KEY_BYTES = 32;
@@ -463,10 +464,46 @@ function getKey(): Buffer {
   // Callers that must NOT reach this point (a database that already holds
   // `enc1:` rows) assert first -- see `assertEncryptionKeyForStoredCredentials`
   // in src/workflows/db/index.ts.
+  //
+  // Except in a process started from a command the assistant ran (#514): that
+  // env is stripped of the daemon's secrets, so "no key anywhere" may only
+  // mean the user's JARVIS_WORKFLOW_ENCRYPTION_KEY did not come along. A key
+  // minted here would encrypt every credential saved from now on under a file
+  // the user's own next restart -- env key back, and preferred -- ignores.
+  if (isModelExecProcess()) {
+    throw new Error(
+      `Refusing to generate a workflow encryption key: this Jarvis was started from a command the `
+      + `assistant ran (${MODEL_EXEC_MARKER_ENV}=1), whose environment carries no `
+      + `JARVIS_WORKFLOW_ENCRYPTION_KEY even if yours does. Restart Jarvis from your own terminal or `
+      + `service manager. (No key file exists at ${file}.)`,
+    );
+  }
   const fresh = randomBytes(KEY_BYTES);
   persistKeyFile(file, fresh.toString("hex"));
   cachedKey = fresh;
   return cachedKey;
+}
+
+/**
+ * Boot: create the key file NOW, when an unmarked daemon has no key anywhere,
+ * instead of at the first credential save. Returns whether it created one.
+ *
+ * Why at boot (#514). Under the JARVIS_MODEL_EXEC marker getKey() refuses to
+ * generate, because there "no key anywhere" may mean the user's env key was
+ * stripped. That test is only sound if a daemon started normally has already
+ * left a file whenever it had no env key; with lazy generation a fresh install
+ * that had not yet saved a credential would look exactly like an env-key user,
+ * and a model-driven `jarvis restart` would lock it out of saving any.
+ *
+ * Call after `assertEncryptionKeyForStoredCredentials`: a database whose
+ * encrypted rows have no key must be refused, not handed a fresh one. No-op
+ * under the marker, and whenever a key resolves already (env, explicit file,
+ * or a file on disk), so an env-key install never gets a file it would ignore.
+ */
+export function ensureWorkflowEncryptionKeyAtBoot(): boolean {
+  if (isModelExecProcess() || hasResolvableEncryptionKey()) return false;
+  getKey();
+  return true;
 }
 
 /** Test/tooling override for the cached key. Pass `null` to fall back to env+file resolution. */
