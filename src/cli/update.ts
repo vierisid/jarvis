@@ -18,6 +18,15 @@ import { openSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { c } from './helpers.ts';
 import { isLocked, getLogPath } from '../daemon/pid.ts';
+import {
+  delegatedUpdateUnit,
+  detectSystemdUnit,
+  startSystemdUnit,
+  stopSystemdUnit,
+  updateThroughSystemd,
+  type SystemdUnit,
+  type UpdateThroughSystemdOptions,
+} from './systemd-unit.ts';
 import { getInstalledVersion } from './version.ts';
 import {
   detectInstallMethod,
@@ -52,14 +61,25 @@ export interface UpdateDeps {
   stopDaemon?: () => Promise<StopResult>;
   /**
    * Injectable for tests. Skips the detached restart when false so tests
-   * can run without actually spawning a daemon.
+   * can run without actually spawning a daemon. Not consulted when a systemd
+   * unit is handed the update.
    */
   restartDaemon?: boolean;
+  /**
+   * Injectable for tests. Defaults to detectSystemdUnit(): the systemd user
+   * unit the running daemon is the main process of, if any. Not detected at
+   * all when checkRunning is injected, so a test's fake pid never leads to
+   * the developer's real unit.
+   */
+  systemdUnit?: () => SystemdUnit | null;
+  /** Injectable for tests: how systemd paths wait and poll. */
+  systemdWait?: UpdateThroughSystemdOptions;
 }
 
 export interface UpdateResult {
   method: InstallMethod;
-  outcome: 'updated' | 'up-to-date' | 'refused' | 'failed';
+  /** `delegated`: run by a transient systemd unit instead (#525). */
+  outcome: 'updated' | 'up-to-date' | 'refused' | 'failed' | 'delegated';
   /** Exit code the CLI should use. 0 for success/up-to-date. */
   exitCode: number;
   message: string;
@@ -318,11 +338,38 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
   const checkRunning = deps.checkRunning ?? isLocked;
   const stopDaemon = deps.stopDaemon ?? (() => stopDaemonGracefully());
   const runningPid = checkRunning();
+  // A daemon that is a systemd user unit's main process is updated by a
+  // transient unit that stops and starts the service through systemd (#525;
+  // src/cli/systemd-unit.ts): stopping it from here can kill this command
+  // (inside the unit's cgroup) or leave the unit down (this command dying
+  // between stop and start). That transient runs `jarvis update` again, which
+  // finds itself delegated and takes the stop/update/start path below.
+  const delegated = delegatedUpdateUnit(runningPid);
+  if (delegated === 'mismatch') {
+    return { method: info.method, outcome: 'failed', exitCode: 1, message: 'not the unit it was started for' };
+  }
+  const findUnit = deps.systemdUnit ?? (deps.checkRunning ? () => null : detectSystemdUnit);
+  const detected = !delegated && runningPid ? findUnit() : null;
+  // The unit, not the pid, is what matters: if systemd replaced the daemon
+  // since checkRunning looked, the old path would still be the wrong one.
+  if (detected) {
+    const outcome = await updateThroughSystemd(detected, deps.packageRoot, deps.systemdWait);
+    return {
+      method: info.method,
+      outcome: outcome === 'failed' ? 'failed' : 'delegated',
+      exitCode: outcome === 'failed' ? 1 : 0,
+      message: `run as a transient unit beside ${detected.name}`,
+    };
+  }
+  const unit = delegated;
+  if (unit && !stopSystemdUnit(unit)) {
+    return { method: info.method, outcome: 'failed', exitCode: 1, message: `could not stop ${unit.name}` };
+  }
   // `stopped: false` means the process survived both signals (e.g. it belongs
   // to another user). Tracked out here because the restart at the end must not
   // fire against a daemon that is still holding the lock.
   let daemonStopped = true;
-  if (runningPid) {
+  if (runningPid && !unit) {
     console.log(c.dim(`  Stopping daemon (PID ${runningPid}) before update...`));
     const stop = await stopDaemon();
     if (stop && stop.stopped === false) {
@@ -348,6 +395,16 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
     } else {
       console.log(c.green(`✓ Updated: ${currentVersion} → ${newVersion}`));
     }
+  }
+
+  if (unit) {
+    // Started whatever the outcome: it was running before, and a failed
+    // update has not moved the install.
+    if (restart) {
+      console.log(c.dim(`\nStarting ${unit.name}...`));
+      if (!await startSystemdUnit(unit, deps.systemdWait)) return { ...result, exitCode: 1 };
+    }
+    return result;
   }
 
   if (runningPid && result.outcome !== 'failed' && restart) {

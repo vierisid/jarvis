@@ -367,6 +367,16 @@ async function cmdUninstall(): Promise<void> {
 }
 
 async function cmdRestart(args: string[]): Promise<void> {
+  // A daemon that is a systemd user unit's main process is restarted by
+  // systemd: stopping it from here leaves the unit down, or kills this very
+  // command when it runs inside the unit (#525; src/cli/systemd-unit.ts).
+  const { detectSystemdUnit, restartSystemdUnit } = await import('../src/cli/systemd-unit.ts');
+  const unit = detectSystemdUnit();
+  if (unit) {
+    if (!await restartSystemdUnit(unit, { ignoredArgs: args })) process.exit(1);
+    return;
+  }
+
   const pid = isLocked();
   if (pid) {
     if (!await cmdStop()) {

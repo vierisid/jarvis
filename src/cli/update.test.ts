@@ -6,9 +6,14 @@ import { runUpdate, type Spawner, type SpawnResult } from './update.ts';
 import type { InstallMethod, InstallMethodInfo } from './install-method.ts';
 
 let workDir: string;
+let prevJarvisHome: string | undefined;
 
 beforeEach(() => {
   workDir = mkdtempSync(join(tmpdir(), 'jarvis-update-test-'));
+  // runUpdate reads the daemon lock (systemd detection, #525): keep it off
+  // the developer's real ~/.jarvis.
+  prevJarvisHome = process.env.JARVIS_HOME;
+  process.env.JARVIS_HOME = workDir;
   // Provide a package.json so getInstalledVersion doesn't return '0.0.0'.
   writeFileSync(join(workDir, 'package.json'), JSON.stringify({
     name: '@usejarvis/brain',
@@ -17,6 +22,8 @@ beforeEach(() => {
 });
 
 afterEach(() => {
+  if (prevJarvisHome === undefined) delete process.env.JARVIS_HOME;
+  else process.env.JARVIS_HOME = prevJarvisHome;
   rmSync(workDir, { recursive: true, force: true });
 });
 
@@ -267,6 +274,7 @@ describe('runUpdate — script install', () => {
         return { wasRunning: true, pid: 12345, graceful: true, stopped: true };
       },
       restartDaemon: false,
+      systemdUnit: () => null,
     });
     expect(result.outcome).toBe('updated');
     expect(stopCalls).toBe(1);
