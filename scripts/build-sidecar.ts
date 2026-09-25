@@ -7,7 +7,7 @@
  */
 
 import { spawnSync } from 'bun';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
 import { join } from 'node:path';
 import { WSLBridge } from '../src/actions/terminal/wsl-bridge.ts';
 
@@ -36,14 +36,12 @@ async function build() {
   const winProjectPath = await bridge.convertToWindowsPath(SIDECAR_DIR);
   console.log(`[build-sidecar] Project: ${winProjectPath}`);
 
-  // Determine output directory
-  let outputDir: string;
-  if (winHome) {
-    outputDir = await bridge.convertToWindowsPath(join(winHome, '.jarvis', 'sidecar'));
-  } else {
-    // Fallback: output next to project
-    outputDir = await bridge.convertToWindowsPath(join(SIDECAR_DIR, 'bin', 'publish'));
-  }
+  // Determine output directory (fallback: next to the project). Create it
+  // first: wslpath fails on a path that does not exist yet, and the conversion
+  // throws on that rather than handing dotnet an empty -o.
+  const outputPath = winHome ? join(winHome, '.jarvis', 'sidecar') : join(SIDECAR_DIR, 'bin', 'publish');
+  mkdirSync(outputPath, { recursive: true });
+  const outputDir = await bridge.convertToWindowsPath(outputPath);
   console.log(`[build-sidecar] Output: ${outputDir}`);
 
   // Run dotnet publish directly (dotnet.exe handles Windows paths)
