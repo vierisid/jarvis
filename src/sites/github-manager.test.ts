@@ -46,12 +46,16 @@ const REAL_GIT = Bun.which('git');
  * and authenticates after a 401 as before. The assertions that depend on it
  * are skipped there rather than left to fail on a stock distro git.
  */
-const GIT_HAS_PROACTIVE_AUTH = (() => {
-  if (!REAL_GIT) return false;
+const GIT_VERSION: readonly [number, number] = (() => {
+  if (!REAL_GIT) return [0, 0];
   const out = Bun.spawnSync([REAL_GIT, '--version']).stdout.toString();
   const [major = 0, minor = 0] = (out.match(/(\d+)\.(\d+)/) ?? []).slice(1).map(Number);
-  return major > 2 || (major === 2 && minor >= 46);
+  return [major, minor];
 })();
+function gitAtLeast(major: number, minor: number): boolean {
+  return GIT_VERSION[0] > major || (GIT_VERSION[0] === major && GIT_VERSION[1] >= minor);
+}
+const GIT_HAS_PROACTIVE_AUTH = gitAtLeast(2, 46);
 
 /**
  * The loopback server needs `git http-backend`, which some distros package
@@ -416,10 +420,10 @@ describe('each call site keeps the token out of git argv and env', () => {
     expect(urls).toEqual([]);
     expect(network[0]!.argv).toContain('origin');
     expect(network[0]!.argv).toContain('protocol.allow=never');
-    expect(network[0]!.argv).toContain('core.fsmonitor=false');
+    expect(network[0]!.argv).toContain('core.fsmonitor=');
     // The always-on pins reach every git this class runs, not only this one.
     for (const pin of [
-      'safe.bareRepository=explicit', 'core.hooksPath=/dev/null', 'core.fsmonitor=false', 'commit.gpgSign=false',
+      'safe.bareRepository=explicit', 'core.hooksPath=/dev/null', 'core.fsmonitor=', 'commit.gpgSign=false',
       'log.showSignature=false', 'merge.verifySignatures=false', 'push.gpgSign=false',
     ]) {
       expect({ pin, missing: invocations.filter(i => !i.argv.includes(pin)).length }).toEqual({ pin, missing: 0 });
@@ -765,14 +769,20 @@ describe('each call site keeps the token out of git argv and env', () => {
 
   // git 2.54 has config hooks but no event-level `hook.<event>.enabled`, so
   // there the manager must name each configured hook and pin it off.
-  describe('config hooks on git older than 2.55', () => {
-    function fakeWithVersion(fake: ReturnType<typeof setupFakeGit>, version: string, hookListing: string) {
+  // git 2.54 has config hooks but no event-level `hook.<event>.enabled`, so
+  // there the manager must name each configured hook and pin it off. Before
+  // 2.54 there are no config hooks, and from 2.55 the event pins cover them.
+  describe('per-name hook pins by git version', () => {
+    function fakeWithVersion(fake: ReturnType<typeof setupFakeGit>, version: string, lookup: string) {
       writeFileSync(join(fake.project, '..', 'bin', 'git'), [
         '#!/bin/sh',
-        `printf "%s\\0" "$@" > "${fake.logDir}/$(date +%s%N).$$.argv"`,
+        `log="${fake.logDir}/$(date +%s%N).$$"`,
+        'printf "%s\\0" "$@" > "$log.argv"',
+        // Whether a credential dir existed while this git ran.
+        `ls "${fake.tmp}" > "$log.tmpls"`,
         'case "$*" in',
         `  *"--version"*) echo "git version ${version}"; exit 0 ;;`,
-        `  *"^hook"*) printf '${hookListing}'; exit 0 ;;`,
+        `  *"^hook"*) ${lookup} ;;`,
         '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
         '  *"branch --show-current"*) echo main; exit 0 ;;',
         '  *"--get-regexp"*) exit 1 ;;',
@@ -781,34 +791,92 @@ describe('each call site keeps the token out of git argv and env', () => {
         'exit 0',
       ].join('\n'), { mode: 0o755 });
     }
-    const argvs = (fake: ReturnType<typeof setupFakeGit>) => readdirSync(fake.logDir).filter(f => f.endsWith('.argv'))
-      .map(f => readFileSync(join(fake.logDir, f), 'utf8').split('\0'));
+    const listing = (text: string) => `printf '${text}'; exit 0`;
+    const calls = (fake: ReturnType<typeof setupFakeGit>) => readdirSync(fake.logDir).filter(f => f.endsWith('.argv'))
+      .map((f) => {
+        const base = join(fake.logDir, f.slice(0, -'.argv'.length));
+        return {
+          argv: readFileSync(`${base}.argv`, 'utf8').split('\0'),
+          sawCredentialDir: readFileSync(`${base}.tmpls`, 'utf8').includes(CREDENTIAL_DIR_PREFIX),
+        };
+      });
+    const isLookup = (argv: string[]) => argv.some(x => x.startsWith('^hook'));
 
     test('on 2.54, every configured hook name is pinned off on every git call', async () => {
       const fake = setupFakeGit();
-      fakeWithVersion(fake, '2.54.0', 'hook.probe.command\\n/x\\0hook.lint.event\\npre-push\\0');
+      fakeWithVersion(fake, '2.54.0', listing('hook.probe.command\\n/x\\0hook.lint.event\\npre-push\\0'));
       expect((await new GitHubManager().push(fake.project)).success).toBe(true);
-      const calls = argvs(fake).filter(a => !a.includes('--version') && !a.some(x => x.startsWith('^hook')));
-      const push = calls.find(a => a.includes('push'))!;
-      expect(push).toContain('hook.probe.enabled=false');
-      expect(push).toContain('hook.lint.enabled=false');
-      expect(calls.filter(a => !a.includes('hook.probe.enabled=false')).length).toBe(0);
+      const real = calls(fake).filter(c => !c.argv.includes('--version') && !isLookup(c.argv));
+      const push = real.find(c => c.argv.includes('push'))!;
+      expect(push.argv).toContain('hook.probe.enabled=false');
+      expect(push.argv).toContain('hook.lint.enabled=false');
+      expect(real.filter(c => !c.argv.includes('hook.probe.enabled=false')).length).toBe(0);
+    });
+
+    // B1: the lookup is a git process of its own. It must run BEFORE the
+    // token file is written, so exactly one process -- the push -- ever
+    // sees the credential dir.
+    test('on 2.54, the hook lookup runs outside the token window', async () => {
+      const fake = setupFakeGit();
+      fakeWithVersion(fake, '2.54.0', listing('hook.probe.command\\n/x\\0'));
+      expect((await new GitHubManager().push(fake.project)).success).toBe(true);
+      const inWindow = calls(fake).filter(c => c.sawCredentialDir);
+      expect(inWindow.length).toBe(1);
+      expect(inWindow[0]!.argv).toContain('push');
+      expect(calls(fake).filter(c => isLookup(c.argv)).length).toBeGreaterThan(0);
     });
 
     test('on 2.54, a hook name that cannot be pinned stops git from running at all', async () => {
       const fake = setupFakeGit();
-      fakeWithVersion(fake, '2.54.0', 'hook.a=b.command\\n/x\\0');
+      fakeWithVersion(fake, '2.54.0', listing('hook.a=b.command\\n/x\\0'));
       const result = await new GitHubManager().push(fake.project);
       expect(result.success).toBe(false);
-      expect(argvs(fake).filter(a => a.includes('push')).length).toBe(0);
+      expect(calls(fake).filter(c => c.argv.includes('push')).length).toBe(0);
     });
 
-    test('on 2.55 the event-level pins suffice, and no lookup is made', async () => {
+    // Only exit 1 means "no hooks": a broken config (128) must not read as
+    // "nothing to pin" and let the command run with its hooks live.
+    test('on 2.54, a lookup that fails other than "no match" fails closed', async () => {
       const fake = setupFakeGit();
-      fakeWithVersion(fake, '2.55.0', 'hook.probe.command\\n/x\\0');
+      fakeWithVersion(fake, '2.54.0', 'echo "fatal: bad config line 3" >&2; exit 128');
+      const result = await new GitHubManager().push(fake.project);
+      expect(result.success).toBe(false);
+      expect(calls(fake).filter(c => c.argv.includes('push')).length).toBe(0);
+    });
+
+    for (const version of ['2.34.1', '2.47.0', '2.55.0']) {
+      test(`on ${version} no lookup is made (no config hooks, or the event pins cover them)`, async () => {
+        const fake = setupFakeGit();
+        fakeWithVersion(fake, version, listing('hook.probe.command\\n/x\\0'));
+        expect((await new GitHubManager().push(fake.project)).success).toBe(true);
+        expect(calls(fake).filter(c => isLookup(c.argv)).length).toBe(0);
+        expect(calls(fake).find(c => c.argv.includes('push'))!.argv).not.toContain('hook.probe.enabled=false');
+      });
+    }
+
+    test('an unparseable version still does the lookup', async () => {
+      const fake = setupFakeGit();
+      fakeWithVersion(fake, 'unknown', listing('hook.probe.command\\n/x\\0'));
       expect((await new GitHubManager().push(fake.project)).success).toBe(true);
-      expect(argvs(fake).filter(a => a.some(x => x.startsWith('^hook'))).length).toBe(0);
-      expect(argvs(fake).find(a => a.includes('push'))).not.toContain('hook.probe.enabled=false');
+      expect(calls(fake).find(c => c.argv.includes('push'))!.argv).toContain('hook.probe.enabled=false');
+    });
+
+    // S3: the version describes the binary, so it is read from a fixed cwd,
+    // and a failed read is retried rather than cached for the manager's life.
+    test('a --version that fails once is retried, not cached as unknown', async () => {
+      const fake = setupFakeGit();
+      const flag = join(fake.logDir, 'version-failed-once');
+      fakeWithVersion(fake, '2.55.0', listing('hook.probe.command\\n/x\\0'));
+      const script = readFileSync(join(fake.project, '..', 'bin', 'git'), 'utf8').replace(
+        '  *"--version"*)',
+        `  *"--version"*) [ -e "${flag}" ] || { touch "${flag}"; exit 1; }; echo "git version 2.55.0"; exit 0 ;;\n  *"--never"*)`,
+      );
+      writeFileSync(join(fake.project, '..', 'bin', 'git'), script, { mode: 0o755 });
+      const manager = new GitHubManager();
+      expect((await manager.push(fake.project)).success).toBe(false);
+      expect((await manager.push(fake.project)).success).toBe(true);
+      // Second time round the version was read: 2.55, so no lookup at all.
+      expect(calls(fake).filter(c => isLookup(c.argv)).length).toBe(0);
     });
   });
 
@@ -1286,11 +1354,16 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
   }
 
   // Daemon git runs no hooks, so git-lfs's pre-push upload would silently not
-  // happen. push() refuses instead of reporting a success with objects missing.
-  test('a project that tracks files with Git LFS is refused, not half-pushed', async () => {
+  // happen. push() refuses when the index holds real LFS pointers, instead of
+  // reporting a success with objects missing. The harness HOME has no
+  // filter.lfs config, so `git add` stores exactly the bytes written here.
+  test('a project with committed Git LFS pointers is refused, naming them', async () => {
     const h = await setupProject('lfs');
     writeFileSync(join(h.project, '.gitattributes'), '*.bin filter=lfs diff=lfs merge=lfs -text\n');
-    writeFileSync(join(h.project, 'asset.bin'), 'pointer\n');
+    const pointer = 'version https://git-lfs.github.com/spec/v1\n'
+      + `oid sha256:${'a'.repeat(64)}\nsize 12345\n`;
+    writeFileSync(join(h.project, 'asset.bin'), pointer);
+    writeFileSync(join(h.project, 'other.bin'), pointer);
     await setup([REAL_GIT!, 'add', '.'], h.project, h.gitEnv);
     await setup([REAL_GIT!, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'lfs'], h.project, h.gitEnv);
     useHarnessEnv(h);
@@ -1299,14 +1372,32 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     const result = await manager().push(h.project);
     expect(result.success).toBe(false);
     expect(result.error).toContain('Git LFS');
+    expect(result.error).toContain('asset.bin');
     expect(server.requests.length).toBe(before);
     expect(credentialDirsIn(h.tmp)).toEqual([]);
+  }, 30_000);
+
+  // Without git-lfs installed (the Docker image has git, not git-lfs), a
+  // `filter=lfs` attribute changes nothing: git commits the raw bytes and the
+  // push is complete. That must not be refused.
+  test('a filter=lfs attribute over raw file content is pushed normally', async () => {
+    const h = await setupProject('lfs-raw');
+    writeFileSync(join(h.project, '.gitattributes'), '*.bin filter=lfs diff=lfs merge=lfs -text\n');
+    writeFileSync(join(h.project, 'asset.bin'), Buffer.from([0, 1, 2, 3, 255, 254]));
+    writeFileSync(join(h.project, 'big.bin'), Buffer.alloc(4096, 7));
+    await setup([REAL_GIT!, 'add', '.'], h.project, h.gitEnv);
+    await setup([REAL_GIT!, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'raw'], h.project, h.gitEnv);
+    useHarnessEnv(h);
+
+    expect(await manager().push(h.project)).toEqual({ success: true });
   }, 30_000);
 
   // git also runs hooks defined in config (`hook.<name>.command` and
   // `.event`), wherever core.hooksPath points; only the per-event
   // `hook.<event>.enabled=false` pins stop them (reproduced in review).
-  test('config-defined hooks never run on daemon git, even when the project re-enables them', async () => {
+  // Config-defined hooks only exist from git 2.54; before that the CONTROL
+  // below has nothing to fire.
+  test.skipIf(!gitAtLeast(2, 54))('config-defined hooks never run on daemon git, even when the project re-enables them', async () => {
     const h = await setupProject('config-hooks');
     const marker = join(h.evidence, 'config-hook-ran');
     const script = join(h.evidence, 'config-hook');
@@ -1403,7 +1494,8 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
   // #516: a bare repository planted at the project root (no .git of its own)
   // is otherwise found by discovery, and its config and hooks run on the
   // manager's plain status/fetch. safe.bareRepository=explicit refuses it.
-  test('a bare repository planted at the project root is never used', async () => {
+  // safe.bareRepository exists from git 2.38; older git ignores the pin.
+  test.skipIf(!gitAtLeast(2, 38))('a bare repository planted at the project root is never used', async () => {
     // A public repo, so the control below can fetch without the token.
     const source = await setupProject('public-bare-src');
     useHarnessEnv(source);
