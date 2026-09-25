@@ -27,10 +27,11 @@
  * code the daemon runs. That is the site builder's contract, not this one's.
  */
 
-import { lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from 'node:fs';
+import { readdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, join, posix, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { HFS_IGNORABLE, isGitDirName, isWithin } from '../../util/path.ts';
+import { isGitDirName, isWithin, isWithinCI, stripHfsIgnorable } from '../../util/path.ts';
+import { exists, isDir, isGitDirectory, landingPath, linkedGitDirs } from '../../sites/git-dir.ts';
 import { getDefaultCwd, isNoLocalTools } from './local-tools-guard.ts';
 
 // ── Daemon-registered roots ──────────────────────────────────────────────────
@@ -90,89 +91,13 @@ export function relativeBases(): string[] {
 
 // ── Path resolution ──────────────────────────────────────────────────────────
 
-/** Symlink hops before giving up, the same bound Linux puts on open(). */
-const MAX_LINK_HOPS = 40;
-
 /**
- * Where `path` (relative to `base`) lands when opened, resolved the way the
- * kernel resolves it: component by component, a symlink replaced by its
- * target before the next component -- so `h/../config` with `h -> .git/hooks`
- * is `.git/config`, which a lexical normalize would call `config` -- and a
- * DANGLING link followed by reading it, since a write through `x -> .git/new`
- * creates `.git/new`. Once a component is missing the rest is appended as
- * spelled.
- *
- * Never throws. On Windows (no kernel-order `..` to mirror) it falls back to
- * realpath of the deepest existing ancestor.
+ * Where `path` (relative to `base`) lands when opened: the kernel's order,
+ * dangling links followed. See landingPath's `follow` mode in
+ * sites/git-dir.ts, shared with the site file tools.
  */
 export function resolveReal(path: string, base = '/'): string {
-  const start = isAbsolute(path) ? path : `${base}/${path}`;
-  try {
-    return realpathSync.native(start);
-  } catch { /* missing, dangling, or unreadable: walk it */ }
-  if (process.platform === 'win32') return resolveRealLexical(resolve(start));
-  const pending = start.split('/').filter(Boolean).reverse();
-  let current = '/';
-  let missing = false;
-  for (let hops = 0; pending.length > 0;) {
-    const c = pending.pop()!;
-    if (c === '.') continue;
-    if (c === '..') { current = dirname(current); continue; }
-    const next = current === '/' ? `/${c}` : `${current}/${c}`;
-    if (!missing) {
-      let target: string | null = null;
-      try {
-        if (lstatSync(next).isSymbolicLink() && ++hops <= MAX_LINK_HOPS) target = readlinkSync(next);
-      } catch {
-        missing = true;
-      }
-      if (target !== null) {
-        if (isAbsolute(target)) current = '/';
-        pending.push(...target.split('/').filter(Boolean).reverse());
-        continue;
-      }
-    }
-    current = next;
-  }
-  return current;
-}
-
-function resolveRealLexical(path: string): string {
-  const tail: string[] = [];
-  for (let current = path; ;) {
-    try {
-      return join(realpathSync(current), ...tail);
-    } catch { /* keep walking up */ }
-    const parent = dirname(current);
-    if (parent === current) return path;
-    tail.unshift(current.slice(parent.length).replace(/^[\\/]/, ''));
-    current = parent;
-  }
-}
-
-function isDir(path: string): boolean {
-  try {
-    return statSync(path).isDirectory();
-  } catch {
-    return false;
-  }
-}
-
-function isFile(path: string): boolean {
-  try {
-    return statSync(path).isFile();
-  } catch {
-    return false;
-  }
-}
-
-function exists(path: string): boolean {
-  try {
-    statSync(path);
-    return true;
-  } catch {
-    return false;
-  }
+  return landingPath(path, { dangling: 'follow', base });
 }
 
 function realOrSelf(path: string): string {
@@ -183,18 +108,6 @@ function realOrSelf(path: string): string {
   }
 }
 
-/**
- * Whether `dir` is a git directory by git's own test (setup.c,
- * is_git_directory): a HEAD, plus objects/ and refs/ or a commondir file.
- * This is how a git dir is recognised whatever it is called -- the target of
- * a `.git` gitfile or symlink, a linked worktree's gitdir, a bare repo --
- * without following any pointer to it.
- */
-function isGitDirectory(dir: string): boolean {
-  if (!exists(join(dir, 'HEAD'))) return false;
-  return (isDir(join(dir, 'objects')) && isDir(join(dir, 'refs'))) || exists(join(dir, 'commondir'));
-}
-
 /** Whether `real` is, or is inside, a git directory, looking no higher than `stopAt` (exclusive). */
 function insideGitDirectory(real: string, stopAt?: string): boolean {
   for (let dir = real; ; dir = dirname(dir)) {
@@ -202,17 +115,6 @@ function insideGitDirectory(real: string, stopAt?: string): boolean {
     if (isGitDirectory(dir)) return true;
     if (dirname(dir) === dir) return false;
   }
-}
-
-/**
- * Containment that ignores case. On a case-insensitive filesystem
- * `~/.JARVIS/projects` opens `~/.jarvis/projects`, and realpath keeps the
- * spelling it was given, so a case-sensitive compare would let a respelled
- * path out of the check. On a case-sensitive one the only cost is treating a
- * same-name-different-case sibling as inside, which errs toward refusing.
- */
-function isWithinCI(path: string, base: string): boolean {
-  return isWithin(path.toLowerCase(), base.toLowerCase());
 }
 
 function sameCI(a: string, b: string): boolean {
@@ -232,45 +134,23 @@ function siteRoots(): string[] {
 }
 
 /**
- * The git dirs a project's root `.git` names when it is a gitfile or a
- * symlink, plus a linked worktree's commondir: #516's linkedGitDirs, with two
- * differences. A target that does not exist yet is still returned (a write
- * that creates `gitdata/config` is the write that makes it a repository
- * config), resolved the way a write would land (resolveReal follows dangling
- * links). And targets OUTSIDE the project are kept: the site tools refuse
- * those by containment, but these tools have none.
+ * The git dirs a project's root `.git` names -- sites/git-dir.ts's
+ * linkedGitDirs, shared with the site file tools -- with the options these
+ * tools need, since they have no containment of their own:
+ * - targets OUTSIDE the project are kept, except one containing the project
+ *   or the home dir (a `.git` pointing at `/` would make every path a git
+ *   path);
+ * - a real `.git` directory is included by its real path, for a project that
+ *   is itself a symlink into the projects dir;
+ * - targets resolve as git resolves them, from where the `.git` really is:
+ *   `projectRoot` here is the path as listed, which for a symlinked project
+ *   goes through the link;
+ * - a gitfile is read as far as git reads one (1 MiB).
  */
 function linkedGitDirsOf(projectRoot: string): string[] {
-  const dotGit = join(projectRoot, '.git');
-  const found: string[] = [];
-  try {
-    const st = lstatSync(dotGit);
-    if (st.isSymbolicLink()) {
-      found.push(resolveReal(dotGit));
-    } else if (st.isDirectory()) {
-      // Its real path: for a project that is itself a symlink into the
-      // projects dir, the `.git` also sits outside it, under a path no site
-      // root contains.
-      found.push(resolveReal(dotGit));
-    } else if (st.isFile()) {
-      const match = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, 'utf-8'));
-      if (match) found.push(resolveReal(match[1]!, projectRoot));
-    }
-  } catch { /* no .git, or unreadable */ }
-  for (const gitDir of [...found]) {
-    const commondir = join(gitDir, 'commondir');
-    // Only a regular file: a FIFO there would block every file-tool call.
-    if (!isFile(commondir)) continue;
-    try {
-      found.push(resolveReal(readFileSync(commondir, 'utf-8').trim(), gitDir));
-    } catch { /* unreadable */ }
-  }
-  // A `.git` pointing at `/`, the home dir or anything above the project
-  // would put every path under a "git dir" and refuse them all. That takes a
-  // shell to set up, so it is a nuisance rather than a bypass, but a git dir
-  // that contains its own project is not one git would use either.
-  const home = policyHome();
-  return found.filter((dir) => !isWithinCI(projectRoot, dir) && !isWithinCI(home, dir));
+  return linkedGitDirs(projectRoot, {
+    keepOutside: true, includeDotGitDir: true, kernelOrder: true, maxRead: 1024 * 1024, home: policyHome(),
+  });
 }
 
 /** How long a scan of the projects' linked git dirs is trusted. */
@@ -370,7 +250,7 @@ export function siteGitRefusal(requested: string, bases: string[]): string | nul
  */
 export function routedGitRefusal(requested: string): string | null {
   if (!_siteProjectsDir || isAbsolute(requested) || /^[a-z]:[\\/]/i.test(requested)) return null;
-  if (!hasGitComponent(requested.replace(HFS_IGNORABLE, ''))) return null;
+  if (!hasGitComponent(stripHfsIgnorable(requested))) return null;
   return `Error: Access denied: "${requested}" is a relative path into a git directory, routed to a sidecar whose working `
     + 'directory the brain cannot see. Use an absolute path.';
 }
@@ -502,7 +382,7 @@ const DAEMON_ROOT: string | null = (() => {
  * never resolved on the brain.
  */
 function normalize(path: string): string {
-  const parts = path.replace(HFS_IGNORABLE, '').replace(/\\/g, '/').toLowerCase().split('/')
+  const parts = stripHfsIgnorable(path).replace(/\\/g, '/').toLowerCase().split('/')
     .map((c) => (c === '.' || c === '..' ? c : c.replace(/:.*$/, '').replace(/[. ]+$/, '')));
   let s = posix.normalize(`/${parts.join('/')}`);
   // macOS: /etc and /var are /private/etc and /private/var.

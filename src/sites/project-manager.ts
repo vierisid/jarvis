@@ -11,11 +11,11 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import {
   readdirSync, statSync, lstatSync, existsSync, mkdirSync, rmSync, readFileSync, realpathSync,
-  writeFileSync, chmodSync, renameSync, readlinkSync, openSync, fstatSync, closeSync, constants as fsConstants,
-  type Stats,
+  writeFileSync, chmodSync, renameSync, type Stats,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { isGitDirName, isWithin } from '../util/path.ts';
+import { landingPath, linkedGitDirs } from './git-dir.ts';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
 
 const META_FILE = '.jarvis-project.json';
@@ -49,151 +49,14 @@ const IGNORED_FILES = new Set(['.DS_Store', 'Thumbs.db']);
  * absorbed submodules live under the root `.git/modules`), and a symlink into
  * one, whoever made it: the model through site_run_command, a scaffold, or a
  * pulled commit. Only the ROOT `.git` is followed when it is a gitfile or a
- * symlink (see linkedGitDirs): a nested gitfile pointing at another in-tree
- * dir is not, and the daemon never runs git there.
+ * symlink (see linkedGitDirs in git-dir.ts): a nested gitfile pointing at
+ * another in-tree dir is not, and the daemon never runs git there.
  */
 function gitDirRefusal(requested: string): Error {
   return new Error(
     `Access denied: "${requested}" is inside a git directory. The site file tools cannot read, write, list or delete ` +
     'git internals; use site_git_commit and site_github_push for version control.',
   );
-}
-
-function isSymlink(path: string): boolean {
-  try {
-    return lstatSync(path).isSymbolicLink();
-  } catch {
-    return false;
-  }
-}
-
-/**
- * The real path of `path`: of the path itself when it exists, else of its
- * deepest existing ancestor with the missing tail appended.
- *
- * A component that exists only as a symlink -- its target is missing -- is
- * refused rather than walked past: `Bun.write` through `x -> .git/new` creates
- * `.git/new`, so a dangling link has to be judged by where it points, and
- * where it points does not exist to be judged.
- */
-function realpathOfDeepest(path: string, requested: string): string {
-  const tail: string[] = [];
-  let current = path;
-  for (;;) {
-    try {
-      return join(realpathSync(current), ...tail);
-    } catch (err) {
-      const code = (err as NodeJS.ErrnoException).code;
-      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err;
-    }
-    if (isSymlink(current)) {
-      throw new Error(`Access denied: "${requested}" goes through a symlink whose target does not exist`);
-    }
-    const parent = dirname(current);
-    if (parent === current) return path;
-    tail.unshift(basename(current));
-    current = parent;
-  }
-}
-
-/**
- * Git directories of the project whose own path need not contain a `.git`
- * component: a `.git` that is a gitfile (`gitdir: <path>`, as linked worktrees
- * and absorbed submodules use) or a symlink, pointing at an ordinary-looking
- * directory in the tree, plus that directory's `commondir` for a linked
- * worktree. Ones outside the tree are already refused by containment, so only
- * the ones inside are returned.
- */
-function linkedGitDirs(realRoot: string): string[] {
-  const dotGit = join(realRoot, '.git');
-  const found: string[] = [];
-  try {
-    const st = lstatSync(dotGit);
-    if (st.isSymbolicLink()) {
-      found.push(realOrLexical(resolve(realRoot, readlinkSync(dotGit))));
-    } else if (st.isFile()) {
-      // readRegularFile, though lstat just said "file": it may not be one by
-      // the time it is opened.
-      const match = /^gitdir:\s*(.+?)\s*$/m.exec(readRegularFile(dotGit) ?? '');
-      if (match) found.push(realOrLexical(resolve(realRoot, match[1]!)));
-    }
-  } catch { /* no .git */ }
-  for (const gitDir of [...found]) {
-    try {
-      const text = readRegularFile(join(gitDir, 'commondir'));
-      if (text !== null) found.push(realOrLexical(resolve(gitDir, text.trim())));
-    } catch { /* not a linked worktree */ }
-  }
-  return found.filter((dir) => isWithin(dir, realRoot));
-}
-
-/**
- * The contents of `path` if it is a regular file (a symlink to one is fine;
- * git follows it too), else null. `commondir` sits in a directory the tree
- * may control, and a FIFO by that name would block the read -- and with it
- * every site file call -- forever. So the file is opened non-blocking and
- * checked on the open descriptor: a stat-then-read would let a FIFO be
- * swapped in between the two. Capped, since the answer is one path.
- */
-function readRegularFile(path: string): string | null {
-  const fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
-  try {
-    const st = fstatSync(fd);
-    if (!st.isFile() || st.size > 64 * 1024) return null;
-    return readFileSync(fd, 'utf-8');
-  } finally {
-    closeSync(fd);
-  }
-}
-
-/**
- * Where a git dir named by a gitfile or symlink really is -- or, when it does
- * not exist yet, where it WILL be once something creates it. A missing target
- * still has to be protected: a write that creates `gitdata/config` is exactly
- * the write that makes it a repository config.
- *
- * A dangling symlink on the way (`.git -> a`, `a -> b`, `b` missing) is
- * replaced by its target and resolution starts over, hop by hop, so the
- * answer is `b` -- where a write through the chain would land -- not `a`.
- */
-function realOrLexical(path: string): string {
-  let current = path;
-  for (let hop = 0; hop < MAX_LINK_HOPS; hop++) {
-    try {
-      return realpathOfDeepest(current, current);
-    } catch { /* a dangling link, or a loop */ }
-    const link = deepestDanglingLink(current);
-    if (!link) return current;
-    let target: string;
-    try {
-      target = readlinkSync(link);
-    } catch {
-      return current;
-    }
-    current = join(resolve(dirname(link), target), relative(link, current));
-  }
-  return current;
-}
-
-/** The symlink-hop budget, as the kernel's ELOOP limit. */
-const MAX_LINK_HOPS = 40;
-
-/**
- * The component of `path` that stops realpathOfDeepest: walking up from the
- * path itself, the first one that exists only as a symlink.
- */
-function deepestDanglingLink(path: string): string | null {
-  let current = path;
-  for (;;) {
-    try {
-      realpathSync(current);
-      return null;
-    } catch { /* missing, or dangling */ }
-    if (isSymlink(current)) return current;
-    const parent = dirname(current);
-    if (parent === current) return null;
-    current = parent;
-  }
 }
 
 /**
@@ -647,8 +510,8 @@ export class ProjectManager {
 
     const realRoot = realpathSync(projectPath);
     const real = final === 'nofollow'
-      ? join(realpathOfDeepest(dirname(resolved), requested), basename(resolved))
-      : realpathOfDeepest(resolved, requested);
+      ? join(landingPath(dirname(resolved), { dangling: 'refuse', requested }), basename(resolved))
+      : landingPath(resolved, { dangling: 'refuse', requested });
     if (!isWithin(real, realRoot)) {
       throw new Error(`Access denied: "${requested}" resolves outside the project through a symlink`);
     }

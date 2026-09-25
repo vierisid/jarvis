@@ -264,6 +264,49 @@ describe('generic file tools refuse a site project\'s git internals', () => {
     expect(existsSync(join(real, DOT_GIT, 'hooks', 'pre-commit'))).toBe(false);
   });
 
+  test('a symlinked project\'s relative gitfile resolves from the link\'s target, as git resolves it', async () => {
+    // What `git worktree add --relative-paths` writes: the main repo's
+    // worktree dir, relative to where the worktree really is.
+    setDefaultCwd(null);
+    const main = join(outside, 'a', 'main');
+    makeGitDir(join(main, DOT_GIT));
+    makeGitDir(join(main, DOT_GIT, 'worktrees', 'site'));
+    writeFileSync(join(main, DOT_GIT, 'worktrees', 'site', 'commondir'), '../..\n');
+    const site = join(outside, 'a', 'site');
+    mkdirSync(site);
+    writeFileSync(join(site, DOT_GIT), 'gitdir: ../main/.git/worktrees/site\n');
+    symlinkSync(site, join(projectsDir, 'site'));
+    expect(await read(join(main, DOT_GIT, 'logs', 'HEAD'))).toContain(REFUSED);
+    expect(await read(join(main, DOT_GIT, 'worktrees', 'site', 'HEAD'))).toContain(REFUSED);
+  });
+
+  test('a symlinked project\'s .git -> ../store.git that does not exist yet is protected where it will be', async () => {
+    setDefaultCwd(null);
+    const site = join(outside, 'b', 'site');
+    mkdirSync(site, { recursive: true });
+    symlinkSync('../store.git', join(site, DOT_GIT));
+    symlinkSync(site, join(projectsDir, 'site2'));
+    expect(await write(join(outside, 'b', 'store.git', 'config'))).toContain(REFUSED);
+    expect(existsSync(join(outside, 'b', 'store.git'))).toBe(false);
+  });
+
+  test('a gitfile target with `..` after a symlink lands where the kernel puts it', async () => {
+    setDefaultCwd(null);
+    rmSync(join(project, DOT_GIT), { recursive: true });
+    mkdirSync(join(outside, 'c', 'deep'), { recursive: true });
+    makeGitDir(join(outside, 'c', 'gd'));
+    symlinkSync(join(outside, 'c', 'deep'), join(project, 'l'));
+    writeFileSync(join(project, DOT_GIT), 'gitdir: l/../gd\n');
+    expect(await read(join(outside, 'c', 'gd', 'config'))).toContain(REFUSED);
+  });
+
+  test('a gitfile padded past 64 KiB is still read, as git reads one up to 1 MiB', async () => {
+    rmSync(join(project, DOT_GIT), { recursive: true });
+    writeFileSync(join(project, DOT_GIT), `gitdir: ${join(outside, 'padded')}\n${'\n'.repeat(70 * 1024)}`);
+    setDefaultCwd(null);
+    expect(await write(join(outside, 'padded', 'config'))).toContain(REFUSED);
+  });
+
   test('a relative git path routed to a sidecar is refused: its cwd is unknown here', async () => {
     setDefaultCwd(null);
     for (const path of ['app/.git/config', 'x/.GIT/hooks/pre-commit']) {

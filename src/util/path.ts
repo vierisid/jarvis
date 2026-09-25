@@ -21,10 +21,28 @@ export function isWithin(resolvedPath: string, basePath: string): boolean {
 }
 
 /**
+ * Containment that ignores case. On a case-insensitive filesystem
+ * `~/.JARVIS/projects` opens `~/.jarvis/projects`, and realpath keeps the
+ * spelling it was given, so a case-sensitive compare would let a respelled
+ * path out of a check. On a case-sensitive one the only cost is treating a
+ * same-name-different-case sibling as inside, which errs toward refusing.
+ */
+export function isWithinCI(resolvedPath: string, basePath: string): boolean {
+  return isWithin(resolvedPath.toLowerCase(), basePath.toLowerCase());
+}
+
+/**
  * Code points HFS+ drops when it compares names, so `.g\u200cit` opens `.git`
  * on a Mac. The same list git uses for `is_hfs_dotgit` (CVE-2014-9390).
+ * Module-private: a /g regex keeps `lastIndex` between `.test()` calls, so it
+ * is only ever used through stripHfsIgnorable's `.replace`.
  */
-export const HFS_IGNORABLE = /[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]/g;
+const HFS_IGNORABLE = /[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]/g;
+
+/** `s` without the code points HFS+ ignores in names. */
+export function stripHfsIgnorable(s: string): string {
+  return s.replace(HFS_IGNORABLE, '');
+}
 
 /**
  * Whether one path component names a git directory on SOME filesystem.
@@ -40,5 +58,5 @@ export const HFS_IGNORABLE = /[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]/g;
  * `.gitignore`, `.gitkeep`, `.github` and `repo.git` are not matches.
  */
 export function isGitDirName(name: string): boolean {
-  return /^(?:\.git|git~\d+)[. ]*(?::.*)?$/.test(name.replace(HFS_IGNORABLE, '').toLowerCase());
+  return /^(?:\.git|git~\d+)[. ]*(?::.*)?$/.test(stripHfsIgnorable(name).toLowerCase());
 }
