@@ -69,17 +69,18 @@ import {
   constants as fsConstants,
   existsSync,
   fsyncSync,
+  linkSync,
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
+  readdirSync,
   rmSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
-import { MODEL_EXEC_MARKER_ENV, isModelExecProcess } from "../../util/model-exec-marker.ts";
+import { basename, dirname, join, resolve } from "node:path";
+import { MODEL_EXEC_ENV_KEY_FLAG, hadEnvWorkflowKey } from "../../util/model-exec-marker.ts";
 
 const ALGO = "aes-256-gcm";
 const KEY_BYTES = 32;
@@ -307,33 +308,108 @@ function parseKeyHex(hex: string, path: string): Buffer {
 }
 
 /**
- * Create `path` holding `hex` with 0600 from the first byte: written to a
- * temp sibling, fsynced, renamed over the target, and the parent directory
- * fsynced too. A crash can leave the temp file behind but never a truncated
- * or world-readable key, and never a half-written target.
+ * Create `path` holding `hex` with 0600 from the first byte, IF IT IS ABSENT:
+ * written to a uniquely named temp sibling, fsynced, then hard-linked into
+ * place, and the parent directory fsynced too. A crash can leave a temp file
+ * behind but never a truncated or world-readable key, and never a half-written
+ * target.
+ *
+ * Create-if-absent, not rename-over, because two first boots can share a
+ * secrets dir (two instances under one JARVIS_SECRETS_DIR, or a restart racing
+ * a still-exiting daemon). With a fixed temp name and a rename, both wrote
+ * their own key and the last rename won, while the loser had already cached
+ * and used its own. `link` fails with EEXIST instead: the loser reads the key
+ * on disk and adopts it, so every process ends up on one key. Returns the key
+ * actually at `path` and whether this call put it there.
+ *
+ * Exported for tests.
  */
-function persistKeyFile(path: string, hex: string): void {
+export function persistKeyFile(
+  path: string,
+  hex: string,
+  /** Test seam: the hard-link call, so a filesystem without links can be simulated. */
+  link: (existing: string, created: string) => void = linkSync,
+): { created: boolean; hex: string } {
   mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
-  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW;
-  const fd = openSync(tmp, flags, 0o600);
+  removeStaleKeyTemps(path);
+  const tmp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  writeNewKeyFile(tmp, hex);
+  try {
+    link(tmp, path);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* best effort */ }
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EEXIST") return adoptExistingKey(path);
+    // No hard links here (vfat/exFAT, SMB without Unix extensions, ReFS).
+    // Create the target itself, exclusively: still create-if-absent, but a
+    // crash mid-write can leave a torn key file -- which parseKeyHex rejects
+    // loudly on the next read rather than using.
+    if (code === "EPERM" || code === "ENOTSUP" || code === "EOPNOTSUPP" || code === "ENOSYS") {
+      try {
+        writeNewKeyFile(path, hex);
+      } catch (inner) {
+        if ((inner as NodeJS.ErrnoException).code === "EEXIST") return adoptExistingKey(path);
+        throw inner;
+      }
+      fsyncDir(dirname(path));
+      return { created: true, hex };
+    }
+    throw err;
+  }
+  try { unlinkSync(tmp); } catch { /* the key is in place; a stray temp is removed next time */ }
+  fsyncDir(dirname(path));
+  return { created: true, hex };
+}
+
+/** Create `path` exclusively with 0600 from the first byte, write `hex`, fsync. */
+function writeNewKeyFile(path: string, hex: string): void {
+  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW;
+  const fd = openSync(path, flags, 0o600);
   try {
     writeSync(fd, `${hex}\n`);
     fsyncSync(fd);
   } catch (err) {
     closeSync(fd);
-    try { unlinkSync(tmp); } catch { /* best effort */ }
+    try { unlinkSync(path); } catch { /* best effort */ }
     throw err;
   }
   closeSync(fd);
-  try { chmodSync(tmp, 0o600); } catch { /* best-effort on Windows / restricted FSes */ }
-  try {
-    renameSync(tmp, path);
-  } catch (err) {
-    try { unlinkSync(tmp); } catch { /* best effort */ }
-    throw err;
+  try { chmodSync(path, 0o600); } catch { /* best-effort on Windows / restricted FSes */ }
+}
+
+/** Another writer got there first: use its key, never a corrupt one. */
+function adoptExistingKey(path: string): { created: false; hex: string } {
+  const existing = readFileSync(path, "utf8").trim();
+  parseKeyHex(existing, path);
+  return { created: false, hex: existing };
+}
+
+/**
+ * Remove `<key>.<pid>.<rand>.tmp` siblings left by a writer that crashed.
+ * Only those whose pid is gone: a live writer's temp is about to be linked.
+ * A crash between link and unlink leaves a second hard link to a key, which a
+ * later rotation (a new file renamed over the key) would otherwise keep alive
+ * in every data-dir backup. A reused pid only means a leftover stays longer.
+ */
+function removeStaleKeyTemps(path: string): void {
+  const dir = dirname(path);
+  const prefix = `${basename(path)}.`;
+  let names: string[];
+  try { names = readdirSync(dir); } catch { return; }
+  for (const name of names) {
+    const m = name.startsWith(prefix) ? /^(\d+)\.[0-9a-f]{12}\.tmp$/.exec(name.slice(prefix.length)) : null;
+    if (!m || isPidAlive(Number(m[1]))) continue;
+    try { unlinkSync(join(dir, name)); } catch { /* raced with another cleaner */ }
   }
-  fsyncDir(dirname(path));
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM"; // alive, not ours
+  }
 }
 
 /** Make a directory entry (a rename, an unlink) durable. Best-effort. */
@@ -376,13 +452,15 @@ export function migrateWorkflowEncryptionKey(
     /** Test-only fault injection: called after the copy is durable and
      * verified and before the original is removed, so tests can interrupt the
      * one window where two copies exist. Never set in production. */
-    _hooks?: { beforeRemovingOld?: () => void };
+    _hooks?: { beforeRemovingOld?: () => void; beforeCopy?: () => void };
   } = {},
 ): boolean {
   if (from === to || !existsSync(from) || existsSync(to)) return false;
   const hex = readFileSync(from, "utf8").trim();
   parseKeyHex(hex, from); // refuse to propagate a corrupt key
-  persistKeyFile(to, hex);
+  options._hooks?.beforeCopy?.();
+  // Lost a race to another writer: `to` is theirs now, so leave `from` alone.
+  if (!persistKeyFile(to, hex).created) return false;
   if (readIfKey(to) !== hex) {
     rmSync(to, { force: true });
     throw new Error(`Copying the workflow encryption key to ${to} did not verify; it stays at ${from}`);
@@ -465,45 +543,25 @@ function getKey(): Buffer {
   // `enc1:` rows) assert first -- see `assertEncryptionKeyForStoredCredentials`
   // in src/workflows/db/index.ts.
   //
-  // Except in a process started from a command the assistant ran (#514): that
-  // env is stripped of the daemon's secrets, so "no key anywhere" may only
-  // mean the user's JARVIS_WORKFLOW_ENCRYPTION_KEY did not come along. A key
-  // minted here would encrypt every credential saved from now on under a file
-  // the user's own next restart -- env key back, and preferred -- ignores.
-  if (isModelExecProcess()) {
+  // Except where the key was stripped rather than absent (#514): a process
+  // descended from a command the assistant ran, whose daemon held
+  // JARVIS_WORKFLOW_ENCRYPTION_KEY in its environment (the flag is set by
+  // modelExecEnv; see util/model-exec-marker.ts). A key minted here would
+  // encrypt every credential saved from now on under a file the user's own
+  // next restart -- env key back, and preferred -- ignores. Installs whose key
+  // lives in a file are never flagged and generate as usual.
+  if (hadEnvWorkflowKey()) {
     throw new Error(
       `Refusing to generate a workflow encryption key: this Jarvis was started from a command the `
-      + `assistant ran (${MODEL_EXEC_MARKER_ENV}=1), whose environment carries no `
-      + `JARVIS_WORKFLOW_ENCRYPTION_KEY even if yours does. Restart Jarvis from your own terminal or `
-      + `service manager. (No key file exists at ${file}.)`,
+      + `assistant ran, and the Jarvis that ran it had JARVIS_WORKFLOW_ENCRYPTION_KEY in its environment `
+      + `(${MODEL_EXEC_ENV_KEY_FLAG}=1), which does not reach here. Restart Jarvis from your own terminal, `
+      + `or with \`systemctl --user restart jarvis\` on a systemd install. (No key file exists at ${file}.)`,
     );
   }
-  const fresh = randomBytes(KEY_BYTES);
-  persistKeyFile(file, fresh.toString("hex"));
-  cachedKey = fresh;
+  // Adopt whatever is on disk if another first boot got there first.
+  const { hex } = persistKeyFile(file, randomBytes(KEY_BYTES).toString("hex"));
+  cachedKey = parseKeyHex(hex, file);
   return cachedKey;
-}
-
-/**
- * Boot: create the key file NOW, when an unmarked daemon has no key anywhere,
- * instead of at the first credential save. Returns whether it created one.
- *
- * Why at boot (#514). Under the JARVIS_MODEL_EXEC marker getKey() refuses to
- * generate, because there "no key anywhere" may mean the user's env key was
- * stripped. That test is only sound if a daemon started normally has already
- * left a file whenever it had no env key; with lazy generation a fresh install
- * that had not yet saved a credential would look exactly like an env-key user,
- * and a model-driven `jarvis restart` would lock it out of saving any.
- *
- * Call after `assertEncryptionKeyForStoredCredentials`: a database whose
- * encrypted rows have no key must be refused, not handed a fresh one. No-op
- * under the marker, and whenever a key resolves already (env, explicit file,
- * or a file on disk), so an env-key install never gets a file it would ignore.
- */
-export function ensureWorkflowEncryptionKeyAtBoot(): boolean {
-  if (isModelExecProcess() || hasResolvableEncryptionKey()) return false;
-  getKey();
-  return true;
 }
 
 /** Test/tooling override for the cached key. Pass `null` to fall back to env+file resolution. */

@@ -24,7 +24,7 @@ import { c } from '../src/cli/helpers.ts';
 import { ensurePortReleased, getConfiguredPort, resolveStopPort } from '../src/cli/lifecycle.ts';
 import { getInstalledVersion } from '../src/cli/version.ts';
 import { loadConfig } from '../src/config/loader.ts';
-import { modelExecDaemonWarning } from '../src/util/model-exec-marker.ts';
+import { modelExecCliWarning } from '../src/util/model-exec-marker.ts';
 
 const PACKAGE_ROOT = join(import.meta.dir, '..');
 
@@ -476,14 +476,10 @@ const command = args[0] || 'help';
 const commandArgs = args.slice(1);
 
 // A daemon started from the assistant's shell (run_command) comes up without
-// the secrets that shell was stripped of (#514). A service-managed restart is
-// unaffected -- the unit gets the service manager's env -- but this CLI cannot
-// tell which path it will take, so it says so up front. Not for a foreground
-// `start` (including the child `start -d` spawns): that process IS the
-// daemon, which logs its own warning.
-const foregroundStart = command === 'start' && !commandArgs.includes('-d') && !commandArgs.includes('--detach');
-if (['start', 'restart', 'update', 'upgrade'].includes(command) && !foregroundStart) {
-  const warning = modelExecDaemonWarning(process.env, 'cli');
+// the workflow key that shell was stripped of (#514). Which commands warn, and
+// why only those, is modelExecCliWarning's; `update` warns from update.ts.
+{
+  const warning = modelExecCliWarning(command, commandArgs);
   if (warning) console.warn(c.yellow(warning));
 }
 

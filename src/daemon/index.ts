@@ -539,18 +539,6 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     ensureWorkflowSchema();
     logWithTimestamp('Workflow schema ready');
 
-    // 2.1-bis. A first run with no env key writes its key file now rather than
-    // at the first credential save, so that a daemon later restarted from the
-    // assistant's shell can tell "no key yet" from "the env key was stripped"
-    // (#514; see ensureWorkflowEncryptionKeyAtBoot). Not fatal: a failure here
-    // is the same failure the first save would hit.
-    try {
-      const { ensureWorkflowEncryptionKeyAtBoot } = await import('../workflows/db/encryption.ts');
-      if (ensureWorkflowEncryptionKeyAtBoot()) logWithTimestamp('Workflow encryption key created');
-    } catch (err) {
-      console.error('[Daemon] Could not create the workflow encryption key at boot; it will be retried on first use:', err);
-    }
-
     // 2.1a. Opt-in strict credential encryption. Off unless the operator sets
     // JARVIS_REQUIRE_ENCRYPTED_CREDENTIALS=1, because every release from
     // v0.6.0 to v0.13.7 wrote plaintext `app_connection.value` rows and

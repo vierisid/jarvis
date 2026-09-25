@@ -412,15 +412,23 @@ settings, `SSH_AUTH_SOCK`, `DISPLAY`, proxies, your own `GITHUB_TOKEN` or
   exported one of these for a CLI of your own and want the assistant to run
   that CLI, pass the key inside the command.
 
-These processes are marked `JARVIS_MODEL_EXEC=1`. If the assistant starts
-Jarvis itself with `jarvis start`, `restart` or `update`, and no systemd or
-launchd service does it, the new daemon comes up without the secrets above
-and logs a warning saying so. If your workflow encryption key lives only in
-`JARVIS_WORKFLOW_ENCRYPTION_KEY`, that daemon will not generate a replacement
-key, so a key minted there cannot split your credentials: saving a workflow
-credential fails until you restart Jarvis from your own terminal or service
-manager. An install without an env key is unaffected, because Jarvis writes
-its key file on its first normal start.
+If the assistant runs `jarvis start`, `jarvis restart` or `jarvis update`
+itself on an install no service manager runs (one you started with
+`jarvis start -d`), the new daemon is started from the assistant's shell and
+comes up without the secrets above. Restart from your own terminal to bring
+them back.
+
+Under systemd the assistant's shell runs inside the service, so stopping
+Jarvis stops it too: `jarvis restart` or `jarvis update` run by the assistant
+leaves Jarvis stopped, and an update unfinished. Restart a systemd install with
+`systemctl --user restart jarvis`. Under launchd, which relaunches Jarvis
+itself, the relaunched daemon gets launchd's environment.
+
+If your workflow encryption key lives only in `JARVIS_WORKFLOW_ENCRYPTION_KEY`,
+a daemon started from the assistant's shell will not generate a new key (an
+existing key file is still used), so it cannot split your credentials: saving a
+workflow credential fails until you restart Jarvis yourself, and the daemon
+logs a warning saying so. An install whose key lives in a file is unaffected.
 
 Like the install sanitizing above, this is environment hygiene, not a
 sandbox. The commands run as the daemon's user, so they can still read

@@ -16,7 +16,16 @@ import {
   modelExecEnv,
   stripDaemonSecrets,
 } from './model-exec-env.ts';
-import { MODEL_EXEC_MARKER_ENV, isModelExecProcess, modelExecDaemonWarning } from './model-exec-marker.ts';
+import {
+  MODEL_EXEC_ENV_KEY_FLAG,
+  MODEL_EXEC_MARKER_ENV,
+  hadEnvWorkflowKey,
+  isModelExecProcess,
+  modelExecCliWarning,
+  modelExecDaemonWarning,
+  modelExecMarkers,
+  modelExecRestartWarning,
+} from './model-exec-marker.ts';
 
 const SENTINEL = 'sentinel-do-not-log';
 
@@ -123,6 +132,28 @@ describe('modelExecEnv()', () => {
     expect(modelExecEnv({ [MODEL_EXEC_MARKER_ENV]: '0' })[MODEL_EXEC_MARKER_ENV]).toBe('1');
     // A setting, so a grandchild started by that child keeps it too.
     expect(isDaemonSecretEnvName(MODEL_EXEC_MARKER_ENV)).toBe(false);
+    expect(isDaemonSecretEnvName(MODEL_EXEC_ENV_KEY_FLAG)).toBe(false);
+  });
+
+  test('flags the env key only when this process holds it or inherited the flag', () => {
+    const saved = { key: process.env.JARVIS_WORKFLOW_ENCRYPTION_KEY, flag: process.env[MODEL_EXEC_ENV_KEY_FLAG] };
+    try {
+      delete process.env.JARVIS_WORKFLOW_ENCRYPTION_KEY;
+      delete process.env[MODEL_EXEC_ENV_KEY_FLAG];
+      expect(modelExecEnv()[MODEL_EXEC_ENV_KEY_FLAG]).toBeUndefined();
+      process.env.JARVIS_WORKFLOW_ENCRYPTION_KEY = SENTINEL;
+      const env = modelExecEnv({ [MODEL_EXEC_ENV_KEY_FLAG]: undefined });
+      expect(env[MODEL_EXEC_ENV_KEY_FLAG]).toBe('1');
+      expect(env.JARVIS_WORKFLOW_ENCRYPTION_KEY).toBeUndefined(); // the bit, not the key
+      delete process.env.JARVIS_WORKFLOW_ENCRYPTION_KEY;
+      process.env[MODEL_EXEC_ENV_KEY_FLAG] = '1';
+      expect(modelExecEnv()[MODEL_EXEC_ENV_KEY_FLAG]).toBe('1'); // inherited, passed on
+    } finally {
+      for (const [name, v] of [['JARVIS_WORKFLOW_ENCRYPTION_KEY', saved.key], [MODEL_EXEC_ENV_KEY_FLAG, saved.flag]] as const) {
+        if (v === undefined) delete process.env[name];
+        else process.env[name] = v;
+      }
+    }
   });
 
   test('an extra cannot put a daemon secret back, nor can a spread of process.env', () => {
@@ -237,34 +268,51 @@ describe('every JARVIS_ env name in src/, bin/ and scripts/ is classified', () =
   });
 });
 
-describe('the model-exec marker (#514)', () => {
-  test('is recognised only as exactly "1"', () => {
+describe('the model-exec markers (#514)', () => {
+  const FLAGGED = { [MODEL_EXEC_MARKER_ENV]: '1', [MODEL_EXEC_ENV_KEY_FLAG]: '1' };
+
+  test('are recognised only as exactly "1"', () => {
     expect(isModelExecProcess({ [MODEL_EXEC_MARKER_ENV]: '1' })).toBe(true);
+    expect(hadEnvWorkflowKey({ [MODEL_EXEC_ENV_KEY_FLAG]: '1' })).toBe(true);
     for (const v of [undefined, '', '0', 'true']) {
       expect({ v, marked: isModelExecProcess({ [MODEL_EXEC_MARKER_ENV]: v }) }).toEqual({ v, marked: false });
+      expect({ v, flagged: hadEnvWorkflowKey({ [MODEL_EXEC_ENV_KEY_FLAG]: v }) }).toEqual({ v, flagged: false });
     }
   });
 
-  test('no warning on the normal path: a daemon the user or a service manager starts', () => {
-    expect(modelExecDaemonWarning({})).toBeNull();
-    expect(modelExecDaemonWarning({}, 'cli')).toBeNull();
+  test('modelExecMarkers derives the flag from the parent', () => {
+    expect(modelExecMarkers({})).toEqual({ [MODEL_EXEC_MARKER_ENV]: '1' });
+    expect(modelExecMarkers({ JARVIS_WORKFLOW_ENCRYPTION_KEY: 'k' })).toEqual(FLAGGED);
+    expect(modelExecMarkers({ [MODEL_EXEC_ENV_KEY_FLAG]: '1' })).toEqual(FLAGGED);
   });
 
-  test('under the marker, the daemon and the CLI name what is missing', () => {
-    const env = { [MODEL_EXEC_MARKER_ENV]: '1' };
-    for (const text of [modelExecDaemonWarning(env)!, modelExecDaemonWarning(env, 'cli')!]) {
-      expect(text).toContain('JARVIS_WORKFLOW_ENCRYPTION_KEY');
-      expect(text).toContain('JARVIS_GITHUB_TOKEN');
+  test('silent for a file-key install, marked or not', () => {
+    for (const env of [{}, { [MODEL_EXEC_MARKER_ENV]: '1' }]) {
+      expect(modelExecDaemonWarning(env)).toBeNull();
+      expect(modelExecRestartWarning(env)).toBeNull();
+      expect(modelExecCliWarning('restart', ['-d'], env)).toBeNull();
     }
-    // The CLI cannot tell whether a service manager does the restart.
-    expect(modelExecDaemonWarning(env, 'cli')).toContain('systemd or launchd is unaffected');
   });
 
-  test('names only what is actually missing, and is silent when nothing is', () => {
+  test('names the workflow key when the parent held it and it is not back', () => {
+    expect(modelExecDaemonWarning(FLAGGED)).toContain('JARVIS_WORKFLOW_ENCRYPTION_KEY was in the environment of the Jarvis that ran it');
+    expect(modelExecRestartWarning(FLAGGED)).toContain('systemctl --user restart jarvis');
     // Passed inside the command, or re-exported by the shell's rc.
-    const withKey = { [MODEL_EXEC_MARKER_ENV]: '1', JARVIS_WORKFLOW_ENCRYPTION_KEY: 'x' };
-    expect(modelExecDaemonWarning(withKey)).not.toContain('JARVIS_WORKFLOW_ENCRYPTION_KEY');
-    expect(modelExecDaemonWarning(withKey)).toContain('JARVIS_GITHUB_TOKEN');
-    expect(modelExecDaemonWarning({ ...withKey, JARVIS_GITHUB_TOKEN: 'y' })).toBeNull();
+    const back = { ...FLAGGED, JARVIS_WORKFLOW_ENCRYPTION_KEY: 'k' };
+    expect(modelExecDaemonWarning(back)).toBeNull();
+    expect(modelExecRestartWarning(back)).toBeNull();
+  });
+
+  test('the CLI warns only for a detached start or restart', () => {
+    // Foreground start/restart IS the daemon, which warns itself; update warns
+    // from update.ts, and only where it restarts anything.
+    const warns = (command: string, args: string[]) => modelExecCliWarning(command, args, FLAGGED) !== null;
+    expect(warns('start', ['-d'])).toBe(true);
+    expect(warns('restart', ['--detach'])).toBe(true);
+    expect(warns('start', [])).toBe(false);
+    expect(warns('start', ['--no-open'])).toBe(false); // the child `start -d` spawns
+    expect(warns('restart', [])).toBe(false);
+    expect(warns('update', [])).toBe(false);
+    expect(warns('status', ['-d'])).toBe(false);
   });
 });
