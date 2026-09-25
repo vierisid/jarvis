@@ -97,6 +97,35 @@ export function defangDelimiters(text: string): string {
   return text.replace(/UNTRUSTED_CONTENT/g, 'UNTRUSTED-CONTENT');
 }
 
+/**
+ * For a short outside value (a name, a branch, a file name) that sits INSIDE
+ * trusted prompt text, where a block of its own would break the sentence it is
+ * part of. The value is reduced to one capped line: line breaks and other
+ * control characters become spaces, invisible format characters (zero-width,
+ * bidi overrides, tag characters) are dropped, double quotes become single
+ * quotes (such values are usually shown quoted), and the delimiters are
+ * defanged -- after the drop, so a zero-width character cannot split the
+ * marker past the defang. That stops the value forging prompt structure -- a
+ * heading, a rule, a closing delimiter -- but a sentence still reads as a
+ * sentence, so anything longer than a label belongs in wrapUntrusted.
+ *
+ * Takes unknown because a caller may hold JSON nobody validated: a planted
+ * value must render, never throw on every later turn. Numbers and booleans
+ * are shown; anything else renders empty, because String() on an object from
+ * JSON can throw (`{"toString": 1}` has no callable conversion).
+ */
+export function inlineUntrusted(value: unknown, maxChars = 100): string {
+  const text = typeof value === 'string' ? value
+    : typeof value === 'number' || typeof value === 'boolean' ? String(value)
+    : '';
+  const flat = defangDelimiters(text.replace(/\p{Cf}/gu, ''))
+    .replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ')
+    .replace(/"/g, "'")
+    .trim();
+  const chars = Array.from(flat);
+  return chars.length > maxChars ? chars.slice(0, maxChars).join('') + '...' : flat;
+}
+
 /** Wrap a payload in the delimiters with the preamble. Empty input stays empty. */
 export function wrapUntrusted(text: string, source: string): string {
   if (text.length === 0) return text;

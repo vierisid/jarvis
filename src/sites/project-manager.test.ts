@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { existsSync } from 'node:fs';
-import { mkdir, mkdtemp, rm } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ProjectManager } from './project-manager.ts';
@@ -52,6 +52,33 @@ describe('ProjectManager path containment', () => {
       await manager.writeFile('app', '..config/settings.json', '{}');
 
       expect(existsSync(join(projectsDir, 'app', '..config', 'settings.json'))).toBe(true);
+    } finally {
+      await rm(projectsDir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('ProjectManager metadata from a model-writable file', () => {
+  test('wrong-typed fields fall back to defaults instead of throwing later (#524)', async () => {
+    const projectsDir = await mkdtemp(join(tmpdir(), 'jarvis-sites-'));
+    try {
+      await mkdir(join(projectsDir, 'app'), { recursive: true });
+      await writeFile(join(projectsDir, 'app', 'Makefile'), 'dev:\n');
+      await writeFile(join(projectsDir, 'app', '.jarvis-project.json'), JSON.stringify({
+        name: { toString: 1 },
+        framework: 5,
+        createdAt: 'yesterday',
+        github: { owner: { toString: 1 }, repo: 'r', remoteUrl: '', lastPushedAt: null },
+        extra: 'kept',
+      }));
+      const manager = makeManager(projectsDir);
+
+      const project = await manager.getProject('app');
+      expect(project?.name).toBe('app');
+      expect(project?.framework).toBe('custom');
+      expect(typeof project?.createdAt).toBe('number');
+      expect(project?.githubUrl).toBeNull();
+      expect((await manager.listProjects()).map((p) => p.name)).toEqual(['app']);
     } finally {
       await rm(projectsDir, { recursive: true, force: true });
     }
