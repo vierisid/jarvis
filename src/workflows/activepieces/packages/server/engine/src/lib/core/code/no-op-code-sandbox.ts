@@ -1,5 +1,6 @@
 import { spawn } from 'node:child_process'
 import { evaluateWorkflowExpression } from '../../../../../../../../runtime/safe-expression'
+import { sanitizedEnv } from '../../../../../../../../../util/subprocess-env'
 import type { CodeSandbox } from '../../core/code/code-sandbox-common'
 
 const CODE_RUNNER_SCRIPT = `
@@ -42,6 +43,13 @@ async function runInChildProcess({ codeFilePath, inputs }: { codeFilePath: strin
     return new Promise((resolve, reject) => {
         const child = spawn(process.execPath, ['--eval', CODE_RUNNER_SCRIPT], {
             stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
+            // Jarvis: this child runs a CODE step, i.e. workflow-authored code.
+            // Inheriting would hand it the engine's own env: SANDBOX_ID (what
+            // the daemon's worker RPC accepts an engine connection on), the WS
+            // port, and the reaper's JARVIS_ENGINE_* markers. This closes the
+            // env channel only: at the same uid the child can still read them
+            // from /proc/<engine pid>/environ.
+            env: sanitizedEnv(),
         })
 
         let capturedStdout = ''

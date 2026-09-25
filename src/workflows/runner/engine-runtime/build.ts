@@ -34,6 +34,7 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { UPSTREAM_PIN_SHA, UPSTREAM_PIN_TAG } from "../../activepieces/upstream-pin";
 import { ENGINE_LIFECYCLE_SHIM } from "./engine-lifecycle";
+import { sanitizedEnv } from "../../../util/subprocess-env";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -205,7 +206,7 @@ function buildStagingPackageJson(): string {
  * bundles. Listed explicitly -- relative to VENDOR_PACKAGES -- so adding a
  * new patch is a one-line cache-invalidation registration.
  */
-const PATCHED_VENDOR_SOURCES = [
+export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/safe-expression.ts',
   // Jarvis: the governed-piece admission gate. The adapter table and the
   // engine-side client are daemon sources compiled INTO the bundle, so editing
@@ -213,6 +214,13 @@ const PATCHED_VENDOR_SOURCES = [
   // the old table -- a stale bundle that silently governs the wrong actions.
   '../../runtime/piece-effects.ts',
   '../../runtime/piece-effect-guard.ts',
+  // The CODE-step sandbox builds its child's env from this allowlist, so it is
+  // compiled into the bundle too: widening or narrowing the allowlist has to
+  // reach the engine, not just the daemon. The cost, accepted over keeping a
+  // third copy of the list: ANY edit to that file, a comment included,
+  // invalidates every cached engine bundle and compiled piece, on every
+  // instance and shared root.
+  '../../../util/subprocess-env.ts',
   'server/engine/src/lib/core/code/no-op-code-sandbox.ts',
   'server/engine/src/lib/variables/props-resolver.ts',
   'server/engine/src/lib/handler/piece-executor.ts',
@@ -393,6 +401,11 @@ export function ensureStagingInstalled(): Promise<void> {
       const child = spawn("bun", ["install", "--silent"], {
         cwd: STAGING_DIR,
         stdio: "inherit",
+        // Installs third-party packages and runs their lifecycle scripts
+        // (esbuild's postinstall among them), none of which need the daemon's
+        // secrets. The allowlist keeps what bun needs: PATH, HOME, proxies,
+        // registry and CA settings.
+        env: sanitizedEnv(),
       });
       child.on("close", (code) => {
         if (code === 0) res();
