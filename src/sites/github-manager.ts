@@ -47,6 +47,31 @@ const STALE_CREDENTIAL_DIR_MS = 15 * 60_000;
  */
 const GIT_NETWORK_TIMEOUT_MS = 10 * 60_000;
 
+/**
+ * After a timeout kill, how long to keep reading git's pipes before giving up
+ * on whatever escaped the process group and still holds them.
+ */
+const PIPE_GRACE_MS = 2_000;
+
+/**
+ * Collect a pipe as text, with a way to stop waiting. `new Response(stream)`
+ * locks the stream with no way to abandon the read, so a holder that never
+ * closes it would pin the call.
+ */
+function readPipe(stream: ReadableStream<Uint8Array>): { text: Promise<string>; cancel: () => void } {
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  const text = (async () => {
+    let result = '';
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return result + decoder.decode();
+      result += decoder.decode(value, { stream: true });
+    }
+  })();
+  return { text, cancel: () => { reader.cancel().catch(() => { /* already closed */ }); } };
+}
+
 /** Transports git may use while it holds the credential helper. */
 const KNOWN_PROTOCOLS = ['file', 'git', 'ext', 'ssh', 'http', 'https'] as const;
 
@@ -151,9 +176,10 @@ export function credentialHelperArgs(tokenFile: string, target: CredentialTarget
  * - `protocol.*.allow`: the target's transport only. A `pushurl` to a local
  *   path, or to ssh with a planted `core.sshCommand`, runs code for that URL
  *   before git ever reaches GitHub and so before the file is consumed. This
- *   refuses ssh origins on the authenticated paths; the app never creates one
- *   (addRemote is given the API's https `clone_url`), and an ssh push had no
- *   agent socket to authenticate with anyway (see subprocess-env.ts). The
+ *   refuses ssh origins on the authenticated paths (and status shows stale
+ *   ahead/behind for one): the app never creates one, since addRemote is
+ *   given the API's https `clone_url`, and ssh already had no agent socket
+ *   (see subprocess-env.ts), leaving only a passphrase-less key on disk. The
  *   per-protocol keys are set explicitly because a project-level
  *   `protocol.file.allow=always` would beat `protocol.allow`.
  * - no submodule recursion: each submodule is a second remote, and so a second
@@ -603,31 +629,39 @@ export class GitHubManager {
       detached: timeoutMs !== undefined,
     });
 
+    // Both pipes at once: a hook that fills the stderr pipe while nobody reads
+    // it would otherwise block git, and this await, forever.
+    const out = readPipe(proc.stdout);
+    const err = readPipe(proc.stderr);
+
     let timedOut = false;
+    let giveUpOnPipes: ReturnType<typeof setTimeout> | undefined;
     const timer = timeoutMs === undefined ? undefined : setTimeout(() => {
       // Only a git still running timed out. After it exits, the kill still
       // runs: a hook's leftover background job may be what holds the pipes.
-      if (proc.exitCode === null) timedOut = true;
+      if (proc.exitCode === null && proc.signalCode === null) timedOut = true;
       try {
         process.kill(-proc.pid, 'SIGKILL');
       } catch {
         proc.kill('SIGKILL');
       }
+      // Something that left the group (a hook's `setsid cmd &`) can still
+      // hold the pipes. Stop waiting for it rather than for ever.
+      giveUpOnPipes = setTimeout(() => {
+        out.cancel();
+        err.cancel();
+      }, PIPE_GRACE_MS);
     }, timeoutMs);
 
     let stdout: string;
     let stderr: string;
     let exitCode: number;
     try {
-      // Both pipes at once: a hook that fills the stderr pipe while nobody
-      // reads it would otherwise block git, and this await, forever.
-      [stdout, stderr] = await Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ]);
+      [stdout, stderr] = await Promise.all([out.text, err.text]);
       exitCode = await proc.exited;
     } finally {
       clearTimeout(timer);
+      clearTimeout(giveUpOnPipes);
     }
 
     if (timedOut) throw new Error(`git ${args[0]} timed out after ${timeoutMs}ms`);

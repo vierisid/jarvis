@@ -102,6 +102,20 @@ function filesContaining(dir: string, needle: string): string[] {
   return walk(dir).filter(f => readFileSync(f, 'latin1').includes(needle));
 }
 
+/**
+ * A killed process is gone once its /proc entry is, or while it is only a
+ * zombie waiting for init to reap it -- which on a loaded machine can take a
+ * moment after the kill.
+ */
+function isGone(pid: string): boolean {
+  try {
+    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+    return stat.slice(stat.lastIndexOf(')') + 2).startsWith('Z');
+  } catch {
+    return true;
+  }
+}
+
 function credentialDirsIn(dir: string): string[] {
   return readdirSync(dir).filter(n => n.startsWith(CREDENTIAL_DIR_PREFIX));
 }
@@ -124,7 +138,7 @@ async function run(cmd: string[], cwd: string, input?: string, env?: Record<stri
  * leaked" assertion pass without testing anything.
  */
 async function setup(cmd: string[], cwd: string, env: Record<string, string>): Promise<string> {
-  const result = await run(cmd, cwd, undefined, env);
+  const result = await run(cmd, cwd, undefined, { ...env, GIT_CONFIG_NOSYSTEM: '1' });
   if (result.exitCode !== 0) throw new Error(`setup failed (${cmd.slice(1, 3).join(' ')}): ${result.stderr.trim()}`);
   return result.stdout;
 }
@@ -456,9 +470,36 @@ describe('each call site keeps the token out of git argv and env', () => {
     expect(Date.now() - started).toBeLessThan(3_000);
     expect(result.error).toContain('timed out');
     expect(credentialDirsIn(fake.tmp)).toEqual([]);
-    const grandchild = readFileSync(pidFile, 'utf8').trim();
-    expect(existsSync(`/proc/${grandchild}`)).toBe(false);
+    expect(isGone(readFileSync(pidFile, 'utf8').trim())).toBe(true);
   }, 15_000);
+
+  // What the group kill cannot reach: a hook's `setsid cmd &` leaves the group
+  // and keeps the pipes. The call must still return, shortly after the kill.
+  test.skipIf(process.platform !== 'linux' || !Bun.which('setsid'))('the timeout gives up on a pipe holder that escaped the group', async () => {
+    const fake = setupFakeGit();
+    const pidFile = join(fake.logDir, 'escaped.pid');
+    writeFileSync(join(fake.project, '..', 'bin', 'git'), [
+      '#!/bin/sh',
+      'case "$*" in',
+      '  *"remote get-url origin"*) echo https://github.com/owner/repo.git; exit 0 ;;',
+      '  *"branch --show-current"*) echo main; exit 0 ;;',
+      '  *"--get-regexp"*) exit 1 ;;',
+      'esac',
+      `setsid sh -c 'echo $$ > "${pidFile}"; exec sleep 8' &`,
+      'exec sleep 8',
+    ].join('\n'), { mode: 0o755 });
+
+    try {
+      const started = Date.now();
+      const result = await new GitHubManager({ networkTimeoutMs: 300 }).push(fake.project);
+      expect(Date.now() - started).toBeLessThan(6_000);
+      expect(result.error).toContain('timed out');
+      expect(credentialDirsIn(fake.tmp)).toEqual([]);
+    } finally {
+      // It escaped on purpose; don't leave it for the rest of the run.
+      try { process.kill(Number(readFileSync(pidFile, 'utf8').trim()), 'SIGKILL'); } catch { /* gone */ }
+    }
+  }, 20_000);
 
   test('a branch that git would parse as an option is refused', async () => {
     const fake = setupFakeGit();
