@@ -57,6 +57,7 @@ printf 'ps-ok\\r\\n'
   // Exits only after 2s and leaves a grandchild holding stdout for 2s more:
   // the shape a timeout must not wait out. Both sleeps end on their own.
   'hang.exe': `#!/bin/sh
+echo $$ > "$(dirname "$0")/../log/hang.pid"
 sleep 2 &
 sleep 2
 `,
@@ -268,9 +269,16 @@ describe('runArgv', () => {
     const started = Date.now();
     await expect(runArgv(['hang.exe'], 150)).rejects.toThrow('hang.exe timed out after 150ms');
     expect(Date.now() - started).toBeLessThan(1500);
+
+    // And the child itself was killed, not just abandoned.
+    const pid = Number(readFileSync(join(logDir, 'hang.pid'), 'utf-8').trim());
+    const alive = () => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const until = Date.now() + 1000;
+    while (alive() && Date.now() < until) await Bun.sleep(10);
+    expect(alive()).toBe(false);
   });
 
   test('a missing executable rejects instead of resolving', async () => {
-    await expect(runArgv(['jarvis-no-such-program-519'])).rejects.toThrow();
+    await expect(runArgv(['jarvis-no-such-program-519'])).rejects.toThrow(/not found/i);
   });
 });

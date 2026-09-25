@@ -187,9 +187,10 @@ async function runWslpath(flag: '-w' | '-u', path: string): Promise<string> {
  * is for interop to work, not a security boundary: whether /init falls back to
  * a default socket without WSL_INTEROP was not verified.
  *
- * The timeout is a hard deadline: the child is SIGKILLed and the call rejects
- * at once, without waiting for its pipes, which a grandchild it started can
- * hold open long after it is gone. Exported for the tests only.
+ * The timeout is a hard deadline: the child is SIGKILLed, its pipe readers are
+ * cancelled, and the call rejects at once, without waiting for pipes that a
+ * grandchild can hold open long after the child is gone. Exported for the
+ * tests only.
  */
 export async function runArgv(argv: string[], timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<CommandResult> {
   const startTime = Date.now();
@@ -205,21 +206,24 @@ export async function runArgv(argv: string[], timeoutMs: number = DEFAULT_TIMEOU
     stderr: 'pipe',
   });
 
+  const stdoutReader = proc.stdout.getReader();
+  const stderrReader = proc.stderr.getReader();
+
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   const deadline = new Promise<never>((_, reject) => {
     timeoutId = setTimeout(() => {
       proc.kill('SIGKILL');
+      // Stop buffering, and let go of the pipes, even if a grandchild still
+      // holds them open.
+      stdoutReader.cancel().catch(() => {});
+      stderrReader.cancel().catch(() => {});
       reject(new Error(`${argv[0]} timed out after ${timeoutMs}ms`));
     }, timeoutMs);
   });
 
   try {
     const [stdout, stderr, exitCode] = await Promise.race([
-      Promise.all([
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-        proc.exited,
-      ]),
+      Promise.all([readText(stdoutReader), readText(stderrReader), proc.exited]),
       deadline,
     ]);
 
@@ -227,4 +231,22 @@ export async function runArgv(argv: string[], timeoutMs: number = DEFAULT_TIMEOU
   } finally {
     clearTimeout(timeoutId);
   }
+}
+
+async function readText(reader: ReadableStreamDefaultReader<Uint8Array>): Promise<string> {
+  const chunks: Uint8Array[] = [];
+
+  while (true) {
+    const { done, value } = await reader.read();
+
+    if (done) {
+      break;
+    }
+
+    if (value) {
+      chunks.push(value);
+    }
+  }
+
+  return Buffer.concat(chunks).toString('utf-8');
 }
