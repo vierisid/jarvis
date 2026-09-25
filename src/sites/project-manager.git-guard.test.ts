@@ -258,6 +258,23 @@ describe('a git dir that is not named .git', () => {
     await expectRefused(() => write('repo/config', 'x', 'wt'));
   });
 
+  test('a gitfile whose gitdir does not exist yet still protects where it will be', async () => {
+    const wt = join(projectsDir, 'wt');
+    mkdirSync(wt, { recursive: true });
+    writeFileSync(join(wt, '.git'), 'gitdir: later/repo\n');
+    await expectRefused(() => write('later/repo/config', 'x', 'wt'));
+    await expectRefused(() => write('later/repo/HEAD', 'x', 'wt'));
+    // Its parent is an ordinary directory.
+    expect(await write('later/notes.md', 'x', 'wt')).toBe('File written: later/notes.md');
+  });
+
+  test('a dangling .git symlink still protects where it points', async () => {
+    const linked = join(projectsDir, 'linked');
+    mkdirSync(linked, { recursive: true });
+    symlinkSync('store', join(linked, '.git'));
+    await expectRefused(() => write('store/config', 'x', 'linked'));
+  });
+
   test('a .git symlink to a directory in the tree protects that directory', async () => {
     const linked = join(projectsDir, 'linked');
     mkdirSync(join(linked, 'store'), { recursive: true });
@@ -334,6 +351,81 @@ describe("the daemon's own metadata writes do not follow a planted symlink", () 
     symlinkSync('.git/config', join(project, '.jarvis-project.json'));
     writeFileSync(join(project, '.git', 'config'), '{"name":"from git config"}');
     expect((await manager.getProject('app'))?.name).toBe('app');
+  });
+
+  test('markPushed records the push without writing through a planted symlink', async () => {
+    const github = { owner: 'o', repo: 'r', remoteUrl: 'https://github.com/o/r.git', lastPushedAt: null };
+    await manager.updateGitHubMeta('app', github);
+    const before = Date.now();
+    manager.markPushed('app');
+    const meta = JSON.parse(readFileSync(join(project, '.jarvis-project.json'), 'utf-8'));
+    expect(meta.github.lastPushedAt).toBeGreaterThanOrEqual(before);
+
+    // Now make the metadata a link into .git holding "metadata" of its own.
+    rmSync(join(project, '.jarvis-project.json'));
+    const planted = JSON.stringify({ name: 'x', framework: 'x', createdAt: 0, lastOpenedAt: 0, github });
+    writeFileSync(join(project, '.git', 'config'), planted);
+    symlinkSync('.git/config', join(project, '.jarvis-project.json'));
+    manager.markPushed('app');
+    expect(readFileSync(join(project, '.git', 'config'), 'utf-8')).toBe(planted);
+    expect(lstatSync(join(project, '.jarvis-project.json')).isSymbolicLink()).toBe(true);
+  });
+
+  test('markPushed does nothing for a project not connected to GitHub', () => {
+    manager.markPushed('app');
+    expect(existsSync(join(project, '.jarvis-project.json'))).toBe(false);
+  });
+});
+
+describe('errors name the requested path, never a host path', () => {
+  const noHostPath = (result: string) => {
+    expect(result).toStartWith('Error:');
+    expect(result).not.toContain(root);
+    expect(result).not.toContain(tmpdir());
+  };
+
+  test('a symlink loop', async () => {
+    symlinkSync('loop2', join(project, 'loop1'));
+    symlinkSync('loop1', join(project, 'loop2'));
+    const result = await read('loop1');
+    noHostPath(result);
+    expect(result).toContain('Too many levels of symlinks: loop1');
+    noHostPath(await write('loop1/x'));
+  });
+
+  test('a name that is too long', async () => {
+    const result = await write(`${'a'.repeat(300)}/x`);
+    noHostPath(result);
+    expect(result).toContain('Path is too long');
+  });
+
+  test('writing to a directory', async () => {
+    const result = await write('src');
+    noHostPath(result);
+    expect(result).toContain('Path is a directory: src');
+  });
+
+  test('writing below a file', async () => {
+    const result = await write('src/App.tsx/child.ts');
+    noHostPath(result);
+    expect(result).toContain('A parent of the path is not a directory: src/App.tsx/child.ts');
+  });
+
+  test('reading a directory', async () => {
+    noHostPath(await read('src'));
+  });
+});
+
+describe('write content', () => {
+  test('non-string content is refused the same way for a plain file and a hardlinked one', async () => {
+    linkSync(join(project, 'src', 'App.tsx'), join(root, 'App.link'));
+    for (const path of ['src/New.tsx', 'src/App.tsx']) {
+      for (const content of [42, { a: 1 }, null, ['x']]) {
+        await expect(manager.writeFile('app', path, content as unknown as string)).rejects.toThrow('File content must be a string');
+      }
+    }
+    expect(existsSync(join(project, 'src', 'New.tsx'))).toBe(false);
+    expect(readFileSync(join(project, 'src', 'App.tsx'), 'utf-8')).toBe('export default 1;\n');
   });
 });
 

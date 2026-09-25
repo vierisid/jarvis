@@ -94,6 +94,25 @@ describe('planted config does not run code through the daemon', () => {
     expect(existsSync(marker)).toBe(false);
   });
 
+  // getDiff makes two calls, `diff --cached` and `diff`; the tests above only
+  // reach the second. Stage the change so the first one has something to run
+  // a driver on, and leave the worktree clean so the second has nothing.
+  test.each([
+    ['diff.external', () => plant(`[diff]\n\texternal = "${join(root, 'drv.sh')}"\n`)],
+    ['a textconv driver', () => {
+      writeFileSync(join(repo, '.gitattributes'), '*.txt diff=conv\n');
+      plant(`[diff "conv"]\n\ttextconv = "${join(root, 'drv.sh')}"\n`);
+    }],
+  ])('%s does not run on the staged half of getDiff', async (_label, setup) => {
+    writeFileSync(join(repo, 'src', 'a.txt'), 'staged\n');
+    const staged = Bun.spawnSync(['git', 'add', '-A'], { cwd: repo, stdout: 'pipe', stderr: 'pipe', env: sanitizedEnv() });
+    expect(staged.exitCode).toBe(0);
+    setup();
+    executable(join(root, 'drv.sh'), `${touch()}; cat "$1"`);
+    expect(await git.getDiff(repo)).toContain('+staged');
+    expect(existsSync(marker)).toBe(false);
+  });
+
   test('log.showSignature does not start gpg.program on getLog', async () => {
     // Only a signed commit makes git verify, so make one (as a pulled GitHub
     // web commit would be) with a stand-in signer.

@@ -4927,18 +4927,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const result = await ctx.siteBuilderService.githubManager.push(projectPath, undefined, body.force);
           if (!result.success) return error(result.error ?? 'Push failed');
 
-          // Update lastPushedAt
-          const project = await ctx.siteBuilderService.projectManager.getProject(id);
-          if (project?.githubUrl) {
-            const meta = require('node:fs').readFileSync(
-              require('node:path').join(projectPath, '.jarvis-project.json'), 'utf-8'
-            );
-            const parsed = JSON.parse(meta);
-            if (parsed.github) {
-              parsed.github.lastPushedAt = Date.now();
-              await Bun.write(require('node:path').join(projectPath, '.jarvis-project.json'), JSON.stringify(parsed, null, 2));
-            }
-          }
+          ctx.siteBuilderService.projectManager.markPushed(id);
 
           return json({ ok: true });
         } catch (err) {
