@@ -1174,7 +1174,9 @@ ${fileTreeText ? `\n## Project Structure\n\`\`\`\n${fileTreeText}\`\`\`` : ''}
 - Use site_read_file, site_write_file, site_list_files, site_run_command, site_git_commit, site_github_push tools with project_id="${projectId}".
 - Do NOT use regular read_file, write_file, or run_command — always use the site_* variants.
 - Do NOT start dev servers via site_run_command. The dev server is managed by the dashboard (make dev runs automatically).
-- Changes are auto-committed after this conversation turn completes.
+${this.siteBuilderService.autoCommitEnabled
+  ? '- Changes are auto-committed after this conversation turn completes.'
+  : '- Changes are NOT auto-committed. Commit with site_git_commit only when the user asks.'}
 - For the "bun-react" framework: the server uses Bun.serve() with HTML imports (import from "./index.html"). Run with "bun --hot index.ts", NOT vite or webpack.`;
       }
     } else if (this.siteBuilderService) {
@@ -1446,7 +1448,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         console.error('[WSService] onComplete error:', err)
       );
 
-      // Auto-commit site builder changes after chat turn
+      // Auto-commit site builder changes after chat turn (sites.auto_commit)
       if (projectId && this.siteBuilderService) {
         try {
           const projectPath = this.siteBuilderService.projectManager.getProjectPath(projectId);
@@ -1454,7 +1456,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
             const commitMsg = text.length > 60 ? text.slice(0, 57) + '...' : text;
             // Git off for the project (#523) is logged once there, not here
             // after every turn.
-            const commit = await this.siteBuilderService.autoCommitIfAllowed(projectPath, commitMsg);
+            const commit = await this.siteBuilderService.autoCommitIfEnabled(projectPath, commitMsg);
             if (commit) {
               this.broadcastSiteEvent({
                 type: 'git_commit',

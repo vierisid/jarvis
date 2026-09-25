@@ -200,6 +200,29 @@ export class SiteBuilderService implements Service {
   }
 
   /**
+   * Whether the site builder commits on the user's behalf: after a
+   * project-scoped chat turn and after a file saved from the editor. Only an
+   * explicit `false` turns it off, so a config written before the key existed
+   * keeps the historical always-commit behaviour.
+   */
+  get autoCommitEnabled(): boolean {
+    return this.config.auto_commit !== false;
+  }
+
+  /**
+   * The implicit commit, gated on `sites.auto_commit`. Returns null when the
+   * setting is off or there is nothing to commit. Explicit commits (the Git
+   * panel, `site_git_commit`, a push with a commit message) are the user
+   * asking for one, so they call `gitManager.autoCommit` directly. When on,
+   * it goes through autoCommitIfAllowed, so a project whose git config the
+   * lint refuses (#523) is not an error here either.
+   */
+  async autoCommitIfEnabled(projectPath: string, message: string): Promise<GitCommit | null> {
+    if (!this.autoCommitEnabled) return null;
+    return this.autoCommitIfAllowed(projectPath, message);
+  }
+
+  /**
    * List all projects with live status.
    */
   async listProjectsWithStatus(): Promise<Project[]> {
