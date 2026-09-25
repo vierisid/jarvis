@@ -11,7 +11,8 @@ import type { ServerWebSocket } from 'bun';
 import { BrowserController } from './session.ts';
 
 type Sent = { method: string; params?: Record<string, any> };
-type Sock = ServerWebSocket<{ path: string }>;
+type SockData = { path: string; n: number };
+type Sock = ServerWebSocket<SockData>;
 
 type FakeOptions = {
   /** /json/version body. Default: a browser websocket. */
@@ -27,6 +28,14 @@ type FakeOptions = {
 };
 
 type Fake = {
+  /**
+   * Everything that happened on the sockets, in order: `browser#1 open`,
+   * `browser#1 Fetch.enable`, `page#1 Page.enable`, `browser#1 close`...
+   * Sockets are numbered per path in the order they were opened.
+   */
+  log: string[];
+  /** Close the current page socket from the server side. */
+  dropPage(): void;
   port: number;
   browserSent: Sent[];
   pageSent: Sent[];
@@ -41,7 +50,11 @@ type Fake = {
 function fakeChrome(opts: FakeOptions = {}): Fake {
   let browserSock: Sock | null = null;
   let pageSock: Sock | null = null;
+  const opened = { '/browser': 0, '/page': 0 } as Record<string, number>;
+  const label = (ws: Sock) => `${ws.data.path.slice(1)}#${ws.data.n}`;
   const fake: Fake = {
+    log: [],
+    dropPage: () => pageSock?.close(),
     port: 0,
     browserSent: [],
     pageSent: [],
@@ -66,12 +79,12 @@ function fakeChrome(opts: FakeOptions = {}): Fake {
     return {};
   };
 
-  const server = Bun.serve<{ path: string }>({
+  const server = Bun.serve<SockData>({
     port: 0,
     fetch(req, srv) {
       const { pathname } = new URL(req.url);
       if (pathname === '/browser' || pathname === '/page') {
-        if (srv.upgrade(req, { data: { path: pathname } })) return;
+        if (srv.upgrade(req, { data: { path: pathname, n: ++opened[pathname]! } })) return;
         return new Response('upgrade failed', { status: 400 });
       }
       if (pathname === '/json/version') {
@@ -90,11 +103,16 @@ function fakeChrome(opts: FakeOptions = {}): Fake {
     },
     websocket: {
       open(ws) {
+        fake.log.push(`${label(ws)} open`);
         if (ws.data.path === '/browser') browserSock = ws;
         else pageSock = ws;
       },
+      close(ws) {
+        fake.log.push(`${label(ws)} close`);
+      },
       async message(ws, raw) {
         const msg = JSON.parse(String(raw)) as { id: number; method: string; params?: Record<string, any> };
+        fake.log.push(`${label(ws)} ${msg.method}`);
         if (ws.data.path === '/browser') {
           fake.browserSent.push({ method: msg.method, params: msg.params });
           if (msg.method === 'Fetch.enable' && opts.fetchEnableError) {
@@ -152,6 +170,34 @@ describe('BrowserController #521 guards (fake Chrome)', () => {
     expect(patterns).toContain(`*://*:${fake.port}/*`);
     expect(patterns).toContain('*://*:9222/*');
     expect(patterns).toContain('*://*:9223/*');
+  });
+
+  test('interception is enabled before the page socket carries anything', async () => {
+    fake = fakeChrome();
+    ctrl = new BrowserController(fake.port);
+    await ctrl.connect();
+    const armed = fake.log.indexOf('browser#1 Fetch.enable');
+    const firstPage = fake.log.findIndex(e => e.startsWith('page#'));
+    expect(armed).toBeGreaterThanOrEqual(0);
+    expect(firstPage).toBeGreaterThan(armed);
+  });
+
+  test('a reconnect arms the new guard before it closes the old one', async () => {
+    fake = fakeChrome();
+    ctrl = new BrowserController(fake.port);
+    await ctrl.connect();
+    const live = ctrl.captureApprovalGuard();
+    fake.dropPage();
+    // Wait until the controller itself sees the page socket gone.
+    for (let i = 0; i < 200 && live(); i++) await Bun.sleep(5);
+    await ctrl.evaluate('1'); // stale page socket: reconnects first
+    const newArmed = fake.log.indexOf('browser#2 Fetch.enable');
+    for (let i = 0; i < 100 && !fake.log.includes('browser#1 close'); i++) await Bun.sleep(5);
+    const oldClosed = fake.log.indexOf('browser#1 close');
+    expect(newArmed).toBeGreaterThanOrEqual(0);
+    expect(oldClosed).toBeGreaterThan(newArmed);
+    // And the new page socket still comes after the new guard.
+    expect(fake.log.indexOf('page#2 open')).toBeGreaterThan(newArmed);
   });
 
   test('fails paused local-file requests and lets textual port matches through', async () => {

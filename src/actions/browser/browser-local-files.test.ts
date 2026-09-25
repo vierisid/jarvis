@@ -30,8 +30,33 @@ const CHROMIUM_CANDIDATES = [
 const chromiumExe = CHROMIUM_CANDIDATES.find(p => existsSync(p));
 
 // Not 9222/9223 (the daemon's) nor 9777/9778 (the other browser suites).
-const TEST_PORT = 30000 + Math.floor(Math.random() * 20000);
+// Asked of the kernel rather than picked at random, so it cannot land on a
+// port another test's server already holds (Chrome would then start without
+// its DevTools endpoint).
+const TEST_PORT = (() => {
+  const listener = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {} } });
+  const { port } = listener;
+  listener.stop(true);
+  return port;
+})();
 const MARKER = `local-file-marker-${crypto.randomUUID()}`;
+
+/**
+ * afterAll cannot run when the test process is SIGKILLed (the pre-commit
+ * cap's escalation, a developer's kill -9), and a detached Chromium would
+ * then be orphaned to PID 1. Where util-linux's setpriv exists, have the
+ * kernel kill it with its parent instead; setpriv execs Chromium in place, so
+ * the pid stays Chromium's, and Chromium's children exit with it (verified).
+ * The signal fires when the spawning THREAD exits, not the process; that is
+ * the same thing here because Bun.spawn runs on the JS thread.
+ * TODO: switch to the shared watchdog fixture from fix/524-review-followups
+ * (src/actions/browser/fixtures/headless-chromium.ts) once that lands.
+ */
+function parentDeathWrapper(): string[] {
+  if (process.platform !== 'linux') return [];
+  const setpriv = ['/usr/bin/setpriv', '/bin/setpriv'].find(p => existsSync(p));
+  return setpriv ? [setpriv, '--pdeathsig', 'KILL'] : [];
+}
 
 /** Pids of processes whose command line names `profile` (Linux only; [] elsewhere). */
 function profileProcesses(profile: string): number[] {
@@ -87,6 +112,7 @@ describe.skipIf(!chromiumExe)('browser local-file lockdown (integration, #521)',
 
     profileDir = mkdtempSync(join(tmpdir(), 'jarvis-local-files-profile-'));
     proc = Bun.spawn([
+      ...parentDeathWrapper(),
       chromiumExe!,
       '--headless=new',
       `--remote-debugging-port=${TEST_PORT}`,
@@ -269,8 +295,10 @@ describe.skipIf(!chromiumExe)('browser local-file lockdown (integration, #521)',
       await cdp.close();
     }
 
-    // Every read reconnects first (the guard is gone), re-arms the guard, and
-    // leaves the local page rather than reading it.
+    // Every read reconnects first (the guard is gone) and re-arms the guard.
+    // The file tab is then the only page, so connect() adopts and blanks it:
+    // what this pins is the reconnect path, not the per-read frame check,
+    // which the fake-Chrome suite (session-guards.test.ts) covers directly.
     for (const read of [() => browser.snapshot(), () => browser.evaluate('document.body.innerText'), () => browser.screenshotBuffer()]) {
       let out = '';
       try { out = JSON.stringify(await read()); } catch (err) { out = String(err); }
@@ -278,9 +306,11 @@ describe.skipIf(!chromiumExe)('browser local-file lockdown (integration, #521)',
     }
     expect(await browser.evaluate('location.protocol')).not.toBe('file:');
 
-    // History still holds the file entry. Going back to it must not expose it
-    // either: a reload is blocked by the re-armed guard, and a page restored
-    // without a request is refused by the read check.
+    // History still holds the file entry. Going back to it must not expose
+    // it either. Best effort: whether Chrome restores the entry from the
+    // back/forward cache (no request, so only the read check stands) or
+    // reloads it (the re-armed guard blocks it) is Chrome's choice, and this
+    // does not assert which happened -- only that nothing leaked.
     await browser.navigate(`${base}/`);
     await browser.evaluate('history.go(-2)').catch(() => {});
     await Bun.sleep(1000);
@@ -288,6 +318,39 @@ describe.skipIf(!chromiumExe)('browser local-file lockdown (integration, #521)',
       let out = '';
       try { out = JSON.stringify(await read()); } catch (err) { out = String(err); }
       expect(out.includes(MARKER)).toBe(false);
+    }
+  }, 45_000);
+
+  test('connect() passes over a tab already showing a local file for a drivable one', async () => {
+    // Build the state a fresh daemon can inherit: a Chrome with a web tab and
+    // a tab that loaded a local file while no guard was armed.
+    await browser.navigate(`${base}/`);
+    await browser.disconnect(); // closes the guard; this Chrome is not ours to stop
+    const res = await fetch(`http://127.0.0.1:${TEST_PORT}/json/new?${markerUrl}`, { method: 'PUT' });
+    const fileTab = await res.json() as { id: string; webSocketDebuggerUrl: string };
+    const raw = new CDPClient();
+    try {
+      await raw.connect(fileTab.webSocketDebuggerUrl);
+      const loaded = await until(async () => {
+        const r = await raw.send('Runtime.evaluate', { expression: 'document.body ? document.body.innerText : ""', returnByValue: true });
+        return String(r.result?.value).includes(MARKER);
+      });
+      expect(loaded).toBe(true);
+    } finally {
+      await raw.close();
+    }
+
+    const fresh = new BrowserController(TEST_PORT);
+    try {
+      const snap = await fresh.snapshot();
+      expect(snap.url).toStartWith(base);
+      expect(JSON.stringify(snap).includes(MARKER)).toBe(false);
+      // The file tab was left alone, not driven.
+      const tabs = await (await fetch(`http://127.0.0.1:${TEST_PORT}/json/list`)).json() as Array<{ id: string; url: string }>;
+      expect(tabs.find(t => t.id === fileTab.id)?.url).toBe(markerUrl);
+    } finally {
+      await fresh.disconnect();
+      await fetch(`http://127.0.0.1:${TEST_PORT}/json/close/${fileTab.id}`).catch(() => {});
     }
   }, 45_000);
 
