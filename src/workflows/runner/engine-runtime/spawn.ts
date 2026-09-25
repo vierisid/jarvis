@@ -149,10 +149,9 @@ export const ENGINE_ENV_PASSTHROUGH: readonly string[] = Object.freeze([
 
 /**
  * Names a caller's `opts.env` may set: the passthrough list and the engine's
- * own wiring namespaces. Anything else is dropped. `opts.env` is fed by
- * EngineRuntime's spawnEnvOverride and by tests, and without this a caller
- * handing it `process.env` would undo the curation above while every check on
- * ENGINE_ENV_PASSTHROUGH still passed.
+ * own wiring namespaces. Anything else is dropped. Only tests set `opts.env`
+ * today; without this a future caller handing it `process.env` would undo the
+ * curation above while every check on ENGINE_ENV_PASSTHROUGH still passed.
  */
 export function isEngineEnvName(name: string): boolean {
   const engineName = ENGINE_ENV_PASSTHROUGH.includes(name)

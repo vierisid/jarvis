@@ -14,9 +14,9 @@
  * from inside the engine bundle, which compiles this file in -- see
  * PATCHED_VENDOR_SOURCES in engine-runtime/build.ts), the `bun install` runs
  * that fetch pieces and the engine's build deps (lifecycle scripts skipped,
- * see src/util/sanitized-install.ts), and the dashboard auto-build. src/spawn-env-guard.test.ts fails on any spawn
- * under src/ that does not use this, unless it is on that file's justified
- * exemption list.
+ * see src/util/sanitized-install.ts), and the dashboard auto-build.
+ * src/spawn-env-guard.test.ts fails on any spawn under src/ that does not use
+ * this, unless it is on that file's justified exemption list.
  *
  * ALLOWLIST, NOT DENYLIST. The predecessor of this module (a
  * `SECRET_ENV_PATTERNS` denylist in src/sites/builder-tools.ts) forwarded
