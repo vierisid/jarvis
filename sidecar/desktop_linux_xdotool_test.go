@@ -3,6 +3,7 @@
 package main
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -68,6 +69,9 @@ func TestTypeTextPassesTextToXdotoolAfterDoubleDash(t *testing.T) {
 	}
 }
 
+// The combo goes after "--" and ends in "+": libxdo skips the empty last key,
+// and no xdotool command name contains "+", so `xdotool key` cannot chain
+// into a command whatever the combo is.
 func TestPressKeysPassesComboToXdotoolAfterDoubleDash(t *testing.T) {
 	lastArgv := fakeXdotool(t)
 	for keys, combo := range map[string]string{
@@ -77,15 +81,17 @@ func TestPressKeysPassesComboToXdotoolAfterDoubleDash(t *testing.T) {
 		"ctrl,shift": "ctrl+shift",
 		"ctrl+s":     "ctrl+s",
 		"minus":      "minus",
+		"Help":       "Help",
 	} {
-		if _, err := handlePressKeys(map[string]any{"keys": keys}); err != nil {
-			t.Errorf("press_keys %q: %v", keys, err)
-			continue
-		}
-		want := []string{"key", "--", combo}
-		if got := lastArgv(); !reflect.DeepEqual(got, want) {
-			t.Errorf("press_keys %q ran xdotool %q, want %q", keys, got, want)
-		}
+		t.Run(keys, func(t *testing.T) {
+			if _, err := handlePressKeys(map[string]any{"keys": keys}); err != nil {
+				t.Fatalf("press_keys %q: %v", keys, err)
+			}
+			want := []string{"key", "--", combo + "+"}
+			if got := lastArgv(); !reflect.DeepEqual(got, want) {
+				t.Errorf("press_keys %q ran xdotool %q, want %q", keys, got, want)
+			}
+		})
 	}
 }
 
@@ -101,28 +107,38 @@ func TestPressKeysRefusesOptionAndCommandNamesWithoutRunningXdotool(t *testing.T
 		"exec",
 		"selectwindow",
 		",",
+		"a,b,c,d,e,f,g,h,i",
 	} {
-		if _, err := handlePressKeys(map[string]any{"keys": keys}); err == nil {
-			t.Errorf("press_keys %q was accepted", keys)
-		}
-		if got := lastArgv(); got != nil {
-			t.Errorf("press_keys %q ran xdotool %q", keys, got)
-		}
+		t.Run(keys, func(t *testing.T) {
+			_, err := handlePressKeys(map[string]any{"keys": keys})
+			// Refused before xdotool ran, and said so: the daemon reports
+			// DESKTOP_INVALID_KEYS as not started (sidecar-route.ts).
+			var coded *codedError
+			if !errors.As(err, &coded) || coded.code != "DESKTOP_INVALID_KEYS" {
+				t.Errorf("press_keys %q: got error %v, want a DESKTOP_INVALID_KEYS refusal", keys, err)
+			} else if !strings.Contains(err.Error(), "nothing was pressed") {
+				t.Errorf("press_keys %q: refusal %q does not say nothing was pressed", keys, err)
+			}
+			if got := lastArgv(); got != nil {
+				t.Errorf("press_keys %q ran xdotool %q", keys, got)
+			}
+		})
 	}
 }
 
 func TestCheckXdotoolKeySequence(t *testing.T) {
-	for _, ok := range []string{"ctrl+s", "Return", "super+F5", "XF86AudioPlay", "U20AC", "0x61", "ctrl++s", "ctrl+Help"} {
+	for _, ok := range []string{"ctrl+s", "Return", "super+F5", "XF86AudioPlay", "U20AC", "0x61", "ctrl++s", "ctrl+Help", "ctrl+exec", "Help", "a+b+c+d+e+f+g+h"} {
 		if err := checkXdotoolKeySequence(ok); err != nil {
 			t.Errorf("%q refused: %v", ok, err)
 		}
 	}
-	if err := checkXdotoolKeySequence("a+b+c+d+e+f+g+h"); err != nil {
-		t.Errorf("an 8-key combo was refused: %v", err)
-	}
-	for _, bad := range []string{"", "+", "-h", "--help", "ctrl+-", "a b", "slash/", "é", "exec", "EXEC", "help", "Help", "a+b+c+d+e+f+g+h+i+j"} {
+	for _, bad := range []string{"", "+", "-h", "--help", "ctrl+-", "a b", "slash/", "é", "exec", "EXEC", "help", "HELP", "a+b+c+d+e+f+g+h+i", "a+b+c+d+e+f+g+h+i+j"} {
 		if err := checkXdotoolKeySequence(bad); err == nil {
 			t.Errorf("%q accepted", bad)
 		}
+	}
+	// Names are checked before the count, as the daemon does.
+	if err := checkXdotoolKeySequence("a+b+c+d+e+f+g+h+-i"); err == nil || !strings.Contains(err.Error(), "invalid key name") {
+		t.Errorf("9 keys with a bad name: got %v, want the invalid name reported", err)
 	}
 }

@@ -76,6 +76,7 @@ jobs:
       # script's header). Re-run just before `npm publish` too, in
       # release-exec.yml, where the real artifact is built.
       - run: bun run scripts/check-package-files.ts
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq --no-install-recommends xdotool && echo JARVIS_REQUIRE_XDOTOOL_SHIM=1 >> "$GITHUB_ENV" # linux.test.ts runs the real xdotool's argument parsing (#518)
       # --retry=2 (3 attempts per test), NOT a retry around the whole step.
       # Every flake this suite has produced in CI is a per-test hook timing out
       # on a loaded runner -- a headless Chromium slow to answer CDP
