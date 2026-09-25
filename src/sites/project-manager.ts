@@ -133,6 +133,22 @@ function isGitPath(realRoot: string, real: string, gitDirs: string[] = linkedGit
 
 type TreeGuard = { realRoot: string; gitDirs: string[] };
 
+/**
+ * Put `content` at `path` by writing a sibling and renaming it over. Only the
+ * name is retargeted: whatever the name pointed at before -- another hard link
+ * to the same inode, or a symlink's target -- is left as it was.
+ */
+function replaceFile(path: string, content: string, mode: number): void {
+  const temp = join(dirname(path), `.${basename(path)}.${randomUUID()}.tmp`);
+  try {
+    writeFileSync(temp, content, { flag: 'wx', mode: 0o600 });
+    chmodSync(temp, mode);
+    renameSync(temp, path);
+  } finally {
+    rmSync(temp, { force: true });
+  }
+}
+
 export class ProjectManager {
   private projectsDir: string;
   private gitManager: GitManager;
@@ -276,7 +292,7 @@ export class ProjectManager {
       createdAt: Date.now(),
       lastOpenedAt: Date.now(),
     };
-    await Bun.write(join(projectPath, META_FILE), JSON.stringify(meta, null, 2));
+    this.writeMeta(projectPath, meta);
 
     // Install dependencies
     const installProc = Bun.spawn(['make', 'install'], {
@@ -341,6 +357,8 @@ export class ProjectManager {
     const filePath = this.safeJoin(projectPath, relativePath, 'follow');
     const file = Bun.file(filePath);
     if (!await file.exists()) throw new Error(`File not found: ${relativePath}`);
+    // A FIFO or device in the tree would block the read forever.
+    if (!statSync(filePath).isFile()) throw new Error(`Not a regular file: ${relativePath}`);
 
     return file.text();
   }
@@ -369,14 +387,7 @@ export class ProjectManager {
       existing = lstatSync(filePath);
     } catch { /* new file */ }
     if (existing?.isFile() && existing.nlink > 1) {
-      const temp = join(dirname(filePath), `.${basename(filePath)}.${randomUUID()}.tmp`);
-      try {
-        writeFileSync(temp, content, { flag: 'wx', mode: 0o600 });
-        chmodSync(temp, existing.mode & 0o777);
-        renameSync(temp, filePath);
-      } finally {
-        rmSync(temp, { force: true });
-      }
+      replaceFile(filePath, content, existing.mode & 0o777);
       return;
     }
 
@@ -411,7 +422,7 @@ export class ProjectManager {
       lastOpenedAt: Date.now(),
     };
     meta.lastOpenedAt = Date.now();
-    await Bun.write(join(projectPath, META_FILE), JSON.stringify(meta, null, 2));
+    this.writeMeta(projectPath, meta);
   }
 
   /**
@@ -434,7 +445,7 @@ export class ProjectManager {
       delete meta.github;
     }
 
-    await Bun.write(join(projectPath, META_FILE), JSON.stringify(meta, null, 2));
+    this.writeMeta(projectPath, meta);
   }
 
   /**
@@ -456,10 +467,12 @@ export class ProjectManager {
     // Prevent path traversal
     const resolved = resolve(projectPath);
     if (!isWithin(resolved, resolve(this.projectsDir))) return null;
-    // A directory: a one-component id can still name a FILE in the projects
-    // dir, such as the dev server's PID file, which path "." would overwrite.
+    // A real directory: a one-component id can still name a FILE in the
+    // projects dir, such as the dev server's PID file, or a symlink to a git
+    // dir, which safeJoin would then trust as the project root. listProjects
+    // never shows either.
     try {
-      if (!statSync(resolved).isDirectory()) return null;
+      if (!lstatSync(resolved).isDirectory()) return null;
     } catch {
       return null;
     }
@@ -478,6 +491,7 @@ export class ProjectManager {
    */
   private safeJoin(projectPath: string, relativePath: string, final: 'follow' | 'nofollow'): string {
     const requested = String(relativePath);
+    if (requested.includes('\0')) throw new Error('Path contains a NUL byte');
     if (requested.split(/[\\/]/).some(isGitDirName)) throw gitDirRefusal(requested);
 
     const resolved = resolve(join(projectPath, requested));
@@ -506,15 +520,24 @@ export class ProjectManager {
       .slice(0, 64) || 'project';
   }
 
+  /**
+   * The metadata file is the daemon's, but it sits in the tree, and a pulled
+   * commit can make it a symlink to `.git/HEAD` or `.git/config`. So it is
+   * only ever read as a regular file, and written by replacing the name: a
+   * rename over a symlink replaces the link and never touches its target.
+   */
   private readMeta(projectPath: string): ProjectMeta | null {
     const metaPath = join(projectPath, META_FILE);
-    if (!existsSync(metaPath)) return null;
     try {
-      const text = require('node:fs').readFileSync(metaPath, 'utf-8');
-      return JSON.parse(text) as ProjectMeta;
+      if (!lstatSync(metaPath).isFile()) return null;
+      return JSON.parse(readFileSync(metaPath, 'utf-8')) as ProjectMeta;
     } catch {
       return null;
     }
+  }
+
+  private writeMeta(projectPath: string, meta: ProjectMeta): void {
+    replaceFile(join(projectPath, META_FILE), JSON.stringify(meta, null, 2), 0o644);
   }
 
   /**

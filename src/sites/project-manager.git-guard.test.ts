@@ -284,9 +284,48 @@ describe('project_id cannot move the project root onto a git dir', () => {
     expect(readFileSync(join(projectsDir, 'pids.json'), 'utf-8')).toBe('{}');
   });
 
+  test('a project dir that is a symlink is not a project, wherever it points', async () => {
+    symlinkSync(join(project, '.git'), join(projectsDir, 'gitlink'));
+    symlinkSync(project, join(projectsDir, 'applink'));
+    await expectRefused(() => read('config', 'gitlink'), 'not found');
+    await expectRefused(() => write('config', 'x', 'gitlink'), 'not found');
+    await expectRefused(() => read('src/App.tsx', 'applink'), 'not found');
+    expect(manager.getProjectPath('gitlink')).toBe(null);
+  });
+
   test('the project root itself is not a file path', async () => {
     await expectRefused(() => write('.'), 'A file path inside the project is required');
     await expectRefused(() => del(''), 'A file path inside the project is required');
+  });
+});
+
+describe('odd paths and files', () => {
+  test('a NUL byte is refused before it reaches the filesystem', async () => {
+    await expectRefused(() => write('.git\0/config'), 'NUL byte');
+    await expectRefused(() => read('src/App.tsx\0.git'), 'NUL byte');
+  });
+
+  test('reading a FIFO is refused instead of blocking', async () => {
+    const made = Bun.spawnSync(['mkfifo', join(project, 'pipe')]);
+    expect(made.exitCode).toBe(0);
+    expect(await read('pipe')).toContain('Not a regular file');
+  });
+});
+
+describe("the daemon's own metadata writes do not follow a planted symlink", () => {
+  test('.jarvis-project.json linked to .git/HEAD is replaced, and HEAD is left alone', async () => {
+    symlinkSync('.git/HEAD', join(project, '.jarvis-project.json'));
+    await manager.touchProject('app');
+    await manager.updateGitHubMeta('app', null);
+    expect(readFileSync(join(project, '.git', 'HEAD'), 'utf-8')).toBe('ref: refs/heads/main\n');
+    expect(lstatSync(join(project, '.jarvis-project.json')).isFile()).toBe(true);
+    expect(JSON.parse(readFileSync(join(project, '.jarvis-project.json'), 'utf-8')).name).toBe('app');
+  });
+
+  test('a metadata symlink is never read through', async () => {
+    symlinkSync('.git/config', join(project, '.jarvis-project.json'));
+    writeFileSync(join(project, '.git', 'config'), '{"name":"from git config"}');
+    expect((await manager.getProject('app'))?.name).toBe('app');
   });
 });
 

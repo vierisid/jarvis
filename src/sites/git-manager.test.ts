@@ -111,6 +111,16 @@ describe('planted config does not run code through the daemon', () => {
   });
 });
 
+describe('planted signing config', () => {
+  test('commit.gpgSign does not start gpg.program on the auto-commit', async () => {
+    plant(`[commit]\n\tgpgSign = true\n[gpg]\n\tprogram = "${join(root, 'gpg.sh')}"\n`);
+    executable(join(root, 'gpg.sh'), `${touch()}; exit 1`);
+    writeFileSync(join(repo, 'src', 'a.txt'), 'two\n');
+    expect((await git.autoCommit(repo, 'edit'))?.message).toBe('edit');
+    expect(existsSync(marker)).toBe(false);
+  });
+});
+
 describe('branch names cannot become options (#520)', () => {
   const OPTIONS = ['--orphan=x', '--detach', '-f', '--force', '--exec=touch RAN', '-D', '-'];
   const MALFORMED = ['', 'a..b', 'HEAD', 'with space', 'trailing.lock', 'x~1'];

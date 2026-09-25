@@ -27,6 +27,9 @@ import { sanitizedEnv } from '../util/subprocess-env.ts';
  *   existing executable hook keeps its mode. Costs a user's pre-commit lint on
  *   auto-commits; their own `git commit` still runs it.
  * - `log.showSignature=false`: getLog would otherwise start gpg.
+ * - `commit.gpgSign=false`: a signing commit starts `gpg.program`, which the
+ *   project config can name. Costs signatures on the daemon's auto-commits,
+ *   which could only work anyway with a gpg-agent that needs no prompt.
  *
  * NOT pinnable this way, because the names are arbitrary: filter drivers
  * (`filter.<x>.clean`), merge drivers and textconv drivers, and config pulled
@@ -39,6 +42,7 @@ const PROJECT_GIT_PINS = [
   '-c', 'core.fsmonitor=false',
   '-c', 'core.hooksPath=/dev/null',
   '-c', 'log.showSignature=false',
+  '-c', 'commit.gpgSign=false',
 ];
 
 export class GitManager {
