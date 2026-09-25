@@ -1,6 +1,6 @@
 /**
  * Per-call-site leak probe for #512. Run as a CHILD process by
- * src/workflows/spawn-env.test.ts; the same arrangement as
+ * src/spawn-env-sites.test.ts; the same arrangement as
  * src/sites/fixtures/spawn-env-probe.ts, for the same reason: Bun spawns an
  * inheriting child from the environment snapshot taken at process start, so a
  * canary assigned to `process.env` inside `bun test` is invisible to exactly
@@ -18,12 +18,12 @@
 import { spawn } from 'node:child_process';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { noOpCodeSandbox } from '../activepieces/packages/server/engine/src/lib/core/code/no-op-code-sandbox';
-import { catalogById } from '../pieces-library/catalog';
-import { installPiece, writeManifest } from '../pieces-library/installer';
-import { reconcilePiecesLibrary } from '../pieces-library/reconciler';
-import { ENGINE_BUILD_PATHS, ensureStagingInstalled } from '../runner/engine-runtime/build';
-import { ensureUiBuilt } from '../../daemon/ui-autobuild';
+import { noOpCodeSandbox } from '../workflows/activepieces/packages/server/engine/src/lib/core/code/no-op-code-sandbox';
+import { catalogById } from '../workflows/pieces-library/catalog';
+import { installPiece, writeManifest } from '../workflows/pieces-library/installer';
+import { reconcilePiecesLibrary } from '../workflows/pieces-library/reconciler';
+import { ENGINE_BUILD_PATHS, ensureStagingInstalled } from '../workflows/runner/engine-runtime/build';
+import { ensureUiBuilt } from '../daemon/ui-autobuild';
 
 const site = process.argv[2]!;
 const workDir = process.argv[3]!;

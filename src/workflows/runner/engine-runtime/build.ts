@@ -35,6 +35,7 @@ import { fileURLToPath } from "node:url";
 import { UPSTREAM_PIN_SHA, UPSTREAM_PIN_TAG } from "../../activepieces/upstream-pin";
 import { ENGINE_LIFECYCLE_SHIM } from "./engine-lifecycle";
 import { sanitizedEnv } from "../../../util/subprocess-env";
+import { BUN_INSTALL_ARGS, SANITIZED_INSTALL_HINT } from "../../../util/sanitized-install";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -398,18 +399,17 @@ export function ensureStagingInstalled(): Promise<void> {
     writeFileSync(pkgPath, desired);
 
     await new Promise<void>((res, rej) => {
-      const child = spawn("bun", ["install", "--silent"], {
+      // Third-party packages, none of which need the daemon's secrets. The
+      // allowlist keeps what bun needs (PATH, HOME, proxies, registry and CA
+      // settings); lifecycle scripts are skipped -- see BUN_INSTALL_ARGS.
+      const child = spawn("bun", [...BUN_INSTALL_ARGS], {
         cwd: STAGING_DIR,
         stdio: "inherit",
-        // Installs third-party packages and runs their lifecycle scripts
-        // (esbuild's postinstall among them), none of which need the daemon's
-        // secrets. The allowlist keeps what bun needs: PATH, HOME, proxies,
-        // registry and CA settings.
         env: sanitizedEnv(),
       });
       child.on("close", (code) => {
         if (code === 0) res();
-        else rej(new Error(`bun install (engine staging) exited with code ${code}`));
+        else rej(new Error(`bun install (engine staging) exited with code ${code}. ${SANITIZED_INSTALL_HINT}`));
       });
       child.on("error", rej);
     });

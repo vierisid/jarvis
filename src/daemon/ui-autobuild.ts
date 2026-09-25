@@ -9,14 +9,12 @@ import { existsSync } from 'node:fs';
 import path from 'node:path';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
 
-export type UiAutobuildResult = 'present' | 'built' | 'failed';
-
 export function ensureUiBuilt(
   repoRoot: string,
   log: (message: string) => void,
-): UiAutobuildResult {
+): void {
   const uiIndexPath = path.join(repoRoot, 'ui', 'dist', 'index.html');
-  if (existsSync(uiIndexPath)) return 'present';
+  if (existsSync(uiIndexPath)) return;
 
   log('Dashboard UI not built — building automatically...');
   const buildResult = Bun.spawnSync(['bun', 'run', 'build:ui'], {
@@ -38,9 +36,8 @@ export function ensureUiBuilt(
   });
   if (buildResult.exitCode === 0) {
     log('Dashboard UI built successfully');
-    return 'built';
+    return;
   }
   const stderr = buildResult.stderr.toString().trim();
   console.warn(`[Daemon] UI build failed (dashboard may not load): ${stderr.slice(0, 200)}`);
-  return 'failed';
 }

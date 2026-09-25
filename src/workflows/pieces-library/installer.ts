@@ -21,6 +21,7 @@ import { resolve, join } from "node:path";
 import { homedir } from "node:os";
 import { catalogById, type CatalogEntry } from "./catalog";
 import { sanitizedEnv } from "../../util/subprocess-env";
+import { BUN_INSTALL_ARGS, SANITIZED_INSTALL_HINT } from "../../util/sanitized-install";
 
 const ROOT_ENV = "JARVIS_PIECES_DIR";
 
@@ -270,21 +271,21 @@ function runBunInstall(cwd: string): Promise<void> {
  * `bun install` in the pieces dir. The one spawn behind both the installer
  * and the startup reconciler, so the two cannot drift apart on how they run it.
  *
- * The packages are third-party npm code, and bun runs the lifecycle scripts of
- * its default trusted-dependency list during the install, so the child gets
- * the sanitized env rather than the daemon's. `label` only names the caller in
- * the error.
+ * The packages are third-party npm code, so the child gets the sanitized env
+ * rather than the daemon's, and lifecycle scripts do not run at all (see
+ * BUN_INSTALL_ARGS for why that is safe for the catalog). `label` only names
+ * the caller in the error.
  */
 export function runPiecesBunInstall(cwd: string, label: string): Promise<void> {
   return new Promise((res, rej) => {
-    const child = spawn("bun", ["install", "--silent"], {
+    const child = spawn("bun", [...BUN_INSTALL_ARGS], {
       cwd,
       stdio: "inherit",
       env: sanitizedEnv(),
     });
     child.on("close", (code) => {
       if (code === 0) res();
-      else rej(new Error(`bun install (${label}) exited with code ${code}`));
+      else rej(new Error(`bun install (${label}) exited with code ${code}. ${SANITIZED_INSTALL_HINT}`));
     });
     child.on("error", rej);
   });

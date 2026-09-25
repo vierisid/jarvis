@@ -12,9 +12,10 @@ export const expressionPatches = {
       '            // Jarvis: this child runs a CODE step, i.e. workflow-authored code.\n' +
       "            // Inheriting would hand it the engine's own env: SANDBOX_ID (what\n" +
       "            // the daemon's worker RPC accepts an engine connection on), the WS\n" +
-      "            // port, and the reaper's JARVIS_ENGINE_* markers. This closes the\n" +
-      '            // env channel only: at the same uid the child can still read them\n' +
-      '            // from /proc/<engine pid>/environ.\n' +
+      "            // port, and the reaper's JARVIS_ENGINE_* markers. This is env\n" +
+      '            // hygiene, not isolation: at the same uid the child can still read\n' +
+      "            // /proc/<engine pid>/environ, and up the parent chain the daemon's\n" +
+      '            // /proc/<pid>/environ, which holds every secret it started with.\n' +
       '            env: sanitizedEnv(),\n' +
       '        })',
     ],
