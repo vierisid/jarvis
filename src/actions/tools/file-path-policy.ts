@@ -243,16 +243,52 @@ export function siteGitRefusal(requested: string, bases: string[]): string | nul
 }
 
 /**
- * The refusal for a call routed to a sidecar with a RELATIVE path that names
- * a git dir, while site projects exist on this host: the sidecar resolves it
- * against its own cwd, which the brain cannot know, so where it lands cannot
- * be judged. An absolute path, which siteGitRefusal can judge, still works.
+ * Whether a spelled absolute path means something only relative to the
+ * process that opens it: `/proc/self/cwd/...` is the sidecar's cwd,
+ * `/proc/self/root` its root, `/dev/fd/N` its descriptors. Judged here they
+ * would mean the BRAIN's. Any `/proc/...` with a `..` in it counts too: the
+ * kernel ships symlinks into `self` (`/proc/net -> self/net`), so
+ * `/proc/net/../cwd` is the caller's cwd, and a lexical normalize would call
+ * it `/proc/cwd`. A symlink PLANTED elsewhere to point at /proc/self is not
+ * caught -- resolving it here gives the brain's own cwd -- but planting one
+ * already takes a shell.
+ */
+function isProcessRelative(spelled: string): boolean {
+  const parts = spelled.toLowerCase().split('/').filter((c) => c !== '' && c !== '.');
+  if (parts[0] === 'dev' && parts[1] === 'fd') return true;
+  if (parts[0] !== 'proc') return false;
+  return /^(?:self|thread-self|net|\d+)$/.test(parts[1] ?? '') || parts.includes('..');
+}
+
+/**
+ * The refusal for a call routed to a sidecar with a path the brain cannot
+ * judge, else null:
+ *
+ * - a process-relative path (see isProcessRelative), always, whether or not
+ *   it names a git dir: `/proc/self/cwd/.jarvis/projects/app/.git` sent to a
+ *   sidecar whose cwd is home is a site project's git dir that
+ *   siteGitRefusal, resolving `/proc/self` here, would judge as the brain's;
+ * - while site projects exist on this host, a path that names a git dir and
+ *   that the brain cannot place: a RELATIVE one (the sidecar resolves it
+ *   against a cwd the brain does not know), a drive-letter one (`C:/...`,
+ *   which a POSIX sidecar opens under its cwd), and a UNC or device one
+ *   (`\\wsl$\...`, `\\?\C:\...`, `//host/...`), which on a Windows sidecar
+ *   can name this host's files by another route.
+ *
+ * An ordinary absolute POSIX path, which siteGitRefusal can judge, still works.
  */
 export function routedGitRefusal(requested: string): string | null {
-  if (!_siteProjectsDir || isAbsolute(requested) || /^[a-z]:[\\/]/i.test(requested)) return null;
-  if (!hasGitComponent(stripHfsIgnorable(requested))) return null;
-  return `Error: Access denied: "${requested}" is a relative path into a git directory, routed to a sidecar whose working `
-    + 'directory the brain cannot see. Use an absolute path.';
+  const spelled = stripHfsIgnorable(requested).replace(/\\/g, '/');
+  // As spelled and normalized (`/./proc/self`, `/x/../proc/self`).
+  if (isAbsolute(spelled) && [spelled, posix.normalize(spelled)].some(isProcessRelative)) {
+    return `Error: Access denied: "${requested}" is a process-relative path; on a sidecar it names that process's own `
+      + 'files, which the brain cannot judge. Use a plain absolute path.';
+  }
+  const judgeable = isAbsolute(spelled) && !/^[a-z]:\//i.test(spelled) && !/^\/\/[^/]/.test(spelled);
+  if (!_siteProjectsDir || judgeable) return null;
+  if (!hasGitComponent(spelled)) return null;
+  return `Error: Access denied: "${requested}" is a relative, drive-letter or network path into a git directory, routed to `
+    + 'a sidecar: the brain cannot tell where it lands. Use a plain absolute path.';
 }
 
 // ── (2) Exec-on-write paths: rated execute_command ───────────────────────────

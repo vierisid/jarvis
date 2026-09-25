@@ -73,16 +73,20 @@ type Options = {
   readCancels?: boolean;
   /** A per-call gate on the write, read afresh on every call (the real write_file's depends on the disk, #522). */
   writeGate?: () => ToolGate | null;
+  /** The write pins its arguments before they are gated (the real file tools' freezeArguments, #522). */
+  writeFreeze?: boolean;
 };
 
 /** Real backends, boundary, Authority and SQLite; only the model and the tools are scripted. */
 function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
   const script = opts.script ?? WRITE_THEN_FINISH;
   let effects = 0, llmCalls = 0;
+  const writes: Array<Record<string, unknown>> = [];
   const registry = new ToolRegistry();
   registry.register({ name: 'write_file', category: 'file-ops', description: 'Synthetic write', parameters: {},
     ...(opts.writeGate ? { authorityGate: () => opts.writeGate!() } : {}),
-    execute: async () => { effects++; if (opts.writeThrows) throw new Error('disk full'); if (opts.writeInterrupts) { emergency.pause(); checkpointExecution(); } return 'saved'; } });
+    ...(opts.writeFreeze ? { freezeArguments: (p: Record<string, unknown>) => ({ ...p, frozen: true }) } : {}),
+    execute: async (p: Record<string, unknown>) => { writes.push(p); effects++; if (opts.writeThrows) throw new Error('disk full'); if (opts.writeInterrupts) { emergency.pause(); checkpointExecution(); } return 'saved'; } });
   registry.register({ name: 'read_file', category: 'file-ops', description: 'Synthetic read', parameters: {},
     execute: async () => { if (opts.readFails) throw new ActionOutcomeError({ status: 'error', code: 'SYNTHETIC', message: 'unreadable', effect: 'not_started' }); if (opts.readCancels) cancelFlowRun(ids.run.id); return 'contents'; } });
   registry.register({ name: 'run_script', category: 'terminal', description: 'Synthetic command', parameters: {}, execute: async () => { effects++; return 'ran'; } });
@@ -127,7 +131,8 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
       headers: { 'X-Jarvis-Step-Name': 'delegate', 'X-Jarvis-Execution-Path': '[]' },
       body: JSON.stringify({ goal: 'Save the note', maxIterations: 4, role: ROLE.id, ...body }) }),
     claims: { runId: ids.run.id, projectId: DEFAULT_IDS.project, sandboxId: 'test' } as any, params: {} });
-  return { services, approvals, emergency, authority, auditTrail, delegate, route, effects: () => effects, llmCalls: () => llmCalls };
+  return { services, approvals, emergency, authority, auditTrail, delegate, route, effects: () => effects, llmCalls: () => llmCalls,
+    writes };
 }
 
 const audit = () => (getWorkflowDb().query('SELECT agent_id, tool_name, authority_decision, executed FROM audit_trail ORDER BY rowid')
@@ -231,6 +236,18 @@ describe('delegated approvals through the workflow effect boundary', () => {
     const done = await f.delegate();
     expect(f.effects()).toBe(1);
     expect(done.toolCalls[0]!.result).toContain('saved');
+  });
+
+  test('a sub-agent\'s call is frozen before it is gated, and the approved run gets the frozen arguments', async () => {
+    const ids = createRun();
+    const f = backends(ids, { writeFreeze: true });
+    const parked = await f.delegate();
+    expect(parked.status).toBe('approval_required');
+    // The durable record holds what will run: the frozen arguments.
+    expect(JSON.parse(f.approvals.getRequest(parked.approval!.approvalId)!.tool_arguments)).toMatchObject({ frozen: true });
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    await f.delegate();
+    expect(f.writes).toEqual([{ ...ARGS, frozen: true }]);
   });
 
   test('without the gate asking for it, the same shortfall is still a denial', async () => {

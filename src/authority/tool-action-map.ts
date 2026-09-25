@@ -282,10 +282,10 @@ export function resolveToolGate(
  * The phrase in the reason of an approval that was SUBSTITUTED for a level
  * denial (`confirm: 'above_level'`), rather than requested on its own merits.
  *
- * Interpolated by every place that writes one -- the orchestrator's gate and
- * substituteAboveLevel below -- and matched as a substring by the approval
- * learner (deferred-executor.ts), so the producers and the consumer cannot
- * drift. Matched the same way TAINT_PROFILE_LABEL is.
+ * Written in one place, substituteAboveLevel below, which every agent gate
+ * calls, and matched as a substring by the approval learner
+ * (deferred-executor.ts), so the producer and the consumer cannot drift.
+ * Matched the same way TAINT_PROFILE_LABEL is.
  */
 export const ABOVE_LEVEL_SUBSTITUTION = "is above this agent's authority level";
 

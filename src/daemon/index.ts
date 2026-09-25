@@ -5454,7 +5454,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // site_run_command, scaffolding and `make dev` run their code here).
         // Say so, since the flag reads as if nothing runs locally.
         // Documented in docs/SELF_HOSTING.md.
-        if (config.noLocalTools && sitesConfig.enabled !== false) {
+        if (config.noLocalTools) {
           console.warn('[Daemon] --no-local-tools is set, but the site builder is enabled: site projects are built and run '
             + 'on THIS host (site_run_command, scaffolding, make dev). Set sites.enabled: false if this host must not run '
             + 'model-written code.');

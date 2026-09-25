@@ -31,7 +31,7 @@ import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { listDirectoryTool, readFileTool, setDefaultCwd, writeFileTool } from './builtin.ts';
 import {
-  execOnWrite, execOnWriteClass, relativeBases, resolveReal, setDaemonDataRoots, setPolicyHome, setSiteProjectsDir,
+  execOnWrite, execOnWriteClass, relativeBases, resolveReal, routedGitRefusal, setDaemonDataRoots, setPolicyHome, setSiteProjectsDir,
   siteGitRefusal,
 } from './file-path-policy.ts';
 import { ToolRegistry } from './registry.ts';
@@ -310,11 +310,39 @@ describe('generic file tools refuse a site project\'s git internals', () => {
   test('a relative git path routed to a sidecar is refused: its cwd is unknown here', async () => {
     setDefaultCwd(null);
     for (const path of ['app/.git/config', 'x/.GIT/hooks/pre-commit']) {
-      expect(await read(path, { target: 'hand-started' })).toContain('relative path into a git directory');
-      expect(await write(path, 'x', { target: 'hand-started' })).toContain('relative path into a git directory');
+      expect(await read(path, { target: 'hand-started' })).toContain('relative, drive-letter or network path into a git directory');
+      expect(await write(path, 'x', { target: 'hand-started' })).toContain('relative, drive-letter or network path into a git directory');
     }
     // Not routed: judged where it resolves (home), which is no site project.
     expect(await read('some/.git/config')).toContain('File not found');
+  });
+
+  test('a process-relative path routed to a sidecar is refused: it names the sidecar\'s cwd, not the brain\'s', async () => {
+    // An XDG-autostarted sidecar has cwd = home, so this is the brain's
+    // project reflog if the sidecar runs here; judged here, /proc/self is the brain.
+    const viaCwd = '/proc/self/cwd/.jarvis/projects/app/.git/logs/HEAD';
+    for (const path of [viaCwd, '/proc/thread-self/cwd/x/.git/config', '/proc/4242/root/etc/passwd', '/dev/fd/3',
+      '//proc//self/cwd/notes.txt', '\\proc\\self\\cwd\\x', '/./proc/self/cwd/x', '/tmp/../proc/self/root',
+      '/proc/net/../cwd/.jarvis/projects/app/.git/logs/HEAD', '/proc/sys/../self/cwd/x']) {
+      expect(await read(path, { target: 'autostarted' })).toContain('process-relative path');
+      expect(await write(path, 'x', { target: 'autostarted' })).toContain('process-relative path');
+      expect(await list(path, { target: 'autostarted' })).toContain('process-relative path');
+    }
+    // Not process-relative: judged as usual.
+    expect(routedGitRefusal('/proc/cpuinfo')).toBeNull();
+    expect(routedGitRefusal('/procedures/self/x')).toBeNull();
+  });
+
+  test('a drive-letter or network git path routed to a sidecar cannot be placed, so it is refused', async () => {
+    setDefaultCwd(null);
+    for (const path of ['C:/work/app/.git/config', 'C:\\work\\app\\.git\\hooks\\pre-commit', 'd:/x/.GIT/config',
+      '\\\\wsl.localhost\\U\\x\\.git\\config', '//wsl$/U/x/.git/config', '\\\\?\\C:\\x\\.git\\config']) {
+      expect(await read(path, { target: 'linux-box' })).toContain('drive-letter or network path into a git directory');
+      expect(await write(path, 'x', { target: 'linux-box' })).toContain('drive-letter or network path into a git directory');
+    }
+    expect(routedGitRefusal('//wsl$/U/x/notes.txt')).toBeNull();
+    expect(routedGitRefusal('C:/work/app/notes.txt')).toBeNull();
+    expect(routedGitRefusal(join(project, DOT_GIT, 'config'))).toBeNull(); // absolute POSIX: siteGitRefusal's job
   });
 
   test('a git dir nothing points at -- a bare repo in the tree -- is recognised by its content', async () => {
@@ -748,6 +776,25 @@ describe('the chat gate pins the path before it asks', () => {
     expect(existsSync(join(home, 'src', 'App.tsx'))).toBe(false);
   });
 
+  test('the realtime (voice) path freezes arguments before it gates and runs them', async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const registry = new ToolRegistry();
+    registry.register({ name: 'write_file', description: 'probe', category: 'file-ops',
+      parameters: { path: { type: 'string', description: 'p', required: true }, frozen: { type: 'boolean', description: 'f', required: false } },
+      freezeArguments: (p) => ({ ...p, frozen: true }),
+      authorityGate: (p) => { seen.push({ gated: p.frozen === true }); return null; },
+      execute: async (p) => { seen.push({ ran: p.frozen === true }); return 'ok'; } });
+    const orch = new AgentOrchestrator();
+    orch.setToolRegistry(registry);
+    orch.setAuthorityEngine(new AuthorityEngine({ default_level: 10, governed_categories: [], overrides: [], context_rules: [],
+      learning: { enabled: false, suggest_threshold: 5 }, emergency_state: 'normal' }));
+    orch.setAuditTrail(new AuditTrail());
+    orch.createPrimary({ id: 'personal-assistant', name: 'PA', description: 't', responsibilities: [], tools: ['file-ops'],
+      authority_level: 10 } as never);
+    await orch.executeRealtimeToolCall('write_file', { path: 'x' }, {});
+    expect(seen).toEqual([{ gated: true }, { ran: true }]);
+  });
+
   test('at level 3 an exec-on-write asks on a card that names the resolved file', async () => {
     const f = chat(3, []);
     expect(String(await f.call({ path: '.bashrc', content: 'echo hi\n' }))).toContain('[AWAITING_APPROVAL]');
@@ -852,7 +899,7 @@ describe('the workflow effect boundary rates write_file the same way', () => {
   afterEach(() => closeWorkflowDb());
 
   /** A real flow step through the real boundary; `level` and `governed` as an install configures them. */
-  function flowStep(level: number, governed: string[]) {
+  function flowStep(level: number, governed: string[], overrides: unknown[] = []) {
     const flow = createFlow();
     const version = createDraftVersion({ flowId: flow.id, displayName: 'write step', trigger: {
       name: 'trigger', type: 'EMPTY', nextAction: { name: 'action', type: 'PIECE', settings: {
@@ -864,7 +911,7 @@ describe('the workflow effect boundary rates write_file the same way', () => {
     const approvals = new ApprovalManager();
     const backends = buildSandboxServiceBackends({ credentialResolver: new CredentialResolver(),
       llmManager: {}, wsService: {}, eventBuffer: new WorkflowEventBuffer(), toolRegistry: registry,
-      authorityEngine: new AuthorityEngine({ default_level: level, governed_categories: governed as never, overrides: [],
+      authorityEngine: new AuthorityEngine({ default_level: level, governed_categories: governed as never, overrides: overrides as never,
         context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' }),
       emergencyController: new EmergencyController(), auditTrail: new AuditTrail(), approvalManager: approvals,
       onWorkflowApproval: () => {}, channelService: {},
@@ -897,6 +944,34 @@ describe('the workflow effect boundary rates write_file the same way', () => {
     f.approvals.approve(parked.approval!.approvalId, 'test');
     expect(String((await f.invoke({ path: rc, content: 'echo hi\n' })).result)).toContain('File written successfully');
     expect(readFileSync(rc, 'utf-8')).toBe('echo hi\n');
+  });
+
+  test('the substitution is only for a gated shortfall above a floor the workflow clears', async () => {
+    setDefaultCwd(null);
+    const shipped = ['send_email', 'send_message', 'make_payment'];
+    // Level 2 does not clear write_data: a plain write and an rc write both fail, nothing parks.
+    await expect(flowStep(2, shipped).invoke({ path: join(outside, 'report.md'), content: 'x' })).rejects.toThrow(/Authority denied/);
+    await expect(flowStep(2, shipped).invoke({ path: join(outside, '.bashrc'), content: 'x' })).rejects.toThrow(/Authority denied/);
+    // An override that denies execute_command is a denial, not a shortfall.
+    await expect(flowStep(3, shipped, [{ action: 'execute_command', allowed: false }])
+      .invoke({ path: join(outside, '.bashrc'), content: 'x' })).rejects.toThrow(/Authority denied/);
+    expect(existsSync(join(outside, 'report.md'))).toBe(false);
+    expect(existsSync(join(outside, '.bashrc'))).toBe(false);
+  });
+
+  test('a relative rc write at level 3 parks, and once approved lands in the home it was resolved against', async () => {
+    setDefaultCwd(null);
+    const f = flowStep(3, ['send_email', 'send_message', 'make_payment']);
+    const params = { path: '.bashrc', content: 'echo hi\n' };
+    const parked = await f.invoke(params);
+    expect(parked.approval).toBeDefined();
+    expect(existsSync(join(home, '.bashrc'))).toBe(false);
+    // Where the approved write will land, checked BEFORE approving: if the
+    // path resolved against the real home, the approval must never run.
+    expect(JSON.parse(f.approvals.getRequest(parked.approval!.approvalId)!.tool_arguments).path).toBe(join(home, '.bashrc'));
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    expect(String((await f.invoke(params)).result)).toContain(join(home, '.bashrc'));
+    expect(readFileSync(join(home, '.bashrc'), 'utf-8')).toBe('echo hi\n');
   });
 
   test('a plain write reviewed as write_data is not dispatched once the file is a program', async () => {
