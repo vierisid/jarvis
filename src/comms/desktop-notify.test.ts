@@ -108,6 +108,11 @@ describe('buildPowerShellToastScript', () => {
     expect(title).toBe('abcd');
     expect(body).toBe('x\ty\nz\r');
   });
+
+  test('control characters are dropped before the cut, so they do not use up the cap', () => {
+    const title = '\u0007'.repeat(10) + 'a'.repeat(TOAST_TITLE_MAX);
+    expect(decodedTexts(buildPowerShellToastScript(title, ''))[0]).toBe('a'.repeat(TOAST_TITLE_MAX));
+  });
 });
 
 describe('buildNotifySendArgs', () => {
@@ -138,8 +143,69 @@ describe('buildNotifySendArgs', () => {
 // not show there; the skeleton check above covers that), and run only the
 // decode lines to check the round trip. pwsh is preinstalled on GitHub's
 // ubuntu runners.
+//
+// Each pwsh start costs a few hundred ms, so every case of a kind goes through
+// ONE pwsh, fed as base64 on stdin, and the per-case tests read its results.
 
-const PWSH = Bun.which('pwsh');
+/** Under the 30s test timeout, so a hung pwsh fails the test rather than the run. */
+const SPAWN_TIMEOUT_MS = 20_000;
+const TEST_TIMEOUT_MS = 30_000;
+
+/** Probed by running it, as windows.test.ts does: a broken install skips rather than fails. */
+const PWSH = (() => {
+  const path = Bun.which('pwsh');
+  if (!path) return null;
+  const r = Bun.spawnSync([path, '-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.Major'], {
+    stdin: 'ignore', stdout: 'ignore', stderr: 'ignore', timeout: SPAWN_TIMEOUT_MS,
+  });
+  return r.exitCode === 0 ? path : null;
+})();
+
+/** Run `wrapper` once over every script: each arrives as base64 in a JSON array on stdin. */
+function pwshBatch<T>(wrapper: string, scripts: string[]): T[] {
+  const input = JSON.stringify(scripts.map(s => Buffer.from(s, 'utf8').toString('base64')));
+  const r = Bun.spawnSync([PWSH!, '-NoProfile', '-NonInteractive', '-Command', wrapper], {
+    stdin: new TextEncoder().encode(input), stdout: 'pipe', stderr: 'pipe', timeout: SPAWN_TIMEOUT_MS,
+    env: { ...process.env, NO_COLOR: '1' },
+  });
+  expect({ code: r.exitCode, err: r.stderr.toString() }).toEqual({ code: 0, err: '' });
+  const results = JSON.parse(r.stdout.toString()) as T[];
+  expect(results).toHaveLength(scripts.length);
+  return results;
+}
+
+const EACH_SCRIPT = `
+  $scripts = [Console]::In.ReadToEnd() | ConvertFrom-Json
+  $results = foreach ($b64 in $scripts) {
+    $s = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($b64))
+`;
+
+/** Parse each script without running it: its parse errors and every command it names. */
+const PARSE_WRAPPER = `${EACH_SCRIPT}
+    $errs = $null
+    $ast = [System.Management.Automation.Language.Parser]::ParseInput($s, [ref]$null, [ref]$errs)
+    $cmds = $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.CommandAst] }, $true)
+    @{ errors = @($errs | ForEach-Object Message); commands = @($cmds | ForEach-Object { $_.GetCommandName() }) }
+  }
+  ConvertTo-Json -Compress -Depth 4 -InputObject @($results)
+`;
+
+/** Run each script in its own scope and collect its output, or the error that stopped it. */
+const RUN_WRAPPER = `${EACH_SCRIPT}
+    try { @{ out = [string](& ([scriptblock]::Create($s))); err = '' } }
+    catch { @{ out = ''; err = $_.ToString() } }
+  }
+  ConvertTo-Json -Compress -InputObject @($results)
+`;
+
+/**
+ * Compute on first use, so a filtered run (`-t`) that selects none of these
+ * starts no batch -- only the PWSH probe above, which skipIf needs up front.
+ */
+function lazy<T>(compute: () => T): () => T {
+  let value: { v: T } | undefined;
+  return () => (value ??= { v: compute() }).v;
+}
 
 describe.skipIf(!PWSH)('toast script under a real PowerShell', () => {
   /** The pre-#515 builder, verbatim, as a positive control for the payloads. */
@@ -157,68 +223,104 @@ describe.skipIf(!PWSH)('toast script under a real PowerShell', () => {
   `.trim();
   }
 
-  function pwsh(script: string): { code: number | null; out: string; err: string } {
-    const r = Bun.spawnSync([PWSH!, '-NoProfile', '-NonInteractive', '-Command', script], {
-      stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', timeout: 30_000,
-      env: { ...process.env, NO_COLOR: '1' },
-    });
-    return { code: r.exitCode, out: r.stdout.toString(), err: r.stderr.toString() };
-  }
-
-  /** Parse `script` without running it: its parse errors and every command it names. */
-  function parse(script: string): { errors: string[]; commands: string[] } {
-    const b64 = Buffer.from(script, 'utf8').toString('base64');
-    const r = pwsh(`
-      $s = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${b64}'))
-      $errs = $null
-      $ast = [System.Management.Automation.Language.Parser]::ParseInput($s, [ref]$null, [ref]$errs)
-      $cmds = $ast.FindAll({ $args[0] -is [System.Management.Automation.Language.CommandAst] }, $true)
-      ConvertTo-Json -Compress @{ errors = @($errs | ForEach-Object Message); commands = @($cmds | ForEach-Object { $_.GetCommandName() }) }
-    `);
-    expect({ code: r.code, err: r.err }).toEqual({ code: 0, err: '' });
-    return JSON.parse(r.out);
-  }
-
   // Close the literal and the LoadXml call, run a command, then reopen a
   // parenthesised literal for the script's own trailing `')`.
   const TYPOGRAPHIC = ['\u2018', '\u2019', '\u201A', '\u201B'];
   const payload = (q: string) => `${q}); New-Item pwned; (${q}`;
   const FIXED_COMMANDS = ['Out-Null', 'Out-Null', 'Out-Null', 'Out-Null'];
+  const CAP_TITLE = 'x'.repeat(TOAST_TITLE_MAX - 1) + "'";
+  const CAP_BODY = "'); New-Item pwned; ('";
+
+  const PARSE_CASES: Record<string, string> = {
+    'new:empty': buildPowerShellToastScript('', ''),
+    ...Object.fromEntries(TYPOGRAPHIC.map(q => [`legacy:${q}`, legacyScript(payload(q), 'body')])),
+    ...Object.fromEntries([...TYPOGRAPHIC, "'"].map(q => [`new:${q}`, buildPowerShellToastScript(payload(q), payload(q))])),
+    'legacy:cap': legacyScript(CAP_TITLE, CAP_BODY),
+    'new:cap': buildPowerShellToastScript(CAP_TITLE, CAP_BODY),
+  };
+  type Parsed = { errors: string[]; commands: string[] };
+  const parsed = lazy(() => {
+    const names = Object.keys(PARSE_CASES);
+    const results = pwshBatch<Parsed>(PARSE_WRAPPER, names.map(n => PARSE_CASES[n]!));
+    return Object.fromEntries(names.map((n, i) => [n, results[i]!]));
+  });
 
   test('the new script, with empty text, parses to its fixed commands', () => {
-    expect(parse(buildPowerShellToastScript('', ''))).toEqual({ errors: [], commands: FIXED_COMMANDS });
-  }, 30_000);
+    expect(parsed()['new:empty']).toEqual({ errors: [], commands: FIXED_COMMANDS });
+  }, TEST_TIMEOUT_MS);
 
   test.each(TYPOGRAPHIC)('the legacy escaping lets a payload closed by %p add a command (the payloads are live)', q => {
-    expect(parse(legacyScript(payload(q), 'body'))).toEqual({ errors: [], commands: ['Out-Null', 'Out-Null', 'New-Item'] });
-  }, 30_000);
+    expect(parsed()[`legacy:${q}`]).toEqual({ errors: [], commands: ['Out-Null', 'Out-Null', 'New-Item'] });
+  }, TEST_TIMEOUT_MS);
 
   test.each([...TYPOGRAPHIC, "'"])('the new script adds no command for a payload closed by %p', q => {
-    expect(parse(buildPowerShellToastScript(payload(q), payload(q)))).toEqual({ errors: [], commands: FIXED_COMMANDS });
-  }, 30_000);
+    expect(parsed()[`new:${q}`]).toEqual({ errors: [], commands: FIXED_COMMANDS });
+  }, TEST_TIMEOUT_MS);
 
   test("a quote at the title cap broke the legacy script's parse, and no longer does", () => {
-    const title = 'x'.repeat(TOAST_TITLE_MAX - 1) + "'";
-    const body = "'); New-Item pwned; ('";
-    expect(parse(legacyScript(title, body)).errors).not.toEqual([]);
-    expect(parse(buildPowerShellToastScript(title, body))).toEqual({ errors: [], commands: FIXED_COMMANDS });
-  }, 30_000);
+    expect(parsed()['legacy:cap']!.errors).not.toEqual([]);
+    expect(parsed()['new:cap']).toEqual({ errors: [], commands: FIXED_COMMANDS });
+  }, TEST_TIMEOUT_MS);
 
   const ROUND_TRIP = [
     ...HOSTILE,
     ...["'", '\u2018', '\u2019', '\u201A', '\u201B'].map(q => 'a'.repeat(TOAST_TITLE_MAX - 1) + q),
   ];
 
-  test.each(ROUND_TRIP)('PowerShell decodes exactly the text that was sent: %p', text => {
-    // Only the lines that handle the text, run as generated, then report what
-    // PowerShell holds -- as base64 so the console encoding cannot interfere.
+  // Only the lines that handle the text, as generated, then report what
+  // PowerShell holds -- as base64 so the console encoding cannot interfere.
+  const decoded = lazy(() => pwshBatch<{ out: string; err: string }>(RUN_WRAPPER, ROUND_TRIP.map(text => {
     const script = buildPowerShellToastScript(text, `${text} \u{1F389}`);
     const decodeLines = script.split('\n').filter(l => /^\s*\$(ErrorActionPreference|title|body) =/.test(l));
     expect(decodeLines).toHaveLength(3);
-    const r = pwsh(
-      `${decodeLines.join('\n')}\n[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($title + [char]0 + $body))`,
+    return `${decodeLines.join('\n')}\n[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($title + [char]0 + $body))`;
+  })));
+
+  test.each(ROUND_TRIP.map((text, i) => [text, i] as const))('PowerShell decodes exactly the text that was sent: %p', (text, i) => {
+    const { out, err } = decoded()[i]!;
+    expect(err).toBe('');
+    expect(Buffer.from(out, 'base64').toString('utf8')).toBe(`${text}\u0000${text} \u{1F389}`);
+  }, TEST_TIMEOUT_MS);
+});
+
+// ── Build the toast XML with the real WinRT DOM ──
+//
+// Only Windows has WinRT, so this runs only there: in CI, the toast-windows
+// job in .github/workflows/test.yml, on Windows PowerShell 5.1 -- the
+// powershell.exe the daemon spawns. It runs the generated script minus its
+// final `.Show($toast)` and reports the XML the toast would have been built
+// from.
+
+describe.skipIf(process.platform !== 'win32')('toast XML under Windows PowerShell 5.1 and WinRT', () => {
+  test('hostile text lands escaped, as text, in the stock ToastText02 XML', () => {
+    const title = '\u2019); New-Item pwned; (\u2019 $(calc) `n; <b>&amp;</b> ]]> \u{1F389}';
+    const body = '</text><text id="3">x</text> \' \u201Cq\u201D caf\u00e9';
+    const lines = buildPowerShellToastScript(title, body).split('\n');
+    expect(lines.at(-1)).toContain('.Show($toast)');
+    const probe = [...lines.slice(0, -1), '[Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($xml.GetXml()))'].join('\n');
+
+    const r = Bun.spawnSync(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command', probe], {
+      stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', timeout: 60_000,
+    });
+    // stderr only matters on failure: 5.1 can print progress noise there.
+    expect({ code: r.exitCode, err: r.exitCode === 0 ? '' : r.stderr.toString() }).toEqual({ code: 0, err: '' });
+    const xml = Buffer.from(r.stdout.toString().trim(), 'base64').toString('utf8');
+
+    // `<` and `&` must be escaped in text; whether `>`, `"`, `'` and non-ASCII
+    // are is the serializer's choice, so those are normalised before comparing.
+    // An escaped `&` reads `&amp;`, so the input cannot manufacture an entity
+    // for this step to decode.
+    const normalised = xml
+      // MSXML, under Windows.Data.Xml.Dom, may end the document with CRLF.
+      .replace(/^<\?xml[^>]*\?>\s*/, '').trimEnd()
+      .replace(/&gt;/g, '>').replace(/&quot;/g, '"').replace(/&apos;/g, "'")
+      .replace(/&#x([0-9a-f]+);/gi, (_, hex: string) => String.fromCodePoint(parseInt(hex, 16)))
+      .replace(/&#([0-9]+);/g, (_, dec: string) => String.fromCodePoint(parseInt(dec, 10)));
+    const escape = (s: string) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;');
+    expect(normalised).toBe(
+      '<toast><visual><binding template="ToastText02">' +
+      `<text id="1">${escape(title)}</text><text id="2">${escape(body)}</text>` +
+      '</binding></visual></toast>',
     );
-    expect({ code: r.code, err: r.err }).toEqual({ code: 0, err: '' });
-    expect(Buffer.from(r.out.trim(), 'base64').toString('utf8')).toBe(`${text}\u0000${text} \u{1F389}`);
-  }, 30_000);
+  }, 90_000);
 });

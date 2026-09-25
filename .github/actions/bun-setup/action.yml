@@ -7,7 +7,8 @@ inputs:
       Bun release to install. Pinned, not `latest`: with --frozen-lockfile a Bun
       release that migrates the lockfile format would fail every PR ("lockfile
       had changes, but lockfile is frozen") with no repo change to blame. Bump
-      deliberately, alongside a regenerated bun.lock.
+      deliberately, alongside a regenerated bun.lock, and bump the same pin in
+      the toast-windows job of test.yml, which installs Bun without this action.
     required: false
     default: "1.3.14"
 
