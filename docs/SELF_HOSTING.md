@@ -396,6 +396,29 @@ bun needs it, so anything readable under your home directory is still readable
 to the install; the sanitizing keeps secrets out of the environment, it is not
 a sandbox.
 
+### Commands, apps and the browser the assistant runs
+
+`run_command`, apps the assistant launches, the local Chrome it drives and the
+Windows desktop bridge get your full environment (`PATH`, nvm and virtualenv
+settings, `SSH_AUTH_SOCK`, `DISPLAY`, proxies, your own `GITHUB_TOKEN` or
+`AWS_*`) **minus the daemon's own secrets**:
+
+- every `JARVIS_*` variable except the settings the `jarvis` CLI reads
+  (`JARVIS_HOME`, `JARVIS_PORT`, `JARVIS_SECRETS_DIR`, and so on), so
+  `JARVIS_WORKFLOW_ENCRYPTION_KEY`, `JARVIS_GITHUB_TOKEN` and the provider
+  keys releases before v0.7.0 read, such as `JARVIS_OPENAI_KEY`, are removed;
+- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `NVIDIA_API_KEY`, the provider keys
+  earlier releases read from the environment or told you to export. If you
+  exported one of these for a CLI of your own and want the assistant to run
+  that CLI, pass the key inside the command.
+
+Like the install sanitizing above, this is environment hygiene, not a
+sandbox. The commands run as the daemon's user, so they can still read
+`/proc/<daemon pid>/environ` and the daemon's `~/.jarvis`. Keeping a secret
+out of the daemon's environment (the dashboard and keychain hold LLM keys)
+keeps it out of that file, but nothing short of a sandbox keeps the daemon's
+files from what it runs.
+
 ## Quick reference
 
 | | Single machine | LAN via IP | VPS + domain |

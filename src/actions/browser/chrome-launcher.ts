@@ -12,6 +12,7 @@ import { spawn, type Subprocess } from 'bun';
 import { existsSync, mkdirSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { modelExecEnv } from '../../util/model-exec-env.ts';
 
 export type BrowserKind = 'chrome' | 'brave' | 'edge' | 'chromium';
 
@@ -145,8 +146,15 @@ function findWindowsCandidates(): BrowserExecutable[] {
 /**
  * Launch Chrome with CDP enabled and an isolated user profile.
  * Returns when the CDP port is reachable.
+ *
+ * `exeOverride` is a test seam (src/model-exec-env-sites.test.ts); callers
+ * leave it to detection.
  */
-export async function launchChrome(port: number = 9222, profileDir?: string): Promise<RunningBrowser> {
+export async function launchChrome(
+  port: number = 9222,
+  profileDir?: string,
+  exeOverride?: BrowserExecutable,
+): Promise<RunningBrowser> {
   // Single choke point for browser.local: false (hosted instances). EVERY
   // local-browser path funnels through here lazily (builtin browser tools,
   // the background agent's bg browser), so no CDP port can ever open when
@@ -156,7 +164,7 @@ export async function launchChrome(port: number = 9222, profileDir?: string): Pr
     throw new Error('The local browser is disabled on this machine (browser.local: false). Use a sidecar browser instead.');
   }
 
-  const exe = findBrowserExecutable();
+  const exe = exeOverride ?? findBrowserExecutable();
   if (!exe) {
     throw new Error(
       'No Chrome/Brave/Edge/Chromium found on this system.\n' +
@@ -214,6 +222,11 @@ export async function launchChrome(port: number = 9222, profileDir?: string): Pr
   const proc = spawn([exe.path, ...args], {
     stdout: 'ignore',
     stderr: 'ignore',
+    // The model drives this browser over CDP and can navigate it to
+    // file:///proc/self/environ, so it gets the desktop session without the
+    // daemon's secrets (#514). Hygiene, not isolation: the same model can
+    // navigate to /proc/<daemon pid>/environ. See util/model-exec-env.ts.
+    env: modelExecEnv(),
   });
 
   const startedAt = Date.now();

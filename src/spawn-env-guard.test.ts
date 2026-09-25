@@ -66,19 +66,6 @@ const DESKTOP_SESSION =
   'DBUS_SESSION_BUS_ADDRESS, XDG_RUNTIME_DIR, and on Windows the full ' +
   'session block. The allowlist drops these on purpose.';
 
-/**
- * NOT a finding that these are safe. They run a model-chosen command or
- * executable by design, gated by the authority engine, and today hand it the
- * full daemon env, secrets included. Whether to strip the daemon-owned
- * secrets there is a product decision -- a shell tool is expected to see the
- * user's own env (nvm, venv, ssh-agent, AWS profile, DISPLAY), so the site
- * allowlist is the wrong tool, and a subtractive strip of daemon-owned names
- * changes what the tool can do -- so it is not taken here. Tracked in #514.
- */
-const MODEL_EXEC_PENDING =
-  'PENDING DECISION (#514): model-directed exec on the user\'s ' +
-  'machine by design; see MODEL_EXEC_PENDING in spawn-env-guard.test.ts.';
-
 type Exemption = { reason: string; calls: Record<string, number> };
 
 const EXEMPT: Record<string, Exemption> = {
@@ -117,37 +104,18 @@ const EXEMPT: Record<string, Exemption> = {
   },
   'comms/desktop-notify.ts': {
     reason:
-      'notify-send / powershell toasts; needs the session env (DBUS_SESSION_BUS_ADDRESS, the Windows ' +
-      'session block). NOT a fixed command line: the title and body can be workflow- or model-authored. ' +
-      'They reach notify-send as positional argv after `--`, and the PowerShell script only as base64 ' +
-      'decoded into a toast text node, never as script or XML source (#515).',
-    calls: { detectMethod: 2, sendViaNotifySend: 1, sendViaPowerShell: 1 },
+      'notify-send and `which`; need the session env (DBUS_SESSION_BUS_ADDRESS). NOT a fixed command ' +
+      'line: the title and body can be workflow- or model-authored, and reach notify-send as positional ' +
+      'argv after `--` (#515). The PowerShell toast is in MODEL_EXEC.',
+    calls: { detectMethod: 2, sendViaNotifySend: 1 },
   },
   'actions/app-control/native-exec.ts': {
-    reason: 'powershell/osascript running repo scripts, model data on stdin only. `runNative` is the injected exec seam, a name match rather than a real spawn. ' + DESKTOP_SESSION,
-    calls: { defaultExec: 1, runNative: 1 },
-  },
-  'actions/app-control/sidecar-launcher.ts': {
-    reason:
-      'Launches this repo\'s own desktop-bridge binary (' + DESKTOP_SESSION + ') and, under WSL only, a fixed ' +
-      '`cmd.exe /C echo %USERPROFILE%`, which needs WSL_INTEROP: on WSL2 that names the socket every Windows ' +
-      'program is launched through. The base allowlist drops it (and WSL_DISTRO_NAME and WSLENV); since #519 ' +
-      'a spawn can add those three back as sanitizedEnv extras, as actions/terminal/wsl-bridge.ts does (not ' +
-      'exempt). This probe keeps the inherited env here: its env is decided together with launchSidecar\'s ' +
-      'in #514.',
-    calls: { findSidecarExecutable: 1, launchSidecar: 1 },
-  },
-  'actions/browser/chrome-launcher.ts': {
-    reason:
-      'Launches Chrome for CDP. ' + DESKTOP_SESSION + ' Page JS is renderer-sandboxed and cannot read the ' +
-      'browser process env, but the model drives this browser over CDP and could navigate it to ' +
-      'file:///proc/self/environ, so this is close to MODEL_EXEC_PENDING and goes with that decision.',
-    calls: { launchChrome: 1 },
+    reason: '`runNative` is the injected exec seam, a name match rather than a real spawn. The real one, defaultExec, is in MODEL_EXEC.',
+    calls: { runNative: 1 },
   },
   'actions/app-control/linux.ts': {
-    reason: 'xdotool/wmctrl/xprop/import via Bun `$`: ' + DESKTOP_SESSION + ' launchApp (model-chosen executable and args): ' + MODEL_EXEC_PENDING,
+    reason: 'xdotool/wmctrl/xprop/import via Bun `$`: ' + DESKTOP_SESSION + ' Model text reaches them only as escaped argv. launchApp, the model-chosen executable, is in MODEL_EXEC.',
     calls: {
-      'LinuxAppController.launchApp': 1,
       'LinuxAppController.captureScreen': 3,
       'LinuxAppController.captureWindow': 2,
       'LinuxAppController.checkTool': 1,
@@ -159,10 +127,6 @@ const EXEMPT: Record<string, Exemption> = {
       'LinuxAppController.pressKeys': 1,
       'LinuxAppController.typeText': 1,
     },
-  },
-  'actions/terminal/executor.ts': {
-    reason: 'The run_command tool: `$SHELL -c <model command>`. ' + MODEL_EXEC_PENDING,
-    calls: { 'TerminalExecutor.execute': 1, 'TerminalExecutor.stream': 1 },
   },
 
   'workflows/runner/engine-runtime/spawn.ts': {
@@ -185,6 +149,66 @@ const EXEMPT: Record<string, Exemption> = {
     reason: 'Positive controls (node:child_process via PATH, node:child_process via execPath + IPC as the CODE sandbox does, and Bun.spawnSync) for src/spawn-env-sites.test.ts.',
     calls: { '<module>/<anonymous>': 2, '<module>': 1 },
   },
+  'fixtures/model-exec-env-probe.ts': {
+    reason: 'Positive controls (Bun.spawn and node:child_process spawnSync, env omitted) for src/model-exec-env-sites.test.ts.',
+    calls: { '<module>': 2 },
+  },
+};
+
+/*
+ * Spawns that pass `env: modelExecEnv(...)` (src/util/model-exec-env.ts)
+ * instead of sanitizedEnv(): the daemon's environment minus the daemon's own
+ * secrets, and nothing else removed. Keyed and counted exactly like EXEMPT.
+ *
+ * This is the weaker helper, so it is accepted ONLY where this table says. A
+ * modelExecEnv() spawn anywhere else fails the guard like an inheriting one:
+ * a site-builder or workflow spawn that reached for it would get the user's
+ * whole desktop environment, SSH agent included, where the allowlist belongs.
+ * The bar: the child is the user's own shell or desktop acting for the model
+ * -- a model-authored command line, a model-chosen executable, a browser the
+ * model drives, or model text reaching an interpreter -- and would break under
+ * the allowlist. Tests below also keep the entry points (TerminalExecutor,
+ * defaultExec, launchChrome, launchSidecar) out of src/sites and
+ * src/workflows, and keep the daemon's own restart spawns out of this table:
+ * a restarted daemon needs its secrets.
+ */
+const MODEL_EXEC: Record<string, Exemption> = {
+  'actions/terminal/executor.ts': {
+    reason: 'run_command: `$SHELL -c <model command>`, and the streaming variant.',
+    calls: { 'TerminalExecutor.execute': 1, 'TerminalExecutor.stream': 1 },
+  },
+  'actions/app-control/linux.ts': {
+    reason: 'desktop_launch_app on Linux: a model-chosen executable and arguments.',
+    calls: { 'LinuxAppController.launchApp': 1 },
+  },
+  'actions/app-control/native-exec.ts': {
+    reason:
+      'The Windows/macOS fallback seam. It runs launchApp (Start-Process of a model-chosen executable, ' +
+      'which inherits this env; `open -a <model app>`) as well as the other desktop scripts, which only ' +
+      'need the session.',
+    calls: { defaultExec: 1 },
+  },
+  'actions/browser/chrome-launcher.ts': {
+    reason:
+      'The only local browser launch. The model drives it over CDP and can navigate it to ' +
+      'file:///proc/self/environ. Note Linux launches pass --no-sandbox, so the renderer is not ' +
+      'relied on here either.',
+    calls: { launchChrome: 1 },
+  },
+  'actions/app-control/sidecar-launcher.ts': {
+    reason:
+      'launchSidecar: desktop-bridge, which serves launchApp on Windows and hands the launched app its ' +
+      'own environment. (findSidecarExecutable\'s fixed WSL `cmd.exe /C echo %USERPROFILE%` probe is not ' +
+      'model-directed and uses sanitizedEnv with the #519 WSL interop extras, like wsl-bridge.ts.)',
+    calls: { launchSidecar: 1 },
+  },
+  'comms/desktop-notify.ts': {
+    reason:
+      'The PowerShell toast: a model- or workflow-authored title and body reach the PowerShell interpreter, ' +
+      'as base64 decoded into toast text nodes and never as script or XML source (#515). An interpreter ' +
+      'running for model content gets the model-exec env whatever the quoting.',
+    calls: { sendViaPowerShell: 1 },
+  },
 };
 
 // ---------------------------------------------------------------------------
@@ -204,6 +228,8 @@ const PROCESS_SPAWNERS = new Set(['execve']);
 
 /** Where `sanitizedEnv` must be imported from, resolved, without extension. */
 const SANITIZER_PATH = join(SRC, 'util', 'subprocess-env');
+/** Where `modelExecEnv` must be imported from (see MODEL_EXEC). */
+const MODEL_EXEC_ENV_PATH = join(SRC, 'util', 'model-exec-env');
 
 const SOURCE_EXT = /\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
 const TEST_FILE = /\.test\.(ts|tsx|mts|cts|js|jsx|mjs|cjs)$/;
@@ -407,10 +433,17 @@ function enclosingName(node: ts.Node, sf: ts.SourceFile): string {
 }
 
 type Offender = { line: number; fn: string; why: string };
-type ScanResult = { offenders: Offender[]; diagnostics: number };
+/**
+ * `modelExec`: spawns whose env is exactly modelExecEnv(...), judged against
+ * MODEL_EXEC rather than reported. `imports`: every local module the file
+ * loads (relative or `@/`), resolved and without extension.
+ */
+type ScanResult = { offenders: Offender[]; modelExec: Offender[]; imports: string[]; diagnostics: number };
 
 /**
- * Every spawn in `source` that does not pass `env: sanitizedEnv(...)`.
+ * Every spawn in `source` that does not pass `env: sanitizedEnv(...)` -- or
+ * `env: modelExecEnv(...)`, which is held to the same shape rules and
+ * returned separately, for MODEL_EXEC to judge.
  *
  * What is recognised as a spawn:
  *   1. by NAME: a call to spawn/spawnSync/exec/execSync/execFile/execFileSync/
@@ -449,11 +482,14 @@ function scanSource(source: string, label: string): ScanResult {
   if (!Array.isArray(parseDiagnostics)) throw new Error('typescript no longer exposes parseDiagnostics');
 
   const offenders: Offender[] = [];
-  const report = (node: ts.Node, why: string) => offenders.push({
+  const modelExec: Offender[] = [];
+  const imports: string[] = [];
+  const at = (node: ts.Node, why: string): Offender => ({
     line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1,
     fn: enclosingName(node, sf),
     why,
   });
+  const report = (node: ts.Node, why: string) => offenders.push(at(node, why));
 
   // Pass 1: bindings. File-wide names; shadowing is handled in pass 2.
   const spawnerAliases = new Set<string>();
@@ -461,6 +497,20 @@ function scanSource(source: string, label: string): ScanResult {
   /** The identifiers that declare those bindings; they do not shadow. */
   const moduleBoundDecls = new Set<ts.Node>();
   let sanitizerImported = false;
+  let modelExecImported = false;
+  // `@/` is tsconfig's alias for src/, which Bun honours at runtime.
+  const resolveRelative = (spec: string) =>
+    (spec.startsWith('@/') ? join(SRC, spec.slice(2)) : resolve(dirname(join(SRC, label)), spec)).replace(/\.[cm]?[jt]sx?$/, '');
+  const isLocal = (spec: string) => spec.startsWith('.') || spec.startsWith('@/');
+  /** A plain named import of `name` (no alias, not type-only) from the module at `path`. */
+  const importsHelper = (node: ts.ImportDeclaration, path: string, name: string): boolean => {
+    const clause = node.importClause;
+    const nb = clause?.namedBindings;
+    const spec = (node.moduleSpecifier as ts.StringLiteral).text;
+    return isLocal(spec) && resolveRelative(spec) === path
+      && !!clause && !clause.isTypeOnly && !!nb && ts.isNamedImports(nb)
+      && nb.elements.some(e => e.name.text === name && !e.propertyName && !e.isTypeOnly);
+  };
 
   const spawnersOf = (spec: string): Set<string> | null =>
     CHILD_PROCESS_MODULES.has(spec) ? CHILD_PROCESS_SPAWNERS
@@ -495,11 +545,8 @@ function scanSource(source: string, label: string): ScanResult {
       const spec = node.moduleSpecifier.text;
       const clause = node.importClause;
       const nb = clause?.namedBindings;
-      if (spec.startsWith('.') && resolve(dirname(join(SRC, label)), spec).replace(/\.ts$/, '') === SANITIZER_PATH
-        && clause && !clause.isTypeOnly && nb && ts.isNamedImports(nb)
-        && nb.elements.some(e => e.name.text === 'sanitizedEnv' && !e.propertyName && !e.isTypeOnly)) {
-        sanitizerImported = true;
-      }
+      if (importsHelper(node, SANITIZER_PATH, 'sanitizedEnv')) sanitizerImported = true;
+      if (importsHelper(node, MODEL_EXEC_ENV_PATH, 'modelExecEnv')) modelExecImported = true;
       const spawners = spawnersOf(spec);
       if (spawners && clause && !clause.isTypeOnly) {
         if (clause.name) bindModule(clause.name, spawners);
@@ -514,6 +561,15 @@ function scanSource(source: string, label: string): ScanResult {
         }
       }
     }
+    // Every relative module this file loads, for the import tests below.
+    const loaded = (ts.isImportDeclaration(node) || ts.isExportDeclaration(node))
+      && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)
+      ? node.moduleSpecifier.text
+      : ts.isImportEqualsDeclaration(node) && ts.isExternalModuleReference(node.moduleReference)
+        && ts.isStringLiteral(node.moduleReference.expression)
+        ? node.moduleReference.expression.text
+        : moduleOfLoadCall(node);
+    if (loaded && isLocal(loaded)) imports.push(resolveRelative(loaded));
     // import cp = require('child_process')
     if (ts.isImportEqualsDeclaration(node) && !node.isTypeOnly && ts.isExternalModuleReference(node.moduleReference)
       && ts.isStringLiteral(node.moduleReference.expression)) {
@@ -621,6 +677,19 @@ function scanSource(source: string, label: string): ScanResult {
   const isShellTag = (tag: ts.Expression): boolean =>
     (ts.isIdentifier(unwrap(tag)) && (unwrap(tag) as ts.Identifier).text === '$') || isBoundSpawner(tag);
 
+  /**
+   * Which helper `init` is exactly a call to: sanitizedEnv from
+   * util/subprocess-env, modelExecEnv from util/model-exec-env (both imported
+   * by name, unaliased, unshadowed), or neither.
+   */
+  const envHelperOf = (init: ts.Expression | undefined): 'sanitized' | 'model' | null => {
+    if (!init || !ts.isCallExpression(init) || !ts.isIdentifier(init.expression)) return null;
+    const name = init.expression.text;
+    if (name === 'sanitizedEnv' && sanitizerImported && !isShadowed(name)) return 'sanitized';
+    if (name === 'modelExecEnv' && modelExecImported && !isShadowed(name)) return 'model';
+    return null;
+  };
+
   const checkEnv = (call: ts.CallExpression, callee: string) => {
     const options = call.arguments.find(a => ts.isObjectLiteralExpression(unwrap(a)));
     if (!options) {
@@ -648,9 +717,10 @@ function scanSource(source: string, label: string): ScanResult {
     // substring check would accept `{ ...sanitizedEnv(), ...process.env }`,
     // the likeliest regression and a total leak; a same-named local or a
     // look-alike module could return anything.
-    const ok = !!init && ts.isCallExpression(init) && ts.isIdentifier(init.expression)
-      && init.expression.text === 'sanitizedEnv' && sanitizerImported && !isShadowed('sanitizedEnv');
-    if (!ok) {
+    const helper = envHelperOf(init);
+    if (helper === 'model') {
+      modelExec.push(at(call, `${callee} env: modelExecEnv(...)`));
+    } else if (helper !== 'sanitized') {
       const got = (init ?? prop).getText(sf).replace(/\s+/g, ' ').slice(0, 60);
       report(call, `${callee} env must be exactly sanitizedEnv(...) imported from util/subprocess-env, got: ${got}`);
     }
@@ -691,10 +761,9 @@ function scanSource(source: string, label: string): ScanResult {
     } else if (ts.isCallExpression(node) && isProcessExecve(node.expression)) {
       // process.execve(file, args, env) REPLACES this process; with no env
       // argument the new image gets the daemon's.
-      const env = node.arguments[2];
-      const ok = !!env && ts.isCallExpression(env) && ts.isIdentifier(env.expression)
-        && env.expression.text === 'sanitizedEnv' && sanitizerImported && !isShadowed('sanitizedEnv');
-      if (!ok) report(node, 'process.execve env (third argument) must be exactly sanitizedEnv(...)');
+      const helper = envHelperOf(node.arguments[2]);
+      if (helper === 'model') modelExec.push(at(node, 'process.execve env: modelExecEnv(...)'));
+      else if (helper !== 'sanitized') report(node, 'process.execve env (third argument) must be exactly sanitizedEnv(...)');
     } else if (ts.isCallExpression(node) && isSpawnCallee(node.expression)) {
       checkEnv(node, node.expression.getText(sf));
     } else if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)
@@ -736,7 +805,7 @@ function scanSource(source: string, label: string): ScanResult {
   };
   visit(sf);
 
-  return { offenders, diagnostics: parseDiagnostics.length };
+  return { offenders, modelExec, imports, diagnostics: parseDiagnostics.length };
 }
 
 /**
@@ -805,8 +874,101 @@ describe('no spawn under src/ inherits the daemon environment', () => {
     expect(problems).toEqual([]);
   });
 
+  test('modelExecEnv(...) is used exactly where MODEL_EXEC says, by file, function and count', () => {
+    const problems: string[] = [];
+    for (const [file, { modelExec }] of SCANS) {
+      const allowed = MODEL_EXEC[file]?.calls ?? {};
+      const found = countByFunction(modelExec);
+      for (const fn of new Set([...Object.keys(found), ...Object.keys(allowed)])) {
+        const want = allowed[fn] ?? 0;
+        const got = found[fn] ?? 0;
+        if (want === got) continue;
+        problems.push(
+          `${file} [${fn}]: MODEL_EXEC allows ${want} modelExecEnv() spawn(s), found ${got}. ` +
+          'Anything that is not the model acting on the user\'s own shell or desktop uses sanitizedEnv().',
+          ...modelExec.filter(o => o.fn === fn).map(o => `  ${format(file, o)}`),
+        );
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+
+  test('only MODEL_EXEC files import util/model-exec-env', () => {
+    const importers = [...SCANS]
+      .filter(([, { imports }]) => imports.includes(MODEL_EXEC_ENV_PATH))
+      .map(([file]) => file)
+      .filter(file => !(file in MODEL_EXEC))
+      .sort();
+    expect(importers).toEqual([]);
+  });
+
+  test('the model-exec entry points stay out of the site builder, the workflow engine and the UI build', () => {
+    // MODEL_EXEC only sees spawn SITES. Reuse is the other way the weaker
+    // helper could spread: a site-builder step calling TerminalExecutor would
+    // hand a model-written tree the user's SSH agent without a new spawn for
+    // the guard to see.
+    //   - src/sites and daemon/ui-autobuild: not reachable at all, through any
+    //     chain of local imports.
+    //   - src/workflows: no direct import. Workflows do reach run_command and
+    //     launch_app, but through the tool registry and the agent delegator
+    //     (agents/sub-agent-runner -> actions/tools/builtin), which is the
+    //     authority-gated path; that chain is the cut point, not a finding.
+    const entryPoints = new Set([
+      MODEL_EXEC_ENV_PATH,
+      ...Object.keys(MODEL_EXEC).map(f => join(SRC, f).replace(/\.ts$/, '')),
+    ]);
+    const byPath = new Map<string, string>();
+    for (const file of SCANS.keys()) {
+      const noExt = join(SRC, file).replace(/\.[cm]?[jt]sx?$/, '');
+      byPath.set(noExt, file);
+      if (noExt.endsWith(`${sep}index`)) byPath.set(noExt.slice(0, -`${sep}index`.length), file);
+    }
+    /** The chain from `start` to an entry point, or null. */
+    const chainFrom = (start: string): string[] | null => {
+      const seen = new Set([start]);
+      const queue: string[][] = [[start]];
+      while (queue.length) {
+        const chain = queue.shift()!;
+        for (const imp of SCANS.get(chain.at(-1)!)!.imports) {
+          if (entryPoints.has(imp)) return [...chain, relative(SRC, imp)];
+          const next = byPath.get(imp);
+          if (next && !seen.has(next)) { seen.add(next); queue.push([...chain, next]); }
+        }
+      }
+      return null;
+    };
+    // Positive control: the walk does follow chains. The agent path is a
+    // real three-hop one; if resolution or the path map broke, this would
+    // come back null and the checks below would silently go direct-only.
+    expect(chainFrom('agents/sub-agent-runner.ts')).toEqual([
+      'agents/sub-agent-runner.ts', 'actions/tools/builtin.ts', 'actions/terminal/executor',
+    ]);
+    const problems: string[] = [];
+    for (const [file, { imports }] of SCANS) {
+      if (file.startsWith('sites/') || file === 'daemon/ui-autobuild.ts') {
+        const chain = chainFrom(file);
+        if (chain) problems.push(chain.join(' -> '));
+      } else if (file.startsWith('workflows/')) {
+        for (const i of imports) if (entryPoints.has(i)) problems.push(`${file} -> ${relative(SRC, i)}`);
+      }
+    }
+    expect(problems).toEqual([]);
+  });
+
+  test("the daemon's own restart spawns are never model-exec: a restarted daemon needs its secrets", () => {
+    const restarts: Array<[string, string]> = [
+      ['cli/autostart.ts', 'spawnDetachedShell'],
+      ['cli/autostart.ts', 'scheduleSystemdRestart'],
+      ['cli/update.ts', 'restartDaemonDetached'],
+    ];
+    for (const [file, fn] of restarts) {
+      expect({ file, fn, modelExec: MODEL_EXEC[file]?.calls[fn] ?? 0 }).toEqual({ file, fn, modelExec: 0 });
+      expect({ file, fn, exempt: EXEMPT[file]?.calls[fn] ?? 0 }).toEqual({ file, fn, exempt: 1 });
+    }
+  });
+
   test('every exemption names a scanned file and justifies itself', () => {
-    for (const [file, { calls, reason }] of Object.entries(EXEMPT)) {
+    for (const [file, { calls, reason }] of [...Object.entries(EXEMPT), ...Object.entries(MODEL_EXEC)]) {
       expect({ file, scanned: SCANS.has(file) }).toEqual({ file, scanned: true });
       expect(Object.keys(calls).length).toBeGreaterThan(0);
       for (const n of Object.values(calls)) expect(n).toBeGreaterThan(0);
@@ -955,6 +1117,7 @@ describe('the guard catches evasions', () => {
   // Synthetic sources are labelled as files at src/ root, so this is the
   // import a real file there would write.
   const SAN = `import { sanitizedEnv } from './util/subprocess-env.ts';\n`;
+  const MEX = `import { modelExecEnv } from './util/model-exec-env.ts';\n`;
   const cases: Array<[string, string]> = [
     ['a plain unsanitized spawn', `Bun.spawn(['echo'], { cwd: d, stdout: 'pipe' });`],
     ['an unbalanced paren inside a string', `Bun.spawn(['sh', '-c', 'echo hi ('], { cwd: d });`],
@@ -1061,6 +1224,15 @@ describe('the guard catches evasions', () => {
     ['process.execve.bind', `const ex = process.execve.bind(process);`],
     ['process.execve.call', `process.execve.call(process, '/bin/sh', ['sh']);`],
     ['execve destructured from globalThis.process', `const { execve: ex } = globalThis.process;\nex('/bin/sh', ['sh']);`],
+    // #514: modelExecEnv is held to exactly the sanitizedEnv rules.
+    ['modelExecEnv never imported', `Bun.spawn(['sh'], { env: modelExecEnv() });`],
+    ['modelExecEnv from a look-alike module', `import { modelExecEnv } from './other/util/model-exec-env.ts';\nBun.spawn(['sh'], { env: modelExecEnv() });`],
+    ['modelExecEnv imported under an alias', `import { modelExecEnv as m } from './util/model-exec-env.ts';\nBun.spawn(['sh'], { env: m() });`],
+    ['modelExecEnv shadowed by a local', `${MEX}function f(modelExecEnv) { Bun.spawn(['sh'], { env: modelExecEnv() }); }`],
+    ['a spread re-adding the daemon env over modelExecEnv', `${MEX}Bun.spawn(['sh'], { env: { ...modelExecEnv(), ...process.env } });`],
+    ['a spread AFTER a modelExecEnv env', `${MEX}Bun.spawn(['sh'], { env: modelExecEnv(), ...opts });`],
+    ['modelExecEnv imported type-only', `import type { modelExecEnv } from './util/model-exec-env.ts';\nBun.spawn(['sh'], { env: modelExecEnv() });`],
+    ['process.execve with a look-alike modelExecEnv', `const modelExecEnv = () => process.env;\nprocess.execve('/bin/sh', ['sh'], modelExecEnv());`],
   ];
 
   for (const [name, code] of cases) {
@@ -1068,6 +1240,26 @@ describe('the guard catches evasions', () => {
       expect(scanSource(code, 'synthetic.ts').offenders).not.toEqual([]);
     });
   }
+
+  test('a correct modelExecEnv spawn is not an offender but is reported for MODEL_EXEC to judge', () => {
+    const scan = scanSource(`${MEX}function run() { Bun.spawn(['sh'], { env: modelExecEnv({ X: '1' }) }); }`, 'synthetic.ts');
+    expect(scan.offenders).toEqual([]);
+    expect(scan.modelExec.map(o => o.fn)).toEqual(['run']);
+  });
+
+  test('imports are recorded resolved, whatever the extension or form', () => {
+    const scan = scanSource(
+      `import { a } from './util/model-exec-env.ts';\nexport * from './actions/index.js';\n` +
+      `const t = await import('./actions/terminal/executor');\nimport { b } from '@/actions/browser/chrome-launcher';`,
+      'sites/synthetic.ts',
+    );
+    expect(scan.imports).toEqual([
+      join(SRC, 'sites', 'util', 'model-exec-env'),
+      join(SRC, 'sites', 'actions', 'index'),
+      join(SRC, 'sites', 'actions', 'terminal', 'executor'),
+      join(SRC, 'actions', 'browser', 'chrome-launcher'),
+    ]);
+  });
 
   test('a spawn in a .tsx file after JSX containing a quote', () => {
     const code = `const el = <div className="x">{'"'}</div>;\nBun.spawn(['echo'], {});`;

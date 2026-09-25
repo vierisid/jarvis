@@ -12,6 +12,8 @@ import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createConnection } from 'node:net';
 import { WSLBridge } from '../terminal/wsl-bridge.ts';
+import { modelExecEnv } from '../../util/model-exec-env.ts';
+import { sanitizedEnv } from '../../util/subprocess-env.ts';
 
 export type RunningSidecar = {
   proc: Subprocess | null; // null if externally managed
@@ -34,7 +36,16 @@ export function findSidecarExecutable(): string | null {
     // WSL: check the Windows-side paths via /mnt/c/
     // First try USERPROFILE-based path (most common)
     try {
-      const userProfileResult = Bun.spawnSync(['cmd.exe', '/C', 'echo', '%USERPROFILE%']);
+      // Not model-directed: a fixed command, so the allowlist plus the WSL
+      // interop extras it needs to launch a Windows executable -- the same env
+      // as actions/terminal/wsl-bridge.ts (#519).
+      const userProfileResult = Bun.spawnSync(['cmd.exe', '/C', 'echo', '%USERPROFILE%'], {
+        env: sanitizedEnv({
+          WSL_INTEROP: process.env.WSL_INTEROP,
+          WSL_DISTRO_NAME: process.env.WSL_DISTRO_NAME,
+          WSLENV: process.env.WSLENV,
+        }),
+      });
       const userProfile = userProfileResult.stdout.toString().trim();
       if (userProfile && !userProfile.includes('%')) {
         const drive = userProfile.charAt(0).toLowerCase();
@@ -131,10 +142,11 @@ export async function isSidecarRunning(port: number = DEFAULT_PORT): Promise<boo
 
 /**
  * Launch the desktop-bridge sidecar.
- * Auto-detects the executable and spawns it.
+ * Auto-detects the executable and spawns it. `exeOverride` is a test seam
+ * (src/model-exec-env-sites.test.ts).
  */
-export async function launchSidecar(port: number = DEFAULT_PORT): Promise<RunningSidecar> {
-  const exePath = findSidecarExecutable();
+export async function launchSidecar(port: number = DEFAULT_PORT, exeOverride?: string): Promise<RunningSidecar> {
+  const exePath = exeOverride ?? findSidecarExecutable();
   if (!exePath) {
     throw new Error(
       'Desktop bridge sidecar not found.\n' +
@@ -149,6 +161,12 @@ export async function launchSidecar(port: number = DEFAULT_PORT): Promise<Runnin
   const proc = spawn([exePath, '--port', String(port)], {
     stdout: 'ignore',
     stderr: 'ignore',
+    // desktop-bridge serves launchApp and hands its own environment to the
+    // model-chosen executable, so it gets the desktop session without the
+    // daemon's secrets (#514; see util/model-exec-env.ts). On WSL only the
+    // WSLENV-listed names cross to Windows anyway; on native Windows this is
+    // the whole environment.
+    env: modelExecEnv(),
   });
 
   const startedAt = Date.now();

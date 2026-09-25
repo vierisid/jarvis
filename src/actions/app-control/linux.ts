@@ -1,5 +1,6 @@
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import { $ } from 'bun';
+import { modelExecEnv } from '../../util/model-exec-env.ts';
 
 export class LinuxAppController implements AppController {
   private async checkTool(tool: string): Promise<boolean> {
@@ -245,6 +246,9 @@ export class LinuxAppController implements AppController {
           stdin: 'ignore',
           stdout: 'ignore',
           stderr: 'ignore',
+          // A model-chosen executable: the desktop session, not the daemon's
+          // secrets (#514; see util/model-exec-env.ts).
+          env: modelExecEnv(),
         },
       );
 
