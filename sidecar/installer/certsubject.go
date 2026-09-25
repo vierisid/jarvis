@@ -1,9 +1,23 @@
 package main
 
-// X.500 subject-DN parsing for the Windows publisher pin. Platform-neutral so
-// it can be unit-tested on any runner (the pin itself is Windows-only).
+// The platform-neutral pieces of the Windows publisher pin (the signer-subject
+// script and X.500 subject-DN parsing), kept here so they can be unit-tested on
+// any runner (the pin itself is Windows-only).
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/jarvis/sidecar/internal/psquote"
+)
+
+// signerSubjectScript is the PowerShell that prints the signer subject of the
+// executable at exe. The path goes in as a single-quoted literal: unlike double
+// quotes it expands neither $ nor backticks, which are legal in Windows paths,
+// and psquote doubles the typographic quotes (U+2018..U+201B) that PowerShell
+// also accepts as delimiters, not only ASCII '.
+func signerSubjectScript(exe string) string {
+	return "(Get-AuthenticodeSignature -FilePath " + psquote.SingleQuoted(exe) + ").SignerCertificate.Subject"
+}
 
 // subjectCN extracts the CN component from an X.500 subject DN as PowerShell
 // renders it ("CN=Acme, Inc., O=Acme, C=US"). Quoted values are unwrapped;
