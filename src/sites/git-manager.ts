@@ -6,8 +6,7 @@
 
 import type { GitCommit, GitBranch } from './types.ts';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
-import { tmpdir } from 'node:os';
-import { PROJECT_GIT_PINS, gitVersionReader, resolveHookPins } from './git-pins.ts';
+import { PROJECT_GIT_PINS, gitVersionReader, resolveHookPins, type GitVersion } from './git-pins.ts';
 
 /** HEAD and the pseudo-refs git writes next to it. */
 const PSEUDO_REFS = new Set([
@@ -259,8 +258,25 @@ export class GitManager {
     if (normalized !== name) throw invalid;
   }
 
-  /** gitVersionReader, run from the temp dir; see there. */
-  private readonly gitVersion = gitVersionReader(args => this.run(tmpdir(), args, { hookPins: [] }));
+  /**
+   * gitVersionReader, run from `/`: the version describes the binary, and `/`
+   * always exists, where a missing TMPDIR would fail every call on this path.
+   */
+  private readonly readGitVersion = gitVersionReader(args => this.run('/', args, { hookPins: [] }));
+
+  /**
+   * The git version, or null when it cannot be read this time (not cached;
+   * the next call retries). Null means "do the hook lookup", so a failed read
+   * keeps hooks pinned off and leaves the manager usable, rather than failing
+   * every status and commit with an error that reads like git is missing.
+   */
+  private async gitVersion(): Promise<GitVersion> {
+    try {
+      return await this.readGitVersion();
+    } catch {
+      return null;
+    }
+  }
 
   /**
    * Run a git command in the project directory. `hookPins`, when given,
@@ -289,11 +305,15 @@ export class GitManager {
       env: sanitizedEnv({ GIT_TERMINAL_PROMPT: '0' }),
     });
 
-    const stdout = await new Response(proc.stdout).text();
-    const exitCode = await proc.exited;
+    // Both pipes at once: git blocks once a pipe nobody reads fills (~64 KiB),
+    // and stderr is only read on failure otherwise.
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
 
     if (exitCode !== 0) {
-      const stderr = await new Response(proc.stderr).text();
       // exitCode rides along so resolveHookPins can tell "no match" (1) apart.
       throw Object.assign(new Error(`git ${args[0]} failed: ${stderr.trim() || stdout.trim()}`), { exitCode });
     }

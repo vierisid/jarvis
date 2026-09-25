@@ -16,6 +16,7 @@ import { join } from 'node:path';
 import type { ToolDefinition } from '../actions/tools/registry.ts';
 import { createSiteBuilderTools } from './builder-tools.ts';
 import { isolateGitHome } from './fixtures/git-home.ts';
+import { sanitizedEnv } from '../util/subprocess-env.ts';
 import { GitManager } from './git-manager.ts';
 import { ProjectManager } from './project-manager.ts';
 
@@ -286,8 +287,10 @@ describe('a git dir that is not named .git', () => {
     const child = Bun.spawn(['bun', '-e', script], { stdout: 'pipe', stderr: 'pipe' });
     const timer = setTimeout(() => child.kill('SIGKILL'), 10_000);
     try {
-      const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
-      expect({ code, out: out.trim() }).toEqual({ code: 0, out: 'done' });
+      const [out, err, code] = await Promise.all([
+        new Response(child.stdout).text(), new Response(child.stderr).text(), child.exited,
+      ]);
+      expect({ code, out: out.trim(), err: err.trim() }).toEqual({ code: 0, out: 'done', err: '' });
     } finally {
       clearTimeout(timer);
     }
@@ -573,6 +576,11 @@ describe("the daemon's git does not take the project root for a bare repository"
     await git.autoCommit(bare, 'x').catch(() => undefined);
     await git.isDirty(bare).catch(() => undefined);
     expect(existsSync(marker)).toBe(false);
+
+    // Control: git without the pin does take this root for a repository and
+    // runs the planted filter, so the refusal above is what stopped it.
+    Bun.spawnSync(['git', 'add', '-A'], { cwd: bare, stdout: 'pipe', stderr: 'pipe', env: sanitizedEnv() });
+    expect(existsSync(marker)).toBe(true);
   });
 });
 

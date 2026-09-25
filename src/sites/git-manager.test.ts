@@ -185,18 +185,21 @@ describe('config-defined hooks', () => {
     expect(existsSync(marker)).toBe(true);
   });
 
-  // git 2.54 has config hooks but no event-level switch, so there the event
-  // pins do nothing and the manager must name each hook. A stand-in git
-  // reports 2.54, answers the hook lookup with `lookup` (a shell case arm
-  // body), prints " M x" for status, and logs every argv.
-  async function onFakeGit254(lookup: string, action: (gm: GitManager) => Promise<unknown>): Promise<string[]> {
+  // A stand-in git: `version` is the body of its `--version` case arm,
+  // `lookup` of its hook-lookup arm; status prints " M x"; every argv, and the
+  // cwd of each `--version` call, is logged.
+  async function onFakeGit(
+    version: string,
+    lookup: string,
+    action: (gm: GitManager) => Promise<unknown>,
+  ): Promise<string[]> {
     const fakeBin = join(root, 'fake-bin');
     const log = join(root, 'fake-git.log');
     mkdirSync(fakeBin);
     executable(join(fakeBin, 'git'), [
       `printf '%s\\n' "$*" >> '${log}'`,
       'case "$*" in',
-      '  *--version*) echo "git version 2.54.0" ;;',
+      `  *--version*) printf 'cwd=%s\\n' "$PWD" >> '${log}'; ${version} ;;`,
       `  *'^hook'*) ${lookup} ;;`,
       "  *'status --porcelain'*) echo ' M x' ;;",
       'esac',
@@ -211,33 +214,67 @@ describe('config-defined hooks', () => {
     }
     return readFileSync(log, 'utf-8').split('\n');
   }
+  const v254 = 'echo "git version 2.54.0"';
+  const isLookup = (l: string) => l.includes('--get-regexp');
 
-  test('on git older than 2.55 each configured hook is also pinned off by name', async () => {
-    const calls = await onFakeGit254(
-      "printf 'hook.lint.command\\n/x\\0hook..event\\npre-commit\\0'",
-      (gm) => gm.isDirty(repo),
-    );
+  // git 2.54 has config hooks but no event-level switch, so there the event
+  // pins do nothing and the manager must name each hook.
+  test('on git 2.54 each configured hook is also pinned off by name', async () => {
+    const listing = "printf 'hook.lint.command\\n/x\\0hook..event\\npre-commit\\0'";
+    const calls = await onFakeGit(v254, listing, (gm) => gm.isDirty(repo));
     const status = calls.find((l) => l.includes('status --porcelain'))!;
     expect(status).toContain('hook.lint.enabled=false');
     // The empty-named hook (`[hook ""]`) is runnable too.
     expect(status).toContain('-c hook..enabled=false');
   });
 
-  test('on git older than 2.55, a lookup that finds no hooks (exit 1) lets the call run', async () => {
-    // The normal case on stock distro git: every call depends on exit 1
-    // being read as "none", which needs the exit code on GitManager's errors.
+  test('on git 2.54, a lookup that finds no hooks (exit 1) lets the call run', async () => {
+    // Every call on 2.54 depends on exit 1 being read as "none", which needs
+    // the exit code on GitManager's errors.
     let dirty: boolean | undefined;
-    const calls = await onFakeGit254('exit 1', async (gm) => { dirty = await gm.isDirty(repo); });
+    const calls = await onFakeGit(v254, 'exit 1', async (gm) => { dirty = await gm.isDirty(repo); });
     expect(dirty).toBe(true);
     expect(calls.some((l) => l.includes('status --porcelain'))).toBe(true);
   });
 
-  test('on git older than 2.55, a lookup that fails otherwise stops the call', async () => {
+  test('on git 2.54, a lookup that fails otherwise stops the call', async () => {
     // 128 is what a broken config gives: not "no hooks".
     let error: unknown;
-    const calls = await onFakeGit254('exit 128', (gm) => gm.isDirty(repo).catch((e) => { error = e; }));
+    const calls = await onFakeGit(v254, 'exit 128', (gm) => gm.isDirty(repo).catch((e) => { error = e; }));
     expect(String(error)).toContain('git config failed');
     expect(calls.some((l) => l.includes('status --porcelain'))).toBe(false);
+  });
+
+  test.each([
+    ['2.55, whose event pins cover config hooks', 'echo "git version 2.55.0"'],
+    ['2.53, which has no config hooks', 'echo "git version 2.53.1"'],
+  ])('on git %s, no lookup is made', async (_label, version) => {
+    const calls = await onFakeGit(version, 'exit 1', async (gm) => {
+      await gm.isDirty(repo);
+      await gm.isDirty(repo);
+    });
+    expect(calls.filter(isLookup)).toEqual([]);
+    // The version is read once per manager, from `/`, not from the project.
+    expect(calls.filter((l) => l.startsWith('cwd='))).toEqual(['cwd=/']);
+  });
+
+  test.each([
+    ['a release candidate', 'echo "git version 2.55.0.rc1"'],
+    ['an unparseable version', 'echo "git version unknown"'],
+    ['a failed version read', 'exit 2'],
+  ])('on %s, the lookup is made and the call still runs', async (_label, version) => {
+    let dirty: boolean | undefined;
+    const calls = await onFakeGit(version, 'exit 1', async (gm) => { dirty = await gm.isDirty(repo); });
+    expect(dirty).toBe(true);
+    expect(calls.some(isLookup)).toBe(true);
+  });
+
+  test('a failed version read is retried on the next call, not remembered', async () => {
+    const calls = await onFakeGit('exit 2', 'exit 1', async (gm) => {
+      await gm.isDirty(repo);
+      await gm.isDirty(repo);
+    });
+    expect(calls.filter((l) => l.startsWith('cwd='))).toEqual(['cwd=/', 'cwd=/']);
   });
 });
 

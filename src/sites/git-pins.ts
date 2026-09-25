@@ -25,7 +25,7 @@
  * p4-* events are left out: only git-p4 fires them, and the daemon never
  * runs it.
  */
-export const HOOK_EVENTS = [
+const HOOK_EVENTS = [
   'applypatch-msg', 'pre-applypatch', 'post-applypatch', 'pre-commit', 'pre-merge-commit',
   'prepare-commit-msg', 'commit-msg', 'post-commit', 'pre-rebase', 'post-checkout', 'post-merge',
   'pre-push', 'pre-receive', 'update', 'proc-receive', 'post-receive', 'post-update',
@@ -45,7 +45,8 @@ export const HOOK_EVENTS = [
  *   - `core.hooksPath=/dev/null` and `hook.<event>.enabled=false` for every
  *     event: no project hook runs on the daemon's own git -- push, pull and
  *     fetch, and the auto-commits, switches, merges and rebases (maintainer
- *     decision; the auto-commits lose the project's pre-commit lint). A project-level `core.hooksPath` is legitimate (husky sets
+ *     decision; the auto-commits lose the project's pre-commit lint). A
+ *     project-level `core.hooksPath` is legitimate (husky sets
  *     `.husky/_`, inside the worktree, and runs `.husky/<hook>` through
  *     `sh -e`, so the file needs no executable bit), which made a
  *     site_write_file of `.husky/pre-push` into code execution on the next

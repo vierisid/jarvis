@@ -11,7 +11,8 @@ import { basename, dirname, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import {
   readdirSync, statSync, lstatSync, existsSync, mkdirSync, rmSync, readFileSync, realpathSync,
-  writeFileSync, chmodSync, renameSync, readlinkSync, type Stats,
+  writeFileSync, chmodSync, renameSync, readlinkSync, openSync, fstatSync, closeSync, constants as fsConstants,
+  type Stats,
 } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { isGitDirName, isWithin } from '../util/path.ts';
@@ -111,22 +112,38 @@ function linkedGitDirs(realRoot: string): string[] {
     if (st.isSymbolicLink()) {
       found.push(realOrLexical(resolve(realRoot, readlinkSync(dotGit))));
     } else if (st.isFile()) {
-      const match = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, 'utf-8'));
+      // readRegularFile, though lstat just said "file": it may not be one by
+      // the time it is opened.
+      const match = /^gitdir:\s*(.+?)\s*$/m.exec(readRegularFile(dotGit) ?? '');
       if (match) found.push(realOrLexical(resolve(realRoot, match[1]!)));
     }
   } catch { /* no .git */ }
   for (const gitDir of [...found]) {
     try {
-      // A regular file only: `commondir` sits in a directory the tree may
-      // control, and a FIFO by that name would block this read -- and with
-      // it every site file call -- forever. (A symlink to a regular file is
-      // fine; git follows it too.)
-      const commondir = join(gitDir, 'commondir');
-      if (!statSync(commondir).isFile()) continue;
-      found.push(realOrLexical(resolve(gitDir, readFileSync(commondir, 'utf-8').trim())));
+      const text = readRegularFile(join(gitDir, 'commondir'));
+      if (text !== null) found.push(realOrLexical(resolve(gitDir, text.trim())));
     } catch { /* not a linked worktree */ }
   }
   return found.filter((dir) => isWithin(dir, realRoot));
+}
+
+/**
+ * The contents of `path` if it is a regular file (a symlink to one is fine;
+ * git follows it too), else null. `commondir` sits in a directory the tree
+ * may control, and a FIFO by that name would block the read -- and with it
+ * every site file call -- forever. So the file is opened non-blocking and
+ * checked on the open descriptor: a stat-then-read would let a FIFO be
+ * swapped in between the two. Capped, since the answer is one path.
+ */
+function readRegularFile(path: string): string | null {
+  const fd = openSync(path, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile() || st.size > 64 * 1024) return null;
+    return readFileSync(fd, 'utf-8');
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**
