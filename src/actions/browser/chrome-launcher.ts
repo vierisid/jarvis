@@ -186,7 +186,14 @@ export async function launchChrome(port: number = 9222, profileDir?: string): Pr
   // Linux-specific (also applies to WSL2)
   if (process.platform === 'linux') {
     args.push('--disable-dev-shm-usage');
-    args.push('--no-sandbox'); // Required for Chromium in containers/WSL2
+    // Chrome's sandbox stays on unless it provably cannot start here (root,
+    // or no user namespaces and no setuid helper). See chrome-sandbox.ts.
+    const { linuxSandboxDecision } = await import('./chrome-sandbox.ts');
+    const sandbox = await linuxSandboxDecision(exe.path);
+    if (!sandbox.sandbox) {
+      console.warn(`[ChromeLauncher] Launching WITHOUT Chrome's sandbox: ${sandbox.reason}`);
+      args.push('--no-sandbox');
+    }
     args.push('--window-size=1280,900');
     args.push('--window-position=100,100');
 
