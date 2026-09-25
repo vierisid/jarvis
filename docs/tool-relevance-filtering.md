@@ -440,13 +440,21 @@ which are now deliberately in the union anyway.
 
 ### I2 - Monotone exposure within a conversation
 
-> **The exposed set never shrinks as a conversation progresses.**
+> **A tool the conversation has used or admitted is never taken away.**
 >
-> For turns `n < m` in one conversation: `S_n ⊆ S_m`
+> For turns `n < m` in one conversation: `LEDGER_n ⊆ LEDGER_m ⊆ S_m`
 
 This is how requirement 3 is met, and it is stronger than "re-filter per
-turn": a follow-up can only ever *add*. Mid-task stripping becomes
-structurally impossible rather than a case the heuristic must get right.
+turn": nothing a task is using can be stripped by a follow-up. Mid-task
+stripping becomes structurally impossible rather than a case the heuristic
+must get right.
+
+What I2 does NOT promise, stated because an earlier version of this section
+claimed `S_n ⊆ S_m` outright: a tool that was only ever *selected* - offered
+because a trigger matched, never called - can drop out once its trigger
+text scrolls out of the bounded selection window (§8). While the text stays
+in the window the selection is monotone too, because every trigger,
+including the unmatched default, is evaluated over text that only grows.
 
 **It does not hold by reading the conversation.** An earlier draft claimed it
 did. Two independent reasons that is false in this codebase:
@@ -473,9 +481,18 @@ ToolExposureLedger := a set of tool names that only ever grows
   snapshot()               read-only copy
 ```
 
-One ledger per conversation: a field on `AgentInstance` for the chat loops, a
-local seeded from `opts.history` for `processTaskCall`, a local seeded from
-`resume.messages` for the sub-agent. `S` is then a pure function of
+One ledger per conversation: keyed by the primary agent's id for the chat
+loops (`ledgerFor(primary.id)`), the SAME primary ledger seeded additionally
+from `opts.history` for `processTaskCall`, and a local seeded from
+`resume.messages` for the sub-agent. `processTaskCall` used to take a fresh
+ledger per task, which on the router-first path - where each task sees only
+the user's latest message and the dialogue rides in as system context the
+selection does not read - was the mid-task strip again: task 1 "open
+example.com" used `browser_navigate`, task 2 "now do the same for the second
+result" was offered none of it. The primary lives as long as the daemon, so
+in practice the chat ledger is process-lifetime and shared across channels:
+one channel's tool use widens every other's set. That is the safe direction,
+and it makes the steady state converge toward the full list. `S` is then a pure function of
 `(A, ledger, conversation text, policy)`, and monotone because the ledger is.
 Compaction can shrink the text, but it cannot shrink the ledger, so it cannot
 shrink `S`.
@@ -645,6 +662,39 @@ Three implementation points an earlier draft got wrong or omitted:
   "I need more info" makes it likely. The branch must emit a result for every
   sibling call.
 
+**Calls to tools the model was not offered** (`interceptOffList`). The
+filter shapes only what is *offered*; the loops dispatch any registered name.
+And a small model does call tools it was not offered, for a structural
+reason: the Tool Guide in the static system prompt (`src/roles/tool-guide.ts`)
+documents `run_command` and the browser tools by name whatever the filter
+kept. Before this was handled, a turn offered only the floor and a goals tool
+could call `run_command` with curl, have it run, and get the page back
+unframed - I1 held on the list and not at dispatch, which is #475's
+substitution through a side door. Now every loop treats such a call as the
+admission it effectively is (ledger, an audit row named
+`off_list_call(<tool>)` - never `discover_tools(...)`, which was not
+called - and a recompute), and:
+
+- if the tool is an invariant trigger and the offered set was hiding a
+  framed reader, it is **not run** (audited as `denied`, `executed: false`,
+  on every refusal): the model gets `[NOT RUN] ...`, and on
+  its next step the tool is offered together with the framed readers, so it
+  chooses again with the framed route in view;
+- anything else (a framed reader, a trigger when no reader was hidden, an
+  inert tool) runs exactly as it would unfiltered, and the set is recomputed
+  so the rest of the turn is offered what it is actually using.
+
+The same check covers a sub-agent's resume. The ledger seeds only calls
+that were ANSWERED: a paused sub-agent's buffer ends on an assistant turn
+whose later calls were never reached, and seeding those used to put a shell
+chosen while it was hidden into the exposed set, so the resume dispatched it
+without the check.
+
+`admittedNames` also accepts the shapes small models actually send for
+`names` - a stringified array (`'["browser_navigate"]'`) or a
+comma-separated string - rather than answering "No such tool" to a
+formatting slip.
+
 Rejected alternative: detecting "I don't have a tool for that" in the model's
 prose and re-running with the full list. Brittle text matching on a small
 model's output is the kind of heuristic this issue exists to avoid, and it
@@ -655,7 +705,8 @@ pays the full-list token cost on every false positive.
 ## 6. Where `S` is computed, and every call site
 
 **Once per user turn, held fixed across the whole tool loop**, recomputed only
-on an explicit `discover_tools` admission.
+on a widening: an explicit `discover_tools` admission, or a call to a tool
+the model was not offered (§5).
 
 Not per loop iteration. An earlier draft said per iteration, which is a
 serious performance error: `src/llm/anthropic.ts` documents that Anthropic
@@ -668,17 +719,18 @@ holds for a local model's prefill cache - measured at 646 s for a cold full
 prefill on the hardware in §10.
 
 So: tools used during a turn are noted into the ledger but take effect at the
-*next* turn; only an explicit admission changes `S` mid-turn, which is the
-escape hatch's entire purpose. `S` therefore changes at most once per turn
-plus once per `discover_tools` call. This still satisfies requirement 3 -
+*next* turn; only a widening changes `S` mid-turn - an admission, which is
+the escape hatch's entire purpose, or an off-list call. `S` therefore
+changes at most once per turn plus once per widening call. This still satisfies requirement 3 -
 re-filtered every turn, over the whole conversation, never first-message-only.
 
 | call site | method | coverage |
 |---|---|---|
 | chat | `AgentOrchestrator.processMessage` | per-turn, ledger keyed by primary agent id |
-| task / resume | `AgentOrchestrator.processTaskCall` | per-turn, ledger seeded from `opts.history`; `ask_for_clarification` appended *after* the filter, so it is never in its accounting |
+| task / resume | `AgentOrchestrator.processTaskCall` | per-turn, the primary's ledger, additionally seeded from `opts.history`; `ask_for_clarification` appended *after* the filter, so it is never in its accounting |
 | streaming chat | `AgentOrchestrator.streamMessage` | per-turn, ledger keyed by primary agent id, `fallbackTier` passed to the gate |
-| sub-agent | `runSubAgent` (`src/agents/sub-agent-runner.ts`) | per-turn, ledger seeded from `resume.messages` |
+| sub-agent | `runSubAgent` (`src/agents/sub-agent-runner.ts`) | per-turn, ledger seeded from `resume.messages`; provider kinds handed in by all three launchers (`delegate_task`, `manage_agents`, the workflow delegator) |
+| background agent | `BackgroundAgentService`'s own `AgentOrchestrator` | the chat loops above, with provider kinds set at construction and on every `llm` reload |
 | realtime voice | `AgentOrchestrator.getRealtimeTools` | routed through the gate, always ineligible - below |
 | conversation tier | `ConvOrchestrator.processTurn` | **not** a registry site: it sends a fixed four-tool `CONV_TOOLS` list, so there is nothing to filter |
 
@@ -773,13 +825,16 @@ in.
 
 Two things are deliberately **not** frozen with it:
 
-- **The env kill switch is re-read on every policy read.** An earlier
-  version froze it at boot, which made `JARVIS_TOOL_FILTER=off` need a
-  restart while this document called it "the switch an operator reaches for
-  at 3am". It now takes effect on the next turn. It can only ever disable -
-  it cannot enable something the resolved policy did not already allow - so
-  re-reading it cannot turn the filter on by surprise. Re-reading one env
-  var per turn costs nothing next to a provider round trip.
+- **The env kill switch is re-read on every policy read.** It can only
+  ever disable - it cannot enable something the resolved policy did not
+  already allow - so re-reading it cannot turn the filter on by surprise.
+  Be precise about what that buys, though, because an earlier version of
+  this section claimed it made the switch take effect "on the next turn":
+  nothing outside a running daemon can change that process's environment,
+  and `tools` has no settings-reload applier. For an operator,
+  `JARVIS_TOOL_FILTER=off` and `enabled: false` both take effect on
+  **restart**. The per-read check helps tests and embedding hosts, nothing
+  more.
 - **Model classification** (§4), because the `llm` section is
   hot-reloadable. `setToolFilterProviders` is re-called from the `llm`
   reload applier: `mergeLLMSettingsIntoConfig` REPLACES
@@ -808,26 +863,67 @@ because the ledger (I2) absorbs anything that scrolls out - a match that
 disappears cannot shrink `S`. Unbounded scanning would be O(history x
 patterns) on every turn against histories retained up to 200k tokens.
 
-The initial trigger table ships in code with a coverage test asserting every
-droppable registered tool has at least one entry, so a new tool cannot ship
-invisible to the filter:
+The trigger table ships in code (`TRIGGER_GROUPS` in `selection.ts`, which
+is the source of truth - this copy is for reading) with a coverage test
+asserting that every droppable tool in the **production registry** has at
+least one entry. That test used to walk `BUILTIN_TOOLS` only, and so passed
+while all eight site-builder tools had no trigger at all and were dropped on
+every turn.
 
-| group | tools | triggers |
+| group | tools | triggers (whole word, plain plural also matches) |
 |---|---|---|
-| browse | all `browser_*` | `https?://`, url, web, website, page, browse, article, link, online, google, search for, look up, summarise/summarize this |
-| perceive | `desktop_snapshot`, `desktop_find_element`, `desktop_list_windows`, `desktop_screenshot`, `capture_screen`, `ui_snapshot` | screen, window, see, look, showing, display, dialog, button, field, what am i |
-| act_desktop | `desktop_click/type/press_keys/launch_app/focus_window`, `ui_act` | open, launch, start, click, type, press, key, notepad, app, application |
-| shell | `run_command` | run, command, terminal, shell, script, build, compile, test, install, npm, bun, git, log, process, restart, service |
-| files | `read_file`, `list_directory` | path-like `[/\\][\w.-]+`, code fence, file, folder, directory, read, save, disk |
-| clipboard | `get_clipboard` | clipboard, copy, paste |
+| browse | all ten `browser_*` | `https?://`, `www.`, a bare domain on a common TLD (`github.com`, `example.org`); url, web, website, webpage, page, browse, browser, article, link, online, google, search, internet, site, blog, news, research, summarise/summarize, competitor, landscape, dashboard, visit, navigate, hover, scroll, form, homepage, look up, lookup, price, weather, forecast, flight, recipe, shop, buy, reddit, youtube, gmail, wikipedia |
+| perceive | `desktop_snapshot`, `desktop_find_element`, `desktop_list_windows`, `desktop_screenshot`, `capture_screen`, `ui_snapshot` | screen, window, see, look, showing, display, dialog, button, field, visible, onscreen, desktop |
+| act_desktop | `desktop_click/type/press_keys/launch_app/focus_window`, `ui_act` | open, launch, start, click, type, press, key, keyboard, notepad, app, application, close, focus, switch, element, foreground, minimize, maximize |
+| shell | `run_command` | run, command, terminal, shell, script, build, compile, test, install, npm, bun, git, log(s), process, restart, service, check, status, deploy |
+| files | `read_file`, `list_directory`, `write_file` | path-like token, code fence; file, folder, directory, read, write, save, disk, path, download |
+| clipboard | `get_clipboard`, `set_clipboard` | clipboard, copy, copied, paste |
+| sidecars | `list_sidecars` | sidecar, machine, device, remote, paired, computer, laptop, pc |
 | skills | `run_skill`, `record_skill`, `manage_skills` | skill, record, replay, macro, teach, demonstrate |
-| delegation | `delegate_task`, `manage_agents` | delegate, agent, specialist, in parallel, background, spawn |
-| workflows | `manage_workflow` | workflow, automation, automate, schedule, recurring, every morning, daily, trigger |
-| goals | `manage_goals` | goal, objective, okr, target, milestone |
-| commitments | `commitments` | remind, remember, commit, promise, todo, follow up, deadline, due |
-| documents | `create_document` | document, note, write up, draft, memo, report |
+| delegation | `delegate_task`, `manage_agents` | delegate, agent, specialist, parallel, background, spawn |
+| workflows | `manage_workflow` | workflow, automation, automate, schedule(d), recurring, daily, weekly, morning, trigger, every |
+| goals | `manage_goals` | goal, objective, okr, target, milestone, ship |
+| commitments | `commitments` | remind(er), remember, commit(ment), promise, todo, deadline, due, follow |
+| documents | `create_document` | document, doc, note, memo, report, draft, write |
 | content | `content_pipeline` | content, pipeline, idea, outline, publish, post |
-| research | `research_queue` | research queue, queued research, background research |
+| research | `research_queue` | research, queue(d), investigate |
+| site builder | all eight `site_*` (registered only with `sites.enabled`) | build intent only: site builder, landing page, landing, portfolio, html, css, template, project directory. Not "website"/"homepage" (a browse must not be offered `site_run_command`, a real shell) and not "project"/"repo"/"commit"/"push" (ordinary dev chat) |
+
+**The unmatched default.** A user message in the window that selects
+nothing the call site can offer adds the browse group's **framed readers
+that are not themselves invariant triggers** - never the shell, and not
+`browser_evaluate` (rank 506, the shell's own rank, whose presence would
+drag every desktop reader in by the I1 union) or `browser_upload_file` (a
+framed actor that sends a local file out and must never be auto-added). Before it existed, "find the cheapest flight to
+Tokyo", "visit example.org and tell me what it says" or "what are people
+saying on reddit about the new iphone" got the floor and the hatch and
+nothing else: three tools, and a small model holding three tools answers
+from memory rather than calling `discover_tools`. A trigger table can never
+enumerate every way to ask for something from outside, so the unmatched case
+needs a default, and the default leans the way the whole design leans: when
+the filter does not know what a turn needs, the outside-reaching tools it
+offers are the ones that frame what they bring back. It can only add, so it
+cannot break an invariant; its price is schema bytes on quiet turns
+("hi", "thanks", "ok"): about 8 kB of browser schema for as long as such a
+message stays in the window, with no repair union behind it. That is an
+accepted trade, not an oversight.
+
+It is applied **per user message**, not "the whole window matched nothing".
+A whole-window rule never fires on "set a goal ..." followed by "find the
+cheapest flight to Tokyo", and it would switch OFF the moment a later
+message matched anything, so "hi" then "what is on my screen?" would drop
+the browser tools turn 1 was offered. Per message, it only ever adds as the
+conversation grows, like every other trigger. "Selects nothing" is judged
+against the call site's own registry: a scoped browser-plus-shell sub-agent
+asked to "set a goal" matches the goals group, whose tool it does not have.
+
+The wrong-exclusion tests in `selection.test.ts` are generated from the
+production registry: the first sentence of every droppable tool's own
+description must keep that tool, which is the offline half of the
+benchmark's `wanted tool dropped` line (0/65 now; it was 12 of the 54
+cases the bench had before the browse cases were added - the eight
+site-builder tools, `browser_hover`, `ui_act`, `desktop_focus_window`, and
+`create_document`, whose own description says "documents").
 
 Structural triggers #475 missed are first-class: a bare URL anywhere admits
 the browse group (its `\burl\b` regex missed a pasted
@@ -854,8 +950,11 @@ Measured by running the filter over the real registry, not estimated.
 Reproduce with `bun bench/tool-relevance/benchmark.ts`, which prints every
 figure below and recomputes them from code, so they cannot go stale.
 
-`A` = 42 tools, **35,050 bytes** of emitted JSON schema (the 33
-`BUILTIN_TOOLS` at 22,445 B plus nine daemon-registered tools). Calibrated
+`A` = 50 tools, **38,760 bytes** of emitted JSON schema: the 33
+`BUILTIN_TOOLS` at 22,445 B, nine daemon-registered tools, and the eight
+site-builder tools registered when `sites.enabled` (the bench builds all of
+them from `production-registry.ts`; figures before the #483 close-out
+counted 42 tools and 35,050 B, without the site-builder eight). Calibrated
 against a real tokenizer on `qwen38-fast` (27.3B, Q4_K, ollama): the full
 33-tool set is **6,091 prompt tokens**, giving **~3.83 bytes/token** for
 these schemas, so a bytes/4 estimate undercounts by about 8%.
@@ -865,26 +964,29 @@ Was 39,420 B before #504 trimmed the six fattest daemon descriptions; see
 
 | set | tools | bytes |
 |---|---|---|
-| full `A` | 42 | 35,050 |
+| full `A` | 50 | 38,760 |
 | `FLOOR(A)` | 2 | 1,906 |
 | `PERCEPTION(A)` (the I1 union) | 16 | 11,384 |
-| invariant triggers | 18 | 17,329 |
+| invariant triggers | 26 | 21,039 |
 | `replay` | 5 | 5,080 |
 
 The five cases from #483's own measurement table, plus its mid-task repro:
 
 | case | tools | bytes | saving |
 |---|---|---|---|
-| `open notepad and type hello` | 24/42 | 17,874 | **-49.0%** |
-| `research the competitor landscape and write it up` | 24/42 | 17,471 | **-50.2%** |
-| `summarise this article https://example.com/post/1` | 21/42 | 15,992 | **-54.4%** |
-| `set a goal to ship the release this week` | 4/42 | 3,910 | **-88.8%** |
-| `schedule a daily check of the dashboard` | 22/42 | 17,905 | **-48.9%** |
-| `open notepad` then `now remember that I did that` | 25/42 | 19,294 | **-45.0%** |
+| `open notepad and type hello` | 24/50 | 17,900 | **-53.8%** |
+| `research the competitor landscape and write it up` | 24/50 | 17,497 | **-54.9%** |
+| `summarise this article https://example.com/post/1` | 21/50 | 16,018 | **-58.7%** |
+| `set a goal to ship the release this week` | 4/50 | 3,936 | **-89.8%** |
+| `schedule a daily check of the dashboard` | 22/50 | 17,931 | **-53.7%** |
+| `open notepad` then `now remember that I did that` | 25/50 | 19,320 | **-50.2%** |
 
-Over all 46 cases (the six above plus one generated per droppable tool):
-**-56.3% aggregate**, best -92.9%, worst **-40.1%**, and zero invariant
-violations.
+Over all 65 cases (the six above, eleven realistic browse asks, and one
+generated per droppable tool): **-57.8% aggregate**, best -89.8%, worst
+**-43.5%**, zero invariant violations, and the wanted tool kept in
+**65/65** (12 of the then-54 cases dropped it before the #483 close-out's
+selection fixes, §8). Bytes include
+`discover_tools` as it goes on the wire, with `items` on its array.
 
 The percentages are slightly *smaller* than before #504 because both arms
 shrank: the filter now has less fat to remove. The absolute saving per case
@@ -894,9 +996,10 @@ Confirmed live against the real tokenizer, not only in bytes - but **before
 #504**, against the 39,420 B registry: on `open notepad and type hello`,
 `qwen38-fast` reported **10,404 prompt tokens unfiltered and 4,938 filtered,
 -52.5%**, against the **-53.8%** the pre-#504 table predicted from bytes. The
-model called `desktop_launch_app` correctly in both arms. The row in the table
-above now reads -49.0% because both arms shrank, so these token counts do not
-corroborate it; re-take the live run to confirm the post-#504 figure.
+model called `desktop_launch_app` correctly in both arms. The table above is
+now taken over a different registry (50 tools, trimmed descriptions), so
+these token counts corroborate the byte method, not the current row;
+re-take the live run to confirm the current figure.
 
 Four things worth saying plainly, because #475 was rejected partly for not
 saying them:
@@ -914,9 +1017,32 @@ saying them:
    monotone, so one "check the build" in turn 4 holds the set at
    `FLOOR ∪ PERCEPTION ∪ ...` thereafter. The steady state of a long mixed
    conversation is nearer -50% than -89%.
-4. **These are schema bytes. They are not the whole cost.** See §10 on
-   prompt-cache invalidation, which is unmeasured and could exceed the
-   saving.
+4. **These are schema bytes. They are not the whole cost, and on a
+   KV-caching runtime whether they are even a saving depends on the chat
+   template.** The offline cache ESTIMATE (§10) replays five scripted
+   conversations under a perfect one-request prefix cache. The filtered set
+   changes on 9-13 of 16 follow-up requests; the unfiltered list never
+   changes. What a change costs depends on where the template renders the
+   tools:
+
+   | template layout | example | prefill, filtered vs full |
+   |---|---|---|
+   | no prompt cache at all | many hosted small-model endpoints | **-32% to -44%** (bytes sent) |
+   | tools, then system, then history | Anthropic's order (§6) | **+560% to +675%** |
+   | same, token-exact reuse of the shared leading tools | llama.cpp / ollama on that layout | +410% to +545% |
+   | system text, then tools, then history | Qwen 2.5/3, most HF templates | **+384% to +421%** |
+   | tools inside the last user message | Llama 3.1's default template | **-40% to -54%** |
+
+   Ranges span the two conversation shapes (separate, one session). Those
+   percentages include the first request, which both arms pay cold; warm,
+   the unfiltered arm on the first three layouts prefills well under 1 kB
+   in total against 220-365 kB filtered. So: on a runtime that keeps its KV
+   cache, with a template that renders tools before the history - which is
+   most of them - the filtered arm is estimated to prefill **about 5-8x as
+   much** as the unfiltered one; with tools rendered last, or with no cache,
+   it prefills 30-55% less.
+   Only a live `--cache` run on a real model and template settles it, and
+   the result applies to that template only.
 
 **The cheapest win needed none of this.** Those six daemon tool
 descriptions were 14,072 B, 36% of the budget. #504 trimmed them to 9,702 B
@@ -967,51 +1093,105 @@ arrows from these six, so for all six the two measures now agree exactly.
 
 ## 10. What the benchmark measures
 
-`bench/tool-relevance/`, runnable, **not** part of the test suite.
+`bench/tool-relevance/`, runnable, **not** part of the test suite. Its
+scoring (`metrics.ts`) is: `metrics.test.ts` pins the substitution rule, the
+McNemar test and the cache model, since the live harness only ever runs
+against a model nobody has had yet.
 
-1. **Token cost**, full vs filtered, with a real tokenizer where available and
-   a labelled byte estimate otherwise; per case and in aggregate.
-2. **Tool-selection accuracy.** Each case names the tool a correct answer
-   would call; the model is asked twice, once per list, and scored correct /
-   wrong / no-call. Plus the two failure modes this design exists for:
-   - **substitution rate** - how often the model reached for `run_command`
-     when the case wanted a framed perception tool. This is the number that
-     would have exposed #475's defect empirically. 
-   - **hatch rate** - how often it called `discover_tools` and recovered.
-3. **Cache and latency**, which the first draft omitted and which may dominate
-   everything else (§6): cached vs fresh input tokens (Anthropic reports the
-   split; ollama reports `prompt_eval_cached_count`), and wall-clock prefill
-   with and without a mid-conversation tool-set change.
+1. **Token cost** (offline, default). Schema bytes full vs filtered, per case
+   and in aggregate, the `wanted tool dropped` count (wrong exclusion,
+   measured without a model), and a **prompt-cache ESTIMATE** over five
+   scripted multi-turn conversations (`CONVERSATIONS` in `cases.ts`): bytes
+   sent, and bytes a perfect one-request prefix cache would still have to
+   prefill for each of four template layouts (`CacheModel` in
+   `metrics.ts`: tools-first, tools-first with token-exact reuse,
+   system-first, tools-last), with and without the cold first request.
+   These are not bounds: the sign itself depends on the layout.
+2. **Tool-selection accuracy** (`--accuracy`). Each case names the tool a
+   correct answer would call; the model is asked once with the full list and
+   once with the filtered one, both behind the same system prompt (the Tool
+   Guide by default; `--system-file` for a captured production prompt,
+   `--no-system` for none). The Tool Guide matters: it names every tool
+   whatever the filter kept, which is exactly when a small model calls a tool
+   it was not offered. A `discover_tools` call is answered as the loops
+   answer it, and an off-list call `interceptOffList` would refuse is
+   refused, and the model is asked again (up to two rounds); what is scored
+   is the tool it finally commits to. Reported:
+   - correct / no-call per arm, and the paired **discordant counts** with an
+     exact McNemar p. "Within noise" is a non-inferiority margin, not a
+     significance test: the filter may lose, net, at most 2% of the paired
+     cases and never less than one. The first version passed whenever
+     McNemar could not reject, which at these sample sizes could not fail -
+     losing 11 cases and winning 3 of 54 was "within noise";
+   - the **substitution rate** - framed-read cases where the filtered arm
+     committed to ANY unframed fetch tool (`outsideReach === 'fetch'`: the
+     shell, the screenshots, delegation, ...) and the full arm did not. The
+     first version counted `run_command` alone;
+   - hatch use and recovery, off-list calls, calls production would not
+     run (scored as no call), and replies carrying several calls (only the
+     first is followed).
 
-Cases are generated from `BUILTIN_TOOLS` plus the conversation fixtures from
-#483's table, so the before/after is directly comparable to the issue.
+   The verdict (`accuracyRunVerdict`, tested) refuses to print MET when the
+   run measured nothing: every case errored, some errored, the FULL arm got
+   under half the cases right (the model is not choosing tools - a template
+   that ignores `tools`, a reply cut off), or the full arm never took the
+   framed route on a framed-read case (then "zero substitutions" is not
+   evidence). An earlier version printed "ALL THREE EXIT CRITERIA MET" for a
+   model that never called a tool.
+3. **Cache accounting** (`--cache`). Each arm replays the scripted
+   conversations turn by turn against the same server, after one uncounted
+   priming request, and sums the prompt tokens the server actually
+   EVALUATED: ollama's `prompt_eval_count`, llama-server's `timings.prompt_n`,
+   or `prompt_tokens - cached_tokens` from an OpenAI-style usage block. A
+   server that reports none of these gets NO CACHE RESULT, not a pass.
+   Separate conversations by default; `--one-session` for the chat loops'
+   shape. Requests ask for one output token, since only prefill is being
+   measured. The result holds for that server and chat template only.
 
-**Cost budget.** On the hardware available here a cold full-set prefill is
-646 s at ~9.4 tok/s; floor-only is 87 s. A naive "every case, twice" sweep is
-hours per model. The harness takes an explicit case count and a pinned model
-ref rather than reading the tier map.
+`--live` runs 2 then 3. `--api openai` speaks `/chat/completions`, which is
+what llama.cpp's `llama-server`, LM Studio, vLLM and OpenRouter expose, so
+no ollama is needed. A key is read from the env var NAMED by
+`--api-key-env`, never from the command line. `--max-calls` caps provider
+calls; the planned count is printed first and a plan over the cap refuses to
+start, so a paid endpoint cannot bill for a run the harness would then
+refuse to read.
+
+**Cost budget.** On the reference hardware a cold full-set prefill was 646 s
+at ~9.4 tok/s for a 27B model; floor-only was 87 s. A 7-8B model at Q4 on a
+16-core CPU is several times faster, but a full `--live` run is still
+65 cases x up to 5 calls plus 36 cache requests at ~12k prompt tokens each:
+budget an hour or more on CPU, or use `--issue-only` / `--limit` first.
+A narrowed run never prints "ALL THREE ... MET"; it says SUBSET.
 
 **Exit criteria for flipping the default**, on at least one real small/local
-model:
+model and chat template (the harness prints each as MET / NOT MET):
 
-- a measured token reduction that survives the cache accounting - i.e. the
-  filter must not lose more to prefix invalidation than it saves in schema;
-- tool-selection accuracy no worse than the full-list baseline within noise;
-- **substitution rate exactly zero** - not "low". One observed unframed
-  substitution on a case that wanted a framed tool is a stop;
-- the I5 violation counter at zero over the whole run.
+1. **substitution rate exactly zero** - not "low". One observed unframed
+   substitution on a case that wanted a framed tool is a stop;
+2. tool-selection accuracy no worse than the full-list baseline within noise;
+3. a token reduction that survives the cache accounting - the filtered arm
+   must evaluate fewer prompt tokens than the full arm over the scripted
+   conversations;
+4. the I5 violation counter at zero over the whole run.
 
 ### What has actually been measured, and what has not
 
 Stated precisely, because "we ran a benchmark" is exactly the kind of claim
 #483 was filed about.
 
-**Measured, offline, over the real 42-tool registry** (reproducible with
+**Measured, offline, over the real 50-tool registry** (reproducible with
 `bun bench/tool-relevance/benchmark.ts`):
 
-- schema-byte savings per case: -40.1% worst, -92.9% best, -56.3% aggregate
-  over 46 cases (re-measured after #504; -40.3% / -92.7% / -61.0% before it);
-- the I5 invariant-violation counter at **zero** across all 46.
+- schema-byte savings per case: -43.5% worst, -89.8% best, -57.8% aggregate
+  over 65 cases (-40.1% / -92.9% / -56.3% over 46 cases after #504, and
+  -40.3% / -92.7% / -61.0% before it);
+- the wanted tool kept in 65/65 cases;
+- the I5 invariant-violation counter at **zero** across all 65.
+
+**Estimated, offline, not measured:** the prompt-cache table in §9 point 4.
+Filtered sends 32-44% fewer bytes; on a KV-caching runtime whose template
+renders tools before the history it is estimated to prefill about 5-8x as
+much, and with tools rendered last, 40-54% less.
 
 **Measured live, against `qwen38-fast` (27.3B, Q4_K) on ollama**, one case:
 
@@ -1031,7 +1211,9 @@ Stated precisely, because "we ran a benchmark" is exactly the kind of claim
   box is 27B or 30B, over the 20B `max_params_b` default, and had to be
   allowlisted explicitly to measure at all. The population this feature
   exists for was never tested.
-- **Cache and latency are unmeasured.** The one live run produced
+- **Cache and latency are unmeasured live.** The offline estimate above
+  says the filter loses badly on a KV-caching runtime; no real server has
+  confirmed or refuted it. The one live run produced
   23,808 ms full vs 205,151 ms filtered, which is *not* a filter effect: the
   full call ran against a warm model and the filtered call then presented a
   different prefix and paid a full re-prefill. That is prompt-cache
@@ -1039,19 +1221,47 @@ Stated precisely, because "we ran a benchmark" is exactly the kind of claim
   feature a net loss. It needs a proper warm/cold protocol.
 - **Accuracy has a sample size of one.**
 
+**Why no live number was taken in the #483 close-out either.** The machine
+it ran on has no GPU, no ollama, no llama.cpp, no local weights, and no
+configured endpoint serving a 7-8B model; installing any of them, or buying
+API time, was out of scope for that change. The harness was made runnable
+against every common way of serving such a model instead, and checked
+end to end against a mock server speaking both protocols.
+
 To reproduce once a model is reachable:
 
 ```
 # offline, seconds
 bun bench/tool-relevance/benchmark.ts
 
-# live; --model is required and must match a ref the gate will allowlist
-bun bench/tool-relevance/benchmark.ts --accuracy \
-  --model ollama:<tag> --case summarise-url
+# every live number, one command. ollama:
+bun bench/tool-relevance/benchmark.ts --live --model ollama:qwen2.5:7b-instruct
+
+# ...or any OpenAI-compatible server. llama.cpp, no ollama needed. One slot
+# (-np 1) so the server keeps exactly one cached prompt, which is the model
+# the estimate assumes, and so the whole 16k context goes to that slot:
+#   llama-server -m qwen2.5-7b-instruct-q4_k_m.gguf --jinja -c 16384 -np 1
+# vLLM needs --enable-prompt-tokens-details to report cached tokens; LM
+# Studio reports none, so its cache criterion is NO CACHE RESULT.
+bun bench/tool-relevance/benchmark.ts --live --api openai \
+  --base-url http://127.0.0.1:8080/v1 --model llamacpp:qwen2.5-7b-instruct
+
+# ...or a hosted endpoint, capped. Reads the key from the NAMED env var.
+# Hosted small models often do not report cached tokens, in which case the
+# cache criterion prints NO CACHE RESULT; use --accuracy there.
+bun bench/tool-relevance/benchmark.ts --accuracy --api openai \
+  --base-url https://openrouter.ai/api/v1 --api-key-env OPENROUTER_API_KEY \
+  --model openrouter:qwen/qwen-2.5-7b-instruct --max-calls 350
 ```
 
-The harness refuses to print a pass on zero successful cases, and exits
-nonzero on a partial run. A "0 substitutions" line accompanied by
+`--model` is required for the live modes and is always allowlisted by the
+harness itself, so any model can be measured on purpose. `llamacpp:` and
+`openrouter:` above are only labels for the allowlist; the part after the
+first colon is sent as the model id.
+
+The harness refuses to print a pass on a run that measured nothing (see
+`accuracyRunVerdict` above), and exits nonzero on a partial run, an unmet
+criterion or a malformed flag. A "0 substitutions" line accompanied by
 "NO RESULT" or "PARTIAL RESULT" is not a green light.
 
 ### Selection accuracy after the #504 description trim: NOT MEASURED
@@ -1087,8 +1297,8 @@ git switch --detach 2478625
 bun bench/tool-relevance/benchmark.ts --accuracy \
   --model ollama:qwen2.5:7b --limit 46 | tee /tmp/acc-before.txt
 
-# 3. After: the trimmed descriptions.
-git switch perf/504-trim-tool-descriptions
+# 3. After: the trimmed descriptions (8d2a449, #508; or main).
+git switch --detach 8d2a449
 bun bench/tool-relevance/benchmark.ts --accuracy \
   --model ollama:qwen2.5:7b --limit 46 | tee /tmp/acc-after.txt
 
@@ -1205,12 +1415,12 @@ unmapped tool rank infinity, independent of what the action map contains.
 
 | # | requirement | mechanism |
 |---|---|---|
-| 1 | model-class/tier gate | §4. Allowlist or capped ollama; frontier veto; unknown is ineligible; **every failover candidate must be eligible**. |
-| 2 | a way back to the full set | §5. `discover_tools`, present whenever anything was dropped (I4), admission recorded in the ledger, emergency-gated and audited. |
-| 3 | per-turn re-filtering over the conversation | §6 + I2. Recomputed every turn over the whole conversation, monotone via the ledger, so a follow-up can only add. |
-| 4 | authority coupling as an invariant | I1, triggered by `fetch` reach *or* rank > 504, repaired by union with `PERCEPTION(A)`, checked on every returned set, tested from `BUILTIN_TOOLS`. |
-| 5 | fixtures from `BUILTIN_TOOLS`, wrong-exclusion coverage | §3, §8. Classification and trigger coverage tests walk `BUILTIN_TOOLS`; negative tests assert a research/browse ask keeps the browser tools. |
-| 6 | a real benchmark before default-on | §10, with exit criteria including a zero substitution rate and cache-accounted tokens. |
+| 1 | model-class/tier gate | §4. Allowlist or capped ollama; frontier veto; unknown is ineligible; **every failover candidate must be eligible**, including a caller-supplied `fallbackTier`. Provider kinds reach every orchestrator and every sub-agent launcher. |
+| 2 | a way back to the full set | §5. `discover_tools`, present whenever anything was dropped (I4), admission recorded in the ledger, emergency-gated and audited; tolerant of stringified `names`. A call to a tool that was not offered is admitted too. |
+| 3 | per-turn re-filtering over the conversation | §6 + I2. Recomputed every turn over the whole conversation; everything used or admitted is kept by the ledger, which `processTaskCall` now shares with the chat loops. |
+| 4 | authority coupling as an invariant | I1, triggered by `fetch` reach *or* rank > 504, repaired by union with `PERCEPTION(A)`, checked on every returned set - and at dispatch, where an off-list trigger is not run while a framed reader is hidden (§5). Tested from the production registry, pairwise over the whole trigger vocabulary. |
+| 5 | fixtures from the registry, wrong-exclusion coverage | §3, §8. Classification tests walk `BUILTIN_TOOLS`; trigger coverage, the stuffing properties and the wrong-exclusion tests walk the 50-tool production registry. Every tool's own description must keep it, eleven realistic browse asks with no web keyword must keep the browser tools, and an unmatched ask gets the framed readers, never the shell. |
+| 6 | a real benchmark before default-on | §10. One-command live harness (ollama or any OpenAI-compatible server) with exit criteria for substitution, accuracy within noise and cache-accounted tokens. **Not yet run on a 7-8B model.** The offline cache estimate says the third criterion fails on KV-caching runtimes whose template renders tools before the history (most of them) and passes with tools rendered last or with no cache. |
 
 Plus the three explicit fixes: the fail-open off-by-one becomes set
 containment against the actual input list (I3, I5); the kill switch
