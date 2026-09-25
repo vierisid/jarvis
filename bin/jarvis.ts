@@ -61,7 +61,8 @@ ${c.bold('Start options:')}
   -d, --detach      Run as background daemon
   --no-open         Don't auto-open dashboard in browser
   --data-dir <path> Override data directory (default: ~/.jarvis)
-  --no-local-tools  Disable local tool execution (Docker/headless mode)
+  --no-local-tools  Run the general tools only on a sidecar (your machine), never
+                    on this host (Docker/headless). The site builder still runs here.
 
 ${c.bold('Logs options:')}
   -f, --follow      Follow log output (like tail -f)

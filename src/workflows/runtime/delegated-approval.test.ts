@@ -218,6 +218,29 @@ describe('delegated approvals through the workflow effect boundary', () => {
     expect(listWorkflowEffects(ids.run.id)[1]).toMatchObject({ route: 'agent-tool:1', status: 'blocked' });
   });
 
+  test('a sub-agent below a gated call\'s level gets an approval, not a denial, and it runs once approved', async () => {
+    // A write the gate raises to execute_command (a shell rc, #522), asked
+    // by a level-3 sub-agent: the chat gate's above-level substitution.
+    const ids = createRun();
+    const f = backends(ids, { childLevel: 3, authority: { default_level: 3 },
+      writeGate: () => ({ actionCategory: 'execute_command', confirm: 'above_level', intent: 'Write a file that can run as code' }) });
+    const parked = await f.delegate();
+    expect(parked.status).toBe('approval_required');
+    expect(f.effects()).toBe(0);
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    const done = await f.delegate();
+    expect(f.effects()).toBe(1);
+    expect(done.toolCalls[0]!.result).toContain('saved');
+  });
+
+  test('without the gate asking for it, the same shortfall is still a denial', async () => {
+    const ids = createRun();
+    const f = backends(ids, { childLevel: 3, authority: { default_level: 3 }, writeGate: () => ({ actionCategory: 'execute_command', intent: 'Write a file' }) });
+    const done = await f.delegate();
+    expect(f.effects()).toBe(0);
+    expect(done.toolCalls[0]!.error).toContain('AUTHORITY DENIED');
+  });
+
   test('a call whose category is unchanged at dispatch still runs under its approval', async () => {
     const ids = createRun();
     const f = backends(ids, { writeGate: () => ({ actionCategory: 'write_data', intent: 'Write a note' }) });

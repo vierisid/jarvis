@@ -32,7 +32,7 @@ import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
-import { resolveToolGate } from '../authority/tool-action-map.ts';
+import { freezeToolArguments, resolveToolGate, substituteAboveLevel } from '../authority/tool-action-map.ts';
 import { combineDecisions } from '../authority/engine.ts';
 import { markUntrustedToolResult, markUntrustedToolFailure, isTaintSourceTool } from '../roles/untrusted.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
@@ -346,6 +346,10 @@ async function executeTool(
   // the tool returned. Nothing is recorded as executed before it ran.
   let audit: ((decision: 'allowed' | 'denied' | 'approval_required', executed: boolean, approvalId?: string) => void) | null = null;
 
+  // Pin what the tool would resolve at run time (a relative file path against
+  // the site chat's cwd), so the gate and a later approved run agree (#522).
+  toolCall = { ...toolCall, arguments: freezeToolArguments(registry.get(toolCall.name), toolCall.arguments) };
+
   // Authority gate (if engine provided)
   if (authorityCtx) {
     const { agent, engine, auditTrail, emergencyController, temporaryGrants, taintGating, taint, governedTools } = authorityCtx;
@@ -384,7 +388,7 @@ async function executeTool(
       return { text: `[AUTHORITY DENIED] ${toolCall.name} requires the user's confirmation. Sub-agents cannot request approvals directly.`, failed: true };
     }
 
-    const decision = combineDecisions(gate.categories.map((category) => engine.checkAuthority({
+    const check = (category: ActionCategory) => engine.checkAuthority({
       agentId: agent.id,
       agentAuthorityLevel: agent.agent.authority.max_authority_level,
       agentRoleId: agent.agent.role.id,
@@ -393,7 +397,13 @@ async function executeTool(
       actionCategory: category,
       temporaryGrants: temporaryGrants ?? new Map(),
       profile: profile ?? null,
-    })));
+    });
+    // The same substitution the orchestrator makes: a gated call whose worst
+    // case is above this agent's level, when the agent clears the tool's
+    // floor, asks for approval instead of being refused (a write to a shell rc
+    // at level 3, #522). Only a pure level shortfall qualifies. Where nobody
+    // can hold an approval (no governedTools) it is still refused below.
+    const decision = substituteAboveLevel(combineDecisions(gate.categories.map(check)), gate, check);
 
     audit = (authorityDecision, executed, approvalId) => auditTrail?.log({
       agent_id: agent.id,

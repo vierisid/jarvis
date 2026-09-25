@@ -4,7 +4,7 @@
 
 import type { ToolRegistry } from '../actions/tools/registry.ts';
 import { executionState, approvalIntentFromContext, approvalNeedsClick, type ApprovalManager, type ApprovalRequest } from './approval.ts';
-import { resolveToolGate, severityRank } from './tool-action-map';
+import { ABOVE_LEVEL_SUBSTITUTION, resolveToolGate, severityRank } from './tool-action-map.ts';
 import { rawUiGate } from './ui-intent';
 import type { AuditTrail } from './audit.ts';
 import type { AuthorityLearner } from './learning.ts';
@@ -12,16 +12,9 @@ import type { EmergencyController } from './emergency.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { TAINT_PROFILE_LABEL } from './taint-gating.ts';
 
-/**
- * The phrase in the reason of an approval that was SUBSTITUTED for a level
- * denial (`confirm: 'above_level'`), rather than requested on its own merits.
- *
- * Exported and interpolated by the one place that writes it, the substitution
- * in `AgentOrchestrator.executeToolInner`, so the producer and the consumer
- * cannot drift. Matched as a substring, the same way TAINT_PROFILE_LABEL is
- * above it.
- */
-export const ABOVE_LEVEL_SUBSTITUTION = "is above this agent's authority level";
+// Defined next to substituteAboveLevel, which writes it; re-exported here,
+// where the approval learner reads it.
+export { ABOVE_LEVEL_SUBSTITUTION };
 
 export type ExecutionResultCallback = (requestId: string, request: ApprovalRequest, result: string) => void;
 

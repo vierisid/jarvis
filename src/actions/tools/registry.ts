@@ -86,6 +86,15 @@ export type ToolDefinition = {
    * force. Must be cheap and must not act.
    */
   authorityGate?: (params: Record<string, unknown>) => ToolGate | null;
+  /**
+   * Trusted, never accepted from model input. Applied to a call's arguments
+   * before it is gated, so the gate, the approval card and the eventual run
+   * all see the same values: pins anything the tool would otherwise resolve
+   * later from ambient state (the file tools' relative path, against the
+   * site chat's cwd). Must be cheap, must not act, and must return the
+   * params unchanged when there is nothing to pin.
+   */
+  freezeArguments?: (params: Record<string, unknown>) => Record<string, unknown>;
   /** Capture a read-only check of the UI session/subject a person will review.
    * The returned guard lives only until this approval is resolved; it must
    * never reconnect or select a replacement subject when validation fails. */

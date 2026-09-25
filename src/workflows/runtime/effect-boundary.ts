@@ -12,6 +12,7 @@ import { getFlowRun } from '../db/repos/flow-run';
 import { createWaitpoint } from '../db/repos/waitpoint';
 import { claimWorkflowEffect, getWorkflowEffect, saveWorkflowEffect, type WorkflowEffect } from '../db/repos/workflow-effect';
 import { canonicalJson, digest, resolveEffectContext, type WorkflowApprovalPending, type WorkflowEffectContext } from './effect-context';
+import { substituteAboveLevel } from '../../authority/tool-action-map';
 
 export interface WorkflowAuthorityDependencies {
   authorityEngine?: AuthorityEngine; auditTrail?: AuditTrail; emergencyController?: EmergencyController;
@@ -45,6 +46,13 @@ export interface EffectInvocation {
   principal?: EffectPrincipal;
   /** The caller's gate already found this effect needs approval; the boundary never concludes otherwise. */
   approvalRequired?: boolean;
+  /**
+   * The tool's own gate asked for `confirm` and this is its floor: a pure
+   * level shortfall above a floor the principal clears becomes an approval
+   * card instead of a denial, the substitution the chat gate makes (a write
+   * to a shell rc at the default level, #522). Absent: a shortfall denies.
+   */
+  aboveLevelFloor?: ActionCategory;
 }
 export type EffectReply = { result: unknown; approval?: never } | { approval: WorkflowApprovalPending; result?: never };
 
@@ -131,10 +139,14 @@ export class WorkflowEffectBoundary {
       // so a gate that already required approval cannot be talked out of it
       // by a looser recomputation here, and the fold cannot bypass it.
       const categories = input.categories?.length ? input.categories : [input.category];
-      const decision = combineDecisions(categories.map((actionCategory) => authority.checkAuthority({
+      const check = (actionCategory: ActionCategory) => authority.checkAuthority({
         agentId: who.agentId, agentRoleId: who.agentRoleId, agentAuthorityLevel: who.agentAuthorityLevel,
         toolName: input.toolName, toolCategory: input.toolCategory,
-        actionCategory, temporaryGrants: new Map(), profile: who.profile ?? null })));
+        actionCategory, temporaryGrants: new Map(), profile: who.profile ?? null });
+      const folded = combineDecisions(categories.map(check));
+      const decision = input.aboveLevelFloor
+        ? substituteAboveLevel(folded, { confirm: 'above_level', floorCategory: input.aboveLevelFloor }, check)
+        : folded;
       if (!decision.allowed) throw new Error(`Authority denied ${input.toolName}: ${decision.reason}`);
       // A capability whose UI effect cannot be described is reviewed whatever
       // the category check concluded; the card carries the uncertainty.

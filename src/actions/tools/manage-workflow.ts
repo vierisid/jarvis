@@ -77,6 +77,7 @@ import type {
   ComposerSpecialistRole,
   ComposerToolSpec,
 } from "./workflow-composer.ts";
+import { forCard } from "../../util/card-text.ts";
 
 export interface ManageWorkflowDeps {
   /** When provided, a refresh is fired after status / publish / delete so cron+webhook+event subs reconcile. */
@@ -120,18 +121,6 @@ export interface ManageWorkflowDeps {
    * their OS long after this tool is constructed.
    */
   executionTargets?: () => ExecutionTarget[];
-}
-
-/**
- * One model-supplied value, safe to put in an approval headline. The card
- * renders the intent sentence and nothing else, so an uncapped flow name can
- * run past the real sentence and append reassuring prose after it. Both call
- * sites put it LAST, where there is nothing after it to impersonate, so the
- * budget is generous enough to show a real name rather than hide it.
- */
-function forCard(value: unknown, max = 600): string {
-  const s = String(value ?? "").replace(/\s+/g, " ").trim();
-  return s.length > max ? `${s.slice(0, max - 3)}...` : s;
 }
 
 export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDefinition {

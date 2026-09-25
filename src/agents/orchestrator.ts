@@ -31,9 +31,8 @@ export function seedTaintFromHistory(history: LLMMessage[], taint: Set<string>, 
 import type { ApprovalManager, ApprovalRequest } from '../authority/approval.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
-import { ABOVE_LEVEL_SUBSTITUTION } from '../authority/deferred-executor.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
-import { resolveToolGate, gateContext } from '../authority/tool-action-map.ts';
+import { resolveToolGate, gateContext, freezeToolArguments, substituteAboveLevel } from '../authority/tool-action-map.ts';
 import { decideTools, realtimeToolDecision } from '../actions/tools/tool-relevance/filter.ts';
 import { DISCOVER_TOOLS, ToolExposureLedger } from '../actions/tools/tool-relevance/ledger.ts';
 import { interceptDiscovery, DISCOVER_TOOLS_LLM } from '../actions/tools/tool-relevance/discover.ts';
@@ -1340,6 +1339,11 @@ export class AgentOrchestrator {
       return `Error: no tool named "${toolCall.name}" is available. Call discover_tools to see what is.`;
     }
 
+    // Pin what the tool would otherwise resolve at run time (a relative file
+    // path against the site chat's cwd), so the gate, an approval card and a
+    // run after that card is clicked all mean the same file (#522).
+    toolCall = { ...toolCall, arguments: freezeToolArguments(this.toolRegistry.get(toolCall.name), toolCall.arguments) };
+
     if (this.authorityEngine && primary) {
       const tool = this.toolRegistry.get(toolCall.name);
       // What this call reaches: the tool's static category, raised by its
@@ -1361,43 +1365,12 @@ export class AgentOrchestrator {
       // and sends a message is checked as control_app AND send_message).
       let decision = combineDecisions(gate.categories.map(check));
 
-      // A gated call (above_level or mandatory review) whose worst case is above the agent's level turns into
-      // an approval instead of a denial, provided the agent clears the
-      // tool's floor on its own: the same substitution request_approval
-      // makes for a declared intent. Only a pure level shortfall qualifies;
-      // an override, a context rule or a profile cap that denies still
-      // denies.
-      if (gate.confirm && !decision.allowed && decision.deniedByLevel && decision.actionCategory !== gate.floorCategory) {
-        const floor = check(gate.floorCategory);
-        if (floor.allowed) {
-          decision = {
-            ...floor,
-            allowed: true,
-            requiresApproval: true,
-            actionCategory: decision.actionCategory,
-            // Carry the floor's profile label through. deferred-executor
-            // keeps taint-gated approvals out of the approval learner by
-            // looking for TAINT_PROFILE_LABEL in `reason`; rewriting `reason`
-            // from scratch silently exempted every substituted approval from
-            // that exclusion, so routine approvals here could train a
-            // suggestion to auto-allow the whole category -- globally, for
-            // every tool, and evaluated before the level check.
-            //
-            // The label goes INSIDE the sentence, not appended after it:
-            // formatApprovalIntent decides whether the engine wrote this
-            // reason, and one of its two tests is
-            // `endsWith('requires user approval')`. For the TAINT label
-            // specifically its other test (`includes(TAINT_PROFILE_LABEL)`)
-            // would still match a trailing parenthetical -- but the
-            // background profile's label has no such second test, so
-            // appending would make its card lead with this sentence instead
-            // of the one naming the actual effect.
-            reason: `${decision.actionCategory} ${ABOVE_LEVEL_SUBSTITUTION}`
-              + `${floor.profileLabel ? ` (${floor.profileLabel})` : ''}`
-              + ` and requires user approval`,
-          };
-        }
-      }
+      // A gated call (above_level or mandatory review) whose worst case is
+      // above the agent's level turns into an approval instead of a denial,
+      // provided the agent clears the tool's floor on its own: the same
+      // substitution request_approval makes for a declared intent. Shared
+      // with the sub-agent and workflow gates; see substituteAboveLevel.
+      decision = substituteAboveLevel(decision, gate, check);
 
       // A call that must be confirmed by the person is never auto-allowed,
       // whatever the level, the overrides or the learned approvals say.
@@ -1623,6 +1596,8 @@ export class AgentOrchestrator {
 
     const primary = this.getPrimary();
     const tool = this.toolRegistry.get(name);
+    // As on the task path: pin a relative file path before it is judged (#522).
+    args = freezeToolArguments(tool, args);
     const gate = resolveToolGate(tool, name, args);
     const actionCategory = gate.actionCategory;
 

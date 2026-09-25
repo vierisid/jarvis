@@ -15,11 +15,11 @@
  * 2. Everywhere else a write is a write, EXCEPT to a path that something runs
  *    as code without being asked: a shell startup file, git config or hooks,
  *    an autostart entry, a systemd or launchd unit, a crontab, SSH config, an
- *    editor config, an existing executable, Jarvis's own data and code.
+ *    editor config, a program on the PATH, Jarvis's own code and keys.
  *    Writing one of those is running a command later, so write_file's
  *    authorityGate rates it `execute_command` instead of `write_data`. It is
  *    not refused: a person can still approve an edit to their own .bashrc,
- *    but it is gated as what it is. See execOnWriteClass.
+ *    but it is gated as what it is. See execOnWrite.
  *
  * What this does NOT close: the site builder turns project writes into
  * execution by design (`make dev` runs the project's Makefile, vite reloads
@@ -27,18 +27,18 @@
  * code the daemon runs. That is the site builder's contract, not this one's.
  */
 
-import {
-  closeSync, lstatSync, openSync, readFileSync, readSync, readdirSync, readlinkSync, realpathSync, statSync,
-} from 'node:fs';
-import { basename, dirname, isAbsolute, join, posix, relative, resolve } from 'node:path';
+import { lstatSync, readFileSync, readdirSync, readlinkSync, realpathSync, statSync } from 'node:fs';
+import { basename, delimiter, dirname, isAbsolute, join, posix, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { HFS_IGNORABLE, isGitDirName, isWithin } from '../../util/path.ts';
-import { getDefaultCwd } from './local-tools-guard.ts';
+import { getDefaultCwd, isNoLocalTools } from './local-tools-guard.ts';
 
 // ── Daemon-registered roots ──────────────────────────────────────────────────
 
 let _siteProjectsDir: string | null = null;
-let _daemonRoots: string[] = [];
+let _dataDirs: string[] = [];
+let _codeRoots: string[] = [];
+let _home: string | null = null;
 
 /**
  * Where site projects live. Registered at daemon boot from the config,
@@ -48,6 +48,7 @@ let _daemonRoots: string[] = [];
  */
 export function setSiteProjectsDir(dir: string | null): void {
   _siteProjectsDir = dir ? resolve(dir) : null;
+  linkedCache = null;
 }
 
 export function getSiteProjectsDir(): string | null {
@@ -55,14 +56,36 @@ export function getSiteProjectsDir(): string | null {
 }
 
 /**
- * Directories whose contents the daemon itself loads or runs: its data dir
- * (config.yaml names engine and pieces dirs; cache/engine holds bundles run
- * by hash with no content check) and any configured engine, pieces or
- * metadata location outside it. Registered at boot. The site projects dir is
- * carved out even when it sits inside one of these.
+ * What the daemon loads from disk. `dataDirs` are its data dirs, where only
+ * the code, config and key entries count (DATA_DIR_SENSITIVE); a note or a log
+ * there is an ordinary file. `codeRoots` are configured engine, pieces and
+ * metadata locations, where everything is code the daemon runs. The site
+ * projects dir is carved out of both.
  */
-export function setDaemonDataRoots(roots: Array<string | null | undefined>): void {
-  _daemonRoots = [...new Set(roots.filter((r): r is string => !!r).map((r) => resolve(r)))];
+export function setDaemonDataRoots(roots: { dataDirs?: Array<string | null | undefined>; codeRoots?: Array<string | null | undefined> }): void {
+  const clean = (list: Array<string | null | undefined> = []) => [...new Set(list.filter((r): r is string => !!r).map((r) => resolve(r)))];
+  _dataDirs = clean(roots.dataDirs);
+  _codeRoots = clean(roots.codeRoots);
+}
+
+/**
+ * The home dir the policy judges against. A seam for tests only: Bun's
+ * homedir() ignores a HOME changed at runtime, and a test must never classify
+ * (or write) against the developer's real home.
+ */
+export function setPolicyHome(dir: string | null): void {
+  _home = dir ? resolve(dir) : null;
+  homeTargetsCache = null;
+}
+
+export function policyHome(): string {
+  return _home ?? homedir();
+}
+
+/** Every base a relative path can be resolved against by whoever serves it: the site cwd, home, and `/` (a sidecar's cwd under launchd). */
+export function relativeBases(): string[] {
+  const home = policyHome();
+  return [...new Set([getDefaultCwd() || home, home, '/'])];
 }
 
 // ── Path resolution ──────────────────────────────────────────────────────────
@@ -71,34 +94,58 @@ export function setDaemonDataRoots(roots: Array<string | null | undefined>): voi
 const MAX_LINK_HOPS = 40;
 
 /**
- * Where `path` lands when opened for writing: the real path of its deepest
- * existing ancestor with the missing tail appended, following a DANGLING
- * symlink by reading it. A write through `x -> .git/new` creates `.git/new`,
- * so a link whose target is missing is judged by that target, not by its own
- * name. realpath alone cannot do that: it fails on the link, and walking up
- * past it would judge `x` as an ordinary new file.
+ * Where `path` (relative to `base`) lands when opened, resolved the way the
+ * kernel resolves it: component by component, a symlink replaced by its
+ * target before the next component -- so `h/../config` with `h -> .git/hooks`
+ * is `.git/config`, which a lexical normalize would call `config` -- and a
+ * DANGLING link followed by reading it, since a write through `x -> .git/new`
+ * creates `.git/new`. Once a component is missing the rest is appended as
+ * spelled.
  *
- * Never throws. An unreadable component ends the walk with the lexical path,
- * which the name-based checks still see.
+ * Never throws. On Windows (no kernel-order `..` to mirror) it falls back to
+ * realpath of the deepest existing ancestor.
  */
-export function resolveReal(path: string): string {
-  let current = resolve(path);
+export function resolveReal(path: string, base = '/'): string {
+  const start = isAbsolute(path) ? path : `${base}/${path}`;
+  try {
+    return realpathSync.native(start);
+  } catch { /* missing, dangling, or unreadable: walk it */ }
+  if (process.platform === 'win32') return resolveRealLexical(resolve(start));
+  const pending = start.split('/').filter(Boolean).reverse();
+  let current = '/';
+  let missing = false;
+  for (let hops = 0; pending.length > 0;) {
+    const c = pending.pop()!;
+    if (c === '.') continue;
+    if (c === '..') { current = dirname(current); continue; }
+    const next = current === '/' ? `/${c}` : `${current}/${c}`;
+    if (!missing) {
+      let target: string | null = null;
+      try {
+        if (lstatSync(next).isSymbolicLink() && ++hops <= MAX_LINK_HOPS) target = readlinkSync(next);
+      } catch {
+        missing = true;
+      }
+      if (target !== null) {
+        if (isAbsolute(target)) current = '/';
+        pending.push(...target.split('/').filter(Boolean).reverse());
+        continue;
+      }
+    }
+    current = next;
+  }
+  return current;
+}
+
+function resolveRealLexical(path: string): string {
   const tail: string[] = [];
-  for (let hops = 0; ;) {
+  for (let current = path; ;) {
     try {
       return join(realpathSync(current), ...tail);
-    } catch { /* missing, dangling, or unreadable: look closer */ }
-    let target: string | null = null;
-    try {
-      if (lstatSync(current).isSymbolicLink()) target = readlinkSync(current);
-    } catch { /* not there at all */ }
-    if (target !== null && ++hops <= MAX_LINK_HOPS) {
-      current = resolve(dirname(current), target);
-      continue;
-    }
+    } catch { /* keep walking up */ }
     const parent = dirname(current);
-    if (parent === current) return join(current, ...tail);
-    tail.unshift(basename(current));
+    if (parent === current) return path;
+    tail.unshift(current.slice(parent.length).replace(/^[\\/]/, ''));
     current = parent;
   }
 }
@@ -141,8 +188,7 @@ function realOrSelf(path: string): string {
  * is_git_directory): a HEAD, plus objects/ and refs/ or a commondir file.
  * This is how a git dir is recognised whatever it is called -- the target of
  * a `.git` gitfile or symlink, a linked worktree's gitdir, a bare repo --
- * without following any pointer to it. It generalises #516's linkedGitDirs,
- * which finds only the ones the project root's `.git` points at.
+ * without following any pointer to it.
  */
 function isGitDirectory(dir: string): boolean {
   if (!exists(join(dir, 'HEAD'))) return false;
@@ -201,9 +247,14 @@ function linkedGitDirsOf(projectRoot: string): string[] {
     const st = lstatSync(dotGit);
     if (st.isSymbolicLink()) {
       found.push(resolveReal(dotGit));
+    } else if (st.isDirectory()) {
+      // Its real path: for a project that is itself a symlink into the
+      // projects dir, the `.git` also sits outside it, under a path no site
+      // root contains.
+      found.push(resolveReal(dotGit));
     } else if (st.isFile()) {
       const match = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, 'utf-8'));
-      if (match) found.push(resolveReal(resolve(projectRoot, match[1]!)));
+      if (match) found.push(resolveReal(match[1]!, projectRoot));
     }
   } catch { /* no .git, or unreadable */ }
   for (const gitDir of [...found]) {
@@ -211,70 +262,117 @@ function linkedGitDirsOf(projectRoot: string): string[] {
     // Only a regular file: a FIFO there would block every file-tool call.
     if (!isFile(commondir)) continue;
     try {
-      found.push(resolveReal(resolve(gitDir, readFileSync(commondir, 'utf-8').trim())));
+      found.push(resolveReal(readFileSync(commondir, 'utf-8').trim(), gitDir));
     } catch { /* unreadable */ }
   }
   // A `.git` pointing at `/`, the home dir or anything above the project
   // would put every path under a "git dir" and refuse them all. That takes a
   // shell to set up, so it is a nuisance rather than a bypass, but a git dir
   // that contains its own project is not one git would use either.
-  const home = homedir();
+  const home = policyHome();
   return found.filter((dir) => !isWithinCI(projectRoot, dir) && !isWithinCI(home, dir));
 }
 
+/** How long a scan of the projects' linked git dirs is trusted. */
+const LINKED_TTL_MS = 2_000;
+let linkedCache: { key: string; at: number; dirs: string[] } | null = null;
+
 /**
  * The linked git dirs of every site project: the site chat's, and each
- * directory in the projects dir. All of them, not just the one a path is
- * under, because a linked git dir can be anywhere; there are tens of
- * projects, not thousands, and this is one lstat each.
+ * directory in the projects dir, symlinked project dirs included (a project
+ * reached through a link has the same `.git`). All of them, not just the one
+ * a path is under, because a linked git dir can be anywhere.
+ *
+ * Cached on the projects dir's mtime and the cwd, for LINKED_TTL_MS: a new or
+ * removed project changes the mtime at once. A `.git` rewritten in place into
+ * a gitfile does not, which is the staleness the TTL bounds; rewriting it
+ * takes git or a shell in the project, which is already execution.
  */
 function allLinkedGitDirs(): string[] {
-  const projects = new Set<string>();
   const cwd = getDefaultCwd();
+  let mtime = 0;
+  if (_siteProjectsDir) {
+    try { mtime = statSync(_siteProjectsDir).mtimeMs; } catch { /* no projects dir yet */ }
+  }
+  const key = `${_siteProjectsDir}\0${mtime}\0${cwd}\0${_home}`;
+  const now = Date.now();
+  if (linkedCache && linkedCache.key === key && now - linkedCache.at < LINKED_TTL_MS) return linkedCache.dirs;
+  const projects = new Set<string>();
   if (cwd) projects.add(resolve(cwd));
   if (_siteProjectsDir) {
     try {
       for (const entry of readdirSync(_siteProjectsDir, { withFileTypes: true })) {
-        if (entry.isDirectory()) projects.add(join(_siteProjectsDir, entry.name));
+        const path = join(_siteProjectsDir, entry.name);
+        if (entry.isDirectory() || (entry.isSymbolicLink() && isDir(path))) projects.add(path);
       }
     } catch { /* no projects dir yet */ }
   }
-  return [...projects].flatMap(linkedGitDirsOf);
+  const dirs = [...projects].flatMap(linkedGitDirsOf);
+  linkedCache = { key, at: now, dirs };
+  return dirs;
 }
 
 /**
- * The refusal message when `absPath` -- as spelled, or where it really lands
- * -- is inside a git directory of a site project, else null.
+ * The refusal message when `requested` -- as spelled, or where it really
+ * lands -- is inside a git directory of a site project, else null.
  *
- * Three tests, any one refuses, each relative to a site root: a component of
- * the spelled path is a git dir name in any form isGitDirName knows (`.git`,
- * `.GIT`, `.git.`, `git~1`, HFS-ignorable spellings); the same of the real
- * path, so a symlink into `.git` from anywhere, inside the project or not, is
- * caught; and the real path is inside a directory git would treat as a git
- * dir, whatever its name.
+ * A relative path is judged against every base in `bases`; an absolute one
+ * once. For each, three paths: the lexical one (what this machine's tools
+ * open, after path.resolve normalizes `..`), the kernel-resolved raw spelling
+ * (what a sidecar handed the raw string opens: symlinks before `..`), and the
+ * real path of the lexical one. Any of them refuses when, relative to a site
+ * root, a component is a git dir name in any form isGitDirName knows, or it
+ * is inside a directory git would treat as a git dir; or when it is inside a
+ * git dir a project's `.git` points at.
  *
- * Callers run this BEFORE routing a call to a sidecar. A sidecar on the
- * brain's own machine opens the brain's files, and nothing on that side knows
- * about site projects. For a genuinely remote sidecar the cost is refusing a
- * path that happens to match a project's `.git` spelling there.
+ * Callers run this BEFORE routing a call to a sidecar, with `/`, home and the
+ * cwd as bases: a sidecar on the brain's own machine opens the brain's files,
+ * nothing on its side knows about site projects, and under launchd its cwd is
+ * `/`. A sidecar started by hand from some other dir resolves a relative path
+ * against a cwd the brain does not know, so the tools also refuse a routed
+ * relative path with a git dir component outright (routedGitRefusal). For a
+ * genuinely remote sidecar the cost is refusing a path that happens to match
+ * a project's git dir spelling there.
  */
-export function siteGitRefusal(requested: string, absPath: string): string | null {
+export function siteGitRefusal(requested: string, bases: string[]): string | null {
   const roots = siteRoots();
   if (roots.length === 0) return null;
-  const real = resolveReal(absPath);
+  const candidates = new Set<string>();
+  for (const base of isAbsolute(requested) ? ['/'] : bases) {
+    const lexical = resolve(base, requested);
+    candidates.add(lexical);
+    candidates.add(resolveReal(requested, base));
+    candidates.add(resolveReal(lexical));
+  }
   const refusal = `Error: Access denied: "${requested}" is inside a site project's git directory. The file tools cannot `
     + 'read, write or list git internals there; use site_git_commit and site_github_push for version control.';
-  for (const root of roots) {
-    const realRoot = realOrSelf(root);
-    const spelled = isWithinCI(absPath, root) && hasGitComponent(relative(root.toLowerCase(), absPath.toLowerCase()));
-    const landed = isWithinCI(real, realRoot)
-      && (hasGitComponent(relative(realRoot.toLowerCase(), real.toLowerCase())) || insideGitDirectory(real, realRoot));
-    if (spelled || landed) return refusal;
+  const realRoots = roots.map((root) => [root, realOrSelf(root)] as const);
+  for (const path of candidates) {
+    for (const [root, realRoot] of realRoots) {
+      for (const r of new Set([root, realRoot])) {
+        if (!isWithinCI(path, r)) continue;
+        if (hasGitComponent(relative(r.toLowerCase(), path.toLowerCase())) || insideGitDirectory(path, r)) return refusal;
+      }
+    }
   }
   // A git dir a project's `.git` points at: maybe not created yet, maybe
   // outside the projects dir, and named nothing like `.git`.
-  if (allLinkedGitDirs().some((dir) => isWithinCI(real, dir) || isWithinCI(absPath, dir))) return refusal;
+  const linked = allLinkedGitDirs();
+  for (const path of candidates) if (linked.some((dir) => isWithinCI(path, dir))) return refusal;
   return null;
+}
+
+/**
+ * The refusal for a call routed to a sidecar with a RELATIVE path that names
+ * a git dir, while site projects exist on this host: the sidecar resolves it
+ * against its own cwd, which the brain cannot know, so where it lands cannot
+ * be judged. An absolute path, which siteGitRefusal can judge, still works.
+ */
+export function routedGitRefusal(requested: string): string | null {
+  if (!_siteProjectsDir || isAbsolute(requested) || /^[a-z]:[\\/]/i.test(requested)) return null;
+  if (!hasGitComponent(requested.replace(HFS_IGNORABLE, ''))) return null;
+  return `Error: Access denied: "${requested}" is a relative path into a git directory, routed to a sidecar whose working `
+    + 'directory the brain cannot see. Use an absolute path.';
 }
 
 // ── (2) Exec-on-write paths: rated execute_command ───────────────────────────
@@ -288,9 +386,8 @@ const LAUNCHD = 'a launchd job';
 const CRON = 'a cron table';
 const SSH = 'SSH configuration or keys';
 const TOOL = 'a config, plugin or module a tool or editor runs';
-const EXECUTABLE = 'an existing executable';
-const HARDLINK = 'a file with other hard links, which may be code another name runs';
-const JARVIS = "Jarvis's own data, configuration or code";
+const EXECUTABLE = 'a program something runs by name';
+const JARVIS = "Jarvis's own code, configuration or keys";
 const SHORT_NAME = 'a Windows 8.3 short name, which may hide where it lands';
 
 /**
@@ -307,12 +404,13 @@ const EXEC_FILE_NAMES: ReadonlyMap<string, string> = new Map([
   ...['.gitconfig', '.pre-commit-config.yaml', 'lefthook.yml', 'lefthook.yaml', '.lefthook.yml'].map((n) => [n, GIT] as const),
   // Each of these can name a command the tool runs on its own: vim/emacs
   // configs are programs; tmux run-shell, screen exec, hg hooks; npm
-  // script-shell / node-options; yarnPath; bun preload; debugger and REPL
-  // init files; Python's site-customisation hooks run on every start.
+  // script-shell / node-options; yarnPath; bun preload (global or a
+  // project's bunfig.toml, which every `bun run` there loads); debugger and
+  // REPL init files; Python's site-customisation hooks run on every start.
   ...['.vimrc', '.gvimrc', '.exrc', '.nvimrc', '.emacs', '.emacs.el', '.tmux.conf', '.screenrc', '.hgrc', '.npmrc',
-    '.yarnrc', '.yarnrc.yml', '.bunfig.toml', '.gdbinit', '.lldbinit', '.psqlrc', '.irbrc', '.pryrc', '.rprofile',
-    '.sqliterc', '.mavenrc', 'init.gradle', 'direnvrc', 'sitecustomize.py', 'usercustomize.py', '.wezterm.lua',
-    '.mailcap', '.xbindkeysrc'].map((n) => [n, TOOL] as const),
+    '.yarnrc', '.yarnrc.yml', '.bunfig.toml', 'bunfig.toml', '.gdbinit', '.lldbinit', '.psqlrc', '.irbrc', '.pryrc',
+    '.rprofile', '.sqliterc', '.mavenrc', 'init.gradle', 'direnvrc', 'sitecustomize.py', 'usercustomize.py',
+    '.wezterm.lua', '.mailcap', '.xbindkeysrc'].map((n) => [n, TOOL] as const),
 ]);
 
 /**
@@ -360,6 +458,30 @@ const EXEC_SYSTEM_FILES: ReadonlyMap<string, string> = new Map([
 ]);
 
 /**
+ * What in a Jarvis data dir is code, config or keys: the config files (the
+ * system config names engine and pieces dirs), the engine cache and installed
+ * pieces, workflow code steps, the web-app templates injected into pages, the
+ * local Chrome profile (extensions), the desktop bridge, an install.sh
+ * checkout of the daemon, the vault DB and the key files. Everything else
+ * there -- logs, content, workflow files, a note -- is ordinary data.
+ */
+const DATA_DIR_SENSITIVE_ENTRIES = new Set([
+  'config.yaml', 'sidecar.yaml', 'cache', 'workflow-codes', 'webapp-templates', 'browser', 'sidecar-keys',
+  'google-tokens.json',
+  // Installed workflow pieces, which shadow the shared copy; the desktop
+  // bridge the daemon launches; install.sh's daemon checkout; the PID
+  // `jarvis stop` signals.
+  'pieces', 'sidecar', 'daemon', 'jarvis.pid',
+]);
+
+function isSensitiveDataEntry(relInDataDir: string): boolean {
+  const first = relInDataDir.split(/[\\/]/)[0]!.toLowerCase();
+  return DATA_DIR_SENSITIVE_ENTRIES.has(first)
+    || /^(?:\.secrets\.|jarvis\.db)/.test(first)
+    || /\.(?:key|pem|enc)$/.test(first);
+}
+
+/**
  * The daemon's own package root: everything under it is code the daemon runs
  * on its next start. `src/actions/tools` is three levels down; a root without
  * a package.json is not trusted to be one (a bundled build would put
@@ -404,12 +526,13 @@ function classifyByName(path: string): string | null {
   if (base.startsWith('.gitconfig')) return GIT;
   // Microsoft.PowerShell_profile.ps1, profile.ps1, Microsoft.VSCode_profile.ps1.
   if (/(?:^|_)profile\.ps1$/.test(base)) return SHELL;
-  if (/\/(?:site|dist)-packages\/[^/]+\.pth$/.test(s)) return TOOL;
+  // VS Code offers to run a folder's tasks, some on folder open.
+  if (s.endsWith('/.vscode/tasks.json')) return TOOL;
   if (/\/\.cargo\/config(?:\.toml)?$/.test(s)) return TOOL;
   // Jarvis's data dir at its default place, the only place a sidecar's path
-  // can be judged against; the projects inside it are site files, not
-  // Jarvis's own.
-  if (s.includes('/.jarvis/') && !s.includes('/.jarvis/projects/')
+  // can be judged against.
+  const inJarvis = /\/\.jarvis\/(.+)$/.exec(s);
+  if (inJarvis && isSensitiveDataEntry(inJarvis[1]!)
     && !(_siteProjectsDir && isWithin(s, normalize(_siteProjectsDir)))) return JARVIS;
   const bySystemFile = EXEC_SYSTEM_FILES.get(s);
   if (bySystemFile) return bySystemFile;
@@ -419,41 +542,44 @@ function classifyByName(path: string): string | null {
   return null;
 }
 
+/** How long the home and PATH scans are trusted. */
+const HOME_TTL_MS = 5_000;
+let homeTargetsCache: { key: string; at: number; targets: Array<{ real: string; label: string; dir: boolean }>; binDirs: string[] } | null = null;
+
 /**
  * The real path of each home-relative exec location that exists, so a file
- * reached some other way is still recognised. Dotfile managers make
- * `~/.bashrc` a symlink to `~/dotfiles/bashrc`; a write to the latter is a
- * write to the former, and no name test sees it.
+ * reached some other way is still recognised -- dotfile managers make
+ * `~/.bashrc` a symlink to `~/dotfiles/bashrc`, and a write to the latter is
+ * a write to the former -- plus the real bin dirs. One realpath each, cached
+ * for HOME_TTL_MS: about a hundred calls once, not per write.
  */
-function realHomeTargets(home: string): Array<{ real: string; label: string; dir: boolean }> {
-  const found: Array<{ real: string; label: string; dir: boolean }> = [];
+function homeScan(home: string): { targets: Array<{ real: string; label: string; dir: boolean }>; binDirs: string[] } {
+  const key = `${home}\0${process.env.PATH ?? ''}`;
+  const now = Date.now();
+  if (homeTargetsCache && homeTargetsCache.key === key && now - homeTargetsCache.at < HOME_TTL_MS) return homeTargetsCache;
+  const targets: Array<{ real: string; label: string; dir: boolean }> = [];
   const add = (rel: string, label: string, dir: boolean) => {
     try {
-      found.push({ real: realpathSync(join(home, rel)), label, dir });
+      targets.push({ real: realpathSync(join(home, rel)), label, dir });
     } catch { /* not there */ }
   };
   for (const [name, label] of EXEC_FILE_NAMES) add(name, label, false);
   for (const { seg, label, anywhere } of EXEC_DIRS) if (anywhere) add(seg.slice(1, -1), label, true);
-  return found;
+  const binDirs = [...new Set([
+    ...(process.env.PATH ?? '').split(delimiter).filter((d) => isAbsolute(d)),
+    join(home, 'bin'), join(home, '.local', 'bin'), join(home, '.cargo', 'bin'), join(home, 'go', 'bin'),
+    '/usr/local/bin', '/usr/local/sbin', '/usr/bin', '/usr/sbin', '/bin', '/sbin', '/opt/homebrew/bin',
+  ].map(realOrSelf))];
+  homeTargetsCache = { key, at: now, targets, binDirs };
+  return homeTargetsCache;
 }
 
-/** The first bytes of a regular file, or '' when it cannot be read. */
-function head(path: string, bytes: number): string {
-  let fd: number | undefined;
-  try {
-    fd = openSync(path, 'r');
-    const buf = Buffer.alloc(bytes);
-    const n = readSync(fd, buf, 0, bytes, 0);
-    return buf.subarray(0, n).toString('latin1');
-  } catch {
-    return '';
-  } finally {
-    if (fd !== undefined) closeSync(fd);
-  }
-}
-
-/** Filesystem-based classes, for a path on this machine. `real` is where the write lands. */
-function classifyOnDisk(real: string, home: string): string | null {
+/**
+ * Filesystem-based classes, for a path on this machine. `real` is where the
+ * write lands; `named` is the name something would run it by, with only the
+ * final component left unresolved (a bin dir entry is usually a symlink).
+ */
+function classifyOnDisk(real: string, named: string, home: string): string | null {
   const byName = classifyByName(real);
   if (byName) return byName;
 
@@ -473,70 +599,96 @@ function classifyOnDisk(real: string, home: string): string | null {
   if (isDir(join(dirname(real), 'objects')) && isDir(join(dirname(real), 'refs'))) return GIT;
 
   const projects = _siteProjectsDir ? realOrSelf(_siteProjectsDir) : null;
-  const inProjects = projects !== null && isWithinCI(real, projects);
-  if (!inProjects) {
-    for (const root of _daemonRoots) if (isWithinCI(real, realOrSelf(root))) return JARVIS;
+  if (projects === null || !isWithinCI(real, projects)) {
+    for (const root of _codeRoots) if (isWithinCI(real, realOrSelf(root))) return JARVIS;
+    for (const dir of _dataDirs) {
+      const realDir = realOrSelf(dir);
+      if (isWithinCI(real, realDir) && !sameCI(real, realDir) && isSensitiveDataEntry(relative(realDir, real))) return JARVIS;
+    }
   }
   if (DAEMON_ROOT && isWithinCI(real, DAEMON_ROOT)) return JARVIS;
 
-  for (const target of realHomeTargets(home)) {
+  const scan = homeScan(home);
+  for (const target of scan.targets) {
     if (target.dir ? isWithinCI(real, target.real) : sameCI(real, target.real)) return target.label;
   }
 
-  try {
-    const st = statSync(real);
-    if (st.isFile()) {
-      // writeFileSync truncates in place and keeps the mode, so overwriting
-      // an executable installs a new program under its name. All nine bits
-      // set is what drvfs, vfat and NTFS mounts report for every file (WSL's
-      // /mnt/c), so there it takes the content to say so: a shebang, an ELF
-      // or a PE header.
-      const perm = st.mode & 0o777;
-      if ((perm & 0o111) !== 0 && (perm !== 0o777 || /^(?:#!|\x7fELF|MZ)/.test(head(real, 4)))) return EXECUTABLE;
-      // An in-place write through one name rewrites every name: bun's
-      // hardlink backend links node_modules to its global cache, which the
-      // daemon's own dependencies share, and a hard link to ~/.bashrc has no
-      // name any test above would recognise.
-      if (st.nlink > 1) return HARDLINK;
-    }
-  } catch { /* new file */ }
+  // Overwriting a program keeps its mode (writeFileSync truncates in place),
+  // so it installs new code under a name something will run. Only where
+  // things are run BY NAME: a bin dir or node_modules/.bin. An executable
+  // bit elsewhere means little (vendored sources, CIFS and exFAT mounts
+  // report 0755 for everything), and a new file in a bin dir is created
+  // without one. The bin dir is the one holding the NAME, not the target:
+  // npm and bun make every node_modules/.bin entry a symlink, Homebrew's
+  // bin points into the Cellar, pipx and `npm link` shims do the same, and
+  // write_file follows the link to rewrite the target in place.
+  const inBinDir = [dirname(named), dirname(real)].some((dir) =>
+    scan.binDirs.some((b) => sameCI(dir, b)) || /\/node_modules\/\.bin$/i.test(dir));
+  if (inBinDir) {
+    try {
+      const st = statSync(real);
+      if (st.isFile() && (st.mode & 0o111) !== 0) return EXECUTABLE;
+    } catch { /* new file */ }
+  }
   return null;
 }
 
+/** `path` is the resolved file that triggered; `lands` is where a write really goes when that differs. */
+export type ExecOnWrite = { kind: string; path: string; lands?: string };
+
 /**
- * What kind of exec-on-write location a write to `requested` reaches, or null
- * for an ordinary file.
+ * What kind of exec-on-write location a write to `requested` reaches, and the
+ * path that made it one, or null for an ordinary file.
  *
  * Deliberately over-inclusive about WHERE the write lands, because the answer
- * gates a call that may run later than it is judged:
+ * gates a call that may be served by a sidecar or run later than it is judged:
  *
  * - the spelled path is judged by name, so a sidecar-routed write (whose
  *   files the brain cannot stat) is still classified;
- * - a relative path is resolved against the default cwd AND the home dir. An
- *   approval card raised during a site chat can be approved after the turn
- *   ends, when setDefaultCwd(null) has made the same relative path resolve
- *   against home instead;
- * - each resolution is judged again at its real path (symlinks followed,
- *   dangling ones by their target), on this machine even when a sidecar is
- *   connected: which machine serves the call is decided at execute time.
+ * - a relative path is resolved against the default cwd, home and `/`
+ *   (relativeBases): an approval clicked after a site turn resolves against
+ *   home, and a sidecar under launchd has `/` as its cwd;
+ * - each resolution is judged again where the kernel would land it, on this
+ *   machine even when a sidecar is connected, since which machine serves the
+ *   call is decided at execute time. Under --no-local-tools no call is served
+ *   here, so the disk is not consulted.
  *
  * `requested` is coerced the way the workflow boundary coerces it before
  * dispatch (`String(path)`), so a non-string path is judged as the string it
  * will be written as, not waved through as nothing.
  */
-export function execOnWriteClass(requested: unknown, opts: { cwd?: string | null; home?: string } = {}): string | null {
+export function execOnWrite(requested: unknown, opts: { bases?: string[]; home?: string } = {}): ExecOnWrite | null {
   if (requested === null || requested === undefined) return null;
   const path = String(requested);
   if (!path) return null;
-  const home = opts.home ?? homedir();
-  const cwd = opts.cwd === undefined ? getDefaultCwd() : opts.cwd;
+  const home = opts.home ?? policyHome();
+  const bases = isAbsolute(path) ? ['/'] : (opts.bases ?? relativeBases());
+  const onDisk = !isNoLocalTools();
   const byName = classifyByName(path);
-  if (byName) return byName;
-  const bases = isAbsolute(path) ? [''] : [...new Set([cwd || home, home])];
+  if (byName) return { kind: byName, path: resolve(bases[0]!, path) };
   for (const base of bases) {
     const abs = resolve(base, path);
-    const label = classifyByName(abs) ?? classifyOnDisk(resolveReal(abs), home);
-    if (label) return label;
+    let kind = classifyByName(abs);
+    let lands: string | undefined;
+    if (!kind && onDisk) {
+      // Where the raw spelling lands (symlinks before `..`, as a sidecar
+      // handed the string would open it) and where the normalized one does
+      // (what this machine's tools open); usually the same path.
+      const named = join(resolveReal(dirname(abs)), basename(abs));
+      for (const real of new Set([resolveReal(path, base), resolveReal(abs)])) {
+        kind = classifyOnDisk(real, named, home);
+        if (kind) {
+          if (real !== named && real !== abs) lands = real;
+          break;
+        }
+      }
+    }
+    if (kind) return { kind, path: abs, ...(lands ? { lands } : {}) };
   }
   return null;
+}
+
+/** execOnWrite's kind alone. */
+export function execOnWriteClass(requested: unknown, opts: { bases?: string[]; home?: string } = {}): string | null {
+  return execOnWrite(requested, opts)?.kind ?? null;
 }

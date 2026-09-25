@@ -204,6 +204,9 @@ export function buildSandboxServiceBackends(
         const gate = resolveToolGate(tool, req.toolName, req.params);
         const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-tool', action: 'invoke',
           ...(gate.confirm === 'always' ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review this UI effect' } } : {}),
+          // As at the chat gate: a gated call over the workflow's level asks
+          // instead of failing the step.
+          ...(gate.confirm ? { aboveLevelFloor: gate.floorCategory } : {}),
           route: 'tool', toolName: tool.name, category: capability.category, categories: capability.categories, toolCategory: tool.category,
           // Spelled out rather than spread: the request is what the effect's
           // identity digest is taken over, so only the two fields that decide
@@ -412,6 +415,13 @@ export function buildSandboxServiceBackends(
             // Judged as the sub-agent the gate judged it for, and never
             // concluded to need less than the gate required.
             principal: call.principal, approvalRequired: true,
+            // The sub-agent's gate may have substituted an approval for a
+            // level shortfall; judge it here the same way, or the approval it
+            // asked for could never be granted.
+            ...(() => {
+              const gate = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
+              return gate.confirm ? { aboveLevelFloor: gate.floorCategory } : {};
+            })(),
             // The target names who asked, so the card and the record are bound
             // to the principal and not only to the tool.
             prepare: () => ({ arguments: { ...call.toolCall.arguments }, target: { tool: call.toolCall.name, sequence: call.sequence,

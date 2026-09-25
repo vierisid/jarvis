@@ -6,7 +6,7 @@ import { autoTargetForCapability, findSidecar, getSidecarManager } from '../../a
 import { getDefaultCwd } from '../../actions/tools/local-tools-guard';
 import type { SidecarCapability } from '../../sidecar/types';
 import { resolve } from 'node:path';
-import { homedir } from 'node:os';
+import { policyHome } from '../../actions/tools/file-path-policy';
 import { getMachineScope } from '../../actions/machine-scope';
 
 /**
@@ -118,7 +118,7 @@ function boundedTarget(tool: string, params: Record<string, unknown>): Record<st
     : typeof params.target === 'string' && params.target.trim() ? params.target : autoTargetForCapability(capability);
   const sidecar = selector ? findSidecar(selector, getSidecarManager()?.listSidecars() ?? []) : null;
   if (selector && !sidecar && !scope) throw new Error(`Workflow target unavailable: ${selector}`);
-  const path = params.path == null ? null : selector ? params.path : resolve(getDefaultCwd() || homedir(), String(params.path));
+  const path = params.path == null ? null : selector ? params.path : resolve(getDefaultCwd() || policyHome(), String(params.path));
   return { tool, sidecarId: scope ? selector : sidecar?.id ?? null, path, selection: selector ? 'pinned-sidecar' : 'local-host',
     ...(scope ? { machineBinding: scope.binding(), capability } : {}) };
 }

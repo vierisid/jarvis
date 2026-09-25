@@ -306,6 +306,36 @@ browser:
 and the brain will never try to launch a local Chromium; browser actions
 route to a connected sidecar's browser (your desktop) instead.
 
+### `--no-local-tools` and the site builder
+
+`jarvis start --no-local-tools` (the Docker image sets it) stops the general
+tools from acting on the machine the brain runs on. `run_command`,
+`read_file`, `write_file`, `list_directory`, the clipboard, screenshots, the
+desktop tools and the local browser only work when they are routed to a
+connected sidecar, which is your own machine. Without one they refuse.
+
+The flag does **not** cover the site builder. Site projects live on the
+brain's host, and building them runs code there:
+
+- `site_run_command` runs a shell command in the project directory, such as
+  `bun add react-router`;
+- creating a project runs the template's scaffolder and `make install`,
+  which runs package install scripts;
+- the preview server runs `make dev`, which executes the project's own
+  `Makefile` and build config (a `vite.config.ts`, for example).
+
+Every one of those is code the model can write, running with the daemon's
+user and permissions on the host. The daemon logs a warning at startup when
+`--no-local-tools` is set and the site builder is enabled. If the brain's
+host must not run model-written code at all, turn the site builder off.
+`sites` is a user-owned section, so a value in `config.yaml` is imported
+into your stored settings on the next start:
+
+```yaml
+sites:
+  enabled: false
+```
+
 ### Timezone
 
 A VPS typically runs on UTC. Set your IANA timezone so cron triggers and
