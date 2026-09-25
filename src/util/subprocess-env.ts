@@ -65,12 +65,11 @@
  * with a reason. Do not widen a pattern to cover it.
  *
  * WHAT THIS DOES NOT COVER. Env is one channel, not the only one:
- *   - argv. Until #511, `GitHubManager` put the GitHub PAT in the remote URL it
- *     handed to git, where `ps` showed it and git passed it to a `pre-push` hook
- *     as `$2`, however clean the environment. It now goes through a
- *     command-line credential helper reading a 0600 file (see
- *     credentialHelperArgs in src/sites/github-manager.ts). Do not "fix" that
- *     by moving the token into an env var: hooks inherit git's environment.
+ *   - argv. `GitHubManager.push()/pull()` put the GitHub PAT in the remote URL
+ *     they hand to git. That is visible in `ps`, and git passes the push URL to
+ *     a `pre-push` hook as `$1`/`$2` (confirmed), so a hook in the project tree
+ *     reads the token regardless of how clean its environment is. Tracked
+ *     separately; sanitising env neither fixes nor breaks it.
  *   - the filesystem. `HOME` is allowlisted because the toolchain genuinely
  *     needs it, so the child can still read `~/.npmrc`, `~/.bunfig.toml`,
  *     `~/.git-credentials` and -- the one that matters most -- `~/.jarvis`,
