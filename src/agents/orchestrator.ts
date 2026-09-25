@@ -1260,6 +1260,9 @@ export class AgentOrchestrator {
     exposed: ReadonlySet<string>,
     ledger: ToolExposureLedger,
   ): { result: string; grew: boolean } | null {
+    // Checked here, before the context is built, so the default-off path
+    // allocates nothing per tool call.
+    if (tc.name !== DISCOVER_TOOLS || !getToolFilterPolicy().enabled) return null;
     return interceptDiscovery(tc.name, tc.arguments, this.discoveryContext(exposed, ledger));
   }
 
@@ -1277,6 +1280,7 @@ export class AgentOrchestrator {
     exposed: ReadonlySet<string>,
     ledger: ToolExposureLedger,
   ): { refusal: string | null; grew: boolean } | null {
+    if (!getToolFilterPolicy().enabled || exposed.has(tc.name)) return null;
     return interceptOffList(tc.name, this.discoveryContext(exposed, ledger));
   }
 

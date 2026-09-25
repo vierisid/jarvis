@@ -684,11 +684,39 @@ called - and a recompute), and:
   inert tool) runs exactly as it would unfiltered, and the set is recomputed
   so the rest of the turn is offered what it is actually using.
 
-The same check covers a sub-agent's resume. The ledger seeds only calls
-that were ANSWERED: a paused sub-agent's buffer ends on an assistant turn
-whose later calls were never reached, and seeding those used to put a shell
-chosen while it was hidden into the exposed set, so the resume dispatched it
-without the check.
+**A sub-agent's resume is checked against what the model was offered when
+it chose the batch, not against a set recomputed from the checkpoint.** A
+governed call can pause a sub-agent partway through a batch; the calls after
+it (`SubAgentPause.remaining`) are dispatched on resume. A set recomputed
+from the resumed buffer already reflects the model's own text ("let me check
+by running a command" selects the shell group) and any `discover_tools`
+admission from the same batch, so a shell the model picked while it was
+hidden read as offered and ran - while the live loop, which holds the offered
+set fixed for the whole batch, refuses the identical batch. The pause now
+records `offered` (the exposed set at the time the batch was chosen) and the
+resume checks `remaining` against it. A checkpoint written before the field
+existed is read as "nothing was offered" - its queued calls were never
+checked, so every one goes through the off-list check and a trigger is
+refused - unless the model the run resolves to is never filtered at all
+(policy off, or an ineligible model), in which case it was offered
+everything. That is decided by the gate (`FilterDecision.engaged`), not by
+whether this turn's recomputed set happens to be full: the model's own text
+can make it full, which is the same bypass.
+
+Seeding a resumed buffer counts only calls that were answered, and not the
+`[Not run: ...]` placeholders `processTaskCall`'s clarification branch
+writes for skipped siblings: those neither ran nor were admitted, and
+seeding them would widen the shared, process-lifetime primary ledger with no
+audit row. An off-list refusal (`[NOT RUN]`) IS seeded, because the live
+loop admitted that name, audited it, and told the model it may call it
+again; a resume that forgot it would refuse the retry the live run allows.
+
+`interceptOffList` fails **closed**, unlike `decideTools`: if the check
+throws while the filter is on and the tool was not offered, the call is
+refused, and the refusal is still audited. `decideTools` failing open sends
+the full list, which only widens what is offered; the off-list equivalent
+would run a tool chosen while hidden, which is what the check exists to
+stop.
 
 `admittedNames` also accepts the shapes small models actually send for
 `names` - a stringified array (`'["browser_navigate"]'`) or a
@@ -887,7 +915,7 @@ every turn.
 | documents | `create_document` | document, doc, note, memo, report, draft, write |
 | content | `content_pipeline` | content, pipeline, idea, outline, publish, post |
 | research | `research_queue` | research, queue(d), investigate |
-| site builder | all eight `site_*` (registered only with `sites.enabled`) | build intent only: site builder, landing page, landing, portfolio, html, css, template, project directory. Not "website"/"homepage" (a browse must not be offered `site_run_command`, a real shell) and not "project"/"repo"/"commit"/"push" (ordinary dev chat) |
+| site builder | all eight `site_*` (registered only with `sites.enabled`) | build intent only: a making verb (build, make, create, code, generate, scaffold, spin up, whip up, put together) within 40 characters before a site noun (site, website, webpage, homepage, landing page, portfolio, html page), unless "account", "sign in", "log in", "sure" or "summary" comes between; site builder, landing page, portfolio site, static site, html page, project directory. Not bare "website"/"homepage"/"my site" (a browse must not be offered `site_run_command`, a real shell), not "project"/"repo"/"commit"/"push" (ordinary dev chat), and not bare "html"/"css"/"template" ("fix the css in my react app") |
 
 **The unmatched default.** A user message in the window that selects
 nothing the call site can offer adds the browse group's **framed readers

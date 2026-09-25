@@ -22,7 +22,7 @@
 
 import type { ToolDefinition } from '../registry.ts';
 import type { LLMTool } from '../../../llm/provider.ts';
-import { DISCOVER_TOOLS, admittedNames, type ToolExposureLedger } from './ledger.ts';
+import { DISCOVER_TOOLS, NOT_RUN_MARKER, admittedNames, type ToolExposureLedger } from './ledger.ts';
 import { isFramedPerception, isInvariantTrigger } from './authority-classes.ts';
 
 /**
@@ -218,12 +218,31 @@ export function interceptOffList(
   try {
     return offListInner(toolName, ctx);
   } catch (err) {
-    // The filter's failure mode is "no optimisation": dispatch as it would
-    // be unfiltered. Loud, because a throw here means the classification
-    // itself broke.
-    console.warn('[ToolFilter] off-list check threw; dispatching unfiltered:',
+    // FAIL CLOSED, unlike `decideTools`. There the failure mode "send the
+    // full list" is safe because it widens what is offered. Here the
+    // equivalent -- dispatch as if the filter were off -- runs a tool the
+    // model chose while it was hidden, which is the one thing this check
+    // exists to stop, and we can no longer tell whether it is a trigger.
+    // So when the filter is on and the tool was not offered, it is not run;
+    // the model can call it again, or ask for it with discover_tools.
+    console.warn('[ToolFilter] off-list check threw; refusing the call:',
       err instanceof Error ? err.message : err);
-    return null;
+    let offeredOrOff = false;
+    try { offeredOrOff = !ctx.filterEnabled || ctx.exposed.has(toolName); } catch { /* treat as off-list */ }
+    if (offeredOrOff) return null;
+    // Keep the onRefused contract -- every refusal leaves a row -- as far as
+    // the broken state allows.
+    try {
+      const tool = ctx.all.find((t) => t.name === toolName);
+      if (tool) ctx.onRefused?.(tool);
+    } catch { /* the refusal stands without its row */ }
+    return {
+      refusal: `${NOT_RUN_MARKER} ${toolName} was not in your tool list and could not be checked, so this call `
+        + `was not executed. Call discover_tools to see what is available.`,
+      // The throw may have come after the ledger grew; a recompute is
+      // harmless either way.
+      grew: true,
+    };
   }
 }
 
@@ -261,7 +280,9 @@ function offListInner(
   if (isInvariantTrigger(tool) && hidingFramedReader) {
     ctx.onRefused?.(tool);
     return {
-      refusal: `[NOT RUN] ${toolName} was not in your tool list, so this call was not executed. `
+      // Starts with NOT_RUN_MARKER: seeding a resumed buffer skips calls
+      // whose result says they did not run.
+      refusal: `${NOT_RUN_MARKER} ${toolName} was not in your tool list, so this call was not executed. `
         + `It is available from your next step, together with the tools that read web pages and `
         + `screens and mark what they return as untrusted. If the task is to read something from `
         + `the web or the screen, use one of those instead; otherwise call ${toolName} again.`,

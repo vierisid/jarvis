@@ -158,6 +158,39 @@ describe('wrong exclusion - the cases #483 measured as capability loss', () => {
     expect(got.has('site_run_command')).toBe(false);
   });
 
+  test('site-builder tools follow build intent, not dev words', () => {
+    for (const ask of ['build me a landing page for my bakery', 'create a website for my bakery',
+      'make a portfolio site', 'create an HTML page for my resume', 'code a website for me',
+      'generate a static site with three pages', 'scaffold a new site', 'put together a small site for the club',
+      'whip up a website for the event', 'spin up a site for the launch']) {
+      expect(`${ask}: ${nameSet(decide([user(ask)])).has('site_write_file')}`).toBe(`${ask}: true`);
+    }
+    // Browses and dev chat: must not be offered the site shell.
+    for (const ask of ['fix the css in my react app', 'use the email template for the reply', 'render this html to text',
+      'go to my website and read the about page', 'check what my site says about pricing',
+      'make sure the website loads before you read the pricing', 'create an account on the site',
+      'set up my account on their website', 'start by reading their homepage', 'what is the design of their homepage',
+      'make a summary of this site']) {
+      expect(`${ask}: ${nameSet(decide([user(ask)])).has('site_run_command')}`).toBe(`${ask}: false`);
+    }
+  });
+
+  test('the window is exactly SELECTION_WINDOW_CHARS of the joined text (ASCII)', () => {
+    const a = 'a'.repeat(5000);
+    const b = 'b'.repeat(2999);
+    const c = 'c'.repeat(3000);
+    // Newest last. The window takes c, a newline, b, a newline -- 7,001 --
+    // and the last 999 characters of a.
+    const text = conversationText([user(a), user(b), user(c)]);
+    expect(text.length).toBe(SELECTION_WINDOW_CHARS);
+    expect(text).toBe([a, b, c].join('\n').slice(-SELECTION_WINDOW_CHARS));
+    // Ending exactly on a boundary takes no sliver of the older message.
+    const exact = conversationText([user('zzz'), user('y'.repeat(SELECTION_WINDOW_CHARS))]);
+    expect(exact).toBe('y'.repeat(SELECTION_WINDOW_CHARS));
+    // Lowercased, and only after windowing.
+    expect(conversationText([user('HELLO')])).toBe('hello');
+  });
+
   test('the bare-domain pattern stays linear on hostile input', () => {
     // The selection reads assistant text, which can echo an injected page.
     const hostile = 'a.'.repeat(4000);
@@ -426,6 +459,28 @@ describe('the ledger', () => {
     expect(l.has('run_command')).toBe(true);
   });
 
+  test("seeding skips the clarification branch's placeholders, and keeps refusals as the admissions they were", () => {
+    // The clarification placeholder answers an id for a call that neither
+    // ran nor was admitted. An off-list refusal WAS admitted (and audited)
+    // live, and the model was told it may call again: a resume must agree.
+    const l = new ToolExposureLedger();
+    l.seedFromMessages([
+      user('hi'),
+      {
+        role: 'assistant', content: '',
+        tool_calls: [
+          { id: 'a', name: 'run_command', arguments: {} },
+          { id: 'b', name: 'list_directory', arguments: {} },
+          { id: 'c', name: 'read_file', arguments: {} },
+        ],
+      },
+      { role: 'tool', content: '[Not run: the task paused to ask the user a question first.]', tool_call_id: 'a' },
+      { role: 'tool', content: '[NOT RUN] list_directory was not in your tool list', tool_call_id: 'b' },
+      { role: 'tool', content: 'file contents', tool_call_id: 'c' },
+    ]);
+    expect([...l.snapshot()].sort()).toEqual(['list_directory', 'read_file']);
+  });
+
   test('seeding skips calls that were never answered', () => {
     // A paused sub-agent's buffer ends on an assistant turn whose later calls
     // were not reached. A shell chosen there, while it was hidden, must go
@@ -513,6 +568,18 @@ describe('off-list calls (dispatch-time I1)', () => {
   test('a trigger is dispatched when no framed reader was hidden', () => {
     const exposed = [...floorOnly, ...P.filter(isFramedPerception).map((t) => t.name)];
     expect(interceptOffList('run_command', ctx(exposed))).toEqual({ refusal: null, grew: true });
+  });
+
+  test('a throw inside the check fails CLOSED: the call is refused, not dispatched', () => {
+    const refused: string[] = [];
+    const c = ctx(floorOnly, { haltedState: () => { throw new Error('boom'); }, onRefused: (t) => refused.push(t.name) });
+    const r = interceptOffList('run_command', c);
+    expect(r?.refusal).toStartWith('[NOT RUN] run_command');
+    expect(r?.grew).toBe(true);
+    expect(refused).toEqual(['run_command']);
+    // Still nothing when the filter is off or the tool was offered.
+    expect(interceptOffList('run_command', ctx(floorOnly, { filterEnabled: false, haltedState: () => { throw new Error('x'); } }))).toBeNull();
+    expect(interceptOffList('run_command', ctx([...floorOnly, 'run_command'], { haltedState: () => { throw new Error('x'); } }))).toBeNull();
   });
 
   test('not applicable: filter off, offered, unregistered, or halted', () => {

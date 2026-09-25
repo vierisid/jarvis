@@ -12,7 +12,7 @@
  *   - the escape hatch actually returns a capability, end to end;
  *   - nothing changes at all when the filter is off.
  */
-import { describe, expect, it, beforeEach, afterEach } from 'bun:test';
+import { describe, expect, it, beforeEach, afterEach, spyOn } from 'bun:test';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import { LLMManager } from '../llm/manager.ts';
 import { AgentOrchestrator } from './orchestrator.ts';
@@ -20,7 +20,8 @@ import { ToolRegistry } from '../actions/tools/registry.ts';
 import { BUILTIN_TOOLS } from '../actions/tools/builtin.ts';
 import { buildProductionRegistry } from '../actions/tools/production-registry.ts';
 import type { ToolDefinition } from '../actions/tools/registry.ts';
-import { runSubAgent, type SubAgentResult } from './sub-agent-runner.ts';
+import { runSubAgent, type GovernedToolDispatch, type SubAgentResult } from './sub-agent-runner.ts';
+import { ToolExposureLedger } from '../actions/tools/tool-relevance/ledger.ts';
 import { AuthorityEngine } from '../authority/engine.ts';
 import type {
   LLMProvider, LLMMessage, LLMOptions, LLMResponse, LLMStreamEvent, LLMTool, LLMToolCall,
@@ -492,66 +493,225 @@ describe('runSubAgent', () => {
   });
 });
 
+/**
+ * A sub-agent that pauses on a governed write partway through a batch, then
+ * resumes. Scoped registry: the browser tools, the shell, a goals tool and
+ * the write. The task selects only the goals group, so the first provider
+ * call offers neither the shell nor the browser.
+ */
+async function pauseAndResume(opts: {
+  content: string;
+  calls: LLMToolCall[];
+  /** Drop `offered` from the checkpoint, as one written before it existed. */
+  legacyCheckpoint?: boolean;
+  /** Policy for the paused run and the resumed one (ON by default). */
+  policy?: 'on' | 'off';
+  /** A frontier model on the tier: the policy is on, but this model is never filtered. */
+  frontier?: boolean;
+  /** A batch the model sends on the first provider call after the resume. */
+  after?: LLMToolCall[];
+  /** Governed dispatch on resume; default executes everything. */
+  resumeGoverned?: GovernedToolDispatch;
+}) {
+  if (opts.policy === 'off') resetToolFilterPolicy(); else setToolFilterPolicy(ON);
+  const ran: string[] = [];
+  const scoped = PROD.filter((t) => t.category === 'browser'
+    || ['run_command', 'manage_goals', 'write_file'].includes(t.name))
+    .map((t) => ({ ...t, execute: async () => { ran.push(t.name); return `stub ${t.name}`; } }));
+  const registry = new ToolRegistry();
+  for (const t of scoped) registry.register(t);
+
+  const batch: LLMResponse = {
+    content: opts.content, tool_calls: opts.calls,
+    usage: { input_tokens: 1, output_tokens: 1 }, model: 'scripted', finish_reason: 'tool_use',
+  };
+  const replies: LLMResponse[] = [batch];
+  if (opts.after) {
+    replies.push({ content: '', tool_calls: opts.after, usage: { input_tokens: 1, output_tokens: 1 }, model: 'scripted', finish_reason: 'tool_use' });
+  }
+  replies.push(done());
+  const seen: string[][] = [];
+  const manager = {
+    getTierMap: () => (opts.frontier
+      ? { medium: { provider: 'openai', model: 'gpt-5.4' } }
+      : { medium: { provider: 'ollama', model: 'qwen2.5:7b' } }),
+    chatTier: async (_t: string, _s: string, _m: LLMMessage[], o?: LLMOptions) => {
+      seen.push((o?.tools ?? []).map((t) => t.name));
+      return replies.shift() ?? done();
+    },
+  } as unknown as LLMManager;
+  const history: Array<{ role: string; content: unknown }> = [];
+  const agent = () => ({
+    id: 'child', agent: { role: { id: 'fixture', name: 'Fixture', description: '', responsibilities: [] }, authority: { max_authority_level: 10 } },
+    setTask() {}, activate() {}, idle() {},
+    addMessage: (role: string, content: unknown) => history.push({ role, content }), getMessages: () => history,
+  } as never);
+  const engine = new AuthorityEngine({ default_level: 10, governed_categories: ['write_data'] as never, overrides: [],
+    context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' } as never);
+  const audit = { log: (r: Record<string, unknown>) => r } as never;
+  const approval = { effectId: 'effect', approvalId: 'approval', waitpointId: 'waitpoint' };
+  const common = {
+    task: 'set a goal to ship the release this week', context: '', llmManager: manager, toolRegistry: registry,
+    toolFilterProviders: { ollama: { kind: 'ollama' as const }, openai: { kind: 'openai' as const } },
+    authorityEngine: engine, auditTrail: audit, maxIterations: 4,
+  };
+
+  const paused: SubAgentResult = await runSubAgent({ ...common, agent: agent(),
+    governedTools: async () => ({ kind: 'paused', approval }) });
+  expect(paused.terminationReason).toBe('paused');
+  const pending = { ...paused.paused! };
+  if (opts.legacyCheckpoint) delete pending.offered;
+
+  const resumed = await runSubAgent({ ...common, agent: agent(),
+    governedTools: opts.resumeGoverned ?? (async () => ({ kind: 'executed', result: 'written' })),
+    resume: {
+      messages: paused.messages, toolsUsed: paused.toolsUsed, tokensUsed: paused.tokensUsed, sequence: paused.sequence!,
+      iteration: paused.paused!.iteration, taint: paused.taint ?? [], failedToolCalls: paused.failedToolCalls ?? [],
+      pending,
+    } });
+  const results = new Map(resumed.messages.filter((m) => m.role === 'tool').map((m) => [m.tool_call_id, String(m.content)]));
+  return { ran, seen, paused, resumed, results };
+}
+
+const write = (id: string): LLMToolCall => ({ id, name: 'write_file', arguments: { path: '/tmp/x', content: 'y' } });
+const shell = (id: string): LLMToolCall => ({ id, name: 'run_command', arguments: { command: 'echo fetched' } });
+
 describe('runSubAgent pause and resume', () => {
   beforeEach(() => { closeDb(); initDatabase(':memory:'); });
   afterEach(() => { resetToolFilterPolicy(); });
 
   it('a hidden shell queued behind a paused call is still refused on resume', async () => {
-    // The buffer at a pause ends on an assistant turn whose later calls were
-    // never reached. Seeding those used to put the shell into the exposed
-    // set, so the resume dispatched it without the off-list check.
-    setToolFilterPolicy(ON);
-    const ran: string[] = [];
-    const scoped = PROD.filter((t) => t.category === 'browser'
-      || ['run_command', 'manage_goals', 'write_file'].includes(t.name))
-      .map((t) => ({ ...t, execute: async () => { ran.push(t.name); return `stub ${t.name}`; } }));
-    const registry = new ToolRegistry();
-    for (const t of scoped) registry.register(t);
+    const r = await pauseAndResume({ content: '', calls: [write('p1'), shell('p2')] });
+    expect(r.seen[0]!.includes('run_command')).toBe(false);
+    expect(r.paused.paused?.remaining.map((c) => c.name)).toEqual(['run_command']);
+    expect(r.ran).toEqual([]);
+    expect(r.results.get('p2')).toStartWith('[NOT RUN] run_command');
+    expect(r.resumed.toolsUsed).not.toContain('run_command');
+  });
 
-    const batch: LLMResponse = {
+  it("the model's own text cannot select the shell for its queued call", async () => {
+    // "running a command" selects the shell group once the assistant text
+    // is in the buffer. A set recomputed on resume would then count the
+    // shell as offered; the model chose it when it was not.
+    const r = await pauseAndResume({
+      content: 'Let me check the status by running a command.', calls: [write('p1'), shell('p2')],
+    });
+    expect(r.seen[0]!.includes('run_command')).toBe(false);
+    expect(r.ran).toEqual([]);
+    expect(r.results.get('p2')).toStartWith('[NOT RUN] run_command');
+  });
+
+  it('a discover_tools admission earlier in the same batch does not pre-clear the shell', async () => {
+    // The live loop refuses this batch: the admission widens the NEXT
+    // provider call, not the batch already chosen. Resume must agree.
+    const r = await pauseAndResume({
       content: '',
-      tool_calls: [
-        { id: 'p1', name: 'write_file', arguments: { path: '/tmp/x', content: 'y' } },
-        { id: 'p2', name: 'run_command', arguments: { command: 'echo fetched' } },
-      ],
-      usage: { input_tokens: 1, output_tokens: 1 }, model: 'scripted', finish_reason: 'tool_use',
-    };
-    const replies: LLMResponse[] = [batch, done()];
-    const manager = {
-      getTierMap: () => ({ medium: { provider: 'ollama', model: 'qwen2.5:7b' } }),
-      chatTier: async () => replies.shift() ?? done(),
-    } as unknown as LLMManager;
-    const history: Array<{ role: string; content: unknown }> = [];
-    const agent = () => ({
-      id: 'child', agent: { role: { id: 'fixture', name: 'Fixture', description: '', responsibilities: [] }, authority: { max_authority_level: 10 } },
-      setTask() {}, activate() {}, idle() {},
-      addMessage: (role: string, content: unknown) => history.push({ role, content }), getMessages: () => history,
-    } as never);
-    const engine = new AuthorityEngine({ default_level: 10, governed_categories: ['write_data'] as never, overrides: [],
-      context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' } as never);
-    const audit = { log: (r: Record<string, unknown>) => r } as never;
-    const approval = { effectId: 'effect', approvalId: 'approval', waitpointId: 'waitpoint' };
-    const common = {
-      task: 'set a goal to ship the release this week', context: '', llmManager: manager, toolRegistry: registry,
-      toolFilterProviders: { ollama: { kind: 'ollama' as const } }, authorityEngine: engine, auditTrail: audit, maxIterations: 3,
-    };
+      calls: [{ id: 'p0', name: 'discover_tools', arguments: { names: ['run_command'] } }, write('p1'), shell('p2')],
+    });
+    expect(r.ran).toEqual([]);
+    expect(r.results.get('p2')).toStartWith('[NOT RUN] run_command');
+  });
 
-    const paused: SubAgentResult = await runSubAgent({ ...common, agent: agent(),
-      governedTools: async () => ({ kind: 'paused', approval }) });
-    expect(paused.terminationReason).toBe('paused');
-    expect(paused.paused?.remaining.map((c) => c.name)).toEqual(['run_command']);
+  it('a checkpoint from before `offered` existed refuses a queued trigger', async () => {
+    const r = await pauseAndResume({
+      content: 'Let me check the status by running a command.', calls: [write('p1'), shell('p2')], legacyCheckpoint: true,
+    });
+    expect(r.ran).toEqual([]);
+    expect(r.results.get('p2')).toStartWith('[NOT RUN] run_command');
+  });
 
-    const resumed = await runSubAgent({ ...common, agent: agent(),
-      governedTools: async () => ({ kind: 'executed', result: 'written' }),
-      resume: {
-        messages: paused.messages, toolsUsed: paused.toolsUsed, tokensUsed: paused.tokensUsed, sequence: paused.sequence!,
-        iteration: paused.paused!.iteration, taint: paused.taint ?? [], failedToolCalls: paused.failedToolCalls ?? [],
-        pending: paused.paused!,
-      } });
-    expect(ran).toEqual([]);
-    const results = resumed.messages.filter((m) => m.role === 'tool').map((m) => [m.tool_call_id, String(m.content)]);
-    expect(results.find(([id]) => id === 'p2')?.[1]).toStartWith('[NOT RUN] run_command');
-    expect(resumed.toolsUsed).not.toContain('run_command');
+  it('with the filter off: nothing touches the ledger, and a queued call runs from any checkpoint', async () => {
+    const add = spyOn(ToolExposureLedger.prototype, 'add');
+    try {
+      const r = await pauseAndResume({ content: '', calls: [write('p1'), shell('p2')], legacyCheckpoint: true, policy: 'off' });
+      expect(r.seen[0]!.length).toBe(PROD.filter((t) => t.category === 'browser'
+        || ['run_command', 'manage_goals', 'write_file'].includes(t.name)).length);
+      expect(r.ran).toEqual(['run_command']);
+      expect(r.results.get('p2')).toBe('stub run_command');
+      expect(add).not.toHaveBeenCalled();
+    } finally {
+      add.mockRestore();
+    }
+  });
+});
+
+describe('runSubAgent pause and resume: agreeing with the live loop', () => {
+  beforeEach(() => { closeDb(); initDatabase(':memory:'); });
+  afterEach(() => { resetToolFilterPolicy(); });
+
+  it('a shell refused live is callable after the resume, as the refusal promised', async () => {
+    // The live loop admits a refused off-list call and tells the model to
+    // call it again. A resume that forgot the admission refused the retry.
+    const r = await pauseAndResume({ content: '', calls: [shell('p1'), write('p2')], after: [shell('b1')] });
+    expect(r.results.get('p1')).toStartWith('[NOT RUN] run_command');
+    expect(r.results.get('b1')).toBe('stub run_command');
+    expect(r.ran).toEqual(['run_command']);
+  });
+
+  it('a frontier model with the policy on runs a queued call from a legacy checkpoint', async () => {
+    // Never filtered, so it was offered everything: no spurious refusal.
+    const r = await pauseAndResume({ content: '', calls: [write('p1'), shell('p2')], legacyCheckpoint: true, frontier: true });
+    expect(r.results.get('p2')).toBe('stub run_command');
+  });
+
+  it('a second pause during the resume carries the original offered set forward', async () => {
+    let n = 0;
+    const second = { effectId: 'e2', approvalId: 'a2', waitpointId: 'w2' };
+    const r = await pauseAndResume({
+      content: 'Let me check the status by running a command.',
+      calls: [write('p1'), write('p2'), shell('p3')],
+      resumeGoverned: async () => (n++ === 0 ? { kind: 'executed', result: 'written' } : { kind: 'paused', approval: second }),
+    });
+    expect(r.resumed.terminationReason).toBe('paused');
+    expect(r.resumed.paused?.remaining.map((c) => c.name)).toEqual(['run_command']);
+    expect(r.resumed.paused?.offered).toEqual(r.paused.paused?.offered);
+    expect(r.resumed.paused?.offered).not.toContain('run_command');
+  });
+});
+
+describe('processTaskCall with the filter off', () => {
+  beforeEach(() => { closeDb(); initDatabase(':memory:'); });
+  afterEach(() => { resetToolFilterPolicy(); });
+
+  it('writes nothing to the ledger and dispatches a tool the model was not offered', async () => {
+    resetToolFilterPolicy();
+    const add = spyOn(ToolExposureLedger.prototype, 'add');
+    try {
+      const ran: string[] = [];
+      // A tool registered AFTER the list was sent: genuinely not offered,
+      // yet registered at dispatch time.
+      const late: ToolDefinition = {
+        name: 'late_tool', description: 'x', category: 'terminal', parameters: {},
+        execute: async () => { ran.push('late_tool'); return 'late ran'; },
+      };
+      let orch: AgentOrchestrator;
+      class LateRegisteringProvider extends RecordingProvider {
+        override async chat(m: LLMMessage[], o?: LLMOptions): Promise<LLMResponse> {
+          if (this.seen.length === 0) orch.getToolRegistry()!.register(late);
+          return super.chat(m, o);
+        }
+      }
+      const provider = new LateRegisteringProvider([call('late_tool'), done()]);
+      orch = makeOrchestrator(provider);
+      const result = await orch.processTaskCall({
+        systemPrompt: 'sys', userMessage: 'set a goal', tier: 'medium', subsystem: 'test',
+        // A resumed buffer with calls and an admission that seeding would read.
+        history: [
+          { role: 'system', content: 'sys' },
+          { role: 'user', content: 'earlier' },
+          { role: 'assistant', content: '', tool_calls: [{ id: 'h1', name: 'run_command', arguments: {} },
+            { id: 'h2', name: 'discover_tools', arguments: { names: ['browser_navigate'] } }] },
+          { role: 'tool', content: 'ok', tool_call_id: 'h1' },
+          { role: 'tool', content: 'ok', tool_call_id: 'h2' },
+        ],
+      });
+      expect(provider.names(0).has('late_tool')).toBe(false);
+      expect(ran).toEqual(['late_tool']);
+      expect(result.conversation.some((m) => m.role === 'tool' && m.content === 'late ran')).toBe(true);
+      expect(add).not.toHaveBeenCalled();
+    } finally {
+      add.mockRestore();
+    }
   });
 });
 

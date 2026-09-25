@@ -106,6 +106,20 @@ export type SubAgentPause = GovernedToolCall & {
   remaining: LLMToolCall[];
   /** The loop iteration the pause happened in; resume continues after it. */
   iteration: number;
+  /**
+   * The tool names the model was OFFERED when it chose this batch. On resume
+   * `remaining` is checked against this, not against a set recomputed from
+   * the checkpoint: the recomputed one already reflects the model's own text
+   * and any `discover_tools` admission from the same batch, so a shell the
+   * model picked while it was hidden would read as offered and run. The
+   * live loop refuses that batch; the resume must too.
+   *
+   * Absent on a checkpoint written before this field existed. That is read
+   * as "nothing was offered", so every remaining call goes through the
+   * off-list check and a trigger is refused -- those calls were never
+   * checked at all when they were queued.
+   */
+  offered?: string[];
 };
 
 /** The state a caller keeps between turns, and everything a paused run needs to continue later. */
@@ -273,8 +287,8 @@ function getLLMTools(
   ledger: ToolExposureLedger,
   tiers: TierMap,
   providers: Record<string, LLMProviderEntry | undefined> | undefined,
-): { llm: LLMTool[] | undefined; exposed: ReadonlySet<string> } {
-  if (registry.count() === 0) return { llm: undefined, exposed: new Set() };
+): { llm: LLMTool[] | undefined; exposed: ReadonlySet<string>; engaged: boolean } {
+  if (registry.count() === 0) return { llm: undefined, exposed: new Set(), engaged: false };
   const all = registry.list();
   const decision = decideTools({
     all,
@@ -289,7 +303,7 @@ function getLLMTools(
   // toolDefToLLMTool drops `items` from an array parameter.
   const llm = decision.tools.map((t) =>
     (t.name === DISCOVER_TOOLS ? DISCOVER_TOOLS_LLM : toolDefToLLMTool(t)));
-  return { llm, exposed: decision.exposed };
+  return { llm, exposed: decision.exposed, engaged: decision.engaged };
 }
 
 type AuthorityContext = {
@@ -530,13 +544,16 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   // checkpoint and `resume.messages` restores it -- so the ledger can be
   // seeded from it and admissions survive a pause.
   const exposure = new ToolExposureLedger();
-  exposure.seedFromMessages(resume?.messages, (n) => toolRegistry.has(n));
-  // The paused call has no result in the buffer yet, so seeding skipped it;
-  // it was dispatched -- it passed the off-list check when it was made --
-  // so it stays exposed like any other call. Its unreached siblings do not:
-  // they go back through dispatch, and through the check, on resume.
-  if (resume?.pending && getToolFilterPolicy().enabled && toolRegistry.has(resume.pending.toolCall.name)) {
-    exposure.add(resume.pending.toolCall.name);
+  if (getToolFilterPolicy().enabled) {
+    exposure.seedFromMessages(resume?.messages, (n) => toolRegistry.has(n));
+    // The paused call has no result in the buffer yet, so seeding skipped
+    // it. It was dispatched as far as the governed pause, so it stays
+    // exposed like any other call. Its unreached siblings are not seeded:
+    // they go back through dispatch on resume, checked against the set the
+    // model was offered when it chose them (`SubAgentPause.offered`).
+    if (resume?.pending && toolRegistry.has(resume.pending.toolCall.name)) {
+      exposure.add(resume.pending.toolCall.name);
+    }
   }
   let toolSet = getLLMTools(toolRegistry, messages, exposure, tierMapOf(llmManager), toolFilterProviders);
   let tools = toolSet.llm;
@@ -586,19 +603,26 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
     tools = toolSet.llm;
   };
 
-  const dispatchCalls = async (calls: LLMToolCall[], iteration: number): Promise<SubAgentPause | null> => {
+  /**
+   * `offered` is the set the model saw when it chose `calls`: the live
+   * `toolSet.exposed` on a fresh turn, the checkpointed `pending.offered` on
+   * resume. It is fixed for the whole batch, exactly like the orchestrator's
+   * loops, which hold `decided.exposed` until the batch is done.
+   */
+  const dispatchCalls = async (
+    calls: LLMToolCall[],
+    iteration: number,
+    offered: ReadonlySet<string>,
+  ): Promise<SubAgentPause | null> => {
     for (let index = 0; index < calls.length; index++) {
       const tc = calls[index]!;
       fence();
-      // The escape hatch is synthetic and never in the scoped registry, so
-      // it is answered here rather than dispatched. It carries no authority
-      // and touches nothing; admission only widens what the next provider
-      // call is offered, and the coupling invariant is re-checked then.
-      const discoveryCtx: DiscoveryContext = {
+      // Filter off: nothing to intercept, and nothing is built for it.
+      const discoveryCtx: DiscoveryContext | null = !getToolFilterPolicy().enabled ? null : {
         all: toolRegistry.list(),
         ledger: exposure,
-        exposed: toolSet.exposed,
-        filterEnabled: getToolFilterPolicy().enabled,
+        exposed: offered,
+        filterEnabled: true,
         // The same emergency predicate `executeTool` applies below. Without
         // it a halted system would still enumerate its catalogue here, which
         // is the one thing this branch skips by sitting before dispatch.
@@ -637,7 +661,11 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
           }
         },
       };
-      const discovery = interceptDiscovery(tc.name, tc.arguments, discoveryCtx);
+      // The escape hatch is synthetic and never in the scoped registry, so
+      // it is answered here rather than dispatched. It carries no authority
+      // and touches nothing; admission only widens what the next provider
+      // call is offered, and the coupling invariant is re-checked then.
+      const discovery = discoveryCtx && interceptDiscovery(tc.name, tc.arguments, discoveryCtx);
       if (discovery) {
         if (discovery.grew) exposureWidened = true;
         noteToolCall(tc);
@@ -648,7 +676,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       // A tool the scoped registry holds but the model was not offered:
       // admitted and recomputed, and not run at all if running it would
       // strand outside content unframed. See interceptOffList.
-      const offList = interceptOffList(tc.name, discoveryCtx);
+      const offList = discoveryCtx && interceptOffList(tc.name, discoveryCtx);
       if (offList) exposureWidened = true;
       if (offList?.refusal) {
         // Not noteToolCall: it did not run, so it is not in `toolsUsed`.
@@ -660,7 +688,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       sequence += 1;
       const dispatched = await executeTool(toolRegistry, tc, sequence, authorityCtx);
       if ('paused' in dispatched) {
-        return { ...dispatched.paused, remaining: calls.slice(index + 1), iteration };
+        return { ...dispatched.paused, remaining: calls.slice(index + 1), iteration, offered: [...offered] };
       }
       // Whatever the sub-agent actually called stays exposed for the rest of
       // the run -- registered names only, and only while the filter is on.
@@ -687,7 +715,15 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       }
       if (governed.kind === 'paused') return finish({ success: true, response: '', terminationReason: 'paused', paused: { ...pending, approval: governed.approval } });
       record(pending.toolCall, governedText(authorityCtx, pending.toolCall, pending.toolCategory, governed));
-      const pause = await dispatchCalls(pending.remaining, pending.iteration);
+      // A checkpoint written before `offered` existed: if this run's model is
+      // never filtered (the gate, not this turn's text, decides that), it
+      // was offered everything and nothing needs checking. Otherwise nothing
+      // is known to have been offered, and every queued call goes through
+      // the off-list check. Not "the recomputed set is full": the model's
+      // own text can make it full, which is the B1 bypass again.
+      const legacyOffered = toolSet.engaged ? new Set<string>() : toolSet.exposed;
+      const pause = await dispatchCalls(pending.remaining, pending.iteration,
+        pending.offered ? new Set(pending.offered) : legacyOffered);
       // A turn is durable only while the run is still alive.
       fence();
       if (pause) return finish({ success: true, response: '', terminationReason: 'paused', paused: pause });
@@ -724,7 +760,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
           onProgress({ type: 'text', agentName, agentId, data: llmResponse.content });
         }
 
-        const pause = await dispatchCalls(llmResponse.tool_calls, iteration);
+        const pause = await dispatchCalls(llmResponse.tool_calls, iteration, toolSet.exposed);
         // A turn is durable only while the run is still alive.
         fence();
         if (pause) return finish({ success: true, response: '', terminationReason: 'paused', paused: pause });

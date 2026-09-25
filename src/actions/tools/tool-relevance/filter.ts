@@ -64,6 +64,14 @@ export type FilterDecision = {
   /** Why, for the log line and the benchmark. */
   reason: string;
   failures: InvariantFailure[];
+  /**
+   * False when this call was never going to be filtered: policy off, model
+   * ineligible, or no tools. True whenever selection ran, including when it
+   * happened to keep everything or failed open. A caller that must know
+   * whether the model was offered EVERYTHING by design -- not by the luck
+   * of this turn's text -- reads this, not `filtered`.
+   */
+  engaged: boolean;
 };
 
 /**
@@ -100,8 +108,8 @@ function noteViolation(failures: readonly FilterFailure[]): void {
   );
 }
 
-const unfiltered = (all: readonly ToolDefinition[], reason: string): FilterDecision =>
-  ({ tools: [...all], filtered: false, exposed: new Set(all.map((t) => t.name)), reason, failures: [] });
+const unfiltered = (all: readonly ToolDefinition[], reason: string, engaged = false): FilterDecision =>
+  ({ tools: [...all], filtered: false, exposed: new Set(all.map((t) => t.name)), reason, failures: [], engaged });
 
 /**
  * Decide the tool set for one turn.
@@ -138,7 +146,7 @@ export function decideTools(ctx: FilterContext): FilterDecision {
       noteViolation(result.failures);
       return {
         tools: [...all], filtered: false, exposed: new Set(all.map((t) => t.name)),
-        reason: 'invariant violation', failures: result.failures,
+        reason: 'invariant violation', failures: result.failures, engaged: true,
       };
     }
 
@@ -146,7 +154,7 @@ export function decideTools(ctx: FilterContext): FilterDecision {
       // Nothing was actually dropped. Return the input untouched so the
       // request stays byte-identical to an unfiltered one -- no hatch, no
       // cache churn, no behaviour change.
-      return unfiltered(all, 'selection kept everything');
+      return unfiltered(all, 'selection kept everything', true);
     }
 
     // I4 -- the escape hatch, appended here rather than at the four call
@@ -159,13 +167,14 @@ export function decideTools(ctx: FilterContext): FilterDecision {
       noteViolation([{ invariant: 'I4', detail: 'escape hatch missing from a filtered set' }]);
       return {
         tools: [...all], filtered: false, exposed: new Set(all.map((t) => t.name)),
-        reason: 'escape hatch missing', failures: [],
+        reason: 'escape hatch missing', failures: [], engaged: true,
       };
     }
 
     return {
       tools,
       filtered: true,
+      engaged: true,
       // The names the model can actually see. The catalogue renders
       // available-vs-hidden against THIS; handing it the full registry
       // instead marks everything available and quietly breaks the discovery
@@ -178,7 +187,7 @@ export function decideTools(ctx: FilterContext): FilterDecision {
   } catch (err) {
     // The filter is an optimisation. Its failure mode is "no optimisation".
     noteViolation([{ invariant: 'I5-threw', detail: err instanceof Error ? err.message : String(err) }]);
-    return unfiltered(all, 'filter threw');
+    return unfiltered(all, 'filter threw', true);
   }
 }
 
