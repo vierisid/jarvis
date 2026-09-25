@@ -4927,7 +4927,12 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const result = await ctx.siteBuilderService.githubManager.push(projectPath, undefined, body.force);
           if (!result.success) return error(result.error ?? 'Push failed');
 
-          ctx.siteBuilderService.projectManager.markPushed(id);
+          // The push has happened; failing to record it must not report it as failed.
+          try {
+            ctx.siteBuilderService.projectManager.markPushed(id);
+          } catch (err) {
+            console.error('[SiteBuilder] Could not record the push time:', err);
+          }
 
           return json({ ok: true });
         } catch (err) {

@@ -275,6 +275,24 @@ describe('a git dir that is not named .git', () => {
     await expectRefused(() => write('store/config', 'x', 'linked'));
   });
 
+  test('a dangling chain protects where the chain ends, not its first hop', async () => {
+    const linked = join(projectsDir, 'linked');
+    mkdirSync(linked, { recursive: true });
+    symlinkSync('a', join(linked, '.git'));
+    symlinkSync('b', join(linked, 'a'));
+    await expectRefused(() => write('b/config', 'x', 'linked'));
+    await expectRefused(() => write('b/HEAD', 'x', 'linked'));
+  });
+
+  test('a gitfile whose gitdir goes through a dangling link protects the link target', async () => {
+    const wt = join(projectsDir, 'wt');
+    mkdirSync(wt, { recursive: true });
+    writeFileSync(join(wt, '.git'), 'gitdir: lnk/repo\n');
+    symlinkSync('missing', join(wt, 'lnk'));
+    await expectRefused(() => write('missing/repo/config', 'x', 'wt'));
+    expect(await write('missing/notes.md', 'x', 'wt')).toBe('File written: missing/notes.md');
+  });
+
   test('a .git symlink to a directory in the tree protects that directory', async () => {
     const linked = join(projectsDir, 'linked');
     mkdirSync(join(linked, 'store'), { recursive: true });
@@ -371,9 +389,24 @@ describe("the daemon's own metadata writes do not follow a planted symlink", () 
     expect(lstatSync(join(project, '.jarvis-project.json')).isSymbolicLink()).toBe(true);
   });
 
-  test('markPushed does nothing for a project not connected to GitHub', () => {
+  test('markPushed does nothing for a project not connected to GitHub', async () => {
     manager.markPushed('app');
     expect(existsSync(join(project, '.jarvis-project.json'))).toBe(false);
+
+    // Metadata present, but no GitHub connection.
+    await manager.touchProject('app');
+    const before = readFileSync(join(project, '.jarvis-project.json'), 'utf-8');
+    manager.markPushed('app');
+    expect(readFileSync(join(project, '.jarvis-project.json'), 'utf-8')).toBe(before);
+    expect(JSON.parse(before).github).toBeUndefined();
+  });
+
+  test('the push route records the push through markPushed', () => {
+    // A source check: the route cannot be driven here without a GitHub
+    // remote, and the old inline read/write followed the symlink.
+    const route = readFileSync(join(import.meta.dir, '..', 'daemon', 'api-routes.ts'), 'utf-8');
+    expect(route).toContain('projectManager.markPushed(id)');
+    expect(route).not.toContain("'.jarvis-project.json'");
   });
 });
 
@@ -412,7 +445,30 @@ describe('errors name the requested path, never a host path', () => {
   });
 
   test('reading a directory', async () => {
-    noHostPath(await read('src'));
+    const result = await read('src');
+    noHostPath(result);
+    expect(result).toContain('Path is a directory: src');
+  });
+
+  test('deleting a directory', async () => {
+    const result = await del('src');
+    noHostPath(result);
+    expect(result).toContain('Path is a directory: src');
+    expect(existsSync(join(project, 'src', 'App.tsx'))).toBe(true);
+  });
+
+  test('deleting below a file', async () => {
+    const result = await del('src/App.tsx/child.ts');
+    noHostPath(result);
+    expect(result).toContain('A parent of the path is not a directory: src/App.tsx/child.ts');
+  });
+
+  test('the original error survives as the cause, off the message', async () => {
+    symlinkSync('loop2', join(project, 'loop1'));
+    symlinkSync('loop1', join(project, 'loop2'));
+    const err = await manager.readFile('app', 'loop1').catch((e: Error) => e);
+    expect((err as Error).message).toBe('Too many levels of symlinks: loop1');
+    expect(((err as Error).cause as NodeJS.ErrnoException).code).toBe('ELOOP');
   });
 });
 

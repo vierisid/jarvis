@@ -128,12 +128,48 @@ function linkedGitDirs(realRoot: string): string[] {
  * not exist yet, where it WILL be once something creates it. A missing target
  * still has to be protected: a write that creates `gitdata/config` is exactly
  * the write that makes it a repository config.
+ *
+ * A dangling symlink on the way (`.git -> a`, `a -> b`, `b` missing) is
+ * replaced by its target and resolution starts over, hop by hop, so the
+ * answer is `b` -- where a write through the chain would land -- not `a`.
  */
 function realOrLexical(path: string): string {
-  try {
-    return realpathOfDeepest(path, path);
-  } catch {
-    return path;
+  let current = path;
+  for (let hop = 0; hop < MAX_LINK_HOPS; hop++) {
+    try {
+      return realpathOfDeepest(current, current);
+    } catch { /* a dangling link, or a loop */ }
+    const link = deepestDanglingLink(current);
+    if (!link) return current;
+    let target: string;
+    try {
+      target = readlinkSync(link);
+    } catch {
+      return current;
+    }
+    current = join(resolve(dirname(link), target), relative(link, current));
+  }
+  return current;
+}
+
+/** The symlink-hop budget, as the kernel's ELOOP limit. */
+const MAX_LINK_HOPS = 40;
+
+/**
+ * The component of `path` that stops realpathOfDeepest: walking up from the
+ * path itself, the first one that exists only as a symlink.
+ */
+function deepestDanglingLink(path: string): string | null {
+  let current = path;
+  for (;;) {
+    try {
+      realpathSync(current);
+      return null;
+    } catch { /* missing, or dangling */ }
+    if (isSymlink(current)) return current;
+    const parent = dirname(current);
+    if (parent === current) return null;
+    current = parent;
   }
 }
 
@@ -175,7 +211,9 @@ async function withProjectErrors<T>(requested: string, action: () => Promise<T>)
   } catch (err) {
     const code = (err as NodeJS.ErrnoException | undefined)?.code;
     if (typeof code !== 'string') throw err;
-    throw new Error(`${FS_ERROR_TEXT[code] ?? `Filesystem error ${code}`}: ${requested}`);
+    // The original stays on `cause` for server-side diagnosis; callers show
+    // only `.message`.
+    throw new Error(`${FS_ERROR_TEXT[code] ?? `Filesystem error ${code}`}: ${requested}`, { cause: err });
   }
 }
 
@@ -402,12 +440,13 @@ export class ProjectManager {
 
     return withProjectErrors(relativePath, async () => {
       const filePath = this.safeJoin(projectPath, relativePath, 'follow');
-      const file = Bun.file(filePath);
-      if (!await file.exists()) throw new Error(`File not found: ${relativePath}`);
-      // A FIFO or device in the tree would block the read forever.
-      if (!statSync(filePath).isFile()) throw new Error(`Not a regular file: ${relativePath}`);
+      // ENOENT maps to "File not found". A FIFO or device in the tree would
+      // block the read forever.
+      const st = statSync(filePath);
+      if (st.isDirectory()) throw new Error(`Path is a directory: ${relativePath}`);
+      if (!st.isFile()) throw new Error(`Not a regular file: ${relativePath}`);
 
-      return file.text();
+      return Bun.file(filePath).text();
     });
   }
 
@@ -459,6 +498,17 @@ export class ProjectManager {
     // allowed and leaves .git alone.
     return withProjectErrors(relativePath, async () => {
       const filePath = this.safeJoin(projectPath, relativePath, 'nofollow');
+      // Bun's rmSync reports a directory, or a path below a file, as EFAULT,
+      // which says nothing; lstat reports them properly. lstat, not stat: a
+      // symlink to a directory is a file here, and unlinking it is fine.
+      let st: Stats | undefined;
+      try {
+        st = lstatSync(filePath);
+      } catch (err) {
+        // Already gone is fine: rm with force is a no-op then.
+        if ((err as NodeJS.ErrnoException).code !== 'ENOENT') throw err;
+      }
+      if (st?.isDirectory()) throw new Error(`Path is a directory: ${relativePath}`);
       rmSync(filePath, { force: true });
     });
   }
