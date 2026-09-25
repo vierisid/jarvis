@@ -14,6 +14,7 @@ import {
 } from "../src/workflows/db/credential-migration";
 import { getConnection, upsertConnection } from "../src/workflows/db/repos/app-connection";
 import { acquireLockAt, lockPathFor } from "../src/daemon/pid";
+import { workflowKeyCheck } from "../src/util/model-exec-marker";
 
 const SCRIPT = resolve(import.meta.dir, "migrate-native-credentials.ts");
 const TOKEN = "synthetic-legacy-migration-credential";
@@ -85,6 +86,7 @@ function run(mode: Mode, extra: string[] = [], envOverrides: Record<string, stri
   const env: Record<string, string | undefined> = { ...process.env, JARVIS_HOME: dir };
   delete env.JARVIS_WORKFLOW_ENCRYPTION_KEY;
   delete env.JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE;
+  delete env.JARVIS_MODEL_EXEC_ENV_KEY; // #514's flag, inherited by a suite run from the assistant's shell
   Object.assign(env, envOverrides);
   const args = [SCRIPT, mode, "--db", dbPath];
   if (mode !== "inventory") args.push("--data-dir", dir, "--recovery", recovery);
@@ -175,6 +177,20 @@ describe("offline native credential migration", () => {
     rmSync(keyFile);
     expect(run("apply").status).toBe(1);
     expect(existsSync(keyFile)).toBe(false);
+    expect(stored()).toEqual(original);
+  });
+
+  // #514: from the assistant's shell of an env-key daemon, only a key that is
+  // provably that env key may seal anything.
+  test("from the assistant's shell, a key that is not the daemon's env key is refused", () => {
+    const flagOther = { JARVIS_MODEL_EXEC_ENV_KEY: workflowKeyCheck(Buffer.alloc(32, 99).toString("hex")) };
+    const refused = run("apply", [], flagOther);
+    expect(refused.status).toBe(1);
+    expect(stored()).toEqual(original);
+    expect(existsSync(recovery)).toBe(false);
+    const flagSame = { JARVIS_MODEL_EXEC_ENV_KEY: workflowKeyCheck(KEY.toString("hex")) };
+    expect(run("apply", [], flagSame).status).toBe(0);
+    expect(run("rollback", [], flagSame).status).toBe(0);
     expect(stored()).toEqual(original);
   });
 

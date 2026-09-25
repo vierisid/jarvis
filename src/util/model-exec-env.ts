@@ -54,16 +54,17 @@
  * single further command still reaches the same secrets:
  *   - /proc/<daemon pid>/environ holds the environment the daemon was STARTED
  *     with. For run_command the daemon is the shell's parent, so that is
- *     `cat /proc/$PPID/environ`; Chrome can be navigated to the same file.
+ *     `cat /proc/$PPID/environ`; until #521, Chrome can open the same file.
  *     Nothing done to process.env changes it -- and, measured with Bun 1.3, a
  *     `delete process.env.X` does not even reach a Bun.spawn or node
  *     child_process spawn that omits `env`: those inherit the startup
  *     snapshot. Only an explicit env, as here, is filtered.
  *   - ~/.jarvis (or JARVIS_HOME / JARVIS_SECRETS_DIR) holds the workflow
  *     encryption key and `.secrets.key` on disk by default.
- * What this does buy: `env`, `echo $X`, file:///proc/self/environ and every
- * grandchild, crash reporter or log line that snapshots its environment no
- * longer carry the daemon's secrets. Keeping them from a process that goes
+ * What this does buy: `env`, `echo $X`, /proc/self/environ, and everything
+ * these children start or open -- the apps a launched browser or editor
+ * spawns, every grandchild, crash reporter or log line that snapshots its
+ * environment -- no longer carry the daemon's secrets. Keeping them from a process that goes
  * looking is a sandboxing problem.
  *
  * Kept out of subprocess-env.ts on purpose: that file is compiled into the
@@ -139,13 +140,14 @@ export const DAEMON_SECRET_ENV_NAMES: readonly string[] = Object.freeze([
  *   - no key file, encrypted rows stored: it refuses to boot rather than
  *     generate a fresh key (assertEncryptionKeyForStoredCredentials in
  *     workflows/db/index.ts);
- *   - no key file, no encrypted rows: saving a credential fails. modelExecEnv
- *     flags its children JARVIS_MODEL_EXEC_ENV_KEY=1 when this daemon held the
- *     key in its env, and under that flag getKey refuses to GENERATE one,
- *     which would otherwise split credentials between a file key and the env
- *     key the user's own next restart prefers. An install whose key lives in
- *     a file is never flagged, so it still generates one when it has none;
- *   - a stale key file: it is used, and stored rows fail to decrypt.
+ *   - otherwise saving or reading a credential fails. modelExecEnv flags its
+ *     children JARVIS_MODEL_EXEC_ENV_KEY=<check of this daemon's env key>,
+ *     and under that flag getKey uses a key only if it matches the check:
+ *     it generates none, and refuses a key file that is some other key -- a
+ *     leftover, another instance's, the shared ~/.jarvis/cache one -- which
+ *     would otherwise split credentials from the env key the user's own next
+ *     restart prefers (util/model-exec-marker.ts). An install whose key lives
+ *     in a file is never flagged, so it still generates one when it has none.
  * Likewise it comes up without JARVIS_GITHUB_TOKEN, which nothing flags. The
  * daemon logs the missing key, and `jarvis start -d`/`restart -d`/`update`
  * print it. `systemctl --user restart jarvis`, or a restart from the user's

@@ -193,9 +193,8 @@ const MODEL_EXEC: Record<string, Exemption> = {
   },
   'actions/browser/chrome-launcher.ts': {
     reason:
-      'The only local browser launch. The model drives it over CDP and can navigate it to ' +
-      'file:///proc/self/environ, so what the browser process holds is what matters here, whatever ' +
-      'the renderer sandbox does.',
+      'The only local browser launch: a desktop app the model drives over CDP, which needs the session ' +
+      'env and hands it to whatever it spawns or opens (and, until #521, can open file:///proc/self/environ).',
     calls: { launchChrome: 1 },
   },
   'actions/app-control/sidecar-launcher.ts': {

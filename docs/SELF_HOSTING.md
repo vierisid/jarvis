@@ -425,10 +425,18 @@ leaves Jarvis stopped, and an update unfinished. Restart a systemd install with
 itself, the relaunched daemon gets launchd's environment.
 
 If your workflow encryption key lives only in `JARVIS_WORKFLOW_ENCRYPTION_KEY`,
-a daemon started from the assistant's shell will not generate a new key (an
-existing key file is still used), so it cannot split your credentials: saving a
-workflow credential fails until you restart Jarvis yourself, and the daemon
-logs a warning saying so. An install whose key lives in a file is unaffected.
+a daemon started from the assistant's shell uses a workflow key only if it is
+provably that same key. It will not generate one, and it will not use a key
+file that holds a different key, such as a leftover or another instance's. So
+it cannot split your credentials: workflow credentials fail there until you
+start Jarvis yourself with the key set, and the daemon logs a warning saying
+so. An install whose key lives in a file is unaffected.
+
+To tell "that same key" apart, the assistant's commands carry
+`JARVIS_MODEL_EXEC_ENV_KEY`, a 16-character check value derived from the key
+with scrypt. It cannot be turned back into the key, but it can confirm a guess,
+so generate `JARVIS_WORKFLOW_ENCRYPTION_KEY` at random (`openssl rand -hex 32`)
+rather than from a passphrase.
 
 Like the install sanitizing above, this is environment hygiene, not a
 sandbox. The commands run as the daemon's user, so they can still read

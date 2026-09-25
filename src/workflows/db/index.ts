@@ -15,7 +15,7 @@
 
 import type { Database } from "bun:sqlite";
 import { closeDb, getDb, initDatabase } from "../../vault/schema";
-import { ENCRYPTED_VALUE_SQL, hasResolvableEncryptionKey, keyFileCandidates } from "./encryption";
+import { ENCRYPTED_VALUE_SQL, hasResolvableEncryptionKey, usableKeyFileCandidates } from "./encryption";
 import { createSchema, DEFAULT_IDS } from "./schema";
 
 /** A database full of ciphertext and no key to read it with. */
@@ -61,7 +61,7 @@ export function assertEncryptionKeyForStoredCredentials(db: Database = getDb()):
       "generated key: it cannot decrypt those rows, and using it would overwrite them.",
       "",
       "Restore the key file to one of:",
-      ...keyFileCandidates().map((path) => `  ${path}`),
+      ...usableKeyFileCandidates().map((path) => `  ${path}`),
       "or set JARVIS_WORKFLOW_ENCRYPTION_KEY (64 hex chars) / JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE.",
       "",
       "A `jarvis export --full` archive taken by this version carries the key as",

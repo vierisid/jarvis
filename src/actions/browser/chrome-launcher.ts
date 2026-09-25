@@ -222,10 +222,11 @@ export async function launchChrome(
   const proc = spawn([exe.path, ...args], {
     stdout: 'ignore',
     stderr: 'ignore',
-    // The model drives this browser over CDP and can navigate it to
-    // file:///proc/self/environ, so it gets the desktop session without the
-    // daemon's secrets (#514). Hygiene, not isolation: the same model can
-    // navigate to /proc/<daemon pid>/environ. See util/model-exec-env.ts.
+    // A desktop app the model drives over CDP: it needs the desktop session,
+    // and its env reaches whatever it spawns or opens (helpers, downloads
+    // handed to other apps; until #521, file:///proc/self/environ). So the
+    // session, without the daemon's secrets (#514). Hygiene, not isolation:
+    // see util/model-exec-env.ts.
     env: modelExecEnv(),
   });
 

@@ -31,6 +31,7 @@ import {
 } from "../src/workflows/db/encryption";
 import { initWorkflowDb, closeWorkflowDb } from "../src/workflows/db/index";
 import { createSchema } from "../src/workflows/db/schema";
+import { workflowKeyCheck } from "../src/util/model-exec-marker";
 
 const SCRIPT = resolve(import.meta.dir, "rotate-encryption-key.ts");
 
@@ -118,6 +119,10 @@ function runScript(opts: {
   // unless the test explicitly wants it set.
   if (!opts.env || !("JARVIS_WORKFLOW_ENCRYPTION_KEY" in opts.env)) {
     delete env["JARVIS_WORKFLOW_ENCRYPTION_KEY"];
+  }
+  // Likewise #514's flag, which a suite run from the assistant's shell inherits.
+  if (!opts.env || !("JARVIS_MODEL_EXEC_ENV_KEY" in opts.env)) {
+    delete env["JARVIS_MODEL_EXEC_ENV_KEY"];
   }
   const allowDaemon = opts.allowDaemon ?? false;
   const args = ["run", SCRIPT, "--data-dir", dataDir, "--key-file", keyFile, "--db", dbPath];
@@ -216,6 +221,19 @@ describe("rotate-encryption-key", () => {
     expect(res.status).toBe(1);
     expect(res.stderr).toMatch(/JARVIS_WORKFLOW_ENCRYPTION_KEY/);
     // Keychain unchanged.
+    expect(readFileSync(keyFile, "utf8").trim()).toBe(originalKey.toString("hex"));
+  }, TEST_TIMEOUT_MS);
+
+  // #514: from the assistant's shell the env key is stripped, but the flag
+  // says the daemon had one. Rotating the file key there would re-encrypt
+  // every row under a key the user's own daemon does not use.
+  test("refuses to run from the assistant's shell of an env-key daemon", () => {
+    const res = runScript({
+      env: { JARVIS_MODEL_EXEC_ENV_KEY: workflowKeyCheck(originalKey.toString("hex")) },
+      allowDaemon: true,
+    });
+    expect(res.status).toBe(1);
+    expect(res.stderr).toMatch(/JARVIS_MODEL_EXEC_ENV_KEY is set/);
     expect(readFileSync(keyFile, "utf8").trim()).toBe(originalKey.toString("hex"));
   }, TEST_TIMEOUT_MS);
 

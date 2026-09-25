@@ -1,9 +1,11 @@
 /**
  * Two markers modelExecEnv() (util/model-exec-env.ts) sets on model-directed
  * children:
- *   - `JARVIS_MODEL_EXEC=1` on every one;
- *   - `JARVIS_MODEL_EXEC_ENV_KEY=1` when the parent's environment held
- *     JARVIS_WORKFLOW_ENCRYPTION_KEY, or had inherited this flag itself.
+ *   - `JARVIS_MODEL_EXEC=1` on every one. Diagnostic only: nothing decides
+ *     anything on it; it says where a process came from.
+ *   - `JARVIS_MODEL_EXEC_ENV_KEY=<check>` when an ancestor daemon held its
+ *     workflow key in JARVIS_WORKFLOW_ENCRYPTION_KEY: a 16-hex-char check value
+ *     of that key (workflowKeyCheck), inherited unchanged by descendants.
  *
  * Why. That env carries none of the daemon's secrets, so a daemon started FROM
  * it comes up without them. `jarvis start`, `restart` and `update` run through
@@ -27,9 +29,12 @@
  * feature: with no key file, getKey() would mint one, credentials saved
  * afterwards would be encrypted under it, and the user's next own restart --
  * env key back, and preferred over any file -- could not decrypt them.
- * rivalKeyWarning() does not see it, since only one file exists. So
- * workflows/db/encryption.ts refuses to GENERATE a key under the env-key flag
- * (reading an existing file is fine).
+ * rivalKeyWarning() does not see it, since only one file exists. And a key
+ * file that merely EXISTS proves nothing: a leftover, another instance's key,
+ * or the shared pre-JARVIS_HOME ~/.jarvis/cache one is just as much "not the
+ * user's key". So under the flag workflows/db/encryption.ts uses a key -- file
+ * or env -- only if its check matches the flag, never generates one, skips
+ * the shared legacy candidate, and does not relocate keys at boot.
  *
  * Why a separate flag rather than refusing on JARVIS_MODEL_EXEC alone: an
  * install whose key lives in a FILE must keep generating one when there is
@@ -37,12 +42,23 @@
  * under another JARVIS_HOME, or with a fresh JARVIS_SECRETS_DIR -- all of which
  * a model may legitimately run. Only an env-key install can split.
  *
- * What the flag gives away: one bit, whether the daemon's environment holds a
- * workflow key. Not the key, and nothing a same-uid child could not read from
- * /proc/<daemon pid>/environ anyway.
+ * What the flag gives away: that the daemon's environment holds a workflow
+ * key, and 64 bits of a slow (scrypt), domain-separated hash of it -- enough
+ * to tell whether a candidate key IS that key, useless for finding a random
+ * 256-bit one. The check sits in exactly the environment dumps the strip
+ * protects (crash reports, logs, `env` in a transcript), so for a key derived
+ * from a passphrase it is an offline guessing target: scrypt makes each guess
+ * cost ~35ms instead of nanoseconds, and the docs say to generate the key at
+ * random. Nothing a same-uid child could not read from
+ * /proc/<daemon pid>/environ anyway. An older parent set the flag to `1`,
+ * "an env key existed, check unknown": that refuses every file key and is
+ * satisfied only by an env key.
  *
- * Neither marker is a boundary: a child can unset them, and an app the model
- * launches keeps them -- a terminal opened inside it is marked too. They are
+ * Neither marker is a boundary: a child can unset them. And an app the model
+ * launches directly keeps them, so a terminal opened inside it can be marked
+ * too -- not after macOS `open -a`, which hands the app launchd's environment,
+ * and not for a terminal whose windows come from an already-running server
+ * process (gnome-terminal, for one). They are
  * hygiene, like the strip they accompany. The generated systemd unit unsets
  * both (UnsetEnvironment=) and the launchd plist blanks them, so a service
  * started from a marked shell's imported environment is not marked.
@@ -52,14 +68,53 @@
  * guard keeps to its MODEL_EXEC sites.
  */
 
+import { scryptSync } from 'node:crypto';
+
 export const MODEL_EXEC_MARKER_ENV = 'JARVIS_MODEL_EXEC';
 export const MODEL_EXEC_ENV_KEY_FLAG = 'JARVIS_MODEL_EXEC_ENV_KEY';
 
 type Env = Record<string, string | undefined>;
 
-/** True when this process descends from a command the assistant ran. */
+/**
+ * True when this process descends from a command the assistant ran.
+ * Diagnostic only -- see the header; the key decisions use the flag.
+ */
 export function isModelExecProcess(env: Env = process.env): boolean {
   return env[MODEL_EXEC_MARKER_ENV] === '1';
+}
+
+/** The pre-check-value flag an older parent set: "an env key existed, check unknown". */
+export const LEGACY_ENV_KEY_FLAG = '1';
+
+const checkCache = new Map<string, string>();
+
+/**
+ * The check value of a workflow key: 16 hex chars of scrypt (N=2^14, r=8,
+ * p=1; ~35ms, 16 MiB) over the key's lowercase hex, salted with a fixed label.
+ * Identifies the key, cannot recover it. Computed once per key per process.
+ *
+ * FROZEN: a daemon of one release sets this and a daemon of the next checks
+ * it, so a change to the label, the parameters or the normalisation would
+ * refuse the right key. model-exec-env.test.ts pins a known answer.
+ */
+export function workflowKeyCheck(hex: string): string {
+  const key = hex.trim().toLowerCase();
+  let check = checkCache.get(key);
+  if (check === undefined) {
+    check = scryptSync(key, 'jarvis-workflow-key-check', 8, { N: 16384, r: 8, p: 1 }).toString('hex');
+    checkCache.set(key, check);
+  }
+  return check;
+}
+
+/**
+ * The env-key flag as set: a check value, `1` from an older parent, or null
+ * when absent or anything else.
+ */
+export function parentWorkflowKeyCheck(env: Env = process.env): string | null {
+  const v = env[MODEL_EXEC_ENV_KEY_FLAG];
+  if (v === LEGACY_ENV_KEY_FLAG || (v !== undefined && /^[0-9a-f]{16}$/.test(v))) return v;
+  return null;
 }
 
 /**
@@ -67,17 +122,41 @@ export function isModelExecProcess(env: Env = process.env): boolean {
  * environment, so a key missing here was stripped, not absent.
  */
 export function hadEnvWorkflowKey(env: Env = process.env): boolean {
-  return env[MODEL_EXEC_ENV_KEY_FLAG] === '1';
+  return parentWorkflowKeyCheck(env) !== null;
+}
+
+/**
+ * Whether `hex` is the ancestor's env key: true/false against a check value,
+ * null against a legacy `1` (unknown).
+ */
+export function matchesParentWorkflowKey(hex: string, env: Env = process.env): boolean | null {
+  const check = parentWorkflowKeyCheck(env);
+  if (check === null || check === LEGACY_ENV_KEY_FLAG) return null;
+  return workflowKeyCheck(hex) === check;
 }
 
 /**
  * The markers a model-directed child gets, given its parent's env: always the
- * marker, plus the env-key flag when the parent held the key or had the flag.
+ * marker, plus the env-key flag. An inherited flag passes on unchanged -- it
+ * names the key of the daemon the user started, which a key handed in along
+ * the way must not replace -- else the parent's own env key sets it.
  */
 export function modelExecMarkers(parent: Env = process.env): Record<string, string> {
   const out: Record<string, string> = { [MODEL_EXEC_MARKER_ENV]: '1' };
-  if (parent.JARVIS_WORKFLOW_ENCRYPTION_KEY || hadEnvWorkflowKey(parent)) out[MODEL_EXEC_ENV_KEY_FLAG] = '1';
+  const inherited = parentWorkflowKeyCheck(parent);
+  if (inherited !== null) out[MODEL_EXEC_ENV_KEY_FLAG] = inherited;
+  else if (parent.JARVIS_WORKFLOW_ENCRYPTION_KEY) {
+    out[MODEL_EXEC_ENV_KEY_FLAG] = workflowKeyCheck(parent.JARVIS_WORKFLOW_ENCRYPTION_KEY);
+  }
   return out;
+}
+
+/** True when this process lacks a key known to be the ancestor's env key. */
+function missingParentKey(env: Env): boolean {
+  if (!hadEnvWorkflowKey(env)) return false;
+  const key = env.JARVIS_WORKFLOW_ENCRYPTION_KEY;
+  if (!key) return true;
+  return matchesParentWorkflowKey(key, env) === false;
 }
 
 /**
@@ -87,12 +166,14 @@ export function modelExecMarkers(parent: Env = process.env): Record<string, stri
  * (passed inside the command, or re-exported by the shell's rc).
  */
 export function modelExecDaemonWarning(env: Env = process.env): string | null {
-  if (!hadEnvWorkflowKey(env) || env.JARVIS_WORKFLOW_ENCRYPTION_KEY) return null;
+  if (!missingParentKey(env)) return null;
   return (
-    'This Jarvis was started from a command the assistant ran. JARVIS_WORKFLOW_ENCRYPTION_KEY was in the ' +
-    'environment of the Jarvis that ran it and is not in this one, so no workflow key is available unless a ' +
-    'key file exists, and none will be generated: saving a workflow credential fails. Restart Jarvis from ' +
-    'your own terminal, or with `systemctl --user restart jarvis` on a systemd install.'
+    'This Jarvis was started from a command the assistant ran. The Jarvis that ran it kept its workflow key ' +
+    'in JARVIS_WORKFLOW_ENCRYPTION_KEY, and that key is not in this environment. A key file is used only if ' +
+    'it is that same key, and no new key is generated, so workflow credentials may be unusable here. Start ' +
+    'this Jarvis from your own terminal with JARVIS_WORKFLOW_ENCRYPTION_KEY set (on a systemd install: ' +
+    '`systemctl --user restart jarvis`), or, if this instance is meant to have its own key, unset ' +
+    'JARVIS_MODEL_EXEC_ENV_KEY deliberately.'
   );
 }
 
@@ -115,11 +196,11 @@ export function modelExecCliWarning(command: string, args: readonly string[], en
 
 /** The CLI's wording: this shell, not the daemon, is what lacks the key. */
 export function modelExecRestartWarning(env: Env = process.env): string | null {
-  if (!hadEnvWorkflowKey(env) || env.JARVIS_WORKFLOW_ENCRYPTION_KEY) return null;
+  if (!missingParentKey(env)) return null;
   return (
     'This shell is the assistant\'s: JARVIS_WORKFLOW_ENCRYPTION_KEY was in the running Jarvis\'s environment ' +
-    'but is not in this one, and the Jarvis started from here will not have it (no new workflow key is ' +
-    'generated; saving a workflow credential fails). Restart from your own terminal, or use ' +
+    'but is not in this one, and the Jarvis started from here will not have it (it uses a key file only if ' +
+    'that file holds the same key, and generates none). Restart from your own terminal, or use ' +
     '`systemctl --user restart jarvis` on a systemd install.'
   );
 }
