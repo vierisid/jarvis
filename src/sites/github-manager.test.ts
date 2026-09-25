@@ -385,6 +385,8 @@ describe('each call site keeps the token out of git argv and env', () => {
     expect(network[0]!.argv).toContain('origin');
     expect(network[0]!.argv).toContain('protocol.allow=never');
     expect(network[0]!.argv).toContain('core.fsmonitor=false');
+    // Proactive auth pinned for the exact origin URL, not only the host.
+    expect(network[0]!.argv).toContain('http.https://github.com/owner/repo.git.proactiveAuth=basic');
 
     // Positive: the helper handed git the token while it ran.
     expect(network[0]!.cred).toBe(`username=x-access-token\npassword=${TOKEN}\n`);
@@ -514,27 +516,30 @@ describe('each call site keeps the token out of git argv and env', () => {
   // get-url prints the https URL even when remote.<name>.vcs swaps in a
   // `git-remote-<vcs>` helper, which a project-level protocol.<vcs>.allow
   // would then let run with the token file in place.
-  test('remote.origin.vcs means no token, whatever get-url says', async () => {
-    const fake = setupFakeGit();
-    writeFileSync(join(fake.project, '..', 'bin', 'git'), [
-      '#!/bin/sh',
-      `ls "${fake.tmp}" > "${fake.logDir}/$(date +%s%N).$$.tmpls"`,
-      'case "$*" in',
-      '  *"remote.origin.vcs"*) echo foo; exit 0 ;;',
-      '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
-      '  *"branch --show-current"*) echo main; exit 0 ;;',
-      '  *"--get-regexp"*) exit 1 ;;',
-      '  *"config --get "*) exit 1 ;;',
-      'esac',
-      'exit 0',
-    ].join('\n'), { mode: 0o755 });
-    const manager = new GitHubManager();
-    expect((await manager.push(fake.project)).success).toBe(true);
-    expect((await manager.pull(fake.project)).success).toBe(true);
-    const sightings = readdirSync(fake.logDir).filter(f => f.endsWith('.tmpls'))
-      .filter(f => readFileSync(join(fake.logDir, f), 'utf8').includes(CREDENTIAL_DIR_PREFIX));
-    expect(sightings.length).toBe(0);
-  });
+  // Set at all counts, including to an empty value: decided by exit status.
+  for (const vcs of ['foo', '']) {
+    test(`remote.origin.vcs="${vcs}" means no token, whatever get-url says`, async () => {
+      const fake = setupFakeGit();
+      writeFileSync(join(fake.project, '..', 'bin', 'git'), [
+        '#!/bin/sh',
+        `ls "${fake.tmp}" > "${fake.logDir}/$(date +%s%N).$$.tmpls"`,
+        'case "$*" in',
+        `  *"remote.origin.vcs"*) echo "${vcs}"; exit 0 ;;`,
+        '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
+        '  *"branch --show-current"*) echo main; exit 0 ;;',
+        '  *"--get-regexp"*) exit 1 ;;',
+        '  *"config --get "*) exit 1 ;;',
+        'esac',
+        'exit 0',
+      ].join('\n'), { mode: 0o755 });
+      const manager = new GitHubManager();
+      expect((await manager.push(fake.project)).success).toBe(true);
+      expect((await manager.pull(fake.project)).success).toBe(true);
+      const sightings = readdirSync(fake.logDir).filter(f => f.endsWith('.tmpls'))
+        .filter(f => readFileSync(join(fake.logDir, f), 'utf8').includes(CREDENTIAL_DIR_PREFIX));
+      expect(sightings.length).toBe(0);
+    });
+  }
 
   test('the local half of a pull is bounded by the timeout too', async () => {
     const fake = setupFakeGit();
@@ -545,15 +550,19 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
       '  *"config --get "*) exit 1 ;;',
-      '  "pull . "*) exec sleep 5 ;;',
+      // Only the local step hangs, and for longer than the timeout. The
+      // timeout itself is generous enough that every other fake call, the
+      // fetch included, finishes well inside it even on a throttled runner,
+      // so the error can only come from the step under test.
+      '  "pull . "*) exec sleep 12 ;;',
       'esac',
       'exit 0',
     ].join('\n'), { mode: 0o755 });
     const started = Date.now();
-    const result = await new GitHubManager({ networkTimeoutMs: 300 }).pull(fake.project);
-    expect(Date.now() - started).toBeLessThan(3_000);
+    const result = await new GitHubManager({ networkTimeoutMs: 4_000 }).pull(fake.project);
+    expect(Date.now() - started).toBeLessThan(10_000);
     expect(result.error).toContain('git pull timed out');
-  }, 15_000);
+  }, 30_000);
 
   test('an origin whose push URL leaves GitHub gets no token, even if the fetch URL is fine', async () => {
     const fake = setupFakeGit();
@@ -1035,7 +1044,12 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
    * upstream then either rewriting Y into Yprime with a force-push, or adding
    * Z normally. `config` is applied to the project before anything happens.
    */
-  async function divergedProject(label: string, config: Array<[string, string]>, upstream: 'rewrite' | 'append') {
+  async function divergedProject(
+    label: string,
+    config: Array<[string, string]>,
+    upstream: 'rewrite' | 'append',
+    local: 'commit' | 'merge' = 'commit',
+  ) {
     const h = await setupProject(label);
     const commit = async (cwd: string, file: string, text: string, msg: string) => {
       writeFileSync(join(cwd, file), text);
@@ -1050,7 +1064,16 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     useHarnessEnv(h);
     const m = manager();
     expect((await m.push(h.project)).success).toBe(true);
-    await commit(h.project, 'g', 'local\n', 'L');
+    if (local === 'merge') {
+      // A side branch merged back with --no-ff: history with a local merge.
+      await setup([REAL_GIT!, 'checkout', '-q', '-b', 'side'], h.project, h.gitEnv);
+      await commit(h.project, 's', 'side\n', 'S');
+      await setup([REAL_GIT!, 'checkout', '-q', 'main'], h.project, h.gitEnv);
+      await commit(h.project, 'g', 'local\n', 'L');
+      await setup([REAL_GIT!, 'merge', '-q', '--no-ff', '-m', 'Merge side', 'side'], h.project, h.gitEnv);
+    } else {
+      await commit(h.project, 'g', 'local\n', 'L');
+    }
 
     const other = join(tempRoot('other'), 'clone');
     await setup([REAL_GIT!, 'clone', '-q', h.bareRepo, other], root, h.gitEnv);
@@ -1091,6 +1114,68 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     expect(await log()).toEqual(['L', 'Y', 'init rebase-ff-only']);
   }, 60_000);
 
+  // branch.<name>.rebase outranks pull.rebase, as in git.
+  test('branch.main.rebase=true over pull.rebase=false rebases', async () => {
+    const { h, m, log } = await divergedProject(
+      'branch-rebase', [['pull.rebase', 'false'], ['branch.main.rebase', 'true']], 'rewrite');
+    expect(await m.pull(h.project)).toEqual({ success: true });
+    expect(await log()).toEqual(['L', 'Yprime', 'init branch-rebase']);
+  }, 60_000);
+
+  // `merges` keeps local merge commits (rebase --rebase-merges); a plain
+  // rebase would flatten them.
+  test('pull.rebase=merges keeps a local merge', async () => {
+    const { h, m } = await divergedProject('rebase-merges', [['pull.rebase', 'merges']], 'append', 'merge');
+    expect(await m.pull(h.project)).toEqual({ success: true });
+    const graph = await setup([REAL_GIT!, 'log', '--format=%s %p'], h.project, h.gitEnv);
+    const merge = graph.split('\n').find(l => l.startsWith('Merge side '));
+    // Still there, still with two parents, and now on top of upstream's Z.
+    expect(merge?.split(' ').length).toBe(4);
+    expect(graph).toContain('Z ');
+    expect((await setup([REAL_GIT!, 'rev-list', '--count', '--merges', 'origin/main..HEAD'], h.project, h.gitEnv)).trim())
+      .toBe('1');
+  }, 60_000);
+
+  // pull into an unborn branch is git's own "pull into void", not a rebase.
+  test('a rebase pull into an unborn branch checks out upstream', async () => {
+    const { h, m } = await divergedProject('unborn-source', [['pull.rebase', 'true']], 'append');
+    expect((await m.pull(h.project)).success).toBe(true);
+    // A second project on the same remote, with no commits of its own.
+    const fresh = join(tempRoot('unborn'), 'project');
+    mkdirSync(fresh);
+    await setup([REAL_GIT!, 'init', '-q', '-b', 'main'], fresh, h.gitEnv);
+    await setup([REAL_GIT!, 'remote', 'add', 'origin', `${server.base}/unborn-source.git`], fresh, h.gitEnv);
+    for (const [k, v] of [['pull.rebase', 'true'], ['user.name', 't'], ['user.email', 't@t']]) {
+      await setup([REAL_GIT!, 'config', k!, v!], fresh, h.gitEnv);
+    }
+    expect(await m.pull(fresh)).toEqual({ success: true });
+    const log = (await setup([REAL_GIT!, 'log', '--format=%s'], fresh, h.gitEnv)).trim().split('\n');
+    expect(log).toEqual(['Z', 'Y', 'init unborn-source']);
+  }, 60_000);
+
+  // S-1: a project-level proactiveAuth=none on the exact origin URL is more
+  // specific than a host pin; only an exact-URL pin of our own beats it.
+  test.skipIf(!GIT_HAS_PROACTIVE_AUTH)('an exact-URL proactiveAuth=none in the project cannot keep the token alive', async () => {
+    const h = await setupProject('public-override');
+    await setup([REAL_GIT!, 'config', `http.${server.base}/public-override.git.proactiveAuth`, 'none'], h.project, h.gitEnv);
+    useHarnessEnv(h);
+    const m = manager();
+    expect((await m.push(h.project)).success).toBe(true);
+    await upstreamCommit(h);
+
+    const before = server.requests.length;
+    const hooksBefore = hookRuns(h, 'reference-transaction').length;
+    expect((await m.getRemoteStatus(h.project)).behind).toBe(1);
+    await upstreamCommit(h);
+    expect(await m.pull(h.project)).toEqual({ success: true });
+
+    // Public repo, so git was never challenged: only proactive auth consumed
+    // the file, on every request, before any hook ran.
+    expect(server.requests.slice(before).filter(r => r.auth !== 'ok').length).toBe(0);
+    expect(hookRuns(h, 'reference-transaction').length).toBeGreaterThan(hooksBefore);
+    expect(hookRunsThatFoundAToken(h)).toEqual([]);
+    expect(h.leaks(TOKEN)).toEqual([]);
+  }, 60_000);
 
   // S1. Commands .git/config can name, which git runs on its own: the
   // fsmonitor on every index read, clean/smudge filters and post-index-change
