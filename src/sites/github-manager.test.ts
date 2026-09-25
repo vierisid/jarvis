@@ -339,6 +339,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"get-url"*) cat "$(dirname "$0")/../origin-url" ;;',
       `  *"branch --show-current"*) cat "${root}/current-branch" ;;`,
       '  *"--get-regexp"*) exit 1 ;;',
+      '  *"ls-files"*) exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
       'exit 0',
@@ -484,6 +485,7 @@ describe('each call site keeps the token out of git argv and env', () => {
         '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
         '  *"branch --show-current"*) echo main; exit 0 ;;',
         '  *"--get-regexp"*) exit 1 ;;',
+        '  *"ls-files"*) exit 0 ;;',
         '  *"config --get "*) exit 1 ;;',
         'esac',
         `printf '%s\\n' ${JSON.stringify(stderr)} >&2`,
@@ -503,6 +505,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
+      '  *"ls-files"*) exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
       'echo "error: unable to create file index.html: Permission denied" >&2',
@@ -521,6 +524,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
+      '  *"ls-files"*) exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
       'echo "fatal: Need to specify how to reconcile divergent branches." >&2',
@@ -546,6 +550,7 @@ describe('each call site keeps the token out of git argv and env', () => {
         '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
         '  *"branch --show-current"*) echo main; exit 0 ;;',
         '  *"--get-regexp"*) exit 1 ;;',
+        '  *"ls-files"*) exit 0 ;;',
         '  *"config --get "*) exit 1 ;;',
         'esac',
         'exit 0',
@@ -567,6 +572,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
+      '  *"ls-files"*) exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       // Only the local step hangs, and for longer than the timeout. The
       // timeout itself is generous enough that every other fake call, the
@@ -593,6 +599,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
+      '  *"ls-files"*) exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
       'exit 0',
@@ -619,6 +626,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
+      '  *"ls-files"*) exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
       'echo "fatal: remote rejected" >&2',
@@ -640,6 +648,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
+      '  *"ls-files"*) exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
       // Short enough that a broken kill cannot outlive the run for long.
@@ -666,6 +675,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
+      '  *"ls-files"*) exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
       'sleep 5 &',
@@ -692,6 +702,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
+      '  *"ls-files"*) exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
       `setsid sh -c 'echo $$ > "${pidFile}"; exec sleep 8' &`,
@@ -1052,6 +1063,11 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     expect(credentialDirsIn(h.tmp)).toEqual([]);
     // No remote URL, tokenized or not, is written into the reflog any more.
     expect(readFileSync(join(h.project, '.git', 'logs', 'HEAD'), 'utf8')).toContain('pull . refs/remotes/origin/main');
+
+    // CONTROL: the reference-transaction probe does fire on a fetch by plain
+    // git, so its silence above means something.
+    await setup([REAL_GIT!, 'fetch', '-q', h.bareRepo, 'main:refs/remotes/control/main'], h.project, h.gitEnv);
+    expect(allHookRuns(h).some(f => f.startsWith('hook.reference-transaction.'))).toBe(true);
   }, 60_000);
 
   /**
@@ -1156,16 +1172,78 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
 
   // gpg.program is project config; a daemon pull that creates a merge commit
   // (or verifies upstream signatures) must not run it.
-  test('a merge pull never runs a project gpg.program', async () => {
-    const probeDir = tempRoot('gpg');
-    const marker = join(probeDir, 'gpg-ran');
-    const gpg = join(probeDir, 'fake-gpg');
-    writeFileSync(gpg, `#!/bin/sh\necho "$@" >> "${marker}"\nexit 1\n`, { mode: 0o755 });
-    const { h, m, log } = await divergedProject('gpg', [
-      ['pull.rebase', 'false'], ['commit.gpgSign', 'true'], ['merge.verifySignatures', 'true'], ['gpg.program', gpg],
-    ], 'append');
+  // Both signing backends (openpgp's gpg.program, and the ssh one that
+  // review reproduced), on both integrate paths: a merge commit and a rebase
+  // that re-signs every replayed commit.
+  for (const [label, backend, mode] of [
+    ['gpg-merge', 'openpgp', 'false'],
+    ['gpg-ssh-merge', 'ssh', 'false'],
+    ['gpg-ssh-rebase', 'ssh', 'true'],
+  ] as const) {
+    test(`a ${mode === 'true' ? 'rebase' : 'merge'} pull never runs a project ${backend} signing program`, async () => {
+      const probeDir = tempRoot('gpg');
+      const marker = join(probeDir, 'gpg-ran');
+      const program = join(probeDir, 'fake-signer');
+      writeFileSync(program, `#!/bin/sh\necho "$@" >> "${marker}"\nexit 1\n`, { mode: 0o755 });
+      const signing: Array<[string, string]> = backend === 'ssh'
+        ? [['gpg.format', 'ssh'], ['gpg.ssh.program', program], ['user.signingKey', 'key::ssh-ed25519 AAAA']]
+        : [['gpg.program', program]];
+      const { h, m, log } = await divergedProject(label, [
+        ['pull.rebase', mode], ['commit.gpgSign', 'true'], ['merge.verifySignatures', 'true'], ...signing,
+      ], 'append');
+      expect(await m.pull(h.project)).toEqual({ success: true });
+      expect((await log())[0]).toBe(mode === 'true' ? 'L' : "Merge remote-tracking branch 'origin/main'");
+      expect(existsSync(marker)).toBe(false);
+    }, 60_000);
+  }
+
+  // Daemon git runs no hooks, so git-lfs's pre-push upload would silently not
+  // happen. push() refuses instead of reporting a success with objects missing.
+  test('a project that tracks files with Git LFS is refused, not half-pushed', async () => {
+    const h = await setupProject('lfs');
+    writeFileSync(join(h.project, '.gitattributes'), '*.bin filter=lfs diff=lfs merge=lfs -text\n');
+    writeFileSync(join(h.project, 'asset.bin'), 'pointer\n');
+    await setup([REAL_GIT!, 'add', '.'], h.project, h.gitEnv);
+    await setup([REAL_GIT!, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'lfs'], h.project, h.gitEnv);
+    useHarnessEnv(h);
+
+    const before = server.requests.length;
+    const result = await manager().push(h.project);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Git LFS');
+    expect(server.requests.length).toBe(before);
+    expect(credentialDirsIn(h.tmp)).toEqual([]);
+  }, 30_000);
+
+  // git also runs hooks defined in config (`hook.<name>.command` and
+  // `.event`), wherever core.hooksPath points; only the per-event
+  // `hook.<event>.enabled=false` pins stop them (reproduced in review).
+  test('config-defined hooks never run on daemon git, even when the project re-enables them', async () => {
+    const h = await setupProject('config-hooks');
+    const marker = join(h.evidence, 'config-hook-ran');
+    const script = join(h.evidence, 'config-hook');
+    writeFileSync(script, `#!/bin/sh\necho "$0 $*" >> "${marker}"\ncat > /dev/null\n`, { mode: 0o755 });
+    await setup([REAL_GIT!, 'config', 'hook.probe.command', script], h.project, h.gitEnv);
+    for (const event of ['pre-push', 'reference-transaction', 'post-merge', 'post-checkout', 'post-rewrite', 'pre-rebase']) {
+      await setup([REAL_GIT!, 'config', '--add', 'hook.probe.event', event], h.project, h.gitEnv);
+    }
+    // A project trying to win back what the command line turns off.
+    for (const key of ['hook.probe.enabled', 'hook.pre-push.enabled', 'hook.reference-transaction.enabled']) {
+      await setup([REAL_GIT!, 'config', key, 'true'], h.project, h.gitEnv);
+    }
+
+    // CONTROL: plain git runs the config hook on push and on fetch.
+    await setup([REAL_GIT!, 'push', '-q', h.bareRepo, 'main'], h.project, h.gitEnv);
+    await setup([REAL_GIT!, 'fetch', '-q', h.bareRepo, 'main:refs/remotes/control/main'], h.project, h.gitEnv);
+    expect(readFileSync(marker, 'utf8').trim().split('\n').length).toBeGreaterThan(1);
+    rmSync(marker);
+
+    useHarnessEnv(h);
+    const m = manager();
+    expect((await m.push(h.project)).success).toBe(true);
+    await upstreamCommit(h);
+    expect((await m.getRemoteStatus(h.project)).behind).toBe(1);
     expect(await m.pull(h.project)).toEqual({ success: true });
-    expect((await log())[0]).toBe("Merge remote-tracking branch 'origin/main'");
     expect(existsSync(marker)).toBe(false);
   }, 60_000);
 
@@ -1348,8 +1426,8 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     // The fsmonitor is pinned off for every git this class runs, so it never
     // runs at all (the control above shows it would have)...
     expect(runs.filter(r => r.startsWith('fsmonitor '))).toEqual([]);
-    // ...while the filter and hook did run (after the token was gone), so this
-    // is not vacuous...
+    // ...while the clean filter did run (after the token was gone), so this is
+    // not vacuous...
     expect(runs.some(r => r.startsWith('clean '))).toBe(true);
     // post-index-change is a hook, and hooks are pinned off entirely.
     expect(runs.filter(r => r.startsWith('post-index-change '))).toEqual([]);

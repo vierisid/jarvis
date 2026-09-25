@@ -91,19 +91,34 @@ function readPipe(stream: ReadableStream<Uint8Array>): { text: Promise<string>; 
  */
 const KNOWN_PROTOCOLS = ['file', 'git', 'ext', 'fd', 'ssh', 'http', 'https'] as const;
 
+/** Every hook event in githooks(5), as of git 2.55. */
+const HOOK_EVENTS = [
+  'applypatch-msg', 'pre-applypatch', 'post-applypatch', 'pre-commit', 'pre-merge-commit',
+  'prepare-commit-msg', 'commit-msg', 'post-commit', 'pre-rebase', 'post-checkout', 'post-merge',
+  'pre-push', 'pre-receive', 'update', 'proc-receive', 'post-receive', 'post-update',
+  'reference-transaction', 'push-to-checkout', 'pre-auto-gc', 'post-rewrite', 'sendemail-validate',
+  'fsmonitor-watchman', 'post-index-change',
+] as const;
+
 /**
  * `-c` pins on EVERY git command this class runs, authenticated or not. Each
  * names something a model-written project tree could otherwise make git run:
  *   - `safe.bareRepository=explicit`: a bare repository planted at the
  *     project root (HEAD, objects/, refs/, config) is otherwise discovered
  *     implicitly, and its config runs code on a plain `git status` (#516).
- *   - `core.hooksPath=/dev/null`: no project hook runs on a daemon push, pull
- *     or fetch (maintainer decision). A project-level `core.hooksPath` is
- *     legitimate (husky sets `.husky/_`, inside the worktree, and runs
- *     `.husky/<hook>` through `sh -e`, so the file needs no executable bit),
- *     which made a site_write_file of `.husky/pre-push` into code execution
- *     on the next push. The token was already consumed by then; this closes
- *     the write-to-execute path itself. Pushes the user runs are unaffected.
+ *   - `core.hooksPath=/dev/null` and `hook.<event>.enabled=false` for every
+ *     event: no project hook runs on a daemon push, pull or fetch (maintainer
+ *     decision). A project-level `core.hooksPath` is legitimate (husky sets
+ *     `.husky/_`, inside the worktree, and runs `.husky/<hook>` through
+ *     `sh -e`, so the file needs no executable bit), which made a
+ *     site_write_file of `.husky/pre-push` into code execution on the next
+ *     push. hooksPath alone is not enough: git also runs hooks defined in
+ *     config (`hook.<name>.command` + `hook.<name>.event`) wherever hooksPath
+ *     points, and only the per-event `enabled=false` stops those (reproduced
+ *     in review; the command line beats a project's own `enabled=true`). The
+ *     token was already consumed by then; this closes the write-to-execute
+ *     path itself. Pushes the user runs are unaffected. A hook event added by
+ *     a future git would need adding to HOOK_EVENTS.
  *   - `core.fsmonitor=false`: the fsmonitor command runs on every index read.
  *   - `commit.gpgSign=false`, `log.showSignature=false`,
  *     `merge.verifySignatures=false`: pull's integrate step creates merge or
@@ -120,6 +135,7 @@ const KNOWN_PROTOCOLS = ['file', 'git', 'ext', 'fd', 'ssh', 'http', 'https'] as 
 const PROJECT_GIT_PINS: readonly string[] = [
   '-c', 'safe.bareRepository=explicit',
   '-c', 'core.hooksPath=/dev/null',
+  ...HOOK_EVENTS.flatMap(event => ['-c', `hook.${event}.enabled=false`]),
   '-c', 'core.fsmonitor=false',
   '-c', 'commit.gpgSign=false',
   '-c', 'log.showSignature=false',
@@ -217,8 +233,9 @@ function shellQuote(value: string): string {
  *
  * Fails closed, by design, wherever a second `get` would be needed: a proxy
  * that answers 407 (git asks for proxy credentials first, which burns the
- * file), a git-lfs pre-push hook calling `git credential fill`, and proxy
- * credentials that used to come from a global helper the reset now skips.
+ * file), and proxy credentials that used to come from a global helper the
+ * reset now skips. (git-lfs would have been a third, but its pre-push hook no
+ * longer runs at all; push() refuses LFS projects instead.)
  *
  * WHAT THIS DOES NOT PROMISE. It keeps the token out of argv, out of hook
  * arguments, and out of files in the project tree. It does not protect the
@@ -270,18 +287,19 @@ export function credentialHelperArgs(tokenFile: string, target: CredentialTarget
  * - `http.<url>.proactiveAuth=basic`: ask the helper before the FIRST
  *   request instead of after a 401. Without it a public repo never challenges,
  *   so fetch/pull never consume the file, and it stays in place for the whole
- *   command. Pinned for the target host AND for each exact origin
- *   URL (`originUrls`): git picks the most specific matching URL, so a
+ *   command. Pinned for the target host AND for each exact origin URL
+ *   (`originUrls`): git picks the most specific matching URL, so a
  *   project-level `http.<exact origin URL>.proactiveAuth=none` beat the host
  *   pin (reproduced in review: reference-transaction read the token on a
- *   public repo, back when hooks still ran). At equal specificity the command line wins, and nothing is
- *   more specific than the exact URL -- provided the pinned key IS the URL
- *   byte for byte, which is why originCredentialUrls only accepts plain
- *   repo paths (see isPlainRepoPath). git < 2.46 ignores the key and only
- *   asks after a 401, so on old git a PUBLIC repo's fetch keeps the file for
- *   the whole command; with hooks off, that leaves whatever else the config
- *   can make git run in that window. (The same exact-URL pin would not rescue `http.sslVerify` and its
- *   kin: redirecting the connection is #516, not something pinned here.)
+ *   public repo, back when hooks still ran). At equal specificity the command
+ *   line wins, and nothing is more specific than the exact URL -- provided
+ *   the pinned key IS the URL byte for byte, which is why
+ *   originCredentialUrls only accepts plain repo paths (see
+ *   isPlainRepoPath). git < 2.46 ignores the key and only asks after a 401,
+ *   so on old git a PUBLIC repo's fetch keeps the file for the whole command;
+ *   with hooks off, that leaves whatever else the config can make git run in
+ *   that window. (The same exact-URL pin would not rescue `http.sslVerify`
+ *   and its kin: redirecting the connection is #516, not pinned here.)
  * - `protocol.*.allow`: the target's transport only. A `pushurl` to a local
  *   path, or to ssh with a planted `core.sshCommand`, runs code for that URL
  *   before git ever reaches GitHub and so before the file is consumed.
@@ -301,9 +319,11 @@ export function credentialHelperArgs(tokenFile: string, target: CredentialTarget
  * Audited and NOT pinned, because git does not run them before the credential
  * `get` of an authenticated fetch or push (measured on git 2.55 with every one
  * planted, plus every hook via core.hooksPath): core.pager and core.editor /
- * sequence.editor (never started without a terminal), gpg.program, diff
- * textconv and merge drivers, filter clean/smudge/process, core.askPass (only
- * after the helper declines), core.alternateRefsCommand. Hooks ran only after
+ * sequence.editor (never started without a terminal), diff textconv and
+ * merge drivers, filter clean/smudge/process, core.askPass (only after the
+ * helper declines), core.alternateRefsCommand. gpg.program and friends did
+ * not run before the `get` either, and the signing pins in PROJECT_GIT_PINS
+ * now keep them from running at all. Hooks ran only after
  * the `get` too, and are now off for every daemon git command anyway
  * (PROJECT_GIT_PINS). Filters DO run before the fetch inside a single
  * `git pull` (index refresh for a rebase pull), which is why pull() fetches
@@ -563,6 +583,16 @@ export class GitHubManager {
     const targetBranch = branch ?? await this.getCurrentBranch(projectPath);
     if (!isSafeBranchArg(targetBranch)) return { success: false, error: `Refusing to push branch "${targetBranch}"` };
 
+    // git-lfs uploads its objects from a pre-push hook, and daemon git runs no
+    // hooks (PROJECT_GIT_PINS). The push would "succeed" with the objects
+    // missing on GitHub, so refuse it instead of reporting a broken success.
+    if (await this.usesGitLfs(projectPath)) {
+      return {
+        success: false,
+        error: 'This project tracks files with Git LFS, which the site builder cannot push (it runs no git hooks). Push it from a terminal.',
+      };
+    }
+
     // The remote NAME, not its URL: `-u` then records `origin` as the upstream
     // (it used to record the token URL in .git/config) and origin/<branch>
     // is updated, which getRemoteStatus's ahead/behind reads.
@@ -584,8 +614,9 @@ export class GitHubManager {
    * WITHOUT it. A single `git pull` refreshes the index before it fetches --
    * running the fsmonitor and clean filters, both nameable by .git/config
    * (and, before hooks were pinned off, the post-index-change hook) -- while
-   * the token file still exists; that was reproduced in review. See planIntegration for how the second step
-   * honours pull.rebase / pull.ff / branch.<name>.rebase.
+   * the token file still exists; that was reproduced in review. See
+   * planIntegration for how the second step honours pull.rebase / pull.ff /
+   * branch.<name>.rebase.
    *
    * Two differences from `git pull origin <branch>` are intentional: a merge
    * commit reads "Merge remote-tracking branch 'origin/<branch>'" (and the
@@ -679,6 +710,16 @@ export class GitHubManager {
   }
 
   // ── Private Helpers ──
+
+  /** True when any tracked file has the `filter=lfs` attribute. */
+  private async usesGitLfs(cwd: string): Promise<boolean> {
+    try {
+      const files = await this.git(cwd, ['ls-files', '--', ':(attr:filter=lfs)']);
+      return files.trim() !== '';
+    } catch {
+      return false; // not a repo, or no attribute support: nothing to upload
+    }
+  }
 
   /**
    * What the token-free half of pull() will do, decided BEFORE the fetch,
