@@ -25,14 +25,16 @@
  *    grace) and removes the profile dir. No polling, and it does not depend on
  *    any JS running at exit, which is the part that fails today.
  *
- * DISPLAY and WAYLAND_DISPLAY are stripped from the browser's environment:
- * `--headless=new` does not need them, and a test browser has no business
- * near the developer's real desktop.
+ * The browser gets `sanitizedEnv()`, the same allowlist as every other spawn:
+ * no API keys, and no DISPLAY or WAYLAND_DISPLAY -- `--headless=new` does not
+ * need them, and a test browser has no business near the developer's real
+ * desktop.
  */
 
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { sanitizedEnv } from '../../../util/subprocess-env.ts';
 
 const CHROMIUM_CANDIDATES = [
   process.env.CHROME_PATH,
@@ -56,13 +58,21 @@ export const chromiumExe: string | undefined =
  * TERM/INT/HUP from killing the shell: depending on the shell, `read` is
  * either interrupted and the cleanup runs at once, or it resumes and the
  * cleanup runs at EOF. Either way the browser goes with it. PIPE is ignored so
- * the `echo` cannot kill the shell if the owner is already gone. Chromium gets
- * default dispositions back for the trapped signals (a caught signal resets
- * on exec) and ignores SIGPIPE itself.
+ * the `echo` cannot kill the shell if the owner is already gone.
  *
- * `$c` is reaped asynchronously, so if Chromium died early the kills below
- * could in principle reach a recycled pid. That needs the pid space to wrap
- * within one test run; accepted.
+ * What Chromium inherits: TERM and HUP are caught here, and a caught signal
+ * resets to default on exec. INT and QUIT do not: a non-interactive shell
+ * starts every `&` list with them ignored (bash and dash alike), and an
+ * ignored signal stays ignored across exec. PIPE is inherited ignored too.
+ * None of that matters, because the watchdog and close() only use TERM and
+ * KILL.
+ *
+ * When `$c` is reaped depends on the shell. bash reaps it asynchronously, even
+ * while blocked in `read`; dash only reaps when it next waits, so a browser
+ * that died at startup stays a zombie until the cleanup below runs its first
+ * `sleep` (which is also why the owner's liveness check must treat a zombie as
+ * dead). Once reaped, the kills could in principle reach a recycled pid. That
+ * needs the pid space to wrap within one test run; accepted.
  */
 const WATCHDOG = `
 trap : TERM INT HUP
@@ -99,28 +109,46 @@ async function waitFor<T>(deadline: number, probe: () => Promise<T | null>): Pro
   return null;
 }
 
-function alive(pid: number): boolean {
+/**
+ * Whether `pid` is a running process. A zombie still answers kill(pid, 0),
+ * but it has exited and holds nothing, so it counts as dead: under dash the
+ * watchdog leaves a browser that died at startup unreaped for as long as it
+ * sits in `read`, and treating that zombie as alive turned a fast failure
+ * into a wait for the whole startup deadline. Where there is no /proc, fall
+ * back to kill(pid, 0).
+ */
+export function processAlive(pid: number): boolean {
   try {
     process.kill(pid, 0);
-    return true;
   } catch {
     return false;
   }
+  let stat: string;
+  try {
+    stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
+  } catch {
+    // Exited between the two checks, or no /proc on this platform.
+    return process.platform !== 'linux';
+  }
+  // The state follows the parenthesised command name, which may contain ')'.
+  return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0] !== 'Z';
 }
 
 /**
  * Start a headless Chromium on a free CDP port and wait until it answers.
  * `startupMs` bounds the whole start: on a loaded CI runner a headless
- * Chromium can take well over 15s to come up.
+ * Chromium can take well over 15s to come up. `executable` overrides the
+ * detected browser (tests use it to start one that dies at once).
  */
-export async function launchTestChromium(opts: { profilePrefix: string; startupMs?: number }): Promise<TestChromium> {
-  if (!chromiumExe) throw new Error('no Chromium executable found');
+export async function launchTestChromium(opts: {
+  profilePrefix: string;
+  startupMs?: number;
+  executable?: string;
+}): Promise<TestChromium> {
+  const exe = opts.executable ?? chromiumExe;
+  if (!exe) throw new Error('no Chromium executable found');
   const profileDir = mkdtempSync(join(tmpdir(), opts.profilePrefix));
   const deadline = Date.now() + (opts.startupMs ?? 45_000);
-
-  const env = { ...process.env };
-  delete env.DISPLAY;
-  delete env.WAYLAND_DISPLAY;
 
   let watchdog: ReturnType<typeof Bun.spawn<'pipe', 'pipe', 'ignore'>> | null = null;
   let pid = 0;
@@ -145,7 +173,7 @@ export async function launchTestChromium(opts: { profilePrefix: string; startupM
 
   try {
     watchdog = Bun.spawn(['sh', '-c', WATCHDOG, 'sh', profileDir,
-      chromiumExe,
+      exe,
       '--headless=new',
       '--remote-debugging-port=0',
       `--user-data-dir=${profileDir}`,
@@ -157,7 +185,7 @@ export async function launchTestChromium(opts: { profilePrefix: string; startupM
       '--password-store=basic',
       '--disable-breakpad',
       'about:blank',
-    ], { stdin: 'pipe', stdout: 'pipe', stderr: 'ignore', env });
+    ], { stdin: 'pipe', stdout: 'pipe', stderr: 'ignore', env: sanitizedEnv() });
 
     const reader = watchdog.stdout.getReader();
     const first = await Promise.race([reader.read(), Bun.sleep(5_000).then(() => null)]);
@@ -170,7 +198,7 @@ export async function launchTestChromium(opts: { profilePrefix: string; startupM
     const died = () => new Error(`Chromium (pid ${pid}) exited during startup`);
 
     const port = await waitFor(deadline, async () => {
-      if (!alive(pid)) throw died();
+      if (!processAlive(pid)) throw died();
       try {
         // Written as "<port>\n<browser path>"; wait for the newline so a
         // partially written first line is never parsed.
@@ -184,7 +212,7 @@ export async function launchTestChromium(opts: { profilePrefix: string; startupM
     if (!port) throw new Error('Chromium never wrote DevToolsActivePort');
 
     const up = await waitFor(deadline, async () => {
-      if (!alive(pid)) throw died();
+      if (!processAlive(pid)) throw died();
       try {
         const res = await fetch(`http://127.0.0.1:${port}/json/version`, { signal: AbortSignal.timeout(1000) });
         return res.ok ? true : null;

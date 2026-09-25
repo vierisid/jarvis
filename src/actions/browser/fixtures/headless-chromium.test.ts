@@ -5,23 +5,9 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { existsSync, readFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { chromiumExe, launchTestChromium } from './headless-chromium.ts';
-
-function alive(pid: number): boolean {
-  try {
-    process.kill(pid, 0);
-  } catch {
-    return false;
-  }
-  // A zombie still answers kill(pid, 0); it holds nothing, so it is gone.
-  try {
-    const stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
-    return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0] !== 'Z';
-  } catch {
-    return process.platform !== 'linux';
-  }
-}
+import { chromiumExe, launchTestChromium, processAlive as alive } from './headless-chromium.ts';
 
 async function gone(pid: number, ms: number): Promise<boolean> {
   const deadline = Date.now() + ms;
@@ -50,6 +36,27 @@ describe('BrowserController autoLaunch: false', () => {
       for (const [k, v] of Object.entries(saved)) if (v !== undefined) process.env[k] = v;
     }
   });
+});
+
+const falseExe = process.platform === 'win32' ? null : Bun.which('false');
+
+describe.skipIf(!falseExe)('launchTestChromium startup failure', () => {
+  // Under dash (/bin/sh on Ubuntu CI) the watchdog does not reap a child that
+  // dies while it sits in `read`, so the dead browser is a zombie that still
+  // answers kill(pid, 0). The fail-fast has to see through that, or this
+  // waits out the whole startup deadline and reports the wrong cause. Run
+  // this file with dash first on PATH as `sh` to exercise that path.
+  test('a browser that exits at once fails fast, with the cause, and cleans up', async () => {
+    // Unique per run, so another checkout's leftovers cannot confuse the check.
+    const prefix = `jarvis-fixture-startfail-${process.pid}-`;
+    const started = Date.now();
+    const err = await launchTestChromium({ profilePrefix: prefix, startupMs: 20_000, executable: falseExe! })
+      .then(() => null, (e: Error) => e);
+    expect(err?.message).toMatch(/exited during startup/);
+    expect(Date.now() - started).toBeLessThan(5_000);
+    // The profile went with it (close() ran on the failure path).
+    expect([...new Bun.Glob(`${prefix}*`).scanSync({ cwd: tmpdir(), onlyFiles: false })]).toEqual([]);
+  }, 30_000);
 });
 
 describe.skipIf(!chromiumExe)('launchTestChromium', () => {
