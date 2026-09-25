@@ -157,10 +157,8 @@ import { WSLBridge } from '@/actions';
 if (WSLBridge.isWSL()) {
   const bridge = new WSLBridge();
 
-  // Run Windows commands from WSL
-  const result = await bridge.runWindowsCommand('dir C:\\Users');
-
-  // Run PowerShell scripts
+  // Run a PowerShell script. The script is code: never interpolate a path or
+  // model/user text into it. It travels as base64, so its own quoting is safe.
   const psResult = await bridge.runPowerShell('Get-Process | Select -First 5');
 
   // Path conversion
@@ -175,6 +173,12 @@ if (WSLBridge.isWSL()) {
 **Detection:**
 - Checks `/proc/version` for "microsoft" or "WSL"
 - Checks `$WSL_DISTRO_NAME` or `$WSL_INTEROP` environment variables
+
+Every child (`wslpath`, `cmd.exe`, `powershell.exe`) is spawned from an argv
+array with the sanitized environment plus the WSL interop variables; no shell
+string is built. There is no method that runs a raw `cmd.exe` command line:
+spawn Windows programs with an argv array instead. Paths starting with `-` are
+refused (wslpath would read them as options); prefix a relative one with `./`.
 
 ### Tool Registry
 
@@ -313,7 +317,8 @@ automateSearch();
 ### Complete Example: WSL File Transfer
 
 ```typescript
-import { WSLBridge, TerminalExecutor } from '@/actions';
+import { copyFileSync } from 'node:fs';
+import { WSLBridge } from '@/actions';
 
 async function copyToWindows() {
   if (!WSLBridge.isWSL()) {
@@ -321,17 +326,14 @@ async function copyToWindows() {
   }
 
   const bridge = new WSLBridge();
-  const executor = new TerminalExecutor();
 
-  // Copy file from WSL to Windows
+  // Copy the file from the Linux side through the Windows drive mount. Do not
+  // splice paths into a runPowerShell script: that script is code.
   const wslFile = '/home/user/data.json';
-  const winPath = await bridge.convertToWindowsPath(wslFile);
+  const target = await bridge.convertToWSLPath('C:\\Users\\Public\\data.json');
+  copyFileSync(wslFile, target);
 
-  await bridge.runPowerShell(
-    `Copy-Item "${winPath}" "C:\\Users\\Public\\data.json"`
-  );
-
-  console.log('File copied to Windows');
+  console.log('File copied to Windows:', await bridge.convertToWindowsPath(target));
 }
 
 copyToWindows();
