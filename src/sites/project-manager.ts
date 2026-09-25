@@ -7,10 +7,14 @@
 import type { Project, ProjectMeta, FileEntry, SiteBuilderConfig } from './types.ts';
 import { GitManager } from './git-manager.ts';
 import { TEMPLATES, generateMakefile, scaffoldBunReact } from './templates.ts';
-import { join, relative, resolve } from 'node:path';
+import { basename, dirname, join, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
-import { readdirSync, statSync, existsSync, mkdirSync, rmSync } from 'node:fs';
-import { isWithin } from '../util/path.ts';
+import {
+  readdirSync, statSync, lstatSync, existsSync, mkdirSync, rmSync, readFileSync, realpathSync,
+  writeFileSync, chmodSync, renameSync, type Stats,
+} from 'node:fs';
+import { randomUUID } from 'node:crypto';
+import { isGitDirName, isWithin } from '../util/path.ts';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
 
 const META_FILE = '.jarvis-project.json';
@@ -22,6 +26,112 @@ const IGNORED_DIRS = new Set([
 ]);
 
 const IGNORED_FILES = new Set(['.DS_Store', 'Thumbs.db']);
+
+/**
+ * Why the site file tools stay out of git's own files (#516, #517).
+ *
+ * Writing git's config is running code: core.fsmonitor, core.hooksPath,
+ * filter and diff drivers all name commands git starts during ordinary
+ * operations, and the daemon runs git in the project after every site chat
+ * turn, on every project listing, and on push and pull. So a `write_data`
+ * call that could write `.git/config` would be `execute_command` without that
+ * gate. The same file can also point the github.com transport at a proxy of
+ * the writer's choosing, and the reflogs of projects pulled before #511 still
+ * hold the PAT. Reading, listing and deleting are refused along with writing:
+ * all four are the same path resolution, and a delete of `.git/index` or
+ * `.git/HEAD` is its own damage.
+ *
+ * The rule is on the RESOLVED path, not the spelling: every component of the
+ * requested path, and every component of its real path inside the project,
+ * must not be a git dir name in any of the forms `isGitDirName` knows. That
+ * covers `.git` anywhere in the tree (nested repos and submodules included),
+ * and a symlink into one, whoever made it: the model through
+ * site_run_command, a scaffold, or a pulled commit.
+ */
+function gitDirRefusal(requested: string): Error {
+  return new Error(
+    `Access denied: "${requested}" is inside a git directory. The site file tools cannot read, write, list or delete ` +
+    'git internals; use site_git_commit and site_github_push for version control.',
+  );
+}
+
+function isSymlink(path: string): boolean {
+  try {
+    return lstatSync(path).isSymbolicLink();
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The real path of `path`: of the path itself when it exists, else of its
+ * deepest existing ancestor with the missing tail appended.
+ *
+ * A component that exists only as a symlink -- its target is missing -- is
+ * refused rather than walked past: `Bun.write` through `x -> .git/new` creates
+ * `.git/new`, so a dangling link has to be judged by where it points, and
+ * where it points does not exist to be judged.
+ */
+function realpathOfDeepest(path: string, requested: string): string {
+  const tail: string[] = [];
+  let current = path;
+  for (;;) {
+    try {
+      return join(realpathSync(current), ...tail);
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err;
+    }
+    if (isSymlink(current)) {
+      throw new Error(`Access denied: "${requested}" goes through a symlink whose target does not exist`);
+    }
+    const parent = dirname(current);
+    if (parent === current) return path;
+    tail.unshift(basename(current));
+    current = parent;
+  }
+}
+
+/**
+ * Git directories of the project whose own path need not contain a `.git`
+ * component: a `.git` that is a gitfile (`gitdir: <path>`, as linked worktrees
+ * and absorbed submodules use) or a symlink, pointing at an ordinary-looking
+ * directory in the tree, plus that directory's `commondir` for a linked
+ * worktree. Ones outside the tree are already refused by containment, so only
+ * the ones inside are returned.
+ */
+function linkedGitDirs(realRoot: string): string[] {
+  const dotGit = join(realRoot, '.git');
+  const found: string[] = [];
+  try {
+    const st = lstatSync(dotGit);
+    if (st.isSymbolicLink()) {
+      found.push(realpathSync(dotGit));
+    } else if (st.isFile()) {
+      const match = /^gitdir:\s*(.+?)\s*$/m.exec(readFileSync(dotGit, 'utf-8'));
+      if (match) found.push(realpathSync(resolve(realRoot, match[1]!)));
+    }
+  } catch { /* no .git, or it points nowhere */ }
+  for (const gitDir of [...found]) {
+    try {
+      found.push(realpathSync(resolve(gitDir, readFileSync(join(gitDir, 'commondir'), 'utf-8').trim())));
+    } catch { /* not a linked worktree */ }
+  }
+  return found.filter((dir) => isWithin(dir, realRoot));
+}
+
+/**
+ * Whether a real path inside the project is one of git's own files. The
+ * linked-dir compare ignores case for the same reason isGitDirName does: on a
+ * case-insensitive filesystem `GITDATA/config` opens `gitdata/config`, and
+ * realpath keeps the spelling it was given.
+ */
+function isGitPath(realRoot: string, real: string, gitDirs: string[] = linkedGitDirs(realRoot)): boolean {
+  return relative(realRoot, real).split(/[\\/]/).some(isGitDirName)
+    || gitDirs.some((dir) => isWithin(real.toLowerCase(), dir.toLowerCase()));
+}
+
+type TreeGuard = { realRoot: string; gitDirs: string[] };
 
 export class ProjectManager {
   private projectsDir: string;
@@ -216,7 +326,9 @@ export class ProjectManager {
     const projectPath = this.resolveProjectPath(projectId);
     if (!projectPath) throw new Error(`Project "${projectId}" not found`);
 
-    return this.buildFileTree(projectPath, projectPath, 0, maxDepth);
+    const realRoot = realpathSync(projectPath);
+    const guard: TreeGuard = { realRoot, gitDirs: linkedGitDirs(realRoot) };
+    return this.buildFileTree(projectPath, projectPath, realRoot, 0, maxDepth, guard);
   }
 
   /**
@@ -226,7 +338,7 @@ export class ProjectManager {
     const projectPath = this.resolveProjectPath(projectId);
     if (!projectPath) throw new Error(`Project "${projectId}" not found`);
 
-    const filePath = this.safeJoin(projectPath, relativePath);
+    const filePath = this.safeJoin(projectPath, relativePath, 'follow');
     const file = Bun.file(filePath);
     if (!await file.exists()) throw new Error(`File not found: ${relativePath}`);
 
@@ -240,11 +352,33 @@ export class ProjectManager {
     const projectPath = this.resolveProjectPath(projectId);
     if (!projectPath) throw new Error(`Project "${projectId}" not found`);
 
-    const filePath = this.safeJoin(projectPath, relativePath);
+    const filePath = this.safeJoin(projectPath, relativePath, 'follow');
 
     // Ensure parent directory exists
-    const dir = filePath.substring(0, filePath.lastIndexOf('/'));
-    mkdirSync(dir, { recursive: true });
+    mkdirSync(dirname(filePath), { recursive: true });
+
+    // A file with other hard links is replaced, not written in place.
+    // `bun install` hardlinks node_modules into its global cache, which other
+    // projects and the daemon's own dependencies share, so an in-place write
+    // under node_modules would rewrite code the daemon loads. A hardlink needs
+    // no symlink and shows up in no realpath, so safeJoin cannot see it.
+    // Writing a sibling and renaming it over retargets this name only; the
+    // mode is carried over so an edited script stays executable.
+    let existing: Stats | undefined;
+    try {
+      existing = lstatSync(filePath);
+    } catch { /* new file */ }
+    if (existing?.isFile() && existing.nlink > 1) {
+      const temp = join(dirname(filePath), `.${basename(filePath)}.${randomUUID()}.tmp`);
+      try {
+        writeFileSync(temp, content, { flag: 'wx', mode: 0o600 });
+        chmodSync(temp, existing.mode & 0o777);
+        renameSync(temp, filePath);
+      } finally {
+        rmSync(temp, { force: true });
+      }
+      return;
+    }
 
     await Bun.write(filePath, content);
   }
@@ -256,7 +390,10 @@ export class ProjectManager {
     const projectPath = this.resolveProjectPath(projectId);
     if (!projectPath) throw new Error(`Project "${projectId}" not found`);
 
-    const filePath = this.safeJoin(projectPath, relativePath);
+    // `rmSync` unlinks a symlink itself, never its target, so only the
+    // parent has to be resolved: deleting a link that points into .git is
+    // allowed and leaves .git alone.
+    const filePath = this.safeJoin(projectPath, relativePath, 'nofollow');
     rmSync(filePath, { force: true });
   }
 
@@ -310,20 +447,54 @@ export class ProjectManager {
   // ── Private Helpers ──
 
   private resolveProjectPath(id: string): string | null {
+    // One plain directory name, the only kind listProjects discovers. The
+    // tools take project_id straight from the model, and a multi-segment id
+    // like "app/.git" would make a git dir the project root, while "" or "."
+    // would make the projects dir one, with every project's .git below it.
+    if (typeof id !== 'string' || !id || id.startsWith('.') || /[\\/]/.test(id) || isGitDirName(id)) return null;
     const projectPath = join(this.projectsDir, id);
     // Prevent path traversal
     const resolved = resolve(projectPath);
     if (!isWithin(resolved, resolve(this.projectsDir))) return null;
-    if (!existsSync(resolved)) return null;
+    // A directory: a one-component id can still name a FILE in the projects
+    // dir, such as the dev server's PID file, which path "." would overwrite.
+    try {
+      if (!statSync(resolved).isDirectory()) return null;
+    } catch {
+      return null;
+    }
     return resolved;
   }
 
-  private safeJoin(projectPath: string, relativePath: string): string {
-    const resolved = resolve(join(projectPath, relativePath));
+  /**
+   * Resolve a path the model or the editor asked for, for the one operation
+   * about to use it. The single choke point for every file the site tools
+   * touch; see gitDirRefusal for why git's files are off limits.
+   *
+   * Returns the REAL path, so the caller opens what was checked rather than
+   * re-walking symlinks. `final` says whether the operation follows a symlink
+   * in the last component: reads and writes do; a delete unlinks the link
+   * itself, so only its parent is resolved.
+   */
+  private safeJoin(projectPath: string, relativePath: string, final: 'follow' | 'nofollow'): string {
+    const requested = String(relativePath);
+    if (requested.split(/[\\/]/).some(isGitDirName)) throw gitDirRefusal(requested);
+
+    const resolved = resolve(join(projectPath, requested));
     if (!isWithin(resolved, resolve(projectPath))) {
       throw new Error('Path traversal attempt blocked');
     }
-    return resolved;
+    if (resolved === resolve(projectPath)) throw new Error('A file path inside the project is required');
+
+    const realRoot = realpathSync(projectPath);
+    const real = final === 'nofollow'
+      ? join(realpathOfDeepest(dirname(resolved), requested), basename(resolved))
+      : realpathOfDeepest(resolved, requested);
+    if (!isWithin(real, realRoot)) {
+      throw new Error(`Access denied: "${requested}" resolves outside the project through a symlink`);
+    }
+    if (isGitPath(realRoot, real)) throw gitDirRefusal(requested);
+    return real;
   }
 
   private sanitizeId(name: string): string {
@@ -346,7 +517,21 @@ export class ProjectManager {
     }
   }
 
-  private buildFileTree(basePath: string, currentPath: string, depth: number, maxDepth: number): FileEntry {
+  /**
+   * `realCurrent` is where `currentPath` really is, and `guard` what a real
+   * path must stay clear of. A child is listed only if the file tools could
+   * open it: a symlink that leaves the project or lands in a git dir is
+   * skipped, as is one whose target is missing, so the tree can neither
+   * describe git's files nor wander out of the project.
+   */
+  private buildFileTree(
+    basePath: string,
+    currentPath: string,
+    realCurrent: string,
+    depth: number,
+    maxDepth: number,
+    guard: TreeGuard,
+  ): FileEntry {
     const name = currentPath === basePath ? '.' : currentPath.split('/').pop()!;
     const rel = relative(basePath, currentPath) || '.';
 
@@ -374,7 +559,7 @@ export class ProjectManager {
     try {
       const entries = readdirSync(currentPath, { withFileTypes: true });
       const sorted = entries
-        .filter(e => !IGNORED_DIRS.has(e.name) && !IGNORED_FILES.has(e.name) && !e.name.startsWith('.'))
+        .filter(e => !IGNORED_DIRS.has(e.name) && !IGNORED_FILES.has(e.name) && !e.name.startsWith('.') && !isGitDirName(e.name))
         .sort((a, b) => {
           // Directories first, then alphabetical
           if (a.isDirectory() !== b.isDirectory()) return a.isDirectory() ? -1 : 1;
@@ -382,9 +567,14 @@ export class ProjectManager {
         });
 
       for (const child of sorted) {
-        entry.children!.push(
-          this.buildFileTree(basePath, join(currentPath, child.name), depth + 1, maxDepth)
-        );
+        const childPath = join(currentPath, child.name);
+        try {
+          const realChild = child.isSymbolicLink() ? realpathSync(childPath) : join(realCurrent, child.name);
+          if (!isWithin(realChild, guard.realRoot) || isGitPath(guard.realRoot, realChild, guard.gitDirs)) continue;
+          entry.children!.push(
+            this.buildFileTree(basePath, childPath, realChild, depth + 1, maxDepth, guard)
+          );
+        } catch { /* dangling symlink, or gone since readdir: skip it, keep its siblings */ }
       }
     } catch { /* permission error */ }
 

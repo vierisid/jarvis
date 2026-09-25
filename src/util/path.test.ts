@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import { resolve, sep } from 'node:path';
-import { isWithin } from './path.ts';
+import { isGitDirName, isWithin } from './path.ts';
 
 describe('isWithin', () => {
   const base = resolve('/foo/app');
@@ -41,5 +41,21 @@ describe('isWithin', () => {
     // The helper relies on `sep` so this should hold on every platform.
     const escaping = `..${sep}escape`;
     expect(escaping.startsWith(`..${sep}`)).toBe(true);
+  });
+});
+
+describe('isGitDirName', () => {
+  test.each([
+    '.git', '.GIT', '.Git', '.git.', '.git ', '.git. . ', '.git::$INDEX_ALLOCATION', '.git:stream',
+    'git~1', 'GIT~1', 'git~2', '.g‌it', '﻿.git', '.gi‍t', '.git‮',
+  ])('matches %j', (name) => {
+    expect(isGitDirName(name)).toBe(true);
+  });
+
+  test.each([
+    '.gitignore', '.gitkeep', '.github', '.gitattributes', '.gitmodules', '.git-blame-ignore-revs',
+    'repo.git', 'git', '.gi', 'git~', 'git~x', 'my.git', '..git', '', '.', '..',
+  ])('does not match %j', (name) => {
+    expect(isGitDirName(name)).toBe(false);
   });
 });
