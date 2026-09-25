@@ -107,6 +107,9 @@ export function createDelegateTool(deps: DelegateToolDeps): ToolDefinition {
           context,
           llmManager: deps.llmManager,
           toolRegistry: scopedRegistry,
+          // Provider kinds for the relevance filter's eligibility gate, so a
+          // sub-agent classifies its model the way the parent loop does.
+          toolFilterProviders: deps.orchestrator.getToolFilterProviders?.(),
           onProgress: deps.onProgress,
           authorityEngine: deps.orchestrator.getAuthorityEngine() ?? undefined,
           auditTrail: deps.orchestrator.getAuditTrail() ?? undefined,

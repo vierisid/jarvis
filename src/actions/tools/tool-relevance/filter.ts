@@ -30,7 +30,7 @@ import { normalizeToolSet, type InvariantFailure } from './invariant.ts';
 import { DISCOVER_TOOLS, type ToolExposureLedger } from './ledger.ts';
 import { isTierEligible } from './model-class.ts';
 import { getToolFilterPolicy, type ToolFilterPolicy } from './policy.ts';
-import { conversationText, selectRelevantNames } from './selection.ts';
+import { selectForConversation } from './selection.ts';
 
 export type FilterContext = {
   /** The tool list the call site would otherwise send. Registry tools only. */
@@ -112,8 +112,9 @@ const unfiltered = (all: readonly ToolDefinition[], reason: string): FilterDecis
  * invalidates the cached tools and the whole system prompt behind them. A
  * per-iteration recompute against a ledger that grows on every dispatch
  * would mean a full cache miss every iteration. Tools used during a turn are
- * noted into the ledger and take effect on the NEXT turn; only an explicit
- * `discover_tools` admission justifies recomputing mid-turn.
+ * noted into the ledger and take effect on the NEXT turn; only a widening
+ * justifies recomputing mid-turn -- an explicit `discover_tools` admission,
+ * or a call to a tool the model was not offered (`interceptOffList`).
  */
 export function decideTools(ctx: FilterContext): FilterDecision {
   const all = ctx.all;
@@ -126,8 +127,7 @@ export function decideTools(ctx: FilterContext): FilterDecision {
   if (!eligibility.eligible) return unfiltered(all, eligibility.reason);
 
   try {
-    const text = conversationText(ctx.messages);
-    const wanted = selectRelevantNames(text);
+    const wanted = selectForConversation(ctx.messages, all);
     const ledger = ctx.ledger.snapshot();
 
     const candidate = all.filter((t) =>

@@ -42,6 +42,8 @@ export type LaunchOptions = {
   onComplete?: (task: AsyncTask) => void;
   /** Authority gate for the background sub-agent; passed straight to runSubAgent. */
   authority?: Pick<RunSubAgentOptions, 'authorityEngine' | 'auditTrail' | 'emergencyController' | 'temporaryGrants' | 'profile' | 'taintGating'>;
+  /** Provider kinds for the tool-relevance eligibility gate; passed straight to runSubAgent. */
+  toolFilterProviders?: RunSubAgentOptions['toolFilterProviders'];
 };
 
 export type TaskLifecycleEvent = 'launch' | 'complete' | 'fail';
@@ -112,7 +114,7 @@ export class AgentTaskManager {
    * Launch a sub-agent task in the background. Returns task ID immediately.
    */
   launch(opts: LaunchOptions): string {
-    const { agent, task, context, llmManager, toolRegistry, onProgress, onComplete, authority } = opts;
+    const { agent, task, context, llmManager, toolRegistry, onProgress, onComplete, authority, toolFilterProviders } = opts;
     // The authoritative check, before anything is recorded: callers ask
     // canLaunch() first for a friendly answer, but this is what holds.
     if (!this.canLaunch()) throw new TaskCapacityError();
@@ -142,6 +144,7 @@ export class AgentTaskManager {
       llmManager,
       toolRegistry,
       onProgress,
+      toolFilterProviders,
       ...(authority ?? {}),
     }).then((result) => {
       asyncTask.status = 'completed';

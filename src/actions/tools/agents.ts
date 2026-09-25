@@ -124,6 +124,7 @@ export async function assignPersistentAgentTask(
     toolRegistry: scopedRegistry,
     onProgress: deps.onProgress,
     onComplete: deps.onTaskComplete,
+    toolFilterProviders: deps.orchestrator.getToolFilterProviders?.(),
     authority: {
       authorityEngine: deps.orchestrator.getAuthorityEngine() ?? undefined,
       auditTrail: deps.orchestrator.getAuditTrail() ?? undefined,

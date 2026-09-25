@@ -62,6 +62,12 @@ export class BackgroundAgentService implements Service, IAgentService {
     this.config = config;
     this.llmManager = llmManager;
     this.orchestrator = new AgentOrchestrator();
+    // Provider kinds for the tool-relevance filter's eligibility gate, the
+    // same entries the main orchestrator gets. Without them this second
+    // orchestrator reads each provider's NAME as its kind -- fail-safe, but
+    // it disagrees with the main one. Re-handed on an `llm` hot reload by
+    // the daemon's applier.
+    this.orchestrator.setToolFilterProviders(config.llm?.providers);
     this.bgBrowser = new BrowserController(BG_CDP_PORT, BG_PROFILE_DIR);
   }
 
