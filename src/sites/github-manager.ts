@@ -6,6 +6,9 @@
  * remote operations (push, pull, fetch, ahead/behind status).
  */
 
+import { lstatSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { getSecret, setSecret, deleteSecret, hasSecret } from '../vault/keychain.ts';
 import type { GitRemoteStatus, GitHubRepoOptions } from './types.ts';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
@@ -13,7 +16,191 @@ import { sanitizedEnv } from '../util/subprocess-env.ts';
 const TOKEN_KEY = 'github.personal_access_token';
 const API_BASE = 'https://api.github.com';
 
+/**
+ * The only place git may send the PAT. The credential helper answers nothing
+ * for any other protocol/host, so a `url.<x>.insteadOf` or `remote.origin.pushurl`
+ * planted in the project's .git/config cannot redirect the token elsewhere.
+ */
+export type CredentialTarget = { protocol: string; host: string };
+const GITHUB_CREDENTIAL_TARGET: CredentialTarget = { protocol: 'https', host: 'github.com' };
+
+/** Prefix of the per-call temp dir holding the token file. */
+export const CREDENTIAL_DIR_PREFIX = 'jarvis-gh-cred-';
+/** A credential dir older than this was orphaned by a killed daemon. */
+const STALE_CREDENTIAL_DIR_MS = 15 * 60_000;
+
+/**
+ * Upper bound on one authenticated git command. Generous, because a first
+ * push of a large site over a slow link is legitimately slow; its job is to
+ * make sure a stalled network or a hook that never returns cannot keep the
+ * token file alive indefinitely.
+ */
+const GIT_NETWORK_TIMEOUT_MS = 10 * 60_000;
+
+/** Transports git may use while it holds the credential helper. */
+const KNOWN_PROTOCOLS = ['file', 'git', 'ext', 'ssh', 'http', 'https'] as const;
+
+/**
+ * Printable ASCII, no space. Anything else could not be a PAT, and a newline
+ * would inject extra lines into the credential protocol.
+ */
+const TOKEN_SHAPE = /^[\x21-\x7e]+$/;
+
+/**
+ * A branch.<name>.remote holding an http(s) URL with userinfo. The pre-#511
+ * `git push -u https://<token>@github.com/...` persisted exactly this into
+ * .git/config, inside the model-readable project tree.
+ */
+const PERSISTED_CREDENTIAL_URL = /^https?:\/\/[^/@\s]+@/i;
+
+/**
+ * A branch name that git will read as a refspec, not an option. The current
+ * branch comes from .git/HEAD, which a model-written tree controls, and a
+ * `--receive-pack=<cmd>` there would be an option to `git push`.
+ */
+function isSafeBranchArg(branch: string): boolean {
+  return branch.length > 0 && !branch.startsWith('-');
+}
+
+/** Single-quote for POSIX sh. */
+function shellQuote(value: string): string {
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+/**
+ * `git -c` arguments that make git obtain the PAT from `tokenFile`, and from
+ * nowhere else.
+ *
+ * Why this shape (#511): the token used to travel as `https://<token>@github.com/...`
+ * in git's argv, where `ps` shows it, git hands it to a `pre-push` hook as $2,
+ * and `push -u` wrote it into .git/config. Here argv carries only the file
+ * PATH. The environment is no alternative: every variable git sees is
+ * inherited by the project's hooks, so a GIT_ASKPASS-style token variable
+ * would be strictly worse than argv.
+ *
+ * - The empty `credential.helper=` first resets the helper list, so helpers
+ *   from system, global or the (model-writable) local config never run. Git
+ *   also calls `store` on every configured helper after a successful auth,
+ *   which would otherwise hand the PAT to e.g. `credential.helper=store`.
+ * - The helper answers only `get` and only for `target`, and deletes the file
+ *   on the FIRST `get`, whatever it was for: a request for any other host
+ *   burns the token rather than leaving it for later. `store`/`erase` carry
+ *   the password on stdin; the helper drains and discards it.
+ * - Command-line `-c` values reach child git processes through
+ *   GIT_CONFIG_PARAMETERS, and so reach hooks. That is why the token itself is
+ *   never in here: a hook sees the file PATH.
+ *
+ * WHAT THIS DOES NOT PROMISE. Code running in the project as the daemon's uid
+ * -- a hook, or a command named by .git/config -- can still obtain the token:
+ * it could read the path above before git asks for it, or simply read the
+ * keychain key in the data dir (see the header of src/util/subprocess-env.ts).
+ * gitHardeningArgs narrows the window; it cannot close it while the project's
+ * own hooks run.
+ */
+export function credentialHelperArgs(tokenFile: string, target: CredentialTarget): string[] {
+  const file = shellQuote(tokenFile);
+  const helper = [
+    '!f() {',
+    ' test "$1" = get || { cat >/dev/null; exit 0; };',
+    ' p=; h=;',
+    ' while IFS= read -r l; do case "$l" in',
+    ' protocol=*) p="${l#protocol=}";;',
+    ' host=*) h="${l#host=}";;',
+    ' "") break;;',
+    ' esac; done;',
+    ` t=$(cat ${file} 2>/dev/null); rm -f ${file};`,
+    ` test "$p" = ${shellQuote(target.protocol)} && test "$h" = ${shellQuote(target.host)} && test -n "$t" || exit 0;`,
+    ` printf 'username=x-access-token\\npassword=%s\\n' "$t";`,
+    ' }; f',
+  ].join('');
+  return ['-c', 'credential.helper=', '-c', `credential.helper=${helper}`];
+}
+
+/**
+ * `git -c` arguments that make git ask for the token as early as possible and
+ * stop the project's config from steering it anywhere else first. Each one
+ * answers a way a model-written .git/config could make a hook run while the
+ * token file still exists:
+ *
+ * - `http.<target>.proactiveAuth=basic`: ask the helper before the FIRST
+ *   request instead of after a 401. Without it a public repo never challenges,
+ *   so fetch/pull never consume the file and every hook of the operation runs
+ *   with it in place. Scoped to the target so other hosts are unaffected.
+ *   (git < 2.46 ignores the key, and falls back to the 401 path.) A more
+ *   specific `http.<url>.proactiveAuth` in the project config still wins.
+ * - `protocol.*.allow`: only the target's transport and ssh. A `pushurl` to a
+ *   local path used to run `pre-push` for that URL before git ever reached
+ *   GitHub. ssh stays allowed so an ssh origin behaves as before (it never
+ *   used the token). The per-protocol keys are set explicitly because a
+ *   project-level `protocol.file.allow=always` would beat `protocol.allow`.
+ * - no submodule recursion: each submodule is a second remote, and so a second
+ *   `get` that the one-shot helper would refuse. Better predictable than a
+ *   failure that depends on which submodule needed auth.
+ */
+export function gitHardeningArgs(target: CredentialTarget): string[] {
+  const args = ['-c', `http.${target.protocol}://${target.host}/.proactiveAuth=basic`, '-c', 'protocol.allow=never'];
+  for (const protocol of KNOWN_PROTOCOLS) {
+    const allowed = protocol === target.protocol || protocol === 'ssh';
+    args.push('-c', `protocol.${protocol}.allow=${allowed ? 'always' : 'never'}`);
+  }
+  args.push(
+    '-c', 'submodule.recurse=false',
+    '-c', 'fetch.recurseSubmodules=false',
+    '-c', 'push.recurseSubmodules=no',
+  );
+  return args;
+}
+
+/**
+ * Where the per-call credential dir goes: the per-user runtime dir (a 0700
+ * tmpfs on systemd hosts, so the token never reaches a disk) when there is
+ * one, else the temp dir.
+ */
+export function credentialRoot(): string {
+  const runtime = process.env.XDG_RUNTIME_DIR;
+  return runtime && runtime.startsWith('/') ? runtime : tmpdir();
+}
+
+/**
+ * Remove credential dirs left behind by a daemon that was killed mid-push
+ * (SIGKILL, OOM), whose `finally` never ran. Best effort: only our own real
+ * directories are touched, never a symlink or another user's entry.
+ */
+export function sweepStaleCredentialDirs(root: string = credentialRoot(), now: number = Date.now()): void {
+  let names: string[];
+  try {
+    names = readdirSync(root);
+  } catch {
+    return;
+  }
+  const uid = process.getuid?.();
+  for (const name of names) {
+    if (!name.startsWith(CREDENTIAL_DIR_PREFIX)) continue;
+    const full = join(root, name);
+    try {
+      const st = lstatSync(full);
+      if (!st.isDirectory()) continue;
+      if (uid !== undefined && st.uid !== uid) continue;
+      if (now - st.mtimeMs < STALE_CREDENTIAL_DIR_MS) continue;
+      rmSync(full, { recursive: true, force: true });
+    } catch { /* gone already, or not ours to remove */ }
+  }
+}
+
 export class GitHubManager {
+
+  private readonly credentialTarget: CredentialTarget;
+  private readonly networkTimeoutMs: number;
+
+  /**
+   * Both options are test seams: the integration test pushes over HTTP to a
+   * loopback `git http-backend`, and the timeout test cannot wait ten minutes.
+   * Production always uses https://github.com and GIT_NETWORK_TIMEOUT_MS.
+   */
+  constructor(options: { credentialTarget?: CredentialTarget; networkTimeoutMs?: number } = {}) {
+    this.credentialTarget = options.credentialTarget ?? GITHUB_CREDENTIAL_TARGET;
+    this.networkTimeoutMs = options.networkTimeoutMs ?? GIT_NETWORK_TIMEOUT_MS;
+  }
 
   // ── Token Management ──
 
@@ -169,7 +356,8 @@ export class GitHubManager {
   }
 
   /**
-   * Push to the origin remote. Injects token into URL for authentication.
+   * Push to the origin remote. The token reaches git through a credential
+   * helper, never through argv or the remote URL (see authedGit).
    */
   async push(projectPath: string, branch?: string, force = false): Promise<{ success: boolean; error?: string }> {
     const token = this.getToken();
@@ -178,14 +366,18 @@ export class GitHubManager {
     const remoteUrl = await this.getRemoteUrl(projectPath);
     if (!remoteUrl) return { success: false, error: 'No remote origin configured' };
 
-    const authUrl = this.injectToken(remoteUrl, token);
+    await this.scrubPersistedCredentialUrls(projectPath);
     const targetBranch = branch ?? await this.getCurrentBranch(projectPath);
+    if (!isSafeBranchArg(targetBranch)) return { success: false, error: `Refusing to push branch "${targetBranch}"` };
 
-    const args = ['push', '-u', authUrl, targetBranch];
+    // The remote NAME, not its URL: `-u` then records `origin` as the upstream
+    // (it used to record the token URL in .git/config) and origin/<branch>
+    // is updated, which getRemoteStatus's ahead/behind reads.
+    const args = ['push', '-u', 'origin', targetBranch];
     if (force) args.splice(1, 0, '--force');
 
     try {
-      await this.git(projectPath, args);
+      await this.authedGit(projectPath, token, args);
       return { success: true };
     } catch (err) {
       return { success: false, error: err instanceof Error ? err.message : String(err) };
@@ -202,11 +394,12 @@ export class GitHubManager {
     const remoteUrl = await this.getRemoteUrl(projectPath);
     if (!remoteUrl) return { success: false, error: 'No remote origin configured' };
 
-    const authUrl = this.injectToken(remoteUrl, token);
+    await this.scrubPersistedCredentialUrls(projectPath);
     const targetBranch = branch ?? await this.getCurrentBranch(projectPath);
+    if (!isSafeBranchArg(targetBranch)) return { success: false, error: `Refusing to pull branch "${targetBranch}"` };
 
     try {
-      await this.git(projectPath, ['pull', authUrl, targetBranch]);
+      await this.authedGit(projectPath, token, ['pull', 'origin', targetBranch]);
       return { success: true };
     } catch (err) {
       // Check for merge conflicts
@@ -236,13 +429,13 @@ export class GitHubManager {
     }
 
     const { owner, repo } = this.parseRemoteUrl(remoteUrl);
+    await this.scrubPersistedCredentialUrls(projectPath);
     const token = this.getToken();
 
     // Fetch latest refs from origin (requires auth)
     if (token) {
-      const authUrl = this.injectToken(remoteUrl, token);
       try {
-        await this.git(projectPath, ['fetch', authUrl, '--quiet']);
+        await this.authedGit(projectPath, token, ['fetch', 'origin', '--quiet']);
       } catch { /* network error, show stale data */ }
     }
 
@@ -271,18 +464,69 @@ export class GitHubManager {
   // ── Private Helpers ──
 
   /**
-   * Inject a token into an HTTPS GitHub URL for non-interactive auth.
-   * Converts https://github.com/owner/repo.git → https://<token>@github.com/owner/repo.git
+   * Run a git command that talks to GitHub with the PAT.
+   *
+   * The token is written to a 0600 file in a fresh 0700 dir and handed to git
+   * by a command-line credential helper (credentialHelperArgs), so it is in
+   * neither argv nor the child's environment. The dir is removed on every
+   * exit path, timeout included; the helper normally removes the file much
+   * earlier, on git's first request.
    */
-  private injectToken(remoteUrl: string, token: string): string {
+  private async authedGit(cwd: string, token: string, args: string[]): Promise<string> {
+    if (!TOKEN_SHAPE.test(token)) throw new Error('GitHub token contains characters that cannot be a token');
+
+    const root = credentialRoot();
+    sweepStaleCredentialDirs(root);
+    const dir = mkdtempSync(join(root, CREDENTIAL_DIR_PREFIX));
     try {
-      const url = new URL(remoteUrl);
-      url.username = token;
-      url.password = '';
-      return url.toString();
+      const tokenFile = join(dir, 'token');
+      writeFileSync(tokenFile, token, { mode: 0o600, flag: 'wx' });
+      return await this.git(cwd, args, {
+        configArgs: [
+          ...credentialHelperArgs(tokenFile, this.credentialTarget),
+          ...gitHardeningArgs(this.credentialTarget),
+        ],
+        timeoutMs: this.networkTimeoutMs,
+      });
+    } catch (err) {
+      // Belt and braces: git never sees the token in a URL any more, so it has
+      // nothing to echo, but a failure message must not be the one place it
+      // surfaces if that ever changes.
+      const message = err instanceof Error ? err.message : String(err);
+      throw new Error(message.split(token).join('***'));
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  }
+
+  /**
+   * Undo the on-disk leak left by the pre-#511 push: `git push -u <tokenUrl>`
+   * recorded the token URL as branch.<name>.remote. Point each such branch
+   * back at `origin`, which is what `push -u origin` records now.
+   *
+   * Runs on push, pull AND status, with or without a token, so a project the
+   * user merely opens is cleaned too. Reflog lines written by the old
+   * `pull <tokenUrl>` are NOT rewritten here; a token that ever landed there
+   * needs rotating regardless.
+   *
+   * Best effort. Failing to clean up an old leak must not block a push.
+   */
+  private async scrubPersistedCredentialUrls(cwd: string): Promise<void> {
+    let listing: string;
+    try {
+      // -z: key and value separated by a newline, entries by NUL.
+      listing = await this.git(cwd, ['config', '--local', '-z', '--get-regexp', '^branch\\..*\\.remote$']);
     } catch {
-      // Fallback for non-standard URLs
-      return remoteUrl.replace('https://', `https://${token}@`);
+      return; // exit 1: no branch has a remote configured
+    }
+    for (const entry of listing.split('\0')) {
+      const nl = entry.indexOf('\n');
+      if (nl <= 0) continue;
+      const key = entry.slice(0, nl);
+      if (!PERSISTED_CREDENTIAL_URL.test(entry.slice(nl + 1))) continue;
+      try {
+        await this.git(cwd, ['config', '--local', '--replace-all', key, 'origin']);
+      } catch { /* leave it; the push itself is unaffected */ }
     }
   }
 
@@ -302,28 +546,47 @@ export class GitHubManager {
   }
 
   /**
-   * Run a git command via Bun.spawn.
+   * Run a git command via Bun.spawn. `configArgs` (`-c k=v` pairs) go before
+   * the subcommand, and are kept apart so error messages still name it.
    */
-  private async git(cwd: string, args: string[]): Promise<string> {
+  private async git(
+    cwd: string,
+    args: string[],
+    options: { configArgs?: string[]; timeoutMs?: number } = {},
+  ): Promise<string> {
     // Sanitized, not inherited - same reasoning as GitManager.run(): these
-    // commands execute .git/hooks out of a model-written project tree.
-    //
-    // NOTE this closes the ENV channel only. push()/pull() still put the PAT in
-    // the remote URL they pass as ARGV, which is visible in `ps` and is handed
-    // to a pre-push hook as $1/$2. Tracked separately; see the header of
-    // src/util/subprocess-env.ts.
-    const proc = Bun.spawn(['git', ...args], {
+    // commands execute .git/hooks out of a model-written project tree. Nothing
+    // credential-bearing may be added here either: hooks inherit this env.
+    const proc = Bun.spawn(['git', ...(options.configArgs ?? []), ...args], {
       cwd,
       stdout: 'pipe',
       stderr: 'pipe',
       env: sanitizedEnv({ GIT_TERMINAL_PROMPT: '0' }),
     });
 
-    const stdout = await new Response(proc.stdout).text();
-    const exitCode = await proc.exited;
+    let timedOut = false;
+    const timer = options.timeoutMs === undefined ? undefined : setTimeout(() => {
+      timedOut = true;
+      proc.kill();
+    }, options.timeoutMs);
 
+    let stdout: string;
+    let stderr: string;
+    let exitCode: number;
+    try {
+      // Both pipes at once: a hook that fills the stderr pipe while nobody
+      // reads it would otherwise block git, and this await, forever.
+      [stdout, stderr] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ]);
+      exitCode = await proc.exited;
+    } finally {
+      clearTimeout(timer);
+    }
+
+    if (timedOut) throw new Error(`git ${args[0]} timed out after ${options.timeoutMs}ms`);
     if (exitCode !== 0) {
-      const stderr = await new Response(proc.stderr).text();
       throw new Error(`git ${args[0]} failed: ${stderr.trim() || stdout.trim()}`);
     }
 
