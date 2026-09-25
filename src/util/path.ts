@@ -21,10 +21,10 @@ export function isWithin(resolvedPath: string, basePath: string): boolean {
 }
 
 /**
- * Code points HFS+ drops when it compares names, so `.g‌it` opens `.git`
+ * Code points HFS+ drops when it compares names, so `.g\u200cit` opens `.git`
  * on a Mac. The same list git uses for `is_hfs_dotgit` (CVE-2014-9390).
  */
-const HFS_IGNORABLE = /[‌-‏‪-‮⁪-⁯﻿]/g;
+const HFS_IGNORABLE = /[\u200c-\u200f\u202a-\u202e\u206a-\u206f\ufeff]/g;
 
 /**
  * Whether one path component names a git directory on SOME filesystem.

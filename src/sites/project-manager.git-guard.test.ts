@@ -6,7 +6,7 @@
  * test cannot pass on an error message while the write went through anyway.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import {
   chmodSync, existsSync, linkSync, lstatSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, symlinkSync,
   writeFileSync,
@@ -15,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { ToolDefinition } from '../actions/tools/registry.ts';
 import { createSiteBuilderTools } from './builder-tools.ts';
+import { isolateGitHome } from './fixtures/git-home.ts';
 import { GitManager } from './git-manager.ts';
 import { ProjectManager } from './project-manager.ts';
 
@@ -28,6 +29,12 @@ let project: string;
 let outside: string;
 let manager: ProjectManager;
 let tools: Map<string, ToolDefinition>;
+
+// No global git config: the real-git tests below must not depend on the
+// developer's ~/.gitconfig (signing, hooks, default branch).
+let restoreHome = () => {};
+beforeAll(() => { restoreHome = isolateGitHome(); });
+afterAll(() => restoreHome());
 
 function makeManager(dir: string): ProjectManager {
   return new ProjectManager({
@@ -126,8 +133,8 @@ const SPELLINGS: Array<[string, string]> = [
   ['NTFS alternate data stream', '.git::$INDEX_ALLOCATION/config'],
   ['NTFS 8.3 short name', 'git~1/config'],
   ['NTFS 8.3 short name, upper case', 'GIT~1/config'],
-  ['HFS+ ignorable zero-width non-joiner', '.g‌it/config'],
-  ['HFS+ ignorable byte order mark', '﻿.git/config'],
+  ['HFS+ ignorable zero-width non-joiner', '.g\u200cit/config'],
+  ['HFS+ ignorable byte order mark', '\ufeff.git/config'],
   ['backslash separators (Windows)', 'src\\..\\.git\\config'],
   ['a nested repo', 'vendor/lib/.git/config'],
   ['the git dir itself', '.git'],
@@ -147,8 +154,9 @@ describe('site file tools refuse every spelling of a git dir', () => {
   });
 
   test('URL encoding is not decoded here, so %2Egit is a literal, harmless name', async () => {
-    // The HTTP route decodes its query string once, before this layer sees
-    // the path; a second decode here would turn a literal name into `.git`.
+    // The GET route decodes its query string once (PUT takes a JSON body),
+    // before this layer sees the path; a second decode here would turn a
+    // literal name into `.git`.
     expect(await write('%2Egit/config', 'literal')).toBe('File written: %2Egit/config');
     expect(readFileSync(join(project, '%2Egit', 'config'), 'utf-8')).toBe('literal');
     expect(readFileSync(join(project, '.git', 'config'), 'utf-8')).toBe(GIT_CONFIG);
@@ -164,7 +172,7 @@ describe('site file tools refuse symlinks into a git dir', () => {
       symlinkSync('.git', join(project, 'chain2'));
       symlinkSync('chain2', join(project, 'chain1'));
     }, 'chain1/config'],
-    ['upper-case link name to the real dir', () => symlinkSync('.git', join(project, 'G')), 'G/logs/HEAD'],
+    ['link reaching the reflogs', () => symlinkSync('.git', join(project, 'G')), 'G/logs/HEAD'],
     ['link into a nested repo', () => symlinkSync('vendor/lib/.git', join(project, 'nested')), 'nested/config'],
   ];
 
@@ -354,22 +362,29 @@ describe('writes do not reach through hard links', () => {
 });
 
 describe("the daemon's git does not take the project root for a bare repository", () => {
-  test('HEAD, objects/, refs/ and config written at a .git-less root do not run core.fsmonitor', async () => {
+  test('HEAD, objects/, refs/, info/attributes and config written at a .git-less root run nothing', async () => {
     const bare = join(projectsDir, 'bare');
     mkdirSync(bare, { recursive: true });
-    const marker = join(root, 'FSMONITOR_RAN');
-    // Every one of these is an ordinary file the site tools may write.
+    const marker = join(root, 'BARE_CONFIG_RAN');
+    // Every one of these is an ordinary file the site tools may write. The
+    // payload is a clean filter on purpose: its driver name is the writer's
+    // choice, so no -c pin can switch it off and only refusing the bare
+    // repository stops it. An fsmonitor payload would be stopped by the
+    // core.fsmonitor pin alone and prove nothing about this one.
     expect(await write('HEAD', 'ref: refs/heads/main\n', 'bare')).toStartWith('File written');
     expect(await write('objects/info/keep', '', 'bare')).toStartWith('File written');
     expect(await write('refs/heads/keep', '', 'bare')).toStartWith('File written');
-    const config = `[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = .\n\tfsmonitor = "touch ${marker}; false"\n`;
+    expect(await write('info/attributes', '* filter=x\n', 'bare')).toStartWith('File written');
+    const config = `[core]\n\trepositoryformatversion = 0\n\tbare = false\n\tworktree = .\n`
+      + `[filter "x"]\n\tclean = "touch ${marker}; cat"\n`;
     expect(await write('config', config, 'bare')).toStartWith('File written');
+    expect(await write('page.html', '<p>hi</p>\n', 'bare')).toStartWith('File written');
 
     const git = new GitManager();
     // Upward discovery could still find an enclosing repo (a temp dir inside
     // one); what matters is that this root's config never ran.
+    await git.autoCommit(bare, 'x').catch(() => undefined);
     await git.isDirty(bare).catch(() => undefined);
-    await git.getCurrentBranch(bare).catch(() => undefined);
     expect(existsSync(marker)).toBe(false);
   });
 });

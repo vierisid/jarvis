@@ -12,7 +12,8 @@ import { sanitizedEnv } from '../util/subprocess-env.ts';
  * every config file for the same key, so these hold even against a
  * `.git/config` planted before the site file tools stopped writing it, or
  * through site_run_command. They are defense in depth: the site file tools
- * refusing `.git` is the fix.
+ * refusing `.git` is the fix. Exported for GitHubManager's own git calls,
+ * which run in the same trees (push, pull, status) and do not use them yet.
  *
  * - `safe.bareRepository=explicit`: in a project with no .git, git would take
  *   the project ROOT for a bare repository if it holds HEAD, objects/ and
@@ -37,7 +38,7 @@ import { sanitizedEnv } from '../util/subprocess-env.ts';
  * write, which is what they no longer can. getDiff passes --no-ext-diff and
  * --no-textconv for the diff side of it.
  */
-const PROJECT_GIT_PINS = [
+export const PROJECT_GIT_PINS = [
   '-c', 'safe.bareRepository=explicit',
   '-c', 'core.fsmonitor=false',
   '-c', 'core.hooksPath=/dev/null',

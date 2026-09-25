@@ -44,9 +44,12 @@ const IGNORED_FILES = new Set(['.DS_Store', 'Thumbs.db']);
  * The rule is on the RESOLVED path, not the spelling: every component of the
  * requested path, and every component of its real path inside the project,
  * must not be a git dir name in any of the forms `isGitDirName` knows. That
- * covers `.git` anywhere in the tree (nested repos and submodules included),
- * and a symlink into one, whoever made it: the model through
- * site_run_command, a scaffold, or a pulled commit.
+ * covers `.git` anywhere in the tree (a nested repo's `.git` dir included;
+ * absorbed submodules live under the root `.git/modules`), and a symlink into
+ * one, whoever made it: the model through site_run_command, a scaffold, or a
+ * pulled commit. Only the ROOT `.git` is followed when it is a gitfile or a
+ * symlink (see linkedGitDirs): a nested gitfile pointing at another in-tree
+ * dir is not, and the daemon never runs git there.
  */
 function gitDirRefusal(requested: string): Error {
   return new Error(
@@ -492,6 +495,9 @@ export class ProjectManager {
   private safeJoin(projectPath: string, relativePath: string, final: 'follow' | 'nofollow'): string {
     const requested = String(relativePath);
     if (requested.includes('\0')) throw new Error('Path contains a NUL byte');
+    // The spelling check. The real-path check below catches all of these too
+    // (a missing tail keeps its spelling), so this is belt and braces that
+    // refuses before touching the filesystem at all.
     if (requested.split(/[\\/]/).some(isGitDirName)) throw gitDirRefusal(requested);
 
     const resolved = resolve(join(projectPath, requested));

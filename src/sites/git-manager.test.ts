@@ -6,17 +6,24 @@
  * none of them. Real git, real temp repos.
  */
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
+import { isolateGitHome } from './fixtures/git-home.ts';
 import { GitManager } from './git-manager.ts';
 
 let root: string;
 let repo: string;
 let marker: string;
 const git = new GitManager();
+
+// Git reads the developer's ~/.gitconfig through the allowlisted HOME, and a
+// global commit.gpgSign or gpg.format would change what these tests measure.
+let restoreHome = () => {};
+beforeAll(() => { restoreHome = isolateGitHome(); });
+afterAll(() => restoreHome());
 
 /** A shell command that proves it ran by creating the marker file. */
 const touch = () => `touch '${marker}'`;
@@ -99,7 +106,7 @@ describe('planted config does not run code through the daemon', () => {
     // Sanitized env, not inherited: under the pre-commit hook the test process
     // carries the outer commit's GIT_DIR/GIT_INDEX_FILE, and an inherited
     // `git commit` here lands in THAT repository instead of the temp one.
-    const signed = Bun.spawnSync(['git', '-c', `gpg.program=${signer}`, 'commit', '--allow-empty', '-S', '-m', 'signed'], {
+    const signed = Bun.spawnSync(['git', '-c', 'gpg.format=openpgp', '-c', `gpg.program=${signer}`, 'commit', '--allow-empty', '-S', '-m', 'signed'], {
       cwd: repo, stdout: 'pipe', stderr: 'pipe', env: sanitizedEnv(),
     });
     expect(signed.exitCode).toBe(0);

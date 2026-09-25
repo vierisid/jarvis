@@ -47,7 +47,7 @@ describe('isWithin', () => {
 describe('isGitDirName', () => {
   test.each([
     '.git', '.GIT', '.Git', '.git.', '.git ', '.git. . ', '.git::$INDEX_ALLOCATION', '.git:stream',
-    'git~1', 'GIT~1', 'git~2', '.g‌it', '﻿.git', '.gi‍t', '.git‮',
+    'git~1', 'GIT~1', 'git~2', '.g\u200cit', '\ufeff.git', '.gi\u200dt', '.git\u202e',
   ])('matches %j', (name) => {
     expect(isGitDirName(name)).toBe(true);
   });
