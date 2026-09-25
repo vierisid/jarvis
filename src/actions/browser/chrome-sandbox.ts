@@ -49,7 +49,8 @@ export type ProbeResult = { exitCode: number | null; stderr: string; timedOut: b
 
 export type SandboxDeps = {
   getuid: () => number | undefined;
-  probe: (exePath: string) => Promise<ProbeResult>;
+  /** null: do not probe (see linuxSandboxDecision's `probe` option). */
+  probe: ((exePath: string) => Promise<ProbeResult>) | null;
 };
 
 const PROBE_TIMEOUT_MS = 20_000;
@@ -66,8 +67,19 @@ const SANDBOX_FATAL = /No usable sandbox|--no-sandbox is not supported|SUID sand
 
 const cache = new Map<string, Promise<SandboxDecision>>();
 
-/** Decide once per executable; see the module comment. */
-export function linuxSandboxDecision(exePath: string): Promise<SandboxDecision> {
+/**
+ * Decide once per executable; see the module comment.
+ *
+ * `probe: false` skips the probe launch, keeping the sandbox unless running as
+ * root or overridden. launchChrome passes it for an executable it did not
+ * detect itself -- a caller-supplied binary (a test seam) is not a Chrome, and
+ * running it an extra time to ask about the sandbox would be a second launch
+ * nobody asked for.
+ */
+export function linuxSandboxDecision(exePath: string, opts: { probe?: boolean } = {}): Promise<SandboxDecision> {
+  if (opts.probe === false) {
+    return decideSandbox(exePath, { getuid: () => process.getuid?.(), probe: null });
+  }
   let decision = cache.get(exePath);
   if (!decision) {
     decision = decideSandbox(exePath);
@@ -91,6 +103,8 @@ export async function decideSandbox(
   if (deps.getuid() === 0) {
     return { sandbox: false, reason: 'the daemon runs as root, and Chrome will not start its sandbox as root' };
   }
+
+  if (!deps.probe) return { sandbox: true };
 
   let result: ProbeResult;
   try {

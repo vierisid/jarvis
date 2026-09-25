@@ -15,6 +15,13 @@ import { join } from 'node:path';
 import { decideSandbox, linuxSandboxDecision, type ProbeResult } from './chrome-sandbox.ts';
 import { findBrowserExecutable, launchChrome, stopChrome, type RunningBrowser } from './chrome-launcher.ts';
 
+function freePort(): number {
+  const listener = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {} } });
+  const { port } = listener;
+  listener.stop(true);
+  return port;
+}
+
 function deps(uid: number | undefined, probe: ProbeResult | Error) {
   let probed = 0;
   return {
@@ -82,6 +89,21 @@ describe('decideSandbox (#521)', () => {
     expect(await decideSandbox('/usr/bin/chromium', deps(1000, { exitCode: 139, stderr, timedOut: false }))).toEqual({ sandbox: true });
   });
 
+  test('probe: false (an executable launchChrome did not detect) never launches it, and keeps root and the override', async () => {
+    // A caller-supplied binary -- #514's env-dumping fake Chrome -- must not
+    // be run an extra time just to ask about the sandbox.
+    const neverRun = '/nonexistent/fake-chrome';
+    expect(await linuxSandboxDecision(neverRun, { probe: false })).toEqual(
+      process.getuid?.() === 0
+        ? { sandbox: false, reason: 'the daemon runs as root, and Chrome will not start its sandbox as root' }
+        : { sandbox: true },
+    );
+    process.env.JARVIS_BROWSER_NO_SANDBOX = '1';
+    expect(await linuxSandboxDecision(neverRun, { probe: false })).toEqual({ sandbox: false, reason: 'JARVIS_BROWSER_NO_SANDBOX=1 is set' });
+    delete process.env.JARVIS_BROWSER_NO_SANDBOX;
+    expect(await decideSandbox('/usr/bin/chromium', { getuid: () => 0, probe: null })).toMatchObject({ sandbox: false, reason: expect.stringMatching(/root/) });
+  });
+
   test("a Windows chrome.exe reached from WSL keeps Windows' sandbox, unprobed", async () => {
     const d = deps(0, { exitCode: 1, stderr: 'No usable sandbox!', timedOut: false });
     expect(await decideSandbox('/mnt/c/Program Files/Google/Chrome/Application/chrome.exe', d)).toEqual({ sandbox: true });
@@ -93,7 +115,10 @@ const isWSL = existsSync('/proc/version') && readFileSync('/proc/version', 'utf-
 const exe = process.platform === 'linux' && !isWSL ? findBrowserExecutable() : null;
 
 describe.skipIf(!exe)('launchChrome on this host (#521, real headless Chromium)', () => {
-  const port = 30000 + Math.floor(Math.random() * 20000);
+  // Asked of the kernel, not picked at random: a random port in the
+  // ephemeral range can collide with another test's server, and Chrome then
+  // runs on without its DevTools port, which reads as a launch failure.
+  const port = freePort();
   // Created in beforeAll, not in the describe body: Bun runs the body of a
   // skipped or filtered describe but not its afterAll.
   let profile = '';
@@ -103,6 +128,11 @@ describe.skipIf(!exe)('launchChrome on this host (#521, real headless Chromium)'
     profile = mkdtempSync(join(tmpdir(), 'jarvis-sandbox-launch-'));
   });
 
+  // TODO: a SIGKILLed test run skips this afterAll and orphans the browser.
+  // launchChrome owns the spawn, so the setpriv wrapper used in
+  // browser-local-files.test.ts cannot be applied here; move to the shared
+  // watchdog fixture from fix/524-review-followups
+  // (src/actions/browser/fixtures/headless-chromium.ts) once that lands.
   afterAll(async () => {
     if (running) await stopChrome(running);
     if (!profile) return;
