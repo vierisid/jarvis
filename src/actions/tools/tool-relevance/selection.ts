@@ -55,15 +55,21 @@ const URL_RE = /https?:\/\/\S+|\bwww\.\S+/i;
  */
 const DOMAIN_RE = /\b[a-z0-9-]{1,63}\.(?:com|org|net|io|dev|app|edu|gov)\b/i;
 /**
- * Site-building intent: a verb of making, then within a few words a site
+ * Site-building intent: a verb of making, then within 40 characters a site
  * noun. "build me a landing page", "create a website for my bakery", "code a
  * website for me". Not "create an account on the site", "make sure the
- * website loads", "make a summary of this site" -- those are browses, and
- * a browse must not be offered the site shell. `start`, `design`, `set up`
- * and a bare "my site" matched too many of them to keep. Bounded gaps and
- * no nested quantifiers, so it stays linear.
+ * website loads", "generate a report on their website traffic" -- those are
+ * browses, and a browse must not be offered the site shell. `start`,
+ * `design`, `set up` and a bare "my site" matched too many of them to keep.
+ *
+ * The excluded words block a match only BETWEEN the verb and the noun (a
+ * tempered gap: every gap character is taken only where no excluded word
+ * starts). An earlier version put them in a lookahead over the 40
+ * characters after the verb, so "create a website with a login page" lost
+ * its site tools to a word that came after the noun. Each gap step looks
+ * ahead a bounded distance and the gap is bounded, so it stays linear.
  */
-const SITE_BUILD_RE = /\b(?:build|make|create|code|generate|scaffold|spin up|whip up|put together)\b(?![^.?!\n]{0,40}?\b(?:account|sign ?in|log ?in|sure|summary)\b)[^.?!\n]{0,40}?\b(?:web ?site|site|web ?page|homepage|landing page|portfolio|html page)s?\b/i;
+const SITE_BUILD_RE = /\b(?:build|make|create|code|generate|scaffold|spin up|whip up|put together)\b(?:(?!\b(?:account|sign ?in|log ?in|sure|summary|report|bookmark|shortcut)\b)[^.?!\n]){0,40}?\b(?:web ?site|site|web ?page|homepage|landing page|portfolio|html page)s?\b/i;
 
 /** A path-looking token, or a fenced code block. */
 const PATH_RE = /(^|\s)[~.]?[/\\][\w.\-/\\]+|```/;

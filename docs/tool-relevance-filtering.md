@@ -695,9 +695,11 @@ hidden read as offered and ran - while the live loop, which holds the offered
 set fixed for the whole batch, refuses the identical batch. The pause now
 records `offered` (the exposed set at the time the batch was chosen) and the
 resume checks `remaining` against it. A checkpoint written before the field
-existed is read as "nothing was offered" - its queued calls were never
-checked, so every one goes through the off-list check and a trigger is
-refused - unless the model the run resolves to is never filtered at all
+existed is read as "every tool that is not an invariant trigger was
+offered" - its queued calls were never checked, so a queued trigger is
+refused, while an ordinary call runs without being logged as an off-list
+admission it probably was not - unless the model the run resolves to is
+never filtered at all
 (policy off, or an ineligible model), in which case it was offered
 everything. That is decided by the gate (`FilterDecision.engaged`), not by
 whether this turn's recomputed set happens to be full: the model's own text
@@ -915,7 +917,7 @@ every turn.
 | documents | `create_document` | document, doc, note, memo, report, draft, write |
 | content | `content_pipeline` | content, pipeline, idea, outline, publish, post |
 | research | `research_queue` | research, queue(d), investigate |
-| site builder | all eight `site_*` (registered only with `sites.enabled`) | build intent only: a making verb (build, make, create, code, generate, scaffold, spin up, whip up, put together) within 40 characters before a site noun (site, website, webpage, homepage, landing page, portfolio, html page), unless "account", "sign in", "log in", "sure" or "summary" comes between; site builder, landing page, portfolio site, static site, html page, project directory. Not bare "website"/"homepage"/"my site" (a browse must not be offered `site_run_command`, a real shell), not "project"/"repo"/"commit"/"push" (ordinary dev chat), and not bare "html"/"css"/"template" ("fix the css in my react app") |
+| site builder | all eight `site_*` (registered only with `sites.enabled`) | build intent only: a making verb (build, make, create, code, generate, scaffold, spin up, whip up, put together) within 40 characters before a site noun (site, website, webpage, homepage, landing page, portfolio, html page), unless "account", "sign in", "log in", "sure", "summary", "report", "bookmark" or "shortcut" comes between the two (after the noun they do not count: "create a website with a login page" is a build); site builder, landing page, portfolio site, static site, html page, project directory. Not bare "website"/"homepage"/"my site" (a browse must not be offered `site_run_command`, a real shell), not "project"/"repo"/"commit"/"push" (ordinary dev chat), and not bare "html"/"css"/"template" ("fix the css in my react app") |
 
 **The unmatched default.** A user message in the window that selects
 nothing the call site can offer adds the browse group's **framed readers
