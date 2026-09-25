@@ -385,6 +385,10 @@ describe('each call site keeps the token out of git argv and env', () => {
     expect(network[0]!.argv).toContain('origin');
     expect(network[0]!.argv).toContain('protocol.allow=never');
     expect(network[0]!.argv).toContain('core.fsmonitor=false');
+    // The always-on pins reach every git this class runs, not only this one.
+    for (const pin of ['safe.bareRepository=explicit', 'core.fsmonitor=false', 'commit.gpgSign=false', 'log.showSignature=false']) {
+      expect({ pin, missing: invocations.filter(i => !i.argv.includes(pin)).length }).toEqual({ pin, missing: 0 });
+    }
     // Proactive auth pinned for the exact origin URL, not only the host.
     expect(network[0]!.argv).toContain('http.https://github.com/owner/repo.git.proactiveAuth=basic');
 
@@ -423,13 +427,22 @@ describe('each call site keeps the token out of git argv and env', () => {
     const fetch = fake.invocations().find(i => i.argv.includes('fetch'))!;
     expect(fetch.argv.slice(fetch.argv.indexOf('fetch'))).toEqual(['fetch', 'origin', '+refs/heads/main:refs/remotes/origin/main']);
     const pull = fake.invocations().find(i => i.argv.includes('pull'))!;
-    expect(pull.argv).toEqual(['pull', '.', 'refs/remotes/origin/main']);
+    expect(pull.argv.slice(pull.argv.indexOf('pull'))).toEqual(['pull', '.', 'refs/remotes/origin/main']);
+    expect(pull.argv.some(a => a.startsWith('credential.helper=!'))).toBe(false);
     expect(pull.sawCredentialDir).toBe(false);
   });
 
   // S4: the token is for GitHub over https. Anything else gets plain git and
   // no token file at all -- and keeps working as it did before #511.
-  for (const origin of ['git@github.com:owner/repo.git', 'ssh://git@github.com/owner/repo.git', 'https://ghe.example/o/r.git']) {
+  // The last three are on github.com but not a plain repo path, so the
+  // exact-URL proactiveAuth pin would not be byte for byte the URL git uses:
+  // `=` splits the `-c` argument, `..` is normalised away, and a trailing
+  // space is not what git matches either.
+  for (const origin of [
+    'git@github.com:owner/repo.git', 'ssh://git@github.com/owner/repo.git', 'https://ghe.example/o/r.git',
+    'https://github.com/x.y=z/../owner/repo.git', 'https://github.com/owner/../other/repo.git',
+    'https://github.com/owner/repo.git ',
+  ]) {
     test(`a non-GitHub-https origin (${origin}) runs without the token`, async () => {
       const fake = setupFakeGit('main', origin);
       const manager = new GitHubManager();
@@ -554,7 +567,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       // timeout itself is generous enough that every other fake call, the
       // fetch included, finishes well inside it even on a throttled runner,
       // so the error can only come from the step under test.
-      '  "pull . "*) exec sleep 12 ;;',
+      '  *" pull . "*) exec sleep 12 ;;',
       'esac',
       'exit 0',
     ].join('\n'), { mode: 0o755 });
@@ -1139,7 +1152,6 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
   // pull into an unborn branch is git's own "pull into void", not a rebase.
   test('a rebase pull into an unborn branch checks out upstream', async () => {
     const { h, m } = await divergedProject('unborn-source', [['pull.rebase', 'true']], 'append');
-    expect((await m.pull(h.project)).success).toBe(true);
     // A second project on the same remote, with no commits of its own.
     const fresh = join(tempRoot('unborn'), 'project');
     mkdirSync(fresh);
@@ -1175,6 +1187,65 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     expect(hookRuns(h, 'reference-transaction').length).toBeGreaterThan(hooksBefore);
     expect(hookRunsThatFoundAToken(h)).toEqual([]);
     expect(h.leaks(TOKEN)).toEqual([]);
+  }, 60_000);
+
+  // The same override, with an origin URL shaped to break the exact-URL pin:
+  // git splits `-c` at the first `=` and normalises `..` away, so the pin
+  // would name a different key and the override would win again (reproduced
+  // in review). Such a URL now gets no token at all.
+  test.skipIf(!GIT_HAS_PROACTIVE_AUTH)('an origin URL that cannot be pinned exactly gets no token at all', async () => {
+    const h = await setupProject('public-eq');
+    const odd = `${server.base}/x.y=z/../public-eq.git`;
+    await setup([REAL_GIT!, 'remote', 'set-url', 'origin', odd], h.project, h.gitEnv);
+    await setup([REAL_GIT!, 'config', `http.${server.base}/public-eq.git.proactiveAuth`, 'none'], h.project, h.gitEnv);
+    // Seed the public repo directly, since a push needs the token.
+    await setup([REAL_GIT!, 'push', '-q', h.bareRepo, 'main'], h.project, h.gitEnv);
+    await upstreamCommit(h);
+    useHarnessEnv(h);
+
+    const before = server.requests.length;
+    const status = await manager().getRemoteStatus(h.project);
+    // Fetched anonymously (public repo), with no token file in existence.
+    expect(status.behind).toBe(1);
+    const seen = server.requests.slice(before);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen.filter(r => r.auth !== 'none').length).toBe(0);
+    expect(hookRuns(h, 'reference-transaction').length).toBeGreaterThan(0);
+    expect(hookRunsThatFoundAToken(h)).toEqual([]);
+    expect(h.leaks(TOKEN)).toEqual([]);
+  }, 60_000);
+
+  // #516: a bare repository planted at the project root (no .git of its own)
+  // is otherwise found by discovery, and its config and hooks run on the
+  // manager's plain status/fetch. safe.bareRepository=explicit refuses it.
+  test('a bare repository planted at the project root is never used', async () => {
+    // A public repo, so the control below can fetch without the token.
+    const source = await setupProject('public-bare-src');
+    useHarnessEnv(source);
+    expect((await manager().push(source.project)).success).toBe(true);
+
+    const planted = join(tempRoot('planted'), 'project');
+    await setup([REAL_GIT!, 'init', '-q', '--bare', '-b', 'main', planted], root, source.gitEnv);
+    await setup([REAL_GIT!, '--git-dir', planted, 'remote', 'add', 'origin', `${server.base}/public-bare-src.git`],
+      root, source.gitEnv);
+    const marker = join(source.evidence, 'planted-ran');
+    for (const hook of ['reference-transaction', 'pre-push', 'post-merge']) {
+      writeFileSync(join(planted, 'hooks', hook), `#!/bin/sh\necho ${hook} >> "${marker}"\ncat > /dev/null\n`, { mode: 0o755 });
+    }
+    // CONTROL: without the pin, plain discovery finds the planted repo from
+    // the project dir and a fetch runs its hooks.
+    expect((await setup([REAL_GIT!, 'rev-parse', '--git-dir'], planted, source.gitEnv)).trim()).toBe('.');
+    await setup([REAL_GIT!, 'fetch', '-q', 'origin'], planted, source.gitEnv);
+    expect(existsSync(marker)).toBe(true);
+    rmSync(marker);
+
+    const m = manager();
+    const status = await m.getRemoteStatus(planted);
+    expect(status.hasRemote).toBe(false);
+    expect((await m.push(planted)).success).toBe(false);
+    expect((await m.pull(planted)).success).toBe(false);
+    expect(existsSync(marker)).toBe(false);
+    expect(credentialDirsIn(source.tmp)).toEqual([]);
   }, 60_000);
 
   // S1. Commands .git/config can name, which git runs on its own: the
@@ -1224,8 +1295,11 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     expect(await m.pull(h.project)).toEqual({ success: true });
 
     const runs = readFileSync(join(h.evidence, 'probes'), 'utf8').trim().split('\n').filter(Boolean);
-    // They did run (after the token was gone), so this is not vacuous...
-    expect(runs.some(r => r.startsWith('fsmonitor '))).toBe(true);
+    // The fsmonitor is pinned off for every git this class runs, so it never
+    // runs at all (the control above shows it would have)...
+    expect(runs.filter(r => r.startsWith('fsmonitor '))).toEqual([]);
+    // ...while the filter and hook did run (after the token was gone), so this
+    // is not vacuous...
     expect(runs.some(r => r.startsWith('clean '))).toBe(true);
     expect(runs.some(r => r.startsWith('post-index-change '))).toBe(true);
     // ...and none of them ever saw the token file.

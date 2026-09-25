@@ -92,6 +92,29 @@ function readPipe(stream: ReadableStream<Uint8Array>): { text: Promise<string>; 
 const KNOWN_PROTOCOLS = ['file', 'git', 'ext', 'fd', 'ssh', 'http', 'https'] as const;
 
 /**
+ * `-c` pins on EVERY git command this class runs, authenticated or not. Each
+ * names something a model-written project tree could otherwise make git run:
+ *   - `safe.bareRepository=explicit`: a bare repository planted at the
+ *     project root (HEAD, objects/, refs/, config) is otherwise discovered
+ *     implicitly, and its config runs code on a plain `git status` (#516).
+ *   - `core.fsmonitor=false`: the fsmonitor command runs on every index read.
+ *   - `commit.gpgSign=false`, `log.showSignature=false`: pull's integrate step
+ *     can create merge or rebase commits, and `gpg.program` is configurable
+ *     by the project.
+ * Mirrors PROJECT_GIT_PINS in git-manager.ts on the #516 branch; kept inline
+ * until that lands. Hooks are deliberately NOT disabled here: whether a
+ * daemon push should run the project's pre-push hook is an open maintainer
+ * decision. If it goes the other way, add `'-c', 'core.hooksPath=/dev/null'`
+ * to this list -- one line.
+ */
+const PROJECT_GIT_PINS: readonly string[] = [
+  '-c', 'safe.bareRepository=explicit',
+  '-c', 'core.fsmonitor=false',
+  '-c', 'commit.gpgSign=false',
+  '-c', 'log.showSignature=false',
+];
+
+/**
  * git/ssh stderr that means "could not authenticate or reach the repo as
  * this user". `Permission denied` is anchored to ssh's form, so a local
  * "unable to create file: Permission denied" is not mistaken for one.
@@ -130,6 +153,22 @@ const PERSISTED_CREDENTIAL_URL = /^https?:\/\/[^/@\s]+@/i;
  */
 function isSafeBranchArg(branch: string): boolean {
   return branch.length > 0 && !/^[-+]/.test(branch) && !branch.includes(':');
+}
+
+/**
+ * The path of an origin URL we are willing to pin config for: plain
+ * `owner/repo.git`-style segments. The exact-URL `-c http.<url>.* =` pin
+ * depends on the key being byte for byte the URL git matches, and two things
+ * break that (reproduced in review): an `=` (git splits `-c` at the FIRST
+ * one, turning the pin into a different, useless key) and `.`/`..` segments
+ * or other characters git normalises before matching. GitHub owner and repo
+ * names are `[A-Za-z0-9_.-]`, so this refuses nothing real.
+ */
+function isPlainRepoPath(path: string): boolean {
+  const segments = path.split('/');
+  if (segments[segments.length - 1] === '') segments.pop(); // one trailing slash
+  return segments.length > 0
+    && segments.every(s => /^[A-Za-z0-9_.-]+$/.test(s) && s !== '.' && s !== '..');
 }
 
 /** Single-quote for POSIX sh. */
@@ -222,7 +261,9 @@ export function credentialHelperArgs(tokenFile: string, target: CredentialTarget
  *   project-level `http.<exact origin URL>.proactiveAuth=none` beat the host
  *   pin (reproduced in review: reference-transaction read the token on a
  *   public repo). At equal specificity the command line wins, and nothing is
- *   more specific than the exact URL. git < 2.46 ignores the key and only
+ *   more specific than the exact URL -- provided the pinned key IS the URL
+ *   byte for byte, which is why originCredentialUrls only accepts plain
+ *   repo paths (see isPlainRepoPath). git < 2.46 ignores the key and only
  *   asks after a 401, so on old git a PUBLIC repo's fetch/pull still runs
  *   every hook (reference-transaction, post-merge, ...) with the file in
  *   place. (The same exact-URL pin would not rescue `http.sslVerify` and its
@@ -757,8 +798,11 @@ export class GitHubManager {
     try {
       const fetchUrls = await this.git(cwd, ['remote', 'get-url', '--all', 'origin']);
       const pushUrls = await this.git(cwd, ['remote', 'get-url', '--push', '--all', 'origin']);
-      const urls = `${fetchUrls}\n${pushUrls}`.split('\n').map(u => u.trim()).filter(Boolean);
-      return urls.length > 0 && urls.every(u => u.startsWith(prefix)) ? [...new Set(urls)] : null;
+      // Split on newlines only and never trim: the URL checked here must be
+      // byte for byte the one git uses and the one pinned.
+      const urls = `${fetchUrls}\n${pushUrls}`.split('\n').filter(u => u !== '');
+      const ok = urls.length > 0 && urls.every(u => u.startsWith(prefix) && isPlainRepoPath(u.slice(prefix.length)));
+      return ok ? [...new Set(urls)] : null;
     } catch {
       return null;
     }
@@ -866,7 +910,7 @@ export class GitHubManager {
     // commands execute .git/hooks out of a model-written project tree. Nothing
     // credential-bearing may be added here either: hooks inherit this env.
     const timeoutMs = options.timeoutMs;
-    const proc = Bun.spawn(['git', ...(options.configArgs ?? []), ...args], {
+    const proc = Bun.spawn(['git', ...PROJECT_GIT_PINS, ...(options.configArgs ?? []), ...args], {
       cwd,
       stdout: 'pipe',
       stderr: 'pipe',
