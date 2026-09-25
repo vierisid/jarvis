@@ -24,6 +24,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { readFileSync, utimesSync } from "node:fs";
 import { dirname } from "node:path";
+import { isSecretEnvName } from "../../../util/subprocess-env";
 import {
   ENGINE_BUNDLE_ENV,
   ENGINE_MARKER_ENV,
@@ -80,7 +81,7 @@ export interface SpawnEngineOptions {
   devPieces?: string[];
   /** Override `process.execPath`. Default: same Bun binary running the daemon. */
   runtime?: string;
-  /** Extra env merged on top of the defaults. */
+  /** Extra env merged on top of the defaults; only engine names (isEngineEnvName) are kept. */
   env?: Record<string, string | undefined>;
   /**
    * The owner's SIGKILL deadline for this engine (`EngineRuntime`'s
@@ -146,7 +147,28 @@ export const ENGINE_ENV_PASSTHROUGH: readonly string[] = Object.freeze([
   ENGINE_ORPHAN_POLL_ENV,
 ]);
 
-export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
+/**
+ * Names a caller's `opts.env` may set: the passthrough list and the engine's
+ * own wiring namespaces. Anything else is dropped. `opts.env` is fed by
+ * EngineRuntime's spawnEnvOverride and by tests, and without this a caller
+ * handing it `process.env` would undo the curation above while every check on
+ * ENGINE_ENV_PASSTHROUGH still passed.
+ */
+export function isEngineEnvName(name: string): boolean {
+  const engineName = ENGINE_ENV_PASSTHROUGH.includes(name)
+    || name === "SANDBOX_ID"
+    || name.startsWith("AP_")
+    || name.startsWith("JARVIS_ENGINE_");
+  // The same credential-shaped backstop sanitizedEnv() applies, so a future
+  // `AP_..._KEY` handed in from process.env still stays out.
+  return engineName && !isSecretEnvName(name);
+}
+
+/**
+ * The engine's complete environment, from `opts` and this process's env, pid,
+ * clock and /proc entry. Warns (names only) about dropped overrides.
+ */
+export function engineEnv(opts: SpawnEngineOptions): Record<string, string> {
   const env: Record<string, string> = {};
   for (const key of ENGINE_ENV_PASSTHROUGH) {
     const v = process.env[key];
@@ -214,11 +236,21 @@ export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
   if (opts.devPieces?.length) {
     env["AP_DEV_PIECES"] = opts.devPieces.join(",");
   }
+  const dropped: string[] = [];
   for (const [k, v] of Object.entries(opts.env ?? {})) {
     if (v === undefined) delete env[k];
-    else env[k] = v;
+    else if (isEngineEnvName(k)) env[k] = v;
+    else dropped.push(k);
   }
+  if (dropped.length > 0) {
+    // Names only: the values are exactly what must not be printed.
+    console.warn(`[engine-spawn] dropped non-engine env override(s): ${dropped.join(", ")}`);
+  }
+  return env;
+}
 
+export function spawnEngine(opts: SpawnEngineOptions): SpawnedEngine {
+  const env = engineEnv(opts);
   const runtime = opts.runtime ?? process.execPath;
   // --smol: the engine is a short-lived-to-parked sandbox that grows to
   // ~100MB under default JSC heap growth; the smaller-heap GC profile is the

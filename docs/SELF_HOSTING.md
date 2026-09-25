@@ -392,6 +392,37 @@ Three caveats.
 - Output from subprocesses that inherit the daemon's file descriptors reaches
   the terminal and journald but not this file.
 
+### Package installs (pieces and the workflow engine)
+
+Installing a piece from the library, the startup check that re-installs the
+pieces when `node_modules` is gone, and building the workflow engine (on first
+start, and again whenever an upgrade changes its dependencies) all run
+`bun install`. They run it with a **sanitized environment**: only an
+allowlist of variables (`PATH`, `HOME`, temp and locale settings, proxies,
+CA bundles, registry URLs, bun and npm cache locations) reaches the install,
+never the daemon's API keys or tokens. Lifecycle scripts are skipped
+(`--ignore-scripts`).
+
+What that means for a private or authenticated registry:
+
+- A registry **URL** set with `NPM_CONFIG_REGISTRY` / `BUN_CONFIG_REGISTRY`, in
+  `~/.npmrc` or in `~/.bunfig.toml` still works.
+- Registry **credentials** set in environment variables do not reach the
+  install: `NPM_CONFIG_TOKEN`, `npm_config_token`, `BUN_CONFIG_TOKEN`, and any
+  `${NPM_TOKEN}`-style reference inside `.npmrc` or `bunfig.toml` (bun sends
+  it unexpanded, as literal text, so the registry answers 401). Write the
+  token literally into `~/.npmrc` (`//registry.example.com/:_authToken=...`)
+  or `~/.bunfig.toml` (`$XDG_CONFIG_HOME/.bunfig.toml` works too) instead.
+  Bun does not read `NPM_CONFIG_USERCONFIG`, so pointing it at another file
+  does not help either.
+- Other install-time tuning variables are dropped as well, for example
+  `ESBUILD_BINARY_PATH`.
+
+A failed install says so in its error message. `HOME` is forwarded because
+bun needs it, so anything readable under your home directory is still readable
+to the install; the sanitizing keeps secrets out of the environment, it is not
+a sandbox.
+
 ## Quick reference
 
 | | Single machine | LAN via IP | VPS + domain |

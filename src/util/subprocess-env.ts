@@ -13,8 +13,8 @@
  * The same holds outside the site builder (#512): a workflow CODE step (run
  * from inside the engine bundle, which compiles this file in -- see
  * PATCHED_VENDOR_SOURCES in engine-runtime/build.ts), the `bun install` runs
- * that fetch pieces and the engine's build deps with their lifecycle scripts,
- * and the dashboard auto-build. src/spawn-env-guard.test.ts fails on any spawn
+ * that fetch pieces and the engine's build deps (lifecycle scripts skipped,
+ * see src/util/sanitized-install.ts), and the dashboard auto-build. src/spawn-env-guard.test.ts fails on any spawn
  * under src/ that does not use this, unless it is on that file's justified
  * exemption list.
  *
@@ -73,11 +73,12 @@
  * with a reason. Do not widen a pattern to cover it.
  *
  * WHAT THIS DOES NOT COVER. Env is one channel, not the only one:
- *   - argv. `GitHubManager.push()/pull()` put the GitHub PAT in the remote URL
- *     they hand to git. That is visible in `ps`, and git passes the push URL to
- *     a `pre-push` hook as `$1`/`$2` (confirmed), so a hook in the project tree
- *     reads the token regardless of how clean its environment is. Tracked
- *     separately; sanitising env neither fixes nor breaks it.
+ *   - argv. Until #511, `GitHubManager` put the GitHub PAT in the remote URL it
+ *     handed to git, where `ps` showed it and git passed it to a `pre-push` hook
+ *     as `$2`, however clean the environment. #511 handles that in
+ *     GitHubManager (src/sites/github-manager.ts): the token reaches git through
+ *     a one-shot credential helper, not argv. Do not "fix" it by moving the
+ *     token into an env var: hooks inherit git's environment.
  *   - the filesystem. `HOME` is allowlisted because the toolchain genuinely
  *     needs it, so the child can still read `~/.npmrc`, `~/.bunfig.toml`,
  *     `~/.git-credentials` and -- the one that matters most -- `~/.jarvis`,

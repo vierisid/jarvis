@@ -4,7 +4,7 @@
  * (#510): assert at EACH CALL SITE, against the environment a real grandchild
  * process received, not against the return value of sanitizedEnv().
  *
- * Arrangement (see fixtures/spawn-env-probe.ts): launch the probe with
+ * Arrangement (see fixtures/spawn-env-sites-probe.ts): launch the probe with
  * canaries in its real startup environment and a fake `bun` first on PATH,
  * then assert on what was dumped. The canaries are the daemon's secrets
  * (ANTHROPIC_API_KEY, JARVIS_WORKFLOW_ENCRYPTION_KEY) AND the engine's own
@@ -17,13 +17,16 @@
  * minimal constructed env rather than a copy of the developer's, and failures
  * report variable NAMES only.
  *
+ * It sits at src/ root, next to the static guard, because the sites span
+ * src/workflows and src/daemon.
+ *
  * POSIX-only: the fake executable is a `#!/bin/sh` script.
  */
 import { afterAll, describe, expect, test } from 'bun:test';
-import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { isAllowedEnvName } from '../util/subprocess-env.ts';
+import { isAllowedEnvName } from './util/subprocess-env.ts';
 
 /** Synthetic. Never a real secret, and never printed on failure. */
 const CANARY_VALUE = 'sentinel-do-not-log';
@@ -41,7 +44,7 @@ const CANARY_NAMES = [
   'JARVIS_ENGINE_MARKER',
 ];
 
-const PROBE = join(import.meta.dir, 'fixtures', 'spawn-env-probe.ts');
+const PROBE = join(import.meta.dir, 'fixtures', 'spawn-env-sites-probe.ts');
 
 /** Variables a POSIX shell sets for itself; not inherited from the parent. */
 const SHELL_INJECTED = new Set(['PWD', 'SHLVL', '_', 'OLDPWD']);
@@ -59,7 +62,8 @@ afterAll(() => {
   for (const dir of tmpRoots) rmSync(dir, { recursive: true, force: true });
 });
 
-type Dump = { name: string; env: Record<string, string> };
+/** `args`: the fake binary's argv, when it recorded one. */
+type Dump = { name: string; env: Record<string, string>; args?: string[] };
 type ProbeResult = { dumps: Dump[]; stderr: string; exitCode: number };
 
 function dumpNamed(result: ProbeResult, name: string): Record<string, string> | undefined {
@@ -81,6 +85,8 @@ async function runProbe(site: string, extraEnv: Record<string, string> = {}): Pr
     // Unique per invocation, so two spawns cannot overwrite each other's
     // evidence and let a clean one mask a leaking one.
     `dump="${dumpDir}/bun-\${1:-none}.$$.$(date +%s%N).env"`,
+    // argv next to it, so the install sites can be held to --ignore-scripts.
+    'printf "%s\\n" "$@" > "$dump.args"',
     // Write then rename: a present file is a complete one.
     'env > "$dump.partial"',
     'mv "$dump.partial" "$dump"',
@@ -92,7 +98,7 @@ async function runProbe(site: string, extraEnv: Record<string, string> = {}): Pr
   // --no-env-file: from the repo root Bun would otherwise auto-load a .env,
   // and the probe would not start from the minimal env built below.
   const proc = Bun.spawn([process.execPath, '--no-env-file', 'run', PROBE, site, root], {
-    cwd: join(import.meta.dir, '..', '..'),
+    cwd: join(import.meta.dir, '..'),
     stdout: 'pipe',
     stderr: 'pipe',
     env: {
@@ -127,7 +133,9 @@ async function runProbe(site: string, extraEnv: Record<string, string> = {}): Pr
         if (eq <= 0) continue;
         env[line.slice(0, eq)] = line.slice(eq + 1);
       }
-      dumps.push({ name, env });
+      const argsFile = join(dumpDir, `${file}.args`);
+      const args = existsSync(argsFile) ? readFileSync(argsFile, 'utf8').split('\n').filter(Boolean) : undefined;
+      dumps.push({ name, env, args });
     }
   }
 
@@ -158,6 +166,13 @@ function expectSanitized(name: string, env: Record<string, string>, extraKeys: s
   // The toolchain still got what it needs to run at all.
   expect(env.PATH).toBeTruthy();
   expect(env.HOME).toBeTruthy();
+}
+
+/** Third-party installs run no lifecycle scripts (see util/sanitized-install.ts). */
+function expectScriptsIgnored(result: ProbeResult) {
+  const installs = result.dumps.filter(d => d.name === 'bun-install');
+  expect(installs.length).toBeGreaterThan(0);
+  for (const d of installs) expect(d.args).toContain('--ignore-scripts');
 }
 
 /** Every dump the run produced, not just the one the test names. */
@@ -202,18 +217,21 @@ describe('workflow and daemon spawns do not inherit the daemon environment (#512
     const result = await runProbe('pieces-install');
     expect(dumpNamed(result, 'bun-install')).toBeDefined();
     expectAllSanitized(result);
+    expectScriptsIgnored(result);
   }, 30_000);
 
   test('pieces-library reconciler: the startup `bun install`', async () => {
     const result = await runProbe('pieces-reconcile');
     expect(dumpNamed(result, 'bun-install')).toBeDefined();
     expectAllSanitized(result);
+    expectScriptsIgnored(result);
   }, 30_000);
 
   test('engine build: the staging `bun install`', async () => {
     const result = await runProbe('engine-staging');
     expect(dumpNamed(result, 'bun-install')).toBeDefined();
     expectAllSanitized(result);
+    expectScriptsIgnored(result);
   }, 30_000);
 
   test('daemon: the dashboard auto-build `bun run build:ui`', async () => {

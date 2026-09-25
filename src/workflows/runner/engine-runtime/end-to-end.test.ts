@@ -570,7 +570,7 @@ describe("Engine end-to-end (G+H pieces)", () => {
    * env, not the engine's. The engine's env carries SANDBOX_ID (the worker
    * RPC's engine identifier), the WS port and the reaper markers; before the
    * fix every CODE step inherited all of them. The unit-level probe in
-   * src/workflows/spawn-env.test.ts covers the call site; this covers the
+   * src/spawn-env-sites.test.ts covers the call site; this covers the
    * BUNDLE, i.e. that the patched sandbox is what actually ships.
    */
   test.skipIf(skipE2eTests)(

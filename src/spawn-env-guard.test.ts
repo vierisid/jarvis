@@ -73,11 +73,10 @@ const DESKTOP_SESSION =
  * secrets there is a product decision -- a shell tool is expected to see the
  * user's own env (nvm, venv, ssh-agent, AWS profile, DISPLAY), so the site
  * allowlist is the wrong tool, and a subtractive strip of daemon-owned names
- * changes what the tool can do -- and it was raised with the maintainer in
- * #512 rather than taken there.
+ * changes what the tool can do -- so it is not taken here. Tracked in #514.
  */
 const MODEL_EXEC_PENDING =
-  'PENDING MAINTAINER DECISION (#512): model-directed exec on the user\'s ' +
+  'PENDING DECISION (#514): model-directed exec on the user\'s ' +
   'machine by design; see MODEL_EXEC_PENDING in spawn-env-guard.test.ts.';
 
 type Exemption = { reason: string; calls: Record<string, number> };
@@ -121,7 +120,7 @@ const EXEMPT: Record<string, Exemption> = {
       'notify-send / powershell toasts; needs the session env (DBUS_SESSION_BUS_ADDRESS, the Windows ' +
       'session block). NOT a fixed command line: the title and body can be workflow- or model-authored, ' +
       'passed as argv to notify-send but interpolated into the PowerShell script. That quoting is a ' +
-      'separate injection question from env hygiene, raised in #512 rather than settled here.',
+      'separate injection question from env hygiene, tracked in #515.',
     calls: { detectMethod: 2, sendViaNotifySend: 1, sendViaPowerShell: 1 },
   },
   'actions/app-control/native-exec.ts': {
@@ -169,15 +168,15 @@ const EXEMPT: Record<string, Exemption> = {
       'would forward HTTP(S)_PROXY and CA settings to the engine, which changes how ' +
       'pieces reach the network -- a functional decision, not env hygiene. The ' +
       'caller-supplied opts.env merged on top (EngineRuntime spawnEnvOverride) is ' +
-      'test-only, and a test below keeps it that way.',
+      'filtered to engine names by isEngineEnvName, pinned by a test below.',
     calls: { spawnEngine: 1 },
   },
 
   // Positive controls: each spawns with an inherited env ON PURPOSE to prove
   // its harness can see a leak.
   'sites/fixtures/spawn-env-probe.ts': { reason: 'Positive control for src/sites/spawn-env.test.ts.', calls: { '<module>': 1 } },
-  'workflows/fixtures/spawn-env-probe.ts': {
-    reason: 'Positive controls (node:child_process via PATH, node:child_process via execPath + IPC as the CODE sandbox does, and Bun.spawnSync) for src/workflows/spawn-env.test.ts.',
+  'fixtures/spawn-env-sites-probe.ts': {
+    reason: 'Positive controls (node:child_process via PATH, node:child_process via execPath + IPC as the CODE sandbox does, and Bun.spawnSync) for src/spawn-env-sites.test.ts.',
     calls: { '<module>/<anonymous>': 2, '<module>': 1 },
   },
 };
@@ -193,6 +192,9 @@ const BUN_MODULE_SPAWNERS = new Set(['spawn', 'spawnSync', '$']);
 /** Members of the `Bun` global that start a process. */
 const BUN_GLOBAL_SPAWNERS = new Set(['spawn', 'spawnSync', '$', 'openInEditor']);
 const CHILD_PROCESS_MODULES = new Set(['child_process', 'node:child_process']);
+/** `node:process` as a module: `execve` replaces this process, env as its third argument. */
+const PROCESS_MODULES = new Set(['process', 'node:process']);
+const PROCESS_SPAWNERS = new Set(['execve']);
 
 /** Where `sanitizedEnv` must be imported from, resolved, without extension. */
 const SANITIZER_PATH = join(SRC, 'util', 'subprocess-env');
@@ -214,7 +216,20 @@ function scriptKind(file: string): ts.ScriptKind {
  */
 const THIRD_PARTY_PROCESS_MODULES = new Set([
   'execa', 'cross-spawn', 'node-pty', 'tinyexec', 'nano-spawn', 'zx', 'shelljs', 'child-process-promise',
+  // Not process libraries by name, but each starts one with the caller's env:
+  // an opener, a VCS client, a notifier, an MCP server over stdio, a browser.
+  'open', 'simple-git', 'node-notifier',
+  '@modelcontextprotocol/sdk/client/stdio', '@modelcontextprotocol/sdk/client/stdio.js',
+  'puppeteer', 'puppeteer-core', 'playwright', 'playwright-core',
 ]);
+
+/** A listed package, any subpath of one, `@playwright/*`, or any MCP SDK stdio transport path. */
+function isThirdPartyProcessModule(spec: string): boolean {
+  if (THIRD_PARTY_PROCESS_MODULES.has(spec)) return true;
+  for (const name of THIRD_PARTY_PROCESS_MODULES) if (spec.startsWith(`${name}/`)) return true;
+  if (spec.startsWith('@playwright/')) return true;
+  return spec.startsWith('@modelcontextprotocol/sdk/') && /\/stdio(\.[cm]?js)?$/.test(spec);
+}
 
 /** Strip what does not change a value: parens, `as`, `satisfies`, `!`, `<T>x`, `await`. */
 function unwrap(e: ts.Expression): ts.Expression {
@@ -249,7 +264,10 @@ function moduleOfLoadCall(node: ts.Node): string | null {
   if (!ts.isCallExpression(node) || node.arguments.length !== 1) return null;
   const arg = node.arguments[0]!;
   if (!ts.isStringLiteralLike(arg)) return null;
-  const isRequire = ts.isIdentifier(node.expression) && node.expression.text === 'require';
+  // require(), and Bun's import.meta.require()
+  const isRequire = (ts.isIdentifier(node.expression) && node.expression.text === 'require')
+    || (ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'require'
+      && ts.isMetaProperty(node.expression.expression));
   const isImport = node.expression.kind === ts.SyntaxKind.ImportKeyword;
   if (isRequire || isImport || CHILD_PROCESS_MODULES.has(arg.text)) return arg.text;
   return null;
@@ -401,7 +419,8 @@ type ScanResult = { offenders: Offender[]; diagnostics: number };
  *   3. the `Bun` global, also behind casts and via globalThis/global/self
  *      (`Bun.spawn`, `Bun['spawn']`, `Bun[k]`, `Bun.openInEditor`);
  *   4. a Bun Shell tagged template (`$`, `Bun.$`, or `$` under any import name);
- *   5. an import of a third-party process library (THIRD_PARTY_PROCESS_MODULES).
+ *   5. an import of a third-party process library (THIRD_PARTY_PROCESS_MODULES);
+ *   6. `process.execve`, whose env is its third argument.
  * And anything that would let a spawner leave the scanner's sight is itself an
  * offender: a bound spawner, the module object or the `Bun` global used as a
  * plain value (`const run = Bun.spawn`, `const B = Bun`, `wrap(cp)`,
@@ -438,7 +457,10 @@ function scanSource(source: string, label: string): ScanResult {
   let sanitizerImported = false;
 
   const spawnersOf = (spec: string): Set<string> | null =>
-    CHILD_PROCESS_MODULES.has(spec) ? CHILD_PROCESS_SPAWNERS : spec === 'bun' ? BUN_MODULE_SPAWNERS : null;
+    CHILD_PROCESS_MODULES.has(spec) ? CHILD_PROCESS_SPAWNERS
+      : spec === 'bun' ? BUN_MODULE_SPAWNERS
+        : PROCESS_MODULES.has(spec) ? PROCESS_SPAWNERS
+          : null;
 
   const bindModule = (id: ts.Identifier, spawners: Set<string>) => {
     moduleAliases.set(id.text, spawners);
@@ -494,9 +516,14 @@ function scanSource(source: string, label: string): ScanResult {
     }
     // const cp = require('child_process') / const { spawn: run } = (await import('bun'))
     if (ts.isVariableDeclaration(node) && node.initializer) {
-      const spec = moduleOfLoadCall(unwrap(node.initializer));
+      const init = unwrap(node.initializer);
+      const spec = moduleOfLoadCall(init);
       const spawners = spec ? spawnersOf(spec) : null;
       if (spawners) bindPattern(node.name, spawners);
+      // const { execve } = process -- the global, destructured
+      if (ts.isIdentifier(init) && init.text === 'process' && ts.isObjectBindingPattern(node.name)) {
+        bindPattern(node.name, PROCESS_SPAWNERS);
+      }
     }
     // import('node:child_process').then(({ spawn }) => ...) / .then(cp => ...)
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'then') {
@@ -569,6 +596,16 @@ function scanSource(source: string, label: string): ScanResult {
     if (ts.isIdentifier(e)) return CHILD_PROCESS_SPAWNERS.has(e.text);
     const m = memberOf(e);
     return !!m && m.name !== 'exec' && CHILD_PROCESS_SPAWNERS.has(m.name);
+  };
+
+  /** `process.execve`, `globalThis.process.execve`, behind casts too. */
+  const isProcessExecve = (e: ts.Expression): boolean => {
+    const m = memberOf(unwrap(e));
+    if (!m || m.name !== 'execve') return false;
+    const obj = unwrap(m.object);
+    if (ts.isIdentifier(obj)) return obj.text === 'process' && !isShadowed('process');
+    const pm = memberOf(obj);
+    return !!pm && pm.name === 'process' && ts.isIdentifier(pm.object) && GLOBAL_OBJECTS.has(pm.object.text);
   };
 
   // Any bound spawner used as a tag is a shell: `$` under whatever name it was
@@ -644,12 +681,19 @@ function scanSource(source: string, label: string): ScanResult {
   const visit = (node: ts.Node): void => {
     if (ts.isTaggedTemplateExpression(node) && isShellTag(node.tag)) {
       report(node, `${node.tag.getText(sf)} shell inherits the env; use Bun.spawn with env: sanitizedEnv()`);
+    } else if (ts.isCallExpression(node) && isProcessExecve(node.expression)) {
+      // process.execve(file, args, env) REPLACES this process; with no env
+      // argument the new image gets the daemon's.
+      const env = node.arguments[2];
+      const ok = !!env && ts.isCallExpression(env) && ts.isIdentifier(env.expression)
+        && env.expression.text === 'sanitizedEnv' && sanitizerImported && !isShadowed('sanitizedEnv');
+      if (!ok) report(node, 'process.execve env (third argument) must be exactly sanitizedEnv(...)');
     } else if (ts.isCallExpression(node) && isSpawnCallee(node.expression)) {
       checkEnv(node, node.expression.getText(sf));
     } else if (ts.isImportDeclaration(node) && ts.isStringLiteral(node.moduleSpecifier)
-      && THIRD_PARTY_PROCESS_MODULES.has(node.moduleSpecifier.text)) {
+      && isThirdPartyProcessModule(node.moduleSpecifier.text)) {
       report(node, `imports ${node.moduleSpecifier.text}, which spawns with an inherited env`);
-    } else if (ts.isCallExpression(node) && THIRD_PARTY_PROCESS_MODULES.has(moduleOfLoadCall(node) ?? '')) {
+    } else if (ts.isCallExpression(node) && isThirdPartyProcessModule(moduleOfLoadCall(node) ?? '')) {
       report(node, `loads ${moduleOfLoadCall(node)}, which spawns with an inherited env`);
     } else if (ts.isExportDeclaration(node) && node.moduleSpecifier && ts.isStringLiteral(node.moduleSpecifier)
       && spawnersOf(node.moduleSpecifier.text)) {
@@ -666,7 +710,8 @@ function scanSource(source: string, label: string): ScanResult {
         report(node, `re-exports ${local}; its callers cannot be checked`);
       }
     } else if ((ts.isIdentifier(node) || ts.isPropertyAccessExpression(node) || ts.isElementAccessExpression(node))
-      && (isBoundSpawner(node) || isBunGlobal(node) || (ts.isIdentifier(node) && moduleOf(node))) && escapes(node)) {
+      && (isBoundSpawner(node) || isBunGlobal(node) || isProcessExecve(node) || (ts.isIdentifier(node) && moduleOf(node)))
+      && escapes(node)) {
       report(node, `${node.getText(sf)} escapes as a value; the call it reaches cannot be checked`);
     } else if (ts.isCallExpression(node) && spawnersOf(moduleOfLoadCall(node) ?? '')) {
       // An inline require()/import() of the module is fine bound to a name or
@@ -687,11 +732,20 @@ function scanSource(source: string, label: string): ScanResult {
   return { offenders, diagnostics: parseDiagnostics.length };
 }
 
+/**
+ * Directories never scanned: installed packages and build output. The jarvis
+ * pieces' `dist/` bundles (gitignored, ~5.7 MB when built) exist only on
+ * machines that have built them, so scanning them made the result depend on
+ * local build state, and an exemption for them could not be written. A test
+ * below fails if a TRACKED file ever lands under one of these.
+ */
+const SKIPPED_DIRS = new Set(['node_modules', 'dist']);
+
 /** Every non-test source file under `root`, via a manual walk. */
 function walk(root: string): string[] {
   const found: string[] = [];
   for (const entry of readdirSync(root, { withFileTypes: true })) {
-    if (entry.name === 'node_modules') continue;
+    if (entry.isDirectory() && SKIPPED_DIRS.has(entry.name)) continue;
     const full = join(root, entry.name);
     if (entry.isDirectory()) found.push(...walk(full));
     else if (entry.isFile() && SOURCE_EXT.test(entry.name) && !TEST_FILE.test(entry.name)) found.push(full);
@@ -763,9 +817,25 @@ describe('the guard parses and reaches every file it scans', () => {
   test('the walk finds exactly what an independent glob finds', () => {
     const globbed = [...new Bun.Glob('**/*.{ts,tsx,mts,cts,js,jsx,mjs,cjs}').scanSync({ cwd: SRC, dot: true, onlyFiles: true })]
       .map(p => p.split(sep).join('/'))
-      .filter(p => !TEST_FILE.test(p) && !p.split('/').includes('node_modules'))
+      .filter(p => !TEST_FILE.test(p) && !p.split('/').slice(0, -1).some(d => SKIPPED_DIRS.has(d)))
       .sort();
     expect([...SCANS.keys()]).toEqual(globbed);
+  });
+
+  test('no tracked source file lives under a skipped directory', () => {
+    // The skip is for generated output only. If source is ever committed under
+    // a `dist/` or `node_modules/`, it has to be scanned, not silently skipped.
+    // A constructed env: under a pre-commit hook git exports GIT_DIR, which
+    // would widen `ls-files` to the whole repo and change what this checks.
+    const ls = Bun.spawnSync(['git', 'ls-files', '-z', '--', '.'], {
+      cwd: SRC, stdout: 'pipe', stderr: 'pipe',
+      env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '' },
+    });
+    expect(ls.exitCode).toBe(0);
+    const tracked = ls.stdout.toString().split('\0').filter(Boolean);
+    expect(tracked.length).toBeGreaterThan(1000);
+    const hidden = tracked.filter(p => SOURCE_EXT.test(p) && p.split('/').slice(0, -1).some(d => SKIPPED_DIRS.has(d)));
+    expect(hidden).toEqual([]);
   });
 
   test('every scanned file parses with zero diagnostics', () => {
@@ -828,13 +898,39 @@ test('the engine env passthrough stays curated', async () => {
   expect(engineOnly).toEqual([ENGINE_SHUTDOWN_GRACE_ENV, ENGINE_ORPHAN_POLL_ENV]);
 });
 
-test('the engine env override stays test-only', () => {
-  // spawnEngine merges opts.env over the curated list unfiltered. It is fed
-  // only by EngineRuntime's spawnEnvOverride, which only tests set; a
-  // production caller passing process.env there would undo the curation
-  // without touching anything this guard pins.
-  const users = FILES.map(rel).filter(f => readFileSync(join(SRC, f), 'utf8').includes('spawnEnvOverride'));
-  expect(users).toEqual(['workflows/runner/engine-runtime/engine-runtime.ts']);
+test('a caller-supplied engine env override cannot reintroduce the daemon env', async () => {
+  // opts.env (EngineRuntime's spawnEnvOverride) is merged over the curated
+  // list. Handing it the daemon's whole environment must still yield only
+  // engine names.
+  const { engineEnv } = await import('./workflows/runner/engine-runtime/spawn.ts');
+  const { ENGINE_SHUTDOWN_GRACE_ENV } = await import('./workflows/runner/engine-runtime/engine-lifecycle.ts');
+  const warn = console.warn;
+  const warnings: string[] = [];
+  console.warn = (m: string) => { warnings.push(m); };
+  let env: Record<string, string>;
+  try {
+    env = engineEnv({
+      bundlePath: '/x/main.js', sandboxId: 'sb', sandboxWsPort: 1, baseCodeDir: '/tmp',
+      env: {
+        ANTHROPIC_API_KEY: 'sentinel-do-not-log',
+        JARVIS_WORKFLOW_ENCRYPTION_KEY: 'sentinel-do-not-log',
+        HTTPS_PROXY: 'http://proxy',
+        [ENGINE_SHUTDOWN_GRACE_ENV]: '300',
+        AP_DEV_PIECES: 'x',
+      },
+    });
+  } finally {
+    console.warn = warn;
+  }
+  expect(env.ANTHROPIC_API_KEY).toBeUndefined();
+  expect(env.JARVIS_WORKFLOW_ENCRYPTION_KEY).toBeUndefined();
+  expect(env.HTTPS_PROXY).toBeUndefined();
+  expect(env[ENGINE_SHUTDOWN_GRACE_ENV]).toBe('300');
+  expect(env.AP_DEV_PIECES).toBe('x');
+  expect(env.SANDBOX_ID).toBe('sb');
+  // The drop is announced by NAME; the value never reaches the log.
+  expect(warnings.join('\n')).toContain('ANTHROPIC_API_KEY');
+  expect(warnings.join('\n')).not.toContain('sentinel-do-not-log');
 });
 
 // ---------------------------------------------------------------------------
@@ -931,6 +1027,23 @@ describe('the guard catches evasions', () => {
     ['an inner module re-binding under an outer local of the same name', `const cp = x;\nasync function f() { const cp = await import('node:child_process'); cp.exec('x'); }`],
     ['an inner spawner re-binding under an outer local of the same name', `const run = 1;\nasync function f() { const { exec: run } = await import('node:child_process'); run('x'); }`],
     ['Bun after an ambient declaration of it', 'declare const Bun: any;\nBun.$`curl`;'],
+    // Coordinator review nits.
+    ['process.execve without an env', `process.execve('/bin/sh', ['sh', '-c', c]);`],
+    ['process.execve with process.env', `process.execve('/bin/sh', ['sh'], process.env);`],
+    ['process.execve escaping as a value', `const ex = process.execve;`],
+    ['import.meta.require of bun, destructured', `const { spawn: go } = import.meta.require('bun');\ngo(['curl']);`],
+    ['import.meta.require of child_process, then .exec', `import.meta.require('node:child_process').exec('curl');`],
+    ['open', `import open from 'open';\nawait open(url);`],
+    ['simple-git', `import { simpleGit } from 'simple-git';\nawait simpleGit(dir).pull();`],
+    ['node-notifier', `const notifier = require('node-notifier');`],
+    ['the MCP SDK stdio client transport', `import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js';`],
+    ['puppeteer', `import puppeteer from 'puppeteer';`],
+    ['playwright', `import { chromium } from 'playwright';`],
+    ['@playwright/test', `import { test } from '@playwright/test';`],
+    ['a deep MCP SDK stdio path', `import { StdioClientTransport } from '@modelcontextprotocol/sdk/dist/esm/client/stdio.js';`],
+    ['execve imported from node:process', `import { execve } from 'node:process';\nexecve('/bin/sh', ['sh']);`],
+    ['execve destructured from process', `const { execve } = process;\nexecve('/bin/sh', ['sh']);`],
+    ['require(node:process).execve', `require('node:process').execve('/bin/sh', ['sh']);`],
   ];
 
   for (const [name, code] of cases) {
@@ -968,6 +1081,8 @@ describe('the guard catches evasions', () => {
     ['typeof Bun', `const inBun = typeof Bun !== 'undefined';`],
     ['an ordinary Bun API', `const f = Bun.file(p);\nconst h = Bun.hash(s);`],
     ['a sanitized spawn behind a cast', `${SAN}(Bun as any).spawn(['echo'], { env: sanitizedEnv() });`],
+    ['a sanitized process.execve', `${SAN}process.execve('/bin/sh', ['sh'], sanitizedEnv());`],
+    ['process.env and other process members', `const p = process.env.PATH;\nprocess.exit(0);`],
   ];
 
   for (const [name, code, label] of allowed) {
