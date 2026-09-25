@@ -8,6 +8,8 @@
  * Gracefully degrades if neither is available.
  */
 
+import { modelExecEnv } from '../util/model-exec-env.ts';
+
 type NotifyMethod = 'notify-send' | 'powershell' | null;
 
 let method: NotifyMethod | undefined;
@@ -130,6 +132,11 @@ function sendViaPowerShell(title: string, body: string): Bun.Subprocess<'ignore'
     stdin: 'ignore',
     stdout: 'ignore',
     stderr: 'ignore',
+    // An interpreter run for model- or workflow-authored text. Since #515 that
+    // text arrives only as base64 decoded into toast text nodes, never as
+    // script; independently of that, the interpreter gets the desktop session
+    // without the daemon's secrets (#514; see util/model-exec-env.ts).
+    env: modelExecEnv(),
   });
 }
 
