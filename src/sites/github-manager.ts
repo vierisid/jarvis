@@ -97,7 +97,8 @@ const KNOWN_PROTOCOLS = ['file', 'git', 'ext', 'fd', 'ssh', 'http', 'https'] as 
 // class state, no other module state) so it can move to a shared
 // src/sites/git-pins.ts for git-manager.ts to use as well (#516).
 //
-// git version support, measured in review (2.34, 2.39, 2.47, 2.54, 2.55):
+// git version support, measured in review (2.34, 2.39, 2.47, 2.51, 2.54,
+// 2.55):
 //   - `safe.bareRepository` exists from 2.38; older git ignores the pin.
 //   - `http.<url>.proactiveAuth` exists from 2.46 (see gitHardeningArgs).
 //   - config-defined hooks (`hook.<name>.command`) exist from 2.54;
@@ -136,9 +137,10 @@ const HOOK_EVENTS = [
  *     (reproduced in review; the command line beats a project's own
  *     `enabled=true`). git 2.54 has config hooks but not that event-level
  *     switch, so there each configured hook is also pinned off by name
- *     (needsNamedHookLookup, hookPinsFromListing). The token was already consumed by then; this closes the
- *     write-to-execute path itself. Pushes the user runs are unaffected. A
- *     hook event added by a future git would need adding to HOOK_EVENTS.
+ *     (resolveHookPins). The token was already consumed by then; this
+ *     closes the write-to-execute path itself. Pushes the user runs are
+ *     unaffected. A hook event added by a future git would need adding to
+ *     HOOK_EVENTS.
  *   - `core.fsmonitor=` (empty): the fsmonitor command runs on every index
  *     read. Empty, not `false`: git 2.34 reads `false` as the name of a hook
  *     to run (via PATH), twice per index read; empty disables it with no
@@ -169,7 +171,13 @@ const PROJECT_GIT_PINS: readonly string[] = [
 /** A git binary's major.minor, or null when `git --version` is unparseable. */
 export type GitVersion = readonly [number, number] | null;
 
+/**
+ * Release candidates parse as unknown (null), which means "do the hook
+ * lookup": whether an rc of 2.55 already carries the event-level switch is
+ * not something to guess at. Dev builds (`2.55.0.123.gabc`) parse normally.
+ */
 export function parseGitVersion(versionOutput: string): GitVersion {
+  if (/-rc\d*/i.test(versionOutput)) return null;
   const m = /(\d+)\.(\d+)/.exec(versionOutput);
   return m ? [Number(m[1]), Number(m[2])] : null;
 }
@@ -219,6 +227,56 @@ export function hookNamesFromListing(listing: string): string[] {
 /** `-c hook.<name>.enabled=false` for every name in a HOOK_LOOKUP_ARGS listing. */
 export function hookPinsFromListing(listing: string): string[] {
   return hookNamesFromListing(listing).flatMap(name => ['-c', `hook.${name}.enabled=false`]);
+}
+
+/**
+ * Runs one git command (with PROJECT_GIT_PINS, no per-name pins) and resolves
+ * to its stdout; rejects with an Error carrying `exitCode` on failure.
+ */
+export type RunGit = (args: string[]) => Promise<string>;
+
+/**
+ * The per-name hook pins for one project, as `-c` arguments: `[]` unless
+ * needsNamedHookLookup(version), else one pin per configured hook name.
+ * Re-reads the config on every call, so a hook added between two commands is
+ * still caught; one added between this lookup and the command it guards is
+ * not -- the same race as any check-then-run on a config the project can
+ * write (#516). Callers holding a secret must resolve this BEFORE the secret
+ * exists: the lookup is a git process of its own.
+ *
+ * Fails closed: only exit 1 ("no such keys") means none; any other failure
+ * (a broken config is 128) rethrows, as does a name no `-c` key can carry.
+ */
+export async function resolveHookPins(run: RunGit, version: GitVersion): Promise<string[]> {
+  if (!needsNamedHookLookup(version)) return [];
+  let listing: string;
+  try {
+    listing = await run([...HOOK_LOOKUP_ARGS]);
+  } catch (err) {
+    if ((err as { exitCode?: number }).exitCode === 1) return [];
+    throw err;
+  }
+  return hookPinsFromListing(listing);
+}
+
+/**
+ * A memoised `git --version` reader. `run` should use a fixed cwd (the version
+ * describes the binary, and a project cwd that does not exist would fail the
+ * read). A failed read is not cached: the next call retries. Concurrent
+ * callers share the one in-flight read.
+ */
+export function gitVersionReader(run: RunGit): () => Promise<GitVersion> {
+  let cached: Promise<GitVersion> | undefined;
+  return () => {
+    cached ??= run(['--version']).then(
+      out => parseGitVersion(out),
+      (err) => {
+        cached = undefined;
+        throw err;
+      },
+    );
+    return cached;
+  };
 }
 
 // ── End of git pins ──
@@ -800,49 +858,13 @@ export class GitHubManager {
 
   // ── Private Helpers ──
 
-  /**
-   * The per-name hook pins for this project (see needsNamedHookLookup),
-   * as `-c` arguments. Each call re-reads the config, so a hook added
-   * between two commands is still caught; one added between this lookup and
-   * the command it guards is not -- the same race as any check-then-run on a
-   * config the project can write (#516). authedGit computes these BEFORE it
-   * writes the token file, so the lookup never runs inside the token window.
-   *
-   * Fails closed: a name that cannot be carried in a `-c` key (`=`, newline)
-   * throws, and so does any lookup failure other than "no such keys".
-   */
+  /** resolveHookPins for this project; see there. */
   private async namedHookPins(cwd: string): Promise<string[]> {
-    if (!needsNamedHookLookup(await this.gitVersion())) return [];
-    let listing: string;
-    try {
-      listing = await this.git(cwd, [...HOOK_LOOKUP_ARGS], { hookPins: [] });
-    } catch (err) {
-      // Only exit 1 means "no such keys". Anything else (a broken config is
-      // 128) must not be read as "no hooks" by a security lookup.
-      if ((err as { exitCode?: number }).exitCode === 1) return [];
-      throw err;
-    }
-    return hookPinsFromListing(listing);
+    return resolveHookPins(args => this.git(cwd, args, { hookPins: [] }), await this.gitVersion());
   }
 
-  private gitVersionCache: Promise<GitVersion> | undefined;
-
-  /**
-   * The git binary's major.minor, read once per manager; null if unparseable.
-   * Run from the temp dir, not a project: it describes the binary, and a
-   * project cwd that does not exist would otherwise poison the cache. A
-   * failed read is not cached.
-   */
-  private gitVersion(): Promise<GitVersion> {
-    this.gitVersionCache ??= this.git(tmpdir(), ['--version'], { hookPins: [] }).then(
-      out => parseGitVersion(out),
-      (err) => {
-        this.gitVersionCache = undefined;
-        throw err;
-      },
-    );
-    return this.gitVersionCache;
-  }
+  /** gitVersionReader, run from the temp dir; see there. */
+  private readonly gitVersion = gitVersionReader(args => this.git(tmpdir(), args, { hookPins: [] }));
 
   /**
    * Paths (up to two, for the error message) whose index blob is an actual
@@ -861,24 +883,32 @@ export class GitHubManager {
    * the index rather than walking origin/<branch>..HEAD.
    */
   private async lfsPointerPaths(cwd: string): Promise<string[]> {
-    const found: string[] = [];
+    // Bounded: in a blobless partial clone `cat-file` may lazily fetch the
+    // blob from origin, and that must not hang the push.
+    const options = { timeoutMs: this.networkTimeoutMs };
+    let listing: string;
     try {
-      const listing = await this.git(cwd, ['ls-files', '-s', '-z', '--', ':(attr:filter=lfs)']);
-      const entries = listing.split('\0').filter(Boolean).slice(0, LFS_CANDIDATE_LIMIT);
-      for (const entry of entries) {
-        // `<mode> <oid> <stage>\t<path>`
-        const tab = entry.indexOf('\t');
-        const oid = entry.slice(0, tab).split(' ')[1];
-        if (tab < 0 || !oid) continue;
-        const size = Number((await this.git(cwd, ['cat-file', '-s', oid])).trim());
-        if (!(size > 0 && size <= LFS_POINTER_MAX_BYTES)) continue;
-        const content = await this.git(cwd, ['cat-file', 'blob', oid]);
-        if (!content.startsWith(LFS_POINTER_HEADER)) continue;
-        found.push(entry.slice(tab + 1));
-        if (found.length === 2) break;
-      }
+      listing = await this.git(cwd, ['ls-files', '-s', '-z', '--', ':(attr:filter=lfs)'], options);
     } catch {
-      return found;
+      return [];
+    }
+    const found: string[] = [];
+    for (const entry of listing.split('\0').filter(Boolean).slice(0, LFS_CANDIDATE_LIMIT)) {
+      // `<mode> <oid> <stage>\t<path>`; regular files only, so a gitlink or
+      // symlink is never handed to cat-file.
+      const tab = entry.indexOf('\t');
+      const [mode, oid] = entry.slice(0, Math.max(tab, 0)).split(' ');
+      if (tab < 0 || !oid || (mode !== '100644' && mode !== '100755')) continue;
+      try {
+        const size = Number((await this.git(cwd, ['cat-file', '-s', oid], options)).trim());
+        if (!(size > 0 && size <= LFS_POINTER_MAX_BYTES)) continue;
+        const content = await this.git(cwd, ['cat-file', 'blob', oid], options);
+        if (!content.startsWith(LFS_POINTER_HEADER)) continue;
+      } catch {
+        continue; // one unreadable entry does not end the scan
+      }
+      found.push(entry.slice(tab + 1));
+      if (found.length === 2) break;
     }
     return found;
   }
@@ -1047,7 +1077,9 @@ export class GitHubManager {
     }
 
     // Before the token file exists: the lookup is a git process of its own,
-    // and exactly one git process may run while the file is on disk.
+    // and this call runs exactly one git process while the file is on disk.
+    // (Per call: nothing serialises two operations on the same project, so a
+    // concurrent pull or status could still run a project filter meanwhile.)
     const hookPins = await this.namedHookPins(cwd);
 
     const root = credentialRoot();

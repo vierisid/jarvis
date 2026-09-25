@@ -28,7 +28,7 @@ import {
   utimesSync, writeFileSync,
 } from 'node:fs';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   CREDENTIAL_DIR_PREFIX, GitHubManager, credentialHelperArgs, credentialRoot, gitHardeningArgs, hookNamesFromListing,
   sweepStaleCredentialDirs,
@@ -74,14 +74,18 @@ function tempRoot(label: string): string {
   return dir;
 }
 
-// process.env is mutated for PATH (fake/wrapped git), TMPDIR and
-// XDG_RUNTIME_DIR (where the credential dir goes), HOME (isolate from the
-// developer's ~/.gitconfig), the locale, and JARVIS_GITHUB_TOKEN. sanitizedEnv
-// reads it live. Always restored after each test. This relies on bun running
-// the tests of a file one at a time: do not opt this file into
-// test.concurrent.
+// process.env is mutated for PATH (fake/wrapped git), XDG_RUNTIME_DIR (where
+// the credential dir goes), HOME (isolate from the developer's ~/.gitconfig),
+// the locale, and JARVIS_GITHUB_TOKEN. sanitizedEnv reads it live. Always
+// restored after each test. This relies on bun running the tests of a file
+// one at a time: do not opt this file into test.concurrent.
+//
+// Never TMPDIR: SQLite resolves its temp directory from TMPDIR and keeps it,
+// so a test dir set here (and deleted afterwards) broke every later test file
+// in the same `bun test` process that opens a database ("disk I/O error").
 const savedEnv = new Map<string, string | undefined>();
 function setEnv(name: string, value: string | undefined): void {
+  if (name === 'TMPDIR') throw new Error('setEnv: TMPDIR must not change in-process (see above)');
   if (!savedEnv.has(name)) savedEnv.set(name, process.env[name]);
   if (value === undefined) delete process.env[name];
   else process.env[name] = value;
@@ -245,9 +249,9 @@ describe('credentialHelperArgs: the helper git runs', () => {
 describe.skipIf(process.platform === 'win32')('credentialRoot', () => {
   test('uses XDG_RUNTIME_DIR only when it is our own private directory', () => {
     const base = tempRoot('xdg');
-    const fallback = join(base, 'tmp');
-    mkdirSync(fallback);
-    setEnv('TMPDIR', fallback);
+    // The fallback is the process temp dir itself: TMPDIR is never changed
+    // in-process (see the note on setEnv).
+    const fallback = resolve(tmpdir());
 
     const good = join(base, 'good');
     mkdirSync(good, { mode: 0o700 });
@@ -379,7 +383,8 @@ describe('each call site keeps the token out of git argv and env', () => {
     ].join('\n'), { mode: 0o755 });
 
     setEnv('PATH', `${bin}:${process.env.PATH ?? ''}`);
-    setEnv('TMPDIR', tmp);
+    // The credential root: 0700 and ours, so credentialRoot() takes it.
+    chmodSync(tmp, 0o700);
     setEnv('XDG_RUNTIME_DIR', tmp);
     setEnv('JARVIS_GITHUB_TOKEN', TOKEN);
 
@@ -768,8 +773,6 @@ describe('each call site keeps the token out of git argv and env', () => {
   const unsafeBranches = ['--receive-pack=touch pwned', '-f', '+main', 'main:refs/heads/other'];
 
   // git 2.54 has config hooks but no event-level `hook.<event>.enabled`, so
-  // there the manager must name each configured hook and pin it off.
-  // git 2.54 has config hooks but no event-level `hook.<event>.enabled`, so
   // there the manager must name each configured hook and pin it off. Before
   // 2.54 there are no config hooks, and from 2.55 the event pins cover them.
   describe('per-name hook pins by git version', () => {
@@ -854,12 +857,16 @@ describe('each call site keeps the token out of git argv and env', () => {
       });
     }
 
-    test('an unparseable version still does the lookup', async () => {
-      const fake = setupFakeGit();
-      fakeWithVersion(fake, 'unknown', listing('hook.probe.command\\n/x\\0'));
-      expect((await new GitHubManager().push(fake.project)).success).toBe(true);
-      expect(calls(fake).find(c => c.argv.includes('push'))!.argv).toContain('hook.probe.enabled=false');
-    });
+    // An unparseable version, or a release candidate (does an rc of 2.55
+    // have the event switch yet?), is treated as needing the lookup.
+    for (const version of ['unknown', '2.55.0-rc1']) {
+      test(`version "${version}" still does the lookup`, async () => {
+        const fake = setupFakeGit();
+        fakeWithVersion(fake, version, listing('hook.probe.command\\n/x\\0'));
+        expect((await new GitHubManager().push(fake.project)).success).toBe(true);
+        expect(calls(fake).find(c => c.argv.includes('push'))!.argv).toContain('hook.probe.enabled=false');
+      });
+    }
 
     // S3: the version describes the binary, so it is read from a fixed cwd,
     // and a failed read is retried rather than cached for the manager's life.
@@ -1086,7 +1093,9 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
   }
 
   function useHarnessEnv(h: Harness) {
-    for (const [k, v] of Object.entries(h.gitEnv)) setEnv(k, v);
+    // Everything but TMPDIR (see the note on setEnv); the credential root
+    // comes from XDG_RUNTIME_DIR below instead.
+    for (const [k, v] of Object.entries(h.gitEnv)) if (k !== 'TMPDIR') setEnv(k, v);
     setEnv('LC_ALL', 'C');
     setEnv('LANGUAGE', undefined);
     setEnv('XDG_RUNTIME_DIR', h.tmp);
@@ -1364,6 +1373,7 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
       + `oid sha256:${'a'.repeat(64)}\nsize 12345\n`;
     writeFileSync(join(h.project, 'asset.bin'), pointer);
     writeFileSync(join(h.project, 'other.bin'), pointer);
+    writeFileSync(join(h.project, 'third.bin'), pointer);
     await setup([REAL_GIT!, 'add', '.'], h.project, h.gitEnv);
     await setup([REAL_GIT!, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'lfs'], h.project, h.gitEnv);
     useHarnessEnv(h);
@@ -1372,7 +1382,9 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     const result = await manager().push(h.project);
     expect(result.success).toBe(false);
     expect(result.error).toContain('Git LFS');
-    expect(result.error).toContain('asset.bin');
+    // Two paths named, not every one: the message stays readable.
+    const named = ['asset.bin', 'other.bin', 'third.bin'].filter(p => result.error!.includes(p));
+    expect(named).toEqual(['asset.bin', 'other.bin']);
     expect(server.requests.length).toBe(before);
     expect(credentialDirsIn(h.tmp)).toEqual([]);
   }, 30_000);
@@ -1385,6 +1397,9 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     writeFileSync(join(h.project, '.gitattributes'), '*.bin filter=lfs diff=lfs merge=lfs -text\n');
     writeFileSync(join(h.project, 'asset.bin'), Buffer.from([0, 1, 2, 3, 255, 254]));
     writeFileSync(join(h.project, 'big.bin'), Buffer.alloc(4096, 7));
+    // Starts like a pointer but is far too big to be one: the size gate.
+    writeFileSync(join(h.project, 'looks-like.bin'),
+      `version https://git-lfs.github.com/spec/v1\n${'x'.repeat(2048)}\n`);
     await setup([REAL_GIT!, 'add', '.'], h.project, h.gitEnv);
     await setup([REAL_GIT!, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'raw'], h.project, h.gitEnv);
     useHarnessEnv(h);
