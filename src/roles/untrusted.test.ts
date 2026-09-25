@@ -94,6 +94,29 @@ describe('inlineUntrusted', () => {
     expect(inlineUntrusted(`a${cp(0xfeff)}b${cp(0x202e)}c${cp(0xe0041)}d`)).toBe('abcd');
   });
 
+  test('lone surrogates from JSON come out as well-formed UTF-16', () => {
+    const name = JSON.parse('"x\\ud800y\\udc00z"') as string;
+    expect(name.isWellFormed()).toBe(false);
+    const out = inlineUntrusted(name);
+    expect(out.isWellFormed()).toBe(true);
+    expect(out).toBe('x\uFFFDy\uFFFDz');
+    // A real pair survives intact.
+    expect(inlineUntrusted('a\u{1F600}b')).toBe('a\u{1F600}b');
+  });
+
+  test('a huge value is cut before the regexes run, and a split pair is repaired', () => {
+    const huge = 'a'.repeat(10_000_000);
+    const started = performance.now();
+    expect(inlineUntrusted(huge, 100)).toBe('a'.repeat(100) + '...');
+    // Uncut, the regexes took ~290ms on this input; cut, well under 1ms.
+    expect(performance.now() - started).toBeLessThan(150);
+    // Mostly-invisible input: the cut still reports that text was dropped.
+    expect(inlineUntrusted('\u200b'.repeat(1_000) + 'tail', 10)).toBe('...');
+    // The cut lands between the halves of a pair (budget = 4 code units).
+    const out = inlineUntrusted('abc\u{1F600}rest', 1);
+    expect(out.isWellFormed()).toBe(true);
+  });
+
   test('a non-string value (unvalidated JSON) renders instead of throwing', () => {
     expect(inlineUntrusted(123)).toBe('123');
     expect(inlineUntrusted(true)).toBe('true');

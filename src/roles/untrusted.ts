@@ -113,17 +113,27 @@ export function defangDelimiters(text: string): string {
  * value must render, never throw on every later turn. Numbers and booleans
  * are shown; anything else renders empty, because String() on an object from
  * JSON can throw (`{"toString": 1}` has no callable conversion).
+ *
+ * Lone surrogates become U+FFFD: JSON happily decodes "\ud800", and a
+ * provider that rejects ill-formed UTF-16 would otherwise refuse every
+ * request carrying the prompt. The input is cut to a few times the cap before
+ * any regex runs, so a multi-megabyte name costs nothing per turn; the cut
+ * may split a surrogate pair, which the same step repairs.
  */
 export function inlineUntrusted(value: unknown, maxChars = 100): string {
-  const text = typeof value === 'string' ? value
+  const raw = typeof value === 'string' ? value
     : typeof value === 'number' || typeof value === 'boolean' ? String(value)
     : '';
+  const budget = maxChars * 4;
+  const cut = raw.length > budget;
+  const text = (cut ? raw.slice(0, budget) : raw).toWellFormed();
   const flat = defangDelimiters(text.replace(/\p{Cf}/gu, ''))
     .replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ')
     .replace(/"/g, "'")
     .trim();
   const chars = Array.from(flat);
-  return chars.length > maxChars ? chars.slice(0, maxChars).join('') + '...' : flat;
+  if (chars.length > maxChars) return chars.slice(0, maxChars).join('') + '...';
+  return cut ? flat + '...' : flat;
 }
 
 /** Wrap a payload in the delimiters with the preamble. Empty input stays empty. */
