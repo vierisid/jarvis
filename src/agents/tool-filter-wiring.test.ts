@@ -548,7 +548,8 @@ async function pauseAndResume(opts: {
   } as never);
   const engine = new AuthorityEngine({ default_level: 10, governed_categories: ['write_data'] as never, overrides: [],
     context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' } as never);
-  const audit = { log: (r: Record<string, unknown>) => r } as never;
+  const rows: Array<Record<string, unknown>> = [];
+  const audit = { log: (r: Record<string, unknown>) => { rows.push(r); return r; } } as never;
   const approval = { effectId: 'effect', approvalId: 'approval', waitpointId: 'waitpoint' };
   const common = {
     task: 'set a goal to ship the release this week', context: '', llmManager: manager, toolRegistry: registry,
@@ -570,7 +571,7 @@ async function pauseAndResume(opts: {
       pending,
     } });
   const results = new Map(resumed.messages.filter((m) => m.role === 'tool').map((m) => [m.tool_call_id, String(m.content)]));
-  return { ran, seen, paused, resumed, results };
+  return { ran, seen, paused, resumed, results, rows };
 }
 
 const write = (id: string): LLMToolCall => ({ id, name: 'write_file', arguments: { path: '/tmp/x', content: 'y' } });
@@ -610,6 +611,19 @@ describe('runSubAgent pause and resume', () => {
     });
     expect(r.ran).toEqual([]);
     expect(r.results.get('p2')).toStartWith('[NOT RUN] run_command');
+  });
+
+  it('a legacy checkpoint runs a queued ordinary call without logging it as an off-list admission', async () => {
+    const r = await pauseAndResume({
+      content: '', calls: [write('p1'), { id: 'p2', name: 'manage_goals', arguments: { action: 'list' } }, shell('p3')],
+      legacyCheckpoint: true,
+    });
+    // Dispatched (through the governed boundary, since it writes), not refused.
+    expect(r.results.get('p2')).toBe('written');
+    expect(r.results.get('p3')).toStartWith('[NOT RUN] run_command');
+    const names = r.rows.map((row) => String(row.tool_name));
+    expect(names.some((n) => n.startsWith('off_list_call(manage_goals'))).toBe(false);
+    expect(names).toContain('off_list_call(run_command)');
   });
 
   it('a checkpoint from before `offered` existed refuses a queued trigger', async () => {

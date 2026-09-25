@@ -162,7 +162,9 @@ describe('wrong exclusion - the cases #483 measured as capability loss', () => {
     for (const ask of ['build me a landing page for my bakery', 'create a website for my bakery',
       'make a portfolio site', 'create an HTML page for my resume', 'code a website for me',
       'generate a static site with three pages', 'scaffold a new site', 'put together a small site for the club',
-      'whip up a website for the event', 'spin up a site for the launch']) {
+      'whip up a website for the event', 'spin up a site for the launch',
+      // An excluded word AFTER the noun does not count against it.
+      'create a website with a login page', 'build a site where members can sign in']) {
       expect(`${ask}: ${nameSet(decide([user(ask)])).has('site_write_file')}`).toBe(`${ask}: true`);
     }
     // Browses and dev chat: must not be offered the site shell.
@@ -170,7 +172,7 @@ describe('wrong exclusion - the cases #483 measured as capability loss', () => {
       'go to my website and read the about page', 'check what my site says about pricing',
       'make sure the website loads before you read the pricing', 'create an account on the site',
       'set up my account on their website', 'start by reading their homepage', 'what is the design of their homepage',
-      'make a summary of this site']) {
+      'make a summary of this site', 'generate a report on their website traffic', 'create a bookmark for this site']) {
       expect(`${ask}: ${nameSet(decide([user(ask)])).has('site_run_command')}`).toBe(`${ask}: false`);
     }
   });
@@ -189,6 +191,14 @@ describe('wrong exclusion - the cases #483 measured as capability loss', () => {
     expect(exact).toBe('y'.repeat(SELECTION_WINDOW_CHARS));
     // Lowercased, and only after windowing.
     expect(conversationText([user('HELLO')])).toBe('hello');
+  });
+
+  test('the site-build pattern stays linear on hostile input', () => {
+    for (const hostile of ['build '.repeat(1400), 'create a '.repeat(900) + 'site', 'make ' + 'x '.repeat(4000)]) {
+      const t0 = performance.now();
+      decide([user(hostile)]);
+      expect(performance.now() - t0).toBeLessThan(200);
+    }
   });
 
   test('the bare-domain pattern stays linear on hostile input', () => {

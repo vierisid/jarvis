@@ -29,6 +29,7 @@ import {
   admissionAuditName, interceptDiscovery, interceptOffList, DISCOVER_TOOLS_LLM, type DiscoveryContext,
 } from '../actions/tools/tool-relevance/discover.ts';
 import { getToolFilterPolicy } from '../actions/tools/tool-relevance/policy.ts';
+import { isInvariantTrigger } from '../actions/tools/tool-relevance/authority-classes.ts';
 import { toolDefToLLMTool, BUILTIN_TOOLS } from '../actions/tools/builtin.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
@@ -717,11 +718,16 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       record(pending.toolCall, governedText(authorityCtx, pending.toolCall, pending.toolCategory, governed));
       // A checkpoint written before `offered` existed: if this run's model is
       // never filtered (the gate, not this turn's text, decides that), it
-      // was offered everything and nothing needs checking. Otherwise nothing
-      // is known to have been offered, and every queued call goes through
-      // the off-list check. Not "the recomputed set is full": the model's
-      // own text can make it full, which is the B1 bypass again.
-      const legacyOffered = toolSet.engaged ? new Set<string>() : toolSet.exposed;
+      // was offered everything and nothing needs checking. Otherwise what was
+      // offered is unknown, so it is taken to be every tool that is NOT an
+      // invariant trigger: a queued trigger is refused (the framed readers
+      // that are themselves triggers count as hidden), and a queued ordinary
+      // call runs without being logged as an off-list admission it probably
+      // was not. Not "the recomputed set is full": the model's own text can
+      // make it full, which is the B1 bypass again.
+      const legacyOffered = toolSet.engaged
+        ? new Set(toolRegistry.list().filter((t) => !isInvariantTrigger(t)).map((t) => t.name))
+        : toolSet.exposed;
       const pause = await dispatchCalls(pending.remaining, pending.iteration,
         pending.offered ? new Set(pending.offered) : legacyOffered);
       // A turn is durable only while the run is still alive.
