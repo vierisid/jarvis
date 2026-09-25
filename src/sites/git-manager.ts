@@ -7,6 +7,40 @@
 import type { GitCommit, GitBranch } from './types.ts';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
 
+/**
+ * `-c` pins on every git call made here (#516). Command-line config beats
+ * every config file for the same key, so these hold even against a
+ * `.git/config` planted before the site file tools stopped writing it, or
+ * through site_run_command. They are defense in depth: the site file tools
+ * refusing `.git` is the fix.
+ *
+ * - `safe.bareRepository=explicit`: in a project with no .git, git would take
+ *   the project ROOT for a bare repository if it holds HEAD, objects/ and
+ *   refs/, and read its `config` -- ordinary files the site file tools may
+ *   write, whose core.worktree + core.fsmonitor then run on the next
+ *   `git status`. Nothing here ever uses a bare repository.
+ * - `core.fsmonitor=false`: git runs the fsmonitor command whenever it reads
+ *   the index, and status runs on every project listing.
+ * - `core.hooksPath=/dev/null`: no hook runs for the daemon's own commits,
+ *   checkouts, merges and rebases. A hooks dir in the worktree (husky's
+ *   `.husky`, set by an npm install) is model-writable, and overwriting an
+ *   existing executable hook keeps its mode. Costs a user's pre-commit lint on
+ *   auto-commits; their own `git commit` still runs it.
+ * - `log.showSignature=false`: getLog would otherwise start gpg.
+ *
+ * NOT pinnable this way, because the names are arbitrary: filter drivers
+ * (`filter.<x>.clean`), merge drivers and textconv drivers, and config pulled
+ * in through `include.path`. Those need a config file the site tools can
+ * write, which is what they no longer can. getDiff passes --no-ext-diff and
+ * --no-textconv for the diff side of it.
+ */
+const PROJECT_GIT_PINS = [
+  '-c', 'safe.bareRepository=explicit',
+  '-c', 'core.fsmonitor=false',
+  '-c', 'core.hooksPath=/dev/null',
+  '-c', 'log.showSignature=false',
+];
+
 export class GitManager {
   /**
    * Check if git is installed on the system.
@@ -154,8 +188,8 @@ export class GitManager {
    * Get diff of uncommitted changes.
    */
   async getDiff(projectPath: string): Promise<string> {
-    const staged = await this.run(projectPath, ['diff', '--cached']);
-    const unstaged = await this.run(projectPath, ['diff']);
+    const staged = await this.run(projectPath, ['diff', '--no-ext-diff', '--no-textconv', '--cached']);
+    const unstaged = await this.run(projectPath, ['diff', '--no-ext-diff', '--no-textconv']);
     return (staged + '\n' + unstaged).trim();
   }
 
@@ -218,11 +252,12 @@ export class GitManager {
    * Run a git command in the project directory.
    */
   private async run(cwd: string, args: string[]): Promise<string> {
-    // Sanitized, not inherited: git runs whatever hooks live in the project
-    // tree's .git/hooks, and that tree is written by the model. Stripping the
-    // inherited GIT_* also stops a hook-invoked daemon's GIT_DIR/GIT_INDEX_FILE
-    // from pointing these commands at the wrong repository.
-    const proc = Bun.spawn(['git', ...args], {
+    // Sanitized, not inherited: git can still run commands the project names
+    // (PROJECT_GIT_PINS covers the ones a pin can), and the project is written
+    // by the model. Stripping the inherited GIT_* also stops a hook-invoked
+    // daemon's GIT_DIR/GIT_INDEX_FILE from pointing these commands at the
+    // wrong repository.
+    const proc = Bun.spawn(['git', ...PROJECT_GIT_PINS, ...args], {
       cwd,
       stdout: 'pipe',
       stderr: 'pipe',
