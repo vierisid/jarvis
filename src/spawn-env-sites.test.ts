@@ -27,6 +27,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isAllowedEnvName } from './util/subprocess-env.ts';
+import { SANITIZED_INSTALL_HINT } from './util/sanitized-install.ts';
 
 /** Synthetic. Never a real secret, and never printed on failure. */
 const CANARY_VALUE = 'sentinel-do-not-log';
@@ -64,7 +65,7 @@ afterAll(() => {
 
 /** `args`: the fake binary's argv, when it recorded one. */
 type Dump = { name: string; env: Record<string, string>; args?: string[] };
-type ProbeResult = { dumps: Dump[]; stderr: string; exitCode: number };
+type ProbeResult = { dumps: Dump[]; stdout: string; stderr: string; exitCode: number };
 
 function dumpNamed(result: ProbeResult, name: string): Record<string, string> | undefined {
   return result.dumps.find(d => d.name === name)?.env;
@@ -114,7 +115,7 @@ async function runProbe(site: string, extraEnv: Record<string, string> = {}): Pr
   });
   liveChildren.push(proc);
 
-  const [, stderr] = await Promise.all([
+  const [stdout, stderr] = await Promise.all([
     new Response(proc.stdout).text(),
     new Response(proc.stderr).text(),
   ]);
@@ -139,7 +140,7 @@ async function runProbe(site: string, extraEnv: Record<string, string> = {}): Pr
     }
   }
 
-  return { dumps, stderr, exitCode };
+  return { dumps, stdout, stderr, exitCode };
 }
 
 /** A crash must not read as a clean run. */
@@ -232,6 +233,18 @@ describe('workflow and daemon spawns do not inherit the daemon environment (#512
     expect(dumpNamed(result, 'bun-install')).toBeDefined();
     expectAllSanitized(result);
     expectScriptsIgnored(result);
+  }, 30_000);
+
+  test('a failed install says it ran sanitized: `exited with code N. <hint>`', async () => {
+    // A self-hoster whose registry auth lived in env vars sees only this, so
+    // its shape is pinned for both install paths.
+    const result = await runProbe('install-errors');
+    expectProbeSucceeded(result);
+    const lines = result.stdout.split('\n').filter(l => l.startsWith('ERR '));
+    expect(lines).toEqual([
+      `ERR bun install (pieces) exited with code 3. ${SANITIZED_INSTALL_HINT}`,
+      `ERR bun install (engine staging) exited with code 3. ${SANITIZED_INSTALL_HINT}`,
+    ]);
   }, 30_000);
 
   test('daemon: the dashboard auto-build `bun run build:ui`', async () => {

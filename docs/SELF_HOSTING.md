@@ -364,14 +364,17 @@ Three caveats.
 
 ### Package installs (pieces and the workflow engine)
 
-Installing a piece from the library, the startup check that re-installs the
-pieces when `node_modules` is gone, and building the workflow engine (on first
-start, and again whenever an upgrade changes its dependencies) all run
-`bun install`. They run it with a **sanitized environment**: only an
+Installing or uninstalling a piece from the library, the startup check that
+re-installs the pieces when `node_modules` is gone, and building the workflow
+engine (on first start, and again whenever an upgrade changes its
+dependencies) all run `bun install`. They run it with a **sanitized environment**: only an
 allowlist of variables (`PATH`, `HOME`, temp and locale settings, proxies,
 CA bundles, registry URLs, bun and npm cache locations) reaches the install,
 never the daemon's API keys or tokens. Lifecycle scripts are skipped
-(`--ignore-scripts`).
+(`--ignore-scripts`). The cost: a native dependency that has no prebuilt
+package for your platform, and would have built or downloaded its binary in
+an install script, now fails when the piece loads, and there is no setting to
+turn the scripts back on.
 
 What that means for a private or authenticated registry:
 

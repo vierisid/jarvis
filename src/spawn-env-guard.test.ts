@@ -167,7 +167,7 @@ const EXEMPT: Record<string, Exemption> = {
       'them to that closed union would open them to every site; and the site allowlist ' +
       'would forward HTTP(S)_PROXY and CA settings to the engine, which changes how ' +
       'pieces reach the network -- a functional decision, not env hygiene. The ' +
-      'caller-supplied opts.env merged on top (EngineRuntime spawnEnvOverride) is ' +
+      'caller-supplied opts.env merged on top (used by tests only) is ' +
       'filtered to engine names by isEngineEnvName, pinned by a test below.',
     calls: { spawnEngine: 1 },
   },
@@ -520,10 +520,11 @@ function scanSource(source: string, label: string): ScanResult {
       const spec = moduleOfLoadCall(init);
       const spawners = spec ? spawnersOf(spec) : null;
       if (spawners) bindPattern(node.name, spawners);
-      // const { execve } = process -- the global, destructured
-      if (ts.isIdentifier(init) && init.text === 'process' && ts.isObjectBindingPattern(node.name)) {
-        bindPattern(node.name, PROCESS_SPAWNERS);
-      }
+      // const { execve } = process / = globalThis.process -- the global, destructured
+      const isProcessGlobal = (ts.isIdentifier(init) && init.text === 'process')
+        || (ts.isPropertyAccessExpression(init) && init.name.text === 'process'
+          && ts.isIdentifier(init.expression) && ['globalThis', 'global', 'self'].includes(init.expression.text));
+      if (isProcessGlobal && ts.isObjectBindingPattern(node.name)) bindPattern(node.name, PROCESS_SPAWNERS);
     }
     // import('node:child_process').then(({ spawn }) => ...) / .then(cp => ...)
     if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression) && node.expression.name.text === 'then') {
@@ -673,7 +674,7 @@ function scanSource(source: string, label: string): ScanResult {
     // SPAWNER is not: `spawn.call(...)`, `Bun.spawn.bind(...)`,
     // `Bun.$.nothrow()` (the same shell), `new $.Shell()` all reach it.
     if ((ts.isPropertyAccessExpression(parent) || ts.isElementAccessExpression(parent)) && parent.expression === child) {
-      return isBoundSpawner(node as ts.Expression);
+      return isBoundSpawner(node as ts.Expression) || isProcessExecve(node as ts.Expression);
     }
     return true;
   };
@@ -822,7 +823,13 @@ describe('the guard parses and reaches every file it scans', () => {
     expect([...SCANS.keys()]).toEqual(globbed);
   });
 
-  test('no tracked source file lives under a skipped directory', () => {
+  // Needs a git checkout; a source tarball or a copied tree has no index to ask.
+  const inGitCheckout = Bun.spawnSync(['git', 'rev-parse', '--is-inside-work-tree'], {
+    cwd: SRC, stdout: 'pipe', stderr: 'pipe',
+    env: { PATH: process.env.PATH ?? '', HOME: process.env.HOME ?? '' },
+  }).stdout.toString().trim() === 'true';
+
+  test.skipIf(!inGitCheckout)('no tracked source file lives under a skipped directory', () => {
     // The skip is for generated output only. If source is ever committed under
     // a `dist/` or `node_modules/`, it has to be scanned, not silently skipped.
     // A constructed env: under a pre-commit hook git exports GIT_DIR, which
@@ -899,7 +906,8 @@ test('the engine env passthrough stays curated', async () => {
 });
 
 test('a caller-supplied engine env override cannot reintroduce the daemon env', async () => {
-  // opts.env (EngineRuntime's spawnEnvOverride) is merged over the curated
+  // opts.env (a test seam since #512 removed EngineRuntime's unused
+  // spawnEnvOverride) is merged over the curated
   // list. Handing it the daemon's whole environment must still yield only
   // engine names.
   const { engineEnv } = await import('./workflows/runner/engine-runtime/spawn.ts');
@@ -1044,6 +1052,9 @@ describe('the guard catches evasions', () => {
     ['execve imported from node:process', `import { execve } from 'node:process';\nexecve('/bin/sh', ['sh']);`],
     ['execve destructured from process', `const { execve } = process;\nexecve('/bin/sh', ['sh']);`],
     ['require(node:process).execve', `require('node:process').execve('/bin/sh', ['sh']);`],
+    ['process.execve.bind', `const ex = process.execve.bind(process);`],
+    ['process.execve.call', `process.execve.call(process, '/bin/sh', ['sh']);`],
+    ['execve destructured from globalThis.process', `const { execve: ex } = globalThis.process;\nex('/bin/sh', ['sh']);`],
   ];
 
   for (const [name, code] of cases) {

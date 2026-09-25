@@ -20,7 +20,7 @@ import { mkdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { noOpCodeSandbox } from '../workflows/activepieces/packages/server/engine/src/lib/core/code/no-op-code-sandbox';
 import { catalogById } from '../workflows/pieces-library/catalog';
-import { installPiece, writeManifest } from '../workflows/pieces-library/installer';
+import { installPiece, runPiecesBunInstall, writeManifest } from '../workflows/pieces-library/installer';
 import { reconcilePiecesLibrary } from '../workflows/pieces-library/reconciler';
 import { ENGINE_BUILD_PATHS, ensureStagingInstalled } from '../workflows/runner/engine-runtime/build';
 import { ensureUiBuilt } from '../daemon/ui-autobuild';
@@ -94,6 +94,28 @@ switch (site) {
     const repoRoot = join(workDir, 'repo');
     mkdirSync(repoRoot, { recursive: true });
     ensureUiBuilt(repoRoot, () => {});
+    break;
+  }
+
+  // Both install paths against a `bun` that fails: print the errors they
+  // raise. The failing fake goes first on PATH for this site only.
+  case 'install-errors': {
+    const failDir = join(workDir, 'failbin');
+    mkdirSync(failDir, { recursive: true });
+    writeFileSync(join(failDir, 'bun'), '#!/bin/sh\nexit 3\n', { mode: 0o755 });
+    process.env.PATH = `${failDir}:${process.env.PATH ?? ''}`;
+    if (!ENGINE_BUILD_PATHS.STAGING_DIR.startsWith(workDir + '/')) {
+      throw new Error(`staging dir ${ENGINE_BUILD_PATHS.STAGING_DIR} is outside the probe's work dir`);
+    }
+    mkdirSync(piecesDir, { recursive: true });
+    for (const run of [() => runPiecesBunInstall(piecesDir, 'pieces'), () => ensureStagingInstalled()]) {
+      try {
+        await run();
+        console.log('ERR <none: the install did not fail>');
+      } catch (e) {
+        console.log(`ERR ${(e as Error).message}`);
+      }
+    }
     break;
   }
 
