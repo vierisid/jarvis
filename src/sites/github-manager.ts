@@ -83,11 +83,16 @@ function readPipe(stream: ReadableStream<Uint8Array>): { text: Promise<string>; 
  * the target's own. Not exhaustive and cannot be: a remote helper
  * (`foo::<url>`, run as `git-remote-foo` from PATH) is a transport too, and a
  * project-level `protocol.foo.allow=always` beats our `protocol.allow=never`.
- * The real guard for those is the URL check in authedGit, which never writes
- * the token for a non-target URL; this list is the backstop for the built-in
+ * The guard for those is originIsCredentialTarget, which authedGit runs
+ * before writing the token file (a `foo::` URL or `remote.origin.vcs` fails
+ * it). Only a config changed between that check and the command gets past
+ * it to a custom helper; this list is the backstop for the built-in
  * transports that run code (file hooks, ssh commands, ext::, fd::).
  */
 const KNOWN_PROTOCOLS = ['file', 'git', 'ext', 'fd', 'ssh', 'http', 'https'] as const;
+
+/** git/ssh stderr that means "could not authenticate". */
+const AUTH_FAILURE = /Authentication failed|could not read (Username|Password)|terminal prompts disabled|Permission denied|returned error: 40[13]|403 Forbidden|401 Unauthorized/i;
 
 /**
  * Printable ASCII, no space. Anything else could not be a PAT, and a newline
@@ -208,8 +213,8 @@ export function credentialHelperArgs(tokenFile: string, target: CredentialTarget
  *   path, or to ssh with a planted `core.sshCommand`, runs code for that URL
  *   before git ever reaches GitHub and so before the file is consumed.
  *   authedGit already refuses to write the token unless every origin URL is
- *   on the target; this is the backstop should the config change between
- *   that check and the command. The per-protocol keys are set explicitly
+ *   on the target (originIsCredentialTarget); this is the backstop should the
+ *   config change between that check and the command. The per-protocol keys are set explicitly
  *   because a project-level `protocol.file.allow=always` would beat
  *   `protocol.allow`. See KNOWN_PROTOCOLS for what this cannot enumerate.
  * - `core.fsmonitor=false`: git runs the fsmonitor command whenever it reads
@@ -501,12 +506,12 @@ export class GitHubManager {
   /**
    * Pull from the origin remote.
    *
-   * With the token, this is a fetch WITH it followed by a local pull WITHOUT
-   * it. A single `git pull` refreshes the index before it fetches -- running
-   * the fsmonitor, clean filters and the post-index-change hook, all
+   * With the token, this is a fetch WITH it followed by a local integrate step
+   * WITHOUT it. A single `git pull` refreshes the index before it fetches --
+   * running the fsmonitor, clean filters and the post-index-change hook, all
    * nameable by .git/config -- while the token file still exists; that was
-   * reproduced in review. Pulling from `.` rather than calling merge keeps
-   * pull.rebase / pull.ff / branch.<name>.rebase working as before.
+   * reproduced in review. See integrateFetched for how the second step keeps
+   * pull.rebase / pull.ff / branch.<name>.rebase behaving as before.
    */
   async pull(projectPath: string, branch?: string): Promise<{ success: boolean; conflicts?: string[]; error?: string }> {
     const token = this.getToken();
@@ -520,12 +525,12 @@ export class GitHubManager {
     if (!isSafeBranchArg(targetBranch)) return { success: false, error: `Refusing to pull branch "${targetBranch}"` };
 
     try {
-      if (TOKEN_SHAPE.test(token) && await this.originIsCredentialTarget(projectPath)) {
+      if (await this.originIsCredentialTarget(projectPath)) {
         // An explicit refspec, so origin/<branch> is updated even for a remote
         // configured without a fetch refspec.
         const tracking = `refs/remotes/origin/${targetBranch}`;
         await this.authedGit(projectPath, token, ['fetch', 'origin', `+refs/heads/${targetBranch}:${tracking}`]);
-        await this.git(projectPath, ['pull', '.', tracking]);
+        await this.integrateFetched(projectPath, targetBranch, tracking);
       } else {
         await this.remoteGit(projectPath, token, ['pull', 'origin', targetBranch]);
       }
@@ -595,6 +600,49 @@ export class GitHubManager {
   // ── Private Helpers ──
 
   /**
+   * The second, token-free half of pull(): bring the just-fetched
+   * `tracking` ref into the current branch the way `git pull origin <branch>`
+   * would have.
+   *
+   * Merge mode is `git pull . <tracking>`, which honours pull.ff and friends.
+   * Rebase mode cannot be: pull only computes a fork point when its refspec
+   * maps to a remote-tracking branch of a named remote, which `.` is not, so
+   * after an upstream force-push it would replay commits upstream rewrote
+   * (reproduced in review). So rebase mode runs `git rebase --fork-point`
+   * itself, which reads the same reflog of origin/<branch> that pull would.
+   * `interactive` needs a terminal and fails either way; it takes the merge
+   * path's `pull .`, which applies it the same as before.
+   */
+  private async integrateFetched(cwd: string, branch: string, tracking: string): Promise<void> {
+    const options = { timeoutMs: this.networkTimeoutMs };
+    const mode = await this.pullRebaseMode(cwd, branch);
+    if (mode === 'rebase' || mode === 'merges') {
+      const args = ['rebase', '--fork-point'];
+      if (mode === 'merges') args.push('--rebase-merges');
+      await this.git(cwd, [...args, tracking], options);
+    } else {
+      await this.git(cwd, ['pull', '.', tracking], options);
+    }
+  }
+
+  /** The effective pull rebase mode: branch.<name>.rebase, else pull.rebase. */
+  private async pullRebaseMode(cwd: string, branch: string): Promise<'merge' | 'rebase' | 'merges' | 'other'> {
+    for (const key of [`branch.${branch}.rebase`, 'pull.rebase']) {
+      let value: string;
+      try {
+        value = (await this.git(cwd, ['config', '--get', key])).trim().toLowerCase();
+      } catch {
+        continue; // unset
+      }
+      if (['true', 'yes', 'on', '1'].includes(value)) return 'rebase';
+      if (['false', 'no', 'off', '0', ''].includes(value)) return 'merge';
+      if (value === 'merges' || value === 'm') return 'merges';
+      return 'other';
+    }
+    return 'merge';
+  }
+
+  /**
    * Run a git command that talks to origin, with the PAT only when origin is
    * on the credential target.
    *
@@ -605,14 +653,16 @@ export class GitHubManager {
    * did before #511. The helper-list reset and the timeout still apply.
    */
   private async remoteGit(cwd: string, token: string, args: string[]): Promise<string> {
-    if (!TOKEN_SHAPE.test(token)) throw new Error('GitHub token contains characters that cannot be a token');
     if (await this.originIsCredentialTarget(cwd)) return this.authedGit(cwd, token, args);
 
     try {
       return await this.git(cwd, args, { configArgs: ['-c', 'credential.helper='], timeoutMs: this.networkTimeoutMs });
     } catch (err) {
-      const { protocol, host } = this.credentialTarget;
       const message = err instanceof Error ? err.message : String(err);
+      // Only where it explains the failure; a divergent-branch or rebase
+      // error has nothing to do with the token.
+      if (!AUTH_FAILURE.test(message)) throw err;
+      const { protocol, host } = this.credentialTarget;
       throw new Error(`${message} (origin is not a ${protocol}://${host}/ URL, so the GitHub token was not used;`
         + ` set origin to the repository's ${protocol} URL to use it)`);
     }
@@ -620,14 +670,22 @@ export class GitHubManager {
 
   /**
    * True when every URL git would use for origin -- fetch and push, after
-   * insteadOf/pushInsteadOf -- is on the credential target. Checked before
-   * the token file is written; the protocol pins in gitHardeningArgs cover a
-   * config that changes between this check and the command.
+   * insteadOf/pushInsteadOf -- is on the credential target, over git's own
+   * http transport. `remote.origin.vcs` is refused outright: it swaps in a
+   * `git-remote-<vcs>` helper while `get-url` still prints the https URL.
+   *
+   * authedGit re-checks this before it writes the token file. What remains is
+   * a config that changes between the check and the command: the protocol
+   * pins in gitHardeningArgs cover git's built-in transports, not a custom
+   * remote helper a project-level `protocol.<name>.allow` enables (see
+   * KNOWN_PROTOCOLS).
    */
   private async originIsCredentialTarget(cwd: string): Promise<boolean> {
     const { protocol, host } = this.credentialTarget;
     const prefix = `${protocol}://${host}/`;
     try {
+      const vcs = await this.git(cwd, ['config', '--get', 'remote.origin.vcs']).catch(() => '');
+      if (vcs.trim() !== '') return false;
       const fetchUrls = await this.git(cwd, ['remote', 'get-url', '--all', 'origin']);
       const pushUrls = await this.git(cwd, ['remote', 'get-url', '--push', '--all', 'origin']);
       const urls = `${fetchUrls}\n${pushUrls}`.split('\n').map(u => u.trim()).filter(Boolean);
@@ -645,9 +703,15 @@ export class GitHubManager {
    * neither argv nor the child's environment. The dir is removed on every
    * exit path, timeout included; the helper normally removes the file much
    * earlier, on git's first request.
+   *
+   * Refuses outright unless origin is on the credential target, so no caller
+   * can write the token file for anywhere else by forgetting the check.
    */
   private async authedGit(cwd: string, token: string, args: string[]): Promise<string> {
     if (!TOKEN_SHAPE.test(token)) throw new Error('GitHub token contains characters that cannot be a token');
+    if (!await this.originIsCredentialTarget(cwd)) {
+      throw new Error('Refusing to use the GitHub token: origin is not on GitHub over https');
+    }
 
     const root = credentialRoot();
     sweepStaleCredentialDirs(root);

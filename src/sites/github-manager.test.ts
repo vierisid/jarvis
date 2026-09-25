@@ -337,6 +337,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"get-url"*) cat "$(dirname "$0")/../origin-url" ;;',
       `  *"branch --show-current"*) cat "${root}/current-branch" ;;`,
       '  *"--get-regexp"*) exit 1 ;;',
+      '  *"config --get "*) exit 1 ;;',
       'esac',
       'exit 0',
     ].join('\n'), { mode: 0o755 });
@@ -455,6 +456,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
+      '  *"config --get "*) exit 1 ;;',
       'esac',
       'echo "git@github.com: Permission denied (publickey)." >&2',
       'exit 128',
@@ -464,6 +466,68 @@ describe('each call site keeps the token out of git argv and env', () => {
     expect(result.error).toContain('Permission denied');
     expect(result.error).toContain('so the GitHub token was not used');
   });
+
+  test('a non-auth failure on a non-GitHub origin is not blamed on the token', async () => {
+    const fake = setupFakeGit('main', 'git@github.com:owner/repo.git');
+    writeFileSync(join(fake.project, '..', 'bin', 'git'), [
+      '#!/bin/sh',
+      'case "$*" in',
+      '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
+      '  *"branch --show-current"*) echo main; exit 0 ;;',
+      '  *"--get-regexp"*) exit 1 ;;',
+      '  *"config --get "*) exit 1 ;;',
+      'esac',
+      'echo "fatal: Need to specify how to reconcile divergent branches." >&2',
+      'exit 128',
+    ].join('\n'), { mode: 0o755 });
+    const result = await new GitHubManager().pull(fake.project);
+    expect(result.error).toContain('divergent branches');
+    expect(result.error).not.toContain('token was not used');
+  });
+
+  // get-url prints the https URL even when remote.<name>.vcs swaps in a
+  // `git-remote-<vcs>` helper, which a project-level protocol.<vcs>.allow
+  // would then let run with the token file in place.
+  test('remote.origin.vcs means no token, whatever get-url says', async () => {
+    const fake = setupFakeGit();
+    writeFileSync(join(fake.project, '..', 'bin', 'git'), [
+      '#!/bin/sh',
+      `ls "${fake.tmp}" > "${fake.logDir}/$(date +%s%N).$$.tmpls"`,
+      'case "$*" in',
+      '  *"remote.origin.vcs"*) echo foo; exit 0 ;;',
+      '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
+      '  *"branch --show-current"*) echo main; exit 0 ;;',
+      '  *"--get-regexp"*) exit 1 ;;',
+      '  *"config --get "*) exit 1 ;;',
+      'esac',
+      'exit 0',
+    ].join('\n'), { mode: 0o755 });
+    const manager = new GitHubManager();
+    expect((await manager.push(fake.project)).success).toBe(true);
+    expect((await manager.pull(fake.project)).success).toBe(true);
+    const sightings = readdirSync(fake.logDir).filter(f => f.endsWith('.tmpls'))
+      .filter(f => readFileSync(join(fake.logDir, f), 'utf8').includes(CREDENTIAL_DIR_PREFIX));
+    expect(sightings.length).toBe(0);
+  });
+
+  test('the local half of a pull is bounded by the timeout too', async () => {
+    const fake = setupFakeGit();
+    writeFileSync(join(fake.project, '..', 'bin', 'git'), [
+      '#!/bin/sh',
+      'case "$*" in',
+      '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
+      '  *"branch --show-current"*) echo main; exit 0 ;;',
+      '  *"--get-regexp"*) exit 1 ;;',
+      '  *"config --get "*) exit 1 ;;',
+      '  "pull . "*) exec sleep 5 ;;',
+      'esac',
+      'exit 0',
+    ].join('\n'), { mode: 0o755 });
+    const started = Date.now();
+    const result = await new GitHubManager({ networkTimeoutMs: 300 }).pull(fake.project);
+    expect(Date.now() - started).toBeLessThan(3_000);
+    expect(result.error).toContain('git pull timed out');
+  }, 15_000);
 
   test('an origin whose push URL leaves GitHub gets no token, even if the fetch URL is fine', async () => {
     const fake = setupFakeGit();
@@ -476,6 +540,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
+      '  *"config --get "*) exit 1 ;;',
       'esac',
       'exit 0',
     ].join('\n'), { mode: 0o755 });
@@ -501,6 +566,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
+      '  *"config --get "*) exit 1 ;;',
       'esac',
       'echo "fatal: remote rejected" >&2',
       'exit 128',
@@ -521,6 +587,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
+      '  *"config --get "*) exit 1 ;;',
       'esac',
       // Short enough that a broken kill cannot outlive the run for long.
       'exec sleep 5',
@@ -546,6 +613,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
+      '  *"config --get "*) exit 1 ;;',
       'esac',
       'sleep 5 &',
       `echo $! > "${pidFile}"`,
@@ -571,6 +639,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
+      '  *"config --get "*) exit 1 ;;',
       'esac',
       `setsid sh -c 'echo $$ > "${pidFile}"; exec sleep 8' &`,
       'exec sleep 8',
@@ -935,6 +1004,39 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     expect(readFileSync(join(h.project, '.git', 'logs', 'HEAD'), 'utf8')).toContain('pull . refs/remotes/origin/main');
   }, 60_000);
 
+  // The split pull must still rebase like `git pull --rebase origin <b>`:
+  // with a fork point, so commits upstream rewrote and force-pushed are
+  // dropped rather than replayed into a conflict.
+  test('a rebase pull after an upstream force-push rewrite still uses the fork point', async () => {
+    const h = await setupProject('rebase');
+    const commit = (cwd: string, file: string, text: string, msg: string) => async () => {
+      writeFileSync(join(cwd, file), text);
+      await setup([REAL_GIT!, 'add', file], cwd, h.gitEnv);
+      await setup([REAL_GIT!, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', msg], cwd, h.gitEnv);
+    };
+    await commit(h.project, 'f', 'y\n', 'Y')();
+    await setup([REAL_GIT!, 'config', 'pull.rebase', 'true'], h.project, h.gitEnv);
+    // A rebase writes commits; the harness HOME has no identity.
+    await setup([REAL_GIT!, 'config', 'user.name', 't'], h.project, h.gitEnv);
+    await setup([REAL_GIT!, 'config', 'user.email', 't@t'], h.project, h.gitEnv);
+    useHarnessEnv(h);
+    const m = manager();
+    expect((await m.push(h.project)).success).toBe(true);
+    await commit(h.project, 'g', 'local\n', 'L')();
+
+    // Upstream rewrites Y into Y' and force-pushes.
+    const other = join(tempRoot('other'), 'clone');
+    await setup([REAL_GIT!, 'clone', '-q', h.bareRepo, other], root, h.gitEnv);
+    await setup([REAL_GIT!, 'reset', '-q', '--hard', 'HEAD~1'], other, h.gitEnv);
+    await commit(other, 'f', 'yprime\n', 'Yprime')();
+    await setup([REAL_GIT!, 'push', '-q', '-f', 'origin', 'main'], other, h.gitEnv);
+
+    expect(await m.pull(h.project)).toEqual({ success: true });
+    const log = (await setup([REAL_GIT!, 'log', '--format=%s'], h.project, h.gitEnv)).trim().split('\n');
+    expect(log).toEqual(['L', 'Yprime', 'init rebase']);
+    expect(h.leaks(TOKEN)).toEqual([]);
+  }, 60_000);
+
   // S1. Commands .git/config can name, which git runs on its own: the
   // fsmonitor on every index read, clean/smudge filters and post-index-change
   // on an index refresh. A single `git pull` did the refresh BEFORE fetching,
@@ -985,6 +1087,7 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     // They did run (after the token was gone), so this is not vacuous...
     expect(runs.some(r => r.startsWith('fsmonitor '))).toBe(true);
     expect(runs.some(r => r.startsWith('clean '))).toBe(true);
+    expect(runs.some(r => r.startsWith('post-index-change '))).toBe(true);
     // ...and none of them ever saw the token file.
     expect(runs.filter(r => r.endsWith(' 1'))).toEqual([]);
     expect(h.leaks(TOKEN)).toEqual([]);
