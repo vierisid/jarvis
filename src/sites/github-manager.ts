@@ -91,8 +91,21 @@ function readPipe(stream: ReadableStream<Uint8Array>): { text: Promise<string>; 
  */
 const KNOWN_PROTOCOLS = ['file', 'git', 'ext', 'fd', 'ssh', 'http', 'https'] as const;
 
-/** git/ssh stderr that means "could not authenticate". */
-const AUTH_FAILURE = /Authentication failed|could not read (Username|Password)|terminal prompts disabled|Permission denied|returned error: 40[13]|403 Forbidden|401 Unauthorized/i;
+/**
+ * git/ssh stderr that means "could not authenticate or reach the repo as
+ * this user". `Permission denied` is anchored to ssh's form, so a local
+ * "unable to create file: Permission denied" is not mistaken for one.
+ */
+const AUTH_FAILURE = new RegExp([
+  'Authentication failed', 'could not read (Username|Password)', 'terminal prompts disabled',
+  'Permission denied \\(publickey', 'Host key verification failed', 'Could not read from remote repository',
+  'Repository not found', 'denied to ', 'returned error: 40[13]', '403 Forbidden', '401 Unauthorized',
+].join('|'), 'i');
+
+/** How pull() integrates what its authenticated fetch brought in. */
+type IntegrationPlan =
+  | { kind: 'pull' }
+  | { kind: 'rebase'; rebaseMerges: boolean; forkPoint: string | null };
 
 /**
  * Printable ASCII, no space. Anything else could not be a PAT, and a newline
@@ -529,8 +542,9 @@ export class GitHubManager {
         // An explicit refspec, so origin/<branch> is updated even for a remote
         // configured without a fetch refspec.
         const tracking = `refs/remotes/origin/${targetBranch}`;
+        const plan = await this.planIntegration(projectPath, targetBranch, tracking);
         await this.authedGit(projectPath, token, ['fetch', 'origin', `+refs/heads/${targetBranch}:${tracking}`]);
-        await this.integrateFetched(projectPath, targetBranch, tracking);
+        await this.integrateFetched(projectPath, tracking, plan);
       } else {
         await this.remoteGit(projectPath, token, ['pull', 'origin', targetBranch]);
       }
@@ -600,44 +614,70 @@ export class GitHubManager {
   // ── Private Helpers ──
 
   /**
-   * The second, token-free half of pull(): bring the just-fetched
-   * `tracking` ref into the current branch the way `git pull origin <branch>`
-   * would have.
+   * What the token-free half of pull() will do, decided BEFORE the fetch,
+   * because that is when `git pull` decides it.
    *
-   * Merge mode is `git pull . <tracking>`, which honours pull.ff and friends.
-   * Rebase mode cannot be: pull only computes a fork point when its refspec
-   * maps to a remote-tracking branch of a named remote, which `.` is not, so
-   * after an upstream force-push it would replay commits upstream rewrote
-   * (reproduced in review). So rebase mode runs `git rebase --fork-point`
-   * itself, which reads the same reflog of origin/<branch> that pull would.
-   * `interactive` needs a terminal and fails either way; it takes the merge
-   * path's `pull .`, which applies it the same as before.
+   * Merge mode, and anything pull.ff=only governs, is `git pull . <tracking>`
+   * in integrateFetched: pull.ff, merge options and hooks apply as ever. (With
+   * pull.ff=only even a rebase pull only fast-forwards or fails, which is
+   * what `pull .` does.)
+   *
+   * Rebase mode cannot go through `pull .`: pull only looks for a fork point
+   * when its refspec names a branch of a named remote, which `.` is not, so
+   * after an upstream force-push it would replay the commits upstream
+   * rewrote (reproduced in review). So it mirrors what pull does itself:
+   * `merge-base --fork-point` against origin/<branch> as it stands before the
+   * fetch -- which does not depend on reflogs surviving -- and then
+   * `rebase --onto <tracking> <fork point>`.
+   *
+   * `interactive`, `preserve` and anything unparseable take the `pull .`
+   * path, where git applies or rejects them exactly as before.
    */
-  private async integrateFetched(cwd: string, branch: string, tracking: string): Promise<void> {
-    const options = { timeoutMs: this.networkTimeoutMs };
+  private async planIntegration(cwd: string, branch: string, tracking: string): Promise<IntegrationPlan> {
     const mode = await this.pullRebaseMode(cwd, branch);
-    if (mode === 'rebase' || mode === 'merges') {
-      const args = ['rebase', '--fork-point'];
-      if (mode === 'merges') args.push('--rebase-merges');
-      await this.git(cwd, [...args, tracking], options);
-    } else {
-      await this.git(cwd, ['pull', '.', tracking], options);
-    }
+    if (mode !== 'rebase' && mode !== 'merges') return { kind: 'pull' };
+    const ff = await this.git(cwd, ['config', '--get', 'pull.ff']).catch(() => '');
+    if (ff.trim().toLowerCase() === 'only') return { kind: 'pull' };
+    // An unborn branch: pull's own "pull into void" path, not a rebase.
+    const hasHead = await this.git(cwd, ['rev-parse', '--verify', '--quiet', 'HEAD']).then(() => true, () => false);
+    if (!hasHead) return { kind: 'pull' };
+    const forkPoint = (await this.git(cwd, ['merge-base', '--fork-point', tracking, 'HEAD']).catch(() => '')).trim();
+    return { kind: 'rebase', rebaseMerges: mode === 'merges', forkPoint: forkPoint || null };
   }
 
-  /** The effective pull rebase mode: branch.<name>.rebase, else pull.rebase. */
+  /** The second, token-free half of pull(); see planIntegration. */
+  private async integrateFetched(cwd: string, tracking: string, plan: IntegrationPlan): Promise<void> {
+    const options = { timeoutMs: this.networkTimeoutMs };
+    if (plan.kind === 'pull') {
+      await this.git(cwd, ['pull', '.', tracking], options);
+      return;
+    }
+    const args = ['rebase'];
+    if (plan.rebaseMerges) args.push('--rebase-merges');
+    await this.git(cwd, [...args, '--onto', tracking, plan.forkPoint ?? tracking], options);
+  }
+
+  /**
+   * The effective pull rebase mode: branch.<name>.rebase, else pull.rebase,
+   * parsed the way git parses it -- the non-boolean words first, then git's
+   * own boolean reading (so a valueless key is true, `2` is true).
+   */
   private async pullRebaseMode(cwd: string, branch: string): Promise<'merge' | 'rebase' | 'merges' | 'other'> {
     for (const key of [`branch.${branch}.rebase`, 'pull.rebase']) {
-      let value: string;
+      let raw: string;
       try {
-        value = (await this.git(cwd, ['config', '--get', key])).trim().toLowerCase();
+        raw = (await this.git(cwd, ['config', '--get', key])).trim().toLowerCase();
       } catch {
         continue; // unset
       }
-      if (['true', 'yes', 'on', '1'].includes(value)) return 'rebase';
-      if (['false', 'no', 'off', '0', ''].includes(value)) return 'merge';
-      if (value === 'merges' || value === 'm') return 'merges';
-      return 'other';
+      if (raw === 'merges' || raw === 'm') return 'merges';
+      if (['interactive', 'i', 'preserve', 'p'].includes(raw)) return 'other';
+      try {
+        const bool = (await this.git(cwd, ['config', '--type=bool', '--get', key])).trim();
+        return bool === 'true' ? 'rebase' : 'merge';
+      } catch {
+        return 'other'; // not a boolean: let git itself reject it
+      }
     }
     return 'merge';
   }

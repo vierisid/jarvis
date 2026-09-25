@@ -448,7 +448,34 @@ describe('each call site keeps the token out of git argv and env', () => {
     });
   }
 
-  test('a failing non-GitHub origin says the token was not used, and why', async () => {
+  // What an ssh origin actually prints on a host with no ssh setup, and the
+  // other common refusals: each gets the "use the https URL" hint.
+  for (const stderr of [
+    'git@github.com: Permission denied (publickey).',
+    'Host key verification failed.\nfatal: Could not read from remote repository.',
+    'ERROR: Repository not found.',
+    'ERROR: Permission to owner/repo.git denied to someone.',
+  ]) {
+    test(`a failing non-GitHub origin says the token was not used (${stderr.split('\n')[0]})`, async () => {
+      const fake = setupFakeGit('main', 'git@github.com:owner/repo.git');
+      writeFileSync(join(fake.project, '..', 'bin', 'git'), [
+        '#!/bin/sh',
+        'case "$*" in',
+        '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
+        '  *"branch --show-current"*) echo main; exit 0 ;;',
+        '  *"--get-regexp"*) exit 1 ;;',
+        '  *"config --get "*) exit 1 ;;',
+        'esac',
+        `printf '%s\\n' ${JSON.stringify(stderr)} >&2`,
+        'exit 128',
+      ].join('\n'), { mode: 0o755 });
+      const result = await new GitHubManager().push(fake.project);
+      expect(result.success).toBe(false);
+      expect(result.error).toContain('so the GitHub token was not used');
+    });
+  }
+
+  test('a local "Permission denied" is not mistaken for an auth failure', async () => {
     const fake = setupFakeGit('main', 'git@github.com:owner/repo.git');
     writeFileSync(join(fake.project, '..', 'bin', 'git'), [
       '#!/bin/sh',
@@ -458,13 +485,12 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"--get-regexp"*) exit 1 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
-      'echo "git@github.com: Permission denied (publickey)." >&2',
-      'exit 128',
+      'echo "error: unable to create file index.html: Permission denied" >&2',
+      'exit 1',
     ].join('\n'), { mode: 0o755 });
-    const result = await new GitHubManager().push(fake.project);
-    expect(result.success).toBe(false);
-    expect(result.error).toContain('Permission denied');
-    expect(result.error).toContain('so the GitHub token was not used');
+    const result = await new GitHubManager().pull(fake.project);
+    expect(result.error).toContain('unable to create file');
+    expect(result.error).not.toContain('token was not used');
   });
 
   test('a non-auth failure on a non-GitHub origin is not blamed on the token', async () => {
@@ -1004,38 +1030,67 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     expect(readFileSync(join(h.project, '.git', 'logs', 'HEAD'), 'utf8')).toContain('pull . refs/remotes/origin/main');
   }, 60_000);
 
-  // The split pull must still rebase like `git pull --rebase origin <b>`:
-  // with a fork point, so commits upstream rewrote and force-pushed are
-  // dropped rather than replayed into a conflict.
-  test('a rebase pull after an upstream force-push rewrite still uses the fork point', async () => {
-    const h = await setupProject('rebase');
-    const commit = (cwd: string, file: string, text: string, msg: string) => async () => {
+  /**
+   * A project with commits base, Y pushed; a local commit L on top; and
+   * upstream then either rewriting Y into Yprime with a force-push, or adding
+   * Z normally. `config` is applied to the project before anything happens.
+   */
+  async function divergedProject(label: string, config: Array<[string, string]>, upstream: 'rewrite' | 'append') {
+    const h = await setupProject(label);
+    const commit = async (cwd: string, file: string, text: string, msg: string) => {
       writeFileSync(join(cwd, file), text);
       await setup([REAL_GIT!, 'add', file], cwd, h.gitEnv);
       await setup([REAL_GIT!, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', msg], cwd, h.gitEnv);
     };
-    await commit(h.project, 'f', 'y\n', 'Y')();
-    await setup([REAL_GIT!, 'config', 'pull.rebase', 'true'], h.project, h.gitEnv);
+    await commit(h.project, 'f', 'y\n', 'Y');
     // A rebase writes commits; the harness HOME has no identity.
-    await setup([REAL_GIT!, 'config', 'user.name', 't'], h.project, h.gitEnv);
-    await setup([REAL_GIT!, 'config', 'user.email', 't@t'], h.project, h.gitEnv);
+    for (const [k, v] of [['user.name', 't'], ['user.email', 't@t'], ...config]) {
+      await setup([REAL_GIT!, 'config', k!, v!], h.project, h.gitEnv);
+    }
     useHarnessEnv(h);
     const m = manager();
     expect((await m.push(h.project)).success).toBe(true);
-    await commit(h.project, 'g', 'local\n', 'L')();
+    await commit(h.project, 'g', 'local\n', 'L');
 
-    // Upstream rewrites Y into Y' and force-pushes.
     const other = join(tempRoot('other'), 'clone');
     await setup([REAL_GIT!, 'clone', '-q', h.bareRepo, other], root, h.gitEnv);
-    await setup([REAL_GIT!, 'reset', '-q', '--hard', 'HEAD~1'], other, h.gitEnv);
-    await commit(other, 'f', 'yprime\n', 'Yprime')();
-    await setup([REAL_GIT!, 'push', '-q', '-f', 'origin', 'main'], other, h.gitEnv);
+    if (upstream === 'rewrite') {
+      await setup([REAL_GIT!, 'reset', '-q', '--hard', 'HEAD~1'], other, h.gitEnv);
+      await commit(other, 'f', 'yprime\n', 'Yprime');
+      await setup([REAL_GIT!, 'push', '-q', '-f', 'origin', 'main'], other, h.gitEnv);
+    } else {
+      await commit(other, 'h', 'z\n', 'Z');
+      await setup([REAL_GIT!, 'push', '-q', 'origin', 'main'], other, h.gitEnv);
+    }
+    const log = async () => (await setup([REAL_GIT!, 'log', '--format=%s'], h.project, h.gitEnv)).trim().split('\n');
+    return { h, m, log, label };
+  }
 
-    expect(await m.pull(h.project)).toEqual({ success: true });
-    const log = (await setup([REAL_GIT!, 'log', '--format=%s'], h.project, h.gitEnv)).trim().split('\n');
-    expect(log).toEqual(['L', 'Yprime', 'init rebase']);
-    expect(h.leaks(TOKEN)).toEqual([]);
+  // The split pull must still rebase like `git pull --rebase origin <b>`:
+  // with a fork point, so commits upstream rewrote and force-pushed are
+  // dropped rather than replayed into a conflict. The fork point is taken
+  // before the fetch, as pull takes it, so it holds without reflogs too.
+  for (const [name, extra] of [
+    ['with reflogs', []],
+    ['without reflogs', [['core.logAllRefUpdates', 'false']]],
+  ] as Array<[string, Array<[string, string]>]>) {
+    test(`a rebase pull after an upstream force-push rewrite uses the fork point (${name})`, async () => {
+      const label = `rebase-${name.replace(/ /g, '-')}`;
+      const { h, m, log } = await divergedProject(label, [['pull.rebase', 'true'], ...extra], 'rewrite');
+      expect(await m.pull(h.project)).toEqual({ success: true });
+      expect(await log()).toEqual(['L', 'Yprime', `init ${label}`]);
+      expect(h.leaks(TOKEN)).toEqual([]);
+    }, 60_000);
+  }
+
+  // pull.ff=only wins over pull.rebase in git: diverged history is refused,
+  // not rebased.
+  test('pull.rebase=true with pull.ff=only still refuses diverged history', async () => {
+    const { h, m, log } = await divergedProject('rebase-ff-only', [['pull.rebase', 'true'], ['pull.ff', 'only']], 'append');
+    expect((await m.pull(h.project)).success).toBe(false);
+    expect(await log()).toEqual(['L', 'Y', 'init rebase-ff-only']);
   }, 60_000);
+
 
   // S1. Commands .git/config can name, which git runs on its own: the
   // fsmonitor on every index read, clean/smudge filters and post-index-change
