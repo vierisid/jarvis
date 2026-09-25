@@ -118,9 +118,9 @@ const EXEMPT: Record<string, Exemption> = {
   'comms/desktop-notify.ts': {
     reason:
       'notify-send / powershell toasts; needs the session env (DBUS_SESSION_BUS_ADDRESS, the Windows ' +
-      'session block). NOT a fixed command line: the title and body can be workflow- or model-authored, ' +
-      'passed as argv to notify-send but interpolated into the PowerShell script. That quoting is a ' +
-      'separate injection question from env hygiene, tracked in #515.',
+      'session block). NOT a fixed command line: the title and body can be workflow- or model-authored. ' +
+      'They reach notify-send as positional argv after `--`, and the PowerShell script only as base64 ' +
+      'decoded into a toast text node, never as script or XML source (#515).',
     calls: { detectMethod: 2, sendViaNotifySend: 1, sendViaPowerShell: 1 },
   },
   'actions/app-control/native-exec.ts': {
