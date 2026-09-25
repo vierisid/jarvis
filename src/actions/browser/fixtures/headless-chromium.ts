@@ -114,8 +114,8 @@ async function waitFor<T>(deadline: number, probe: () => Promise<T | null>): Pro
  * but it has exited and holds nothing, so it counts as dead: under dash the
  * watchdog leaves a browser that died at startup unreaped for as long as it
  * sits in `read`, and treating that zombie as alive turned a fast failure
- * into a wait for the whole startup deadline. Where there is no /proc, fall
- * back to kill(pid, 0).
+ * into a wait for the whole startup deadline. Where there is no /proc (macOS,
+ * or a Linux sandbox without it mounted), fall back to kill(pid, 0).
  */
 export function processAlive(pid: number): boolean {
   try {
@@ -127,11 +127,14 @@ export function processAlive(pid: number): boolean {
   try {
     stat = readFileSync(`/proc/${pid}/stat`, 'utf8');
   } catch {
-    // Exited between the two checks, or no /proc on this platform.
-    return process.platform !== 'linux';
+    // With a working /proc the process was reaped between the two checks;
+    // without one, kill(pid, 0) is all there is to go on.
+    return !existsSync('/proc/self/stat');
   }
   // The state follows the parenthesised command name, which may contain ')'.
-  return stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0] !== 'Z';
+  // Z is a zombie, X (rarely seen) a process being torn down.
+  const state = stat.slice(stat.lastIndexOf(')') + 2).split(' ')[0];
+  return state !== 'Z' && state !== 'X';
 }
 
 /**

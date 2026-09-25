@@ -118,7 +118,9 @@ export function defangDelimiters(text: string): string {
  * provider that rejects ill-formed UTF-16 would otherwise refuse every
  * request carrying the prompt. The input is cut to a few times the cap before
  * any regex runs, so a multi-megabyte name costs nothing per turn; the cut
- * may split a surrogate pair, which the same step repairs.
+ * may split a surrogate pair, which the same step repairs (so a cut can end
+ * in U+FFFD). A cut always appends '...', even when what it dropped was only
+ * invisible characters: saying too much was dropped beats hiding a drop.
  */
 export function inlineUntrusted(value: unknown, maxChars = 100): string {
   const raw = typeof value === 'string' ? value

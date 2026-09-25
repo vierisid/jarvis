@@ -113,7 +113,10 @@ describe('inlineUntrusted', () => {
     // Mostly-invisible input: the cut still reports that text was dropped.
     expect(inlineUntrusted('\u200b'.repeat(1_000) + 'tail', 10)).toBe('...');
     // The cut lands between the halves of a pair (budget = 4 code units).
-    const out = inlineUntrusted('abc\u{1F600}rest', 1);
+    // Three invisible characters are dropped, so the half pair reaches the
+    // output; without the repair this would be an ill-formed '\uD83D...'.
+    const out = inlineUntrusted('\u200b'.repeat(3) + '\u{1F600}', 1);
+    expect(out).toBe('\uFFFD...');
     expect(out.isWellFormed()).toBe(true);
   });
 
