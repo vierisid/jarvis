@@ -10,6 +10,14 @@
  * `ANTHROPIC_API_KEY`, the `JARVIS_*` tokens and the workflow encryption key
  * along with it.
  *
+ * The same holds outside the site builder (#512): a workflow CODE step (run
+ * from inside the engine bundle, which compiles this file in -- see
+ * PATCHED_VENDOR_SOURCES in engine-runtime/build.ts), the `bun install` runs
+ * that fetch pieces and the engine's build deps with their lifecycle scripts,
+ * and the dashboard auto-build. src/spawn-env-guard.test.ts fails on any spawn
+ * under src/ that does not use this, unless it is on that file's justified
+ * exemption list.
+ *
  * ALLOWLIST, NOT DENYLIST. The predecessor of this module (a
  * `SECRET_ENV_PATTERNS` denylist in src/sites/builder-tools.ts) forwarded
  * everything it did not recognise, and it did not recognise

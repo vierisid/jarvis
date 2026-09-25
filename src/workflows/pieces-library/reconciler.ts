@@ -21,6 +21,7 @@ import { resolve, join } from "node:path";
 import {
   piecesBaseDir,
   readManifest,
+  runPiecesBunInstall,
   writeManifest,
   synthesizePackageJson,
   type InstalledManifest,
@@ -139,17 +140,9 @@ export async function reconcilePiecesLibrary(
 }
 
 function defaultRunBunInstall(cwd: string): Promise<void> {
-  return new Promise((res, rej) => {
-    // Import lazily so tests that don't run installs aren't penalized.
-    import("node:child_process").then(({ spawn }) => {
-      const child = spawn("bun", ["install", "--silent"], { cwd, stdio: "inherit" });
-      child.on("close", (code) => {
-        if (code === 0) res();
-        else rej(new Error(`bun install (pieces reconcile) exited with code ${code}`));
-      });
-      child.on("error", rej);
-    });
-  });
+  // The installer's spawn, not a copy of it: two copies were two places to
+  // forget the env, and #512 found both had.
+  return runPiecesBunInstall(cwd, "pieces reconcile");
 }
 
 /**
