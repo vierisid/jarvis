@@ -30,6 +30,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DAEMON_SECRET_ENV_NAMES } from './util/model-exec-env.ts';
+import { MODEL_EXEC_MARKER_ENV } from './util/model-exec-marker.ts';
 
 /** Synthetic. Never a real secret, and never printed on failure. */
 const CANARY_VALUE = 'sentinel-do-not-log';
@@ -172,6 +173,10 @@ function expectModelExecEnv(result: ProbeResult, expectedDump: string) {
     // secrets, so a mismatch may print them.
     const changed = Object.keys(result.sent).filter(k => env[k] !== result.sent[k]);
     expect({ dump: name, changed }).toEqual({ dump: name, changed: [] });
+
+    // And the child is marked, so a daemon it starts will not mint a second
+    // workflow key (util/model-exec-marker.ts).
+    expect({ dump: name, marker: env[MODEL_EXEC_MARKER_ENV] }).toEqual({ dump: name, marker: '1' });
   }
 }
 
@@ -185,6 +190,8 @@ describe('model-directed spawns strip the daemon secrets and keep the user env (
       expect({ name, dumped: env !== undefined }).toEqual({ name, dumped: true });
       const seen = CANARY_NAMES.filter(c => env![c] === CANARY_VALUE);
       expect({ name, seen }).toEqual({ name, seen: CANARY_NAMES });
+      // The marker comes from modelExecEnv(), not from the harness.
+      expect({ name, marker: env![MODEL_EXEC_MARKER_ENV] }).toEqual({ name, marker: undefined });
     }
   }, 45_000);
 
@@ -212,7 +219,7 @@ describe('model-directed spawns strip the daemon secrets and keep the user env (
     expectModelExecEnv(await runProbe('sidecar'), 'sidecar');
   }, 45_000);
 
-  test('the PowerShell toast, which interpolates model text: sendViaPowerShell', async () => {
+  test('the PowerShell toast, an interpreter run for model text: sendViaPowerShell', async () => {
     expectModelExecEnv(await runProbe('desktop-notify', true), 'powershell');
   }, 45_000);
 });
