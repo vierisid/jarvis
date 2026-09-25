@@ -115,10 +115,9 @@ const EXEMPT: Record<string, Exemption> = {
   },
   'actions/app-control/linux.ts': {
     reason:
-      'xdotool/wmctrl/xprop/import via Bun `$`: ' + DESKTOP_SESSION + ' Model text reaches xdotool as argv: ' +
-      'Bun `$` escapes it for the shell, NOT for xdotool\'s option parser, so typed text starting with `-` is ' +
-      'read as an option (`type --file=<path>` types out a file) -- #518. launchApp, the model-chosen ' +
-      'executable, is in MODEL_EXEC.',
+      'xdotool/wmctrl/xprop/import via Bun `$`: ' + DESKTOP_SESSION + ' Model text reaches xdotool as argv, ' +
+      'escaped by Bun `$` for the shell, not for xdotool\'s own option parsing -- tracked in #518. ' +
+      'launchApp, the model-chosen executable, is in MODEL_EXEC.',
     calls: {
       'LinuxAppController.captureScreen': 3,
       'LinuxAppController.captureWindow': 2,
@@ -195,8 +194,8 @@ const MODEL_EXEC: Record<string, Exemption> = {
   'actions/browser/chrome-launcher.ts': {
     reason:
       'The only local browser launch. The model drives it over CDP and can navigate it to ' +
-      'file:///proc/self/environ. Note Linux launches pass --no-sandbox, so the renderer is not ' +
-      'relied on here either.',
+      'file:///proc/self/environ, so what the browser process holds is what matters here, whatever ' +
+      'the renderer sandbox does.',
     calls: { launchChrome: 1 },
   },
   'actions/app-control/sidecar-launcher.ts': {
