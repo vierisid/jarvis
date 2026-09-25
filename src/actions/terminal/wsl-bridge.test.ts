@@ -10,14 +10,18 @@
  * every payload tries to create the same marker file, which must never exist.
  *
  * POSIX-only: the fakes are `#!/bin/sh` scripts and record with GNU `env -0`.
- * isWSL() is stubbed, since this machine is not WSL. What they cannot show is
- * real PowerShell or real WSL interop behaviour: that is transport only.
+ * isWSL() is stubbed, since this machine is not WSL. The fakes show transport
+ * only. When a working `pwsh` is on PATH (GitHub's ubuntu runners have one),
+ * the last block also runs runPowerShell's wrapper under real PowerShell, for
+ * the round trip and the exit code. Real WSL interop is not exercised.
  */
-import { afterAll, afterEach, beforeEach, describe, expect, spyOn, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, spyOn, test } from 'bun:test';
 import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { WSLBridge, buildPowerShellCommand, POWERSHELL_COMMAND_MAX, runArgv } from './wsl-bridge.ts';
+
+const IS_WINDOWS = process.platform === 'win32';
 
 const root = mkdtempSync(join(tmpdir(), 'jarvis-wsl-bridge-'));
 const binDir = join(root, 'bin');
@@ -54,12 +58,15 @@ printf 'C:\\\\Users\\\\tester\\r\\n'
   'powershell.exe': `${RECORD}
 printf 'ps-ok\\r\\n'
 `,
-  // Exits only after 2s and leaves a grandchild holding stdout for 2s more:
-  // the shape a timeout must not wait out. Both sleeps end on their own.
+  // Runs 5s and leaves a grandchild holding stdout as long: the shape a
+  // timeout must not wait out. `exec` makes the sleeper the pid runArgv kills;
+  // the grandchild's pid is recorded so the test can reap it.
   'hang.exe': `#!/bin/sh
-echo $$ > "$(dirname "$0")/../log/hang.pid"
-sleep 2 &
-sleep 2
+log="$(dirname "$0")/../log"
+sleep 5 &
+echo $! > "$log/hang.child"
+echo $$ > "$log/hang.pid"
+exec sleep 5
 `,
 };
 
@@ -103,6 +110,8 @@ beforeEach(() => {
   Object.assign(process.env, INTEROP_ENV);
   process.env[CANARY_NAME] = CANARY_VALUE;
   rmSync(PWNED, { force: true });
+  rmSync(join(logDir, 'hang.pid'), { force: true });
+  rmSync(join(logDir, 'hang.child'), { force: true });
   for (const name of Object.keys(FAKES)) {
     rmSync(join(logDir, `${name}.argv`), { force: true });
     rmSync(join(logDir, `${name}.env`), { force: true });
@@ -148,7 +157,7 @@ function bridgeWithoutDetection(): WSLBridge {
   return bridge;
 }
 
-describe('WSLBridge path conversion', () => {
+describe.skipIf(IS_WINDOWS)('WSLBridge path conversion', () => {
   for (const [method, flag] of [['convertToWindowsPath', '-w'], ['convertToWSLPath', '-u']] as const) {
     test(`${method} hands wslpath each hostile path as one intact argv element`, async () => {
       const bridge = bridgeWithoutDetection();
@@ -189,7 +198,7 @@ describe('WSLBridge path conversion', () => {
   });
 });
 
-describe('WSLBridge.runPowerShell', () => {
+describe.skipIf(IS_WINDOWS)('WSLBridge.runPowerShell', () => {
   const WRAPPER = /^\. \(\[ScriptBlock\]::Create\(\[Text\.Encoding\]::UTF8\.GetString\(\[Convert\]::FromBase64String\('([A-Za-z0-9+/=]*)'\)\)\)\)$/;
 
   test('the script reaches powershell.exe only as base64 inside the fixed wrapper', async () => {
@@ -210,7 +219,8 @@ describe('WSLBridge.runPowerShell', () => {
       expect(argv).toHaveLength(4);
       const match = WRAPPER.exec(argv[3]!);
       expect(match).not.toBeNull();
-      expect(Buffer.from(match![1]!, 'base64').toString('utf8')).toBe(script);
+      // The script, then the exit-code line on its own line (pinned exactly).
+      expect(Buffer.from(match![1]!, 'base64').toString('utf8')).toBe(`${script}\n;if (-not $?) { exit 1 }`);
       expect(argv[3]).not.toContain('"');
     }
 
@@ -235,7 +245,7 @@ describe('WSLBridge.runPowerShell', () => {
   });
 });
 
-describe('WSLBridge Windows home detection', () => {
+describe.skipIf(IS_WINDOWS)('WSLBridge Windows home detection', () => {
   test('asks cmd.exe for %USERPROFILE% with fixed argv and no shell', async () => {
     stubWSL(true);
     const bridge = new WSLBridge();
@@ -251,7 +261,7 @@ describe('WSLBridge Windows home detection', () => {
   });
 });
 
-describe('WSLBridge outside WSL', () => {
+describe.skipIf(IS_WINDOWS)('WSLBridge outside WSL', () => {
   test('every spawning method refuses without running anything', async () => {
     stubWSL(false);
     const bridge = new WSLBridge();
@@ -264,11 +274,26 @@ describe('WSLBridge outside WSL', () => {
   });
 });
 
-describe('runArgv', () => {
+describe.skipIf(IS_WINDOWS)('runArgv', () => {
   test('the timeout is a hard deadline, not a wait for the child or its pipes', async () => {
     const started = Date.now();
-    await expect(runArgv(['hang.exe'], 150)).rejects.toThrow('hang.exe timed out after 150ms');
-    expect(Date.now() - started).toBeLessThan(1500);
+    const run = runArgv(['hang.exe'], 2000);
+    const rejected = expect(run).rejects.toThrow('hang.exe timed out after 2000ms');
+
+    // The child is up before the deadline, so what follows is a timeout of a
+    // running child rather than of one that never started.
+    const pidFile = join(logDir, 'hang.pid');
+    while (!existsSync(pidFile) && Date.now() - started < 1900) await Bun.sleep(5);
+    expect(existsSync(pidFile)).toBe(true);
+
+    try {
+      await rejected;
+      // Waiting for the child or its pipes would take the full 5s.
+      expect(Date.now() - started).toBeLessThan(4000);
+    } finally {
+      // runArgv leaves grandchildren alone; this test's own must not outlive it.
+      try { process.kill(Number(readFileSync(join(logDir, 'hang.child'), 'utf-8').trim()), 'SIGKILL'); } catch { /* gone */ }
+    }
 
     // And the child itself was killed, not just abandoned.
     const pid = Number(readFileSync(join(logDir, 'hang.pid'), 'utf-8').trim());
@@ -276,9 +301,94 @@ describe('runArgv', () => {
     const until = Date.now() + 1000;
     while (alive() && Date.now() < until) await Bun.sleep(10);
     expect(alive()).toBe(false);
-  });
+  }, 10_000);
 
   test('a missing executable rejects instead of resolving', async () => {
-    await expect(runArgv(['jarvis-no-such-program-519'])).rejects.toThrow(/not found/i);
+    const error = await runArgv(['jarvis-no-such-program-519']).then(() => null, (e: unknown) => e);
+    // Bun reports ENOENT as `code`; its message wording is not relied on.
+    expect((error as { code?: string } | null)?.code).toBe('ENOENT');
   });
+});
+
+// ── The wrapper under a real PowerShell, when one is installed ──
+//
+// pwsh 7, not the Windows PowerShell 5.1 the daemon runs on WSL: the wrapper
+// uses nothing believed to differ between them, but the exit codes here are
+// pwsh's. A second `powershell.exe` fake execs pwsh with the argv
+// runPowerShell built, so this is the real method end to end, minus WSL
+// interop.
+
+/** Probed by running it, as desktop-notify.test.ts does: a broken install skips rather than fails. */
+const PWSH = (() => {
+  if (IS_WINDOWS) return null;
+  const path = Bun.which('pwsh');
+  if (!path) return null;
+  const r = Bun.spawnSync([path, '-NoProfile', '-NonInteractive', '-Command', '$PSVersionTable.PSVersion.Major'], {
+    stdin: 'ignore', stdout: 'ignore', stderr: 'ignore', timeout: 20_000,
+  });
+  return r.exitCode === 0 ? path : null;
+})();
+
+/** A PowerShell single-quoted literal: `'` and U+2018..U+201B all close one, so all are doubled. */
+function psLiteral(text: string): string {
+  return `'${text.replace(/['‘-‛]/g, q => q + q)}'`;
+}
+
+describe.skipIf(!PWSH)('WSLBridge.runPowerShell under a real PowerShell', () => {
+  const pwshBin = join(root, 'pwsh-bin');
+
+  beforeAll(() => {
+    mkdirSync(pwshBin);
+    const quoted = `'${PWSH!.replaceAll("'", "'\\''")}'`;
+    writeFileSync(join(pwshBin, 'powershell.exe'), `#!/bin/sh\nexec ${quoted} "$@"\n`);
+    chmodSync(join(pwshBin, 'powershell.exe'), 0o755);
+  });
+
+  beforeEach(() => {
+    process.env.PATH = `${pwshBin}:${process.env.PATH}`;
+  });
+
+  const ROUND_TRIP = [...HOSTILE, 'ünïcödé ✓ 😀 ‚high‛', "it's ‘both’"];
+  // One script: every text as a literal, echoed back as base64 of its UTF-8.
+  // Unicode sits in the script text itself, outside any literal, too.
+  const ROUND_TRIP_SCRIPT = [
+    '# ünïcödé ✓ 😀 in a comment',
+    '$items = @(',
+    ROUND_TRIP.map(psLiteral).join(',\n'),
+    ')',
+    '$items | ForEach-Object { [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($_)) }',
+  ].join('\n');
+
+  const EXIT_CASES: Array<[string, number]> = [
+    ['Write-Output a; exit 7', 7],
+    ['Write-Output a; Write-Error "bad"', 1],
+    ["Write-Output a; & '/bin/sh' -c 'exit 7'", 1],
+    ['throw "boom"', 1],
+    ['Write-Error early; Write-Output ok', 0],
+    ['Write-Error bad # a trailing comment must not swallow the exit line', 1],
+    ['Write-Output a |', 1],
+  ];
+
+  // Every pwsh start costs hundreds of ms: all the runs go concurrently, once.
+  let results: Promise<Array<{ stdout: string; exitCode: number }>> | undefined;
+  const runAll = () => (results ??= (async () => {
+    const bridge = bridgeWithoutDetection();
+    return Promise.all([ROUND_TRIP_SCRIPT, ...EXIT_CASES.map(([s]) => s)].map(s => bridge.runPowerShell(s)));
+  })());
+
+  test('every text reaches PowerShell intact', async () => {
+    const [roundTrip] = await runAll();
+    expect(roundTrip!.exitCode).toBe(0);
+    const decoded = roundTrip!.stdout.trim().split(/\r?\n/).map(line => Buffer.from(line, 'base64').toString('utf8'));
+    expect(decoded).toEqual(ROUND_TRIP);
+    expect(existsSync(PWNED)).toBe(false);
+  }, 40_000);
+
+  test.each(EXIT_CASES.map(([script, code], i) => [script, code, i + 1] as const))(
+    'exits as a bare -Command would: %p -> %p',
+    async (_script, code, i) => {
+      expect((await runAll())[i]!.exitCode).toBe(code);
+    },
+    40_000,
+  );
 });

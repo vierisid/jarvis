@@ -71,6 +71,11 @@ export class WSLBridge {
    * twice the length, and it reports progress as CLIXML on stderr), not
    * `$args` (powershell.exe joins every argument after -Command into the
    * script), not stdin (read in the OEM code page).
+   *
+   * Known limitation, shared with the #515 toast: under Constrained Language
+   * Mode (a WDAC or AppLocker policy) the wrapper cannot run, because
+   * [Convert] and [Text.Encoding] are not core types there. The call fails
+   * with a language-mode error rather than running anything else.
    */
   async runPowerShell(script: string): Promise<CommandResult> {
     if (!WSLBridge.isWSL()) {
@@ -142,13 +147,28 @@ export class WSLBridge {
 }
 
 /**
+ * Appended to every script. A bare `-Command` script exits 1 when its last
+ * statement fails, but here the last statement powershell.exe sees is the
+ * dot-source, whose own `$?` is true, so without this a failing script would
+ * exit 0. On its own line, so a trailing comment cannot swallow it, and after
+ * a `;`, so a trailing `|` cannot pipe into it.
+ *
+ * Not identical in every case: a script that leaves with `return` or `break`
+ * skips this line and exits 0 even if the statement before failed, and one
+ * that ends in a line-continuation backtick runs its last command where a bare
+ * -Command would fail to parse.
+ */
+const EXIT_ON_FAILURE = '\n;if (-not $?) { exit 1 }';
+
+/**
  * The `-Command` text for runPowerShell: a fixed wrapper that decodes the
  * script and dot-sources it, so it runs in the scope a bare `-Command` would
- * have given it. The wrapper has no `"` and its only quotes enclose base64,
- * whose alphabet no Windows or PowerShell parser treats specially.
+ * have given it and, with the caveats at EXIT_ON_FAILURE, its exit code. The wrapper has
+ * no `"` and its only quotes enclose base64, whose alphabet no Windows or
+ * PowerShell parser treats specially.
  */
 export function buildPowerShellCommand(script: string): string {
-  const encoded = Buffer.from(script, 'utf8').toString('base64');
+  const encoded = Buffer.from(script + EXIT_ON_FAILURE, 'utf8').toString('base64');
   const command = `. ([ScriptBlock]::Create([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${encoded}'))))`;
 
   if (command.length > POWERSHELL_COMMAND_MAX) {
@@ -180,17 +200,21 @@ async function runWslpath(flag: '-w' | '-u', path: string): Promise<string> {
 }
 
 /**
- * Spawn `argv` with no shell. The env is the sanitized allowlist plus the
- * variables WSL interop reads when launching a Windows executable (the interop
- * socket, the distro name, and WSLENV, which lists what may be shared with the
- * Windows side -- only names that survive the allowlist can be). Keeping them
- * is for interop to work, not a security boundary: whether /init falls back to
- * a default socket without WSL_INTEROP was not verified.
+ * Spawn `argv` with no shell. The env is the sanitized allowlist plus three
+ * WSL names: WSL_INTEROP, the socket a Windows program is launched through on
+ * WSL2 (the one interop needs); WSL_DISTRO_NAME, this distro's name; and
+ * WSLENV, the list of variables shared with the Windows side (only names that
+ * survive the allowlist can be). Keeping them is for interop to work, not a security
+ * boundary: whether /init falls back to a default socket without WSL_INTEROP
+ * was not verified.
  *
- * The timeout is a hard deadline: the child is SIGKILLed, its pipe readers are
- * cancelled, and the call rejects at once, without waiting for pipes that a
- * grandchild can hold open long after the child is gone. Exported for the
- * tests only.
+ * On timeout this stops waiting and kills the Linux-side process: for a
+ * Windows program that is the interop relay, and the Windows process itself
+ * may survive it. The child gets SIGKILL, its pipe readers are cancelled, and
+ * the call rejects at once rather than waiting for pipes a grandchild can hold
+ * open.
+ *
+ * @internal Exported for wsl-bridge.test.ts only.
  */
 export async function runArgv(argv: string[], timeoutMs: number = DEFAULT_TIMEOUT_MS): Promise<CommandResult> {
   const startTime = Date.now();
