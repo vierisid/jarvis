@@ -94,7 +94,7 @@ async function runProbe(site: string): Promise<ProbeResult> {
       '#!/bin/sh',
       // Name the dump after the subcommand, skipping leading `-c key=value`
       // pairs (GitHubManager pins config on every git it runs).
-      'while [ "$1" = "-c" ]; do shift 2; done',
+      'while [ "$#" -ge 2 ] && [ "$1" = "-c" ]; do shift 2; done',
       // Unique per invocation: two spawns of the same binary with the same
       // first argument must not overwrite each other's evidence, or a
       // sanitized call could mask a leaking one.

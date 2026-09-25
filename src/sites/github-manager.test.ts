@@ -13,10 +13,12 @@
  *     child process received;
  *   - a real `git push`/`pull`/`fetch` against a loopback `git http-backend`
  *     that demands Basic auth. GIT_TRACE records the argv of EVERY process git
- *     starts (remote helper, credential helper, hooks), and a planted pre-push
- *     hook records its arguments, its environment, its parent's command line,
- *     and whatever token file it can find. A positive control runs the old
- *     token-in-URL shape through the same harness and must be caught.
+ *     starts (remote helper, credential helper), planted hooks record their
+ *     arguments, environment, parent's command line and any token file they
+ *     can find, and planted filters and a hostile credential helper do the
+ *     same. A positive control runs the old token-in-URL shape through the
+ *     same harness and must be caught. Daemon git now pins hooks off
+ *     entirely, so on manager calls the hook probes must not fire at all.
  *
  * POSIX-only, like spawn-env.test.ts: fakes and hooks are `#!/bin/sh`.
  */
@@ -386,7 +388,10 @@ describe('each call site keeps the token out of git argv and env', () => {
     expect(network[0]!.argv).toContain('protocol.allow=never');
     expect(network[0]!.argv).toContain('core.fsmonitor=false');
     // The always-on pins reach every git this class runs, not only this one.
-    for (const pin of ['safe.bareRepository=explicit', 'core.fsmonitor=false', 'commit.gpgSign=false', 'log.showSignature=false']) {
+    for (const pin of [
+      'safe.bareRepository=explicit', 'core.hooksPath=/dev/null', 'core.fsmonitor=false', 'commit.gpgSign=false',
+      'log.showSignature=false', 'merge.verifySignatures=false', 'push.gpgSign=false',
+    ]) {
       expect({ pin, missing: invocations.filter(i => !i.argv.includes(pin)).length }).toEqual({ pin, missing: 0 });
     }
     // Proactive auth pinned for the exact origin URL, not only the host.
@@ -841,7 +846,8 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
    *     git sends it (git sends the password on `store`);
    *   - pre-push and reference-transaction hooks that record $1/$2, their
    *     environment, their parent git's /proc cmdline, and any token file they
-   *     can find in the credential root.
+   *     can find in the credential root. They fire for the CONTROL tests'
+   *     plain git; daemon git pins hooks off, so there they must stay silent.
    */
   async function setupProject(label: string): Promise<Harness> {
     const base = tempRoot(`proj-${label}`);
@@ -920,8 +926,13 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     setEnv('JARVIS_GITHUB_TOKEN', TOKEN);
   }
 
-  function hookRuns(h: Harness, hook: 'pre-push' | 'reference-transaction'): string[] {
-    return readdirSync(h.evidence).filter(f => f.startsWith(`hook.${hook}.`) && f.endsWith('.args'));
+  /**
+   * Every recorded run of a planted .git/hooks probe. Daemon git pins hooks
+   * off, so on manager calls this must stay empty; the CONTROL tests run
+   * plain git to show the probes do fire.
+   */
+  function allHookRuns(h: Harness): string[] {
+    return readdirSync(h.evidence).filter(f => f.startsWith('hook.') && f.endsWith('.args'));
   }
 
   /** Hook runs that managed to read a token file, as labels. */
@@ -999,18 +1010,13 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     expect(seen.filter(r => r.auth === 'wrong').length).toBe(0);
     if (GIT_HAS_PROACTIVE_AUTH) expect(seen.filter(r => r.auth !== 'ok').length).toBe(0);
 
-    // The hook ran, got a tokenless URL, and found no token file to read.
-    const runs = hookRuns(h, 'pre-push');
-    expect(runs.length).toBe(1);
-    const [remoteName, remoteUrl] = readFileSync(join(h.evidence, runs[0]!), 'utf8').split('\n');
-    expect(remoteName).toBe('origin');
-    expect(remoteUrl).toBe(`${server.base}/push.git`);
-    expect(hookRunsThatFoundAToken(h)).toEqual([]);
-    // The parent-cmdline sample is real evidence, not an empty file.
-    expect(readFileSync(join(h.evidence, runs[0]!.replace(/\.args$/, '.parent-cmdline')), 'utf8')).toContain('push');
+    // Project hooks do not run on a daemon push at all (core.hooksPath is
+    // pinned to /dev/null); the CONTROL above shows the planted pre-push
+    // would otherwise have received the old token URL as $2.
+    expect(allHookRuns(h)).toEqual([]);
 
-    // Not in any argv (top-level or GIT_TRACE'd children), hook env, parent
-    // cmdline, the hostile helper's loot, anywhere under .git, or tmp.
+    // Not in any argv (top-level or GIT_TRACE'd children), the hostile
+    // helper's loot, anywhere under .git, or tmp.
     expect(h.leaks(TOKEN)).toEqual([]);
     expect(existsSync(join(h.evidence, 'stolen-by-helper'))).toBe(false);
     expect(credentialDirsIn(h.tmp)).toEqual([]);
@@ -1029,22 +1035,18 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     expect((await m.push(h.project)).success).toBe(true);
     await upstreamCommit(h);
 
-    const beforeFetch = hookRuns(h, 'reference-transaction').length;
     const status = await m.getRemoteStatus(h.project);
     // Fetching by remote name updates origin/main, so this is now accurate.
     expect({ ahead: status.ahead, behind: status.behind }).toEqual({ ahead: 0, behind: 1 });
     expect(existsSync(join(h.project, '.git', 'FETCH_HEAD'))).toBe(true);
-    // The hook ran during the fetch itself, not only during the setup push.
-    const beforePull = hookRuns(h, 'reference-transaction').length;
-    expect(beforePull).toBeGreaterThan(beforeFetch);
 
     const pulled = await m.pull(h.project);
     expect(pulled).toEqual({ success: true });
-    expect(hookRuns(h, 'reference-transaction').length).toBeGreaterThan(beforePull);
     const after = await m.getRemoteStatus(h.project);
     expect(after.behind).toBe(0);
 
-    expect(hookRunsThatFoundAToken(h)).toEqual([]);
+    // No project hook ran on any of it: fetch, pull or push.
+    expect(allHookRuns(h)).toEqual([]);
     expect(h.leaks(TOKEN)).toEqual([]);
     expect(existsSync(join(h.evidence, 'stolen-by-helper'))).toBe(false);
     expect(credentialDirsIn(h.tmp)).toEqual([]);
@@ -1067,7 +1069,10 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     const commit = async (cwd: string, file: string, text: string, msg: string) => {
       writeFileSync(join(cwd, file), text);
       await setup([REAL_GIT!, 'add', file], cwd, h.gitEnv);
-      await setup([REAL_GIT!, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', msg], cwd, h.gitEnv);
+      // Unsigned whatever the project config says: signing is what one test
+      // plants, and only the daemon's own commands are under test.
+      await setup([REAL_GIT!, '-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgSign=false',
+        'commit', '-q', '-m', msg], cwd, h.gitEnv);
     };
     await commit(h.project, 'f', 'y\n', 'Y');
     // A rebase writes commits; the harness HOME has no identity.
@@ -1149,6 +1154,21 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
       .toBe('1');
   }, 60_000);
 
+  // gpg.program is project config; a daemon pull that creates a merge commit
+  // (or verifies upstream signatures) must not run it.
+  test('a merge pull never runs a project gpg.program', async () => {
+    const probeDir = tempRoot('gpg');
+    const marker = join(probeDir, 'gpg-ran');
+    const gpg = join(probeDir, 'fake-gpg');
+    writeFileSync(gpg, `#!/bin/sh\necho "$@" >> "${marker}"\nexit 1\n`, { mode: 0o755 });
+    const { h, m, log } = await divergedProject('gpg', [
+      ['pull.rebase', 'false'], ['commit.gpgSign', 'true'], ['merge.verifySignatures', 'true'], ['gpg.program', gpg],
+    ], 'append');
+    expect(await m.pull(h.project)).toEqual({ success: true });
+    expect((await log())[0]).toBe("Merge remote-tracking branch 'origin/main'");
+    expect(existsSync(marker)).toBe(false);
+  }, 60_000);
+
   // pull into an unborn branch is git's own "pull into void", not a rebase.
   test('a rebase pull into an unborn branch checks out upstream', async () => {
     const { h, m } = await divergedProject('unborn-source', [['pull.rebase', 'true']], 'append');
@@ -1176,16 +1196,16 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     await upstreamCommit(h);
 
     const before = server.requests.length;
-    const hooksBefore = hookRuns(h, 'reference-transaction').length;
     expect((await m.getRemoteStatus(h.project)).behind).toBe(1);
     await upstreamCommit(h);
     expect(await m.pull(h.project)).toEqual({ success: true });
 
-    // Public repo, so git was never challenged: only proactive auth consumed
-    // the file, on every request, before any hook ran.
+    // Public repo, so git was never challenged: only proactive auth -- the
+    // exact-URL pin beating the override -- consumed the file, on the very
+    // first request of every command. An anonymous request here means the
+    // file outlived it.
     expect(server.requests.slice(before).filter(r => r.auth !== 'ok').length).toBe(0);
-    expect(hookRuns(h, 'reference-transaction').length).toBeGreaterThan(hooksBefore);
-    expect(hookRunsThatFoundAToken(h)).toEqual([]);
+    expect(allHookRuns(h)).toEqual([]);
     expect(h.leaks(TOKEN)).toEqual([]);
   }, 60_000);
 
@@ -1210,8 +1230,7 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     const seen = server.requests.slice(before);
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.filter(r => r.auth !== 'none').length).toBe(0);
-    expect(hookRuns(h, 'reference-transaction').length).toBeGreaterThan(0);
-    expect(hookRunsThatFoundAToken(h)).toEqual([]);
+    expect(credentialDirsIn(h.tmp)).toEqual([]);
     expect(h.leaks(TOKEN)).toEqual([]);
   }, 60_000);
 
@@ -1246,6 +1265,37 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     expect((await m.pull(planted)).success).toBe(false);
     expect(existsSync(marker)).toBe(false);
     expect(credentialDirsIn(source.tmp)).toEqual([]);
+  }, 60_000);
+
+  // Maintainer decision: daemon push/pull run no project hooks. The realistic
+  // shape is husky's: a project-level core.hooksPath inside the worktree, and
+  // `.husky/<hook>` run through `sh -e`, so it needs no executable bit -- a
+  // site_write_file of `.husky/pre-push` would otherwise run on the next push.
+  test('husky-style hooks from a project core.hooksPath never run on daemon push or pull', async () => {
+    const h = await setupProject('husky');
+    const marker = join(h.evidence, 'husky-ran');
+    const huskyDir = join(h.project, '.husky');
+    mkdirSync(join(huskyDir, '_'), { recursive: true });
+    for (const hook of ['pre-push', 'post-merge', 'post-checkout', 'reference-transaction']) {
+      // The wrapper husky installs, then the user's script, not executable.
+      writeFileSync(join(huskyDir, '_', hook), `#!/bin/sh\nexec sh -e "$(dirname "$0")/../${hook}" "$@"\n`, { mode: 0o755 });
+      writeFileSync(join(huskyDir, hook), `echo ${hook} >> "${marker}"\ncat > /dev/null\n`, { mode: 0o644 });
+    }
+    await setup([REAL_GIT!, 'config', 'core.hooksPath', '.husky/_'], h.project, h.gitEnv);
+
+    // CONTROL: plain git runs the husky chain.
+    await setup([REAL_GIT!, 'push', '-q', h.bareRepo, 'main'], h.project, h.gitEnv);
+    expect(readFileSync(marker, 'utf8')).toContain('pre-push');
+    rmSync(marker);
+
+    useHarnessEnv(h);
+    const m = manager();
+    expect((await m.push(h.project)).success).toBe(true);
+    await upstreamCommit(h);
+    expect((await m.getRemoteStatus(h.project)).behind).toBe(1);
+    expect(await m.pull(h.project)).toEqual({ success: true });
+    expect(existsSync(marker)).toBe(false);
+    expect(allHookRuns(h)).toEqual([]);
   }, 60_000);
 
   // S1. Commands .git/config can name, which git runs on its own: the
@@ -1301,14 +1351,15 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     // ...while the filter and hook did run (after the token was gone), so this
     // is not vacuous...
     expect(runs.some(r => r.startsWith('clean '))).toBe(true);
-    expect(runs.some(r => r.startsWith('post-index-change '))).toBe(true);
+    // post-index-change is a hook, and hooks are pinned off entirely.
+    expect(runs.filter(r => r.startsWith('post-index-change '))).toEqual([]);
     // ...and none of them ever saw the token file.
     expect(runs.filter(r => r.endsWith(' 1'))).toEqual([]);
     expect(h.leaks(TOKEN)).toEqual([]);
   }, 60_000);
 
   // On git < 2.46 this is the documented gap: see gitHardeningArgs.
-  test.skipIf(!GIT_HAS_PROACTIVE_AUTH)('a public repo, which never challenges, still consumes the token before any hook runs', async () => {
+  test.skipIf(!GIT_HAS_PROACTIVE_AUTH)('a public repo, which never challenges, still consumes the token on the first request', async () => {
     const h = await setupProject('public-fetch');
     useHarnessEnv(h);
     const m = manager();
@@ -1316,21 +1367,19 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     await upstreamCommit(h);
 
     const before = server.requests.length;
-    const hooksBefore = hookRuns(h, 'reference-transaction').length;
     const status = await m.getRemoteStatus(h.project);
     expect(status.behind).toBe(1);
 
     // The server would have answered anonymously, yet the helper was asked
-    // up front, so the file was gone before reference-transaction ran.
+    // up front, so the file was gone before the first response arrived.
     const seen = server.requests.slice(before);
     expect(seen.length).toBeGreaterThan(0);
     expect(seen.filter(r => r.auth !== 'ok').length).toBe(0);
-    expect(hookRuns(h, 'reference-transaction').length).toBeGreaterThan(hooksBefore);
-    expect(hookRunsThatFoundAToken(h)).toEqual([]);
+    expect(allHookRuns(h)).toEqual([]);
     expect(h.leaks(TOKEN)).toEqual([]);
   }, 60_000);
 
-  test('a local-path pushurl ahead of origin means no token at all, so pre-push has nothing to find', async () => {
+  test('a local-path pushurl ahead of origin means no token at all', async () => {
     const h = await setupProject('pushurl');
     const decoy = join(tempRoot('decoy'), 'decoy.git');
     await setup([REAL_GIT!, 'init', '-q', '--bare', decoy], root, h.gitEnv);
@@ -1343,9 +1392,9 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     // Plain git: the decoy gets the push, GitHub refuses the anonymous one.
     expect(result.success).toBe(false);
     expect(result.error).toContain('so the GitHub token was not used');
-    expect(hookRuns(h, 'pre-push').length).toBeGreaterThan(0);
     expect(server.requests.slice(before).filter(r => r.auth !== 'none').length).toBe(0);
-    expect(hookRunsThatFoundAToken(h)).toEqual([]);
+    // Hooks are off on the plain path too.
+    expect(allHookRuns(h)).toEqual([]);
     expect(h.leaks(TOKEN)).toEqual([]);
     expect(credentialDirsIn(h.tmp)).toEqual([]);
   }, 30_000);

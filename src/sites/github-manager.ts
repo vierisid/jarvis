@@ -97,21 +97,34 @@ const KNOWN_PROTOCOLS = ['file', 'git', 'ext', 'fd', 'ssh', 'http', 'https'] as 
  *   - `safe.bareRepository=explicit`: a bare repository planted at the
  *     project root (HEAD, objects/, refs/, config) is otherwise discovered
  *     implicitly, and its config runs code on a plain `git status` (#516).
+ *   - `core.hooksPath=/dev/null`: no project hook runs on a daemon push, pull
+ *     or fetch (maintainer decision). A project-level `core.hooksPath` is
+ *     legitimate (husky sets `.husky/_`, inside the worktree, and runs
+ *     `.husky/<hook>` through `sh -e`, so the file needs no executable bit),
+ *     which made a site_write_file of `.husky/pre-push` into code execution
+ *     on the next push. The token was already consumed by then; this closes
+ *     the write-to-execute path itself. Pushes the user runs are unaffected.
  *   - `core.fsmonitor=false`: the fsmonitor command runs on every index read.
- *   - `commit.gpgSign=false`, `log.showSignature=false`: pull's integrate step
- *     can create merge or rebase commits, and `gpg.program` is configurable
- *     by the project.
+ *   - `commit.gpgSign=false`, `log.showSignature=false`,
+ *     `merge.verifySignatures=false`: pull's integrate step creates merge or
+ *     rebase commits and would verify signed upstream commits, and
+ *     `gpg.program` / `gpg.ssh.program` are configurable by the project (a
+ *     planted `gpg.ssh.program` ran on `pull` with only the first two pinned).
+ *     A project with commit.gpgSign=true now gets unsigned commits from a
+ *     daemon pull.
+ *   - `push.gpgSign=false`: GitHub does not accept signed pushes, and the
+ *     signing program is project-configurable too.
  * Mirrors PROJECT_GIT_PINS in git-manager.ts on the #516 branch; kept inline
- * until that lands. Hooks are deliberately NOT disabled here: whether a
- * daemon push should run the project's pre-push hook is an open maintainer
- * decision. If it goes the other way, add `'-c', 'core.hooksPath=/dev/null'`
- * to this list -- one line.
+ * until that lands.
  */
 const PROJECT_GIT_PINS: readonly string[] = [
   '-c', 'safe.bareRepository=explicit',
+  '-c', 'core.hooksPath=/dev/null',
   '-c', 'core.fsmonitor=false',
   '-c', 'commit.gpgSign=false',
   '-c', 'log.showSignature=false',
+  '-c', 'merge.verifySignatures=false',
+  '-c', 'push.gpgSign=false',
 ];
 
 /**
@@ -211,11 +224,12 @@ function shellQuote(value: string): string {
  * arguments, and out of files in the project tree. It does not protect the
  * token from a hostile .git/config, which the site file tools can write
  * (#516):
- *   - Same-uid code -- a hook, or a command .git/config names -- can read the
- *     path above before git asks for it, or simply read the keychain key in
- *     the data dir (see the header of src/util/subprocess-env.ts).
- *     gitHardeningArgs narrows that window; it cannot close it while the
- *     project's own hooks run.
+ *   - Same-uid code -- a command .git/config names, such as a clean filter
+ *     (hooks no longer run on daemon git; see PROJECT_GIT_PINS) -- can read
+ *     the path above before git asks for it, or simply read the keychain key
+ *     in the data dir (see the header of src/util/subprocess-env.ts).
+ *     gitHardeningArgs narrows that window; it cannot rule out every command
+ *     a config can name.
  *   - The connection can be redirected underneath a correct github.com URL:
  *     a local `http.proxy` plus `http.sslVerify=false` (or `http.sslCAInfo`
  *     pointing at a CA in the tree, or `http.curloptResolve`) delivers the
@@ -250,23 +264,23 @@ export function credentialHelperArgs(tokenFile: string, target: CredentialTarget
 /**
  * `git -c` arguments that make git ask for the token as early as possible and
  * stop the project's config from steering it anywhere else first. Each one
- * answers a way a model-written .git/config could make a hook run while the
+ * answers a way a model-written .git/config could make code run while the
  * token file still exists:
  *
  * - `http.<url>.proactiveAuth=basic`: ask the helper before the FIRST
  *   request instead of after a 401. Without it a public repo never challenges,
- *   so fetch/pull never consume the file and every hook of the operation runs
- *   with it in place. Pinned for the target host AND for each exact origin
+ *   so fetch/pull never consume the file, and it stays in place for the whole
+ *   command. Pinned for the target host AND for each exact origin
  *   URL (`originUrls`): git picks the most specific matching URL, so a
  *   project-level `http.<exact origin URL>.proactiveAuth=none` beat the host
  *   pin (reproduced in review: reference-transaction read the token on a
- *   public repo). At equal specificity the command line wins, and nothing is
+ *   public repo, back when hooks still ran). At equal specificity the command line wins, and nothing is
  *   more specific than the exact URL -- provided the pinned key IS the URL
  *   byte for byte, which is why originCredentialUrls only accepts plain
  *   repo paths (see isPlainRepoPath). git < 2.46 ignores the key and only
- *   asks after a 401, so on old git a PUBLIC repo's fetch/pull still runs
- *   every hook (reference-transaction, post-merge, ...) with the file in
- *   place. (The same exact-URL pin would not rescue `http.sslVerify` and its
+ *   asks after a 401, so on old git a PUBLIC repo's fetch keeps the file for
+ *   the whole command; with hooks off, that leaves whatever else the config
+ *   can make git run in that window. (The same exact-URL pin would not rescue `http.sslVerify` and its
  *   kin: redirecting the connection is #516, not something pinned here.)
  * - `protocol.*.allow`: the target's transport only. A `pushurl` to a local
  *   path, or to ssh with a planted `core.sshCommand`, runs code for that URL
@@ -277,10 +291,9 @@ export function credentialHelperArgs(tokenFile: string, target: CredentialTarget
  *   are set explicitly because a project-level `protocol.file.allow=always`
  *   would beat `protocol.allow`. See KNOWN_PROTOCOLS for what this cannot
  *   enumerate.
- * - `core.fsmonitor=false`: git runs the fsmonitor command whenever it reads
- *   the index. Reproduced in review: `pull` read the index before fetching, so
- *   a planted fsmonitor read the token. (pull is now split so the index work
- *   happens after the token is gone, but push and fetch get the pin too.)
+ * - (`core.fsmonitor=false` used to be pinned here: `pull` read the index
+ *   before fetching, so a planted fsmonitor read the token. It now sits in
+ *   PROJECT_GIT_PINS, on every git call, and pull is split besides.)
  * - no submodule recursion: each submodule is a second remote, and so a second
  *   `get` that the one-shot helper would refuse. Better predictable than a
  *   failure that depends on which submodule needed auth.
@@ -290,9 +303,9 @@ export function credentialHelperArgs(tokenFile: string, target: CredentialTarget
  * planted, plus every hook via core.hooksPath): core.pager and core.editor /
  * sequence.editor (never started without a terminal), gpg.program, diff
  * textconv and merge drivers, filter clean/smudge/process, core.askPass (only
- * after the helper declines), core.alternateRefsCommand, and the hooks
- * themselves -- pre-push and reference-transaction run only after the `get`.
- * Filters and post-index-change DO run before the fetch inside a single
+ * after the helper declines), core.alternateRefsCommand. Hooks ran only after
+ * the `get` too, and are now off for every daemon git command anyway
+ * (PROJECT_GIT_PINS). Filters DO run before the fetch inside a single
  * `git pull` (index refresh for a rebase pull), which is why pull() fetches
  * with the token and merges without it. Filter driver names are arbitrary, so
  * they could not be pinned here anyway.
@@ -305,7 +318,6 @@ export function gitHardeningArgs(target: CredentialTarget, originUrls: readonly 
     args.push('-c', `protocol.${protocol}.allow=${protocol === target.protocol ? 'always' : 'never'}`);
   }
   args.push(
-    '-c', 'core.fsmonitor=false',
     '-c', 'submodule.recurse=false',
     '-c', 'fetch.recurseSubmodules=false',
     '-c', 'push.recurseSubmodules=no',
@@ -570,9 +582,9 @@ export class GitHubManager {
    *
    * With the token, this is a fetch WITH it followed by a local integrate step
    * WITHOUT it. A single `git pull` refreshes the index before it fetches --
-   * running the fsmonitor, clean filters and the post-index-change hook, all
-   * nameable by .git/config -- while the token file still exists; that was
-   * reproduced in review. See planIntegration for how the second step
+   * running the fsmonitor and clean filters, both nameable by .git/config
+   * (and, before hooks were pinned off, the post-index-change hook) -- while
+   * the token file still exists; that was reproduced in review. See planIntegration for how the second step
    * honours pull.rebase / pull.ff / branch.<name>.rebase.
    *
    * Two differences from `git pull origin <branch>` are intentional: a merge
@@ -673,7 +685,7 @@ export class GitHubManager {
    * because that is when `git pull` decides it.
    *
    * Merge mode, and anything pull.ff=only governs, is `git pull . <tracking>`
-   * in integrateFetched: pull.ff, merge options and hooks apply as ever. (With
+   * in integrateFetched: pull.ff and merge options apply as ever. (With
    * pull.ff=only even a rebase pull only fast-forwards or fails, which is
    * what `pull .` does.)
    *
@@ -747,9 +759,10 @@ export class GitHubManager {
    *
    * Anything else -- an ssh origin, a GitHub Enterprise host, or an origin
    * that a planted insteadOf/pushurl points elsewhere -- runs as plain git
-   * with no token file in existence at all: nothing for the transport, its
-   * hooks or its config-named commands to find, and ssh keeps working as it
-   * did before #511. The helper-list reset and the timeout still apply.
+   * with no token file in existence at all: nothing for the transport or its
+   * config-named commands to find, and ssh keeps working as it did before
+   * #511. The helper-list reset, PROJECT_GIT_PINS and the timeout still
+   * apply.
    */
   private async remoteGit(cwd: string, token: string, args: string[]): Promise<string> {
     if (await this.originIsCredentialTarget(cwd)) return this.authedGit(cwd, token, args);
@@ -799,7 +812,10 @@ export class GitHubManager {
       const fetchUrls = await this.git(cwd, ['remote', 'get-url', '--all', 'origin']);
       const pushUrls = await this.git(cwd, ['remote', 'get-url', '--push', '--all', 'origin']);
       // Split on newlines only and never trim: the URL checked here must be
-      // byte for byte the one git uses and the one pinned.
+      // byte for byte the one git uses and the one pinned. A single URL that
+      // itself contains a newline would read as two here; git refuses such a
+      // URL outright ("url contains a newline"), before any request or
+      // credential lookup, so it fails closed.
       const urls = `${fetchUrls}\n${pushUrls}`.split('\n').filter(u => u !== '');
       const ok = urls.length > 0 && urls.every(u => u.startsWith(prefix) && isPlainRepoPath(u.slice(prefix.length)));
       return ok ? [...new Set(urls)] : null;
@@ -907,8 +923,10 @@ export class GitHubManager {
     options: { configArgs?: string[]; timeoutMs?: number } = {},
   ): Promise<string> {
     // Sanitized, not inherited - same reasoning as GitManager.run(): these
-    // commands execute .git/hooks out of a model-written project tree. Nothing
-    // credential-bearing may be added here either: hooks inherit this env.
+    // commands run in a model-written project tree, and whatever its config
+    // names inherits this env (hooks are pinned off by PROJECT_GIT_PINS, but
+    // filters and the like are not). Nothing credential-bearing may be added
+    // here either.
     const timeoutMs = options.timeoutMs;
     const proc = Bun.spawn(['git', ...PROJECT_GIT_PINS, ...(options.configArgs ?? []), ...args], {
       cwd,
