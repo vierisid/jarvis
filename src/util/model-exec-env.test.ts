@@ -25,6 +25,8 @@ import {
   modelExecDaemonWarning,
   modelExecMarkers,
   modelExecRestartWarning,
+  parentWorkflowKeyCheck,
+  workflowKeyCheck,
 } from './model-exec-marker.ts';
 
 const SENTINEL = 'sentinel-do-not-log';
@@ -143,11 +145,11 @@ describe('modelExecEnv()', () => {
       expect(modelExecEnv()[MODEL_EXEC_ENV_KEY_FLAG]).toBeUndefined();
       process.env.JARVIS_WORKFLOW_ENCRYPTION_KEY = SENTINEL;
       const env = modelExecEnv({ [MODEL_EXEC_ENV_KEY_FLAG]: undefined });
-      expect(env[MODEL_EXEC_ENV_KEY_FLAG]).toBe('1');
-      expect(env.JARVIS_WORKFLOW_ENCRYPTION_KEY).toBeUndefined(); // the bit, not the key
+      expect(env[MODEL_EXEC_ENV_KEY_FLAG]).toBe(workflowKeyCheck(SENTINEL));
+      expect(env.JARVIS_WORKFLOW_ENCRYPTION_KEY).toBeUndefined(); // the check, not the key
       delete process.env.JARVIS_WORKFLOW_ENCRYPTION_KEY;
-      process.env[MODEL_EXEC_ENV_KEY_FLAG] = '1';
-      expect(modelExecEnv()[MODEL_EXEC_ENV_KEY_FLAG]).toBe('1'); // inherited, passed on
+      process.env[MODEL_EXEC_ENV_KEY_FLAG] = 'abcdef0123456789';
+      expect(modelExecEnv()[MODEL_EXEC_ENV_KEY_FLAG]).toBe('abcdef0123456789'); // inherited, passed on
     } finally {
       for (const [name, v] of [['JARVIS_WORKFLOW_ENCRYPTION_KEY', saved.key], [MODEL_EXEC_ENV_KEY_FLAG, saved.flag]] as const) {
         if (v === undefined) delete process.env[name];
@@ -259,7 +261,12 @@ describe('every JARVIS_ env name in src/, bin/ and scripts/ is classified', () =
     // it on processes it starts itself.
     const known = new Set([...DAEMON_SECRET_ENV_NAMES, ...JARVIS_SETTINGS_ENV_NAMES, ...JARVIS_INTERNAL_ENV_NAMES]);
     const unclassified = [...names].filter(([n]) => !known.has(n)).map(([n, f]) => `${n} (${f})`);
-    expect(unclassified).toEqual([]);
+    // The failure prints what to do, not just the names.
+    const fix = unclassified.length === 0 ? null
+      : 'A setting (e.g. JARVIS_BROWSER_NO_SANDBOX from #521): add it to JARVIS_SETTINGS_ENV_NAMES in '
+        + 'src/util/model-exec-env.ts. A secret: DAEMON_SECRET_ENV_NAMES. Set only on processes the daemon '
+        + 'starts itself: JARVIS_INTERNAL_ENV_NAMES.';
+    expect({ unclassified, fix }).toEqual({ unclassified: [], fix: null });
   });
 
   test('the three buckets do not overlap', () => {
@@ -269,21 +276,39 @@ describe('every JARVIS_ env name in src/, bin/ and scripts/ is classified', () =
 });
 
 describe('the model-exec markers (#514)', () => {
-  const FLAGGED = { [MODEL_EXEC_MARKER_ENV]: '1', [MODEL_EXEC_ENV_KEY_FLAG]: '1' };
+  const KEY = 'a'.repeat(64);
+  const CHECK = workflowKeyCheck(KEY);
+  const FLAGGED = { [MODEL_EXEC_MARKER_ENV]: '1', [MODEL_EXEC_ENV_KEY_FLAG]: CHECK };
+  const LEGACY = { [MODEL_EXEC_MARKER_ENV]: '1', [MODEL_EXEC_ENV_KEY_FLAG]: '1' };
 
-  test('are recognised only as exactly "1"', () => {
+  test('the key check: 16 hex chars, stable, case-insensitive, and not the key', () => {
+    // Known answer, FROZEN: one release sets the flag and the next checks it,
+    // so a changed label, parameter or normalisation must fail here first.
+    expect(workflowKeyCheck('a'.repeat(64))).toBe('2449f493d03b759a');
+    expect(workflowKeyCheck(` ${'A'.repeat(64)}\n`)).toBe('2449f493d03b759a');
+    expect(CHECK).toMatch(/^[0-9a-f]{16}$/);
+    expect(workflowKeyCheck(KEY.toUpperCase())).toBe(CHECK);
+    expect(workflowKeyCheck('b'.repeat(64))).not.toBe(CHECK);
+    expect(KEY).not.toContain(CHECK);
+  });
+
+  test('the marker is exactly "1"; the flag is a check value or an older parent\'s "1"', () => {
     expect(isModelExecProcess({ [MODEL_EXEC_MARKER_ENV]: '1' })).toBe(true);
-    expect(hadEnvWorkflowKey({ [MODEL_EXEC_ENV_KEY_FLAG]: '1' })).toBe(true);
-    for (const v of [undefined, '', '0', 'true']) {
+    expect(parentWorkflowKeyCheck({ [MODEL_EXEC_ENV_KEY_FLAG]: CHECK })).toBe(CHECK);
+    expect(parentWorkflowKeyCheck({ [MODEL_EXEC_ENV_KEY_FLAG]: '1' })).toBe('1');
+    for (const v of [undefined, '', '0', 'true', CHECK.toUpperCase(), CHECK.slice(1)]) {
       expect({ v, marked: isModelExecProcess({ [MODEL_EXEC_MARKER_ENV]: v }) }).toEqual({ v, marked: false });
       expect({ v, flagged: hadEnvWorkflowKey({ [MODEL_EXEC_ENV_KEY_FLAG]: v }) }).toEqual({ v, flagged: false });
     }
   });
 
-  test('modelExecMarkers derives the flag from the parent', () => {
+  test('modelExecMarkers: the parent env key sets the check, an inherited flag passes on unchanged', () => {
     expect(modelExecMarkers({})).toEqual({ [MODEL_EXEC_MARKER_ENV]: '1' });
-    expect(modelExecMarkers({ JARVIS_WORKFLOW_ENCRYPTION_KEY: 'k' })).toEqual(FLAGGED);
-    expect(modelExecMarkers({ [MODEL_EXEC_ENV_KEY_FLAG]: '1' })).toEqual(FLAGGED);
+    expect(modelExecMarkers({ JARVIS_WORKFLOW_ENCRYPTION_KEY: KEY })).toEqual(FLAGGED);
+    expect(modelExecMarkers({ [MODEL_EXEC_ENV_KEY_FLAG]: CHECK })).toEqual(FLAGGED);
+    expect(modelExecMarkers({ [MODEL_EXEC_ENV_KEY_FLAG]: '1' })).toEqual(LEGACY);
+    // A key handed in along the way does not replace the ancestor's check.
+    expect(modelExecMarkers({ ...FLAGGED, JARVIS_WORKFLOW_ENCRYPTION_KEY: 'b'.repeat(64) })).toEqual(FLAGGED);
   });
 
   test('silent for a file-key install, marked or not', () => {
@@ -294,13 +319,17 @@ describe('the model-exec markers (#514)', () => {
     }
   });
 
-  test('names the workflow key when the parent held it and it is not back', () => {
-    expect(modelExecDaemonWarning(FLAGGED)).toContain('JARVIS_WORKFLOW_ENCRYPTION_KEY was in the environment of the Jarvis that ran it');
+  test('warns while the parent\'s key is missing or a different one is set; silent once it is back', () => {
+    expect(modelExecDaemonWarning(FLAGGED)).toContain('kept its workflow key in JARVIS_WORKFLOW_ENCRYPTION_KEY');
+    expect(modelExecDaemonWarning(FLAGGED)).toContain('unset JARVIS_MODEL_EXEC_ENV_KEY deliberately');
     expect(modelExecRestartWarning(FLAGGED)).toContain('systemctl --user restart jarvis');
-    // Passed inside the command, or re-exported by the shell's rc.
-    const back = { ...FLAGGED, JARVIS_WORKFLOW_ENCRYPTION_KEY: 'k' };
+    expect(modelExecDaemonWarning({ ...FLAGGED, JARVIS_WORKFLOW_ENCRYPTION_KEY: 'b'.repeat(64) })).not.toBeNull();
+    const back = { ...FLAGGED, JARVIS_WORKFLOW_ENCRYPTION_KEY: KEY };
     expect(modelExecDaemonWarning(back)).toBeNull();
     expect(modelExecRestartWarning(back)).toBeNull();
+    // An older parent's `1` cannot judge an env key; one being set is enough.
+    expect(modelExecDaemonWarning({ ...LEGACY, JARVIS_WORKFLOW_ENCRYPTION_KEY: KEY })).toBeNull();
+    expect(modelExecDaemonWarning(LEGACY)).not.toBeNull();
   });
 
   test('the CLI warns only for a detached start or restart', () => {

@@ -62,6 +62,7 @@ import {
   type CredentialRowBinding,
 } from "../src/workflows/db/encryption";
 import { isLocked, lockPathFor } from "../src/daemon/pid";
+import { hadEnvWorkflowKey } from "../src/util/model-exec-marker";
 
 interface CliArgs {
   dataDir: string;
@@ -144,13 +145,17 @@ function bindingFor(row: ConnectionRow): CredentialRowBinding {
 }
 
 async function main(): Promise<void> {
-  if (process.env["JARVIS_WORKFLOW_ENCRYPTION_KEY"]) {
+  // From the assistant's shell the env key is stripped (#514), but the flag
+  // says it existed: rotating the file key there would re-encrypt every row
+  // under a key the user's own daemon, preferring the env key, cannot read.
+  if (process.env["JARVIS_WORKFLOW_ENCRYPTION_KEY"] || hadEnvWorkflowKey()) {
     console.error(
       [
-        "JARVIS_WORKFLOW_ENCRYPTION_KEY is set in the environment. That env var",
-        "IS the key -- rotate by changing it (and restarting the daemon) rather",
-        "than running this script. Unset it first if you want to switch to a",
-        "file-based keychain.",
+        "JARVIS_WORKFLOW_ENCRYPTION_KEY is set in the environment -- or was, in the",
+        "Jarvis whose assistant ran this shell (JARVIS_MODEL_EXEC_ENV_KEY is set). That",
+        "env var IS the key -- rotate by changing it (and restarting the daemon) rather",
+        "than running this script. To switch to a file-based keychain, unset it and run",
+        "this from your own terminal.",
       ].join("\n"),
     );
     process.exit(1);
