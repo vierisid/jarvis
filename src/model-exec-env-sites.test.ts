@@ -30,7 +30,7 @@ import { mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSyn
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { DAEMON_SECRET_ENV_NAMES } from './util/model-exec-env.ts';
-import { MODEL_EXEC_MARKER_ENV } from './util/model-exec-marker.ts';
+import { MODEL_EXEC_ENV_KEY_FLAG, MODEL_EXEC_MARKER_ENV } from './util/model-exec-marker.ts';
 
 /** Synthetic. Never a real secret, and never printed on failure. */
 const CANARY_VALUE = 'sentinel-do-not-log';
@@ -177,6 +177,9 @@ function expectModelExecEnv(result: ProbeResult, expectedDump: string) {
     // And the child is marked, so a daemon it starts will not mint a second
     // workflow key (util/model-exec-marker.ts).
     expect({ dump: name, marker: env[MODEL_EXEC_MARKER_ENV] }).toEqual({ dump: name, marker: '1' });
+    // The probe's daemon held JARVIS_WORKFLOW_ENCRYPTION_KEY (a canary), so the
+    // child carries the one-bit flag that says so -- and not the key.
+    expect({ dump: name, flag: env[MODEL_EXEC_ENV_KEY_FLAG] }).toEqual({ dump: name, flag: '1' });
   }
 }
 
@@ -190,8 +193,10 @@ describe('model-directed spawns strip the daemon secrets and keep the user env (
       expect({ name, dumped: env !== undefined }).toEqual({ name, dumped: true });
       const seen = CANARY_NAMES.filter(c => env![c] === CANARY_VALUE);
       expect({ name, seen }).toEqual({ name, seen: CANARY_NAMES });
-      // The marker comes from modelExecEnv(), not from the harness.
+      // The markers come from modelExecEnv(), not from the harness -- nor from
+      // a developer running this suite in a marked shell.
       expect({ name, marker: env![MODEL_EXEC_MARKER_ENV] }).toEqual({ name, marker: undefined });
+      expect({ name, flag: env![MODEL_EXEC_ENV_KEY_FLAG] }).toEqual({ name, flag: undefined });
     }
   }, 45_000);
 

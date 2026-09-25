@@ -40,6 +40,7 @@ import {
   type InstallMethodInfo,
 } from './install-method.ts';
 import { stopDaemonGracefully, type StopResult } from './daemon-control.ts';
+import { modelExecRestartWarning } from '../util/model-exec-marker.ts';
 
 export interface SpawnResult {
   exitCode: number;
@@ -463,6 +464,10 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
   if (runningPid && result.outcome !== 'failed' && restart) {
     if (daemonStopped) {
       console.log(c.dim('\nRestarting daemon...'));
+      // The replacement inherits this shell's env. From the assistant's shell
+      // that can lack the workflow key (#514; util/model-exec-marker.ts).
+      const warning = modelExecRestartWarning();
+      if (warning) console.log(c.yellow(warning));
       restartDaemonDetached(deps.packageRoot);
     } else {
       // The old daemon still holds the lock, so a spawned replacement would

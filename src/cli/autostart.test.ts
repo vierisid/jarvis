@@ -244,6 +244,16 @@ describe('service definitions propagate JARVIS_HOME', () => {
     expect(plist).toContain('<string>/srv/tenant7</string>');
   });
 
+  // #514: an import-environment (or launchctl setenv) from the assistant's
+  // marked shell must not mark the service -- see util/model-exec-marker.ts.
+  test('the service never carries the model-exec markers', () => {
+    const unit = withJarvisHome(undefined, generateSystemdUnit);
+    expect(unit).toContain('UnsetEnvironment=JARVIS_MODEL_EXEC JARVIS_MODEL_EXEC_ENV_KEY\n');
+    const plist = withJarvisHome(undefined, generateLaunchdPlist);
+    expect(plist).toContain('<key>JARVIS_MODEL_EXEC</key>\n    <string></string>');
+    expect(plist).toContain('<key>JARVIS_MODEL_EXEC_ENV_KEY</key>\n    <string></string>');
+  });
+
   test('launchd plist falls back to ~/.jarvis/logs with no JARVIS_HOME', () => {
     const plist = withJarvisHome(undefined, generateLaunchdPlist);
     expect(plist).toContain('/.jarvis/logs/jarvis.log');

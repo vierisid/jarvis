@@ -71,7 +71,7 @@
  * edit to it rebuilds every engine and piece. This module does not import it
  * either, so it stays independent of that file's patterns.
  */
-import { MODEL_EXEC_MARKER_ENV } from './model-exec-marker.ts';
+import { MODEL_EXEC_ENV_KEY_FLAG, MODEL_EXEC_MARKER_ENV, modelExecMarkers } from './model-exec-marker.ts';
 
 /**
  * The daemon's secrets, by exact name, compared upper-cased. The JARVIS_ ones
@@ -130,23 +130,26 @@ export const DAEMON_SECRET_ENV_NAMES: readonly string[] = Object.freeze([
  * without strict mode. The files the locations name are same-uid readable
  * whether or not the pointer is forwarded.
  *
- * One cost remains: a daemon started from run_command (`jarvis restart` in an
- * install no service manager owns) by a user whose workflow key lives ONLY in
- * JARVIS_WORKFLOW_ENCRYPTION_KEY comes up without it and falls back to the key
- * file (encryption.ts getKey):
+ * One cost remains. On an install no service manager runs, `jarvis restart`
+ * and `jarvis update` run through run_command start the new daemon FROM that
+ * shell (under systemd they stop Jarvis instead, and launchd relaunches it
+ * with its own env: see util/model-exec-marker.ts). A user whose key lives ONLY in
+ * JARVIS_WORKFLOW_ENCRYPTION_KEY gets a daemon without it, which falls back to
+ * the key file (encryption.ts getKey):
  *   - no key file, encrypted rows stored: it refuses to boot rather than
  *     generate a fresh key (assertEncryptionKeyForStoredCredentials in
  *     workflows/db/index.ts);
  *   - no key file, no encrypted rows: saving a credential fails. modelExecEnv
- *     marks its children JARVIS_MODEL_EXEC=1, and under that marker getKey
- *     refuses to GENERATE a key, which would otherwise split credentials
- *     between a file key and the env key the user's own next restart prefers
- *     (util/model-exec-marker.ts). An install WITHOUT an env key never lands
- *     here: an unmarked daemon writes its key file at boot;
+ *     flags its children JARVIS_MODEL_EXEC_ENV_KEY=1 when this daemon held the
+ *     key in its env, and under that flag getKey refuses to GENERATE one,
+ *     which would otherwise split credentials between a file key and the env
+ *     key the user's own next restart prefers. An install whose key lives in
+ *     a file is never flagged, so it still generates one when it has none;
  *   - a stale key file: it is used, and stored rows fail to decrypt.
- * Likewise it comes up without JARVIS_GITHUB_TOKEN. The daemon and `jarvis
- * start/restart/update` say so when marked. A daemon that needs its secrets is
- * restarted by the service manager or from the user's own terminal.
+ * Likewise it comes up without JARVIS_GITHUB_TOKEN, which nothing flags. The
+ * daemon logs the missing key, and `jarvis start -d`/`restart -d`/`update`
+ * print it. `systemctl --user restart jarvis`, or a restart from the user's
+ * own terminal, brings every secret back.
  */
 export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   // Where things are.
@@ -167,9 +170,9 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   'JARVIS_ENGINE_IDLE_TTL_MS', 'JARVIS_ENGINE_CACHE_MAX_AGE_DAYS',
   'JARVIS_ENGINE_CACHE_MAX_BUNDLES', 'JARVIS_ENGINE_SHUTDOWN_GRACE_MS',
   'JARVIS_ENGINE_ORPHAN_POLL_MS',
-  // Set on every model-directed child by modelExecEnv(), and must survive into
-  // what it starts: see util/model-exec-marker.ts.
-  MODEL_EXEC_MARKER_ENV,
+  // Set on model-directed children by modelExecEnv(), and must survive into
+  // what they start: see util/model-exec-marker.ts.
+  MODEL_EXEC_MARKER_ENV, MODEL_EXEC_ENV_KEY_FLAG,
   // Test seam (cli/version.ts): a substitute git binary.
   'JARVIS_GIT_BIN',
   // Read by the Go sidecar (sidecar/), which a user may start from
@@ -218,8 +221,9 @@ export function stripDaemonSecrets(base: Record<string, string | undefined>): Re
 
 /**
  * The environment for a model-directed child: the daemon's, with `extra` on
- * top, minus the daemon's secrets, plus `JARVIS_MODEL_EXEC=1`
- * (util/model-exec-marker.ts), set last so no `extra` can drop it. An
+ * top, minus the daemon's secrets, plus the markers of
+ * util/model-exec-marker.ts (JARVIS_MODEL_EXEC=1, and the env-key flag when
+ * this process holds or inherited it), set last so no `extra` can drop them. An
  * `undefined` in `extra` removes the key
  * -- the key as spelled: on Windows, where process.env holds `Path`, an extra
  * `PATH` sits beside it rather than replacing it.
@@ -231,5 +235,5 @@ export function stripDaemonSecrets(base: Record<string, string | undefined>): Re
  * restores the leak.
  */
 export function modelExecEnv(extra?: Record<string, string | undefined>): Record<string, string> {
-  return { ...stripDaemonSecrets({ ...process.env, ...extra }), [MODEL_EXEC_MARKER_ENV]: '1' };
+  return { ...stripDaemonSecrets({ ...process.env, ...extra }), ...modelExecMarkers(process.env) };
 }

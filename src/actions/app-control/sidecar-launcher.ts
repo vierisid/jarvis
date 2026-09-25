@@ -11,7 +11,7 @@ import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { createConnection } from 'node:net';
-import { WSLBridge } from '../terminal/wsl-bridge.ts';
+import { WSLBridge, wslInteropExtras } from '../terminal/wsl-bridge.ts';
 import { modelExecEnv } from '../../util/model-exec-env.ts';
 import { sanitizedEnv } from '../../util/subprocess-env.ts';
 
@@ -40,11 +40,7 @@ export function findSidecarExecutable(): string | null {
       // interop extras it needs to launch a Windows executable -- the same env
       // as actions/terminal/wsl-bridge.ts (#519).
       const userProfileResult = Bun.spawnSync(['cmd.exe', '/C', 'echo', '%USERPROFILE%'], {
-        env: sanitizedEnv({
-          WSL_INTEROP: process.env.WSL_INTEROP,
-          WSL_DISTRO_NAME: process.env.WSL_DISTRO_NAME,
-          WSLENV: process.env.WSLENV,
-        }),
+        env: sanitizedEnv(wslInteropExtras()),
       });
       const userProfile = userProfileResult.stdout.toString().trim();
       if (userProfile && !userProfile.includes('%')) {
