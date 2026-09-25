@@ -30,7 +30,8 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  CREDENTIAL_DIR_PREFIX, GitHubManager, credentialHelperArgs, credentialRoot, gitHardeningArgs, sweepStaleCredentialDirs,
+  CREDENTIAL_DIR_PREFIX, GitHubManager, credentialHelperArgs, credentialRoot, gitHardeningArgs, hookNamesFromListing,
+  sweepStaleCredentialDirs,
 } from './github-manager.ts';
 
 /** Synthetic. Never a real token. */
@@ -260,6 +261,33 @@ describe.skipIf(process.platform === 'win32')('credentialRoot', () => {
 
     setEnv('XDG_RUNTIME_DIR', 'relative/dir');
     expect(credentialRoot()).toBe(fallback);
+  });
+});
+
+// The lookup behind namedHookPins, against real git's listing: the git-side
+// regex and the parser together must find every runnable hook name. An
+// empty name (`[hook ""]`) is valid and runs on git 2.54; `.+` missed it.
+describe.skipIf(process.platform === 'win32' || !REAL_GIT)('hookNamesFromListing', () => {
+  test('finds empty, dotted, spaced and mixed-case names, as git spells them', async () => {
+    const repo = join(tempRoot('hooknames'), 'r');
+    const env = { PATH: process.env.PATH ?? '', HOME: tempRoot('hookhome'), GIT_CONFIG_NOSYSTEM: '1' };
+    await setup([REAL_GIT!, 'init', '-q', repo], tmpdir(), env);
+    writeFileSync(join(repo, '.git', 'config'), `${readFileSync(join(repo, '.git', 'config'), 'utf8')}${[
+      '[hook ""]', '\tcommand = /x', '\tevent = pre-push',
+      '[hook "a.b"]', '\tcommand = /x',
+      '[hook "my hook"]', '\tevent = pre-push',
+      '[hook "Upper"]', '\tcommand = /x',
+      '[hook.Legacy]', '\tcommand = /x',
+      '[hook]', '\tcommand = not-a-hook',
+    ].join('\n')}\n`);
+    const listing = await setup(
+      [REAL_GIT!, 'config', '-z', '--get-regexp', '^hook\\..*\\.(command|event)$'], repo, env);
+    // The legacy dotted header is lowercased by git itself, and pinned as such.
+    expect(hookNamesFromListing(listing).sort()).toEqual(['', 'Upper', 'a.b', 'legacy', 'my hook']);
+  });
+
+  test('refuses a name a -c key cannot carry', () => {
+    expect(() => hookNamesFromListing('hook.a=b.command\n/x\0')).toThrow('cannot be disabled');
   });
 });
 

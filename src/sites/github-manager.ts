@@ -206,6 +206,29 @@ function isPlainRepoPath(path: string): boolean {
     && segments.every(s => /^[A-Za-z0-9_.-]+$/.test(s) && s !== '.' && s !== '..');
 }
 
+/**
+ * Hook names from `git config -z --get-regexp '^hook\..*\.(command|event)$'`:
+ * entries are NUL-separated, each `key\nvalue` (or just `key` when valueless).
+ * The name is everything between `hook.` and the last `.command`/`.event`,
+ * case preserved (git keeps a subsection's case, and matches it exactly), and
+ * may be empty or contain dots and spaces.
+ *
+ * Throws on a name `-c hook.<name>.enabled=false` cannot carry: git splits
+ * `-c` at the first `=`, so the pin would silently name a different key.
+ */
+export function hookNamesFromListing(listing: string): string[] {
+  const names = new Set<string>();
+  for (const entry of listing.split('\0')) {
+    const key = entry.split('\n', 1)[0]!;
+    const match = /^hook\.(.*)\.(command|event)$/s.exec(key);
+    if (!match) continue;
+    const name = match[1]!;
+    if (/[=\n]/.test(name)) throw new Error(`Refusing to run git: a config hook name cannot be disabled ("${name}")`);
+    names.add(name);
+  }
+  return [...names];
+}
+
 /** Single-quote for POSIX sh. */
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
@@ -737,20 +760,15 @@ export class GitHubManager {
     if (version !== null && (version[0] > 2 || (version[0] === 2 && version[1] >= 55))) return [];
     let listing: string;
     try {
-      listing = await this.git(cwd, ['config', '-z', '--get-regexp', '^hook\\..+\\.(command|event)$'], { lookup: true });
-    } catch {
-      return []; // exit 1: no config hooks (or not a repo)
+      // `.*`, not `.+`: `[hook ""]` is a valid, runnable hook named "".
+      listing = await this.git(cwd, ['config', '-z', '--get-regexp', '^hook\\..*\\.(command|event)$'], { lookup: true });
+    } catch (err) {
+      // Only exit 1 means "no such keys". Anything else (a broken config is
+      // 128) must not be read as "no hooks" by a security lookup.
+      if ((err as { exitCode?: number }).exitCode === 1) return [];
+      throw err;
     }
-    const names = new Set<string>();
-    for (const entry of listing.split('\0')) {
-      const key = entry.split('\n', 1)[0]!;
-      const match = /^hook\.(.+)\.(command|event)$/s.exec(key);
-      if (!match) continue;
-      const name = match[1]!;
-      if (/[=\n]/.test(name)) throw new Error(`Refusing to run git: a config hook name cannot be disabled ("${name}")`);
-      names.add(name);
-    }
-    return [...names].flatMap(name => ['-c', `hook.${name}.enabled=false`]);
+    return hookNamesFromListing(listing).flatMap(name => ['-c', `hook.${name}.enabled=false`]);
   }
 
   private gitVersionCache: Promise<[number, number] | null> | undefined;
@@ -1092,7 +1110,9 @@ export class GitHubManager {
 
     if (timedOut) throw new Error(`git ${args[0]} timed out after ${timeoutMs}ms`);
     if (exitCode !== 0) {
-      throw new Error(`git ${args[0]} failed: ${stderr.trim() || stdout.trim()}`);
+      // exitCode rides along for callers that must tell "no match" (1) from
+      // a real failure; the message is unchanged.
+      throw Object.assign(new Error(`git ${args[0]} failed: ${stderr.trim() || stdout.trim()}`), { exitCode });
     }
 
     return stdout;
