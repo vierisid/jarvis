@@ -10,7 +10,7 @@ import { listWorkflowEffects } from '../db/repos/workflow-effect';
 import { getDelegation } from '../db/repos/delegation';
 import { cancelFlowRun } from '../db/repos/run-cancellation';
 import { enqueue } from '../db/repos/job-queue';
-import { ToolRegistry } from '../../actions/tools/registry';
+import { ToolRegistry, type ToolGate } from '../../actions/tools/registry';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import type { ActionCategory } from '../../roles/authority';
 import { AuthorityEngine } from '../../authority/engine';
@@ -71,6 +71,8 @@ type Options = {
   readFails?: boolean;
   /** The read cancels the run while the turn is still going. */
   readCancels?: boolean;
+  /** A per-call gate on the write, read afresh on every call (the real write_file's depends on the disk, #522). */
+  writeGate?: () => ToolGate | null;
 };
 
 /** Real backends, boundary, Authority and SQLite; only the model and the tools are scripted. */
@@ -79,6 +81,7 @@ function backends(ids: ReturnType<typeof createRun>, opts: Options = {}) {
   let effects = 0, llmCalls = 0;
   const registry = new ToolRegistry();
   registry.register({ name: 'write_file', category: 'file-ops', description: 'Synthetic write', parameters: {},
+    ...(opts.writeGate ? { authorityGate: () => opts.writeGate!() } : {}),
     execute: async () => { effects++; if (opts.writeThrows) throw new Error('disk full'); if (opts.writeInterrupts) { emergency.pause(); checkpointExecution(); } return 'saved'; } });
   registry.register({ name: 'read_file', category: 'file-ops', description: 'Synthetic read', parameters: {},
     execute: async () => { if (opts.readFails) throw new ActionOutcomeError({ status: 'error', code: 'SYNTHETIC', message: 'unreadable', effect: 'not_started' }); if (opts.readCancels) cancelFlowRun(ids.run.id); return 'contents'; } });
@@ -197,6 +200,32 @@ describe('delegated approvals through the workflow effect boundary', () => {
     expect((await f.delegate({ requiredTools: ['read_file'] })).outcome).toMatchObject({ status: 'error', code: 'REQUIRED_TOOL_NOT_COMPLETED', effect: 'not_started' });
     expect(f.effects()).toBe(1);
     expect(f.llmCalls()).toBe(2);
+  });
+
+  test('a call that reaches a stricter category at dispatch than at review is blocked, not run under the old approval', async () => {
+    // Reviewed as a plain write; by the time it is approved, the same frozen
+    // arguments name a path that runs as code (#522).
+    let raised = false;
+    const ids = createRun();
+    const f = backends(ids, { writeGate: () => (raised ? { actionCategory: 'execute_command', intent: 'Write a shell startup file' } : null) });
+    const parked = await f.delegate();
+    expect(parked.status).toBe('approval_required');
+    raised = true;
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    const done = await f.delegate();
+    expect(f.effects()).toBe(0);
+    expect(done.toolCalls[0]!.error).toContain('now reaches execute_command');
+    expect(listWorkflowEffects(ids.run.id)[1]).toMatchObject({ route: 'agent-tool:1', status: 'blocked' });
+  });
+
+  test('a call whose category is unchanged at dispatch still runs under its approval', async () => {
+    const ids = createRun();
+    const f = backends(ids, { writeGate: () => ({ actionCategory: 'write_data', intent: 'Write a note' }) });
+    const parked = await f.delegate();
+    f.approvals.approve(parked.approval!.approvalId, 'test');
+    const done = await f.delegate();
+    expect(f.effects()).toBe(1);
+    expect(done.toolCalls[0]!.result).toContain('saved');
   });
 
   test('a declined approval resumes with a denial the agent acts on, and the declared outcome says so', async () => {

@@ -28,6 +28,7 @@ const terminal = new TerminalExecutor({ timeout: 30000 });
 export const browser = new BrowserController();
 
 import { isNoLocalTools, LOCAL_DISABLED_MSG, isLocalBrowserDisabled, LOCAL_BROWSER_DISABLED_MSG, getDefaultCwd } from './local-tools-guard.ts';
+import { execOnWriteClass, siteGitRefusal } from './file-path-policy.ts';
 // Re-export for convenience
 export { setNoLocalTools, isNoLocalTools, setDefaultCwd } from './local-tools-guard.ts';
 
@@ -63,6 +64,23 @@ export function toolDefToLLMTool(tool: ToolDefinition): LLMTool {
       required,
     },
   };
+}
+
+/** A model-supplied value for the end of an approval sentence: one line, card-sized. */
+function forCard(value: string, max = 600): string {
+  const s = value.replace(/\s+/g, ' ').trim();
+  return s.length > max ? `${s.slice(0, max - 3)}...` : s;
+}
+
+/**
+ * The file tools' refusal of a site project's git internals (#522), judged on
+ * the path as this machine would resolve it. Run BEFORE sidecar routing: a
+ * sidecar on the brain's own machine opens the brain's files and knows
+ * nothing about site projects. See siteGitRefusal.
+ */
+function siteGitRefusalFor(params: Record<string, unknown>): string | null {
+  const rawPath = String(params.path ?? '');
+  return siteGitRefusal(rawPath, resolve(getDefaultCwd() || homedir(), rawPath));
 }
 
 // --- Tool Implementations ---
@@ -143,6 +161,8 @@ export const readFileTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
+    const refused = siteGitRefusalFor(params);
+    if (refused) return refused;
     const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'read_file', { path: params.path }, 'filesystem');
@@ -161,6 +181,11 @@ export const readFileTool: ToolDefinition = {
     const stat = statSync(filePath);
     if (stat.isDirectory()) {
       return `Error: Path is a directory, not a file: ${filePath}`;
+    }
+    // A FIFO blocks readFileSync, and the whole daemon with it, until a
+    // writer shows up; a device like /dev/zero reports size 0 and never ends.
+    if (!stat.isFile()) {
+      return `Error: Not a regular file: ${filePath}`;
     }
 
     // Limit file size to 100KB
@@ -194,7 +219,36 @@ export const writeFileTool: ToolDefinition = {
       required: false,
     },
   },
+  /**
+   * `write_data` is the floor. A write to a path something runs as code -- a
+   * shell startup file, git config or hooks, an autostart entry, a unit, a
+   * crontab, SSH config, an existing executable, Jarvis's own data -- is
+   * running a command later, so it is rated `execute_command` (#522). Not
+   * refused: an agent below that level gets an approval card instead of a
+   * denial, and the card says what the file is. See file-path-policy.ts for
+   * what counts and why the path is judged under more than one resolution.
+   */
+  authorityGate: (params) => {
+    const kind = execOnWriteClass(params.path);
+    if (!kind) return null;
+    // The card names the file the write will land on NOW, not the relative
+    // spelling: `.bashrc` in a site chat is the project's, the same call run
+    // after the turn is home's. The deferred executor compares this sentence
+    // with the approved one, so a call whose target moved is not run.
+    const path = String(params.path);
+    const shown = params.target ? `${path} on ${String(params.target)}` : resolve(getDefaultCwd() || homedir(), path);
+    return {
+      actionCategory: 'execute_command',
+      confirm: 'above_level',
+      // The path goes last, whitespace collapsed and capped at a card's
+      // size: it is the value being approved, and nothing after it can pose
+      // as the rest of the sentence.
+      intent: `Write a file that can run as code (${kind}): ${forCard(shown)}`,
+    };
+  },
   execute: async (params) => {
+    const refused = siteGitRefusalFor(params);
+    if (refused) return refused;
     const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'write_file', { path: params.path, content: params.content }, 'filesystem');
@@ -206,6 +260,11 @@ export const writeFileTool: ToolDefinition = {
     const baseCwd = getDefaultCwd() || homedir();
     const filePath = resolve(baseCwd, rawPath);
     const content = params.content as string;
+    // Opening a FIFO for writing blocks until a reader appears, and the
+    // daemon with it; a device is not a file either.
+    try {
+      if (!statSync(filePath).isFile()) return `Error: Not a regular file: ${filePath}`;
+    } catch { /* new file */ }
 
     writeFileSync(filePath, content, 'utf-8');
     return `File written successfully: ${filePath} (${content.length} bytes)`;
@@ -229,6 +288,8 @@ export const listDirectoryTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
+    const refused = siteGitRefusalFor(params);
+    if (refused) return refused;
     const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'list_directory', { path: params.path }, 'filesystem');

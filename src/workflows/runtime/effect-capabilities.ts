@@ -1,4 +1,4 @@
-import type { ToolDefinition } from '../../actions/tools/registry';
+import type { ToolDefinition, ToolGate } from '../../actions/tools/registry';
 import type { ActionCategory } from '../../roles/authority';
 import { AUTHORITY_REQUIREMENTS } from '../../roles/authority';
 import { TOOL_ACTION_MAP, severityRank } from '../../authority/tool-action-map';
@@ -143,19 +143,48 @@ export function refusedEffectCategory(tool: ToolDefinition): ActionCategory {
   return Object.hasOwn(TOOL_ACTION_MAP, tool.name) ? TOOL_ACTION_MAP[tool.name]! : 'execute_command';
 }
 
+/**
+ * A bounded tool's own per-call gate, or null. write_file is bounded AND
+ * gated: a write to a shell startup file or a git hook is `execute_command`
+ * (#522), and the agent path learns that from resolveToolGate. A gate that
+ * throws counts as none here; the call site's resolveToolGate turns the same
+ * throw into a mandatory review.
+ */
+function boundedGate(tool: ToolDefinition, params: Record<string, unknown>): ToolGate | null {
+  if (tool.workflowEffect) return null;
+  try { return tool.authorityGate?.(params) ?? null; } catch { return null; }
+}
+
 export function toolEffectCapability(tool: ToolDefinition, params: Record<string, unknown> = {}) {
   if (OPAQUE_TOOLS.has(tool.name)) throw new Error(`Unsupported direct workflow capability: ${tool.name} has opaque code/UI effects; use a typed governed adapter`);
   if (GATED_TOOLS.has(tool.name) && !tool.workflowEffect) return gatedCapability(tool, params);
-  const category = tool.workflowEffect?.category
+  const floor = tool.workflowEffect?.category
     ?? (BOUNDED_TOOLS.has(tool.name) ? TOOL_ACTION_MAP[tool.name] : undefined);
-  if (!category || !Object.hasOwn(AUTHORITY_REQUIREMENTS, category)) {
+  if (!floor || !Object.hasOwn(AUTHORITY_REQUIREMENTS, floor)) {
     throw new Error(`Unsupported direct workflow capability: ${tool.name} has no declared Authority action`);
   }
-  return { category, categories: [category], target: tool.workflowEffect?.target ?? ((params: Record<string, unknown>) => boundedTarget(tool.name, params)),
-    prepareArguments: (params: Record<string, unknown>) => {
-      if (tool.workflowEffect) return params;
-      const target = boundedTarget(tool.name, params);
-      return { ...params, ...(target.sidecarId ? { target: target.sidecarId } : {}),
-        ...(target.path !== null ? { path: target.path } : {}) };
-    } };
+  const prepareArguments = (params: Record<string, unknown>) => {
+    if (tool.workflowEffect) return params;
+    const target = boundedTarget(tool.name, params);
+    return { ...params, ...(target.sidecarId ? { target: target.sidecarId } : {}),
+      ...(target.path !== null ? { path: target.path } : {}) };
+  };
+  // The floor, raised by the tool's gate. write_file's gate judges a
+  // relative path against both the cwd and home, and coerces a non-string
+  // the way prepareArguments will, so the arguments as given are enough.
+  const gate = boundedGate(tool, params);
+  const known = (c: ActionCategory) => Object.hasOwn(AUTHORITY_REQUIREMENTS, c);
+  const raised = gate ? [gate.actionCategory, ...(gate.actionCategories ?? [])].filter(known) : [];
+  const categories = [...new Set([floor, ...raised])].sort((a, b) => severityRank(b) - severityRank(a));
+  // A raised call carries the gate's sentence in its target, so the card
+  // shows it. At dispatch two checks catch a file that changed kind since
+  // review: a changed CATEGORY no longer matches the recorded effect (the
+  // boundary refuses it as changed), and a changed kind within the same
+  // category changes this sentence, which validateTarget's digest catches.
+  const target = tool.workflowEffect?.target ?? ((args: Record<string, unknown>) => {
+    const bounded = boundedTarget(tool.name, args);
+    const intent = boundedGate(tool, args)?.intent;
+    return intent ? { ...bounded, intent } : bounded;
+  });
+  return { category: categories[0]!, categories, target, prepareArguments };
 }

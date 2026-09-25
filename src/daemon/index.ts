@@ -4797,6 +4797,25 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       setNoLocalTools(true);
     }
 
+    // 9b-bis. What the generic file tools must know about this install
+    // (#522): the site projects dir, whose git internals they refuse --
+    // registered whether or not the site builder is on or starts, since old
+    // projects keep their .git and pre-#511 reflogs either way (same `~`
+    // expansion ProjectManager applies) -- and the dirs whose contents the
+    // daemon loads or runs, where a write is rated execute_command.
+    {
+      const { setSiteProjectsDir, setDaemonDataRoots } = await import('../actions/tools/file-path-policy.ts');
+      setSiteProjectsDir((jarvisConfig.sites?.projects_dir ?? '~/.jarvis/projects').replace(/^~/, os.homedir()));
+      setDaemonDataRoots([
+        config.dataDir,
+        // The engine bundle cache is under ~/.jarvis whatever the data dir.
+        path.join(os.homedir(), '.jarvis'),
+        sharedRuntime.engineCacheRoot,
+        sharedRuntime.piecesDir,
+        sharedRuntime.metadataCacheFile,
+      ]);
+    }
+
     // 9b'. browser.local: false (system config) - never launch a local
     // Chrome on this machine. Hosted instances set this so no CDP port can
     // open on a shared VPS; browser actions route to a sidecar browser

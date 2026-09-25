@@ -3,8 +3,8 @@
  */
 
 import type { ToolRegistry } from '../actions/tools/registry.ts';
-import { executionState, approvalNeedsClick, type ApprovalManager, type ApprovalRequest } from './approval.ts';
-import { resolveToolGate } from './tool-action-map';
+import { executionState, approvalIntentFromContext, approvalNeedsClick, type ApprovalManager, type ApprovalRequest } from './approval.ts';
+import { resolveToolGate, severityRank } from './tool-action-map';
 import { rawUiGate } from './ui-intent';
 import type { AuditTrail } from './audit.ts';
 import type { AuthorityLearner } from './learning.ts';
@@ -116,6 +116,31 @@ export class DeferredExecutor {
       }
       if (!registry) {
         const blocked = `Approved action ${request.tool_name} was NOT executed: its original UI session or reviewed subject is no longer available. Take a fresh snapshot and request a fresh review.`;
+        this.approvalManager.markExecuted(requestId, blocked, 'blocked');
+        this.onResult?.(requestId, request, blocked);
+        return { claimed: true, result: blocked };
+      }
+      // An approval given to a call that had no per-call gate then, but has
+      // one now that raises it, was not an approval of what would run: a
+      // relative write_file path reviewed in a site chat resolves against
+      // home once the turn has ended, and a path can have become a shell rc
+      // or a hook in between (#522).
+      if (gate.intent && !approvalIntentFromContext(request)
+        && severityRank(gate.actionCategory) > severityRank(request.action_category)) {
+        const blocked = `Approved action ${request.tool_name} was NOT executed: it was approved as ${request.action_category}, but it now reaches ${gate.actionCategory} (${gate.intent}). Request a fresh approval.`;
+        this.approvalManager.markExecuted(requestId, blocked, 'blocked');
+        this.onResult?.(requestId, request, blocked);
+        return { claimed: true, result: blocked };
+      }
+      // A card that carried a sentence was an approval of THAT sentence. When
+      // the same arguments now produce a different one -- write_file naming
+      // the file it will land on, which moves when the site chat's cwd is
+      // gone; a skill whose stored steps changed -- it is not the call that
+      // was approved. UI calls are left to their own guard: their sentence
+      // describes a live screen, and captureApprovalGuard binds that.
+      const approvedIntent = approvalIntentFromContext(request);
+      if (!uiCall && approvedIntent && gate.intent && gate.intent.trim() !== approvedIntent) {
+        const blocked = `Approved action ${request.tool_name} was NOT executed: what it would do changed after approval (approved: "${approvedIntent}"; now: "${gate.intent}"). Request a fresh approval.`;
         this.approvalManager.markExecuted(requestId, blocked, 'blocked');
         this.onResult?.(requestId, request, blocked);
         return { claimed: true, result: blocked };
