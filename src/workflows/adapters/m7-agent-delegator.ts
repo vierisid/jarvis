@@ -251,6 +251,9 @@ export class M7AgentDelegator implements PieceAgentDelegator {
         context: "",
         llmManager: this.llmManager,
         toolRegistry: registry,
+        // Provider kinds for the tool-relevance eligibility gate. Optional
+        // call: the tests stand in a partial orchestrator.
+        toolFilterProviders: this.orchestrator.getToolFilterProviders?.(),
         // Clamped as well as validated at the route: this adapter is also
         // reachable without it, and 200 is the primary loop's own ceiling.
         maxIterations: Math.min(input.maxIterations ?? this.defaultMaxIterations, 200),

@@ -25,14 +25,16 @@ import type { TierMap } from '../llm/tiers.ts';
 import type { LLMProviderEntry } from '../config/types.ts';
 import { decideTools } from '../actions/tools/tool-relevance/filter.ts';
 import { DISCOVER_TOOLS, ToolExposureLedger } from '../actions/tools/tool-relevance/ledger.ts';
-import { interceptDiscovery, DISCOVER_TOOLS_LLM } from '../actions/tools/tool-relevance/discover.ts';
+import {
+  admissionAuditName, interceptDiscovery, interceptOffList, DISCOVER_TOOLS_LLM, type DiscoveryContext,
+} from '../actions/tools/tool-relevance/discover.ts';
 import { getToolFilterPolicy } from '../actions/tools/tool-relevance/policy.ts';
 import { toolDefToLLMTool, BUILTIN_TOOLS } from '../actions/tools/builtin.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
 import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
-import { resolveToolGate } from '../authority/tool-action-map.ts';
+import { getActionForTool, resolveToolGate } from '../authority/tool-action-map.ts';
 import { combineDecisions } from '../authority/engine.ts';
 import { markUntrustedToolResult, markUntrustedToolFailure, isTaintSourceTool } from '../roles/untrusted.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
@@ -529,6 +531,13 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   // seeded from it and admissions survive a pause.
   const exposure = new ToolExposureLedger();
   exposure.seedFromMessages(resume?.messages, (n) => toolRegistry.has(n));
+  // The paused call has no result in the buffer yet, so seeding skipped it;
+  // it was dispatched -- it passed the off-list check when it was made --
+  // so it stays exposed like any other call. Its unreached siblings do not:
+  // they go back through dispatch, and through the check, on resume.
+  if (resume?.pending && getToolFilterPolicy().enabled && toolRegistry.has(resume.pending.toolCall.name)) {
+    exposure.add(resume.pending.toolCall.name);
+  }
   let toolSet = getLLMTools(toolRegistry, messages, exposure, tierMapOf(llmManager), toolFilterProviders);
   let tools = toolSet.llm;
   let finalText = '';
@@ -566,10 +575,10 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
   };
 
   /** Dispatch a turn's tool calls in order; a pause returns what was not reached. */
-  /** Set when a discover_tools admission widened the exposed set. */
+  /** Set when an admission, or a call to a hidden tool, widened the exposed set. */
   let exposureWidened = false;
 
-  /** Recompute the offered set after an admission, and only after one. */
+  /** Recompute the offered set after a widening, and only after one. */
   const refreshToolsIfWidened = () => {
     if (!exposureWidened) return;
     exposureWidened = false;
@@ -585,7 +594,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       // it is answered here rather than dispatched. It carries no authority
       // and touches nothing; admission only widens what the next provider
       // call is offered, and the coupling invariant is re-checked then.
-      const discovery = interceptDiscovery(tc.name, tc.arguments, {
+      const discoveryCtx: DiscoveryContext = {
         all: toolRegistry.list(),
         ledger: exposure,
         exposed: toolSet.exposed,
@@ -597,12 +606,12 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
           (authorityCtx?.emergencyController && !authorityCtx.emergencyController.canExecute()
             ? authorityCtx.emergencyController.getState()
             : null),
-        onAdmitted: (admitted) => {
+        onAdmitted: (admitted, via) => {
           try {
             authorityCtx?.auditTrail?.log({
               agent_id: agentId,
               agent_name: agentName,
-              tool_name: `${DISCOVER_TOOLS}(${admitted.join(',')})`,
+              tool_name: admissionAuditName(admitted, via),
               action_category: 'read_data',
               authority_decision: 'allowed',
               executed: true,
@@ -612,12 +621,39 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
               err instanceof Error ? err.message : err);
           }
         },
-      });
+        onRefused: (tool) => {
+          try {
+            authorityCtx?.auditTrail?.log({
+              agent_id: agentId,
+              agent_name: agentName,
+              tool_name: tool.name,
+              action_category: getActionForTool(tool.name, tool.category),
+              authority_decision: 'denied',
+              executed: false,
+            });
+          } catch (err) {
+            console.warn(`[SubAgent:${agentName}] could not audit an off-list refusal:`,
+              err instanceof Error ? err.message : err);
+          }
+        },
+      };
+      const discovery = interceptDiscovery(tc.name, tc.arguments, discoveryCtx);
       if (discovery) {
         if (discovery.grew) exposureWidened = true;
         noteToolCall(tc);
         sequence += 1;
         record(tc, { text: discovery.result });
+        continue;
+      }
+      // A tool the scoped registry holds but the model was not offered:
+      // admitted and recomputed, and not run at all if running it would
+      // strand outside content unframed. See interceptOffList.
+      const offList = interceptOffList(tc.name, discoveryCtx);
+      if (offList) exposureWidened = true;
+      if (offList?.refusal) {
+        // Not noteToolCall: it did not run, so it is not in `toolsUsed`.
+        sequence += 1;
+        record(tc, { text: offList.refusal });
         continue;
       }
       noteToolCall(tc);

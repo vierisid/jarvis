@@ -4151,6 +4151,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // the tier map it is being asked about -- and a provider re-pointed
       // from a local endpoint to a remote one would still read as local.
       agentService.getOrchestrator().setToolFilterProviders(cfg.llm?.providers);
+      bgAgent?.getOrchestrator().setToolFilterProviders(cfg.llm?.providers);
     });
 
     // authority — keep the engine's construction-time snapshot in sync on a
