@@ -260,6 +260,11 @@ a bug.
 
 Run `jarvis doctor` to see what was detected and the exact commands for your install.
 
+**Under a systemd user service** (JARVIS is the main process of a unit such as `jarvis.service`), `jarvis update` and `jarvis restart` go through systemd instead of stopping and starting the daemon themselves. See [Running under systemd](docs/SELF_HOSTING.md#running-under-systemd) for the details. In short:
+
+- The update runs as a separate transient unit named `<unit>-update`, for example `jarvis-update`. It stops the service, installs, and starts the service again. From a terminal, `jarvis update` follows it until it finishes or hits its time limit. From anywhere else, including the assistant's own shell, it returns straight away. Follow it with `journalctl --user -u jarvis-update -f`, and `jarvis status` shows the last result.
+- `jarvis restart` asks systemd to restart the unit and ignores `-d`, `--port` and the other start flags.
+
 ### Removing JARVIS
 
 `jarvis uninstall` stops the daemon, removes autostart hooks, deletes `~/.jarvis`, and — where applicable — runs the correct package-manager uninstall. It does **not** touch sidecars.

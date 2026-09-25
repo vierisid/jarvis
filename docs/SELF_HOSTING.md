@@ -366,6 +366,38 @@ morning/evening routines fire at your wall-clock time:
 timezone: "Europe/Rome"
 ```
 
+### Running under systemd
+
+When the daemon is the main process of a systemd **user** unit, such as the `jarvis.service` the old setup wizard installed, `jarvis restart` and `jarvis update` hand the work to systemd. Otherwise they stop and start the daemon themselves. They used to do that in every case, and it went wrong in two ways:
+
+- Run from inside the service, for example by the assistant's `run_command`, the command was part of the unit. It stopped the daemon, and systemd then killed the command before it could start a new one. JARVIS stayed down.
+- Run from a terminal, the new daemon ran outside the unit, so systemd no longer supervised it.
+
+What happens now:
+
+- **`jarvis restart`**
+  - From a terminal: runs `systemctl --user restart <unit>` and waits up to 20 s for the new daemon.
+  - From inside the service: schedules that restart two seconds out, through a transient timer, and returns at once. The command's output still reaches whoever ran it.
+  - Start flags such as `-d` and `--port` are ignored, because the unit's `ExecStart` decides.
+- **`jarvis update`**
+  - Runs as a transient unit, `<unit>-update`. It stops the service, installs, and starts the service again, whether the install worked or not.
+  - From a terminal, it follows that unit's journal until the unit finishes or hits its time limit. Anywhere else it returns straight away.
+  - Follow it with `journalctl --user -u jarvis-update -f`. `jarvis status` shows the result of the last one, as long as that result still matches the installed version.
+- **Safety net:** the updater's `ExecStopPost` starts the service whenever the updater ends, even if it crashed, was killed, or hit its time limit. The limit is `RuntimeMaxSec`: roughly 35 minutes, more if the unit's `TimeoutStopSec` is longer. The install steps together get 30 minutes, and no single step gets more than 10.
+  - One consequence: a `jarvis stop` or `systemctl --user stop` issued while an update is running is overridden when the updater finishes. Wait for the update to end, then stop.
+- **Environment:** the daemon is always started by its own unit, so it keeps the unit's `Environment=` and `EnvironmentFile=`. The updater gets only what an install needs:
+  - `PATH`, `HOME`, `JARVIS_HOME`, `BUN_INSTALL`, `XDG_CONFIG_HOME`;
+  - locale settings and `TMPDIR`;
+  - proxy settings and CA bundles;
+  - registry URLs.
+
+  Registry tokens are not passed on. They belong in your `.npmrc` or `bunfig.toml`, which the updater reads from `HOME`. On systemd 250 and later the values are passed by name, so they never appear on a command line. On older versions they do, briefly, and a proxy password in `HTTPS_PROXY` is then visible to your own user in the process list.
+- **`jarvis stop` and `jarvis drain`** still signal the daemon directly. It drains and exits cleanly, and the unit shows as inactive, just as `systemctl --user stop` would leave it.
+- **When `systemctl --user` cannot be reached:**
+  - From inside the service, or when the daemon was started by the user manager itself, the command refuses and leaves JARVIS running. It tells you the `systemctl` command to run from a login shell.
+  - Otherwise, for example a daemon started by hand inside some other service such as a tmux unit, it falls back to stopping and starting the daemon itself.
+- **System-level units** (`/etc/systemd/system`) are not handled. Restart those with `systemctl` yourself.
+
 ### Logs
 
 `jarvis start -d` redirects the detached daemon's output into
