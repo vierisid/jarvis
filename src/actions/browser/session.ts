@@ -139,10 +139,19 @@ export class BrowserController {
   // Coordinates stored from last snapshot — not sent to LLM
   private elementCoords = new Map<number, { x: number; y: number }>();
 
-  constructor(port: number = 9222, profileDir?: string) {
+  private autoLaunch: boolean;
+
+  /**
+   * `autoLaunch: false` makes connect() fail instead of starting a browser
+   * when nothing answers on the port. Tests that bring their own headless
+   * Chromium pass it: a browser that died mid-suite must fail the test, not be
+   * replaced by a headed Chrome on the developer's desktop and real profile.
+   */
+  constructor(port: number = 9222, profileDir?: string, opts: { autoLaunch?: boolean } = {}) {
     this.cdp = new CDPClient();
     this.port = port;
     this.profileDir = profileDir;
+    this.autoLaunch = opts.autoLaunch ?? true;
   }
 
   /**
@@ -179,6 +188,9 @@ export class BrowserController {
 
     // If Chrome isn't running, launch it automatically
     if (!(await this.isAvailable())) {
+      if (!this.autoLaunch) {
+        throw new Error(`Chrome CDP not reachable on port ${this.port} and auto-launch is disabled`);
+      }
       console.log('[BrowserController] Chrome not detected, launching automatically...');
       this.runningBrowser = await launchChrome(this.port, this.profileDir);
     }
