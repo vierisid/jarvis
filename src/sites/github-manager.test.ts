@@ -28,7 +28,7 @@ import {
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  CREDENTIAL_DIR_PREFIX, GitHubManager, credentialHelperArgs, credentialRoot, sweepStaleCredentialDirs,
+  CREDENTIAL_DIR_PREFIX, GitHubManager, credentialHelperArgs, credentialRoot, gitHardeningArgs, sweepStaleCredentialDirs,
 } from './github-manager.ts';
 
 /** Synthetic. Never a real token. */
@@ -48,6 +48,16 @@ const GIT_HAS_PROACTIVE_AUTH = (() => {
   const out = Bun.spawnSync([REAL_GIT, '--version']).stdout.toString();
   const [major = 0, minor = 0] = (out.match(/(\d+)\.(\d+)/) ?? []).slice(1).map(Number);
   return major > 2 || (major === 2 && minor >= 46);
+})();
+
+/**
+ * The loopback server needs `git http-backend`, which some distros package
+ * separately (Alpine's git-daemon). Probed by its presence in the exec path.
+ */
+const HAS_HTTP_BACKEND = (() => {
+  if (!REAL_GIT) return false;
+  const execPath = Bun.spawnSync([REAL_GIT, '--exec-path']).stdout.toString().trim();
+  return execPath !== '' && existsSync(join(execPath, 'git-http-backend'));
 })();
 
 const tmpRoots: string[] = [];
@@ -284,7 +294,7 @@ describe('sweepStaleCredentialDirs', () => {
 // ── Per call site, against a fake git ──
 
 describe('each call site keeps the token out of git argv and env', () => {
-  type Invocation = { argv: string[]; env: string; cred: string | null };
+  type Invocation = { argv: string[]; env: string; cred: string | null; sawCredentialDir: boolean };
 
   /**
    * A fake `git` that records its argv (NUL-separated) and env, answers the
@@ -292,10 +302,14 @@ describe('each call site keeps the token out of git argv and env', () => {
    * runs it the way git would, so the test also proves the token was
    * deliverable while git was running.
    */
-  function setupFakeGit(currentBranch = 'main'): { project: string; logDir: string; tmp: string; invocations: () => Invocation[] } {
+  function setupFakeGit(
+    currentBranch = 'main',
+    originUrl = 'https://github.com/owner/repo.git',
+  ): { project: string; logDir: string; tmp: string; invocations: () => Invocation[] } {
     const root = tempRoot('fake');
     // Read by the fake rather than interpolated, so any branch text is inert.
     writeFileSync(join(root, 'current-branch'), `${currentBranch}\n`);
+    writeFileSync(join(root, 'origin-url'), `${originUrl}\n`);
     const bin = join(root, 'bin');
     const logDir = join(root, 'log');
     const project = join(root, 'project');
@@ -309,6 +323,8 @@ describe('each call site keeps the token out of git argv and env', () => {
       `log="${logDir}/$(date +%s%N).$$"`,
       'printf "%s\\0" "$@" > "$log.argv"',
       'env > "$log.env"',
+      // Whether a credential dir existed while this git ran.
+      `ls "${tmp}" > "$log.tmpls"`,
       'helper=; prev=',
       'for a in "$@"; do',
       '  if [ "$prev" = "-c" ]; then case "$a" in "credential.helper=!"*) helper="${a#credential.helper=!}";; esac; fi',
@@ -318,7 +334,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  printf "protocol=https\\nhost=github.com\\n\\n" | sh -c "$helper get" > "$log.cred"',
       'fi',
       'case "$*" in',
-      '  *"remote get-url origin"*) echo https://github.com/owner/repo.git ;;',
+      '  *"get-url"*) cat "$(dirname "$0")/../origin-url" ;;',
       `  *"branch --show-current"*) cat "${root}/current-branch" ;;`,
       '  *"--get-regexp"*) exit 1 ;;',
       'esac',
@@ -341,6 +357,7 @@ describe('each call site keeps the token out of git argv and env', () => {
           argv,
           env: readFileSync(`${base}.env`, 'utf8'),
           cred: existsSync(`${base}.cred`) ? readFileSync(`${base}.cred`, 'utf8') : null,
+          sawCredentialDir: readFileSync(`${base}.tmpls`, 'utf8').includes(CREDENTIAL_DIR_PREFIX),
         };
       });
 
@@ -366,9 +383,13 @@ describe('each call site keeps the token out of git argv and env', () => {
     expect(urls).toEqual([]);
     expect(network[0]!.argv).toContain('origin');
     expect(network[0]!.argv).toContain('protocol.allow=never');
+    expect(network[0]!.argv).toContain('core.fsmonitor=false');
 
     // Positive: the helper handed git the token while it ran.
     expect(network[0]!.cred).toBe(`username=x-access-token\npassword=${TOKEN}\n`);
+
+    // The token file existed for that one command and no other.
+    expect(invocations.filter(i => i.sawCredentialDir).length).toBe(1);
 
     // And cleaned up after itself.
     expect(credentialDirsIn(tmp)).toEqual([]);
@@ -391,11 +412,77 @@ describe('each call site keeps the token out of git argv and env', () => {
     expect(push.argv.slice(push.argv.indexOf('push'))).toEqual(['push', '--force', '-u', 'origin', 'feature']);
   });
 
-  test('pull', async () => {
+  test('pull: fetches with the token, then pulls locally without it', async () => {
     const fake = setupFakeGit();
     const result = await new GitHubManager().pull(fake.project);
     expect(result).toEqual({ success: true });
-    expectTokenOnlyViaHelper(fake.invocations(), 'pull', fake.tmp);
+    expectTokenOnlyViaHelper(fake.invocations(), 'fetch', fake.tmp);
+    const fetch = fake.invocations().find(i => i.argv.includes('fetch'))!;
+    expect(fetch.argv.slice(fetch.argv.indexOf('fetch'))).toEqual(['fetch', 'origin', '+refs/heads/main:refs/remotes/origin/main']);
+    const pull = fake.invocations().find(i => i.argv.includes('pull'))!;
+    expect(pull.argv).toEqual(['pull', '.', 'refs/remotes/origin/main']);
+    expect(pull.sawCredentialDir).toBe(false);
+  });
+
+  // S4: the token is for GitHub over https. Anything else gets plain git and
+  // no token file at all -- and keeps working as it did before #511.
+  for (const origin of ['git@github.com:owner/repo.git', 'ssh://git@github.com/owner/repo.git', 'https://ghe.example/o/r.git']) {
+    test(`a non-GitHub-https origin (${origin}) runs without the token`, async () => {
+      const fake = setupFakeGit('main', origin);
+      const manager = new GitHubManager();
+      expect(await manager.push(fake.project)).toEqual({ success: true });
+      expect(await manager.pull(fake.project)).toEqual({ success: true });
+      expect((await manager.getRemoteStatus(fake.project)).hasRemote).toBe(true);
+
+      const invocations = fake.invocations();
+      for (const sub of ['push', 'pull', 'fetch']) {
+        const network = invocations.filter(i => i.argv.includes(sub));
+        expect({ sub, count: network.length }).toEqual({ sub, count: 1 });
+        // The inherited-helper reset still applies; our helper does not.
+        expect(network[0]!.argv).toContain('credential.helper=');
+        expect(network[0]!.argv.some(a => a.startsWith('credential.helper=!'))).toBe(false);
+      }
+      expect(invocations.filter(i => i.sawCredentialDir).length).toBe(0);
+      expect(invocations.filter(i => i.argv.some(a => a.includes(TOKEN)) || i.env.includes(TOKEN)).length).toBe(0);
+    });
+  }
+
+  test('a failing non-GitHub origin says the token was not used, and why', async () => {
+    const fake = setupFakeGit('main', 'git@github.com:owner/repo.git');
+    writeFileSync(join(fake.project, '..', 'bin', 'git'), [
+      '#!/bin/sh',
+      'case "$*" in',
+      '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
+      '  *"branch --show-current"*) echo main; exit 0 ;;',
+      '  *"--get-regexp"*) exit 1 ;;',
+      'esac',
+      'echo "git@github.com: Permission denied (publickey)." >&2',
+      'exit 128',
+    ].join('\n'), { mode: 0o755 });
+    const result = await new GitHubManager().push(fake.project);
+    expect(result.success).toBe(false);
+    expect(result.error).toContain('Permission denied');
+    expect(result.error).toContain('so the GitHub token was not used');
+  });
+
+  test('an origin whose push URL leaves GitHub gets no token, even if the fetch URL is fine', async () => {
+    const fake = setupFakeGit();
+    // Answer the --push query with somewhere else.
+    writeFileSync(join(fake.project, '..', 'bin', 'git'), [
+      '#!/bin/sh',
+      `ls "${fake.tmp}" > "${fake.logDir}/$(date +%s%N).$$.tmpls"`,
+      'case "$*" in',
+      '  *"get-url --push"*) echo /tmp/decoy.git; exit 0 ;;',
+      '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
+      '  *"branch --show-current"*) echo main; exit 0 ;;',
+      '  *"--get-regexp"*) exit 1 ;;',
+      'esac',
+      'exit 0',
+    ].join('\n'), { mode: 0o755 });
+    expect((await new GitHubManager().push(fake.project)).success).toBe(true);
+    const sightings = readdirSync(fake.logDir).filter(f => f.endsWith('.tmpls'))
+      .filter(f => readFileSync(join(fake.logDir, f), 'utf8').includes(CREDENTIAL_DIR_PREFIX));
+    expect(sightings.length).toBe(0);
   });
 
   test('getRemoteStatus (fetch)', async () => {
@@ -411,7 +498,7 @@ describe('each call site keeps the token out of git argv and env', () => {
     writeFileSync(join(fake.project, '..', 'bin', 'git'), [
       '#!/bin/sh',
       'case "$*" in',
-      '  *"remote get-url origin"*) echo https://github.com/owner/repo.git; exit 0 ;;',
+      '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
       'esac',
@@ -431,7 +518,7 @@ describe('each call site keeps the token out of git argv and env', () => {
     writeFileSync(join(fake.project, '..', 'bin', 'git'), [
       '#!/bin/sh',
       'case "$*" in',
-      '  *"remote get-url origin"*) echo https://github.com/owner/repo.git; exit 0 ;;',
+      '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
       'esac',
@@ -456,7 +543,7 @@ describe('each call site keeps the token out of git argv and env', () => {
     writeFileSync(join(fake.project, '..', 'bin', 'git'), [
       '#!/bin/sh',
       'case "$*" in',
-      '  *"remote get-url origin"*) echo https://github.com/owner/repo.git; exit 0 ;;',
+      '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
       'esac',
@@ -481,7 +568,7 @@ describe('each call site keeps the token out of git argv and env', () => {
     writeFileSync(join(fake.project, '..', 'bin', 'git'), [
       '#!/bin/sh',
       'case "$*" in',
-      '  *"remote get-url origin"*) echo https://github.com/owner/repo.git; exit 0 ;;',
+      '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
       'esac',
@@ -501,23 +588,28 @@ describe('each call site keeps the token out of git argv and env', () => {
     }
   }, 20_000);
 
-  test('a branch that git would parse as an option is refused', async () => {
+  // `-x` is an option, `+x` a force push, `a:b` a push to a ref nobody named.
+  const unsafeBranches = ['--receive-pack=touch pwned', '-f', '+main', 'main:refs/heads/other'];
+
+  test('a branch that git would not read as a plain branch is refused', async () => {
     const fake = setupFakeGit();
-    for (const branch of ['--receive-pack=touch pwned', '-f']) {
+    for (const branch of unsafeBranches) {
       expect((await new GitHubManager().push(fake.project, branch)).success).toBe(false);
       expect((await new GitHubManager().pull(fake.project, branch)).success).toBe(false);
     }
-    const network = fake.invocations().filter(i => i.argv.includes('push') || i.argv.includes('pull'));
+    const network = fake.invocations().filter(i => ['push', 'pull', 'fetch'].some(s => i.argv.includes(s)));
     expect(network.length).toBe(0);
   });
 
-  test('...including when it comes from .git/HEAD rather than the caller', async () => {
-    const fake = setupFakeGit('--receive-pack=touch pwned');
-    expect((await new GitHubManager().push(fake.project)).success).toBe(false);
-    expect((await new GitHubManager().pull(fake.project)).success).toBe(false);
-    const network = fake.invocations().filter(i => i.argv.includes('push') || i.argv.includes('pull'));
-    expect(network.length).toBe(0);
-  });
+  for (const branch of unsafeBranches) {
+    test(`...including "${branch}" from .git/HEAD rather than the caller`, async () => {
+      const fake = setupFakeGit(branch);
+      expect((await new GitHubManager().push(fake.project)).success).toBe(false);
+      expect((await new GitHubManager().pull(fake.project)).success).toBe(false);
+      const network = fake.invocations().filter(i => ['push', 'pull', 'fetch'].some(s => i.argv.includes(s)));
+      expect(network.length).toBe(0);
+    });
+  }
 
   test('a token that cannot be a token never reaches git', async () => {
     const fake = setupFakeGit();
@@ -598,7 +690,7 @@ function startGitServer(repoRoot: string, gitBinary: string) {
 }
 
 // Linux-only: the hook samples /proc and the modes check uses GNU stat.
-describe.skipIf(process.platform !== 'linux' || !REAL_GIT)('a real push/pull/fetch over HTTP', () => {
+describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)('a real push/pull/fetch over HTTP', () => {
   let server: ReturnType<typeof startGitServer>;
   let root: string;
   let bare: string;
@@ -839,8 +931,63 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT)('a real push/pull/fet
     expect(h.leaks(TOKEN)).toEqual([]);
     expect(existsSync(join(h.evidence, 'stolen-by-helper'))).toBe(false);
     expect(credentialDirsIn(h.tmp)).toEqual([]);
-    // No URL, tokenized or not, is written into the reflog any more.
-    expect(readFileSync(join(h.project, '.git', 'logs', 'HEAD'), 'utf8')).toContain('pull origin main');
+    // No remote URL, tokenized or not, is written into the reflog any more.
+    expect(readFileSync(join(h.project, '.git', 'logs', 'HEAD'), 'utf8')).toContain('pull . refs/remotes/origin/main');
+  }, 60_000);
+
+  // S1. Commands .git/config can name, which git runs on its own: the
+  // fsmonitor on every index read, clean/smudge filters and post-index-change
+  // on an index refresh. A single `git pull` did the refresh BEFORE fetching,
+  // i.e. while the token file existed (reproduced in review).
+  test('config-named commands and index hooks never run while the token file exists', async () => {
+    const h = await setupProject('config-exec');
+    const probe = (name: string, body: string) => {
+      const path = join(h.evidence, `probe-${name}`);
+      writeFileSync(path, [
+        '#!/bin/sh',
+        `n=0; for f in "${h.tmp}"/*/token; do [ -f "$f" ] && n=1; done`,
+        `echo "${name} $n" >> "${h.evidence}/probes"`,
+        body,
+      ].join('\n'), { mode: 0o755 });
+      return path;
+    };
+    writeFileSync(join(h.project, '.gitattributes'), '*.txt filter=x\n');
+    writeFileSync(join(h.project, 'a.txt'), 'one\n');
+    await setup([REAL_GIT!, 'add', '.'], h.project, h.gitEnv);
+    await setup([REAL_GIT!, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'tracked'], h.project, h.gitEnv);
+    await setup([REAL_GIT!, 'config', 'core.fsmonitor', probe('fsmonitor', 'exit 1')], h.project, h.gitEnv);
+    await setup([REAL_GIT!, 'config', 'filter.x.clean', probe('clean', 'cat')], h.project, h.gitEnv);
+    await setup([REAL_GIT!, 'config', 'filter.x.smudge', probe('smudge', 'cat')], h.project, h.gitEnv);
+    // A rebase pull checks the work tree is clean first: the index refresh.
+    await setup([REAL_GIT!, 'config', 'pull.rebase', 'true'], h.project, h.gitEnv);
+    writeFileSync(join(h.project, '.git', 'hooks', 'post-index-change'), readFileSync(probe('post-index-change', 'exit 0')), { mode: 0o755 });
+
+    // CONTROL: with a token file present, the probes see it.
+    const planted = join(h.tmp, `${CREDENTIAL_DIR_PREFIX}control`);
+    mkdirSync(planted);
+    writeFileSync(join(planted, 'token'), TOKEN);
+    await setup([REAL_GIT!, 'status', '--porcelain'], h.project, h.gitEnv);
+    expect(readFileSync(join(h.evidence, 'probes'), 'utf8')).toContain('fsmonitor 1');
+    rmSync(planted, { recursive: true });
+    writeFileSync(join(h.evidence, 'probes'), '');
+
+    useHarnessEnv(h);
+    const m = manager();
+    expect((await m.push(h.project)).success).toBe(true);
+    await upstreamCommit(h);
+    // Stat-dirty, content-clean: forces the refresh to run the clean filter.
+    const later = new Date(Date.now() + 5_000);
+    utimesSync(join(h.project, 'a.txt'), later, later);
+    expect((await m.getRemoteStatus(h.project)).behind).toBe(1);
+    expect(await m.pull(h.project)).toEqual({ success: true });
+
+    const runs = readFileSync(join(h.evidence, 'probes'), 'utf8').trim().split('\n').filter(Boolean);
+    // They did run (after the token was gone), so this is not vacuous...
+    expect(runs.some(r => r.startsWith('fsmonitor '))).toBe(true);
+    expect(runs.some(r => r.startsWith('clean '))).toBe(true);
+    // ...and none of them ever saw the token file.
+    expect(runs.filter(r => r.endsWith(' 1'))).toEqual([]);
+    expect(h.leaks(TOKEN)).toEqual([]);
   }, 60_000);
 
   // On git < 2.46 this is the documented gap: see gitHardeningArgs.
@@ -866,7 +1013,7 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT)('a real push/pull/fet
     expect(h.leaks(TOKEN)).toEqual([]);
   }, 60_000);
 
-  test('a local-path pushurl ahead of origin cannot run pre-push while the token exists', async () => {
+  test('a local-path pushurl ahead of origin means no token at all, so pre-push has nothing to find', async () => {
     const h = await setupProject('pushurl');
     const decoy = join(tempRoot('decoy'), 'decoy.git');
     await setup([REAL_GIT!, 'init', '-q', '--bare', decoy], root, h.gitEnv);
@@ -874,14 +1021,34 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT)('a real push/pull/fet
     await setup([REAL_GIT!, 'config', '--add', 'remote.origin.pushurl', `${server.base}/pushurl.git`], h.project, h.gitEnv);
     useHarnessEnv(h);
 
+    const before = server.requests.length;
     const result = await manager().push(h.project);
-    // The file transport is refused, so the push as a whole reports failure.
+    // Plain git: the decoy gets the push, GitHub refuses the anonymous one.
     expect(result.success).toBe(false);
-    expect(result.error).toContain("transport 'file' not allowed");
-    expect(readdirSync(join(decoy, 'refs', 'heads')).length).toBe(0);
+    expect(result.error).toContain('so the GitHub token was not used');
+    expect(hookRuns(h, 'pre-push').length).toBeGreaterThan(0);
+    expect(server.requests.slice(before).filter(r => r.auth !== 'none').length).toBe(0);
     expect(hookRunsThatFoundAToken(h)).toEqual([]);
     expect(h.leaks(TOKEN)).toEqual([]);
     expect(credentialDirsIn(h.tmp)).toEqual([]);
+  }, 30_000);
+
+  // The backstop behind the URL check, should the config change between the
+  // check and the command: the pins must beat a project that allows more.
+  test('the transport pins beat a project-level protocol.file.allow=always', async () => {
+    const h = await setupProject('pins');
+    const decoy = join(tempRoot('decoy'), 'decoy.git');
+    await setup([REAL_GIT!, 'init', '-q', '--bare', decoy], root, h.gitEnv);
+    await setup([REAL_GIT!, 'config', 'protocol.file.allow', 'always'], h.project, h.gitEnv);
+    await setup([REAL_GIT!, 'config', 'protocol.allow', 'always'], h.project, h.gitEnv);
+    const target = { protocol: 'http', host: server.host };
+    const pinned = await run(
+      [REAL_GIT!, ...credentialHelperArgs(join(h.tmp, 'absent'), target), ...gitHardeningArgs(target), 'push', decoy, 'main'],
+      h.project, undefined, h.gitEnv,
+    );
+    expect(pinned.exitCode).not.toBe(0);
+    expect(pinned.stderr).toContain("transport 'file' not allowed");
+    expect(readdirSync(join(decoy, 'refs', 'heads')).length).toBe(0);
   }, 30_000);
 
   test('an insteadOf redirect to another host gets no credential at all', async () => {
@@ -916,6 +1083,22 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT)('a real push/pull/fet
     const before = server.requests.length;
     await manager().getRemoteStatus(h.project);
     expect(server.requests.length).toBe(before);
+    expect(readFileSync(join(h.project, '.git', 'config'), 'utf8')).not.toContain(OLD_TOKEN);
+  }, 30_000);
+
+  // S5: `remote remove` keeps branch.*.remote values that are URLs, not names.
+  test('removeRemote, and status with no remote left, still scrub an old token URL', async () => {
+    const h = await setupProject('scrub-removed');
+    useHarnessEnv(h);
+
+    await plantStaleTokenUrl(h, 'main');
+    await manager().removeRemote(h.project);
+    expect(readFileSync(join(h.project, '.git', 'config'), 'utf8')).not.toContain(OLD_TOKEN);
+
+    // A project whose remote was removed before this fix shipped.
+    await plantStaleTokenUrl(h, 'other');
+    const status = await manager().getRemoteStatus(h.project);
+    expect(status.hasRemote).toBe(false);
     expect(readFileSync(join(h.project, '.git', 'config'), 'utf8')).not.toContain(OLD_TOKEN);
   }, 30_000);
 
