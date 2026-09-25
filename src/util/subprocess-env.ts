@@ -115,11 +115,12 @@
  */
 export const EXTRA_ENV_KEYS = [
   'PORT', 'HOST', 'NODE_ENV', 'GIT_TERMINAL_PROMPT',
-  // WSL interop, for src/actions/terminal/wsl-bridge.ts only: the interop
-  // socket a Windows executable is launched through, the distro name, and
-  // WSLENV, the list of variables shared with the Windows side. A socket path
-  // and names, not credentials; WSLENV can only share what survived the
-  // allowlist. Extras are per call site, so no other spawn receives these.
+  // WSL interop, added for src/actions/terminal/wsl-bridge.ts (#519): the
+  // interop socket a Windows executable is launched through, the distro name,
+  // and WSLENV, the list of variables shared with the Windows side. A socket
+  // path and names, not credentials; WSLENV can only share what survived the
+  // allowlist. Extras are opt-in per call site: only a spawn that names these
+  // receives them.
   'WSL_INTEROP', 'WSL_DISTRO_NAME', 'WSLENV',
 ] as const;
 
