@@ -54,6 +54,17 @@ const URL_RE = /https?:\/\/\S+|\bwww\.\S+/i;
  * "done.Co"), and not `.ts`/`.json`-style file extensions.
  */
 const DOMAIN_RE = /\b[a-z0-9-]{1,63}\.(?:com|org|net|io|dev|app|edu|gov)\b/i;
+/**
+ * Site-building intent: a verb of making, then within a few words a site
+ * noun. "build me a landing page", "create a website for my bakery", "code a
+ * website for me". Not "create an account on the site", "make sure the
+ * website loads", "make a summary of this site" -- those are browses, and
+ * a browse must not be offered the site shell. `start`, `design`, `set up`
+ * and a bare "my site" matched too many of them to keep. Bounded gaps and
+ * no nested quantifiers, so it stays linear.
+ */
+const SITE_BUILD_RE = /\b(?:build|make|create|code|generate|scaffold|spin up|whip up|put together)\b(?![^.?!\n]{0,40}?\b(?:account|sign ?in|log ?in|sure|summary)\b)[^.?!\n]{0,40}?\b(?:web ?site|site|web ?page|homepage|landing page|portfolio|html page)s?\b/i;
+
 /** A path-looking token, or a fenced code block. */
 const PATH_RE = /(^|\s)[~.]?[/\\][\w.\-/\\]+|```/;
 
@@ -150,11 +161,15 @@ export const TRIGGER_GROUPS: readonly TriggerGroup[] = [
     // Triggered by BUILD intent only. "site", "website", "homepage" belong to
     // the browse group: "go to their website and read the pricing" must not
     // be offered a shell, a delete and a GitHub push. Likewise "project",
-    // "repo", "commit", "push" are ordinary dev chat, not site building.
+    // "repo", "commit", "push" are ordinary dev chat, and "html", "css",
+    // "template" are too broad on their own ("fix the css in my react app",
+    // "use the email template") -- a verb of making next to a site noun
+    // carries the intent instead.
     tools: ['site_create_project', 'site_read_file', 'site_write_file', 'site_delete_file',
       'site_list_files', 'site_run_command', 'site_git_commit', 'site_github_push'],
-    words: ['site builder', 'landing page', 'landing', 'portfolio', 'html', 'css', 'template',
-      'project directory'],
+    words: ['site builder', 'landing page', 'portfolio site', 'portfolio website', 'project directory',
+      'static site', 'html page'],
+    patterns: [SITE_BUILD_RE],
   },
 ];
 
@@ -223,41 +238,46 @@ export const SELECTION_WINDOW_CHARS = 8000;
 
 type TextPart = { role: 'user' | 'assistant'; text: string };
 
-/** The user/assistant text of the conversation, oldest first, lowercased. */
-function textParts(messages: readonly LLMMessage[]): TextPart[] {
-  const parts: TextPart[] = [];
-  for (const m of messages) {
-    if (m.role !== 'user' && m.role !== 'assistant') continue;
-    if (typeof m.content === 'string') {
-      parts.push({ role: m.role, text: m.content.toLowerCase() });
-    } else if (Array.isArray(m.content)) {
-      for (const b of m.content) if (b.type === 'text') parts.push({ role: m.role, text: b.text.toLowerCase() });
-    }
-  }
-  return parts;
-}
-
 /**
- * The parts that fall inside the selection window, the oldest one cut to
- * the portion that fits -- exactly the text `conversationText` returns,
- * split back into messages.
+ * The user/assistant text inside the selection window, oldest first,
+ * lowercased: the most recent SELECTION_WINDOW_CHARS of the parts joined
+ * with newlines, the oldest part cut to what fits. The window is measured
+ * before lowercasing, so a few non-ASCII characters that lengthen when
+ * lowercased ("İ") can take it past the nominal size -- at most about 2x,
+ * and harmless for matching.
+ *
+ * Built newest-first and reversed once (not `unshift` per part, which is
+ * quadratic in the number of messages), and lowercased AFTER windowing, so
+ * a 200k-token history costs one pass over its tail rather than two full
+ * `toLowerCase` copies. The joining newline is charged before a part is
+ * taken, so a window that ends exactly on a message boundary does not take
+ * an empty sliver of the next-older one.
  */
 function windowedParts(messages: readonly LLMMessage[]): TextPart[] {
-  const parts = textParts(messages);
-  const out: TextPart[] = [];
+  const newestFirst: TextPart[] = [];
   let budget = SELECTION_WINDOW_CHARS;
-  for (let i = parts.length - 1; i >= 0 && budget > 0; i--) {
-    const p = parts[i]!;
-    out.unshift(p.text.length > budget ? { role: p.role, text: p.text.slice(-budget) } : p);
-    budget -= p.text.length + 1; // the joining newline
+  for (let i = messages.length - 1; i >= 0 && budget > 0; i--) {
+    const m = messages[i]!;
+    if (m.role !== 'user' && m.role !== 'assistant') continue;
+    const texts = typeof m.content === 'string'
+      ? [m.content]
+      : Array.isArray(m.content) ? m.content.flatMap((b) => (b.type === 'text' ? [b.text] : [])) : [];
+    for (let j = texts.length - 1; j >= 0 && budget > 0; j--) {
+      if (newestFirst.length > 0) {
+        budget -= 1; // the newline joining this part to the newer one
+        if (budget <= 0) break;
+      }
+      const t = texts[j]!;
+      newestFirst.push({ role: m.role, text: (t.length > budget ? t.slice(-budget) : t).toLowerCase() });
+      budget -= t.length;
+    }
   }
-  return out;
+  return newestFirst.reverse();
 }
 
 /** Flatten the conversation to the text the triggers are matched against. */
 export function conversationText(messages: readonly LLMMessage[]): string {
-  const joined = textParts(messages).map((p) => p.text).join('\n');
-  return joined.length > SELECTION_WINDOW_CHARS ? joined.slice(-SELECTION_WINDOW_CHARS) : joined;
+  return windowedParts(messages).map((p) => p.text).join('\n');
 }
 
 const wordCache = new Map<string, RegExp>();
@@ -324,9 +344,9 @@ export function selectForConversation(
 ): Set<string> {
   const byName = available ? new Map(available.map((t) => [t.name, t])) : undefined;
   const names = byName ? new Set(byName.keys()) : undefined;
-  const out = selectRelevantNames(conversationText(messages), names);
-  const unmatched = windowedParts(messages)
-    .some((p) => p.role === 'user' && selectRelevantNames(p.text, names).size === 0);
+  const parts = windowedParts(messages);
+  const out = selectRelevantNames(parts.map((p) => p.text).join('\n'), names);
+  const unmatched = parts.some((p) => p.role === 'user' && selectRelevantNames(p.text, names).size === 0);
   if (unmatched) for (const t of unmatchedDefaultNames(byName)) out.add(t);
   return out;
 }

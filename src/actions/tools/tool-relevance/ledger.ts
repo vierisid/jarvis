@@ -30,6 +30,16 @@ import type { LLMMessage } from '../../../llm/provider.ts';
 /** The tool name the escape hatch is exposed under. */
 export const DISCOVER_TOOLS = 'discover_tools';
 
+/** How an off-list refusal's tool result begins (`interceptOffList`). */
+export const NOT_RUN_MARKER = '[NOT RUN]';
+
+/**
+ * The placeholder `processTaskCall`'s clarification branch writes for every
+ * sibling call it skipped. It answers a tool_call id -- the providers require
+ * it -- but the call neither ran nor was admitted, so seeding skips it.
+ */
+const SKIPPED_PREFIX = '[Not run:';
+
 /**
  * A grow-only set of tool names that must stay exposed for the rest of a
  * conversation: everything the model has already called, plus everything it
@@ -87,8 +97,22 @@ export class ToolExposureLedger {
     // picked with every framed reader out of view -- into the exposed set,
     // and the resume would then dispatch it without the off-list check.
     // "Called or admitted" has to mean it.
+    //
+    // Not the clarification branch's skipped siblings: they were answered
+    // with a placeholder, never ran and were never admitted, and seeding
+    // them into the shared, process-lifetime primary ledger would widen it
+    // with no audit row. An off-list REFUSAL (NOT_RUN_MARKER) is different
+    // and IS seeded: the live loop admitted that name, audited the
+    // admission, and told the model it is available from its next step --
+    // a resumed run that forgot it would refuse the retry the live one
+    // allows.
     const answered = new Set<string>();
-    for (const m of messages) if (m.role === 'tool' && m.tool_call_id) answered.add(m.tool_call_id);
+    for (const m of messages) {
+      if (m.role !== 'tool' || !m.tool_call_id) continue;
+      const text = m.content;
+      if (typeof text === 'string' && text.startsWith(SKIPPED_PREFIX)) continue;
+      answered.add(m.tool_call_id);
+    }
     for (const m of messages) {
       if (m.role !== 'assistant' || !m.tool_calls) continue;
       for (const tc of m.tool_calls) {
