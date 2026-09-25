@@ -137,6 +137,110 @@ describe('planted config does not run code through the daemon', () => {
   });
 });
 
+/**
+ * Config-defined hooks (`hook.<name>.command`) arrived in git 2.54. The
+ * real-git tests below need a git that runs them for their plain-git control
+ * to mean anything, so they are skipped on older git rather than left to fail
+ * on a stock distro git; the fake-git tests run everywhere.
+ */
+const GIT_HAS_CONFIG_HOOKS = (() => {
+  const real = Bun.which('git');
+  if (!real) return false;
+  const out = Bun.spawnSync([real, '--version']).stdout.toString();
+  const [major = 0, minor = 0] = (out.match(/(\d+)\.(\d+)/) ?? []).slice(1).map(Number);
+  return major > 2 || (major === 2 && minor >= 54);
+})();
+
+describe('config-defined hooks', () => {
+  /** A hook defined in config, not in a hooks dir: `hooksPath=/dev/null` alone misses it. */
+  function plantConfigHook(event: string): void {
+    plant(`[hook "x"]\n\tcommand = "${touch()}"\n\tevent = ${event}\n`);
+  }
+
+  /** The user's own git in the same repo: no pins. */
+  function plainGit(...args: string[]): number {
+    return Bun.spawnSync(['git', ...args], { cwd: repo, stdout: 'pipe', stderr: 'pipe', env: sanitizedEnv() }).exitCode;
+  }
+
+  test.skipIf(!GIT_HAS_CONFIG_HOOKS)('a pre-commit config hook does not run on the auto-commit', async () => {
+    plantConfigHook('pre-commit');
+    writeFileSync(join(repo, 'src', 'a.txt'), 'two\n');
+    expect((await git.autoCommit(repo, 'edit'))?.message).toBe('edit');
+    expect(existsSync(marker)).toBe(false);
+
+    // Control: the hook is real, and plain git runs it.
+    writeFileSync(join(repo, 'src', 'a.txt'), 'three\n');
+    expect(plainGit('commit', '-am', 'by hand')).toBe(0);
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  test.skipIf(!GIT_HAS_CONFIG_HOOKS)('a post-checkout config hook does not run on createBranch or switchBranch', async () => {
+    plantConfigHook('post-checkout');
+    const base = await git.getCurrentBranch(repo);
+    await git.createBranch(repo, 'feature');
+    await git.switchBranch(repo, base);
+    expect(existsSync(marker)).toBe(false);
+
+    expect(plainGit('switch', 'feature')).toBe(0);
+    expect(existsSync(marker)).toBe(true);
+  });
+
+  // git 2.54 has config hooks but no event-level switch, so there the event
+  // pins do nothing and the manager must name each hook. A stand-in git
+  // reports 2.54, answers the hook lookup with `lookup` (a shell case arm
+  // body), prints " M x" for status, and logs every argv.
+  async function onFakeGit254(lookup: string, action: (gm: GitManager) => Promise<unknown>): Promise<string[]> {
+    const fakeBin = join(root, 'fake-bin');
+    const log = join(root, 'fake-git.log');
+    mkdirSync(fakeBin);
+    executable(join(fakeBin, 'git'), [
+      `printf '%s\\n' "$*" >> '${log}'`,
+      'case "$*" in',
+      '  *--version*) echo "git version 2.54.0" ;;',
+      `  *'^hook'*) ${lookup} ;;`,
+      "  *'status --porcelain'*) echo ' M x' ;;",
+      'esac',
+    ].join('\n'));
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${fakeBin}:${savedPath ?? ''}`;
+    try {
+      await action(new GitManager());
+    } finally {
+      if (savedPath === undefined) delete process.env.PATH;
+      else process.env.PATH = savedPath;
+    }
+    return readFileSync(log, 'utf-8').split('\n');
+  }
+
+  test('on git older than 2.55 each configured hook is also pinned off by name', async () => {
+    const calls = await onFakeGit254(
+      "printf 'hook.lint.command\\n/x\\0hook..event\\npre-commit\\0'",
+      (gm) => gm.isDirty(repo),
+    );
+    const status = calls.find((l) => l.includes('status --porcelain'))!;
+    expect(status).toContain('hook.lint.enabled=false');
+    // The empty-named hook (`[hook ""]`) is runnable too.
+    expect(status).toContain('-c hook..enabled=false');
+  });
+
+  test('on git older than 2.55, a lookup that finds no hooks (exit 1) lets the call run', async () => {
+    // The normal case on stock distro git: every call depends on exit 1
+    // being read as "none", which needs the exit code on GitManager's errors.
+    let dirty: boolean | undefined;
+    const calls = await onFakeGit254('exit 1', async (gm) => { dirty = await gm.isDirty(repo); });
+    expect(dirty).toBe(true);
+    expect(calls.some((l) => l.includes('status --porcelain'))).toBe(true);
+  });
+
+  test('on git older than 2.55, a lookup that fails otherwise stops the call', async () => {
+    // 128 is what a broken config gives: not "no hooks".
+    let error: unknown;
+    const calls = await onFakeGit254('exit 128', (gm) => gm.isDirty(repo).catch((e) => { error = e; }));
+    expect(String(error)).toContain('git config failed');
+    expect(calls.some((l) => l.includes('status --porcelain'))).toBe(false);
+  });
+});
+
 describe('planted signing config', () => {
   test('commit.gpgSign does not start gpg.program on the auto-commit', async () => {
     plant(`[commit]\n\tgpgSign = true\n[gpg]\n\tprogram = "${join(root, 'gpg.sh')}"\n`);

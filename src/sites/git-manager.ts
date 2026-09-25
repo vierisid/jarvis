@@ -6,45 +6,8 @@
 
 import type { GitCommit, GitBranch } from './types.ts';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
-
-/**
- * `-c` pins on every git call made here (#516). Command-line config beats
- * every config file for the same key, so these hold even against a
- * `.git/config` planted before the site file tools stopped writing it, or
- * through site_run_command. They are defense in depth: the site file tools
- * refusing `.git` is the fix. Exported for GitHubManager's own git calls,
- * which run in the same trees (push, pull, status) and do not use them yet.
- *
- * - `safe.bareRepository=explicit`: in a project with no .git, git would take
- *   the project ROOT for a bare repository if it holds HEAD, objects/ and
- *   refs/, and read its `config` -- ordinary files the site file tools may
- *   write, whose core.worktree + core.fsmonitor then run on the next
- *   `git status`. Nothing here ever uses a bare repository.
- * - `core.fsmonitor=false`: git runs the fsmonitor command whenever it reads
- *   the index, and status runs on every project listing.
- * - `core.hooksPath=/dev/null`: no hook runs for the daemon's own commits,
- *   checkouts, merges and rebases. A hooks dir in the worktree (husky's
- *   `.husky`, set by an npm install) is model-writable, and overwriting an
- *   existing executable hook keeps its mode. Costs a user's pre-commit lint on
- *   auto-commits; their own `git commit` still runs it.
- * - `log.showSignature=false`: getLog would otherwise start gpg.
- * - `commit.gpgSign=false`: a signing commit starts `gpg.program`, which the
- *   project config can name. Costs signatures on the daemon's auto-commits,
- *   which could only work anyway with a gpg-agent that needs no prompt.
- *
- * NOT pinnable this way, because the names are arbitrary: filter drivers
- * (`filter.<x>.clean`), merge drivers and textconv drivers, and config pulled
- * in through `include.path`. Those need a config file the site tools can
- * write, which is what they no longer can. getDiff passes --no-ext-diff and
- * --no-textconv for the diff side of it.
- */
-export const PROJECT_GIT_PINS = [
-  '-c', 'safe.bareRepository=explicit',
-  '-c', 'core.fsmonitor=false',
-  '-c', 'core.hooksPath=/dev/null',
-  '-c', 'log.showSignature=false',
-  '-c', 'commit.gpgSign=false',
-];
+import { tmpdir } from 'node:os';
+import { PROJECT_GIT_PINS, gitVersionReader, resolveHookPins } from './git-pins.ts';
 
 /** HEAD and the pseudo-refs git writes next to it. */
 const PSEUDO_REFS = new Set([
@@ -296,16 +259,30 @@ export class GitManager {
     if (normalized !== name) throw invalid;
   }
 
+  /** gitVersionReader, run from the temp dir; see there. */
+  private readonly gitVersion = gitVersionReader(args => this.run(tmpdir(), args, { hookPins: [] }));
+
   /**
-   * Run a git command in the project directory.
+   * Run a git command in the project directory. `hookPins`, when given,
+   * replaces the per-call resolveHookPins lookup; the lookups themselves pass
+   * `[]`, since they cannot wait on their own result. Unlike GitHubManager
+   * there is no secret here to keep the lookup away from, so every other call
+   * resolves its own pins.
    */
-  private async run(cwd: string, args: string[]): Promise<string> {
+  private async run(cwd: string, args: string[], options: { hookPins?: readonly string[] } = {}): Promise<string> {
     // Sanitized, not inherited: git can still run commands the project names
     // (PROJECT_GIT_PINS covers the ones a pin can), and the project is written
     // by the model. Stripping the inherited GIT_* also stops a hook-invoked
     // daemon's GIT_DIR/GIT_INDEX_FILE from pointing these commands at the
     // wrong repository.
-    const proc = Bun.spawn(['git', ...PROJECT_GIT_PINS, ...args], {
+    //
+    // On git 2.54 (or an unknown version), a config hook name that cannot be
+    // pinned makes this throw for every call in that repo -- or in every
+    // repo, if the name is in ~/.gitconfig. Fail closed; project listings
+    // catch the error and show the project as having no branch.
+    const hookPins = options.hookPins
+      ?? await resolveHookPins(lookup => this.run(cwd, lookup, { hookPins: [] }), await this.gitVersion());
+    const proc = Bun.spawn(['git', ...PROJECT_GIT_PINS, ...hookPins, ...args], {
       cwd,
       stdout: 'pipe',
       stderr: 'pipe',
@@ -317,7 +294,8 @@ export class GitManager {
 
     if (exitCode !== 0) {
       const stderr = await new Response(proc.stderr).text();
-      throw new Error(`git ${args[0]} failed: ${stderr.trim() || stdout.trim()}`);
+      // exitCode rides along so resolveHookPins can tell "no match" (1) apart.
+      throw Object.assign(new Error(`git ${args[0]} failed: ${stderr.trim() || stdout.trim()}`), { exitCode });
     }
 
     return stdout;
