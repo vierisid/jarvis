@@ -20,6 +20,14 @@ import { GitManager } from './git-manager.ts';
 import { ProjectManager } from './project-manager.ts';
 
 const GIT_CONFIG = '[core]\n\trepositoryformatversion = 0\n';
+
+const GIT_HAS_SAFE_BARE_REPOSITORY = (() => {
+  const real = Bun.which('git');
+  if (!real) return false;
+  const out = Bun.spawnSync([real, '--version']).stdout.toString();
+  const [major = 0, minor = 0] = (out.match(/(\d+)\.(\d+)/) ?? []).slice(1).map(Number);
+  return major > 2 || (major === 2 && minor >= 38);
+})();
 const REFLOG = '0000 1111 Jarvis <j@x> 1 +0000\tpull https://ghp_REFLOGSECRET@github.com/o/r.git: Fast-forward\n';
 const REFUSED = 'inside a git directory';
 
@@ -67,6 +75,8 @@ function snapshot(dir: string, prefix = ''): string[] {
     const full = join(dir, entry.name);
     if (entry.isSymbolicLink()) out.push(`${rel} -> link`);
     else if (entry.isDirectory()) out.push(`${rel}/`, ...snapshot(full, `${rel}/`));
+    // Never open a FIFO: the read would block this process for good.
+    else if (!entry.isFile()) out.push(`${rel} (special)`);
     else out.push(`${rel} (${readFileSync(full, 'utf-8')})`);
   }
   return out.sort();
@@ -257,6 +267,33 @@ describe('a git dir that is not named .git', () => {
 
     await expectRefused(() => write('repo/config', 'x', 'wt'));
   });
+
+  test('a FIFO named commondir is not read, so it cannot hang the tools', async () => {
+    const wt = join(projectsDir, 'wt');
+    mkdirSync(join(wt, 'repo', 'worktrees', 'wt'), { recursive: true });
+    expect(Bun.spawnSync(['mkfifo', join(wt, 'repo', 'worktrees', 'wt', 'commondir')]).exitCode).toBe(0);
+    writeFileSync(join(wt, '.git'), 'gitdir: repo/worktrees/wt\n');
+
+    // In a child process: a blocked read would hang this one for good, where
+    // no per-test timeout can reach it. The child gets 10 s, then is killed.
+    const script = [
+      `import { ProjectManager } from ${JSON.stringify(join(import.meta.dir, 'project-manager.ts'))};`,
+      `const pm = new ProjectManager({ enabled: true, projects_dir: ${JSON.stringify(projectsDir)},`,
+      '  port_range_start: 3000, port_range_end: 3999, auto_commit: false, max_concurrent_servers: 1 });',
+      "await pm.writeFile('wt', 'src/a.ts', 'x');",
+      "console.log('done');",
+    ].join('\n');
+    const child = Bun.spawn(['bun', '-e', script], { stdout: 'pipe', stderr: 'pipe' });
+    const timer = setTimeout(() => child.kill('SIGKILL'), 10_000);
+    try {
+      const [out, code] = await Promise.all([new Response(child.stdout).text(), child.exited]);
+      expect({ code, out: out.trim() }).toEqual({ code: 0, out: 'done' });
+    } finally {
+      clearTimeout(timer);
+    }
+    // The gitdir itself is still protected.
+    await expectRefused(() => write('repo/worktrees/wt/HEAD', 'x', 'wt'));
+  }, 20_000);
 
   test('a gitfile whose gitdir does not exist yet still protects where it will be', async () => {
     const wt = join(projectsDir, 'wt');
@@ -510,7 +547,9 @@ describe('writes do not reach through hard links', () => {
 });
 
 describe("the daemon's git does not take the project root for a bare repository", () => {
-  test('HEAD, objects/, refs/, info/attributes and config written at a .git-less root run nothing', async () => {
+  // `safe.bareRepository` exists from git 2.38; older git ignores the pin
+  // and is not protected by it, so there is nothing to test there.
+  test.skipIf(!GIT_HAS_SAFE_BARE_REPOSITORY)('HEAD, objects/, refs/, info/attributes and config written at a .git-less root run nothing', async () => {
     const bare = join(projectsDir, 'bare');
     mkdirSync(bare, { recursive: true });
     const marker = join(root, 'BARE_CONFIG_RAN');

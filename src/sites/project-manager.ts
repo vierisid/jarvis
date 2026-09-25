@@ -117,7 +117,13 @@ function linkedGitDirs(realRoot: string): string[] {
   } catch { /* no .git */ }
   for (const gitDir of [...found]) {
     try {
-      found.push(realOrLexical(resolve(gitDir, readFileSync(join(gitDir, 'commondir'), 'utf-8').trim())));
+      // A regular file only: `commondir` sits in a directory the tree may
+      // control, and a FIFO by that name would block this read -- and with
+      // it every site file call -- forever. (A symlink to a regular file is
+      // fine; git follows it too.)
+      const commondir = join(gitDir, 'commondir');
+      if (!statSync(commondir).isFile()) continue;
+      found.push(realOrLexical(resolve(gitDir, readFileSync(commondir, 'utf-8').trim())));
     } catch { /* not a linked worktree */ }
   }
   return found.filter((dir) => isWithin(dir, realRoot));
