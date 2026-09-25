@@ -29,6 +29,7 @@
 import type { ToolDefinition, ToolGate } from './registry.ts';
 import { getSidecarManager, autoTargetForCapability } from './sidecar-route.ts';
 import { captureSurface } from '../../structural/surface.ts';
+import { checkNavigationUrl } from '../browser/url-policy.ts';
 import { runSkill, type SkillRuntimeDeps } from '../../skills/runtime.ts';
 import {
   deleteSkill, getSkillByName, listRunnableSkills, listSkills, matchSkills, recordSkillRun, upsertSkill,
@@ -93,7 +94,10 @@ function liveDeps(explicitTarget?: string): SkillRuntimeDeps {
       // happens to be in the foreground, which for a step like the Slack
       // seed's Enter is the send.
       if (action === 'navigate') {
-        await manager.dispatchRPC(sidecarIdFor(targetFor('browser')), 'browser_navigate', { url: value }, RPC_TIMEOUT);
+        // Same scheme allowlist as browser_navigate (#521): a stored skill
+        // step must not open file: or chrome: pages on the sidecar either.
+        const url = checkNavigationUrl(value ?? '');
+        await manager.dispatchRPC(sidecarIdFor(targetFor('browser')), 'browser_navigate', { url }, RPC_TIMEOUT);
         return;
       }
       if (action === 'press_keys') {
