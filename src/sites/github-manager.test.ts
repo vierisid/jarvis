@@ -340,6 +340,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       `  *"branch --show-current"*) cat "${root}/current-branch" ;;`,
       '  *"--get-regexp"*) exit 1 ;;',
       '  *"ls-files"*) exit 0 ;;',
+      '  *"--version"*) echo "git version 2.55.0"; exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
       'exit 0',
@@ -486,6 +487,7 @@ describe('each call site keeps the token out of git argv and env', () => {
         '  *"branch --show-current"*) echo main; exit 0 ;;',
         '  *"--get-regexp"*) exit 1 ;;',
         '  *"ls-files"*) exit 0 ;;',
+        '  *"--version"*) echo "git version 2.55.0"; exit 0 ;;',
         '  *"config --get "*) exit 1 ;;',
         'esac',
         `printf '%s\\n' ${JSON.stringify(stderr)} >&2`,
@@ -506,6 +508,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
       '  *"ls-files"*) exit 0 ;;',
+      '  *"--version"*) echo "git version 2.55.0"; exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
       'echo "error: unable to create file index.html: Permission denied" >&2',
@@ -525,6 +528,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
       '  *"ls-files"*) exit 0 ;;',
+      '  *"--version"*) echo "git version 2.55.0"; exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
       'echo "fatal: Need to specify how to reconcile divergent branches." >&2',
@@ -551,6 +555,7 @@ describe('each call site keeps the token out of git argv and env', () => {
         '  *"branch --show-current"*) echo main; exit 0 ;;',
         '  *"--get-regexp"*) exit 1 ;;',
         '  *"ls-files"*) exit 0 ;;',
+        '  *"--version"*) echo "git version 2.55.0"; exit 0 ;;',
         '  *"config --get "*) exit 1 ;;',
         'esac',
         'exit 0',
@@ -573,6 +578,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
       '  *"ls-files"*) exit 0 ;;',
+      '  *"--version"*) echo "git version 2.55.0"; exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       // Only the local step hangs, and for longer than the timeout. The
       // timeout itself is generous enough that every other fake call, the
@@ -600,6 +606,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
       '  *"ls-files"*) exit 0 ;;',
+      '  *"--version"*) echo "git version 2.55.0"; exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
       'exit 0',
@@ -627,6 +634,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
       '  *"ls-files"*) exit 0 ;;',
+      '  *"--version"*) echo "git version 2.55.0"; exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
       'echo "fatal: remote rejected" >&2',
@@ -649,6 +657,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
       '  *"ls-files"*) exit 0 ;;',
+      '  *"--version"*) echo "git version 2.55.0"; exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
       // Short enough that a broken kill cannot outlive the run for long.
@@ -676,6 +685,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
       '  *"ls-files"*) exit 0 ;;',
+      '  *"--version"*) echo "git version 2.55.0"; exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
       'sleep 5 &',
@@ -703,6 +713,7 @@ describe('each call site keeps the token out of git argv and env', () => {
       '  *"branch --show-current"*) echo main; exit 0 ;;',
       '  *"--get-regexp"*) exit 1 ;;',
       '  *"ls-files"*) exit 0 ;;',
+      '  *"--version"*) echo "git version 2.55.0"; exit 0 ;;',
       '  *"config --get "*) exit 1 ;;',
       'esac',
       `setsid sh -c 'echo $$ > "${pidFile}"; exec sleep 8' &`,
@@ -723,6 +734,55 @@ describe('each call site keeps the token out of git argv and env', () => {
 
   // `-x` is an option, `+x` a force push, `a:b` a push to a ref nobody named.
   const unsafeBranches = ['--receive-pack=touch pwned', '-f', '+main', 'main:refs/heads/other'];
+
+  // git 2.54 has config hooks but no event-level `hook.<event>.enabled`, so
+  // there the manager must name each configured hook and pin it off.
+  describe('config hooks on git older than 2.55', () => {
+    function fakeWithVersion(fake: ReturnType<typeof setupFakeGit>, version: string, hookListing: string) {
+      writeFileSync(join(fake.project, '..', 'bin', 'git'), [
+        '#!/bin/sh',
+        `printf "%s\\0" "$@" > "${fake.logDir}/$(date +%s%N).$$.argv"`,
+        'case "$*" in',
+        `  *"--version"*) echo "git version ${version}"; exit 0 ;;`,
+        `  *"^hook"*) printf '${hookListing}'; exit 0 ;;`,
+        '  *"get-url"*) cat "$(dirname "$0")/../origin-url"; exit 0 ;;',
+        '  *"branch --show-current"*) echo main; exit 0 ;;',
+        '  *"--get-regexp"*) exit 1 ;;',
+        '  *"config --get "*) exit 1 ;;',
+        'esac',
+        'exit 0',
+      ].join('\n'), { mode: 0o755 });
+    }
+    const argvs = (fake: ReturnType<typeof setupFakeGit>) => readdirSync(fake.logDir).filter(f => f.endsWith('.argv'))
+      .map(f => readFileSync(join(fake.logDir, f), 'utf8').split('\0'));
+
+    test('on 2.54, every configured hook name is pinned off on every git call', async () => {
+      const fake = setupFakeGit();
+      fakeWithVersion(fake, '2.54.0', 'hook.probe.command\\n/x\\0hook.lint.event\\npre-push\\0');
+      expect((await new GitHubManager().push(fake.project)).success).toBe(true);
+      const calls = argvs(fake).filter(a => !a.includes('--version') && !a.some(x => x.startsWith('^hook')));
+      const push = calls.find(a => a.includes('push'))!;
+      expect(push).toContain('hook.probe.enabled=false');
+      expect(push).toContain('hook.lint.enabled=false');
+      expect(calls.filter(a => !a.includes('hook.probe.enabled=false')).length).toBe(0);
+    });
+
+    test('on 2.54, a hook name that cannot be pinned stops git from running at all', async () => {
+      const fake = setupFakeGit();
+      fakeWithVersion(fake, '2.54.0', 'hook.a=b.command\\n/x\\0');
+      const result = await new GitHubManager().push(fake.project);
+      expect(result.success).toBe(false);
+      expect(argvs(fake).filter(a => a.includes('push')).length).toBe(0);
+    });
+
+    test('on 2.55 the event-level pins suffice, and no lookup is made', async () => {
+      const fake = setupFakeGit();
+      fakeWithVersion(fake, '2.55.0', 'hook.probe.command\\n/x\\0');
+      expect((await new GitHubManager().push(fake.project)).success).toBe(true);
+      expect(argvs(fake).filter(a => a.some(x => x.startsWith('^hook'))).length).toBe(0);
+      expect(argvs(fake).find(a => a.includes('push'))).not.toContain('hook.probe.enabled=false');
+    });
+  });
 
   test('a branch that git would not read as a plain branch is refused', async () => {
     const fake = setupFakeGit();
