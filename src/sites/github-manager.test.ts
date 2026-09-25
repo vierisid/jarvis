@@ -859,7 +859,7 @@ describe('each call site keeps the token out of git argv and env', () => {
 
     // An unparseable version, or a release candidate (does an rc of 2.55
     // have the event switch yet?), is treated as needing the lookup.
-    for (const version of ['unknown', '2.55.0-rc1']) {
+    for (const version of ['unknown', '2.55.0-rc1', '2.55.0.rc1', '2.55.0.rc0.12.gabcdef']) {
       test(`version "${version}" still does the lookup`, async () => {
         const fake = setupFakeGit();
         fakeWithVersion(fake, version, listing('hook.probe.command\\n/x\\0'));
@@ -1038,6 +1038,9 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
       '#!/bin/sh',
       `printf "%s\\0" "$@" > "${evidence}/argv.$$.$(date +%s%N)"`,
       `GIT_TRACE="${evidence}/trace"; export GIT_TRACE`,
+      // git's own temp files land where leaks() looks. Set here, for git
+      // only: the bun test process itself never changes TMPDIR.
+      `TMPDIR="${tmp}"; export TMPDIR`,
       // Independent of the host's /etc/gitconfig.
       'GIT_CONFIG_NOSYSTEM=1; export GIT_CONFIG_NOSYSTEM',
       `exec "${REAL_GIT}" "$@"`,

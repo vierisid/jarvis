@@ -174,10 +174,12 @@ export type GitVersion = readonly [number, number] | null;
 /**
  * Release candidates parse as unknown (null), which means "do the hook
  * lookup": whether an rc of 2.55 already carries the event-level switch is
- * not something to guess at. Dev builds (`2.55.0.123.gabc`) parse normally.
+ * not something to guess at. git prints an rc as `2.55.0.rc1` (its version
+ * script turns `-` into `.`), or `2.55.0.rc0.12.gabc` between tags; `-rc1` is
+ * matched too. Dev builds of a release (`2.55.0.123.gabc`) parse normally.
  */
 export function parseGitVersion(versionOutput: string): GitVersion {
-  if (/-rc\d*/i.test(versionOutput)) return null;
+  if (/[.-]rc\d/i.test(versionOutput)) return null;
   const m = /(\d+)\.(\d+)/.exec(versionOutput);
   return m ? [Number(m[1]), Number(m[2])] : null;
 }
@@ -287,6 +289,8 @@ const LFS_POINTER_HEADER = 'version https://git-lfs.github.com/spec/v1';
 const LFS_POINTER_MAX_BYTES = 1024;
 /** How many `filter=lfs` index entries lfsPointerPaths inspects. */
 const LFS_CANDIDATE_LIMIT = 50;
+/** Upper bound on the whole LFS scan, and on each git call in it. */
+const LFS_SCAN_BUDGET_MS = 60_000;
 
 /**
  * git/ssh stderr that means "could not authenticate or reach the repo as
@@ -883,9 +887,13 @@ export class GitHubManager {
    * the index rather than walking origin/<branch>..HEAD.
    */
   private async lfsPointerPaths(cwd: string): Promise<string[]> {
-    // Bounded: in a blobless partial clone `cat-file` may lazily fetch the
-    // blob from origin, and that must not hang the push.
-    const options = { timeoutMs: this.networkTimeoutMs };
+    // In a blobless partial clone `cat-file` would lazily fetch a missing blob
+    // from origin. git 2.45+ can refuse that outright (a missing blob is then
+    // just skipped); every call is also bounded, and so is the whole scan.
+    const version = await this.gitVersion();
+    const noLazyFetch = version !== null && (version[0] > 2 || (version[0] === 2 && version[1] >= 45));
+    const options = { timeoutMs: LFS_SCAN_BUDGET_MS, configArgs: noLazyFetch ? ['--no-lazy-fetch'] : [] };
+    const deadline = Date.now() + LFS_SCAN_BUDGET_MS;
     let listing: string;
     try {
       listing = await this.git(cwd, ['ls-files', '-s', '-z', '--', ':(attr:filter=lfs)'], options);
@@ -894,6 +902,7 @@ export class GitHubManager {
     }
     const found: string[] = [];
     for (const entry of listing.split('\0').filter(Boolean).slice(0, LFS_CANDIDATE_LIMIT)) {
+      if (Date.now() > deadline) break;
       // `<mode> <oid> <stage>\t<path>`; regular files only, so a gitlink or
       // symlink is never handed to cat-file.
       const tab = entry.indexOf('\t');
