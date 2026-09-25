@@ -1,6 +1,71 @@
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
 import { $ } from 'bun';
 
+/**
+ * Key names xdotool can press: X keysym names (Return, minus, F5, XF86AudioPlay,
+ * U20AC) and xdotool's aliases (ctrl, alt, super, enter). Anything else is
+ * ignored or rejected by xdotool itself, so refusing it loses no working key,
+ * and it keeps a leading "-" from ever reaching xdotool.
+ *
+ * This, XDOTOOL_COMMANDS and MAX_CHORD_KEYS are mirrored by the sidecar's
+ * checkXdotoolKeySequence (sidecar/desktop_linux.go); keep them in sync.
+ */
+const KEYSYM_NAME = /^[A-Za-z0-9_]+$/;
+
+/**
+ * xdotool's commands (its dispatch table). `xdotool key` stops at the first
+ * argument that names one and runs it as a chained command, `--` or not, so a
+ * lone key spelled like a command ("exec", "selectwindow") would run that
+ * command instead of being pressed.
+ */
+const XDOTOOL_COMMANDS = new Set([
+  'behave', 'behave_screen_edge', 'click', 'exec', 'get_desktop',
+  'get_desktop_for_window', 'get_desktop_viewport', 'get_num_desktops',
+  'getactivewindow', 'getdisplaygeometry', 'getmouselocation', 'getwindowclassname',
+  'getwindowfocus', 'getwindowgeometry', 'getwindowname', 'getwindowpid', 'help',
+  'key', 'keydown', 'keyup', 'mousedown', 'mousemove', 'mousemove_relative', 'mouseup',
+  'search', 'selectwindow', 'set_desktop', 'set_desktop_for_window',
+  'set_desktop_viewport', 'set_num_desktops', 'set_window', 'sleep', 'type', 'version',
+  'windowactivate', 'windowclose', 'windowfocus', 'windowkill', 'windowlower',
+  'windowmap', 'windowminimize', 'windowmove', 'windowquit', 'windowraise',
+  'windowreparent', 'windowsize', 'windowstate', 'windowunmap',
+]);
+
+/**
+ * libxdo grows its key array with the wrong element size once a sequence
+ * reaches 10 keys (xdo.c `realloc(*keys, keys_size * sizeof(KeyCode))`) and
+ * then writes past it. No real chord comes close, so stay well below.
+ */
+const MAX_CHORD_KEYS = 8;
+
+/**
+ * Join a chord like ["ctrl", "shift", "t"] into xdotool's "ctrl+shift+t",
+ * refusing anything that xdotool would read as other than a key sequence.
+ * Each "+"-separated name is checked, so a key given as "ctrl+s" still works;
+ * empty names are skipped, as xdotool skips them.
+ */
+export function toXdotoolKeySequence(keys: string[]): string {
+  const sequence = keys.join('+');
+  const names = sequence.split('+').filter(Boolean);
+  if (names.length === 0) {
+    throw new Error('No keys given');
+  }
+  if (names.length > MAX_CHORD_KEYS) {
+    throw new Error(`Too many keys in one chord (${names.length}); press at most ${MAX_CHORD_KEYS} at once`);
+  }
+  for (const name of names) {
+    if (!KEYSYM_NAME.test(name)) {
+      throw new Error(
+        `Invalid key name ${JSON.stringify(name)}: use X keysym names such as Return, Tab, minus, slash or F5`,
+      );
+    }
+  }
+  if (XDOTOOL_COMMANDS.has(sequence.toLowerCase())) {
+    throw new Error(`"${sequence}" is an xdotool command name and cannot be pressed as a key`);
+  }
+  return sequence;
+}
+
 export class LinuxAppController implements AppController {
   private async checkTool(tool: string): Promise<boolean> {
     try {
@@ -149,7 +214,10 @@ export class LinuxAppController implements AppController {
     await this.ensureTool('xdotool');
 
     try {
-      await $`xdotool type --clearmodifiers ${text}`;
+      // `--` ends xdotool's option parsing, so text such as "-h" or
+      // "--file=/home/me/.ssh/id_ed25519" is typed literally instead of
+      // being read as an option (--file would type out the named file).
+      await $`xdotool type --clearmodifiers -- ${text}`;
     } catch (error) {
       throw new Error(`Failed to type text: ${error instanceof Error ? error.message : String(error)}`);
     }
@@ -159,8 +227,8 @@ export class LinuxAppController implements AppController {
     await this.ensureTool('xdotool');
 
     try {
-      const keyString = keys.join('+');
-      await $`xdotool key --clearmodifiers ${keyString}`;
+      const keyString = toXdotoolKeySequence(keys);
+      await $`xdotool key --clearmodifiers -- ${keyString}`;
     } catch (error) {
       throw new Error(`Failed to press keys: ${error instanceof Error ? error.message : String(error)}`);
     }
