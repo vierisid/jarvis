@@ -37,6 +37,22 @@ async function mount(node: React.ReactNode) {
   root = createRoot(host);
   await act(async () => root!.render(node));
 }
+/**
+ * Let React and the component's own async work run until `done()` holds.
+ * These flows chain real timers -- each status retry waits on a setTimeout,
+ * even at a 0ms backoff -- so the fixed 20ms sleeps they replaced raced them:
+ * one event-loop stall longer than the sleep (GC, a loaded machine) and the
+ * assertions saw a flow that had not finished yet (#524). Bounded, and named,
+ * so a real regression still fails promptly and says what it was waiting for.
+ */
+// 3s: inside bun's default 5s test timeout, so the named error wins.
+async function actUntil(what: string, done: () => boolean, timeoutMs = 3_000): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (!done()) {
+    if (Date.now() > deadline) throw new Error(`timed out waiting for ${what}`);
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); });
+  }
+}
 const button = (text: string) => [...host.querySelectorAll("button")].find((el) => el.textContent?.trim() === text)!;
 async function enter(el: HTMLTextAreaElement, text: string) {
   await act(async () => {
@@ -146,10 +162,11 @@ test("the request survives the gate refresh, waits for connection, preserves edi
   try {
     for (const ready of [false, true]) {
       servicesReady = ready;
-      await act(async () => {
-        channel.postMessage({ type: "status_changed" });
-        await new Promise((resolve) => setTimeout(resolve, 25));
-      });
+      const reads = statusReads;
+      await act(async () => channel.postMessage({ type: "status_changed" }));
+      // The banner flips only once the broadcast-triggered refresh has landed.
+      await actUntil("the broadcast refresh", () =>
+        statusReads > reads && (host.querySelector(".v2-restart-banner") !== null) === !ready);
       expect(host.querySelector("textarea")!.value).toContain("my Friday update");
       expect(host.querySelector(".v2-restart-banner") !== null).toBe(!ready);
     }
@@ -184,10 +201,8 @@ test("a failed completion refresh retains the activation task and can be retried
   const retryDelay = STATUS_RETRY.delayMs;
   STATUS_RETRY.delayMs = 0;
   try {
-    await act(async () => {
-      button("Review request in Talk").click();
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
+    await act(async () => button("Review request in Talk").click());
+    await actUntil("the refresh failure", () => host.querySelector('[role="alert"]') !== null);
   } finally {
     STATUS_RETRY.delayMs = retryDelay;
   }
@@ -227,18 +242,16 @@ test("a skip that saves but cannot load the dashboard says so, and retrying work
   try {
     await mount(<OnboardingGate><section aria-label="Shell" /></OnboardingGate>);
     const later = () => [...host.querySelectorAll("button")].find((el) => el.textContent?.includes("do this later"))!;
-    await act(async () => {
-      later().click();
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
+    await act(async () => later().click());
+    // Settled: an error is showing and the button is usable again.
+    await actUntil("the skip to settle", () =>
+      /Skip saved|Couldn't save the skip|Couldn't reach the daemon/.test(host.textContent ?? "") && later()?.disabled === false);
     expect(host.textContent).toContain("Skip saved, but Jarvis couldn't load your dashboard");
     expect(host.textContent).not.toContain("Couldn't save the skip");
+    expect(statusReads).toBe(4); // the initial read, then all three refresh attempts
     failRefresh = false;
-    await act(async () => {
-      later().click();
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    });
-    expect(host.querySelector('[aria-label="Shell"]')).not.toBeNull();
+    await act(async () => later().click());
+    await actUntil("the dashboard", () => host.querySelector('[aria-label="Shell"]') !== null);
     expect(skips).toEqual(["POST", "POST"]);
   } finally {
     STATUS_RETRY.delayMs = retryDelay;
