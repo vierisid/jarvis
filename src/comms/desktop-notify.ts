@@ -99,11 +99,12 @@ function sendViaNotifySend(
 }
 
 /**
- * The title and body are argv, so no shell sees them, but notify-send parses
- * its argv with GLib: a title or body starting with `-` would be read as an
- * option (`-u x` fails the send, `-i` picks the icon file, `-w` blocks until
- * dismissed). `--` ends option parsing, so both are always positional. NUL is
- * dropped because Bun refuses to spawn with it, which would lose the send.
+ * The title and body are argv, so no shell sees them, but libnotify's
+ * notify-send parses its argv with GLib: a title or body starting with `-`
+ * would be read as an option (`-u x` fails the send, `-i` picks the icon file,
+ * `-w` blocks until dismissed). `--` ends option parsing, so both are always
+ * positional. NUL is dropped because Bun refuses to spawn with it, which would
+ * lose the send.
  */
 export function buildNotifySendArgs(
   title: string,
@@ -141,10 +142,13 @@ export const TOAST_BODY_MAX = 200;
  * workflow- or model-authored and are never PowerShell or XML source (#515):
  * each travels as base64 of its UTF-8, which cannot end the single-quoted
  * literal it sits in (PowerShell also closes one on U+2018..U+201B), and
- * joins the stock ToastText02 template as a DOM text node, never parsed. Not
- * `$args` -- powershell.exe joins every argument after -Command into the
- * script -- nor stdin, which it reads in the OEM code page. The script has no
- * `"`, so no Windows command-line quoting layer can mangle it.
+ * joins the stock ToastText02 template as a DOM text node, never parsed.
+ * Inline, not in `$args`: with `-Command` and no script file, powershell.exe
+ * joins every argument after -Command into the script itself. Nor on stdin:
+ * the script would have to read it, and 5.1 decodes redirected stdin in the
+ * OEM code page (the `-File` helper in actions/app-control/windows.ts pays for
+ * that with toAsciiJson). The script has no `"`, so no Windows command-line
+ * quoting layer can mangle it.
  */
 export function buildPowerShellToastScript(title: string, body: string): string {
   const encode = (text: string, max: number) => Buffer.from(clampToastText(text, max), 'utf8').toString('base64');
@@ -169,8 +173,13 @@ export function buildPowerShellToastScript(title: string, body: string): string 
  * text: before any encoding, and never leaving a lone surrogate.
  */
 function clampToastText(text: string, max: number): string {
-  const chars = Array.from(text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, ''));
-  return chars.length > max ? chars.slice(0, max).join('') : chars.join('');
+  let out = '';
+  let count = 0;
+  for (const ch of text.replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, '')) {
+    if (count++ === max) break;
+    out += ch;
+  }
+  return out;
 }
 
 /**

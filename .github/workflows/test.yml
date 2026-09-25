@@ -35,6 +35,7 @@ jobs:
     outputs:
       sidecar: ${{ steps.filter.outputs.sidecar }}
       daemon-cli: ${{ steps.filter.outputs.daemon-cli }}
+      toast: ${{ steps.filter.outputs.toast }}
     steps:
       - uses: actions/checkout@v5
       - uses: dorny/paths-filter@v3
@@ -61,6 +62,11 @@ jobs:
               # This job's toolchain + install now live in a composite action;
               # a change there must still re-run it.
               - '.github/actions/bun-setup/**'
+            # The Windows toast script builds its XML through WinRT, which no
+            # other runner has -- see toast-windows below.
+            toast:
+              - 'src/comms/desktop-notify*'
+              - '.github/workflows/test.yml'
 
   test:
     runs-on: ubuntu-latest
@@ -285,6 +291,39 @@ jobs:
             exit 1
           fi
           go test -count=1 -run "$pattern" -v .
+
+  # The desktop toast (src/comms/desktop-notify.ts) is built by a Windows
+  # PowerShell 5.1 script through the WinRT XML DOM, and model-written text
+  # goes into it (#515). The ubuntu job proves with pwsh that the text never
+  # becomes script; only a Windows runner has WinRT, so only here does the
+  # script actually build its toast XML. One test, one powershell.exe.
+  #
+  # Run from src/comms on purpose: bun reads bunfig.toml from the working
+  # directory only, so the suite-wide preload (which imports the workflow
+  # engine and needs node_modules) stays out and no `bun install` is needed --
+  # the test and the module it covers import nothing but bun:test. The count
+  # check catches the test being filtered or skipped into a silent pass.
+  toast-windows:
+    needs: changes
+    if: needs.changes.outputs.toast == 'true'
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: oven-sh/setup-bun@v2
+        with:
+          # Same pin as .github/actions/bun-setup.
+          bun-version: "1.3.14"
+      - name: Toast XML under Windows PowerShell 5.1 and WinRT
+        working-directory: src/comms
+        shell: bash
+        run: |
+          set -euo pipefail
+          out=$(bun test ./desktop-notify.test.ts -t 'WinRT' 2>&1 | tr -d '\r') || { echo "$out"; exit 1; }
+          echo "$out"
+          if ! grep -Eq '^ *1 pass$' <<<"$out" || ! grep -Eq '^ *0 fail$' <<<"$out"; then
+            echo "::error::expected exactly one passing WinRT toast test"
+            exit 1
+          fi
 
   # Compile gate for the darwin cgo files (deeplink_darwin.go, the *_darwin
   # bridges): build tags hide them from the linux job, so without this their
