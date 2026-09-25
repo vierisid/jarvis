@@ -150,8 +150,11 @@ describe('planted signing config', () => {
 describe('branch names cannot become options (#520)', () => {
   const OPTIONS = ['--orphan=x', '--detach', '-f', '--force', '--exec=touch RAN', '-D', '-'];
   const MALFORMED = ['', 'a..b', 'HEAD', 'with space', 'trailing.lock', 'x~1'];
+  // Accepted by `check-ref-format --branch`, but not a plain branch name:
+  // rewritten by it (`@{-1}`), or a pseudo-ref, or a full ref path.
+  const REWRITTEN = ['@{-1}', '@{upstream}', '@', 'FETCH_HEAD', 'ORIG_HEAD', 'MERGE_HEAD', 'head', 'refs/heads/main'];
 
-  test.each([...OPTIONS, ...MALFORMED])('every branch call refuses %j', async (name) => {
+  test.each([...OPTIONS, ...MALFORMED, ...REWRITTEN])('every branch call refuses %j', async (name) => {
     const head = await git.getCurrentBranch(repo);
     await expect(git.createBranch(repo, name)).rejects.toThrow('Invalid branch name');
     await expect(git.switchBranch(repo, name)).rejects.toThrow('Invalid branch name');
@@ -167,6 +170,52 @@ describe('branch names cannot become options (#520)', () => {
     writeFileSync(join(repo, 'src', 'a.txt'), 'uncommitted\n');
     await expect(git.switchBranch(repo, 'src')).rejects.toThrow();
     expect(readFileSync(join(repo, 'src', 'a.txt'), 'utf-8')).toBe('uncommitted\n');
+  });
+
+  test('a shorthand check-ref-format would expand is refused, not expanded', async () => {
+    // With a previous branch, `check-ref-format --branch @{-1}` succeeds and
+    // prints that branch's name; only comparing its output to the input
+    // catches it.
+    const base = await git.getCurrentBranch(repo);
+    await git.createBranch(repo, 'other');
+    await git.switchBranch(repo, base);
+    for (const call of [
+      () => git.switchBranch(repo, '@{-1}'),
+      () => git.merge(repo, '@{-1}'),
+      () => git.deleteBranch(repo, '@{-1}'),
+    ]) {
+      await expect(call()).rejects.toThrow('Invalid branch name');
+    }
+    expect(await git.getCurrentBranch(repo)).toBe(base);
+    expect((await git.getBranches(repo)).map((b) => b.name).sort()).toEqual([base, 'other'].sort());
+  });
+
+  test('the leading-dash check holds on its own, before git is ever asked', async () => {
+    // A stand-in git that approves every name check-ref-format is given (it
+    // echoes its last argument) and logs every call. Real git rejects a
+    // leading dash too, so only a git that would NOT is a test of the check
+    // in front of it.
+    const fakeBin = join(root, 'fake-bin');
+    const log = join(root, 'fake-git.log');
+    mkdirSync(fakeBin);
+    executable(join(fakeBin, 'git'), `echo "$*" >> '${log}'\nfor a; do last=$a; done\nprintf '%s\\n' "$last"`);
+    const savedPath = process.env.PATH;
+    process.env.PATH = `${fakeBin}:${savedPath ?? ''}`;
+    try {
+      for (const name of ['--orphan=x', '--detach', '-f']) {
+        await expect(git.switchBranch(repo, name)).rejects.toThrow('Invalid branch name');
+        await expect(git.createBranch(repo, name)).rejects.toThrow('Invalid branch name');
+      }
+      // Positive control: the stand-in is really on PATH and would approve.
+      await git.switchBranch(repo, 'feature');
+    } finally {
+      process.env.PATH = savedPath;
+    }
+    const calls = readFileSync(log, 'utf-8');
+    expect(calls).not.toContain('--orphan=x');
+    expect(calls).not.toContain('--detach');
+    expect(calls).not.toMatch(/ -f(\s|$)/);
+    expect(calls).toContain('switch -- feature');
   });
 
   test('ordinary branch operations still work', async () => {

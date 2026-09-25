@@ -272,11 +272,21 @@ export class GitManager {
   private async checkBranchName(projectPath: string, name: string): Promise<void> {
     const invalid = new Error(`Invalid branch name: "${String(name)}"`);
     if (typeof name !== 'string' || !name || name.startsWith('-')) throw invalid;
+    // Names check-ref-format passes but that do not mean a branch here:
+    // `@` is HEAD, HEAD and the *_HEAD pseudo-refs (FETCH_HEAD, ORIG_HEAD,
+    // MERGE_HEAD) name whatever git last left there -- case-insensitively, as
+    // a case-insensitive filesystem would read them -- and a full `refs/...`
+    // name is a ref path, not a branch.
+    if (name === '@' || /^(?:[a-z_]+_)?head$/i.test(name) || name.startsWith('refs/')) throw invalid;
+    let normalized: string;
     try {
-      await this.run(projectPath, ['check-ref-format', '--branch', name]);
+      normalized = (await this.run(projectPath, ['check-ref-format', '--branch', name])).trim();
     } catch {
       throw invalid;
     }
+    // `--branch` also EXPANDS shorthands (`@{-1}` becomes the previous
+    // branch), so a name it rewrites is not the name the caller sent.
+    if (normalized !== name) throw invalid;
   }
 
   /**
