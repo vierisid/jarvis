@@ -98,7 +98,7 @@ async function waitFor<T>(what: string, probe: () => T | null, timeoutMs: number
  * returns the stand-in's pid once it holds the lock.
  */
 async function startStandInUnit(name: string): Promise<number> {
-  const home = join(DATA_DIR, name);
+  const home = join(DATA_DIR, name.replace(/\\/g, '_'));
   mkdirSync(home, { recursive: true });
   homes.push(home);
   process.env.JARVIS_HOME = home;
@@ -223,7 +223,10 @@ describe.skipIf(!ENABLED)('restart and update from inside a real systemd user un
    * (nothing is installed), plus a driver: the `jarvis update` a user or the
    * assistant runs, whose install step must never be reached.
    */
-  function writeUpdater(home: string, opts: { hangAfterInstall?: boolean } = {}): { driver: string; marker: string } {
+  function writeUpdater(
+    home: string,
+    opts: { hangAfterInstall?: boolean; runtimeMaxSec?: number } = {},
+  ): { driver: string; marker: string } {
     const root = join(home, 'pkg');
     const marker = join(home, 'installed.json');
     mkdirSync(join(root, 'bin'), { recursive: true });
@@ -236,7 +239,7 @@ const result = await runUpdate({
   packageRoot: ${JSON.stringify(root)},
   detect: () => ({ method: 'bun-global', reason: 'integration test' }),
   spawn: (cmd) => { ${installStep} return { exitCode: 0, stdout: 'installed', stderr: '' }; },
-  systemdWait: { followMs: 60_000, follow: true },
+  systemdWait: { followMs: 60_000, follow: true${opts.runtimeMaxSec ? `, runtimeMaxSec: ${opts.runtimeMaxSec}` : ''} },
 });
 console.log('RESULT ' + JSON.stringify(result));
 process.exit(result.exitCode);
@@ -299,5 +302,21 @@ process.exit(result.exitCode);
     process.kill(unitState(`${name}-update`).pid, 'SIGKILL');
     await expectBackUnderUnit(name, oldPid);
     sh(['systemctl', '--user', 'reset-failed', `${name}-update.service`]);
+  }, 120_000);
+
+  test('a hung updater is stopped by its RuntimeMaxSec and the unit, escaped name and all, comes back', async () => {
+    // `\x2d` in the name: ExecStopPost must start this unit, not `...-hang-x`.
+    const name = `${UNIT_PREFIX}-hang\\x2dx`;
+    const updater = `${UNIT_PREFIX}-hang-x2dx-update`;
+    const oldPid = await startStandInUnit(name);
+    const { driver, marker } = writeUpdater(process.env.JARVIS_HOME!, { hangAfterInstall: true, runtimeMaxSec: 6 });
+
+    const cli = runInsideUnit(name, [process.execPath, driver]);
+    expect(cli.code).toBe(0);
+    await expectInstalledWhileStopped(marker);
+
+    await expectBackUnderUnit(name, oldPid);
+    expect(sh(['systemctl', '--user', 'show', `${updater}.service`, '--property=Result']).out).toBe('Result=timeout');
+    sh(['systemctl', '--user', 'reset-failed', `${updater}.service`]);
   }, 120_000);
 });

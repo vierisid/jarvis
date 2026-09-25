@@ -11,7 +11,7 @@
  * paths against a real user manager.
  */
 import { describe, expect, test, beforeEach, afterEach } from 'bun:test';
-import { chmodSync, existsSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
@@ -22,9 +22,18 @@ import {
   userUnitFromCgroup,
   SCHEDULE_DELAY_SEC,
   UPDATE_ENV,
+  INSTALL_STEP_TIMEOUT_MS,
+  describeLastUpdate,
+  parseTimespanMs,
+  readLastUpdate,
+  routeRestart,
+  stopBudgetMs,
+  updaterRuntimeMaxSec,
+  writeLastUpdate,
+  type LastUpdate,
   type SystemdUnit,
 } from './systemd-unit.ts';
-import { runUpdate, type SpawnResult } from './update.ts';
+import { defaultSpawn, runUpdate, type SpawnResult, type UpdateResult } from './update.ts';
 import type { StopResult } from './daemon-control.ts';
 
 const PID_MODULE = join(import.meta.dir, '..', 'daemon', 'pid.ts');
@@ -43,13 +52,21 @@ let holder: ReturnType<typeof Bun.spawn> | null = null;
 // One script serves as all three binaries. Each call appends its argv,
 // separated by \x1f, as one line of calls.log. `systemctl show <unit>` prints
 // the file `state.<unit>` (else `state`) when asked for ActiveState, else
-// `MainPID=` from the file `mainpid` and `Transient=` from `transient`. Exit
+// `MainPID=` from the file `mainpid`, `Transient=` from `transient`,
+// `ControlGroup=` from `cgroup` and `TimeoutStopUSec=` from `stoptimeout`. Exit
 // codes come from `<binary>.<subcommand>.exit`, then `<binary>.exit`
 // (default 0); stderr from `<binary>.stderr`. journalctl prints nothing.
 const FAKE = `#!/bin/sh
 dir=$(dirname "$0")
 name=$(basename "$0")
+if [ "$1" = --version ]; then echo "systemd $(cat "$dir/version" 2>/dev/null || echo 262) (fake)"; exit 0; fi
 { printf '%s\\037' "$name" "$@"; printf '\\n'; } >> "$dir/calls.log"
+# systemd-run with a record.tpl: play the updater's part and leave its record,
+# with this run's id in it.
+if [ "$name" = systemd-run ] && [ -f "$dir/record.tpl" ]; then
+  for a in "$@"; do case "$a" in --setenv=JARVIS_UPDATE_RUN=*) run=\${a#--setenv=JARVIS_UPDATE_RUN=} ;; esac; done
+  sed "s/@RUN@/$run/" "$dir/record.tpl" > "$dir/last-update.json"
+fi
 sub=
 unit=
 for a in "$@"; do case "$a" in -*) ;; *) if [ -z "$sub" ]; then sub=$a; elif [ -z "$unit" ]; then unit=$a; fi ;; esac; done
@@ -63,7 +80,9 @@ if [ "$name" = systemctl ] && [ "$sub" = show ]; then
       if [ -f "$dir/state.$unit" ]; then cat "$dir/state.$unit"; elif [ -f "$dir/state" ]; then cat "$dir/state"; fi ;;
     *)
       [ -f "$dir/mainpid" ] && printf 'MainPID=%s\\n' "$(cat "$dir/mainpid")"
-      printf 'Transient=%s\\n' "$(cat "$dir/transient" 2>/dev/null || echo no)" ;;
+      printf 'Transient=%s\\n' "$(cat "$dir/transient" 2>/dev/null || echo no)"
+      printf 'ControlGroup=%s\\n' "$(cat "$dir/cgroup" 2>/dev/null)"
+      printf 'TimeoutStopUSec=%s\\n' "$(cat "$dir/stoptimeout" 2>/dev/null || echo '1min 30s')" ;;
   esac
 fi
 exit "$code"
@@ -198,8 +217,9 @@ describe('detectSystemdUnit', () => {
   test('inside the unit: the CLI shares the daemon\'s cgroup', () => {
     setFile('mainpid', '4242');
     const unit = detectSystemdUnit({ ...base, readCgroup: cgroups({ 4242: UNIT_CGROUP, self: UNIT_CGROUP }) });
-    expect(unit).toEqual({ name: UNIT, pid: 4242, inside: true, reachable: true, transient: false });
-    expect(calls()).toEqual([['systemctl', '--user', 'show', UNIT, '--property=MainPID', '--property=Transient']]);
+    expect(unit).toEqual({ name: UNIT, pid: 4242, inside: true, reachable: true, transient: false, stopTimeoutMs: 90_000 });
+    expect(calls()).toEqual([['systemctl', '--user', 'show', UNIT,
+      '--property=MainPID', '--property=Transient', '--property=ControlGroup', '--property=TimeoutStopUSec']]);
   });
 
   test('a transient unit is flagged', () => {
@@ -221,14 +241,14 @@ describe('detectSystemdUnit', () => {
       ...base,
       readCgroup: cgroups({ 4242: `${UNIT_CGROUP}/payload`, self: `${UNIT_CGROUP}/tools` }),
     });
-    expect(unit).toEqual({ name: UNIT, pid: 4242, inside: true, reachable: true, transient: false });
+    expect(unit).toEqual({ name: UNIT, pid: 4242, inside: true, reachable: true, transient: false, stopTimeoutMs: 90_000 });
   });
 
   test('outside the unit: a terminal, or a cgroup whose name merely starts the same', () => {
     setFile('mainpid', '4242');
     for (const self of [TERMINAL_CGROUP, `${UNIT_CGROUP}-other`]) {
       const unit = detectSystemdUnit({ ...base, readCgroup: cgroups({ 4242: UNIT_CGROUP, self }) });
-      expect(unit).toEqual({ name: UNIT, pid: 4242, inside: false, reachable: true, transient: false });
+      expect(unit).toEqual({ name: UNIT, pid: 4242, inside: false, reachable: true, transient: false, stopTimeoutMs: 90_000 });
     }
   });
 
@@ -238,12 +258,40 @@ describe('detectSystemdUnit', () => {
     expect(unit).toBeNull();
   });
 
-  test('systemctl unreachable: flagged, inside or out, so callers refuse rather than take the old path', () => {
+  test('systemctl unreachable, inside the unit: flagged so callers refuse', () => {
     setFile('systemctl.exit', '1');
     expect(detectSystemdUnit({ ...base, readCgroup: cgroups({ 4242: UNIT_CGROUP, self: UNIT_CGROUP }) }))
       .toEqual({ name: UNIT, pid: 4242, inside: true, reachable: false });
-    expect(detectSystemdUnit({ ...base, readCgroup: cgroups({ 4242: UNIT_CGROUP, self: TERMINAL_CGROUP }) }))
-      .toEqual({ name: UNIT, pid: 4242, inside: false, reachable: false });
+  });
+
+  test('systemctl unreachable, outside: a daemon the user manager started itself is the unit\'s main process: refuse', () => {
+    setFile('systemctl.exit', '1');
+    const unit = detectSystemdUnit({
+      ...base,
+      parentPid: () => 1,
+      readCgroup: cgroups({ 4242: UNIT_CGROUP, 1: `${MANAGER}/init.scope`, self: TERMINAL_CGROUP }),
+    });
+    expect(unit).toEqual({ name: UNIT, pid: 4242, inside: false, reachable: false });
+  });
+
+  test('systemctl unreachable, outside: a daemon an unrelated service spawned takes the old path', () => {
+    setFile('systemctl.exit', '1');
+    const tmux = `${MANAGER}/app.slice/tmux.service`;
+    const unit = detectSystemdUnit({
+      ...base,
+      parentPid: () => 999,
+      readCgroup: cgroups({ 4242: tmux, 999: tmux, self: TERMINAL_CGROUP }),
+    });
+    expect(unit).toBeNull();
+  });
+
+  test('the unit\'s TimeoutStopSec is carried, infinity included', () => {
+    setFile('mainpid', '4242');
+    setFile('stoptimeout', '10min');
+    const read = cgroups({ 4242: UNIT_CGROUP, self: TERMINAL_CGROUP });
+    expect(detectSystemdUnit({ ...base, readCgroup: read })?.stopTimeoutMs).toBe(600_000);
+    setFile('stoptimeout', 'infinity');
+    expect(detectSystemdUnit({ ...base, readCgroup: read })?.stopTimeoutMs).toBe(Infinity);
   });
 
   test('a systemctl that hangs counts as unreachable', () => {
@@ -414,7 +462,14 @@ describe('runUpdate under a systemd user unit', () => {
     test('inside the unit: nothing is stopped or installed here; a transient unit runs the update', async () => {
       const { stopDaemon, stops } = stopRecorder();
       const { spawn, spawned } = recordingSpawn();
-      const result = await withEnv({ BUN_INSTALL: '/opt/bun', JARVIS_TEST_SECRET_525: 'hunter2' }, () => runUpdate({
+      const result = await withEnv({
+        BUN_INSTALL: '/opt/bun',
+        HTTPS_PROXY: 'http://user:hunter2@proxy:3128',
+        NODE_EXTRA_CA_CERTS: '/etc/corp-ca.pem',
+        JARVIS_TEST_SECRET_525: 'hunter2',
+        NPM_TOKEN: 'hunter2',
+        npm_config__authToken: 'hunter2',
+      }, () => runUpdate({
         packageRoot: fakeDir,
         spawn,
         detect: bunGlobal,
@@ -438,14 +493,23 @@ describe('runUpdate under a systemd user unit', () => {
       // Kept loaded when it fails, so its result can be read.
       expect(args).not.toContain('--collect');
       // However the updater ends, the service is started again, by its own unit.
-      expect(args).toContain(`--property=ExecStopPost=${join(fakeDir, 'systemctl')} --user --no-block start ${UNIT}`);
+      expect(args).toContain(`--property=ExecStopPost="${join(fakeDir, 'systemctl')}" "--user" "--no-block" "start" "${UNIT}"`);
+      // A hung updater is killed, and ExecStopPost still runs.
+      expect(args.find((a) => a.startsWith('--property=RuntimeMaxSec='))).toBe(`--property=RuntimeMaxSec=${updaterRuntimeMaxSec({ stopTimeoutMs: null })}`);
       // Pins the updater to the unit, so it never spawns a detached daemon.
       expect(args).toContain(`--setenv=JARVIS_UPDATE_UNIT=${UNIT}`);
-      expect(args).toContain(`--setenv=JARVIS_HOME=${fakeDir}`);
-      expect(args).toContain('--setenv=BUN_INSTALL=/opt/bun');
-      // Only the allowlist reaches the updater, never the rest of our environment.
+      // Everything else by name only: systemd-run copies the value from its own
+      // environment, so a proxy password never lands on a command line.
+      expect(args).toContain('--setenv=JARVIS_HOME');
+      expect(args).toContain('--setenv=BUN_INSTALL');
+      expect(args).toContain('--setenv=HTTPS_PROXY');
+      expect(args).toContain('--setenv=NODE_EXTRA_CA_CERTS');
+      expect(args.join(' ')).not.toContain('hunter2');
+      // Only the allowlist reaches the updater: not the rest of our environment, not registry tokens.
       const passed = args.filter((a) => a.startsWith('--setenv=')).map((a) => a.slice('--setenv='.length).split('=')[0]!);
-      expect(passed.filter((k) => k !== 'JARVIS_UPDATE_UNIT' && !UPDATE_ENV.includes(k))).toEqual([]);
+      expect(passed.filter((k) => k !== 'JARVIS_UPDATE_UNIT' && k !== 'JARVIS_UPDATE_RUN' && !UPDATE_ENV.includes(k))).toEqual([]);
+      expect(passed).not.toContain('NPM_TOKEN');
+      expect(passed).not.toContain('npm_config__authToken');
       expect(args.slice(-3)).toEqual([process.execPath, join(fakeDir, 'bin', 'jarvis.ts'), 'update']);
     });
 
@@ -498,20 +562,114 @@ describe('runUpdate under a systemd user unit', () => {
       expect(result.exitCode).toBe(0);
     });
 
+    /** What the transient updater leaves behind, written by the fake systemd-run with the run's id. */
+    function updaterRecord(overrides: Partial<LastUpdate> = {}): void {
+      setFile('record.tpl', JSON.stringify({
+        outcome: 'updated', from: '1.0.0', to: '1.1.0', at: new Date().toISOString(),
+        unit: UNIT, run: '@RUN@', serviceStarted: true, ...overrides,
+      }));
+    }
+
+    async function followed(): Promise<{ result: UpdateResult; errors: string[]; lines: string[] }> {
+      const errors: string[] = [];
+      const lines: string[] = [];
+      const [log, error] = [console.log, console.error];
+      console.log = (...a: unknown[]) => { lines.push(a.join(' ')); };
+      console.error = (...a: unknown[]) => { errors.push(a.join(' ')); };
+      try {
+        const result = await runUpdate({
+          packageRoot: fakeDir, spawn: recordingSpawn().spawn, detect: bunGlobal, checkRunning: () => 4242,
+          stopDaemon: stopRecorder().stopDaemon, systemdUnit: () => outside, systemdWait: FAST,
+        });
+        return { result, errors, lines };
+      } finally {
+        [console.log, console.error] = [log, error];
+      }
+    }
+
     test('outside the unit (a terminal): same transient updater, followed until it finishes', async () => {
       setFile(`state.${UPDATER}.service`, 'ActiveState=inactive\nMainPID=0\n');
       setFile(`state.${UNIT}`, 'ActiveState=active\nMainPID=5151\n');
-      const { stopDaemon, stops } = stopRecorder();
-      const { spawn, spawned } = recordingSpawn();
-      const result = await runUpdate({
-        packageRoot: fakeDir, spawn, detect: bunGlobal, checkRunning: () => 4242, stopDaemon,
-        systemdUnit: () => outside, systemdWait: FAST,
-      });
+      updaterRecord();
+      const { result, lines } = await followed();
       expect(result.outcome).toBe('delegated');
       expect(result.exitCode).toBe(0);
-      expect(stops).toEqual([]);
-      expect(spawned).toEqual([]);
       expect(calls().some((c) => c[0] === 'systemd-run')).toBe(true);
+      expect(lines.some((l) => l.includes('Updated 1.0.0 → 1.1.0') && l.includes('PID 5151'))).toBe(true);
+    });
+
+    test('followed: an updater that left no record was killed or timed out', async () => {
+      setFile(`state.${UPDATER}.service`, 'ActiveState=failed\nMainPID=0\n');
+      const { result, errors } = await followed();
+      expect(result.exitCode).toBe(1);
+      expect(errors.join('\n')).toContain('did not finish');
+    });
+
+    test('followed: an older run\'s record, however recent, is not this run\'s result', async () => {
+      setFile(`state.${UPDATER}.service`, 'ActiveState=failed\nMainPID=0\n');
+      writeLastUpdate({
+        outcome: 'updated', from: '1.0.0', to: '1.1.0', at: new Date(Date.now() + 60_000).toISOString(),
+        unit: UNIT, run: 'an-earlier-run', serviceStarted: true,
+      });
+      const { result, errors } = await followed();
+      expect(result.exitCode).toBe(1);
+      expect(errors.join('\n')).toContain('did not finish');
+    });
+
+    test('before systemd 250, --setenv=KEY alone is refused, so values are passed', async () => {
+      setFile('version', '249');
+      await withEnv({ HTTPS_PROXY: 'http://proxy:3128' }, () => runUpdate({
+        packageRoot: fakeDir, spawn: recordingSpawn().spawn, detect: bunGlobal, checkRunning: () => 4242,
+        stopDaemon: stopRecorder().stopDaemon, systemdUnit: () => inside, systemdWait: FAST,
+      }));
+      const args = calls().find((c) => c[0] === 'systemd-run')!;
+      expect(args).toContain('--setenv=HTTPS_PROXY=http://proxy:3128');
+      expect(args).toContain(`--setenv=JARVIS_HOME=${fakeDir}`);
+    });
+
+    test('a systemctl path with $ in it reaches ExecStopPost with $ doubled', async () => {
+      const odd = join(fakeDir, 'b$in');
+      mkdirSync(odd);
+      writeFileSync(join(odd, 'systemctl'), FAKE, 'utf-8');
+      chmodSync(join(odd, 'systemctl'), 0o755);
+      await withEnv({ PATH: `${odd}:${process.env.PATH}` }, () => runUpdate({
+        packageRoot: fakeDir, spawn: recordingSpawn().spawn, detect: bunGlobal, checkRunning: () => 4242,
+        stopDaemon: stopRecorder().stopDaemon, systemdUnit: () => inside, systemdWait: FAST,
+      }));
+      const args = calls().find((c) => c[0] === 'systemd-run')!;
+      expect(args.find((a) => a.startsWith('--property=ExecStopPost='))).toStartWith(`--property=ExecStopPost="${odd.split('$').join('$$')}/systemctl"`);
+    });
+
+    test('followed: an installed update whose service did not come back is not reported as a failed install', async () => {
+      setFile(`state.${UPDATER}.service`, 'ActiveState=failed\nMainPID=0\n');
+      setFile(`state.${UNIT}`, 'ActiveState=failed\nMainPID=0\n');
+      updaterRecord({ serviceStarted: false });
+      const { result, errors } = await followed();
+      expect(result.exitCode).toBe(1);
+      expect(errors.join('\n')).toContain('The update was installed');
+      expect(errors.join('\n')).not.toContain('The update failed');
+    });
+
+    test('followed: a failed install says why', async () => {
+      setFile(`state.${UPDATER}.service`, 'ActiveState=failed\nMainPID=0\n');
+      updaterRecord({ outcome: 'failed', to: '1.0.0', error: 'bun update failed' });
+      const { result, errors } = await followed();
+      expect(result.exitCode).toBe(1);
+      expect(errors.join('\n')).toContain('The update failed: bun update failed');
+    });
+
+    test('an escaped unit name reaches ExecStopPost escaped, so the safety net starts the right unit', async () => {
+      const escaped = 'my\\x2djarvis.service';
+      await runUpdate({
+        packageRoot: fakeDir, spawn: recordingSpawn().spawn, detect: bunGlobal, checkRunning: () => 4242,
+        stopDaemon: stopRecorder().stopDaemon, systemdUnit: () => ({ ...inside, name: escaped }), systemdWait: FAST,
+      });
+      const args = calls().find((c) => c[0] === 'systemd-run')!;
+      // systemd reads C escapes in Exec lines: `\\x2d` there is the literal `\x2d`.
+      expect(args).toContain(`--property=ExecStopPost="${join(fakeDir, 'systemctl')}" "--user" "--no-block" "start" "my\\\\x2djarvis.service"`);
+      // The name systemctl stops and starts directly is passed as is.
+      expect(args).toContain(`--setenv=JARVIS_UPDATE_UNIT=${escaped}`);
+      expect(args).toContain('--unit=my-x2djarvis-update');
     });
 
     test('outside the unit: a failed updater is reported as a failure and cleared', async () => {
@@ -590,7 +748,8 @@ describe('runUpdate under a systemd user unit', () => {
       expect(verbs()).toContain('start');
     }, LOCK_HOLDER_TIMEOUT);
 
-    test('the daemon already gone: no MainPID check, then stop, install, start', async () => {
+    test('the daemon already gone: no MainPID match needed, then stop, install, start', async () => {
+      setFile('mainpid', '0');
       const newPid = await spawnLockHolder();
       setFile('state', `ActiveState=active\nMainPID=${newPid}\n`);
       const rec = recordingSpawn();
@@ -600,8 +759,8 @@ describe('runUpdate under a systemd user unit', () => {
       }));
       expect(result.outcome).toBe('updated');
       expect(rec.spawned).toEqual([['bun', 'update', '-g', '@usejarvis/brain']]);
-      expect(rec.systemdCallsBefore).toEqual([1]);
-      expect(verbs().slice(0, 2)).toEqual(['stop', 'start']);
+      expect(rec.systemdCallsBefore).toEqual([2]);
+      expect(verbs().slice(0, 3)).toEqual(['show', 'stop', 'start']);
     }, LOCK_HOLDER_TIMEOUT);
 
     test('a start that fails is a failure', async () => {
@@ -636,6 +795,121 @@ describe('runUpdate under a systemd user unit', () => {
       expect(stops).toEqual([]);
       expect(calls()).toEqual([]);
     });
+
+    test('run inside the unit it would stop (not a real updater): refuses, stops nothing', async () => {
+      const self = parseCgroupPath(readFileSync('/proc/self/cgroup', 'utf-8'));
+      if (!self) return; // no cgroup to be inside of here
+      setFile('mainpid', '4242');
+      setFile('cgroup', self);
+      const { result, spawned, stops } = await runDelegated();
+      expect(result.outcome).toBe('failed');
+      expect(spawned).toEqual([]);
+      expect(stops).toEqual([]);
+      expect(verbs()).toEqual(['show']);
+    });
+
+    test('the result is recorded for jarvis status', async () => {
+      setFile('mainpid', '4242');
+      const newPid = await spawnLockHolder();
+      setFile('state', `ActiveState=active\nMainPID=${newPid}\n`);
+      await runDelegated({ spawn: recordingSpawn({ exitCode: 1, stdout: '', stderr: 'network down' }) });
+      const record = readLastUpdate();
+      expect(record).toMatchObject({ outcome: 'failed', unit: UNIT, serviceStarted: true, error: 'bun update -g: network down' });
+      expect(describeLastUpdate(record!)).toStartWith('Last update: failed (');
+      expect(describeLastUpdate(record!)).toContain('): bun update -g: network down');
+    }, LOCK_HOLDER_TIMEOUT);
+
+    test('an update that changed nothing is recorded as up to date, not updated', async () => {
+      setFile('mainpid', '4242');
+      const newPid = await spawnLockHolder();
+      setFile('state', `ActiveState=active\nMainPID=${newPid}\n`);
+      await withEnv({ JARVIS_UPDATE_RUN: 'r1' }, () => runDelegated());
+      const record = readLastUpdate();
+      expect(record).toMatchObject({ outcome: 'up-to-date', run: 'r1' });
+      expect(record!.to).toBe(record!.from);
+    }, LOCK_HOLDER_TIMEOUT);
+
+    test('a refusal leaves a failed record, so the terminal does not blame a kill', async () => {
+      setFile('mainpid', '777');
+      await withEnv({ JARVIS_UPDATE_RUN: 'r2' }, () => runDelegated());
+      expect(readLastUpdate()).toMatchObject({ outcome: 'failed', run: 'r2', serviceStarted: true });
+    });
+
+    test('install steps share one deadline', async () => {
+      setFile('mainpid', '4242');
+      setFile('systemctl.start.exit', '1');
+      const timeouts: number[] = [];
+      await withEnv({ JARVIS_UPDATE_UNIT: UNIT }, () => runUpdate({
+        packageRoot: fakeDir,
+        spawn: (_cmd, options) => { timeouts.push(options?.timeoutMs ?? -1); return { exitCode: 0, stdout: '', stderr: '' }; },
+        detect: bunGlobal, checkRunning: () => 4242, stopDaemon: stopRecorder().stopDaemon, systemdWait: FAST,
+      }));
+      expect(timeouts).toHaveLength(1);
+      expect(timeouts[0]).toBeGreaterThan(0);
+      expect(timeouts[0]).toBeLessThanOrEqual(INSTALL_STEP_TIMEOUT_MS);
+    });
+  });
+});
+
+describe('routeRestart (jarvis restart)', () => {
+  const unit: SystemdUnit = { name: UNIT, pid: 4242, inside: true, reachable: true };
+
+  test('a detected unit is restarted through systemd, never by the old stop/start path', async () => {
+    const restarted: Array<{ unit: SystemdUnit; args?: string[] }> = [];
+    const routed = await routeRestart(['-d'], {
+      detect: () => unit,
+      restart: async (u, o) => { restarted.push({ unit: u, args: o.ignoredArgs }); return true; },
+    });
+    expect(routed).toBe('done');
+    expect(restarted).toEqual([{ unit, args: ['-d'] }]);
+  });
+
+  test('a failed systemd restart is a failure, not a fall-through to the old path', async () => {
+    expect(await routeRestart([], { detect: () => unit, restart: async () => false })).toBe('failed');
+  });
+
+  test('no unit: the old path', async () => {
+    let called = false;
+    expect(await routeRestart([], { detect: () => null, restart: async () => { called = true; return true; } })).toBe('legacy');
+    expect(called).toBe(false);
+  });
+});
+
+describe('time spans and budgets', () => {
+  test.each([
+    ['1min 30s', 90_000], ['90s', 90_000], ['500ms', 500], ['2h', 7_200_000], ['infinity', Infinity], ['', null], ['soon', null],
+    ['1month 5d', 2_629_800_000 + 5 * 86_400_000], ['1y', 31_557_600_000],
+  ])('parseTimespanMs(%p)', (text, expected) => {
+    expect(parseTimespanMs(text)).toBe(expected);
+  });
+
+  test('the stop budget: at least 3 minutes, the unit\'s timeout plus 30 s, at most an hour and a bit', () => {
+    expect(stopBudgetMs({ stopTimeoutMs: null })).toBe(180_000);
+    expect(stopBudgetMs({ stopTimeoutMs: 600_000 })).toBe(630_000);
+    expect(stopBudgetMs({ stopTimeoutMs: Infinity })).toBe(3_630_000);
+  });
+
+  test('the updater outlives its stop, its install steps and its start', () => {
+    expect(updaterRuntimeMaxSec({ stopTimeoutMs: null })).toBe(180 + 30 * 60 + 120);
+    expect(updaterRuntimeMaxSec({ stopTimeoutMs: 600_000 })).toBeGreaterThan(630 + 30 * 60);
+  });
+});
+
+describe('describeLastUpdate', () => {
+  test('an unreadable time is left out, not printed as Invalid Date', () => {
+    const line = describeLastUpdate({ outcome: 'updated', from: '1.0.0', to: '1.1.0', at: 'garbage', unit: UNIT, serviceStarted: true });
+    expect(line).toBe('Last update: updated 1.0.0 → 1.1.0');
+  });
+});
+
+describe('defaultSpawn (the install steps)', () => {
+  test('a hung step is stopped and fails with a reason', () => {
+    const started = Date.now();
+    // exec, so the timeout's signal reaches sleep itself and nothing outlives it.
+    const result = defaultSpawn(['sh', '-c', 'exec sleep 30'], { timeoutMs: 200 });
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('was stopped after');
+    expect(Date.now() - started).toBeLessThan(5000);
   });
 });
 

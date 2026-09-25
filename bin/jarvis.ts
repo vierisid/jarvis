@@ -336,7 +336,7 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
   }
 }
 
-function cmdStatus(): void {
+async function cmdStatus(): Promise<void> {
   const pid = isLocked();
   if (pid) {
     console.log(`${c.green('●')} JARVIS is ${c.green('running')} (PID ${pid})`);
@@ -354,6 +354,15 @@ function cmdStatus(): void {
     console.log(`${c.red('●')} JARVIS is ${c.red('stopped')}`);
     console.log(c.dim(`  Start with: jarvis start`));
   }
+
+  // Written by an update that ran as a systemd transient, out of sight (#525).
+  const { readLastUpdate, describeLastUpdate } = await import('../src/cli/systemd-unit.ts');
+  // Only while it still describes this install: a later update by other
+  // means (bun update -g, the old path) makes it stale.
+  const lastUpdate = readLastUpdate();
+  if (lastUpdate && (lastUpdate.to ?? lastUpdate.from) === getVersion()) {
+    console.log(c.dim(`  ${describeLastUpdate(lastUpdate)}`));
+  }
 }
 
 async function cmdDoctor(): Promise<void> {
@@ -370,12 +379,10 @@ async function cmdRestart(args: string[]): Promise<void> {
   // A daemon that is a systemd user unit's main process is restarted by
   // systemd: stopping it from here leaves the unit down, or kills this very
   // command when it runs inside the unit (#525; src/cli/systemd-unit.ts).
-  const { detectSystemdUnit, restartSystemdUnit } = await import('../src/cli/systemd-unit.ts');
-  const unit = detectSystemdUnit();
-  if (unit) {
-    if (!await restartSystemdUnit(unit, { ignoredArgs: args })) process.exit(1);
-    return;
-  }
+  const { routeRestart } = await import('../src/cli/systemd-unit.ts');
+  const routed = await routeRestart(args);
+  if (routed === 'failed') process.exit(1);
+  if (routed === 'done') return;
 
   const pid = isLocked();
   if (pid) {
@@ -500,7 +507,7 @@ switch (command) {
     await cmdRestart(commandArgs);
     break;
   case 'status':
-    cmdStatus();
+    await cmdStatus();
     break;
   case 'logs':
   case 'log':

@@ -21,9 +21,14 @@ import { isLocked, getLogPath } from '../daemon/pid.ts';
 import {
   delegatedUpdateUnit,
   detectSystemdUnit,
+  INSTALL_BUDGET_MS,
+  INSTALL_STEP_TIMEOUT_MS,
+  UPDATE_RUN_ENV,
   startSystemdUnit,
   stopSystemdUnit,
   updateThroughSystemd,
+  UPDATE_UNIT_ENV,
+  writeLastUpdate,
   type SystemdUnit,
   type UpdateThroughSystemdOptions,
 } from './systemd-unit.ts';
@@ -43,7 +48,7 @@ export interface SpawnResult {
 }
 
 export interface Spawner {
-  (cmd: string[], options?: { cwd?: string }): SpawnResult;
+  (cmd: string[], options?: { cwd?: string; timeoutMs?: number }): SpawnResult;
 }
 
 export interface UpdateDeps {
@@ -85,17 +90,26 @@ export interface UpdateResult {
   message: string;
 }
 
-function defaultSpawn(cmd: string[], options: { cwd?: string } = {}): SpawnResult {
+/**
+ * Each step is bounded: a hung install step fails the update rather than
+ * holding Jarvis stopped (#525).
+ */
+export function defaultSpawn(cmd: string[], options: { cwd?: string; timeoutMs?: number } = {}): SpawnResult {
+  const timeoutMs = options.timeoutMs ?? INSTALL_STEP_TIMEOUT_MS;
   const result = Bun.spawnSync(cmd, {
     cwd: options.cwd,
     stdout: 'pipe',
     stderr: 'pipe',
     env: { ...process.env },
+    timeout: timeoutMs,
   });
+  const stderr = result.stderr.toString();
   return {
     exitCode: result.exitCode ?? -1,
     stdout: result.stdout.toString(),
-    stderr: result.stderr.toString(),
+    stderr: result.exitedDueToTimeout
+      ? `${stderr}\n\`${cmd.join(' ')}\` was stopped after ${Math.round(timeoutMs / 1000)}s`.trim()
+      : stderr,
   };
 }
 
@@ -316,18 +330,41 @@ function updateScript(
 // ── Orchestrator ────────────────────────────────────────────────────
 
 export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
-  const spawn = deps.spawn ?? defaultSpawn;
+  // One deadline for all install steps together, so a slow-but-alive run
+  // fails cleanly (and records it) before a supervising RuntimeMaxSec would
+  // kill it half way (#525).
+  const installDeadline = Date.now() + INSTALL_BUDGET_MS;
+  const rawSpawn = deps.spawn ?? defaultSpawn;
+  let lastFailure: string | undefined;
+  const spawn: Spawner = (cmd, options) => {
+    const result = rawSpawn(cmd, {
+      ...options,
+      timeoutMs: Math.max(1000, Math.min(options?.timeoutMs ?? INSTALL_STEP_TIMEOUT_MS, installDeadline - Date.now())),
+    });
+    if (result.exitCode !== 0) {
+      const detail = (result.stderr.trim() || result.stdout.trim()).split('\n').at(-1);
+      lastFailure = `${cmd.slice(0, 3).join(' ')}: ${detail || `exit ${result.exitCode}`}`;
+    }
+    return result;
+  };
   const detect = deps.detect ?? detectInstallMethod;
   const restart = deps.restartDaemon ?? true;
 
-  console.log(c.cyan('Checking for updates...\n'));
+  // A transient updater's output goes to the journal, which a terminal that
+  // handed it the update may be following below its own header (#525): one
+  // compact line there instead of the header again.
+  const updaterFor = process.env[UPDATE_UNIT_ENV];
+  if (!updaterFor) console.log(c.cyan('Checking for updates...\n'));
 
   const currentVersion = getInstalledVersion(deps.packageRoot);
-  console.log(`  Current version: ${c.bold(currentVersion)}`);
-
   const info = detect(deps.packageRoot);
-  console.log(`  Install method:  ${c.bold(describeInstallMethod(info))}`);
-  console.log('');
+  if (updaterFor) {
+    console.log(c.dim(`  Updater for ${updaterFor}: ${currentVersion}, ${describeInstallMethod(info)}`));
+  } else {
+    console.log(`  Current version: ${c.bold(currentVersion)}`);
+    console.log(`  Install method:  ${c.bold(describeInstallMethod(info))}`);
+    console.log('');
+  }
 
   // Refusals — no daemon interaction needed.
   if (info.method === 'docker') return updateDocker(info);
@@ -346,6 +383,10 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
   // finds itself delegated and takes the stop/update/start path below.
   const delegated = delegatedUpdateUnit(runningPid);
   if (delegated === 'mismatch') {
+    writeLastUpdate({
+      outcome: 'failed', from: currentVersion, to: null, at: new Date().toISOString(), unit: updaterFor ?? '',
+      run: process.env[UPDATE_RUN_ENV], serviceStarted: true, error: 'refused to stop the unit (see the journal)',
+    });
     return { method: info.method, outcome: 'failed', exitCode: 1, message: 'not the unit it was started for' };
   }
   const findUnit = deps.systemdUnit ?? (deps.checkRunning ? () => null : detectSystemdUnit);
@@ -363,6 +404,10 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
   }
   const unit = delegated;
   if (unit && !stopSystemdUnit(unit)) {
+    writeLastUpdate({
+      outcome: 'failed', from: currentVersion, to: null, at: new Date().toISOString(), unit: unit.name,
+      run: process.env[UPDATE_RUN_ENV], serviceStarted: true, error: `could not stop ${unit.name}`,
+    });
     return { method: info.method, outcome: 'failed', exitCode: 1, message: `could not stop ${unit.name}` };
   }
   // `stopped: false` means the process survived both signals (e.g. it belongs
@@ -400,11 +445,19 @@ export async function runUpdate(deps: UpdateDeps): Promise<UpdateResult> {
   if (unit) {
     // Started whatever the outcome: it was running before, and a failed
     // update has not moved the install.
-    if (restart) {
-      console.log(c.dim(`\nStarting ${unit.name}...`));
-      if (!await startSystemdUnit(unit, deps.systemdWait)) return { ...result, exitCode: 1 };
-    }
-    return result;
+    if (restart) console.log(c.dim(`\nStarting ${unit.name}...`));
+    const started = restart && await startSystemdUnit(unit, deps.systemdWait);
+    // For `jarvis status`, and for the terminal that handed us the update.
+    // bun-global reports `updated` even when nothing changed.
+    const to = getInstalledVersion(deps.packageRoot);
+    const outcome = result.outcome === 'failed' ? 'failed'
+      : result.outcome === 'up-to-date' || to === currentVersion ? 'up-to-date' : 'updated';
+    writeLastUpdate({
+      outcome, from: currentVersion, to, at: new Date().toISOString(), unit: unit.name,
+      run: process.env[UPDATE_RUN_ENV], serviceStarted: started || !restart,
+      error: outcome === 'failed' ? (lastFailure ?? result.message) : undefined,
+    });
+    return started || !restart ? result : { ...result, exitCode: 1 };
   }
 
   if (runningPid && result.outcome !== 'failed' && restart) {
