@@ -22,6 +22,13 @@ import { getMachineScope } from '../machine-scope.ts';
 let sidecarManager: SidecarManager | null = null;
 
 /**
+ * RPC error codes a sidecar sends for a request it refused before acting
+ * (codedError in sidecar/client.go). Every other handler error may follow a
+ * partial effect.
+ */
+const NOT_STARTED_RPC_CODES = new Set(['DESKTOP_INVALID_KEYS']);
+
+/**
  * Inject the sidecar manager at startup. Called once from the daemon.
  */
 export function setSidecarManagerRef(manager: SidecarManager): void {
@@ -254,9 +261,10 @@ export async function routeToSidecar(
     // The OS goes in the message on purpose: the commonest remote failure is
     // a command written for the wrong platform (`notepad.exe` sent to a Mac),
     // and "command not found" alone tells neither the model nor the user why.
+    const refused = err instanceof SidecarRPCError && NOT_STARTED_RPC_CODES.has(err.code);
     return fail(err instanceof SidecarRPCError ? 'error' : 'unknown',
       err instanceof SidecarRPCError ? err.code : 'SIDECAR_OUTCOME_UNKNOWN',
-      `Error [${describeMachine(sidecar)}]: ${msg}`, 'may_have_occurred');
+      `Error [${describeMachine(sidecar)}]: ${msg}`, refused ? 'not_started' : 'may_have_occurred');
   }
 }
 

@@ -3,8 +3,23 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"testing"
 )
+
+// A handler can pick its RPC error code (press_keys sends DESKTOP_INVALID_KEYS
+// for a chord it refused, which the daemon reports as not started); any other
+// error stays HANDLER_ERROR.
+func TestHandlerRPCErrorKeepsAChosenCode(t *testing.T) {
+	if got := handlerRPCError(errors.New("boom")); got.Code != "HANDLER_ERROR" || got.Message != "boom" {
+		t.Errorf("plain error became %+v", got)
+	}
+	wrapped := fmt.Errorf("outer: %w", &codedError{code: "DESKTOP_INVALID_KEYS", err: errors.New("bad key")})
+	if got := handlerRPCError(wrapped); got.Code != "DESKTOP_INVALID_KEYS" || got.Message != "outer: bad key" {
+		t.Errorf("coded error became %+v", got)
+	}
+}
 
 func fakeToken(t *testing.T, claims SidecarTokenClaims) string {
 	t.Helper()

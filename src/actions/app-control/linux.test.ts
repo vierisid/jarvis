@@ -1,8 +1,9 @@
 import { test, expect, describe, beforeAll, afterAll } from 'bun:test';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { ActionOutcomeError } from '../action-outcome.ts';
 import { toXdotoolKeySequence } from './linux.ts';
 
 // Text and key names come from the model. xdotool reads a leading "-" as an
@@ -28,7 +29,7 @@ const ORDINARY_TEXT = ['- item', '-5 degrees', 'hello world', 'line one\nline tw
 const LINUX_TS = new URL('./linux.ts', import.meta.url).href;
 
 type Action = { op: 'type'; text: string } | { op: 'keys'; keys: string[] };
-type Outcome = { ok: boolean; error?: string };
+type Outcome = { ok: boolean; error?: string; code?: string; effect?: string };
 
 /**
  * Run LinuxAppController in a child whose PATH is only `binDir` and which has
@@ -48,7 +49,9 @@ async function runController(binDir: string, actions: Action[], env: Record<stri
         else await ctrl.pressKeys(a.keys);
         out.push({ ok: true });
       } catch (e) {
-        out.push({ ok: false, error: e instanceof Error ? e.message : String(e) });
+        const o = { ok: false, error: e instanceof Error ? e.message : String(e) };
+        if (e && e.outcome) Object.assign(o, { code: e.outcome.code, effect: e.outcome.effect });
+        out.push(o);
       }
     }
     console.log('RESULT:' + JSON.stringify(out));
@@ -70,21 +73,37 @@ async function runController(binDir: string, actions: Action[], env: Record<stri
   return JSON.parse(line.slice('RESULT:'.length)) as Outcome[];
 }
 
-/** A stand-in for `name` that appends its argv and stdin, as JSON, to calls.jsonl. */
-function writeRecordingTool(binDir: string, name: string): void {
-  const path = join(binDir, name);
-  writeFileSync(path, `#!${process.execPath}
-const stdin = await Bun.stdin.text();
-require('node:fs').appendFileSync(${JSON.stringify(join(binDir, 'calls.jsonl'))},
-  JSON.stringify({ tool: ${JSON.stringify(name)}, argv: process.argv.slice(2), stdin }) + '\\n');
-`);
+/**
+ * A /bin/sh stand-in for xdotool that appends each call to `calls`: its
+ * arguments, each ended by NUL, then US (\037), its stdin, and RS (\036).
+ */
+function writeRecordingXdotool(binDir: string): void {
+  const path = join(binDir, 'xdotool');
+  writeFileSync(path, [
+    '#!/bin/sh',
+    `{ for a in "$@"; do printf '%s\\000' "$a"; done; printf '\\037'; /bin/cat; printf '\\036'; } >> '${join(binDir, 'calls')}'`,
+    '',
+  ].join('\n'));
   chmodSync(path, 0o755);
 }
 
-function readCalls(binDir: string): { tool: string; argv: string[]; stdin: string }[] {
-  const file = join(binDir, 'calls.jsonl');
+function readCalls(binDir: string): { argv: string[]; stdin: string }[] {
+  const file = join(binDir, 'calls');
   if (!existsSync(file)) return [];
-  return readFileSync(file, 'utf-8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l));
+  return readFileSync(file, 'utf-8').split('\x1e').slice(0, -1).map((record) => {
+    const [args = '', stdin = ''] = record.split('\x1f');
+    return { argv: args.split('\0').slice(0, -1), stdin };
+  });
+}
+
+function refusal(keys: string[]): ActionOutcomeError {
+  try {
+    toXdotoolKeySequence(keys);
+  } catch (error) {
+    if (error instanceof ActionOutcomeError) return error;
+    throw error;
+  }
+  throw new Error(`${JSON.stringify(keys)} was accepted`);
 }
 
 describe('toXdotoolKeySequence', () => {
@@ -118,11 +137,15 @@ describe('toXdotoolKeySequence', () => {
   });
 
   test('refuses a lone key named like an xdotool command, which xdotool would run', () => {
-    for (const key of ['exec', 'EXEC', 'selectwindow', 'windowkill', 'type', 'help', 'Help']) {
+    for (const key of ['exec', 'EXEC', 'selectwindow', 'windowkill', 'type', 'help', 'HELP']) {
       expect(() => toXdotoolKeySequence([key])).toThrow(/xdotool command name/);
     }
     // Inside a chord the argument contains "+" and can never name a command.
-    expect(toXdotoolKeySequence(['ctrl', 'Help'])).toBe('ctrl+Help');
+    expect(toXdotoolKeySequence(['ctrl', 'exec'])).toBe('ctrl+exec');
+  });
+
+  test('lets the Help keysym through, which the trailing "+" keeps from being the help command', () => {
+    expect(toXdotoolKeySequence(['Help'])).toBe('Help');
   });
 
   test('refuses an empty chord', () => {
@@ -131,9 +154,22 @@ describe('toXdotoolKeySequence', () => {
   });
 
   test('refuses a chord long enough to hit libxdo\'s broken array growth', () => {
-    // libxdo corrupts its heap once a sequence reaches 10 keys.
+    // libxdo corrupts its heap once a sequence reaches 10 keys; 8 is the cap.
     expect(toXdotoolKeySequence(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h'])).toBe('a+b+c+d+e+f+g+h');
+    expect(() => toXdotoolKeySequence(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i'])).toThrow(/Too many keys in one chord \(9\)/);
     expect(() => toXdotoolKeySequence(['a+b+c+d+e+f+g+h+i+j'])).toThrow(/Too many keys/);
+  });
+
+  test('checks names before the count, as the sidecar does', () => {
+    expect(() => toXdotoolKeySequence(['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', '-i'])).toThrow(/Invalid key name "-i"/);
+  });
+
+  test('a refusal is a not-started outcome, so the model fixes the name instead of checking what happened', () => {
+    for (const keys of [['-h'], [], ['exec'], ['a', 'b', 'c', 'd', 'e', 'f', 'g', 'h', 'i']]) {
+      const error = refusal(keys);
+      expect(error.outcome).toMatchObject({ status: 'error', code: 'DESKTOP_INVALID_KEYS', effect: 'not_started' });
+      expect(error.message).toMatch(/^Error: .*Nothing was pressed\.$/);
+    }
   });
 });
 
@@ -142,7 +178,7 @@ describe('LinuxAppController with a recording xdotool on PATH', () => {
 
   beforeAll(() => {
     binDir = mkdtempSync(join(tmpdir(), 'jarvis-xdotool-'));
-    writeRecordingTool(binDir, 'xdotool');
+    writeRecordingXdotool(binDir);
   });
 
   afterAll(() => {
@@ -150,7 +186,7 @@ describe('LinuxAppController with a recording xdotool on PATH', () => {
   });
 
   test('typeText passes hostile and ordinary text as one argument after "--"', async () => {
-    rmSync(join(binDir, 'calls.jsonl'), { force: true });
+    rmSync(join(binDir, 'calls'), { force: true });
     const texts = [...HOSTILE_TEXT, ...ORDINARY_TEXT];
     const outcomes = await runController(binDir, texts.map((text) => ({ op: 'type', text })));
 
@@ -161,31 +197,33 @@ describe('LinuxAppController with a recording xdotool on PATH', () => {
     expect(calls.map((c) => c.stdin)).toEqual(texts.map(() => ''));
   });
 
-  test('pressKeys passes the chord as one argument after "--"', async () => {
-    rmSync(join(binDir, 'calls.jsonl'), { force: true });
+  test('pressKeys passes the chord as one argument after "--", ending in "+"', async () => {
+    rmSync(join(binDir, 'calls'), { force: true });
     const outcomes = await runController(binDir, [
       { op: 'keys', keys: ['ctrl', 's'] },
       { op: 'keys', keys: ['Return'] },
       { op: 'keys', keys: ['ctrl+shift+t'] },
+      { op: 'keys', keys: ['Help'] },
     ]);
 
-    expect(outcomes).toEqual([{ ok: true }, { ok: true }, { ok: true }]);
+    expect(outcomes).toEqual([{ ok: true }, { ok: true }, { ok: true }, { ok: true }]);
     expect(readCalls(binDir).map((c) => c.argv)).toEqual([
-      ['key', '--clearmodifiers', '--', 'ctrl+s'],
-      ['key', '--clearmodifiers', '--', 'Return'],
-      ['key', '--clearmodifiers', '--', 'ctrl+shift+t'],
+      ['key', '--clearmodifiers', '--', 'ctrl+s+'],
+      ['key', '--clearmodifiers', '--', 'Return+'],
+      ['key', '--clearmodifiers', '--', 'ctrl+shift+t+'],
+      ['key', '--clearmodifiers', '--', 'Help+'],
     ]);
   });
 
-  test('pressKeys refuses option-like and command-like keys without running xdotool', async () => {
-    rmSync(join(binDir, 'calls.jsonl'), { force: true });
+  test('pressKeys refuses option-like and command-like keys, as not started, without running xdotool', async () => {
+    rmSync(join(binDir, 'calls'), { force: true });
     const hostile: string[][] = [['--file=/etc/passwd'], ['-h'], ['--window', '1'], ['--delay', '99999'], ['--window=1'], ['exec']];
     const outcomes = await runController(binDir, hostile.map((keys) => ({ op: 'keys', keys })));
 
     expect(outcomes).toHaveLength(hostile.length);
     for (const o of outcomes) {
-      expect(o.ok).toBe(false);
-      expect(o.error).toMatch(/^Failed to press keys: /);
+      expect(o).toMatchObject({ ok: false, code: 'DESKTOP_INVALID_KEYS', effect: 'not_started' });
+      expect(o.error).toMatch(/Nothing was pressed\.$/);
     }
     expect(readCalls(binDir)).toEqual([]);
   });
@@ -225,7 +263,27 @@ int xdo_clear_active_modifiers(const xdo_t *x, Window w, void *k, int n) { (void
 int xdo_set_active_modifiers(const xdo_t *x, Window w, void *k, int n) { (void)x; (void)w; (void)k; (void)n; return 0; }
 `;
 
-const realXdotool = Bun.which('xdotool');
+/**
+ * The real xdotool, used only when it is an ELF binary linked against libxdo
+ * in a system bin directory. Whatever else answers to `xdotool` on PATH -- a
+ * script, or a Wayland compatibility wrapper that types through ydotool or
+ * uinput and so ignores DISPLAY -- could reach the desktop the tests run on,
+ * so it is never run.
+ */
+function findRealXdotool(): string | null {
+  if (process.platform !== 'linux') return null;
+  for (const path of ['/usr/bin/xdotool', '/usr/local/bin/xdotool']) {
+    try {
+      const bytes = readFileSync(path);
+      if (bytes.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46])) && bytes.includes('libxdo.so')) return path;
+    } catch {
+      // Not installed here.
+    }
+  }
+  return null;
+}
+
+const realXdotool = findRealXdotool();
 const compiler = Bun.which('cc') ?? Bun.which('gcc');
 
 /**
@@ -235,7 +293,7 @@ const compiler = Bun.which('cc') ?? Bun.which('gcc');
  * the directory holding bin/xdotool and the shim's log, or null to skip.
  */
 function prepareShim(): { dir: string; log: string } | null {
-  if (!realXdotool || !compiler || process.platform !== 'linux') return null;
+  if (!realXdotool || !compiler) return null;
   const dir = mkdtempSync(join(tmpdir(), 'jarvis-xdo-shim-'));
   const log = join(dir, 'shim.log');
   writeFileSync(join(dir, 'shim.c'), SHIM_C);
@@ -262,6 +320,14 @@ function prepareShim(): { dir: string; log: string } | null {
 }
 
 const shim = prepareShim();
+
+// CI installs xdotool and sets this, so the check above cannot quietly turn
+// into a skip there (a runner image whose xdotool the shim cannot stub).
+if (process.env.JARVIS_REQUIRE_XDOTOOL_SHIM === '1') {
+  test('the real-xdotool shim tests run here', () => {
+    expect({ realXdotool, compiler, shimReady: shim !== null }).toMatchObject({ shimReady: true });
+  });
+}
 
 describe.skipIf(!shim)('real xdotool argument parsing (libxdo stubbed, no display)', () => {
   const { dir, log } = shim ?? { dir: '', log: '' };
@@ -292,29 +358,34 @@ describe.skipIf(!shim)('real xdotool argument parsing (libxdo stubbed, no displa
     expect(typed.join('\n')).not.toContain('TOP-SECRET');
   });
 
-  test('presses the chord it was given', async () => {
+  test('presses the chord it was given, and a lone Help as a key rather than the help command', async () => {
     rmSync(log, { force: true });
     const outcomes = await runController(join(dir, 'bin'), [
       { op: 'keys', keys: ['ctrl', 's'] },
       { op: 'keys', keys: ['ctrl', 'Help'] },
+      { op: 'keys', keys: ['Help'] },
     ]);
 
-    expect(outcomes).toEqual([{ ok: true }, { ok: true }]);
-    expect(readShimLog()).toEqual(['KEY ctrl+s', 'KEY ctrl+Help']);
+    expect(outcomes).toEqual([{ ok: true }, { ok: true }, { ok: true }]);
+    // libxdo receives the argument as is and skips the empty key after "+".
+    expect(readShimLog()).toEqual(['KEY ctrl+s+', 'KEY ctrl+Help+', 'KEY Help+']);
   });
 });
 
 // ── Real X server ────────────────────────────────────────────────────
 //
 // Types into an xterm on a private Xvfb display, never the session the tests
-// run in. Needs Xvfb, xterm and xdotool; skipped otherwise.
+// run in. Needs Xvfb, xterm and a real xdotool; skipped otherwise.
 
 const xvfb = Bun.which('Xvfb');
 const xterm = Bun.which('xterm');
 const timeoutBin = Bun.which('timeout');
 const bounded = timeoutBin ? [timeoutBin, '120'] : [];
+// An odd size no real monitor has, checked before anything is typed.
+const XVFB_WIDTH = 823;
+const XVFB_HEIGHT = 617;
 
-describe.skipIf(!xvfb || !xterm || !realXdotool || process.platform !== 'linux')('typing into an xterm on a private Xvfb display', () => {
+describe.skipIf(!xvfb || !xterm || !realXdotool)('typing into an xterm on a private Xvfb display', () => {
   let dir: string;
   let display: string;
   let server: ReturnType<typeof Bun.spawn> | undefined;
@@ -341,7 +412,7 @@ describe.skipIf(!xvfb || !xterm || !realXdotool || process.platform !== 'linux')
     dir = mkdtempSync(join(tmpdir(), 'jarvis-xvfb-'));
     // -displayfd makes Xvfb pick a free display and print its number. The
     // `timeout` bounds both helpers, so a killed test run cannot orphan them.
-    server = Bun.spawn([...bounded, xvfb!, '-displayfd', '1', '-nolisten', 'tcp', '-screen', '0', '800x600x24'], {
+    server = Bun.spawn([...bounded, xvfb!, '-displayfd', '1', '-nolisten', 'tcp', '-screen', '0', `${XVFB_WIDTH}x${XVFB_HEIGHT}x24`], {
       stdin: 'ignore', stdout: 'pipe', stderr: 'ignore',
     });
     const reader = (server.stdout as ReadableStream<Uint8Array>).getReader();
@@ -353,6 +424,15 @@ describe.skipIf(!xvfb || !xterm || !realXdotool || process.platform !== 'linux')
     }
     reader.releaseLock();
     display = `:${buf.trim()}`;
+
+    // Before any window, focus or keystroke: prove this display is the Xvfb
+    // just started. In a private-/tmp namespace Xvfb can claim a display
+    // number whose abstract socket belongs to the real server.
+    const geometry = onDisplay(['getdisplaygeometry']);
+    if (geometry !== `${XVFB_WIDTH} ${XVFB_HEIGHT}`) {
+      display = '';
+      throw new Error(`display reported ${geometry}, not the private Xvfb; refusing to type into it`);
+    }
 
     const out = join(dir, 'typed.txt');
     term = Bun.spawn([...bounded, xterm!, '-geometry', '80x10+0+0', '-e', 'sh', '-c', `while IFS= read -r l; do printf '%s\\n' "$l" >> '${out}'; done`], {
@@ -378,8 +458,12 @@ describe.skipIf(!xvfb || !xterm || !realXdotool || process.platform !== 'linux')
     for (const text of texts) {
       actions.push({ op: 'type', text }, { op: 'keys', keys: ['Return'] });
     }
+    // The controller finds only the verified xdotool on its PATH.
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    symlinkSync(realXdotool!, join(bin, 'xdotool'));
 
-    const outcomes = await runController(dir, actions, { PATH: pathEnv, DISPLAY: display });
+    const outcomes = await runController(bin, actions, { DISPLAY: display });
 
     expect(outcomes).toEqual(actions.map(() => ({ ok: true })));
     expect(await readLines(join(dir, 'typed.txt'), texts.length)).toEqual(texts);

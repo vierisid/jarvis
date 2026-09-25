@@ -1,4 +1,5 @@
 import type { AppController, WindowInfo, UIElement } from './interface.ts';
+import { ActionOutcomeError } from '../action-outcome.ts';
 import { $ } from 'bun';
 
 /**
@@ -7,7 +8,7 @@ import { $ } from 'bun';
  * ignored or rejected by xdotool itself, so refusing it loses no working key,
  * and it keeps a leading "-" from ever reaching xdotool.
  *
- * This, XDOTOOL_COMMANDS and MAX_CHORD_KEYS are mirrored by the sidecar's
+ * This, the command checks and MAX_CHORD_KEYS are mirrored by the sidecar's
  * checkXdotoolKeySequence (sidecar/desktop_linux.go); keep them in sync.
  */
 const KEYSYM_NAME = /^[A-Za-z0-9_]+$/;
@@ -16,7 +17,9 @@ const KEYSYM_NAME = /^[A-Za-z0-9_]+$/;
  * xdotool's commands (its dispatch table). `xdotool key` stops at the first
  * argument that names one and runs it as a chained command, `--` or not, so a
  * lone key spelled like a command ("exec", "selectwindow") would run that
- * command instead of being pressed.
+ * command instead of being pressed. pressKeys also ends the argument with "+"
+ * (see there), which no command name contains; refusing these as well keeps a
+ * later edit to that argument from reopening the hole.
  */
 const XDOTOOL_COMMANDS = new Set([
   'behave', 'behave_screen_edge', 'click', 'exec', 'get_desktop',
@@ -39,29 +42,42 @@ const XDOTOOL_COMMANDS = new Set([
 const MAX_CHORD_KEYS = 8;
 
 /**
+ * Real keysyms that share a name with a command. Help (the "help" command) is
+ * the only one. The trailing "+" in pressKeys is what lets it be pressed; were
+ * that ever lost, xdotool would merely print its help text.
+ */
+const KEYSYMS_NAMED_LIKE_COMMANDS = new Set(['Help']);
+
+/** A refused chord never reaches xdotool: the caller should fix the key names, not check what happened. */
+function invalidKeys(message: string): ActionOutcomeError {
+  return new ActionOutcomeError({ status: 'error', code: 'DESKTOP_INVALID_KEYS', effect: 'not_started',
+    message: `Error: ${message}. Nothing was pressed.` });
+}
+
+/**
  * Join a chord like ["ctrl", "shift", "t"] into xdotool's "ctrl+shift+t",
  * refusing anything that xdotool would read as other than a key sequence.
  * Each "+"-separated name is checked, so a key given as "ctrl+s" still works;
- * empty names are skipped, as xdotool skips them.
+ * empty names are skipped, as xdotool skips them. The checks run in the same
+ * order as the sidecar's: names, then empty, then count, then command names.
  */
 export function toXdotoolKeySequence(keys: string[]): string {
   const sequence = keys.join('+');
   const names = sequence.split('+').filter(Boolean);
-  if (names.length === 0) {
-    throw new Error('No keys given');
-  }
-  if (names.length > MAX_CHORD_KEYS) {
-    throw new Error(`Too many keys in one chord (${names.length}); press at most ${MAX_CHORD_KEYS} at once`);
-  }
   for (const name of names) {
     if (!KEYSYM_NAME.test(name)) {
-      throw new Error(
-        `Invalid key name ${JSON.stringify(name)}: use X keysym names such as Return, Tab, minus, slash or F5`,
-      );
+      throw invalidKeys(`Invalid key name ${JSON.stringify(name)}: use X keysym names such as Return, Tab, minus, slash or F5`);
     }
   }
-  if (XDOTOOL_COMMANDS.has(sequence.toLowerCase())) {
-    throw new Error(`"${sequence}" is an xdotool command name and cannot be pressed as a key`);
+  if (names.length === 0) {
+    throw invalidKeys('No keys given');
+  }
+  if (names.length > MAX_CHORD_KEYS) {
+    throw invalidKeys(`Too many keys in one chord (${names.length}); press at most ${MAX_CHORD_KEYS} at once`);
+  }
+  if (XDOTOOL_COMMANDS.has(sequence.toLowerCase()) && !KEYSYMS_NAMED_LIKE_COMMANDS.has(sequence)) {
+    const hint = sequence.toLowerCase() === 'help' ? ' (the Help key is spelled "Help")' : '';
+    throw invalidKeys(`"${sequence}" is an xdotool command name and cannot be pressed as a key${hint}`);
   }
   return sequence;
 }
@@ -224,11 +240,15 @@ export class LinuxAppController implements AppController {
   }
 
   async pressKeys(keys: string[]): Promise<void> {
+    // Outside the try below, so a refusal stays a not-started outcome.
+    const keyString = toXdotoolKeySequence(keys);
     await this.ensureTool('xdotool');
 
     try {
-      const keyString = toXdotoolKeySequence(keys);
-      await $`xdotool key --clearmodifiers -- ${keyString}`;
+      // The trailing "+" is an empty last key, which libxdo skips. It keeps
+      // the argument from equalling any xdotool command name, so `xdotool key`
+      // cannot chain into a command, whatever commands a later xdotool adds.
+      await $`xdotool key --clearmodifiers -- ${keyString}+`;
     } catch (error) {
       throw new Error(`Failed to press keys: ${error instanceof Error ? error.message : String(error)}`);
     }

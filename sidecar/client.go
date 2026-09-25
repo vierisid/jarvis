@@ -1379,7 +1379,7 @@ func (c *SidecarClient) readLoop(ctx context.Context) error {
 		go func(id string, h RPCHandler, params map[string]any) {
 			result, err := h(params)
 			if err != nil {
-				c.sendResult(ctx, id, nil, &rpcError{Code: "HANDLER_ERROR", Message: err.Error()})
+				c.sendResult(ctx, id, nil, handlerRPCError(err))
 				return
 			}
 			c.sendResult(ctx, id, result, nil)
@@ -1390,6 +1390,29 @@ func (c *SidecarClient) readLoop(ctx context.Context) error {
 type rpcError struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
+}
+
+// codedError lets a handler choose its RPC error code instead of the generic
+// HANDLER_ERROR, which the daemon reads as "may have taken effect". A code
+// the daemon lists as not-started (e.g. DESKTOP_INVALID_KEYS, see
+// src/actions/tools/sidecar-route.ts) says the request was refused before
+// anything happened.
+type codedError struct {
+	code string
+	err  error
+}
+
+func (e *codedError) Error() string { return e.err.Error() }
+func (e *codedError) Unwrap() error { return e.err }
+
+// handlerRPCError turns a handler's error into its RPC error.
+func handlerRPCError(err error) *rpcError {
+	code := "HANDLER_ERROR"
+	var coded *codedError
+	if errors.As(err, &coded) {
+		code = coded.code
+	}
+	return &rpcError{Code: code, Message: err.Error()}
 }
 
 func (c *SidecarClient) sendResult(ctx context.Context, rpcID string, result *RPCResult, rpcErr *rpcError) {
