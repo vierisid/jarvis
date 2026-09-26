@@ -108,6 +108,10 @@ const EXEMPT: Record<string, Exemption> = {
     reason: USER_CLI,
     calls: { defaultSpawn: 1, restartDaemonDetached: 1, updateBunGlobal: 1, updateScript: 6 },
   },
+  'cli/systemd-unit.ts': {
+    reason: USER_CLI + ' runCommand runs the fixed systemctl/systemd-run/journalctl command lines of `jarvis restart` and `jarvis update` for a systemd-managed daemon (#525), and adds XDG_RUNTIME_DIR back when a trimmed env lacks it; updateThroughSystemd follows the transient updater with `journalctl --user -f`.',
+    calls: { runCommand: 1, updateThroughSystemd: 1 },
+  },
   'cli/version.ts': { reason: USER_CLI + ' Also reached from telemetry: a read-only `git -C <package root>` query.', calls: { runGit: 1 } },
   'scripts/google-setup.ts': { reason: 'Interactive setup script; opens a URL with the desktop opener. ' + DESKTOP_SESSION, calls: { main: 1 } },
 
