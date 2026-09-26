@@ -1,6 +1,6 @@
 import type { CommandResult } from './executor.ts';
 import { readFileSync, existsSync } from 'node:fs';
-import { sanitizedEnv } from '../../util/subprocess-env.ts';
+import { sanitizedEnv, type ExtraEnv } from '../../util/subprocess-env.ts';
 
 const DEFAULT_TIMEOUT_MS = 30_000;
 
@@ -200,6 +200,20 @@ async function runWslpath(flag: '-w' | '-u', path: string): Promise<string> {
 }
 
 /**
+ * The sanitizedEnv extras a spawn needs to launch a Windows program from WSL
+ * (#519): WSL_INTEROP, the socket interop launches it through on WSL2;
+ * WSL_DISTRO_NAME; and WSLENV. Shared with the desktop-bridge probe in
+ * actions/app-control/sidecar-launcher.ts.
+ */
+export function wslInteropExtras(): Pick<ExtraEnv, 'WSL_INTEROP' | 'WSL_DISTRO_NAME' | 'WSLENV'> {
+  return {
+    WSL_INTEROP: process.env.WSL_INTEROP,
+    WSL_DISTRO_NAME: process.env.WSL_DISTRO_NAME,
+    WSLENV: process.env.WSLENV,
+  };
+}
+
+/**
  * Spawn `argv` with no shell. The env is the sanitized allowlist plus three
  * WSL names: WSL_INTEROP, the socket a Windows program is launched through on
  * WSL2 (the one interop needs); WSL_DISTRO_NAME, this distro's name; and
@@ -220,11 +234,7 @@ export async function runArgv(argv: string[], timeoutMs: number = DEFAULT_TIMEOU
   const startTime = Date.now();
 
   const proc = Bun.spawn(argv, {
-    env: sanitizedEnv({
-      WSL_INTEROP: process.env.WSL_INTEROP,
-      WSL_DISTRO_NAME: process.env.WSL_DISTRO_NAME,
-      WSLENV: process.env.WSLENV,
-    }),
+    env: sanitizedEnv(wslInteropExtras()),
     stdin: 'ignore',
     stdout: 'pipe',
     stderr: 'pipe',

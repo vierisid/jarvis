@@ -1,4 +1,5 @@
 import { spawnSync } from 'node:child_process';
+import { modelExecEnv } from '../../util/model-exec-env.ts';
 
 /**
  * Minimal synchronous exec used by the Windows/macOS fallback controllers.
@@ -25,6 +26,12 @@ export const defaultExec: NativeExec = (cmd, input) => {
     // Base64 screenshots can be several MB.
     maxBuffer: 64 * 1024 * 1024,
     windowsHide: true,
+    // The desktop session without the daemon's secrets (#514). This seam runs
+    // the Windows `launch-app` script, whose Start-Process hands its env to a
+    // model-chosen executable, and macOS `open -a <model app>` (LaunchServices
+    // gives the app launchd's env, but `open` itself gets this one). The
+    // other scripts only need the session. See util/model-exec-env.ts.
+    env: modelExecEnv(),
   });
   return {
     status: result.status,

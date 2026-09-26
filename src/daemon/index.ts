@@ -20,6 +20,7 @@ import { activeTurns } from "./active-turns.ts";
 import { writeLockedPort } from "./pid.ts";
 import { AgentService } from "./agent-service.ts";
 import { initDebugRpcGate, MIN_SECRET_LENGTH } from "./debug-rpc-gate.ts";
+import { modelExecDaemonWarning } from "../util/model-exec-marker.ts";
 import { getRecorder, parseInteractionEvent } from "../skills/recorder.ts";
 import { onRecordingStopped } from "../actions/tools/skills.ts";
 import { createObservation } from "../vault/observations.ts";
@@ -440,6 +441,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       console.log(`[Daemon] Log file: ${logFilePath}`);
     }
   }
+
+  // Started from a command the assistant ran (#514): its env was stripped of
+  // the daemon's secrets. After the file sink, so the configured log has it.
+  const modelExecWarning = modelExecDaemonWarning();
+  if (modelExecWarning) console.warn(`[Daemon] ${modelExecWarning}`);
 
   // Drain budget: default 75s; a non-positive value falls back; cap at 85s so a
   // misconfig can't push the drain past the supervisor's kill grace (systemd

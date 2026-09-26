@@ -69,16 +69,27 @@ import {
   constants as fsConstants,
   existsSync,
   fsyncSync,
+  linkSync,
+  lstatSync,
   mkdirSync,
   openSync,
   readFileSync,
-  renameSync,
+  readdirSync,
+  readlinkSync,
+  statSync,
   rmSync,
   unlinkSync,
   writeSync,
 } from "node:fs";
 import { homedir } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { basename, dirname, join, resolve } from "node:path";
+import {
+  LEGACY_ENV_KEY_FLAG,
+  MODEL_EXEC_ENV_KEY_FLAG,
+  hadEnvWorkflowKey,
+  matchesParentWorkflowKey,
+  parentWorkflowKeyCheck,
+} from "../../util/model-exec-marker.ts";
 
 const ALGO = "aes-256-gcm";
 const KEY_BYTES = 32;
@@ -208,11 +219,23 @@ export function workflowKeyTarget(dir: string = configuredDir()): string {
  *      `JARVIS_HOME` path, which is where a `JARVIS_HOME` install's key
  *      actually is today (see #481 item 3)
  */
-export function keyFileCandidates(dir: string = configuredDir()): string[] {
+export function keyFileCandidates(dir: string = configuredDir(), options: { ownOnly?: boolean } = {}): string[] {
+  if (options.ownOnly) return ownCandidates(dir);
   return [
     ...ownCandidates(dir),
     join(legacyRootDir(), LEGACY_SUBDIR, KEY_FILE_NAME),
   ].filter((path, index, all) => all.indexOf(path) === index);
+}
+
+/**
+ * The candidates a key may be USED from: all of them, except under the #514
+ * env-key flag, where the shared pre-JARVIS_HOME ~/.jarvis/cache key is
+ * another install's, or a leftover, by definition -- this one's key was in an
+ * env var. Only getKey and the boot message about where to restore a key use
+ * this; export, rotation and restore keep seeing every candidate.
+ */
+export function usableKeyFileCandidates(dir: string = configuredDir()): string[] {
+  return keyFileCandidates(dir, { ownOnly: hadEnvWorkflowKey() });
 }
 
 /** The candidates that belong to THIS data dir: the root and its own cache/. */
@@ -235,10 +258,10 @@ function ownCandidates(dir: string): string[] {
  * operator is the only one who can tell us which database this is. See
  * `rivalKeyWarning`.
  */
-export function resolveKeyFile(dir: string = configuredDir()): string {
+export function resolveKeyFile(dir: string = configuredDir(), options: { ownOnly?: boolean } = {}): string {
   const explicit = process.env["JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE"];
   if (explicit) return explicit;
-  const present = keyFileCandidates(dir).filter((path) => existsSync(path));
+  const present = keyFileCandidates(dir, options).filter((path) => existsSync(path));
   if (present.length === 0) return workflowKeyTarget(dir);
   if (!warnedAboutRivalKeys) {
     const warning = rivalKeyWarning(dir);
@@ -306,33 +329,130 @@ function parseKeyHex(hex: string, path: string): Buffer {
 }
 
 /**
- * Create `path` holding `hex` with 0600 from the first byte: written to a
- * temp sibling, fsynced, renamed over the target, and the parent directory
- * fsynced too. A crash can leave the temp file behind but never a truncated
- * or world-readable key, and never a half-written target.
+ * Create `path` holding `hex` with 0600 from the first byte, IF IT IS ABSENT:
+ * written to a uniquely named temp sibling, fsynced, then hard-linked into
+ * place, and the parent directory fsynced too. A crash can leave a temp file
+ * behind but never a truncated or world-readable key, and never a half-written
+ * target.
+ *
+ * Create-if-absent, not rename-over, because two first boots can share a
+ * secrets dir (two instances under one JARVIS_SECRETS_DIR, or a restart racing
+ * a still-exiting daemon). With a fixed temp name and a rename, both wrote
+ * their own key and the last rename won, while the loser had already cached
+ * and used its own. `link` fails with EEXIST instead: the loser reads the key
+ * on disk and adopts it, so every process ends up on one key. Returns the key
+ * actually at `path` and whether this call put it there.
+ *
+ * Exported for tests.
  */
-function persistKeyFile(path: string, hex: string): void {
+export function persistKeyFile(
+  path: string,
+  hex: string,
+  /** Test seam: the hard-link call, so a filesystem without links can be simulated. */
+  link: (existing: string, created: string) => void = linkSync,
+): { created: boolean; hex: string } {
   mkdirSync(dirname(path), { recursive: true });
-  const tmp = `${path}.tmp`;
-  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_TRUNC | fsConstants.O_NOFOLLOW;
-  const fd = openSync(tmp, flags, 0o600);
+  removeStaleKeyTemps(path);
+  const tmp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;
+  writeNewKeyFile(tmp, hex);
+  try {
+    link(tmp, path);
+  } catch (err) {
+    try { unlinkSync(tmp); } catch { /* best effort */ }
+    if ((err as NodeJS.ErrnoException).code === "EEXIST") return adoptExistingKey(path);
+    // Anything else means no hard link here, and the codes vary by platform
+    // (EPERM, ENOTSUP/EOPNOTSUPP, ENOSYS; EISDIR from FAT on Windows): vfat,
+    // exFAT, SMB without Unix extensions, ReFS. Create the target itself,
+    // exclusively: still create-if-absent, but a crash mid-write can leave a
+    // torn key file -- which parseKeyHex rejects loudly on the next read
+    // rather than using. A real failure (a read-only or full disk) fails here
+    // again, with its own error.
+    try {
+      writeNewKeyFile(path, hex);
+    } catch (inner) {
+      if ((inner as NodeJS.ErrnoException).code === "EEXIST") return adoptExistingKey(path);
+      throw inner;
+    }
+    fsyncDir(dirname(path));
+    return { created: true, hex };
+  }
+  // A failure here leaves a second link to the key; the next process that
+  // reads or writes the key removes it (removeStaleKeyTemps).
+  try { unlinkSync(tmp); } catch { /* best effort */ }
+  fsyncDir(dirname(path));
+  return { created: true, hex };
+}
+
+/** Create `path` exclusively with 0600 from the first byte, write `hex`, fsync. */
+function writeNewKeyFile(path: string, hex: string): void {
+  const flags = fsConstants.O_WRONLY | fsConstants.O_CREAT | fsConstants.O_EXCL | fsConstants.O_NOFOLLOW;
+  const fd = openSync(path, flags, 0o600);
   try {
     writeSync(fd, `${hex}\n`);
     fsyncSync(fd);
   } catch (err) {
     closeSync(fd);
-    try { unlinkSync(tmp); } catch { /* best effort */ }
+    try { unlinkSync(path); } catch { /* best effort */ }
     throw err;
   }
   closeSync(fd);
-  try { chmodSync(tmp, 0o600); } catch { /* best-effort on Windows / restricted FSes */ }
+  try { chmodSync(path, 0o600); } catch { /* best-effort on Windows / restricted FSes */ }
+}
+
+/** Another writer got there first: use its key, never a corrupt one. */
+function adoptExistingKey(path: string): { created: false; hex: string } {
+  let existing: string;
   try {
-    renameSync(tmp, path);
+    existing = readFileSync(path, "utf8").trim();
   } catch (err) {
-    try { unlinkSync(tmp); } catch { /* best effort */ }
+    // `existsSync` said no and `link` said EEXIST: a symlink to nothing.
+    if ((err as NodeJS.ErrnoException).code === "ENOENT" && lstatSync(path, { throwIfNoEntry: false })?.isSymbolicLink()) {
+      throw new Error(
+        `The workflow encryption key path ${path} is a symlink to a missing file (${readlinkSync(path)}). `
+        + "Restore the file it points to, or remove the link so a key can be created there.",
+      );
+    }
     throw err;
   }
-  fsyncDir(dirname(path));
+  parseKeyHex(existing, path);
+  return { created: false, hex: existing };
+}
+
+/**
+ * Remove `<key>.<pid>.<rand>.tmp` siblings left by a writer that crashed, and
+ * an old `<key>.tmp`. Runs before every key write and on the first key read
+ * in each process, so a leftover does not outlive the next start.
+ * Only those whose pid is gone: a live writer's temp is about to be linked.
+ * A crash between link and unlink leaves a second hard link to a key, which a
+ * later rotation (a new file renamed over the key) would otherwise keep alive
+ * in every data-dir backup. A reused pid only means a leftover stays longer.
+ */
+function removeStaleKeyTemps(path: string): void {
+  const dir = dirname(path);
+  const prefix = `${basename(path)}.`;
+  let names: string[];
+  try { names = readdirSync(dir); } catch { return; }
+  // The fixed `<key>.tmp` of releases before #514, left by a crash between
+  // write and rename. It never became the key, so nothing was encrypted with
+  // it; the age check keeps clear of an older release writing it right now.
+  const legacy = join(dir, `${basename(path)}.tmp`);
+  try {
+    if (Date.now() - statSync(legacy).mtimeMs > 60_000) unlinkSync(legacy);
+  } catch { /* absent, or raced */ }
+  for (const name of names) {
+    const m = name.startsWith(prefix) ? /^(\d+)\.[0-9a-f]{12}\.tmp$/.exec(name.slice(prefix.length)) : null;
+    if (!m || isPidAlive(Number(m[1]))) continue;
+    try { unlinkSync(join(dir, name)); } catch { /* raced with another cleaner */ }
+  }
+}
+
+function isPidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === "EPERM"; // alive, not ours
+  }
 }
 
 /** Make a directory entry (a rename, an unlink) durable. Best-effort. */
@@ -355,7 +475,8 @@ function fsyncDir(dir: string): void {
  * Place one key file at `to` from `from`: copy durably, read the copy back and
  * compare, and only then (unless `keepSource`) remove the original.
  *
- * Crash safety. `to` is created by rename from a temp sibling and fsynced
+ * Crash safety. `to` is created by persistKeyFile (a hard link from a fsynced
+ * temp sibling, create-if-absent) and fsynced
  * before `from` is touched, so at every instant a readable key exists at
  * `from`, at `to`, or at both -- never at neither. Both-populated resolves to
  * `to` (same bytes), so an interrupted relocation is indistinguishable from a
@@ -375,13 +496,15 @@ export function migrateWorkflowEncryptionKey(
     /** Test-only fault injection: called after the copy is durable and
      * verified and before the original is removed, so tests can interrupt the
      * one window where two copies exist. Never set in production. */
-    _hooks?: { beforeRemovingOld?: () => void };
+    _hooks?: { beforeRemovingOld?: () => void; beforeCopy?: () => void };
   } = {},
 ): boolean {
   if (from === to || !existsSync(from) || existsSync(to)) return false;
   const hex = readFileSync(from, "utf8").trim();
   parseKeyHex(hex, from); // refuse to propagate a corrupt key
-  persistKeyFile(to, hex);
+  options._hooks?.beforeCopy?.();
+  // Lost a race to another writer: `to` is theirs now, so leave `from` alone.
+  if (!persistKeyFile(to, hex).created) return false;
   if (readIfKey(to) !== hex) {
     rmSync(to, { force: true });
     throw new Error(`Copying the workflow encryption key to ${to} did not verify; it stays at ${from}`);
@@ -419,6 +542,11 @@ export function migrateWorkflowEncryptionKey(
  * reads it.
  */
 export function migrateWorkflowEncryptionKeyToDataDir(): boolean {
+  // Under the #514 env-key flag, whatever sits in cache/ or the shared
+  // ~/.jarvis/cache is not known to be this install's key -- the key was in
+  // an env var. Planting it at the root would hand getKey() a key the user's
+  // own restart ignores.
+  if (hadEnvWorkflowKey()) return false;
   // An explicit key source makes any file on disk irrelevant -- and possibly
   // an unrelated leftover. Moving that to the root would plant a key a later
   // boot (env var gone) would trust.
@@ -451,22 +579,72 @@ function getKey(): Buffer {
         "JARVIS_WORKFLOW_ENCRYPTION_KEY must be 64 hex characters (32 bytes); got length " + env.length,
       );
     }
+    // A legacy `1` flag cannot vouch for or against an env key; only a check can.
+    if (matchesParentWorkflowKey(env) === false) throw parentKeyMismatch("JARVIS_WORKFLOW_ENCRYPTION_KEY here");
     cachedKey = Buffer.from(env, "hex");
     return cachedKey;
   }
-  const file = resolveKeyFile();
+  const file = resolveKeyFile(configuredDir(), { ownOnly: hadEnvWorkflowKey() });
   if (existsSync(file)) {
-    cachedKey = parseKeyHex(readFileSync(file, "utf8").trim(), file);
+    // Not in an operator's explicitly named directory: not ours to tidy.
+    if (!process.env["JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE"]) removeStaleKeyTemps(file);
+    const hex = readFileSync(file, "utf8").trim();
+    const key = parseKeyHex(hex, file);
+    // Under the #514 flag an existing file proves nothing -- a leftover,
+    // another instance's key -- so it must BE the ancestor's env key.
+    if (hadEnvWorkflowKey() && matchesParentWorkflowKey(hex) !== true) throw parentKeyMismatch(`the key file ${file}`);
+    cachedKey = key;
     return cachedKey;
   }
   // Nothing anywhere: first run. Generate at the target path with 0600.
   // Callers that must NOT reach this point (a database that already holds
   // `enc1:` rows) assert first -- see `assertEncryptionKeyForStoredCredentials`
   // in src/workflows/db/index.ts.
-  const fresh = randomBytes(KEY_BYTES);
-  persistKeyFile(file, fresh.toString("hex"));
-  cachedKey = fresh;
+  //
+  // Except where the key was stripped rather than absent (#514): a process
+  // descended from a command the assistant ran, whose daemon held
+  // JARVIS_WORKFLOW_ENCRYPTION_KEY in its environment (the flag is set by
+  // modelExecEnv; see util/model-exec-marker.ts). A key minted here cannot be
+  // that key. Installs whose key lives in a file are never flagged and
+  // generate as usual.
+  if (hadEnvWorkflowKey()) throw parentKeyMismatch(null, file);
+  cachedKey = createOrAdoptKey(file);
   return cachedKey;
+}
+
+/**
+ * A fresh key at `file` -- or, when another first boot got there first, the
+ * key on disk. Returning the key persistKeyFile reports, never the one
+ * generated here, is what keeps two racing first boots on one key.
+ *
+ * Exported for tests: the race itself is timing-dependent, this is not.
+ */
+export function createOrAdoptKey(file: string): Buffer {
+  const { hex } = persistKeyFile(file, randomBytes(KEY_BYTES).toString("hex"));
+  return parseKeyHex(hex, file);
+}
+
+/**
+ * Why a flagged process will not use the key it has (`found`), or has none
+ * and will not make one (`found` null). Says what the flag means and the two
+ * ways forward, rather than "restart": a second instance or a fresh secrets
+ * dir started from the assistant's shell is not fixed by restarting anything.
+ */
+function parentKeyMismatch(found: string | null, file?: string): Error {
+  const legacy = parentWorkflowKeyCheck() === LEGACY_ENV_KEY_FLAG;
+  const what = found === null
+    ? `this instance has no workflow key (none at ${file}) and will not generate one`
+    : legacy
+      ? `${found} cannot be checked against it (the flag is an older release's \`1\`, which records no key)`
+      : `${found} is a different key`;
+  return new Error(
+    `Refusing the workflow encryption key: this Jarvis descends from a command the assistant ran, and the `
+    + `Jarvis that ran it kept its workflow key in JARVIS_WORKFLOW_ENCRYPTION_KEY (${MODEL_EXEC_ENV_KEY_FLAG} is `
+    + `set). ${what[0]!.toUpperCase()}${what.slice(1)}`
+    + (found === null ? ": a key made here could not be that key. " : ", so credentials saved with it would not decrypt under that key. ")
+    + `Start this Jarvis from your own terminal with JARVIS_WORKFLOW_ENCRYPTION_KEY set to that key, or, if this `
+    + `instance is meant to have its own key, unset ${MODEL_EXEC_ENV_KEY_FLAG} deliberately.`,
+  );
 }
 
 /** Test/tooling override for the cached key. Pass `null` to fall back to env+file resolution. */

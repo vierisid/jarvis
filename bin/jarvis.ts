@@ -24,6 +24,7 @@ import { c } from '../src/cli/helpers.ts';
 import { ensurePortReleased, getConfiguredPort, resolveStopPort } from '../src/cli/lifecycle.ts';
 import { getInstalledVersion } from '../src/cli/version.ts';
 import { loadConfig } from '../src/config/loader.ts';
+import { modelExecCliWarning } from '../src/util/model-exec-marker.ts';
 
 const PACKAGE_ROOT = join(import.meta.dir, '..');
 
@@ -473,6 +474,14 @@ assertSupportedPlatform();
 const args = process.argv.slice(2);
 const command = args[0] || 'help';
 const commandArgs = args.slice(1);
+
+// A daemon started from the assistant's shell (run_command) comes up without
+// the workflow key that shell was stripped of (#514). Which commands warn, and
+// why only those, is modelExecCliWarning's; `update` warns from update.ts.
+{
+  const warning = modelExecCliWarning(command, commandArgs);
+  if (warning) console.warn(c.yellow(warning));
+}
 
 switch (command) {
   case 'start':

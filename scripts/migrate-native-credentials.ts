@@ -5,6 +5,7 @@ import { mkdirSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { acquireLockAt, lockPathFor } from "../src/daemon/pid";
 import { setEncryptionKey } from "../src/workflows/db/encryption";
+import { hadEnvWorkflowKey, matchesParentWorkflowKey } from "../src/util/model-exec-marker";
 import {
   bindNativeCredentials, CredentialMigrationError, inventoryNativeCredentials, migrateNativeCredentials,
   rollbackCredentialBinding, rollbackNativeCredentials,
@@ -59,6 +60,15 @@ function loadExistingKey(keyFile: string | undefined): Buffer {
   try { hex = envKey ?? readFileSync(keyFile!, "utf8").trim(); }
   catch { throw new CredentialMigrationError("The existing key file could not be read."); }
   if (!/^[0-9a-fA-F]{64}$/.test(hex)) throw new CredentialMigrationError("The existing key must contain 64 hex characters.");
+  // From the assistant's shell of an env-key daemon (#514), seal nothing under
+  // a key that is not provably that env key.
+  if (hadEnvWorkflowKey() && matchesParentWorkflowKey(hex) !== true) {
+    throw new CredentialMigrationError(
+      "This shell descends from a command the assistant ran, and the Jarvis that ran it kept its workflow key in "
+      + "JARVIS_WORKFLOW_ENCRYPTION_KEY; the key given here is not provably that key. Run this from your own "
+      + "terminal, or unset JARVIS_MODEL_EXEC_ENV_KEY deliberately.",
+    );
+  }
   return Buffer.from(hex, "hex");
 }
 

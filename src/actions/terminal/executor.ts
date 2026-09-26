@@ -1,4 +1,5 @@
 import { spawn, type Subprocess } from 'bun';
+import { modelExecEnv } from '../../util/model-exec-env.ts';
 
 export type CommandResult = {
   stdout: string;
@@ -30,7 +31,10 @@ export class TerminalExecutor {
       const proc = spawn({
         cmd: [this.shell, '-c', command],
         cwd: opts?.cwd,
-        env: { ...process.env, ...opts?.env },
+        // run_command's shell runs a model-written command line: the user's
+        // environment minus the daemon's own secrets (#514). Env hygiene,
+        // not isolation -- see util/model-exec-env.ts.
+        env: modelExecEnv(opts?.env),
         stdout: 'pipe',
         stderr: 'pipe',
       });
@@ -70,7 +74,7 @@ export class TerminalExecutor {
     const proc = spawn({
       cmd: [this.shell, '-c', command],
       cwd: opts?.cwd,
-      env: { ...process.env, ...opts?.env },
+      env: modelExecEnv(opts?.env),
       stdout: 'pipe',
       stderr: 'pipe',
     });

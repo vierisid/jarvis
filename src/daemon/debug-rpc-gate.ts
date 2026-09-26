@@ -27,9 +27,12 @@ let activeSecret: string | null = null;
 
 /**
  * Resolve the gate once, at startup. The secret is removed from `env` whatever
- * the outcome: the daemon spawns children with `{ ...process.env }` (the
- * terminal tool among them), and a command an agent runs must never be able to
- * read it.
+ * the outcome, so that spawns building their env from `process.env` do not
+ * copy it. That is defense in depth only: a Bun or node spawn that omits `env`
+ * inherits the startup environment, delete or not. What keeps it from a
+ * command an agent runs is modelExecEnv() (util/model-exec-env.ts), which
+ * lists JARVIS_DEBUG_RPC among the daemon's secrets, and sanitizedEnv()'s
+ * allowlist elsewhere.
  */
 export function initDebugRpcGate(opts: { hosted: boolean }, env: NodeJS.ProcessEnv = process.env): DebugRpcGateState {
   const raw = env[DEBUG_RPC_ENV];

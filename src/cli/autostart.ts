@@ -12,6 +12,7 @@ import { spawn } from 'node:child_process';
 import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
 import { c, printOk, printErr, printWarn } from './helpers.ts';
 import { getLogDir } from '../daemon/pid.ts';
+import { MODEL_EXEC_ENV_KEY_FLAG, MODEL_EXEC_MARKER_ENV } from '../util/model-exec-marker.ts';
 
 function canSpawnBinary(binary: string): boolean {
   try {
@@ -109,6 +110,17 @@ export function canUseSystemdUserService(spawnSync: SpawnSyncFn = defaultSpawnSy
 const SYSTEMD_DIR = join(homedir(), '.config', 'systemd', 'user');
 const SYSTEMD_SERVICE = join(SYSTEMD_DIR, 'jarvis.service');
 
+/**
+ * The #514 markers (util/model-exec-marker.ts) must never reach the service: a
+ * `systemctl --user import-environment` run from the assistant's shell would
+ * otherwise mark the manager, and every later start of the unit with it.
+ * UnsetEnvironment= needs systemd 235 (2017). An older systemd logs an unknown
+ * key and ignores the line, so the unit still loads everywhere. A unit
+ * installed before this line existed gets it only when autostart is
+ * reinstalled.
+ */
+const SYSTEMD_UNSET_MODEL_EXEC = `UnsetEnvironment=${MODEL_EXEC_MARKER_ENV} ${MODEL_EXEC_ENV_KEY_FLAG}`;
+
 export function generateSystemdUnit(): string {
   const bunPath = getBunPath();
   const jarvisPath = getJarvisPath();
@@ -123,6 +135,7 @@ ExecStart=${bunPath} ${jarvisPath} start --foreground
 Restart=on-failure
 RestartSec=5
 Environment=HOME=${homedir()}
+${SYSTEMD_UNSET_MODEL_EXEC}
 ${systemdJarvisHomeLine()}
 [Install]
 WantedBy=default.target
@@ -295,6 +308,10 @@ export function generateLaunchdPlist(): string {
     <string>${xmlEscape(homedir())}</string>
 ${process.env.JARVIS_HOME ? `    <key>JARVIS_HOME</key>\n    <string>${xmlEscape(process.env.JARVIS_HOME)}</string>\n` : ''}    <key>PATH</key>
     <string>/usr/local/bin:/usr/bin:/bin:${xmlEscape(join(homedir(), '.bun', 'bin'))}</string>
+    <key>${MODEL_EXEC_MARKER_ENV}</key>
+    <string></string>
+    <key>${MODEL_EXEC_ENV_KEY_FLAG}</key>
+    <string></string>
   </dict>
 </dict>
 </plist>

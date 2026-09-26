@@ -396,6 +396,55 @@ bun needs it, so anything readable under your home directory is still readable
 to the install; the sanitizing keeps secrets out of the environment, it is not
 a sandbox.
 
+### Commands, apps and the browser the assistant runs
+
+`run_command`, apps the assistant launches, the local Chrome it drives and the
+Windows desktop bridge get your full environment (`PATH`, nvm and virtualenv
+settings, `SSH_AUTH_SOCK`, `DISPLAY`, proxies, your own `GITHUB_TOKEN` or
+`AWS_*`) **minus the daemon's own secrets**:
+
+- every `JARVIS_*` variable except the settings the `jarvis` CLI reads
+  (`JARVIS_HOME`, `JARVIS_PORT`, `JARVIS_SECRETS_DIR`, and so on), so
+  `JARVIS_WORKFLOW_ENCRYPTION_KEY`, `JARVIS_GITHUB_TOKEN` and the provider
+  keys releases before v0.7.0 read, such as `JARVIS_OPENAI_KEY`, are removed;
+- `ANTHROPIC_API_KEY`, `OPENAI_API_KEY` and `NVIDIA_API_KEY`, the provider keys
+  earlier releases read from the environment or told you to export. If you
+  exported one of these for a CLI of your own and want the assistant to run
+  that CLI, pass the key inside the command.
+
+If the assistant runs `jarvis start`, `jarvis restart` or `jarvis update`
+itself on an install no service manager runs (one you started with
+`jarvis start -d`), the new daemon is started from the assistant's shell and
+comes up without the secrets above. Restart from your own terminal to bring
+them back.
+
+Under systemd the assistant's shell runs inside the service, so stopping
+Jarvis stops it too: `jarvis restart` or `jarvis update` run by the assistant
+leaves Jarvis stopped, and an update unfinished. Restart a systemd install with
+`systemctl --user restart jarvis`. Under launchd, which relaunches Jarvis
+itself, the relaunched daemon gets launchd's environment.
+
+If your workflow encryption key lives only in `JARVIS_WORKFLOW_ENCRYPTION_KEY`,
+a daemon started from the assistant's shell uses a workflow key only if it is
+provably that same key. It will not generate one, and it will not use a key
+file that holds a different key, such as a leftover or another instance's. So
+it cannot split your credentials: workflow credentials fail there until you
+start Jarvis yourself with the key set, and the daemon logs a warning saying
+so. An install whose key lives in a file is unaffected.
+
+To tell "that same key" apart, the assistant's commands carry
+`JARVIS_MODEL_EXEC_ENV_KEY`, a 16-character check value derived from the key
+with scrypt. It cannot be turned back into the key, but it can confirm a guess,
+so generate `JARVIS_WORKFLOW_ENCRYPTION_KEY` at random (`openssl rand -hex 32`)
+rather than from a passphrase.
+
+Like the install sanitizing above, this is environment hygiene, not a
+sandbox. The commands run as the daemon's user, so they can still read
+`/proc/<daemon pid>/environ` and the daemon's `~/.jarvis`. Keeping a secret
+out of the daemon's environment (the dashboard and keychain hold LLM keys)
+keeps it out of that file, but nothing short of a sandbox keeps the daemon's
+files from what it runs.
+
 ## Quick reference
 
 | | Single machine | LAN via IP | VPS + domain |
