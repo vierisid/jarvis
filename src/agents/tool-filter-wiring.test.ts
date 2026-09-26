@@ -12,12 +12,17 @@
  *   - the escape hatch actually returns a capability, end to end;
  *   - nothing changes at all when the filter is off.
  */
-import { describe, expect, it, beforeEach, afterEach } from 'bun:test';
+import { describe, expect, it, beforeEach, afterEach, spyOn } from 'bun:test';
 import { initDatabase, closeDb } from '../vault/schema.ts';
 import { LLMManager } from '../llm/manager.ts';
 import { AgentOrchestrator } from './orchestrator.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
 import { BUILTIN_TOOLS } from '../actions/tools/builtin.ts';
+import { buildProductionRegistry } from '../actions/tools/production-registry.ts';
+import type { ToolDefinition } from '../actions/tools/registry.ts';
+import { runSubAgent, type GovernedToolDispatch, type SubAgentResult } from './sub-agent-runner.ts';
+import { ToolExposureLedger } from '../actions/tools/tool-relevance/ledger.ts';
+import { AuthorityEngine } from '../authority/engine.ts';
 import type {
   LLMProvider, LLMMessage, LLMOptions, LLMResponse, LLMStreamEvent, LLMTool, LLMToolCall,
 } from '../llm/provider.ts';
@@ -70,6 +75,16 @@ class CatalogueCapturingProvider extends RecordingProvider {
   }
 }
 
+/** Streams scripted responses, recording the tool list of each call. */
+class StreamingRecordingProvider extends RecordingProvider {
+  override async *stream(messages: LLMMessage[] = [], opts?: LLMOptions): AsyncIterable<LLMStreamEvent> {
+    const r = await this.chat(messages, opts);
+    for (const tc of r.tool_calls) yield { type: 'tool_call', tool_call: tc };
+    if (r.content) yield { type: 'text', text: r.content };
+    yield { type: 'done', response: r };
+  }
+}
+
 function call(name: string, args: Record<string, unknown> = {}): LLMResponse {
   const tc: LLMToolCall = { id: `c${Math.random()}`, name, arguments: args };
   return {
@@ -82,14 +97,14 @@ const done = (t = 'done'): LLMResponse => ({
   model: 'scripted', finish_reason: 'stop',
 });
 
-function makeOrchestrator(provider: LLMProvider): AgentOrchestrator {
+function makeOrchestrator(provider: LLMProvider, tools: readonly ToolDefinition[] = BUILTIN_TOOLS): AgentOrchestrator {
   const m = new LLMManager();
   m.registerProvider(provider);
   m.setTierMap({ medium: { provider: 'ollama', model: 'qwen2.5:7b' } });
   const orch = new AgentOrchestrator();
   orch.setLLMManager(m);
   const registry = new ToolRegistry();
-  for (const t of BUILTIN_TOOLS) registry.register(t);
+  for (const t of tools) registry.register(t);
   orch.setToolRegistry(registry);
   orch.setToolFilterProviders({ ollama: { kind: 'ollama' } });
   orch.createPrimary(ROLE);
@@ -97,6 +112,14 @@ function makeOrchestrator(provider: LLMProvider): AgentOrchestrator {
 }
 
 const PERCEPTION = BUILTIN_TOOLS.filter(isFramedPerception).map((t) => t.name);
+
+/**
+ * The production registry, with every tool's `execute` replaced by a stub:
+ * these tests assert what is OFFERED and must never touch the machine,
+ * whichever tool a scripted model calls.
+ */
+const PROD: ToolDefinition[] = (await buildProductionRegistry()).tools
+  .map((t) => ({ ...t, execute: async () => `stub ${t.name}` }));
 
 describe('the filter wired into processMessage', () => {
   beforeEach(() => { closeDb(); initDatabase(':memory:'); });
@@ -218,6 +241,491 @@ describe('the escape hatch, end to end', () => {
     const primary = orch.getPrimary()!;
     expect(primary).toBeDefined();
     expect(provider.seen[1]!.length).toBe(BUILTIN_TOOLS.length);
+  });
+});
+
+describe('across turns and off-list calls', () => {
+  beforeEach(() => { closeDb(); initDatabase(':memory:'); });
+  afterEach(() => { resetToolFilterPolicy(); });
+
+  it("#483's mid-task repro, end to end: the follow-up keeps ui_act and browser_navigate", async () => {
+    // Turn 1 `open notepad`, turn 2 `now remember that I did that`. Under
+    // #475 turn 2 lost ui_act and browser_navigate and kept run_command.
+    setToolFilterPolicy(ON);
+    const provider = new RecordingProvider([call('ui_act', { id: 1, action: 'click' }), done(), done()]);
+    const orch = makeOrchestrator(provider, PROD);
+    await orch.processMessage('sys', 'open notepad and type hello');
+    // Pad turn 2 past the selection window, so turn 1's text cannot select
+    // anything and only the ledger can keep what turn 1 used.
+    await orch.processMessage('sys', `${'x '.repeat(4500)}now remember that I did that`);
+    const turn2 = provider.names(provider.seen.length - 1);
+    expect(turn2.has('ui_act')).toBe(true);
+    expect(turn2.has('browser_navigate')).toBe(true);
+    if (turn2.has('run_command')) for (const p of PERCEPTION) expect(`${p}:${turn2.has(p)}`).toBe(`${p}:true`);
+  });
+
+  it('an off-list unframed fetch is not run while framed readers are hidden, and comes back with them', async () => {
+    // The Tool Guide in the system prompt names every tool whatever the
+    // filter kept, so a small model can call one it was not offered.
+    // Dispatching it would be #475's substitution through a side door: the
+    // offered set kept the framing invariant and the dispatch did not.
+    setToolFilterPolicy(ON);
+    const results: string[] = [];
+    const ran: string[] = [];
+    const tools = PROD.map((t) => (t.name === 'list_directory'
+      ? { ...t, execute: async () => { ran.push(t.name); return 'listing'; } }
+      : t));
+    const provider = new CatalogueCapturingProvider([call('list_directory', { path: '/tmp' }), done()], results);
+    const orch = makeOrchestrator(provider, tools);
+    const rows: Array<Record<string, unknown>> = [];
+    orch.setAuditTrail({ log: (r: Record<string, unknown>) => { rows.push(r); return r; } } as never);
+    await orch.processMessage('sys', 'set a goal to ship the release this week');
+
+    // Audited as what it was: an off-list admission (not a discover_tools
+    // call) and a refusal that did not execute.
+    expect(rows.map((r) => [r.tool_name, r.authority_decision, r.executed])).toEqual([
+      ['off_list_call(list_directory)', 'allowed', true],
+      ['list_directory', 'denied', false],
+    ]);
+
+    const first = provider.names(0);
+    expect(first.has('list_directory')).toBe(false);
+    expect(first.has('browser_navigate')).toBe(false);
+
+    expect(ran).toEqual([]);
+    expect(results.some((r) => r.startsWith('[NOT RUN] list_directory'))).toBe(true);
+
+    const next = provider.names(1);
+    expect(next.has('list_directory')).toBe(true);
+    for (const p of PERCEPTION) expect(`${p}:${next.has(p)}`).toBe(`${p}:true`);
+  });
+
+  it('an off-list framed reader runs as it would unfiltered, and the set is recomputed', async () => {
+    setToolFilterPolicy(ON);
+    const ran: string[] = [];
+    const tools = PROD.map((t) => (t.name === 'browser_snapshot'
+      ? { ...t, execute: async () => { ran.push(t.name); return 'page'; } }
+      : t));
+    const provider = new RecordingProvider([call('browser_snapshot'), done()]);
+    const orch = makeOrchestrator(provider, tools);
+    await orch.processMessage('sys', 'set a goal to ship the release this week');
+    expect(provider.names(0).has('browser_snapshot')).toBe(false);
+    expect(ran).toEqual(['browser_snapshot']);
+    expect(provider.names(1).has('browser_snapshot')).toBe(true);
+  });
+
+  it('the off-list call stays exposed on the next turn, through the ledger rather than the text', async () => {
+    setToolFilterPolicy(ON);
+    const provider = new RecordingProvider([call('list_directory', { path: '/tmp' }), done(), done()]);
+    const orch = makeOrchestrator(provider, PROD);
+    await orch.processMessage('sys', 'set a goal to ship the release this week');
+    await orch.processMessage('sys', 'thanks');
+    expect(provider.names(2).has('list_directory')).toBe(true);
+  });
+
+  it('an offered call does not recompute: the set stays byte-stable across the loop', async () => {
+    // Recomputing on every dispatch would invalidate the cached prefix on
+    // every iteration; only a widening may change the list mid-turn.
+    setToolFilterPolicy(ON);
+    const provider = new RecordingProvider([call('manage_goals', { action: 'list' }), done()]);
+    const orch = makeOrchestrator(provider, PROD);
+    await orch.processMessage('sys', 'set a goal to ship the release this week');
+    expect(provider.seen[1]!.map((t) => t.name)).toEqual(provider.seen[0]!.map((t) => t.name));
+  });
+
+  it("consecutive router-first tasks share the primary's ledger, so task 2 keeps task 1's tools", async () => {
+    // processTaskCall sees only the user's latest message; the dialogue
+    // rides in as system context, which selection does not read. A fresh
+    // ledger per task was the mid-task strip on the router-first path.
+    setToolFilterPolicy(ON);
+    const provider = new RecordingProvider([call('list_directory', { path: '/tmp' }), done(), done()]);
+    const orch = makeOrchestrator(provider, PROD);
+    await orch.processTaskCall({
+      systemPrompt: 'sys', userMessage: 'list the files in /tmp', tier: 'medium', subsystem: 'test',
+    });
+    expect(provider.names(0).has('list_directory')).toBe(true);
+    await orch.processTaskCall({
+      systemPrompt: 'sys', userMessage: 'set a goal to ship it this week', tier: 'medium', subsystem: 'test',
+    });
+    expect(provider.names(2).has('list_directory')).toBe(true);
+  });
+
+  it('processTaskCall: a refused off-list call in a batch leaves no tool_call unanswered', async () => {
+    setToolFilterPolicy(ON);
+    const ran: string[] = [];
+    const tools = PROD.map((t) => ({ ...t, execute: async () => { ran.push(t.name); return `stub ${t.name}`; } }));
+    const batch: LLMResponse = {
+      content: '',
+      tool_calls: [
+        { id: 'k1', name: 'run_command', arguments: { command: 'echo x' } },
+        { id: 'k2', name: 'manage_goals', arguments: { action: 'list' } },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 }, model: 'scripted', finish_reason: 'tool_use',
+    };
+    const provider = new RecordingProvider([batch, done()]);
+    const orch = makeOrchestrator(provider, tools);
+    const result = await orch.processTaskCall({
+      systemPrompt: 'sys', userMessage: 'set a goal to ship the release this week', tier: 'medium', subsystem: 'test',
+    });
+    expect(ran).toEqual(['manage_goals']);
+    const answered = new Map(result.conversation.filter((m) => m.role === 'tool').map((m) => [m.tool_call_id, String(m.content)]));
+    expect(answered.get('k1')).toStartWith('[NOT RUN] run_command');
+    expect(answered.get('k2')).toBe('stub manage_goals');
+    const next = provider.names(1);
+    expect(next.has('run_command')).toBe(true);
+    for (const p of PERCEPTION) expect(`${p}:${next.has(p)}`).toBe(`${p}:true`);
+  });
+
+  it('with the filter off, an unknown tool is not answered with a pointer to discover_tools', async () => {
+    // discover_tools is neither offered nor intercepted when the filter is
+    // off; pointing at it sent the model round a loop.
+    resetToolFilterPolicy();
+    const results: string[] = [];
+    const provider = new CatalogueCapturingProvider([call('web_search', { q: 'x' }), done()], results);
+    const orch = makeOrchestrator(provider);
+    await orch.processMessage('sys', 'look something up');
+    const reply = results.find((r) => r.includes('web_search'));
+    expect(reply).toBeDefined();
+    expect(reply).not.toContain('discover_tools');
+  });
+});
+
+describe('streamMessage', () => {
+  beforeEach(() => { closeDb(); initDatabase(':memory:'); });
+  afterEach(() => { resetToolFilterPolicy(); });
+
+  async function drain(it: AsyncIterable<LLMStreamEvent>): Promise<void> {
+    for await (const _ of it) { /* consume */ }
+  }
+
+  it('filters on the main chat path when every reachable model is small', async () => {
+    setToolFilterPolicy(ON);
+    const provider = new StreamingRecordingProvider([done()]);
+    const orch = makeOrchestrator(provider, PROD);
+    await drain(orch.streamMessage('sys', 'set a goal to ship the release this week'));
+    expect(provider.seen[0]!.length).toBeLessThan(PROD.length);
+    expect(provider.names(0).has('discover_tools')).toBe(true);
+  });
+
+  it('refuses an off-list shell on the streaming path too', async () => {
+    setToolFilterPolicy(ON);
+    const ran: string[] = [];
+    const tools = PROD.map((t) => ({ ...t, execute: async () => { ran.push(t.name); return 'x'; } }));
+    const provider = new StreamingRecordingProvider([call('run_command', { command: 'echo x' }), done()]);
+    const orch = makeOrchestrator(provider, tools);
+    await drain(orch.streamMessage('sys', 'set a goal to ship the release this week'));
+    expect(ran).toEqual([]);
+    expect(provider.names(0).has('run_command')).toBe(false);
+    expect(provider.names(1).has('run_command')).toBe(true);
+    for (const p of PERCEPTION) expect(`${p}:${provider.names(1).has(p)}`).toBe(`${p}:true`);
+  });
+
+  it('a frontier fallbackTier keeps the list whole, even though the requested tier is small', async () => {
+    // agent-service streams on `conversation` with `medium` as the
+    // caller-supplied retry tier, which TIER_FALLBACK never mentions. The
+    // gate must see it, or the frontier model gets the filtered list the
+    // moment the small one fails before first output.
+    setToolFilterPolicy(ON);
+    const provider = new StreamingRecordingProvider([done()]);
+    const orch = makeOrchestrator(provider, PROD);
+    const m = new LLMManager();
+    m.registerProvider(provider);
+    m.setTierMap({
+      conversation: { provider: 'ollama', model: 'qwen2.5:7b' },
+      medium: { provider: 'ollama', model: 'claude-sonnet-proxy' },
+    });
+    orch.setLLMManager(m);
+    await drain(orch.streamMessage('sys', 'set a goal to ship the release this week', 'conversation', 'test', 'medium'));
+    expect(provider.seen[0]!.length).toBe(PROD.length);
+  });
+});
+
+describe('runSubAgent', () => {
+  beforeEach(() => { closeDb(); initDatabase(':memory:'); });
+  afterEach(() => { resetToolFilterPolicy(); });
+
+  it('a call to a hidden shell is not run, and the next provider call carries it with the framed readers', async () => {
+    setToolFilterPolicy(ON);
+    // A scoped registry with every browser tool, the shell and one
+    // non-browsing tool. A turn that selects only that tool hides both the
+    // browser and the shell -- the shape in which a hidden shell call would
+    // strand a fetch unframed.
+    const scoped = PROD.filter((t) => t.category === 'browser'
+      || ['run_command', 'manage_goals'].includes(t.name));
+    const registry = new ToolRegistry();
+    for (const t of scoped) registry.register(t);
+
+    const seen: string[][] = [];
+    const replies: LLMResponse[] = [call('run_command', { command: 'echo fetched' }), done()];
+    const manager = {
+      getTierMap: () => ({ medium: { provider: 'ollama', model: 'qwen2.5:7b' } }),
+      chatTier: async (_tier: string, _sub: string, _msgs: LLMMessage[], opts?: LLMOptions) => {
+        seen.push((opts?.tools ?? []).map((t) => t.name));
+        return replies.shift() ?? done();
+      },
+    } as unknown as LLMManager;
+    const history: Array<{ role: string; content: unknown }> = [];
+    const agent = {
+      id: 'child', agent: { role: { id: 'fixture', name: 'Fixture', description: '', responsibilities: [] }, authority: { max_authority_level: 10 } },
+      setTask() {}, activate() {}, idle() {},
+      addMessage: (role: string, content: unknown) => history.push({ role, content }), getMessages: () => history,
+    } as never;
+
+    const result = await runSubAgent({
+      agent, task: 'set a goal to ship the release this week', context: '', llmManager: manager, toolRegistry: registry,
+      toolFilterProviders: { ollama: { kind: 'ollama' } },
+    });
+    // Not run: the offered set was hiding every framed reader.
+    const toolResults = result.messages.filter((m) => m.role === 'tool').map((m) => String(m.content));
+    expect(toolResults.some((r) => r.startsWith('[NOT RUN] run_command'))).toBe(true);
+    expect(toolResults.some((r) => r.includes('stub run_command'))).toBe(false);
+
+    // The ask selects the goals group: no shell, no browser.
+    expect(seen[0]!.includes('run_command')).toBe(false);
+    expect(seen[0]!.includes('browser_navigate')).toBe(false);
+    expect(seen[0]!.includes('discover_tools')).toBe(true);
+    // The model called it anyway. The very next provider call carries it,
+    // and every framed reader the registry has.
+    expect(seen[1]!.includes('run_command')).toBe(true);
+    for (const t of scoped.filter(isFramedPerception)) {
+      expect(`${t.name}:${seen[1]!.includes(t.name)}`).toBe(`${t.name}:true`);
+    }
+  });
+});
+
+/**
+ * A sub-agent that pauses on a governed write partway through a batch, then
+ * resumes. Scoped registry: the browser tools, the shell, a goals tool and
+ * the write. The task selects only the goals group, so the first provider
+ * call offers neither the shell nor the browser.
+ */
+async function pauseAndResume(opts: {
+  content: string;
+  calls: LLMToolCall[];
+  /** Drop `offered` from the checkpoint, as one written before it existed. */
+  legacyCheckpoint?: boolean;
+  /** Policy for the paused run and the resumed one (ON by default). */
+  policy?: 'on' | 'off';
+  /** A frontier model on the tier: the policy is on, but this model is never filtered. */
+  frontier?: boolean;
+  /** A batch the model sends on the first provider call after the resume. */
+  after?: LLMToolCall[];
+  /** Governed dispatch on resume; default executes everything. */
+  resumeGoverned?: GovernedToolDispatch;
+}) {
+  if (opts.policy === 'off') resetToolFilterPolicy(); else setToolFilterPolicy(ON);
+  const ran: string[] = [];
+  const scoped = PROD.filter((t) => t.category === 'browser'
+    || ['run_command', 'manage_goals', 'write_file'].includes(t.name))
+    .map((t) => ({ ...t, execute: async () => { ran.push(t.name); return `stub ${t.name}`; } }));
+  const registry = new ToolRegistry();
+  for (const t of scoped) registry.register(t);
+
+  const batch: LLMResponse = {
+    content: opts.content, tool_calls: opts.calls,
+    usage: { input_tokens: 1, output_tokens: 1 }, model: 'scripted', finish_reason: 'tool_use',
+  };
+  const replies: LLMResponse[] = [batch];
+  if (opts.after) {
+    replies.push({ content: '', tool_calls: opts.after, usage: { input_tokens: 1, output_tokens: 1 }, model: 'scripted', finish_reason: 'tool_use' });
+  }
+  replies.push(done());
+  const seen: string[][] = [];
+  const manager = {
+    getTierMap: () => (opts.frontier
+      ? { medium: { provider: 'openai', model: 'gpt-5.4' } }
+      : { medium: { provider: 'ollama', model: 'qwen2.5:7b' } }),
+    chatTier: async (_t: string, _s: string, _m: LLMMessage[], o?: LLMOptions) => {
+      seen.push((o?.tools ?? []).map((t) => t.name));
+      return replies.shift() ?? done();
+    },
+  } as unknown as LLMManager;
+  const history: Array<{ role: string; content: unknown }> = [];
+  const agent = () => ({
+    id: 'child', agent: { role: { id: 'fixture', name: 'Fixture', description: '', responsibilities: [] }, authority: { max_authority_level: 10 } },
+    setTask() {}, activate() {}, idle() {},
+    addMessage: (role: string, content: unknown) => history.push({ role, content }), getMessages: () => history,
+  } as never);
+  const engine = new AuthorityEngine({ default_level: 10, governed_categories: ['write_data'] as never, overrides: [],
+    context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' } as never);
+  const rows: Array<Record<string, unknown>> = [];
+  const audit = { log: (r: Record<string, unknown>) => { rows.push(r); return r; } } as never;
+  const approval = { effectId: 'effect', approvalId: 'approval', waitpointId: 'waitpoint' };
+  const common = {
+    task: 'set a goal to ship the release this week', context: '', llmManager: manager, toolRegistry: registry,
+    toolFilterProviders: { ollama: { kind: 'ollama' as const }, openai: { kind: 'openai' as const } },
+    authorityEngine: engine, auditTrail: audit, maxIterations: 4,
+  };
+
+  const paused: SubAgentResult = await runSubAgent({ ...common, agent: agent(),
+    governedTools: async () => ({ kind: 'paused', approval }) });
+  expect(paused.terminationReason).toBe('paused');
+  const pending = { ...paused.paused! };
+  if (opts.legacyCheckpoint) delete pending.offered;
+
+  const resumed = await runSubAgent({ ...common, agent: agent(),
+    governedTools: opts.resumeGoverned ?? (async () => ({ kind: 'executed', result: 'written' })),
+    resume: {
+      messages: paused.messages, toolsUsed: paused.toolsUsed, tokensUsed: paused.tokensUsed, sequence: paused.sequence!,
+      iteration: paused.paused!.iteration, taint: paused.taint ?? [], failedToolCalls: paused.failedToolCalls ?? [],
+      pending,
+    } });
+  const results = new Map(resumed.messages.filter((m) => m.role === 'tool').map((m) => [m.tool_call_id, String(m.content)]));
+  return { ran, seen, paused, resumed, results, rows };
+}
+
+const write = (id: string): LLMToolCall => ({ id, name: 'write_file', arguments: { path: '/tmp/x', content: 'y' } });
+const shell = (id: string): LLMToolCall => ({ id, name: 'run_command', arguments: { command: 'echo fetched' } });
+
+describe('runSubAgent pause and resume', () => {
+  beforeEach(() => { closeDb(); initDatabase(':memory:'); });
+  afterEach(() => { resetToolFilterPolicy(); });
+
+  it('a hidden shell queued behind a paused call is still refused on resume', async () => {
+    const r = await pauseAndResume({ content: '', calls: [write('p1'), shell('p2')] });
+    expect(r.seen[0]!.includes('run_command')).toBe(false);
+    expect(r.paused.paused?.remaining.map((c) => c.name)).toEqual(['run_command']);
+    expect(r.ran).toEqual([]);
+    expect(r.results.get('p2')).toStartWith('[NOT RUN] run_command');
+    expect(r.resumed.toolsUsed).not.toContain('run_command');
+  });
+
+  it("the model's own text cannot select the shell for its queued call", async () => {
+    // "running a command" selects the shell group once the assistant text
+    // is in the buffer. A set recomputed on resume would then count the
+    // shell as offered; the model chose it when it was not.
+    const r = await pauseAndResume({
+      content: 'Let me check the status by running a command.', calls: [write('p1'), shell('p2')],
+    });
+    expect(r.seen[0]!.includes('run_command')).toBe(false);
+    expect(r.ran).toEqual([]);
+    expect(r.results.get('p2')).toStartWith('[NOT RUN] run_command');
+  });
+
+  it('a discover_tools admission earlier in the same batch does not pre-clear the shell', async () => {
+    // The live loop refuses this batch: the admission widens the NEXT
+    // provider call, not the batch already chosen. Resume must agree.
+    const r = await pauseAndResume({
+      content: '',
+      calls: [{ id: 'p0', name: 'discover_tools', arguments: { names: ['run_command'] } }, write('p1'), shell('p2')],
+    });
+    expect(r.ran).toEqual([]);
+    expect(r.results.get('p2')).toStartWith('[NOT RUN] run_command');
+  });
+
+  it('a legacy checkpoint runs a queued ordinary call without logging it as an off-list admission', async () => {
+    const r = await pauseAndResume({
+      content: '', calls: [write('p1'), { id: 'p2', name: 'manage_goals', arguments: { action: 'list' } }, shell('p3')],
+      legacyCheckpoint: true,
+    });
+    // Dispatched (through the governed boundary, since it writes), not refused.
+    expect(r.results.get('p2')).toBe('written');
+    expect(r.results.get('p3')).toStartWith('[NOT RUN] run_command');
+    const names = r.rows.map((row) => String(row.tool_name));
+    expect(names.some((n) => n.startsWith('off_list_call(manage_goals'))).toBe(false);
+    expect(names).toContain('off_list_call(run_command)');
+  });
+
+  it('a checkpoint from before `offered` existed refuses a queued trigger', async () => {
+    const r = await pauseAndResume({
+      content: 'Let me check the status by running a command.', calls: [write('p1'), shell('p2')], legacyCheckpoint: true,
+    });
+    expect(r.ran).toEqual([]);
+    expect(r.results.get('p2')).toStartWith('[NOT RUN] run_command');
+  });
+
+  it('with the filter off: nothing touches the ledger, and a queued call runs from any checkpoint', async () => {
+    const add = spyOn(ToolExposureLedger.prototype, 'add');
+    try {
+      const r = await pauseAndResume({ content: '', calls: [write('p1'), shell('p2')], legacyCheckpoint: true, policy: 'off' });
+      expect(r.seen[0]!.length).toBe(PROD.filter((t) => t.category === 'browser'
+        || ['run_command', 'manage_goals', 'write_file'].includes(t.name)).length);
+      expect(r.ran).toEqual(['run_command']);
+      expect(r.results.get('p2')).toBe('stub run_command');
+      expect(add).not.toHaveBeenCalled();
+    } finally {
+      add.mockRestore();
+    }
+  });
+});
+
+describe('runSubAgent pause and resume: agreeing with the live loop', () => {
+  beforeEach(() => { closeDb(); initDatabase(':memory:'); });
+  afterEach(() => { resetToolFilterPolicy(); });
+
+  it('a shell refused live is callable after the resume, as the refusal promised', async () => {
+    // The live loop admits a refused off-list call and tells the model to
+    // call it again. A resume that forgot the admission refused the retry.
+    const r = await pauseAndResume({ content: '', calls: [shell('p1'), write('p2')], after: [shell('b1')] });
+    expect(r.results.get('p1')).toStartWith('[NOT RUN] run_command');
+    expect(r.results.get('b1')).toBe('stub run_command');
+    expect(r.ran).toEqual(['run_command']);
+  });
+
+  it('a frontier model with the policy on runs a queued call from a legacy checkpoint', async () => {
+    // Never filtered, so it was offered everything: no spurious refusal.
+    const r = await pauseAndResume({ content: '', calls: [write('p1'), shell('p2')], legacyCheckpoint: true, frontier: true });
+    expect(r.results.get('p2')).toBe('stub run_command');
+  });
+
+  it('a second pause during the resume carries the original offered set forward', async () => {
+    let n = 0;
+    const second = { effectId: 'e2', approvalId: 'a2', waitpointId: 'w2' };
+    const r = await pauseAndResume({
+      content: 'Let me check the status by running a command.',
+      calls: [write('p1'), write('p2'), shell('p3')],
+      resumeGoverned: async () => (n++ === 0 ? { kind: 'executed', result: 'written' } : { kind: 'paused', approval: second }),
+    });
+    expect(r.resumed.terminationReason).toBe('paused');
+    expect(r.resumed.paused?.remaining.map((c) => c.name)).toEqual(['run_command']);
+    expect(r.resumed.paused?.offered).toEqual(r.paused.paused?.offered);
+    expect(r.resumed.paused?.offered).not.toContain('run_command');
+  });
+});
+
+describe('processTaskCall with the filter off', () => {
+  beforeEach(() => { closeDb(); initDatabase(':memory:'); });
+  afterEach(() => { resetToolFilterPolicy(); });
+
+  it('writes nothing to the ledger and dispatches a tool the model was not offered', async () => {
+    resetToolFilterPolicy();
+    const add = spyOn(ToolExposureLedger.prototype, 'add');
+    try {
+      const ran: string[] = [];
+      // A tool registered AFTER the list was sent: genuinely not offered,
+      // yet registered at dispatch time.
+      const late: ToolDefinition = {
+        name: 'late_tool', description: 'x', category: 'terminal', parameters: {},
+        execute: async () => { ran.push('late_tool'); return 'late ran'; },
+      };
+      let orch: AgentOrchestrator;
+      class LateRegisteringProvider extends RecordingProvider {
+        override async chat(m: LLMMessage[], o?: LLMOptions): Promise<LLMResponse> {
+          if (this.seen.length === 0) orch.getToolRegistry()!.register(late);
+          return super.chat(m, o);
+        }
+      }
+      const provider = new LateRegisteringProvider([call('late_tool'), done()]);
+      orch = makeOrchestrator(provider);
+      const result = await orch.processTaskCall({
+        systemPrompt: 'sys', userMessage: 'set a goal', tier: 'medium', subsystem: 'test',
+        // A resumed buffer with calls and an admission that seeding would read.
+        history: [
+          { role: 'system', content: 'sys' },
+          { role: 'user', content: 'earlier' },
+          { role: 'assistant', content: '', tool_calls: [{ id: 'h1', name: 'run_command', arguments: {} },
+            { id: 'h2', name: 'discover_tools', arguments: { names: ['browser_navigate'] } }] },
+          { role: 'tool', content: 'ok', tool_call_id: 'h1' },
+          { role: 'tool', content: 'ok', tool_call_id: 'h2' },
+        ],
+      });
+      expect(provider.names(0).has('late_tool')).toBe(false);
+      expect(ran).toEqual(['late_tool']);
+      expect(result.conversation.some((m) => m.role === 'tool' && m.content === 'late ran')).toBe(true);
+      expect(add).not.toHaveBeenCalled();
+    } finally {
+      add.mockRestore();
+    }
   });
 });
 

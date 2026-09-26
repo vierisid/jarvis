@@ -33,10 +33,12 @@ import type { AuditTrail } from '../authority/audit.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import { ABOVE_LEVEL_SUBSTITUTION } from '../authority/deferred-executor.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
-import { resolveToolGate, gateContext } from '../authority/tool-action-map.ts';
+import { getActionForTool, resolveToolGate, gateContext } from '../authority/tool-action-map.ts';
 import { decideTools, realtimeToolDecision } from '../actions/tools/tool-relevance/filter.ts';
 import { DISCOVER_TOOLS, ToolExposureLedger } from '../actions/tools/tool-relevance/ledger.ts';
-import { interceptDiscovery, DISCOVER_TOOLS_LLM } from '../actions/tools/tool-relevance/discover.ts';
+import {
+  admissionAuditName, interceptDiscovery, interceptOffList, DISCOVER_TOOLS_LLM, type DiscoveryContext,
+} from '../actions/tools/tool-relevance/discover.ts';
 import { getToolFilterPolicy } from '../actions/tools/tool-relevance/policy.ts';
 import type { LLMProviderEntry } from '../config/types.ts';
 import { combineDecisions, type AuthorityDecision } from '../authority/engine.ts';
@@ -241,6 +243,16 @@ export class AgentOrchestrator {
    */
   setToolFilterProviders(providers: Record<string, LLMProviderEntry | undefined> | undefined): void {
     this.toolFilterProviders = providers;
+  }
+
+  /**
+   * The same provider entries, for the sub-agent launchers to hand to
+   * `runSubAgent`. Without them the sub-agent gate falls back to reading
+   * the provider NAME as its kind, so a custom-named ollama provider is
+   * never eligible there -- safe, but the call sites then disagree.
+   */
+  getToolFilterProviders(): Record<string, LLMProviderEntry | undefined> | undefined {
+    return this.toolFilterProviders;
   }
 
   // --- Authority setters ---
@@ -588,6 +600,15 @@ export class AgentOrchestrator {
             messages.push({ role: 'tool', content: discovery.result, tool_call_id: tc.id });
             continue;
           }
+          // A tool the model was not offered: admitted and recomputed, and
+          // not run at all if running it would strand outside content
+          // unframed. See interceptOffList.
+          const offList = this.handleOffListCall(tc, decided.exposed, ledger);
+          if (offList) widened = true;
+          if (offList?.refusal) {
+            messages.push({ role: 'tool', content: offList.refusal, tool_call_id: tc.id });
+            continue;
+          }
           // Everything the model actually calls stays exposed for the rest
           // of the conversation, so a later turn cannot strip a tool an
           // in-flight task is using.
@@ -610,9 +631,10 @@ export class AgentOrchestrator {
           }
         }
 
-        // An admission is the one thing that justifies recomputing the tool
-        // list mid-turn: it is the escape hatch, and it would be pointless
-        // if the newly admitted tools only appeared on the next user turn.
+        // Only a widening justifies recomputing the tool list mid-turn: an
+        // admission (the escape hatch would be pointless if the admitted
+        // tools only appeared on the next user turn), or a call to a tool
+        // the model was not offered (see interceptOffList).
         if (widened) {
           decided = this.decideTurnTools(messages, tier, ledger);
           tools = decided.llm;
@@ -699,8 +721,21 @@ export class AgentOrchestrator {
     // The task path's buffer IS durable -- it is persisted whole onto the
     // task record and replayed as opts.history -- so the ledger can be
     // seeded from it, which restores admissions across a pause/resume.
-    const ledger = new ToolExposureLedger();
-    ledger.seedFromMessages(opts.history, (n) => this.toolRegistry?.has(n) ?? false);
+    //
+    // The ledger is the PRIMARY's, not a fresh one per task. This loop is the
+    // router-first path's tool executor, and it sees only the user's latest
+    // message (the dialogue rides in as system context, which selection does
+    // not read), so a fresh ledger per task was #483's mid-task stripping
+    // again: task 1 "open example.com" uses browser_navigate, task 2 "now do
+    // the same for the second result" is offered none of it. Grow-only, so
+    // concurrent tasks sharing it can only widen each other.
+    const primaryAgent = this.getPrimary();
+    const ledger = primaryAgent ? this.ledgerFor(primaryAgent.id) : new ToolExposureLedger();
+    // Seeding writes into the long-lived primary ledger, so it follows the
+    // same rule as noteToolUse: nothing at all while the filter is off.
+    if (getToolFilterPolicy().enabled) {
+      ledger.seedFromMessages(opts.history, (n) => this.toolRegistry?.has(n) ?? false);
+    }
     let decided = this.decideTurnTools(messages, opts.tier, ledger);
     // ask_for_clarification is appended AFTER the filter, and is therefore
     // never part of its accounting. #475's fail-open guard counted it as
@@ -781,6 +816,12 @@ export class AgentOrchestrator {
           if (discovery) {
             widened ||= discovery.grew;
             messages.push({ role: 'tool', content: discovery.result, tool_call_id: tc.id });
+            continue;
+          }
+          const offList = this.handleOffListCall(tc, decided.exposed, ledger);
+          if (offList) widened = true;
+          if (offList?.refusal) {
+            messages.push({ role: 'tool', content: offList.refusal, tool_call_id: tc.id });
             continue;
           }
           this.noteToolUse(ledger, tc.name);
@@ -1066,6 +1107,12 @@ export class AgentOrchestrator {
           messages.push({ role: 'tool', content: discovery.result, tool_call_id: tc.id });
           continue;
         }
+        const offList = this.handleOffListCall(tc, decided.exposed, ledger);
+        if (offList) widened = true;
+        if (offList?.refusal) {
+          messages.push({ role: 'tool', content: offList.refusal, tool_call_id: tc.id });
+          continue;
+        }
         this.noteToolUse(ledger, tc.name);
         const result = await this.executeTool(tc, undefined, turnTaint);
         messages.push({
@@ -1133,17 +1180,6 @@ export class AgentOrchestrator {
   }
 
   // --- Private helpers ---
-
-  /**
-   * Get LLM-formatted tools from the ToolRegistry, unfiltered.
-   */
-  private getLLMTools(): LLMTool[] | undefined {
-    if (!this.toolRegistry || this.toolRegistry.count() === 0) {
-      return undefined;
-    }
-
-    return this.toolRegistry.list().map(toolDefToLLMTool);
-  }
 
   /**
    * The grow-only exposure ledger for one conversation.
@@ -1224,7 +1260,33 @@ export class AgentOrchestrator {
     exposed: ReadonlySet<string>,
     ledger: ToolExposureLedger,
   ): { result: string; grew: boolean } | null {
-    return interceptDiscovery(tc.name, tc.arguments, {
+    // Checked here, before the context is built, so the default-off path
+    // allocates nothing per tool call.
+    if (tc.name !== DISCOVER_TOOLS || !getToolFilterPolicy().enabled) return null;
+    return interceptDiscovery(tc.name, tc.arguments, this.discoveryContext(exposed, ledger));
+  }
+
+  /**
+   * Intercept a call to a registered tool the model was not offered.
+   *
+   * Returns null for an ordinary call. Otherwise the call has been admitted
+   * into the ledger (and audited), `grew` asks the loop to recompute, and a
+   * non-null `refusal` is the tool result to hand back INSTEAD of
+   * dispatching: an unframed fetch the offered set was keeping away from
+   * hidden framed readers is not run. See `interceptOffList`.
+   */
+  private handleOffListCall(
+    tc: LLMToolCall,
+    exposed: ReadonlySet<string>,
+    ledger: ToolExposureLedger,
+  ): { refusal: string | null; grew: boolean } | null {
+    if (!getToolFilterPolicy().enabled || exposed.has(tc.name)) return null;
+    return interceptOffList(tc.name, this.discoveryContext(exposed, ledger));
+  }
+
+  /** What both interceptors need: the gate, the emergency check, the audit hook. */
+  private discoveryContext(exposed: ReadonlySet<string>, ledger: ToolExposureLedger): DiscoveryContext {
+    return {
       all: this.toolRegistry?.list() ?? [],
       ledger,
       exposed,
@@ -1233,13 +1295,13 @@ export class AgentOrchestrator {
         (this.emergencyController && !this.emergencyController.canExecute()
           ? this.emergencyController.getState()
           : null),
-      onAdmitted: (admitted) => {
+      onAdmitted: (admitted, via) => {
         const agent = this.getPrimary();
         try {
           this.auditTrail?.log({
             agent_id: agent?.id ?? 'unknown',
             agent_name: this.auditAgentName(agent?.agent.role.name ?? 'unknown'),
-            tool_name: `${DISCOVER_TOOLS}(${admitted.join(',')})`,
+            tool_name: admissionAuditName(admitted, via),
             action_category: 'read_data',
             authority_decision: 'allowed',
             executed: true,
@@ -1251,7 +1313,23 @@ export class AgentOrchestrator {
             err instanceof Error ? err.message : err);
         }
       },
-    });
+      onRefused: (tool) => {
+        const agent = this.getPrimary();
+        try {
+          this.auditTrail?.log({
+            agent_id: agent?.id ?? 'unknown',
+            agent_name: this.auditAgentName(agent?.agent.role.name ?? 'unknown'),
+            tool_name: tool.name,
+            action_category: getActionForTool(tool.name, tool.category),
+            authority_decision: 'denied',
+            executed: false,
+          });
+        } catch (err) {
+          console.warn('[Orchestrator] could not audit an off-list refusal:',
+            err instanceof Error ? err.message : err);
+        }
+      },
+    };
   }
 
   /**
@@ -1337,7 +1415,13 @@ export class AgentOrchestrator {
     // background and taint profiles -- a real approval card for an invented
     // tool. A model steered by injected page text can emit those at will.
     if (!this.toolRegistry.has(toolCall.name)) {
-      return `Error: no tool named "${toolCall.name}" is available. Call discover_tools to see what is.`;
+      // Point at discover_tools only when it is answered. With the filter
+      // off it is neither offered nor intercepted, so the hint sent the
+      // model round a loop: call it, be told it does not exist, be told to
+      // call it.
+      return getToolFilterPolicy().enabled
+        ? `Error: no tool named "${toolCall.name}" is available. Call discover_tools to see what is.`
+        : `Error: no tool named "${toolCall.name}" is available.`;
     }
 
     if (this.authorityEngine && primary) {

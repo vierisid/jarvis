@@ -30,6 +30,16 @@ import type { LLMMessage } from '../../../llm/provider.ts';
 /** The tool name the escape hatch is exposed under. */
 export const DISCOVER_TOOLS = 'discover_tools';
 
+/** How an off-list refusal's tool result begins (`interceptOffList`). */
+export const NOT_RUN_MARKER = '[NOT RUN]';
+
+/**
+ * The placeholder `processTaskCall`'s clarification branch writes for every
+ * sibling call it skipped. It answers a tool_call id -- the providers require
+ * it -- but the call neither ran nor was admitted, so seeding skips it.
+ */
+const SKIPPED_PREFIX = '[Not run:';
+
 /**
  * A grow-only set of tool names that must stay exposed for the rest of a
  * conversation: everything the model has already called, plus everything it
@@ -81,9 +91,32 @@ export class ToolExposureLedger {
   ): void {
     if (!messages) return;
     const ok = (n: string) => (isKnown ? isKnown(n) : true);
+    // Only calls that were ANSWERED. A paused sub-agent's buffer ends on an
+    // assistant turn whose later calls were never reached; seeding those
+    // would put a tool the model chose while it was hidden -- a shell
+    // picked with every framed reader out of view -- into the exposed set,
+    // and the resume would then dispatch it without the off-list check.
+    // "Called or admitted" has to mean it.
+    //
+    // Not the clarification branch's skipped siblings: they were answered
+    // with a placeholder, never ran and were never admitted, and seeding
+    // them into the shared, process-lifetime primary ledger would widen it
+    // with no audit row. An off-list REFUSAL (NOT_RUN_MARKER) is different
+    // and IS seeded: the live loop admitted that name, audited the
+    // admission, and told the model it is available from its next step --
+    // a resumed run that forgot it would refuse the retry the live one
+    // allows.
+    const answered = new Set<string>();
+    for (const m of messages) {
+      if (m.role !== 'tool' || !m.tool_call_id) continue;
+      const text = m.content;
+      if (typeof text === 'string' && text.startsWith(SKIPPED_PREFIX)) continue;
+      answered.add(m.tool_call_id);
+    }
     for (const m of messages) {
       if (m.role !== 'assistant' || !m.tool_calls) continue;
       for (const tc of m.tool_calls) {
+        if (!answered.has(tc.id)) continue;
         if (ok(tc.name)) this.add(tc.name);
         if (tc.name === DISCOVER_TOOLS) this.add(...admittedNames(tc.arguments).filter(ok));
       }
@@ -103,8 +136,22 @@ export class ToolExposureLedger {
  */
 export function admittedNames(args: unknown): string[] {
   if (!args || typeof args !== 'object') return [];
-  const raw = (args as Record<string, unknown>).names;
-  if (typeof raw === 'string') return [raw];
+  let raw = (args as Record<string, unknown>).names;
+  if (typeof raw === 'string') {
+    // Small models routinely stringify the array ('["browser_navigate"]')
+    // or send a comma-separated list, and `discover_tools` is answered
+    // before the registry's argument coercion ever sees it. Read either
+    // shape rather than reporting "No such tool" for a name that exists --
+    // the hatch failing on a formatting slip is the hatch failing.
+    const text = raw.trim();
+    if (text.startsWith('[')) {
+      try { raw = JSON.parse(text); } catch { raw = text.slice(1, -1); }
+    }
+    if (typeof raw === 'string') raw = raw.split(/[\s,]+/).map((n) => n.replace(/^["']|["']$/g, ''));
+  }
   if (!Array.isArray(raw)) return [];
-  return raw.filter((n): n is string => typeof n === 'string' && n.length > 0);
+  return raw
+    .filter((n): n is string => typeof n === 'string')
+    .map((n) => n.trim())
+    .filter((n) => n.length > 0);
 }

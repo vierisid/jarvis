@@ -42,12 +42,15 @@ let current: ToolFilterPolicy = DISABLED_POLICY;
 /**
  * The live policy.
  *
- * The env kill switch is re-read on every call, not just at boot. That is
- * the difference between a switch an operator can actually reach and one
- * that needs a restart: `JARVIS_TOOL_FILTER=off` now takes effect on the
- * next turn. Reading one env var per turn is nothing next to a provider
- * round trip, and the alternative -- a boot-frozen value -- was documented
- * as "the switch an operator reaches for at 3am" while not being one.
+ * The env kill switch is re-read on every call, not just at boot, so
+ * anything that changes this process's environment -- a test, an embedding
+ * host, a supervisor that sets it in-process -- is honoured on the next
+ * turn. Be precise about what that buys a running DAEMON, though: nothing
+ * outside the process can change its environment, and `tools` has no
+ * settings-reload applier, so for an operator `JARVIS_TOOL_FILTER=off` (or
+ * `tools.relevance_filter.enabled: false`) takes effect on RESTART. That
+ * meets #483's "no config key, no env var" complaint; it is not a live
+ * switch, and an earlier version of this comment claimed it was.
  *
  * `off` can only ever disable. It cannot enable something the resolved
  * policy did not already allow, so this cannot turn the filter on by

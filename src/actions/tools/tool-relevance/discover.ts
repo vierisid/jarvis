@@ -22,7 +22,8 @@
 
 import type { ToolDefinition } from '../registry.ts';
 import type { LLMTool } from '../../../llm/provider.ts';
-import { DISCOVER_TOOLS, admittedNames, type ToolExposureLedger } from './ledger.ts';
+import { DISCOVER_TOOLS, NOT_RUN_MARKER, admittedNames, type ToolExposureLedger } from './ledger.ts';
+import { isFramedPerception, isInvariantTrigger } from './authority-classes.ts';
 
 /**
  * The model-facing schema.
@@ -143,8 +144,18 @@ export type DiscoveryContext = {
   filterEnabled: boolean;
   /** The emergency state when execution is suspended, else null. */
   haltedState?: () => string | null;
-  /** Called with the admitted names when the exposed set actually grew. */
-  onAdmitted?: (admitted: string[]) => void;
+  /**
+   * Called with the admitted names when something was admitted, and how:
+   * an explicit `discover_tools` call, or a call to a tool the model was not
+   * offered (`interceptOffList`).
+   */
+  onAdmitted?: (admitted: string[], via: 'discover_tools' | 'off-list call') => void;
+  /**
+   * Called when an off-list call is refused (not run). Every refusal, even
+   * when the name was already in the ledger, so the trail shows each call
+   * that was not executed.
+   */
+  onRefused?: (tool: ToolDefinition) => void;
 };
 
 export function interceptDiscovery(
@@ -166,8 +177,119 @@ export function interceptDiscovery(
   const before = ctx.ledger.size;
   const outcome = handleDiscoverTools(args, ctx.all, ctx.ledger, ctx.exposed);
   const grew = ctx.ledger.size > before;
-  if (outcome.admitted.length > 0) ctx.onAdmitted?.(outcome.admitted);
+  if (outcome.admitted.length > 0) ctx.onAdmitted?.(outcome.admitted, 'discover_tools');
   return { result: outcome.result, grew };
+}
+
+/**
+ * A call to a registered tool the model was NOT offered this turn.
+ *
+ * It happens, and not only by hallucination: the Tool Guide in the static
+ * system prompt documents `run_command` and the browser tools by name
+ * whatever the filter kept, and the loops dispatch by registry name. The
+ * filter only ever shaped what was OFFERED, so without this the framing
+ * invariant held on the list and not at dispatch: a knowledge turn offered
+ * no shell and no browser, the model called `run_command` with curl
+ * anyway, it ran, and the page came back unframed -- #475's substitution
+ * through a side door.
+ *
+ * The call is treated as the admission it effectively is -- the name goes
+ * into the ledger, audited as `off_list_call(<name>)`, and the loop
+ * recomputes -- and then one of two things happens:
+ *
+ *   - It is an invariant trigger (an unframed fetch, or above
+ *     access_browser) and the offered set was hiding a framed reader. It is
+ *     NOT run. The model gets it back on the next step with the framed
+ *     readers beside it, and is told to choose again. Dispatching it would
+ *     be exactly the I1 violation the offered set was normalised to avoid.
+ *   - Anything else runs as it would unfiltered. A framed reader, or a tool
+ *     whose dispatch cannot strand outside content unframed, gains nothing
+ *     from a round trip.
+ *
+ * Returns null when this is not an off-list call (filter off, name not
+ * registered, or the model was offered it), so a caller can use it as a
+ * guard. `refusal` is the tool result to hand back instead of dispatching;
+ * null means dispatch normally. `grew` tells the loop to recompute.
+ */
+export function interceptOffList(
+  toolName: string,
+  ctx: DiscoveryContext,
+): { refusal: string | null; grew: boolean } | null {
+  try {
+    return offListInner(toolName, ctx);
+  } catch (err) {
+    // FAIL CLOSED, unlike `decideTools`. There the failure mode "send the
+    // full list" is safe because it widens what is offered. Here the
+    // equivalent -- dispatch as if the filter were off -- runs a tool the
+    // model chose while it was hidden, which is the one thing this check
+    // exists to stop, and we can no longer tell whether it is a trigger.
+    // So when the filter is on and the tool was not offered, it is not run;
+    // the model can call it again, or ask for it with discover_tools.
+    console.warn('[ToolFilter] off-list check threw; refusing the call:',
+      err instanceof Error ? err.message : err);
+    let offeredOrOff = false;
+    try { offeredOrOff = !ctx.filterEnabled || ctx.exposed.has(toolName); } catch { /* treat as off-list */ }
+    if (offeredOrOff) return null;
+    // Keep the onRefused contract -- every refusal leaves a row -- as far as
+    // the broken state allows.
+    try {
+      const tool = ctx.all.find((t) => t.name === toolName);
+      if (tool) ctx.onRefused?.(tool);
+    } catch { /* the refusal stands without its row */ }
+    return {
+      refusal: `${NOT_RUN_MARKER} ${toolName} was not in your tool list and could not be checked, so this call `
+        + `was not executed. Call discover_tools to see what is available.`,
+      // The throw may have come after the ledger grew; a recompute is
+      // harmless either way.
+      grew: true,
+    };
+  }
+}
+
+/**
+ * The audit `tool_name` for an admission. An off-list admission is NOT a
+ * `discover_tools` call and must not be logged as one, or anything that
+ * reads the trail by tool name would count calls that never happened.
+ */
+export function admissionAuditName(admitted: readonly string[], via: 'discover_tools' | 'off-list call'): string {
+  return via === 'off-list call' ? `off_list_call(${admitted.join(',')})` : `${DISCOVER_TOOLS}(${admitted.join(',')})`;
+}
+
+function offListInner(
+  toolName: string,
+  ctx: DiscoveryContext,
+): { refusal: string | null; grew: boolean } | null {
+  if (!ctx.filterEnabled) return null;
+  if (ctx.exposed.has(toolName)) return null;
+  const tool = ctx.all.find((t) => t.name === toolName);
+  if (!tool) return null;
+  // A halted system dispatches nothing; let the ordinary path say so,
+  // and do not widen anything while it is halted.
+  if (ctx.haltedState?.()) return null;
+
+  const before = ctx.ledger.size;
+  ctx.ledger.add(toolName);
+  const grew = ctx.ledger.size > before;
+  if (grew) ctx.onAdmitted?.([toolName], 'off-list call');
+
+  // `grew` below is always true, even when the name was already in the
+  // ledger (an earlier call in this batch, or a concurrent task): the
+  // offered set did not include it, so it is stale either way and the loop
+  // must recompute to offer what is now admitted.
+  const hidingFramedReader = ctx.all.some((t) => isFramedPerception(t) && !ctx.exposed.has(t.name));
+  if (isInvariantTrigger(tool) && hidingFramedReader) {
+    ctx.onRefused?.(tool);
+    return {
+      // Starts with NOT_RUN_MARKER: seeding a resumed buffer skips calls
+      // whose result says they did not run.
+      refusal: `${NOT_RUN_MARKER} ${toolName} was not in your tool list, so this call was not executed. `
+        + `It is available from your next step, together with the tools that read web pages and `
+        + `screens and mark what they return as untrusted. If the task is to read something from `
+        + `the web or the screen, use one of those instead; otherwise call ${toolName} again.`,
+      grew: true,
+    };
+  }
+  return { refusal: null, grew: true };
 }
 
 /**
