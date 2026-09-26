@@ -12,7 +12,8 @@ import { join, resolve } from 'node:path';
 import { getSecret, setSecret, deleteSecret, hasSecret } from '../vault/keychain.ts';
 import type { GitRemoteStatus, GitHubRepoOptions } from './types.ts';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
-import { PROJECT_GIT_PINS, gitVersionReader, resolveHookPins } from './git-pins.ts';
+import { PROJECT_GIT_PINS, PROJECT_STATUS_ARGS, gitVersionReader, resolveHookPins } from './git-pins.ts';
+import { defaultGitConfigLint, type GitConfigLint } from './git-config-lint.ts';
 
 // Kept importable from here, where #511 exported them.
 export {
@@ -226,6 +227,12 @@ function shellQuote(value: string): string {
  *     also disable HTTPS_PROXY on the proxied networks that need it.
  *   - Tokens already written into reflogs by the pre-#511 `pull <tokenUrl>`
  *     stay there (#517): rotate the token.
+ * Since #523 the project's OWN config cannot do either of the first two:
+ * git-config-lint.ts refuses to run git in a project whose .git/config holds
+ * a filter, an http.* key or anything else off its allowlist, and authedGit
+ * lints right before the token file exists. Both still apply to the global
+ * and system configs, which the lint does not read, and to a config changed
+ * between that lint and the command.
  */
 export function credentialHelperArgs(tokenFile: string, target: CredentialTarget): string[] {
   const file = shellQuote(tokenFile);
@@ -282,7 +289,8 @@ export function credentialHelperArgs(tokenFile: string, target: CredentialTarget
  *   PROJECT_GIT_PINS, on every git call, and pull is split besides.)
  * - no submodule recursion: each submodule is a second remote, and so a second
  *   `get` that the one-shot helper would refuse. Better predictable than a
- *   failure that depends on which submodule needed auth.
+ *   failure that depends on which submodule needed auth. (Pinned in
+ *   PROJECT_GIT_PINS since #523, for every daemon git call, not here.)
  *
  * Audited and NOT pinned, because git does not run them before the credential
  * `get` of an authenticated fetch or push (measured on git 2.55 with every one
@@ -305,11 +313,6 @@ export function gitHardeningArgs(target: CredentialTarget, originUrls: readonly 
   for (const protocol of KNOWN_PROTOCOLS) {
     args.push('-c', `protocol.${protocol}.allow=${protocol === target.protocol ? 'always' : 'never'}`);
   }
-  args.push(
-    '-c', 'submodule.recurse=false',
-    '-c', 'fetch.recurseSubmodules=false',
-    '-c', 'push.recurseSubmodules=no',
-  );
   return args;
 }
 
@@ -364,15 +367,19 @@ export class GitHubManager {
 
   private readonly credentialTarget: CredentialTarget;
   private readonly networkTimeoutMs: number;
+  private readonly configLint: GitConfigLint;
 
   /**
-   * Both options are test seams: the integration test pushes over HTTP to a
-   * loopback `git http-backend`, and the timeout test cannot wait ten minutes.
-   * Production always uses https://github.com and GIT_NETWORK_TIMEOUT_MS.
+   * `credentialTarget` and `networkTimeoutMs` are test seams: the integration
+   * test pushes over HTTP to a loopback `git http-backend`, and the timeout
+   * test cannot wait ten minutes. Production always uses https://github.com
+   * and GIT_NETWORK_TIMEOUT_MS. `configLint` is the project config lint
+   * (#523); SiteBuilderService passes the one it shares with its GitManager.
    */
-  constructor(options: { credentialTarget?: CredentialTarget; networkTimeoutMs?: number } = {}) {
+  constructor(options: { credentialTarget?: CredentialTarget; networkTimeoutMs?: number; configLint?: GitConfigLint } = {}) {
     this.credentialTarget = options.credentialTarget ?? GITHUB_CREDENTIAL_TARGET;
     this.networkTimeoutMs = options.networkTimeoutMs ?? GIT_NETWORK_TIMEOUT_MS;
+    this.configLint = options.configLint ?? defaultGitConfigLint;
     // A daemon killed mid-push left its dir behind; don't wait for the next
     // push to notice.
     sweepStaleCredentialDirs();
@@ -514,6 +521,9 @@ export class GitHubManager {
    * Remove the 'origin' remote.
    */
   async removeRemote(projectPath: string): Promise<void> {
+    // Up front: both steps below swallow failures, a lint refusal included,
+    // and would report a removal that never happened.
+    await this.configLint.check(projectPath);
     try {
       await this.git(projectPath, ['remote', 'remove', 'origin']);
     } catch { /* already gone */ }
@@ -541,6 +551,8 @@ export class GitHubManager {
    * when origin is on GitHub over https (see remoteGit).
    */
   async push(projectPath: string, branch?: string, force = false): Promise<{ success: boolean; error?: string }> {
+    const refusal = await this.configRefusal(projectPath);
+    if (refusal) return { success: false, error: refusal };
     const token = this.getToken();
     if (!token) return { success: false, error: 'GitHub token not configured' };
 
@@ -595,6 +607,8 @@ export class GitHubManager {
    * `pull <tokenUrl>` had no remote-tracking ref to find one from.
    */
   async pull(projectPath: string, branch?: string): Promise<{ success: boolean; conflicts?: string[]; error?: string }> {
+    const refusal = await this.configRefusal(projectPath);
+    if (refusal) return { success: false, error: refusal };
     const token = this.getToken();
     if (!token) return { success: false, error: 'GitHub token not configured' };
 
@@ -620,7 +634,7 @@ export class GitHubManager {
     } catch (err) {
       // Check for merge conflicts
       try {
-        const status = await this.git(projectPath, ['status', '--porcelain']);
+        const status = await this.git(projectPath, [...PROJECT_STATUS_ARGS]);
         const conflicts = status
           .split('\n')
           .filter(line => line.startsWith('UU') || line.startsWith('AA'))
@@ -639,6 +653,9 @@ export class GitHubManager {
    * Fetch from origin and compute ahead/behind status.
    */
   async getRemoteStatus(projectPath: string): Promise<GitRemoteStatus> {
+    // Up front, for the same reason as in removeRemote: the scrub and the
+    // get-url below swallow a refusal, which would read as "no remote".
+    await this.configLint.check(projectPath);
     // Before the early return: a project whose remote is gone must still be
     // cleaned of a token URL the pre-#511 push left behind.
     await this.scrubPersistedCredentialUrls(projectPath);
@@ -681,13 +698,26 @@ export class GitHubManager {
 
   // ── Private Helpers ──
 
-  /** resolveHookPins for this project; see there. */
+  /**
+   * The lint's refusal message for this project, or null when git may run.
+   * push and pull check this first: the get-url they start with swallows a
+   * refusal, and the user would be told "No remote origin configured".
+   */
+  private async configRefusal(cwd: string): Promise<string | null> {
+    const verdict = await this.configLint.inspect(cwd);
+    return verdict.ok ? null : verdict.message;
+  }
+
+  /**
+   * resolveHookPins for this project; see there. Unlinted: every caller has
+   * just linted the project (git(), or authedGit).
+   */
   private async namedHookPins(cwd: string): Promise<string[]> {
-    return resolveHookPins(args => this.git(cwd, args, { hookPins: [] }), await this.gitVersion());
+    return resolveHookPins(args => this.git(cwd, args, { hookPins: [], lint: false }), await this.gitVersion());
   }
 
   /** gitVersionReader, run from the temp dir; see there. */
-  private readonly gitVersion = gitVersionReader(args => this.git(tmpdir(), args, { hookPins: [] }));
+  private readonly gitVersion = gitVersionReader(args => this.git(tmpdir(), args, { hookPins: [], lint: false }));
 
   /**
    * Paths (up to two, for the error message) whose index blob is an actual
@@ -829,7 +859,12 @@ export class GitHubManager {
     if (await this.originIsCredentialTarget(cwd)) return this.authedGit(cwd, token, args);
 
     try {
-      return await this.git(cwd, args, { configArgs: ['-c', 'credential.helper='], timeoutMs: this.networkTimeoutMs });
+      // No local transport: it runs upload-pack/receive-pack in another
+      // repository on this machine with the pins stripped (git clears
+      // GIT_CONFIG_PARAMETERS for it), so that repository's hooks run. The
+      // lint refuses a local origin URL; this covers one it cannot see.
+      const configArgs = ['-c', 'credential.helper=', '-c', 'protocol.file.allow=never'];
+      return await this.git(cwd, args, { configArgs, timeoutMs: this.networkTimeoutMs });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       // Only where it explains the failure; a divergent-branch or rebase
@@ -904,10 +939,14 @@ export class GitHubManager {
       throw new Error('Refusing to use the GitHub token: origin is not on GitHub over https');
     }
 
-    // Before the token file exists: the lookup is a git process of its own,
-    // and this call runs exactly one git process while the file is on disk.
-    // (Per call: nothing serialises two operations on the same project, so a
-    // concurrent pull or status could still run a project filter meanwhile.)
+    // Before the token file exists, like the hook lookup after it: the
+    // config lint (#523) can be a git process of its own, and this call runs
+    // exactly one git process while the file is on disk, which therefore
+    // skips the lint. The last check is the one here, as close to the
+    // command as a check can be. (Per call: nothing serialises two operations
+    // on the same project, so a concurrent call could still change the
+    // config meanwhile; see the header of git-config-lint.ts.)
+    await this.configLint.check(cwd);
     const hookPins = await this.namedHookPins(cwd);
 
     const root = credentialRoot();
@@ -923,6 +962,7 @@ export class GitHubManager {
         ],
         timeoutMs: this.networkTimeoutMs,
         hookPins,
+        lint: false,
       });
     } catch (err) {
       // Belt and braces: git never sees the token in a URL any more, so it has
@@ -988,12 +1028,18 @@ export class GitHubManager {
    * `hookPins`, when given, replaces the per-call namedHookPins lookup:
    * authedGit passes pins computed before the token file exists, and the
    * lookup's own queries pass `[]`.
+   *
+   * Every call first lints the project's git config (#523) and throws its
+   * refusal instead of running git. `lint: false` is for the version read
+   * (not in a project), the hook lookup (its caller just linted), and
+   * authedGit's token-holding call (linted before the token file existed).
    */
   private async git(
     cwd: string,
     args: string[],
-    options: { configArgs?: string[]; timeoutMs?: number; hookPins?: readonly string[] } = {},
+    options: { configArgs?: string[]; timeoutMs?: number; hookPins?: readonly string[]; lint?: boolean } = {},
   ): Promise<string> {
+    if (options.lint !== false) await this.configLint.check(cwd);
     // Sanitized, not inherited - same reasoning as GitManager.run(): these
     // commands run in a model-written project tree, and whatever its config
     // names inherits this env (hooks are pinned off by PROJECT_GIT_PINS, but

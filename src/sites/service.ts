@@ -5,6 +5,7 @@
  * Implements the Service interface for daemon integration.
  */
 
+import { homedir } from 'node:os';
 import type { Service, ServiceStatus } from '../daemon/services.ts';
 import type { SiteBuilderConfig, Project } from './types.ts';
 import { ProjectManager } from './project-manager.ts';
@@ -12,6 +13,16 @@ import { GitManager } from './git-manager.ts';
 import { DevServerManager } from './dev-server-manager.ts';
 import { SiteProxy } from './proxy.ts';
 import { GitHubManager } from './github-manager.ts';
+import { GitConfigLint, scanProjectGitConfigs, type GitConfigVerdict } from './git-config-lint.ts';
+
+/**
+ * What a listing shows for a verdict: the refusal and, for the user reading
+ * the dashboard, the command that removes the key; or null.
+ */
+function configIssue(verdict: GitConfigVerdict | undefined): string | null {
+  if (!verdict || verdict.ok || verdict.reason === 'no-repo') return null;
+  return verdict.remedy ? `${verdict.message} ${verdict.remedy}` : verdict.message;
+}
 
 export class SiteBuilderService implements Service {
   name = 'site-builder';
@@ -22,10 +33,13 @@ export class SiteBuilderService implements Service {
   readonly githubManager: GitHubManager;
   readonly devServerManager: DevServerManager;
   readonly proxy: SiteProxy;
+  /** One lint, and so one cache, for both managers (#523). */
+  readonly configLint: GitConfigLint;
 
   constructor(private config: SiteBuilderConfig) {
-    this.gitManager = new GitManager();
-    this.githubManager = new GitHubManager();
+    this.configLint = new GitConfigLint();
+    this.gitManager = new GitManager({ configLint: this.configLint });
+    this.githubManager = new GitHubManager({ configLint: this.configLint });
     this.devServerManager = new DevServerManager(config);
     this.projectManager = new ProjectManager(config, this.gitManager);
     this.proxy = new SiteProxy(this.devServerManager);
@@ -49,6 +63,26 @@ export class SiteBuilderService implements Service {
     } catch (err) {
       this._status = 'error';
       console.error('[SiteBuilder] Failed to start:', err instanceof Error ? err.message : err);
+    }
+
+    // Not awaited: startup does not wait on a git spawn per project.
+    void this.scanGitConfigs();
+  }
+
+  /**
+   * Lint every project's git config once (#523), so a project whose config
+   * a model planted keys in is logged, and flagged in the listing
+   * (gitConfigIssue), before anyone opens it. Sequential and bounded (see
+   * scanProjectGitConfigs); its verdicts warm the cache the managers use.
+   */
+  async scanGitConfigs(): Promise<void> {
+    try {
+      const failing = await scanProjectGitConfigs(this.config.projects_dir.replace(/^~/, homedir()), this.configLint);
+      for (const { id, verdict } of failing) {
+        console.warn(`[SiteBuilder] Git is turned off for project "${id}": ${verdict.summary}`);
+      }
+    } catch (err) {
+      console.error('[SiteBuilder] Git config scan failed:', err instanceof Error ? err.message : err);
     }
   }
 
@@ -115,6 +149,8 @@ export class SiteBuilderService implements Service {
       ...project,
       devPort: port,
       status: running ? 'running' : 'stopped',
+      // getProject just ran git in the project, so this verdict is current.
+      gitConfigIssue: configIssue(this.configLint.lastVerdict(project.path)),
     };
   }
 
@@ -130,6 +166,7 @@ export class SiteBuilderService implements Service {
         ...p,
         devPort: port,
         status: running ? 'running' as const : 'stopped' as const,
+        gitConfigIssue: configIssue(this.configLint.lastVerdict(p.path)),
       };
     });
   }

@@ -102,6 +102,12 @@ async function runProbe(site: string): Promise<ProbeResult> {
       // Write then rename: the presence of the file implies a complete write.
       'env > "$dump.partial"',
       'mv "$dump.partial" "$dump"',
+      // `init` leaves the smallest repository git accepts, with no config, as
+      // the real one would leave a repository: the managers refuse to run
+      // git where there is none (#523), and createProject goes on to commit.
+      ...(name === 'git'
+        ? ['[ "$1" = init ] && mkdir -p .git/objects .git/refs && echo "ref: refs/heads/main" > .git/HEAD']
+        : []),
       'exit 0',
     ].join('\n');
     writeFileSync(join(binDir, name), script, { mode: 0o755 });

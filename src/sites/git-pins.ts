@@ -73,12 +73,28 @@ const HOOK_EVENTS = [
  *     daemon pull.
  *   - `push.gpgSign=false`: GitHub does not accept signed pushes, and the
  *     signing program is project-configurable too.
+ *   - `submodule.recurse=false`, `fetch.recurseSubmodules=false`,
+ *     `push.recurseSubmodules=no` (#523; the last three used to be pinned on
+ *     authenticated calls only): recursing runs git in a nested repository
+ *     under THAT repository's config, which git-config-lint.ts never reads --
+ *     its filter drivers and includes would run. `status` and `diff` also
+ *     get `--ignore-submodules=all` from their callers, since a per-submodule
+ *     `ignore` setting in `.gitmodules` beats the config default.
+ *   - `gc.autoDetach=false`, `maintenance.autoDetach=false` (#523): auto
+ *     maintenance otherwise runs detached, outliving the daemon's command and
+ *     its timeout, and re-reads the project config long after the lint.
+ *     Foreground, it is part of the command that triggered it (rare: loose
+ *     objects have to pile up first). A git without maintenance.autoDetach
+ *     ignores that key and falls back on gc.autoDetach, as newer git does.
  *
  * NOT pinnable this way, because their names are the writer's choice: filter
  * drivers (`filter.<x>.clean`), merge and textconv drivers, and config pulled
  * in through `include.path`. Those need a config file the site file tools can
- * write, which is what they no longer can (#516). GitManager.getDiff passes
- * --no-ext-diff and --no-textconv for the diff side of it.
+ * write, which is what they no longer can (#516), and git-config-lint.ts
+ * refuses to run git at all in a project whose own config holds one (#523).
+ * GitManager.getDiff passes --no-ext-diff and --no-textconv for the diff
+ * side of it. The pins still matter for what the lint does not read: the
+ * global and system configs, and a config changed after the lint.
  */
 export const PROJECT_GIT_PINS: readonly string[] = [
   '-c', 'safe.bareRepository=explicit',
@@ -89,7 +105,21 @@ export const PROJECT_GIT_PINS: readonly string[] = [
   '-c', 'log.showSignature=false',
   '-c', 'merge.verifySignatures=false',
   '-c', 'push.gpgSign=false',
+  '-c', 'submodule.recurse=false',
+  '-c', 'fetch.recurseSubmodules=false',
+  '-c', 'push.recurseSubmodules=no',
+  '-c', 'gc.autoDetach=false',
+  '-c', 'maintenance.autoDetach=false',
 ];
+
+/**
+ * `git status` as the daemon runs it in a project, from both managers.
+ * `--ignore-submodules=all`: checking a submodule's work tree runs git inside
+ * it, under a config git-config-lint.ts never read, and a per-submodule
+ * `ignore` in `.gitmodules` (which the site file tools can write) beats a
+ * `-c diff.ignoreSubmodules` pin. Only the command-line option beats it.
+ */
+export const PROJECT_STATUS_ARGS: readonly string[] = ['status', '--porcelain', '--ignore-submodules=all'];
 
 /** A git binary's major.minor, or null when `git --version` is unparseable. */
 export type GitVersion = readonly [number, number] | null;

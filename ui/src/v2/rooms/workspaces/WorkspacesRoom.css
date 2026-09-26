@@ -264,6 +264,13 @@
 
 .v2-ws__card-port { color: var(--ok); }
 
+/* #523: the "Git off" chip; its reason is the tooltip. */
+.v2-ws__git-issue {
+  display: inline-flex;
+  align-items: center;
+  cursor: help;
+}
+
 .v2-ws__dirty {
   color: var(--warn);
   font-size: 14px;

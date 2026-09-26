@@ -46,6 +46,21 @@ const STATUS_TONE: Record<ProjectStatus, Tone> = {
   error: "fail",
 };
 
+/**
+ * The daemon refuses to run git in a project whose own git config holds a
+ * key it does not allow (#523). The chip says so; the full reason, with how
+ * to remove the key, is its tooltip and, for screen readers, hidden text.
+ */
+function GitConfigIssue({ issue }: { issue?: string | null }) {
+  if (!issue) return null;
+  return (
+    <span className="v2-ws__git-issue" title={issue}>
+      <StatusChip tone="fail">Git off</StatusChip>
+      <span className="v2-sr-only">{issue}</span>
+    </span>
+  );
+}
+
 const STATUS_LABEL: Record<ProjectStatus, string> = {
   stopped: "Stopped",
   starting: "Starting…",
@@ -270,6 +285,7 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
             {activeProject.devPort && (
               <span className="v2-ws__port">localhost:{activeProject.devPort}</span>
             )}
+            <GitConfigIssue issue={activeProject.gitConfigIssue} />
           </div>
         </div>
         <div className="v2-ws__detail-ide">
@@ -515,6 +531,7 @@ function ProjectCard({
         {project.devPort && isRunning && (
           <span className="v2-ws__card-port">localhost:{project.devPort}</span>
         )}
+        <GitConfigIssue issue={project.gitConfigIssue} />
         {project.githubUrl && (
           <a
             className="v2-ws__card-github"
