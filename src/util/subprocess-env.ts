@@ -113,7 +113,16 @@
  * environment while looking sanitized. With this union it fails to compile, and
  * adding a key is a deliberate one-line edit reviewed in this file.
  */
-export const EXTRA_ENV_KEYS = ['PORT', 'HOST', 'NODE_ENV', 'GIT_TERMINAL_PROMPT'] as const;
+export const EXTRA_ENV_KEYS = [
+  'PORT', 'HOST', 'NODE_ENV', 'GIT_TERMINAL_PROMPT',
+  // WSL, added for src/actions/terminal/wsl-bridge.ts (#519). WSL_INTEROP is
+  // the one launching a Windows program needs on WSL2: the socket it goes
+  // through. WSL_DISTRO_NAME is this distro's name, and WSLENV lists the
+  // variables shared with the Windows side (only ones that survived the
+  // allowlist can be). A socket path and names, not credentials. Extras are
+  // opt-in per call site: only a spawn that names these receives them.
+  'WSL_INTEROP', 'WSL_DISTRO_NAME', 'WSLENV',
+] as const;
 
 export type ExtraEnvKey = (typeof EXTRA_ENV_KEYS)[number];
 

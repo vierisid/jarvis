@@ -128,7 +128,13 @@ const EXEMPT: Record<string, Exemption> = {
     calls: { defaultExec: 1, runNative: 1 },
   },
   'actions/app-control/sidecar-launcher.ts': {
-    reason: 'Launches this repo\'s own desktop-bridge binary (' + DESKTOP_SESSION + ') and, under WSL only, `cmd.exe /C echo %USERPROFILE%`, which needs the WSL interop variables (WSL_INTEROP, WSLENV) the allowlist drops.',
+    reason:
+      'Launches this repo\'s own desktop-bridge binary (' + DESKTOP_SESSION + ') and, under WSL only, a fixed ' +
+      '`cmd.exe /C echo %USERPROFILE%`, which needs WSL_INTEROP: on WSL2 that names the socket every Windows ' +
+      'program is launched through. The base allowlist drops it (and WSL_DISTRO_NAME and WSLENV); since #519 ' +
+      'a spawn can add those three back as sanitizedEnv extras, as actions/terminal/wsl-bridge.ts does (not ' +
+      'exempt). This probe keeps the inherited env here: its env is decided together with launchSidecar\'s ' +
+      'in #514.',
     calls: { findSidecarExecutable: 1, launchSidecar: 1 },
   },
   'actions/browser/chrome-launcher.ts': {
