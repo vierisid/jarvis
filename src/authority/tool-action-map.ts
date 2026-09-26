@@ -6,6 +6,7 @@ import type { ActionCategory } from '../roles/authority.ts';
 import { AUTHORITY_REQUIREMENTS } from '../roles/authority.ts';
 import type { ToolDefinition, ToolGate } from '../actions/tools/registry.ts';
 import { rawUiGate } from './ui-intent';
+import type { AuthorityDecision } from './engine';
 
 /**
  * Explicit mapping from tool name -> ActionCategory.
@@ -275,6 +276,80 @@ export function resolveToolGate(
     intent: gate?.intent ?? uiGate?.intent,
     confirm: uiGate?.confirm === 'always' ? 'always' : gate?.confirm,
   };
+}
+
+/**
+ * The phrase in the reason of an approval that was SUBSTITUTED for a level
+ * denial (`confirm: 'above_level'`), rather than requested on its own merits.
+ *
+ * Written in one place, substituteAboveLevel below, which every agent gate
+ * calls, and matched as a substring by the approval learner
+ * (deferred-executor.ts), so the producer and the consumer cannot drift.
+ * Matched the same way TAINT_PROFILE_LABEL is.
+ */
+export const ABOVE_LEVEL_SUBSTITUTION = "is above this agent's authority level";
+
+/**
+ * The above-level substitution, for every agent gate: the orchestrator's
+ * task path, sub-agents and the workflow effect boundary. A gated call
+ * (`confirm` set) whose worst case is above the agent's level turns into an
+ * approval instead of a denial, provided the agent clears the tool's floor on
+ * its own -- the substitution request_approval makes for a declared intent.
+ * Only a pure level shortfall qualifies; an override, a context rule or a
+ * profile cap that denies still denies.
+ *
+ * The floor's profile label is carried through. deferred-executor keeps
+ * taint-gated approvals out of the approval learner by looking for
+ * TAINT_PROFILE_LABEL in `reason`; rewriting `reason` from scratch silently
+ * exempted every substituted approval from that exclusion, so routine
+ * approvals could train a suggestion to auto-allow the whole category --
+ * globally, for every tool, and evaluated before the level check.
+ *
+ * The label goes INSIDE the sentence, not appended after it:
+ * formatApprovalIntent decides whether the engine wrote this reason, and one
+ * of its two tests is `endsWith('requires user approval')`. For the TAINT
+ * label its other test (`includes(TAINT_PROFILE_LABEL)`) would still match a
+ * trailing parenthetical -- but the background profile's label has no such
+ * second test, so appending would make its card lead with this sentence
+ * instead of the one naming the actual effect.
+ */
+export function substituteAboveLevel(
+  decision: AuthorityDecision,
+  gate: Pick<ResolvedToolGate, 'confirm' | 'floorCategory'>,
+  check: (category: ActionCategory) => AuthorityDecision,
+): AuthorityDecision {
+  if (!gate.confirm || decision.allowed || !decision.deniedByLevel || decision.actionCategory === gate.floorCategory) {
+    return decision;
+  }
+  const floor = check(gate.floorCategory);
+  if (!floor.allowed) return decision;
+  return {
+    ...floor,
+    allowed: true,
+    requiresApproval: true,
+    actionCategory: decision.actionCategory,
+    reason: `${decision.actionCategory} ${ABOVE_LEVEL_SUBSTITUTION}`
+      + `${floor.profileLabel ? ` (${floor.profileLabel})` : ''}`
+      + ' and requires user approval',
+  };
+}
+
+/**
+ * A call's arguments with anything the tool would resolve later from ambient
+ * state pinned now (ToolDefinition.freezeArguments), so the gate, the card and
+ * the run agree. A hook that throws leaves the arguments as they were: the
+ * gate still judges them, as before the hook existed.
+ */
+export function freezeToolArguments(
+  tool: Pick<ToolDefinition, 'freezeArguments'> | undefined,
+  params: Record<string, unknown>,
+): Record<string, unknown> {
+  if (!tool?.freezeArguments) return params;
+  try {
+    return tool.freezeArguments(params);
+  } catch {
+    return params;
+  }
 }
 
 /**

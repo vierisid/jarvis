@@ -5,8 +5,9 @@
  * run_command, read_file, write_file, list_directory
  */
 
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, unlinkSync } from 'node:fs';
-import { resolve } from 'node:path';
+import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, unlinkSync, chmodSync, renameSync, rmSync, realpathSync } from 'node:fs';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
+import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
 import { execSync } from 'node:child_process';
 import { hostname, platform, arch, cpus, version } from 'node:os';
@@ -28,6 +29,8 @@ const terminal = new TerminalExecutor({ timeout: 30000 });
 export const browser = new BrowserController();
 
 import { isNoLocalTools, LOCAL_DISABLED_MSG, isLocalBrowserDisabled, LOCAL_BROWSER_DISABLED_MSG, getDefaultCwd } from './local-tools-guard.ts';
+import { execOnWrite, policyHome, relativeBases, routedGitRefusal, siteGitRefusal } from './file-path-policy.ts';
+import { forCard } from '../../util/card-text.ts';
 // Re-export for convenience
 export { setNoLocalTools, isNoLocalTools, setDefaultCwd } from './local-tools-guard.ts';
 
@@ -63,6 +66,33 @@ export function toolDefToLLMTool(tool: ToolDefinition): LLMTool {
       required,
     },
   };
+}
+
+/**
+ * The file tools' refusal of a site project's git internals (#522). Run
+ * BEFORE sidecar routing: a sidecar on the brain's own machine opens the
+ * brain's files and knows nothing about site projects, so a relative path is
+ * judged against every cwd it could be opened from. See siteGitRefusal.
+ */
+function siteGitRefusalFor(params: Record<string, unknown>): string | null {
+  const path = String(params.path ?? '');
+  return siteGitRefusal(path, relativeBases())
+    ?? (params.target || autoTargetForCapability('filesystem') ? routedGitRefusal(path) : null);
+}
+
+/**
+ * Pin a relative `path` to the absolute one it means now, for a call about to
+ * be judged. An approval can be clicked after the site chat that asked for it
+ * has ended, when the same relative path would resolve against home, and a
+ * daemon restart forgets the cwd altogether; the frozen path is what the card
+ * names and what runs. A call routed to a sidecar keeps its spelling: the
+ * brain's cwd means nothing there.
+ */
+function freezePath(params: Record<string, unknown>): Record<string, unknown> {
+  const path = params.path;
+  if (typeof path !== 'string' || !path || isAbsolute(path)) return params;
+  if (params.target || autoTargetForCapability('filesystem')) return params;
+  return { ...params, path: resolve(getDefaultCwd() || policyHome(), path) };
 }
 
 // --- Tool Implementations ---
@@ -142,7 +172,10 @@ export const readFileTool: ToolDefinition = {
       required: false,
     },
   },
+  freezeArguments: freezePath,
   execute: async (params) => {
+    const refused = siteGitRefusalFor(params);
+    if (refused) return refused;
     const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'read_file', { path: params.path }, 'filesystem');
@@ -151,7 +184,7 @@ export const readFileTool: ToolDefinition = {
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
 
     const rawPath = params.path as string;
-    const baseCwd = getDefaultCwd() || homedir();
+    const baseCwd = getDefaultCwd() || policyHome();
     const filePath = resolve(baseCwd, rawPath);
 
     if (!existsSync(filePath)) {
@@ -161,6 +194,11 @@ export const readFileTool: ToolDefinition = {
     const stat = statSync(filePath);
     if (stat.isDirectory()) {
       return `Error: Path is a directory, not a file: ${filePath}`;
+    }
+    // A FIFO blocks readFileSync, and the whole daemon with it, until a
+    // writer shows up; a device like /dev/zero reports size 0 and never ends.
+    if (!stat.isFile()) {
+      return `Error: Not a regular file: ${filePath}`;
     }
 
     // Limit file size to 100KB
@@ -194,7 +232,41 @@ export const writeFileTool: ToolDefinition = {
       required: false,
     },
   },
+  /**
+   * `write_data` is the floor. A write to a path something runs as code -- a
+   * shell startup file, git config or hooks, an autostart entry, a unit, a
+   * crontab, SSH config, an existing executable, Jarvis's own data -- is
+   * running a command later, so it is rated `execute_command` (#522). Not
+   * refused: an agent below that level gets an approval card instead of a
+   * denial, and the card says what the file is. See file-path-policy.ts for
+   * what counts and why the path is judged under more than one resolution.
+   */
+  authorityGate: (params) => {
+    const hit = execOnWrite(params.path);
+    if (!hit) return null;
+    // The card names the file that made this an exec-on-write, resolved: a
+    // relative path is judged against more than one base, and `.bashrc` on a
+    // card could be the project's or home's. The deferred executor compares
+    // this sentence with the approved one, so a call whose target moved is
+    // not run under the old click.
+    // A routed call names the sidecar and keeps its own spelling: the sidecar
+    // resolves it, not the brain.
+    const routedTo = params.target || autoTargetForCapability('filesystem');
+    const shown = routedTo ? `${String(params.path)} on ${String(routedTo)}`
+      : hit.lands ? `${hit.path} (lands on ${hit.lands})` : hit.path;
+    return {
+      actionCategory: 'execute_command',
+      confirm: 'above_level',
+      // The path goes last, whitespace collapsed and capped at a card's
+      // size: it is the value being approved, and nothing after it can pose
+      // as the rest of the sentence.
+      intent: `Write a file that can run as code (${hit.kind}): ${forCard(shown)}`,
+    };
+  },
+  freezeArguments: freezePath,
   execute: async (params) => {
+    const refused = siteGitRefusalFor(params);
+    if (refused) return refused;
     const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'write_file', { path: params.path, content: params.content }, 'filesystem');
@@ -203,9 +275,37 @@ export const writeFileTool: ToolDefinition = {
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
 
     const rawPath = params.path as string;
-    const baseCwd = getDefaultCwd() || homedir();
+    const baseCwd = getDefaultCwd() || policyHome();
     const filePath = resolve(baseCwd, rawPath);
     const content = params.content as string;
+    let existing: ReturnType<typeof statSync> | undefined;
+    try {
+      existing = statSync(filePath);
+    } catch { /* new file */ }
+    // Opening a FIFO for writing blocks until a reader appears, and the
+    // daemon with it; a device is not a file either.
+    if (existing && !existing.isFile()) return `Error: Not a regular file: ${filePath}`;
+
+    // A file with other hard links is replaced, not written in place, as the
+    // site tools do (#516): bun's hardlink backend links node_modules to its
+    // global cache, which other projects and the daemon's own dependencies
+    // share, and an in-place write through one name rewrites all of them. A
+    // sibling renamed over retargets this name only; the mode is kept.
+    if (existing && Number(existing.nlink) > 1) {
+      // Rename onto the file the path names, not onto the path: when the
+      // path is a symlink to the hard-linked file, renaming over the link
+      // would turn it into a plain file and leave the target untouched.
+      const dest = realpathSync(filePath);
+      const temp = join(dirname(dest), `.${randomUUID()}.jarvis-write.tmp`);
+      try {
+        writeFileSync(temp, content, { encoding: 'utf-8', flag: 'wx', mode: 0o600 });
+        chmodSync(temp, Number(existing.mode) & 0o777);
+        renameSync(temp, dest);
+      } finally {
+        rmSync(temp, { force: true });
+      }
+      return `File written successfully: ${filePath} (${content.length} bytes)`;
+    }
 
     writeFileSync(filePath, content, 'utf-8');
     return `File written successfully: ${filePath} (${content.length} bytes)`;
@@ -228,7 +328,10 @@ export const listDirectoryTool: ToolDefinition = {
       required: false,
     },
   },
+  freezeArguments: freezePath,
   execute: async (params) => {
+    const refused = siteGitRefusalFor(params);
+    if (refused) return refused;
     const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'list_directory', { path: params.path }, 'filesystem');
@@ -237,7 +340,7 @@ export const listDirectoryTool: ToolDefinition = {
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
 
     const rawPath = params.path as string;
-    const baseCwd = getDefaultCwd() || homedir();
+    const baseCwd = getDefaultCwd() || policyHome();
     const dirPath = resolve(baseCwd, rawPath);
 
     if (!existsSync(dirPath)) {

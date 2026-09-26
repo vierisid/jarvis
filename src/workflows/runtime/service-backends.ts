@@ -42,7 +42,7 @@ import { WorkflowEventBuffer } from "./event-buffer";
 import { cancellableWorkflowService } from "./cancellation";
 import { WorkflowEffectBoundary, workflowEffectId, type WorkflowAuthorityDependencies } from './effect-boundary';
 import { getWorkflowEffect } from '../db/repos/workflow-effect';
-import { resolveToolGate } from '../../authority/tool-action-map';
+import { resolveToolGate, severityRank } from '../../authority/tool-action-map';
 import { GATED_TOOL_NAMES, OPAQUE_TOOL_NAMES, refusedEffectCategory, toolEffectCapability } from './effect-capabilities';
 import { ActionOutcomeError } from '../../actions/action-outcome';
 import { governedPieceToolDefinition, resolveGovernedPieceAction, sanitizePieceInput } from './piece-effects';
@@ -204,6 +204,9 @@ export function buildSandboxServiceBackends(
         const gate = resolveToolGate(tool, req.toolName, req.params);
         const reply = await effects.invoke({ context: ctx, piece: '@jarvispieces/piece-jarvis-tool', action: 'invoke',
           ...(gate.confirm === 'always' ? { confirmation: { confirm: 'always' as const, intent: gate.intent ?? 'Review this UI effect' } } : {}),
+          // As at the chat gate: a gated call over the workflow's level asks
+          // instead of failing the step.
+          ...(gate.confirm ? { aboveLevelFloor: gate.floorCategory } : {}),
           route: 'tool', toolName: tool.name, category: capability.category, categories: capability.categories, toolCategory: tool.category,
           // Spelled out rather than spread: the request is what the effect's
           // identity digest is taken over, so only the two fields that decide
@@ -412,10 +415,29 @@ export function buildSandboxServiceBackends(
             // Judged as the sub-agent the gate judged it for, and never
             // concluded to need less than the gate required.
             principal: call.principal, approvalRequired: true,
+            // The sub-agent's gate may have substituted an approval for a
+            // level shortfall; judge it here the same way, or the approval it
+            // asked for could never be granted.
+            ...(() => {
+              const gate = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, call.toolCall.arguments);
+              return gate.confirm ? { aboveLevelFloor: gate.floorCategory } : {};
+            })(),
             // The target names who asked, so the card and the record are bound
             // to the principal and not only to the tool.
             prepare: () => ({ arguments: { ...call.toolCall.arguments }, target: { tool: call.toolCall.name, sequence: call.sequence,
               principal: { agentId: call.principal.agentId, agentRoleId: call.principal.agentRoleId, agentAuthorityLevel: call.principal.agentAuthorityLevel } } }),
+            // The arguments are frozen but a path in them is resolved only
+            // when the tool runs, possibly long after review. A write that now
+            // reaches a stricter category than the gate judged (a relative
+            // path under a different cwd, a file that became a shell rc or a
+            // hook, #522) is not the call that was approved.
+            validateTarget: (args) => {
+              const now = resolveToolGate(registry.get(call.toolCall.name), call.toolCall.name, args);
+              if (severityRank(now.actionCategory) > severityRank(call.actionCategory)) {
+                throw new ActionOutcomeError({ status: 'blocked', code: 'EFFECT_CHANGED_AFTER_REVIEW', effect: 'not_started',
+                  message: `${call.toolCall.name} now reaches ${now.actionCategory}, not the ${call.actionCategory} it was reviewed as; dispatch blocked` });
+              }
+            },
             execute: async (args, checkpoint) => {
               checkpoint();
               try {

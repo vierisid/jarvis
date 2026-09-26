@@ -10,6 +10,7 @@ import type { ProjectManager } from './project-manager.ts';
 import type { GitManager } from './git-manager.ts';
 import type { GitHubManager } from './github-manager.ts';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
+import { forCard as cardText } from '../util/card-text.ts';
 
 /** Block patterns for long-running dev servers that conflict with the managed server */
 const BLOCKED_SERVER_PATTERNS = /\b(make\s+dev|bun\s+--hot|vite\s*$|next\s+dev|npm\s+run\s+dev|yarn\s+dev)\b/i;
@@ -35,8 +36,7 @@ const BLOCKED_SERVER_PATTERNS = /\b(make\s+dev|bun\s+--hot|vite\s*$|next\s+dev|n
  * ending. Whitespace is always collapsed so nothing can scroll the verb away.
  */
 function forCard(value: unknown, fallback = '', max = 80): string {
-  const s = String(value ?? '').replace(/\s+/g, ' ').trim() || fallback;
-  return s.length > max ? `${s.slice(0, max - 3)}...` : s;
+  return cardText(String(value ?? '').trim() ? value : fallback, max);
 }
 
 /** A trailing free-text value: shown in full up to a card-sized budget. */
@@ -208,6 +208,11 @@ export function createSiteBuilderTools(
         actionCategory: 'execute_command',
         intent: `In site project "${forCard(params.project_id)}", run: ${forCard(params.command, '', TRAILING)}`,
       }),
+      // Deliberately NOT refused under --no-local-tools (#522): the project
+      // lives on this host and there is no sidecar to route to, and refusing
+      // it would not stop the builder running project code here anyway
+      // (scaffolding, `make dev`). The daemon warns at startup instead; see
+      // docs/SELF_HOSTING.md.
       execute: async (params) => {
         const projectPath = projectManager.getProjectPath(params.project_id as string);
         if (!projectPath) return 'Error: Project not found';

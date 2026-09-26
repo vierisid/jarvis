@@ -181,8 +181,9 @@ Options:
   --db-path <path>         Database file path (default: ~/.jarvis/jarvis.db)
   --data-dir <path>        Data directory (default: ~/.jarvis)
   --health-interval <ms>   Health check interval in ms (default: 30000)
-  --no-local-tools         Disable local tool execution (run_command, read_file, etc).
-                           Tools will only work when routed to a sidecar via target param.
+  --no-local-tools         Keep the general tools (run_command, read_file, desktop, browser...) off
+                           this host: they only run on a connected sidecar, i.e. your machine.
+                           The site builder still builds and runs projects on this host.
   --help, -h               Show this help message
 
 Example:
@@ -4797,6 +4798,22 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       setNoLocalTools(true);
     }
 
+    // 9b-bis. What the generic file tools must know about this install
+    // (#522): the site projects dir, whose git internals they refuse --
+    // registered whether or not the site builder is on or starts, since old
+    // projects keep their .git and pre-#511 reflogs either way (same `~`
+    // expansion ProjectManager applies) -- and the dirs whose contents the
+    // daemon loads or runs, where a write is rated execute_command.
+    {
+      const { setSiteProjectsDir, setDaemonDataRoots } = await import('../actions/tools/file-path-policy.ts');
+      setSiteProjectsDir((jarvisConfig.sites?.projects_dir ?? '~/.jarvis/projects').replace(/^~/, os.homedir()));
+      setDaemonDataRoots({
+        // The engine bundle cache is under ~/.jarvis whatever the data dir.
+        dataDirs: [config.dataDir, path.join(os.homedir(), '.jarvis')],
+        codeRoots: [sharedRuntime.engineCacheRoot, sharedRuntime.piecesDir, sharedRuntime.metadataCacheFile],
+      });
+    }
+
     // 9b'. browser.local: false (system config) - never launch a local
     // Chrome on this machine. Hosted instances set this so no CDP port can
     // open on a shared VPS; browser actions route to a sidecar browser
@@ -5432,6 +5449,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         };
         const siteBuilderService = new SiteBuilderService(sitesConfig);
         await siteBuilderService.start();
+        // --no-local-tools keeps the general tools off this host; the site
+        // builder is deliberately outside it (projects live here, and
+        // site_run_command, scaffolding and `make dev` run their code here).
+        // Say so, since the flag reads as if nothing runs locally.
+        // Documented in docs/SELF_HOSTING.md.
+        if (config.noLocalTools) {
+          console.warn('[Daemon] --no-local-tools is set, but the site builder is enabled: site projects are built and run '
+            + 'on THIS host (site_run_command, scaffolding, make dev). Set sites.enabled: false if this host must not run '
+            + 'model-written code.');
+        }
         apiContext.siteBuilderService = siteBuilderService;
         registry.register(siteBuilderService);
 
