@@ -46,18 +46,58 @@ const STATUS_TONE: Record<ProjectStatus, Tone> = {
   error: "fail",
 };
 
+type GitIssue = Project["gitConfigIssue"];
+
 /**
  * The daemon refuses to run git in a project whose own git config holds a
- * key it does not allow (#523). The chip says so; the full reason, with how
- * to remove the key, is its tooltip and, for screen readers, hidden text.
+ * setting it does not allow (#523). On a card, a chip whose tooltip (and
+ * screen-reader text) is the reason; the project header shows it in full.
  */
-function GitConfigIssue({ issue }: { issue?: string | null }) {
+function GitConfigIssue({ issue }: { issue?: GitIssue }) {
   if (!issue) return null;
   return (
-    <span className="v2-ws__git-issue" title={issue}>
+    <span className="v2-ws__git-issue" title={issue.message}>
       <StatusChip tone="fail">Git off</StatusChip>
-      <span className="v2-sr-only">{issue}</span>
+      <span className="v2-sr-only">{issue.message}</span>
     </span>
+  );
+}
+
+/**
+ * The same, in full, below the project header: the reason as visible text
+ * and the fix as a selectable command with a copy button, so it is reachable
+ * by keyboard and touch, not only by hovering.
+ */
+function GitConfigIssuePanel({ issue }: { issue?: GitIssue }) {
+  const [copied, setCopied] = useState<"idle" | "ok" | "fail">("idle");
+  if (!issue) return null;
+  // Only the commands go on the clipboard, one per line, so a paste into a
+  // shell runs exactly them.
+  const script = issue.commands.join("\n");
+  const copy = () => {
+    // navigator.clipboard is undefined outside secure contexts (plain-HTTP
+    // LAN dashboards); the commands stay selectable either way.
+    if (!navigator.clipboard) {
+      setCopied("fail");
+      return;
+    }
+    navigator.clipboard.writeText(script).then(() => setCopied("ok"), () => setCopied("fail"));
+  };
+  return (
+    <div className="v2-ws__git-issue-panel" role="status">
+      <StatusChip tone="fail">Git off</StatusChip>
+      <p className="v2-ws__git-issue-text">{issue.message}</p>
+      {issue.commands.length > 0 && (
+        <div className="v2-ws__git-issue-fix">
+          <span className="v2-ws__git-issue-text">To fix it, run this in the project directory:</span>
+          <code className="v2-ws__git-issue-cmd">{script}</code>
+          <button type="button" className="v2-ws__git-issue-copy" onClick={copy}>
+            {copied === "ok" ? "Copied" : copied === "fail" ? "Select to copy" : "Copy"}
+          </button>
+        </div>
+      )}
+      {issue.note && <p className="v2-ws__git-issue-text">{issue.note}</p>}
+    </div>
   );
 }
 
@@ -285,9 +325,9 @@ export function WorkspacesRoomBody({ mode }: { mode: RoomBodyMode }) {
             {activeProject.devPort && (
               <span className="v2-ws__port">localhost:{activeProject.devPort}</span>
             )}
-            <GitConfigIssue issue={activeProject.gitConfigIssue} />
           </div>
         </div>
+        <GitConfigIssuePanel key={activeProject.id} issue={activeProject.gitConfigIssue} />
         <div className="v2-ws__detail-ide">
           <SiteTopBar
             openTabs={openTabs}

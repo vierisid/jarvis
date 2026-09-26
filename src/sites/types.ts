@@ -22,7 +22,7 @@ export type Project = {
    * config failed the lint (#523); null when it passed. Set by
    * SiteBuilderService's listings, absent elsewhere.
    */
-  gitConfigIssue?: string | null;
+  gitConfigIssue?: { message: string; commands: string[]; note: string | null } | null;
 };
 
 export type ProjectMeta = {

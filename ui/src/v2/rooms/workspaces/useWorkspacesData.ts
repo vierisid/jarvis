@@ -18,7 +18,7 @@ export interface Project {
   lastOpenedAt: number;
   githubUrl: string | null;
   /** Why the daemon will not run git in this project (#523); null when it will. */
-  gitConfigIssue?: string | null;
+  gitConfigIssue?: { message: string; commands: string[]; note: string | null } | null;
 }
 
 interface ActionResult {

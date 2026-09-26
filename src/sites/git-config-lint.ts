@@ -49,116 +49,222 @@ import { sanitizedEnv } from '../util/subprocess-env.ts';
 import { isWithin } from '../util/path.ts';
 import { PROJECT_GIT_PINS } from './git-pins.ts';
 
-/** A value check for one allowed key; `null` is a valueless key. */
-type ValueCheck = (value: string | null, subsection: string | null) => boolean;
-/** An allowed variable: `true` for any value, or a check on it. */
-type Allowed = Readonly<Record<string, true | ValueCheck>>;
+/**
+ * What is wrong with an allowed key's value, and how the user puts it right:
+ * `fix` is the git command, given the `git config` file option for the file
+ * the key is in (see fileOption), or null when there is none to suggest.
+ */
+type ValueProblem = { why: string; fix: ((fileOption: string) => string) | null };
+/** A value check for one allowed key: null when the value is fine. */
+type ValueCheck = (value: string | null, subsection: string | null) => ValueProblem | null;
+/** An allowed variable: `true` for any value, or a check on its value. */
+type Rule = true | ValueCheck;
+type Rules = Readonly<Record<string, Rule>>;
+
+/** A value check from a predicate. */
+function valueCheck(
+  ok: (value: string | null, subsection: string | null) => boolean,
+  why: string,
+  fix: ValueProblem['fix'],
+): ValueCheck {
+  return (value, subsection) => (ok(value, subsection) ? null : { why, fix });
+}
 
 /**
  * git's boolean spellings (valueless is true), plus the non-boolean modes
- * GitHubManager.planIntegration handles itself. Not `interactive`/`i`, which
- * would start an editor, or `preserve`, which git 2.34+ rejects anyway.
+ * GitHubManager.planIntegration handles itself. Not `interactive`/`i` or
+ * `preserve`.
  */
-const REBASE_MODE: ValueCheck = value => value === null
-  || /^(?:true|false|yes|no|on|off|1|0|merges|m)$/i.test(value);
+function isRebaseMode(value: string | null): boolean {
+  return value === null || /^(?:true|false|yes|no|on|off|1|0|merges|m)$/i.test(value);
+}
 
 /**
  * A fetch refspec that can only write remote-tracking refs of its own remote
  * (or a negative refspec). `+refs/heads/*:refs/heads/*` would let
  * getRemoteStatus's fetch overwrite local branches.
  */
-const TRACKING_REFSPEC: ValueCheck = (value, remote) => {
-  if (value === null || remote === null) return false;
+function isTrackingRefspec(value: string | null, remote: string): boolean {
+  if (value === null) return false;
   if (value.startsWith('^')) return !value.includes(':');
   const colon = value.indexOf(':');
   if (colon < 0 || value.indexOf(':', colon + 1) >= 0) return false;
   return value.slice(colon + 1).startsWith(`refs/remotes/${remote}/`);
+}
+
+const isOneWord = (value: string | null) => value !== null && /^[A-Za-z]{1,32}$/.test(value);
+const unsetFix = (key: string) => (f: string) => `git config${f} --unset-all ${key}`;
+
+/**
+ * The value of the one remote the daemon talks to. Other remotes' URLs and
+ * refspecs are never used by daemon git (it names origin, and runs no
+ * argument-less fetch, pull or push), so their values are the user's own.
+ */
+const ORIGIN_RULES: Rules = {
+  url: valueCheck(v => isNetworkRemoteUrl(v), 'is not a network URL',
+    // A placeholder that is still a valid shell word, so a pasted command
+    // fails on the URL rather than leaving the shell mid-quote.
+    f => (f === ' --local' ? 'git remote set-url origin https://github.com/OWNER/REPO.git'
+      : `git config${f} remote.origin.url https://github.com/OWNER/REPO.git`)),
+  pushurl: valueCheck(v => isNetworkRemoteUrl(v), 'is not a network URL', unsetFix('remote.origin.pushurl')),
+  fetch: valueCheck(v => isTrackingRefspec(v, 'origin'), 'writes outside refs/remotes/origin/',
+    f => `git config${f} --replace-all remote.origin.fetch '+refs/heads/*:refs/remotes/origin/*'`),
 };
 
 /**
- * Keys allowed in a project's git config, by section, then variable (both
- * lowercase, as `git config --list` prints them). Everything not listed is
- * refused. Each entry is written by `git init`, by the site builder's own
- * flow, or by a common tool on a normal project, and none can name a program,
- * a path, a host or another config file -- except where it is overridden on
- * every daemon git call by PROJECT_GIT_PINS, which is said per entry.
+ * Keys allowed in a project's git config, in three tiers. Section and
+ * variable are compared lowercase (as `git config --list` prints them); a
+ * subsection exactly. Everything not listed is refused -- above all anything
+ * that names a driver, a program, a path to read, a host or another config
+ * file, `submodule.*`, `core.sharedRepository`, `remote.*.promisor`, and any
+ * section this list does not know.
+ *
+ * 1. Inert: written by `git init`, the site builder or common tools, or pure
+ *    behaviour switches of git's own. None names a program, path or host.
+ * 2. Pinned: a program, but overridden on every daemon git call by
+ *    PROJECT_GIT_PINS, which the command line always wins (core.hooksPath,
+ *    core.fsmonitor, core.editor, sequence.editor, commit/push signing and
+ *    signature checks), or never reached by the daemon (pager: `--no-pager`;
+ *    aliases: git never lets one shadow a builtin, and the daemon runs only
+ *    builtins; interactive.diffFilter: `add -p` only; tag.gpgSign: the daemon
+ *    never tags).
+ * 3. Value-checked: origin's URLs and refspec, the rebase modes, and the
+ *    git-lfs filter, allowed only with git-lfs's own standard commands.
+ *    Known gap: git-lfs itself reads `lfs.url` from the work tree's
+ *    `.lfsconfig`, so where git-lfs is installed a smudge can fetch from a
+ *    host the tree names (no token: the credential helper answers only for
+ *    GitHub). A globally installed git-lfs does the same with no project
+ *    config at all; the fix for both is GIT_LFS_SKIP_SMUDGE in the daemon's
+ *    git env, with the GIT_CONFIG_GLOBAL follow-up (#523 PR).
  */
-const ALLOWED: Readonly<Record<string, Allowed>> = {
+const ALLOWED: Readonly<Record<string, Rules | '*'>> = {
   core: {
-    // Written by `git init`: the first four everywhere, the next three on
-    // macOS and Windows.
+    // Written by `git init` (the last three on macOS and Windows).
     repositoryformatversion: true, filemode: true, bare: true, logallrefupdates: true,
     ignorecase: true, precomposeunicode: true, symlinks: true,
-    // git's built-in line-ending conversion, and a status speed-up.
-    autocrlf: true, eol: true, safecrlf: true, untrackedcache: true,
-    // Programs, but pinned off on every daemon git call (PROJECT_GIT_PINS),
-    // which the command line always wins. Allowed because they are common in
-    // real projects: husky sets `core.hooksPath=.husky/_` on `bun install`.
-    hookspath: true, fsmonitor: true,
-    // Not core.worktree (moves the work tree out of the project), nor
-    // attributesFile/excludesFile/sshCommand/editor/pager/askPass/gitProxy/
-    // alternateRefsCommand (paths and programs no pin covers).
+    // Line endings, status and index behaviour, display.
+    autocrlf: true, eol: true, safecrlf: true, untrackedcache: true, commentchar: true, commentstring: true,
+    quotepath: true, whitespace: true, abbrev: true, checkstat: true, trustctime: true, preloadindex: true,
+    longpaths: true, compression: true, protecthfs: true, protectntfs: true, sparsecheckout: true,
+    sparsecheckoutcone: true,
+    // Pinned (tier 2). husky sets core.hooksPath on `bun install`.
+    hookspath: true, fsmonitor: true, editor: true, pager: true,
+    // Not: worktree (moves the work tree out of the project), sharedRepository
+    // (chmods), attributesFile/excludesFile (paths), sshCommand/askPass/
+    // gitProxy/alternateRefsCommand (programs no pin covers).
   },
-  // GitManager.init writes name and email; the rest is identity only.
+  sequence: { editor: true },
+  // Identity. user.signingKey is inert with signing pinned off.
   user: { name: true, email: true, useconfigonly: true, signingkey: true },
+  // The user name for a host; the helper that would supply a password is
+  // credential.helper, refused.
+  credential: { username: true },
   init: { defaultbranch: true },
-  // Written by `git init` with a global init.defaultObjectFormat /
-  // init.defaultRefFormat; worktreeConfig enables config.worktree, which is
-  // linted too. Not partialClone (lazy fetches) or any other extension.
+  // Written by `git init` under a global default format; worktreeConfig
+  // enables config.worktree, which is linted too. Not partialClone.
   extensions: { objectformat: true, refstorage: true, worktreeconfig: true },
-  // Read by GitHubManager.pull. Not twohead/octopus (merge strategy names).
-  pull: { rebase: REBASE_MODE, ff: true },
-  // Only matter for a push without a refspec; the daemon always names one.
-  push: { default: true, autosetupremote: true, gpgsign: true /* pinned false */ },
-  fetch: { prune: true },
-  // Signing switches, all pinned false by PROJECT_GIT_PINS; the programs they
-  // would start (gpg.*) are refused.
-  commit: { gpgsign: true },
-  log: { showsignature: true },
-  merge: { verifysignatures: true },
-  // Numbers and a schedule name (`git maintenance start` writes the last
-  // two). Not the rest of gc.*: gc.recentObjectsHook runs a program.
+  pull: {
+    rebase: valueCheck(isRebaseMode, 'is not true, false or merges', f => `git config${f} pull.rebase false`),
+    ff: true,
+    // Not twohead/octopus: merge strategy names, i.e. programs.
+  },
+  push: { default: true, autosetupremote: true, followtags: true, gpgsign: true },
+  fetch: { prune: true, writecommitgraph: true, fsckobjects: true },
+  transfer: { fsckobjects: true },
+  merge: { conflictstyle: true, ff: true, log: true, renames: true, stat: true, verifysignatures: true },
+  // No subsection (a `diff.<driver>` is refused), and never external, tool,
+  // guitool or orderFile.
+  diff: {
+    algorithm: true, renames: true, renamelimit: true, indentheuristic: true, colormoved: true,
+    mnemonicprefix: true, noprefix: true, context: true, interhunkcontext: true,
+  },
+  rebase: {
+    autostash: true, autosquash: true, updaterefs: true, stat: true, missingcommitscheck: true,
+    abbreviatecommands: true,
+  },
+  // Not commit.template: a path to read (unused with -m, but this list
+  // allows no key that names a file).
+  commit: { verbose: true, status: true, cleanup: true, gpgsign: true },
+  log: '*',
+  // Not blame.ignoreRevsFile: a path to read.
+  blame: {
+    blankboundary: true, showroot: true, showemail: true, date: true, coloring: true,
+    markunblamablelines: true, markignoredlines: true,
+  },
+  // Not status.submoduleSummary: it has the long status format run git in
+  // each submodule, under a config the lint never reads.
+  status: {
+    showuntrackedfiles: true, short: true, branch: true, relativepaths: true, aheadbehind: true, renames: true,
+    renamelimit: true, displaycommentprefix: true, showstash: true,
+  },
+  rerere: '*', column: '*', i18n: '*', feature: '*', index: '*', advice: '*', color: '*',
+  pager: '*', alias: '*',
+  interactive: { difffilter: true, singlekey: true },
+  tag: { sort: true, gpgsign: true },
+  // gpg.format only: gpg.program, gpg.<format>.program and the ssh key
+  // command are programs, allowedSignersFile a path.
+  gpg: { format: true },
+  // A branch.sort, branch.autoSetupMerge etc. (branch.<name>.* is below).
+  branch: { sort: true, autosetupmerge: true, autosetuprebase: true },
+  // Numbers and a schedule name. Not gc.recentObjectsHook (a program).
   gc: { auto: true },
   maintenance: { auto: true, strategy: true },
-  // git-lfs writes this into any repository it touches. Not the rest of
-  // lfs.*: lfs.customtransfer.<name>.path runs a program, lfs.url redirects.
+  // git-lfs writes it. Not lfs.url or lfs.customtransfer.*.
   lfs: { repositoryformatversion: true },
 };
 
-/** Sections whose every variable is allowed: display only. */
-const ALLOWED_ANY_VARIABLE = new Set(['advice', 'color']);
+/** The standard git-lfs filter (`git lfs install`), exactly. */
+const LFS_FILTER: Readonly<Record<string, string>> = {
+  clean: 'git-lfs clean -- %f', smudge: 'git-lfs smudge -- %f', process: 'git-lfs filter-process', required: 'true',
+};
+
+/** The rule for a variable, or undefined when it is refused. */
+type Lookup = (variable: string) => Rule | undefined;
+/** hasOwn, not a plain lookup: `constructor` would find Object.prototype's. */
+const lookupIn = (rules: Rules): Lookup => variable => (Object.hasOwn(rules, variable) ? rules[variable] : undefined);
 
 /**
- * Keys with a subsection (`section.<sub>.variable`), by section:
- *   - remote.<name>: `git remote add` writes url and fetch; pushurl is
- *     allowed for the same reason url is. url/pushurl must be a network URL
- *     (isNetworkRemoteUrl), fetch a refspec into refs/remotes/<name>/. Not
- *     proxy, uploadpack, receivepack, vcs, push, mirror or anything else.
- *   - branch.<name>: `push -u` writes remote and merge; rebase is read by
- *     pull; description is text; VS Code writes vscode-merge-base. A
- *     branch.<b>.remote holding a URL -- the pre-#511 token URL, which
- *     GitHubManager scrubs -- is only used by an argument-less
- *     fetch/pull/push, which the daemon never runs. Not pushRemote or
- *     mergeOptions (a merge strategy is a program name).
- *   - lfs.<url>.access: git-lfs records the auth scheme a server wanted, one
- *     word (`basic`), after a push or fetch.
- *   - color.<slot>: display only.
+ * The rules for `section.<subsection>.variable`, given the subsection; null
+ * when the whole subsection is refused. `subsection` is only ever put into a
+ * fix command after displayConfigKey has vetted the key.
  */
-const ONE_WORD: ValueCheck = value => value !== null && /^[A-Za-z]{1,32}$/.test(value);
-const ALLOWED_WITH_SUBSECTION: Readonly<Record<string, Allowed | '*'>> = {
-  remote: {
-    url: value => isNetworkRemoteUrl(value),
-    pushurl: value => isNetworkRemoteUrl(value),
-    fetch: TRACKING_REFSPEC,
-    tagopt: true,
-    prune: true,
-    // The gh CLI writes `base` here; a word, not a remote or a URL.
-    'gh-resolved': ONE_WORD,
-  },
-  branch: { remote: true, merge: true, rebase: REBASE_MODE, description: true, 'vscode-merge-base': true },
-  lfs: { access: ONE_WORD },
-  color: '*',
-};
+function subsectionRules(section: string, subsection: string): Lookup | '*' | null {
+  switch (section) {
+    case 'remote': {
+      const shared: Rules = {
+        tagopt: true, prune: true, followremotehead: true, skipdefaultupdate: true, skipfetchall: true,
+        // The gh CLI writes `base` here.
+        'gh-resolved': valueCheck(isOneWord, 'is not a single word', unsetFix(`remote.${subsection}.gh-resolved`)),
+      };
+      // Not proxy, uploadpack, receivepack, vcs, push, mirror or promisor.
+      return lookupIn(subsection === 'origin'
+        ? { ...shared, ...ORIGIN_RULES }
+        : { ...shared, url: true, pushurl: true, fetch: true });
+    }
+    case 'branch': {
+      // Everything but mergeOptions (a merge strategy is a program name).
+      // remote/pushRemote may name any remote, URL or path: only an
+      // argument-less fetch, pull or push reads them, and the daemon always
+      // names origin (or `.`).
+      const rebase = valueCheck(isRebaseMode, 'is not true, false or merges',
+        f => `git config${f} branch.${subsection}.rebase false`);
+      return variable => (variable === 'mergeoptions' ? undefined : variable === 'rebase' ? rebase : true);
+    }
+    case 'credential':
+      return lookupIn({ username: true });
+    case 'lfs':
+      // git-lfs records the auth scheme a server wanted, one word.
+      return lookupIn({ access: valueCheck(isOneWord, 'is not a single word', unsetFix(`lfs.${subsection}.access`)) });
+    case 'filter':
+      if (subsection !== 'lfs') return null;
+      return lookupIn(Object.fromEntries(Object.entries(LFS_FILTER).map(([variable, standard]) => [variable,
+        valueCheck(v => v === standard, 'is not git-lfs\'s standard command', unsetFix(`filter.lfs.${variable}`))])));
+    case 'color':
+      return '*';
+    default:
+      return null;
+  }
+}
 
 /**
  * A remote URL that selects git's own network transport. Refused: a local
@@ -169,12 +275,13 @@ const ALLOWED_WITH_SUBSECTION: Readonly<Record<string, Allowed | '*'>> = {
  * runs its address as a command where protocol.ext.allow lets it). The
  * scheme compare is case-sensitive, as git's is: `HTTPS://` would look for
  * `git-remote-HTTPS`. The site builder only ever sets GitHub's https clone
- * URL; ssh stays allowed because GitHubManager deliberately supports an ssh
- * origin, and http because a self-hosted remote may use it.
+ * URL; ssh (and git's `git+ssh`/`ssh+git` spellings of it) stays allowed
+ * because GitHubManager deliberately supports an ssh origin, and http because
+ * a self-hosted remote may use it.
  */
 export function isNetworkRemoteUrl(value: string | null): boolean {
   if (value === null || /[\0-\x1f\x7f]/.test(value)) return false;
-  const scheme = /^(?:https?|ssh|git):\/\//.exec(value);
+  const scheme = /^(?:https?|ssh|git|git\+ssh|ssh\+git):\/\//.exec(value);
   if (scheme) {
     // The host is what follows the last `@` of the authority. One starting
     // with `-` would be an ssh option (git refuses it too).
@@ -201,43 +308,56 @@ function splitKey(key: string): { section: string; subsection: string | null; va
   };
 }
 
-/** Whether one `git config --list` entry is allowed. `key` as git prints it. */
-export function isAllowedConfigEntry(key: string, value: string | null): boolean {
+/** What the allowlist says about one entry. */
+export type EntryRuling =
+  | { allowed: true }
+  | { allowed: false; problem: 'key' }
+  | ({ allowed: false; problem: 'value' } & ValueProblem);
+
+/** The allowlist's ruling on one `git config --list` entry, `key` as git prints it. */
+export function ruleOnConfigEntry(key: string, value: string | null): EntryRuling {
   const parts = splitKey(key);
-  if (parts === null) return false;
+  if (parts === null) return { allowed: false, problem: 'key' };
   const { section, subsection, variable } = parts;
-  // hasOwn, not a plain lookup: `constructor` or `__proto__` would find
-  // Object.prototype's.
-  let rule: true | ValueCheck | undefined;
-  if (subsection === null) {
-    if (ALLOWED_ANY_VARIABLE.has(section)) return true;
-    if (!Object.hasOwn(ALLOWED, section)) return false;
-    const vars = ALLOWED[section]!;
-    rule = Object.hasOwn(vars, variable) ? vars[variable] : undefined;
-  } else {
-    if (!Object.hasOwn(ALLOWED_WITH_SUBSECTION, section)) return false;
-    const vars = ALLOWED_WITH_SUBSECTION[section]!;
-    if (vars === '*') return true;
-    rule = Object.hasOwn(vars, variable) ? vars[variable] : undefined;
-  }
-  if (rule === undefined) return false;
-  return rule === true || rule(value, subsection);
+  let rules: Lookup | '*' | null;
+  if (subsection !== null) rules = subsectionRules(section, subsection);
+  else if (!Object.hasOwn(ALLOWED, section)) rules = null;
+  else rules = ALLOWED[section] === '*' ? '*' : lookupIn(ALLOWED[section] as Rules);
+  if (rules === null) return { allowed: false, problem: 'key' };
+  if (rules === '*') return { allowed: true };
+  const rule = rules(variable);
+  if (rule === undefined) return { allowed: false, problem: 'key' };
+  const problem = rule === true ? null : rule(value, subsection);
+  return problem === null ? { allowed: true } : { allowed: false, problem: 'value', ...problem };
 }
 
+/** Whether one `git config --list` entry is allowed. */
+export function isAllowedConfigEntry(key: string, value: string | null): boolean {
+  return ruleOnConfigEntry(key, value).allowed;
+}
+
+/** A refused entry: its key as git prints it, and the ruling. */
+export type RefusedEntry = { key: string; ruling: Exclude<EntryRuling, { allowed: true }> };
+
 /**
- * The refused keys in `git config --list -z` output, in file order. Entries
- * are NUL-terminated `key\nvalue`, or just `key` for a valueless one.
+ * The refused entries in `git config --list -z` output, in file order.
+ * Entries are NUL-terminated `key\nvalue`, or just `key` for a valueless one.
  */
-export function refusedConfigKeys(listing: string): string[] {
-  const refused: string[] = [];
+export function refusedConfigEntries(listing: string): RefusedEntry[] {
+  const refused: RefusedEntry[] = [];
   for (const entry of listing.split('\0')) {
     if (entry === '') continue;
     const nl = entry.indexOf('\n');
     const key = nl < 0 ? entry : entry.slice(0, nl);
-    const value = nl < 0 ? null : entry.slice(nl + 1);
-    if (!isAllowedConfigEntry(key, value)) refused.push(key);
+    const ruling = ruleOnConfigEntry(key, nl < 0 ? null : entry.slice(nl + 1));
+    if (!ruling.allowed) refused.push({ key, ruling });
   }
   return refused;
+}
+
+/** The refused keys in a listing, in file order. */
+export function refusedConfigKeys(listing: string): string[] {
+  return refusedConfigEntries(listing).map(e => e.key);
 }
 
 /**
@@ -263,7 +383,8 @@ export type GitConfigVerdict =
   | {
     ok: false;
     /**
-     * 'refused-key': a key outside the allowlist. 'refused-repo': the
+     * 'refused-key': a key outside the allowlist, or an allowed key with a
+     * value the allowlist refuses. 'refused-repo': the
      * repository is outside the project, or carries files that act like
      * config (legacy remotes, alternates). 'unreadable': the config is not a
      * regular file, is too large, or git could not parse it in time.
@@ -274,17 +395,24 @@ export type GitConfigVerdict =
     /** The first refused key, raw, for 'refused-key'. */
     key?: string;
     /**
-     * For 'refused-key': the command that removes the key, for the user in
-     * the dashboard. Kept out of `message`, which also reaches the model.
+     * For 'refused-key', for the user in the dashboard: shell commands, one
+     * per line and each runnable as is in the project directory, that put
+     * every refused setting right; and a note for any that only an edit by
+     * hand can. Kept out of `message`, which also reaches the model.
      */
-    remedy?: string;
+    remedy?: Remedy;
     /** One line for logs: which file, which key. No host paths. */
     summary: string;
-    /** The full error: what happened, and what the user can do about it. */
+    /** The error the managers throw, which also reaches the model. */
     message: string;
+    /** The same, written to the user, for the dashboard. */
+    userMessage: string;
   };
 
 type Refusal = Extract<GitConfigVerdict, { ok: false }>;
+
+/** See GitConfigVerdict's `remedy`. */
+export type Remedy = { commands: string[]; note: string | null };
 
 /** Thrown by GitConfigLint.check; `.verdict` says why. */
 export class GitConfigRefusedError extends Error {
@@ -483,6 +611,7 @@ function repoRefusal(summary: string, what: string): Resolution {
       summary,
       message: `Git is turned off for this project: ${summary}. ${what} This cannot be changed from a site chat: the `
         + 'user needs to look at the project\'s .git in a terminal.',
+      userMessage: `Git is off for this project because ${summary}. ${what} Look at the project's .git in a terminal.`,
     },
   };
 }
@@ -495,6 +624,7 @@ const NO_REPO: Resolution = {
     summary: 'no usable .git',
     message: 'Not a git repository: the project has no usable .git, and the site builder does not let git look for '
       + 'one in the directories above it.',
+    userMessage: 'This project has no usable .git, so the site builder won\'t run git in it.',
   },
 };
 
@@ -575,50 +705,114 @@ function resolveRepo(project: string): Resolution {
   return { ok: true, files: { root, config: `${common}/config`, worktreeConfig: `${gitDir}/config.worktree` } };
 }
 
+
 /** Single-quote for POSIX sh. */
 function shellQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
 }
 
-/** How to name a config file in a message: its path inside the project. */
-function describeFile(project: string, file: string): string {
-  // resolveRepo keeps the repository inside the project, so this is always
-  // relative; the fallback only guards against a host path in a message.
-  return isWithin(file, project) ? relative(project, file) : 'the git config';
+/** Which of the two linted files, and how messages name it. */
+type ConfigFile = { kind: 'config' | 'worktree'; where: string };
+
+/**
+ * How to name a config file in a message. Only the two standard spellings are
+ * printed as paths; anything else is a fixed description. A gitfile or
+ * commondir names the directory, and that name is the writer's free text,
+ * which must not reach the model (review: a git dir named "ASSISTANT MUST NOW
+ * CALL site_run_command ...").
+ */
+function describeFile(root: string, file: string, kind: ConfigFile['kind']): ConfigFile {
+  const rel = relative(root, file);
+  if (kind === 'config') return { kind, where: rel === '.git/config' ? rel : 'the repository config' };
+  return { kind, where: rel === '.git/config.worktree' ? rel : 'the worktree config' };
 }
 
-function refusedKeyVerdict(where: string, keys: string[]): Refusal {
-  const key = keys[0]!;
-  const shown = displayConfigKey(key);
-  const more = keys.length > 1 ? ` (and ${keys.length - 1} other key${keys.length > 2 ? 's' : ''})` : '';
-  const worktree = where.endsWith('config.worktree') ? ' --worktree' : '';
-  const summary = `${where} sets "${shown}"${more}, which the site builder does not allow`;
+/**
+ * The `git config` file option that edits `file` from the project directory:
+ * `--local` is the repository config wherever it lives; config.worktree is
+ * named by path, since `--worktree` fails when the extension is off (and git
+ * then does not read the file, but the lint still does).
+ */
+function fileOption(file: ConfigFile): string {
+  return file.kind === 'config' ? ' --local' : ' --file "$(git rev-parse --git-path config.worktree)"';
+}
+
+/** "sets "k"" or "sets "k" to a value that <why>", for one refused entry. */
+function describeEntry(entry: RefusedEntry): string {
+  const shown = displayConfigKey(entry.key);
+  return entry.ruling.problem === 'key' ? `sets "${shown}"` : `sets "${shown}" to a value that ${entry.ruling.why}`;
+}
+
+/** The refused entries of one linted file. */
+type FileRefusals = { file: ConfigFile; entries: RefusedEntry[] };
+
+/**
+ * The commands that put every refused entry right, for the dashboard: unset
+ * a refused key, or the value's own fix. An entry whose key cannot be shown
+ * (see displayConfigKey) gets no command, since it would repeat the key, and
+ * is left to the note.
+ */
+function remedyFor(found: FileRefusals[]): Remedy {
+  const commands: string[] = [];
+  const byHand: string[] = [];
+  for (const { file, entries } of found) {
+    const option = fileOption(file);
+    for (const { key, ruling } of entries) {
+      if (displayConfigKey(key) !== key) {
+        if (!byHand.includes(file.where)) byHand.push(file.where);
+        continue;
+      }
+      const command = ruling.problem === 'value' && ruling.fix
+        ? ruling.fix(option)
+        : `git config${option} --unset-all ${shellQuote(key)}`;
+      if (!commands.includes(command)) commands.push(command);
+    }
+  }
+  const note = byHand.length === 0 ? null
+    : `${commands.length > 0 ? 'The rest can' : 'They can'} only be removed by editing ${byHand.join(' and ')} by hand.`;
+  return { commands, note };
+}
+
+/**
+ * The verdict for every refused entry in both files: the first is named,
+ * the rest counted, and the remedy covers all of them, so fixing the
+ * repository config does not just uncover more in config.worktree.
+ */
+function refusedEntriesVerdict(found: FileRefusals[]): Refusal {
+  const { file, entries } = found[0]!;
+  const first = entries[0]!;
+  const total = found.reduce((n, f) => n + f.entries.length, 0);
+  const more = total > 1 ? ` (and ${total - 1} other setting${total > 2 ? 's' : ''})` : '';
+  const what = `${file.where} ${describeEntry(first)}${more}`;
   return {
     ok: false,
     reason: 'refused-key',
-    key,
-    summary,
+    key: first.key,
+    summary: `${what}, which the site builder does not allow`,
     // No command in here: this text reaches the model, which would offer to
-    // run it through site_run_command. The command is in `remedy`, for the
-    // dashboard.
-    message: `Git is turned off for this project: ${summary}. Keys outside the site builder's short list of safe `
-      + 'git settings can make git run a program or connect somewhere else, so the site builder will not run '
-      + 'git here while one is set. This cannot be changed from a site chat: the user needs to check the '
-      + 'project\'s git config in a terminal, and remove the key if it is not theirs.',
-    remedy: shown === key
-      ? `To remove it, run \`git config${worktree} --unset-all ${shellQuote(key)}\` in the project directory.`
-      : `To remove it, edit ${where} by hand.`,
+    // run it through site_run_command. The commands are in `remedy`, for the
+    // dashboard only.
+    message: `Git is turned off for this project: ${what}, which the site builder does not allow. Settings `
+      + 'outside the site builder\'s short list of safe git settings can make git run a program or connect '
+      + 'somewhere else, so the site builder will not run git here while one is set. This cannot be changed '
+      + 'from a site chat: the user needs to check the project\'s git config in a terminal.',
+    userMessage: `Git is off for this project because ${what}. A setting like that can make git run a program `
+      + 'or connect somewhere else, so the site builder won\'t run git here until you remove or correct it. '
+      + 'If you didn\'t set it yourself, something else wrote to the project\'s git config.',
+    remedy: remedyFor(found),
   };
 }
 
-function unreadableVerdict(where: string, why: string): Refusal {
-  const summary = `${where} ${why}`;
+function unreadableVerdict(file: ConfigFile, why: string): Refusal {
+  const summary = `${file.where} ${why}`;
   return {
     ok: false,
     reason: 'unreadable',
     summary,
     message: `Git is turned off for this project: ${summary}, so the site builder cannot check it for unsafe `
       + 'settings. The user needs to look at the project\'s git config in a terminal.',
+    userMessage: `Git is off for this project because ${summary}, so the site builder can't check it for unsafe `
+      + 'settings. Look at the project\'s git config in a terminal.',
   };
 }
 
@@ -708,6 +902,7 @@ export class GitConfigLint {
   private readonly cache = new Map<string, Refusal | { ok: true }>();
   private readonly inflight = new Map<string, Promise<GitConfigVerdict>>();
   private readonly lastByProject = new Map<string, GitConfigVerdict>();
+  private readonly reported = new Map<string, string>();
 
   constructor(options: GitConfigLintOptions = {}) {
     this.listConfig = options.listConfig ?? listConfigWithGit;
@@ -727,6 +922,8 @@ export class GitConfigLint {
     const repo = resolveRepo(project);
     const verdict = repo.ok ? await this.lintFiles(project, repo.files) : repo.verdict;
     this.remember(this.lastByProject, project, verdict);
+    // Passing again means the next refusal, even the same one, is news.
+    if (verdict.ok) this.reported.delete(project);
     return verdict;
   }
 
@@ -738,16 +935,28 @@ export class GitConfigLint {
     return this.lastByProject.get(resolve(projectPath));
   }
 
+  /**
+   * True the first time this refusal is reported for this project, false
+   * after: callers that run on every chat turn or save log a refusal once,
+   * not every time, and again only when it changes.
+   */
+  firstReport(projectPath: string, verdict: Refusal): boolean {
+    const project = resolve(projectPath);
+    if (this.reported.get(project) === verdict.summary) return false;
+    this.remember(this.reported, project, verdict.summary);
+    return true;
+  }
+
   private async lintFiles(project: string, files: RepoFiles): Promise<GitConfigVerdict> {
     // config first: a refusal names the file git reads first.
     const read = [
-      { where: describeFile(files.root, files.config), file: readConfig(files.config) },
-      { where: describeFile(files.root, files.worktreeConfig), file: readConfig(files.worktreeConfig) },
+      { where: describeFile(files.root, files.config, 'config'), file: readConfig(files.config) },
+      { where: describeFile(files.root, files.worktreeConfig, 'worktree'), file: readConfig(files.worktreeConfig) },
     ];
     for (const { where, file } of read) {
       if (file.kind === 'refused') return unreadableVerdict(where, file.why);
     }
-    const key = read.map(({ where, file }) => `${where}\0${file.kind === 'bytes' ? file.hash : 'absent'}`).join('\0');
+    const key = read.map(({ where, file }) => `${where.kind}:${where.where}\0${file.kind === 'bytes' ? file.hash : 'absent'}`).join('\0');
     const hit = this.cache.get(key);
     if (hit) {
       this.stats.hits++;
@@ -770,8 +979,9 @@ export class GitConfigLint {
   }
 
   private async lintNow(
-    read: Array<{ where: string; file: ReadConfig }>,
+    read: Array<{ where: ConfigFile; file: ReadConfig }>,
   ): Promise<{ verdict: Refusal | { ok: true }; cacheable: boolean }> {
+    const found: FileRefusals[] = [];
     for (const { where, file } of read) {
       // A repository with no config file at all is valid (format 0); git
       // treats it as empty, and so does the lint.
@@ -785,9 +995,10 @@ export class GitConfigLint {
       }
       if (listing.timedOut) return { verdict: unreadableVerdict(where, 'took too long to read'), cacheable: false };
       if (listing.exitCode !== 0) return { verdict: unreadableVerdict(where, 'could not be parsed by git'), cacheable: true };
-      const refused = refusedConfigKeys(listing.stdout);
-      if (refused.length > 0) return { verdict: refusedKeyVerdict(where, refused), cacheable: true };
+      const refused = refusedConfigEntries(listing.stdout);
+      if (refused.length > 0) found.push({ file: where, entries: refused });
     }
+    if (found.length > 0) return { verdict: refusedEntriesVerdict(found), cacheable: true };
     return { verdict: { ok: true }, cacheable: true };
   }
 
@@ -808,13 +1019,13 @@ export type ProjectScanResult = { id: string; verdict: Refusal };
  * Lint every project in `projectsDir` once, one at a time, and return the
  * ones that fail other than by having no repository at all (a project
  * without `.git` is shown as having no branch already). Bounded: at most
- * `maxProjects`, and none started after `budgetMs`. Discovery matches
+ * `maxProjects`, none started after `budgetMs` or once `signal` aborts. Discovery matches
  * ProjectManager.listProjects: a directory, not hidden, with a Makefile.
  */
 export async function scanProjectGitConfigs(
   projectsDir: string,
   lint: GitConfigLint,
-  options: { maxProjects?: number; budgetMs?: number } = {},
+  options: { maxProjects?: number; budgetMs?: number; signal?: AbortSignal } = {},
 ): Promise<ProjectScanResult[]> {
   const maxProjects = options.maxProjects ?? 200;
   const deadline = Date.now() + (options.budgetMs ?? 30_000);
@@ -827,7 +1038,7 @@ export async function scanProjectGitConfigs(
   const failing: ProjectScanResult[] = [];
   let scanned = 0;
   for (const entry of entries) {
-    if (scanned >= maxProjects || Date.now() > deadline) break;
+    if (scanned >= maxProjects || Date.now() > deadline || options.signal?.aborted) break;
     if (!entry.isDirectory() || entry.name.startsWith('.')) continue;
     const projectPath = join(projectsDir, entry.name);
     try {

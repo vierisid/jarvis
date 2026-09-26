@@ -1581,6 +1581,37 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     expect(existsSync(marker)).toBe(false);
   }, 60_000);
 
+  // #523 T1: fetch recursion runs git in each submodule under ITS config,
+  // which the lint never reads. The submodule-recursion pins must hold even
+  // against a .gitmodules that asks for it, on the tokenless fetch path.
+  test('a submodule is never fetched into, whatever .gitmodules asks', async () => {
+    const h = await setupProject('public-submodule');
+    const marker = join(h.evidence, 'submodule-ssh-ran');
+    const sub = join(h.project, 'sub');
+    mkdirSync(sub);
+    const g = (args: string[], cwd = h.project) => setup([REAL_GIT!, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], cwd, h.gitEnv);
+    await g(['init', '-q', '-b', 'main'], sub);
+    await g(['commit', '-q', '--allow-empty', '-m', 's'], sub);
+    await g(['remote', 'add', 'origin', 'ssh://example.invalid/r.git'], sub);
+    await g(['config', 'core.sshCommand', `touch '${marker}'; false`], sub);
+    await g(['add', 'sub']);
+    writeFileSync(join(h.project, '.gitmodules'),
+      '[submodule "sub"]\n\tpath = sub\n\turl = ssh://example.invalid/r.git\n\tfetchRecurseSubmodules = true\n');
+    await g(['add', '.gitmodules']);
+    await g(['commit', '-q', '-m', 'submodule']);
+    await g(['push', '-q', h.bareRepo, 'main']);
+    useHarnessEnv(h);
+
+    // Tokenless: origin is not the default credential target (github.com).
+    const status = await new GitHubManager().getRemoteStatus(h.project);
+    expect(status.hasRemote).toBe(true);
+    expect(existsSync(marker)).toBe(false);
+
+    // CONTROL: plain git's fetch of the same origin recurses and runs it.
+    await run(['git', 'fetch', '-q', 'origin'], h.project, undefined, h.gitEnv);
+    expect(existsSync(marker)).toBe(true);
+  }, 60_000);
+
   // Maintainer decision: daemon push/pull run no project hooks. The realistic
   // shape is husky's: a project-level core.hooksPath inside the worktree, and
   // `.husky/<hook>` run through `sh -e`, so it needs no executable bit -- a
@@ -1837,7 +1868,8 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
       expect(pushed.error).toContain(JSON.stringify(key.replace(/\.([^.]+)$/, (_, v: string) => `.${v.toLowerCase()}`)));
       expect((await m.pull(h.project)).error).toContain('Git is turned off for this project');
       await expect(m.getRemoteStatus(h.project)).rejects.toThrow('Git is turned off for this project');
-      await expect(m.removeRemote(h.project)).rejects.toThrow('Git is turned off for this project');
+      // Nothing for the daemon to remove: Disconnect goes on to clear the metadata.
+      await m.removeRemote(h.project);
 
       expect(server.requests.length).toBe(before);
       expect(credentialDirsIn(h.tmp)).toEqual([]);
@@ -1845,7 +1877,7 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
         .map(f => readFileSync(join(h.evidence, f), 'utf8').split('\0'));
       expect(argvs.length).toBeGreaterThan(0);
       expect(argvs.filter(a => !(a.includes('config') && a.includes('--list')))).toEqual([]);
-      // Nothing was removed either: removeRemote reported the refusal.
+      // And removeRemote ran no git: the project's remote is untouched.
       expect(await setup([REAL_GIT!, 'remote'], h.project, h.gitEnv)).toContain('origin');
     }, 30_000);
   }

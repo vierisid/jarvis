@@ -521,9 +521,16 @@ export class GitHubManager {
    * Remove the 'origin' remote.
    */
   async removeRemote(projectPath: string): Promise<void> {
-    // Up front: both steps below swallow failures, a lint refusal included,
-    // and would report a removal that never happened.
-    await this.configLint.check(projectPath);
+    // A project git is off for (#523), or that has no repository, has no
+    // remote the daemon may remove: nothing to do, so Disconnect still
+    // clears the project's GitHub metadata.
+    const verdict = await this.configLint.inspect(projectPath);
+    if (!verdict.ok) {
+      if (verdict.reason !== 'no-repo' && this.configLint.firstReport(projectPath, verdict)) {
+        console.warn(`[GitHubManager] Left the git remote alone (git is off for the project): ${verdict.summary}`);
+      }
+      return;
+    }
     try {
       await this.git(projectPath, ['remote', 'remove', 'origin']);
     } catch { /* already gone */ }

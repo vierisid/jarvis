@@ -34,7 +34,7 @@ const HOOK_EVENTS = [
 ] as const;
 
 /**
- * `-c` pins on EVERY git command the daemon runs in a site project, from
+ * `-c` pins (and `--no-pager`) on EVERY git command the daemon runs in a site project, from
  * GitManager (status, commit, diff, switch, merge, rebase, log, ...) and
  * GitHubManager (push, pull, fetch, remote), authenticated or not. Each
  * names something a model-written project tree could otherwise make git run:
@@ -80,12 +80,18 @@ const HOOK_EVENTS = [
  *     its filter drivers and includes would run. `status` and `diff` also
  *     get `--ignore-submodules=all` from their callers, since a per-submodule
  *     `ignore` setting in `.gitmodules` beats the config default.
- *   - `gc.autoDetach=false`, `maintenance.autoDetach=false` (#523): auto
- *     maintenance otherwise runs detached, outliving the daemon's command and
- *     its timeout, and re-reads the project config long after the lint.
- *     Foreground, it is part of the command that triggered it (rare: loose
- *     objects have to pile up first). A git without maintenance.autoDetach
- *     ignores that key and falls back on gc.autoDetach, as newer git does.
+ *   - `core.editor=:`, `sequence.editor=:` (#523): the daemon never wants an
+ *     editor (commits take -m), and `:` is a no-op, so a project may keep its
+ *     own editor setting -- the lint allows both keys because of this pin.
+ *   - `--no-pager` (#523): git starts a pager only on a terminal, which the
+ *     daemon never has, but `pager.<cmd>` beats a `-c core.pager` pin
+ *     (measured), so the option is what makes the lint's allowing
+ *     `core.pager` and `pager.*` safe regardless.
+ *
+ * Deliberately NOT pinned: `gc.autoDetach` / `maintenance.autoDetach`. A
+ * detached auto-gc inherits GIT_CONFIG_PARAMETERS, so it runs under these
+ * same pins; running it in the foreground instead would put a gc into a
+ * dashboard save, on a GitManager.run that has no timeout.
  *
  * NOT pinnable this way, because their names are the writer's choice: filter
  * drivers (`filter.<x>.clean`), merge and textconv drivers, and config pulled
@@ -97,6 +103,7 @@ const HOOK_EVENTS = [
  * global and system configs, and a config changed after the lint.
  */
 export const PROJECT_GIT_PINS: readonly string[] = [
+  '--no-pager',
   '-c', 'safe.bareRepository=explicit',
   '-c', 'core.hooksPath=/dev/null',
   ...HOOK_EVENTS.flatMap(event => ['-c', `hook.${event}.enabled=false`]),
@@ -108,8 +115,8 @@ export const PROJECT_GIT_PINS: readonly string[] = [
   '-c', 'submodule.recurse=false',
   '-c', 'fetch.recurseSubmodules=false',
   '-c', 'push.recurseSubmodules=no',
-  '-c', 'gc.autoDetach=false',
-  '-c', 'maintenance.autoDetach=false',
+  '-c', 'core.editor=:',
+  '-c', 'sequence.editor=:',
 ];
 
 /**
@@ -119,7 +126,12 @@ export const PROJECT_GIT_PINS: readonly string[] = [
  * `ignore` in `.gitmodules` (which the site file tools can write) beats a
  * `-c diff.ignoreSubmodules` pin. Only the command-line option beats it.
  */
-export const PROJECT_STATUS_ARGS: readonly string[] = ['status', '--porcelain', '--ignore-submodules=all'];
+export const PROJECT_STATUS_ARGS: readonly string[] = [
+  'status', '--porcelain', '--ignore-submodules=all',
+  // A project's status.showUntrackedFiles=no would hide new files, and the
+  // auto-commit would skip a save that only adds one.
+  '--untracked-files=normal',
+];
 
 /** A git binary's major.minor, or null when `git --version` is unparseable. */
 export type GitVersion = readonly [number, number] | null;

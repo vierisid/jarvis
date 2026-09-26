@@ -453,6 +453,11 @@ export class ProjectManager {
     this.writeMeta(projectPath, meta);
   }
 
+  /** The projects directory, `~` expanded. */
+  getProjectsDir(): string {
+    return this.projectsDir;
+  }
+
   /**
    * Get the resolved absolute path for a project.
    */

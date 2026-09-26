@@ -117,7 +117,8 @@ export class GitManager {
    * List all local branches.
    */
   async getBranches(projectPath: string): Promise<GitBranch[]> {
-    const output = await this.run(projectPath, ['branch', '--no-color']);
+    // --no-column: a project's column.ui=always would put names side by side.
+    const output = await this.run(projectPath, ['branch', '--no-color', '--no-column']);
     if (!output.trim()) return [{ name: 'main', current: true }];
 
     return output
@@ -164,6 +165,8 @@ export class GitManager {
         'log',
         `--max-count=${limit}`,
         '--format=%H|%h|%s|%an|%at',
+        // A project's i18n.logOutputEncoding would re-encode the output.
+        '--encoding=UTF-8',
       ]);
 
       if (!output.trim()) return [];
@@ -199,7 +202,8 @@ export class GitManager {
    */
   async getDiff(projectPath: string): Promise<string> {
     // --ignore-submodules=all for the reason on PROJECT_STATUS_ARGS.
-    const diff = ['diff', '--no-ext-diff', '--no-textconv', '--ignore-submodules=all'];
+    // --no-color: a project's color.diff=always would put escapes in it.
+    const diff = ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--ignore-submodules=all'];
     const staged = await this.run(projectPath, [...diff, '--cached']);
     const unstaged = await this.run(projectPath, diff);
     return (staged + '\n' + unstaged).trim();

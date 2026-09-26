@@ -264,11 +264,51 @@
 
 .v2-ws__card-port { color: var(--ok); }
 
-/* #523: the "Git off" chip; its reason is the tooltip. */
+/* #523: the "Git off" chip on a card; its reason is the tooltip. */
 .v2-ws__git-issue {
   display: inline-flex;
   align-items: center;
   cursor: help;
+}
+
+/* #523: the same, in full, under the project header. */
+.v2-ws__git-issue-panel {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-2);
+  padding: var(--s-3) var(--s-6);
+  border-bottom: var(--hair-soft);
+  background: color-mix(in srgb, var(--listen) 6%, var(--paper-2));
+  flex-shrink: 0;
+}
+
+.v2-ws__git-issue-text {
+  margin: 0;
+  max-width: 72ch;
+  color: var(--ink-2);
+  line-height: 1.5;
+}
+
+.v2-ws__git-issue-fix {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: var(--s-2);
+  max-width: 100%;
+}
+
+.v2-ws__git-issue-cmd {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
+
+.v2-ws__git-issue-copy {
+  min-height: 32px;
+  padding: 0 var(--s-3);
 }
 
 .v2-ws__dirty {
