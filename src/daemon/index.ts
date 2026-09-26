@@ -58,6 +58,7 @@ import { buildBackgroundProfile } from "../authority/background-profile.ts";
 import { buildTaintGating } from "../authority/taint-gating.ts";
 import { applyApprovalDecision } from "./approval-decision.ts";
 import { sendDesktopNotification } from "../comms/desktop-notify.ts";
+import { ensureUiBuilt } from "./ui-autobuild.ts";
 import { deliverOpportunityNotification } from './opportunity-notification.ts';
 import { SidecarManager, buildEnrollmentUrls } from "../sidecar/manager.ts";
 import {
@@ -4457,23 +4458,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     console.log(`[Daemon] Authority engine initialized (governed: ${authorityEngine.getConfig().governed_categories.join(', ')})`);
 
     // 9. Ensure UI is built (auto-build if ui/dist is missing or empty)
-    const uiDistDir = path.join(import.meta.dir, '../../ui/dist');
-    const uiIndexPath = path.join(uiDistDir, 'index.html');
-    if (!existsSync(uiIndexPath)) {
-      logWithTimestamp('Dashboard UI not built — building automatically...');
-      const buildResult = Bun.spawnSync(['bun', 'run', 'build:ui'], {
-        cwd: path.join(import.meta.dir, '../..'),
-        stdout: 'pipe',
-        stderr: 'pipe',
-        env: { ...process.env },
-      });
-      if (buildResult.exitCode === 0) {
-        logWithTimestamp('Dashboard UI built successfully');
-      } else {
-        const stderr = buildResult.stderr.toString().trim();
-        console.warn(`[Daemon] UI build failed (dashboard may not load): ${stderr.slice(0, 200)}`);
-      }
-    }
+    const repoRoot = path.join(import.meta.dir, '../..');
+    const uiDistDir = path.join(repoRoot, 'ui', 'dist');
+    ensureUiBuilt(repoRoot, logWithTimestamp);
 
     // 9b. Set up API routes + dashboard static files
     const apiContext: import('./api-routes.ts').ApiContext & Record<string, unknown> = {

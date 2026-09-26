@@ -24,12 +24,14 @@
  *   - the process is owned by OUR uid;
  *   - its environment carries our exact versioned marker;
  *   - its argv contains the bundle path recorded in its own environment, and
- *     that path ends in `main.js`. This is not redundant with the marker: the
- *     engine spawns CODE actions with no env of their own, so user code
- *     inherits the marker too -- but it runs `bun --eval`, never a bundle
- *     path, so the argv check excludes it. (Deleting the vars from
- *     `process.env` inside the engine would not help: Bun's spawn still
- *     passes on the original environment block.)
+ *     that path ends in `main.js`. This is not redundant with the marker:
+ *     bundles built before #512 spawn CODE actions with an inherited env, so
+ *     user code from one of those carries the marker too -- but it runs `bun
+ *     --eval`, never a bundle path, so the argv check excludes it. Current
+ *     bundles give that child `sanitizedEnv()`, which drops the marker, but a
+ *     cache can still hold the older ones. (Deleting the vars from
+ *     `process.env` inside the engine would not have helped: Bun's spawn
+ *     still passes on the original environment block when env is omitted.)
  *   - its owner pid is no longer alive, or is alive but started at a
  *     different time than recorded -- i.e. the number was recycled.
  *
@@ -41,13 +43,13 @@
  * engine-bundle` matched nothing at all, but the next pattern someone reaches
  * for would match everything).
  *
- * KNOWN RESIDUE: a CODE action's own subprocess (`bun --eval ...`, spawned by
- * the engine with no env of its own) inherits the marker but is deliberately
- * NOT matched -- it may be mid-step, and killing it would fail a live
- * workflow. When its engine is reaped it is orphaned in turn. It carries no
- * pooled state and no socket, so it is a much smaller version of this
- * problem, but it is not zero; if those start accumulating, match them by
- * their ppid being a just-reaped engine rather than by the marker alone.
+ * KNOWN RESIDUE: a CODE action's own subprocess (`bun --eval ...`) is NOT
+ * matched -- it may be mid-step, and killing it would fail a live workflow.
+ * When its engine is reaped it is orphaned in turn. It carries no pooled state
+ * and no socket, so it is a much smaller version of this problem, but it is
+ * not zero. Since #512 it no longer carries the marker at all (the engine
+ * hands it `sanitizedEnv()`), so if those start accumulating, match them by
+ * their ppid being a just-reaped engine; the marker cannot find them.
  */
 
 import { lstatSync, readFileSync, readdirSync, rmSync, statSync, utimesSync } from "node:fs";
@@ -230,7 +232,8 @@ function identifyEngine(
   const bundlePath = env[ENGINE_BUNDLE_ENV];
   if (!bundlePath || !bundlePath.endsWith("main.js")) return null;
   // argv must actually name that bundle -- this is what separates the engine
-  // from the CODE-action children that inherited its environment.
+  // from the CODE-action children of a pre-#512 bundle, which inherited its
+  // environment.
   let argv: string[];
   try {
     argv = readFileSync(resolve(dir, "cmdline"), "utf8").split("\0").filter(Boolean);

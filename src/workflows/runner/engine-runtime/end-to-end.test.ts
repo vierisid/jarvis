@@ -564,4 +564,83 @@ describe("Engine end-to-end (G+H pieces)", () => {
     },
     60_000,
   );
+
+  /**
+   * #512 against the real engine: the CODE step's process gets the sanitized
+   * env, not the engine's. The engine's env carries SANDBOX_ID (the worker
+   * RPC's engine identifier), the WS port and the reaper markers; before the
+   * fix every CODE step inherited all of them. The unit-level probe in
+   * src/spawn-env-sites.test.ts covers the call site; this covers the
+   * BUNDLE, i.e. that the patched sandbox is what actually ships.
+   */
+  test.skipIf(skipE2eTests)(
+    "a CODE step does not inherit the engine's environment",
+    async () => {
+      const { isAllowedEnvName } = await import("../../../util/subprocess-env");
+      const probeDir = mkdtempSync(join(tmpdir(), "jarvis-code-env-"));
+      try {
+        await runCodeEnvProbe(probeDir, isAllowedEnvName);
+      } finally {
+        rmSync(probeDir, { recursive: true, force: true });
+      }
+    },
+    60_000,
+  );
+
+  async function runCodeEnvProbe(probeDir: string, isAllowedEnvName: (n: string) => boolean): Promise<void> {
+    const probe = join(probeDir, "env.json");
+    const flow = createFlow({ projectId: DEFAULT_IDS.project });
+    const trigger: FlowTriggerNode = {
+      name: "trigger",
+      type: "PIECE_TRIGGER",
+      displayName: "Manual",
+      settings: {
+        pieceName: PIECE_TEST_NAME,
+        pieceVersion: PIECE_VERSION,
+        triggerName: "manual",
+        input: { payload: {} },
+      },
+      nextAction: {
+        name: "dump_env",
+        type: "CODE",
+        displayName: "Dump env",
+        settings: {
+          input: {},
+          sourceCode: {
+            packageJson: "{}",
+            code:
+              "exports.code = async () => {" +
+              `  require('node:fs').writeFileSync(${JSON.stringify(probe)}, JSON.stringify(Object.keys(process.env)));` +
+              "  return {};" +
+              "};",
+          },
+        },
+      },
+    };
+    const v = createDraftVersion({ flowId: flow.id, displayName: "code-env", trigger });
+    updateDraftVersion(v.id, { trigger, valid: true });
+    setFlowCodeStepsEnabled(flow.id, true);
+    const published = publishFlowVersion(flow.id);
+    const run = createFlowRun({
+      flowId: flow.id,
+      flowVersionId: published.version.id,
+      environment: "TESTING",
+    });
+    const handle = await runtime!.acquire({ runId: run.id, projectId: DEFAULT_IDS.project });
+    let stderrBuf = "";
+    handle.stderr?.on("data", (d) => { stderrBuf += d.toString(); });
+    try {
+      const finalRun = await handle.executeFlow({ flowVersion: getFlowVersion(published.version.id)! });
+      if (finalRun.status !== "SUCCEEDED") {
+        console.error(`[engine stderr]\n${stderrBuf.slice(0, 4000)}`);
+      }
+      expect(finalRun.status).toBe("SUCCEEDED");
+      const names = JSON.parse(readFileSync(probe, "utf8")) as string[];
+      // Names only: nothing the engine holds is worth printing.
+      expect(names.filter((n) => !isAllowedEnvName(n))).toEqual([]);
+      expect(names).toContain("PATH");
+    } finally {
+      await handle.release();
+    }
+  }
 });

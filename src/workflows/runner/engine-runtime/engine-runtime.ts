@@ -103,8 +103,6 @@ export interface EngineRuntimeOptions {
    * Bun subprocess. Pass 0 (or undefined with pool=false) to disable.
    */
   poolIdleTtlMs?: number;
-  /** Override extra env for the spawned engine -- mostly for tests. */
-  spawnEnvOverride?: Record<string, string | undefined>;
   /** Override the runtime binary (default: process.execPath). */
   runtime?: string;
 }
@@ -567,7 +565,6 @@ export class EngineRuntime {
   private readonly customPiecesPaths: string[];
   private readonly handshakeTimeoutMs: number;
   private readonly killGraceMs: number;
-  private readonly spawnEnvOverride: Record<string, string | undefined> | undefined;
   private readonly runtime: string | undefined;
   private readonly cwd: string;
   private readonly devPieces: string[];
@@ -626,7 +623,6 @@ export class EngineRuntime {
     this.handshakeTimeoutMs =
       opts.handshakeTimeoutMs ?? envHandshakeTimeoutMs() ?? 30_000;
     this.killGraceMs = opts.killGraceMs ?? 2_000;
-    this.spawnEnvOverride = opts.spawnEnvOverride;
     this.runtime = opts.runtime;
     // Default to the vendored activepieces dir so dev-pieces resolution finds
     // packages/pieces/jarvis/*/dist/package.json without further env setup.
@@ -733,7 +729,6 @@ export class EngineRuntime {
       customPiecesPaths: this.customPiecesPaths,
       devPieces: this.devPieces,
       cwd: this.cwd,
-      env: this.spawnEnvOverride,
       // Keep the engine's own post-SIGTERM flush window inside the deadline
       // we SIGKILL it on, so the two can't drift apart (see spawn.ts).
       ownerKillGraceMs: this.killGraceMs,

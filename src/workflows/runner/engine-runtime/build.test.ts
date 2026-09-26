@@ -10,7 +10,7 @@
 import { test, expect, describe, afterEach } from "bun:test";
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { resolve } from "node:path";
+import { dirname, resolve } from "node:path";
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import {
@@ -20,6 +20,7 @@ import {
   ENGINE_BUILD_PATHS,
   ENGINE_ESBUILD_CONFIG,
   ENGINE_REQUEST_BASE_SHIM,
+  PATCHED_VENDOR_SOURCES,
 } from "./build";
 import { ENGINE_LIFECYCLE_SHIM, ENGINE_OWNER_PID_ENV } from "./engine-lifecycle";
 
@@ -169,6 +170,34 @@ describe("engine bundle build", () => {
         rmSync(root, { recursive: true, force: true });
       }
     });
+  });
+
+  test("every daemon source a patched vendor file imports is itself in the bundle hash", () => {
+    // A patched vendor file that imports a daemon module compiles that module
+    // into the bundle, so the module must be in PATCHED_VENDOR_SOURCES too or
+    // editing it serves a stale engine. #512 added one such import
+    // (no-op-code-sandbox -> util/subprocess-env); this catches the next.
+    const registered = new Set(PATCHED_VENDOR_SOURCES.map((rel) => resolve(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, rel)));
+    const missing: string[] = [];
+    for (const file of registered) {
+      const source = readFileSync(file, "utf8");
+      // Static imports and re-exports, side-effect imports, require() and
+      // import(). `import type` / `export type` are erased before bundling, so
+      // they compile nothing in.
+      const specs = [
+        ...source.matchAll(/^(?:import|export)\s+(?!type\s)(?:(?!\b(?:import|export)\b)[^;])*?\bfrom\s+['"](\.[^'"]+)['"]/gm),
+        ...source.matchAll(/^import\s+['"](\.[^'"]+)['"]/gm),
+        ...source.matchAll(/\b(?:require|import)\(\s*['"](\.[^'"]+)['"]\s*\)/g),
+      ];
+      for (const m of specs) {
+        let target = resolve(dirname(file), m[1]!);
+        if (!target.endsWith(".ts")) target += ".ts";
+        if (target.startsWith(ENGINE_BUILD_PATHS.VENDOR_PACKAGES + "/")) continue;
+        if (!registered.has(target)) missing.push(`${file} -> ${target}`);
+      }
+    }
+    expect(missing).toEqual([]);
+    expect(registered.has(resolve(ENGINE_BUILD_PATHS.REPO_ROOT, "src/util/subprocess-env.ts"))).toBe(true);
   });
 
   test("vendored engine source exists at the expected path", () => {

@@ -34,6 +34,8 @@ import { createHash } from "node:crypto";
 import { fileURLToPath } from "node:url";
 import { UPSTREAM_PIN_SHA, UPSTREAM_PIN_TAG } from "../../activepieces/upstream-pin";
 import { ENGINE_LIFECYCLE_SHIM } from "./engine-lifecycle";
+import { sanitizedEnv } from "../../../util/subprocess-env";
+import { BUN_INSTALL_ARGS, SANITIZED_INSTALL_HINT } from "../../../util/sanitized-install";
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = dirname(__filename);
@@ -205,7 +207,7 @@ function buildStagingPackageJson(): string {
  * bundles. Listed explicitly -- relative to VENDOR_PACKAGES -- so adding a
  * new patch is a one-line cache-invalidation registration.
  */
-const PATCHED_VENDOR_SOURCES = [
+export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/safe-expression.ts',
   // Jarvis: the governed-piece admission gate. The adapter table and the
   // engine-side client are daemon sources compiled INTO the bundle, so editing
@@ -213,6 +215,13 @@ const PATCHED_VENDOR_SOURCES = [
   // the old table -- a stale bundle that silently governs the wrong actions.
   '../../runtime/piece-effects.ts',
   '../../runtime/piece-effect-guard.ts',
+  // The CODE-step sandbox builds its child's env from this allowlist, so it is
+  // compiled into the bundle too: widening or narrowing the allowlist has to
+  // reach the engine, not just the daemon. The cost, accepted over keeping a
+  // third copy of the list: ANY edit to that file, a comment included,
+  // invalidates every cached engine bundle and compiled piece, on every
+  // instance and shared root.
+  '../../../util/subprocess-env.ts',
   'server/engine/src/lib/core/code/no-op-code-sandbox.ts',
   'server/engine/src/lib/variables/props-resolver.ts',
   'server/engine/src/lib/handler/piece-executor.ts',
@@ -390,13 +399,17 @@ export function ensureStagingInstalled(): Promise<void> {
     writeFileSync(pkgPath, desired);
 
     await new Promise<void>((res, rej) => {
-      const child = spawn("bun", ["install", "--silent"], {
+      // Third-party packages, none of which need the daemon's secrets. The
+      // allowlist keeps what bun needs (PATH, HOME, proxies, registry and CA
+      // settings); lifecycle scripts are skipped -- see BUN_INSTALL_ARGS.
+      const child = spawn("bun", [...BUN_INSTALL_ARGS], {
         cwd: STAGING_DIR,
         stdio: "inherit",
+        env: sanitizedEnv(),
       });
       child.on("close", (code) => {
         if (code === 0) res();
-        else rej(new Error(`bun install (engine staging) exited with code ${code}`));
+        else rej(new Error(`bun install (engine staging) exited with code ${code}. ${SANITIZED_INSTALL_HINT}`));
       });
       child.on("error", rej);
     });

@@ -3,6 +3,22 @@ export const expressionPatches = {
   'packages/server/engine/src/lib/core/code/no-op-code-sandbox.ts': [
     ["import { CodeSandbox } from '../../core/code/code-sandbox-common'", "import type { CodeSandbox } from '../../core/code/code-sandbox-common'"],
     ["import { spawn } from 'node:child_process'", "import { spawn } from 'node:child_process'\nimport { evaluateWorkflowExpression } from '../../../../../../../../runtime/safe-expression'"],
+    // #512: the CODE-step child gets a sanitized env rather than the engine's.
+    // Registered here so a vendor sync re-applies it instead of dropping it.
+    ["import { evaluateWorkflowExpression } from '../../../../../../../../runtime/safe-expression'", "import { evaluateWorkflowExpression } from '../../../../../../../../runtime/safe-expression'\nimport { sanitizedEnv } from '../../../../../../../../../util/subprocess-env'"],
+    [
+      "            stdio: ['pipe', 'pipe', 'pipe', 'ipc'],\n        })",
+      "            stdio: ['pipe', 'pipe', 'pipe', 'ipc'],\n" +
+      '            // Jarvis: this child runs a CODE step, i.e. workflow-authored code.\n' +
+      "            // Inheriting would hand it the engine's own env: SANDBOX_ID (what\n" +
+      "            // the daemon's worker RPC accepts an engine connection on), the WS\n" +
+      "            // port, and the reaper's JARVIS_ENGINE_* markers. This is env\n" +
+      '            // hygiene, not isolation: at the same uid the child can still read\n' +
+      "            // /proc/<engine pid>/environ, and up the parent chain the daemon's\n" +
+      '            // /proc/<pid>/environ, which holds every secret it started with.\n' +
+      '            env: sanitizedEnv(),\n' +
+      '        })',
+    ],
     [
       '    async runScript({ script, scriptContext, functions }) {\n' +
       '        const newContext = {\n' +
