@@ -6,6 +6,13 @@
 
 import type { GitCommit, GitBranch } from './types.ts';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
+import { PROJECT_GIT_PINS, gitVersionReader, resolveHookPins, type GitVersion } from './git-pins.ts';
+
+/** HEAD and the pseudo-refs git writes next to it. */
+const PSEUDO_REFS = new Set([
+  'HEAD', 'FETCH_HEAD', 'ORIG_HEAD', 'MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'REBASE_HEAD',
+  'BISECT_HEAD', 'AUTO_MERGE',
+]);
 
 export class GitManager {
   /**
@@ -101,14 +108,18 @@ export class GitManager {
    * Create a new branch.
    */
   async createBranch(projectPath: string, name: string): Promise<void> {
-    await this.run(projectPath, ['checkout', '-b', name]);
+    await this.checkBranchName(projectPath, name);
+    await this.run(projectPath, ['switch', '-c', name]);
   }
 
   /**
    * Switch to an existing branch.
    */
   async switchBranch(projectPath: string, name: string): Promise<void> {
-    await this.run(projectPath, ['checkout', name]);
+    await this.checkBranchName(projectPath, name);
+    // `switch`, not `checkout`: checkout takes a name that is also a path
+    // ("src") as a pathspec and overwrites that path's uncommitted changes.
+    await this.run(projectPath, ['switch', '--', name]);
   }
 
   /**
@@ -154,8 +165,8 @@ export class GitManager {
    * Get diff of uncommitted changes.
    */
   async getDiff(projectPath: string): Promise<string> {
-    const staged = await this.run(projectPath, ['diff', '--cached']);
-    const unstaged = await this.run(projectPath, ['diff']);
+    const staged = await this.run(projectPath, ['diff', '--no-ext-diff', '--no-textconv', '--cached']);
+    const unstaged = await this.run(projectPath, ['diff', '--no-ext-diff', '--no-textconv']);
     return (staged + '\n' + unstaged).trim();
   }
 
@@ -163,6 +174,7 @@ export class GitManager {
    * Merge a branch into the current branch.
    */
   async merge(projectPath: string, branch: string): Promise<{ success: boolean; conflicts?: string[] }> {
+    await this.checkBranchName(projectPath, branch);
     try {
       await this.run(projectPath, ['merge', branch]);
       return { success: true };
@@ -188,6 +200,8 @@ export class GitManager {
    * Rebase current branch onto another branch.
    */
   async rebase(projectPath: string, ontoBranch: string): Promise<{ success: boolean; conflicts?: string[] }> {
+    // Outside the try, which turns every failure into `success: false`.
+    await this.checkBranchName(projectPath, ontoBranch);
     try {
       await this.run(projectPath, ['rebase', ontoBranch]);
       return { success: true };
@@ -211,30 +225,97 @@ export class GitManager {
    * Delete a branch.
    */
   async deleteBranch(projectPath: string, name: string): Promise<void> {
+    await this.checkBranchName(projectPath, name);
     await this.run(projectPath, ['branch', '-d', name]);
   }
 
   /**
-   * Run a git command in the project directory.
+   * Refuse a branch name before it reaches git's argv (#520). The names come
+   * from the dashboard, and git reads one that starts with `-` as an option:
+   * `--orphan=x` or `--detach` change what checkout does, and
+   * `rebase --exec=<cmd>` runs a command. The dash check has to come first,
+   * since check-ref-format would read the name as an option too. After it:
+   * a short list of names that are valid refnames but not branches, then
+   * check-ref-format, whose output must equal the input.
    */
-  private async run(cwd: string, args: string[]): Promise<string> {
-    // Sanitized, not inherited: git runs whatever hooks live in the project
-    // tree's .git/hooks, and that tree is written by the model. Stripping the
-    // inherited GIT_* also stops a hook-invoked daemon's GIT_DIR/GIT_INDEX_FILE
-    // from pointing these commands at the wrong repository.
-    const proc = Bun.spawn(['git', ...args], {
+  private async checkBranchName(projectPath: string, name: string): Promise<void> {
+    const invalid = new Error(`Invalid branch name: "${String(name)}"`);
+    if (typeof name !== 'string' || !name || name.startsWith('-')) throw invalid;
+    // Names check-ref-format passes but that do not mean a branch here: `@`
+    // is HEAD, HEAD and git's pseudo-refs name whatever git last left there
+    // (compared case-insensitively, as a case-insensitive filesystem would
+    // read them), and a full `refs/...` name is a ref path, not a branch.
+    // A fixed list, not `*_HEAD`: `page_head` is an ordinary branch.
+    if (name === '@' || PSEUDO_REFS.has(name.toUpperCase()) || name.startsWith('refs/')) throw invalid;
+    let normalized: string;
+    try {
+      normalized = (await this.run(projectPath, ['check-ref-format', '--branch', name])).trim();
+    } catch {
+      throw invalid;
+    }
+    // `--branch` also EXPANDS shorthands (`@{-1}` becomes the previous
+    // branch), so a name it rewrites is not the name the caller sent.
+    if (normalized !== name) throw invalid;
+  }
+
+  /**
+   * gitVersionReader, run from `/`: the version describes the binary, and `/`
+   * always exists, where a missing TMPDIR would fail every call on this path.
+   */
+  private readonly readGitVersion = gitVersionReader(args => this.run('/', args, { hookPins: [] }));
+
+  /**
+   * The git version, or null when it cannot be read this time (not cached;
+   * the next call retries). Null means "do the hook lookup", so a failed read
+   * keeps hooks pinned off and leaves the manager usable, rather than failing
+   * every status and commit with an error that reads like git is missing.
+   */
+  private async gitVersion(): Promise<GitVersion> {
+    try {
+      return await this.readGitVersion();
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Run a git command in the project directory. `hookPins`, when given,
+   * replaces the per-call resolveHookPins lookup; the lookups themselves pass
+   * `[]`, since they cannot wait on their own result. Unlike GitHubManager
+   * there is no secret here to keep the lookup away from, so every other call
+   * resolves its own pins.
+   */
+  private async run(cwd: string, args: string[], options: { hookPins?: readonly string[] } = {}): Promise<string> {
+    // Sanitized, not inherited: git can still run commands the project names
+    // (PROJECT_GIT_PINS covers the ones a pin can), and the project is written
+    // by the model. Stripping the inherited GIT_* also stops a hook-invoked
+    // daemon's GIT_DIR/GIT_INDEX_FILE from pointing these commands at the
+    // wrong repository.
+    //
+    // On git 2.54 (or an unknown version), a config hook name that cannot be
+    // pinned makes this throw for every call in that repo -- or in every
+    // repo, if the name is in ~/.gitconfig. Fail closed; project listings
+    // catch the error and show the project as having no branch.
+    const hookPins = options.hookPins
+      ?? await resolveHookPins(lookup => this.run(cwd, lookup, { hookPins: [] }), await this.gitVersion());
+    const proc = Bun.spawn(['git', ...PROJECT_GIT_PINS, ...hookPins, ...args], {
       cwd,
       stdout: 'pipe',
       stderr: 'pipe',
       env: sanitizedEnv({ GIT_TERMINAL_PROMPT: '0' }),
     });
 
-    const stdout = await new Response(proc.stdout).text();
-    const exitCode = await proc.exited;
+    // Both pipes at once: git blocks once a pipe nobody reads fills (~64 KiB),
+    // and stderr is only read on failure otherwise.
+    const [stdout, stderr, exitCode] = await Promise.all([
+      new Response(proc.stdout).text(),
+      new Response(proc.stderr).text(),
+      proc.exited,
+    ]);
 
     if (exitCode !== 0) {
-      const stderr = await new Response(proc.stderr).text();
-      throw new Error(`git ${args[0]} failed: ${stderr.trim() || stdout.trim()}`);
+      // exitCode rides along so resolveHookPins can tell "no match" (1) apart.
+      throw Object.assign(new Error(`git ${args[0]} failed: ${stderr.trim() || stdout.trim()}`), { exitCode });
     }
 
     return stdout;

@@ -91,7 +91,9 @@ switch (site) {
     const projectPath = join(projectsDir, 'probe-app');
     mkdirSync(projectPath, { recursive: true });
     const gm = new GitManager();
-    await gm.deleteBranch(projectPath, 'probe-branch');
+    // A call with no name check in front: the fake git prints nothing, which
+    // checkBranchName would read as check-ref-format rewriting the name.
+    await gm.getCurrentBranch(projectPath);
     break;
   }
 
