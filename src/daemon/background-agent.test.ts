@@ -64,20 +64,29 @@ describe('createBrowserTools', () => {
 describe('BrowserController parameterization', () => {
   test('approval guards reject a disconnected or replaced CDP session', async () => {
     let peer: { close(): void } | undefined;
-    const server = Bun.serve({
+    let browserPeer: { close(): void } | undefined;
+    const server = Bun.serve<{ path: string }>({
       port: 0,
       fetch(req, server) {
         const path = new URL(req.url).pathname;
-        if (path === '/page') {
-          if (server.upgrade(req)) return;
+        // /browser is the browser-level socket the request guard (#521)
+        // attaches to before the page; only the page socket is `peer`.
+        if (path === '/page' || path === '/browser') {
+          if (server.upgrade(req, { data: { path } })) return;
           return new Response('upgrade failed', { status: 400 });
         }
+        if (path === '/json/version') {
+          return Response.json({ webSocketDebuggerUrl: `ws://127.0.0.1:${server.port}/browser` });
+        }
         return Response.json(path === '/json/list'
-          ? [{ type: 'page', webSocketDebuggerUrl: `ws://127.0.0.1:${server.port}/page` }]
+          ? [{ type: 'page', url: 'about:blank', webSocketDebuggerUrl: `ws://127.0.0.1:${server.port}/page` }]
           : {});
       },
       websocket: {
-        open(ws) { peer = ws; },
+        open(ws) {
+          if (ws.data.path === '/page') peer = ws;
+          else browserPeer = ws;
+        },
         message(ws, message) {
           const request = JSON.parse(String(message));
           ws.send(JSON.stringify({ id: request.id, result: {} }));
@@ -102,6 +111,15 @@ describe('BrowserController parameterization', () => {
       peer!.close();
       for (let i = 0; i < 100 && replacement(); i++) await Bun.sleep(5);
       expect(replacement()).toBe(false);
+      await ctrl.disconnect();
+      // Losing the request guard's socket ends Chrome's interception, so it
+      // invalidates an approval exactly like losing the page socket.
+      await ctrl.connect();
+      const guarded = ctrl.captureApprovalGuard();
+      expect(guarded()).toBe(true);
+      browserPeer!.close();
+      for (let i = 0; i < 100 && guarded(); i++) await Bun.sleep(5);
+      expect(guarded()).toBe(false);
       await ctrl.disconnect();
       const lazy = ctrl.captureApprovalGuard(true);
       await ctrl.disconnect();

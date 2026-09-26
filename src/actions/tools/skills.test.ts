@@ -121,7 +121,18 @@ describe('skill tools', () => {
       upsertSkill({ name: 'nav', steps: [{ action: 'navigate', value: 'https://x.test' }] });
       const out = String(await runSkillTool.execute({ name: 'nav' }));
       expect(out).toContain('completed');
-      expect(calls[0]).toEqual({ method: 'browser_navigate', params: { url: 'https://x.test' } });
+      // The URL goes out as checkNavigationUrl normalised it (#521).
+      expect(calls[0]).toEqual({ method: 'browser_navigate', params: { url: 'https://x.test/' } });
+    });
+
+    test('a navigate step to a local file is refused before it reaches the sidecar (#521)', async () => {
+      const calls: Call[] = [];
+      setSidecarManagerRef(fakeManager(calls));
+      upsertSkill({ name: 'peek', steps: [{ action: 'navigate', value: 'file:///etc/hostname' }] });
+      const failure = await outcomeOf(runSkillTool.execute({ name: 'peek' }));
+      expect(failure).toMatchObject({ status: 'error', code: 'SKILL_STEP_FAILED' });
+      expect(failure.message).toContain('Refusing to open file:///etc/hostname');
+      expect(calls.filter((c) => c.method === 'browser_navigate')).toHaveLength(0);
     });
 
     test('a browser key press goes to the browser provider, not the machine foreground window', async () => {

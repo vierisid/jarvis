@@ -14,6 +14,7 @@ import { hostname, platform, arch, cpus, version } from 'node:os';
 import { TerminalExecutor } from '../terminal/executor.ts';
 import { WSLBridge } from '../terminal/wsl-bridge.ts';
 import { BrowserController, type PageSnapshot } from '../browser/session.ts';
+import { checkNavigationUrl } from '../browser/url-policy.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
 import { routeToSidecar, autoTargetForCapability, resolveToolTarget } from './sidecar-route.ts';
@@ -691,9 +692,18 @@ export const browserNavigateTool: ToolDefinition = {
     },
   },
   execute: async (params) => {
+    // The scheme allowlist applies to sidecar browsers too: the sidecar has no
+    // check of its own, and its file: is the file system of the machine it
+    // runs on. The local path checks again in BrowserController.navigate.
+    let url: string;
+    try {
+      url = checkNavigationUrl(params.url as string);
+    } catch (err) {
+      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+    }
     const target = resolveBrowserTarget(params, 'browser_navigate');
     if (target) {
-      const result = await routeToSidecar(target, 'browser_navigate', { url: params.url, headless: params.headless }, 'browser');
+      const result = await routeToSidecar(target, 'browser_navigate', { url, headless: params.headless }, 'browser');
       return globalWebappTemplateDelivery.withInstructions(result, params.url as string);
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;

@@ -186,7 +186,16 @@ export async function launchChrome(port: number = 9222, profileDir?: string): Pr
   // Linux-specific (also applies to WSL2)
   if (process.platform === 'linux') {
     args.push('--disable-dev-shm-usage');
-    args.push('--no-sandbox'); // Required for Chromium in containers/WSL2
+    // Chrome's sandbox stays on unless it provably cannot start here (root,
+    // or no user namespaces and no setuid helper). See chrome-sandbox.ts.
+    // Only a browser this launcher detected is probed; see linuxSandboxDecision.
+    const { linuxSandboxDecision } = await import('./chrome-sandbox.ts');
+    const detected = findBrowserExecutable()?.path === exe.path;
+    const sandbox = await linuxSandboxDecision(exe.path, { probe: detected });
+    if (!sandbox.sandbox) {
+      console.warn(`[ChromeLauncher] Launching WITHOUT Chrome's sandbox: ${sandbox.reason}`);
+      args.push('--no-sandbox');
+    }
     args.push('--window-size=1280,900');
     args.push('--window-position=100,100');
 
@@ -238,10 +247,20 @@ export async function launchChrome(port: number = 9222, profileDir?: string): Pr
   }
 
   if (!reachable) {
+    const exitCode = proc.exitCode;
     proc.kill();
+    // One way a sandboxed Linux launch dies at startup is a sandbox that
+    // fails where the probe's did not (#521). Chrome's stderr is not captured
+    // here, so name the way out rather than leave "not reachable" to guess at.
+    const sandboxHint = process.platform === 'linux' && !args.includes('--no-sandbox')
+      && !exe.path.toLowerCase().endsWith('.exe')
+      ? '\nChrome ran with its sandbox on. If it cannot start sandboxed on this host (a container, ' +
+        'or no user namespaces), set JARVIS_BROWSER_NO_SANDBOX=1 and restart Jarvis.'
+      : '';
     throw new Error(
-      `Chrome started but CDP not reachable on port ${port} after 15s.\n` +
-      `Binary: ${exe.path}`
+      `Chrome started but CDP not reachable on port ${port} after 15s` +
+      `${exitCode !== null ? ` (Chrome exited with code ${exitCode})` : ''}.\n` +
+      `Binary: ${exe.path}` + sandboxHint
     );
   }
 

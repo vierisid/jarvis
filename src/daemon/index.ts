@@ -454,6 +454,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
   // Determine data directory: CLI args > config file > default
   const dataDir = userConfig?.dataDir ?? jarvisConfig.daemon.data_dir ?? DEFAULT_DATA_DIR;
+  // browser_upload_file never sends files from here, wherever it is (#521).
+  (await import('../actions/browser/upload-policy.ts')).registerJarvisDataDir(dataDir);
 
   // If user specified a custom data dir but no db path, use jarvis.db in that dir
   const dbPath = userConfig?.dbPath ?? jarvisConfig.daemon.db_path ?? path.join(dataDir, 'jarvis.db');
@@ -5435,6 +5437,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           max_concurrent_servers: 3,
         };
         const siteBuilderService = new SiteBuilderService(sitesConfig);
+        // Site projects stay uploadable even inside the data dir (#521).
+        (await import('../actions/browser/upload-policy.ts')).registerSiteProjectsDir(sitesConfig.projects_dir);
         await siteBuilderService.start();
         // --no-local-tools keeps the general tools off this host; the site
         // builder is deliberately outside it (projects live here, and

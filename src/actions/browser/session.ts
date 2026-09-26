@@ -12,6 +12,9 @@ import { CDPClient } from './cdp.ts';
 import { STEALTH_SCRIPT } from './stealth.ts';
 import { launchChrome, stopChrome, type RunningBrowser } from './chrome-launcher.ts';
 import { parseKeyCombo, SUPPORTED_KEYS_HINT } from './keys.ts';
+import { checkNavigationUrl, isDrivableUrl, isLocalContentUrl, knownDevtoolsPorts, registerDevtoolsPort } from './url-policy.ts';
+import { BrowserRequestGuard } from './browser-request-guard.ts';
+import { checkUploadPath } from './upload-policy.ts';
 
 export type PageElement = {
   id: number;
@@ -131,6 +134,11 @@ const SNAPSHOT_SCRIPT = `(() => {
 
 export class BrowserController {
   private cdp: CDPClient;
+  // Fails file: and DevTools-endpoint requests inside Chrome (#521). Armed
+  // before the page connection on every connect; never driven without it.
+  private requestGuard: BrowserRequestGuard | null = null;
+  // Keeps this.port on url-policy's DevTools-port list while connected.
+  private releasePort: (() => void) | null = null;
   private port: number;
   private profileDir: string | undefined;
   private _connected = false;
@@ -195,6 +203,24 @@ export class BrowserController {
       this.runningBrowser = await launchChrome(this.port, this.profileDir);
     }
 
+    // Arm the in-browser local-file guard BEFORE anything can navigate. Fail
+    // closed: without it a redirect-free path to file: is one CDP call away.
+    // The new one is armed before the old one is dropped, so a reconnect has
+    // no window without interception.
+    this.releasePort ??= registerDevtoolsPort(this.port);
+    const guard = new BrowserRequestGuard();
+    try {
+      await guard.install(this.port, knownDevtoolsPorts());
+    } catch (err) {
+      throw new Error(
+        `Could not install the browser's local-file guard, so the browser will not be driven: ` +
+        `${err instanceof Error ? err.message : String(err)}`,
+      );
+    }
+    const previousGuard = this.requestGuard;
+    this.requestGuard = guard;
+    await previousGuard?.close();
+
     // Discover page targets
     const listRes = await fetch(`http://127.0.0.1:${this.port}/json/list`);
     if (!listRes.ok) {
@@ -203,14 +229,21 @@ export class BrowserController {
 
     const targets = await listRes.json() as Array<{
       type: string;
+      url?: string;
       webSocketDebuggerUrl: string;
     }>;
 
-    let pageTarget = targets.find(t => t.type === 'page');
+    // Prefer a tab showing something the model may be sent to. A tab opened
+    // before the guard existed (by hand, or in a Chrome that outlived an
+    // earlier daemon) can be sitting on a file: page or chrome://settings; if
+    // that is all there is, it is adopted and blanked below rather than read.
+    const pages = targets.filter(t => t.type === 'page');
+    let pageTarget = pages.find(t => isDrivableUrl(t.url ?? '')) ?? pages[0];
+    const blankAdopted = !!pageTarget && !isDrivableUrl(pageTarget.url ?? '');
 
     if (!pageTarget) {
-      // Create a new tab
-      const newRes = await fetch(`http://127.0.0.1:${this.port}/json/new?about:blank`);
+      // Create a new tab. PUT: Chrome 111+ refuses /json/new over GET.
+      const newRes = await fetch(`http://127.0.0.1:${this.port}/json/new?about:blank`, { method: 'PUT' });
       pageTarget = await newRes.json() as any;
     }
 
@@ -231,6 +264,10 @@ export class BrowserController {
       source: STEALTH_SCRIPT,
     });
 
+    if (blankAdopted) {
+      await this.cdp.send('Page.navigate', { url: 'about:blank' });
+    }
+
     this._connected = true;
     console.log('[BrowserController] Connected to Chrome');
   }
@@ -239,16 +276,31 @@ export class BrowserController {
    * Navigate to a URL and wait for the page to load.
    */
   async navigate(url: string): Promise<PageSnapshot> {
+    // Before connecting: a refused URL should not launch a browser.
+    const target = checkNavigationUrl(url);
     await this.ensureConnected();
 
     const loadPromise = this.cdp.waitForEvent('Page.loadEventFired', 30000);
+    const navigatedAt = Date.now();
 
+    let result: { errorText?: string };
     try {
-      await this.cdp.send('Page.navigate', { url });
+      result = await this.cdp.send('Page.navigate', { url: target });
     } catch (err) {
       // If navigate fails, suppress the dangling loadPromise timeout
       loadPromise.catch(() => {});
       throw err;
+    }
+
+    // The guard failed this navigation (a redirect into a blocked URL, say).
+    // Say so, instead of snapshotting Chrome's generic "blocked" error page.
+    const blocked = this.requestGuard?.lastBlocked;
+    if (
+      result?.errorText === 'net::ERR_BLOCKED_BY_CLIENT'
+      && blocked && blocked.at >= navigatedAt && blocked.resourceType === 'Document'
+    ) {
+      loadPromise.catch(() => {});
+      throw new Error(`Navigation to ${url} was blocked: it led to ${blocked.url.slice(0, 200)}, and ${blocked.reason}.`);
     }
 
     try {
@@ -331,6 +383,22 @@ export class BrowserController {
   }
 
   /**
+   * Refuse to hand the model anything from a page showing local content
+   * (#521). The guards keep file: from loading; this covers what they cannot
+   * see -- a tab restored from the back/forward cache (no request is made), or
+   * a load let through because the guard's socket died while it was paused
+   * (Chrome then continues the request, verified). The URL comes from the
+   * browser's frame tree, not from script the page controls.
+   */
+  private async assertNotLocalContent(): Promise<void> {
+    const tree = await this.cdp.send('Page.getFrameTree');
+    const url = String(tree?.frameTree?.frame?.url ?? '');
+    if (isLocalContentUrl(url)) {
+      throw new Error(`Refusing to read ${url.slice(0, 200)}: the browser does not show local files to the model.`);
+    }
+  }
+
+  /**
    * Get a snapshot of the current page: text content + numbered interactive elements.
    */
   async snapshot(): Promise<PageSnapshot> {
@@ -349,6 +417,12 @@ export class BrowserController {
     const data = result.result.value as PageSnapshot & {
       elements: Array<PageElement & { x: number; y: number }>;
     };
+
+    // Backstop for the guards (#521): whatever got the tab here, local
+    // content is not handed to the model.
+    if (isLocalContentUrl(data.url ?? '')) {
+      throw new Error(`Refusing to read ${String(data.url).slice(0, 200)}: the browser does not show local files to the model.`);
+    }
 
     // Store coordinates locally, strip from LLM-facing data
     this.elementCoords.clear();
@@ -642,6 +716,10 @@ export class BrowserController {
    * If no selector is provided, finds the first visible file input.
    */
   async uploadFile(filePath: string, selector?: string): Promise<string> {
+    // Throws for sensitive locations (upload-policy.ts). Chrome is handed the
+    // symlink-resolved path the rule was applied to, not the name the model
+    // passed.
+    const realPath = checkUploadPath(filePath);
     await this.ensureConnected();
 
     // Resolve the file input element
@@ -659,7 +737,7 @@ export class BrowserController {
     // Set the file on the input element via CDP
     try {
       await this.cdp.send('DOM.setFileInputFiles', {
-        files: [filePath],
+        files: [realPath],
         nodeId: node.nodeId,
       });
     } catch (err) {
@@ -676,6 +754,7 @@ export class BrowserController {
    */
   async screenshot(filePath: string = '/tmp/jarvis-screenshot.png'): Promise<string> {
     await this.ensureConnected();
+    await this.assertNotLocalContent();
 
     const result = await this.cdp.send('Page.captureScreenshot', { format: 'png' });
     const buffer = Buffer.from(result.data, 'base64');
@@ -689,6 +768,7 @@ export class BrowserController {
    */
   async screenshotBuffer(): Promise<{ base64: string; mimeType: string }> {
     await this.ensureConnected();
+    await this.assertNotLocalContent();
     const result = await this.cdp.send('Page.captureScreenshot', { format: 'png' });
     return { base64: result.data, mimeType: 'image/png' };
   }
@@ -698,6 +778,7 @@ export class BrowserController {
    */
   async evaluate(expression: string): Promise<unknown> {
     await this.ensureConnected();
+    await this.assertNotLocalContent();
 
     const result = await this.cdp.send('Runtime.evaluate', {
       expression,
@@ -717,6 +798,12 @@ export class BrowserController {
    */
   async disconnect(): Promise<void> {
     this.approvalEpoch++;
+    if (this.requestGuard) {
+      await this.requestGuard.close();
+      this.requestGuard = null;
+    }
+    this.releasePort?.();
+    this.releasePort = null;
     if (this._connected) {
       await this.cdp.close();
       this._connected = false;
@@ -741,14 +828,16 @@ export class BrowserController {
     const epoch = this.approvalEpoch;
     const connected = this._connected;
     return () => this.approvalEpoch === epoch && (connected
-      ? this._connected && this.cdp.isOpen
+      ? this._connected && this.cdp.isOpen && !!this.requestGuard?.isOpen
       : allowInitialConnection && !this._connected);
   }
 
   private async ensureConnected(): Promise<void> {
-    if (this._connected && !this.cdp.isOpen) {
-      // Connection went stale — reset and reconnect
+    if (this._connected && (!this.cdp.isOpen || !this.requestGuard?.isOpen)) {
+      // Connection went stale — reset and reconnect. A closed request guard
+      // counts: Chrome stops intercepting the moment its socket closes.
       console.warn('[BrowserController] CDP connection stale, reconnecting...');
+      await this.cdp.close();
       this._connected = false;
       this.elementCoords.clear();
     }

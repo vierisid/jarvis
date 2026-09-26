@@ -306,6 +306,27 @@ browser:
 and the brain will never try to launch a local Chromium; browser actions
 route to a connected sidecar's browser (your desktop) instead.
 
+If you do run the local browser on Linux, Jarvis keeps Chrome's sandbox on.
+Before the first launch it starts Chrome once, headless, to check that the
+sandbox works. It drops the sandbox only if that check fails with Chrome's
+"No usable sandbox" error, or if the brain runs as root. The log says which
+of the two happened. Some hosts pass that check but still can't start a
+sandboxed Chrome: containers with a restrictive seccomp profile, or kernels
+without unprivileged user namespaces. On those, the launch fails with "CDP
+not reachable". Only on a host you trust, turn the sandbox off yourself:
+
+```bash
+JARVIS_BROWSER_NO_SANDBOX=1 jarvis start
+```
+
+For the systemd user service, run `systemctl --user edit jarvis.service` and
+add `Environment=JARVIS_BROWSER_NO_SANDBOX=1` under `[Service]`.
+
+Without the sandbox, a bug in a page the model visits can run with the
+brain's own privileges. Prefer fixing the host, for example by enabling
+unprivileged user namespaces, and fall back to `browser.local: false` if you
+can't.
+
 ### `--no-local-tools` and the site builder
 
 `jarvis start --no-local-tools` (the Docker image sets it) stops the general
