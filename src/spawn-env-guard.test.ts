@@ -119,8 +119,9 @@ const EXEMPT: Record<string, Exemption> = {
   },
   'actions/app-control/linux.ts': {
     reason:
-      'xdotool/wmctrl/xprop/import via Bun `$`: ' + DESKTOP_SESSION + ' Model text reaches xdotool as argv, ' +
-      'escaped by Bun `$` for the shell, not for xdotool\'s own option parsing -- tracked in #518. ' +
+      'xdotool/wmctrl/xprop/import via Bun `$`: ' + DESKTOP_SESSION + ' Model text reaches xdotool only as ' +
+      'argv, escaped by Bun `$` for the shell and placed after `--`, which ends xdotool\'s own option ' +
+      'parsing; key chords are checked against keysym names first (#518). ' +
       'launchApp, the model-chosen executable, is in MODEL_EXEC.',
     calls: {
       'LinuxAppController.captureScreen': 3,
@@ -198,7 +199,8 @@ const MODEL_EXEC: Record<string, Exemption> = {
   'actions/browser/chrome-launcher.ts': {
     reason:
       'The only local browser launch: a desktop app the model drives over CDP, which needs the session ' +
-      'env and hands it to whatever it spawns or opens (and, until #521, can open file:///proc/self/environ).',
+      'env and hands it to whatever it spawns or opens. Since #521 it refuses local files, so it cannot open ' +
+      'file:///proc/self/environ, and keeps Chrome\'s sandbox on unless it cannot start.',
     calls: { launchChrome: 1 },
   },
   'actions/app-control/sidecar-launcher.ts': {
@@ -972,6 +974,8 @@ describe('no spawn under src/ inherits the daemon environment', () => {
       ['cli/autostart.ts', 'spawnDetachedShell'],
       ['cli/autostart.ts', 'scheduleSystemdRestart'],
       ['cli/update.ts', 'restartDaemonDetached'],
+      // `systemctl --user restart` and the systemd-run updater (#525).
+      ['cli/systemd-unit.ts', 'runCommand'],
     ];
     for (const [file, fn] of restarts) {
       expect({ file, fn, modelExec: MODEL_EXEC[file]?.calls[fn] ?? 0 }).toEqual({ file, fn, modelExec: 0 });

@@ -233,7 +233,7 @@ export async function launchChrome(
     stderr: 'ignore',
     // A desktop app the model drives over CDP: it needs the desktop session,
     // and its env reaches whatever it spawns or opens (helpers, downloads
-    // handed to other apps; until #521, file:///proc/self/environ). So the
+    // handed to other apps; since #521 not file:///proc/self/environ). So the
     // session, without the daemon's secrets (#514). Hygiene, not isolation:
     // see util/model-exec-env.ts.
     env: modelExecEnv(),

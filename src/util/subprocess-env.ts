@@ -18,6 +18,13 @@
  * src/spawn-env-guard.test.ts fails on any spawn under src/ that does not use
  * this, unless it is on that file's justified exemption list.
  *
+ * Not for what the model runs on the user's own machine -- run_command's
+ * shell, the apps it launches, the browser it drives (#514). Those get
+ * modelExecEnv() from src/util/model-exec-env.ts instead: the daemon's env
+ * minus the daemon's own secrets, since this allowlist would drop the desktop
+ * session and toolchain they exist to use. The guard accepts that helper only
+ * where its MODEL_EXEC table says.
+ *
  * ALLOWLIST, NOT DENYLIST. The predecessor of this module (a
  * `SECRET_ENV_PATTERNS` denylist in src/sites/builder-tools.ts) forwarded
  * everything it did not recognise, and it did not recognise
