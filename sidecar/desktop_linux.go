@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -412,7 +413,10 @@ func handleTypeText(params map[string]any) (*RPCResult, error) {
 		time.Sleep(100 * time.Millisecond)
 	}
 
-	if _, err := runWithTimeout(10*time.Second, "xdotool", "type", "--delay", "12", text); err != nil {
+	// "--" ends xdotool's option parsing, so text such as "-h" or
+	// "--file=/home/me/.ssh/id_ed25519" is typed literally instead of being
+	// read as an option (--file would type out the named file).
+	if _, err := runWithTimeout(10*time.Second, "xdotool", "type", "--delay", "12", "--", text); err != nil {
 		return nil, fmt.Errorf("type_text failed: %w", err)
 	}
 
@@ -428,8 +432,17 @@ func handlePressKeys(params map[string]any) (*RPCResult, error) {
 	}
 
 	combo := convertKeysToXdotool(keys)
+	if err := checkXdotoolKeySequence(combo); err != nil {
+		// Refused before xdotool ran: say so, so the model fixes the key
+		// name instead of checking whether something was pressed.
+		return nil, &codedError{code: "DESKTOP_INVALID_KEYS",
+			err: fmt.Errorf("press_keys refused, nothing was pressed: %w", err)}
+	}
 
-	if _, err := runWithTimeout(5*time.Second, "xdotool", "key", combo); err != nil {
+	// The trailing "+" is an empty last key, which libxdo skips. It keeps the
+	// argument from equalling any xdotool command name, so `xdotool key`
+	// cannot chain into a command, whatever commands a later xdotool adds.
+	if _, err := runWithTimeout(5*time.Second, "xdotool", "key", "--", combo+"+"); err != nil {
 		return nil, fmt.Errorf("press_keys failed: %w", err)
 	}
 
@@ -786,6 +799,77 @@ func convertKeysToXdotool(keys string) string {
 
 	all := append(modifiers, mapped...)
 	return strings.Join(all, "+")
+}
+
+// xdotoolKeyName matches the key names xdotool can press: X keysym names
+// (Return, minus, F5, XF86AudioPlay, U20AC) and xdotool's aliases (ctrl,
+// super, enter). xdotool ignores or rejects anything else, so refusing it
+// loses no working key, and it keeps a leading "-" from ever reaching xdotool.
+//
+// This, the command checks and maxChordKeys are mirrored by the daemon's
+// toXdotoolKeySequence (src/actions/app-control/linux.ts); keep them in sync.
+var xdotoolKeyName = regexp.MustCompile(`^[A-Za-z0-9_]+$`)
+
+// xdotoolCommands is xdotool's command table. `xdotool key` stops at the
+// first argument that names one and runs it as a chained command, "--" or
+// not, so a lone key spelled like a command ("exec", "selectwindow") would run
+// that command instead of being pressed. handlePressKeys also ends the
+// argument with "+" (see there), which no command name contains; refusing
+// these as well keeps a later edit to that argument from reopening the hole.
+var xdotoolCommands = map[string]bool{
+	"behave": true, "behave_screen_edge": true, "click": true, "exec": true, "get_desktop": true,
+	"get_desktop_for_window": true, "get_desktop_viewport": true, "get_num_desktops": true,
+	"getactivewindow": true, "getdisplaygeometry": true, "getmouselocation": true, "getwindowclassname": true,
+	"getwindowfocus": true, "getwindowgeometry": true, "getwindowname": true, "getwindowpid": true, "help": true,
+	"key": true, "keydown": true, "keyup": true, "mousedown": true, "mousemove": true, "mousemove_relative": true, "mouseup": true,
+	"search": true, "selectwindow": true, "set_desktop": true, "set_desktop_for_window": true,
+	"set_desktop_viewport": true, "set_num_desktops": true, "set_window": true, "sleep": true, "type": true, "version": true,
+	"windowactivate": true, "windowclose": true, "windowfocus": true, "windowkill": true, "windowlower": true,
+	"windowmap": true, "windowminimize": true, "windowmove": true, "windowquit": true, "windowraise": true,
+	"windowreparent": true, "windowsize": true, "windowstate": true, "windowunmap": true,
+}
+
+// maxChordKeys bounds a combo: libxdo grows its key array with the wrong
+// element size once a sequence reaches 10 keys (xdo.c
+// `realloc(*keys, keys_size * sizeof(KeyCode))`) and then writes past it. No
+// real chord comes close, so stay well below.
+const maxChordKeys = 8
+
+// keysymsNamedLikeCommands holds the real keysyms that share a name with a
+// command. Help (the "help" command) is the only one. The trailing "+" in
+// handlePressKeys is what lets it be pressed; were that ever lost, xdotool
+// would merely print its help text.
+var keysymsNamedLikeCommands = map[string]bool{"Help": true}
+
+// checkXdotoolKeySequence refuses a "+"-joined combo that xdotool would read
+// as anything other than keys to press. Empty items are skipped, as xdotool
+// itself skips them. The checks run in the same order as the daemon's: names,
+// then empty, then count, then command names.
+func checkXdotoolKeySequence(combo string) error {
+	named := 0
+	for _, k := range strings.Split(combo, "+") {
+		if k == "" {
+			continue
+		}
+		if !xdotoolKeyName.MatchString(k) {
+			return fmt.Errorf("invalid key name %q: use names such as enter, tab or f5, or X keysym names such as minus and slash", k)
+		}
+		named++
+	}
+	if named == 0 {
+		return fmt.Errorf("no keys given")
+	}
+	if named > maxChordKeys {
+		return fmt.Errorf("too many keys in one combo (%d); press at most %d at once", named, maxChordKeys)
+	}
+	if xdotoolCommands[strings.ToLower(combo)] && !keysymsNamedLikeCommands[combo] {
+		hint := ""
+		if strings.ToLower(combo) == "help" {
+			hint = ` (the Help key is spelled "Help")`
+		}
+		return fmt.Errorf("%q is an xdotool command name and cannot be pressed as a key%s", combo, hint)
+	}
+	return nil
 }
 
 // mapKeyToXdotool maps human-readable key names to xdotool key names.

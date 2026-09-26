@@ -56,6 +56,18 @@ describe('typed desktop outcomes', () => {
     });
   });
 
+  test('a chord the sidecar refused before pressing anything is not started', async () => {
+    // sidecar/desktop_linux.go sends DESKTOP_INVALID_KEYS for a key name it
+    // will not pass to xdotool (#518): the model should fix the name, not
+    // go and check whether a key was pressed.
+    setSidecarManagerRef(stubManager([mac], async () => {
+      throw new SidecarRPCError('DESKTOP_INVALID_KEYS', 'press_keys refused, nothing was pressed: invalid key name "-h"');
+    }));
+    await expect(routeToSidecarAction(mac.id, 'press_keys', { keys: '-h' }, 'desktop')).rejects.toMatchObject({
+      outcome: { status: 'error', code: 'DESKTOP_INVALID_KEYS', effect: 'not_started' },
+    });
+  });
+
   test('an unverified launch window stays an unverified success, note and pid intact', async () => {
     // launchResultLinux/launchResultDarwin report this as success on purpose:
     // calling it a failure makes the model launch an app that is already open.
