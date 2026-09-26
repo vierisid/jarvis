@@ -1,9 +1,16 @@
 /**
  * GitManager runs git in model-written project trees on every listing, chat
  * turn and dashboard action (#516). These plant each code-running config key
- * straight into .git/config -- as a project written before the site file tools
- * refused .git would have it -- and check that the daemon's git calls start
- * none of them. Real git, real temp repos.
+ * and check that the daemon's git calls start none of them. Real git, real
+ * temp repos.
+ *
+ * They plant into the GLOBAL config of the throwaway HOME, not .git/config:
+ * since #523 a project whose own config holds any of these keys is refused
+ * before git runs at all (git-config-lint.test.ts), so a project-level plant
+ * would test the lint, not the pins. The pins are what still stands between
+ * these keys and the daemon when they come from a config the lint does not
+ * read, and the command line beats the global config exactly as it beats the
+ * project's.
  */
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
@@ -22,14 +29,21 @@ const git = new GitManager();
 // Git reads the developer's ~/.gitconfig through the allowlisted HOME, and a
 // global commit.gpgSign or gpg.format would change what these tests measure.
 let restoreHome = () => {};
-beforeAll(() => { restoreHome = isolateGitHome(); });
+/** The throwaway HOME; plant() writes its .gitconfig, never the real one. */
+let isolatedHome = '';
+beforeAll(() => {
+  restoreHome = isolateGitHome();
+  isolatedHome = process.env.HOME!;
+  if (!isolatedHome.includes('jarvis-git-home-')) throw new Error('HOME is not the throwaway one');
+});
 afterAll(() => restoreHome());
 
 /** A shell command that proves it ran by creating the marker file. */
 const touch = () => `touch '${marker}'`;
 
+/** Plant into the global config; see the header for why not .git/config. */
 function plant(config: string): void {
-  appendFileSync(join(repo, '.git', 'config'), config);
+  appendFileSync(join(isolatedHome, '.gitconfig'), config);
 }
 
 function executable(path: string, body: string): void {
@@ -47,6 +61,7 @@ beforeEach(async () => {
 
 afterEach(() => {
   rmSync(root, { recursive: true, force: true });
+  rmSync(join(isolatedHome, '.gitconfig'), { force: true });
 });
 
 describe('planted config does not run code through the daemon', () => {
@@ -339,7 +354,14 @@ describe('branch names cannot become options (#520)', () => {
     const fakeBin = join(root, 'fake-bin');
     const log = join(root, 'fake-git.log');
     mkdirSync(fakeBin);
-    executable(join(fakeBin, 'git'), `echo "$*" >> '${log}'\nfor a; do last=$a; done\nprintf '%s\\n' "$last"`);
+    // The config lint's `config --list` (#523) gets an empty listing, which
+    // passes; echoing its last argument would read as a refused key.
+    executable(join(fakeBin, 'git'), [
+      `echo "$*" >> '${log}'`,
+      "case \"$*\" in *' --list '*) exit 0 ;; esac",
+      'for a; do last=$a; done',
+      `printf '%s\\n' "$last"`,
+    ].join('\n'));
     const savedPath = process.env.PATH;
     process.env.PATH = `${fakeBin}:${savedPath ?? ''}`;
     try {

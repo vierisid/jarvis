@@ -33,6 +33,8 @@ import {
   CREDENTIAL_DIR_PREFIX, GitHubManager, credentialHelperArgs, credentialRoot, gitHardeningArgs, hookNamesFromListing,
   sweepStaleCredentialDirs,
 } from './github-manager.ts';
+import { PROJECT_GIT_PINS } from './git-pins.ts';
+import { GitConfigLint } from './git-config-lint.ts';
 
 /** Synthetic. Never a real token. */
 const TOKEN = 'ghp_issue511Canary0123456789abcdefABCD';
@@ -353,6 +355,12 @@ describe('each call site keeps the token out of git argv and env', () => {
     const project = join(root, 'project');
     const tmp = join(root, 'tmp');
     for (const d of [bin, logDir, project, tmp]) mkdirSync(d);
+    // The smallest repository git accepts, with no config file: the managers
+    // refuse a project with no .git (#523), and with no config the lint has
+    // nothing to list, so every invocation below is a call site's own.
+    mkdirSync(join(project, '.git', 'objects'), { recursive: true });
+    mkdirSync(join(project, '.git', 'refs'));
+    writeFileSync(join(project, '.git', 'HEAD'), 'ref: refs/heads/main\n');
 
     // The log path is baked into the script: the environment is the channel
     // under test and sanitizedEnv would strip anything we passed through it.
@@ -1012,7 +1020,12 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
 
   /**
    * A project with the hostile furniture a model-written tree could carry, and
-   * a PATH-wrapped git that records every argv:
+   * a PATH-wrapped git that records every argv. The hostile CONFIG goes into
+   * the harness HOME's global config (`git config --global`, HOME is `home`):
+   * since #523 the managers refuse a project whose own .git/config holds any
+   * of it, and the tests below that plant a key are about the pins, which
+   * matter for the configs the lint does not read. The project config keeps
+   * only what the lint allows.
    *   - bin/git logs its own argv, then sets GIT_TRACE so real git logs the
    *     argv of every process IT starts (remote helper, credential helper,
    *     hooks);
@@ -1058,9 +1071,14 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     await g(['config', 'maintenance.auto', 'false']);
     await g(['config', 'gc.auto', '0']);
 
+    // In the harness HOME's global config: a project whose own config names
+    // a credential helper is refused outright since #523, before any git
+    // runs, while the global config is not linted -- so this is where a
+    // hostile helper can still be, and the helper-list reset still has to
+    // beat it.
     const steal = `!f() { cat >> '${evidence}/stolen-by-helper'; }; f`;
-    await g(['config', 'credential.helper', steal]);
-    await g(['config', `credential.${server.base}.helper`, steal]);
+    await g(['config', '--global', 'credential.helper', steal]);
+    await g(['config', '--global', `credential.${server.base}.helper`, steal]);
 
     // reference-transaction fires on every ref update, fetch included, so it
     // covers the operations where no pre-push runs.
@@ -1134,11 +1152,15 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
 
   /** Someone else pushes one commit straight into the project's bare repo. */
   async function upstreamCommit(h: Harness): Promise<void> {
+    // Without the harness's global config (a HOME of its own, which every
+    // git honours): the probes planted there would otherwise fire for this
+    // someone-else's git and read as daemon runs.
+    const env = { ...h.gitEnv, HOME: tempRoot('other-home') };
     const other = join(tempRoot('other'), 'clone');
-    await setup([REAL_GIT!, 'clone', '-q', h.bareRepo, other], root, h.gitEnv);
+    await setup([REAL_GIT!, 'clone', '-q', h.bareRepo, other], root, env);
     await setup([REAL_GIT!, '-c', 'user.name=o', '-c', 'user.email=o@o', 'commit', '-q', '--allow-empty', '-m', 'upstream'],
-      other, h.gitEnv);
-    await setup([REAL_GIT!, 'push', '-q', 'origin', 'main'], other, h.gitEnv);
+      other, env);
+    await setup([REAL_GIT!, 'push', '-q', 'origin', 'main'], other, env);
   }
 
   // If this fails, the "no leak" assertions below prove nothing.
@@ -1231,6 +1253,9 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     expect(credentialDirsIn(h.tmp)).toEqual([]);
     // No remote URL, tokenized or not, is written into the reflog any more.
     expect(readFileSync(join(h.project, '.git', 'logs', 'HEAD'), 'utf8')).toContain('pull . refs/remotes/origin/main');
+    // What push -u, fetch and pull leave in the project's config is still a
+    // config the lint passes (#523), or the next call would be refused.
+    expect(await new GitConfigLint().inspect(h.project)).toEqual({ ok: true });
 
     // CONTROL: the reference-transaction probe does fire on a fetch by plain
     // git, so its silence above means something.
@@ -1356,9 +1381,12 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
       const signing: Array<[string, string]> = backend === 'ssh'
         ? [['gpg.format', 'ssh'], ['gpg.ssh.program', program], ['user.signingKey', 'key::ssh-ed25519 AAAA']]
         : [['gpg.program', program]];
-      const { h, m, log } = await divergedProject(label, [
-        ['pull.rebase', mode], ['commit.gpgSign', 'true'], ['merge.verifySignatures', 'true'], ...signing,
-      ], 'append');
+      const { h, m, log } = await divergedProject(label, [['pull.rebase', mode]], 'append');
+      // Global, once the project is set up (see setupProject): the lint would
+      // refuse gpg.* and commit.gpgSign in the project's own config.
+      for (const [k, v] of [['commit.gpgSign', 'true'], ['merge.verifySignatures', 'true'], ...signing]) {
+        await setup([REAL_GIT!, 'config', '--global', k!, v!], h.project, h.gitEnv);
+      }
       expect(await m.pull(h.project)).toEqual({ success: true });
       expect((await log())[0]).toBe(mode === 'true' ? 'L' : "Merge remote-tracking branch 'origin/main'");
       expect(existsSync(marker)).toBe(false);
@@ -1420,13 +1448,14 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     const marker = join(h.evidence, 'config-hook-ran');
     const script = join(h.evidence, 'config-hook');
     writeFileSync(script, `#!/bin/sh\necho "$0 $*" >> "${marker}"\ncat > /dev/null\n`, { mode: 0o755 });
-    await setup([REAL_GIT!, 'config', 'hook.probe.command', script], h.project, h.gitEnv);
+    // Global, not the project's (see setupProject).
+    await setup([REAL_GIT!, 'config', '--global', 'hook.probe.command', script], h.project, h.gitEnv);
     for (const event of ['pre-push', 'reference-transaction', 'post-merge', 'post-checkout', 'post-rewrite', 'pre-rebase']) {
-      await setup([REAL_GIT!, 'config', '--add', 'hook.probe.event', event], h.project, h.gitEnv);
+      await setup([REAL_GIT!, 'config', '--global', '--add', 'hook.probe.event', event], h.project, h.gitEnv);
     }
-    // A project trying to win back what the command line turns off.
+    // A config trying to win back what the command line turns off.
     for (const key of ['hook.probe.enabled', 'hook.pre-push.enabled', 'hook.reference-transaction.enabled']) {
-      await setup([REAL_GIT!, 'config', key, 'true'], h.project, h.gitEnv);
+      await setup([REAL_GIT!, 'config', '--global', key, 'true'], h.project, h.gitEnv);
     }
 
     // CONTROL: plain git runs the config hook on push and on fetch.
@@ -1460,11 +1489,13 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     expect(log).toEqual(['Z', 'Y', 'init unborn-source']);
   }, 60_000);
 
-  // S-1: a project-level proactiveAuth=none on the exact origin URL is more
-  // specific than a host pin; only an exact-URL pin of our own beats it.
-  test.skipIf(!GIT_HAS_PROACTIVE_AUTH)('an exact-URL proactiveAuth=none in the project cannot keep the token alive', async () => {
+  // S-1: a proactiveAuth=none on the exact origin URL is more specific than a
+  // host pin; only an exact-URL pin of our own beats it. Planted globally: in
+  // the project's own config the lint refuses it (#523).
+  test.skipIf(!GIT_HAS_PROACTIVE_AUTH)('an exact-URL proactiveAuth=none in the config cannot keep the token alive', async () => {
     const h = await setupProject('public-override');
-    await setup([REAL_GIT!, 'config', `http.${server.base}/public-override.git.proactiveAuth`, 'none'], h.project, h.gitEnv);
+    await setup([REAL_GIT!, 'config', '--global', `http.${server.base}/public-override.git.proactiveAuth`, 'none'],
+      h.project, h.gitEnv);
     useHarnessEnv(h);
     const m = manager();
     expect((await m.push(h.project)).success).toBe(true);
@@ -1492,7 +1523,8 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     const h = await setupProject('public-eq');
     const odd = `${server.base}/x.y=z/../public-eq.git`;
     await setup([REAL_GIT!, 'remote', 'set-url', 'origin', odd], h.project, h.gitEnv);
-    await setup([REAL_GIT!, 'config', `http.${server.base}/public-eq.git.proactiveAuth`, 'none'], h.project, h.gitEnv);
+    await setup([REAL_GIT!, 'config', '--global', `http.${server.base}/public-eq.git.proactiveAuth`, 'none'],
+      h.project, h.gitEnv);
     // Seed the public repo directly, since a push needs the token.
     await setup([REAL_GIT!, 'push', '-q', h.bareRepo, 'main'], h.project, h.gitEnv);
     await upstreamCommit(h);
@@ -1534,13 +1566,50 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     expect(existsSync(marker)).toBe(true);
     rmSync(marker);
 
+    // The managers now refuse a project with no .git before git runs at all
+    // (#523), so they never get as far as discovery...
     const m = manager();
-    const status = await m.getRemoteStatus(planted);
-    expect(status.hasRemote).toBe(false);
+    await expect(m.getRemoteStatus(planted)).rejects.toThrow('Not a git repository');
     expect((await m.push(planted)).success).toBe(false);
     expect((await m.pull(planted)).success).toBe(false);
     expect(existsSync(marker)).toBe(false);
     expect(credentialDirsIn(source.tmp)).toEqual([]);
+
+    // ...and the pin behind that still refuses the planted repo on its own.
+    const pinned = await run([REAL_GIT!, ...PROJECT_GIT_PINS, 'fetch', '-q', 'origin'], planted, undefined, source.gitEnv);
+    expect(pinned.exitCode).not.toBe(0);
+    expect(existsSync(marker)).toBe(false);
+  }, 60_000);
+
+  // #523 T1: fetch recursion runs git in each submodule under ITS config,
+  // which the lint never reads. The submodule-recursion pins must hold even
+  // against a .gitmodules that asks for it, on the tokenless fetch path.
+  test('a submodule is never fetched into, whatever .gitmodules asks', async () => {
+    const h = await setupProject('public-submodule');
+    const marker = join(h.evidence, 'submodule-ssh-ran');
+    const sub = join(h.project, 'sub');
+    mkdirSync(sub);
+    const g = (args: string[], cwd = h.project) => setup([REAL_GIT!, '-c', 'user.name=t', '-c', 'user.email=t@t', ...args], cwd, h.gitEnv);
+    await g(['init', '-q', '-b', 'main'], sub);
+    await g(['commit', '-q', '--allow-empty', '-m', 's'], sub);
+    await g(['remote', 'add', 'origin', 'ssh://example.invalid/r.git'], sub);
+    await g(['config', 'core.sshCommand', `touch '${marker}'; false`], sub);
+    await g(['add', 'sub']);
+    writeFileSync(join(h.project, '.gitmodules'),
+      '[submodule "sub"]\n\tpath = sub\n\turl = ssh://example.invalid/r.git\n\tfetchRecurseSubmodules = true\n');
+    await g(['add', '.gitmodules']);
+    await g(['commit', '-q', '-m', 'submodule']);
+    await g(['push', '-q', h.bareRepo, 'main']);
+    useHarnessEnv(h);
+
+    // Tokenless: origin is not the default credential target (github.com).
+    const status = await new GitHubManager().getRemoteStatus(h.project);
+    expect(status.hasRemote).toBe(true);
+    expect(existsSync(marker)).toBe(false);
+
+    // CONTROL: plain git's fetch of the same origin recurses and runs it.
+    await run(['git', 'fetch', '-q', 'origin'], h.project, undefined, h.gitEnv);
+    expect(existsSync(marker)).toBe(true);
   }, 60_000);
 
   // Maintainer decision: daemon push/pull run no project hooks. The realistic
@@ -1557,6 +1626,8 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
       writeFileSync(join(huskyDir, '_', hook), `#!/bin/sh\nexec sh -e "$(dirname "$0")/../${hook}" "$@"\n`, { mode: 0o755 });
       writeFileSync(join(huskyDir, hook), `echo ${hook} >> "${marker}"\ncat > /dev/null\n`, { mode: 0o644 });
     }
+    // In the project's own config, where husky puts it: the lint allows
+    // core.hooksPath (#523), because the pin overrides it on every call.
     await setup([REAL_GIT!, 'config', 'core.hooksPath', '.husky/_'], h.project, h.gitEnv);
 
     // CONTROL: plain git runs the husky chain.
@@ -1594,9 +1665,13 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     writeFileSync(join(h.project, 'a.txt'), 'one\n');
     await setup([REAL_GIT!, 'add', '.'], h.project, h.gitEnv);
     await setup([REAL_GIT!, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'tracked'], h.project, h.gitEnv);
-    await setup([REAL_GIT!, 'config', 'core.fsmonitor', probe('fsmonitor', 'exit 1')], h.project, h.gitEnv);
-    await setup([REAL_GIT!, 'config', 'filter.x.clean', probe('clean', 'cat')], h.project, h.gitEnv);
-    await setup([REAL_GIT!, 'config', 'filter.x.smudge', probe('smudge', 'cat')], h.project, h.gitEnv);
+    // Global, not the project's (see setupProject): the lint refuses a filter
+    // in the project's config, and the project .gitattributes still
+    // activates a globally defined one. (The lint allows core.fsmonitor,
+    // which the pin overrides; global keeps the three together.)
+    await setup([REAL_GIT!, 'config', '--global', 'core.fsmonitor', probe('fsmonitor', 'exit 1')], h.project, h.gitEnv);
+    await setup([REAL_GIT!, 'config', '--global', 'filter.x.clean', probe('clean', 'cat')], h.project, h.gitEnv);
+    await setup([REAL_GIT!, 'config', '--global', 'filter.x.smudge', probe('smudge', 'cat')], h.project, h.gitEnv);
     // A rebase pull checks the work tree is clean first: the index refresh.
     await setup([REAL_GIT!, 'config', 'pull.rebase', 'true'], h.project, h.gitEnv);
     writeFileSync(join(h.project, '.git', 'hooks', 'post-index-change'), readFileSync(probe('post-index-change', 'exit 0')), { mode: 0o755 });
@@ -1659,15 +1734,20 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     const h = await setupProject('pushurl');
     const decoy = join(tempRoot('decoy'), 'decoy.git');
     await setup([REAL_GIT!, 'init', '-q', '--bare', decoy], root, h.gitEnv);
-    await setup([REAL_GIT!, 'config', '--add', 'remote.origin.pushurl', decoy], h.project, h.gitEnv);
-    await setup([REAL_GIT!, 'config', '--add', 'remote.origin.pushurl', `${server.base}/pushurl.git`], h.project, h.gitEnv);
+    // Global (see setupProject): the lint refuses a local-path pushurl in the
+    // project's own config.
+    await setup([REAL_GIT!, 'config', '--global', '--add', 'remote.origin.pushurl', decoy], h.project, h.gitEnv);
+    await setup([REAL_GIT!, 'config', '--global', '--add', 'remote.origin.pushurl', `${server.base}/pushurl.git`],
+      h.project, h.gitEnv);
     useHarnessEnv(h);
 
     const before = server.requests.length;
     const result = await manager().push(h.project);
-    // Plain git: the decoy gets the push, GitHub refuses the anonymous one.
+    // The tokenless path, which since #523 also refuses the local transport:
+    // the decoy gets nothing (its receive-pack would run without the pins).
     expect(result.success).toBe(false);
-    expect(result.error).toContain('so the GitHub token was not used');
+    expect(result.error).toContain("transport 'file' not allowed");
+    expect(readdirSync(join(decoy, 'refs', 'heads'))).toEqual([]);
     expect(server.requests.slice(before).filter(r => r.auth !== 'none').length).toBe(0);
     // Hooks are off on the plain path too.
     expect(allHookRuns(h)).toEqual([]);
@@ -1697,7 +1777,8 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     const h = await setupProject('redirect');
     const elsewhere = startGitServer(bare, REAL_GIT!);
     try {
-      await setup([REAL_GIT!, 'config', `url.${elsewhere.base}/.insteadOf`, `${server.base}/`], h.project, h.gitEnv);
+      // Global (see setupProject).
+      await setup([REAL_GIT!, 'config', '--global', `url.${elsewhere.base}/.insteadOf`, `${server.base}/`], h.project, h.gitEnv);
       useHarnessEnv(h);
 
       const result = await manager().push(h.project);
@@ -1760,4 +1841,44 @@ describe.skipIf(process.platform !== 'linux' || !REAL_GIT || !HAS_HTTP_BACKEND)(
     expect(modes).toEqual(['700', '600']);
     expect(credentialDirsIn(h.tmp)).toEqual([]);
   }, 30_000);
+
+  // #523: the same keys the tests above plant globally, planted in the
+  // project's OWN config, stop push, pull and status before git runs at all:
+  // the only git process is the lint's `config --list`, nothing reaches the
+  // server, and no token file is ever written. (git-config-lint.test.ts shows
+  // plain git running or applying each of them.)
+  for (const [slug, entry] of [
+    ['filter', () => ['filter.x.clean', 'cat']],
+    ['proxy', () => [`http.${server.base}/.proxy`, 'http://127.0.0.1:9']],
+    ['insteadof', () => [`url.${server.base}/elsewhere/.insteadOf`, `${server.base}/`]],
+    ['helper', () => ['credential.helper', '!true']],
+    ['textconv', () => ['diff.x.textconv', 'cat']],
+  ] as Array<[string, () => [string, string]]>) {
+    test(`a project-level ${slug} key stops push, pull and status before any git runs`, async () => {
+      const h = await setupProject(`lint-${slug}`);
+      const [key, value] = entry();
+      await setup([REAL_GIT!, 'config', key, value], h.project, h.gitEnv);
+      useHarnessEnv(h);
+      const m = manager();
+      const before = server.requests.length;
+
+      const pushed = await m.push(h.project);
+      expect(pushed.success).toBe(false);
+      expect(pushed.error).toContain('Git is turned off for this project');
+      expect(pushed.error).toContain(JSON.stringify(key.replace(/\.([^.]+)$/, (_, v: string) => `.${v.toLowerCase()}`)));
+      expect((await m.pull(h.project)).error).toContain('Git is turned off for this project');
+      await expect(m.getRemoteStatus(h.project)).rejects.toThrow('Git is turned off for this project');
+      // Nothing for the daemon to remove: Disconnect goes on to clear the metadata.
+      await m.removeRemote(h.project);
+
+      expect(server.requests.length).toBe(before);
+      expect(credentialDirsIn(h.tmp)).toEqual([]);
+      const argvs = readdirSync(h.evidence).filter(f => f.startsWith('argv.'))
+        .map(f => readFileSync(join(h.evidence, f), 'utf8').split('\0'));
+      expect(argvs.length).toBeGreaterThan(0);
+      expect(argvs.filter(a => !(a.includes('config') && a.includes('--list')))).toEqual([]);
+      // And removeRemote ran no git: the project's remote is untouched.
+      expect(await setup([REAL_GIT!, 'remote'], h.project, h.gitEnv)).toContain('origin');
+    }, 30_000);
+  }
 });

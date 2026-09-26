@@ -34,7 +34,7 @@ const HOOK_EVENTS = [
 ] as const;
 
 /**
- * `-c` pins on EVERY git command the daemon runs in a site project, from
+ * `-c` pins (and `--no-pager`) on EVERY git command the daemon runs in a site project, from
  * GitManager (status, commit, diff, switch, merge, rebase, log, ...) and
  * GitHubManager (push, pull, fetch, remote), authenticated or not. Each
  * names something a model-written project tree could otherwise make git run:
@@ -73,14 +73,37 @@ const HOOK_EVENTS = [
  *     daemon pull.
  *   - `push.gpgSign=false`: GitHub does not accept signed pushes, and the
  *     signing program is project-configurable too.
+ *   - `submodule.recurse=false`, `fetch.recurseSubmodules=false`,
+ *     `push.recurseSubmodules=no` (#523; the last three used to be pinned on
+ *     authenticated calls only): recursing runs git in a nested repository
+ *     under THAT repository's config, which git-config-lint.ts never reads --
+ *     its filter drivers and includes would run. `status` and `diff` also
+ *     get `--ignore-submodules=all` from their callers, since a per-submodule
+ *     `ignore` setting in `.gitmodules` beats the config default.
+ *   - `core.editor=:`, `sequence.editor=:` (#523): the daemon never wants an
+ *     editor (commits take -m), and `:` is a no-op, so a project may keep its
+ *     own editor setting -- the lint allows both keys because of this pin.
+ *   - `--no-pager` (#523): git starts a pager only on a terminal, which the
+ *     daemon never has, but `pager.<cmd>` beats a `-c core.pager` pin
+ *     (measured), so the option is what makes the lint's allowing
+ *     `core.pager` and `pager.*` safe regardless.
+ *
+ * Deliberately NOT pinned: `gc.autoDetach` / `maintenance.autoDetach`. A
+ * detached auto-gc inherits GIT_CONFIG_PARAMETERS, so it runs under these
+ * same pins; running it in the foreground instead would put a gc into a
+ * dashboard save, on a GitManager.run that has no timeout.
  *
  * NOT pinnable this way, because their names are the writer's choice: filter
  * drivers (`filter.<x>.clean`), merge and textconv drivers, and config pulled
  * in through `include.path`. Those need a config file the site file tools can
- * write, which is what they no longer can (#516). GitManager.getDiff passes
- * --no-ext-diff and --no-textconv for the diff side of it.
+ * write, which is what they no longer can (#516), and git-config-lint.ts
+ * refuses to run git at all in a project whose own config holds one (#523).
+ * GitManager.getDiff passes --no-ext-diff and --no-textconv for the diff
+ * side of it. The pins still matter for what the lint does not read: the
+ * global and system configs, and a config changed after the lint.
  */
 export const PROJECT_GIT_PINS: readonly string[] = [
+  '--no-pager',
   '-c', 'safe.bareRepository=explicit',
   '-c', 'core.hooksPath=/dev/null',
   ...HOOK_EVENTS.flatMap(event => ['-c', `hook.${event}.enabled=false`]),
@@ -89,6 +112,25 @@ export const PROJECT_GIT_PINS: readonly string[] = [
   '-c', 'log.showSignature=false',
   '-c', 'merge.verifySignatures=false',
   '-c', 'push.gpgSign=false',
+  '-c', 'submodule.recurse=false',
+  '-c', 'fetch.recurseSubmodules=false',
+  '-c', 'push.recurseSubmodules=no',
+  '-c', 'core.editor=:',
+  '-c', 'sequence.editor=:',
+];
+
+/**
+ * `git status` as the daemon runs it in a project, from both managers.
+ * `--ignore-submodules=all`: checking a submodule's work tree runs git inside
+ * it, under a config git-config-lint.ts never read, and a per-submodule
+ * `ignore` in `.gitmodules` (which the site file tools can write) beats a
+ * `-c diff.ignoreSubmodules` pin. Only the command-line option beats it.
+ */
+export const PROJECT_STATUS_ARGS: readonly string[] = [
+  'status', '--porcelain', '--ignore-submodules=all',
+  // A project's status.showUntrackedFiles=no would hide new files, and the
+  // auto-commit would skip a save that only adds one.
+  '--untracked-files=normal',
 ];
 
 /** A git binary's major.minor, or null when `git --version` is unparseable. */

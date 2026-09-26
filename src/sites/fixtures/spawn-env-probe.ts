@@ -16,7 +16,7 @@
  *
  * argv: <site> <workDir> (PATH and the canary come from the spawned env)
  */
-import { mkdirSync, readdirSync } from 'node:fs';
+import { mkdirSync, readdirSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { ProjectManager } from '../project-manager.ts';
 import { DevServerManager } from '../dev-server-manager.ts';
@@ -43,6 +43,18 @@ const projectsDir = join(workDir, 'projects');
 mkdirSync(projectsDir, { recursive: true });
 
 const dumpDir = join(workDir, 'dumps');
+
+/**
+ * The smallest `.git` git would accept (HEAD, objects/, refs/), with no config
+ * file. The managers refuse to run git where there is no repository (#523),
+ * and the fake git creates none; with no config there is nothing to lint, so
+ * the lint spawns nothing either and the dumps stay those of the call sites.
+ */
+function emptyRepo(projectPath: string): void {
+  mkdirSync(join(projectPath, '.git', 'objects'), { recursive: true });
+  mkdirSync(join(projectPath, '.git', 'refs'), { recursive: true });
+  writeFileSync(join(projectPath, '.git', 'HEAD'), 'ref: refs/heads/main\n');
+}
 
 /**
  * Wait until a fake executable has finished writing its dump.
@@ -90,6 +102,7 @@ switch (site) {
   case 'git-manager': {
     const projectPath = join(projectsDir, 'probe-app');
     mkdirSync(projectPath, { recursive: true });
+    emptyRepo(projectPath);
     const gm = new GitManager();
     // A call with no name check in front: the fake git prints nothing, which
     // checkBranchName would read as check-ref-format rewriting the name.
@@ -113,6 +126,7 @@ switch (site) {
   case 'github-manager': {
     const projectPath = join(projectsDir, 'probe-app');
     mkdirSync(projectPath, { recursive: true });
+    emptyRepo(projectPath);
     const ghm = new GitHubManager();
     await ghm.addRemote(projectPath, 'https://example.invalid/owner/repo.git');
     break;

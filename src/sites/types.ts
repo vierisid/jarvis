@@ -17,6 +17,12 @@ export type Project = {
   createdAt: number;
   lastOpenedAt: number;
   githubUrl: string | null; // e.g., "https://github.com/owner/repo"
+  /**
+   * Why the site builder will not run git in this project, when its git
+   * config failed the lint (#523); null when it passed. Set by
+   * SiteBuilderService's listings, absent elsewhere.
+   */
+  gitConfigIssue?: { message: string; commands: string[]; note: string | null } | null;
 };
 
 export type ProjectMeta = {

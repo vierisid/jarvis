@@ -27,6 +27,8 @@ export type Project = {
   createdAt: number;
   lastOpenedAt: number;
   githubUrl: string | null;
+  /** Why the daemon will not run git in this project (#523); null when it will. */
+  gitConfigIssue?: { message: string; commands: string[]; note: string | null } | null;
 };
 
 export type FileEntry = {

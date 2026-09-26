@@ -6,7 +6,10 @@
 
 import type { GitCommit, GitBranch } from './types.ts';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
-import { PROJECT_GIT_PINS, gitVersionReader, resolveHookPins, type GitVersion } from './git-pins.ts';
+import {
+  PROJECT_GIT_PINS, PROJECT_STATUS_ARGS, gitVersionReader, resolveHookPins, type GitVersion,
+} from './git-pins.ts';
+import { GitConfigRefusedError, defaultGitConfigLint, type GitConfigLint } from './git-config-lint.ts';
 
 /** HEAD and the pseudo-refs git writes next to it. */
 const PSEUDO_REFS = new Set([
@@ -15,6 +18,17 @@ const PSEUDO_REFS = new Set([
 ]);
 
 export class GitManager {
+  private readonly configLint: GitConfigLint;
+
+  /**
+   * `configLint` is the project config lint every call in a project runs
+   * first (#523); SiteBuilderService passes the one it shares with its
+   * GitHubManager.
+   */
+  constructor(options: { configLint?: GitConfigLint } = {}) {
+    this.configLint = options.configLint ?? defaultGitConfigLint;
+  }
+
   /**
    * Check if git is installed on the system.
    */
@@ -52,7 +66,8 @@ export class GitManager {
    * If author config is provided, sets it before the initial commit.
    */
   async init(projectPath: string, author?: { name: string; email: string; global: boolean }): Promise<void> {
-    await this.run(projectPath, ['init']);
+    // Not linted: there is no repository yet. Every call after it is.
+    await this.run(projectPath, ['init'], { lint: false });
 
     if (author) {
       const scope = author.global ? '--global' : '--local';
@@ -61,7 +76,7 @@ export class GitManager {
     }
 
     // Create initial commit
-    await this.run(projectPath, ['add', '-A']);
+    await this.stageAll(projectPath);
     await this.run(projectPath, ['commit', '-m', 'Initial commit', '--allow-empty']);
   }
 
@@ -73,7 +88,7 @@ export class GitManager {
     const dirty = await this.isDirty(projectPath);
     if (!dirty) return null;
 
-    await this.run(projectPath, ['add', '-A']);
+    await this.stageAll(projectPath);
     await this.run(projectPath, ['commit', '-m', message]);
 
     const log = await this.getLog(projectPath, 1);
@@ -81,10 +96,29 @@ export class GitManager {
   }
 
   /**
+   * `git add -A`, minus the gitlinks already in the index (#523). For each
+   * one, add checks the nested repository's work tree by running git inside
+   * it, under THAT repository's config, which the lint never reads -- its
+   * filters ran (reproduced in review), and no config pin or
+   * `diff.ignoreSubmodules` stops it. Excluded, git never enters them; a new
+   * nested repository is still recorded as a gitlink, by reading its HEAD.
+   * Site projects have no submodules, so nothing real is left unstaged.
+   */
+  private async stageAll(projectPath: string): Promise<void> {
+    const gitlinks = (await this.run(projectPath, ['ls-files', '--stage', '-z']))
+      .split('\0')
+      .filter(entry => entry.startsWith('160000 '))
+      .map(entry => entry.slice(entry.indexOf('\t') + 1));
+    const exclude = gitlinks.map(path => `:(exclude,literal)${path}`);
+    await this.run(projectPath, exclude.length > 0 ? ['add', '-A', '--', '.', ...exclude] : ['add', '-A']);
+  }
+
+  /**
    * List all local branches.
    */
   async getBranches(projectPath: string): Promise<GitBranch[]> {
-    const output = await this.run(projectPath, ['branch', '--no-color']);
+    // --no-column: a project's column.ui=always would put names side by side.
+    const output = await this.run(projectPath, ['branch', '--no-color', '--no-column']);
     if (!output.trim()) return [{ name: 'main', current: true }];
 
     return output
@@ -131,6 +165,8 @@ export class GitManager {
         'log',
         `--max-count=${limit}`,
         '--format=%H|%h|%s|%an|%at',
+        // A project's i18n.logOutputEncoding would re-encode the output.
+        '--encoding=UTF-8',
       ]);
 
       if (!output.trim()) return [];
@@ -157,7 +193,7 @@ export class GitManager {
    * Check if working tree has uncommitted changes.
    */
   async isDirty(projectPath: string): Promise<boolean> {
-    const output = await this.run(projectPath, ['status', '--porcelain']);
+    const output = await this.run(projectPath, [...PROJECT_STATUS_ARGS]);
     return output.trim().length > 0;
   }
 
@@ -165,8 +201,11 @@ export class GitManager {
    * Get diff of uncommitted changes.
    */
   async getDiff(projectPath: string): Promise<string> {
-    const staged = await this.run(projectPath, ['diff', '--no-ext-diff', '--no-textconv', '--cached']);
-    const unstaged = await this.run(projectPath, ['diff', '--no-ext-diff', '--no-textconv']);
+    // --ignore-submodules=all for the reason on PROJECT_STATUS_ARGS.
+    // --no-color: a project's color.diff=always would put escapes in it.
+    const diff = ['diff', '--no-ext-diff', '--no-textconv', '--no-color', '--ignore-submodules=all'];
+    const staged = await this.run(projectPath, [...diff, '--cached']);
+    const unstaged = await this.run(projectPath, diff);
     return (staged + '\n' + unstaged).trim();
   }
 
@@ -180,7 +219,7 @@ export class GitManager {
       return { success: true };
     } catch (err) {
       // Check for merge conflicts
-      const status = await this.run(projectPath, ['status', '--porcelain']);
+      const status = await this.run(projectPath, [...PROJECT_STATUS_ARGS]);
       const conflicts = status
         .split('\n')
         .filter(line => line.startsWith('UU') || line.startsWith('AA'))
@@ -206,7 +245,7 @@ export class GitManager {
       await this.run(projectPath, ['rebase', ontoBranch]);
       return { success: true };
     } catch {
-      const status = await this.run(projectPath, ['status', '--porcelain']);
+      const status = await this.run(projectPath, [...PROJECT_STATUS_ARGS]);
       const conflicts = status
         .split('\n')
         .filter(line => line.startsWith('UU') || line.startsWith('AA'))
@@ -250,7 +289,9 @@ export class GitManager {
     let normalized: string;
     try {
       normalized = (await this.run(projectPath, ['check-ref-format', '--branch', name])).trim();
-    } catch {
+    } catch (err) {
+      // The config lint's refusal is about the project, not the name.
+      if (err instanceof GitConfigRefusedError) throw err;
       throw invalid;
     }
     // `--branch` also EXPANDS shorthands (`@{-1}` becomes the previous
@@ -262,7 +303,7 @@ export class GitManager {
    * gitVersionReader, run from `/`: the version describes the binary, and `/`
    * always exists, where a missing TMPDIR would fail every call on this path.
    */
-  private readonly readGitVersion = gitVersionReader(args => this.run('/', args, { hookPins: [] }));
+  private readonly readGitVersion = gitVersionReader(args => this.run('/', args, { hookPins: [], lint: false }));
 
   /**
    * The git version, or null when it cannot be read this time (not cached;
@@ -284,8 +325,19 @@ export class GitManager {
    * `[]`, since they cannot wait on their own result. Unlike GitHubManager
    * there is no secret here to keep the lookup away from, so every other call
    * resolves its own pins.
+   *
+   * Every call first lints the project's git config (GitConfigLint.check,
+   * #523) and throws its refusal instead of running git. `lint: false` is
+   * for the calls with no project repository to lint -- `git init` and the
+   * version read from `/` -- and for the hook lookup, which runs straight
+   * after its own call's lint.
    */
-  private async run(cwd: string, args: string[], options: { hookPins?: readonly string[] } = {}): Promise<string> {
+  private async run(
+    cwd: string,
+    args: string[],
+    options: { hookPins?: readonly string[]; lint?: boolean } = {},
+  ): Promise<string> {
+    if (options.lint !== false) await this.configLint.check(cwd);
     // Sanitized, not inherited: git can still run commands the project names
     // (PROJECT_GIT_PINS covers the ones a pin can), and the project is written
     // by the model. Stripping the inherited GIT_* also stops a hook-invoked
@@ -297,7 +349,7 @@ export class GitManager {
     // repo, if the name is in ~/.gitconfig. Fail closed; project listings
     // catch the error and show the project as having no branch.
     const hookPins = options.hookPins
-      ?? await resolveHookPins(lookup => this.run(cwd, lookup, { hookPins: [] }), await this.gitVersion());
+      ?? await resolveHookPins(lookup => this.run(cwd, lookup, { hookPins: [], lint: false }), await this.gitVersion());
     const proc = Bun.spawn(['git', ...PROJECT_GIT_PINS, ...hookPins, ...args], {
       cwd,
       stdout: 'pipe',

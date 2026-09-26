@@ -1452,7 +1452,9 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           const projectPath = this.siteBuilderService.projectManager.getProjectPath(projectId);
           if (projectPath) {
             const commitMsg = text.length > 60 ? text.slice(0, 57) + '...' : text;
-            const commit = await this.siteBuilderService.gitManager.autoCommit(projectPath, commitMsg);
+            // Git off for the project (#523) is logged once there, not here
+            // after every turn.
+            const commit = await this.siteBuilderService.autoCommitIfAllowed(projectPath, commitMsg);
             if (commit) {
               this.broadcastSiteEvent({
                 type: 'git_commit',
