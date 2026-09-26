@@ -2,69 +2,27 @@
  * Integration tests for #521: the model-driven browser must not load local
  * files, whichever way it is pointed at one, and must still load the web.
  *
- * Spawns its own headless Chromium on a random port with a throwaway profile,
- * like browser-primitives.test.ts, and is skipped when no Chromium exists.
- * `--no-sandbox` here only keeps the test runnable on CI hosts without user
- * namespaces; the sandbox itself is covered by chrome-sandbox.test.ts.
+ * Runs its own headless Chromium from the shared fixture
+ * (fixtures/headless-chromium.ts: a free CDP port, a throwaway profile, and a
+ * watchdog that stops the browser with this process), like
+ * browser-primitives.test.ts, and is skipped when no Chromium exists. The
+ * fixture's `--no-sandbox` only keeps the test runnable on CI hosts without
+ * user namespaces; the sandbox itself is covered by chrome-sandbox.test.ts.
  *
  * Leak assertions look for a random marker written into a temp file, not for
  * /etc/hostname's contents, which are a few common letters that any error
  * page could contain.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
-import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { BrowserController } from './session.ts';
 import { CDPClient } from './cdp.ts';
+import { chromiumExe, launchTestChromium, type TestChromium } from './fixtures/headless-chromium.ts';
 
-const CHROMIUM_CANDIDATES = [
-  process.env.CHROME_PATH,
-  '/snap/bin/chromium',
-  '/usr/bin/chromium-browser',
-  '/usr/bin/chromium',
-  '/usr/bin/google-chrome',
-].filter(Boolean) as string[];
-
-const chromiumExe = CHROMIUM_CANDIDATES.find(p => existsSync(p));
-
-// Not 9222/9223 (the daemon's) nor 9777/9778 (the other browser suites).
-// Asked of the kernel rather than picked at random, so it cannot land on a
-// port another test's server already holds (Chrome would then start without
-// its DevTools endpoint).
-const TEST_PORT = (() => {
-  const listener = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {} } });
-  const { port } = listener;
-  listener.stop(true);
-  return port;
-})();
 const MARKER = `local-file-marker-${crypto.randomUUID()}`;
-
-/**
- * afterAll cannot run when the test process is SIGKILLed (the pre-commit
- * cap's escalation, a developer's kill -9), and a detached Chromium would
- * then be orphaned to PID 1. Where util-linux's setpriv exists, have the
- * kernel kill it with its parent instead; setpriv execs Chromium in place, so
- * the pid stays Chromium's, and Chromium's children exit with it (verified).
- * The signal fires when the spawning THREAD exits, not the process; that is
- * the same thing here because Bun.spawn runs on the JS thread.
- * TODO: switch to the shared watchdog fixture from fix/524-review-followups
- * (src/actions/browser/fixtures/headless-chromium.ts) once that lands.
- */
-function parentDeathWrapper(): string[] {
-  if (process.platform !== 'linux') return [];
-  const setpriv = ['/usr/bin/setpriv', '/bin/setpriv'].find(p => existsSync(p));
-  return setpriv ? [setpriv, '--pdeathsig', 'KILL'] : [];
-}
-
-/** Pids of processes whose command line names `profile` (Linux only; [] elsewhere). */
-function profileProcesses(profile: string): number[] {
-  if (process.platform !== 'linux') return [];
-  return readdirSync('/proc').filter(d => /^\d+$/.test(d)).map(Number).filter(pid => {
-    try { return readFileSync(`/proc/${pid}/cmdline`, 'utf-8').includes(profile); } catch { return false; }
-  });
-}
 
 /** Poll until `probe` returns a truthy value, or give up after `ms`. */
 async function until<T>(probe: () => Promise<T> | T, ms = 10_000): Promise<T> {
@@ -78,8 +36,9 @@ async function until<T>(probe: () => Promise<T> | T, ms = 10_000): Promise<T> {
 }
 
 describe.skipIf(!chromiumExe)('browser local-file lockdown (integration, #521)', () => {
-  let proc: ReturnType<typeof Bun.spawn> | null = null;
-  let profileDir: string;
+  let chromium: TestChromium | null = null;
+  /** The fixture browser's CDP port, known once beforeAll has started it. */
+  let cdpPort = 0;
   let fixtureDir: string;
   let markerUrl: string;
   let server: ReturnType<typeof Bun.serve>;
@@ -101,7 +60,7 @@ describe.skipIf(!chromiumExe)('browser local-file lockdown (integration, #521)',
         });
         if (pathname === '/redirect') return new Response(null, { status: 302, headers: { location: markerUrl } });
         if (pathname === '/redirect-devtools') {
-          return new Response(null, { status: 302, headers: { location: `http://127.0.0.1:${TEST_PORT}/json/version` } });
+          return new Response(null, { status: 302, headers: { location: `http://127.0.0.1:${cdpPort}/json/version` } });
         }
         if (pathname === '/iframe') return html(`<p>outer page</p><iframe id="f" src="${markerUrl}"></iframe>`);
         if (pathname === '/upload') return html('<input id="up" type="file">');
@@ -110,49 +69,18 @@ describe.skipIf(!chromiumExe)('browser local-file lockdown (integration, #521)',
     });
     base = `http://127.0.0.1:${server.port}`;
 
-    profileDir = mkdtempSync(join(tmpdir(), 'jarvis-local-files-profile-'));
-    proc = Bun.spawn([
-      ...parentDeathWrapper(),
-      chromiumExe!,
-      '--headless=new',
-      `--remote-debugging-port=${TEST_PORT}`,
-      `--user-data-dir=${profileDir}`,
-      '--no-sandbox',
-      '--no-first-run',
-      '--disable-dev-shm-usage',
-      'about:blank',
-    // Own process group, so afterAll can kill the zygote and renderers too.
-    ], { stdout: 'ignore', stderr: 'ignore', detached: true });
+    chromium = await launchTestChromium({ profilePrefix: 'jarvis-local-files-profile-' });
+    cdpPort = chromium.port;
 
-    const deadline = Date.now() + 45_000;
-    let up = false;
-    while (Date.now() < deadline) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${TEST_PORT}/json/version`, { signal: AbortSignal.timeout(1000) });
-        if (res.ok) { up = true; break; }
-      } catch { /* not up yet */ }
-      await Bun.sleep(250);
-    }
-    if (!up) throw new Error(`Chromium CDP did not come up on port ${TEST_PORT}`);
-
-    browser = new BrowserController(TEST_PORT);
+    // autoLaunch off: if this browser dies, fail rather than start a headed one.
+    browser = new BrowserController(cdpPort, undefined, { autoLaunch: false });
     await browser.navigate(`${base}/`);
   }, 90_000);
 
   afterAll(async () => {
     try { await browser?.disconnect(); } catch { /* already gone */ }
-    if (proc) {
-      try { process.kill(-proc.pid, 'SIGKILL'); } catch { /* group gone */ }
-      proc.kill(9);
-      await proc.exited;
-    }
     server?.stop(true);
-    if (profileDir) {
-      // A child still shutting down recreates files in the profile; wait for
-      // every process naming it to be gone before removing it.
-      await until(() => profileProcesses(profileDir).length === 0, 5000);
-      rmSync(profileDir, { recursive: true, force: true });
-    }
+    await chromium?.close();
     if (fixtureDir) rmSync(fixtureDir, { recursive: true, force: true });
   });
 
@@ -172,7 +100,7 @@ describe.skipIf(!chromiumExe)('browser local-file lockdown (integration, #521)',
 
   /** Open a raw CDP session on the tab the controller drives, bypassing navigate(). */
   async function rawPageSession(): Promise<CDPClient> {
-    const targets = await (await fetch(`http://127.0.0.1:${TEST_PORT}/json/list`)).json() as Array<{ type: string; url: string; webSocketDebuggerUrl: string }>;
+    const targets = await (await fetch(`http://127.0.0.1:${cdpPort}/json/list`)).json() as Array<{ type: string; url: string; webSocketDebuggerUrl: string }>;
     const page = targets.find(t => t.type === 'page' && t.url.startsWith(base));
     if (!page) throw new Error('no page on the fixture server');
     const cdp = new CDPClient();
@@ -240,7 +168,7 @@ describe.skipIf(!chromiumExe)('browser local-file lockdown (integration, #521)',
   }, 30_000);
 
   test('a tab opened through the DevTools endpoint cannot load a local file either', async () => {
-    const res = await fetch(`http://127.0.0.1:${TEST_PORT}/json/new?${markerUrl}`, { method: 'PUT' });
+    const res = await fetch(`http://127.0.0.1:${cdpPort}/json/new?${markerUrl}`, { method: 'PUT' });
     expect(res.ok).toBe(true);
     const tab = await res.json() as { id: string; webSocketDebuggerUrl: string };
     const cdp = new CDPClient();
@@ -258,18 +186,18 @@ describe.skipIf(!chromiumExe)('browser local-file lockdown (integration, #521)',
       expect(String(body.result?.value).includes(MARKER)).toBe(false);
     } finally {
       await cdp.close();
-      await fetch(`http://127.0.0.1:${TEST_PORT}/json/close/${tab.id}`).catch(() => {});
+      await fetch(`http://127.0.0.1:${cdpPort}/json/close/${tab.id}`).catch(() => {});
     }
   }, 30_000);
 
   test("the browser's DevTools endpoint is refused at navigate time and blocked in the browser", async () => {
     await browser.navigate(`${base}/`);
-    await expect(browser.navigate(`http://127.0.0.1:${TEST_PORT}/json/version`)).rejects.toThrow(/DevTools endpoint/);
-    await expect(browser.navigate(`http://localhost:${TEST_PORT}/json/list`)).rejects.toThrow(/DevTools endpoint/);
+    await expect(browser.navigate(`http://127.0.0.1:${cdpPort}/json/version`)).rejects.toThrow(/DevTools endpoint/);
+    await expect(browser.navigate(`http://localhost:${cdpPort}/json/list`)).rejects.toThrow(/DevTools endpoint/);
 
     const cdp = await rawPageSession();
     try {
-      const result = await cdp.send('Page.navigate', { url: `http://127.0.0.1:${TEST_PORT}/json/version` });
+      const result = await cdp.send('Page.navigate', { url: `http://127.0.0.1:${cdpPort}/json/version` });
       expect(result.errorText).toBe('net::ERR_BLOCKED_BY_CLIENT');
     } finally {
       await cdp.close();
@@ -326,7 +254,7 @@ describe.skipIf(!chromiumExe)('browser local-file lockdown (integration, #521)',
     // a tab that loaded a local file while no guard was armed.
     await browser.navigate(`${base}/`);
     await browser.disconnect(); // closes the guard; this Chrome is not ours to stop
-    const res = await fetch(`http://127.0.0.1:${TEST_PORT}/json/new?${markerUrl}`, { method: 'PUT' });
+    const res = await fetch(`http://127.0.0.1:${cdpPort}/json/new?${markerUrl}`, { method: 'PUT' });
     const fileTab = await res.json() as { id: string; webSocketDebuggerUrl: string };
     const raw = new CDPClient();
     try {
@@ -340,24 +268,24 @@ describe.skipIf(!chromiumExe)('browser local-file lockdown (integration, #521)',
       await raw.close();
     }
 
-    const fresh = new BrowserController(TEST_PORT);
+    const fresh = new BrowserController(cdpPort, undefined, { autoLaunch: false });
     try {
       const snap = await fresh.snapshot();
       expect(snap.url).toStartWith(base);
       expect(JSON.stringify(snap).includes(MARKER)).toBe(false);
       // The file tab was left alone, not driven.
-      const tabs = await (await fetch(`http://127.0.0.1:${TEST_PORT}/json/list`)).json() as Array<{ id: string; url: string }>;
+      const tabs = await (await fetch(`http://127.0.0.1:${cdpPort}/json/list`)).json() as Array<{ id: string; url: string }>;
       expect(tabs.find(t => t.id === fileTab.id)?.url).toBe(markerUrl);
     } finally {
       await fresh.disconnect();
-      await fetch(`http://127.0.0.1:${TEST_PORT}/json/close/${fileTab.id}`).catch(() => {});
+      await fetch(`http://127.0.0.1:${cdpPort}/json/close/${fileTab.id}`).catch(() => {});
     }
   }, 45_000);
 
   test('a redirect into the DevTools endpoint is blocked in the browser and reported', async () => {
     // Chrome allows http -> http redirects, so this one is the guard's alone.
     await expect(browser.navigate(`${base}/redirect-devtools`)).rejects.toThrow(
-      new RegExp(`was blocked: it led to http://127\\.0\\.0\\.1:${TEST_PORT}/json/version`),
+      new RegExp(`was blocked: it led to http://127\\.0\\.0\\.1:${cdpPort}/json/version`),
     );
   }, 30_000);
 
@@ -366,7 +294,7 @@ describe.skipIf(!chromiumExe)('browser local-file lockdown (integration, #521)',
     const out = await browser.evaluate(
       // no-cors: without the guard this resolves (opaque, status 0), so a
       // rejection here is the guard and not CORS.
-      `fetch('http://127.0.0.1:${TEST_PORT}/json/list', { mode: 'no-cors' }).then(r => 'status ' + r.status).catch(e => 'blocked: ' + e.message)`,
+      `fetch('http://127.0.0.1:${cdpPort}/json/list', { mode: 'no-cors' }).then(r => 'status ' + r.status).catch(e => 'blocked: ' + e.message)`,
     );
     expect(String(out)).toStartWith('blocked:');
   }, 30_000);

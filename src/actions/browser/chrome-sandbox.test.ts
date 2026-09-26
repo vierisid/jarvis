@@ -4,9 +4,10 @@
  * The decision logic is tested with the environment injected. The last block
  * launches a real Chromium through launchChrome -- headless (DISPLAY is
  * removed for the duration), random port, throwaway profile, killed in
- * afterAll -- and checks the running browser against the decision: when the
- * sandbox was kept, the main process has no --no-sandbox and its renderers
- * run under a seccomp filter.
+ * afterAll or, if the run is killed first, by the fixture's watchdog -- and
+ * checks the running browser against the decision: when the sandbox was
+ * kept, the main process has no --no-sandbox and its renderers run under a
+ * seccomp filter.
  */
 import { describe, test, expect, afterAll, afterEach, beforeAll, beforeEach } from 'bun:test';
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs';
@@ -14,6 +15,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { decideSandbox, linuxSandboxDecision, type ProbeResult } from './chrome-sandbox.ts';
 import { findBrowserExecutable, launchChrome, stopChrome, type RunningBrowser } from './chrome-launcher.ts';
+import { watchBrowser } from './fixtures/headless-chromium.ts';
 
 function freePort(): number {
   const listener = Bun.listen({ hostname: '127.0.0.1', port: 0, socket: { data() {} } });
@@ -123,16 +125,15 @@ describe.skipIf(!exe)('launchChrome on this host (#521, real headless Chromium)'
   // skipped or filtered describe but not its afterAll.
   let profile = '';
   let running: RunningBrowser | null = null;
+  let watch: { release(): Promise<void> } | null = null;
 
   beforeAll(() => {
     profile = mkdtempSync(join(tmpdir(), 'jarvis-sandbox-launch-'));
   });
 
-  // TODO: a SIGKILLed test run skips this afterAll and orphans the browser.
-  // launchChrome owns the spawn, so the setpriv wrapper used in
-  // browser-local-files.test.ts cannot be applied here; move to the shared
-  // watchdog fixture from fix/524-review-followups
-  // (src/actions/browser/fixtures/headless-chromium.ts) once that lands.
+  // A SIGKILLed test run skips this afterAll. launchChrome owns the spawn, so
+  // the browser cannot run under launchTestChromium's watchdog; watchBrowser
+  // from the same fixture ties it to this process once it is up instead.
   afterAll(async () => {
     if (running) await stopChrome(running);
     if (!profile) return;
@@ -143,6 +144,7 @@ describe.skipIf(!exe)('launchChrome on this host (#521, real headless Chromium)'
       try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
     }
     rmSync(profile, { recursive: true, force: true });
+    await watch?.release();
   });
 
   function profileProcesses(): number[] {
@@ -171,6 +173,7 @@ describe.skipIf(!exe)('launchChrome on this host (#521, real headless Chromium)'
     delete process.env.WAYLAND_DISPLAY;
     try {
       running = await launchChrome(port, profile);
+      watch = watchBrowser(running.proc.pid, profile);
     } finally {
       if (saved.DISPLAY !== undefined) process.env.DISPLAY = saved.DISPLAY;
       if (saved.WAYLAND_DISPLAY !== undefined) process.env.WAYLAND_DISPLAY = saved.WAYLAND_DISPLAY;

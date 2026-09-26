@@ -59,6 +59,52 @@ describe.skipIf(!falseExe)('launchTestChromium startup failure', () => {
   }, 30_000);
 });
 
+const sleepExe = process.platform === 'win32' ? null : Bun.which('sleep');
+
+describe.skipIf(!sleepExe)('watchBrowser', () => {
+  test('stops the watched process and removes its profile when the owner is SIGKILLed', async () => {
+    // The owner starts the "browser" (a sleep) itself, as launchChrome does,
+    // then hands it to watchBrowser and is killed outright.
+    const owner = Bun.spawn(['bun', '-e', `
+      const { mkdtempSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const { watchBrowser } = await import(${JSON.stringify(join(import.meta.dir, 'headless-chromium.ts'))});
+      const profileDir = mkdtempSync(join(tmpdir(), 'jarvis-fixture-watch-'));
+      const child = Bun.spawn([${JSON.stringify(sleepExe)}, '60'], { stdout: 'ignore', stderr: 'ignore' });
+      watchBrowser(child.pid, profileDir);
+      console.log(JSON.stringify({ pid: child.pid, profileDir }));
+      setInterval(() => {}, 1000);
+    `], { stdout: 'pipe', stderr: 'ignore' });
+    let info: { pid: number; profileDir: string } | null = null;
+    try {
+      const reader = owner.stdout.getReader();
+      let text = '';
+      const deadline = Date.now() + 20_000;
+      while (!text.includes('\n') && Date.now() < deadline) {
+        const chunk = await Promise.race([reader.read(), Bun.sleep(1_000).then(() => null)]);
+        if (chunk?.done) break;
+        if (chunk) text += new TextDecoder().decode(chunk.value);
+      }
+      reader.releaseLock();
+      info = JSON.parse(text.split('\n')[0]!) as { pid: number; profileDir: string };
+      expect(alive(info.pid)).toBe(true);
+      expect(existsSync(info.profileDir)).toBe(true);
+    } finally {
+      owner.kill('SIGKILL');
+      await owner.exited;
+    }
+    try {
+      expect(await gone(info!.pid, 8_000)).toBe(true);
+      const deadline = Date.now() + 2_000;
+      while (existsSync(info!.profileDir) && Date.now() < deadline) await Bun.sleep(100);
+      expect(existsSync(info!.profileDir)).toBe(false);
+    } finally {
+      if (info && alive(info.pid)) try { process.kill(info.pid, 'SIGKILL'); } catch { /* raced */ }
+    }
+  }, 30_000);
+});
+
 describe.skipIf(!chromiumExe)('launchTestChromium', () => {
   test('answers on the port it wrote, and close() removes browser and profile', async () => {
     const chromium = await launchTestChromium({ profilePrefix: 'jarvis-fixture-test-' });

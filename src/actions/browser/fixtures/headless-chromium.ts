@@ -90,6 +90,51 @@ wait "$c" 2>/dev/null
 [ -n "$profile" ] && rm -rf -- "$profile"
 `;
 
+/**
+ * The same watchdog for a browser something else already started: `$1` is
+ * its pid, `$2` its profile dir. For tests where the code under test owns the
+ * spawn (chrome-sandbox.test.ts runs launchChrome itself), so it cannot run
+ * under WATCHDOG. The browser is not this shell's child, so there is nothing
+ * to reap; a zombie left for its real parent only costs the 5s grace.
+ */
+const PID_WATCHDOG = `
+trap : TERM INT HUP
+trap '' PIPE
+c=$1; profile=$2
+read -r _ || :
+kill -TERM "$c" 2>/dev/null
+i=0
+while kill -0 "$c" 2>/dev/null && [ "$i" -lt 50 ]; do sleep 0.1; i=$((i + 1)); done
+kill -KILL "$c" 2>/dev/null
+[ -n "$profile" ] && rm -rf -- "$profile"
+`;
+
+/**
+ * Tie an already running browser to this process: however this process ends,
+ * afterAll or SIGKILL, the browser `pid` is stopped (TERM, then KILL) and
+ * `profileDir` removed. `release()` does the same now and waits for it.
+ * Idempotent.
+ */
+export function watchBrowser(pid: number, profileDir: string): { release(): Promise<void> } {
+  const watchdog = Bun.spawn(['sh', '-c', PID_WATCHDOG, 'sh', String(pid), profileDir], {
+    stdin: 'pipe', stdout: 'ignore', stderr: 'ignore', env: sanitizedEnv(),
+  });
+  let releasing: Promise<void> | null = null;
+  return {
+    release() {
+      releasing ??= (async () => {
+        try { watchdog.stdin.end(); } catch { /* already closed */ }
+        const exited = await Promise.race([watchdog.exited.then(() => true), Bun.sleep(8_000).then(() => false)]);
+        if (!exited) {
+          try { watchdog.kill('SIGKILL'); } catch { /* gone */ }
+          try { process.kill(pid, 'SIGKILL'); } catch { /* gone */ }
+        }
+      })();
+      return releasing;
+    },
+  };
+}
+
 export interface TestChromium {
   /** The CDP port this browser chose. */
   port: number;
