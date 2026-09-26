@@ -538,12 +538,33 @@ export class ProjectManager {
    * commit can make it a symlink to `.git/HEAD` or `.git/config`. So it is
    * only ever read as a regular file, and written by replacing the name: a
    * rename over a symlink replaces the link and never touches its target.
+   *
+   * The file is model- and repo-writable (site_write_file, site_run_command, a
+   * pulled repo) and its values reach the dashboard and every later system
+   * prompt. A field of the wrong type is dropped so callers fall back to their
+   * defaults: `"name": {"toString": 1}` would otherwise throw wherever the name
+   * is turned into a string (#524). Unknown keys are kept, since touchProject
+   * writes the object back.
    */
   private readMeta(projectPath: string): ProjectMeta | null {
     const metaPath = join(projectPath, META_FILE);
     try {
       if (!lstatSync(metaPath).isFile()) return null;
-      return JSON.parse(readFileSync(metaPath, 'utf-8')) as ProjectMeta;
+      const raw: unknown = JSON.parse(readFileSync(metaPath, 'utf-8'));
+      if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null;
+      const meta = { ...raw } as Record<string, unknown>;
+      for (const key of ['name', 'framework']) {
+        if (typeof meta[key] !== 'string') delete meta[key];
+      }
+      for (const key of ['createdAt', 'lastOpenedAt']) {
+        if (typeof meta[key] !== 'number') delete meta[key];
+      }
+      const github = meta.github as Record<string, unknown> | null | undefined;
+      if (github !== undefined && !(github && typeof github === 'object'
+        && typeof github.owner === 'string' && typeof github.repo === 'string')) {
+        delete meta.github;
+      }
+      return meta as ProjectMeta;
     } catch {
       return null;
     }

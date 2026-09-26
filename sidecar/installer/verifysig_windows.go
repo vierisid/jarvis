@@ -105,11 +105,8 @@ func verifyPayloadSignature(stagedBin string) error {
 	// Publisher pin: chain validity alone would accept ANY signed executable,
 	// so compare the signer's CN. PowerShell is guaranteed present on
 	// supported Windows; native CryptQueryObject plumbing is deferred.
-	// Single-quoted PS literal (embedded ' doubled): unlike double quotes it
-	// expands neither $ nor backticks, which are legal in Windows paths.
-	psPath := "'" + strings.ReplaceAll(exe, "'", "''") + "'"
 	ps := exec.Command("powershell", "-NoProfile", "-NonInteractive", "-Command",
-		"(Get-AuthenticodeSignature -FilePath "+psPath+").SignerCertificate.Subject")
+		signerSubjectScript(exe))
 	hideSubprocessWindow(ps)
 	out, err := ps.Output()
 	if err != nil {

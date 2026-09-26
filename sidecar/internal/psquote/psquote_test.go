@@ -1,4 +1,4 @@
-package main
+package psquote
 
 import (
 	"encoding/base64"
@@ -6,10 +6,10 @@ import (
 	"testing"
 )
 
-func TestPsSingleQuotedDoublesEveryQuoteVariant(t *testing.T) {
+func TestSingleQuotedDoublesEveryQuoteVariant(t *testing.T) {
 	quotes := []string{"'", "\u2018", "\u2019", "\u201a", "\u201b"}
 	in := "it's \u2018smart\u2019 and \u201alow\u201b"
-	got := psSingleQuoted(in)
+	got := SingleQuoted(in)
 	if !strings.HasPrefix(got, "'") || !strings.HasSuffix(got, "'") {
 		t.Fatalf("not wrapped in quotes: %q", got)
 	}
@@ -24,14 +24,14 @@ func TestPsSingleQuotedDoublesEveryQuoteVariant(t *testing.T) {
 		}
 	}
 	// Nothing else is touched; $ and backticks are inert inside single quotes.
-	if got := psSingleQuoted("$env:X `n"); got != "'$env:X `n'" {
+	if got := SingleQuoted("$env:X `n"); got != "'$env:X `n'" {
 		t.Errorf("unexpected escaping: %q", got)
 	}
 }
 
-func TestPsUTF8Base64ExprRoundTrips(t *testing.T) {
+func TestUTF8Base64ExprRoundTrips(t *testing.T) {
 	in := "line1\r\nit's \u2018x\u2019 日本語 ' ; Start-Process calc"
-	expr := psUTF8Base64Expr(in)
+	expr := UTF8Base64Expr(in)
 	marker := "FromBase64String('"
 	start := strings.Index(expr, marker)
 	if start < 0 {

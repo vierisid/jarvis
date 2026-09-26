@@ -97,6 +97,47 @@ export function defangDelimiters(text: string): string {
   return text.replace(/UNTRUSTED_CONTENT/g, 'UNTRUSTED-CONTENT');
 }
 
+/**
+ * For a short outside value (a name, a branch, a file name) that sits INSIDE
+ * trusted prompt text, where a block of its own would break the sentence it is
+ * part of. The value is reduced to one capped line: line breaks and other
+ * control characters become spaces, invisible format characters (zero-width,
+ * bidi overrides, tag characters) are dropped, double quotes become single
+ * quotes (such values are usually shown quoted), and the delimiters are
+ * defanged -- after the drop, so a zero-width character cannot split the
+ * marker past the defang. That stops the value forging prompt structure -- a
+ * heading, a rule, a closing delimiter -- but a sentence still reads as a
+ * sentence, so anything longer than a label belongs in wrapUntrusted.
+ *
+ * Takes unknown because a caller may hold JSON nobody validated: a planted
+ * value must render, never throw on every later turn. Numbers and booleans
+ * are shown; anything else renders empty, because String() on an object from
+ * JSON can throw (`{"toString": 1}` has no callable conversion).
+ *
+ * Lone surrogates become U+FFFD: JSON happily decodes "\ud800", and a
+ * provider that rejects ill-formed UTF-16 would otherwise refuse every
+ * request carrying the prompt. The input is cut to a few times the cap before
+ * any regex runs, so a multi-megabyte name costs nothing per turn; the cut
+ * may split a surrogate pair, which the same step repairs (so a cut can end
+ * in U+FFFD). A cut always appends '...', even when what it dropped was only
+ * invisible characters: saying too much was dropped beats hiding a drop.
+ */
+export function inlineUntrusted(value: unknown, maxChars = 100): string {
+  const raw = typeof value === 'string' ? value
+    : typeof value === 'number' || typeof value === 'boolean' ? String(value)
+    : '';
+  const budget = maxChars * 4;
+  const cut = raw.length > budget;
+  const text = (cut ? raw.slice(0, budget) : raw).toWellFormed();
+  const flat = defangDelimiters(text.replace(/\p{Cf}/gu, ''))
+    .replace(/[\p{Cc}\p{Zl}\p{Zp}]+/gu, ' ')
+    .replace(/"/g, "'")
+    .trim();
+  const chars = Array.from(flat);
+  if (chars.length > maxChars) return chars.slice(0, maxChars).join('') + '...';
+  return cut ? flat + '...' : flat;
+}
+
 /** Wrap a payload in the delimiters with the preamble. Empty input stays empty. */
 export function wrapUntrusted(text: string, source: string): string {
   if (text.length === 0) return text;

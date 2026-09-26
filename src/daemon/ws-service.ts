@@ -52,6 +52,8 @@ import { classifyErrorString } from '../llm/provider.ts';
 import { getOrCreateConversation, addMessage } from '../vault/conversations.ts';
 import { maybeCreateUserProfileFollowupPrompt, recordUserProfileTurn } from '../user/profile-followup.ts';
 import { runWithOrigin } from '../llm/origin.ts';
+import { buildProjectSiteContext, formatProjectList } from '../sites/prompt-context.ts';
+import type { FileEntry } from '../sites/types.ts';
 
 type VoiceSession = {
   requestId: string;
@@ -861,19 +863,6 @@ export class WebSocketService implements Service {
     this.wsServer.broadcast(message);
   }
 
-  /**
-   * Format a FileEntry tree into a compact text listing.
-   */
-  private formatFileTree(entry: { name: string; path: string; type: 'file' | 'directory'; children?: { name: string; type: 'file' | 'directory' }[] }): string {
-    const lines: string[] = [];
-    if (entry.children) {
-      for (const child of entry.children) {
-        lines.push(child.type === 'directory' ? `${child.name}/` : child.name);
-      }
-    }
-    return lines.join('\n') + '\n';
-  }
-
   broadcastApprovalUpdate(request: ApprovalRequest): void {
     const message: WSMessage = {
       type: 'notification',
@@ -1155,45 +1144,19 @@ export class WebSocketService implements Service {
       // Project-scoped chat (from the Site Builder page)
       const project = await this.siteBuilderService.getProjectWithStatus(projectId);
       if (project) {
-        let fileTreeText = '';
+        let tree: FileEntry | null = null;
         try {
-          const tree = this.siteBuilderService.projectManager.getFileTree(projectId, 1);
-          fileTreeText = this.formatFileTree(tree);
+          tree = this.siteBuilderService.projectManager.getFileTree(projectId, 1);
         } catch { /* ignore */ }
-
-        siteContext = `# Site Builder Context
-
-You are working on project "${project.name}" (${project.framework}).
-- Path: ${project.path}
-- Branch: ${project.gitBranch ?? 'main'}
-- Dev server: ${project.status}
-${project.githubUrl ? `- GitHub: ${project.githubUrl}` : ''}
-${fileTreeText ? `\n## Project Structure\n\`\`\`\n${fileTreeText}\`\`\`` : ''}
-
-## Rules
-- Use site_read_file, site_write_file, site_list_files, site_run_command, site_git_commit, site_github_push tools with project_id="${projectId}".
-- Do NOT use regular read_file, write_file, or run_command — always use the site_* variants.
-- Do NOT start dev servers via site_run_command. The dev server is managed by the dashboard (make dev runs automatically).
-- Changes are auto-committed after this conversation turn completes.
-- For the "bun-react" framework: the server uses Bun.serve() with HTML imports (import from "./index.html"). Run with "bun --hot index.ts", NOT vite or webpack.`;
+        siteContext = buildProjectSiteContext(project, tree, this.siteBuilderService.autoCommitEnabled);
       }
     } else if (this.siteBuilderService) {
       // General chat (main dashboard) — give the LLM awareness of site builder projects
       try {
         const projects = await this.siteBuilderService.listProjectsWithStatus();
         if (projects.length > 0) {
-          const projectList = projects.map(p =>
-            `  - "${p.name}" (id: ${p.id}, framework: ${p.framework}, branch: ${p.gitBranch ?? 'main'}${p.githubUrl ? `, github: ${p.githubUrl}` : ''})`
-          ).join('\n');
-
-          // Most-recently-opened, used as a fallback default when the
-          // user's request offers no name hint at all.
-          const mostRecent = [...projects].sort(
-            (a, b) => (b.lastOpenedAt ?? 0) - (a.lastOpenedAt ?? 0),
-          )[0];
-          const fallbackLine = mostRecent
-            ? `\nFALLBACK PROJECT (most recently opened, use ONLY if no project name keyword matches the user's request): "${mostRecent.name}" (id: ${mostRecent.id}).`
-            : "";
+          // Every project field is model- or repo-written; see prompt-context.ts.
+          const { projectList, fallbackLine } = formatProjectList(projects);
 
           siteContext = `# Site Builder
 
@@ -1446,7 +1409,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         console.error('[WSService] onComplete error:', err)
       );
 
-      // Auto-commit site builder changes after chat turn
+      // Auto-commit site builder changes after chat turn (sites.auto_commit)
       if (projectId && this.siteBuilderService) {
         try {
           const projectPath = this.siteBuilderService.projectManager.getProjectPath(projectId);
@@ -1454,7 +1417,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
             const commitMsg = text.length > 60 ? text.slice(0, 57) + '...' : text;
             // Git off for the project (#523) is logged once there, not here
             // after every turn.
-            const commit = await this.siteBuilderService.autoCommitIfAllowed(projectPath, commitMsg);
+            const commit = await this.siteBuilderService.autoCommitIfEnabled(projectPath, commitMsg);
             if (commit) {
               this.broadcastSiteEvent({
                 type: 'git_commit',

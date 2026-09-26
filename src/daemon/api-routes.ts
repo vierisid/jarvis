@@ -4680,11 +4680,11 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           if (!body.path || body.content === undefined) return error('path and content are required');
           await ctx.siteBuilderService.projectManager.writeFile(id, body.path, body.content);
 
-          // Auto-commit if enabled. The save stands even when git is off for
-          // the project (#523): the file is written either way.
+          // Auto-commit if enabled (sites.auto_commit). The save stands even
+          // when git is off for the project (#523): the file is written either way.
           const projectPath = ctx.siteBuilderService.projectManager.getProjectPath(id);
           if (projectPath) {
-            await ctx.siteBuilderService.autoCommitIfAllowed(projectPath, `Update ${body.path}`);
+            await ctx.siteBuilderService.autoCommitIfEnabled(projectPath, `Update ${body.path}`);
           }
 
           return json({ ok: true });

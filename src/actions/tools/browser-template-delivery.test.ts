@@ -6,33 +6,18 @@
  * Skipped when no Chromium executable is available.
  */
 import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { BrowserController } from '../browser/session.ts';
+import { chromiumExe, launchTestChromium, type TestChromium } from '../browser/fixtures/headless-chromium.ts';
 import { createBrowserTools } from './builtin.ts';
 import { initDatabase } from '../../vault/schema.ts';
 import { upsertWebappTemplate } from '../../vault/webapp-templates.ts';
-
-const TEST_CDP_PORT = 9778;
-
-const CHROMIUM_CANDIDATES = [
-  process.env.CHROME_PATH,
-  '/snap/bin/chromium',
-  '/usr/bin/chromium-browser',
-  '/usr/bin/chromium',
-  '/usr/bin/google-chrome',
-].filter(Boolean) as string[];
-
-const chromiumExe = CHROMIUM_CANDIDATES.find(p => existsSync(p));
 
 function toolMap(ctrl: BrowserController) {
   return new Map(createBrowserTools(ctrl).map(t => [t.name, t.execute]));
 }
 
 describe.skipIf(!chromiumExe)('webapp template delivery via browser tools (integration)', () => {
-  let proc: ReturnType<typeof Bun.spawn> | null = null;
-  let profileDir: string;
+  let chromium: TestChromium | null = null;
   let server: ReturnType<typeof Bun.serve>;
   let ctrl: BrowserController;
   let tools: Map<string, (params: Record<string, unknown>) => Promise<unknown>>;
@@ -65,43 +50,17 @@ describe.skipIf(!chromiumExe)('webapp template delivery via browser tools (integ
       instructions: 'LocalhostApp playbook: URL-first.',
     });
 
-    profileDir = mkdtempSync(join(tmpdir(), 'jarvis-template-delivery-'));
-    proc = Bun.spawn([
-      chromiumExe!,
-      '--headless=new',
-      `--remote-debugging-port=${TEST_CDP_PORT}`,
-      `--user-data-dir=${profileDir}`,
-      '--no-sandbox',
-      '--no-first-run',
-      '--disable-dev-shm-usage',
-      'about:blank',
-    ], { stdout: 'ignore', stderr: 'ignore' });
-
-    // Generous deadline: on loaded CI runners a headless Chromium can take
-    // well over 15s to start (see the flaky hook-timeout failures on
-    // ubuntu-latest).
-    const deadline = Date.now() + 45_000;
-    let up = false;
-    while (Date.now() < deadline) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${TEST_CDP_PORT}/json/version`, {
-          signal: AbortSignal.timeout(1000),
-        });
-        if (res.ok) { up = true; break; }
-      } catch { /* not up yet */ }
-      await Bun.sleep(250);
-    }
-    if (!up) throw new Error(`Chromium CDP did not come up on port ${TEST_CDP_PORT}`);
-
-    ctrl = new BrowserController(TEST_CDP_PORT);
+    chromium = await launchTestChromium({ profilePrefix: 'jarvis-template-delivery-' });
+    // autoLaunch off: if this browser dies, fail rather than start a headed one.
+    ctrl = new BrowserController(chromium.port, undefined, { autoLaunch: false });
     tools = toolMap(ctrl);
   }, 60_000);
 
   afterAll(async () => {
-    proc?.kill();
-    if (profileDir) rmSync(profileDir, { recursive: true, force: true });
+    try { await ctrl?.disconnect(); } catch { /* already gone */ }
+    await chromium?.close();
     server?.stop(true);
-  });
+  }, 15_000); // close() may wait out the watchdog's 5s TERM grace
 
   test('navigate delivers the site template exactly once', async () => {
     const navigate = tools.get('browser_navigate')!;

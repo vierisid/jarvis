@@ -2,32 +2,20 @@
  * Integration tests for the browser interaction primitives:
  * hover, press_key, right/double click, and browser_type append mode.
  *
- * Spawns its own headless Chromium on a test port (BrowserController attaches
- * to it instead of launching a headed window via WSLg). Skipped entirely when
- * no Chromium executable is available.
+ * Spawns its own headless Chromium on a free CDP port (BrowserController
+ * attaches to it instead of launching a headed window via WSLg); see
+ * fixtures/headless-chromium.ts for why the port is not fixed and how the
+ * browser is reclaimed when the run bails. Skipped entirely when no Chromium
+ * executable is available.
  */
 import { describe, test, expect, beforeAll, afterAll, beforeEach } from 'bun:test';
-import { existsSync, mkdtempSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
 import { BrowserController } from './session.ts';
-
-const TEST_PORT = 9777;
+import { chromiumExe, launchTestChromium, type TestChromium } from './fixtures/headless-chromium.ts';
 
 // Typed into the password field by the credential-leak test below. Distinctive
 // so the assertion can scan the WHOLE serialized snapshot for it rather than
 // one field.
 const SECRET = 'correct-horse-battery-staple-9f3a';
-
-const CHROMIUM_CANDIDATES = [
-  process.env.CHROME_PATH,
-  '/snap/bin/chromium',
-  '/usr/bin/chromium-browser',
-  '/usr/bin/chromium',
-  '/usr/bin/google-chrome',
-].filter(Boolean) as string[];
-
-const chromiumExe = CHROMIUM_CANDIDATES.find(p => existsSync(p));
 
 const TEST_PAGE = `<!DOCTYPE html>
 <html><body>
@@ -69,50 +57,22 @@ const TEST_PAGE = `<!DOCTYPE html>
 </body></html>`;
 
 describe.skipIf(!chromiumExe)('browser primitives (integration)', () => {
-  let proc: ReturnType<typeof Bun.spawn> | null = null;
-  let profileDir: string;
+  let chromium: TestChromium | null = null;
   let browser: BrowserController;
 
   beforeAll(async () => {
-    profileDir = mkdtempSync(join(tmpdir(), 'jarvis-browser-test-'));
-    proc = Bun.spawn([
-      chromiumExe!,
-      '--headless=new',
-      `--remote-debugging-port=${TEST_PORT}`,
-      `--user-data-dir=${profileDir}`,
-      '--no-sandbox',
-      '--no-first-run',
-      '--disable-dev-shm-usage',
-      'about:blank',
-    ], { stdout: 'ignore', stderr: 'ignore' });
-
-    // Wait for CDP to come up. Generous deadline: on loaded CI runners a
-    // headless Chromium can take well over 15s to start (see the flaky
-    // hook-timeout failures on ubuntu-latest).
-    const deadline = Date.now() + 45_000;
-    let up = false;
-    while (Date.now() < deadline) {
-      try {
-        const res = await fetch(`http://127.0.0.1:${TEST_PORT}/json/version`, {
-          signal: AbortSignal.timeout(1000),
-        });
-        if (res.ok) { up = true; break; }
-      } catch { /* not up yet */ }
-      await Bun.sleep(250);
-    }
-    if (!up) throw new Error(`Chromium CDP did not come up on port ${TEST_PORT}`);
-
-    browser = new BrowserController(TEST_PORT);
+    chromium = await launchTestChromium({ profilePrefix: 'jarvis-browser-test-' });
+    // autoLaunch off: if this browser dies, fail rather than start a headed one.
+    browser = new BrowserController(chromium.port, undefined, { autoLaunch: false });
     await loadTestPage();
-    // 90s, not 60s: the poll alone may run ~46s and navigate() carries an
+    // 90s, not 60s: the launch alone may run ~46s and navigate() carries an
     // internal 30s load wait — the hook must exceed their sum.
   }, 90_000);
 
   afterAll(async () => {
     try { await browser?.disconnect(); } catch { /* already gone */ }
-    proc?.kill();
-    if (profileDir) rmSync(profileDir, { recursive: true, force: true });
-  });
+    await chromium?.close();
+  }, 15_000); // close() may wait out the watchdog's 5s TERM grace
 
   /**
    * Navigate to a pristine TEST_PAGE and block until the DOM the tests assert
