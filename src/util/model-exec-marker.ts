@@ -172,7 +172,7 @@ export function modelExecDaemonWarning(env: Env = process.env): string | null {
     'in JARVIS_WORKFLOW_ENCRYPTION_KEY, and that key is not in this environment. A key file is used only if ' +
     'it is that same key, and no new key is generated, so workflow credentials may be unusable here. Start ' +
     'this Jarvis from your own terminal with JARVIS_WORKFLOW_ENCRYPTION_KEY set (on a systemd install: ' +
-    '`systemctl --user restart jarvis`), or, if this instance is meant to have its own key, unset ' +
+    '`jarvis restart`), or, if this instance is meant to have its own key, unset ' +
     'JARVIS_MODEL_EXEC_ENV_KEY deliberately.'
   );
 }
@@ -185,6 +185,8 @@ export function modelExecDaemonWarning(env: Env = process.env): string | null {
  * user would not see it: `start -d` / `restart -d` (the detached daemon logs
  * its warning to a file). A foreground `start` or `restart` IS the daemon and
  * warns itself, so the CLI stays quiet there rather than say it twice.
+ * `restart` asks only once systemd-unit.ts's routeRestart has said the
+ * restart is not systemd's (#525): a unit starts the daemon with its own env.
  * `update` warns from update.ts, and only for install methods whose update
  * restarts the daemon (not docker or dev checkouts, where nothing restarts).
  */
@@ -201,6 +203,6 @@ export function modelExecRestartWarning(env: Env = process.env): string | null {
     'This shell is the assistant\'s: JARVIS_WORKFLOW_ENCRYPTION_KEY was in the running Jarvis\'s environment ' +
     'but is not in this one, and the Jarvis started from here will not have it (it uses a key file only if ' +
     'that file holds the same key, and generates none). Restart from your own terminal, or use ' +
-    '`systemctl --user restart jarvis` on a systemd install.'
+    '`jarvis restart` on a systemd install.'
   );
 }

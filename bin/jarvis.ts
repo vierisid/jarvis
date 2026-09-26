@@ -385,6 +385,10 @@ async function cmdRestart(args: string[]): Promise<void> {
   if (routed === 'failed') process.exit(1);
   if (routed === 'done') return;
 
+  // Not a unit's restart: the new daemon starts from this shell's env (#514).
+  const warning = modelExecCliWarning('restart', args);
+  if (warning) console.warn(c.yellow(warning));
+
   const pid = isLocked();
   if (pid) {
     if (!await cmdStop()) {
@@ -495,8 +499,10 @@ const commandArgs = args.slice(1);
 
 // A daemon started from the assistant's shell (run_command) comes up without
 // the workflow key that shell was stripped of (#514). Which commands warn, and
-// why only those, is modelExecCliWarning's; `update` warns from update.ts.
-{
+// why only those, is modelExecCliWarning's; `restart` warns from cmdRestart,
+// once it knows systemd is not the one restarting (#525), and `update` from
+// update.ts.
+if (command !== 'restart') {
   const warning = modelExecCliWarning(command, commandArgs);
   if (warning) console.warn(c.yellow(warning));
 }

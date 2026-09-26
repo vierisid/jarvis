@@ -54,7 +54,8 @@
  * single further command still reaches the same secrets:
  *   - /proc/<daemon pid>/environ holds the environment the daemon was STARTED
  *     with. For run_command the daemon is the shell's parent, so that is
- *     `cat /proc/$PPID/environ`; until #521, Chrome can open the same file.
+ *     `cat /proc/$PPID/environ`. (The model-driven Chrome no longer opens
+ *     file: URLs since #521, so it cannot read the file that way.)
  *     Nothing done to process.env changes it -- and, measured with Bun 1.3, a
  *     `delete process.env.X` does not even reach a Bun.spawn or node
  *     child_process spawn that omits `env`: those inherit the startup
@@ -133,8 +134,9 @@ export const DAEMON_SECRET_ENV_NAMES: readonly string[] = Object.freeze([
  *
  * One cost remains. On an install no service manager runs, `jarvis restart`
  * and `jarvis update` run through run_command start the new daemon FROM that
- * shell (under systemd they stop Jarvis instead, and launchd relaunches it
- * with its own env: see util/model-exec-marker.ts). A user whose key lives ONLY in
+ * shell (under systemd they go through the unit since #525, which starts the
+ * daemon with the unit's own env, and launchd relaunches it with its own env:
+ * see util/model-exec-marker.ts). A user whose key lives ONLY in
  * JARVIS_WORKFLOW_ENCRYPTION_KEY gets a daemon without it, which falls back to
  * the key file (encryption.ts getKey):
  *   - no key file, encrypted rows stored: it refuses to boot rather than
@@ -150,8 +152,8 @@ export const DAEMON_SECRET_ENV_NAMES: readonly string[] = Object.freeze([
  *     in a file is never flagged, so it still generates one when it has none.
  * Likewise it comes up without JARVIS_GITHUB_TOKEN, which nothing flags. The
  * daemon logs the missing key, and `jarvis start -d`/`restart -d`/`update`
- * print it. `systemctl --user restart jarvis`, or a restart from the user's
- * own terminal, brings every secret back.
+ * print it. `jarvis restart` on a systemd install, or a restart from the
+ * user's own terminal, brings every secret back.
  */
 export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   // Where things are.
@@ -166,6 +168,10 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
   'JARVIS_TELEMETRY', 'JARVIS_TELEMETRY_DEBUG', 'JARVIS_TOOL_FILTER',
   'JARVIS_WAKE_ENGINE', 'JARVIS_REALTIME_VOICE', 'JARVIS_AMBIENT_UI',
   'JARVIS_ALLOW_LEAKED_ENGINES',
+  // The Linux Chrome sandbox opt-out (actions/browser/chrome-sandbox.ts, #521).
+  // A daemon or browser started from the model's shell must keep the user's
+  // choice, or a host that needs it cannot launch the browser there.
+  'JARVIS_BROWSER_NO_SANDBOX',
   // Workflow engine tuning, read by the daemon. None is a credential.
   'JARVIS_WORKFLOW_FLOW_TIMEOUT_SECONDS', 'JARVIS_WORKFLOW_STREAM_STEP_PROGRESS',
   'JARVIS_WORKFLOW_TERMINAL_TIMEOUT_MS', 'JARVIS_ENGINE_HANDSHAKE_TIMEOUT_MS',
@@ -184,16 +190,19 @@ export const JARVIS_SETTINGS_ENV_NAMES: readonly string[] = Object.freeze([
 ]);
 
 /**
- * JARVIS_* names that are neither secrets nor settings: wiring the daemon sets
- * on the processes it starts itself, never read from its own environment. The
- * engine's identity and lifecycle markers (engine-lifecycle.ts), which the
- * reaper uses to recognise an engine. Known, internal, and stripped like any
+ * JARVIS_* names that are neither secrets nor settings: wiring jarvis sets on
+ * the processes it starts itself, never read from the daemon's own
+ * environment. The engine's identity and lifecycle markers
+ * (engine-lifecycle.ts), which the reaper uses to recognise an engine; and the
+ * unit and run id `jarvis update` gives the transient systemd updater it
+ * starts (cli/systemd-unit.ts, #525). Known, internal, and stripped like any
  * unlisted JARVIS_ name -- a model-directed child has no business carrying
  * one. Listed so the classification test knows them.
  */
 export const JARVIS_INTERNAL_ENV_NAMES: readonly string[] = Object.freeze([
   'JARVIS_ENGINE_MARKER', 'JARVIS_ENGINE_OWNER_PID', 'JARVIS_ENGINE_OWNER_START',
   'JARVIS_ENGINE_BUNDLE', 'JARVIS_ENGINE_STARTED_AT',
+  'JARVIS_UPDATE_UNIT', 'JARVIS_UPDATE_RUN',
 ]);
 
 const SECRET_EXACT: ReadonlySet<string> = new Set(DAEMON_SECRET_ENV_NAMES);

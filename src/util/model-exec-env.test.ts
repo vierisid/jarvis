@@ -322,7 +322,7 @@ describe('the model-exec markers (#514)', () => {
   test('warns while the parent\'s key is missing or a different one is set; silent once it is back', () => {
     expect(modelExecDaemonWarning(FLAGGED)).toContain('kept its workflow key in JARVIS_WORKFLOW_ENCRYPTION_KEY');
     expect(modelExecDaemonWarning(FLAGGED)).toContain('unset JARVIS_MODEL_EXEC_ENV_KEY deliberately');
-    expect(modelExecRestartWarning(FLAGGED)).toContain('systemctl --user restart jarvis');
+    expect(modelExecRestartWarning(FLAGGED)).toContain('`jarvis restart` on a systemd install');
     expect(modelExecDaemonWarning({ ...FLAGGED, JARVIS_WORKFLOW_ENCRYPTION_KEY: 'b'.repeat(64) })).not.toBeNull();
     const back = { ...FLAGGED, JARVIS_WORKFLOW_ENCRYPTION_KEY: KEY };
     expect(modelExecDaemonWarning(back)).toBeNull();

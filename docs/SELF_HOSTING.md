@@ -501,11 +501,11 @@ itself on an install no service manager runs (one you started with
 comes up without the secrets above. Restart from your own terminal to bring
 them back.
 
-Under systemd the assistant's shell runs inside the service, so stopping
-Jarvis stops it too: `jarvis restart` or `jarvis update` run by the assistant
-leaves Jarvis stopped, and an update unfinished. Restart a systemd install with
-`systemctl --user restart jarvis`. Under launchd, which relaunches Jarvis
-itself, the relaunched daemon gets launchd's environment.
+Under systemd, `jarvis restart` and `jarvis update` go through the unit even
+when the assistant runs them (see [Running under systemd](#running-under-systemd)),
+so the restarted Jarvis gets the unit's environment, secrets included. Under
+launchd, which relaunches Jarvis itself, the relaunched daemon gets launchd's
+environment.
 
 If your workflow encryption key lives only in `JARVIS_WORKFLOW_ENCRYPTION_KEY`,
 a daemon started from the assistant's shell uses a workflow key only if it is
