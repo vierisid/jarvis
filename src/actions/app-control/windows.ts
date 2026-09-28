@@ -207,8 +207,10 @@ export class WindowsAppController implements AppController {
     const sc = await this.getSidecar();
     if (sc) return sc.getWindowTree(pid);
     throw new Error(
-      'UI element traversal on Windows requires the desktop-bridge sidecar. ' +
-      'Build it with: bun run scripts/build-sidecar.ts',
+      'UI element traversal on Windows requires the desktop-bridge sidecar, ' +
+      'which is not reachable. Expected desktop-bridge.exe at ' +
+      '%USERPROFILE%\\.jarvis\\sidecar\\desktop-bridge.exe, or a bridge already ' +
+      'speaking its JSON-RPC protocol on port 9224; this repo no longer builds it.',
     );
   }
 

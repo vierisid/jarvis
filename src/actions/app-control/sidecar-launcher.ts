@@ -59,7 +59,9 @@ export function findSidecarExecutable(): string | null {
     candidates.push(join(homedir(), '.jarvis', 'sidecar', 'desktop-bridge.exe'));
   }
 
-  // Also check repo build output (both custom -o path and default dotnet publish path)
+  // Legacy build output. Kept only so a desktop-bridge.exe left on disk from
+  // before 28e43ed -- which deleted the .NET project that wrote these paths --
+  // is still found. Nothing in the repo produces them any more.
   const repoBase = join(import.meta.dir, '../../../sidecar/desktop-bridge');
   candidates.push(join(repoBase, 'bin', 'publish', 'desktop-bridge.exe'));
   candidates.push(join(repoBase, 'bin', 'Release', 'net10.0-windows', 'win-x64', 'publish', 'desktop-bridge.exe'));
@@ -144,10 +146,15 @@ export async function isSidecarRunning(port: number = DEFAULT_PORT): Promise<boo
 export async function launchSidecar(port: number = DEFAULT_PORT, exeOverride?: string): Promise<RunningSidecar> {
   const exePath = exeOverride ?? findSidecarExecutable();
   if (!exePath) {
+    // There is no build command to name any more: the .NET desktop-bridge
+    // project this hunts for was deleted in 28e43ed, and the Go sidecar that
+    // replaced it is a different program (binary `jarvis`, shipped as the
+    // @usejarvis/sidecar-* packages) speaking a different protocol. Naming a
+    // script that does not exist is worse than saying where the file belongs.
     throw new Error(
-      'Desktop bridge sidecar not found.\n' +
-      'Build it with: bun run scripts/build-sidecar.ts\n' +
-      'Requires .NET 8 SDK on Windows.'
+      'Desktop bridge sidecar not found: no desktop-bridge.exe at any known path.\n' +
+      'Expected at %USERPROFILE%\\.jarvis\\sidecar\\desktop-bridge.exe.\n' +
+      'This repo no longer builds it; place the executable there to enable the sidecar.'
     );
   }
 
