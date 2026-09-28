@@ -57,6 +57,12 @@ type cdpClient struct {
 	// One-shot waiters for CDP events (e.g. Page.loadEventFired).
 	eventMu      sync.Mutex
 	eventWaiters map[string][]chan struct{}
+
+	// The last request the in-browser guard failed (browser_fetch_guard.go),
+	// so a navigation that died as ERR_BLOCKED_BY_CLIENT can say what happened
+	// instead of leaving Chrome's error page to be snapshotted.
+	blockedMu   sync.Mutex
+	lastBlocked *blockedRequest
 }
 
 // waitForEvent returns a channel that closes when the named CDP event next
@@ -279,6 +285,16 @@ func launchCDP(cfg *SidecarConfig, headless bool) (*cdpClient, error) {
 			"build (Chrome, Chromium, Edge, Brave, Vivaldi)", exe, profileDir)
 	}
 
+	// Arm the in-browser local-file guard BEFORE anything can navigate (#526),
+	// and fail closed: a browser whose Fetch interception could not be installed
+	// is one CDP call away from opening a local file, so it is not driven at
+	// all. The browser is still sitting on the about:blank it launched with.
+	if err := c.installFetchGuard(); err != nil {
+		c.shutdown()
+		return nil, fmt.Errorf("launch browser %q: could not install the browser's local-file guard, "+
+			"so the browser will not be driven: %w", exe, err)
+	}
+
 	if err := c.attachToPage(); err != nil {
 		c.shutdown()
 		return nil, fmt.Errorf("attach to page: %w", err)
@@ -366,10 +382,12 @@ func (c *cdpClient) readLoop(r io.Reader) {
 				data = data[:n-1]
 			}
 			var msg struct {
-				ID     int64           `json:"id"`
-				Method string          `json:"method"`
-				Result json.RawMessage `json:"result"`
-				Error  json.RawMessage `json:"error"`
+				ID        int64           `json:"id"`
+				Method    string          `json:"method"`
+				SessionID string          `json:"sessionId"`
+				Params    json.RawMessage `json:"params"`
+				Result    json.RawMessage `json:"result"`
+				Error     json.RawMessage `json:"error"`
 			}
 			if json.Unmarshal(data, &msg) == nil {
 				if msg.ID != 0 {
@@ -383,6 +401,13 @@ func (c *cdpClient) readLoop(r io.Reader) {
 						ch <- cdpReply{result: msg.Result, errMsg: msg.Error}
 					}
 				} else if msg.Method != "" {
+					// A paused request is answered on its OWN goroutine: the
+					// answer is a CDP round-trip whose reply only this loop can
+					// deliver, so answering here would deadlock the pipe while
+					// the browser waits (browser_fetch_guard.go).
+					if msg.Method == "Fetch.requestPaused" {
+						go c.handlePausedRequest(msg.SessionID, msg.Params)
+					}
 					// Protocol event — wake anyone waiting on it.
 					c.fireEvent(msg.Method)
 				}
@@ -629,6 +654,7 @@ func makeBrowserNavigateHandler(cfg *SidecarConfig) RPCHandler {
 
 		// Register the waiter BEFORE navigating so the event can't be missed
 		loaded := cdp.waitForEvent("Page.loadEventFired")
+		navigatedAt := time.Now()
 
 		result, err := cdp.send("Page.navigate", map[string]any{"url": target})
 		if err != nil {
@@ -644,6 +670,12 @@ func makeBrowserNavigateHandler(cfg *SidecarConfig) RPCHandler {
 		}
 		_ = json.Unmarshal(result, &nav)
 		if nav.ErrorText != "" {
+			// The guard failed this navigation -- a redirect into file:, say.
+			// Say so, instead of reporting Chrome's generic "blocked" error and
+			// snapshotting its error page.
+			if blocked := cdp.describeBlockedNavigation(target, nav.ErrorText, navigatedAt); blocked != "" {
+				return nil, fmt.Errorf("%s", blocked)
+			}
 			return nil, fmt.Errorf("navigation to %s failed: %s", target, nav.ErrorText)
 		}
 
