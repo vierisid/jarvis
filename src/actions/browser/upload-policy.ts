@@ -339,7 +339,9 @@ function readUserDirsFile(home: string, env: Record<string, string | undefined>)
     const m = /^\s*(XDG_[A-Z_]+_DIR)\s*=\s*"?([^"\n]*)"?\s*$/.exec(line);
     if (!m) continue;
     const value = m[2]!.replace(/^\$HOME/, home);
-    if (value && nodePath.isAbsolute(value)) out[m[1]!] = nodePath.resolve(value);
+    // No real path contains a NUL, and letting one through would only make the
+    // resolver throw somewhere further away.
+    if (value && !value.includes('\0') && nodePath.isAbsolute(value)) out[m[1]!] = nodePath.resolve(value);
   }
   return out;
 }
