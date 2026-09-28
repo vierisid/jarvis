@@ -306,6 +306,14 @@ browser:
 and the brain will never try to launch a local Chromium; browser actions
 route to a connected sidecar's browser (your desktop) instead.
 
+A sidecar's browser applies the same rules as the brain's own, on the machine
+it runs on: it opens only `http://`, `https://`, `data:` and `about:blank`
+URLs, fails any request for a local file inside the browser itself, and
+refuses to snapshot, screenshot or run script in a page showing a local file
+or one of the browser's own `chrome://` pages. So a `file:///` URL is refused
+whether the model asks the brain or a sidecar, and typing one into a visible
+sidecar browser's address bar gets you a page the model cannot read.
+
 If you do run the local browser on Linux, Jarvis keeps Chrome's sandbox on.
 Before the first launch it starts Chrome once, headless, to check that the
 sandbox works. It drops the sandbox only if that check fails with Chrome's
