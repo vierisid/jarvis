@@ -416,10 +416,40 @@ export class BrowserController {
    * wants a file attached to it is exactly the party that would lie.
    */
   private async readTopFrameUrl(): Promise<string> {
+    return (await this.readTopFrame()).url;
+  }
+
+  /**
+   * Record where the browser is now, best effort. Called after the actions that
+   * can leave a page -- a click, a key press, a submit -- so a later approval
+   * card names the page the model is actually on. A failure here must not fail
+   * the action that succeeded: a stale record costs a refusal at upload time,
+   * which is the safe direction.
+   */
+  private async noteCurrentPage(): Promise<void> {
+    try {
+      await this.readTopFrameUrl();
+    } catch { /* keep the previous record */ }
+  }
+
+  /**
+   * The top frame's URL and loaderId. The loaderId changes on every document
+   * commit, so it is how a caller can tell that the page it checked is still the
+   * page it is acting on -- a URL can be rewritten same-origin by
+   * `history.pushState` without a new document, and a new document can arrive at
+   * the same URL.
+   */
+  private async readTopFrame(): Promise<{ url: string; loaderId: string }> {
     const tree = await this.cdp.send('Page.getFrameTree');
     const url = String(tree?.frameTree?.frame?.url ?? '');
-    this.lastReportedUrl = url || null;
-    return url;
+    const loaderId = String(tree?.frameTree?.frame?.loaderId ?? '');
+    // Only ever REPLACE the record, never clear it. A frame that has not
+    // committed a document reports an empty URL, and writing that as null would
+    // put the upload path back into its "nothing reviewed" branch while the
+    // connection still looks healthy -- turning a missing answer into a skipped
+    // check.
+    if (url) this.lastReportedUrl = url;
+    return { url, loaderId };
   }
 
   /**
@@ -530,6 +560,10 @@ export class BrowserController {
 
     // Wait for navigation/changes
     await Bun.sleep(1000);
+    // A click is the ordinary way to leave a page, so re-read where the browser
+    // now is: an approval card built after this must name the page the click
+    // landed on, not the one it left (see lastReportedUrl).
+    await this.noteCurrentPage();
 
     const kind = options.double ? 'Double-clicked' : button === 'right' ? 'Right-clicked' : 'Clicked';
     return `${kind} element [${elementId}]`;
@@ -597,6 +631,7 @@ export class BrowserController {
 
     // Let the app react (menu open, mode switch, etc.)
     await Bun.sleep(300);
+    await this.noteCurrentPage();
 
     return `Pressed ${parsed.display}`;
   }
@@ -696,6 +731,7 @@ export class BrowserController {
       await this.pressEnter();
       // Wait for page load after submit
       await Bun.sleep(2000);
+      await this.noteCurrentPage();
       result += ' and pressed Enter';
     }
 
@@ -765,19 +801,26 @@ export class BrowserController {
     const reviewed = this.lastReportedUrl;
     await this.ensureConnected();
 
-    // Authoritative, from the browser's frame tree. Two refusals:
-    const actual = await this.readTopFrameUrl();
+    // Authoritative, from the browser's frame tree. Three refusals:
+    const before = await this.readTopFrame();
     // (1) a page that cannot legitimately receive a file at all.
-    const opaque = uploadTargetRefusal(actual);
+    const opaque = uploadTargetRefusal(before.url);
     if (opaque) return `Error: Refusing to upload to this page: ${opaque}`;
-    // (2) a page that is not the one the click was given for. Compared by
+    // (2) nothing reviewed. Allowing it would skip the origin check altogether,
+    // and it is reachable: after a daemon restart against a Chrome that outlived
+    // it, `connect()` adopts whatever tab was left open.
+    if (reviewed === null) {
+      return 'Error: Refusing to upload: no page has been reported by the browser yet, so the approval could not name '
+        + 'the page that would receive the file. Take a browser_snapshot first, then ask again.';
+    }
+    // (3) a page that is not the one the click was given for. Compared by
     // ORIGIN, not by URL: the sites people upload to (Gmail, Drive, GitHub)
     // rewrite the path constantly with history.pushState, and refusing on that
-    // would refuse every real upload. A cross-origin move is the thing that
-    // invalidates a review.
-    const reviewedOrigin = reviewed === null ? null : pageOrigin(reviewed);
-    if (reviewedOrigin !== null && reviewedOrigin !== pageOrigin(actual)) {
-      return `Error: Refusing to upload: the page moved from ${reviewedOrigin} to ${pageOrigin(actual) ?? 'an unknown origin'} `
+    // would refuse every real upload. A cross-origin move is what invalidates a
+    // review.
+    const reviewedOrigin = pageOrigin(reviewed);
+    if (reviewedOrigin !== pageOrigin(before.url)) {
+      return `Error: Refusing to upload: the page moved from ${reviewedOrigin} to ${pageOrigin(before.url) ?? 'an unknown origin'} `
         + 'since this upload was reviewed. Take a browser_snapshot and ask again, so the approval names the page that '
         + 'will actually receive the file.';
     }
@@ -792,6 +835,17 @@ export class BrowserController {
 
     if (!node.nodeId) {
       return `Error: No file input found matching "${query}". Click the upload/attach button first to trigger the file input.`;
+    }
+
+    // The origin check above and the handoff below are separate round trips, so a
+    // page that navigates in between would receive a file approved for the
+    // previous document. The loaderId changes on every commit, so comparing it
+    // closes that window -- and it catches a same-URL reload, which a URL
+    // comparison cannot.
+    const after = await this.readTopFrame();
+    if (after.loaderId !== before.loaderId || pageOrigin(after.url) !== reviewedOrigin) {
+      return 'Error: Refusing to upload: the page loaded a new document while the upload was being set up. '
+        + 'Take a browser_snapshot and ask again.';
     }
 
     // Set the file on the input element via CDP

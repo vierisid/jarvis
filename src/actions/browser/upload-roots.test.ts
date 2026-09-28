@@ -204,11 +204,109 @@ describe('the XDG user directories', () => {
     expect(roots).toContain(join(home, 'Documents'));
   });
 
+  test('user-dirs.dirs cannot widen a root through a symlink out of home', () => {
+    // The hole a lexical containment check leaves: `$HOME/out` is lexically
+    // inside home, but it RESOLVES to somewhere else, and root matching resolves
+    // too -- so the roots rule would have been switched off wholesale.
+    const outside = join(root, 'outside');
+    mkdirSync(outside, { recursive: true });
+    writeFileSync(join(outside, 'f.txt'), 'not mine to send');
+    symlinkSync(outside, join(home, 'out'));
+    mkdirSync(join(home, '.config'), { recursive: true });
+    writeFileSync(join(home, '.config', 'user-dirs.dirs'), 'XDG_DOCUMENTS_DIR="$HOME/out"\n');
+    const roots = defaultUploadRoots(home, projectsDir, [staging], {});
+    expect(roots).not.toContain(join(home, 'out'));
+    expect(outsideUploadRoots(join(outside, 'f.txt'), ctx({ uploadRoots: roots }))).not.toBeNull();
+  });
+
+  test('a root pointed at home through a symlink is dropped', () => {
+    // Same shape reached through config rather than the untrusted file: a root
+    // that resolves to the home directory would make every file in it uploadable.
+    const link = join(root, 'homelink');
+    symlinkSync(home, link);
+    registerUploadRoots([link]);
+    const roots = defaultUploadRoots(home, projectsDir, [staging], {});
+    expect(roots).not.toContain(link);
+    expect(outsideUploadRoots(join(home, 'notes', 'todo.md'), ctx({ uploadRoots: roots }))).not.toBeNull();
+  });
+
+  test('a root that resolves to the filesystem root is dropped', () => {
+    const link = join(root, 'slash');
+    symlinkSync('/', link);
+    registerUploadRoots([link]);
+    const roots = defaultUploadRoots(home, projectsDir, [staging], {});
+    expect(roots).not.toContain(link);
+  });
+
+  test('a root spelled in another case is dropped where case does not matter', () => {
+    // On macOS and Windows the default filesystems fold case, so `/users/me`
+    // and `/Users/me` are the same directory and one must not sneak past a
+    // case-sensitive comparison.
+    const roots = defaultUploadRoots('/Users/me', null, [], { }, 'darwin');
+    expect(roots.map(r => r.toLowerCase())).not.toContain('/users/me');
+  });
+
+  test('a malformed upload_roots value neither throws nor is honoured', () => {
+    // `upload_roots: "x"` in config.yaml is a string, and a throw here would
+    // stop the daemon from starting.
+    expect(() => registerUploadRoots('oops' as unknown as string[])).not.toThrow();
+    expect(() => registerUploadRoots(undefined)).not.toThrow();
+    registerUploadRoots(['relative/path']);
+    expect(defaultUploadRoots(home, projectsDir, [staging], {})).not.toContain('relative/path');
+  });
+
   test('browser.upload_roots adds a folder', () => {
     const extra = join(root, 'shared');
     mkdirSync(extra, { recursive: true });
     registerUploadRoots([extra]);
     expect(defaultUploadRoots(home, projectsDir, [staging], {})).toContain(extra);
+  });
+});
+
+describe('what #527 deliberately costs', () => {
+  // Recorded as tests so these are visible product decisions rather than
+  // something a user discovers. Each is fixed by `browser.upload_roots`.
+  test('a file a previous step left in /tmp is refused', () => {
+    writeFileSync(join(root, 'report.csv'), 'a,b');
+    expect(refusal(join(root, 'report.csv'))).toContain('outside the folders');
+  });
+
+  test('a mounted drive is refused until it is configured', () => {
+    const mnt = join(root, 'mnt', 'data');
+    mkdirSync(mnt, { recursive: true });
+    writeFileSync(join(mnt, 'export.csv'), 'a,b');
+    expect(refusal(join(mnt, 'export.csv'))).toContain('outside the folders');
+    // And works once configured, which is the documented answer.
+    expect(upload(join(mnt, 'export.csv'), { uploadRoots: [...ctx().uploadRoots!, mnt] }))
+      .toBe(join(mnt, 'export.csv'));
+  });
+
+  test('a cloud-drive folder is a root when it exists', () => {
+    // #521 carved macOS's CloudStorage out of the DENYLIST; without adding it
+    // here that carve-out was dead, since it is under no other root.
+    for (const rel of ['OneDrive', 'Dropbox', join('Library', 'CloudStorage')]) {
+      mkdirSync(join(home, rel), { recursive: true });
+    }
+    const roots = defaultUploadRoots(home, projectsDir, [staging], {});
+    expect(roots).toContain(join(home, 'OneDrive'));
+    expect(roots).toContain(join(home, 'Dropbox'));
+    expect(roots).toContain(join(home, 'Library', 'CloudStorage'));
+  });
+
+  test('a cloud folder that does not exist is not named in the refusal', () => {
+    // A message telling the user to move a file into a folder they do not have
+    // is worse than no message.
+    const roots = defaultUploadRoots(home, projectsDir, [staging], {});
+    expect(roots).not.toContain(join(home, 'Dropbox'));
+  });
+
+  test('both the localized and the English folder are roots when both exist', () => {
+    mkdirSync(join(home, '.config'), { recursive: true });
+    mkdirSync(join(home, 'Documentos'), { recursive: true });
+    writeFileSync(join(home, '.config', 'user-dirs.dirs'), 'XDG_DOCUMENTS_DIR="$HOME/Documentos"\n');
+    const roots = defaultUploadRoots(home, projectsDir, [staging], {});
+    expect(roots).toContain(join(home, 'Documentos'));
+    expect(roots).toContain(join(home, 'Documents'));
   });
 });
 

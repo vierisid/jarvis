@@ -335,9 +335,16 @@ so it only sends files from folders meant for sharing:
 - your document folders - `~/Documents`, `~/Downloads`, `~/Desktop`,
   `~/Pictures`, or wherever your desktop actually puts them (the `XDG_*_DIR`
   settings and `~/.config/user-dirs.dirs` are both read, so a localized
-  `~/Dokumente` or a relocated `~/Nextcloud/Documents` works);
+  `~/Dokumente` works, and both names are allowed if you have both);
+- your cloud-drive folders, when they exist: `~/OneDrive`, `~/Dropbox`,
+  `~/Nextcloud`, `~/Sync`, and on macOS `~/Library/CloudStorage` and iCloud
+  Drive;
 - the site builder's projects directory;
 - `<data dir>/uploads`, a staging folder for anything else you want to share.
+  Jarvis creates it at startup, readable only by you.
+
+The folder list is fixed when the daemon starts, so changing your desktop's
+folder settings needs a restart to take effect.
 
 Anything else is refused, with a message telling the assistant to ask you to
 move the file. To add a folder:
@@ -352,7 +359,8 @@ browser:
 This is worth setting if your files live somewhere unusual - a second drive, a
 network share, or, on WSL, your Windows profile (`/mnt/c/Users/<you>/Downloads`),
 which is not one of the defaults because the brain cannot tell which Windows
-account is yours.
+account is yours. A file the assistant produced in `/tmp` is also outside the
+list: have it write to `<data dir>/uploads` instead, or move the file yourself.
 
 Adding a folder can only ever *narrow* what leaves your machine. The refusal
 list from earlier releases still runs first and underneath: hidden entries like

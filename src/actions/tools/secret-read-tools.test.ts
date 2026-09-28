@@ -198,12 +198,46 @@ describe('read_file still reads the user\'s own files', () => {
     expect(out).not.toContain(KEY_MARKER);
   });
 
+  test('a fragment the rc sources is scanned through the real tool', async () => {
+    mkdirSync(join(home, '.dotfiles'), { recursive: true });
+    const fragment = join(home, '.dotfiles', 'secrets.sh');
+    writeFileSync(fragment, `export ANTHROPIC_API_KEY=${KEY_MARKER}\n`);
+    writeFileSync(join(home, '.bashrc'), `alias ll="ls -l"\nsource ${fragment}\n`);
+    const out = await read(fragment);
+    expect(out).toContain(DENIED);
+    expect(out).not.toContain(KEY_MARKER);
+
+    // The same fragment without a key in it reads fine.
+    writeFileSync(fragment, 'export PATH="$HOME/bin:$PATH"\n');
+    expect(await read(fragment)).toContain('$HOME/bin');
+  });
+
+  test('a system env file reads unless it carries a key', async () => {
+    // /etc/default/grub and friends are ordinary sysadmin reads; refusing them
+    // outright bought nothing, because the scan catches the one that matters.
+    const dir = join(root, 'etc-default');
+    mkdirSync(dir, { recursive: true });
+    // Judged by name as a shared env file, so it is scanned either way.
+    writeFileSync(join(dir, 'grub'), 'GRUB_TIMEOUT=5\n');
+    expect(await read(join(dir, 'grub'))).toContain('GRUB_TIMEOUT=5');
+  });
+
   test('a large file is truncated without being slurped whole', async () => {
     const big = join(home, 'Documents', 'big.txt');
     writeFileSync(big, 'y'.repeat(300_000));
     const out = await read(big);
     expect(out).toContain('truncated, file is 300000 bytes');
     expect(out.length).toBeLessThan(110 * 1024);
+  });
+
+  test('a truncated non-ASCII file is cut on a character boundary', async () => {
+    // The read is bounded in BYTES, which is the point, but cutting mid-sequence
+    // used to leave a U+FFFD at the end of every truncated non-ASCII file.
+    const jp = join(home, 'Documents', 'jp.txt');
+    writeFileSync(jp, 'あ'.repeat(60_000)); // 3 bytes each, 180 KB
+    const out = await read(jp);
+    expect(out).toContain('truncated');
+    expect(out).not.toContain('�');
   });
 
   test('a directory and a missing file still report what they are', async () => {

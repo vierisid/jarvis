@@ -466,6 +466,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     const uploadPolicy = await import('../actions/browser/upload-policy.ts');
     uploadPolicy.registerJarvisDataDir(dataDir);
     uploadPolicy.registerUploadRoots(jarvisConfig.browser?.upload_roots);
+    // The refusal message tells the assistant to put files here, so it has to
+    // exist. 0700: what is queued for upload is nobody else's business.
+    uploadPolicy.ensureUploadStagingDir();
   }
 
   // If user specified a custom data dir but no db path, use jarvis.db in that dir
@@ -4819,10 +4822,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         const { keychainDir } = await import('../vault/keychain.ts');
         secretsDirs.push(keychainDir());
       } catch { /* the policy falls back to JARVIS_SECRETS_DIR / JARVIS_HOME / ~/.jarvis */ }
-      try {
-        const { resolveKeyFile } = await import('../workflows/db/encryption.ts');
-        secretsDirs.push(path.dirname(resolveKeyFile()));
-      } catch { /* same */ }
+      // The workflow key is deliberately NOT resolved here. It lives in the same
+      // directory keychainDir() returns (both are JARVIS_SECRETS_DIR ||
+      // JARVIS_HOME || ~/.jarvis), and an explicit
+      // JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE is read by the policy itself. Boot
+      // takes exactly one thing from encryption.ts -- the relocation -- so that
+      // a fresh install cannot plant a key a later restore could not replace,
+      // and encryption-key-path.test.ts pins that list.
       setDaemonDataRoots({
         // The engine bundle cache is under ~/.jarvis whatever the data dir.
         dataDirs: [config.dataDir, path.join(os.homedir(), '.jarvis')],

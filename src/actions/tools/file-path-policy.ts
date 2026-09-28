@@ -124,6 +124,30 @@ function realOrSelf(path: string): string {
   }
 }
 
+/** How long a directory's resolved form is trusted. */
+const REAL_DIR_TTL_MS = 5_000;
+const realDirCache = new Map<string, { at: number; real: string }>();
+
+/**
+ * `realOrSelf` for a REGISTERED directory, memoised.
+ *
+ * These resolve the data dir, the secrets dir and the projects dir, on every
+ * candidate of every read. Two reasons to cache: it was a realpath per dir per
+ * candidate (about eight per read, doubled), and every one is a SYNCHRONOUS call
+ * on the daemon's only thread -- so a `JARVIS_HOME` on a hung NFS mount made
+ * `read_file /etc/hosts`, a read touching nothing of Jarvis's, block the whole
+ * daemon. Bounded by the number of registered dirs, which is a handful.
+ */
+function realDir(path: string): string {
+  const now = Date.now();
+  const hit = realDirCache.get(path);
+  if (hit && now - hit.at < REAL_DIR_TTL_MS) return hit.real;
+  const real = realOrSelf(path);
+  if (realDirCache.size > 64) realDirCache.clear();
+  realDirCache.set(path, { at: now, real });
+  return real;
+}
+
 /** Whether `real` is, or is inside, a git directory, looking no higher than `stopAt` (exclusive). */
 function insideGitDirectory(real: string, stopAt?: string): boolean {
   for (let dir = real; ; dir = dirname(dir)) {
@@ -832,9 +856,9 @@ function carveOutProjectsDir(): string | null {
 
 function computeCarveOutProjectsDir(): string | null {
   if (!_siteProjectsDir) return null;
-  const projects = realOrSelf(_siteProjectsDir);
+  const projects = realDir(_siteProjectsDir);
   for (const dir of [...secretHoldingDirs(), policyHome()]) {
-    for (const form of new Set([resolve(dir), realOrSelf(dir)])) {
+    for (const form of new Set([resolve(dir), realDir(dir)])) {
       if (isWithinCI(form, projects)) return null;
     }
   }
@@ -916,11 +940,25 @@ function secretInodes(): Set<string> {
   const add = (path: string) => {
     try {
       const st = statSync(path);
-      if (st.isFile()) inodes.add(`${st.dev}:${st.ino}`);
+      // An inode of 0 is not an identity: some network and Windows volumes
+      // report it for every file, and a cached `dev:0` would refuse the lot.
+      if (st.isFile() && st.ino) inodes.add(`${st.dev}:${st.ino}`);
     } catch { /* not there */ }
   };
   for (const dir of dirs) for (const name of SECRET_INODE_NAMES) add(join(dir, name));
   for (const file of explicit) add(file);
+  // Then everything ELSE in those dirs that the path rule calls key material, so
+  // identity covers what the names cover: a `foo.pem`, a `.secrets.enc.bak`, a
+  // rotated `*.key.new`. Without this, a hard link under a benign name to one of
+  // those read normally while the direct path was refused -- and the refusal by
+  // inode claims to be the verdict that cannot be aliased. One readdir per dir.
+  for (const dir of dirs) {
+    let entries: string[];
+    try { entries = readdirSync(dir); } catch { continue; }
+    for (const entry of entries) {
+      if (isSecretReadEntry(entry)) add(join(dir, entry));
+    }
+  }
   secretInodeCache = { key, at: now, inodes };
   return inodes;
 }
@@ -988,21 +1026,132 @@ function ownUnitNames(): string[] {
  * unit (envFilesFromUnits), which is the only way to know an arbitrary path.
  */
 function isEnvDefinitionFile(s: string): boolean {
-  if (s === '/etc/environment') return true;
-  if (/^\/etc\/(?:default|sysconfig)\/[^/]+$/.test(s)) return true;
-  // DefaultEnvironment= sets variables for every unit, the daemon's included.
-  if (/^\/(?:etc|usr\/lib|run)\/systemd\/(?:system|user)\.conf(?:\.d\/[^/]+)?$/.test(s)) return true;
-  if (/\/\.config\/systemd\/user\.conf(?:\.d\/[^/]+)?$/.test(s)) return true;
-  if (/\/\.config\/environment\.d\/[^/]+$/.test(s) || /^\/(?:etc|usr\/lib|run)\/environment\.d\/[^/]+$/.test(s)) return true;
   // A `jarvis export` archive holds .secrets.key, the workflow key, the
   // sidecar keypair and google-tokens.json verbatim (cli/backup.ts:112), and
   // they are ASCII, so a plain text read of the tar prints them.
   return /(?:^|\/)jarvis-(?:export|backup)-[^/]*\.(?:tar|tgz|zip)(?:\.[a-z0-9]+)?$/.test(s);
 }
 
+/**
+ * System files that CAN set the daemon's environment but mostly do not: they are
+ * shared with the rest of the OS. Returned unless their bytes actually assign one
+ * of the daemon's credentials, the same treatment a shell rc gets.
+ *
+ * Refusing these outright was wrong: `/etc/default/` holds `grub`, `locale`,
+ * `keyboard`, `ufw`, `cron` and `docker` on every Debian-family box, and
+ * `/etc/systemd/system.conf` is ordinary sysadmin reading. The file that really
+ * carries a key -- `/etc/default/jarvis`, say -- is caught by the scan, and if
+ * the unit names it in `EnvironmentFile=` it is refused outright by
+ * envFilesFromUnits regardless of what is in it.
+ */
+function isSharedEnvFile(s: string): boolean {
+  if (s === '/etc/environment') return true;
+  if (/^\/etc\/(?:default|sysconfig)\/[^/]+$/.test(s)) return true;
+  // DefaultEnvironment= sets variables for every unit, the daemon's included.
+  if (/^\/(?:etc|usr\/lib|run)\/systemd\/(?:system|user)\.conf(?:\.d\/[^/]+)?$/.test(s)) return true;
+  if (/\/\.config\/systemd\/user\.conf(?:\.d\/[^/]+)?$/.test(s)) return true;
+  return /\/\.config\/environment\.d\/[^/]+$/.test(s)
+    || /^\/(?:etc|usr\/lib|run)\/environment\.d\/[^/]+$/.test(s);
+}
+
+/** How long the parsed `source` set is trusted. */
+const SOURCED_TTL_MS = 10_000;
+let sourcedCache: { key: string; at: number; files: Set<string> } | null = null;
+
+/**
+ * Files that a shell startup file `source`s, transitively.
+ *
+ * The common dotfiles layout puts the exports in a fragment --
+ * `~/.bashrc` says `source ~/.dotfiles/secrets.sh` -- and that fragment is not a
+ * startup file by any name or directory rule, so it was returned unscanned with
+ * the key in it. This is the same trick envFilesFromUnits plays on
+ * `EnvironmentFile=`: the pointer is in a file we already classify, so read it
+ * and follow it.
+ *
+ * Bounded hard, because it runs on the read path: at most MAX_FILES files, at
+ * most MAX_DEPTH levels, 256 KiB per file. A fragment sourced deeper than that,
+ * or named by a variable this does not expand, is the documented residual.
+ */
+function sourcedShellFragments(): Set<string> {
+  const home = policyHome();
+  const now = Date.now();
+  if (sourcedCache && sourcedCache.key === home && now - sourcedCache.at < SOURCED_TTL_MS) return sourcedCache.files;
+  const MAX_FILES = 24;
+  const MAX_DEPTH = 3;
+  const found = new Set<string>();
+  // The startup files to begin from. Seeding only `~/<name>` would miss the
+  // layouts people actually use: a ZDOTDIR or XDG `~/.config/zsh/.zshrc`, and the
+  // drop-in directories (`~/.config/fish/conf.d`, `~/.bashrc.d`) whose entries
+  // are startup files in their own right.
+  const shellNames = [...EXEC_FILE_NAMES].filter(([, label]) => label === SHELL).map(([name]) => name);
+  const zdotdirs = [
+    home,
+    ...(process.env.ZDOTDIR && isAbsolute(process.env.ZDOTDIR) ? [resolve(process.env.ZDOTDIR)] : []),
+    join(home, '.config', 'zsh'), join(home, '.config', 'bash'), join(home, '.config', 'sh'),
+  ];
+  let frontier: string[] = [];
+  for (const dir of zdotdirs) {
+    for (const name of shellNames) {
+      const path = join(dir, name);
+      frontier.push(path);
+      const real = realDir(path);
+      if (real !== path) frontier.push(real);
+    }
+  }
+  // Entries of the SHELL-labelled drop-in directories, bounded.
+  for (const { seg, label, anywhere } of EXEC_DIRS) {
+    if (label !== SHELL) continue;
+    const dir = anywhere ? join(home, seg.slice(1, -1)) : seg;
+    try {
+      for (const entry of readdirSync(dir).slice(0, 32)) frontier.push(join(dir, entry));
+    } catch { /* not there */ }
+  }
+  const seen = new Set<string>(frontier);
+  for (let depth = 0; depth < MAX_DEPTH && frontier.length > 0 && found.size < MAX_FILES; depth += 1) {
+    const next: string[] = [];
+    for (const file of frontier) {
+      let text: string;
+      try {
+        const st = statSync(file);
+        if (!st.isFile() || st.size > 256 * 1024) continue;
+        text = readFileSync(file, 'utf-8');
+      } catch { continue; }
+      for (const m of text.matchAll(/^\s*(?:\.|source)\s+(?:"([^"\n]+)"|'([^'\n]+)'|(\S+))/gm)) {
+        const raw = (m[1] ?? m[2] ?? m[3] ?? '').trim();
+        if (!raw || raw.includes('$(') || raw.includes('`')) continue;
+        // Expand only the two forms that name a fixed file; anything else
+        // (a variable, a glob) is left alone rather than guessed at.
+        const expanded = raw.replace(/^~(?=$|\/)/, home).replace(/^\$(?:HOME|\{HOME\})(?=$|\/)/, home);
+        if (!isAbsolute(expanded) || expanded.includes('*')) continue;
+        const resolved = resolve(expanded);
+        if (found.size >= MAX_FILES) break;
+        found.add(resolved);
+        const real = resolveReal(resolved);
+        found.add(real);
+        for (const candidate of [resolved, real]) {
+          if (!seen.has(candidate)) { seen.add(candidate); next.push(candidate); }
+        }
+      }
+    }
+    frontier = next;
+  }
+  sourcedCache = { key: home, at: now, files: found };
+  return found;
+}
+
+/** Whether `candidate` is a fragment a shell startup file sources. */
+function isSourcedShellFragment(candidate: string): boolean {
+  if (isNoLocalTools()) return false; // nothing here to read the rc files from
+  const files = sourcedShellFragments();
+  if (files.size === 0) return false;
+  const abs = resolve(candidate);
+  for (const file of files) if (sameCI(abs, file)) return true;
+  return false;
+}
+
 /** How long the parsed `EnvironmentFile=` set is trusted. */
 const ENV_FILES_TTL_MS = 30_000;
-let envFilesCache: { at: number; files: string[] } | null = null;
+let envFilesCache: { key: string; at: number; files: string[] } | null = null;
 
 /**
  * Absolute paths named by `EnvironmentFile=` in a unit that is the daemon's
@@ -1013,9 +1162,14 @@ let envFilesCache: { at: number; files: string[] } | null = null;
  */
 function envFilesFromUnits(): string[] {
   const now = Date.now();
-  if (envFilesCache && now - envFilesCache.at < ENV_FILES_TTL_MS) return envFilesCache.files;
-  const files = new Set<string>();
   const home = policyHome();
+  // Keyed on the home dir, not on time alone: a cache that only expired would
+  // answer for the previous home after setPolicyHome, which is both a test
+  // artefact and, for a daemon, a wrong answer after a reconfiguration.
+  if (envFilesCache && envFilesCache.key === home && now - envFilesCache.at < ENV_FILES_TTL_MS) {
+    return envFilesCache.files;
+  }
+  const files = new Set<string>();
   const names = ['jarvis', ...ownUnitNames().map((n) => n.replace(/\\(.)/g, '$1'))];
   const dirs = [
     join(home, '.config', 'systemd', 'user'), '/etc/systemd/system', '/etc/systemd/user',
@@ -1034,7 +1188,7 @@ function envFilesFromUnits(): string[] {
       }
     }
   }
-  envFilesCache = { at: now, files: [...files] };
+  envFilesCache = { key: home, at: now, files: [...files] };
   return envFilesCache.files;
 }
 
@@ -1189,8 +1343,12 @@ function classifySecretByName(candidate: string): SecretReadHit | null {
     if (isDataDirEnvEntry(rel)) return { kind: 'daemon-env-source', path: candidate };
   }
 
-  // A shell startup file is allowed unless its bytes assign a daemon secret.
-  if (isShellStartupFile(s)) return { kind: 'daemon-env-source', path: candidate, scanOnly: true };
+  // These are allowed unless their bytes assign a daemon secret: a shell startup
+  // file, a fragment such a file sources, and the system env files shared with
+  // the rest of the OS.
+  if (isShellStartupFile(s) || isSharedEnvFile(s) || isSourcedShellFragment(candidate)) {
+    return { kind: 'daemon-env-source', path: candidate, scanOnly: true };
+  }
   return null;
 }
 
@@ -1253,10 +1411,10 @@ function classifySecretOnDisk(real: string, carve: string | null): SecretReadHit
     }
   }
   for (const file of explicitKeyFiles()) {
-    if (sameCI(real, realOrSelf(file))) return { kind: 'jarvis-key', path: real };
+    if (sameCI(real, realDir(file))) return { kind: 'jarvis-key', path: real };
   }
   for (const dir of secretHoldingDirs()) {
-    const form = realOrSelf(dir);
+    const form = realDir(dir);
     if (!isWithinCI(real, form) || sameCI(real, form)) continue;
     const rel = relative(form, real);
     if (isSecretReadEntry(rel)) return { kind: 'jarvis-key', path: real };
@@ -1325,13 +1483,18 @@ function secretRefusalText(requested: string, what: string): string {
 export function secretReadRefusal(requested: unknown, opts: { bases?: string[] } = {}): string | null {
   const hit = secretRead(requested, opts);
   if (!hit || hit.scanOnly) return null;
-  logSecretRefusal('read_file', hit);
+  return secretRefusalTextFor(requested, hit);
+}
+
+/** The refusal for an already-taken verdict, so a caller need not classify twice. */
+export function secretRefusalTextFor(requested: unknown, hit: SecretReadHit): string {
+  logSecretRefusal('read_file', requested, hit.kind);
   return secretRefusalText(String(requested), 'the file');
 }
 
 /** The refusal for a file whose bytes turned out to assign a daemon secret. */
 export function secretScanRefusal(requested: unknown, envName: string): string {
-  logSecretRefusal('read_file', { kind: 'daemon-env-source', path: String(requested) }, envName);
+  logSecretRefusal('read_file', requested, 'daemon-env-source', envName);
   return secretRefusalText(String(requested), 'the file');
 }
 
@@ -1342,7 +1505,7 @@ export function secretScanRefusal(requested: unknown, envName: string): string {
  * spelling.
  */
 export function secretInodeRefusal(requested: unknown): string {
-  logSecretRefusal('read_file', { kind: 'jarvis-key', path: `${String(requested)} (by inode)` });
+  logSecretRefusal('read_file', requested, 'jarvis-key (by inode)');
   return secretRefusalText(String(requested), 'the file');
 }
 
@@ -1397,7 +1560,7 @@ export function secretListRefusal(requested: unknown, opts: { bases?: string[] }
   const onDisk = !isNoLocalTools();
   const dedicated = dedicatedSecretsDirs();
   const refuse = (hit: SecretReadHit): string => {
-    logSecretRefusal('list_directory', hit);
+    logSecretRefusal('list_directory', path, hit.kind);
     return secretRefusalText(path, 'the directory');
   };
   const carve = carveOutProjectsDir();
@@ -1412,12 +1575,12 @@ export function secretListRefusal(requested: unknown, opts: { bases?: string[] }
       return refuse({ kind: 'jarvis-key', path: candidate });
     }
     for (const dir of dedicated) {
-      for (const form of new Set([dir, ...(onDisk ? [realOrSelf(dir)] : [])])) {
+      for (const form of new Set([dir, ...(onDisk ? [realDir(dir)] : [])])) {
         if (isWithinCI(resolve(candidate), form)) return refuse({ kind: 'jarvis-key', path: candidate });
       }
     }
     for (const dir of secretHoldingDirs()) {
-      for (const form of new Set([resolve(dir), ...(onDisk ? [realOrSelf(dir)] : [])])) {
+      for (const form of new Set([resolve(dir), ...(onDisk ? [realDir(dir)] : [])])) {
         const abs = resolve(candidate);
         if (!isWithinCI(abs, form) || sameCI(abs, form)) continue;
         if (/^(?:sidecar-keys|browser)(?:[\\/]|$)/i.test(relative(form, abs))) {
@@ -1435,6 +1598,12 @@ export function secretListRefusal(requested: unknown, opts: { bases?: string[] }
  * model would throw that away. The class and the path are logged; no bytes and
  * no values ever are.
  */
-function logSecretRefusal(tool: string, hit: SecretReadHit, envName?: string): void {
-  console.warn(`[FilePolicy] ${tool} refused: ${hit.kind}${envName ? ` (assigns ${envName})` : ''} at ${hit.path}`);
+function logSecretRefusal(tool: string, requested: unknown, kind: string, envName?: string): void {
+  // The path logged is the one the CALLER asked for, never the resolved one.
+  // The daemon's log file is itself readable by read_file (deliberately -- it is
+  // the user's log), so logging where a symlink really landed would hand back
+  // the location of a relocated data or secrets dir: exactly the recon the
+  // /proc rules refuse. The requested spelling tells the user what happened and
+  // tells the caller nothing it did not already know.
+  console.warn(`[FilePolicy] ${tool} refused: ${kind}${envName ? ` (assigns ${envName})` : ''} for ${String(requested)}`);
 }

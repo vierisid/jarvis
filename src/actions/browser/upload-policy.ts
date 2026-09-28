@@ -50,7 +50,7 @@
  * bug fix. Everything outside the list above is left to the approval card.
  */
 
-import { readFileSync, realpathSync, statSync } from 'node:fs';
+import { mkdirSync, readFileSync, realpathSync, statSync } from 'node:fs';
 import { homedir, hostname } from 'node:os';
 import nodePath from 'node:path';
 
@@ -63,21 +63,73 @@ let registeredProjectsDir: string | null = null;
 
 export function registerJarvisDataDir(dir: string): void {
   registeredDataDirs.add(expandHome(dir));
+  pinUploadRoots();
 }
 
 export function registerSiteProjectsDir(dir: string | null): void {
   registeredProjectsDir = dir ? expandHome(dir) : null;
+  pinUploadRoots();
 }
 
 /** Extra roots from `browser.upload_roots` (SYSTEM-owned config, not model input). */
 let registeredUploadRoots: string[] = [];
 
 export function registerUploadRoots(roots: readonly string[] | undefined): void {
-  registeredUploadRoots = (roots ?? []).filter(r => typeof r === 'string' && r.trim()).map(expandHome);
+  // Tolerant of a malformed value: `upload_roots: "x"` in config.yaml is a string,
+  // and letting `.filter` throw here would stop the daemon from starting.
+  const list = Array.isArray(roots) ? roots : roots === undefined ? [] : [roots as unknown];
+  registeredUploadRoots = [];
+  for (const entry of list) {
+    if (typeof entry !== 'string' || !entry.trim()) continue;
+    const expanded = expandHome(entry);
+    if (!nodePath.isAbsolute(expanded)) {
+      console.warn(`[UploadPolicy] Ignoring browser.upload_roots entry "${entry}": not an absolute path.`);
+      continue;
+    }
+    registeredUploadRoots.push(expanded);
+  }
+  pinUploadRoots();
 }
 
 /** The staging folder inside a data dir, for files put there to be uploaded. */
 export const UPLOAD_STAGING_DIR_NAME = 'uploads';
+
+/**
+ * The roots, fixed at registration time.
+ *
+ * Deliberately NOT recomputed per call. `defaultUploadRoots` reads
+ * `~/.config/user-dirs.dirs`, which a plain `write_data` can rewrite -- so
+ * computing per call let a model move the roots between building the approval
+ * card and running the upload, and let a rewrite take effect without a restart.
+ * Every registration happens at daemon start, before any tool can run.
+ */
+let pinnedRoots: string[] | null = null;
+
+function pinUploadRoots(): void {
+  const home = homedir();
+  const projectsDir = registeredProjectsDir ?? nodePath.join(home, '.jarvis', 'projects');
+  pinnedRoots = defaultUploadRoots(home, projectsDir, stagingDirsFor(home));
+}
+
+function stagingDirsFor(home: string): string[] {
+  const dataDirs = [nodePath.join(home, '.jarvis'), ...(process.env.JARVIS_HOME ? [process.env.JARVIS_HOME] : []),
+    ...registeredDataDirs];
+  return [...new Set(dataDirs.map(d => nodePath.join(expandHome(d), UPLOAD_STAGING_DIR_NAME)))];
+}
+
+/**
+ * Create the staging folder, so the refusal message names somewhere that exists.
+ * 0700: it sits inside the data dir, and nothing but this user should read what
+ * is queued for upload. Called at daemon start; failure is not fatal.
+ */
+export function ensureUploadStagingDir(): void {
+  for (const dir of stagingDirsFor(homedir())) {
+    try {
+      mkdirSync(dir, { recursive: true, mode: 0o700 });
+    } catch { /* best effort: a missing staging dir only costs a refusal */ }
+  }
+  pinUploadRoots();
+}
 
 export type UploadPolicyContext = {
   home: string;
@@ -133,13 +185,14 @@ export function defaultUploadPolicyContext(): UploadPolicyContext {
   const jarvisDirs = [...dataDirs, ...(env.JARVIS_SECRETS_DIR ? [env.JARVIS_SECRETS_DIR] : [])];
   const projectsDir = registeredProjectsDir ?? nodePath.join(home, '.jarvis', 'projects');
   const stagingDirs = [...new Set(dataDirs.map(d => nodePath.join(expandHome(d), UPLOAD_STAGING_DIR_NAME)))];
+  if (pinnedRoots === null) pinUploadRoots();
   return {
     home,
     platform: process.platform,
     jarvisDirs,
     projectsDir,
     stagingDirs,
-    uploadRoots: defaultUploadRoots(home, projectsDir, stagingDirs, env),
+    uploadRoots: pinnedRoots ?? [],
     appDataDirs: [env.APPDATA, env.LOCALAPPDATA].filter((d): d is string => !!d),
     credentialPaths: credentialPathsFromEnv(env),
     hostnames: [hostname()],
@@ -180,36 +233,89 @@ export function defaultUploadRoots(
   projectsDir: string | null,
   stagingDirs: string[],
   env: Record<string, string | undefined> = process.env,
+  platform: NodeJS.Platform = process.platform,
 ): string[] {
+  const fold = platform === 'win32' || platform === 'darwin';
+  const homeReal = resolvedForm(home);
   const fromFile = readUserDirsFile(home, env);
   const roots: string[] = [];
   for (const [variable, fallback] of XDG_UPLOAD_DIRS) {
+    const fallbackPath = nodePath.join(home, fallback);
     const candidate = env[variable] ?? fromFile[variable];
-    // A variable may point anywhere the user likes; one read out of the
-    // untrusted file may not escape home.
-    if (candidate && nodePath.isAbsolute(candidate) && (env[variable] || under(candidate, home))) {
-      roots.push(nodePath.resolve(candidate));
-    } else {
-      roots.push(nodePath.join(home, fallback));
-    }
+    // A variable the user exported may point anywhere they like. A value read
+    // out of `user-dirs.dirs` may not escape the home directory -- and that is
+    // checked on the RESOLVED form, because a lexical check passes
+    // `$HOME/link` where `link -> /`, which would make the whole filesystem a
+    // root and switch this rule off entirely.
+    const trusted = candidate && nodePath.isAbsolute(candidate)
+      && (env[variable] !== undefined || under(resolvedForm(candidate), homeReal, fold));
+    if (trusted) roots.push(nodePath.resolve(candidate!));
+    // Keep the conventional name too when it exists: a user can have both
+    // `~/Documentos` and `~/Documents`, and only one of them being a root is a
+    // surprise for no benefit.
+    if (!trusted || isDirectory(fallbackPath)) roots.push(fallbackPath);
   }
   if (projectsDir) roots.push(nodePath.resolve(projectsDir));
   roots.push(...stagingDirs);
   roots.push(...registeredUploadRoots);
-  // A root that IS the home dir, an ancestor of it, or the filesystem root
-  // would turn the allowed-roots rule back into the denylist it replaces. The
-  // floor still bounds the damage, but a rule that silently does nothing is
-  // worse than one that drops a bad root.
-  const homeReal = nodePath.resolve(home);
-  return [...new Set(roots.map(r => nodePath.resolve(r)))].filter(r =>
-    r !== nodePath.parse(r).root && r !== homeReal && !under(homeReal, r));
+  // Cloud-drive folders that hold the user's own documents. #521 deliberately
+  // carved macOS's out of the DENYLIST; without adding them here that carve-out
+  // is dead, because they are not under any other root. Only added when they
+  // exist, so a refusal message never names a folder that is not there.
+  for (const rel of ['OneDrive', 'Dropbox', 'Nextcloud', 'Sync',
+    nodePath.join('Library', 'CloudStorage'),
+    nodePath.join('Library', 'Mobile Documents', 'com~apple~CloudDocs')]) {
+    const dir = nodePath.join(home, rel);
+    if (isDirectory(dir)) roots.push(dir);
+  }
+
+  // A root that IS the home dir, an ancestor of it, or the filesystem root would
+  // turn the allowed-roots rule back into the denylist it replaces. Judged on the
+  // RESOLVED form and with the same case folding the matcher uses, so a symlink
+  // or a differently-cased spelling cannot slip past.
+  const seen = new Set<string>();
+  const kept: string[] = [];
+  for (const raw of roots) {
+    const resolved = resolvedForm(raw);
+    if (resolved === nodePath.parse(resolved).root) continue;
+    if (same(resolved, homeReal, fold) || under(homeReal, resolved, fold)) continue;
+    const key = fold ? resolved.toLowerCase() : resolved;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    // Stored as written: `forms()` in the matcher adds the resolved form, and the
+    // written form is what a refusal message shows.
+    kept.push(nodePath.resolve(raw));
+  }
+  return kept;
 }
 
-/** Whether `path` is strictly inside `dir` (not `dir` itself). */
-function under(path: string, dir: string): boolean {
-  const p = nodePath.resolve(path);
-  const d = nodePath.resolve(dir);
+/** Whether `path` is strictly inside `dir` (not `dir` itself). Both are compared resolved. */
+function under(path: string, dir: string, fold = false): boolean {
+  const p = fold ? nodePath.resolve(path).toLowerCase() : nodePath.resolve(path);
+  const d = fold ? nodePath.resolve(dir).toLowerCase() : nodePath.resolve(dir);
   return p !== d && p.startsWith(d.endsWith(nodePath.sep) ? d : d + nodePath.sep);
+}
+
+function same(a: string, b: string, fold: boolean): boolean {
+  return fold ? a.toLowerCase() === b.toLowerCase() : a === b;
+}
+
+/** `path` symlink-resolved when it exists, else as written. */
+function resolvedForm(path: string): string {
+  const written = nodePath.resolve(path);
+  try {
+    return realpathSync.native(written);
+  } catch {
+    return written;
+  }
+}
+
+function isDirectory(path: string): boolean {
+  try {
+    return statSync(path).isDirectory();
+  } catch {
+    return false;
+  }
 }
 
 /**

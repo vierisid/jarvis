@@ -297,9 +297,18 @@ describe("the environment's source files (#528)", () => {
     expect(refused(join(dataDir, 'env'))).toBe(true);
   });
 
-  test('/etc/environment and environment.d are refused', () => {
-    expect(refused('/etc/environment')).toBe(true);
-    expect(refused(join(home, '.config', 'environment.d', '50-keys.conf'))).toBe(true);
+  test('the system env files are scanned, not blanket-refused', () => {
+    // These are shared with the rest of the OS: /etc/default holds grub, locale
+    // and ufw, and /etc/systemd/system.conf is ordinary sysadmin reading.
+    // Refusing them outright broke that for no gain, because the one that really
+    // carries a key is caught by the scan -- and if the unit names it in
+    // EnvironmentFile= it is refused outright whatever is in it.
+    for (const path of ['/etc/environment', join(home, '.config', 'environment.d', '50-keys.conf'),
+      '/etc/default/grub', '/etc/default/jarvis', '/etc/sysconfig/network',
+      '/etc/systemd/system.conf', '/etc/systemd/system.conf.d/10-env.conf', '/etc/systemd/user.conf']) {
+      expect(secretRead(path)?.scanOnly, path).toBe(true);
+      expect(refused(path), path).toBe(false);
+    }
   });
 
   test('a shell rc is returned unless it actually assigns a daemon secret', () => {
@@ -464,15 +473,25 @@ describe('near-miss spellings found by review', () => {
     expect(refused(join(home, 'notes.tar'))).toBe(false);
   });
 
-  test('the EnvironmentFile conventions and DefaultEnvironment are refused', () => {
+  test("Jarvis's own units are refused wherever systemd keeps them", () => {
     for (const path of [
-      '/etc/default/jarvis', '/etc/sysconfig/jarvis',
-      '/etc/systemd/system.conf', '/etc/systemd/system.conf.d/10-env.conf',
-      '/etc/systemd/user.conf', '/run/systemd/transient/jarvis.service',
+      '/run/systemd/transient/jarvis.service',
       '/etc/systemd/system/multi-user.target.wants/jarvis.service',
+      join(home, '.config', 'systemd', 'user.control', 'jarvis.service'),
     ]) {
       expect(refused(path), path).toBe(true);
     }
+  });
+
+  test('an EnvironmentFile the unit names is refused wherever it points', () => {
+    // The only way to cover an arbitrary path is to read the pointer out of the
+    // unit, which is why the unit is parsed rather than pattern-matched.
+    const envFile = join(root, 'etc-jarvis', 'daemon.env');
+    mkdirSync(join(root, 'etc-jarvis'), { recursive: true });
+    writeFileSync(envFile, 'ANTHROPIC_API_KEY=placeholder\n');
+    writeFileSync(join(home, '.config', 'systemd', 'user', 'jarvis.service'),
+      `[Service]\nEnvironmentFile=${envFile}\nExecStart=/usr/bin/jarvis\n`);
+    expect(refused(envFile)).toBe(true);
   });
 
   test('a hard link to any secret-bearing file in the data dir is refused', () => {
@@ -510,6 +529,34 @@ describe('near-miss spellings found by review', () => {
     ]) {
       expect(secretRead(path)?.scanOnly, path).toBe(true);
     }
+  });
+
+  test('a fragment the rc SOURCES is scanned, not returned unread', () => {
+    // The common dotfiles layout: the rc is boring and the exports live in a
+    // fragment, which matches no name or directory rule. Before this it came
+    // back with the key in it.
+    mkdirSync(join(home, '.dotfiles'), { recursive: true });
+    const fragment = join(home, '.dotfiles', 'secrets.sh');
+    writeFileSync(fragment, 'export ANTHROPIC_API_KEY=placeholder\n');
+    writeFileSync(join(home, '.bashrc'), `alias ll="ls -l"\nsource ${fragment}\n`);
+    expect(secretRead(fragment)?.scanOnly).toBe(true);
+  });
+
+  test('a sourced fragment is followed through ~ and $HOME and one more level', () => {
+    mkdirSync(join(home, '.zsh'), { recursive: true });
+    const second = join(home, '.zsh', 'exports.zsh');
+    const first = join(home, '.zsh', 'env.zsh');
+    writeFileSync(second, 'export OPENAI_API_KEY=placeholder\n');
+    writeFileSync(first, `. "$HOME/.zsh/exports.zsh"\n`);
+    writeFileSync(join(home, '.zshrc'), 'source ~/.zsh/env.zsh\n');
+    expect(secretRead(first)?.scanOnly, 'first level').toBe(true);
+    expect(secretRead(second)?.scanOnly, 'second level').toBe(true);
+  });
+
+  test('an unrelated file is not made scannable by a sourced-fragment rule', () => {
+    writeFileSync(join(home, '.bashrc'), 'source ~/.dotfiles/secrets.sh\n');
+    expect(secretRead(join(home, 'Documents', 'cv.pdf'))).toBeNull();
+    expect(secretRead(join(home, 'notes.md'))).toBeNull();
   });
 
   test("a dotfile manager's real file is scanned, not just the ~/.bashrc name", () => {
