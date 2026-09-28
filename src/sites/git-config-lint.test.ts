@@ -923,6 +923,72 @@ describe('the repository linted is the one git uses', () => {
     expect(markerExists()).toBe(false);
   });
 
+  /**
+   * #524, end to end and from the other side: the table above stops at
+   * isDirty, so nothing yet asserts what the issue is actually about -- that
+   * the daemon's implicit commit does not land in the USER'S OWN repository
+   * when a site project sits inside one and has no `.git` of its own.
+   *
+   * No new guard for it: #542's resolveHead/resolveRepo already refuses
+   * `no-repo` before any git spawn, and `autoCommit` reaches `add -A` only
+   * through that check. This pins the consequence, so a later relaxation of
+   * the check cannot quietly turn back into a commit in the user's repository.
+   *
+   * The parent repository is built here in a temp dir and is never this one.
+   * Every git spawned goes through spawnOptions/sanitizedEnv, which strips
+   * GIT_DIR and GIT_INDEX_FILE, and HOME is the throwaway one.
+   */
+  test('autoCommit in a project inside the user\'s own repository commits nothing to it', async () => {
+    // An identity per command: the throwaway HOME has no global config.
+    const ID = ['-c', 'user.name=Owner', '-c', 'user.email=owner@example.invalid'];
+    const outer = join(root, 'outer');
+    const project = join(outer, 'project');
+    mkdirSync(project, { recursive: true });
+    setupGit(['init', '-q'], outer);
+    writeFileSync(join(outer, 'owned.txt'), 'the user\'s own work\n');
+    setupGit([...ID, 'add', 'owned.txt'], outer);
+    setupGit([...ID, 'commit', '-q', '-m', 'the user\'s own commit'], outer);
+    // The site project's file: what an `add -A` in the parent would swallow.
+    writeFileSync(join(project, 'index.html'), '<h1>site</h1>\n');
+
+    const headBefore = setupGit(['rev-parse', 'HEAD'], outer).trim();
+    const countBefore = setupGit(['rev-list', '--count', 'HEAD'], outer).trim();
+
+    // CONTROL: the project has no repository of its own, so plain git there IS
+    // the user's repository and already sees the project as something to
+    // commit. Without the check, `add -A` would stage it into that repository.
+    expect(existsSync(join(project, '.git'))).toBe(false);
+    expect(plainGit(['rev-parse', '--show-toplevel'], { cwd: project }).stdout.trim()).toBe(outer);
+    expect(plainGit(['status', '--porcelain', '-uall'], { cwd: project }).stdout).toBe('?? project/index.html\n');
+    // Not a hypothetical: a plain `add -A` in the project stages the site's
+    // file into the user's repository. Undone immediately, so the assertions
+    // below start from the same state a refusal must leave behind.
+    setupGit([...ID, 'add', '-A'], project);
+    expect(setupGit([...ID, 'diff', '--cached', '--name-only'], outer)).toBe('project/index.html\n');
+    setupGit([...ID, 'reset', '-q'], outer);
+
+    const { gm, lint } = managers();
+    const verdict = await lint.inspect(project);
+    expect(!verdict.ok && verdict.reason).toBe('no-repo');
+    // isDirty is autoCommit's first call, so this is also what stops it; both
+    // are asserted, because autoCommit is the one that would write.
+    expect(await errorOf(() => gm.autoCommit(project, 'save the site'))).toContain('Not a git repository');
+    expect(await errorOf(() => gm.isDirty(project))).toContain('Not a git repository');
+
+    // The user's repository is exactly as it was: same commit, same number of
+    // commits, nothing staged, and the project still merely untracked.
+    expect(setupGit(['rev-parse', 'HEAD'], outer).trim()).toBe(headBefore);
+    expect(setupGit(['rev-list', '--count', 'HEAD'], outer).trim()).toBe(countBefore);
+    expect(setupGit([...ID, 'diff', '--cached', '--name-only'], outer)).toBe('');
+    expect(setupGit(['status', '--porcelain'], outer)).toBe('?? project/\n');
+    expect(setupGit(['log', '--format=%s'], outer).trim()).toBe('the user\'s own commit');
+    // And nothing of the project was written into the parent's object store.
+    expect(setupGit(['ls-files'], outer)).toBe('owned.txt\n');
+    // The refusal is a refusal, not a repair: a later change that satisfied the
+    // lint by quietly `git init`-ing the project would pass everything above.
+    expect(existsSync(join(project, '.git'))).toBe(false);
+  });
+
   // path.resolve collapses `link/..` before the link is followed; git lets
   // the kernel follow the link first (reproduced in review).
   test('a commondir of `link/..` is followed as git follows it', async () => {
