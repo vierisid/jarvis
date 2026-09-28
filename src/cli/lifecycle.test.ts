@@ -5,6 +5,7 @@ import {
   DEFAULT_DAEMON_PORT,
   getConfiguredPort,
   readConfiguredPort,
+  resolveDashboardTarget,
   resolveStopPort,
 } from './lifecycle.ts';
 import { acquireLock, releaseLock, writeLockedPort } from '../daemon/pid.ts';
@@ -111,5 +112,74 @@ describe('resolveStopPort precedence', () => {
     await Bun.write(TEST_CONFIG_PATH, `daemon:\n  port: ${DEFAULT_DAEMON_PORT}\n`);
     const result = resolveStopPort({ configPath: TEST_CONFIG_PATH, env: {} });
     expect(result).toEqual({ port: DEFAULT_DAEMON_PORT, source: 'config' });
+  });
+});
+
+// #544: the open step used a hardcoded 3142, so `jarvis start` sent the browser
+// (and the printed URL) to the wrong place on any other port, and to a bogus
+// localhost tab in unix-socket mode.
+describe('resolveDashboardTarget precedence', () => {
+  afterEach(cleanupConfig);
+
+  test('--port wins, like startDaemon userConfig.port', async () => {
+    await Bun.write(TEST_CONFIG_PATH, 'daemon:\n  port: 5000\n');
+    expect(resolveDashboardTarget({
+      cliPort: 8080,
+      configPath: TEST_CONFIG_PATH,
+      env: { JARVIS_PORT: '7000' },
+    })).toEqual({ url: 'http://localhost:8080', port: 8080, source: 'cli' });
+  });
+
+  test('JARVIS_PORT beats config, as applyEnvOverrides does', async () => {
+    await Bun.write(TEST_CONFIG_PATH, 'daemon:\n  port: 5000\n');
+    expect(resolveDashboardTarget({
+      configPath: TEST_CONFIG_PATH,
+      env: { JARVIS_PORT: '7000' },
+    })).toEqual({ url: 'http://localhost:7000', port: 7000, source: 'env' });
+  });
+
+  test('daemon.port is used when nothing overrides it', async () => {
+    await Bun.write(TEST_CONFIG_PATH, 'daemon:\n  port: 5000\n');
+    expect(resolveDashboardTarget({ configPath: TEST_CONFIG_PATH, env: {} }))
+      .toEqual({ url: 'http://localhost:5000', port: 5000, source: 'config' });
+  });
+
+  test('the default is the last resort, not the first', () => {
+    expect(resolveDashboardTarget({ configPath: MISSING_CONFIG_PATH, env: {} }))
+      .toEqual({ url: `http://localhost:${DEFAULT_DAEMON_PORT}`, port: DEFAULT_DAEMON_PORT, source: 'default' });
+  });
+
+  test('an invalid --port or JARVIS_PORT falls through instead of being used', async () => {
+    await Bun.write(TEST_CONFIG_PATH, 'daemon:\n  port: 5000\n');
+    expect(resolveDashboardTarget({
+      cliPort: 99999,
+      configPath: TEST_CONFIG_PATH,
+      env: { JARVIS_PORT: 'not-a-port' },
+    })).toEqual({ url: 'http://localhost:5000', port: 5000, source: 'config' });
+  });
+
+  test('unix-socket mode has no URL at all, whatever the port sources say', async () => {
+    // There is no localhost port to open: a tab at daemon.port would land on
+    // whatever else is listening there.
+    await Bun.write(TEST_CONFIG_PATH, 'daemon:\n  port: 5000\n  listen: "unix:/run/jarvis/brain.sock"\n');
+    expect(resolveDashboardTarget({
+      cliPort: 8080,
+      configPath: TEST_CONFIG_PATH,
+      env: { JARVIS_PORT: '7000' },
+    })).toEqual({ url: null, port: null, source: 'unix-socket' });
+  });
+
+  test('a lockfile from a previous daemon does not decide where the browser goes', async () => {
+    // resolveStopPort starts from the lockfile because it signals a RUNNING
+    // daemon. Nothing has bound a port yet here, and a stale record would open
+    // the wrong tab.
+    await Bun.write(TEST_CONFIG_PATH, 'daemon:\n  port: 5000\n');
+    acquireLock(process.pid);
+    writeLockedPort(9000);
+    try {
+      expect(resolveDashboardTarget({ configPath: TEST_CONFIG_PATH, env: {} }).port).toBe(5000);
+    } finally {
+      releaseLock();
+    }
   });
 });

@@ -154,6 +154,54 @@ export function getConfiguredPort(configPath?: string): number {
   return readConfiguredPort(configPath) ?? DEFAULT_DAEMON_PORT;
 }
 
+/**
+ * Where the dashboard of the daemon we are ABOUT to start will be, or no URL
+ * at all when it will not listen on TCP.
+ *
+ * `null` is not "use the default": in unix-socket mode there is no localhost
+ * port, and printing or opening `http://localhost:3142` would send the user
+ * (or a browser, on every service start) to whatever else happens to be
+ * listening there.
+ */
+export type DashboardTarget =
+  | { url: string; port: number; source: 'cli' | 'env' | 'config' | 'default' }
+  | { url: null; port: null; source: 'unix-socket' };
+
+/**
+ * Resolve the dashboard URL for `jarvis start`, in the SAME precedence
+ * startDaemon uses to pick the port it binds (src/daemon/index.ts):
+ *
+ *   1. `--port N` on this command line.
+ *   2. `JARVIS_PORT`, which the config loader applies over daemon.port.
+ *   3. `daemon.port` from ~/.jarvis/config.yaml.
+ *   4. The built-in default.
+ *
+ * ...and `daemon.listen: unix:/path` ahead of all of them, because resolveListen
+ * ignores the port entirely when a socket is configured.
+ *
+ * Note this is NOT resolveStopPort's order: that one starts from the lockfile,
+ * which records the port a RUNNING daemon bound. Nothing has bound anything
+ * yet here, and a stale lockfile must not decide where we send a browser.
+ */
+export function resolveDashboardTarget(options?: {
+  cliPort?: unknown;
+  configPath?: string;
+  env?: Record<string, string | undefined>;
+}): DashboardTarget {
+  if (readConfiguredUnixListen(options?.configPath) !== null) {
+    return { url: null, port: null, source: 'unix-socket' };
+  }
+
+  const env = options?.env ?? process.env;
+  const resolved: { port: number; source: 'cli' | 'env' | 'config' | 'default' } =
+    validPort(options?.cliPort) !== null ? { port: validPort(options?.cliPort)!, source: 'cli' }
+    : validPort(env.JARVIS_PORT) !== null ? { port: validPort(env.JARVIS_PORT)!, source: 'env' }
+    : readConfiguredPort(options?.configPath) !== null ? { port: readConfiguredPort(options?.configPath)!, source: 'config' }
+    : { port: DEFAULT_DAEMON_PORT, source: 'default' };
+
+  return { ...resolved, url: `http://localhost:${resolved.port}` };
+}
+
 function validPort(value: unknown): number | null {
   const n = typeof value === 'string' ? Number.parseInt(value, 10) : typeof value === 'number' ? value : NaN;
   return Number.isInteger(n) && n >= 1 && n <= 65535 ? n : null;

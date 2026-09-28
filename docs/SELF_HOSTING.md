@@ -398,6 +398,47 @@ What happens now:
   - Otherwise, for example a daemon started by hand inside some other service such as a tmux unit, it falls back to stopping and starting the daemon itself.
 - **System-level units** (`/etc/systemd/system`) are not handled. Restart those with `systemctl` yourself.
 
+### What the generated unit sets, and why
+
+The unit JARVIS writes (`~/.config/systemd/user/jarvis.service`) makes three choices worth knowing about:
+
+- **`ExecStart=... start --foreground --no-open`.** The service starts at login, after a crash and after an update. Without `--no-open` each of those starts tries to open a browser: a failed attempt on a headless box, a tab popping up on a desktop.
+- **`Restart=on-failure`, not `always`.** A crash exits non-zero (3 for an uncaught exception, 4 for an unhandled rejection), so systemd restarts it. A deliberate shutdown exits 0, and `jarvis stop` and `jarvis drain` signal the daemon directly rather than going through `systemctl`: under `Restart=always` systemd would bring JARVIS back five seconds after the CLI told you it had stopped.
+- **`StartLimitIntervalSec=120` with `StartLimitBurst=5`.** A daemon that dies the moment it boots is restarted five times, about twenty seconds apart in total, and then left alone. Without a limit it would be relaunched every `RestartSec` for as long as the machine is up, which is worse than being down: nothing tells you, and the loop burns CPU and log space. systemd's own default limit (five starts in ten seconds) can never be reached at `RestartSec=5`, so the unit sets its own.
+
+  The limit counts **every** start in the window, deliberate ones included, so a unit that has hit it refuses the next start. JARVIS runs `systemctl --user reset-failed` before each restart, update and start it asks for, so its own commands never trip over it. If you hit it by hand:
+
+  ```bash
+  systemctl --user reset-failed jarvis.service
+  systemctl --user start jarvis.service
+  ```
+
+### Refreshing an autostart service
+
+A unit or launchd plist is only rewritten when autostart is installed again, so a service installed by an older version keeps whatever it was written with. `jarvis status` says so when it can tell, and names what the old definition still does.
+
+To fix an existing `jarvis.service` without replacing it, add an override:
+
+```bash
+systemctl --user edit jarvis.service
+```
+
+```ini
+[Unit]
+StartLimitIntervalSec=120
+StartLimitBurst=5
+
+[Service]
+# The empty assignment clears the old command; the second line replaces it.
+# Keep your own paths -- copy them from: systemctl --user cat jarvis.service
+ExecStart=
+ExecStart=/home/you/.bun/bin/bun /path/to/jarvis/bin/jarvis.ts start --foreground --no-open
+```
+
+`systemctl --user daemon-reload` is run by `edit` itself; `systemctl --user restart jarvis.service` applies it. An override lives in `jarvis.service.d/override.conf` and survives a reinstall of the unit, which is also why `jarvis status` stops reporting drift once a drop-in exists: it cannot tell what the override changed.
+
+On macOS, replace `--foreground` in `~/Library/LaunchAgents/ai.jarvis.daemon.plist` with `--foreground` followed by a `<string>--no-open</string>` entry, then `launchctl unload` and `launchctl load` the plist.
+
 ### Logs
 
 `jarvis start -d` redirects the detached daemon's output into

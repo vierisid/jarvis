@@ -21,7 +21,7 @@ import { existsSync, openSync } from 'node:fs';
 import { spawn } from 'node:child_process';
 import { acquireLock, releaseLock, releaseLockIfUnheld, isLocked, getLogPath, isProcessAlive, waitForProcessExit } from '../src/daemon/pid.ts';
 import { c } from '../src/cli/helpers.ts';
-import { ensurePortReleased, getConfiguredPort, resolveStopPort } from '../src/cli/lifecycle.ts';
+import { ensurePortReleased, getConfiguredPort, resolveDashboardTarget, resolveStopPort } from '../src/cli/lifecycle.ts';
 import { getInstalledVersion } from '../src/cli/version.ts';
 import { loadConfig } from '../src/config/loader.ts';
 import { modelExecCliWarning } from '../src/util/model-exec-marker.ts';
@@ -116,7 +116,13 @@ async function cmdStart(args: string[]): Promise<void> {
     dataDir = args[dataDirIdx + 1]!;
   }
 
-  // Friendly first-run hint — when no config exists yet, the daemon
+  // Where the dashboard will be, resolved ONCE for every place below that
+  // prints or opens it: the hint, the detached summary, and openDashboard on
+  // both paths. It follows the port startDaemon is about to bind rather than a
+  // hardcoded 3142 (#544), and has no URL at all in unix-socket mode.
+  const dashboard = resolveDashboardTarget({ cliPort: port });
+
+  // Friendly first-run hint - when no config exists yet, the daemon
   // boots in "setup mode" and the dashboard's onboarding gate handles
   // LLM/TTS/profile/tutorial. Print a one-liner so the user knows where
   // to go (the browser auto-opens too unless --no-open is set).
@@ -128,7 +134,9 @@ async function cmdStart(args: string[]): Promise<void> {
     console.log(c.dim('  1. jarvis enroll "<device-name>"   mint your device token'));
     console.log(c.dim('  2. paste the token into the sidecar (desktop app) to connect'));
     console.log(c.dim('  Setting up without a sidecar? Put "auth:\n  insecure_open_access: true"'));
-    console.log(c.dim(`  in ~/.jarvis/config.yaml, open http://localhost:${port ?? 3142}, and`));
+    console.log(c.dim(dashboard.url
+      ? `  in ~/.jarvis/config.yaml, open ${dashboard.url}, and`
+      : '  in ~/.jarvis/config.yaml, reach the socket in daemon.listen through your proxy, and'));
     console.log(c.dim('  REMOVE the flag once your device is enrolled.'));
     console.log('');
   }
@@ -149,8 +157,8 @@ async function cmdStart(args: string[]): Promise<void> {
     const { startDaemon } = await import('../src/daemon/index.ts');
     await startDaemon({ port, dataDir, noLocalTools });
 
-    if (!noOpen) {
-      openDashboard(port ?? 3142);
+    if (!noOpen && dashboard.url) {
+      openDashboard(dashboard.url);
     }
   } else {
     // Check if already running before spawning detached child
@@ -194,12 +202,14 @@ async function cmdStart(args: string[]): Promise<void> {
 
     if (runningPid) {
       console.log(c.green(`✓ JARVIS daemon started (PID ${runningPid})`));
-      console.log(c.dim(`  Dashboard: http://localhost:${port ?? 3142}`));
+      console.log(c.dim(dashboard.url
+        ? `  Dashboard: ${dashboard.url}`
+        : '  Dashboard: on the unix socket in daemon.listen (no localhost port)'));
       console.log(c.dim(`  Logs:      ${logPath}`));
       console.log(c.dim(`  Stop with: jarvis stop`));
 
-      if (!noOpen) {
-        openDashboard(port ?? 3142);
+      if (!noOpen && dashboard.url) {
+        openDashboard(dashboard.url);
       }
     } else {
       console.log(c.red('✗ Failed to start daemon. Check logs:'));
@@ -342,12 +352,16 @@ async function cmdStatus(): Promise<void> {
   if (pid) {
     console.log(`${c.green('●')} JARVIS is ${c.green('running')} (PID ${pid})`);
 
-    // Try to read the port from config
+    // The port the RUNNING daemon recorded when it bound, not the one config
+    // says today: that is resolveStopPort's whole job, and it also knows when
+    // there is no port to print because daemon.listen is a unix socket.
     try {
-      const port = getConfiguredPort();
-      console.log(c.dim(`  Dashboard: http://localhost:${port}`));
+      const resolution = resolveStopPort();
+      console.log(c.dim(resolution.port === null
+        ? '  Dashboard: on the unix socket in daemon.listen (no localhost port)'
+        : `  Dashboard: http://localhost:${resolution.port}`));
     } catch {
-      console.log(c.dim(`  Dashboard: http://localhost:3142`));
+      console.log(c.dim(`  Dashboard: http://localhost:${getConfiguredPort()}`));
     }
 
     console.log(c.dim(`  Stop with: jarvis stop`));
@@ -363,6 +377,21 @@ async function cmdStatus(): Promise<void> {
   const lastUpdate = readLastUpdate();
   if (lastUpdate && (lastUpdate.to ?? lastUpdate.from) === getVersion()) {
     console.log(c.dim(`  ${describeLastUpdate(lastUpdate)}`));
+  }
+
+  // An autostart definition installed before #543/#544 keeps both bugs until
+  // autostart is reinstalled, and nothing reinstalls it by itself. Say so here
+  // rather than rewriting the file: it may have been edited by hand, and an
+  // offer to rewrite belongs to a command that installs autostart, which this
+  // CLI does not have. The detector stays quiet unless it is sure.
+  const { checkInstalledAutostart, describeAutostartProblem } = await import('../src/cli/autostart.ts');
+  const drift = checkInstalledAutostart();
+  if (drift) {
+    console.log(c.yellow(`  ! ${drift.path} is out of date:`));
+    for (const problem of drift.problems) {
+      console.log(c.dim(`      ${describeAutostartProblem(problem)}`));
+    }
+    console.log(c.dim('    Fix: docs/SELF_HOSTING.md, "Refreshing an autostart service".'));
   }
 }
 
@@ -465,8 +494,9 @@ async function cmdUpdate(): Promise<void> {
   }
 }
 
-function openDashboard(port: number): void {
-  const url = `http://localhost:${port}`;
+// Takes the URL, not a port: the caller resolves it once (resolveDashboardTarget)
+// and has already decided there is one to open at all (#544).
+function openDashboard(url: string): void {
   try {
     const platform = process.platform;
     if (platform === 'darwin') {
@@ -532,13 +562,17 @@ switch (command) {
   case 'upgrade':
     await cmdUpdate();
     break;
-  case 'onboard':
+  case 'onboard': {
     console.log(c.yellow('The CLI onboarding wizard has been retired.'));
     console.log(c.dim('  First-time setup now happens in the dashboard:'));
     console.log(c.dim('    1. Run: jarvis start'));
-    console.log(c.dim('    2. Open: http://localhost:3142'));
+    const target = resolveDashboardTarget();
+    console.log(c.dim(target.url
+      ? `    2. Open: ${target.url}`
+      : '    2. Reach the unix socket in daemon.listen through your proxy'));
     console.log(c.dim('  The dashboard guides you through LLM, voice, and profile setup.'));
     break;
+  }
   case 'doctor':
     await cmdDoctor();
     break;
