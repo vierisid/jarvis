@@ -512,6 +512,16 @@ describe('near-miss spellings found by review', () => {
     }
   });
 
+  test("a dotfile manager's real file is scanned, not just the ~/.bashrc name", () => {
+    // `~/.bashrc -> ~/dotfiles/bashrc`: reading the target is reading the rc.
+    // The write side already resolves this through homeScan; the read side must.
+    mkdirSync(join(home, 'dotfiles'), { recursive: true });
+    const target = join(home, 'dotfiles', 'bashrc');
+    writeFileSync(target, 'export PATH=$PATH\n');
+    symlinkSync(target, join(home, '.bashrc'));
+    expect(secretRead(target)?.scanOnly).toBe(true);
+  });
+
   test('direnv and *.local rc files are scanned', () => {
     for (const path of [
       join(home, '.envrc'), join(home, '.zshrc.local'), join(home, '.bashrc.local'),

@@ -1242,6 +1242,16 @@ function classifySecretByRegisteredDirs(candidate: string, carve: string | null)
  */
 function classifySecretOnDisk(real: string, carve: string | null): SecretReadHit | null {
   if (carve !== null && isWithinCI(real, carve)) return null;
+  // A dotfile manager makes `~/.bashrc` a symlink to `~/dotfiles/bashrc`, and
+  // reading the latter is reading the former. homeScan already has the real path
+  // of every home-relative exec location -- the write side uses it for exactly
+  // this -- so the read side reuses it instead of judging names only.
+  for (const target of homeScan(policyHome()).targets) {
+    if (target.label !== SHELL) continue;
+    if (target.dir ? isWithinCI(real, target.real) : sameCI(real, target.real)) {
+      return { kind: 'daemon-env-source', path: real, scanOnly: true };
+    }
+  }
   for (const file of explicitKeyFiles()) {
     if (sameCI(real, realOrSelf(file))) return { kind: 'jarvis-key', path: real };
   }
@@ -1283,7 +1293,9 @@ export function secretRead(requested: unknown, opts: { bases?: string[] } = {}):
   if (onDisk) {
     for (const candidate of candidates) {
       const hit = classifySecretOnDisk(candidate, carve);
-      if (hit) return hit;
+      if (!hit) continue;
+      if (hit.scanOnly) scanHit ??= hit;
+      else return hit;
     }
     // Identity, last: the only test that sees through a hard link.
     for (const candidate of candidates) {
