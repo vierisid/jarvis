@@ -77,6 +77,13 @@ func makeBrowserAXSnapshotHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, err
 		}
 
+		// Same rule as the DOM snapshot: a file: page is not read back to the
+		// model (#526). The daemon has no accessibility-tree handler to mirror,
+		// but this reads the same document by another route.
+		if err := cdp.assertNotLocalContent(); err != nil {
+			return nil, err
+		}
+
 		raw, err := cdp.send("Accessibility.getFullAXTree", nil)
 		if err != nil {
 			return nil, fmt.Errorf("getFullAXTree failed: %w", err)

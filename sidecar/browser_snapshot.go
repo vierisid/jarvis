@@ -126,6 +126,13 @@ type pageSnapshot struct {
 // takePageSnapshot runs the snapshot script, stores element coordinates on
 // the client (for click/hover by id), and returns the parsed snapshot.
 func takePageSnapshot(cdp *cdpClient) (*pageSnapshot, error) {
+	// Before running anything in the page: a page showing local content is not
+	// read back to the model (#526, browser_read_guard.go). Every snapshot
+	// path goes through here -- browser_snapshot and the one navigate returns.
+	if err := cdp.assertNotLocalContent(); err != nil {
+		return nil, err
+	}
+
 	result, err := cdp.send("Runtime.evaluate", map[string]any{
 		"expression":    browserSnapshotScript,
 		"returnByValue": true,
@@ -151,6 +158,14 @@ func takePageSnapshot(cdp *cdpClient) (*pageSnapshot, error) {
 	var snap pageSnapshot
 	if err := json.Unmarshal([]byte(wrapper.Result.Value), &snap); err != nil {
 		return nil, fmt.Errorf("parse snapshot payload: %w", err)
+	}
+
+	// Second line behind the frame-tree check above: whatever the page says it
+	// is, local content is not formatted and returned. A page can only lie in
+	// the safe direction here (it cannot claim to be https while the frame tree
+	// says file:, because the frame tree was checked first).
+	if err := refuseLocalContent(snap.URL); err != nil {
+		return nil, err
 	}
 
 	cdp.elemMu.Lock()

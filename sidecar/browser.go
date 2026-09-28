@@ -892,6 +892,11 @@ func makeBrowserScreenshotHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, err
 		}
 
+		// A screenshot of a file: page is the file, in pixels (#526).
+		if err := cdp.assertNotLocalContent(); err != nil {
+			return nil, err
+		}
+
 		result, err := cdp.send("Page.captureScreenshot", map[string]any{
 			"format":  "png",
 			"quality": 80,
@@ -979,6 +984,11 @@ func makeBrowserEvaluateHandler(cfg *SidecarConfig) RPCHandler {
 
 		cdp, err := getCDPForParams(cfg, params)
 		if err != nil {
+			return nil, err
+		}
+
+		// Script in a file: page can read the file and hand it back (#526).
+		if err := cdp.assertNotLocalContent(); err != nil {
 			return nil, err
 		}
 

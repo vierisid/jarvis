@@ -47,23 +47,14 @@ func TestBrowserFileGuardIntegration(t *testing.T) {
 		t.Fatalf("launch headless browser: %v", err)
 	}
 
+	// The production frame-tree reader, against a real Chrome's reply shape.
 	mainFrameURL := func() string {
 		t.Helper()
-		raw, err := cdp.send("Page.getFrameTree", nil)
+		url, err := cdp.mainFrameURL()
 		if err != nil {
-			t.Fatalf("Page.getFrameTree: %v", err)
+			t.Fatalf("mainFrameURL: %v", err)
 		}
-		var tree struct {
-			FrameTree struct {
-				Frame struct {
-					URL string `json:"url"`
-				} `json:"frame"`
-			} `json:"frameTree"`
-		}
-		if err := json.Unmarshal(raw, &tree); err != nil {
-			t.Fatalf("parse frame tree: %v", err)
-		}
-		return tree.FrameTree.Frame.URL
+		return url
 	}
 
 	navigateRaw := func(url string) string {
@@ -129,6 +120,39 @@ func TestBrowserFileGuardIntegration(t *testing.T) {
 		t.Logf("redirect into file: stopped as %s", errorText)
 		if got := mainFrameURL(); isLocalContentURL(got) {
 			t.Fatalf("the main frame followed the redirect to local content: %q", got)
+		}
+	})
+
+	// 2b. The redirect case that Chrome does NOT refuse for us: http -> http,
+	// into a DevTools port. Nothing needs to be listening there -- if the guard
+	// were not in the redirect path the failure would be a connection error, or
+	// worse a loaded page, rather than ERR_BLOCKED_BY_CLIENT.
+	t.Run("a same-scheme redirect to a DevTools port is blocked", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, "http://127.0.0.1:9222/json/list", http.StatusFound)
+		}))
+		defer srv.Close()
+		if strings.Contains(srv.URL, ":9222") || strings.Contains(srv.URL, ":9223") {
+			t.Skipf("the test server landed on a blocked DevTools port: %s", srv.URL)
+		}
+
+		started := time.Now()
+		errorText := navigateRaw(srv.URL)
+		if errorText != "net::ERR_BLOCKED_BY_CLIENT" {
+			t.Fatalf("the redirect to a DevTools port failed as %q, want net::ERR_BLOCKED_BY_CLIENT "+
+				"(the guard must see redirect hops, not only the first request)", errorText)
+		}
+		blocked := cdp.blockedSince(started)
+		if blocked == nil || !strings.Contains(blocked.reason, "DevTools port") {
+			t.Fatalf("the guard recorded %+v, want the DevTools-port block", blocked)
+		}
+		if !strings.Contains(blocked.url, ":9222") {
+			t.Fatalf("the guard blocked %q, not the redirect target", blocked.url)
+		}
+		// And the navigate handler turns that into a message that names it.
+		msg := cdp.describeBlockedNavigation(srv.URL, errorText, started)
+		if !strings.Contains(msg, "9222") || !strings.Contains(msg, "DevTools port") {
+			t.Fatalf("describeBlockedNavigation = %q, want it to name the blocked redirect target", msg)
 		}
 	})
 
