@@ -605,9 +605,21 @@ func getCDPForParams(cfg *SidecarConfig, params map[string]any) (*cdpClient, err
 
 func makeBrowserNavigateHandler(cfg *SidecarConfig) RPCHandler {
 	return func(params map[string]any) (*RPCResult, error) {
-		url, _ := params["url"].(string)
-		if url == "" {
+		rawURL, _ := params["url"].(string)
+		if rawURL == "" {
 			return nil, fmt.Errorf("missing required parameter: url")
+		}
+
+		// The scheme allowlist (#526), before the browser is launched: a URL
+		// that will be refused should not spawn a Chromium. Page.navigate is a
+		// browser-initiated navigation, so Chrome applies none of the checks it
+		// applies to a page's own attempts -- handed a file: URL it opens the
+		// file and the snapshot below hands it to the model. `target` is the
+		// normalised URL, so Chrome parses the scheme and authority that were
+		// checked (browser_url_policy.go).
+		target, err := checkNavigationURL(rawURL)
+		if err != nil {
+			return nil, err
 		}
 
 		cdp, err := getCDPForParams(cfg, params)
@@ -618,7 +630,7 @@ func makeBrowserNavigateHandler(cfg *SidecarConfig) RPCHandler {
 		// Register the waiter BEFORE navigating so the event can't be missed
 		loaded := cdp.waitForEvent("Page.loadEventFired")
 
-		result, err := cdp.send("Page.navigate", map[string]any{"url": url})
+		result, err := cdp.send("Page.navigate", map[string]any{"url": target})
 		if err != nil {
 			return nil, fmt.Errorf("navigate failed: %w", err)
 		}
@@ -632,7 +644,7 @@ func makeBrowserNavigateHandler(cfg *SidecarConfig) RPCHandler {
 		}
 		_ = json.Unmarshal(result, &nav)
 		if nav.ErrorText != "" {
-			return nil, fmt.Errorf("navigation to %s failed: %s", url, nav.ErrorText)
+			return nil, fmt.Errorf("navigation to %s failed: %s", target, nav.ErrorText)
 		}
 
 		select {
@@ -640,7 +652,7 @@ func makeBrowserNavigateHandler(cfg *SidecarConfig) RPCHandler {
 		case <-time.After(30 * time.Second):
 			// Page may still be usable (SPAs, slow loads) — same fallback as
 			// the daemon's local navigate.
-			log.Printf("[browser] page load timeout for %s, continuing anyway", url)
+			log.Printf("[browser] page load timeout for %s, continuing anyway", target)
 		}
 
 		// Let JS settle (matches the daemon's post-load delay)
