@@ -6,7 +6,9 @@ import (
 	"encoding/binary"
 	"fmt"
 	"io"
+	"os"
 	"runtime"
+	"sync"
 	"syscall"
 	"unsafe"
 
@@ -17,8 +19,22 @@ import (
 // WriteFile. We avoid os.NewFile here on purpose: it routes the handle through
 // Go's IOCP poller, whose behavior on synchronous CreatePipe handles is fragile.
 // The readLoop runs on its own goroutine, so blocking syscalls are fine.
+// A raw handle has none of *os.File's reference counting, so a Write racing a
+// Close is a use-after-close: Windows recycles handle values, and the write can
+// land on whatever object got this number next. The guard in browser_fetch_guard.go
+// makes that race easy to reach -- it writes from a goroutine spawned whenever a
+// page makes a matching request, including across a closeActiveCDP() relaunch --
+// so Write and Close take the same mutex, and Write after Close is an error
+// rather than a syscall on a dead number.
+//
+// Read is deliberately NOT under the mutex: it blocks until the browser sends
+// something, and holding the lock there would mean Close could never run. A
+// racing Close makes the pending ReadFile fail, which is exactly what readLoop
+// is written to handle.
 type winPipe struct {
-	h windows.Handle
+	h      windows.Handle
+	mu     sync.Mutex
+	closed bool
 }
 
 func (p *winPipe) Read(b []byte) (int, error) {
@@ -38,6 +54,11 @@ func (p *winPipe) Read(b []byte) (int, error) {
 }
 
 func (p *winPipe) Write(b []byte) (int, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return 0, os.ErrClosed
+	}
 	var done uint32
 	if err := windows.WriteFile(p.h, b, &done, nil); err != nil {
 		return int(done), err
@@ -45,7 +66,15 @@ func (p *winPipe) Write(b []byte) (int, error) {
 	return int(done), nil
 }
 
-func (p *winPipe) Close() error { return windows.CloseHandle(p.h) }
+func (p *winPipe) Close() error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return nil
+	}
+	p.closed = true
+	return windows.CloseHandle(p.h)
+}
 
 // On Windows, Chromium's --remote-debugging-pipe reads/writes CDP on C-runtime
 // file descriptors 3 and 4. Those fds are populated through the MSVCRT "lowio"

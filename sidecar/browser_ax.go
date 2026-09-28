@@ -79,8 +79,11 @@ func makeBrowserAXSnapshotHandler(cfg *SidecarConfig) RPCHandler {
 
 		// Same rule as the DOM snapshot: a file: page is not read back to the
 		// model (#526). The daemon has no accessibility-tree handler to mirror,
-		// but this reads the same document by another route.
-		if err := cdp.assertNotLocalContent(); err != nil {
+		// but this reads the same document by another route -- and an accessible
+		// name IS the document's text, so it gets both of the DOM snapshot's
+		// checks, not just the frame-tree one.
+		checked, err := cdp.assertNotLocalContent()
+		if err != nil {
 			return nil, err
 		}
 
@@ -100,6 +103,17 @@ func makeBrowserAXSnapshotHandler(cfg *SidecarConfig) RPCHandler {
 			// Reporting elements without saying which page they came from
 			// invites the agent to act on the wrong document.
 			return nil, fmt.Errorf("could not read page url/title: %w", err)
+		}
+
+		// The page's own view of where it is, checked before anything is
+		// formatted -- the second line takePageSnapshot has. The url below is
+		// this same string, so it is also what the model is told it read.
+		reportedURL, _ := pageInfo["url"].(string)
+		if err := refuseLocalContent(reportedURL); err != nil {
+			return nil, err
+		}
+		if err := cdp.assertSamePage(checked); err != nil {
+			return nil, err
 		}
 
 		elements := buildAXElements(tree.Nodes)

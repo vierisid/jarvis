@@ -162,6 +162,43 @@ func TestBrowserFileGuardIntegration(t *testing.T) {
 		}
 	})
 
+	// 2c. The invariant the whole design rests on: the interception is installed
+	// on the BROWSER session, so it covers tabs that did not exist when it was
+	// armed. A page-level Fetch.enable would not.
+	t.Run("a tab created after arming is covered", func(t *testing.T) {
+		started := time.Now()
+		raw, err := cdp.sendOn("", "Target.createTarget", map[string]any{"url": "file:///etc/hostname"})
+		if err != nil {
+			t.Fatalf("Target.createTarget: %v", err)
+		}
+		var created struct {
+			TargetID string `json:"targetId"`
+		}
+		_ = json.Unmarshal(raw, &created)
+		if created.TargetID != "" {
+			// Close it by the id we were given, so the test leaves no tab behind.
+			defer func() {
+				if _, err := cdp.sendOn("", "Target.closeTarget",
+					map[string]any{"targetId": created.TargetID}); err != nil {
+					t.Logf("warning: could not close the test tab: %v", err)
+				}
+			}()
+		}
+
+		// The load is asynchronous: wait briefly for the guard to see it.
+		deadline := time.Now().Add(5 * time.Second)
+		for {
+			if blocked := cdp.blockedSince(started); blocked != nil &&
+				strings.HasPrefix(strings.ToLower(blocked.url), "file:") {
+				return
+			}
+			if time.Now().After(deadline) {
+				t.Fatalf("a file: load in a tab created after arming was not blocked")
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	})
+
 	// 3. The interception must not change ordinary browsing: this is the case
 	// that would hang if a paused request were ever dropped.
 	t.Run("ordinary pages still load", func(t *testing.T) {

@@ -129,7 +129,8 @@ func takePageSnapshot(cdp *cdpClient) (*pageSnapshot, error) {
 	// Before running anything in the page: a page showing local content is not
 	// read back to the model (#526, browser_read_guard.go). Every snapshot
 	// path goes through here -- browser_snapshot and the one navigate returns.
-	if err := cdp.assertNotLocalContent(); err != nil {
+	checked, err := cdp.assertNotLocalContent()
+	if err != nil {
 		return nil, err
 	}
 
@@ -165,6 +166,13 @@ func takePageSnapshot(cdp *cdpClient) (*pageSnapshot, error) {
 	// the safe direction here (it cannot claim to be https while the frame tree
 	// says file:, because the frame tree was checked first).
 	if err := refuseLocalContent(snap.URL); err != nil {
+		return nil, err
+	}
+
+	// And the page must still be the document that was approved: the snapshot is
+	// a separate round-trip, and another RPC (or a slow navigation) can commit a
+	// new document in between.
+	if err := cdp.assertSamePage(checked); err != nil {
 		return nil, err
 	}
 

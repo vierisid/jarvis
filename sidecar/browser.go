@@ -322,8 +322,19 @@ func launchCDP(cfg *SidecarConfig, headless bool) (*cdpClient, error) {
 	// if it fails, the read guards refuse to read the tab anyway.
 	if url, err := c.mainFrameURL(); err == nil && url != "" && !isDrivableURL(url) {
 		log.Printf("[browser] attached tab was showing %s; blanking it", truncateURL(url, 120))
-		if _, err := c.send("Page.navigate", map[string]any{"url": "about:blank"}); err != nil {
+		raw, err := c.send("Page.navigate", map[string]any{"url": "about:blank"})
+		if err != nil {
 			log.Printf("[browser] could not blank the adopted tab: %v", err)
+		} else {
+			// Page.navigate reports a failure in errorText, not as an error. Worth
+			// a line: a tab that stayed put is one every read will refuse.
+			var nav struct {
+				ErrorText string `json:"errorText"`
+			}
+			if json.Unmarshal(raw, &nav) == nil && nav.ErrorText != "" {
+				log.Printf("[browser] blanking the adopted tab failed: %s (reads of it will be refused)",
+					nav.ErrorText)
+			}
 		}
 	}
 
@@ -936,7 +947,8 @@ func makeBrowserScreenshotHandler(cfg *SidecarConfig) RPCHandler {
 		}
 
 		// A screenshot of a file: page is the file, in pixels (#526).
-		if err := cdp.assertNotLocalContent(); err != nil {
+		checked, err := cdp.assertNotLocalContent()
+		if err != nil {
 			return nil, err
 		}
 
@@ -946,6 +958,12 @@ func makeBrowserScreenshotHandler(cfg *SidecarConfig) RPCHandler {
 		})
 		if err != nil {
 			return nil, fmt.Errorf("screenshot failed: %w", err)
+		}
+
+		// The pixels must come from the document that was approved, not from one
+		// that committed while the capture was in flight.
+		if err := cdp.assertSamePage(checked); err != nil {
+			return nil, err
 		}
 
 		var ss struct {
@@ -1031,7 +1049,8 @@ func makeBrowserEvaluateHandler(cfg *SidecarConfig) RPCHandler {
 		}
 
 		// Script in a file: page can read the file and hand it back (#526).
-		if err := cdp.assertNotLocalContent(); err != nil {
+		checked, err := cdp.assertNotLocalContent()
+		if err != nil {
 			return nil, err
 		}
 
@@ -1042,6 +1061,12 @@ func makeBrowserEvaluateHandler(cfg *SidecarConfig) RPCHandler {
 		})
 		if err != nil {
 			return nil, fmt.Errorf("evaluate failed: %w", err)
+		}
+
+		// The script ran in whatever document was current WHEN IT RAN: if that is
+		// no longer the one that was approved, its result is not returned.
+		if err := cdp.assertSamePage(checked); err != nil {
+			return nil, err
 		}
 
 		// Unwrap to the same shape the daemon's evaluate tool returns:

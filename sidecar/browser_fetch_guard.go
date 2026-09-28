@@ -63,6 +63,15 @@ import (
 // variable so the tests can shorten it; nothing else writes it.
 var fetchGuardReplyTimeoutForTest = 10 * time.Second
 
+// fetchGuardSlots bounds how many paused requests are being answered at once.
+// The patterns are page-reachable text, so a page can pause thousands of
+// requests (a few thousand <img src="http://x:9222/..."> will do it), and each
+// answer is a CDP round-trip that queues on the one pipe write mutex every other
+// CDP call needs -- without a bound, a page can push ordinary browser calls into
+// their 30s timeout. Queueing costs nothing here: Chrome is already holding those
+// requests, and they are still answered in order.
+var fetchGuardSlots = make(chan struct{}, 32)
+
 // blockedRequest is the last request the guard failed, kept so a navigation that
 // died as ERR_BLOCKED_BY_CLIENT can be reported as what it was.
 type blockedRequest struct {
@@ -90,6 +99,9 @@ func (c *cdpClient) installFetchGuard() error {
 // so a ":9222" in a path reaches us -- because a request that is neither failed
 // nor continued hangs the page load until Chrome gives up.
 func (c *cdpClient) handlePausedRequest(sessionID string, params json.RawMessage) {
+	fetchGuardSlots <- struct{}{}
+	defer func() { <-fetchGuardSlots }()
+
 	var ev struct {
 		RequestID    string `json:"requestId"`
 		ResourceType string `json:"resourceType"`

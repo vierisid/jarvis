@@ -15,6 +15,13 @@ import (
 // child frames, shaped exactly like Chrome's reply.
 func (fb *fakeBrowser) frameTreeReply(id int64, mainURL string, childURLs ...string) {
 	fb.t.Helper()
+	fb.frameTreeReplyFull(id, mainURL, "loader-1", originOf(mainURL), childURLs...)
+}
+
+// frameTreeReplyFull is frameTreeReply with the loaderId and securityOrigin
+// spelled out, for the tests that care which document it is.
+func (fb *fakeBrowser) frameTreeReplyFull(id int64, mainURL, loaderID, origin string, childURLs ...string) {
+	fb.t.Helper()
 	children := []any{}
 	for i, u := range childURLs {
 		children = append(children, map[string]any{
@@ -25,11 +32,41 @@ func (fb *fakeBrowser) frameTreeReply(id int64, mainURL string, childURLs ...str
 		"id": id,
 		"result": map[string]any{
 			"frameTree": map[string]any{
-				"frame":       map[string]any{"id": "main", "url": mainURL},
+				"frame": map[string]any{
+					"id": "main", "url": mainURL, "loaderId": loaderID, "securityOrigin": origin,
+				},
 				"childFrames": children,
 			},
 		},
 	})
+}
+
+// originOf is what Chrome reports as securityOrigin for the URLs these tests
+// use: the scheme and host for a real page, "://" for about:blank and data:.
+func originOf(u string) string {
+	switch {
+	case strings.HasPrefix(u, "https://"), strings.HasPrefix(u, "http://"):
+		rest := u[strings.Index(u, "://")+3:]
+		if i := strings.IndexAny(rest, "/?#"); i >= 0 {
+			rest = rest[:i]
+		}
+		return u[:strings.Index(u, "://")+3] + rest
+	default:
+		return "://"
+	}
+}
+
+// answerFrameTree answers the next command, which must be a Page.getFrameTree.
+// The read paths check, read, then check again, so a test that scripts a read
+// answers this twice.
+func (fb *fakeBrowser) answerFrameTree(mainURL string) cdpCommand {
+	fb.t.Helper()
+	cmd := fb.nextCommand()
+	if cmd.Method != "Page.getFrameTree" {
+		fb.t.Fatalf("expected Page.getFrameTree, got %q", cmd.Method)
+	}
+	fb.frameTreeReply(cmd.ID, mainURL)
+	return cmd
 }
 
 // noCommandWithin asserts the client sends nothing for a while: the point of a
@@ -90,7 +127,7 @@ func TestAssertNotLocalContentReadsTheMainFrame(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			fb := newFakeBrowser(t)
 			errCh := make(chan error, 1)
-			go func() { errCh <- fb.client.assertNotLocalContent() }()
+			go func() { _, err := fb.client.assertNotLocalContent(); errCh <- err }()
 
 			cmd := fb.nextCommand()
 			if cmd.Method != "Page.getFrameTree" {
@@ -119,7 +156,7 @@ func TestAssertNotLocalContentReadsTheMainFrame(t *testing.T) {
 func TestAssertNotLocalContentFailsClosed(t *testing.T) {
 	fb := newFakeBrowser(t)
 	errCh := make(chan error, 1)
-	go func() { errCh <- fb.client.assertNotLocalContent() }()
+	go func() { _, err := fb.client.assertNotLocalContent(); errCh <- err }()
 
 	cmd := fb.nextCommand()
 	fb.write(map[string]any{"id": cmd.ID, "error": map[string]any{"code": -32000, "message": "no page"}})
@@ -256,6 +293,9 @@ func TestSnapshotOfAnOrdinaryPageStillWorks(t *testing.T) {
 			},
 		},
 	})
+	// The read paths check, read, then check again; answer the second check with
+	// the same document.
+	fb.answerFrameTree("https://example.com/")
 
 	got := <-done
 	if got.err != nil {
@@ -266,5 +306,146 @@ func TestSnapshotOfAnOrdinaryPageStillWorks(t *testing.T) {
 	}
 	if coords, ok := fb.client.elementCoordsFor(1); !ok || coords != [2]float64{10, 20} {
 		t.Fatalf("element coordinates were not stored: %v %v", coords, ok)
+	}
+}
+
+// The AX snapshot reads the same document by another route -- an accessible name
+// IS the document's text -- so it gets the page-reported URL check too, not only
+// the frame-tree one.
+func TestAXSnapshotRefusesWhenThePageReportsLocalContent(t *testing.T) {
+	fb := newFakeBrowser(t)
+	useFakeBrowserAsActiveCDP(t, fb.client)
+
+	type outcome struct {
+		res *RPCResult
+		err error
+	}
+	done := make(chan outcome, 1)
+	handler := makeBrowserAXSnapshotHandler(guardTestConfig())
+	go func() {
+		res, err := handler(map[string]any{})
+		done <- outcome{res, err}
+	}()
+
+	fb.answerFrameTree("https://example.com/")
+
+	axTree := fb.nextCommand()
+	if axTree.Method != "Accessibility.getFullAXTree" {
+		t.Fatalf("second command was %q, want Accessibility.getFullAXTree", axTree.Method)
+	}
+	fb.write(map[string]any{
+		"id": axTree.ID,
+		"result": map[string]any{
+			"nodes": []any{map[string]any{
+				"nodeId": "1", "role": map[string]any{"value": "StaticText"},
+				"name": map[string]any{"value": "root:x:0:0:root:/root:/bin/bash"},
+			}},
+		},
+	})
+
+	// The page's own view of where it is says file:.
+	pageInfo := fb.nextCommand()
+	if pageInfo.Method != "Runtime.evaluate" {
+		t.Fatalf("third command was %q, want Runtime.evaluate", pageInfo.Method)
+	}
+	fb.write(map[string]any{
+		"id": pageInfo.ID,
+		"result": map[string]any{
+			"result": map[string]any{
+				"type":  "string",
+				"value": `{"url":"file:///etc/passwd","title":"passwd"}`,
+			},
+		},
+	})
+
+	got := <-done
+	if got.err == nil {
+		t.Fatalf("the AX tree of a file: page was returned: %+v", got.res)
+	}
+	if !strings.Contains(got.err.Error(), "does not show local files") {
+		t.Fatalf("refusal %q does not say why", got.err)
+	}
+}
+
+// A read that raced a navigation is discarded: the bytes may have come from a
+// document nobody checked.
+func TestReadIsDiscardedWhenThePageNavigatedUnderIt(t *testing.T) {
+	fb := newFakeBrowser(t)
+
+	type outcome struct {
+		snap *pageSnapshot
+		err  error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		snap, err := takePageSnapshot(fb.client)
+		done <- outcome{snap, err}
+	}()
+
+	first := fb.nextCommand()
+	fb.frameTreeReplyFull(first.ID, "https://example.com/", "loader-1", "https://example.com")
+
+	script := fb.nextCommand()
+	fb.write(map[string]any{
+		"id": script.ID,
+		"result": map[string]any{
+			"result": map[string]any{
+				"type":  "string",
+				"value": `{"title":"Example","url":"https://example.com/","text":"hello","elements":[]}`,
+			},
+		},
+	})
+
+	// Same URL, new document: only the loaderId gives it away.
+	second := fb.nextCommand()
+	if second.Method != "Page.getFrameTree" {
+		t.Fatalf("the read did not check the page again (got %q)", second.Method)
+	}
+	fb.frameTreeReplyFull(second.ID, "https://example.com/", "loader-2", "https://example.com")
+
+	got := <-done
+	if got.err == nil {
+		t.Fatalf("a snapshot taken across a navigation was returned: %+v", got.snap)
+	}
+	if !strings.Contains(got.err.Error(), "navigated") {
+		t.Fatalf("error %q does not say the page changed", got.err)
+	}
+}
+
+// A document can hold a file: origin while wearing a URL that matches none of
+// the local-content prefixes (a blob: or about:blank document inherits the
+// origin of whatever created it), so the origin is checked too.
+func TestAssertNotLocalContentRefusesAnInheritedFileOrigin(t *testing.T) {
+	fb := newFakeBrowser(t)
+	errCh := make(chan error, 1)
+	go func() { _, err := fb.client.assertNotLocalContent(); errCh <- err }()
+
+	cmd := fb.nextCommand()
+	fb.frameTreeReplyFull(cmd.ID, "blob:null/2f7a-1", "loader-1", "file://")
+
+	err := <-errCh
+	if err == nil {
+		t.Fatal("a document with a file: origin was allowed to be read")
+	}
+	if !strings.Contains(err.Error(), "local-file origin") {
+		t.Fatalf("refusal %q does not name the origin", err)
+	}
+}
+
+// ... and an ordinary page's origin must not trip that check.
+func TestAssertNotLocalContentAllowsOrdinaryOrigins(t *testing.T) {
+	for _, origin := range []string{"https://example.com", "://", "", "http://localhost:3000"} {
+		t.Run(origin, func(t *testing.T) {
+			fb := newFakeBrowser(t)
+			errCh := make(chan error, 1)
+			go func() { _, err := fb.client.assertNotLocalContent(); errCh <- err }()
+
+			cmd := fb.nextCommand()
+			fb.frameTreeReplyFull(cmd.ID, "https://example.com/", "loader-1", origin)
+
+			if err := <-errCh; err != nil {
+				t.Fatalf("origin %q was refused: %v", origin, err)
+			}
+		})
 	}
 }
