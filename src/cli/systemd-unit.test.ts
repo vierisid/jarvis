@@ -26,10 +26,12 @@ import {
   describeLastUpdate,
   parseTimespanMs,
   readLastUpdate,
+  readUnitFailure,
   routeRestart,
   stopBudgetMs,
   updaterRuntimeMaxSec,
   writeLastUpdate,
+  type CommandRunner,
   type LastUpdate,
   type SystemdUnit,
 } from './systemd-unit.ts';
@@ -426,6 +428,39 @@ describe('restartSystemdUnit', () => {
     expect(ok).toBe(false);
     // show, reset-failed, the refused restart -- and no polling after it.
     expect(calls().map((c) => c.slice(1).find((a) => !a.startsWith('-')))).toEqual(['show', 'reset-failed', 'restart']);
+  });
+});
+
+// #543: once the unit's StartLimitBurst is hit, systemd leaves it failed and
+// never starts it again by itself. `jarvis status` says so, so it needs to tell
+// that apart from a daemon the user stopped.
+describe('readUnitFailure', () => {
+  function runner(stdout: string, exitCode = 0): CommandRunner {
+    return () => ({ exitCode, stdout, stderr: '' });
+  }
+
+  test('a start-limit stop is reported as one', () => {
+    expect(readUnitFailure(UNIT, runner('ActiveState=failed\nResult=start-limit-hit\n')))
+      .toEqual({ result: 'start-limit-hit', startLimitHit: true });
+  });
+
+  test('another failure is reported without claiming the limit', () => {
+    expect(readUnitFailure(UNIT, runner('ActiveState=failed\nResult=exit-code\n')))
+      .toEqual({ result: 'exit-code', startLimitHit: false });
+  });
+
+  test('a unit stopped on purpose is not a failure', () => {
+    expect(readUnitFailure(UNIT, runner('ActiveState=inactive\nResult=success\n'))).toBeNull();
+  });
+
+  test('a unit mid-restart is not reported: it has not given up', () => {
+    // systemd 254+ shows ActiveState=failed transiently between auto-restarts;
+    // only a settled `failed` matters, and `activating` never does.
+    expect(readUnitFailure(UNIT, runner('ActiveState=activating\nResult=exit-code\n'))).toBeNull();
+  });
+
+  test('systemd unreachable says nothing rather than guessing', () => {
+    expect(readUnitFailure(UNIT, runner('', 1))).toBeNull();
   });
 });
 

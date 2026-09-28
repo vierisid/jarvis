@@ -611,3 +611,46 @@ describe('tools: relevance filter config', () => {
     expect(config.tools?.relevance_filter?.enabled).toBe(true);
   });
 });
+
+// The daemon binds `daemon.port` and the CLI prints/opens a URL resolved in the
+// same precedence (src/cli/lifecycle.ts resolveDashboardTarget). A JARVIS_PORT
+// one of them accepts and the other rejects would put the daemon on one port and
+// every printed URL on another (#544).
+describe('JARVIS_PORT agrees with the port the CLI resolves', () => {
+  let prev: string | undefined;
+
+  beforeEach(async () => {
+    await createTestConfigPath();
+    prev = process.env.JARVIS_PORT;
+  });
+
+  afterEach(async () => {
+    if (prev === undefined) delete process.env.JARVIS_PORT;
+    else process.env.JARVIS_PORT = prev;
+    await rm(TEST_CONFIG_DIR, { recursive: true, force: true });
+  });
+
+  const write = async (body: string) => {
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(TEST_CONFIG_PATH, body);
+  };
+
+  test('a port in range overrides daemon.port', async () => {
+    await write('daemon:\n  port: 5000\n');
+    process.env.JARVIS_PORT = '7000';
+    expect((await loadConfig(TEST_CONFIG_PATH)).daemon.port).toBe(7000);
+  });
+
+  test.each(['0', '70000', '-1', 'not-a-port', ''])('%p is ignored, like validPort ignores it', async (value) => {
+    await write('daemon:\n  port: 5000\n');
+    process.env.JARVIS_PORT = value;
+    expect((await loadConfig(TEST_CONFIG_PATH)).daemon.port).toBe(5000);
+  });
+
+  test('a trailing fraction truncates the same way on both sides', async () => {
+    // parseInt on both sides, so `8080.5` is 8080 here and 8080 in validPort.
+    await write('daemon:\n  port: 5000\n');
+    process.env.JARVIS_PORT = '8080.5';
+    expect((await loadConfig(TEST_CONFIG_PATH)).daemon.port).toBe(8080);
+  });
+});

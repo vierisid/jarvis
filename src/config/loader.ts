@@ -81,7 +81,12 @@ export function applyEnvOverrides(config: JarvisConfig): void {
 
   if (env.JARVIS_PORT) {
     const port = parseInt(env.JARVIS_PORT, 10);
-    if (!isNaN(port)) config.daemon.port = port;
+    // Range-checked, so the CLI and the daemon cannot disagree about the port:
+    // src/cli/lifecycle.ts resolves the dashboard URL in this same precedence
+    // and rejects anything outside 1..65535, and a JARVIS_PORT of 0 (bind
+    // anywhere) or 70000 (bind nothing) accepted only here would have the daemon
+    // on one port and every printed URL on another (#544).
+    if (Number.isInteger(port) && port >= 1 && port <= 65535) config.daemon.port = port;
   }
 
   if (env.JARVIS_HOME) {

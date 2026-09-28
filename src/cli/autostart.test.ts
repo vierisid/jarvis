@@ -475,6 +475,21 @@ WantedBy=default.target
     expect(checkInstalledSystemdUnit(valued)?.problems).toEqual(['opens-a-browser']);
   });
 
+  test("a unit JARVIS did not write is not judged at all", () => {
+    // Someone else's jarvis.service: a wrapper script, a container, a shell that
+    // passes --no-open itself. Nagging about it on every `jarvis status` would
+    // be unsilenceable, so the detector only reads units shaped like the ones
+    // generateSystemdUnit writes (`... jarvis.ts start --foreground`).
+    for (const exec of [
+      '/home/u/bin/run-jarvis.sh',
+      '/usr/bin/docker run --rm ghcr.io/vierisid/jarvis',
+      '/bin/sh -c "exec jarvis serve"',
+    ]) {
+      const path = unitFile(`[Service]\nExecStart=${exec}\nRestart=on-failure\nRestartSec=5\n`);
+      expect(checkInstalledSystemdUnit(path)).toBeNull();
+    }
+  });
+
   test('a unit that does not restart is not reported for restart limits', () => {
     const path = unitFile('[Service]\nExecStart=/bin/bun /x/jarvis.ts start --no-open\nRestart=no\nRestartSec=5\n');
     expect(checkInstalledSystemdUnit(path)).toBeNull();

@@ -360,6 +360,27 @@ function clearStartLimit(unit: string, run: CommandRunner): void {
   run(['systemctl', '--user', 'reset-failed', unit]);
 }
 
+/**
+ * Why systemd is not running the unit, when it has given up on it -- null when
+ * the unit is fine, stopped on purpose, or unreadable from here.
+ *
+ * `jarvis status` needs this because the generated unit bounds a crash loop
+ * (StartLimitBurst, src/cli/autostart.ts): once the limit is hit, systemd leaves
+ * the unit `failed` and never starts it again by itself, which otherwise looks
+ * exactly like a daemon the user stopped.
+ */
+export function readUnitFailure(
+  unit: string,
+  run: CommandRunner = runCommand,
+): { result: string; startLimitHit: boolean } | null {
+  const show = run(['systemctl', '--user', 'show', unit, '--property=ActiveState', '--property=Result']);
+  if (show.exitCode !== 0) return null;
+  const state = /ActiveState=(\S*)/.exec(show.stdout)?.[1] ?? '';
+  if (state !== 'failed') return null;
+  const result = /Result=(\S*)/.exec(show.stdout)?.[1] ?? 'failed';
+  return { result, startLimitHit: result === 'start-limit-hit' };
+}
+
 function unitState(unit: string, run: CommandRunner): { state: string; pid: number | null } {
   const show = run(['systemctl', '--user', 'show', unit, '--property=ActiveState', '--property=MainPID']);
   let state = 'unknown';

@@ -60,6 +60,27 @@ describe('unix-domain socket listener', () => {
   });
 });
 
+test('the dashboard line names the socket, never a localhost URL (#544)', () => {
+  // In unix-socket mode nothing is listening on this.port, so a
+  // `http://localhost:<port>/` line in the log points at whatever else is.
+  const sockPath = join(tmpdir(), `jarvis-test-log-${process.pid}-${Date.now()}.sock`);
+  const lines: string[] = [];
+  const realLog = console.log;
+  console.log = (...args: unknown[]) => { lines.push(args.map(String).join(' ')); };
+  const s = new WebSocketServer(39991, sockPath);
+  s.setStaticDir(tmpdir());
+  try {
+    s.start();
+  } finally {
+    console.log = realLog;
+    s.stop();
+  }
+  const dashboard = lines.filter((l) => l.includes('Dashboard:'));
+  expect(dashboard).toHaveLength(1);
+  expect(dashboard[0]).toContain(`unix:${sockPath}`);
+  expect(dashboard[0]).not.toContain('http://localhost');
+});
+
 test('stop() removes the socket file (no dead-but-present socket)', async () => {
   const { existsSync } = await import('node:fs');
   const sockPath = join(tmpdir(), `jarvis-test-stop-${process.pid}-${Date.now()}.sock`);

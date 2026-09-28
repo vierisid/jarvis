@@ -232,10 +232,11 @@ async function installSystemd(): Promise<boolean> {
 
 async function startSystemdService(): Promise<boolean> {
   try {
-    // Same reason as in scheduleSystemdRestart: a unit sitting at its start
-    // limit refuses the next start, and neither daemon-reload nor enable clears
-    // the counter. Result ignored (a no-op on a healthy unit).
-    Bun.spawnSync(['systemctl', '--user', 'reset-failed', 'jarvis.service']);
+    // No reset-failed here, unlike scheduleSystemdRestart: this start is
+    // blocking and reports its own failure, including "Start request repeated
+    // too quickly", so it cannot leave the user thinking JARVIS came up. Adding
+    // one would also add an unsanitized spawn (src/spawn-env-guard.test.ts) to a
+    // path that runs right after the unit was written and enabled.
     const start = Bun.spawnSync(['systemctl', '--user', 'start', 'jarvis.service']);
     if (start.exitCode !== 0) {
       printErr('Failed to start systemd service. You may need to run: systemctl --user start jarvis.service');
@@ -397,7 +398,15 @@ export function checkInstalledSystemdUnit(unitPath = SYSTEMD_SERVICE): Autostart
   // every unit that loads: more than one is only legal for Type=oneshot, and
   // otherwise only after an empty assignment has reset the list.
   const execStart = service.filter((d) => d.key === 'ExecStart' && d.value !== '').at(-1);
-  if (execStart && !execTokens(execStart.value).includes('--no-open')) {
+  const argv = execStart ? execTokens(execStart.value) : [];
+  // Only a unit shaped like the ones this file writes is judged at all. Somebody
+  // else's jarvis.service -- a wrapper script, a `docker run`, a shell -c that
+  // passes --no-open itself -- would otherwise be nagged about on every `jarvis
+  // status` forever, with no way to silence it. Every unit this repo has ever
+  // generated runs `... jarvis.ts start --foreground`.
+  if (!argv.includes('start')) return null;
+
+  if (!argv.includes('--no-open')) {
     problems.push('opens-a-browser');
   }
 

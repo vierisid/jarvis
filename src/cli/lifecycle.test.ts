@@ -199,6 +199,14 @@ describe('resolveDashboardTarget precedence', () => {
 
   // The #544 bug was in the CLI's wiring, not in the lookup: this is the part
   // bin/jarvis.ts prints and opens, so it is asserted here rather than nowhere.
+  test('the CLI default is the config default', async () => {
+    // resolveDashboardTarget claims to end where startDaemon ends, which holds
+    // only while the copies of the default agree. src/daemon/index.ts keeps a
+    // third (DEFAULT_PORT), module-private, and falls back to daemon.port first.
+    const { DEFAULT_CONFIG } = await import('../config/types.ts');
+    expect(DEFAULT_DAEMON_PORT).toBe(DEFAULT_CONFIG.daemon.port);
+  });
+
   test('a TCP target is printed and opened; a socket is printed and NOT opened', () => {
     expect(describeDashboard({ url: 'http://localhost:8080' }))
       .toEqual({ label: 'http://localhost:8080', openUrl: 'http://localhost:8080' });

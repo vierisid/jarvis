@@ -32,7 +32,8 @@ export async function runDoctor(): Promise<void> {
   // Where the dashboard actually is, for every message below that points at it:
   // JARVIS_PORT or `daemon.port` make a hardcoded localhost:3142 wrong, and in
   // unix-socket mode there is no localhost URL at all (#544).
-  const dashboard = describeDashboard(resolveDashboardTarget());
+  const target = resolveDashboardTarget();
+  const dashboard = describeDashboard(target);
   const setupHint = dashboard.openUrl
     ? `finish setup at ${dashboard.openUrl}`
     : 'finish setup through the proxy in front of daemon.listen';
@@ -166,10 +167,9 @@ export async function runDoctor(): Promise<void> {
 
   // ── Check 7: Port Availability ────────────────────────────────────
 
-  // The port the daemon would bind, in the same precedence it uses -- not
-  // `daemon.port` alone, which misses JARVIS_PORT and reports on a port nothing
-  // will listen on.
-  const target = resolveDashboardTarget();
+  // `target`, resolved once at the top: the port the daemon would bind, in the
+  // same precedence it uses -- not `daemon.port` alone, which misses JARVIS_PORT
+  // and reports on a port nothing will listen on.
   if (target.port === null) {
     results.push({ name: 'Port', status: 'skip', message: 'unix-socket mode (daemon.listen): no TCP port to check' });
   } else {

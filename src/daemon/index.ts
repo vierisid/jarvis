@@ -280,10 +280,14 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
   const fatalCode = FATAL_EXIT_CODES[signal];
 
   if (shutdownInProgress) {
-    // A repeated SIGNAL means the operator/user wants to force-quit now.
+    // A repeated SIGNAL means the operator/user wants to force-quit now. Status
+    // 0, because this is still a shutdown they asked for: `jarvis drain` takes
+    // up to 85s, a `jarvis stop` during it sends the second SIGTERM, and under
+    // Restart=on-failure a non-zero status here brought JARVIS back five seconds
+    // after the CLI reported it stopped (#543).
     if (signal === 'SIGINT' || signal === 'SIGTERM') {
       console.log('\n[Daemon] Second signal - forcing immediate exit');
-      process.exit(1);
+      process.exit(0);
     }
     // But an internal error (uncaughtException/unhandledRejection) while we're
     // already draining -- e.g. a stray rejection from a still-streaming turn --
@@ -453,8 +457,12 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
     console.log('[Daemon] Shutdown complete');
     process.exit(fatalCode ?? 0);
   } catch (error) {
+    // Logged, but not a failure status on a deliberate shutdown: the daemon is
+    // going down because it was asked to, and a non-zero status here would have
+    // Restart=on-failure start it again right after `jarvis stop` reported
+    // success (#543). A crash still carries its own code out.
     console.error('[Daemon] Error during shutdown:', error);
-    process.exit(fatalCode ?? 1);
+    process.exit(fatalCode ?? 0);
   }
 }
 

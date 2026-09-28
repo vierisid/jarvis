@@ -124,6 +124,41 @@ setTimeout(() => { throw new Error('fixture uncaught boom'); }, 10);
     expect(output).toContain('shutdown did not finish within');
   }, 90_000);
 
+  test('a second signal force-quits with 0, so systemd leaves it stopped', async () => {
+    // `jarvis drain` can legitimately take 85s; a `jarvis stop` during it sends
+    // the second SIGTERM. A failure status here would have Restart=on-failure
+    // bring JARVIS back five seconds after the CLI reported it stopped.
+    const { exitCode, output } = await runFixture('second-signal', `
+const { activeTurns } = await import(${ACTIVE_TURNS});
+activeTurns.drain = async () => { await Bun.sleep(5_000); return { drained: true, remaining: 0 }; };
+process.kill(process.pid, 'SIGTERM');
+setTimeout(() => process.kill(process.pid, 'SIGTERM'), 300);
+`);
+    expect(exitCode).toBe(0);
+    expect(output).toContain('Second signal');
+  }, 90_000);
+
+  test('a teardown that throws on SIGTERM still exits 0', async () => {
+    // Same reason: the user asked for the stop, and it is going down. The error
+    // is logged; it must not read as a crash to the supervisor.
+    const { exitCode, output } = await runFixture('teardown-throws', `
+const { activeTurns } = await import(${ACTIVE_TURNS});
+activeTurns.drain = () => { throw new Error('fixture teardown boom'); };
+process.kill(process.pid, 'SIGTERM');
+`);
+    expect(exitCode).toBe(0);
+    expect(output).toContain('Error during shutdown');
+  }, 90_000);
+
+  test('a teardown that throws on a crash still exits non-zero', async () => {
+    const { exitCode } = await runFixture('teardown-throws-fatal', `
+const { activeTurns } = await import(${ACTIVE_TURNS});
+activeTurns.drain = () => { throw new Error('fixture teardown boom'); };
+setTimeout(() => { throw new Error('fixture uncaught boom'); }, 10);
+`);
+    expect(exitCode).toBe(3);
+  }, 90_000);
+
   test('a crash during a deliberate drain still exits 0', async () => {
     // A stray rejection from a still-streaming turn must not turn `jarvis stop`
     // into a failure, and must not abort the drain either.

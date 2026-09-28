@@ -12,8 +12,9 @@
  *   jarvis version                          Print version
  *   jarvis help                             Show this help
  *
- * First-time setup happens in the dashboard at http://localhost:3142
- * after `jarvis start` — there is no longer a CLI wizard.
+ * First-time setup happens in the dashboard after `jarvis start` - there is no
+ * longer a CLI wizard. `jarvis start` prints its URL, which follows the port the
+ * daemon binds (resolveDashboardTarget), not a fixed one.
  */
 
 import { join } from 'node:path';
@@ -345,16 +346,40 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
   }
 }
 
+/**
+ * "Stopped" is ambiguous under systemd: the unit bounds a crash loop
+ * (StartLimitBurst, src/cli/autostart.ts), and once that limit is hit systemd
+ * leaves the unit failed and never starts it again by itself. Without this, that
+ * reads exactly like a daemon the user stopped -- and nothing else would say so.
+ * Best effort: costs one `systemctl show` only when a unit is installed.
+ */
+async function printSystemdFailure(): Promise<void> {
+  if (process.platform !== 'linux') return;
+  try {
+    const { isAutostartInstalled } = await import('../src/cli/autostart.ts');
+    if (!isAutostartInstalled()) return;
+    const { readUnitFailure } = await import('../src/cli/systemd-unit.ts');
+    const failure = readUnitFailure('jarvis.service');
+    if (!failure) return;
+    console.log(c.yellow(failure.startLimitHit
+      ? '  ! systemd stopped restarting jarvis.service: it failed too many times in a row.'
+      : `  ! jarvis.service is failed (${failure.result}).`));
+    console.log(c.dim('    Why:     journalctl --user -u jarvis.service -n 50'));
+    console.log(c.dim('    Recover: systemctl --user reset-failed jarvis.service && systemctl --user start jarvis.service'));
+  } catch { /* the status above is what matters */ }
+}
+
 async function cmdStatus(): Promise<void> {
   const pid = isLocked();
   if (pid) {
     console.log(`${c.green('●')} JARVIS is ${c.green('running')} (PID ${pid})`);
 
-    // The port the RUNNING daemon recorded when it bound, not the one config
-    // says today: that is resolveStopPort's whole job, and it also knows when
-    // there is no port to print because daemon.listen is a unix socket. No
-    // fallback: every source it reads swallows its own errors, and a `?? 3142`
-    // here is exactly the wrong answer #544 was about.
+    // The port the RUNNING daemon recorded when it bound, which is what
+    // resolveStopPort reads first, and which also tells it when there is no port
+    // to print at all because daemon.listen is a unix socket. It falls back to
+    // JARVIS_PORT, then daemon.port, then the default, for the narrow window
+    // where a booting daemon holds the lock but has not recorded its port yet.
+    // No try/catch: every source it reads swallows its own errors.
     const resolution = resolveStopPort();
     const { label } = describeDashboard({
       url: resolution.port === null ? null : `http://localhost:${resolution.port}`,
@@ -365,6 +390,7 @@ async function cmdStatus(): Promise<void> {
   } else {
     console.log(`${c.red('●')} JARVIS is ${c.red('stopped')}`);
     console.log(c.dim(`  Start with: jarvis start`));
+    await printSystemdFailure();
   }
 
   // Written by an update that ran as a systemd transient, out of sight (#525).
@@ -387,7 +413,7 @@ async function cmdStatus(): Promise<void> {
     const { checkInstalledAutostart, describeAutostartProblem } = await import('../src/cli/autostart.ts');
     const drift = checkInstalledAutostart();
     if (drift) {
-      console.log(c.yellow(`  ! ${drift.path} predates this version of JARVIS:`));
+      console.log(c.yellow(`  ! ${drift.path} still has what this version fixes:`));
       for (const problem of drift.problems) {
         console.log(c.dim(`      ${describeAutostartProblem(problem)}`));
       }
