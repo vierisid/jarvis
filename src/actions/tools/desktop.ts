@@ -466,7 +466,11 @@ export const desktopPressKeysTool: ToolDefinition = {
     },
     keys: {
       type: 'string',
-      description: 'Comma-separated key names (e.g., "ctrl,s" or "alt,f4" or "enter"). Modifiers: ctrl, alt, shift, win.',
+      // "Modifiers first" is load-bearing, not style: the local Linux path
+      // presses the keys in the order given, so "a,ctrl" types "a" there while
+      // a sidecar, which sorts modifiers to the front, reads it as Ctrl+A.
+      // Saying so here is what keeps the two from diverging (#524).
+      description: 'Comma-separated key names, modifiers first (e.g., "ctrl,s" or "alt,f4" or "enter"). Modifiers: ctrl, alt, shift, win.',
       required: true,
     },
   },

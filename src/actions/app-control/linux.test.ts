@@ -4,7 +4,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, sy
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { ActionOutcomeError } from '../action-outcome.ts';
-import { toXdotoolKeySequence } from './linux.ts';
+import { FRIENDLY_KEY_NAMES, mapKeyToXdotool, toXdotoolKeySequence } from './linux.ts';
 
 // Text and key names come from the model. xdotool reads a leading "-" as an
 // option, and `xdotool type --file=PATH` types out PATH (#518), so every one of
@@ -110,7 +110,9 @@ describe('toXdotoolKeySequence', () => {
   test('joins a chord with "+" and passes keysym names and xdotool aliases through', () => {
     expect(toXdotoolKeySequence(['ctrl', 'shift', 't'])).toBe('ctrl+shift+t');
     expect(toXdotoolKeySequence(['super'])).toBe('super');
-    for (const key of ['Return', 'enter', 'Tab', 'minus', 'slash', 'F5', 'KP_Add', 'XF86AudioPlay', 'U20AC', '0x61', '1']) {
+    // "enter" used to be in this list: it is an xdotool alias, and now also a
+    // friendly name mapped to the keysym it aliases. Same key either way.
+    for (const key of ['Return', 'Tab', 'minus', 'slash', 'F5', 'KP_Add', 'XF86AudioPlay', 'U20AC', '0x61', '1']) {
       expect(toXdotoolKeySequence([key])).toBe(key);
     }
   });
@@ -170,6 +172,160 @@ describe('toXdotoolKeySequence', () => {
       expect(error.outcome).toMatchObject({ status: 'error', code: 'DESKTOP_INVALID_KEYS', effect: 'not_started' });
       expect(error.message).toMatch(/^Error: .*Nothing was pressed\.$/);
     }
+  });
+});
+
+// ── Friendly key names (#524) ────────────────────────────────────────
+//
+// desktop_press_keys advertises "ctrl,s", "alt,f4", "enter", "tab", "escape"
+// and "Modifiers: ctrl, alt, shift, win". X keysym names are case-sensitive and
+// xdotool knows no "win", so the local path used to refuse or mis-press exactly
+// the names the description tells the model to use, while a routed call worked.
+
+const SIDECAR_LINUX_GO = new URL('../../../sidecar/desktop_linux.go', import.meta.url);
+
+/**
+ * The sidecar's tables, read out of sidecar/desktop_linux.go: the `case` arms
+ * of mapKeyToXdotool and the modifier arm of convertKeysToXdotool. Parsed
+ * rather than copied, so the two sides cannot drift apart silently -- a rename
+ * on the Go side changes what this test expects.
+ *
+ * `unresolved` holds any `case` arm whose body the parser did not recognise --
+ * a new arm returning a constant or a call rather than a literal. Without it a
+ * new sidecar name in an unexpected shape would simply not be collected, and
+ * every assertion below would still pass while the local table lacked it.
+ */
+function sidecarKeyTable(): { table: Map<string, string>; unresolved: string[] } {
+  const source = readFileSync(SIDECAR_LINUX_GO, 'utf-8');
+  const body = (fn: string): string => {
+    const start = source.indexOf(`func ${fn}(`);
+    if (start < 0) throw new Error(`${fn} not found in ${SIDECAR_LINUX_GO.pathname}`);
+    const end = source.indexOf('\n}\n', start);
+    if (end < 0) throw new Error(`could not find the end of ${fn}`);
+    return source.slice(start, end);
+  };
+  const table = new Map<string, string>();
+  const unresolved: string[] = [];
+  const collect = (fn: string, target: RegExp) => {
+    let pending: string[] = [];
+    for (const line of body(fn).split('\n')) {
+      const arm = /^\s*case (.+):\s*$/.exec(line);
+      if (arm || /^\s*default:\s*$/.test(line)) {
+        // The arm before this one never produced a target.
+        unresolved.push(...pending);
+        pending = arm ? [...arm[1]!.matchAll(/"([^"]*)"/g)].map(m => m[1]!) : [];
+        if (!arm) break;
+        continue;
+      }
+      const to = target.exec(line);
+      if (to && pending.length > 0) {
+        for (const name of pending) table.set(name, to[1]!);
+        pending = [];
+      }
+    }
+    unresolved.push(...pending);
+  };
+  collect('mapKeyToXdotool', /^\s*return "([^"]*)"\s*$/);
+  collect('convertKeysToXdotool', /^\s*modifiers = append\(modifiers, "([^"]*)"\)\s*$/);
+  return { table, unresolved };
+}
+
+// A checkout without the sidecar tree (brain-only, or after a move) would
+// otherwise throw while this module is evaluated and take down every test in
+// this file, including the unrelated #518 argv-hygiene ones.
+const hasSidecarSource = existsSync(SIDECAR_LINUX_GO);
+
+describe.skipIf(!hasSidecarSource)('friendly key names match the sidecar', () => {
+  let sidecar: Map<string, string>;
+  let unresolved: string[];
+
+  beforeAll(() => {
+    ({ table: sidecar, unresolved } = sidecarKeyTable());
+  });
+
+  test('the sidecar tables were actually parsed, whole', () => {
+    // A parser that silently matched nothing -- or matched only part -- would
+    // make every assertion below vacuous, so pin the shape of what it found.
+    expect(sidecar.size).toBeGreaterThanOrEqual(30);
+    expect([...sidecar.entries()]).toEqual(expect.arrayContaining([
+      ['win', 'super'], ['escape', 'Escape'], ['f4', 'F4'], ['pgdn', 'Page_Down'], ['control', 'ctrl'],
+    ]));
+    // Every `case` arm was understood. If this fails, the sidecar grew an arm
+    // in a shape the parser does not read -- widen the parser, then port the
+    // name, rather than relaxing this.
+    expect(unresolved).toEqual([]);
+  });
+
+  test('every name the sidecar maps, the local path maps the same way', () => {
+    const local = new Map([...sidecar.keys()].map(name => [name, mapKeyToXdotool(name)]));
+    expect(Object.fromEntries(local)).toEqual(Object.fromEntries(sidecar));
+  });
+
+  test('and the local path maps nothing the sidecar does not', () => {
+    // The other direction: an extra entry here would press a key no sidecar
+    // presses, which is the same silent divergence the other way round.
+    expect(Object.fromEntries(FRIENDLY_KEY_NAMES)).toEqual(Object.fromEntries(sidecar));
+  });
+
+  test('names are matched case-insensitively, as the sidecar lowercases first', () => {
+    expect(mapKeyToXdotool('ESCAPE')).toBe('Escape');
+    expect(mapKeyToXdotool('F4')).toBe('F4');
+    expect(mapKeyToXdotool('PgUp')).toBe('Page_Up');
+    expect(mapKeyToXdotool('Win')).toBe('super');
+  });
+
+  test('an unmapped name passes through unchanged, as the sidecar default arm does', () => {
+    // Keysym names, xdotool aliases, single characters and names neither side
+    // knows: mapping must not invent a key for any of them.
+    for (const key of ['minus', 'slash', 'KP_Add', 'XF86AudioPlay', 'U20AC', '0x61', 'a', 'Z', '1', 'é', 'Help', 'nosuchkey', '-h', '']) {
+      expect(mapKeyToXdotool(key)).toBe(key);
+    }
+  });
+});
+
+describe('toXdotoolKeySequence maps the advertised key names', () => {
+  test('the names the tool description gives as examples reach xdotool as keys', () => {
+    // Each of these was a "No such key name" from xdotool before #524.
+    expect(toXdotoolKeySequence(['alt', 'f4'])).toBe('alt+F4');
+    expect(toXdotoolKeySequence(['escape'])).toBe('Escape');
+    expect(toXdotoolKeySequence(['enter'])).toBe('Return');
+    expect(toXdotoolKeySequence(['tab'])).toBe('Tab');
+    expect(toXdotoolKeySequence(['win'])).toBe('super');
+    expect(toXdotoolKeySequence(['win', 'd'])).toBe('super+d');
+    expect(toXdotoolKeySequence(['ctrl', 'pgdn'])).toBe('ctrl+Page_Down');
+    expect(toXdotoolKeySequence(['control', 'shift', 'esc'])).toBe('ctrl+shift+Escape');
+  });
+
+  test('a chord written with "+" is mapped too', () => {
+    expect(toXdotoolKeySequence(['alt+f4'])).toBe('alt+F4');
+    expect(toXdotoolKeySequence(['win+shift+s'])).toBe('super+shift+s');
+  });
+
+  test('the chord keeps the order it was given; modifiers are not hoisted', () => {
+    // The sidecar hoists modifiers because it parses one comma-separated
+    // string. Doing it here would turn "a,ctrl" into Ctrl+A -- a different
+    // action, silently.
+    expect(toXdotoolKeySequence(['a', 'ctrl'])).toBe('a+ctrl');
+  });
+
+  test('mapping does not let an option-like or command-like name through', () => {
+    for (const key of ['-h', '--delay=99999', '--']) {
+      expect(() => toXdotoolKeySequence([key])).toThrow(/Invalid key name/);
+    }
+    for (const key of ['exec', 'type', 'sleep']) {
+      expect(() => toXdotoolKeySequence([key])).toThrow(/xdotool command name/);
+    }
+    // No mapped name is itself a command name, so mapping cannot create one.
+    for (const to of FRIENDLY_KEY_NAMES.values()) {
+      expect(toXdotoolKeySequence([to])).toBe(to);
+    }
+  });
+
+  test('an empty name is still skipped, and the count is of real keys', () => {
+    expect(toXdotoolKeySequence(['escape', '', 'f4'])).toBe('Escape++F4');
+    expect(() => toXdotoolKeySequence(['+'])).toThrow(/No keys/);
+    expect(toXdotoolKeySequence(['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8'])).toBe('F1+F2+F3+F4+F5+F6+F7+F8');
+    expect(() => toXdotoolKeySequence(['f1', 'f2', 'f3', 'f4', 'f5', 'f6', 'f7', 'f8', 'f9'])).toThrow(/Too many keys in one chord \(9\)/);
   });
 });
 

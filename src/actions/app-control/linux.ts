@@ -49,6 +49,67 @@ const MAX_CHORD_KEYS = 8;
  */
 const KEYSYMS_NAMED_LIKE_COMMANDS = new Set(['Help']);
 
+/**
+ * The friendly key names the tool description advertises ("ctrl,s", "alt,f4",
+ * "enter", "tab", "escape"; modifiers ctrl, alt, shift, win), mapped to the
+ * names xdotool actually presses. X keysym names are case-sensitive, so
+ * "escape", "f4" and "pgup" are not keys at all: without this table the local
+ * path refused exactly the names the description tells the model to use, while
+ * the same names worked when the call was routed to a sidecar.
+ *
+ * A PORT of the sidecar's mapKeyToXdotool plus the modifier arm of
+ * convertKeysToXdotool (sidecar/desktop_linux.go); keep the two in sync. Every
+ * entry is the sidecar's, and only the sidecar's: a name the sidecar leaves
+ * alone is left alone here too, so a chord cannot press one key locally and
+ * another through a sidecar.
+ *
+ * Unlike the sidecar this does NOT reorder anything. The sidecar takes a
+ * comma-separated string and hoists the modifiers to the front; here the chord
+ * arrives as a list and its order is the caller's. Hoisting would silently turn
+ * "a,ctrl" (press a, then hold ctrl) into Ctrl+A, i.e. a different action, and
+ * the order a model writes is already modifiers-first.
+ */
+export const FRIENDLY_KEY_NAMES: ReadonlyMap<string, string> = new Map(Object.entries({
+  // convertKeysToXdotool's modifier arm. xdotool's own aliases, so these are
+  // identities except "control", which xdotool does accept but the sidecar
+  // normalizes.
+  ctrl: 'ctrl', control: 'ctrl', alt: 'alt', shift: 'shift', super: 'super', win: 'super',
+  // mapKeyToXdotool.
+  enter: 'Return', return: 'Return',
+  tab: 'Tab',
+  escape: 'Escape', esc: 'Escape',
+  backspace: 'BackSpace', bs: 'BackSpace',
+  delete: 'Delete', del: 'Delete',
+  up: 'Up', down: 'Down', left: 'Left', right: 'Right',
+  home: 'Home', end: 'End',
+  pageup: 'Page_Up', pgup: 'Page_Up',
+  pagedown: 'Page_Down', pgdn: 'Page_Down',
+  space: 'space',
+  f1: 'F1', f2: 'F2', f3: 'F3', f4: 'F4', f5: 'F5', f6: 'F6',
+  f7: 'F7', f8: 'F8', f9: 'F9', f10: 'F10', f11: 'F11', f12: 'F12',
+}));
+
+/**
+ * One key name as xdotool spells it. An unknown name passes through unchanged
+ * (the sidecar's default arm), so X keysym names, xdotool aliases and single
+ * characters are untouched and the validation below still sees them.
+ *
+ * No mapped name is option-shaped or an xdotool command name, so mapping can
+ * only ever turn a name xdotool would refuse into one it presses -- never the
+ * other way round, and never past the checks in toXdotoolKeySequence, which run
+ * on the mapped names as the sidecar's run on its mapped combo.
+ *
+ * One input lowercases differently from the sidecar's `strings.ToLower`: JS
+ * expands U+0130 (dotted capital I) to "i" + U+0307, Go's simple fold does not,
+ * so "WİN" is "win" to the sidecar and stays "WİN" here. That direction is the
+ * safe one -- an unmapped name is then REFUSED by KEYSYM_NAME below, never
+ * pressed as some other key. Only names containing "i" can differ at all
+ * (shift, win, right); U+0131, U+212A and U+1E9E fold the same in both.
+ */
+export function mapKeyToXdotool(key: string): string {
+  return FRIENDLY_KEY_NAMES.get(key.toLowerCase()) ?? key;
+}
+
 /** A refused chord never reaches xdotool: the caller should fix the key names, not check what happened. */
 function invalidKeys(message: string): ActionOutcomeError {
   return new ActionOutcomeError({ status: 'error', code: 'DESKTOP_INVALID_KEYS', effect: 'not_started',
@@ -58,12 +119,17 @@ function invalidKeys(message: string): ActionOutcomeError {
 /**
  * Join a chord like ["ctrl", "shift", "t"] into xdotool's "ctrl+shift+t",
  * refusing anything that xdotool would read as other than a key sequence.
- * Each "+"-separated name is checked, so a key given as "ctrl+s" still works;
- * empty names are skipped, as xdotool skips them. The checks run in the same
- * order as the sidecar's: names, then empty, then count, then command names.
+ * Each "+"-separated name is mapped through mapKeyToXdotool and then checked,
+ * so a key given as "ctrl+s" still works and "alt+f4" becomes "alt+F4"; empty
+ * names are skipped, as xdotool skips them. Mapping comes first and the checks
+ * see only mapped names, in the same order as the sidecar's: names, then empty,
+ * then count, then command names.
  */
 export function toXdotoolKeySequence(keys: string[]): string {
-  const sequence = keys.join('+');
+  // Empty segments are preserved rather than dropped (mapKeyToXdotool returns
+  // "" for one), so the returned sequence is what libxdo gets and skips,
+  // exactly as before the mapping existed.
+  const sequence = keys.join('+').split('+').map(part => mapKeyToXdotool(part)).join('+');
   const names = sequence.split('+').filter(Boolean);
   for (const name of names) {
     if (!KEYSYM_NAME.test(name)) {
