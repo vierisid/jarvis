@@ -34,7 +34,11 @@ func TestCheckNavigationURLAllows(t *testing.T) {
 		{"about blank", "about:blank", "about:blank"},
 		{"about blank with fragment", "about:blank#file:", "about:blank#file:"},
 		{"about blank with query", "about:blank?x", "about:blank?x"},
-		{"about blank mixed case", "about:BLANK", "about:BLANK"},
+		// Canonicalised: Chrome compares about:blank's path case sensitively, so
+		// the empty page has to be spelled the way it was checked.
+		{"about blank mixed case", "about:BLANK", "about:blank"},
+		{"about blank mixed case with fragment", "ABOUT:Blank#x", "about:blank#x"},
+		{"about blank mixed case with query", "about:BLANK?x=1", "about:blank?x=1"},
 		// The parity fixture loads its page this way; the data payload must
 		// reach Chrome byte for byte.
 		{"data html", "data:text/html,%3Ch1%3Ehi%3C%2Fh1%3E", "data:text/html,%3Ch1%3Ehi%3C%2Fh1%3E"},
@@ -46,7 +50,11 @@ func TestCheckNavigationURLAllows(t *testing.T) {
 		// Userinfo that merely LOOKS like a DevTools endpoint: the host is
 		// example.com, so this is an ordinary web page.
 		{"devtools port as userinfo", "http://127.0.0.1:9222@example.com/", "http://127.0.0.1:9222@example.com/"},
-		{"public host on a devtools port", "http://example.com:9222/", "http://example.com:9222/"},
+		// Ordinary IDN browsing keeps working: a non-ASCII host is only folded
+		// for the loopback comparison, never rewritten.
+		{"idn host", "http://例.com/", "http://例.com/"},
+		{"idn host with path", "https://münchen.de/x", "https://münchen.de/x"},
+		{"punycode host", "http://xn--fsq.com/", "http://xn--fsq.com/"},
 		// WHATWG skips the slashes after a special scheme; so do we, and the
 		// normalised form is what Chrome is handed.
 		{"single slash authority", "http:/example.com/x", "http://example.com/x"},
@@ -135,6 +143,33 @@ func TestCheckNavigationURLRefuses(t *testing.T) {
 		{"devtools fullwidth digits", "http://１２７.0.0.1:9222/", "DevTools endpoint"},
 		{"devtools ideographic dots", "http://127。0。0。1:9222/", "DevTools endpoint"},
 		{"devtools fullwidth localhost", "http://ｌｏｃａｌｈｏｓｔ:9222/", "DevTools endpoint"},
+		// UTS46 DELETES these before Chrome resolves the host, so all three
+		// reach the local endpoint. The fold catches them; the port refusal
+		// below catches whatever the fold does not.
+		{"devtools soft hyphen in localhost", "http://loc­alhost:9222/", "DevTools endpoint"},
+		{"devtools zero-width joiner in an IP", "http://127.0.0‍.1:9222/", "DevTools endpoint"},
+		{"devtools one dot leader", "http://127․0․0․1:9222/", "DevTools endpoint"},
+		{"devtools circled digits", "http://①②⑦.0.0.1:9222/", "DevTools endpoint"},
+		// A DevTools port is refused whatever the host resolves to -- unlike the
+		// daemon, and on purpose: no enumeration of Chrome's host mappings is
+		// complete, and the Fetch guard blocks these ports on any host anyway.
+		{"devtools port on a public host", "http://example.com:9222/", "DevTools port"},
+		{"devtools port on a resolving name", "http://127.0.0.1.nip.io:9222/", "DevTools port"},
+		{"devtools port on an idn host", "https://例.com:9223/", "DevTools port"},
+		// Refused today only because net/url rejects a host escape whose first
+		// nibble is < 8. Pinned: if that ever relaxes, these become bypasses.
+		{"percent-escaped dot in host", "http://127.0.0%2E1:9222/", "is not a valid URL"},
+		{"percent-escaped letter in host", "http://%6Cocalhost:9222/", "is not a valid URL"},
+		{"percent-escaped brackets in host", "http://%5B::1%5D:9222/", "is not a valid URL"},
+		// Interior control bytes: Chrome strips TAB/CR/LF (covered above) but
+		// rejects the rest, and so do we.
+		{"interior SOH in host", "http://127.0.0.1\x01:9222/", "control characters"},
+		{"interior VT in host", "http://127.0.0.1\x0b:9222/", "control characters"},
+		{"interior DEL in host", "http://127.0.0.1\x7f:9222/", "control characters"},
+		{"interior SOH in path", "http://127.0.0.1:9222/a\x01b", "control characters"},
+		// A TRAILING control byte is trimmed, exactly as Chrome trims it, so
+		// this is the DevTools URL and is refused as one.
+		{"trailing SOH", "http://127.0.0.1:9222/\x01", "DevTools endpoint"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -147,6 +182,56 @@ func TestCheckNavigationURLRefuses(t *testing.T) {
 			}
 			if !strings.Contains(err.Error(), tc.want) {
 				t.Fatalf("checkNavigationURL(%q) error %q does not mention %q", tc.in, err, tc.want)
+			}
+		})
+	}
+}
+
+// The invariant the whole design rests on: the string handed to Page.navigate
+// parses to the same scheme, host and port that were checked. Asserted as a
+// property over the allow table rather than case by case, because that is what
+// catches a normalisation bug as a class.
+func TestAllowedURLsReparseToWhatWasChecked(t *testing.T) {
+	for _, raw := range []string{
+		"https://example.com/", "http://example.com/a?b=c#d", "HTTPS://Example.com/A",
+		"about:blank", "about:BLANK#x", "data:text/html,<h1>hi</h1>",
+		"http://127.0.0.1:3000/", "http://localhost/", "http://127.0.0.1:9222@example.com/",
+		"http:/example.com/x", "http:example.com/x", "http:\\\\example.com/x",
+		"http://example.com\\a\\b", "http://例.com/", "http://xn--fsq.com/",
+		"  https://example.com/  ",
+	} {
+		t.Run(raw, func(t *testing.T) {
+			got, err := checkNavigationURL(raw)
+			if err != nil {
+				t.Fatalf("checkNavigationURL(%q) refused: %v", raw, err)
+			}
+			// Re-checking the returned URL must reach the same verdict and the
+			// same string: a URL that passed cannot become one that would not.
+			again, err := checkNavigationURL(got)
+			if err != nil {
+				t.Fatalf("the returned %q would be refused on its own: %v", got, err)
+			}
+			if again != got {
+				t.Fatalf("checkNavigationURL is not idempotent: %q -> %q -> %q", raw, got, again)
+			}
+			u, err := url.Parse(got)
+			if err != nil {
+				t.Fatalf("the returned %q does not parse: %v", got, err)
+			}
+			scheme := strings.ToLower(u.Scheme)
+			if !allowedNavigationSchemes[scheme] && scheme != "about" {
+				t.Fatalf("the returned %q has scheme %q, which is not on the allowlist", got, scheme)
+			}
+			if scheme == "http" || scheme == "https" {
+				if u.Host == "" || u.Opaque != "" {
+					t.Fatalf("the returned %q has no authority (host %q, opaque %q)", got, u.Host, u.Opaque)
+				}
+				if isDevtoolsPort(effectiveURLPort(u)) {
+					t.Fatalf("the returned %q is on a DevTools port after being allowed", got)
+				}
+			}
+			if isLocalContentURL(got) || isPrivilegedPageURL(got) {
+				t.Fatalf("the returned %q would be refused as unreadable", got)
 			}
 		})
 	}
@@ -248,6 +333,125 @@ func TestIsLoopbackHost(t *testing.T) {
 	}
 }
 
+// The parity fixture's real spelling, not a hand-written approximation of it:
+// browser_parity_test.go builds its data: URL this way and the page must reach
+// Chrome byte for byte.
+func TestParityFixtureDataURLSurvivesTheAllowlist(t *testing.T) {
+	in := "data:text/html," + url.PathEscape(parityTestPage)
+	got, err := checkNavigationURL(in)
+	if err != nil {
+		t.Fatalf("the parity fixture URL was refused: %v", err)
+	}
+	if got != in {
+		t.Fatalf("the parity fixture URL was rewritten:\n got: %s\nwant: %s", got, in)
+	}
+}
+
+// Chrome strips TAB/CR/LF from a URL wherever they appear, data: payloads
+// included, so this is correct rather than surprising -- pinned because it is
+// surprising.
+func TestDataURLNewlinesAreStrippedLikeChromeDoes(t *testing.T) {
+	got, err := checkNavigationURL("data:text/html,<p>a\nb</p>")
+	if err != nil {
+		t.Fatalf("data: with a newline was refused: %v", err)
+	}
+	if got != "data:text/html,<p>ab</p>" {
+		t.Fatalf("got %q, want the newline removed", got)
+	}
+}
+
+func TestWhatwgIPv4(t *testing.T) {
+	ok := map[string]uint32{
+		"127.0.0.1":  0x7f000001,
+		"127.1":      0x7f000001,
+		"127.0.1":    0x7f000001,
+		"0177.0.0.1": 0x7f000001,
+		"0x7f.1":     0x7f000001,
+		"0x7f000001": 0x7f000001,
+		"2130706433": 0x7f000001,
+		"2130706432": 0x7f000000,
+		"0":          0,
+		"0x":         0,
+		"1.2.3.4":    0x01020304,
+		"127.0.0.1.": 0x7f000001, // one trailing dot is stripped
+		// A single number covers all four bytes, so "256" is 0.0.1.0 -- an
+		// address, just not a loopback one.
+		"256": 0x00000100,
+	}
+	for host, want := range ok {
+		t.Run("ipv4/"+host, func(t *testing.T) {
+			got, isIP := whatwgIPv4(host)
+			if !isIP {
+				t.Fatalf("whatwgIPv4(%q) said it is not an address", host)
+			}
+			if got != want {
+				t.Fatalf("whatwgIPv4(%q) = %#x, want %#x", host, got, want)
+			}
+		})
+	}
+	notIP := []string{
+		"", "example.com", "127.0.0.1.nip.io", "08.0.0.1", "127.0.0.256",
+		"1.2.3.4.5", "127.0.0.1..", "0x7f.0x0.0x0.0x1x", "99999999999999999999",
+		"4294967296", "127.0.0.-1", "256.0.0.1",
+	}
+	for _, host := range notIP {
+		t.Run("notip/"+host, func(t *testing.T) {
+			if _, isIP := whatwgIPv4(host); isIP {
+				t.Fatalf("whatwgIPv4(%q) claimed it is an address", host)
+			}
+		})
+	}
+}
+
+// The browser's own pages are refused on the read paths (beyond #526's three
+// prefixes), but an error page is not: a snapshot of one is how the model finds
+// out why a page did not load.
+func TestIsPrivilegedPageURL(t *testing.T) {
+	privileged := []string{
+		"chrome://settings/passwords", "CHROME://history", "chrome-untrusted://x",
+		"chrome-extension://abcdef/page.html", "devtools://devtools/bundled/inspector.html",
+		"chrome-search://local-ntp/local-ntp.html",
+	}
+	for _, u := range privileged {
+		t.Run("privileged/"+u, func(t *testing.T) {
+			if !isPrivilegedPageURL(u) {
+				t.Fatalf("isPrivilegedPageURL(%q) = false, want true", u)
+			}
+		})
+	}
+	ordinary := []string{
+		"https://example.com/", "about:blank", "data:text/html,hi", "",
+		"chrome-error://chromewebdata/", "https://chrome.example.com/",
+		"https://example.com/chrome://settings",
+	}
+	for _, u := range ordinary {
+		t.Run("ordinary/"+u, func(t *testing.T) {
+			if isPrivilegedPageURL(u) {
+				t.Fatalf("isPrivilegedPageURL(%q) = true, want false", u)
+			}
+		})
+	}
+}
+
+func TestIsDrivableURL(t *testing.T) {
+	drivable := []string{"https://example.com/", "about:blank", "data:text/html,hi", "http://127.0.0.1:3000/"}
+	for _, u := range drivable {
+		if !isDrivableURL(u) {
+			t.Fatalf("isDrivableURL(%q) = false, want true", u)
+		}
+	}
+	notDrivable := []string{
+		"file:///etc/passwd", "chrome://settings", "devtools://devtools/x",
+		"view-source:https://example.com", "chrome-error://chromewebdata/",
+		"http://127.0.0.1:9222/json/list", "", "about:settings",
+	}
+	for _, u := range notDrivable {
+		if isDrivableURL(u) {
+			t.Fatalf("isDrivableURL(%q) = true, want false", u)
+		}
+	}
+}
+
 func TestIsLocalContentURL(t *testing.T) {
 	local := []string{
 		"file:///etc/passwd", "FILE:///etc/passwd", "file://localhost/etc/passwd",
@@ -285,6 +489,9 @@ func TestBlockedRequestReason(t *testing.T) {
 		"https://127.0.0.1:9223/json/new":  "DevTools port",
 		"http://127.0.0.1.nip.io:9222/x":   "DevTools port",
 		"ws://127.0.0.1:9222/devtools/abc": "DevTools port",
+		"wss://127.0.0.1:9223/devtools":    "DevTools port",
+		"http://0.0.0.0:9222/":             "DevTools port",
+		"ftp://example.com:9222/x":         "DevTools port",
 		"not a url":                        "unparseable",
 	}
 	for u, want := range blocked {
@@ -302,6 +509,14 @@ func TestBlockedRequestReason(t *testing.T) {
 		"https://example.com/", "http://example.com/", "https://example.com/a:9222/b",
 		"https://example.com/?redirect=http://127.0.0.1:9222/", "data:text/html,hi",
 		"about:blank", "blob:https://example.com/uuid", "https://example.com:443/",
+		// Chrome leaves a stray "%" literal in a path; net/url refuses to parse
+		// it. These reach the guard because ":9222" matched the port pattern as
+		// TEXT, and failing them would break a page over a punctuation mark.
+		"https://example.com/x:9222/100%discount",
+		"https://example.com/x:9222/a%zz",
+		"https://example.com/x:9222/a%",
+		"https://example.com/x:9222/a%2",
+		"ftp://example.com/x", // no port: the default arm, not a DevTools port
 	}
 	for _, u := range allowed {
 		t.Run("allowed/"+u, func(t *testing.T) {
@@ -343,6 +558,9 @@ func TestEffectiveURLPortDefaults(t *testing.T) {
 		"https://example.com/":      443,
 		"http://example.com:8080/":  8080,
 		"https://example.com:9222/": 9222,
+		"ws://example.com/":         80,
+		"wss://example.com/":        443,
+		"ftp://example.com/":        80,
 	}
 	for raw, want := range cases {
 		t.Run(raw, func(t *testing.T) {
@@ -351,5 +569,43 @@ func TestEffectiveURLPortDefaults(t *testing.T) {
 				t.Fatalf("effectiveURLPort(%q) = %d, want %d", raw, got, want)
 			}
 		})
+	}
+
+	// url.URL.Port() only ever returns digits (a non-numeric ":suffix" is part
+	// of the host), so effectiveURLPort's -1 arm is unreachable today. Pin the
+	// direction it fails in, for whoever makes it reachable.
+	if !isDevtoolsPort(-1) {
+		t.Fatal("isDevtoolsPort(-1) = false: an unreadable port must fail closed")
+	}
+}
+
+// A refusal must not echo a string that looks like a valid URL, or the model
+// retries the same bytes. Chrome rejects interior control bytes in a host, and
+// so do we -- but the message has to say that is why.
+func TestControlCharacterRefusalSaysSo(t *testing.T) {
+	_, err := checkNavigationURL("http://127.0.0.1\x01:9222/")
+	if err == nil {
+		t.Fatal("a URL with a control byte in the host was allowed")
+	}
+	if !strings.Contains(err.Error(), "control characters") {
+		t.Fatalf("refusal %q does not mention the control characters", err)
+	}
+	if strings.Contains(err.Error(), "is not a valid URL") {
+		t.Fatalf("refusal %q still shows the stripped URL as if it were the problem", err)
+	}
+}
+
+// truncateURL counts runes, so a multibyte URL is not cut mid-character.
+func TestTruncateURLIsRuneSafe(t *testing.T) {
+	long := "https://example.com/" + strings.Repeat("例", 200)
+	got := truncateURL(long, 120)
+	if len([]rune(got)) != 120 {
+		t.Fatalf("truncateURL returned %d runes, want 120", len([]rune(got)))
+	}
+	if !strings.HasSuffix(got, "...") {
+		t.Fatalf("truncateURL(%q...) = %q, want an ellipsis", long[:20], got)
+	}
+	if strings.ContainsRune(got, '�') {
+		t.Fatalf("truncateURL cut a rune in half: %q", got)
 	}
 }

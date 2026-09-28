@@ -33,6 +33,10 @@ import (
 
 // mainFrameURL is the URL of the attached page's main frame, as the BROWSER
 // knows it.
+//
+// Do NOT "simplify" this onto the page's own `location.href` (which the snapshot
+// script already reports): a page can be talked into lying about that, and the
+// whole point of asking the browser is that it cannot.
 func (c *cdpClient) mainFrameURL() (string, error) {
 	raw, err := c.send("Page.getFrameTree", nil)
 	if err != nil {
@@ -65,9 +69,17 @@ func (c *cdpClient) assertNotLocalContent() error {
 // refuseLocalContent is the shared refusal, so the frame-tree check and the
 // snapshot's own URL check word it identically.
 func refuseLocalContent(url string) error {
-	if !isLocalContentURL(url) {
-		return nil
+	if isLocalContentURL(url) {
+		return fmt.Errorf("Refusing to read %s: the browser does not show local files to the model",
+			truncateURL(url, 200))
 	}
-	return fmt.Errorf("Refusing to read %s: the browser does not show local files to the model",
-		truncateURL(url, 200))
+	// Beyond the daemon, and beyond the three prefixes #526 names: the browser's
+	// own pages (chrome://settings/passwords, chrome://history, devtools://) are
+	// not local files but are worth as much, and a headed automation browser has
+	// an address bar. See privilegedPagePrefixes.
+	if isPrivilegedPageURL(url) {
+		return fmt.Errorf("Refusing to read %s: the browser does not show its own internal pages to the model",
+			truncateURL(url, 200))
+	}
+	return nil
 }

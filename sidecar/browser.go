@@ -306,14 +306,15 @@ func launchCDP(cfg *SidecarConfig, headless bool) (*cdpClient, error) {
 		log.Printf("[browser] Page.enable failed (navigation uses fixed delay): %v", err)
 	}
 
-	// A freshly launched browser sits on the about:blank it was given, but a
-	// restored session in the automation profile can put the attached tab on
-	// something else -- a local file included. The daemon blanks a tab it
-	// adopted in that state rather than reading it (#521); do the same, so the
-	// guards are a backstop here and not the thing the caller trips over on
-	// their first snapshot. Best-effort: if it fails, the read guards refuse.
-	if url, err := c.mainFrameURL(); err == nil && isLocalContentURL(url) {
-		log.Printf("[browser] attached tab was showing local content; blanking it")
+	// A freshly launched browser sits on the about:blank it was given, but the
+	// automation profile is a persistent directory: a restored session can put
+	// the attached tab on something else -- a local file, chrome://settings, a
+	// leftover page. The daemon blanks a tab it adopted in that state rather
+	// than reading it (#521); do the same, so the guards are a backstop here and
+	// not the thing the caller trips over on their first snapshot. Best-effort:
+	// if it fails, the read guards refuse to read the tab anyway.
+	if url, err := c.mainFrameURL(); err == nil && url != "" && !isDrivableURL(url) {
+		log.Printf("[browser] attached tab was showing %s; blanking it", truncateURL(url, 120))
 		if _, err := c.send("Page.navigate", map[string]any{"url": "about:blank"}); err != nil {
 			log.Printf("[browser] could not blank the adopted tab: %v", err)
 		}
@@ -337,14 +338,29 @@ func (c *cdpClient) attachToPage() error {
 			TargetInfos []struct {
 				TargetID string `json:"targetId"`
 				Type     string `json:"type"`
+				URL      string `json:"url"`
 			} `json:"targetInfos"`
 		}
 		json.Unmarshal(raw, &res)
+		// Prefer a tab showing something the model may be sent to (#526, as the
+		// daemon's connect() does). A tab left on a file: or chrome:// page by a
+		// restored session is adopted only if it is the only one there is, and
+		// launchCDP blanks it before anything reads it.
+		fallback := ""
 		for _, t := range res.TargetInfos {
-			if t.Type == "page" {
+			if t.Type != "page" {
+				continue
+			}
+			if isDrivableURL(t.URL) {
 				targetID = t.TargetID
 				break
 			}
+			if fallback == "" {
+				fallback = t.TargetID
+			}
+		}
+		if targetID == "" {
+			targetID = fallback
 		}
 		if targetID != "" || time.Now().After(deadline) {
 			break

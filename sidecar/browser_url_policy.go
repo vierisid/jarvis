@@ -65,6 +65,7 @@ import (
 	"fmt"
 	"net"
 	"net/url"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -128,18 +129,39 @@ func collapseSpecialAuthority(in string) string {
 	return scheme + "://" + strings.TrimLeft(rest, "/")
 }
 
-// foldHostConfusables maps the non-ASCII characters that IDNA turns into the
-// ASCII that can spell a host we care about: fullwidth ASCII (U+FF01..U+FF5E,
-// which covers fullwidth digits and letters) and the full-stop variants Chrome
-// treats as label separators. Anything else is left alone, so an ordinary IDN
-// host is still browsable -- it simply is not a loopback spelling we recognise.
+// foldHostConfusables approximates the UTS46 mapping Chrome runs a host through
+// (ICU uidna_openUTS46, non-transitional, STD3 rules OFF) for the characters
+// that can spell a host we care about: the code points UTS46 DELETES, the
+// fullwidth ASCII block (fullwidth digits and letters), and the full-stop and
+// digit variants it maps to ASCII. Anything else is left alone, so an ordinary
+// IDN host is still browsable -- it simply is not a loopback spelling we
+// recognise.
+//
+// This is an enumeration, so it is incomplete by construction: it decides which
+// REFUSAL a DevTools-port URL gets, not whether it is refused. Refusing that
+// port does not depend on the host at all (see checkNavigationURL), and the
+// Fetch guard blocks it inside Chrome on any host, which is what makes an
+// incomplete fold safe here.
 func foldHostConfusables(host string) string {
 	return strings.Map(func(r rune) rune {
 		switch {
+		// UTS46 `ignored`: deleted before the host is resolved, so
+		// "loc<U+00AD>alhost" IS localhost to Chrome.
+		case r == 0x00AD || r == 0x034F || r == 0x2060 || r == 0xFEFF,
+			r >= 0x200B && r <= 0x200D,
+			r >= 0x180B && r <= 0x180D,
+			r >= 0xFE00 && r <= 0xFE0F:
+			return -1
 		case r >= 0xFF01 && r <= 0xFF5E:
 			return r - 0xFEE0
-		case r == 0x3002 || r == 0xFF61:
+		// Label separators Chrome accepts for ".".
+		case r == 0x3002 || r == 0xFF61 || r == 0x2024 || r == 0xFE52:
 			return '.'
+		// Digit forms UTS46/NFKC maps to ASCII digits, which can spell an IP.
+		case r >= 0x2460 && r <= 0x2468: // circled 1..9
+			return '1' + (r - 0x2460)
+		case r >= 0x1D7CE && r <= 0x1D7FF: // mathematical digits
+			return '0' + (r-0x1D7CE)%10
 		}
 		return r
 	}, host)
@@ -237,7 +259,9 @@ func isLoopbackHost(hostname string) bool {
 }
 
 // effectiveURLPort is url-policy.ts effectivePort: the port Chrome will
-// connect to, default included.
+// connect to, default included. A port that is not a number is reported as -1,
+// which isDevtoolsPort treats as blocked -- url.Parse does not currently let one
+// through, and an unreadable port must not read as "some port that is fine".
 func effectiveURLPort(u *url.URL) int {
 	if p := u.Port(); p != "" {
 		n, err := strconv.Atoi(p)
@@ -255,6 +279,10 @@ func effectiveURLPort(u *url.URL) int {
 }
 
 func isDevtoolsPort(port int) bool {
+	if port < 0 {
+		// Fail closed: see effectiveURLPort.
+		return true
+	}
 	for _, p := range devtoolsBlockedPorts {
 		if p == port {
 			return true
@@ -290,8 +318,12 @@ func checkNavigationURL(raw string) (string, error) {
 
 	if scheme == "about" {
 		// `about:blank`, `about:blank#x` and `about:blank?x` are the empty page.
+		// Canonicalised rather than echoed: Chrome does NOT lowercase the path
+		// of a non-special scheme, and it compares `about:blank` case
+		// sensitively, so "ABOUT:BLANK" is only the empty page if we spell it
+		// that way. (The daemon gets this from `new URL().href`.)
 		if strings.EqualFold(parsed.Opaque, "blank") {
-			return normalized, nil
+			return "about:blank" + aboutBlankSuffix(normalized), nil
 		}
 		return "", refuseNavigation(input, scheme,
 			"about: pages other than about:blank map to browser-internal chrome:// pages")
@@ -315,13 +347,50 @@ func checkNavigationURL(raw string) (string, error) {
 		if parsed.Opaque != "" || parsed.Host == "" {
 			return "", errNotAURL(input)
 		}
-		if isLoopbackHost(parsed.Hostname()) && isDevtoolsPort(effectiveURLPort(parsed)) {
-			return "", fmt.Errorf("Refusing to open %s: that is a Jarvis browser's DevTools endpoint, "+
-				"which can open local files in new tabs. Open a web page instead.", truncateURL(input, 120))
+		// A DevTools port is refused WHATEVER the host, deliberately unlike the
+		// daemon, which only refuses it on a loopback host. Chrome canonicalises
+		// a host through UTS46 before resolving it -- deleting soft hyphens and
+		// zero-width joiners, mapping circled digits and half a dozen full-stop
+		// variants -- so "loc<U+00AD>alhost:9222" reaches the endpoint while any
+		// enumeration of those mappings we do here says it is a foreign host.
+		// The port is the part Chrome cannot rewrite, so the port is what this
+		// refuses; the Fetch guard blocks those ports on any host too, so
+		// refusing here only moves an inevitable failure earlier and explains
+		// it. `isLoopbackHost` still chooses the wording, because "that is a
+		// Jarvis browser's DevTools endpoint" is only true of a local one.
+		if isDevtoolsPort(effectiveURLPort(parsed)) {
+			if isLoopbackHost(parsed.Hostname()) {
+				return "", fmt.Errorf("Refusing to open %s: that is a Jarvis browser's DevTools endpoint, "+
+					"which can open local files in new tabs. Open a web page instead.", truncateURL(input, 120))
+			}
+			return "", fmt.Errorf("Refusing to open %s: port %d is a Jarvis browser's DevTools port, "+
+				"which can open local files in new tabs, and requests to it are blocked whatever the "+
+				"host resolves to. Open a web page on another port instead.",
+				truncateURL(input, 120), effectiveURLPort(parsed))
 		}
 	}
 
 	return normalized, nil
+}
+
+// aboutBlankSuffix keeps the query or fragment of an about:blank URL when the
+// scheme and path are canonicalised, so `about:blank#x` stays `about:blank#x` --
+// the same thing the daemon's `parsed.href` returns.
+func aboutBlankSuffix(normalized string) string {
+	if i := strings.IndexAny(normalized, "?#"); i >= 0 {
+		return normalized[i:]
+	}
+	return ""
+}
+
+// isDrivableURL reports whether a page already showing this URL may be driven:
+// the navigation allowlist applied to where a page IS rather than where it is
+// asked to go. A tab can predate the guards -- opened by hand in a headed
+// automation browser, or restored by a Chromium that found session state in the
+// (persistent) automation profile. Port of url-policy.ts isDrivableUrl.
+func isDrivableURL(raw string) bool {
+	_, err := checkNavigationURL(raw)
+	return err == nil
 }
 
 // isLocalContentURL reports pages that show local content. Never snapshotted,
@@ -335,11 +404,39 @@ func isLocalContentURL(raw string) bool {
 		strings.HasPrefix(lower, "filesystem:")
 }
 
+// privilegedPagePrefixes are the browser's own pages. Reading one back to the
+// model is not a local FILE, so #526's three prefixes miss it, but
+// chrome://settings/passwords, chrome://history and a devtools:// window are
+// worth as much to an attacker as ~/.ssh, and a headed automation browser has an
+// address bar a desktop tool can type into. Refused on the read paths only: the
+// navigation allowlist already refuses these schemes outright.
+//
+// This goes beyond the daemon, which refuses local content only. Deliberate:
+// the sidecar's browser is the one on the user's desktop, and the daemon's own
+// gap is worth closing separately rather than copying.
+//
+// `chrome-error:` is NOT here. A failed navigation leaves the main frame on
+// chrome-error://chromewebdata, and a snapshot of an error page is exactly how
+// the model finds out why a page did not load.
+var privilegedPagePrefixes = []string{
+	"chrome:", "chrome-untrusted:", "chrome-search:", "chrome-extension:", "devtools:",
+}
+
+func isPrivilegedPageURL(raw string) bool {
+	lower := strings.ToLower(sanitizeURLInput(raw))
+	for _, prefix := range privilegedPagePrefixes {
+		if strings.HasPrefix(lower, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
 // blockedRequestReason says why a request Chrome paused for us must fail, or ""
 // to let it through. It decides only; browser_fetch_guard.go does the talking.
 // Mirrors browser-request-guard.ts blockReason.
 func blockedRequestReason(rawURL string) string {
-	parsed, err := url.Parse(strings.TrimSpace(rawURL))
+	parsed, err := parseRequestURL(sanitizeURLInput(rawURL))
 	if err != nil || parsed.Scheme == "" {
 		// Chrome paused it on a pattern we set and we cannot tell which: fail.
 		return "unparseable URL matched a blocked pattern"
@@ -351,6 +448,26 @@ func blockedRequestReason(rawURL string) string {
 		return "requests to a Jarvis browser's DevTools port are blocked"
 	}
 	return ""
+}
+
+// lonePercent matches a `%` that does not start a valid escape. Chrome leaves
+// those literal in a path or query; net/url rejects the whole URL.
+var lonePercent = regexp.MustCompile(`%(?:[^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|.?$)`)
+
+// parseRequestURL parses a URL Chrome has already canonicalised, being lenient
+// in the one way Chrome is and net/url is not. Chrome pauses a request because
+// the URL TEXT matched a pattern, so `https://example.com/x:9222/100%discount`
+// reaches the guard; refusing to parse it would fail a request that is neither a
+// local file nor a DevTools endpoint, and a failed subresource is a broken page.
+func parseRequestURL(raw string) (*url.URL, error) {
+	if u, err := url.Parse(raw); err == nil {
+		return u, nil
+	}
+	// Escape the stray percent signs and try once more. Still fails closed if
+	// the URL is unparseable for any other reason.
+	return url.Parse(lonePercent.ReplaceAllStringFunc(raw, func(m string) string {
+		return "%25" + m[1:]
+	}))
 }
 
 // fetchGuardPatterns are the `Fetch.enable` patterns: local files, plus every
@@ -372,6 +489,13 @@ func refuseNavigation(input, scheme, why string) error {
 // errNotAURL is the daemon's "not a valid URL" refusal, for input that is not a
 // URL at all and for http(s) spellings with no authority.
 func errNotAURL(input string) error {
+	// Control characters are stripped for display, so echoing the input would
+	// otherwise print a URL that looks perfectly valid and tell the model to fix
+	// it -- which it would "fix" by sending the same bytes again.
+	if strings.ContainsFunc(input, func(r rune) bool { return r < 0x20 || r == 0x7f }) {
+		return fmt.Errorf("Refusing to open %s: the URL contains control characters.",
+			truncateURL(input, 120))
+	}
 	// Literal quotes rather than %q: truncateURL has already dropped the
 	// control characters, and %q would mangle a non-ASCII host into escapes.
 	return fmt.Errorf("\"%s\" is not a valid URL. Include the scheme, e.g. https://%s.",
