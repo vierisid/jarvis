@@ -5,7 +5,10 @@
  * run_command, read_file, write_file, list_directory
  */
 
-import { readFileSync, writeFileSync, readdirSync, statSync, existsSync, unlinkSync, chmodSync, renameSync, rmSync, realpathSync } from 'node:fs';
+import {
+  readFileSync, writeFileSync, readdirSync, statSync, existsSync, unlinkSync, chmodSync, renameSync, rmSync,
+  realpathSync, openSync, closeSync, fstatSync, readSync, readlinkSync, constants as fsConstants,
+} from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { homedir } from 'node:os';
@@ -30,7 +33,10 @@ const terminal = new TerminalExecutor({ timeout: 30000 });
 export const browser = new BrowserController();
 
 import { isNoLocalTools, LOCAL_DISABLED_MSG, isLocalBrowserDisabled, LOCAL_BROWSER_DISABLED_MSG, getDefaultCwd } from './local-tools-guard.ts';
-import { execOnWrite, policyHome, relativeBases, routedGitRefusal, siteGitRefusal } from './file-path-policy.ts';
+import {
+  execOnWrite, isSecretInode, policyHome, relativeBases, routedGitRefusal, scanForDaemonSecrets, secretInodeRefusal,
+  secretListRefusal, secretRead, secretReadRefusal, secretScanRefusal, siteGitRefusal,
+} from './file-path-policy.ts';
 import { forCard } from '../../util/card-text.ts';
 // Re-export for convenience
 export { setNoLocalTools, isNoLocalTools, setDefaultCwd } from './local-tools-guard.ts';
@@ -79,6 +85,103 @@ function siteGitRefusalFor(params: Record<string, unknown>): string | null {
   const path = String(params.path ?? '');
   return siteGitRefusal(path, relativeBases())
     ?? (params.target || autoTargetForCapability('filesystem') ? routedGitRefusal(path) : null);
+}
+
+/**
+ * The file tools' refusal of the daemon's own credentials (#528). Run BEFORE
+ * sidecar routing, like siteGitRefusalFor and for the same reason: a sidecar on
+ * the brain's own machine opens the brain's files, and a routed path is judged
+ * by spelling (see secretRead's name tier), so `read_file {target, path:
+ * "~/.jarvis/.secrets.key"}` is refused too.
+ */
+function secretRefusalFor(params: Record<string, unknown>): string | null {
+  return secretReadRefusal(params.path, { bases: relativeBases() });
+}
+
+/** What `read_file` will hand back at most, before truncation is reported. */
+const READ_FILE_LIMIT = 100 * 1024;
+
+/**
+ * Where a descriptor really landed, or null when the platform cannot say.
+ *
+ * Linux answers through `/proc/self/fd/<n>`, which is the only way to learn the
+ * path a descriptor actually resolved to, and it appends `" (deleted)"` for an
+ * unlinked inode -- stripped, or the suffix would be classified as part of the
+ * name. macOS needs `fcntl(F_GETPATH)`, which node does not expose, and Windows
+ * has no equivalent; both fall back to the path-based verdict already taken,
+ * plus the inode test, which needs no path at all.
+ */
+function descriptorPath(fd: number): string | null {
+  try {
+    return readlinkSync(`/proc/self/fd/${fd}`).replace(/ \(deleted\)$/, '');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Read a file the policy has already allowed by path, judging the descriptor
+ * that is actually opened.
+ *
+ * The path was resolved and classified a moment ago; between then and the read
+ * it could have been replaced. So the file is opened once and everything after
+ * that is decided from the descriptor: `fstat` for what kind of file it is and
+ * which inode it is, `/proc/self/fd` for where it landed, and the bytes come
+ * from that same descriptor. Nothing re-resolves the path, so there is nothing
+ * left to swap.
+ *
+ * `O_NONBLOCK` because opening a FIFO for reading otherwise blocks until a
+ * writer appears, and the daemon with it; `fstat` then refuses anything that is
+ * not a regular file, as the pre-checks did.
+ *
+ * The read is bounded rather than slurped: the old code read the whole file and
+ * then took the first 100 KB, so `read_file /proc/kcore` (a REGULAR file of
+ * 140 TB) or any multi-GB file tried to allocate all of it.
+ */
+function readJudgedFile(filePath: string, requested: unknown, scanOnly: boolean): string {
+  let fd: number;
+  try {
+    fd = openSync(filePath, fsConstants.O_RDONLY | fsConstants.O_NONBLOCK);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'ENOENT') return `Error: File not found: ${filePath}`;
+    if (code === 'EACCES') return `Error: Permission denied: ${filePath}`;
+    return `Error: Cannot read ${filePath}: ${code ?? 'open failed'}`;
+  }
+  try {
+    const st = fstatSync(fd);
+    if (!st.isFile()) return `Error: Not a regular file: ${filePath}`;
+    // Identity, which no spelling and no race can change.
+    if (isSecretInode(st.dev, st.ino)) return secretInodeRefusal(requested);
+    const landed = descriptorPath(fd);
+    if (landed && landed !== filePath) {
+      const refused = secretReadRefusal(landed, { bases: relativeBases() });
+      if (refused) return refused;
+    }
+
+    const buf = Buffer.allocUnsafe(READ_FILE_LIMIT + 1);
+    let n = 0;
+    while (n < buf.length) {
+      const got = readSync(fd, buf, n, buf.length - n, null);
+      if (got <= 0) break;
+      n += got;
+    }
+    const truncated = n > READ_FILE_LIMIT;
+    const content = buf.toString('utf-8', 0, Math.min(n, READ_FILE_LIMIT));
+    // A file that legitimately holds environment settings comes back only if it
+    // does not actually assign one of the daemon's own credentials. Scanning
+    // what is RETURNED is enough: anything past the limit is not returned.
+    if (scanOnly) {
+      const name = scanForDaemonSecrets(content);
+      if (name) return secretScanRefusal(requested, name);
+    }
+    if (!truncated) return content;
+    // A procfs file reports size 0 while still having bytes, so fall back to
+    // what was actually read.
+    return `${content}\n... [truncated, file is ${Number(st.size) || n} bytes]`;
+  } finally {
+    closeSync(fd);
+  }
 }
 
 /**
@@ -177,6 +280,8 @@ export const readFileTool: ToolDefinition = {
   execute: async (params) => {
     const refused = siteGitRefusalFor(params);
     if (refused) return refused;
+    const secret = secretRefusalFor(params);
+    if (secret) return secret;
     const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'read_file', { path: params.path }, 'filesystem');
@@ -202,13 +307,11 @@ export const readFileTool: ToolDefinition = {
       return `Error: Not a regular file: ${filePath}`;
     }
 
-    // Limit file size to 100KB
-    if (stat.size > 100 * 1024) {
-      const content = readFileSync(filePath, 'utf-8').slice(0, 100 * 1024);
-      return content + '\n... [truncated, file is ' + stat.size + ' bytes]';
-    }
-
-    return readFileSync(filePath, 'utf-8');
+    // A file that may hold the daemon's environment is returned only if its
+    // bytes do not assign one of its credentials; readJudgedFile decides that
+    // from what it actually reads.
+    const scanOnly = secretRead(params.path, { bases: relativeBases() })?.scanOnly === true;
+    return readJudgedFile(filePath, params.path, scanOnly);
   },
 };
 
@@ -333,6 +436,8 @@ export const listDirectoryTool: ToolDefinition = {
   execute: async (params) => {
     const refused = siteGitRefusalFor(params);
     if (refused) return refused;
+    const secret = secretListRefusal(params.path, { bases: relativeBases() });
+    if (secret) return secret;
     const target = (params.target as string | undefined) || autoTargetForCapability('filesystem');
     if (target) {
       return routeToSidecar(target, 'list_directory', { path: params.path }, 'filesystem');

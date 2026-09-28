@@ -1324,6 +1324,17 @@ export function secretScanRefusal(requested: unknown, envName: string): string {
 }
 
 /**
+ * The refusal for a descriptor that turned out to BE one of the daemon's
+ * secrets, whatever the path said. This is the verdict that cannot be raced or
+ * aliased: the caller has the file open, and identity does not depend on any
+ * spelling.
+ */
+export function secretInodeRefusal(requested: unknown): string {
+  logSecretRefusal('read_file', { kind: 'jarvis-key', path: `${String(requested)} (by inode)` });
+  return secretRefusalText(String(requested), 'the file');
+}
+
+/**
  * Secrets dirs that exist only to hold secrets: what `JARVIS_SECRETS_DIR` or an
  * explicit key file points at, when that is not also a data dir (where ordinary
  * things -- logs, notes, content -- live beside the keys).

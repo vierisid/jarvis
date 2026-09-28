@@ -4803,10 +4803,25 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     {
       const { setSiteProjectsDir, setDaemonDataRoots } = await import('../actions/tools/file-path-policy.ts');
       setSiteProjectsDir((jarvisConfig.sites?.projects_dir ?? '~/.jarvis/projects').replace(/^~/, os.homedir()));
+      // Where the keychain and the workflow key really are, which
+      // JARVIS_SECRETS_DIR can put outside every data dir. Resolved through the
+      // owning modules rather than recomputed, and tolerated failing: a read of
+      // a secret is refused by the policy's own env fallback either way, and a
+      // boot must not fail because a key file is unreadable (#528).
+      const secretsDirs: Array<string | null> = [];
+      try {
+        const { keychainDir } = await import('../vault/keychain.ts');
+        secretsDirs.push(keychainDir());
+      } catch { /* the policy falls back to JARVIS_SECRETS_DIR / JARVIS_HOME / ~/.jarvis */ }
+      try {
+        const { resolveKeyFile } = await import('../workflows/db/encryption.ts');
+        secretsDirs.push(path.dirname(resolveKeyFile()));
+      } catch { /* same */ }
       setDaemonDataRoots({
         // The engine bundle cache is under ~/.jarvis whatever the data dir.
         dataDirs: [config.dataDir, path.join(os.homedir(), '.jarvis')],
         codeRoots: [sharedRuntime.engineCacheRoot, sharedRuntime.piecesDir, sharedRuntime.metadataCacheFile],
+        secretsDirs,
       });
     }
 
