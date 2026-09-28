@@ -327,6 +327,88 @@ brain's own privileges. Prefer fixing the host, for example by enabling
 unprivileged user namespaces, and fall back to `browser.local: false` if you
 can't.
 
+### Where the assistant may upload files from
+
+`browser_upload_file` sends a file's bytes to whatever page the browser is on,
+so it only sends files from folders meant for sharing:
+
+- your document folders - `~/Documents`, `~/Downloads`, `~/Desktop`,
+  `~/Pictures`, or wherever your desktop actually puts them (the `XDG_*_DIR`
+  settings and `~/.config/user-dirs.dirs` are both read, so a localized
+  `~/Dokumente` or a relocated `~/Nextcloud/Documents` works);
+- the site builder's projects directory;
+- `<data dir>/uploads`, a staging folder for anything else you want to share.
+
+Anything else is refused, with a message telling the assistant to ask you to
+move the file. To add a folder:
+
+```yaml
+browser:
+  upload_roots:
+    - ~/Sync/shared
+    - /mnt/data/exports
+```
+
+This is worth setting if your files live somewhere unusual - a second drive, a
+network share, or, on WSL, your Windows profile (`/mnt/c/Users/<you>/Downloads`),
+which is not one of the defaults because the brain cannot tell which Windows
+account is yours.
+
+Adding a folder can only ever *narrow* what leaves your machine. The refusal
+list from earlier releases still runs first and underneath: hidden entries like
+`~/.ssh` and `~/.aws`, the Jarvis data directory, `/proc`, `/etc`, `AppData`,
+`~/Library` and the credential locations named by `GNUPGHOME`, `KUBECONFIG` and
+friends are refused even inside a folder you allow. A folder set to `/` or to
+your home directory is dropped, because it would put the old guessing game back.
+
+Uploads into a page with an opaque origin - a `data:` document, `about:blank` -
+are refused whatever the folder. Such a page only reads the file back to the
+model, which is what `read_file` is for. Every upload still needs a click, and
+the card names the resolved path, the file size and the origin of the page that
+will receive it; if the page moves to another origin between the card and your
+click, the upload is refused and the assistant has to ask again.
+
+### What the assistant cannot read
+
+`read_file` and `list_directory` refuse Jarvis's own credentials, whatever path
+is used to reach them. Resolved first, so a symlink, a hard link, a relative
+path and a `/proc/self/root/...` spelling all land on the same verdict:
+
+- process memory and startup state: `/proc/<pid>/environ`, `mem`, `cmdline` and
+  friends, for every process, not just Jarvis's. Your daemon's environment is
+  where `ANTHROPIC_API_KEY` and `JARVIS_WORKFLOW_ENCRYPTION_KEY` live. Use
+  `run_command` if you want the assistant to inspect a process; that is a
+  higher-authority action and will ask.
+- key material in the data and secrets directories: `.secrets.key`,
+  `.secrets.enc`, `workflow-encryption.key` (and a leftover `.tmp` beside it,
+  which is a second link to the same key), `google-tokens.json`, `sidecar-keys/`,
+  the vault database, and the local Chrome profile with your cookies.
+- `config.yaml` and `sidecar.yaml`, which can hold a bot token or a provider key.
+- the files your daemon's environment comes FROM: its systemd unit and drop-ins,
+  its launchd plist, anything an `EnvironmentFile=` in that unit points at,
+  `/etc/default/*`, `/etc/sysconfig/*`, `/etc/environment` and
+  `~/.config/environment.d/*`. Closing `/proc` while leaving the unit readable
+  would have been cosmetic.
+- a `jarvis export` archive, which holds all of the above verbatim.
+
+Your own files are untouched: documents, logs, `~/.gitconfig`, `~/.config`,
+project files and `~/.jarvis/logs` all read as before, and `~/.jarvis` is still
+listable. A shell startup file is a special case - `~/.bashrc`, `~/.zshrc`,
+`~/.config/fish/config.fish` and the like read normally, but if one of them
+actually assigns a provider key or the workflow key, that read is refused,
+because it is the same disclosure as reading the daemon's environment. Move such
+a key into the keychain or the unit file and the rc file reads again.
+
+Every refusal is logged by the daemon with the path and the reason. A burst of
+them is worth looking at: a turn that keeps reaching for credentials is the
+clearest sign of a prompt injection you will get.
+
+This is containment for the file tools, not a sandbox. `run_command` and
+workflow code steps run as your user, so they can still read
+`/proc/<daemon pid>/environ`, and a core dump would still hold it. Both are
+addressed by making the daemon's process memory unreadable to same-uid
+processes, which is tracked separately.
+
 ### `--no-local-tools` and the site builder
 
 `jarvis start --no-local-tools` (the Docker image sets it) stops the general
@@ -523,7 +605,10 @@ rather than from a passphrase.
 
 Like the install sanitizing above, this is environment hygiene, not a
 sandbox. The commands run as the daemon's user, so they can still read
-`/proc/<daemon pid>/environ` and the daemon's `~/.jarvis`. Keeping a secret
+`/proc/<daemon pid>/environ` and the daemon's `~/.jarvis` -- `read_file` and
+`list_directory` no longer will (see
+[What the assistant cannot read](#what-the-assistant-cannot-read)), but a shell
+is a shell. Keeping a secret
 out of the daemon's environment (the dashboard and keychain hold LLM keys)
 keeps it out of that file, but nothing short of a sandbox keeps the daemon's
 files from what it runs.
