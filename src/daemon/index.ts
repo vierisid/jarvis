@@ -217,31 +217,87 @@ function logWithTimestamp(message: string): void {
 }
 
 /**
+ * Exit status per fatal reason, following the workflow engine's shape
+ * (src/workflows/activepieces/packages/server/engine/src/main.ts, which exits 3
+ * and 4 for the same two reasons).
+ *
+ * The status is the ONLY thing a supervisor sees: the generated systemd unit
+ * uses `Restart=on-failure` (src/cli/autostart.ts), and a crash that exits 0
+ * left Jarvis down until someone restarted it by hand (#543). Anything not
+ * listed here shuts down with 0 on purpose -- a signal, a drain, `jarvis stop`.
+ */
+const FATAL_EXIT_CODES: Record<string, number> = {
+  uncaughtException: 3,
+  unhandledRejection: 4,
+};
+
+/**
+ * Drain budget on a fatal path, instead of the configured `drainDeadlineMs`
+ * (75s by default). The process is already in an undefined state, so there is
+ * nothing to be gained by holding it there: flush what is cheap and let the
+ * supervisor start a healthy one.
+ */
+const FATAL_DRAIN_DEADLINE_MS = 10_000;
+
+/**
+ * Grace on top of that budget before a fatal shutdown is forced. The drain
+ * awaits several service `stop()`s that are not individually bounded, so a
+ * handler that hangs there would leave the process alive-but-broken and
+ * `Restart=on-failure` would never fire.
+ */
+const FATAL_FLUSH_GRACE_MS = 10_000;
+
+/**
+ * Make every exit from here on a failure, and guarantee one happens.
+ *
+ * `process.exitCode` covers an exit we do not reach on purpose (the loop
+ * emptying, a later `process.exit()` with no argument). The timer covers the
+ * drain hanging or throwing on its way out; it is deliberately NOT unref'd, so
+ * an empty loop cannot exit 0 out from under it.
+ */
+function armFatalExit(code: number, budgetMs: number): void {
+  process.exitCode = code;
+  setTimeout(() => {
+    console.error(`[Daemon] shutdown did not finish within ${budgetMs}ms; exiting ${code}`);
+    process.exit(code);
+  }, budgetMs);
+}
+
+/**
  * Handle graceful shutdown
  */
 async function handleShutdown(signal: string): Promise<void> {
+  // undefined for every deliberate shutdown, which must keep exiting 0:
+  // something depends on `jarvis stop` succeeding.
+  const fatalCode = FATAL_EXIT_CODES[signal];
+
   if (shutdownInProgress) {
     // A repeated SIGNAL means the operator/user wants to force-quit now.
     if (signal === 'SIGINT' || signal === 'SIGTERM') {
-      console.log('\n[Daemon] Second signal — forcing immediate exit');
+      console.log('\n[Daemon] Second signal - forcing immediate exit');
       process.exit(1);
     }
     // But an internal error (uncaughtException/unhandledRejection) while we're
     // already draining -- e.g. a stray rejection from a still-streaming turn --
     // must NOT abort the drain (that would skip teardown + lose window state).
+    // Nor does it change the status: a crash on the way out of a shutdown we
+    // asked for is still a shutdown we asked for.
     console.warn(`[Daemon] ${signal} during drain (ignored; drain continues)`);
     return;
   }
 
   shutdownInProgress = true;
+  const budgetMs = fatalCode === undefined ? drainDeadlineMs : Math.min(drainDeadlineMs, FATAL_DRAIN_DEADLINE_MS);
+  // Before anything that can throw or hang, including the stop() below.
+  if (fatalCode !== undefined) armFatalExit(fatalCode, budgetMs + FATAL_FLUSH_GRACE_MS);
   suggestionComposer?.stop();
   suggestionComposer = null;
-  console.log(`\n[Daemon] Received ${signal}, draining gracefully (deadline ${drainDeadlineMs}ms)...`);
+  console.log(`\n[Daemon] Received ${signal}, draining gracefully (deadline ${budgetMs}ms)...`);
 
   try {
     // One wall-clock budget for the whole drain (turns + workflow), kept under
     // the supervisor's SIGKILL grace.
-    const drainUntil = Date.now() + drainDeadlineMs;
+    const drainUntil = Date.now() + budgetMs;
 
     // ---- Phase 1: QUIESCE -- stop accepting NEW work; keep in-flight alive ----
     // New agent turns are refused (agent-service throws DrainingError); stop the
@@ -368,10 +424,10 @@ async function handleShutdown(signal: string): Promise<void> {
     console.log('[Daemon] Database closed');
 
     console.log('[Daemon] Shutdown complete');
-    process.exit(0);
+    process.exit(fatalCode ?? 0);
   } catch (error) {
     console.error('[Daemon] Error during shutdown:', error);
-    process.exit(1);
+    process.exit(fatalCode ?? 1);
   }
 }
 
