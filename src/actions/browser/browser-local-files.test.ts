@@ -19,6 +19,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { BrowserController } from './session.ts';
+import { registerUploadRoots } from './upload-policy.ts';
 import { CDPClient } from './cdp.ts';
 import { chromiumExe, launchTestChromium, type TestChromium } from './fixtures/headless-chromium.ts';
 
@@ -309,14 +310,47 @@ describe.skipIf(!chromiumExe)('browser local-file lockdown (integration, #521)',
     expect(snap.text).toContain('inline page');
   }, 30_000);
 
-  test('uploadFile sends an ordinary file and refuses a sensitive one', async () => {
+  test('uploadFile sends a file from an allowed root and refuses a sensitive one', async () => {
     await browser.navigate(`${base}/upload`);
     await expect(browser.uploadFile('/proc/self/environ', '#up')).rejects.toThrow(/Refusing to upload \/proc\/self\/environ/);
     expect(await browser.evaluate('document.getElementById("up").files.length')).toBe(0);
 
     const ok = join(fixtureDir, 'report.txt');
     writeFileSync(ok, 'an ordinary file');
-    expect(await browser.uploadFile(ok, '#up')).toContain('Uploaded file');
-    expect(await browser.evaluate('document.getElementById("up").files[0].name')).toBe('report.txt');
+    // #527: an ordinary file is no longer enough -- it has to be somewhere
+    // uploads are allowed from. The fixture dir stands in for ~/Downloads here,
+    // registered the way `browser.upload_roots` registers an extra folder,
+    // because a test must not depend on the developer's real home.
+    await expect(browser.uploadFile(ok, '#up')).rejects.toThrow(/outside the folders Jarvis may upload from/);
+    registerUploadRoots([fixtureDir]);
+    try {
+      expect(await browser.uploadFile(ok, '#up')).toContain('Uploaded file');
+      expect(await browser.evaluate('document.getElementById("up").files[0].name')).toBe('report.txt');
+      // Still refused inside an allowed root: the floor runs underneath it, so a
+      // root cannot re-expose what the denylist denies.
+      const hidden = join(fixtureDir, '.env');
+      writeFileSync(hidden, 'SECRET=1');
+      await expect(browser.uploadFile(hidden, '#up')).rejects.toThrow(/Refusing to upload/);
+    } finally {
+      registerUploadRoots([]);
+    }
+  }, 30_000);
+
+  test('uploadFile refuses an opaque-origin page, which would only read the file back', async () => {
+    // A data: document has an opaque origin: the model writes the page, attaches
+    // the file and reads it back with browser_evaluate. That is a file read
+    // wearing an upload's clothes, and read_file is the tool with the containment.
+    await browser.navigate('data:text/html,<input id="up" type="file">');
+    const ok = join(fixtureDir, 'report.txt');
+    writeFileSync(ok, 'an ordinary file');
+    registerUploadRoots([fixtureDir]);
+    try {
+      const out = await browser.uploadFile(ok, '#up').catch((e: Error) => `THREW: ${e.message}`);
+      expect(out).not.toContain('THREW');
+      expect(out).toMatch(/opaque origin|rather than a web page/);
+      expect(await browser.evaluate('document.getElementById("up").files.length')).toBe(0);
+    } finally {
+      registerUploadRoots([]);
+    }
   }, 30_000);
 });

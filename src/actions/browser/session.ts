@@ -14,7 +14,7 @@ import { launchChrome, stopChrome, type RunningBrowser } from './chrome-launcher
 import { parseKeyCombo, SUPPORTED_KEYS_HINT } from './keys.ts';
 import { checkNavigationUrl, isDrivableUrl, isLocalContentUrl, knownDevtoolsPorts, registerDevtoolsPort } from './url-policy.ts';
 import { BrowserRequestGuard } from './browser-request-guard.ts';
-import { checkUploadPath } from './upload-policy.ts';
+import { checkUploadPath, pageOrigin, uploadTargetRefusal } from './upload-policy.ts';
 
 export type PageElement = {
   id: number;
@@ -143,6 +143,16 @@ export class BrowserController {
   private profileDir: string | undefined;
   private _connected = false;
   private approvalEpoch = 0;
+  /**
+   * The URL Chrome last reported for the TOP frame -- from the frame tree or the
+   * target list, never from script the page controls. It exists because an
+   * approval gate is synchronous (`authorityGate` must be cheap and must not
+   * act) while every route to the current URL is an async CDP round trip, and
+   * `browser_upload_file`'s card has to name the origin that will receive the
+   * file. Advisory by design: the authoritative check happens at upload time,
+   * which refuses when the origin has moved since the card was built.
+   */
+  private lastReportedUrl: string | null = null;
   private runningBrowser: RunningBrowser | null = null;
   // Coordinates stored from last snapshot — not sent to LLM
   private elementCoords = new Map<number, { x: number; y: number }>();
@@ -269,6 +279,9 @@ export class BrowserController {
     }
 
     this._connected = true;
+    // The tab that was adopted, so a gate has something to name before the
+    // first navigate. `blankAdopted` means it was just blanked.
+    this.lastReportedUrl = blankAdopted ? 'about:blank' : (pageTarget.url ?? null);
     console.log('[BrowserController] Connected to Chrome');
   }
 
@@ -391,11 +404,32 @@ export class BrowserController {
    * browser's frame tree, not from script the page controls.
    */
   private async assertNotLocalContent(): Promise<void> {
-    const tree = await this.cdp.send('Page.getFrameTree');
-    const url = String(tree?.frameTree?.frame?.url ?? '');
+    const url = await this.readTopFrameUrl();
     if (isLocalContentUrl(url)) {
       throw new Error(`Refusing to read ${url.slice(0, 200)}: the browser does not show local files to the model.`);
     }
+  }
+
+  /**
+   * Ask Chrome what the top frame's URL is, and remember it. The frame tree is
+   * the browser's own answer; `location.href` is the page's, and a page that
+   * wants a file attached to it is exactly the party that would lie.
+   */
+  private async readTopFrameUrl(): Promise<string> {
+    const tree = await this.cdp.send('Page.getFrameTree');
+    const url = String(tree?.frameTree?.frame?.url ?? '');
+    this.lastReportedUrl = url || null;
+    return url;
+  }
+
+  /**
+   * The last URL Chrome reported, for a synchronous approval gate. Null when
+   * nothing has been reported yet. May be stale: a page that navigated itself
+   * since the last navigate or snapshot is not reflected, which is why the
+   * upload path re-reads it and refuses a mismatch rather than trusting this.
+   */
+  lastKnownPageUrl(): string | null {
+    return this.lastReportedUrl;
   }
 
   /**
@@ -403,6 +437,10 @@ export class BrowserController {
    */
   async snapshot(): Promise<PageSnapshot> {
     await this.ensureConnected();
+    // Refresh the browser-reported URL while we are here: a snapshot is what the
+    // model takes after clicking through a site, so this is where an approval
+    // card's idea of the current origin comes from.
+    await this.readTopFrameUrl().catch(() => { /* advisory only */ });
 
     const result = await this.cdp.send('Runtime.evaluate', {
       expression: SNAPSHOT_SCRIPT,
@@ -720,7 +758,29 @@ export class BrowserController {
     // symlink-resolved path the rule was applied to, not the name the model
     // passed.
     const realPath = checkUploadPath(filePath);
+    // The origin the approval card named, BEFORE ensureConnected can refresh it:
+    // a reconnect adopts `pages.find(isDrivableUrl) ?? pages[0]`, a tab the
+    // reviewed page can influence, so comparing the authoritative URL against a
+    // cache that the reconnect just rewrote would compare it with itself.
+    const reviewed = this.lastReportedUrl;
     await this.ensureConnected();
+
+    // Authoritative, from the browser's frame tree. Two refusals:
+    const actual = await this.readTopFrameUrl();
+    // (1) a page that cannot legitimately receive a file at all.
+    const opaque = uploadTargetRefusal(actual);
+    if (opaque) return `Error: Refusing to upload to this page: ${opaque}`;
+    // (2) a page that is not the one the click was given for. Compared by
+    // ORIGIN, not by URL: the sites people upload to (Gmail, Drive, GitHub)
+    // rewrite the path constantly with history.pushState, and refusing on that
+    // would refuse every real upload. A cross-origin move is the thing that
+    // invalidates a review.
+    const reviewedOrigin = reviewed === null ? null : pageOrigin(reviewed);
+    if (reviewedOrigin !== null && reviewedOrigin !== pageOrigin(actual)) {
+      return `Error: Refusing to upload: the page moved from ${reviewedOrigin} to ${pageOrigin(actual) ?? 'an unknown origin'} `
+        + 'since this upload was reviewed. Take a browser_snapshot and ask again, so the approval names the page that '
+        + 'will actually receive the file.';
+    }
 
     // Resolve the file input element
     const query = selector || 'input[type="file"]';

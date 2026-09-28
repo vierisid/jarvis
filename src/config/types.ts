@@ -709,6 +709,20 @@ export type JarvisConfig = {
    */
   browser?: {
     local?: boolean;
+    /**
+     * SYSTEM-owned: extra folders `browser_upload_file` may send a file from,
+     * on top of the user's document folders (`~/Documents`, `~/Downloads`,
+     * `~/Desktop`, `~/Pictures`, or wherever the XDG user dirs put them), the
+     * site projects dir and `<data dir>/uploads` (#527).
+     *
+     * Absolute paths, `~` allowed. This can only NARROW what is sent: the
+     * denylist floor (hidden entries, the Jarvis data dir, /proc, /etc, AppData,
+     * credential locations) runs first and underneath, so a root set to `/` or a
+     * home directory still cannot reach a credential. A root that IS the home
+     * directory, an ancestor of it, or the filesystem root is dropped, since it
+     * would turn the allowed-roots rule back into the denylist it replaces.
+     */
+    upload_roots?: string[];
   };
   google?: GoogleConfig;
   channels?: ChannelConfig;

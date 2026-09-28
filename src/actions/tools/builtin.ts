@@ -18,6 +18,7 @@ import { TerminalExecutor } from '../terminal/executor.ts';
 import { WSLBridge } from '../terminal/wsl-bridge.ts';
 import { BrowserController, type PageSnapshot } from '../browser/session.ts';
 import { checkNavigationUrl } from '../browser/url-policy.ts';
+import { checkUploadPath, pageOrigin } from '../browser/upload-policy.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
 import { routeToSidecar, autoTargetForCapability, resolveToolTarget } from './sidecar-route.ts';
@@ -100,6 +101,17 @@ function secretRefusalFor(params: Record<string, unknown>): string | null {
 
 /** What `read_file` will hand back at most, before truncation is reported. */
 const READ_FILE_LIMIT = 100 * 1024;
+
+/** A file size a person can read at a glance, for an approval card. */
+function formatBytes(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes < 0) return 'unknown size';
+  if (bytes < 1024) return `${bytes} bytes`;
+  const units = ['KB', 'MB', 'GB', 'TB'];
+  let value = bytes / 1024;
+  let unit = 0;
+  while (value >= 1024 && unit < units.length - 1) { value /= 1024; unit += 1; }
+  return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
 
 /**
  * Where a descriptor really landed, or null when the platform cannot say.
@@ -1063,6 +1075,74 @@ export const browserUploadFileTool: ToolDefinition = {
       description: 'CSS selector for the file input element (default: first input[type="file"] on the page)',
       required: false,
     },
+  },
+  /**
+   * The card IS the review (#507), and for an upload the three things a person
+   * needs are: which file, how big, and who receives it. `rawUiGate` already
+   * forces a click on every call, but its sentence is generic -- and because a
+   * tool's own intent REPLACES it (tool-action-map.ts), the "effect unknown"
+   * warning has to be restated here rather than lost.
+   *
+   * Synchronous, as every authorityGate must be, so the origin comes from the
+   * URL the browser last reported rather than a CDP round trip; `uploadFile`
+   * re-reads it authoritatively and refuses a cross-origin move. A path the
+   * policy will refuse returns null: `execute` does the refusing, with the
+   * reason, and a doomed call gets no card of its own.
+   */
+  authorityGate: (params) => {
+    let real: string;
+    let size: number;
+    try {
+      real = checkUploadPath(String(params.file_path ?? ''));
+      size = Number(statSync(real).size);
+    } catch {
+      return null;
+    }
+    const url = browser.lastKnownPageUrl();
+    const origin = url ? (pageOrigin(url) ?? url) : 'a page not yet reported by the browser';
+    return {
+      actionCategory: 'write_data',
+      confirm: 'always',
+      // The path goes LAST and in full: it is the value being approved, and
+      // nothing after it can pose as the rest of the sentence.
+      intent: `Send a local file to ${origin} (${formatBytes(size)}). The page receives the file's contents and can `
+        + `forward them anywhere; check that this is the right page and the right file: ${forCard(real)}`,
+    };
+  },
+  /**
+   * Bind what was reviewed. Without this the approval manager falls back to
+   * `() => true` and an upload has no subject binding at all, so a click could
+   * be spent after a reconnect adopted a different tab.
+   *
+   * Three parts, all of which must still hold at execution: the controller's own
+   * epoch guard (the same one every other reviewed browser tool uses, which
+   * catches a reconnect or a dropped request guard), the file's identity, and the
+   * origin the card named.
+   */
+  captureApprovalGuard: (params) => {
+    const epochHolds = browser.captureApprovalGuard();
+    const reviewedOrigin = (() => {
+      const url = browser.lastKnownPageUrl();
+      return url ? pageOrigin(url) : null;
+    })();
+    let fingerprint: string | null = null;
+    try {
+      const real = checkUploadPath(String(params.file_path ?? ''));
+      const st = statSync(real);
+      fingerprint = `${real}\0${st.dev}\0${st.ino}\0${st.size}\0${st.mtimeMs}`;
+    } catch { /* refused or gone: the guard below fails it */ }
+    return () => {
+      if (!epochHolds() || fingerprint === null) return false;
+      try {
+        const real = checkUploadPath(String(params.file_path ?? ''));
+        const st = statSync(real);
+        if (`${real}\0${st.dev}\0${st.ino}\0${st.size}\0${st.mtimeMs}` !== fingerprint) return false;
+      } catch {
+        return false;
+      }
+      const url = browser.lastKnownPageUrl();
+      return reviewedOrigin === (url ? pageOrigin(url) : null);
+    };
   },
   execute: async (params) => {
     // No sidecar route exists for uploads, so the generic "use a sidecar"

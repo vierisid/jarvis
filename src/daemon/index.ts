@@ -460,8 +460,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
 
   // Determine data directory: CLI args > config file > default
   const dataDir = userConfig?.dataDir ?? jarvisConfig.daemon.data_dir ?? DEFAULT_DATA_DIR;
-  // browser_upload_file never sends files from here, wherever it is (#521).
-  (await import('../actions/browser/upload-policy.ts')).registerJarvisDataDir(dataDir);
+  // browser_upload_file never sends files from here, wherever it is (#521), and
+  // sends them only from the allowed roots (#527).
+  {
+    const uploadPolicy = await import('../actions/browser/upload-policy.ts');
+    uploadPolicy.registerJarvisDataDir(dataDir);
+    uploadPolicy.registerUploadRoots(jarvisConfig.browser?.upload_roots);
+  }
 
   // If user specified a custom data dir but no db path, use jarvis.db in that dir
   const dbPath = userConfig?.dbPath ?? jarvisConfig.daemon.db_path ?? path.join(dataDir, 'jarvis.db');
@@ -3213,7 +3218,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           case 'browser_type':        return `Typing into ${trim(args.selector || 'field', 30)}`;
           case 'browser_scroll':      return 'Scrolling';
           case 'browser_evaluate':    return 'Running JS';
-          case 'browser_upload_file': return `Uploading ${trim(args.path, 40)}`;
+          // The parameter is `file_path`; `args.path` read as "Uploading undefined".
+          case 'browser_upload_file': return `Uploading ${trim(args.file_path ?? args.path, 40)}`;
           // Desktop (Win32 UIA)
           case 'desktop_click':        return `Clicking ${trim(args.element_id || args.label || 'element', 50)}`;
           case 'desktop_type':         return `Typing "${trim(args.text, 50)}"`;
