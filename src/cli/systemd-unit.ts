@@ -347,10 +347,11 @@ export function scheduleUnitRestart(unit: SystemdUnit, run: CommandRunner = runC
  * The generated unit bounds a crash loop with StartLimitIntervalSec/
  * StartLimitBurst (src/cli/autostart.ts), and that limit counts EVERY start in
  * the window, including the deliberate ones below: a few restarts or updates in
- * quick succession and systemd refuses the next start. Every path here is
- * either `--no-block` or inside a transient unit, so without this the CLI
- * reports success while JARVIS stays down and only `systemctl --user
- * reset-failed` brings it back.
+ * quick succession and systemd refuses the next start. Most callers here ask for
+ * the start with `--no-block` or from a transient unit, so without this the CLI
+ * reports success while JARVIS stays down, and only `systemctl --user
+ * reset-failed` brings it back. The blocking ones would at least report the
+ * refusal -- for a limit the user's own `jarvis restart` filled up.
  *
  * Advisory: a no-op (exit 0) on a healthy unit, and a failure here must not
  * stop the start, so the result is ignored.
