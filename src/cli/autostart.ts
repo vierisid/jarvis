@@ -9,7 +9,7 @@
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { c, printOk, printErr, printWarn } from './helpers.ts';
 import { getLogDir } from '../daemon/pid.ts';
 import { MODEL_EXEC_ENV_KEY_FLAG, MODEL_EXEC_MARKER_ENV } from '../util/model-exec-marker.ts';
@@ -128,10 +128,27 @@ export function generateSystemdUnit(): string {
   return `[Unit]
 Description=J.A.R.V.I.S. Daemon
 After=network.target
+# A daemon that cannot boot must not be restarted forever: five starts inside
+# two minutes and systemd gives up and leaves the unit failed. At RestartSec=5
+# that caps a crash loop at about 20 seconds. systemd's own default (5 starts
+# in 10s) can never be reached at that interval, so this has to be explicit.
+# These two keys belong in [Unit]; systemd ignores StartLimitIntervalSec in
+# [Service] (and needs systemd 229+ for the name at all).
+# Recover a rate-limited unit with: systemctl --user reset-failed jarvis.service
+StartLimitIntervalSec=120
+StartLimitBurst=5
 
 [Service]
 Type=simple
-ExecStart=${bunPath} ${jarvisPath} start --foreground
+# --no-open, because the service starts at login, after a crash and after an
+# update: without it every start tries to open a browser -- a failed attempt on
+# a headless box, a tab popping up on a desktop (#544).
+ExecStart=${bunPath} ${jarvisPath} start --foreground --no-open
+# on-failure, not always: \`jarvis stop\` and \`jarvis drain\` SIGTERM the daemon
+# directly rather than going through systemctl, and that drain ends in a clean
+# exit. Under Restart=always systemd would bring JARVIS back RestartSec after
+# the CLI reported it stopped. A crash exits non-zero (#543), so on-failure
+# covers the case this exists for.
 Restart=on-failure
 RestartSec=5
 Environment=HOME=${homedir()}
@@ -230,9 +247,15 @@ async function startSystemdService(): Promise<boolean> {
 }
 
 export function scheduleSystemdRestart(spawnSync: SpawnSyncFn = defaultSpawnSync): boolean {
-  // --no-block returns immediately; systemd queues the restart through its own
-  // lifecycle, so the calling HTTP handler can return before the unit cycles.
   try {
+    // The unit's StartLimitBurst counts EVERY start in the window, not only the
+    // ones Restart= triggers: enough restarts or updates in two minutes and
+    // systemd refuses the next start. Clear the counter first, or --no-block
+    // reports success below while JARVIS stays down. A no-op (exit 0) on a unit
+    // that is running normally, so the result is deliberately ignored.
+    spawnSync(['systemctl', '--user', 'reset-failed', 'jarvis.service']);
+    // --no-block returns immediately; systemd queues the restart through its own
+    // lifecycle, so the calling HTTP handler can return before the unit cycles.
     const res = spawnSync(['systemctl', '--user', '--no-block', 'restart', 'jarvis.service']);
     return res.exitCode === 0;
   } catch {
@@ -262,6 +285,116 @@ function isSystemdInstalled(): boolean {
   return existsSync(SYSTEMD_SERVICE);
 }
 
+// ── Is the INSTALLED definition still the one we would write? ────────
+//
+// A unit or plist is only rewritten when autostart is reinstalled, so an
+// install made before #543/#544 keeps opening a browser on every start and
+// keeps restarting a daemon that cannot boot, every RestartSec, forever -- the
+// second one matters MORE now that a crash exits non-zero. Nothing in the
+// product reinstalls it, so the most it can honestly do is say so.
+
+/** A consequence of the installed definition, named by what the user sees. */
+export type AutostartProblem = 'opens-a-browser' | 'unbounded-restarts';
+
+export interface AutostartDrift {
+  /** The file the problems were read from. */
+  path: string;
+  problems: AutostartProblem[];
+}
+
+/**
+ * One `KEY=value` from a unit file, with its section.
+ *
+ * Tolerant on purpose, because a false report here nags forever: leading
+ * whitespace (systemd allows indentation), CRLF, comments, and a `\` line
+ * continuation, which a regex over single lines would read as a truncated
+ * value.
+ */
+function parseUnitDirectives(text: string): { section: string; key: string; value: string }[] {
+  const out: { section: string; key: string; value: string }[] = [];
+  let section = '';
+  const lines = text.replace(/\r\n?/g, '\n').split('\n');
+  for (let i = 0; i < lines.length; i++) {
+    let line = lines[i]!.trim();
+    if (!line || line.startsWith('#') || line.startsWith(';')) continue;
+    if (line.startsWith('[')) {
+      section = line.replace(/^\[|\].*$/g, '');
+      continue;
+    }
+    while (line.endsWith('\\') && i + 1 < lines.length) {
+      line = `${line.slice(0, -1).trim()} ${lines[++i]!.trim()}`;
+    }
+    const eq = line.indexOf('=');
+    if (eq <= 0) continue;
+    out.push({ section, key: line.slice(0, eq).trim(), value: line.slice(eq + 1).trim() });
+  }
+  return out;
+}
+
+/** systemd's argv splitting, enough of it: quotes off, exec prefixes off. */
+function execTokens(value: string): string[] {
+  return value
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((token, index) => (index === 0 ? token.replace(/^[-@:!+]+/, '') : token))
+    .map((token) => token.replace(/^"(.*)"$/, '$1').replace(/^'(.*)'$/, '$1'));
+}
+
+/**
+ * What the installed systemd unit still gets wrong, or null when there is
+ * nothing to report.
+ *
+ * Null (not an empty list) when nothing is installed, when the file cannot be
+ * read, and when a drop-in directory exists: docs/SELF_HOSTING.md tells people
+ * to `systemctl --user edit jarvis.service`, and a drop-in can set ExecStart or
+ * Restart without the main file showing it. Reporting on the main file alone
+ * would nag someone who has already fixed it.
+ */
+export function checkInstalledSystemdUnit(unitPath = SYSTEMD_SERVICE): AutostartDrift | null {
+  let text: string;
+  try {
+    if (!existsSync(unitPath)) return null;
+    if (existsSync(`${unitPath}.d`)) return null;
+    text = readFileSync(unitPath, 'utf-8');
+  } catch {
+    return null;
+  }
+
+  const directives = parseUnitDirectives(text);
+  const service = directives.filter((d) => d.section === 'Service');
+  const problems: AutostartProblem[] = [];
+
+  // The last non-empty ExecStart wins, as it does in systemd (an empty
+  // assignment resets the list).
+  const execStart = service.filter((d) => d.key === 'ExecStart' && d.value !== '').at(-1);
+  if (execStart && !execTokens(execStart.value).includes('--no-open')) {
+    problems.push('opens-a-browser');
+  }
+
+  // Unbounded only when systemd's OWN default limit cannot bite either: at the
+  // default 5 starts per 10s, a unit that waits RestartSec >= 2s between tries
+  // never reaches it, so an explicit limit is the only thing that ends a loop.
+  // Anyone who set a StartLimit key themselves is left alone.
+  const restart = service.filter((d) => d.key === 'Restart').at(-1)?.value;
+  const restartSec = Number(service.filter((d) => d.key === 'RestartSec').at(-1)?.value);
+  const hasLimit = directives.some((d) => d.key.startsWith('StartLimit'));
+  if (restart && restart !== 'no' && !hasLimit && Number.isFinite(restartSec) && restartSec * 5 >= 10) {
+    problems.push('unbounded-restarts');
+  }
+
+  return problems.length > 0 ? { path: unitPath, problems } : null;
+}
+
+/** One line each, in the order they bite. */
+export function describeAutostartProblem(problem: AutostartProblem): string {
+  switch (problem) {
+    case 'opens-a-browser':
+      return 'it opens a browser on every start (at the default port, whatever yours is)';
+    case 'unbounded-restarts':
+      return 'a daemon that cannot boot is restarted forever, with no start limit';
+  }
+}
+
 // ── launchd (macOS) ──────────────────────────────────────────────────
 
 const LAUNCHD_DIR = join(homedir(), 'Library', 'LaunchAgents');
@@ -280,6 +413,10 @@ export function generateLaunchdPlist(): string {
   // by renaming a fresh file over the path, which would leave launchd's
   // descriptors appending to an unlinked inode that grows without bound.
   const logDir = getLogDir();
+  // --no-open for the same reason as the systemd unit (#544): KeepAlive=true
+  // relaunches the daemon, and every relaunch would otherwise pop a browser
+  // tab. There is no launchd equivalent of StartLimitBurst; KeepAlive already
+  // backs off (10s between respawns) rather than spinning.
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -293,6 +430,7 @@ export function generateLaunchdPlist(): string {
     <string>${xmlEscape(jarvisPath)}</string>
     <string>start</string>
     <string>--foreground</string>
+    <string>--no-open</string>
   </array>
   <key>RunAtLoad</key>
   <true/>
@@ -436,6 +574,38 @@ async function uninstallLaunchd(): Promise<boolean> {
 
 function isLaunchdInstalled(): boolean {
   return existsSync(LAUNCHD_PLIST);
+}
+
+/**
+ * The stale-install question (see checkInstalledSystemdUnit) for the launchd
+ * plist: KeepAlive=true relaunches the daemon just as often.
+ */
+export function checkInstalledLaunchdPlist(plistPath = LAUNCHD_PLIST): AutostartDrift | null {
+  let text: string;
+  try {
+    if (!existsSync(plistPath)) return null;
+    text = readFileSync(plistPath, 'utf-8');
+  } catch {
+    return null;
+  }
+  // Sliced to ProgramArguments, so a `--no-open` under some other key cannot
+  // pass for an argument the daemon is actually started with.
+  const at = text.indexOf('<key>ProgramArguments</key>');
+  if (at === -1) return null;
+  const end = text.indexOf('</array>', at);
+  const argv = text.slice(at, end === -1 ? undefined : end);
+  return argv.includes('<string>--no-open</string>') ? null : { path: plistPath, problems: ['opens-a-browser'] };
+}
+
+/**
+ * Drift in the autostart definition installed on THIS platform, or null when
+ * there is nothing to report. Read-only: rewriting the file from here would
+ * clobber hand edits, and only a reinstall may touch it.
+ */
+export function checkInstalledAutostart(): AutostartDrift | null {
+  if (process.platform === 'darwin') return checkInstalledLaunchdPlist();
+  if (process.platform !== 'linux') return null;
+  return checkInstalledSystemdUnit();
 }
 
 // ── Public API ───────────────────────────────────────────────────────

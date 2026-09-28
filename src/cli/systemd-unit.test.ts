@@ -327,6 +327,11 @@ describe('restartSystemdUnit', () => {
     expect(args).toContain('--timer-property=AccuracySec=100ms');
     // What the timer runs: this PATH's systemctl, restarting the unit.
     expect(args.slice(-4)).toEqual([join(fakeDir, 'systemctl'), '--user', 'restart', UNIT]);
+    // ...after clearing the unit's start rate-limit, which counts this restart
+    // as much as a crash: this command has already told the user it scheduled
+    // one, so a refused start here would go unreported. `-` so a failing
+    // reset-failed cannot cancel the restart.
+    expect(args).toContain(`--property=ExecStartPre=-"${join(fakeDir, 'systemctl')}" "--user" "reset-failed" "${UNIT}"`);
   });
 
   test('inside: a restart already pending is success, not a second restart', async () => {
@@ -353,8 +358,15 @@ describe('restartSystemdUnit', () => {
     const ok = await restartSystemdUnit(outside, { lockHolder: () => 5151, pollMs: 10, waitMs: 2000 });
     expect(ok).toBe(true);
     const all = calls();
-    expect(all[1]).toEqual(['systemctl', '--user', '--no-block', 'restart', UNIT]);
-    expect(all[2]).toEqual(['systemctl', '--user', 'show', UNIT, '--property=ActiveState', '--property=MainPID']);
+    // reset-failed first: the unit's StartLimitBurst counts deliberate restarts
+    // too (src/cli/autostart.ts), and --no-block would report success while a
+    // rate-limited unit refused to start.
+    expect(all.slice(0, 3)).toEqual([
+      ['systemctl', '--user', 'show', UNIT, '--property=ActiveState', '--property=MainPID'],
+      ['systemctl', '--user', 'reset-failed', UNIT],
+      ['systemctl', '--user', '--no-block', 'restart', UNIT],
+    ]);
+    expect(all[3]).toEqual(['systemctl', '--user', 'show', UNIT, '--property=ActiveState', '--property=MainPID']);
     expect(all.some((c) => c[0] === 'systemd-run')).toBe(false);
   });
 
@@ -412,7 +424,8 @@ describe('restartSystemdUnit', () => {
     setFile('systemctl.restart.exit', '5');
     const ok = await restartSystemdUnit(outside, { lockHolder: () => 4242, pollMs: 10, waitMs: 200 });
     expect(ok).toBe(false);
-    expect(calls()).toHaveLength(2);
+    // show, reset-failed, the refused restart -- and no polling after it.
+    expect(calls().map((c) => c.slice(1).find((a) => !a.startsWith('-')))).toEqual(['show', 'reset-failed', 'restart']);
   });
 });
 
@@ -637,7 +650,13 @@ describe('runUpdate under a systemd user unit', () => {
         stopDaemon: stopRecorder().stopDaemon, systemdUnit: () => inside, systemdWait: FAST,
       }));
       const args = calls().find((c) => c[0] === 'systemd-run')!;
-      expect(args.find((a) => a.startsWith('--property=ExecStopPost='))).toStartWith(`--property=ExecStopPost="${odd.split('$').join('$$')}/systemctl"`);
+      // The start is the safety net; the reset-failed before it is asserted
+      // separately below. Both carry the same doubled path.
+      const stopPost = args.filter((a) => a.startsWith('--property=ExecStopPost='));
+      const doubled = odd.split('$').join('$$');
+      expect(stopPost).toHaveLength(2);
+      expect(stopPost[0]).toStartWith(`--property=ExecStopPost=-"${doubled}/systemctl"`);
+      expect(stopPost[1]).toStartWith(`--property=ExecStopPost="${doubled}/systemctl"`);
     });
 
     test('followed: an installed update whose service did not come back is not reported as a failed install', async () => {
@@ -732,10 +751,11 @@ describe('runUpdate under a systemd user unit', () => {
       expect(result.exitCode).toBe(0);
       expect(stops).toEqual([]);
       expect(spawned).toEqual([['bun', 'update', '-g', '@usejarvis/brain']]);
-      // show (is 4242 the unit's main process?), stop, [install], start, show...
+      // show (is 4242 the unit's main process?), stop, [install], reset-failed
+      // (the stop counted against the unit's start limit), start, show...
       expect(systemdCallsBefore).toEqual([2]);
-      expect(verbs().slice(0, 3)).toEqual(['show', 'stop', 'start']);
-      expect(verbs().slice(3).every((v) => v === 'show')).toBe(true);
+      expect(verbs().slice(0, 4)).toEqual(['show', 'stop', 'reset-failed', 'start']);
+      expect(verbs().slice(4).every((v) => v === 'show')).toBe(true);
     }, LOCK_HOLDER_TIMEOUT);
 
     test('a failed update still starts the unit again, and fails', async () => {
@@ -760,7 +780,7 @@ describe('runUpdate under a systemd user unit', () => {
       expect(result.outcome).toBe('updated');
       expect(rec.spawned).toEqual([['bun', 'update', '-g', '@usejarvis/brain']]);
       expect(rec.systemdCallsBefore).toEqual([2]);
-      expect(verbs().slice(0, 3)).toEqual(['show', 'stop', 'start']);
+      expect(verbs().slice(0, 4)).toEqual(['show', 'stop', 'reset-failed', 'start']);
     }, LOCK_HOLDER_TIMEOUT);
 
     test('a start that fails is a failure', async () => {

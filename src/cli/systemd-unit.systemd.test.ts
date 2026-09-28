@@ -319,4 +319,76 @@ process.exit(result.exitCode);
     expect(sh(['systemctl', '--user', 'show', `${updater}.service`, '--property=Result']).out).toBe('Result=timeout');
     sh(['systemctl', '--user', 'reset-failed', `${updater}.service`]);
   }, 120_000);
+
+  // ── What the unit does with the status the daemon leaves (#543) ─────
+  //
+  // The exit codes themselves are covered in src/daemon/exit-code.test.ts.
+  // These two say what systemd then does with them, which is the whole reason
+  // the codes matter: only a real user manager can answer it.
+
+  /**
+   * Link a unit made from the generated text whose ExecStart exits with
+   * `exitCode` the moment it starts: a daemon that dies as soon as it boots.
+   */
+  function startExitingUnit(name: string, exitCode: number): void {
+    const home = join(DATA_DIR, name);
+    mkdirSync(home, { recursive: true });
+    homes.push(home);
+    // Its own data root, like startStandInUnit's: nothing here takes a lock,
+    // but the unit must not point at the developer's ~/.jarvis either.
+    process.env.JARVIS_HOME = home;
+    const standIn = join(home, 'exit.ts');
+    writeFileSync(standIn, `process.exit(${exitCode});\n`, 'utf-8');
+    const generated = generateSystemdUnit();
+    expect(generated).toContain('Restart=on-failure');
+    const body = generated.replace(/^ExecStart=.*$/m, `ExecStart=${process.execPath} ${standIn}`);
+    const unitPath = join(home, `${name}.service`);
+    writeFileSync(unitPath, body, 'utf-8');
+    const link = sh(['systemctl', '--user', 'link', '--runtime', unitPath]);
+    if (link.code !== 0) throw new Error(`systemctl link failed: ${link.out}`);
+    linkedUnits.push(name);
+    // The start job for a Type=simple unit returns as soon as it forked, and
+    // this one is already dead by then, so the result is not interesting.
+    sh(['systemctl', '--user', 'start', `${name}.service`]);
+  }
+
+  function property(name: string, key: string): string {
+    return sh(['systemctl', '--user', 'show', `${name}.service`, `--property=${key}`, '--value']).out;
+  }
+
+  test('a non-zero exit is restarted, and the start limit stops the loop', async () => {
+    // 3 is what the daemon exits after an uncaught exception (#543). Before
+    // that fix it exited 0 and this unit never restarted it.
+    const name = `${UNIT_PREFIX}-crash`;
+    startExitingUnit(name, 3);
+
+    const restarts = await waitFor('the unit to be restarted', () => {
+      const n = Number(property(name, 'NRestarts'));
+      return Number.isFinite(n) && n >= 1 ? n : null;
+    }, 30_000);
+    expect(restarts).toBeGreaterThanOrEqual(1);
+
+    // And then stops: StartLimitBurst starts inside StartLimitIntervalSec, not
+    // a daemon relaunched every RestartSec for as long as the machine is up.
+    const failed = await waitFor('the start limit to end the loop', () => (
+      unitState(name).state === 'failed' ? { state: 'failed', result: property(name, 'Result') } : null
+    ), 60_000);
+    expect(failed).toEqual({ state: 'failed', result: 'start-limit-hit' });
+
+    sh(['systemctl', '--user', 'reset-failed', `${name}.service`]);
+  }, 120_000);
+
+  test('a clean exit is left stopped, which is what jarvis stop relies on', async () => {
+    // `jarvis stop` and `jarvis drain` SIGTERM the daemon directly and its
+    // drain exits 0. Restart=on-failure must leave that stopped -- under
+    // Restart=always systemd would undo the stop the CLI just reported.
+    const name = `${UNIT_PREFIX}-clean`;
+    startExitingUnit(name, 0);
+
+    await waitFor('the unit to go inactive', () => (unitState(name).state === 'inactive' ? true : null), 30_000);
+    // Past RestartSec plus margin: a restart would have happened by now.
+    await Bun.sleep(8_000);
+    expect({ state: unitState(name).state, restarts: property(name, 'NRestarts') })
+      .toEqual({ state: 'inactive', restarts: '0' });
+  }, 120_000);
 });
