@@ -306,6 +306,19 @@ func launchCDP(cfg *SidecarConfig, headless bool) (*cdpClient, error) {
 		log.Printf("[browser] Page.enable failed (navigation uses fixed delay): %v", err)
 	}
 
+	// A freshly launched browser sits on the about:blank it was given, but a
+	// restored session in the automation profile can put the attached tab on
+	// something else -- a local file included. The daemon blanks a tab it
+	// adopted in that state rather than reading it (#521); do the same, so the
+	// guards are a backstop here and not the thing the caller trips over on
+	// their first snapshot. Best-effort: if it fails, the read guards refuse.
+	if url, err := c.mainFrameURL(); err == nil && isLocalContentURL(url) {
+		log.Printf("[browser] attached tab was showing local content; blanking it")
+		if _, err := c.send("Page.navigate", map[string]any{"url": "about:blank"}); err != nil {
+			log.Printf("[browser] could not blank the adopted tab: %v", err)
+		}
+	}
+
 	return c, nil
 }
 
