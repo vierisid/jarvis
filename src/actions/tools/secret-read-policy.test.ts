@@ -234,6 +234,45 @@ describe('Jarvis key material (#528)', () => {
   });
 });
 
+describe('carve-outs cannot swallow what they are carved out of', () => {
+  test('a projects_dir pointed at the data dir does not un-refuse the keys', () => {
+    // The trap upload-policy.ts guards against for its own carve-out: a
+    // projects dir set to the data dir (or home, or /) would otherwise make
+    // every key under it an ordinary project file.
+    setSiteProjectsDir(dataDir);
+    expect(refused(join(dataDir, '.secrets.key'))).toBe(true);
+    expect(refused(join(dataDir, 'workflow-encryption.key'))).toBe(true);
+    setSiteProjectsDir(home);
+    expect(refused(join(dataDir, '.secrets.key'))).toBe(true);
+    setSiteProjectsDir('/');
+    expect(refused(join(dataDir, '.secrets.key'))).toBe(true);
+  });
+
+  test('a secrets dir misconfigured to home does not make listing home a refusal', () => {
+    // Over-refusing `list_directory ~` would be a worse bug than the recon it
+    // prevents.
+    process.env.JARVIS_SECRETS_DIR = home;
+    setDaemonDataRoots({ dataDirs: [dataDir], secretsDirs: [home] });
+    expect(secretListRefusal(home)).toBeNull();
+    expect(secretListRefusal(join(home, 'Documents'))).toBeNull();
+    // The keys inside it are still refused on read.
+    expect(refused(join(dataDir, '.secrets.key'))).toBe(true);
+  });
+});
+
+describe('the data-dir component rules do not over-refuse', () => {
+  test('`browser` and `sidecar-keys` only match at the data dir root', () => {
+    // They are the Chrome profile and the sidecar keypair, both at the root. A
+    // log or content folder that happens to contain a `browser` directory is
+    // the user's data.
+    mkdirSync(join(dataDir, 'content', 'browser'), { recursive: true });
+    writeFileSync(join(dataDir, 'content', 'browser', 'notes.md'), 'notes');
+    expect(refused(join(dataDir, 'content', 'browser', 'notes.md'))).toBe(false);
+    expect(refused(join(dataDir, 'browser', 'Cookies'))).toBe(true);
+    expect(refused(join(dataDir, 'sidecar-keys', 'private.pem'))).toBe(true);
+  });
+});
+
 describe("the environment's source files (#528)", () => {
   test("Jarvis's own systemd unit and drop-ins are refused", () => {
     const unit = join(home, '.config', 'systemd', 'user', 'jarvis.service');
@@ -273,6 +312,20 @@ describe("the environment's source files (#528)", () => {
     expect(hit?.scanOnly).toBe(true);
     // scanOnly alone is not a refusal: the caller decides from the bytes.
     expect(secretReadRefusal(rc)).toBeNull();
+  });
+
+  test('a shell startup file known by its DIRECTORY is scanned too', () => {
+    // fish's config, /etc/profile.d and ~/.bashrc.d are known by directory, not
+    // by file name, and each can export a provider key. Before the fix these
+    // returned null from the classifier, i.e. readable with no scan at all.
+    mkdirSync(join(home, '.config', 'fish'), { recursive: true });
+    for (const path of [
+      join(home, '.config', 'fish', 'config.fish'),
+      join(home, '.bashrc.d', '10-keys.sh'),
+      '/etc/profile.d/keys.sh',
+    ]) {
+      expect(secretRead(path)?.scanOnly, path).toBe(true);
+    }
   });
 
   test('scanForDaemonSecrets finds an assignment in every shape that matters', () => {

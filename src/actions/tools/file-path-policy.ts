@@ -748,8 +748,12 @@ function isSecretReadEntry(relInDir: string): boolean {
   const parts = relInDir.split(/[\\/]/).filter(Boolean);
   if (parts.length === 0) return false;
   // A whole tree of key material, or the local Chrome profile: the user's
-  // cookie jar and `Login Data`.
-  if (parts.some((p) => p.toLowerCase() === 'sidecar-keys' || p.toLowerCase() === 'browser')) return true;
+  // cookie jar and `Login Data`. Both sit at the data dir's ROOT
+  // (sidecar/enrollment.ts's sidecarKeyPaths, the Chrome profile dir), so they
+  // are matched as the first component only: a site project or a log directory
+  // with a `browser` folder in it is not key material.
+  const first = parts[0]!.toLowerCase();
+  if (first === 'sidecar-keys' || first === 'browser') return true;
   const base = parts[parts.length - 1]!.toLowerCase();
   if (/^\.secrets\./.test(base)) return true;
   if (/^jarvis\.db/.test(base)) return true;
@@ -785,6 +789,26 @@ function secretHoldingDirs(): string[] {
   const fromEnv = [env.JARVIS_SECRETS_DIR, env.JARVIS_HOME]
     .filter((d): d is string => !!d && isAbsolute(d)).map((d) => resolve(d));
   return [...new Set([..._dataDirs, ..._secretsDirs, ...fromEnv, join(policyHome(), '.jarvis')])];
+}
+
+/**
+ * The site projects dir, but only when carving it out cannot swallow what it is
+ * carved out of. A `sites.projects_dir` pointed at the data dir, the secrets dir
+ * or the home dir would otherwise un-refuse every key under it -- the same trap
+ * upload-policy.ts guards against for its own projects carve-out
+ * ("unless it would swallow what it is carved out of"). A misconfigured
+ * projects dir then costs a refused project file, not an exposed key.
+ */
+function carveOutProjectsDir(): string | null {
+  if (!_siteProjectsDir) return null;
+  const projects = realOrSelf(_siteProjectsDir);
+  const protectedDirs = [...secretHoldingDirs(), policyHome()];
+  for (const dir of protectedDirs) {
+    for (const form of new Set([resolve(dir), realOrSelf(dir)])) {
+      if (isWithinCI(form, projects)) return null;
+    }
+  }
+  return projects;
 }
 
 /** An explicit `JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE`, which may point anywhere at all. */
@@ -870,13 +894,17 @@ function isEnvDefinitionFile(s: string): boolean {
 
 /**
  * A login shell startup file: readable, but not if it assigns one of the
- * daemon's own secrets. EXEC_FILE_NAMES already knows these names -- the write
- * side gates writing them as `execute_command` -- so the read side reuses that
- * table rather than keeping a second list that could drift from it.
+ * daemon's own secrets. EXEC_FILE_NAMES, EXEC_SYSTEM_FILES and EXEC_DIRS
+ * already know these -- the write side gates writing them as
+ * `execute_command` -- so the read side reuses those tables rather than keeping
+ * a second list that could drift from them. The directory half matters: fish's
+ * `~/.config/fish/config.fish`, `/etc/profile.d/*.sh` and `~/.bashrc.d/*` are
+ * known by their DIRECTORY, not by a file name, and each can export a key.
  */
 function isShellStartupFile(s: string): boolean {
   const base = s.split('/').pop() ?? '';
-  return EXEC_FILE_NAMES.get(base) === SHELL || EXEC_SYSTEM_FILES.get(s) === SHELL;
+  if (EXEC_FILE_NAMES.get(base) === SHELL || EXEC_SYSTEM_FILES.get(s) === SHELL) return true;
+  return EXEC_DIRS.some(({ seg, label, anywhere }) => label === SHELL && (anywhere ? s.includes(seg) : s.startsWith(seg)));
 }
 
 /**
@@ -955,8 +983,9 @@ function classifySecretByName(candidate: string): SecretReadHit | null {
   // Jarvis's data dir at its default place -- the only spelling judgeable for a
   // path whose filesystem the brain cannot see (a sidecar's), and the reason a
   // routed read of `~/.jarvis/.secrets.key` is refused too.
+  const carveOut = carveOutProjectsDir();
   const inJarvis = /\/\.jarvis\/(.+)$/.exec(s);
-  if (inJarvis && !(_siteProjectsDir && isWithin(s, normalize(_siteProjectsDir)))) {
+  if (inJarvis && !(carveOut && isWithin(s, normalize(carveOut)))) {
     const rel = inJarvis[1]!;
     if (isSecretReadEntry(rel)) return { kind: 'jarvis-key', path: candidate };
     if (isSecretConfigEntry(rel)) return { kind: 'jarvis-config', path: candidate };
@@ -970,7 +999,7 @@ function classifySecretByName(candidate: string): SecretReadHit | null {
 
 /** The class of `real` (a resolved path on THIS machine), consulting the registered dirs. */
 function classifySecretOnDisk(real: string): SecretReadHit | null {
-  const projects = _siteProjectsDir ? realOrSelf(_siteProjectsDir) : null;
+  const projects = carveOutProjectsDir();
   if (projects !== null && isWithinCI(real, projects)) return null;
 
   for (const file of explicitKeyFiles()) {
@@ -1072,7 +1101,15 @@ function dedicatedSecretsDirs(): string[] {
     ..._secretsDirs,
     ...explicitKeyFiles().map((f) => dirname(f)),
   ];
-  return [...new Set(candidates.filter((d) => !dataDirs.some((dd) => sameCI(dd, d))))];
+  const home = resolve(policyHome());
+  return [...new Set(candidates.filter((d) =>
+    // Not a data dir: those hold logs, notes and content beside the keys, and
+    // listing them is ordinary use.
+    !dataDirs.some((dd) => sameCI(dd, d))
+    // And not a directory that CONTAINS the home dir or a data dir. A secrets
+    // dir misconfigured to `~` or `/` would otherwise make `list_directory ~`
+    // a refusal, which is a worse bug than the recon it would prevent.
+    && !isWithinCI(home, d) && !dataDirs.some((dd) => isWithinCI(dd, d))))];
 }
 
 /**
