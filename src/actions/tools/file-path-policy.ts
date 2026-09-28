@@ -39,6 +39,7 @@ import { getDefaultCwd, isNoLocalTools } from './local-tools-guard.ts';
 let _siteProjectsDir: string | null = null;
 let _dataDirs: string[] = [];
 let _codeRoots: string[] = [];
+let _secretsDirs: string[] = [];
 let _home: string | null = null;
 
 /**
@@ -63,10 +64,24 @@ export function getSiteProjectsDir(): string | null {
  * metadata locations, where everything is code the daemon runs. The site
  * projects dir is carved out of both.
  */
-export function setDaemonDataRoots(roots: { dataDirs?: Array<string | null | undefined>; codeRoots?: Array<string | null | undefined> }): void {
+export function setDaemonDataRoots(roots: {
+  dataDirs?: Array<string | null | undefined>;
+  codeRoots?: Array<string | null | undefined>;
+  /**
+   * Where the keychain and the workflow key really live: `JARVIS_SECRETS_DIR`
+   * or `JARVIS_HOME` can put them outside every data dir, and until #528
+   * nothing here knew that. Registered rather than resolved on demand because
+   * the canonical resolver (vault/keychain.ts's keychainDir) deliberately
+   * THROWS under NODE_ENV=test with neither variable set, and a classifier
+   * must never throw because a test forgot an environment variable.
+   */
+  secretsDirs?: Array<string | null | undefined>;
+}): void {
   const clean = (list: Array<string | null | undefined> = []) => [...new Set(list.filter((r): r is string => !!r).map((r) => resolve(r)))];
   _dataDirs = clean(roots.dataDirs);
   _codeRoots = clean(roots.codeRoots);
+  _secretsDirs = clean(roots.secretsDirs);
+  secretInodeCache = null;
 }
 
 /**
@@ -77,6 +92,7 @@ export function setDaemonDataRoots(roots: { dataDirs?: Array<string | null | und
 export function setPolicyHome(dir: string | null): void {
   _home = dir ? resolve(dir) : null;
   homeTargetsCache = null;
+  secretInodeCache = null;
 }
 
 export function policyHome(): string {
@@ -423,8 +439,19 @@ function normalize(path: string): string {
   let s = posix.normalize(`/${parts.join('/')}`);
   // macOS: /etc and /var are /private/etc and /private/var.
   if (s.startsWith('/private/etc/') || s.startsWith('/private/var/')) s = s.slice('/private'.length);
+  // macOS: the data volume's firmlinked view of /Users, /private and friends.
+  // A firmlink is NOT a symlink, so realpath does not canonicalise it away and
+  // /System/Volumes/Data/Users/me/.jarvis/.secrets.key would otherwise miss
+  // every data-dir and `/.jarvis/` test. upload-policy.ts already strips this
+  // (DARWIN_DATA_VOLUME); doing it here too keeps the two policies agreeing.
+  if (s === DARWIN_DATA_VOLUME || s.startsWith(`${DARWIN_DATA_VOLUME}/`)) {
+    s = s.slice(DARWIN_DATA_VOLUME.length) || '/';
+  }
   return s;
 }
+
+/** macOS: the data volume's firmlinked view of the root filesystem, lower-cased for normalize(). */
+const DARWIN_DATA_VOLUME = '/system/volumes/data';
 
 /** Name- and place-based classes: they need no filesystem, so they apply to a sidecar's paths as well. */
 function classifyByName(path: string): string | null {
@@ -607,4 +634,507 @@ export function execOnWrite(requested: unknown, opts: { bases?: string[]; home?:
 /** execOnWrite's kind alone. */
 export function execOnWriteClass(requested: unknown, opts: { bases?: string[]; home?: string } = {}): string | null {
   return execOnWrite(requested, opts)?.kind ?? null;
+}
+
+// ── (3) The daemon's own secrets: refused on read (#528) ─────────────────────
+
+/**
+ * `read_file` is rated `read_data`, the lowest-friction authority there is,
+ * and had no containment: a prompt-injected turn that may read files could
+ * read the daemon's own credentials. This section refuses that, and only that.
+ *
+ * Five classes, all judged on RESOLVED paths (see readCandidates) so a
+ * symlink, a `/proc/self/root/...` spelling and a relative path all land on
+ * the real file:
+ *
+ * 1. `process-memory` -- a process's environment or memory. `/proc/<pid>/environ`
+ *    holds ANTHROPIC_API_KEY, JARVIS_WORKFLOW_ENCRYPTION_KEY and
+ *    JARVIS_GITHUB_TOKEN; `cmdline` holds argv. Refused for EVERY pid, not just
+ *    the daemon's family: a family test needs the live parent/child set, which
+ *    is racy (pids are reused, children re-parented) and per-platform, while
+ *    process inspection is `run_command`'s job and `run_command` is already
+ *    `execute_command`. The recon files (`maps`, `smaps`, `mountinfo`) go with
+ *    them: they are how a reader finds a relocated data dir, and nothing a user
+ *    wants from `read_file` needs them.
+ * 2. `process-relative` -- `/dev/fd/N`, `/proc/<pid>/fd/N`, `/dev/stdin`. On
+ *    Linux these are magic links and resolve to the real file, so they would be
+ *    judged as that file; on macOS `/dev/fd` is fdesc, there is no readlink, and
+ *    `realpath('/dev/fd/7')` is `/dev/fd/7` -- an unremarkable path that would
+ *    be opened, dup'ing whatever the daemon holds open (the vault DB, the
+ *    keychain, the key file). A path-based classifier cannot judge these on any
+ *    platform, so they are refused on the spelling everywhere.
+ *    `isProcessRelative` already refuses them for a call ROUTED to a sidecar
+ *    (routedGitRefusal, #522); this closes the local side.
+ * 3. `jarvis-key` -- key material in a data or secrets dir, by path AND by
+ *    inode (see secretInodes: a hard link IS the file under another name, and no
+ *    resolver can see through one -- the daemon itself makes such a link,
+ *    `<key>.<pid>.<hex>.tmp`, and leaves it when an unlink fails).
+ * 4. `jarvis-config` -- `config.yaml` / `sidecar.yaml`, which hold
+ *    `channels.*.bot_token`, `llm.*.api_key`, `client_secret`, `notify_secret`,
+ *    `refresh_secret` and `usage_secret` (config/types.ts).
+ * 5. `daemon-env-source` -- where the daemon's environment COMES FROM. Closing
+ *    `/proc/<pid>/environ` while leaving `~/.config/systemd/user/jarvis.service`
+ *    readable would be cosmetic: the unit carries `Environment=` and
+ *    `EnvironmentFile=` lines, "the workflow key among them"
+ *    (cli/systemd-unit.ts:475), and SELF_HOSTING.md tells people to put them
+ *    there. Jarvis's own service definitions are refused outright. A login shell
+ *    rc is NOT refused outright -- reading `~/.bashrc` is ordinary use -- it is
+ *    returned unless it actually assigns one of the daemon's secret names
+ *    (`scanOnly`, resolved by the caller with scanForDaemonSecrets).
+ *
+ * What this does NOT close, stated so it is not mistaken for closed:
+ * `run_command` and workflow code steps still read `/proc/$PPID/environ`, which
+ * is the documented way round #536's env scrub, and a core dump still holds the
+ * whole environment. Only `prctl(PR_SET_DUMPABLE, 0)` in the daemon closes
+ * those, for every caller present and future; it is filed separately.
+ */
+
+export type SecretReadKind =
+  | 'process-memory' | 'process-relative' | 'jarvis-key' | 'jarvis-config' | 'daemon-env-source';
+
+/** `path` is the candidate that matched. `scanOnly`: refuse only if the bytes assign a daemon secret. */
+export type SecretReadHit = { kind: SecretReadKind; path: string; scanOnly?: boolean };
+
+/**
+ * Files under `/proc/<pid>/` (or `/proc/<pid>/task/<tid>/`) that are refused.
+ * `environ` and `cmdline` are the live leaks; `mem` and `pagemap` are the
+ * address space (inert through `read_file` today, which has no offset
+ * parameter, but not through a sidecar or a future ranged read); the rest are
+ * recon that maps out every relocation this classifier relies on names for.
+ */
+const PROC_REFUSED_LEAVES = [
+  'environ', 'mem', 'cmdline', 'auxv', 'syscall', 'stack', 'pagemap',
+  'maps', 'smaps', 'smaps_rollup', 'numa_maps', 'mountinfo', 'mounts', 'mountstats',
+] as const;
+
+/**
+ * `/proc/<pid|self|thread-self>[/task/<tid>]/<leaf>`, on a normalized path.
+ * The unresolved spellings (`self`, `thread-self`) are matched as well as the
+ * numeric one, because followPath returns a path AS SPELLED once a component
+ * cannot be lstat'ed -- under `hidepid=2`, `subset=pid`, an LSM denial or a
+ * container, `resolveReal('/proc/self/environ')` can come back unchanged.
+ */
+const PROC_LEAF_RE = new RegExp(
+  `^/proc/(?:self|thread-self|\\d+)/(?:task/(?:thread-self|\\d+)/)?(?:${PROC_REFUSED_LEAVES.join('|')})$`,
+);
+
+/** Whole-system memory. `/proc/kcore` stats as a REGULAR file of 140 TB, so a read returns its first 100 KB. */
+const WHOLE_MEMORY_FILES = new Set(['/proc/kcore', '/dev/mem', '/dev/kmem', '/dev/port']);
+
+/**
+ * A descriptor named as a path: it means whatever the holding process has open,
+ * which this classifier cannot know. Matched on the spelling, every platform.
+ */
+const FD_PATH_RE =
+  /^\/(?:dev\/fd(?:\/.*)?|dev\/std(?:in|out|err)|proc\/(?:self|thread-self|\d+)\/(?:task\/(?:thread-self|\d+)\/)?fd(?:\/.*)?)$/;
+
+/**
+ * Key material in a Jarvis data or secrets dir, as a relative entry.
+ *
+ * Deliberately NARROWER than the write side's DATA_DIR_SENSITIVE_ENTRIES --
+ * reading the engine cache or an installed piece is not a credential leak,
+ * reading the key is -- and deliberately tolerant of trailing junk, because the
+ * daemon's own `persistKeyFile` leaves `workflow-encryption.key.<pid>.<hex>.tmp`
+ * as a SECOND HARD LINK to the live key (workflows/db/encryption.ts:355-381),
+ * and `removeStaleKeyTemps` skips temps whose pid is still alive -- i.e. the
+ * running daemon's own.
+ *
+ * Matched on the BASENAME of the whole relative entry, not on its first
+ * component the way the write side's isSensitiveDataEntry does: the legacy
+ * workflow key lives at `cache/workflow-encryption.key`, whose first component
+ * is the deliberately-allowed `cache`.
+ */
+function isSecretReadEntry(relInDir: string): boolean {
+  const parts = relInDir.split(/[\\/]/).filter(Boolean);
+  if (parts.length === 0) return false;
+  // A whole tree of key material, or the local Chrome profile: the user's
+  // cookie jar and `Login Data`.
+  if (parts.some((p) => p.toLowerCase() === 'sidecar-keys' || p.toLowerCase() === 'browser')) return true;
+  const base = parts[parts.length - 1]!.toLowerCase();
+  if (/^\.secrets\./.test(base)) return true;
+  if (/^jarvis\.db/.test(base)) return true;
+  if (base === 'google-tokens.json') return true;
+  // `.key`, `.pem`, `.enc`, `.p12`, `.pfx`, each possibly with trailing junk
+  // (`.tmp`, `.new`, `.bak`, `.<pid>.<hex>.tmp`).
+  return /\.(?:key|pem|enc|p12|pfx)(?:\.[^/\\]*)?$/.test(base);
+}
+
+/** Token-bearing Jarvis config, as a relative entry in a data dir. */
+function isSecretConfigEntry(relInDir: string): boolean {
+  const parts = relInDir.split(/[\\/]/).filter(Boolean);
+  if (parts.length !== 1) return false;
+  const base = parts[0]!.toLowerCase();
+  return base === 'config.yaml' || base === 'sidecar.yaml';
+}
+
+/** A file whose only job is to hold the daemon's environment, inside a data dir. */
+function isDataDirEnvEntry(relInDir: string): boolean {
+  const base = relInDir.split(/[\\/]/).filter(Boolean).pop()?.toLowerCase() ?? '';
+  return base === 'env' || base === '.env';
+}
+
+/**
+ * Data and secrets dirs to judge a read against: the registered ones, plus a
+ * pure environment fallback for the window before the daemon registers them
+ * (and for tests). Never calls vault/keychain.ts's keychainDir, which throws
+ * under NODE_ENV=test with neither variable set; the resolution rule is copied,
+ * the throw is not.
+ */
+function secretHoldingDirs(): string[] {
+  const env = process.env;
+  const fromEnv = [env.JARVIS_SECRETS_DIR, env.JARVIS_HOME]
+    .filter((d): d is string => !!d && isAbsolute(d)).map((d) => resolve(d));
+  return [...new Set([..._dataDirs, ..._secretsDirs, ...fromEnv, join(policyHome(), '.jarvis')])];
+}
+
+/** An explicit `JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE`, which may point anywhere at all. */
+function explicitKeyFiles(): string[] {
+  const v = process.env.JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE;
+  return v && isAbsolute(v) ? [resolve(v)] : [];
+}
+
+/** How long the secret-inode scan is trusted. */
+const SECRET_INODE_TTL_MS = 5_000;
+let secretInodeCache: { key: string; at: number; inodes: Set<string> } | null = null;
+
+/**
+ * `dev:ino` of every secret file that exists, so a read is judged by WHICH FILE
+ * it reaches rather than by what it is called.
+ *
+ * This is the only thing that closes a hard link, and a hard link is the one
+ * alias no resolver can see through: after `ln ~/.jarvis/.secrets.key
+ * ~/Downloads/notes.txt`, resolveReal reports an ordinary
+ * `~/Downloads/notes.txt`. The upload policy answers this by refusing
+ * `nlink > 1`, which cannot be reused for reads: bun's hardlink install backend
+ * gives half of `node_modules` an `nlink > 1`. Comparing identity costs about
+ * thirty stats, cached, and refuses nothing that is not actually the key.
+ *
+ * It also covers, for free: the daemon's own `<key>.<pid>.<hex>.tmp` link, a
+ * single-file bind mount of a key (same inode), and -- once read_file fstats
+ * the descriptor it opened -- the read TOCTOU.
+ */
+function secretInodes(): Set<string> {
+  const dirs = secretHoldingDirs();
+  const explicit = explicitKeyFiles();
+  const key = `${dirs.join('\0')}\0${explicit.join('\0')}`;
+  const now = Date.now();
+  if (secretInodeCache && secretInodeCache.key === key && now - secretInodeCache.at < SECRET_INODE_TTL_MS) {
+    return secretInodeCache.inodes;
+  }
+  const inodes = new Set<string>();
+  const add = (path: string) => {
+    try {
+      const st = statSync(path);
+      if (st.isFile()) inodes.add(`${st.dev}:${st.ino}`);
+    } catch { /* not there */ }
+  };
+  const NAMES = [
+    '.secrets.key', '.secrets.enc', 'workflow-encryption.key', join('cache', 'workflow-encryption.key'),
+    'google-tokens.json', 'jarvis.db', 'jarvis.db-wal', 'jarvis.db-shm',
+    join('sidecar-keys', 'private.pem'), join('sidecar-keys', 'public.pem'),
+  ];
+  for (const dir of dirs) for (const name of NAMES) add(join(dir, name));
+  for (const file of explicit) add(file);
+  secretInodeCache = { key, at: now, inodes };
+  return inodes;
+}
+
+/** Whether a file the daemon has already opened is one of its own secrets. Hard-link proof. */
+export function isSecretInode(dev: number | bigint, ino: number | bigint): boolean {
+  return secretInodes().has(`${dev}:${ino}`);
+}
+
+/**
+ * Jarvis's own service definitions, which carry `Environment=` /
+ * `EnvironmentFile=` / launchd `EnvironmentVariables` -- the same bytes as
+ * `/proc/self/environ`, in a file. Matched on a normalized path, so a sidecar's
+ * path and a case-insensitive filesystem are covered too.
+ */
+function isDaemonServiceFile(s: string): boolean {
+  // systemd: the user unit `jarvis autostart` writes, a system unit, and any
+  // drop-in directory beside either.
+  if (/^\/(?:etc|usr\/lib|lib|run)\/systemd\/(?:system|user)\/jarvis[^/]*\.service(?:\.d\/.*)?$/.test(s)) return true;
+  if (/\/\.(?:config|local\/share)\/systemd\/user\/jarvis[^/]*\.service(?:\.d\/.*)?$/.test(s)) return true;
+  // launchd: ~/Library/LaunchAgents/<label>.plist and the system locations.
+  return /\/library\/(?:launchagents|launchdaemons)\/[^/]*jarvis[^/]*\.plist$/.test(s);
+}
+
+/**
+ * Files whose whole job is to set environment variables. Refused outright:
+ * unlike a shell rc, nobody reads these casually.
+ */
+function isEnvDefinitionFile(s: string): boolean {
+  if (s === '/etc/environment') return true;
+  return /\/\.config\/environment\.d\/[^/]+$/.test(s) || /^\/(?:etc|usr\/lib|run)\/environment\.d\/[^/]+$/.test(s);
+}
+
+/**
+ * A login shell startup file: readable, but not if it assigns one of the
+ * daemon's own secrets. EXEC_FILE_NAMES already knows these names -- the write
+ * side gates writing them as `execute_command` -- so the read side reuses that
+ * table rather than keeping a second list that could drift from it.
+ */
+function isShellStartupFile(s: string): boolean {
+  const base = s.split('/').pop() ?? '';
+  return EXEC_FILE_NAMES.get(base) === SHELL || EXEC_SYSTEM_FILES.get(s) === SHELL;
+}
+
+/**
+ * Environment-variable names whose VALUE is one of the daemon's own secrets.
+ * The same list as model-exec-env.ts's DAEMON_SECRET_ENV_NAMES, which strips
+ * them from model-driven spawns (#536); importing it here would pull the spawn
+ * machinery into a module the file tools load on every call, so it is duplicated
+ * and a test asserts the two agree.
+ */
+export const SECRET_ENV_NAMES: readonly string[] = Object.freeze([
+  'JARVIS_WORKFLOW_ENCRYPTION_KEY', 'JARVIS_GITHUB_TOKEN', 'JARVIS_DEBUG_RPC', 'JARVIS_API_KEY',
+  'JARVIS_OPENAI_KEY', 'JARVIS_GROQ_KEY', 'JARVIS_OPENROUTER_KEY', 'JARVIS_LITELLM_KEY',
+  'NVIDIA_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY',
+]);
+
+// `NAME=`, `export NAME=`, `Environment="NAME=..."`, `NAME: value`, and a
+// launchd plist's `<key>NAME</key>`. The name must not be a prefix of a longer
+// one, so JARVIS_API_KEY_FILE -- a location, not a secret -- does not match.
+const SECRET_ENV_ASSIGN_RE = new RegExp(
+  `(?:^|[^A-Za-z0-9_])(?:${SECRET_ENV_NAMES.join('|')})(?![A-Za-z0-9_])\\s*[=:]`
+  + `|<key>\\s*(?:${SECRET_ENV_NAMES.join('|')})\\s*</key>`,
+  'm',
+);
+
+/**
+ * The name of a daemon secret this text assigns, or null.
+ *
+ * Used for files that legitimately hold environment settings: they are returned
+ * to the model unless they actually carry one of the daemon's credentials, so
+ * reading `~/.bashrc` keeps working and reading the one that exports the API key
+ * does not. The check is on the literal text, so an indirection
+ * (`A=secret; export ANTHROPIC_API_KEY=$A`) is not caught: recorded as a known
+ * limit rather than papered over with redaction, which would imply a guarantee
+ * it cannot give.
+ */
+export function scanForDaemonSecrets(text: string): string | null {
+  const m = SECRET_ENV_ASSIGN_RE.exec(text);
+  if (!m) return null;
+  return SECRET_ENV_NAMES.find((n) => m[0]!.includes(n)) ?? 'a Jarvis credential';
+}
+
+/**
+ * Every spelling of `requested` this machine might open, the way execOnWrite
+ * builds them: as spelled (so a sidecar's path is judged by name), lexically
+ * resolved against each base, and resolved on disk from both the raw spelling
+ * and the lexical form.
+ *
+ * Both resolutions matter and neither is redundant. Bun's `realpathSync.native`
+ * normalizes `..` LEXICALLY, so resolveReal is kernel-order only for a path
+ * whose lexical form does not exist -- measured on Bun 1.3.8, not assumed. Bun's
+ * own openSync/readFileSync normalize the same way, so for a read served HERE
+ * the lexical resolution is what gets opened, while a sidecar handed the raw
+ * string opens the kernel-order one. Judging both means that whichever process
+ * serves the call, the file it reaches was judged.
+ */
+function readCandidates(path: string, bases: string[], onDisk: boolean): string[] {
+  const out = new Set<string>([path]);
+  for (const base of isAbsolute(path) ? ['/'] : bases) {
+    const abs = resolve(base, path);
+    out.add(abs);
+    if (onDisk) {
+      out.add(resolveReal(path, base));
+      out.add(resolveReal(abs));
+    }
+  }
+  return [...out];
+}
+
+/** The class of `candidate`, judged without touching the disk. */
+function classifySecretByName(candidate: string): SecretReadHit | null {
+  const s = normalize(candidate);
+  if (FD_PATH_RE.test(s)) return { kind: 'process-relative', path: candidate };
+  if (PROC_LEAF_RE.test(s) || WHOLE_MEMORY_FILES.has(s)) return { kind: 'process-memory', path: candidate };
+  if (isDaemonServiceFile(s) || isEnvDefinitionFile(s)) return { kind: 'daemon-env-source', path: candidate };
+
+  // Jarvis's data dir at its default place -- the only spelling judgeable for a
+  // path whose filesystem the brain cannot see (a sidecar's), and the reason a
+  // routed read of `~/.jarvis/.secrets.key` is refused too.
+  const inJarvis = /\/\.jarvis\/(.+)$/.exec(s);
+  if (inJarvis && !(_siteProjectsDir && isWithin(s, normalize(_siteProjectsDir)))) {
+    const rel = inJarvis[1]!;
+    if (isSecretReadEntry(rel)) return { kind: 'jarvis-key', path: candidate };
+    if (isSecretConfigEntry(rel)) return { kind: 'jarvis-config', path: candidate };
+    if (isDataDirEnvEntry(rel)) return { kind: 'daemon-env-source', path: candidate };
+  }
+
+  // A shell startup file is allowed unless its bytes assign a daemon secret.
+  if (isShellStartupFile(s)) return { kind: 'daemon-env-source', path: candidate, scanOnly: true };
+  return null;
+}
+
+/** The class of `real` (a resolved path on THIS machine), consulting the registered dirs. */
+function classifySecretOnDisk(real: string): SecretReadHit | null {
+  const projects = _siteProjectsDir ? realOrSelf(_siteProjectsDir) : null;
+  if (projects !== null && isWithinCI(real, projects)) return null;
+
+  for (const file of explicitKeyFiles()) {
+    for (const form of new Set([file, realOrSelf(file)])) {
+      if (sameCI(real, form)) return { kind: 'jarvis-key', path: real };
+    }
+  }
+  for (const dir of secretHoldingDirs()) {
+    for (const form of new Set([dir, realOrSelf(dir)])) {
+      if (!isWithinCI(real, form) || sameCI(real, form)) continue;
+      const rel = relative(form, real);
+      if (isSecretReadEntry(rel)) return { kind: 'jarvis-key', path: real };
+      if (isSecretConfigEntry(rel)) return { kind: 'jarvis-config', path: real };
+      if (isDataDirEnvEntry(rel)) return { kind: 'daemon-env-source', path: real };
+    }
+  }
+  // The PAT the site builder stages for a git push: 0600 under XDG_RUNTIME_DIR
+  // or the temp dir, for the life of one push (sites/github-manager.ts:326-338).
+  if (/(?:^|\/)jarvis-gh-cred-[^/]*(?:\/|$)/.test(normalize(real))) return { kind: 'jarvis-key', path: real };
+  return null;
+}
+
+/**
+ * What secret of the daemon's own a read of `requested` would reach, or null.
+ *
+ * `requested` is coerced the way the workflow boundary coerces it before
+ * dispatch, so a non-string path is judged as the string it will be read as.
+ */
+export function secretRead(requested: unknown, opts: { bases?: string[] } = {}): SecretReadHit | null {
+  if (requested === null || requested === undefined) return null;
+  const path = String(requested);
+  if (!path) return null;
+  const onDisk = !isNoLocalTools();
+  const candidates = readCandidates(path, opts.bases ?? relativeBases(), onDisk);
+
+  // Name first, for every candidate: it needs no filesystem, so it judges a
+  // sidecar's path and a file that is not there yet alike. A scan-only hit is
+  // held back, so a definite hit from another candidate still wins.
+  let scanHit: SecretReadHit | null = null;
+  for (const candidate of candidates) {
+    const hit = classifySecretByName(candidate);
+    if (!hit) continue;
+    if (hit.scanOnly) scanHit ??= hit;
+    else return hit;
+  }
+  if (onDisk) {
+    for (const candidate of candidates) {
+      const hit = classifySecretOnDisk(candidate);
+      if (hit) return hit;
+    }
+    // Identity, last: the only test that sees through a hard link.
+    for (const candidate of candidates) {
+      try {
+        const st = statSync(candidate);
+        if (st.isFile() && isSecretInode(st.dev, st.ino)) return { kind: 'jarvis-key', path: candidate };
+      } catch { /* not there */ }
+    }
+  }
+  return scanHit;
+}
+
+/**
+ * One sentence for every class. Deliberately uniform: naming which rule matched
+ * would let a caller enumerate the classifier by probing, and the distinction is
+ * of no use to a legitimate caller. It does not suggest asking the user to paste
+ * the file -- a prompt-injected turn would do exactly that, and a trusting user
+ * would comply.
+ */
+function secretRefusalText(requested: string, what: string): string {
+  return `Error: Access denied: ${what} "${requested}" holds Jarvis's own credentials (keys, tokens, or the `
+    + 'environment they are set in), which are never returned to the model. The refusal has been logged. Do not '
+    + 'retry this path, do not look for the same data by another route, and do not ask the user to read it out.';
+}
+
+/** The refusal for a `read_file`, or null. A `scanOnly` hit is resolved by the caller, not here. */
+export function secretReadRefusal(requested: unknown, opts: { bases?: string[] } = {}): string | null {
+  const hit = secretRead(requested, opts);
+  if (!hit || hit.scanOnly) return null;
+  logSecretRefusal('read_file', hit);
+  return secretRefusalText(String(requested), 'the file');
+}
+
+/** The refusal for a file whose bytes turned out to assign a daemon secret. */
+export function secretScanRefusal(requested: unknown, envName: string): string {
+  logSecretRefusal('read_file', { kind: 'daemon-env-source', path: String(requested) }, envName);
+  return secretRefusalText(String(requested), 'the file');
+}
+
+/**
+ * Secrets dirs that exist only to hold secrets: what `JARVIS_SECRETS_DIR` or an
+ * explicit key file points at, when that is not also a data dir (where ordinary
+ * things -- logs, notes, content -- live beside the keys).
+ */
+function dedicatedSecretsDirs(): string[] {
+  const dataDirs = [..._dataDirs, join(policyHome(), '.jarvis')].map((d) => resolve(d));
+  const env = process.env.JARVIS_SECRETS_DIR;
+  const candidates = [
+    ...(env && isAbsolute(env) ? [resolve(env)] : []),
+    ..._secretsDirs,
+    ...explicitKeyFiles().map((f) => dirname(f)),
+  ];
+  return [...new Set(candidates.filter((d) => !dataDirs.some((dd) => sameCI(dd, d))))];
+}
+
+/**
+ * The refusal for a `list_directory`, or null.
+ *
+ * A listing discloses entry names and sizes, not bytes, so this is narrower than
+ * the read rule. Refused: a descriptor directory (`/proc/<pid>/fd`, whose
+ * entries name every file the daemon has open), a directory whose whole contents
+ * are key material (`sidecar-keys`, the local Chrome profile), and a DEDICATED
+ * secrets dir -- one a `JARVIS_SECRETS_DIR` or an explicit
+ * `JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE` points at, which is not also a data dir.
+ *
+ * Deliberately NOT refused: listing the shared `~/.jarvis`, which is also the
+ * default keychain dir. Refusing it would break "what is in my Jarvis folder"
+ * for a names-and-sizes disclosure, and every secret byte in it is refused on
+ * read. `/proc/<pid>` stays listable for the same reason. The one thing such a
+ * listing does leak is a name that is itself the capability -- the daemon's
+ * leftover `workflow-encryption.key.<pid>.<hex>.tmp` hard link -- and that is
+ * covered because both its name (isSecretReadEntry) and its inode
+ * (secretInodes) refuse the read however it is spelled.
+ */
+export function secretListRefusal(requested: unknown, opts: { bases?: string[] } = {}): string | null {
+  if (requested === null || requested === undefined) return null;
+  const path = String(requested);
+  if (!path) return null;
+  const onDisk = !isNoLocalTools();
+  const dedicated = dedicatedSecretsDirs();
+  const refuse = (hit: SecretReadHit): string => {
+    logSecretRefusal('list_directory', hit);
+    return secretRefusalText(path, 'the directory');
+  };
+  for (const candidate of readCandidates(path, opts.bases ?? relativeBases(), onDisk)) {
+    const s = normalize(candidate);
+    if (FD_PATH_RE.test(s)) return refuse({ kind: 'process-relative', path: candidate });
+    // A key-material tree at the default data-dir location.
+    if (/\/\.jarvis\/(?:.*\/)?(?:sidecar-keys|browser)(?:\/|$)/.test(s)) {
+      return refuse({ kind: 'jarvis-key', path: candidate });
+    }
+    for (const dir of dedicated) {
+      for (const form of new Set([dir, realOrSelf(dir)])) {
+        if (isWithinCI(candidate, form)) return refuse({ kind: 'jarvis-key', path: candidate });
+      }
+    }
+    if (!onDisk) continue;
+    for (const dir of secretHoldingDirs()) {
+      for (const form of new Set([dir, realOrSelf(dir)])) {
+        if (!isWithinCI(candidate, form) || sameCI(candidate, form)) continue;
+        if (/^(?:sidecar-keys|browser)(?:[\\/]|$)/i.test(relative(form, candidate))) {
+          return refuse({ kind: 'jarvis-key', path: candidate });
+        }
+      }
+    }
+  }
+  return null;
+}
+
+/**
+ * The daemon's log is where the user finds out. A refusal here is the loudest
+ * prompt-injection signal the system produces, and returning it only to the
+ * model would throw that away. The class and the path are logged; no bytes and
+ * no values ever are.
+ */
+function logSecretRefusal(tool: string, hit: SecretReadHit, envName?: string): void {
+  console.warn(`[FilePolicy] ${tool} refused: ${hit.kind}${envName ? ` (assigns ${envName})` : ''} at ${hit.path}`);
 }
