@@ -136,13 +136,26 @@ export function matchesParentWorkflowKey(hex: string, env: Env = process.env): b
 }
 
 /**
+ * The markers as their exact names, not `Record<string, string>`.
+ *
+ * Why the narrower type: the site-builder spawns take their environment from
+ * sanitizedEnv() (util/subprocess-env.ts), whose extras are a CLOSED union, and
+ * a `Record<string, string>` argument defeats that check -- it is exactly the
+ * shape the union exists to reject. Typed this way the two names are checked
+ * against EXTRA_ENV_KEYS at the call site like any other extra.
+ */
+export type ModelExecMarkerEnv =
+  Record<typeof MODEL_EXEC_MARKER_ENV, string>
+  & Partial<Record<typeof MODEL_EXEC_ENV_KEY_FLAG, string>>;
+
+/**
  * The markers a model-directed child gets, given its parent's env: always the
  * marker, plus the env-key flag. An inherited flag passes on unchanged -- it
  * names the key of the daemon the user started, which a key handed in along
  * the way must not replace -- else the parent's own env key sets it.
  */
-export function modelExecMarkers(parent: Env = process.env): Record<string, string> {
-  const out: Record<string, string> = { [MODEL_EXEC_MARKER_ENV]: '1' };
+export function modelExecMarkers(parent: Env = process.env): ModelExecMarkerEnv {
+  const out: ModelExecMarkerEnv = { [MODEL_EXEC_MARKER_ENV]: '1' };
   const inherited = parentWorkflowKeyCheck(parent);
   if (inherited !== null) out[MODEL_EXEC_ENV_KEY_FLAG] = inherited;
   else if (parent.JARVIS_WORKFLOW_ENCRYPTION_KEY) {

@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  BACKSTOP_EXEMPT_EXTRA_KEYS,
   EXTRA_ENV_KEYS,
   SUBPROCESS_ENV_ALLOWLIST,
   filterEnv,
@@ -7,6 +8,12 @@ import {
   isSecretEnvName,
   sanitizedEnv,
 } from './subprocess-env.ts';
+import {
+  MODEL_EXEC_ENV_KEY_FLAG,
+  MODEL_EXEC_MARKER_ENV,
+  modelExecMarkers,
+  workflowKeyCheck,
+} from './model-exec-marker.ts';
 
 const SENTINEL = 'sentinel-do-not-log';
 
@@ -172,6 +179,74 @@ describe('extra additions', () => {
     const out = filterEnv({ PATH: '/usr/bin' }, { API_TOKEN: SENTINEL } as never);
     expect(out).toEqual({ PATH: '/usr/bin' });
   });
+
+  // #524: the model-exec markers travel as extras, and the env-key flag is the
+  // one listed name the backstop would otherwise drop for its shape alone.
+  describe('the model-exec markers (#524)', () => {
+    test('both arrive when a call site passes them', () => {
+      const out = filterEnv({ PATH: '/usr/bin' }, {
+        [MODEL_EXEC_MARKER_ENV]: '1',
+        [MODEL_EXEC_ENV_KEY_FLAG]: 'a1b2c3d4e5f60718',
+      });
+      expect(out).toEqual({ PATH: '/usr/bin', [MODEL_EXEC_MARKER_ENV]: '1', [MODEL_EXEC_ENV_KEY_FLAG]: 'a1b2c3d4e5f60718' });
+    });
+
+    test('and not when it does not: they are opt-in, like every other extra', () => {
+      expect(filterEnv({ PATH: '/usr/bin' })).toEqual({ PATH: '/usr/bin' });
+    });
+
+    test('the exemption is for the extra only -- the same names in the base env are still dropped', () => {
+      // Neither is allowlisted, so a daemon that itself runs marked does not
+      // pass the marks on by inheritance; modelExecMarkers() decides that, and
+      // it reads the parent env directly.
+      const out = filterEnv({
+        PATH: '/usr/bin',
+        [MODEL_EXEC_MARKER_ENV]: '1',
+        [MODEL_EXEC_ENV_KEY_FLAG]: 'a1b2c3d4e5f60718',
+      } as Record<string, string>);
+      expect(out).toEqual({ PATH: '/usr/bin' });
+    });
+
+    test('the exemption does not widen to any other credential-shaped name', () => {
+      // The nearest misses: a name that merely contains the flag's, and one
+      // that differs in case. Neither is the exempt name, and neither is in
+      // EXTRA_ENV_KEYS, so both are dropped twice over.
+      const out = filterEnv({ PATH: '/usr/bin' }, {
+        [`${MODEL_EXEC_ENV_KEY_FLAG}_2`]: SENTINEL,
+        [MODEL_EXEC_ENV_KEY_FLAG.toLowerCase()]: SENTINEL,
+        JARVIS_WORKFLOW_ENCRYPTION_KEY: SENTINEL,
+      } as never);
+      expect(JSON.stringify(out)).not.toContain(SENTINEL);
+      expect(out).toEqual({ PATH: '/usr/bin' });
+    });
+
+    test('and not on win32 either, where only the BASE lookup folds case', () => {
+      // The platform seam changes isAllowedEnvName, not the extras loop: the
+      // membership check and the exemption are exact and case-sensitive
+      // everywhere, so a folded spelling is dropped on Windows too.
+      const out = filterEnv({ PATH: 'C:\\Windows' }, {
+        [MODEL_EXEC_ENV_KEY_FLAG.toLowerCase()]: SENTINEL,
+      } as never, 'win32');
+      expect(JSON.stringify(out)).not.toContain(SENTINEL);
+      // The exempt name itself still arrives on win32, spelled correctly.
+      expect(filterEnv({ PATH: 'C:\\Windows' }, { [MODEL_EXEC_ENV_KEY_FLAG]: 'a1b2c3d4e5f60718' }, 'win32'))
+        .toEqual({ PATH: 'C:\\Windows', [MODEL_EXEC_ENV_KEY_FLAG]: 'a1b2c3d4e5f60718' });
+    });
+
+    test('modelExecMarkers is shaped to pass the closed union, not to bypass it', () => {
+      // The value a call site actually hands sanitizedEnv. Record<string, string>
+      // would defeat the union check, which is why the helper is typed.
+      expect(filterEnv({ PATH: '/usr/bin' }, modelExecMarkers({}))).toEqual({
+        PATH: '/usr/bin',
+        [MODEL_EXEC_MARKER_ENV]: '1',
+      });
+      const flagged = modelExecMarkers({ JARVIS_WORKFLOW_ENCRYPTION_KEY: 'a'.repeat(64) });
+      const out = filterEnv({ PATH: '/usr/bin' }, flagged);
+      expect(out[MODEL_EXEC_ENV_KEY_FLAG]).toBe(workflowKeyCheck('a'.repeat(64)));
+      // The check is not the key.
+      expect(JSON.stringify(out)).not.toContain('a'.repeat(64));
+    });
+  });
 });
 
 describe('list consistency', () => {
@@ -222,11 +297,28 @@ describe('list consistency', () => {
     expect(Object.isFrozen(SUBPROCESS_ENV_ALLOWLIST)).toBe(true);
   });
 
-  test('no EXTRA_ENV_KEYS member is caught by the backstop', () => {
+  test('no EXTRA_ENV_KEYS member is caught by the backstop, bar the one documented exemption', () => {
     // Without this, adding e.g. NPM_TOKEN to EXTRA_ENV_KEYS would compile,
     // typecheck and pass every other test, then be silently dropped at
     // runtime by the backstop with no diagnostic anywhere.
-    expect(EXTRA_ENV_KEYS.filter(isSecretEnvName)).toEqual([]);
+    //
+    // The single exemption is the model-exec env-key FLAG (#524): a one-way
+    // scrypt check OF the workflow key, which the backstop cannot tell from the
+    // key itself because it only ever sees a name. Pinned as an exact list, so
+    // a second credential-shaped extra fails here rather than riding along.
+    expect(EXTRA_ENV_KEYS.filter(isSecretEnvName)).toEqual([MODEL_EXEC_ENV_KEY_FLAG]);
+    // And the marker itself is not credential-shaped at all, so it needs none.
+    expect(isSecretEnvName(MODEL_EXEC_MARKER_ENV)).toBe(false);
+  });
+
+  test('the model-exec names are spelled the way the marker module defines them', () => {
+    // subprocess-env.ts may import NOTHING (it is compiled into the engine
+    // bundle; see its header), so the two names are literals there. This is the
+    // rename guard that an import would otherwise have given for free -- a test
+    // file is not bundled, so it can import the constants.
+    expect(EXTRA_ENV_KEYS).toContain(MODEL_EXEC_MARKER_ENV);
+    expect(EXTRA_ENV_KEYS).toContain(MODEL_EXEC_ENV_KEY_FLAG);
+    expect([...BACKSTOP_EXEMPT_EXTRA_KEYS]).toEqual([MODEL_EXEC_ENV_KEY_FLAG]);
   });
 
   test('EXTRA_ENV_KEYS and the allowlist are disjoint', () => {

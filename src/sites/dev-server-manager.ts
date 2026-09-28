@@ -10,6 +10,7 @@ import type { SiteBuilderConfig } from './types.ts';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
+import { modelExecMarkers } from '../util/model-exec-marker.ts';
 
 type RunningServer = {
   proc: Subprocess;
@@ -63,7 +64,16 @@ export class DevServerManager {
       // The daemon's own environment is NOT inherited: this runs `make dev` out
       // of a model-written project tree, continuously, for as long as the
       // preview is up. See src/util/subprocess-env.ts.
+      //
+      // Marked as model-directed too (#524). The command line is fixed, but the
+      // RECIPE is not: `make dev` runs <project>/Makefile, which site_write_file
+      // and site_run_command may both overwrite, and it runs for the life of the
+      // preview rather than 30 seconds. A recipe with `jarvis restart` in it
+      // therefore reaches the same split-key failure as site_run_command -- and
+      // restarting to pick up a change is an ordinary thing for a model to
+      // script, so this is as likely by accident as by attack.
       env: sanitizedEnv({
+        ...modelExecMarkers(),
         PORT: String(port),
         // Enforce loopback bind — prevent dev servers from listening on 0.0.0.0
         HOST: '127.0.0.1',

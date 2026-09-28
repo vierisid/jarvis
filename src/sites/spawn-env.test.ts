@@ -33,6 +33,7 @@ import { existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, rmSync, 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { isAllowedEnvName } from '../util/subprocess-env.ts';
+import { MODEL_EXEC_ENV_KEY_FLAG, MODEL_EXEC_MARKER_ENV, workflowKeyCheck } from '../util/model-exec-marker.ts';
 
 /** Synthetic. Never a real secret, and never printed on failure. */
 const CANARY_VALUE = 'sentinel-do-not-log';
@@ -57,7 +58,11 @@ const SHELL_INJECTED = new Set(['PWD', 'SHLVL', '_', 'OLDPWD']);
  * dump name, so the allowance has to cover either.
  */
 const EXTRAS_BY_DUMP: Array<[RegExp, string[]]> = [
-  [/^make-dev$/, ['PORT', 'HOST', 'NODE_ENV']],
+  // The model-exec markers (#524) are on the spawns that execute content out of
+  // the project tree: `make dev`'s recipe, and site_run_command's shell (that
+  // one is asserted directly, not through expectAllSanitized, so it names them
+  // at its own call to expectSanitized).
+  [/^make-dev$/, ['PORT', 'HOST', 'NODE_ENV', MODEL_EXEC_MARKER_ENV, MODEL_EXEC_ENV_KEY_FLAG]],
   [/^git-/, ['GIT_TERMINAL_PROMPT']],
 ];
 
@@ -244,6 +249,11 @@ describe('site-builder spawns do not inherit the daemon environment', () => {
     expect(env!.HOST).toBe('127.0.0.1');
     expect(env!.NODE_ENV).toBe('development');
     expect(Number(env!.PORT)).toBeGreaterThanOrEqual(39000);
+    // #524: the recipe comes from a model-written Makefile, so this child is
+    // marked like site_run_command's shell -- the key the allowlist strips
+    // cannot be silently re-minted by a daemon started from here.
+    expect(env![MODEL_EXEC_MARKER_ENV]).toBe('1');
+    expect(env![MODEL_EXEC_ENV_KEY_FLAG]).toBe(workflowKeyCheck(CANARY_VALUE));
   }, 30_000);
 
   test('git-manager: git spawn keeps GIT_TERMINAL_PROMPT', async () => {
@@ -297,6 +307,16 @@ describe('site-builder spawns do not inherit the daemon environment', () => {
       env[line.slice(0, eq)] = line.slice(eq + 1);
     }
 
-    expectSanitized('site_run_command', env, []);
+    // #524: the two model-exec markers, and nothing else beyond the allowlist.
+    expectSanitized('site_run_command', env, [MODEL_EXEC_MARKER_ENV, MODEL_EXEC_ENV_KEY_FLAG]);
+
+    // The allowlist drops JARVIS_WORKFLOW_ENCRYPTION_KEY -- the canary above
+    // proves it -- so a `jarvis restart` from this shell starts a daemon with
+    // no key. The flag is what stops that daemon minting one of its own.
+    expect(env[MODEL_EXEC_MARKER_ENV]).toBe('1');
+    expect(env[MODEL_EXEC_ENV_KEY_FLAG]).toBe(workflowKeyCheck(CANARY_VALUE));
+    // The flag identifies the key; it is not the key, and not any part of it.
+    expect(env[MODEL_EXEC_ENV_KEY_FLAG]).not.toBe(CANARY_VALUE);
+    expect(env[MODEL_EXEC_ENV_KEY_FLAG]).toMatch(/^[0-9a-f]{16}$/);
   }, 30_000);
 });

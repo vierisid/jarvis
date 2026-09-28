@@ -107,6 +107,19 @@
  *     attacker-influenced code. Consequence: git over an SSH remote cannot
  *     authenticate from these spawns. The GitHub path uses HTTPS plus a PAT, so
  *     no current flow regresses.
+ *
+ * WHAT A NAME CANNOT SAY. The backstop below judges a NAME, and since #524 one
+ * name in EXTRA_ENV_KEYS is credential-shaped without being a credential:
+ * JARVIS_MODEL_EXEC_ENV_KEY carries a one-way check OF the workflow key, not the
+ * key (util/model-exec-marker.ts). It is the only member of
+ * BACKSTOP_EXEMPT_EXTRA_KEYS, and nothing else is exempt. Never widen that set
+ * to silence the backstop: if a new extra trips it, the answer is almost always
+ * that the extra is a credential.
+ *
+ * NOTHING MAY BE IMPORTED INTO THIS FILE. It is registered in
+ * PATCHED_VENDOR_SOURCES and compiled into the engine bundle, so an import
+ * travels with it while staying outside bundleHash(). Spell a constant out and
+ * pin it in the tests, as the model-exec names below are.
  */
 
 /**
@@ -122,6 +135,29 @@
  */
 export const EXTRA_ENV_KEYS = [
   'PORT', 'HOST', 'NODE_ENV', 'GIT_TERMINAL_PROMPT',
+  // The model-exec markers (#514, util/model-exec-marker.ts), added for
+  // site_run_command (#524). Not credentials: JARVIS_MODEL_EXEC is the constant
+  // "1", and JARVIS_MODEL_EXEC_ENV_KEY is a slow, domain-separated 64-bit scrypt
+  // CHECK of the daemon's workflow key -- it identifies that key, it cannot
+  // recover it, and the module header sets out exactly what it gives away.
+  //
+  // Why they have to travel at all: this allowlist drops
+  // JARVIS_WORKFLOW_ENCRYPTION_KEY (as it must), so a `jarvis restart` run from
+  // a site project would come up with no key and, unflagged, MINT one --
+  // credentials saved afterwards could not be decrypted by the user's own
+  // restart. The flag makes that daemon refuse to generate a key and say why.
+  // Opt-in per call site, like the WSL names below: only a spawn that passes
+  // them receives them.
+  //
+  // SPELLED OUT, not imported from util/model-exec-marker.ts, although that is
+  // where they are defined: this file is in PATCHED_VENDOR_SOURCES
+  // (workflows/runner/engine-runtime/build.ts) and is compiled into the engine
+  // bundle, so an import here would pull that module -- and its node:crypto
+  // scrypt -- into the bundle while leaving it outside bundleHash(), i.e. edits
+  // to it would serve a stale engine. build.test.ts fails on exactly that.
+  // subprocess-env.test.ts pins these against the constants instead; test files
+  // are not bundled, so a rename there still fails loudly.
+  'JARVIS_MODEL_EXEC', 'JARVIS_MODEL_EXEC_ENV_KEY',
   // WSL, added for src/actions/terminal/wsl-bridge.ts (#519). WSL_INTEROP is
   // the one launching a Windows program needs on WSL2: the socket it goes
   // through. WSL_DISTRO_NAME is this distro's name, and WSLENV lists the
@@ -269,6 +305,20 @@ const SECRET_ENV_PATTERNS: readonly RegExp[] = [
 
 const EXTRA_ENV_KEY_SET: ReadonlySet<string> = new Set(EXTRA_ENV_KEYS);
 
+/**
+ * The one extra whose NAME the backstop catches although its VALUE is not a
+ * credential: the model-exec env-key flag (see the note in the header, and
+ * util/model-exec-marker.ts for what the check value is and is not). Spelled out
+ * for the bundle reason given at EXTRA_ENV_KEYS; subprocess-env.test.ts pins it
+ * against the defining constant, and that it stays a one-element set.
+ *
+ * It exempts nothing from the EXTRA_ENV_KEYS membership check -- only from the
+ * name-shape backstop -- and it applies to extras alone, never to the base env,
+ * so a same-named variable in the daemon's environment is still dropped.
+ * Matched exact and case-sensitive, on every platform.
+ */
+export const BACKSTOP_EXEMPT_EXTRA_KEYS: ReadonlySet<string> = new Set<string>(['JARVIS_MODEL_EXEC_ENV_KEY']);
+
 /** True if a variable name looks like it names a credential. */
 export function isSecretEnvName(name: string): boolean {
   return SECRET_ENV_PATTERNS.some(p => p.test(name));
@@ -330,9 +380,9 @@ export function filterEnv<T extends ExtraEnv>(
       delete out[key];
       continue;
     }
-    // Unreachable today: no EXTRA_ENV_KEYS member is credential-shaped, and a
-    // test pins that. Kept as the tripwire for the next key someone adds.
-    if (isSecretEnvName(key)) continue;
+    // The tripwire for the next key someone adds. Reachable for exactly one
+    // listed name, the model-exec env-key flag, which is exempt above by name.
+    if (isSecretEnvName(key) && !BACKSTOP_EXEMPT_EXTRA_KEYS.has(key)) continue;
     out[key] = value;
   }
 

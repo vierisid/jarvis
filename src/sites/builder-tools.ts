@@ -10,6 +10,7 @@ import type { ProjectManager } from './project-manager.ts';
 import type { GitManager } from './git-manager.ts';
 import type { GitHubManager } from './github-manager.ts';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
+import { modelExecMarkers } from '../util/model-exec-marker.ts';
 import { forCard as cardText } from '../util/card-text.ts';
 
 /** Block patterns for long-running dev servers that conflict with the managed server */
@@ -229,7 +230,30 @@ export function createSiteBuilderTools(
             cwd: projectPath,
             stdout: 'pipe',
             stderr: 'pipe',
-            env: sanitizedEnv(),
+            // Still the site-builder allowlist -- this shell runs a command the
+            // model wrote, in a tree the model wrote -- plus the model-exec
+            // markers (#524; util/model-exec-marker.ts). The allowlist drops
+            // JARVIS_WORKFLOW_ENCRYPTION_KEY, so `jarvis restart` from here
+            // starts a daemon without it; unmarked, that daemon would MINT a
+            // fresh key and the credentials it then saved would be unreadable
+            // to the user's own Jarvis. The flag makes it refuse and say so.
+            //
+            // What decides which site spawns are marked is whether the child
+            // EXECUTES CONTENT OUT OF THE PROJECT TREE, not whether the command
+            // line is model-authored: `make dev` is marked too, because its
+            // recipe comes from a Makefile the model can write. Still unmarked,
+            // deliberately: the git spawns, whose argv the daemon builds and
+            // whose project config the #523 lint keeps from naming a program;
+            // and `make install` / the scaffolders, which run against a
+            // daemon-authored Makefile at the instant createProject writes it.
+            //
+            // What the flag costs here: the check value is also visible to the
+            // lifecycle scripts of any package the model installs from this
+            // shell (`bun add` with no --ignore-scripts, unlike the daemon's own
+            // installs in util/sanitized-install.ts). It identifies the workflow
+            // key and cannot recover it -- see the marker module on what that
+            // gives away, which rests on the key being random.
+            env: sanitizedEnv(modelExecMarkers()),
           });
 
           // 30-second timeout to prevent hanging
