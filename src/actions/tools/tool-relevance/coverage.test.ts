@@ -13,6 +13,7 @@
  */
 import { describe, expect, test } from 'bun:test';
 import { BUILTIN_TOOLS } from '../builtin.ts';
+import { buildProductionRegistry } from '../production-registry.ts';
 import { outsideReach, isFloorEligible, isFramedPerception, isInvariantTrigger, type OutsideReach } from './authority-classes.ts';
 
 /**
@@ -205,45 +206,98 @@ describe('daemon-registered tool classification', () => {
     }
   });
 
-  test('the site-builder tools are never floor-eligible and always triggers', () => {
+  test('the site-builder tools are never floor-eligible', () => {
     // Since #503 all eight carry explicit TOOL_ACTION_MAP entries, so the
     // rank lock that used to keep them out of the floor (Infinity) is gone
-    // and `reach` is now the ONLY thing holding them out: undeclared here,
-    // so `fetch`. That is why every one of them is pinned by name in
-    // EXPECTED_SITE_BUILDER below -- reclassifying `site_read_file`
-    // (read_data, rank 100) as `inert` would otherwise make it
-    // floor-eligible, i.e. pinned into every turn and removable by nothing.
-    for (const name of ['site_run_command', 'site_write_file', 'site_read_file', 'site_github_push']) {
+    // and `reach` is the only thing holding them out. Five are undeclared and
+    // so `fetch`; the three readers are `framed` since #529. Neither class is
+    // floor-eligible -- the floor takes `inert` only -- which is what stops
+    // `site_read_file` (read_data, rank 100) from being pinned into every turn
+    // and removable by nothing. That is why all eight are pinned by name in
+    // EXPECTED_SITE_BUILDER below.
+    for (const name of ['site_write_file', 'site_github_push']) {
       const t = { name, description: 'x', category: 'site-builder', parameters: {}, execute: async () => '' };
       expect(`${name}:${outsideReach(t)}`).toBe(`${name}:fetch`);
+      expect(`${name}:${isFloorEligible(t)}`).toBe(`${name}:false`);
+    }
+    // Framed since #529, and still never floor-eligible: the floor takes only
+    // `inert`, so framing a reader cannot pin it into every turn.
+    for (const name of ['site_read_file', 'site_list_files', 'site_run_command']) {
+      const t = { name, description: 'x', category: 'site-builder', parameters: {}, execute: async () => '' };
+      expect(`${name}:${outsideReach(t)}`).toBe(`${name}:framed`);
       expect(`${name}:${isFloorEligible(t)}`).toBe(`${name}:false`);
     }
   });
 
   /**
-   * All eight, pinned by name. The loop above covers four; this covers the
+   * All eight, pinned by name. The loop above covers five; this covers the
    * set, so adding a site tool forces a reach decision here the way
-   * EXPECTED_RUNTIME does for the other daemon-registered tools.
+   * EXPECTED_RUNTIME does for the other daemon-registered tools -- and unlike
+   * the earlier version of this block, it now really does force one: the table
+   * is checked against the tools `createSiteBuilderTools` actually returns
+   * (via buildProductionRegistry), so a ninth tool cannot default to `fetch`
+   * unreviewed, and a name that leaves the factory cannot linger here.
    */
   const EXPECTED_SITE_BUILDER: Record<string, OutsideReach> = {
-    // The model picks the path and the command, and the result is the
-    // project's own bytes or a shell's stdout, unframed. All `fetch`.
-    site_read_file: 'fetch',
-    site_list_files: 'fetch',
+    // The three readers of outside content are framed since #529: project
+    // bytes, a recursive tree of repo-authored names, and a shell's stdout.
+    site_read_file: 'framed',
+    site_list_files: 'framed',
+    site_run_command: 'framed',
+    // The rest act rather than read. Their results are our own status strings
+    // (plus stderr on an error path), and they are undeclared here, so `fetch`.
     site_write_file: 'fetch',
     site_delete_file: 'fetch',
     site_create_project: 'fetch',
-    site_run_command: 'fetch',
     site_git_commit: 'fetch',
     site_github_push: 'fetch',
   };
+
+  /**
+   * Triggers: `fetch || rank > access_browser`. The five `fetch` tools qualify
+   * on the first clause and site_run_command (execute_command, 506) on the
+   * second, so selecting any of them still drags the framed readers in and the
+   * invariant is intact. site_read_file and site_list_files (read_data, 100)
+   * are framed and below the ceiling, so they stop being triggers -- safe by
+   * the rule I1 rests on: a framed tool cannot be an unframed route to outside
+   * content, which is the only thing the invariant protects.
+   */
+  const NON_TRIGGERS: ReadonlySet<string> = new Set(['site_read_file', 'site_list_files']);
 
   test('every site-builder tool has a pinned reach and stays out of the floor', () => {
     for (const [name, reach] of Object.entries(EXPECTED_SITE_BUILDER)) {
       const t = { name, description: 'x', category: 'site-builder', parameters: {}, execute: async () => '' };
       expect(`${name}:${outsideReach(t)}`).toBe(`${name}:${reach}`);
       expect(`${name}:${isFloorEligible(t)}`).toBe(`${name}:false`);
-      expect(`${name}:${isInvariantTrigger(t)}`).toBe(`${name}:true`);
+      expect(`${name}:${isInvariantTrigger(t)}`).toBe(`${name}:${!NON_TRIGGERS.has(name)}`);
     }
+  });
+
+  /**
+   * The table above is hand-written, so it is only a coverage claim if it is
+   * checked against the real factory. These three are the same checks the
+   * BUILTIN_TOOLS block makes: nothing unreviewed, no drift between the
+   * reviewed value and the computed one, and no stale name.
+   */
+  test('the table matches the tools createSiteBuilderTools really returns', async () => {
+    const { tools, skipped } = await buildProductionRegistry();
+    expect(skipped).toEqual([]);
+    const site = tools.filter((t) => t.category === 'site-builder');
+    // Eight today; the point is that the count comes from the factory.
+    expect(site.length).toBeGreaterThan(0);
+
+    const unreviewed = site.filter((t) => !Object.hasOwn(EXPECTED_SITE_BUILDER, t.name)).map((t) => t.name);
+    expect(unreviewed).toEqual([]);
+
+    const drift = site
+      .filter((t) => outsideReach(t) !== EXPECTED_SITE_BUILDER[t.name])
+      .map((t) => `${t.name}: reviewed ${EXPECTED_SITE_BUILDER[t.name]}, computed ${outsideReach(t)}`);
+    expect(drift).toEqual([]);
+
+    const registered = new Set(site.map((t) => t.name));
+    expect(Object.keys(EXPECTED_SITE_BUILDER).filter((n) => !registered.has(n))).toEqual([]);
+
+    // And the real definitions, not stand-ins, stay out of the floor.
+    expect(site.filter((t) => isFloorEligible(t)).map((t) => t.name)).toEqual([]);
   });
 });

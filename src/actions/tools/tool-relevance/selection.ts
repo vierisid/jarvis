@@ -160,9 +160,19 @@ export const TRIGGER_GROUPS: readonly TriggerGroup[] = [
   {
     // Registered only when `sites.enabled`. Without a group these eight were
     // dropped on EVERY turn -- the coverage test walked BUILTIN_TOOLS, and
-    // none of them is in it. Every one is `fetch` (site_run_command is a real
-    // `sh -c` shell), so selecting them always pulls the framed readers in
-    // with them; that is the invariant working, not a leak.
+    // none of them is in it. Since #529 the three that read outside content
+    // (site_read_file, site_list_files, site_run_command) are framed; the
+    // other five are `fetch`, and site_run_command is above the perception
+    // ceiling anyway, so selecting any of them still pulls the framed readers
+    // in with them. That is the invariant working, not a leak.
+    //
+    // This group is the only route to the five ACTORS. It is no longer the
+    // only route to site_read_file and site_list_files: framed since #529,
+    // they are framed perception, so the I1 repair can restore them on any
+    // turn that retains a trigger, site intent or not. That is accepted --
+    // read_data, path-confined, framed, taint-exempt, two schemas -- and
+    // pinned in selection.test.ts. The shell does not follow them, because
+    // site_run_command is in FRAMED_ACTORS.
     //
     // Triggered by BUILD intent only. "site", "website", "homepage" belong to
     // the browse group: "go to their website and read the pricing" must not

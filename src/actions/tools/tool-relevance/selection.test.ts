@@ -156,6 +156,33 @@ describe('wrong exclusion - the cases #483 measured as capability loss', () => {
     const got = nameSet(decide([user('go to their website and read the pricing')]));
     expect(got.has('browser_navigate')).toBe(true);
     expect(got.has('site_run_command')).toBe(false);
+    for (const n of ['site_delete_file', 'site_github_push', 'site_write_file']) {
+      expect(`${n}:${got.has(n)}`).toBe(`${n}:false`);
+    }
+  });
+
+  /**
+   * The force-add consequence of #529, pinned because it is a decision and not
+   * an accident. site_read_file and site_list_files are framed now, so they are
+   * framed PERCEPTION and the I1 repair restores them on any turn that keeps a
+   * trigger -- including turns with no site intent at all. Accepted: both are
+   * read_data/rank 100, path-confined by the project guard, framed and
+   * taint-exempt, and excluding a framed reader from the union is the thing
+   * that needs justifying, not including it. The cost is two extra schemas on
+   * a filtered turn. What must NOT follow them is the shell or any actor,
+   * which is what site_run_command's FRAMED_ACTORS entry buys.
+   */
+  test('the framed site readers may be restored on a non-site turn, the shell may not', () => {
+    for (const ask of ['what is the weather', 'read my clipboard', 'run ls in my home dir']) {
+      const d = decide([user(ask)]);
+      const got = nameSet(d);
+      const triggers = d.tools.filter(isInvariantTrigger).map((t) => t.name);
+      if (triggers.length === 0) continue; // nothing retained, nothing restored
+      for (const n of ['site_run_command', 'site_write_file', 'site_delete_file', 'site_github_push',
+        'site_create_project', 'site_git_commit']) {
+        expect(`${ask} / ${n}:${got.has(n)}`).toBe(`${ask} / ${n}:false`);
+      }
+    }
   });
 
   test('site-builder tools follow build intent, not dev words', () => {

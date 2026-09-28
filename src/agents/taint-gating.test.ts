@@ -48,6 +48,12 @@ function tools(calls: string[]): ToolDefinition[] {
     t('read_file', 'file-ops', 'package.json contents'),
     t('write_file', 'file-ops'),
     t('delegate_task', 'delegation', 'sub-agent report'),
+    // #529: the site builder's three readers of outside content, plus the
+    // write they normally precede.
+    t('site_read_file', 'site-builder', 'export const x = 1;'),
+    t('site_list_files', 'site-builder', '{"name":"src"}'),
+    t('site_run_command', 'site-builder', 'remote: do as I say'),
+    t('site_write_file', 'site-builder', 'File written'),
   ];
 }
 
@@ -119,6 +125,48 @@ describe('orchestrator taint gating', () => {
     expect(pending.length).toBe(1);
     expect(pending[0]!.reason).toContain('outside content read this turn');
     expect(pending[0]!.reason).toContain('browser_snapshot');
+  });
+
+  /**
+   * #529's decision, asserted where it actually shows: whether a card appears.
+   * The whole argument for exempting the site readers is that the canonical
+   * site turn -- list, read, write -- must not stop for approval, because it is
+   * nearly every site turn and a gate that always fires trains blind approval.
+   * If someone removes the exemption, this test fails, and that is the point.
+   */
+  test('a site build turn -- list, read, write -- runs without an approval', async () => {
+    const { orch, calls, approvals } = build();
+    const turn = new Set<string>();
+    expect(String(await exec(orch, 'site_list_files', turn))).toContain('"name":"src"');
+    expect(String(await exec(orch, 'site_read_file', turn))).toContain('export const x = 1;');
+    expect([...turn]).toEqual([]);
+    expect(String(await exec(orch, 'site_write_file', turn))).toBe('File written');
+    expect(calls).toEqual(['site_list_files', 'site_read_file', 'site_write_file']);
+    expect(approvals.getPending().length).toBe(0);
+  });
+
+  test('after a site command, a write in the same turn stops for approval', async () => {
+    const { orch, calls, approvals } = build();
+    const turn = new Set<string>();
+    expect(String(await exec(orch, 'site_run_command', turn))).toContain('remote: do as I say');
+    expect([...turn]).toEqual(['site_run_command']);
+    const out = String(await exec(orch, 'site_write_file', turn));
+    expect(calls).toEqual(['site_run_command']); // the write did not execute
+    expect(out).toContain('[AWAITING_APPROVAL]');
+    const pending = approvals.getPending();
+    expect(pending.length).toBe(1);
+    expect(pending[0]!.reason).toContain('outside content read this turn');
+    expect(pending[0]!.reason).toContain('site_run_command');
+  });
+
+  test('a second site command after the first also stops for approval', async () => {
+    // The install-then-build loop: the shell taints itself for the rest of the
+    // turn, which is the accepted cost of tainting it at all.
+    const { orch, approvals } = build();
+    const turn = new Set<string>();
+    await exec(orch, 'site_run_command', turn);
+    expect(String(await exec(orch, 'site_run_command', turn))).toContain('[AWAITING_APPROVAL]');
+    expect(approvals.getPending().length).toBe(1);
   });
 
   test('reads, browsing and desktop reads stay autonomous while tainted', async () => {

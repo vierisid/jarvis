@@ -41,7 +41,8 @@ Outside content reaches the model two ways:
   (`src/roles/untrusted.ts`). The result is wrapped in
   `<<<UNTRUSTED_CONTENT ... UNTRUSTED_CONTENT>>>`, run through
   `defangDelimiters()` so the payload cannot forge the boundary, preceded by
-  `untrustedPreamble()`, and - except `read_file` - marks the turn tainted for
+  `untrustedPreamble()`, and - except the file readers `read_file`,
+  `site_read_file` and `site_list_files` - marks the turn tainted for
   `isTaintSourceTool`, which the authority engine's taint gating consumes.
 - **Unframed tools.** `run_command` above all: a shell is a general-purpose
   fetcher, it is not in `UNTRUSTED_TOOL_NAMES`, its category is `terminal`
@@ -401,8 +402,13 @@ delete `run_command` from a turn where the person genuinely asked to run a
 command: a steerable denial-of-capability, a new bug of the same family.
 
 **The union is `PERCEPTION`, not all of `FRAMED`** - the framed *readers*,
-excluding three named framed *actors*: `browser_upload_file`, `run_skill` and
-`record_skill`. Measured: 11,384 B rather than 13,977 B.
+excluding four named framed *actors*: `browser_upload_file`, `run_skill`,
+`record_skill` and `site_run_command`. Measured over the builtins: 11,384 B
+rather than 13,977 B. (#529 framed three site-builder tools, so on a
+`sites.enabled` install `site_read_file` and `site_list_files` join the union
+and `site_run_command` is the fourth actor kept out of it - a real `sh -c`
+that the repair must never force-add to a turn that asked for nothing of the
+kind. The byte figure above counts the builtin set only.)
 
 Membership is **not** a rank test, and two earlier drafts got this wrong in
 opposite directions:

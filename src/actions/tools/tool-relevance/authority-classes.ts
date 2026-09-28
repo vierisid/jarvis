@@ -308,6 +308,15 @@ const FRAMED_ACTORS: ReadonlySet<string> = new Set([
   // confirmation card. The worst possible thing to auto-add next to
   // `run_command` on a "run this script" turn.
   'record_skill',
+  // A real `Bun.spawn(['sh','-c',cmd])` in the project directory. Framed since
+  // #529, which without this entry would make it a framed READER the invariant
+  // repair force-adds to every filtered turn that retains any trigger --
+  // auto-granting a shell to turns that asked for nothing of the kind. Same
+  // reasoning as browser_upload_file above. The site surface keeps framed eyes
+  // without it: site_read_file and site_list_files are framed, are the route
+  // the site prompt tells the model to use, and unlike browser_evaluate this
+  // tool is not the only way to read anything.
+  'site_run_command',
 ]);
 
 /**
