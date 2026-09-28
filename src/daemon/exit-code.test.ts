@@ -47,8 +47,9 @@ ${trigger}
     const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
     return { exitCode: await proc.exited, output: `${out}\n${err}` };
   } finally {
-    // A test that times out must not leave a child behind for its own safety
-    // exit to reap, with other worktrees running tests beside it.
+    // Belt and braces for a read that throws. A test killed by bun's own
+    // timeout does not unwind this, so the fixture's 60s safety exit above is
+    // what actually bounds a runaway child.
     proc.kill();
   }
 }

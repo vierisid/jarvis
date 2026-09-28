@@ -319,32 +319,32 @@ describe('restartSystemdUnit', () => {
   test('inside: hands the restart to a transient timer and never restarts in-process', async () => {
     expect(await restartSystemdUnit(inside)).toBe(true);
     const all = calls();
-    expect(all).toHaveLength(1);
-    const [bin, ...args] = all[0]!;
+    // The unit's start rate-limit is cleared first: this command reports success
+    // and returns, so a start the limit refuses two seconds later would go
+    // unreported (src/cli/autostart.ts sets StartLimitBurst).
+    expect(all).toHaveLength(2);
+    expect(all[0]).toEqual(['systemctl', '--user', 'reset-failed', UNIT]);
+    const [bin, ...args] = all[1]!;
     expect(bin).toBe('systemd-run');
     expect(args.slice(0, 4)).toEqual(['--user', '--quiet', '--collect', `--unit=${STEM}-restart`]);
     expect(args).toContain(`--on-active=${SCHEDULE_DELAY_SEC}s`);
     expect(args).toContain('--timer-property=AccuracySec=100ms');
     // What the timer runs: this PATH's systemctl, restarting the unit.
     expect(args.slice(-4)).toEqual([join(fakeDir, 'systemctl'), '--user', 'restart', UNIT]);
-    // ...after clearing the unit's start rate-limit, which counts this restart
-    // as much as a crash: this command has already told the user it scheduled
-    // one, so a refused start here would go unreported. `-` so a failing
-    // reset-failed cannot cancel the restart.
-    expect(args).toContain(`--property=ExecStartPre=-"${join(fakeDir, 'systemctl')}" "--user" "reset-failed" "${UNIT}"`);
   });
 
   test('inside: a restart already pending is success, not a second restart', async () => {
     setFile('systemd-run.exit', '1');
     setFile('systemd-run.stderr', `Failed to start transient timer unit: Unit ${STEM}-restart.timer was already loaded or has a fragment file.`);
     expect(await restartSystemdUnit(inside)).toBe(true);
-    expect(calls()).toHaveLength(1);
+    // The reset-failed, then the one systemd-run that reported "already loaded".
+    expect(calls()).toHaveLength(2);
   });
 
   test('inside: a failed schedule reports failure and leaves the daemon alone', async () => {
     setFile('systemd-run.exit', '1');
     expect(await restartSystemdUnit(inside)).toBe(false);
-    expect(calls().map((c) => c[0])).toEqual(['systemd-run']);
+    expect(calls().map((c) => c[0])).toEqual(['systemctl', 'systemd-run']);
   });
 
   test('systemd unreachable, inside or out: refuses without touching anything', async () => {
@@ -650,13 +650,12 @@ describe('runUpdate under a systemd user unit', () => {
         stopDaemon: stopRecorder().stopDaemon, systemdUnit: () => inside, systemdWait: FAST,
       }));
       const args = calls().find((c) => c[0] === 'systemd-run')!;
-      // The start is the safety net; the reset-failed before it is asserted
-      // separately below. Both carry the same doubled path.
+      // Exactly one ExecStopPost: systemd writes a reset line before each
+      // assignment of an exec property on a transient unit, so a second one
+      // would not survive a daemon-reload inside the update window.
       const stopPost = args.filter((a) => a.startsWith('--property=ExecStopPost='));
-      const doubled = odd.split('$').join('$$');
-      expect(stopPost).toHaveLength(2);
-      expect(stopPost[0]).toStartWith(`--property=ExecStopPost=-"${doubled}/systemctl"`);
-      expect(stopPost[1]).toStartWith(`--property=ExecStopPost="${doubled}/systemctl"`);
+      expect(stopPost).toHaveLength(1);
+      expect(stopPost[0]).toStartWith(`--property=ExecStopPost="${odd.split('$').join('$$')}/systemctl"`);
     });
 
     test('followed: an installed update whose service did not come back is not reported as a failed install', async () => {
@@ -751,11 +750,14 @@ describe('runUpdate under a systemd user unit', () => {
       expect(result.exitCode).toBe(0);
       expect(stops).toEqual([]);
       expect(spawned).toEqual([['bun', 'update', '-g', '@usejarvis/brain']]);
-      // show (is 4242 the unit's main process?), stop, [install], reset-failed
-      // (the stop counted against the unit's start limit), start, show...
-      expect(systemdCallsBefore).toEqual([2]);
-      expect(verbs().slice(0, 4)).toEqual(['show', 'stop', 'reset-failed', 'start']);
-      expect(verbs().slice(4).every((v) => v === 'show')).toBe(true);
+      // show (is 4242 the unit's main process?), reset-failed (before the stop,
+      // so every start after it is within the unit's start limit), stop,
+      // [install], reset-failed again, start, show...
+      // 3 systemctl calls before the install: show, reset-failed, stop -- the
+      // daemon is down for the install either way.
+      expect(systemdCallsBefore).toEqual([3]);
+      expect(verbs().slice(0, 5)).toEqual(['show', 'reset-failed', 'stop', 'reset-failed', 'start']);
+      expect(verbs().slice(5).every((v) => v === 'show')).toBe(true);
     }, LOCK_HOLDER_TIMEOUT);
 
     test('a failed update still starts the unit again, and fails', async () => {
@@ -779,8 +781,8 @@ describe('runUpdate under a systemd user unit', () => {
       }));
       expect(result.outcome).toBe('updated');
       expect(rec.spawned).toEqual([['bun', 'update', '-g', '@usejarvis/brain']]);
-      expect(rec.systemdCallsBefore).toEqual([2]);
-      expect(verbs().slice(0, 4)).toEqual(['show', 'stop', 'reset-failed', 'start']);
+      expect(rec.systemdCallsBefore).toEqual([3]);
+      expect(verbs().slice(0, 5)).toEqual(['show', 'reset-failed', 'stop', 'reset-failed', 'start']);
     }, LOCK_HOLDER_TIMEOUT);
 
     test('a start that fails is a failure', async () => {
@@ -797,6 +799,9 @@ describe('runUpdate under a systemd user unit', () => {
       expect(result.outcome).toBe('failed');
       expect(spawned).toEqual([]);
       expect(calls().at(-1)).toEqual(['systemctl', '--user', '--no-block', 'start', UNIT]);
+      // The recovery start is only possible because the rate-limit was cleared
+      // before the stop: it has no chance to clear it itself.
+      expect(verbs()).toEqual(['show', 'reset-failed', 'stop', 'start']);
     });
 
     test('the running daemon is not that unit\'s main process: refuses, stops nothing', async () => {

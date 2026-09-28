@@ -11,6 +11,7 @@ import {
   c, printBanner, printOk, printWarn, printErr, printInfo, startSpinner, closeRL,
 } from './helpers.ts';
 import { detectInstallMethod, describeInstallMethod, getMethodCommands } from './install-method.ts';
+import { describeDashboard, resolveDashboardTarget } from './lifecycle.ts';
 
 const JARVIS_DIR = join(homedir(), '.jarvis');
 const CONFIG_PATH = join(JARVIS_DIR, 'config.yaml');
@@ -27,6 +28,14 @@ export async function runDoctor(): Promise<void> {
   console.log(c.bold('Running system diagnostics...\n'));
 
   const results: CheckResult[] = [];
+
+  // Where the dashboard actually is, for every message below that points at it:
+  // JARVIS_PORT or `daemon.port` make a hardcoded localhost:3142 wrong, and in
+  // unix-socket mode there is no localhost URL at all (#544).
+  const dashboard = describeDashboard(resolveDashboardTarget());
+  const setupHint = dashboard.openUrl
+    ? `finish setup at ${dashboard.openUrl}`
+    : 'finish setup through the proxy in front of daemon.listen';
 
   // ── Check 1: Bun Version ──────────────────────────────────────────
 
@@ -53,7 +62,7 @@ export async function runDoctor(): Promise<void> {
   if (existsSync(JARVIS_DIR)) {
     results.push({ name: 'Data Directory', status: 'ok', message: JARVIS_DIR });
   } else {
-    results.push({ name: 'Data Directory', status: 'warn', message: `${JARVIS_DIR} not found. Run: jarvis start (then finish setup at http://localhost:3142)` });
+    results.push({ name: 'Data Directory', status: 'warn', message: `${JARVIS_DIR} not found. Run: jarvis start (then ${setupHint})` });
   }
 
   // ── Check 3: Config File ──────────────────────────────────────────
@@ -69,7 +78,7 @@ export async function runDoctor(): Promise<void> {
       results.push({ name: 'Config File', status: 'fail', message: `Invalid YAML: ${err}` });
     }
   } else {
-    results.push({ name: 'Config File', status: 'fail', message: 'Not found. Run: jarvis start (then finish setup at http://localhost:3142)' });
+    results.push({ name: 'Config File', status: 'fail', message: `Not found. Run: jarvis start (then ${setupHint})` });
   }
 
   // ── Check 4: LLM API Key ─────────────────────────────────────────
@@ -93,7 +102,7 @@ export async function runDoctor(): Promise<void> {
 
   if (llmConfig) {
     if (llmProviderNames.length === 0) {
-      results.push({ name: 'LLM Provider', status: 'fail', message: 'No providers configured. Add one in Settings > LLM (http://localhost:3142).' });
+      results.push({ name: 'LLM Provider', status: 'fail', message: `No providers configured. Add one in Settings > LLM (${dashboard.label}).` });
     } else {
       // The ROUTING view, not the persisted one: on a hosted install the
       // uj-* tier defaults live only in the binding view (they are
@@ -157,13 +166,20 @@ export async function runDoctor(): Promise<void> {
 
   // ── Check 7: Port Availability ────────────────────────────────────
 
-  const port = config?.daemon?.port ?? 3142;
-  try {
-    const server = Bun.serve({ port, fetch: () => new Response('') });
-    server.stop(true);
-    results.push({ name: 'Port', status: 'ok', message: `${port} is available` });
-  } catch {
-    results.push({ name: 'Port', status: 'warn', message: `${port} is in use (daemon may already be running)` });
+  // The port the daemon would bind, in the same precedence it uses -- not
+  // `daemon.port` alone, which misses JARVIS_PORT and reports on a port nothing
+  // will listen on.
+  const target = resolveDashboardTarget();
+  if (target.port === null) {
+    results.push({ name: 'Port', status: 'skip', message: 'unix-socket mode (daemon.listen): no TCP port to check' });
+  } else {
+    try {
+      const server = Bun.serve({ port: target.port, fetch: () => new Response('') });
+      server.stop(true);
+      results.push({ name: 'Port', status: 'ok', message: `${target.port} is available` });
+    } catch {
+      results.push({ name: 'Port', status: 'warn', message: `${target.port} is in use (daemon may already be running)` });
+    }
   }
 
   // ── Check 8: SQLite ───────────────────────────────────────────────
@@ -246,7 +262,7 @@ export async function runDoctor(): Promise<void> {
   console.log(`  ${c.green(`${okCount} passed`)}  ${c.yellow(`${warnCount} warnings`)}  ${c.red(`${failCount} failed`)}`);
 
   if (failCount > 0) {
-    console.log(c.red('\nSome checks failed. Run "jarvis start" and finish setup at http://localhost:3142 to fix configuration.\n'));
+    console.log(c.red(`\nSome checks failed. Run "jarvis start" and ${setupHint} to fix configuration.\n`));
   } else if (warnCount > 0) {
     console.log(c.yellow('\nAll critical checks passed, but some optional features need setup.\n'));
   } else {

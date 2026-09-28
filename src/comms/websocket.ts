@@ -747,7 +747,12 @@ export class WebSocketServer {
       console.log(`[WebSocketServer] Health endpoint: http://localhost:${this.port}/health`);
     }
     if (this.staticDir) {
-      console.log(`[WebSocketServer] Dashboard: http://localhost:${this.port}/`);
+      // Not a localhost URL in unix-socket mode: nothing is listening on
+      // this.port there, and the log would advertise a dashboard that is not
+      // reachable that way (#544, same class as the CLI's open step).
+      console.log(this.unixPath
+        ? `[WebSocketServer] Dashboard: served over unix:${this.unixPath}`
+        : `[WebSocketServer] Dashboard: http://localhost:${this.port}/`);
     }
   }
 

@@ -1,8 +1,11 @@
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test';
 import { unlink } from 'node:fs/promises';
-import { existsSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import {
   DEFAULT_DAEMON_PORT,
+  describeDashboard,
   getConfiguredPort,
   readConfiguredPort,
   resolveDashboardTarget,
@@ -10,8 +13,33 @@ import {
 } from './lifecycle.ts';
 import { acquireLock, releaseLock, writeLockedPort } from '../daemon/pid.ts';
 
-const TEST_CONFIG_PATH = '/tmp/jarvis-cli-lifecycle-config.yaml';
-const MISSING_CONFIG_PATH = '/tmp/jarvis-cli-lifecycle-missing.yaml';
+/**
+ * One sandbox for the whole file, and JARVIS_HOME points at it while these
+ * tests run.
+ *
+ * Both matter. `releaseLock()` unlinks the daemon's lock path whether or not
+ * this process holds the flock (src/daemon/pid.ts), so against the default root
+ * these tests would delete a LIVE daemon's lockfile -- and then pass vacuously,
+ * because `acquireLock` fails while that daemon holds the flock and
+ * `writeLockedPort` no-ops without one. A per-run temp path also keeps parallel
+ * runs in other worktrees off each other's config file.
+ */
+const SANDBOX = mkdtempSync(join(tmpdir(), 'jarvis-cli-lifecycle-'));
+const TEST_CONFIG_PATH = join(SANDBOX, 'config.yaml');
+const MISSING_CONFIG_PATH = join(SANDBOX, 'missing.yaml');
+let prevJarvisHome: string | undefined;
+
+beforeAll(() => {
+  prevJarvisHome = process.env.JARVIS_HOME;
+  process.env.JARVIS_HOME = SANDBOX;
+});
+
+afterAll(() => {
+  releaseLock();
+  if (prevJarvisHome === undefined) delete process.env.JARVIS_HOME;
+  else process.env.JARVIS_HOME = prevJarvisHome;
+  try { rmSync(SANDBOX, { recursive: true, force: true }); } catch { /* ignore */ }
+});
 
 async function cleanupConfig(): Promise<void> {
   if (existsSync(TEST_CONFIG_PATH)) await unlink(TEST_CONFIG_PATH);
@@ -169,14 +197,28 @@ describe('resolveDashboardTarget precedence', () => {
     })).toEqual({ url: null, port: null, source: 'unix-socket' });
   });
 
+  // The #544 bug was in the CLI's wiring, not in the lookup: this is the part
+  // bin/jarvis.ts prints and opens, so it is asserted here rather than nowhere.
+  test('a TCP target is printed and opened; a socket is printed and NOT opened', () => {
+    expect(describeDashboard({ url: 'http://localhost:8080' }))
+      .toEqual({ label: 'http://localhost:8080', openUrl: 'http://localhost:8080' });
+    const socket = describeDashboard({ url: null });
+    expect(socket.openUrl).toBeNull();
+    expect(socket.label).toContain('unix socket');
+    expect(socket.label).not.toContain('http://');
+  });
+
   test('a lockfile from a previous daemon does not decide where the browser goes', async () => {
     // resolveStopPort starts from the lockfile because it signals a RUNNING
     // daemon. Nothing has bound a port yet here, and a stale record would open
     // the wrong tab.
     await Bun.write(TEST_CONFIG_PATH, 'daemon:\n  port: 5000\n');
-    acquireLock(process.pid);
+    // Asserted, not assumed: without the lock the port below is never recorded
+    // and this test would pass whatever resolveDashboardTarget did.
+    expect(acquireLock(process.pid)).toBe(true);
     writeLockedPort(9000);
     try {
+      expect(resolveStopPort({ configPath: TEST_CONFIG_PATH, env: {} }).port).toBe(9000);
       expect(resolveDashboardTarget({ configPath: TEST_CONFIG_PATH, env: {} }).port).toBe(5000);
     } finally {
       releaseLock();

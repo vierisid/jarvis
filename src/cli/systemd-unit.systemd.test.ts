@@ -340,7 +340,11 @@ process.exit(result.exitCode);
     const standIn = join(home, 'exit.ts');
     writeFileSync(standIn, `process.exit(${exitCode});\n`, 'utf-8');
     const generated = generateSystemdUnit();
+    // Both halves of the policy under test, so removing either fails here
+    // instead of timing out in a wait for something that can no longer happen.
     expect(generated).toContain('Restart=on-failure');
+    expect(generated).toMatch(/^StartLimitBurst=\d+$/m);
+    expect(generated).toMatch(/^StartLimitIntervalSec=\d+$/m);
     const body = generated.replace(/^ExecStart=.*$/m, `ExecStart=${process.execPath} ${standIn}`);
     const unitPath = join(home, `${name}.service`);
     writeFileSync(unitPath, body, 'utf-8');
@@ -354,6 +358,20 @@ process.exit(result.exitCode);
 
   function property(name: string, key: string): string {
     return sh(['systemctl', '--user', 'show', `${name}.service`, `--property=${key}`, '--value']).out;
+  }
+
+  /**
+   * SubState and Result in ONE call. A unit between auto-restarts is
+   * transiently ActiveState=failed (SubState `failed-before-auto-restart`,
+   * systemd 254+), so polling ActiveState alone can catch the loop mid-cycle
+   * and then read `Result=exit-code` from a second, later call.
+   */
+  function terminalFailure(name: string): { subState: string; result: string } {
+    const out = sh(['systemctl', '--user', 'show', `${name}.service`, '--property=SubState', '--property=Result']).out;
+    return {
+      subState: /SubState=(\S*)/.exec(out)?.[1] ?? '',
+      result: /Result=(\S*)/.exec(out)?.[1] ?? '',
+    };
   }
 
   test('a non-zero exit is restarted, and the start limit stops the loop', async () => {
@@ -370,10 +388,12 @@ process.exit(result.exitCode);
 
     // And then stops: StartLimitBurst starts inside StartLimitIntervalSec, not
     // a daemon relaunched every RestartSec for as long as the machine is up.
-    const failed = await waitFor('the start limit to end the loop', () => (
-      unitState(name).state === 'failed' ? { state: 'failed', result: property(name, 'Result') } : null
-    ), 60_000);
-    expect(failed).toEqual({ state: 'failed', result: 'start-limit-hit' });
+    const failed = await waitFor('the start limit to end the loop', () => {
+      const now = terminalFailure(name);
+      // `failed`, not `failed-before-auto-restart`: the loop is over.
+      return now.subState === 'failed' ? now : null;
+    }, 60_000);
+    expect(failed).toEqual({ subState: 'failed', result: 'start-limit-hit' });
 
     sh(['systemctl', '--user', 'reset-failed', `${name}.service`]);
   }, 120_000);

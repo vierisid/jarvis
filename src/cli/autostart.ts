@@ -9,7 +9,7 @@
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { spawn } from 'node:child_process';
-import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs';
 import { c, printOk, printErr, printWarn } from './helpers.ts';
 import { getLogDir } from '../daemon/pid.ts';
 import { MODEL_EXEC_ENV_KEY_FLAG, MODEL_EXEC_MARKER_ENV } from '../util/model-exec-marker.ts';
@@ -232,6 +232,10 @@ async function installSystemd(): Promise<boolean> {
 
 async function startSystemdService(): Promise<boolean> {
   try {
+    // Same reason as in scheduleSystemdRestart: a unit sitting at its start
+    // limit refuses the next start, and neither daemon-reload nor enable clears
+    // the counter. Result ignored (a no-op on a healthy unit).
+    Bun.spawnSync(['systemctl', '--user', 'reset-failed', 'jarvis.service']);
     const start = Bun.spawnSync(['systemctl', '--user', 'start', 'jarvis.service']);
     if (start.exitCode !== 0) {
       printErr('Failed to start systemd service. You may need to run: systemctl --user start jarvis.service');
@@ -331,6 +335,24 @@ function parseUnitDirectives(text: string): { section: string; key: string; valu
   return out;
 }
 
+/**
+ * A systemd time span in seconds, for the values this needs to compare. Bare
+ * numbers are seconds; `s`/`sec`/`min`/`ms` cover what a hand-edited RestartSec
+ * realistically says. Anything else is null, i.e. "do not guess".
+ */
+function timeSpanSeconds(value: string | undefined): number | null {
+  if (value === undefined) return null;
+  const match = /^(\d+(?:\.\d+)?)\s*(ms|s|sec|secs|seconds?|m|min|mins|minutes?)?$/.exec(value.trim());
+  if (!match) return null;
+  const n = Number(match[1]);
+  if (!Number.isFinite(n)) return null;
+  switch (match[2]) {
+    case 'ms': return n / 1000;
+    case 'm': case 'min': case 'mins': case 'minute': case 'minutes': return n * 60;
+    default: return n;
+  }
+}
+
 /** systemd's argv splitting, enough of it: quotes off, exec prefixes off. */
 function execTokens(value: string): string[] {
   return value
@@ -345,16 +367,23 @@ function execTokens(value: string): string[] {
  * nothing to report.
  *
  * Null (not an empty list) when nothing is installed, when the file cannot be
- * read, and when a drop-in directory exists: docs/SELF_HOSTING.md tells people
- * to `systemctl --user edit jarvis.service`, and a drop-in can set ExecStart or
- * Restart without the main file showing it. Reporting on the main file alone
- * would nag someone who has already fixed it.
+ * read, and when this unit's own drop-in directory exists: docs/SELF_HOSTING.md
+ * tells people to `systemctl --user edit jarvis.service`, and a drop-in can set
+ * ExecStart or Restart without the main file showing it. Reporting on the main
+ * file alone would nag someone who has already fixed it.
+ *
+ * That guard covers `<unit>.d/` beside the unit, which is where `systemctl edit`
+ * writes. systemd also reads top-level `service.d/` and the same paths under
+ * /etc and /run; an override placed there is still reported. Conservative in the
+ * other direction is not an option here -- something has to be read.
  */
 export function checkInstalledSystemdUnit(unitPath = SYSTEMD_SERVICE): AutostartDrift | null {
   let text: string;
   try {
     if (!existsSync(unitPath)) return null;
-    if (existsSync(`${unitPath}.d`)) return null;
+    // A drop-in that actually overrides something. An empty `<unit>.d/`, left by
+    // a `systemctl edit` somebody aborted, would otherwise silence this forever.
+    if (existsSync(`${unitPath}.d`) && readdirSync(`${unitPath}.d`).some((f) => f.endsWith('.conf'))) return null;
     text = readFileSync(unitPath, 'utf-8');
   } catch {
     return null;
@@ -364,8 +393,9 @@ export function checkInstalledSystemdUnit(unitPath = SYSTEMD_SERVICE): Autostart
   const service = directives.filter((d) => d.section === 'Service');
   const problems: AutostartProblem[] = [];
 
-  // The last non-empty ExecStart wins, as it does in systemd (an empty
-  // assignment resets the list).
+  // The last non-empty ExecStart, which is the command systemd would run in
+  // every unit that loads: more than one is only legal for Type=oneshot, and
+  // otherwise only after an empty assignment has reset the list.
   const execStart = service.filter((d) => d.key === 'ExecStart' && d.value !== '').at(-1);
   if (execStart && !execTokens(execStart.value).includes('--no-open')) {
     problems.push('opens-a-browser');
@@ -374,11 +404,17 @@ export function checkInstalledSystemdUnit(unitPath = SYSTEMD_SERVICE): Autostart
   // Unbounded only when systemd's OWN default limit cannot bite either: at the
   // default 5 starts per 10s, a unit that waits RestartSec >= 2s between tries
   // never reaches it, so an explicit limit is the only thing that ends a loop.
-  // Anyone who set a StartLimit key themselves is left alone.
+  // Anyone who set one of the two keys that bound a loop is left alone
+  // (StartLimitAction is not one of them: it says what to do AT the limit).
+  //
+  // RestartSec is read as a time span, so a hand-written `5s` or `2min` counts
+  // like the bare `5` the generator writes. A value this cannot read at all
+  // stays SILENT rather than guessing.
   const restart = service.filter((d) => d.key === 'Restart').at(-1)?.value;
-  const restartSec = Number(service.filter((d) => d.key === 'RestartSec').at(-1)?.value);
-  const hasLimit = directives.some((d) => d.key.startsWith('StartLimit'));
-  if (restart && restart !== 'no' && !hasLimit && Number.isFinite(restartSec) && restartSec * 5 >= 10) {
+  const restartSec = timeSpanSeconds(service.filter((d) => d.key === 'RestartSec').at(-1)?.value);
+  const hasLimit = directives.some((d) =>
+    d.key === 'StartLimitBurst' || d.key === 'StartLimitIntervalSec' || d.key === 'StartLimitInterval');
+  if (restart && restart !== 'no' && !hasLimit && restartSec !== null && restartSec * 5 >= 10) {
     problems.push('unbounded-restarts');
   }
 
@@ -389,7 +425,7 @@ export function checkInstalledSystemdUnit(unitPath = SYSTEMD_SERVICE): Autostart
 export function describeAutostartProblem(problem: AutostartProblem): string {
   switch (problem) {
     case 'opens-a-browser':
-      return 'it opens a browser on every start (at the default port, whatever yours is)';
+      return 'it opens a browser on every start, including every restart after a crash';
     case 'unbounded-restarts':
       return 'a daemon that cannot boot is restarted forever, with no start limit';
   }
@@ -414,9 +450,17 @@ export function generateLaunchdPlist(): string {
   // descriptors appending to an unlinked inode that grows without bound.
   const logDir = getLogDir();
   // --no-open for the same reason as the systemd unit (#544): KeepAlive=true
-  // relaunches the daemon, and every relaunch would otherwise pop a browser
-  // tab. There is no launchd equivalent of StartLimitBurst; KeepAlive already
-  // backs off (10s between respawns) rather than spinning.
+  // relaunches the daemon, and every relaunch would otherwise pop a browser tab.
+  //
+  // Two things the systemd half of #543 does that this does NOT, both
+  // pre-existing and both needing a macOS box to change safely:
+  //   - `KeepAlive=<true/>` relaunches on ANY exit, a clean one included, so a
+  //     `jarvis stop` here is undone about ThrottleInterval (10s) later. The
+  //     launchd equivalent of Restart=on-failure is a KeepAlive DICT with
+  //     `SuccessfulExit=false`. src/cli/uninstall.ts already works around the
+  //     current behavior by removing autostart before stopping the daemon.
+  //   - launchd throttles respawns to ~10s but never gives up, so the crash-loop
+  //     bound (StartLimitBurst) is Linux-only.
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">

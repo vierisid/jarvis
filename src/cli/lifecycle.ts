@@ -192,14 +192,33 @@ export function resolveDashboardTarget(options?: {
     return { url: null, port: null, source: 'unix-socket' };
   }
 
+  // Each source read once, in order, so the two halves of a branch cannot drift
+  // apart and the config file is not parsed twice.
   const env = options?.env ?? process.env;
+  const fromCli = validPort(options?.cliPort);
+  const fromEnv = validPort(env.JARVIS_PORT);
+  const fromConfig = fromCli === null && fromEnv === null ? readConfiguredPort(options?.configPath) : null;
+
   const resolved: { port: number; source: 'cli' | 'env' | 'config' | 'default' } =
-    validPort(options?.cliPort) !== null ? { port: validPort(options?.cliPort)!, source: 'cli' }
-    : validPort(env.JARVIS_PORT) !== null ? { port: validPort(env.JARVIS_PORT)!, source: 'env' }
-    : readConfiguredPort(options?.configPath) !== null ? { port: readConfiguredPort(options?.configPath)!, source: 'config' }
+    fromCli !== null ? { port: fromCli, source: 'cli' }
+    : fromEnv !== null ? { port: fromEnv, source: 'env' }
+    : fromConfig !== null ? { port: fromConfig, source: 'config' }
     : { port: DEFAULT_DAEMON_PORT, source: 'default' };
 
   return { ...resolved, url: `http://localhost:${resolved.port}` };
+}
+
+/**
+ * What to print for the dashboard, and what to open -- null when there is
+ * nothing to open.
+ *
+ * Here rather than in bin/jarvis.ts so the decision is testable in one place:
+ * the bug in #544 was in the CLI's wiring, not in the port lookup.
+ */
+export function describeDashboard(target: { url: string | null }): { label: string; openUrl: string | null } {
+  return target.url === null
+    ? { label: 'on the unix socket in daemon.listen (no localhost port)', openUrl: null }
+    : { label: target.url, openUrl: target.url };
 }
 
 function validPort(value: unknown): number | null {

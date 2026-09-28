@@ -299,13 +299,12 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
   // Before anything that can throw or hang, including the stop() below.
   if (fatalCode !== undefined) {
     armFatalExit(fatalCode, budgetMs + FATAL_FLUSH_GRACE_MS);
-    // The cheap flush, up front: on a fatal path the teardown that normally
+    // The cheap write, up front: on a fatal path the teardown that normally
     // reaches it sits behind service stops that nothing bounds, so the last
     // ~400ms of debounced per-room window bounds would be the first thing lost.
-    // Idempotent, and phase 3 still calls it on the way out.
-    try { flushWindowState(); } catch (err) {
-      console.warn(`[Daemon] window state flush failed: ${(err as Error).message}`);
-    }
+    // A no-op when nothing touched window state, it swallows its own I/O errors
+    // (window-state.ts), and phase 3 still calls it on the way out.
+    flushWindowState();
   }
   suggestionComposer?.stop();
   suggestionComposer = null;
@@ -403,8 +402,12 @@ async function handleShutdown(signal: ShutdownReason): Promise<void> {
       healthMonitor.stop();
     }
 
-    // Stop all services (reverse order: websocket -> observers -> agent). Safe
-    // now: turns are drained, so tearing down the agent/WS drops nothing live.
+    // Stop all services (reverse order: websocket -> observers -> agent).
+    // On a deliberate shutdown the turns above are drained first, so this drops
+    // nothing live. On a fatal one they are deliberately NOT waited for, and
+    // this still tears down under a running turn: AgentService.stop terminates
+    // the primary agent anyway, so the turn ends here either way -- waiting for
+    // it would only have spent the budget that phase 3 can still use.
     if (registry) {
       await registry.stopAll();
     }

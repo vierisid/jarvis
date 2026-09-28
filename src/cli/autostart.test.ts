@@ -1,11 +1,12 @@
-import { describe, expect, test } from 'bun:test';
+import { afterAll, describe, expect, test } from 'bun:test';
 import { join } from 'node:path';
 import { tmpdir } from 'node:os';
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import {
   canUseSystemdUserService,
   checkInstalledLaunchdPlist,
   checkInstalledSystemdUnit,
+  describeAutostartProblem,
   generateLaunchdPlist,
   generateSystemdUnit,
   decodeLaunchctlOutput,
@@ -405,6 +406,7 @@ describe('generated systemd unit: restart policy and the open step', () => {
 // all that it stays QUIET unless it is sure: it can only nag.
 describe('checkInstalledSystemdUnit', () => {
   const dir = mkdtempSync(join(tmpdir(), 'jarvis-drift-'));
+  afterAll(() => { try { rmSync(dir, { recursive: true, force: true }); } catch {} });
   let seq = 0;
   function unitFile(body: string): string {
     const path = join(dir, `unit-${seq++}.service`);
@@ -447,6 +449,7 @@ WantedBy=default.target
     const path = unitFile('[Service]\nExecStart=/bin/bun /x/jarvis.ts start --foreground\nRestart=always\nRestartSec=5\n');
     expect(checkInstalledSystemdUnit(path)?.problems).toEqual(['opens-a-browser', 'unbounded-restarts']);
     mkdirSync(`${path}.d`, { recursive: true });
+    writeFileSync(join(`${path}.d`, 'override.conf'), '[Service]\nRestart=no\n', 'utf-8');
     expect(checkInstalledSystemdUnit(path)).toBeNull();
   });
 
@@ -491,6 +494,51 @@ WantedBy=default.target
     }
   });
 
+  test('StartLimitAction alone does not count as a limit', () => {
+    // It says what to do AT the limit, not what the limit is, so a unit with
+    // only that key is still restarted forever.
+    const path = unitFile('[Unit]\nStartLimitAction=none\n\n[Service]\nExecStart=/bin/bun /x/jarvis.ts start --no-open\nRestart=always\nRestartSec=9\n');
+    expect(checkInstalledSystemdUnit(path)?.problems).toEqual(['unbounded-restarts']);
+  });
+
+  test('a RestartSec written as a time span counts like a bare number', () => {
+    // All valid systemd, and all far enough apart that its default 5-in-10s
+    // limit never fires: the loop really is unbounded.
+    for (const value of ['5s', '5sec', '2min', '10000ms']) {
+      const path = unitFile(`[Service]\nExecStart=/bin/bun /x/jarvis.ts start --no-open\nRestart=always\nRestartSec=${value}\n`);
+      expect(checkInstalledSystemdUnit(path)?.problems).toEqual(['unbounded-restarts']);
+    }
+    // Under 2s, systemd's own default limit ends the loop: nothing to report.
+    for (const value of ['1s', '500ms', '1']) {
+      const path = unitFile(`[Service]\nExecStart=/bin/bun /x/jarvis.ts start --no-open\nRestart=always\nRestartSec=${value}\n`);
+      expect(checkInstalledSystemdUnit(path)).toBeNull();
+    }
+    // Unreadable: stay silent rather than guess.
+    const odd = unitFile('[Service]\nExecStart=/bin/bun /x/jarvis.ts start --no-open\nRestart=always\nRestartSec=infinity\n');
+    expect(checkInstalledSystemdUnit(odd)).toBeNull();
+  });
+
+  test('an empty drop-in directory does not silence it', () => {
+    // A `systemctl edit` somebody aborted leaves the directory with no .conf in
+    // it, and overrides nothing.
+    const path = unitFile('[Service]\nExecStart=/bin/bun /x/jarvis.ts start --foreground\nRestart=on-failure\nRestartSec=5\n');
+    mkdirSync(`${path}.d`, { recursive: true });
+    expect(checkInstalledSystemdUnit(path)?.problems.sort()).toEqual(['opens-a-browser', 'unbounded-restarts']);
+    writeFileSync(join(`${path}.d`, 'override.conf'), '[Service]\nExecStart=\nExecStart=/bin/bun /x/jarvis.ts start --no-open\n', 'utf-8');
+    expect(checkInstalledSystemdUnit(path)).toBeNull();
+  });
+
+  test('every problem has a one-line plain-ASCII description', () => {
+    // The only user-visible strings in the feature (printed by `jarvis status`).
+    for (const problem of ['opens-a-browser', 'unbounded-restarts'] as const) {
+      const text = describeAutostartProblem(problem);
+      expect(text).toMatch(/^[\x20-\x7e]+$/);
+      expect(text.length).toBeGreaterThan(20);
+    }
+    expect(describeAutostartProblem('opens-a-browser')).toContain('browser');
+    expect(describeAutostartProblem('unbounded-restarts')).toContain('restart');
+  });
+
   test('comments cannot fake a directive', () => {
     const path = unitFile('[Service]\n# ExecStart=/bin/bun /x/jarvis.ts start --no-open\n; StartLimitBurst=5\nExecStart=/bin/bun /x/jarvis.ts start\nRestart=on-failure\nRestartSec=5\n');
     expect(checkInstalledSystemdUnit(path)?.problems.sort()).toEqual(['opens-a-browser', 'unbounded-restarts']);
@@ -499,6 +547,7 @@ WantedBy=default.target
 
 describe('checkInstalledLaunchdPlist', () => {
   const dir = mkdtempSync(join(tmpdir(), 'jarvis-drift-plist-'));
+  afterAll(() => { try { rmSync(dir, { recursive: true, force: true }); } catch {} });
 
   test('the plist we generate today has nothing to report', () => {
     const path = join(dir, 'current.plist');
