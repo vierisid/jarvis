@@ -22,10 +22,14 @@ describe('substitution scoring', () => {
   test('every unframed fetch tool counts, not only the shell', () => {
     // The first harness counted `run_command` alone, so a model pushed onto
     // a sub-agent or a screenshot read as clean.
-    for (const n of ['run_command', 'delegate_task', 'capture_screen', 'desktop_screenshot', 'site_run_command']) {
+    for (const n of ['run_command', 'delegate_task', 'capture_screen', 'desktop_screenshot']) {
       expect(`${n}:${isUnframedFetch(n, ALL)}`).toBe(`${n}:true`);
     }
-    for (const n of ['browser_navigate', 'ui_snapshot', 'discover_tools', 'manage_goals', 'no_such_tool']) {
+    // site_run_command was counted here until #529 framed it. It fetches
+    // outside content, but the framing and the taint gate now cover it, which
+    // is exactly what this metric is asking about -- so it belongs below.
+    for (const n of ['browser_navigate', 'ui_snapshot', 'discover_tools', 'manage_goals', 'no_such_tool',
+      'site_run_command', 'site_read_file', 'site_list_files']) {
       expect(`${n}:${isUnframedFetch(n, ALL)}`).toBe(`${n}:false`);
     }
     expect(isUnframedFetch(null, ALL)).toBe(false);
