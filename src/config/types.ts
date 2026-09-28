@@ -654,6 +654,12 @@ export type JarvisConfig = {
      * and workflow runs to reach a safe point before tearing down. Kept UNDER
      * the supervisor's kill grace (hosted: systemd `TimeoutStopSec=90`) so the
      * drain finishes before SIGKILL. Default 75s.
+     *
+     * Applies to a DELIBERATE shutdown only. A crash (uncaught exception or
+     * unhandled rejection) tears down on a fixed 10s budget and exits non-zero
+     * so the supervisor restarts it, however high this is set: the process is
+     * already in an undefined state, and in-flight turns cannot be resumed
+     * anyway (src/daemon/index.ts, FATAL_DRAIN_DEADLINE_MS).
      */
     drain_deadline_ms?: number;
     /**

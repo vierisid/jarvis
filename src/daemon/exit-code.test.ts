@@ -43,8 +43,14 @@ ${trigger}
     stderr: 'pipe',
     env: { ...process.env, JARVIS_HOME: home },
   });
-  const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
-  return { exitCode: await proc.exited, output: `${out}\n${err}` };
+  try {
+    const [out, err] = await Promise.all([new Response(proc.stdout).text(), new Response(proc.stderr).text()]);
+    return { exitCode: await proc.exited, output: `${out}\n${err}` };
+  } finally {
+    // A test that times out must not leave a child behind for its own safety
+    // exit to reap, with other worktrees running tests beside it.
+    proc.kill();
+  }
 }
 
 describe('daemon exit status', () => {
@@ -54,7 +60,6 @@ setTimeout(() => { throw new Error('fixture uncaught boom'); }, 10);
 `);
     // Non-zero is what Restart=on-failure needs; 3 is the engine's code for
     // this reason (engine/src/main.ts), asserted so the two stay in step.
-    expect(exitCode).not.toBe(0);
     expect(exitCode).toBe(3);
     expect(output).toContain('Uncaught exception');
   }, 90_000);
@@ -63,7 +68,6 @@ setTimeout(() => { throw new Error('fixture uncaught boom'); }, 10);
     const { exitCode, output } = await runFixture('rejection', `
 Promise.reject(new Error('fixture rejected'));
 `);
-    expect(exitCode).not.toBe(0);
     expect(exitCode).toBe(4);
     expect(output).toContain('Unhandled rejection');
   }, 90_000);
@@ -97,5 +101,39 @@ setTimeout(() => { clearTimeout(safety); console.log('[fixture] still running');
     expect(exitCode).toBe(7);
     expect(output).toContain('Non-fatal browser error');
     expect(output).toContain('still running');
+  }, 90_000);
+
+  // The two invariants a refactor would break silently, leaving #543 fixed only
+  // on paper: the drain must not be able to hang instead of exiting, and a crash
+  // on the way out of a shutdown we asked for must still exit 0. Both wedge the
+  // drain by replacing the process-wide ActiveTurns singleton's drain(), which
+  // the daemon module holds the same instance of.
+  const ACTIVE_TURNS = JSON.stringify(join(import.meta.dir, 'active-turns.ts'));
+
+  test('a drain that hangs still exits non-zero, bounded', async () => {
+    const { exitCode, output } = await runFixture('hanging-drain', `
+const { activeTurns } = await import(${ACTIVE_TURNS});
+activeTurns.drain = () => new Promise(() => {});
+setTimeout(() => { throw new Error('fixture uncaught boom'); }, 10);
+`);
+    // Not 90 (the fixture's own safety exit) and not 0: the watchdog armed
+    // before the drain forced the exit. It must not be unref'd either, or an
+    // empty loop would exit 0 out from under it.
+    expect(exitCode).toBe(3);
+    expect(output).toContain('shutdown did not finish within');
+  }, 90_000);
+
+  test('a crash during a deliberate drain still exits 0', async () => {
+    // A stray rejection from a still-streaming turn must not turn `jarvis stop`
+    // into a failure, and must not abort the drain either.
+    const { exitCode, output } = await runFixture('crash-during-drain', `
+const { activeTurns } = await import(${ACTIVE_TURNS});
+activeTurns.drain = async () => { await Bun.sleep(3_000); return { drained: true, remaining: 0 }; };
+process.kill(process.pid, 'SIGTERM');
+setTimeout(() => { throw new Error('fixture boom mid-drain'); }, 300);
+`);
+    expect(exitCode).toBe(0);
+    expect(output).toContain('during drain (ignored; drain continues)');
+    expect(output).toContain('Shutdown complete');
   }, 90_000);
 });

@@ -226,16 +226,24 @@ function logWithTimestamp(message: string): void {
  * left Jarvis down until someone restarted it by hand (#543). Anything not
  * listed here shuts down with 0 on purpose -- a signal, a drain, `jarvis stop`.
  */
-const FATAL_EXIT_CODES: Record<string, number> = {
+const FATAL_EXIT_CODES: Partial<Record<ShutdownReason, number>> = {
   uncaughtException: 3,
   unhandledRejection: 4,
 };
 
 /**
- * Drain budget on a fatal path, instead of the configured `drainDeadlineMs`
+ * Why the daemon is shutting down. A closed set, so a reason that is meant to
+ * be fatal cannot become a silent clean exit through a typo -- the #543 bug.
+ */
+type ShutdownReason = 'SIGINT' | 'SIGTERM' | 'uncaughtException' | 'unhandledRejection';
+
+/**
+ * Teardown budget on a fatal path, instead of the configured `drainDeadlineMs`
  * (75s by default). The process is already in an undefined state, so there is
- * nothing to be gained by holding it there: flush what is cheap and let the
- * supervisor start a healthy one.
+ * nothing to be gained by holding it there: give the durable parts a bounded
+ * chance to finish and let the supervisor start a healthy daemon. Best effort,
+ * not a guarantee -- the teardown awaits service stops that nothing bounds, and
+ * armFatalExit is what makes sure the process leaves either way.
  */
 const FATAL_DRAIN_DEADLINE_MS = 10_000;
 
@@ -266,7 +274,7 @@ function armFatalExit(code: number, budgetMs: number): void {
 /**
  * Handle graceful shutdown
  */
-async function handleShutdown(signal: string): Promise<void> {
+async function handleShutdown(signal: ShutdownReason): Promise<void> {
   // undefined for every deliberate shutdown, which must keep exiting 0:
   // something depends on `jarvis stop` succeeding.
   const fatalCode = FATAL_EXIT_CODES[signal];
@@ -289,7 +297,16 @@ async function handleShutdown(signal: string): Promise<void> {
   shutdownInProgress = true;
   const budgetMs = fatalCode === undefined ? drainDeadlineMs : Math.min(drainDeadlineMs, FATAL_DRAIN_DEADLINE_MS);
   // Before anything that can throw or hang, including the stop() below.
-  if (fatalCode !== undefined) armFatalExit(fatalCode, budgetMs + FATAL_FLUSH_GRACE_MS);
+  if (fatalCode !== undefined) {
+    armFatalExit(fatalCode, budgetMs + FATAL_FLUSH_GRACE_MS);
+    // The cheap flush, up front: on a fatal path the teardown that normally
+    // reaches it sits behind service stops that nothing bounds, so the last
+    // ~400ms of debounced per-room window bounds would be the first thing lost.
+    // Idempotent, and phase 3 still calls it on the way out.
+    try { flushWindowState(); } catch (err) {
+      console.warn(`[Daemon] window state flush failed: ${(err as Error).message}`);
+    }
+  }
   suggestionComposer?.stop();
   suggestionComposer = null;
   console.log(`\n[Daemon] Received ${signal}, draining gracefully (deadline ${budgetMs}ms)...`);
@@ -364,13 +381,20 @@ async function handleShutdown(signal: string): Promise<void> {
     // Per UPDATES.md a turn is NOT checkpointed mid-flight: if it overruns we
     // abandon it (the process exits, the user re-asks). Workflow runs ARE
     // durable (per-step checkpoint + resume), so they're handled in teardown.
+    //
+    // Which is why a fatal shutdown does not wait here at all: the turn would be
+    // abandoned either way, and everything it waited would come off the workflow
+    // worker's share of the budget in phase 3, where the wait CAN save a run.
+    const turnBudget = fatalCode === undefined ? Math.max(0, drainUntil - Date.now()) : 0;
     const active = activeTurns.active;
-    if (active > 0) console.log(`[Drain] waiting for ${active} in-flight turn(s)...`);
-    const { drained, remaining } = await activeTurns.drain(Math.max(0, drainUntil - Date.now()));
+    if (active > 0 && turnBudget > 0) console.log(`[Drain] waiting for ${active} in-flight turn(s)...`);
+    const { drained, remaining } = await activeTurns.drain(turnBudget);
     if (drained) {
-      console.log('[Drain] all in-flight turns completed');
-    } else {
+      if (active > 0) console.log('[Drain] all in-flight turns completed');
+    } else if (turnBudget > 0) {
       console.log(`[Drain] deadline reached; abandoning ${remaining} in-flight turn(s) (user re-asks)`);
+    } else {
+      console.log(`[Drain] ${signal}: abandoning ${remaining} in-flight turn(s) at once (a turn cannot be resumed anyway)`);
     }
 
     // ---- Phase 3: TEARDOWN ----
@@ -5792,7 +5816,16 @@ process.on('uncaughtException', (error) => {
 });
 
 process.on('unhandledRejection', (reason) => {
-  const msg = reason instanceof Error ? reason.message : String(reason);
+  // Guarded: a rejection value whose `message` getter or `toString` throws would
+  // otherwise throw HERE, before the fatal exit is armed. (It would come back as
+  // an uncaughtException, so the status would still be non-zero, but this path
+  // is the one the daemon is supposed to leave through.)
+  let msg: string;
+  try {
+    msg = reason instanceof Error ? reason.message : String(reason);
+  } catch {
+    msg = '<rejection value could not be described>';
+  }
 
   // Browser timeouts and CDP errors should NOT crash the daemon
   if (msg.includes('Timeout waiting for') || msg.includes('CDP')) {
