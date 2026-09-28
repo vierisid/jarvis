@@ -437,7 +437,7 @@ ExecStart=/home/you/.bun/bin/bun /path/to/jarvis/bin/jarvis.ts start --foregroun
 
 `systemctl --user daemon-reload` is run by `edit` itself; `systemctl --user restart jarvis.service` applies it. An override lives in `jarvis.service.d/override.conf` and survives a reinstall of the unit, which is also why `jarvis status` stops reporting drift once a drop-in exists: it cannot tell what the override changed.
 
-On macOS, replace `--foreground` in `~/Library/LaunchAgents/ai.jarvis.daemon.plist` with `--foreground` followed by a `<string>--no-open</string>` entry, then `launchctl unload` and `launchctl load` the plist.
+On macOS, add a `<string>--no-open</string>` entry after `<string>--foreground</string>` in the `ProgramArguments` array of `~/Library/LaunchAgents/ai.jarvis.daemon.plist`, then `launchctl unload` and `launchctl load` the plist. Note that `KeepAlive` there relaunches the daemon after a clean exit too, so a `jarvis stop` on macOS is undone about ten seconds later unless you remove autostart first (`jarvis uninstall` does that in the right order).
 
 ### Logs
 
