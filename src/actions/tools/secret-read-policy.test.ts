@@ -28,9 +28,10 @@ import { linkSync, mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } 
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
-  SECRET_ENV_NAMES, scanForDaemonSecrets, secretListRefusal, secretRead, secretReadRefusal,
+  SECRET_ENV_NAMES, SECRET_INODE_NAMES, scanForDaemonSecrets, secretListRefusal, secretRead, secretReadRefusal,
   setDaemonDataRoots, setPolicyHome, setSiteProjectsDir,
 } from './file-path-policy.ts';
+import { setNoLocalTools } from './local-tools-guard.ts';
 import { DAEMON_SECRET_ENV_NAMES } from '../../util/model-exec-env.ts';
 
 let root: string;
@@ -328,26 +329,207 @@ describe("the environment's source files (#528)", () => {
     }
   });
 
-  test('scanForDaemonSecrets finds an assignment in every shape that matters', () => {
-    expect(scanForDaemonSecrets('export ANTHROPIC_API_KEY=sk-placeholder')).toBe('ANTHROPIC_API_KEY');
-    expect(scanForDaemonSecrets('JARVIS_WORKFLOW_ENCRYPTION_KEY=abc')).toBe('JARVIS_WORKFLOW_ENCRYPTION_KEY');
-    expect(scanForDaemonSecrets('Environment="OPENAI_API_KEY=sk-x"')).toBe('OPENAI_API_KEY');
-    expect(scanForDaemonSecrets('  setenv JARVIS_GITHUB_TOKEN: ghp_x')).toBe('JARVIS_GITHUB_TOKEN');
-    expect(scanForDaemonSecrets('<key>ANTHROPIC_API_KEY</key><string>sk-x</string>')).toBe('ANTHROPIC_API_KEY');
+  test('scanForDaemonSecrets finds an assignment in every shell syntax that matters', () => {
+    // fish and csh have NO `=` and no `:` -- the whitespace-separated form is
+    // the whole syntax -- and both their rc files reach the scanner, so a rule
+    // built only around `=` would return the file with the key in it.
+    const cases: Array<[string, string]> = [
+      ['export ANTHROPIC_API_KEY=sk-placeholder', 'ANTHROPIC_API_KEY'],
+      ['JARVIS_WORKFLOW_ENCRYPTION_KEY=abc', 'JARVIS_WORKFLOW_ENCRYPTION_KEY'],
+      ['export "ANTHROPIC_API_KEY"=sk-x', 'ANTHROPIC_API_KEY'],
+      ['declare -x OPENAI_API_KEY=sk-x', 'OPENAI_API_KEY'],
+      ['set -gx ANTHROPIC_API_KEY sk-x', 'ANTHROPIC_API_KEY'],            // fish
+      ['setenv ANTHROPIC_API_KEY sk-x', 'ANTHROPIC_API_KEY'],             // csh/tcsh
+      ['launchctl setenv ANTHROPIC_API_KEY sk-x', 'ANTHROPIC_API_KEY'],   // macOS
+      ['setx ANTHROPIC_API_KEY sk-x', 'ANTHROPIC_API_KEY'],               // Windows
+      ['$env:ANTHROPIC_API_KEY = "sk-x"', 'ANTHROPIC_API_KEY'],           // PowerShell
+      ['ANTHROPIC_API_KEY DEFAULT=sk-x', 'ANTHROPIC_API_KEY'],            // ~/.pam_environment
+      ['read ANTHROPIC_API_KEY < /etc/k', 'ANTHROPIC_API_KEY'],
+      ['Environment="OPENAI_API_KEY=sk-x"', 'OPENAI_API_KEY'],            // systemd
+      ['<key>ANTHROPIC_API_KEY</key><string>sk-x</string>', 'ANTHROPIC_API_KEY'], // launchd
+      ['TELEGRAM_BOT_TOKEN=123:abc', 'TELEGRAM_BOT_TOKEN'],
+      ['export ANTHROPIC_API_KEY \\\n  = sk-x', 'ANTHROPIC_API_KEY'],     // line continuation
+      ['true && export ANTHROPIC_API_KEY=sk-x', 'ANTHROPIC_API_KEY'],
+    ];
+    for (const [text, name] of cases) expect(scanForDaemonSecrets(text), text).toBe(name);
   });
 
-  test('scanForDaemonSecrets does not fire on a location or a mention', () => {
-    // A path to a key is not a key, and prose is not an assignment.
-    expect(scanForDaemonSecrets('JARVIS_API_KEY_FILE=/etc/jarvis/key')).toBeNull();
-    expect(scanForDaemonSecrets('# remember to set ANTHROPIC_API_KEY somewhere')).toBeNull();
-    expect(scanForDaemonSecrets('export MY_ANTHROPIC_API_KEY=x')).toBeNull();
-    expect(scanForDaemonSecrets('alias ll="ls -l"')).toBeNull();
+  test('scanForDaemonSecrets does not fire on a location, a mention or a test', () => {
+    // A path to a key is not a key, and prose is not an assignment. Firing on
+    // these would refuse an innocent ~/.bashrc wholesale.
+    for (const text of [
+      'JARVIS_API_KEY_FILE=/etc/jarvis/key',
+      '# remember to set ANTHROPIC_API_KEY somewhere',
+      '# see ANTHROPIC_API_KEY: docs',
+      'echo "ANTHROPIC_API_KEY: unset"',
+      '[ -n "$ANTHROPIC_API_KEY" ] && echo "ANTHROPIC_API_KEY: set"',
+      'if [ "$ANTHROPIC_API_KEY" == "x" ]; then true; fi',
+      'export MY_ANTHROPIC_API_KEY=x',
+      'alias ll="ls -l"',
+      'unset ANTHROPIC_API_KEY',
+    ]) {
+      expect(scanForDaemonSecrets(text), text).toBeNull();
+    }
   });
 
-  test('the scanned name list agrees with the spawn scrubber it mirrors', () => {
-    // #536 strips exactly these from model-driven spawns. If that list grows,
-    // this one must too, or a new secret becomes readable from a shell rc.
-    expect([...SECRET_ENV_NAMES].sort()).toEqual([...DAEMON_SECRET_ENV_NAMES].sort());
+  test('the scanned name list is a superset of the spawn scrubber it mirrors', () => {
+    // #536 strips exactly DAEMON_SECRET_ENV_NAMES from model-driven spawns, and
+    // every one of those must be scanned for. The scan list is deliberately
+    // wider: the failure modes are asymmetric -- a scrub false positive breaks a
+    // child process, a scan false negative hands over a key.
+    for (const name of DAEMON_SECRET_ENV_NAMES) expect(SECRET_ENV_NAMES).toContain(name);
+    expect(SECRET_ENV_NAMES.length).toBeGreaterThan(DAEMON_SECRET_ENV_NAMES.length);
+  });
+});
+
+describe('--no-local-tools: the hosted brain with the user as a sidecar', () => {
+  // The mode where the containment rules matter MOST and were switched off: the
+  // brain serves nothing locally, so every read is routed, and a relocated data
+  // dir was then invisible because the registered-dir tests sat behind the
+  // on-disk branch even though they are pure string work.
+  const relocated = () => join(root, 'srv', 'jarvis');
+
+  const withNoLocalTools = (fn: () => void) => {
+    setNoLocalTools(true);
+    try { fn(); } finally { setNoLocalTools(false); }
+  };
+
+  beforeEach(() => {
+    mkdirSync(join(relocated(), 'sidecar-keys'), { recursive: true });
+    writeFileSync(join(relocated(), '.secrets.key'), `${FAKE_HEX}\n`);
+    writeFileSync(join(relocated(), 'workflow-encryption.key'), `${FAKE_HEX}\n`);
+    writeFileSync(join(relocated(), 'config.yaml'), 'llm:\n  anthropic:\n    api_key: placeholder\n');
+    writeFileSync(join(relocated(), 'sidecar-keys', 'private.pem'), '-----BEGIN PRIVATE KEY-----');
+    setDaemonDataRoots({ dataDirs: [relocated()], secretsDirs: [relocated()] });
+  });
+
+  test('a relocated data dir is refused even with no local filesystem', () => {
+    for (const name of ['.secrets.key', 'workflow-encryption.key', 'config.yaml', join('sidecar-keys', 'private.pem')]) {
+      const path = join(relocated(), name);
+      expect(refused(path), `local: ${name}`).toBe(true);
+      withNoLocalTools(() => expect(refused(path), `routed: ${name}`).toBe(true));
+    }
+  });
+
+  test('the staged GitHub PAT is refused with no local filesystem', () => {
+    withNoLocalTools(() => {
+      expect(refused('/tmp/jarvis-gh-cred-9f2a/token')).toBe(true);
+    });
+  });
+
+  test('the default layout and /proc stay refused with no local filesystem', () => {
+    withNoLocalTools(() => {
+      expect(refused('/home/someone/.jarvis/.secrets.key')).toBe(true);
+      expect(refused('/proc/self/environ')).toBe(true);
+      expect(refused('/dev/fd/7')).toBe(true);
+    });
+  });
+
+  test('an ordinary file is still not refused with no local filesystem', () => {
+    withNoLocalTools(() => {
+      expect(refused('/home/someone/Documents/cv.pdf')).toBe(false);
+      expect(refused(join(relocated(), 'logs', 'jarvis.log'))).toBe(false);
+    });
+  });
+});
+
+describe('near-miss spellings found by review', () => {
+  test('a procfs visible somewhere other than the root is refused', () => {
+    // flatpak/toolbx/distrobox mount the host's procfs at /run/host/proc, and a
+    // Windows sidecar reaches this host's as \\wsl$\<distro>\proc.
+    for (const spelling of [
+      '/run/host/proc/self/environ',
+      '\\\\wsl$\\Ubuntu\\proc\\self\\environ',
+      '\\\\wsl.localhost\\Ubuntu\\proc\\self\\environ',
+      'C:/proc/self/environ',
+      '/run/host/dev/fd/7',
+    ]) {
+      expect(refused(spelling), spelling).toBe(true);
+    }
+  });
+
+  test('vmcore, fdinfo and map_files are refused', () => {
+    for (const spelling of ['/proc/vmcore', '/proc/self/fdinfo/3', '/proc/self/map_files/400000-401000']) {
+      expect(refused(spelling), spelling).toBe(true);
+    }
+  });
+
+  test('a jarvis export archive is refused wherever it sits', () => {
+    // --full puts .secrets.key, the workflow key and the sidecar keypair in it
+    // verbatim, and they are ASCII, so a plain text read prints them.
+    for (const name of ['jarvis-export-2026-01-01T00-00-00.tar', 'jarvis-backup-x.tar.zst']) {
+      expect(refused(join(home, name)), name).toBe(true);
+      expect(refused(join(home, 'Downloads', name)), name).toBe(true);
+    }
+    expect(refused(join(home, 'notes.tar'))).toBe(false);
+  });
+
+  test('the EnvironmentFile conventions and DefaultEnvironment are refused', () => {
+    for (const path of [
+      '/etc/default/jarvis', '/etc/sysconfig/jarvis',
+      '/etc/systemd/system.conf', '/etc/systemd/system.conf.d/10-env.conf',
+      '/etc/systemd/user.conf', '/run/systemd/transient/jarvis.service',
+      '/etc/systemd/system/multi-user.target.wants/jarvis.service',
+    ]) {
+      expect(refused(path), path).toBe(true);
+    }
+  });
+
+  test('a hard link to any secret-bearing file in the data dir is refused', () => {
+    // The inode set must cover the whole inventory, not just the key files: a
+    // hard link to config.yaml is as good as a copy of the bot token.
+    const names = ['.secrets.key', '.secrets.enc', 'workflow-encryption.key', 'google-tokens.json',
+      'jarvis.db', 'config.yaml'];
+    for (const [i, name] of names.entries()) {
+      const alias = join(home, 'Documents', `alias-${i}.txt`);
+      linkSync(join(dataDir, name), alias);
+      expect(refused(alias), name).toBe(true);
+    }
+  });
+
+  test('the inode list covers the export inventory, so the two cannot drift', () => {
+    // cli/backup.ts's SECRET_ENTRIES is the project's canonical secret list.
+    for (const entry of ['.secrets.key', '.secrets.enc', 'google-tokens.json', 'workflow-encryption.key']) {
+      expect(SECRET_INODE_NAMES).toContain(entry);
+    }
+    expect(SECRET_INODE_NAMES.some((n) => n.includes('sidecar-keys'))).toBe(true);
+  });
+
+  test('a relative JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE is still refused', () => {
+    // encryption.ts takes the value verbatim with no absoluteness check, so a
+    // relative one is resolved against the daemon cwd and used as the key.
+    process.env.JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE = 'keys/wf';
+    expect(refused(join(process.cwd(), 'keys', 'wf'))).toBe(true);
+  });
+
+  test('a PowerShell profile is scanned like any other shell startup file', () => {
+    for (const path of [
+      'C:\\Users\\me\\Documents\\PowerShell\\Microsoft.PowerShell_profile.ps1',
+      'C:\\Users\\me\\Documents\\WindowsPowerShell\\profile.ps1',
+      join(home, '.config', 'powershell', 'Microsoft.PowerShell_profile.ps1'),
+    ]) {
+      expect(secretRead(path)?.scanOnly, path).toBe(true);
+    }
+  });
+
+  test('direnv and *.local rc files are scanned', () => {
+    for (const path of [
+      join(home, '.envrc'), join(home, '.zshrc.local'), join(home, '.bashrc.local'),
+      join(home, '.config', 'fish', 'conf.d', 'keys.fish'),
+      join(home, '.oh-my-zsh', 'custom', 'keys.zsh'),
+    ]) {
+      expect(secretRead(path)?.scanOnly, path).toBe(true);
+    }
+  });
+
+  test('a long or NUL-bearing path is judged, not a crash', () => {
+    // secretRead is called from a tool's execute AND from a sync authority gate,
+    // so "never throws" is the invariant.
+    expect(() => secretRead('/proc/self/environ\u0000')).not.toThrow();
+    expect(() => secretRead(`/${'a'.repeat(5000)}`)).not.toThrow();
+    expect(() => secretRead(`/${'a/'.repeat(3000)}b`)).not.toThrow();
+    expect(() => secretRead('//')).not.toThrow();
+    expect(() => secretRead('C:')).not.toThrow();
   });
 });
 

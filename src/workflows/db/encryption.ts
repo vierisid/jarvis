@@ -351,6 +351,16 @@ export function persistKeyFile(
   /** Test seam: the hard-link call, so a filesystem without links can be simulated. */
   link: (existing: string, created: string) => void = linkSync,
 ): { created: boolean; hex: string } {
+  // The file tools refuse a read that reaches a key by its INODE as well as by
+  // its name (#528), from a cache that cannot know about a key created after it
+  // was built -- first-boot generation, or rotate-encryption-key. Without this,
+  // a hard link to a brand-new key is judged by name alone until the cache
+  // expires. Fire-and-forget and dynamically imported: a key write must not fail
+  // because a policy module could not load, and a static import here would tie
+  // the encryption module to the tool layer.
+  void import('../../actions/tools/file-path-policy.ts')
+    .then((m) => m.invalidateSecretInodes())
+    .catch(() => { /* the policy's own TTL is the backstop */ });
   mkdirSync(dirname(path), { recursive: true });
   removeStaleKeyTemps(path);
   const tmp = `${path}.${process.pid}.${randomBytes(6).toString("hex")}.tmp`;

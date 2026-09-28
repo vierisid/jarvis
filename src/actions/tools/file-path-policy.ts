@@ -27,7 +27,7 @@
  * code the daemon runs. That is the site builder's contract, not this one's.
  */
 
-import { readdirSync, realpathSync, statSync } from 'node:fs';
+import { readFileSync, readdirSync, realpathSync, statSync } from 'node:fs';
 import { basename, delimiter, dirname, isAbsolute, join, posix, relative, resolve } from 'node:path';
 import { homedir } from 'node:os';
 import { isGitDirName, isWithin, isWithinCI, stripHfsIgnorable } from '../../util/path.ts';
@@ -331,7 +331,12 @@ const SHORT_NAME = 'a Windows 8.3 short name, which may hide where it lands';
 const EXEC_FILE_NAMES: ReadonlyMap<string, string> = new Map([
   ...['.bashrc', '.bash_profile', '.bash_login', '.bash_logout', '.bash_aliases', '.profile', '.zshrc', '.zshenv',
     '.zprofile', '.zlogin', '.zlogout', '.kshrc', '.mkshrc', '.cshrc', '.tcshrc', '.login', '.logout', '.xprofile',
-    '.xinitrc', '.xsession', '.xsessionrc', '.pam_environment'].map((n) => [n, SHELL] as const),
+    '.xinitrc', '.xsession', '.xsessionrc', '.pam_environment',
+    // direnv runs `.envrc` on every cd into the directory, and a daemon started
+    // from such a shell inherits what it exported; the `.local` files are what
+    // prezto, grml and most dotfile managers source from the main rc.
+    '.envrc', '.zshrc.local', '.bashrc.local', '.profile.local', '.zshenv.local',
+  ].map((n) => [n, SHELL] as const),
   // Hook managers read these to decide what runs on commit.
   ...['.gitconfig', '.pre-commit-config.yaml', 'lefthook.yml', 'lefthook.yaml', '.lefthook.yml'].map((n) => [n, GIT] as const),
   // Each of these can name a command the tool runs on its own: vim/emacs
@@ -709,24 +714,36 @@ const PROC_REFUSED_LEAVES = [
 
 /**
  * `/proc/<pid|self|thread-self>[/task/<tid>]/<leaf>`, on a normalized path.
+ *
  * The unresolved spellings (`self`, `thread-self`) are matched as well as the
  * numeric one, because followPath returns a path AS SPELLED once a component
  * cannot be lstat'ed -- under `hidepid=2`, `subset=pid`, an LSM denial or a
  * container, `resolveReal('/proc/self/environ')` can come back unchanged.
+ *
+ * Deliberately NOT anchored at the filesystem root: a procfs is routinely
+ * visible somewhere else. `/run/host/proc/self/environ` is the flatpak, toolbx
+ * and distrobox spelling; a Windows sidecar reaches this host's as
+ * `\\wsl$\Ubuntu\proc\self\environ`, which normalizes to
+ * `/wsl$/ubuntu/proc/self/environ`; and `C:\proc\...` normalizes to
+ * `/c/proc/...`. The cost of matching the tail anywhere is refusing a directory
+ * a user named `proc/self/environ`, which nobody has.
  */
 const PROC_LEAF_RE = new RegExp(
-  `^/proc/(?:self|thread-self|\\d+)/(?:task/(?:thread-self|\\d+)/)?(?:${PROC_REFUSED_LEAVES.join('|')})$`,
+  `(?:^|/)proc/(?:self|thread-self|\\d+)/(?:task/(?:thread-self|\\d+)/)?(?:${PROC_REFUSED_LEAVES.join('|')})$`,
 );
 
-/** Whole-system memory. `/proc/kcore` stats as a REGULAR file of 140 TB, so a read returns its first 100 KB. */
-const WHOLE_MEMORY_FILES = new Set(['/proc/kcore', '/dev/mem', '/dev/kmem', '/dev/port']);
+/**
+ * Whole-system memory. `/proc/kcore` stats as a REGULAR file of 140 TB, so a
+ * read returns its first 100 KB; `vmcore` is the crash image on a kdump kernel.
+ */
+const WHOLE_MEMORY_RE = /(?:^|\/)(?:proc\/(?:kcore|vmcore)|dev\/(?:mem|kmem|port))$/;
 
 /**
  * A descriptor named as a path: it means whatever the holding process has open,
  * which this classifier cannot know. Matched on the spelling, every platform.
  */
 const FD_PATH_RE =
-  /^\/(?:dev\/fd(?:\/.*)?|dev\/std(?:in|out|err)|proc\/(?:self|thread-self|\d+)\/(?:task\/(?:thread-self|\d+)\/)?fd(?:\/.*)?)$/;
+  /(?:^|\/)(?:dev\/fd(?:\/.*)?|dev\/std(?:in|out|err)|proc\/(?:self|thread-self|\d+)\/(?:task\/(?:thread-self|\d+)\/)?(?:fd|fdinfo|map_files)(?:\/.*)?)$/;
 
 /**
  * Key material in a Jarvis data or secrets dir, as a relative entry.
@@ -799,11 +816,24 @@ function secretHoldingDirs(): string[] {
  * ("unless it would swallow what it is carved out of"). A misconfigured
  * projects dir then costs a refused project file, not an exposed key.
  */
+const CARVE_TTL_MS = 5_000;
+let carveCache: { key: string; at: number; dir: string | null } | null = null;
+
 function carveOutProjectsDir(): string | null {
+  const env = process.env;
+  const key = [_siteProjectsDir, _home, _dataDirs.join(','), _secretsDirs.join(','),
+    env.JARVIS_SECRETS_DIR, env.JARVIS_HOME, env.JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE].join('\0');
+  const now = Date.now();
+  if (carveCache && carveCache.key === key && now - carveCache.at < CARVE_TTL_MS) return carveCache.dir;
+  const dir = computeCarveOutProjectsDir();
+  carveCache = { key, at: now, dir };
+  return dir;
+}
+
+function computeCarveOutProjectsDir(): string | null {
   if (!_siteProjectsDir) return null;
   const projects = realOrSelf(_siteProjectsDir);
-  const protectedDirs = [...secretHoldingDirs(), policyHome()];
-  for (const dir of protectedDirs) {
+  for (const dir of [...secretHoldingDirs(), policyHome()]) {
     for (const form of new Set([resolve(dir), realOrSelf(dir)])) {
       if (isWithinCI(form, projects)) return null;
     }
@@ -811,15 +841,52 @@ function carveOutProjectsDir(): string | null {
   return projects;
 }
 
-/** An explicit `JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE`, which may point anywhere at all. */
+/**
+ * An explicit `JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE`, which may point anywhere at
+ * all. Resolved rather than required to be absolute, because
+ * `resolveKeyFile` (workflows/db/encryption.ts:262) takes the value verbatim
+ * with no absoluteness check -- a relative value there is resolved against the
+ * daemon's cwd and used as the key, so dropping it here would leave that file
+ * unclassified.
+ */
 function explicitKeyFiles(): string[] {
   const v = process.env.JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE;
-  return v && isAbsolute(v) ? [resolve(v)] : [];
+  return v ? [resolve(v)] : [];
 }
 
-/** How long the secret-inode scan is trusted. */
+/**
+ * Every secret-bearing file a data or secrets dir can hold, relative to it.
+ *
+ * This is the inventory `jarvis export --full` already keeps (cli/backup.ts's
+ * SECRET_ENTRIES), plus the vault DB and its sidecar files, the legacy workflow
+ * key location, and the token-bearing config -- a test asserts the backup list is
+ * a subset, so the two cannot drift. Names only: identity is what is compared.
+ */
+export const SECRET_INODE_NAMES: readonly string[] = Object.freeze([
+  '.secrets.key', '.secrets.enc',
+  'workflow-encryption.key', join('cache', 'workflow-encryption.key'),
+  'google-tokens.json',
+  'jarvis.db', 'jarvis.db-wal', 'jarvis.db-shm', 'jarvis.db-journal',
+  join('sidecar-keys', 'private.pem'), join('sidecar-keys', 'public.pem'),
+  // Not key files, but they carry tokens, and a hard link to one is as good as
+  // a copy: `config.yaml` holds bot_token / api_key / client_secret, and `env`
+  // is an EnvironmentFile inside the data dir.
+  'config.yaml', 'sidecar.yaml', 'env', '.env',
+]);
+
+/** How long the secret-inode scan is trusted, as a backstop to invalidateSecretInodes. */
 const SECRET_INODE_TTL_MS = 5_000;
 let secretInodeCache: { key: string; at: number; inodes: Set<string> } | null = null;
+
+/**
+ * Drop the inode cache. Called when a key is created or replaced at runtime
+ * (first-boot generation, `rotate-encryption-key`): until the cache catches up, a
+ * hard link to a brand-new key would be judged by name alone, and a link under
+ * an unrelated name would not be judged at all.
+ */
+export function invalidateSecretInodes(): void {
+  secretInodeCache = null;
+}
 
 /**
  * `dev:ino` of every secret file that exists, so a read is judged by WHICH FILE
@@ -852,12 +919,7 @@ function secretInodes(): Set<string> {
       if (st.isFile()) inodes.add(`${st.dev}:${st.ino}`);
     } catch { /* not there */ }
   };
-  const NAMES = [
-    '.secrets.key', '.secrets.enc', 'workflow-encryption.key', join('cache', 'workflow-encryption.key'),
-    'google-tokens.json', 'jarvis.db', 'jarvis.db-wal', 'jarvis.db-shm',
-    join('sidecar-keys', 'private.pem'), join('sidecar-keys', 'public.pem'),
-  ];
-  for (const dir of dirs) for (const name of NAMES) add(join(dir, name));
+  for (const dir of dirs) for (const name of SECRET_INODE_NAMES) add(join(dir, name));
   for (const file of explicit) add(file);
   secretInodeCache = { key, at: now, inodes };
   return inodes;
@@ -875,21 +937,105 @@ export function isSecretInode(dev: number | bigint, ino: number | bigint): boole
  * path and a case-insensitive filesystem are covered too.
  */
 function isDaemonServiceFile(s: string): boolean {
-  // systemd: the user unit `jarvis autostart` writes, a system unit, and any
-  // drop-in directory beside either.
-  if (/^\/(?:etc|usr\/lib|lib|run)\/systemd\/(?:system|user)\/jarvis[^/]*\.service(?:\.d\/.*)?$/.test(s)) return true;
-  if (/\/\.(?:config|local\/share)\/systemd\/user\/jarvis[^/]*\.service(?:\.d\/.*)?$/.test(s)) return true;
+  // A unit name, by pattern. The default install writes `jarvis.service`
+  // (cli/autostart.ts), but a unit may be called anything, so the name the
+  // daemon is ACTUALLY running under is detected separately -- see
+  // ownUnitNames. `<target>.wants/` is matched too: on this machine those
+  // entries are symlinks and resolution lands on the real unit, but a routed
+  // path is judged by spelling alone.
+  const names = ['jarvis[^/]*', ...ownUnitNames()].join('|');
+  const dirs = String.raw`(?:etc|usr\/lib|lib|run)\/systemd\/(?:system|user)`;
+  const wants = String.raw`(?:[^/]+\.(?:target|service)\.wants\/)?`;
+  if (new RegExp(`^/${dirs}/${wants}(?:${names})\\.service(?:\\.d/.*)?$`).test(s)) return true;
+  if (new RegExp(`^/run/systemd/(?:transient|system\\.control|user\\.control)/(?:${names})\\.service(?:\\.d/.*)?$`).test(s)) return true;
+  if (new RegExp(`/\\.(?:config|local/share)/systemd/user(?:\\.control)?/${wants}(?:${names})\\.service(?:\\.d/.*)?$`).test(s)) return true;
   // launchd: ~/Library/LaunchAgents/<label>.plist and the system locations.
   return /\/library\/(?:launchagents|launchdaemons)\/[^/]*jarvis[^/]*\.plist$/.test(s);
 }
 
 /**
+ * The unit name this daemon is running under, from its own cgroup, lower-cased
+ * and regex-escaped. An operator may call the unit anything
+ * (`cli/systemd-unit.ts`'s UNIT_NAME allows it, and detectSystemdUnit reads it
+ * out of the cgroup), and that unit is where `Environment=` lines live -- so a
+ * rule that only knew `jarvis*.service` would leave a renamed install's
+ * credentials readable. Read once, cached for the process: a daemon does not
+ * change unit while running.
+ */
+let ownUnitCache: string[] | null = null;
+function ownUnitNames(): string[] {
+  if (ownUnitCache) return ownUnitCache;
+  const names = new Set<string>();
+  try {
+    const cgroup = readFileSync('/proc/self/cgroup', 'utf-8');
+    for (const m of cgroup.matchAll(/([A-Za-z0-9_:.@\\-]+)\.service/g)) {
+      const name = m[1]!.toLowerCase();
+      // `\x2d` is systemd's escaping for `-` in a cgroup path.
+      names.add(name.replace(/\\x2d/g, '-').replace(/[.*+?^${}()|[\]\\]/g, '\\$&'));
+    }
+  } catch { /* not Linux, or no cgroup: the pattern half still applies */ }
+  ownUnitCache = [...names];
+  return ownUnitCache;
+}
+
+/**
  * Files whose whole job is to set environment variables. Refused outright:
  * unlike a shell rc, nobody reads these casually.
+ *
+ * `/etc/default/<name>` and `/etc/sysconfig/<name>` are the two conventional
+ * `EnvironmentFile=` targets on Debian- and RHEH-family systems. An
+ * `EnvironmentFile=` pointed anywhere else is covered by parsing it out of the
+ * unit (envFilesFromUnits), which is the only way to know an arbitrary path.
  */
 function isEnvDefinitionFile(s: string): boolean {
   if (s === '/etc/environment') return true;
-  return /\/\.config\/environment\.d\/[^/]+$/.test(s) || /^\/(?:etc|usr\/lib|run)\/environment\.d\/[^/]+$/.test(s);
+  if (/^\/etc\/(?:default|sysconfig)\/[^/]+$/.test(s)) return true;
+  // DefaultEnvironment= sets variables for every unit, the daemon's included.
+  if (/^\/(?:etc|usr\/lib|run)\/systemd\/(?:system|user)\.conf(?:\.d\/[^/]+)?$/.test(s)) return true;
+  if (/\/\.config\/systemd\/user\.conf(?:\.d\/[^/]+)?$/.test(s)) return true;
+  if (/\/\.config\/environment\.d\/[^/]+$/.test(s) || /^\/(?:etc|usr\/lib|run)\/environment\.d\/[^/]+$/.test(s)) return true;
+  // A `jarvis export` archive holds .secrets.key, the workflow key, the
+  // sidecar keypair and google-tokens.json verbatim (cli/backup.ts:112), and
+  // they are ASCII, so a plain text read of the tar prints them.
+  return /(?:^|\/)jarvis-(?:export|backup)-[^/]*\.(?:tar|tgz|zip)(?:\.[a-z0-9]+)?$/.test(s);
+}
+
+/** How long the parsed `EnvironmentFile=` set is trusted. */
+const ENV_FILES_TTL_MS = 30_000;
+let envFilesCache: { at: number; files: string[] } | null = null;
+
+/**
+ * Absolute paths named by `EnvironmentFile=` in a unit that is the daemon's
+ * own, and by launchd's `EnvironmentVariables`. An `EnvironmentFile=` may point
+ * at any path at all, so no pattern can cover it: the unit has to be read. Only
+ * units this classifier already refuses are parsed, so this cannot be pointed at
+ * an arbitrary file by anything the model controls.
+ */
+function envFilesFromUnits(): string[] {
+  const now = Date.now();
+  if (envFilesCache && now - envFilesCache.at < ENV_FILES_TTL_MS) return envFilesCache.files;
+  const files = new Set<string>();
+  const home = policyHome();
+  const names = ['jarvis', ...ownUnitNames().map((n) => n.replace(/\\(.)/g, '$1'))];
+  const dirs = [
+    join(home, '.config', 'systemd', 'user'), '/etc/systemd/system', '/etc/systemd/user',
+    '/usr/lib/systemd/system', '/run/systemd/transient',
+  ];
+  for (const dir of dirs) {
+    for (const name of names) {
+      for (const unit of [join(dir, `${name}.service`)]) {
+        let text: string;
+        try { text = readFileSync(unit, 'utf-8'); } catch { continue; }
+        if (text.length > 256 * 1024) continue;
+        for (const m of text.matchAll(/^\s*EnvironmentFile\s*=\s*-?\s*(\S+)\s*$/gm)) {
+          const p = m[1]!.replace(/^["']|["']$/g, '');
+          if (isAbsolute(p)) files.add(resolve(p));
+        }
+      }
+    }
+  }
+  envFilesCache = { at: now, files: [...files] };
+  return envFilesCache.files;
 }
 
 /**
@@ -904,6 +1050,10 @@ function isEnvDefinitionFile(s: string): boolean {
 function isShellStartupFile(s: string): boolean {
   const base = s.split('/').pop() ?? '';
   if (EXEC_FILE_NAMES.get(base) === SHELL || EXEC_SYSTEM_FILES.get(s) === SHELL) return true;
+  // A PowerShell profile: classifyByName already rates WRITING one as SHELL by
+  // this same rule, so the read side must know it too or a Windows sidecar
+  // returns `$env:ANTHROPIC_API_KEY = "..."` unscanned.
+  if (/(?:^|_)profile\.ps1$/.test(base)) return true;
   return EXEC_DIRS.some(({ seg, label, anywhere }) => label === SHELL && (anywhere ? s.includes(seg) : s.startsWith(seg)));
 }
 
@@ -915,19 +1065,59 @@ function isShellStartupFile(s: string): boolean {
  * and a test asserts the two agree.
  */
 export const SECRET_ENV_NAMES: readonly string[] = Object.freeze([
+  // Exactly model-exec-env.ts's DAEMON_SECRET_ENV_NAMES (#536).
   'JARVIS_WORKFLOW_ENCRYPTION_KEY', 'JARVIS_GITHUB_TOKEN', 'JARVIS_DEBUG_RPC', 'JARVIS_API_KEY',
   'JARVIS_OPENAI_KEY', 'JARVIS_GROQ_KEY', 'JARVIS_OPENROUTER_KEY', 'JARVIS_LITELLM_KEY',
   'NVIDIA_API_KEY', 'OPENAI_API_KEY', 'ANTHROPIC_API_KEY',
+  // Plus names the scrub list does not need but the scan does. The two failure
+  // modes are asymmetric: a scrub false positive breaks a child process, a scan
+  // false negative hands over a key. So this list is a strict SUPERSET, and the
+  // test asserts that relation rather than equality.
+  'ANTHROPIC_AUTH_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', 'GEMINI_API_KEY', 'GOOGLE_API_KEY',
+  'GROQ_API_KEY', 'OPENROUTER_API_KEY', 'AZURE_OPENAI_API_KEY', 'XAI_API_KEY',
+  'DEEPSEEK_API_KEY', 'MISTRAL_API_KEY', 'TELEGRAM_BOT_TOKEN', 'DISCORD_BOT_TOKEN',
 ]);
 
-// `NAME=`, `export NAME=`, `Environment="NAME=..."`, `NAME: value`, and a
-// launchd plist's `<key>NAME</key>`. The name must not be a prefix of a longer
-// one, so JARVIS_API_KEY_FILE -- a location, not a secret -- does not match.
-const SECRET_ENV_ASSIGN_RE = new RegExp(
-  `(?:^|[^A-Za-z0-9_])(?:${SECRET_ENV_NAMES.join('|')})(?![A-Za-z0-9_])\\s*[=:]`
-  + `|<key>\\s*(?:${SECRET_ENV_NAMES.join('|')})\\s*</key>`,
-  'm',
-);
+const NAME_ALT = SECRET_ENV_NAMES.join('|');
+/** The name, optionally quoted, not a prefix of a longer name (JARVIS_API_KEY_FILE is a location). */
+const NAME_RE = `["']?(?:${NAME_ALT})["']?(?![A-Za-z0-9_])`;
+
+/**
+ * Every shape that gives one of those names a value, one per line.
+ *
+ * Anchored at the start of a statement -- line start, or after `;`, `&&`, `||`,
+ * `(`, or a keyword that introduces an assignment -- so prose and tests do not
+ * match: `# see ANTHROPIC_API_KEY: docs` and
+ * `[ -n "$ANTHROPIC_API_KEY" ] && echo "ANTHROPIC_API_KEY: set"` are not
+ * assignments, and an earlier version of this rule refused the whole file for
+ * them.
+ */
+const ASSIGN_PATTERNS: readonly string[] = Object.freeze([
+  // sh/bash/zsh: NAME=value, export NAME=value, declare -x NAME=value, env NAME=value.
+  String.raw`(?:^|[;&|(]\s*)(?:export\s+|declare\s+-\w+\s+|typeset\s+-\w+\s+|local\s+|readonly\s+|env\s+)?` + NAME_RE + String.raw`\s*=(?!=)`,
+  // fish: set -gx NAME value. No `=` at all, which is the whole point.
+  String.raw`(?:^|[;&|(]\s*)set\s+(?:-\w+\s+)*` + NAME_RE + String.raw`\s+\S`,
+  // csh/tcsh: setenv NAME value. Also no `=`.
+  String.raw`(?:^|[;&|(]\s*)setenv\s+` + NAME_RE + String.raw`\s+\S`,
+  // macOS: launchctl setenv NAME value, from a login script.
+  String.raw`launchctl\s+setenv\s+` + NAME_RE + String.raw`\s+\S`,
+  // Windows: setx NAME value, and PowerShell's $env:NAME = value.
+  String.raw`setx\s+` + NAME_RE + String.raw`\s+\S`,
+  String.raw`\$env:` + NAME_RE + String.raw`\s*=`,
+  // A value read into the name from somewhere else still puts it in the file's
+  // reach, so treat it as an assignment.
+  String.raw`(?:^|[;&|(]\s*)read\s+(?:-\w+\s+)*` + NAME_RE,
+  // systemd: Environment=NAME=value / Environment="NAME=value".
+  String.raw`Environment\s*=\s*["']?` + NAME_RE + String.raw`\s*=`,
+  // ~/.pam_environment: NAME DEFAULT=value / NAME OVERRIDE=value.
+  NAME_RE + String.raw`\s+(?:DEFAULT|OVERRIDE)\s*=`,
+  // launchd plist: <key>NAME</key>.
+  String.raw`<key>\s*(?:` + NAME_ALT + String.raw`)\s*</key>`,
+  // YAML / dotenv-style `NAME: value`, at the start of a line only.
+  String.raw`^\s*` + NAME_RE + String.raw`\s*:\s*\S`,
+]);
+
+const SECRET_ENV_ASSIGN_RE = new RegExp(ASSIGN_PATTERNS.join('|'));
 
 /**
  * The name of a daemon secret this text assigns, or null.
@@ -935,15 +1125,22 @@ const SECRET_ENV_ASSIGN_RE = new RegExp(
  * Used for files that legitimately hold environment settings: they are returned
  * to the model unless they actually carry one of the daemon's credentials, so
  * reading `~/.bashrc` keeps working and reading the one that exports the API key
- * does not. The check is on the literal text, so an indirection
- * (`A=secret; export ANTHROPIC_API_KEY=$A`) is not caught: recorded as a known
- * limit rather than papered over with redaction, which would imply a guarantee
- * it cannot give.
+ * does not.
+ *
+ * Scanned line by line, after joining shell line-continuations, so a match has a
+ * line to point at. Two limits, recorded rather than papered over with redaction
+ * (which would imply a guarantee it cannot give): an indirection
+ * (`A=secret; export ANTHROPIC_API_KEY=$A`) puts the value on a line this does
+ * not match, and a name this list does not know is not scanned for at all.
  */
 export function scanForDaemonSecrets(text: string): string | null {
-  const m = SECRET_ENV_ASSIGN_RE.exec(text);
-  if (!m) return null;
-  return SECRET_ENV_NAMES.find((n) => m[0]!.includes(n)) ?? 'a Jarvis credential';
+  if (text.length > 4 * 1024 * 1024) return null;
+  for (const line of text.replace(/\\\r?\n\s*/g, ' ').split(/\r?\n/)) {
+    if (line.length > 8 * 1024) continue;
+    const m = SECRET_ENV_ASSIGN_RE.exec(line);
+    if (m) return SECRET_ENV_NAMES.find((n) => m[0]!.includes(n)) ?? 'a Jarvis credential';
+  }
+  return null;
 }
 
 /**
@@ -977,7 +1174,7 @@ function readCandidates(path: string, bases: string[], onDisk: boolean): string[
 function classifySecretByName(candidate: string): SecretReadHit | null {
   const s = normalize(candidate);
   if (FD_PATH_RE.test(s)) return { kind: 'process-relative', path: candidate };
-  if (PROC_LEAF_RE.test(s) || WHOLE_MEMORY_FILES.has(s)) return { kind: 'process-memory', path: candidate };
+  if (PROC_LEAF_RE.test(s) || WHOLE_MEMORY_RE.test(s)) return { kind: 'process-memory', path: candidate };
   if (isDaemonServiceFile(s) || isEnvDefinitionFile(s)) return { kind: 'daemon-env-source', path: candidate };
 
   // Jarvis's data dir at its default place -- the only spelling judgeable for a
@@ -997,28 +1194,65 @@ function classifySecretByName(candidate: string): SecretReadHit | null {
   return null;
 }
 
-/** The class of `real` (a resolved path on THIS machine), consulting the registered dirs. */
-function classifySecretOnDisk(real: string): SecretReadHit | null {
-  const projects = carveOutProjectsDir();
-  if (projects !== null && isWithinCI(real, projects)) return null;
-
+/**
+ * The class of `candidate` against the REGISTERED dirs -- the data dir, the
+ * secrets dir, an explicit key file -- by string containment only.
+ *
+ * Kept separate from, and run unconditionally with, the on-disk pass below.
+ * These are pure string tests, and putting them behind `--no-local-tools`
+ * switched off the whole point of registering a relocated data dir in exactly
+ * the mode where the brain is hosted and the user's machine is a sidecar: a
+ * `JARVIS_HOME=/srv/jarvis` install would have had `/srv/jarvis/.secrets.key`
+ * readable through a routed `read_file`, because the name tier only knows the
+ * literal `/.jarvis/` spelling.
+ *
+ * `carve` is the projects carve-out, passed in so it is computed once per call
+ * rather than once per candidate.
+ */
+function classifySecretByRegisteredDirs(candidate: string, carve: string | null): SecretReadHit | null {
+  const abs = resolve(candidate);
+  if (carve !== null && isWithinCI(abs, carve)) return null;
   for (const file of explicitKeyFiles()) {
-    for (const form of new Set([file, realOrSelf(file)])) {
-      if (sameCI(real, form)) return { kind: 'jarvis-key', path: real };
-    }
+    if (sameCI(abs, file)) return { kind: 'jarvis-key', path: candidate };
   }
-  for (const dir of secretHoldingDirs()) {
-    for (const form of new Set([dir, realOrSelf(dir)])) {
-      if (!isWithinCI(real, form) || sameCI(real, form)) continue;
-      const rel = relative(form, real);
-      if (isSecretReadEntry(rel)) return { kind: 'jarvis-key', path: real };
-      if (isSecretConfigEntry(rel)) return { kind: 'jarvis-config', path: real };
-      if (isDataDirEnvEntry(rel)) return { kind: 'daemon-env-source', path: real };
-    }
+  for (const file of envFilesFromUnits()) {
+    if (sameCI(abs, file)) return { kind: 'daemon-env-source', path: candidate };
   }
   // The PAT the site builder stages for a git push: 0600 under XDG_RUNTIME_DIR
   // or the temp dir, for the life of one push (sites/github-manager.ts:326-338).
-  if (/(?:^|\/)jarvis-gh-cred-[^/]*(?:\/|$)/.test(normalize(real))) return { kind: 'jarvis-key', path: real };
+  // A pure spelling rule, so it must not sit behind --no-local-tools.
+  if (/(?:^|\/)jarvis-gh-cred-[^/]*(?:\/|$)/.test(normalize(candidate))) {
+    return { kind: 'jarvis-key', path: candidate };
+  }
+  for (const dir of secretHoldingDirs()) {
+    if (!isWithinCI(abs, dir) || sameCI(abs, dir)) continue;
+    const rel = relative(dir, abs);
+    if (isSecretReadEntry(rel)) return { kind: 'jarvis-key', path: candidate };
+    if (isSecretConfigEntry(rel)) return { kind: 'jarvis-config', path: candidate };
+    if (isDataDirEnvEntry(rel)) return { kind: 'daemon-env-source', path: candidate };
+  }
+  return null;
+}
+
+/**
+ * The class of `real` (a resolved path on THIS machine) against the alternate,
+ * symlink-resolved forms of the registered dirs -- a `~/.jarvis` that is a link
+ * to `/data/jarvis` must still cover `/data/jarvis/.secrets.key`. Only the
+ * `realOrSelf` calls need the disk, so only they live here.
+ */
+function classifySecretOnDisk(real: string, carve: string | null): SecretReadHit | null {
+  if (carve !== null && isWithinCI(real, carve)) return null;
+  for (const file of explicitKeyFiles()) {
+    if (sameCI(real, realOrSelf(file))) return { kind: 'jarvis-key', path: real };
+  }
+  for (const dir of secretHoldingDirs()) {
+    const form = realOrSelf(dir);
+    if (!isWithinCI(real, form) || sameCI(real, form)) continue;
+    const rel = relative(form, real);
+    if (isSecretReadEntry(rel)) return { kind: 'jarvis-key', path: real };
+    if (isSecretConfigEntry(rel)) return { kind: 'jarvis-config', path: real };
+    if (isDataDirEnvEntry(rel)) return { kind: 'daemon-env-source', path: real };
+  }
   return null;
 }
 
@@ -1034,20 +1268,21 @@ export function secretRead(requested: unknown, opts: { bases?: string[] } = {}):
   if (!path) return null;
   const onDisk = !isNoLocalTools();
   const candidates = readCandidates(path, opts.bases ?? relativeBases(), onDisk);
+  const carve = carveOutProjectsDir();
 
-  // Name first, for every candidate: it needs no filesystem, so it judges a
+  // Spelling first, for every candidate: it needs no filesystem, so it judges a
   // sidecar's path and a file that is not there yet alike. A scan-only hit is
   // held back, so a definite hit from another candidate still wins.
   let scanHit: SecretReadHit | null = null;
   for (const candidate of candidates) {
-    const hit = classifySecretByName(candidate);
+    const hit = classifySecretByName(candidate) ?? classifySecretByRegisteredDirs(candidate, carve);
     if (!hit) continue;
     if (hit.scanOnly) scanHit ??= hit;
     else return hit;
   }
   if (onDisk) {
     for (const candidate of candidates) {
-      const hit = classifySecretOnDisk(candidate);
+      const hit = classifySecretOnDisk(candidate, carve);
       if (hit) return hit;
     }
     // Identity, last: the only test that sees through a hard link.
@@ -1096,11 +1331,12 @@ export function secretScanRefusal(requested: unknown, envName: string): string {
 function dedicatedSecretsDirs(): string[] {
   const dataDirs = [..._dataDirs, join(policyHome(), '.jarvis')].map((d) => resolve(d));
   const env = process.env.JARVIS_SECRETS_DIR;
-  const candidates = [
-    ...(env && isAbsolute(env) ? [resolve(env)] : []),
-    ..._secretsDirs,
-    ...explicitKeyFiles().map((f) => dirname(f)),
-  ];
+  // Deliberately NOT the directory holding an explicit key file: an ordinary
+  // directory does not become a secrets dir because a key happens to sit in it,
+  // and taking its dirname made `list_directory ~/Documents` a refusal whenever
+  // JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE pointed there. The FILE is still refused
+  // on read, by exact match and by inode.
+  const candidates = [...(env && isAbsolute(env) ? [resolve(env)] : []), ..._secretsDirs];
   const home = resolve(policyHome());
   return [...new Set(candidates.filter((d) =>
     // Not a data dir: those hold logs, notes and content beside the keys, and
@@ -1141,23 +1377,27 @@ export function secretListRefusal(requested: unknown, opts: { bases?: string[] }
     logSecretRefusal('list_directory', hit);
     return secretRefusalText(path, 'the directory');
   };
+  const carve = carveOutProjectsDir();
   for (const candidate of readCandidates(path, opts.bases ?? relativeBases(), onDisk)) {
     const s = normalize(candidate);
     if (FD_PATH_RE.test(s)) return refuse({ kind: 'process-relative', path: candidate });
-    // A key-material tree at the default data-dir location.
-    if (/\/\.jarvis\/(?:.*\/)?(?:sidecar-keys|browser)(?:\/|$)/.test(s)) {
+    if (carve !== null && isWithinCI(resolve(candidate), carve)) continue;
+    // A key-material tree at the default data-dir location. The FIRST component
+    // under the data dir, matching the read side's isSecretReadEntry: a site
+    // project or a notes folder with a `browser` directory in it is the user's.
+    if (/\/\.jarvis\/(?:sidecar-keys|browser)(?:\/|$)/.test(s)) {
       return refuse({ kind: 'jarvis-key', path: candidate });
     }
     for (const dir of dedicated) {
-      for (const form of new Set([dir, realOrSelf(dir)])) {
-        if (isWithinCI(candidate, form)) return refuse({ kind: 'jarvis-key', path: candidate });
+      for (const form of new Set([dir, ...(onDisk ? [realOrSelf(dir)] : [])])) {
+        if (isWithinCI(resolve(candidate), form)) return refuse({ kind: 'jarvis-key', path: candidate });
       }
     }
-    if (!onDisk) continue;
     for (const dir of secretHoldingDirs()) {
-      for (const form of new Set([dir, realOrSelf(dir)])) {
-        if (!isWithinCI(candidate, form) || sameCI(candidate, form)) continue;
-        if (/^(?:sidecar-keys|browser)(?:[\\/]|$)/i.test(relative(form, candidate))) {
+      for (const form of new Set([resolve(dir), ...(onDisk ? [realOrSelf(dir)] : [])])) {
+        const abs = resolve(candidate);
+        if (!isWithinCI(abs, form) || sameCI(abs, form)) continue;
+        if (/^(?:sidecar-keys|browser)(?:[\\/]|$)/i.test(relative(form, abs))) {
           return refuse({ kind: 'jarvis-key', path: candidate });
         }
       }
