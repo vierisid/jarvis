@@ -30,12 +30,23 @@ package main
 // it to file: URLs and the DevTools ports, so ordinary web requests are never
 // paused and cost nothing.
 //
+// WHAT THIS DOES NOT COVER: Fetch interception is HTTP(S)-only. A WebSocket
+// handshake is never paused (verified: a page opening
+// ws://127.0.0.1:9222/devtools/browser/<uuid> produces no requestPaused event),
+// so blockedRequestReason's port branch is not what stops that route. What stops
+// it is that the uuid lives behind /json/version, which this guard DOES block,
+// plus Chrome's own origin checks on the DevTools websocket. A `filesystem:`
+// URL makes no request at all (ERR_FILE_NOT_FOUND), so there is nothing to
+// pause; the read guards cover a page that somehow shows one.
+//
 // Lifetime: the interception lives exactly as long as the pipe. When the pipe
 // dies, cdpClient.fail() drops the cached client and the next browser tool call
 // relaunches a browser with the guard armed again -- there is no path that keeps
 // driving a browser whose guard has gone, which is what the daemon needs its
-// reconnect logic for. The read-path guards in browser_snapshot.go are the
-// backstop for a page that got there anyway.
+// reconnect logic for. One gap that leaves: if the pipe dies while a request is
+// paused, Chrome CONTINUES it, so a file: load can commit with no guard
+// involvement. The read-path guards (browser_read_guard.go) are the backstop for
+// exactly that page.
 
 import (
 	"encoding/json"
@@ -44,10 +55,13 @@ import (
 	"time"
 )
 
-// fetchGuardReplyTimeout bounds the one CDP call that answers a paused request.
-// Short compared to cdpDefaultTimeout: Chrome is holding a request open while
-// we decide, and if it has stopped listening there is nothing to wait for.
-const fetchGuardReplyTimeout = 10 * time.Second
+// fetchGuardReplyTimeoutForTest bounds the one CDP call that answers a paused
+// request. Short compared to cdpDefaultTimeout: Chrome is holding a request open
+// while we decide, and if it has stopped listening there is nothing to wait for.
+// Giving up is harmless -- the command is already on the wire, so Chrome acts on
+// it whether or not we read the acknowledgement; only the log line is lost. A
+// variable so the tests can shorten it; nothing else writes it.
+var fetchGuardReplyTimeoutForTest = 10 * time.Second
 
 // blockedRequest is the last request the guard failed, kept so a navigation that
 // died as ERR_BLOCKED_BY_CLIENT can be reported as what it was.
@@ -86,7 +100,10 @@ func (c *cdpClient) handlePausedRequest(sessionID string, params json.RawMessage
 	if err := json.Unmarshal(params, &ev); err != nil || ev.RequestID == "" {
 		// Nothing to answer with. Chrome releases the request when the pipe
 		// closes; until then this one load stalls, which is the safe direction.
-		log.Printf("[browser] guard could not read a paused request: %v", err)
+		// The params are logged (truncated) because without them the line says
+		// nothing: on the missing-requestId branch there is no error to print.
+		log.Printf("[browser] guard could not read a paused request (err %v): %s",
+			err, truncateURL(string(params), 200))
 		return
 	}
 
@@ -97,12 +114,11 @@ func (c *cdpClient) handlePausedRequest(sessionID string, params json.RawMessage
 			resourceType: ev.ResourceType,
 			at:           time.Now(),
 		})
-		log.Printf("[browser] guard blocked %s (%s): %s",
-			truncateURL(ev.Request.URL, 200), ev.ResourceType, reason)
+		c.logBlocked(ev.Request.URL, ev.ResourceType, reason)
 		if _, err := c.sendOnTimeout(sessionID, "Fetch.failRequest", map[string]any{
 			"requestId":   ev.RequestID,
 			"errorReason": "BlockedByClient",
-		}, fetchGuardReplyTimeout); err != nil {
+		}, fetchGuardReplyTimeoutForTest); err != nil {
 			log.Printf("[browser] guard could not fail %s: %v", truncateURL(ev.Request.URL, 200), err)
 		}
 		return
@@ -110,11 +126,40 @@ func (c *cdpClient) handlePausedRequest(sessionID string, params json.RawMessage
 
 	if _, err := c.sendOnTimeout(sessionID, "Fetch.continueRequest", map[string]any{
 		"requestId": ev.RequestID,
-	}, fetchGuardReplyTimeout); err != nil {
+	}, fetchGuardReplyTimeoutForTest); err != nil {
 		// The request went away, or the pipe did. Logged rather than retried:
 		// Chrome continues what it had paused when the connection closes.
 		log.Printf("[browser] guard could not continue %s: %v", truncateURL(ev.Request.URL, 200), err)
 	}
+}
+
+// blockLogInterval throttles the block log. A page can pause requests as fast as
+// it can call fetch() -- 50,000 in thirteen seconds, measured -- and one log line
+// each would push that through log's global mutex and bloat the sidecar log.
+// Only the log is throttled: every request is still answered, because queueing
+// the answers would hold legitimate paused requests behind a flood.
+const blockLogInterval = time.Second
+
+func (c *cdpClient) logBlocked(url, resourceType, reason string) {
+	c.blockedMu.Lock()
+	suppressed := c.blockedSuppressed
+	quiet := time.Since(c.blockedLoggedAt) < blockLogInterval
+	if quiet {
+		c.blockedSuppressed++
+	} else {
+		c.blockedLoggedAt = time.Now()
+		c.blockedSuppressed = 0
+	}
+	c.blockedMu.Unlock()
+	if quiet {
+		return
+	}
+	extra := ""
+	if suppressed > 0 {
+		extra = fmt.Sprintf(" (+%d more since the last line)", suppressed)
+	}
+	log.Printf("[browser] guard blocked %s (%s): %s%s",
+		truncateURL(url, 200), resourceType, reason, extra)
 }
 
 func (c *cdpClient) recordBlocked(b blockedRequest) {
@@ -125,6 +170,13 @@ func (c *cdpClient) recordBlocked(b blockedRequest) {
 
 // blockedSince returns the last request the guard failed if it was failed at or
 // after `since`, so a navigation only reports a block that belongs to it.
+//
+// BEST-EFFORT ATTRIBUTION, deliberately not load-bearing. The guard is
+// browser-level and this is one slot, so the record can come from another tab or
+// from a browser_navigate running concurrently in another RPC goroutine; the
+// timestamp and the Document resource type narrow that but do not settle it. The
+// consequence is a wrong URL in an error message, never a block that did not
+// happen: the refusal itself is Chrome's ERR_BLOCKED_BY_CLIENT.
 func (c *cdpClient) blockedSince(since time.Time) *blockedRequest {
 	c.blockedMu.Lock()
 	defer c.blockedMu.Unlock()
@@ -148,6 +200,9 @@ func (c *cdpClient) describeBlockedNavigation(target, errorText string, navigate
 	if blocked == nil || blocked.resourceType != "Document" {
 		return ""
 	}
+	if blocked.url == target {
+		return fmt.Sprintf("navigation to %s was blocked: %s", truncateURL(target, 120), blocked.reason)
+	}
 	return fmt.Sprintf("navigation to %s was blocked: it led to %s, and %s",
-		target, truncateURL(blocked.url, 200), blocked.reason)
+		truncateURL(target, 120), truncateURL(blocked.url, 200), blocked.reason)
 }

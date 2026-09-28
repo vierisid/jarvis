@@ -309,8 +309,19 @@ func checkNavigationURL(raw string) (string, error) {
 	}
 
 	normalized := collapseSpecialAuthority(input)
-	parsed, err := url.Parse(normalized)
+	// Parsed leniently, for the CHECKS only: a `%` that starts no valid escape
+	// is literal to Chrome (`https://example.com/discount-100%` opens fine) and
+	// fatal to net/url, and refusing those would refuse ordinary pages the
+	// daemon's local browser opens. `normalized` is what Chrome gets, untouched,
+	// so the path it requests is the one the caller asked for.
+	parsed, err := parseURLLeniently(normalized)
 	if err != nil || parsed.Scheme == "" {
+		return "", errNotAURL(input)
+	}
+	// Leniency stops at the authority. A `%` there is a forbidden host code
+	// point to Chrome and an escape we had to invent to Go, so neither of us
+	// knows what would be connected to: refuse instead of guessing.
+	if strings.Contains(urlAuthority(normalized), "%") {
 		return "", errNotAURL(input)
 	}
 
@@ -371,6 +382,21 @@ func checkNavigationURL(raw string) (string, error) {
 	}
 
 	return normalized, nil
+}
+
+// urlAuthority returns the authority of a normalised URL -- what follows
+// "scheme://" up to the first "/", "?" or "#" -- or "" when there is none. The
+// userinfo is included: a `%` anywhere in there is equally undecidable.
+func urlAuthority(normalized string) string {
+	i := strings.Index(normalized, "://")
+	if i < 0 {
+		return ""
+	}
+	rest := normalized[i+3:]
+	if j := strings.IndexAny(rest, "/?#"); j >= 0 {
+		return rest[:j]
+	}
+	return rest
 }
 
 // aboutBlankSuffix keeps the query or fragment of an about:blank URL when the
@@ -436,7 +462,7 @@ func isPrivilegedPageURL(raw string) bool {
 // to let it through. It decides only; browser_fetch_guard.go does the talking.
 // Mirrors browser-request-guard.ts blockReason.
 func blockedRequestReason(rawURL string) string {
-	parsed, err := parseRequestURL(sanitizeURLInput(rawURL))
+	parsed, err := parseURLLeniently(sanitizeURLInput(rawURL))
 	if err != nil || parsed.Scheme == "" {
 		// Chrome paused it on a pattern we set and we cannot tell which: fail.
 		return "unparseable URL matched a blocked pattern"
@@ -454,12 +480,13 @@ func blockedRequestReason(rawURL string) string {
 // those literal in a path or query; net/url rejects the whole URL.
 var lonePercent = regexp.MustCompile(`%(?:[^0-9A-Fa-f]|[0-9A-Fa-f][^0-9A-Fa-f]|.?$)`)
 
-// parseRequestURL parses a URL Chrome has already canonicalised, being lenient
-// in the one way Chrome is and net/url is not. Chrome pauses a request because
-// the URL TEXT matched a pattern, so `https://example.com/x:9222/100%discount`
-// reaches the guard; refusing to parse it would fail a request that is neither a
-// local file nor a DevTools endpoint, and a failed subresource is a broken page.
-func parseRequestURL(raw string) (*url.URL, error) {
+// parseURLLeniently parses a URL the way Chrome does in the one respect that
+// matters here: a `%` that starts no valid escape is literal, not fatal. GURL
+// keeps it; net/url rejects the whole URL. Used for both the navigation check
+// and the paused-request decision -- in the first case refusing would refuse an
+// ordinary page, in the second it would fail a request that is neither a local
+// file nor a DevTools endpoint, and a failed subresource is a broken page.
+func parseURLLeniently(raw string) (*url.URL, error) {
 	if u, err := url.Parse(raw); err == nil {
 		return u, nil
 	}
@@ -496,10 +523,36 @@ func errNotAURL(input string) error {
 		return fmt.Errorf("Refusing to open %s: the URL contains control characters.",
 			truncateURL(input, 120))
 	}
+	// The "include the scheme" hint only makes sense for input that HAS no
+	// scheme; on a URL that already carries one it tells the model to prefix a
+	// second (`e.g. https://https://example.com/...`), which it will duly do.
+	if hasURLScheme(input) {
+		return fmt.Errorf("\"%s\" is not a valid URL.", truncateURL(input, 120))
+	}
 	// Literal quotes rather than %q: truncateURL has already dropped the
 	// control characters, and %q would mangle a non-ASCII host into escapes.
 	return fmt.Errorf("\"%s\" is not a valid URL. Include the scheme, e.g. https://%s.",
 		truncateURL(input, 120), truncateURL(input, 60))
+}
+
+// hasURLScheme reports whether the input starts with something shaped like a
+// scheme (ALPHA *( ALPHA / DIGIT / "+" / "-" / "." ) ":"), which is what both Go
+// and Chrome read as one.
+func hasURLScheme(input string) bool {
+	for i, r := range input {
+		switch {
+		case r == ':':
+			return i > 0
+		case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z':
+		case r >= '0' && r <= '9', r == '+', r == '-', r == '.':
+			if i == 0 {
+				return false
+			}
+		default:
+			return false
+		}
+	}
+	return false
 }
 
 // truncateURL shortens a URL for a message and drops the control characters

@@ -45,6 +45,14 @@ func TestCheckNavigationURLAllows(t *testing.T) {
 		{"data raw markup", "data:text/html,<h1>hi</h1>", "data:text/html,<h1>hi</h1>"},
 		{"data base64", "data:text/html;base64,PGgxPmhpPC9oMT4=", "data:text/html;base64,PGgxPmhpPC9oMT4="},
 		{"surrounding whitespace is trimmed", "  https://example.com/  ", "https://example.com/"},
+		// A `%` that starts no valid escape is literal to Chrome and fatal to
+		// net/url. These must pass, and must reach Chrome untouched: escaping
+		// them to %25 would change the path requested.
+		{"stray percent in path", "https://example.com/discount-100%", "https://example.com/discount-100%"},
+		{"stray percent in fragment", "https://example.com/#100%", "https://example.com/#100%"},
+		{"invalid escape in path", "https://example.com/%zz", "https://example.com/%zz"},
+		{"stray percent in query", "https://example.com/?off=50%&x=1", "https://example.com/?off=50%&x=1"},
+		{"truncated escape at the end", "https://example.com/a%2", "https://example.com/a%2"},
 		{"loopback on an ordinary port", "http://127.0.0.1:3000/", "http://127.0.0.1:3000/"},
 		{"loopback on the default port", "http://localhost/", "http://localhost/"},
 		// Userinfo that merely LOOKS like a DevTools endpoint: the host is
@@ -161,6 +169,10 @@ func TestCheckNavigationURLRefuses(t *testing.T) {
 		{"percent-escaped dot in host", "http://127.0.0%2E1:9222/", "is not a valid URL"},
 		{"percent-escaped letter in host", "http://%6Cocalhost:9222/", "is not a valid URL"},
 		{"percent-escaped brackets in host", "http://%5B::1%5D:9222/", "is not a valid URL"},
+		// A stray `%` in the AUTHORITY is refused, not tolerated: escaping it
+		// leaves an escape net/url rejects in a host, so we cannot tell what
+		// Chrome would connect to.
+		{"stray percent in host", "http://exa%mple.com:9222/", "is not a valid URL"},
 		// Interior control bytes: Chrome strips TAB/CR/LF (covered above) but
 		// rejects the rest, and so do we.
 		{"interior SOH in host", "http://127.0.0.1\x01:9222/", "control characters"},

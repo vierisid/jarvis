@@ -61,8 +61,10 @@ type cdpClient struct {
 	// The last request the in-browser guard failed (browser_fetch_guard.go),
 	// so a navigation that died as ERR_BLOCKED_BY_CLIENT can say what happened
 	// instead of leaving Chrome's error page to be snapshotted.
-	blockedMu   sync.Mutex
-	lastBlocked *blockedRequest
+	blockedMu         sync.Mutex
+	lastBlocked       *blockedRequest
+	blockedLoggedAt   time.Time
+	blockedSuppressed int
 }
 
 // waitForEvent returns a channel that closes when the named CDP event next
@@ -289,6 +291,11 @@ func launchCDP(cfg *SidecarConfig, headless bool) (*cdpClient, error) {
 	// and fail closed: a browser whose Fetch interception could not be installed
 	// is one CDP call away from opening a local file, so it is not driven at
 	// all. The browser is still sitting on the about:blank it launched with.
+	//
+	// AFTER the profile check above, not before, and not "as early as possible":
+	// the interception is browser-wide, so arming it on a browser that turned out
+	// to be the user's OWN (one that ignored --user-data-dir) would pause and
+	// fail their own file: loads for as long as we held the pipe.
 	if err := c.installFetchGuard(); err != nil {
 		c.shutdown()
 		return nil, fmt.Errorf("launch browser %q: could not install the browser's local-file guard, "+
@@ -705,7 +712,14 @@ func makeBrowserNavigateHandler(cfg *SidecarConfig) RPCHandler {
 			if blocked := cdp.describeBlockedNavigation(target, nav.ErrorText, navigatedAt); blocked != "" {
 				return nil, fmt.Errorf("%s", blocked)
 			}
-			return nil, fmt.Errorf("navigation to %s failed: %s", target, nav.ErrorText)
+			// truncateURL, not the raw string: `target` can be a multi-megabyte
+			// data: URL, and sanitizeURLInput leaves interior control bytes
+			// alone -- neither belongs in a log line or a model-facing error.
+			asked := ""
+			if target != rawURL {
+				asked = fmt.Sprintf(" (asked for %s)", truncateURL(rawURL, 120))
+			}
+			return nil, fmt.Errorf("navigation to %s%s failed: %s", truncateURL(target, 120), asked, nav.ErrorText)
 		}
 
 		select {
@@ -713,7 +727,7 @@ func makeBrowserNavigateHandler(cfg *SidecarConfig) RPCHandler {
 		case <-time.After(30 * time.Second):
 			// Page may still be usable (SPAs, slow loads) — same fallback as
 			// the daemon's local navigate.
-			log.Printf("[browser] page load timeout for %s, continuing anyway", target)
+			log.Printf("[browser] page load timeout for %s, continuing anyway", truncateURL(target, 120))
 		}
 
 		// Let JS settle (matches the daemon's post-load delay)

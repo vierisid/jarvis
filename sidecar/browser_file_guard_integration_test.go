@@ -95,10 +95,14 @@ func TestBrowserFileGuardIntegration(t *testing.T) {
 		}
 	})
 
-	// 2. Redirects: a permitted http: URL that 302s into file: must not load the
-	// file either. Whether the guard fails the redirect hop or Chrome refuses
-	// the cross-scheme redirect first, the page must not end up on file:.
-	t.Run("a redirect into file is stopped", func(t *testing.T) {
+	// 2. A permitted http: URL that 302s into file:. NOTE: this is NOT evidence
+	// that the guard covers redirects -- Chrome refuses a cross-scheme redirect
+	// itself (net::ERR_UNSAFE_REDIRECT) and the guard is never consulted, so
+	// this subtest passes with the guard deleted. It is here to pin that
+	// Chrome's own refusal holds, and because it would start exercising the
+	// guard the day Chrome stops refusing. The guard's redirect coverage is
+	// proven by the same-scheme case below, which Chrome does follow.
+	t.Run("a cross-scheme redirect into file is stopped by Chrome", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "file:///etc/hostname", http.StatusFound)
 		}))
@@ -124,9 +128,11 @@ func TestBrowserFileGuardIntegration(t *testing.T) {
 	})
 
 	// 2b. The redirect case that Chrome does NOT refuse for us: http -> http,
-	// into a DevTools port. Nothing needs to be listening there -- if the guard
-	// were not in the redirect path the failure would be a connection error, or
-	// worse a loaded page, rather than ERR_BLOCKED_BY_CLIENT.
+	// into a DevTools port -- the `PUT /json/new?file:///...` route the guard
+	// exists for. This is the subtest that proves the guard is in the redirect
+	// path: without it the navigation fails as a connection error (or loads the
+	// endpoint, when a daemon really is listening), never as
+	// ERR_BLOCKED_BY_CLIENT with a recorded block naming the target.
 	t.Run("a same-scheme redirect to a DevTools port is blocked", func(t *testing.T) {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			http.Redirect(w, r, "http://127.0.0.1:9222/json/list", http.StatusFound)

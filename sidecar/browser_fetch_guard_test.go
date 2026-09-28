@@ -184,7 +184,11 @@ func TestFetchGuardFailsLocalAndDevtoolsRequests(t *testing.T) {
 		// A host that only DNS knows is loopback: unreachable for the
 		// navigate-time check, caught here because Chrome matched the port.
 		{"devtools via a resolving name", "http://127.0.0.1.nip.io:9222/json/list", "DevTools port"},
-		{"devtools websocket", "ws://127.0.0.1:9222/devtools/browser/abc", "DevTools port"},
+		// This one pins the DECISION only: Chrome never pauses a WebSocket
+		// handshake, so the guard is not what stops that route (see the header
+		// comment in browser_fetch_guard.go). Kept so the decision stays
+		// consistent if Chrome's interception ever grows to cover it.
+		{"devtools websocket (decision only)", "ws://127.0.0.1:9222/devtools/browser/abc", "DevTools port"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -218,7 +222,6 @@ func TestFetchGuardFailsLocalAndDevtoolsRequests(t *testing.T) {
 // the page load open until Chrome gives up, which looks like a hung browser.
 func TestFetchGuardContinuesEverythingElse(t *testing.T) {
 	for _, url := range []string{
-		"https://example.com/",
 		"https://example.com/",
 		// Matched the port pattern by accident: ":9222" in the path, not the
 		// authority. Must still be continued.
@@ -352,6 +355,57 @@ func TestDescribeBlockedNavigationIgnoresUnrelatedFailures(t *testing.T) {
 	})
 	if msg := fb.client.describeBlockedNavigation("http://example.com/", "net::ERR_NAME_NOT_RESOLVED", now); msg != "" {
 		t.Fatalf("describeBlockedNavigation claimed a DNS failure: %q", msg)
+	}
+}
+
+// An answer that is never acknowledged must not wedge anything. The command is
+// already on the wire when the timeout fires, so Chrome acts on it either way --
+// the timeout only abandons the log line.
+func TestFetchGuardHandlerGivesUpOnAnUnansweredReply(t *testing.T) {
+	fb := newFakeBrowser(t)
+
+	previous := fetchGuardReplyTimeoutForTest
+	fetchGuardReplyTimeoutForTest = 150 * time.Millisecond
+	t.Cleanup(func() { fetchGuardReplyTimeoutForTest = previous })
+
+	fb.pauseRequest("req-unanswered", "file:///etc/passwd", "Document")
+	cmd := fb.nextCommand()
+	if cmd.Method != "Fetch.failRequest" {
+		t.Fatalf("answered with %q, want Fetch.failRequest", cmd.Method)
+	}
+	// Deliberately no reply. The pipe must keep working regardless.
+	done := make(chan error, 1)
+	go func() {
+		_, err := fb.client.sendOn("", "Browser.getVersion", nil)
+		done <- err
+	}()
+	version := fb.nextCommand()
+	fb.reply(version.ID)
+	if err := <-done; err != nil {
+		t.Fatalf("Browser.getVersion after an unanswered fail: %v", err)
+	}
+
+	// And the abandoned round-trip left nothing behind.
+	time.Sleep(300 * time.Millisecond)
+	fb.client.pendMu.Lock()
+	pending := len(fb.client.pending)
+	fb.client.pendMu.Unlock()
+	if pending != 0 {
+		t.Fatalf("%d pending replies left after the timeout, want 0", pending)
+	}
+}
+
+// A paused request that arrives while the pipe is going down must not panic or
+// block; it is logged and dropped, and Chrome releases it when the pipe closes.
+func TestFetchGuardSurvivesADeadPipe(t *testing.T) {
+	fb := newFakeBrowser(t)
+	fb.client.closed.Store(true)
+
+	// Answering now fails at the closed check rather than the write.
+	fb.client.handlePausedRequest("", []byte(`{"requestId":"r","resourceType":"Document","request":{"url":"file:///etc/passwd"}}`))
+
+	if blocked := fb.client.blockedSince(time.Now().Add(-time.Minute)); blocked == nil {
+		t.Fatal("the guard did not record the block it could not send")
 	}
 }
 

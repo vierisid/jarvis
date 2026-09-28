@@ -45,11 +45,14 @@ func TestNavigateHandlerRefusesBeforeLaunchingABrowser(t *testing.T) {
 			if err == nil {
 				t.Fatalf("navigate(%q) was allowed, returning %+v", raw, res)
 			}
-			if !strings.Contains(err.Error(), want) {
-				t.Fatalf("navigate(%q) error %q does not mention %q", raw, err, want)
-			}
+			// This check goes FIRST: if the guard ever moves after
+			// getCDPForParams, the failure should read as "launched a browser",
+			// not as a confusing "error does not mention ...".
 			if strings.Contains(err.Error(), noBrowserLaunched) {
 				t.Fatalf("navigate(%q) tried to launch a browser before refusing: %v", raw, err)
+			}
+			if !strings.Contains(err.Error(), want) {
+				t.Fatalf("navigate(%q) error %q does not mention %q", raw, err, want)
 			}
 		})
 	}
@@ -71,6 +74,15 @@ func TestNavigateHandlerAllowsWebURLsThroughToTheBrowser(t *testing.T) {
 		"http://127.0.0.1:9222@example.com/",
 		"about:blank",
 		"data:text/html,<h1>hi</h1>",
+		// URLs that need normalising must get through the handler too, not just
+		// through checkNavigationURL's own tests.
+		" http://example.com/\t",
+		"http:/\\/example.com/",
+		// A bare "%" is literal to Chrome: the daemon's local browser opens
+		// these, so a sidecar must not refuse them.
+		"https://example.com/discount-100%",
+		"https://example.com/#100%",
+		"https://example.com/%zz",
 	} {
 		t.Run(raw, func(t *testing.T) {
 			_, err := navigate(map[string]any{"url": raw})
