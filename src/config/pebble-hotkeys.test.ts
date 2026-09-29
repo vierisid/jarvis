@@ -232,8 +232,9 @@ describe('resolvePebbleHotkeys', () => {
   });
 
   test('one key cannot drive both hotkeys', () => {
-    // Windows refuses the second RegisterHotKey and says so; macOS installs
-    // two monitors and fires both callbacks on one press. Caught here so the
+    // Windows refuses the second RegisterHotKey and says so, as does Linux
+    // since #574; macOS installs two monitors and fires both callbacks on one
+    // press. Caught here so the
     // behaviour is the same everywhere: summon wins, palette is dropped, and
     // the user is told.
     const resolved = resolvePebbleHotkeys(

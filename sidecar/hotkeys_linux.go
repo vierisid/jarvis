@@ -153,7 +153,7 @@ typedef struct {
 // single recording handler installed for the process lifetime, though GDK
 // displaces even that on every trap push, so it fixes the corruption without
 // fixing the detection. Either is a bigger change than this fix should carry.
-// NOT yet filed as an issue -- do that before trusting this note to survive.
+// Filed as #577.
 typedef struct {
     Display* volatile      dpy;
     volatile XErrorHandler prev;
