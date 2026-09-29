@@ -554,6 +554,48 @@ describe('#571 a resume cannot cross a chat boundary', () => {
     expect((own.envelope as { status?: string }).status).toBe('needs_input');
   });
 
+  it('a pause with several calls in one batch keeps every tool_use paired', async () => {
+    // Stripping system messages is only safe if they are head-only AND the
+    // assistant/tool sequence is complete. The pause branch emits a `[Not run:
+    // ...]` tool result for every sibling of the clarify call, so a batch pause
+    // is still a valid buffer -- a provider rejects a `tool_use` with no
+    // matching `tool_result`, and that rejection would only show up on resume.
+    const batch: LLMResponse = {
+      content: '',
+      tool_calls: [
+        { id: 'a1', name: 'site_write_file', arguments: { project_id: 'p', path: 'x' } },
+        { id: 'a2', name: 'ask_for_clarification', arguments: { question: 'Which page?' } },
+        { id: 'a3', name: 'site_run_command', arguments: { project_id: 'p', command: 'npm i' } },
+      ],
+      usage: { input_tokens: 1, output_tokens: 1 },
+      model: 'scripted',
+      finish_reason: 'tool_use',
+    };
+    const stack = buildStack([textResponse('')], [batch]);
+    const envelope = await stack.dispatcher.dispatch(
+      { tier: 'medium', template: 'general', intent: 'x', original_message: 'add a hero' },
+      { scope: PROJECT_SITE_CHAT_SCOPE },
+    );
+    expect(envelope.status).toBe('needs_input');
+
+    const buffer = stack.taskRegistry.get(envelope.task_id)!.pausedConversation as LLMMessage[];
+    expect(buffer.some((m) => m.role === 'system')).toBe(false);
+    // Every id the assistant asked for has a result.
+    const asked = buffer.flatMap((m) => m.tool_calls ?? []).map((c) => c.id).sort();
+    const answered = buffer.filter((m) => m.role === 'tool').map((m) => m.tool_call_id).sort();
+    expect(asked).toEqual(['a1', 'a2', 'a3']);
+    expect(answered).toEqual(asked);
+    // And the resume replays it intact, with fresh system messages on the front.
+    stack.provider.pushTask(textResponse('done'));
+    const resumed = await stack.dispatcher.resume(envelope.task_id, 'the home page', { scope: PROJECT_SITE_CHAT_SCOPE });
+    expect(resumed.status).toBe('completed');
+    const replayed = stack.provider.taskBuffers.at(-1)!;
+    expect(replayed[0]!.role).toBe('system');
+    const replayedAsked = replayed.flatMap((m) => m.tool_calls ?? []).map((c) => c.id).sort();
+    const replayedAnswered = replayed.filter((m) => m.role === 'tool').map((m) => m.tool_call_id).sort();
+    expect(replayedAnswered).toEqual(replayedAsked);
+  });
+
   it('the paused buffer carries no system messages, so the site block cannot outlive its turn', async () => {
     const { stack, id } = await paused(PROJECT_SITE_CHAT_SCOPE);
     const buffer = stack.taskRegistry.get(id)!.pausedConversation as { role: string }[];

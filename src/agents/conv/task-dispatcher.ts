@@ -279,8 +279,17 @@ export class TaskDispatcher {
         //
         // Safe for tool_use/tool_result pairing: these buffers only ever
         // carry system messages at the head (processTaskCall builds them that
-        // way), so removing them leaves the assistant/tool sequence
-        // untouched, and the resume re-prepends them in the same position.
+        // way, and the only mid-buffer insert is NO_WORK_NUDGE, which is a
+        // `user` message), so removing them leaves the assistant/tool sequence
+        // untouched and the resume re-prepends them in the same position.
+        //
+        // What this does NOT do, so the claim above is not read wider than it
+        // is: the persisted buffer still contains this task's TOOL RESULTS,
+        // including whatever `site_read_file` returned from the project. That
+        // content is framed when it is stored and replayed framed, which is the
+        // shape the untrusted-content rule expects; the per-turn guarantee this
+        // restores is specifically the one about the PROMPT blocks, which are
+        // rebuilt rather than replayed.
         const buffer = (result.conversation as import('../../llm/provider.ts').LLMMessage[])
           .filter((m) => m.role !== 'system');
         this.registry.recordPauseState(record.id, result.question, buffer);
