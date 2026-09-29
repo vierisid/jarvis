@@ -1471,6 +1471,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // does not make the pebble blink. An empty map after our own restart
           // counts as different, which is exactly the case above; on a
           // freshly started sidecar the close is a no-op.
+          //
+          // The `await` here is LOAD-BEARING, not stylistic. The sidecar runs
+          // every RPC handler on its own goroutine, and its pebble service
+          // guards Spawn/Close with an atomic latch that covers the entry and
+          // not the body -- so a close overlapping a spawn can skip the
+          // hotkey teardown and leave a system-wide key monitor installed that
+          // nothing can ever remove. Awaiting the close response, which the
+          // sidecar sends after Close() returns, keeps the two strictly
+          // ordered. Do not turn this into a fire-and-forget.
           const requested = `${hotkeys.summon}\n${hotkeys.palette}`;
           if (pebbleHotkeysRequested.get(sidecar.id) !== requested) {
             await sidecarManager.dispatchRPC(sidecar.id, 'pebble.close', {})

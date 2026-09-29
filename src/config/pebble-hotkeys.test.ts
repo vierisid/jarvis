@@ -60,6 +60,34 @@ describe('readHotkeySetting', () => {
     expect(setting.problem.length).toBeLessThan(200);
   });
 
+  test('a bare ordinary key is refused; a bare F-key is not', () => {
+    // On macOS the monitor is passive, so `summon_hotkey: "a"` does not break
+    // typing the way an exclusive grab would -- the letter still types, and the
+    // pebble just opens the microphone every time you press it. Silent, which
+    // is the shape of clash #563 exists to stop.
+    for (const bare of ['a', 'space', 'return', '1', 'k', 'tab']) {
+      const setting = readHotkeySetting(bare);
+      expect(setting.kind).toBe('invalid');
+      if (setting.kind === 'invalid') expect(setting.problem).toContain('at least one modifier');
+    }
+    // The case the allowance exists for.
+    for (const fkey of ['f1', 'f13', 'f19', 'f35']) {
+      expect(readHotkeySetting(fkey)).toEqual({ kind: 'valid', keyspec: fkey });
+    }
+    // Not F-keys, so still refused bare.
+    for (const notAnFKey of ['f0', 'f36', 'f', 'f13x']) {
+      expect(readHotkeySetting(notAnFKey).kind).toBe('invalid');
+    }
+    // A modifier makes any of them fine again.
+    expect(readHotkeySetting('ctrl+shift+a').kind).toBe('valid');
+  });
+
+  test('an absurdly long value is refused before it is parsed', () => {
+    const setting = readHotkeySetting(`ctrl+${'a'.repeat(200)}`);
+    expect(setting.kind).toBe('invalid');
+    if (setting.kind === 'invalid') expect(setting.problem).toContain('limit is 128');
+  });
+
   test('key names are NOT validated here', () => {
     // On purpose: the three backends resolve names against three different
     // tables, Linux additionally takes any keysym XStringToKeysym knows, and
@@ -94,10 +122,13 @@ describe('the YAML spellings behave as documented', () => {
     expect(readHotkeySetting(parsed.a).kind).toBe('disabled');
     expect(readHotkeySetting(parsed.b).kind).toBe('disabled');
     expect(readHotkeySetting(parsed.f).kind).toBe('disabled');
-    // `no` is a string but not a disable spelling, so it is read as a key name
-    // and left for the sidecar to reject. Pinned so the asymmetry with `none`
-    // and `off` is deliberate rather than discovered.
-    expect(readHotkeySetting(parsed.c).kind).toBe('valid');
+    // `no` is a string but not one of the disable spellings, so it is read as
+    // a key name -- and refused, because it carries no modifier. Pinned so the
+    // asymmetry with `none` and `off` is deliberate rather than discovered,
+    // and so someone who writes `no` gets told rather than getting a hotkey
+    // bound to a key called "no" that the sidecar would then reject in a log
+    // nobody reads.
+    expect(readHotkeySetting(parsed.c).kind).toBe('invalid');
     // A bare key is "use the default", NOT "off" -- documented in
     // docs/PEBBLE_HOTKEYS.md because it is the obvious way to try to disable one.
     expect(readHotkeySetting(parsed.d).kind).toBe('absent');
@@ -177,6 +208,36 @@ describe('resolvePebbleHotkeys', () => {
     expect(resolved.summon).toBe('ctrl+alt+j');
     expect(resolved.palette).toBe(PEBBLE_DEFAULT_PALETTE_HOTKEY);
     expect(resolved.problems).toHaveLength(1);
+  });
+
+  test('one key cannot drive both hotkeys', () => {
+    // Windows refuses the second RegisterHotKey and says so; macOS installs
+    // two monitors and fires both callbacks on one press. Caught here so the
+    // behaviour is the same everywhere: summon wins, palette is dropped, and
+    // the user is told.
+    const resolved = resolvePebbleHotkeys(
+      { summon_hotkey: 'ctrl+shift+j', palette_hotkey: 'Ctrl + Shift + J' },
+      'darwin',
+    );
+    expect(resolved.summon).toBe('ctrl+shift+j');
+    expect(resolved.palette).toBe('');
+    expect(resolved.problems).toHaveLength(1);
+    expect(resolved.problems[0]).toContain('same key');
+  });
+
+  test('both disabled is not treated as a collision', () => {
+    // "" === "" must not trip the duplicate check, or turning both off would
+    // report a spurious problem.
+    expect(resolvePebbleHotkeys({ summon_hotkey: 'off', palette_hotkey: 'off' }, 'linux')).toEqual({
+      summon: '',
+      palette: '',
+      problems: [],
+    });
+  });
+
+  test('the shipped defaults are not a collision', () => {
+    expect(resolvePebbleHotkeys(undefined, 'darwin').problems).toEqual([]);
+    expect(PEBBLE_DEFAULT_SUMMON_HOTKEY).not.toBe(PEBBLE_DEFAULT_PALETTE_HOTKEY);
   });
 
   test('the resolved value is stable for the same input', () => {

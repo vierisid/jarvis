@@ -93,7 +93,7 @@ func startHotkeyListener(keyspec string, onFire func()) (stop func(), err error)
 		}
 		defer procUnregisterHotKey.Call(0, hotkeyID)
 		regCh <- registration{tid: uint32(tid)}
-		log.Printf("[hotkeys] registered %s (mods=0x%x, vk=0x%x)", keyspec, mods, vk)
+		log.Printf("[hotkeys] registered %q (mods=0x%x, vk=0x%x)", keyspec, mods, vk)
 
 		for {
 			select {
@@ -121,11 +121,11 @@ func startHotkeyListener(keyspec string, onFire func()) (stop func(), err error)
 			// straight back to the thing this file exists to stop: a hotkey
 			// that does nothing and a log with no trace of why.
 			if int32(r) == -1 {
-				log.Printf("[hotkeys] GetMessage failed for %s; listener stopping (hotkey is now dead)", keyspec)
+				log.Printf("[hotkeys] GetMessage failed for %q; listener stopping (hotkey is now dead)", keyspec)
 				return
 			}
 			if msg.Message == wmHotkey && msg.WParam == hotkeyID {
-				log.Printf("[hotkeys] WM_HOTKEY received for %s — firing", keyspec)
+				log.Printf("[hotkeys] WM_HOTKEY received for %q -- firing", keyspec)
 				go onFire()
 			}
 		}

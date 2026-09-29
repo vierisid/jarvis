@@ -29,6 +29,10 @@ import (
 	"strings"
 )
 
+// maxKeyspecLen is a sanity bound on an incoming keyspec. "ctrl+shift+space"
+// is 16 bytes; anything approaching this is a mistake or an attack.
+const maxKeyspecLen = 128
+
 // hotkeyMods is the set of modifiers a spec asks for, independent of any OS's
 // bit layout. Each backend converts it with its own function below.
 type hotkeyMods uint8
@@ -113,7 +117,27 @@ func canonicalKeyName(token string) string {
 	if canon, ok := keyAliases[token]; ok {
 		return canon
 	}
+	// Normalise a zero-padded function key. Windows and Linux compute these
+	// with strconv.Atoi, so "f013" resolved there while macOS -- a literal map
+	// lookup -- refused it, which is exactly the one-spelling-means-one-key
+	// rule this file exists to hold.
+	if n, ok := functionKeyNumber(token); ok {
+		return "f" + strconv.Itoa(n)
+	}
 	return token
+}
+
+// functionKeyNumber reads "f13" (or "f013") as 13. The bound is the widest any
+// backend accepts; each one narrows it further with its own table or range.
+func functionKeyNumber(token string) (int, bool) {
+	if len(token) < 2 || token[0] != 'f' {
+		return 0, false
+	}
+	n, err := strconv.Atoi(token[1:])
+	if err != nil || n < 1 || n > 35 {
+		return 0, false
+	}
+	return n, true
 }
 
 // parseKeyspec reads "ctrl+shift+space", "Cmd+K" or "f13": the last
@@ -121,6 +145,14 @@ func canonicalKeyName(token string) string {
 // not matter, and a key with no modifier at all is allowed (`f13` is a
 // legitimate binding).
 func parseKeyspec(spec string) (hotkeySpec, error) {
+	// Bounded before ToLower+Split, which together allocate a copy plus a
+	// string header per token -- roughly 16x the input. The spec arrives over
+	// the daemon RPC, whose read limit is 10 MiB, and no real keyspec is
+	// anywhere near this. The daemon truncates the value in its own log line
+	// for the same reason (describeValue in src/config/pebble-hotkeys.ts).
+	if len(spec) > maxKeyspecLen {
+		return hotkeySpec{}, fmt.Errorf("hotkey spec is %d bytes; the limit is %d", len(spec), maxKeyspecLen)
+	}
 	parts := strings.Split(strings.ToLower(strings.TrimSpace(spec)), "+")
 	for i := range parts {
 		parts[i] = strings.TrimSpace(parts[i])

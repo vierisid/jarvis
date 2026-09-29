@@ -166,6 +166,10 @@ authority:
 # NOTE on Windows: palette_hotkey: "" also turns off the Ctrl+middle-click
 # palette gesture, which is gated on the same value.
 #
+# Each needs at least one modifier unless the key is an F-key (a bare "a"
+# would summon the pebble, and open the mic, every time you typed it), and the
+# two may not be the same key.
+#
 # Grammar and the full key list: docs/PEBBLE_HOTKEYS.md
 # pebble:
 #   summon_hotkey: "ctrl+shift+space"   # show the pebble / start listening

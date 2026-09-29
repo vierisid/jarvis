@@ -60,6 +60,23 @@ daemon sends when a sidecar connects, so:
 - `SIGHUP` does **not** pick it up. `pebble:` is not one of the sections the
   daemon re-reads on a reload.
 
+### What a keyspec may not be
+
+Three rules beyond the grammar, all enforced by the daemon so the message
+reaches you rather than a sidecar log:
+
+- **At least one modifier**, unless the key is an F-key. `summon_hotkey: "a"`
+  is refused. On Windows and Linux binding a bare letter would seize it and
+  break typing immediately and loudly; on macOS the monitor is passive, so the
+  letter keeps typing normally and the only symptom is the pebble waking up -
+  and opening the microphone - every time you press `a` in any application.
+  `f13` is exactly the case the exception exists for.
+- **The two hotkeys may not be the same key.** Windows refuses the second
+  registration; macOS installs two monitors and fires both callbacks on one
+  press. If they collide, the summon hotkey wins, the palette hotkey is not
+  registered, and it is reported.
+- **128 characters**, which no real keyspec approaches.
+
 A keyspec that is not a hotkey at all (`summon_hotkey: 3`, `"ctrl+"`,
 `"hyper+k"`) is logged as an error naming the key and the problem, and the
 default is used instead. It is never silently swallowed. Note this is the
@@ -195,6 +212,13 @@ will not fire until Jarvis is granted in System Settings -> Privacy & Security -
 Accessibility. Grant it and relaunch the sidecar; a monitor installed while
 untrusted does not start working on its own.
 
+The probe can also be wrong the other way: macOS keeps a stale Accessibility
+record when an app is moved or re-signed, so `AXIsProcessTrusted()` can answer
+yes for a monitor that will never fire. Nothing detects that - a passive
+monitor gives no delivery feedback at all - so the ABSENCE of the caveat below
+is not proof that the hotkey works. If a hotkey is dead and the log says
+nothing, remove Jarvis from the Accessibility list and add it back.
+
 The monitor is still installed when the probe says no. A machine where the
 monitor works but `AXIsProcessTrusted()` reports false - Input Monitoring granted
 instead of Accessibility, for instance - must still get its hotkey, so this is a
@@ -225,6 +249,34 @@ handed both the mask and the wanted flags from Go so the two cannot disagree.
 Windows gets exact matching for free from `RegisterHotKey`; Linux's `XGrabKey`
 grabs the exact modifier combination (plus the lock variants, on purpose).
 Neither changes here.
+
+The monitor also ignores OS auto-repeat (`[e isARepeat]`), which is what
+Windows gets from `MOD_NOREPEAT`. Holding the summon key used to fire it about
+thirty times a second, and every fire put an event on the wire to the brain
+before the microphone's in-flight guard could stop it.
+
+## Known gaps
+
+Two things this change deliberately did not fix, recorded so the next person
+does not have to rediscover them:
+
+- **`Spawn` and `Close` are guarded by an atomic latch that covers the entry
+  and not the body**, in all three `pebble_overlay_*.go`. A `pebble.close`
+  overlapping a `pebble.spawn` can therefore skip the hotkey teardown and leave
+  a global key monitor installed that nothing can remove for the life of the
+  process. The daemon is the only caller and it awaits the close before
+  spawning, so the race is not reachable today - the `await` in
+  `src/daemon/index.ts` is load-bearing and says so. The real fix is a mutex
+  held across the whole of `Spawn` and `Close`, which means editing three
+  overlay files that cannot be compiled outside their own platforms.
+- **`addGlobalMonitorForEventsMatchingMask:` and `removeMonitor:` are called
+  from an RPC goroutine**, while the rest of `pebble_overlay_darwin.go`
+  marshals AppKit work to the main queue. Wrapping both in
+  `dispatch_sync(dispatch_get_main_queue(), ...)` would match the file's own
+  convention and remove the question of whether `removeMonitor:` can race a
+  block mid-invocation; it also risks a deadlock if `stop()` is ever reached
+  from the main thread, and neither the problem nor the fix can be observed
+  off a Mac.
 
 ## Alternatives considered on macOS, and why they are not here
 

@@ -60,7 +60,14 @@ static void* jarvisHotkeyAdd(unsigned long modMask, unsigned long modCompareMask
         // Function on every F-key and arrow (plus NumericPad on the arrows), so
         // comparing those bits would make an f13 or arrow binding impossible to
         // press and would break every hotkey while Caps Lock was on.
-        if ([e keyCode] == keyCode && ([e modifierFlags] & cmp) == want) {
+        //
+        // isARepeat: OS auto-repeat must not fire the hotkey over and over
+        // while the key is held. Windows gets this from MOD_NOREPEAT
+        // (hotkeys_windows.go); macOS delivers every repeat as its own
+        // key-down, so it has to be filtered here. Each fire emits an event to
+        // the brain BEFORE the in-flight guard in runSessionCapture, so a held
+        // key was a burst on the wire, not just a wasted goroutine.
+        if ([e keyCode] == keyCode && ![e isARepeat] && ([e modifierFlags] & cmp) == want) {
             goHotkeyFire(hotkeyID);
         }
     }];
@@ -97,9 +104,23 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 		hotkeyRegDarwin.Delete(id)
 		return nil, fmt.Errorf("addGlobalMonitor failed for %q (Accessibility permission?)", keyspec)
 	}
+	// sync.Once because jarvisHotkeyRemove consumes the single retain that
+	// jarvisHotkeyAdd handed to Go (__bridge_retained / __bridge_transfer): a
+	// second call would be an over-release and then a removeMonitor: on a
+	// deallocated object. No caller does that today -- Close nils the field,
+	// panels_runtime defers once -- but nothing at this return site said so.
+	//
+	// Delete BEFORE removing the monitor, not after. stop() runs on an RPC
+	// goroutine while the handler block runs on the main run loop, so a block
+	// invocation already in flight can reach goHotkeyFire after the removal;
+	// deleting first makes that a guaranteed no-op instead of a summon event
+	// arriving after the pebble was closed.
+	var once sync.Once
 	stop := func() {
-		C.jarvisHotkeyRemove(mon)
-		hotkeyRegDarwin.Delete(id)
+		once.Do(func() {
+			hotkeyRegDarwin.Delete(id)
+			C.jarvisHotkeyRemove(mon)
+		})
 	}
 	return stop, nil
 }

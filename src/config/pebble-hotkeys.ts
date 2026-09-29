@@ -82,6 +82,27 @@ const MODIFIER_NAMES = new Set([
   'cmd', 'command', 'super', 'win', 'meta',
 ]);
 
+/**
+ * A sanity bound on the value. "ctrl+shift+space" is 16 characters; anything
+ * near this is a mistake or an attack, and the sidecar's parser applies the
+ * same limit (`maxKeyspecLen` in sidecar/hotkeys_keyspec.go).
+ */
+const MAX_KEYSPEC_LENGTH = 128;
+
+/**
+ * Keys that are safe to bind with NO modifier at all.
+ *
+ * A bare key is a real requirement - `f13` is the whole reason F-keys are
+ * interesting - but a bare ORDINARY key is a footgun with teeth on macOS.
+ * There the monitor is passive, so `summon_hotkey: "a"` does not break typing
+ * the way an exclusive `RegisterHotKey`/`XGrabKey` grab would: the letter still
+ * types perfectly, and the only symptom is the pebble waking up - and OPENING
+ * THE MICROPHONE - on every press of `a` in every application. That is exactly
+ * the silent-clash shape #563 is about, so it is refused here, where the
+ * message can reach the user.
+ */
+const BARE_KEY_ALLOWED = /^f([1-9]|[12]\d|3[0-5])$/;
+
 /** What one hotkey key says, once. */
 export type HotkeySetting =
   /** Not set at all (missing, or YAML null): the caller applies the default. */
@@ -132,6 +153,10 @@ export function readHotkeySetting(value: unknown): HotkeySetting {
     return { kind: 'invalid', problem: `must be a hotkey like "ctrl+shift+space", got ${describeValue(value)}` };
   }
 
+  if (value.length > MAX_KEYSPEC_LENGTH) {
+    return { kind: 'invalid', problem: `is ${value.length} characters; the limit is ${MAX_KEYSPEC_LENGTH}` };
+  }
+
   const text = value.trim().toLowerCase();
   if (DISABLED_SPELLINGS.has(text)) return { kind: 'disabled' };
 
@@ -151,6 +176,13 @@ export function readHotkeySetting(value: unknown): HotkeySetting {
           + ` the modifiers are ctrl, shift, alt and cmd`,
       };
     }
+  }
+  if (parts.length === 1 && !BARE_KEY_ALLOWED.test(key)) {
+    return {
+      kind: 'invalid',
+      problem: `needs at least one modifier (ctrl, shift, alt or cmd) unless the key is an F-key,`
+        + ` because a bare ${JSON.stringify(key)} would summon the pebble every time you typed it`,
+    };
   }
   // Rebuilt from the trimmed tokens so "Ctrl + Shift + K" and "ctrl+shift+k"
   // reach the sidecar as the same string, which keeps the daemon's
@@ -210,9 +242,22 @@ export function resolvePebbleHotkeys(
 ): PebbleHotkeyResolution {
   const overrides = (sidecarOS && PLATFORM_DEFAULT_OVERRIDES[sidecarOS]) || {};
   const problems: string[] = [];
-  return {
-    summon: resolveOne('summon_hotkey', pebble?.summon_hotkey, overrides.summon ?? PEBBLE_DEFAULT_SUMMON_HOTKEY, problems),
-    palette: resolveOne('palette_hotkey', pebble?.palette_hotkey, overrides.palette ?? PEBBLE_DEFAULT_PALETTE_HOTKEY, problems),
-    problems,
-  };
+  const summon = resolveOne('summon_hotkey', pebble?.summon_hotkey, overrides.summon ?? PEBBLE_DEFAULT_SUMMON_HOTKEY, problems);
+  let palette = resolveOne('palette_hotkey', pebble?.palette_hotkey, overrides.palette ?? PEBBLE_DEFAULT_PALETTE_HOTKEY, problems);
+
+  // One keystroke cannot drive both callbacks. Windows would refuse the second
+  // RegisterHotKey and say so; macOS installs two monitors quite happily, and
+  // the press then starts a listening session AND opens the palette at once -
+  // the silent-asymmetry shape #563 is about. Summon wins because it is the one
+  // the pebble cannot do without; the palette is also reachable from the tray
+  // and, on Windows, from Ctrl+middle-click.
+  if (summon !== '' && summon === palette) {
+    problems.push(
+      `pebble.palette_hotkey is the same key as pebble.summon_hotkey (${JSON.stringify(summon)});`
+      + ` one keystroke cannot do both, so the palette hotkey is not registered`,
+    );
+    palette = '';
+  }
+
+  return { summon, palette, problems };
 }

@@ -496,6 +496,57 @@ func TestLinuxKeysymNames(t *testing.T) {
 	})
 }
 
+// Hardening added after the phase-3 security review.
+func TestKeyspecHardening(t *testing.T) {
+	t.Run("an over-long spec is refused before it is split", func(t *testing.T) {
+		// ToLower + Split allocate a copy plus a string header per token,
+		// roughly 16x the input, and the spec arrives over an RPC whose read
+		// limit is 10 MiB.
+		if _, err := parseKeyspec("ctrl+" + strings.Repeat("+", 200000)); err == nil {
+			t.Error("an over-long spec should be refused")
+		}
+		if _, err := parseKeyspec(strings.Repeat("a", maxKeyspecLen+1)); err == nil {
+			t.Error("a spec past maxKeyspecLen should be refused")
+		}
+		// The bound must not reject anything realistic.
+		if _, err := parseKeyspec("ctrl+alt+shift+cmd+pagedown"); err != nil {
+			t.Errorf("a real keyspec should fit inside the bound: %v", err)
+		}
+	})
+
+	t.Run("a zero-padded function key means the same key everywhere", func(t *testing.T) {
+		// Windows and Linux compute F-keys with strconv.Atoi, so "f013"
+		// resolved there while macOS -- a literal map lookup -- refused it.
+		for _, spec := range []string{"ctrl+f013", "ctrl+f0013"} {
+			parsed, err := parseKeyspec(spec)
+			if err != nil {
+				t.Fatalf("%q: %v", spec, err)
+			}
+			if parsed.Key != "f13" {
+				t.Errorf("%q -> key %q, want f13", spec, parsed.Key)
+			}
+			if _, _, err := parseDarwinKeyspec(spec); err != nil {
+				t.Errorf("macOS should accept %q now: %v", spec, err)
+			}
+			if _, _, err := parseHotkey(spec); err != nil {
+				t.Errorf("Windows should accept %q: %v", spec, err)
+			}
+		}
+	})
+
+	t.Run("function-key normalisation does not swallow other names", func(t *testing.T) {
+		for _, key := range []string{"f", "f0", "f36", "f13x", "fo"} {
+			if n, ok := functionKeyNumber(key); ok {
+				t.Errorf("functionKeyNumber(%q) = %d, should not resolve", key, n)
+			}
+		}
+		// A bare "f" stays the letter.
+		if parsed, err := parseKeyspec("ctrl+f"); err != nil || parsed.Key != "f" {
+			t.Errorf(`parseKeyspec("ctrl+f") = %+v, %v; want key "f"`, parsed, err)
+		}
+	})
+}
+
 // linuxKeysymRecognised reports whether linuxKeysymName resolved the key from
 // its table (or the computed F<n> branch) rather than passing it through
 // untouched. A passthrough is only correct for names that are already X keysym
