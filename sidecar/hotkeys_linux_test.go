@@ -50,3 +50,78 @@ func TestParseLinuxKeyspec(t *testing.T) {
 		}
 	})
 }
+
+// Every key name the shared layer knows must resolve to a real KeySym, proven
+// against the actual XStringToKeysym rather than against our own table. This is
+// the Linux half of the parity check in hotkeys_keyspec_test.go, and it is why
+// the keysym spellings are a table: XStringToKeysym is case-sensitive, so "tab",
+// "f13", "left" and "pageup" are all NoSymbol, which is how `ctrl+tab` and
+// `ctrl+f13` came to parse on Windows and fail on Linux alone (#563).
+func TestLinuxKeyNameParity(t *testing.T) {
+	keys := []string{
+		"a", "k", "z", "0", "9",
+		"space", "spacebar", "return", "enter", "tab", "escape", "esc",
+		"backspace", "delete", "del", "insert", "ins",
+		"home", "end", "pageup", "pgup", "pagedown", "pgdn",
+		"left", "right", "up", "down",
+		"minus", "equal", "leftbracket", "rightbracket", "backslash",
+		"semicolon", "quote", "comma", "period", "slash", "grave",
+		"-", "=", "[", "]", ";", "'", ",", ".", "/", "`",
+		"f1", "f5", "f12", "f13", "f19", "f20",
+	}
+	for _, key := range keys {
+		mods, ks, err := parseLinuxKeyspec("ctrl+shift+" + key)
+		if err != nil {
+			t.Errorf("ctrl+shift+%s: %v", key, err)
+			continue
+		}
+		if ks == 0 {
+			t.Errorf("ctrl+shift+%s resolved to NoSymbol", key)
+		}
+		if mods != hkControlMask|hkShiftMask {
+			t.Errorf("ctrl+shift+%s: mods = %d, want ctrl|shift", key, mods)
+		}
+	}
+}
+
+// The shipped defaults, resolved through the real X keysym table. If the pair in
+// src/config/pebble-hotkeys.ts changes, this list changes with it.
+func TestLinuxResolvesTheShippedDefaults(t *testing.T) {
+	for _, spec := range []string{"ctrl+shift+space", "ctrl+shift+k"} {
+		mods, ks, err := parseLinuxKeyspec(spec)
+		if err != nil {
+			t.Fatalf("%q: %v", spec, err)
+		}
+		if ks == 0 {
+			t.Errorf("%q resolved to NoSymbol", spec)
+		}
+		if mods != hkControlMask|hkShiftMask {
+			t.Errorf("%q: mods = %d, want ctrl|shift", spec, mods)
+		}
+	}
+}
+
+// "command" was the one modifier spelling Linux refused while macOS and Windows
+// accepted it.
+func TestLinuxAcceptsEveryModifierSpelling(t *testing.T) {
+	for _, group := range [][]string{
+		{"ctrl", "control"},
+		{"alt", "opt", "option"},
+		{"cmd", "command", "super", "win", "meta"},
+	} {
+		var first uint
+		for i, name := range group {
+			mods, _, err := parseLinuxKeyspec(name + "+k")
+			if err != nil {
+				t.Fatalf("%q: %v", name, err)
+			}
+			if i == 0 {
+				first = mods
+				continue
+			}
+			if mods != first {
+				t.Errorf("modifier %q = %d, want %d (same as %q)", name, mods, first, group[0])
+			}
+		}
+	}
+}
