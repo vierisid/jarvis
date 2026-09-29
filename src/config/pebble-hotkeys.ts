@@ -178,6 +178,16 @@ export function readHotkeySetting(value: unknown): HotkeySetting {
     }
   }
   if (parts.length === 1 && !BARE_KEY_ALLOWED.test(key)) {
+    // A lone modifier is its own mistake, and by far the likeliest one here:
+    // the last token is always read as the KEY, so `summon_hotkey: ctrl` asks
+    // to bind the Control key on its own rather than to hold it.
+    if (MODIFIER_NAMES.has(key)) {
+      return {
+        kind: 'invalid',
+        problem: `is only the modifier ${JSON.stringify(key)} with no key after it`
+          + ` -- a hotkey needs both, as in "${key}+space"`,
+      };
+    }
     return {
       kind: 'invalid',
       problem: `needs at least one modifier (ctrl, shift, alt or cmd) unless the key is an F-key,`

@@ -82,6 +82,16 @@ describe('readHotkeySetting', () => {
     expect(readHotkeySetting('ctrl+shift+a').kind).toBe('valid');
   });
 
+  test('a lone modifier gets its own message', () => {
+    // The likeliest mistake of all, because the LAST token is always the key:
+    // `summon_hotkey: ctrl` asks to bind Control itself.
+    for (const lone of ['ctrl', 'shift', 'alt', 'cmd', 'super']) {
+      const setting = readHotkeySetting(lone);
+      expect(setting.kind).toBe('invalid');
+      if (setting.kind === 'invalid') expect(setting.problem).toContain('no key after it');
+    }
+  });
+
   test('an absurdly long value is refused before it is parsed', () => {
     const setting = readHotkeySetting(`ctrl+${'a'.repeat(200)}`);
     expect(setting.kind).toBe('invalid');
