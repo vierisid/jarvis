@@ -308,7 +308,9 @@ export function resolvePebbleHotkeys(
   let palette = resolveOne('palette_hotkey', fields.palette_hotkey, overrides.palette ?? PEBBLE_DEFAULT_PALETTE_HOTKEY, problems);
 
   // One keystroke cannot drive both callbacks. Windows would refuse the second
-  // RegisterHotKey and say so; macOS installs two monitors quite happily, and
+  // RegisterHotKey and say so, and since #574 Linux reports the refused
+  // XGrabKey too (the server gives BadAccess for a duplicate grab whoever holds
+  // it); macOS installs two monitors quite happily, and
   // the press then starts a listening session AND opens the palette at once -
   // the silent-asymmetry shape #563 is about. Summon wins because it is the one
   // the pebble cannot do without; the palette is also reachable from the tray

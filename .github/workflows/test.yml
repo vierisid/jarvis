@@ -263,8 +263,8 @@ jobs:
   # matched as a prefix so a new sibling test runs without editing this file.
   # They live here rather than on linux because the files are windows-tagged:
   # one hotkey test needs the real RegisterHotKey, since a refused
-  # registration is exactly what has to surface as an error and no other
-  # platform can produce one, and the UIA and SendInput helpers do not exist
+  # registration is exactly what has to surface as an error. Linux can produce
+  # one too as of #574, but its tests need a DISPLAY this job does not set, and the UIA and SendInput helpers do not exist
   # in a linux build at all.
   sidecar-test-windows:
     runs-on: windows-latest

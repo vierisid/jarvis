@@ -676,3 +676,160 @@ func TestTranspositionProneKeyCodes(t *testing.T) {
 		}
 	})
 }
+
+// The Linux refusal message, which is the #574 fix's entire user-visible
+// surface. It lives in a pure function precisely so it can be tested here: the
+// grab it describes is in the cgo half of hotkeys_linux.go and no test on any
+// platform can reach that.
+func TestLinuxGrabError(t *testing.T) {
+	t.Run("a successful create is not an error", func(t *testing.T) {
+		if err := linuxGrabError("ctrl+shift+space", hkGrabOK, 0, 0, 0, false); err != nil {
+			t.Fatalf("HK_OK produced an error: %v", err)
+		}
+	})
+
+	t.Run("every failure names the keyspec", func(t *testing.T) {
+		// Whoever is reading the log has more than one hotkey registered, so a
+		// message that does not say which one failed is nearly useless. The
+		// Windows test asserts the same thing about its own path.
+		for _, stage := range []int{hkGrabNoDisplay, hkGrabNoKeycode, hkGrabNoPipe, hkGrabNoMem, hkGrabRefused} {
+			err := linuxGrabError("ctrl+shift+k", stage, hkBadAccess, hkOpcodeGrab, hkAllVariants, false)
+			if err == nil {
+				t.Fatalf("stage %d produced no error", stage)
+			}
+			if !strings.Contains(err.Error(), "ctrl+shift+k") {
+				t.Errorf("stage %d does not name the hotkey: %v", stage, err)
+			}
+			if !strings.HasPrefix(err.Error(), "XGrabKey(ctrl+shift+k): ") {
+				t.Errorf("stage %d does not use the Windows-shaped prefix: %v", stage, err)
+			}
+		}
+	})
+
+	t.Run("no display and no keycode are told apart", func(t *testing.T) {
+		// They used to share one message ("no display or key unavailable"),
+		// which left the reader unable to tell "this session cannot do global
+		// hotkeys at all" from "this keyspec is wrong for your layout".
+		noDisplay := linuxGrabError("ctrl+k", hkGrabNoDisplay, 0, 0, 0, false).Error()
+		noKeycode := linuxGrabError("ctrl+k", hkGrabNoKeycode, 0, 0, 0, false).Error()
+		if noDisplay == noKeycode {
+			t.Fatal("no-display and no-keycode produce the same message")
+		}
+		if !strings.Contains(noDisplay, "DISPLAY") {
+			t.Errorf("the no-display message should mention DISPLAY: %s", noDisplay)
+		}
+		if !strings.Contains(noKeycode, "layout") {
+			t.Errorf("the no-keycode message should mention the layout: %s", noKeycode)
+		}
+	})
+
+	t.Run("a fully taken combination reads like the Windows one", func(t *testing.T) {
+		err := linuxGrabError("ctrl+shift+space", hkGrabRefused, hkBadAccess, hkOpcodeGrab, hkAllVariants, false)
+		got := err.Error()
+		// Windows: "RegisterHotKey(ctrl+shift+space): already held by another
+		// hot key (another app, or a sidecar that has not exited)".
+		if !strings.Contains(got, "already held by another client") {
+			t.Errorf("want the Windows-shaped 'already held' wording, got: %s", got)
+		}
+		if !strings.Contains(got, "sidecar that has not exited") {
+			t.Errorf("want the Windows 'sidecar that has not exited' clause, got: %s", got)
+		}
+		// All four variants refused means the combination is simply taken;
+		// listing them would add noise and no information.
+		if strings.Contains(got, "variant(s) clashed") {
+			t.Errorf("an all-variants refusal should not enumerate variants: %s", got)
+		}
+	})
+
+	t.Run("a partial clash names the variants", func(t *testing.T) {
+		// The case the all-or-nothing decision exists for, and the one observed
+		// live: the base mask refused while the lock variants were granted.
+		err := linuxGrabError("ctrl+shift+space", hkGrabRefused, hkBadAccess, hkOpcodeGrab, 0x1, false)
+		got := err.Error()
+		if !strings.Contains(got, "plain") {
+			t.Errorf("a base-variant clash should name it: %s", got)
+		}
+		if !strings.Contains(got, "refused as a whole") {
+			t.Errorf("the message should say the whole grab was refused: %s", got)
+		}
+		lockOnly := linuxGrabError("ctrl+shift+space", hkGrabRefused, hkBadAccess, hkOpcodeGrab, 0x2|0x8, false).Error()
+		if !strings.Contains(lockOnly, "CapsLock, CapsLock+NumLock") {
+			t.Errorf("want both clashing lock variants listed, got: %s", lockOnly)
+		}
+		if strings.Contains(lockOnly, "plain") {
+			t.Errorf("a variant that was GRANTED must not be listed as clashing: %s", lockOnly)
+		}
+	})
+
+	t.Run("an X error that is not BadAccess reports its codes", func(t *testing.T) {
+		// BadValue on X_GrabKey, say. Still a dead hotkey, so still an error,
+		// but it must not claim someone else holds the combination.
+		got := linuxGrabError("ctrl+f13", hkGrabRefused, 2, hkOpcodeGrab, hkAllVariants, false).Error()
+		if strings.Contains(got, "already held") {
+			t.Errorf("a non-BadAccess refusal must not claim the combination is held: %s", got)
+		}
+		if !strings.Contains(got, "X error 2") {
+			t.Errorf("the raw X error code should survive into the message: %s", got)
+		}
+	})
+
+	t.Run("BadAccess on some other request is not read as a clash", func(t *testing.T) {
+		// The handler records any error on our own display, not only X_GrabKey
+		// ones, so the opcode has to be part of the "already held" decision --
+		// otherwise an unrelated BadAccess would be reported as a taken hotkey.
+		got := linuxGrabError("ctrl+k", hkGrabRefused, hkBadAccess, 34 /* X_UngrabKey */, hkAllVariants, false).Error()
+		if strings.Contains(got, "already held") {
+			t.Errorf("BadAccess on a non-grab request must not be reported as a clash: %s", got)
+		}
+	})
+
+	t.Run("variant names track the C variant order", func(t *testing.T) {
+		// hkVariantNames is indexed by the same bit positions as HK_VARIANTS in
+		// hotkeys_linux.go; if someone reorders one, this is the tripwire.
+		if hkFailedVariantList(hkAllVariants) != "plain, CapsLock, NumLock, CapsLock+NumLock" {
+			t.Errorf("variant order changed: %q", hkFailedVariantList(hkAllVariants))
+		}
+		if hkFailedVariantList(0) != "" {
+			t.Errorf("an empty mask should list nothing, got %q", hkFailedVariantList(0))
+		}
+	})
+
+	t.Run("a success with no listener is not reported as success", func(t *testing.T) {
+		// The fail-open trap. startHotkeyListener treats a nil handle as a
+		// failure and asks for the message via the stage, which is HK_OK in
+		// that case -- so if this returned nil the caller would log
+		// "registered" for a hotkey that cannot fire. That is #574 verbatim,
+		// reached through the guard meant to prevent it.
+		err := linuxGrabError("ctrl+shift+space", hkGrabOK, 0, 0, 0, true)
+		if err == nil {
+			t.Fatal("HK_OK with a nil handle returned no error")
+		}
+		if !strings.Contains(err.Error(), "ctrl+shift+space") {
+			t.Errorf("the error should still name the hotkey: %v", err)
+		}
+	})
+
+	t.Run("an unknown stage is reported as drift, not as an X refusal", func(t *testing.T) {
+		// A stage this file does not know about means the C enum and the Go
+		// constants have diverged. Pointing the reader at the X server for what
+		// is a code bug would waste their time.
+		got := linuxGrabError("ctrl+k", 99, 0, 0, 0, false).Error()
+		if strings.Contains(got, "already held") || strings.Contains(got, "refused with X error") {
+			t.Errorf("an unknown stage must not masquerade as an X refusal: %s", got)
+		}
+		if !strings.Contains(got, "drifted") {
+			t.Errorf("an unknown stage should say the two files have drifted: %s", got)
+		}
+	})
+
+	t.Run("out of memory is not reported as a pipe failure", func(t *testing.T) {
+		oom := linuxGrabError("ctrl+k", hkGrabNoMem, 0, 0, 0, false).Error()
+		pipe := linuxGrabError("ctrl+k", hkGrabNoPipe, 0, 0, 0, false).Error()
+		if oom == pipe {
+			t.Fatal("an allocation failure and a pipe failure read identically")
+		}
+		if strings.Contains(oom, "pipe") {
+			t.Errorf("an allocation failure should not blame the stop pipe: %s", oom)
+		}
+	})
+}

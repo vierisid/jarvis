@@ -189,24 +189,57 @@ export function toolReturnText(raw: unknown): string {
 }
 
 /**
- * Neutralise a carrier while leaving every other value EXACTLY as it was.
+ * Take the untrusted payload out of a carrier and DISCARD the trusted trailer,
+ * leaving every other value EXACTLY as it was.
  *
- * For a path that must not stringify. `toolReturnText` and `splitToolReturn`
- * both flatten a non-string return to JSON, which is right where the next step
- * is prompt text -- and wrong where the value is structured data somebody stores
- * or reads fields off.
+ * For a path that must not stringify AND has no model to read a playbook. That
+ * is the workflow tool adapter, and both halves of that sentence are load
+ * bearing.
  *
- * The workflow tool adapter is that path. Its return becomes a durable EFFECT
- * RECEIPT (`effects.invoke` in workflows/runtime/service-backends.ts), which is
- * replay and idempotency state: a resumed run reads it back instead of acting
- * again. Stringifying there changed a receipt's `result` from the tool's own
- * object to a JSON string of it, which
- * `cancellation-authority.integration.test.ts` caught -- so the rule is that a
- * carrier must be collapsed without touching anything else. A carrier cannot
- * reach a receipt anyway once it is collapsed here, and nothing else moves.
+ * NOT STRINGIFYING. `toolReturnText` and `splitToolReturn` both flatten a
+ * non-string return to JSON, which is right where the next step is prompt text
+ * and wrong where the value is structured data somebody stores or reads fields
+ * off. The adapter's return becomes a durable EFFECT RECEIPT (`effects.invoke`
+ * in workflows/runtime/service-backends.ts), which is replay and idempotency
+ * state: a resumed run reads it back instead of acting again. Stringifying there
+ * changed a receipt's `result` from the tool's own object to a JSON string of
+ * it, which `cancellation-authority.integration.test.ts` caught -- so a carrier
+ * must be handled without touching anything else.
+ *
+ * DISCARDING THE TRAILER, rather than concatenating it back in band the way
+ * `toolReturnText` does (#573). A trailer is repo-authored INSTRUCTIONS TO A
+ * MODEL -- the webapp template playbook, "Follow these site-specific
+ * instructions while operating it" -- and `browser_snapshot` is one of the tools
+ * a workflow step can name, so carriers do reach this path. Concatenating there
+ * is wrong twice over:
+ *
+ *   1. A workflow step's result is DATA, consumed by `{{ }}` expressions and by
+ *      other steps. `browser_snapshot` -> `write_file` would write the playbook
+ *      into the file, deterministically and unattended, with no model in the
+ *      loop to notice. Same corruption that makes framing the wrong thing to do
+ *      on this path; see the note in workflows/adapters/tool-registry.ts.
+ *   2. It rebuilds the #529 shape. The trailer travels beside the payload
+ *      precisely so it can render OUTSIDE the untrusted block (see
+ *      `withTrustedTrailer` and actions/tools/webapp-template-injection.ts).
+ *      This path has no block, so concatenating glues page text directly onto
+ *      repo-authored instructions with no boundary between them -- and if that
+ *      value later reaches a model (a `manage_workflow` run listing, an author's
+ *      `jarvis-ask` prompt) a page can forge or extend the playbook.
+ *
+ * Dropping is the safe direction by this module's own polarity: the direction
+ * that must never happen is attacker text ending up outside the block, while a
+ * lost playbook merely loses a playbook -- and a flow has no model to read one.
+ *
+ * What this does NOT fix: `withInstructions` burns its 30-minute redelivery TTL
+ * on a process-wide singleton inside the TOOL, before this function is reached,
+ * so a workflow snapshot still suppresses the playbook for the chat model. That
+ * is a missing per-context scope in webapp-template-injection.ts. It has no
+ * issue of its own yet; docs/WORKFLOW_AUTOMATION.md lists it as open. Dropping
+ * here makes that fix a pure win, since the playbook now reaches no consumer at
+ * all on this path.
  */
-export function collapseTrustedTrailer(raw: unknown): unknown {
-  if (raw instanceof TrailedToolReturn) return raw.untrusted + raw.trustedTrailer;
+export function dropTrustedTrailer(raw: unknown): unknown {
+  if (raw instanceof TrailedToolReturn) return raw.untrusted;
   return raw;
 }
 

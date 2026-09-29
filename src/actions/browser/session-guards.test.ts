@@ -23,6 +23,19 @@ type FakeOptions = {
   fetchEnableError?: string;
   /** URL of the main frame, as Page.getFrameTree reports it. */
   frameUrl?: () => string;
+  /**
+   * loaderId of the main frame. Called once per Page.getFrameTree, so a counter
+   * here simulates a document committing between two reads. Real Chrome always
+   * sends one for a committed frame (it is required on Page.Frame), and
+   * `snapshot()` compares it across its own evaluate, so a fake that omitted it
+   * would report no browserUrl and quietly pass.
+   */
+  loaderId?: () => string;
+  /**
+   * What the IN-PAGE script claims the URL is (`location.href`). Defaults to the
+   * frame URL; set it differently to tell the two apart.
+   */
+  pageUrl?: () => string;
   /** Page.navigate handler; may talk to the browser socket first. */
   onNavigate?: (url: string, fake: Fake) => Promise<Record<string, unknown>>;
 };
@@ -65,14 +78,23 @@ function fakeChrome(opts: FakeOptions = {}): Fake {
   };
 
   const pageResult = async (method: string, params: Record<string, any>): Promise<Record<string, unknown>> => {
-    if (method === 'Page.getFrameTree') return { frameTree: { frame: { url: opts.frameUrl?.() ?? 'https://example.com/' } } };
+    if (method === 'Page.getFrameTree') {
+      return {
+        frameTree: {
+          frame: {
+            url: opts.frameUrl?.() ?? 'https://example.com/',
+            loaderId: opts.loaderId?.() ?? 'LOADER-1',
+          },
+        },
+      };
+    }
     if (method === 'Page.navigate') return opts.onNavigate ? opts.onNavigate(params.url, fake) : {};
     if (method === 'Page.captureScreenshot') return { data: 'SECRET-PIXELS' };
     if (method === 'Runtime.evaluate') {
       const expr = String(params.expression);
       if (expr.includes('readyState')) return { result: { value: 'complete:5' } };
       if (expr.includes('__jarvis_elements')) {
-        return { result: { value: { title: 'SECRET-TITLE', url: opts.frameUrl?.() ?? 'https://example.com/', text: 'SECRET-TEXT', elements: [] } } };
+        return { result: { value: { title: 'SECRET-TITLE', url: opts.pageUrl?.() ?? opts.frameUrl?.() ?? 'https://example.com/', text: 'SECRET-TEXT', elements: [] } } };
       }
       return { result: { value: 'SECRET-VALUE' } };
     }
@@ -290,4 +312,34 @@ describe('BrowserController #521 guards (fake Chrome)', () => {
     expect(ctrl.connected).toBe(false);
     expect(fake.browserSent).toHaveLength(0);
   });
+
+  /**
+   * #572. `browserUrl` is the field every playbook decision is made from, so the
+   * two things it promises are pinned here rather than left to the live-Chromium
+   * suite: it is the BROWSER's URL, not the page's, and it is null unless the
+   * document that ran the snapshot script is the one that was checked.
+   */
+  test('browserUrl is the frame tree\'s answer, not the page\'s', async () => {
+    fake = fakeChrome({
+      frameUrl: () => 'https://real.example/inbox',
+      pageUrl: () => 'https://spoofed.example/',
+    });
+    ctrl = new BrowserController(fake.port);
+    const snap = await ctrl.navigate('https://real.example/inbox');
+    expect(snap.browserUrl).toBe('https://real.example/inbox');
+    // The page's claim still reaches the model, as text, in its own field.
+    expect(snap.url).toBe('https://spoofed.example/');
+  }, 15_000);
+
+  test('browserUrl is null when the document commits mid-snapshot', async () => {
+    // A new loaderId on the second read is a new document: the URL then names
+    // one document and the text came from another, so neither may be paired.
+    let reads = 0;
+    fake = fakeChrome({ loaderId: () => `LOADER-${++reads}` });
+    ctrl = new BrowserController(fake.port);
+    const snap = await ctrl.navigate('https://example.com/');
+    expect(snap.browserUrl).toBeNull();
+    // The snapshot itself still reaches the model; only the decision is withheld.
+    expect(snap.text).toBe('SECRET-TEXT');
+  }, 15_000);
 });

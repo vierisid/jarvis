@@ -43,7 +43,10 @@ export class ContextTracker {
   private stuckReported: boolean = false;
   /** Full-text OCR hash, used only for redundancy (see processCapture). */
   private lastFullOcrHash: string = '';
-  private pendingWindowInfo: { appName: string; windowTitle: string } | null = null;
+  // Explicit window events are hints, never edits to a processed capture.
+  // Scope metadata to its source so another computer cannot supply its title.
+  private pendingWindowInfo = new Map<string, { appName: string; windowTitle: string; timestamp: number }>();
+  private capturedWindowInfo = new Map<string, { appName: string; windowTitle: string; timestamp: number }>();
   private struggleDetector: StruggleDetector;
 
   constructor(config: AwarenessConfig) {
@@ -57,7 +60,8 @@ export class ContextTracker {
   /**
    * Process a new screen capture. Returns the context and any detected events.
    */
-  processCapture(captureId: string, ocrText: string, rawWindowTitle?: string, capturedAt?: number): {
+  processCapture(captureId: string, ocrText: string, rawWindowTitle?: string, capturedAt?: number,
+    source: { appName?: string; sidecarId?: string } = {}): {
     context: ScreenContext;
     events: AwarenessEvent[];
     /**
@@ -74,14 +78,27 @@ export class ContextTracker {
     const priorFullOcrHash = this.lastFullOcrHash;
     const fullOcrHash = simpleHash(ocrText, ocrText.length);
 
-    // Use pending window info from sidecar context_changed if no rawWindowTitle provided
-    const effectiveWindowTitle = rawWindowTitle || this.pendingWindowInfo?.windowTitle;
-    if (this.pendingWindowInfo && !rawWindowTitle) {
-      this.pendingWindowInfo = null; // consumed
-    }
-
-    // Parse app name and details from window title or OCR
-    const { appName, windowTitle, url, filePath } = this.parseWindowInfo(ocrText, effectiveWindowTitle);
+    const sourceKey = source.sidecarId ?? '';
+    const pending = this.pendingWindowInfo.get(sourceKey);
+    const hint = pending && pending.timestamp <= now ? pending : undefined;
+    // A capture supersedes hints up to its timestamp, including conflicting
+    // hints. Future hints wait for a later capture instead of changing history.
+    if (hint) this.pendingWindowInfo.delete(sourceKey);
+    // Hints can be partial too. Combine only non-conflicting supplied fields,
+    // then fill remaining gaps from a compatible confirmed snapshot.
+    const usableHint = hint &&
+      (!source.appName || !hint.appName || source.appName === hint.appName) &&
+      (!rawWindowTitle || !hint.windowTitle || rawWindowTitle === hint.windowTitle) ? hint : undefined;
+    const observedApp = source.appName || usableHint?.appName;
+    const observedTitle = rawWindowTitle || usableHint?.windowTitle;
+    const last = this.capturedWindowInfo.get(sourceKey);
+    const fallback = last &&
+      (!observedApp || observedApp === last.appName) &&
+      (!observedTitle || observedTitle === last.windowTitle) ? last : undefined;
+    const parsed = this.parseWindowInfo(ocrText, observedTitle || fallback?.windowTitle);
+    // Native app identity is authoritative. Title parsing is a legacy fallback.
+    const appName = observedApp || fallback?.appName || parsed.appName;
+    const { windowTitle, url, filePath } = parsed;
 
     // Detect context change
     const isAppChange = this.currentContext !== null &&
@@ -103,10 +120,12 @@ export class ContextTracker {
     if (isAppChange || isIdleReturn || !this.currentSessionId) {
       // End previous session if it exists
       if (this.currentSessionId && isAppChange) {
+        const sessionId = this.currentSessionId;
+        const apps = Array.from(this.currentSessionApps);
         this.endCurrentSession();
         events.push({
           type: 'session_ended',
-          data: { sessionId: this.currentSessionId, apps: Array.from(this.currentSessionApps) },
+          data: { sessionId, apps },
           timestamp: now,
         });
       }
@@ -260,6 +279,7 @@ export class ContextTracker {
     // Update state
     this.previousContext = this.currentContext;
     this.currentContext = context;
+    this.capturedWindowInfo.set(sourceKey, { appName, windowTitle, timestamp: now });
     this.lastActivityTimestamp = now;
 
     // Hashed in full, not through simpleHash: that one samples the first 2000
@@ -294,28 +314,17 @@ export class ContextTracker {
   }
 
   /**
-   * Get the last known window title (set by updateWindowInfo from sidecar events).
+   * Cache an explicit context event until a capture confirms the observation.
+   * Only processCapture compares/commits snapshots and emits context_changed;
+   * repeating a hint before or after that capture cannot create a second event.
    */
-  getLastWindowTitle(): string | undefined {
-    return this.currentContext?.windowTitle ?? undefined;
-  }
-
-  /**
-   * Update cached window info from a sidecar context_changed event.
-   * Called externally when the sidecar pushes a window change.
-   */
-  updateWindowInfo(appName: string, windowTitle: string): void {
-    if (!this.currentContext) {
-      // No capture processed yet — store as pending info for the first processCapture call
-      this.pendingWindowInfo = { appName, windowTitle };
-      return;
-    }
-    // Directly update current context's window info
-    this.currentContext = {
-      ...this.currentContext,
-      appName: appName || this.currentContext.appName,
-      windowTitle: windowTitle || this.currentContext.windowTitle,
-    };
+  updateWindowInfo(appName: string, windowTitle: string, timestamp = Date.now(), sidecarId?: string): void {
+    const sourceKey = sidecarId ?? '';
+    const captured = this.capturedWindowInfo.get(sourceKey);
+    const pending = this.pendingWindowInfo.get(sourceKey);
+    if (captured && timestamp <= captured.timestamp) return;
+    if (pending && timestamp < pending.timestamp) return;
+    this.pendingWindowInfo.set(sourceKey, { appName, windowTitle, timestamp });
   }
 
   /**

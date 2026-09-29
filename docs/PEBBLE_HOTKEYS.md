@@ -93,10 +93,12 @@ reaches you rather than a sidecar log:
   letter keeps typing normally and the only symptom is the pebble waking up -
   and opening the microphone - every time you press `a` in any application.
   `f13` is exactly the case the exception exists for.
-- **The two hotkeys may not be the same key.** Windows refuses the second
-  registration; macOS installs two monitors and fires both callbacks on one
-  press. If they collide, the summon hotkey wins, the palette hotkey is not
-  registered, and it is reported.
+- **The two hotkeys may not be the same key.** Windows and Linux both refuse the
+  second registration - on Linux because the two listeners are separate X
+  clients, so the second `XGrabKey` gets `BadAccess` (since #574; before that it
+  was refused and reported as success). macOS installs two monitors and fires
+  both callbacks on one press. If they collide, the summon hotkey wins, the
+  palette hotkey is not registered, and it is reported.
 - **128 bytes**, which no real keyspec approaches. Bytes, not characters, so
   the daemon and the sidecar agree on the limit.
 
@@ -188,7 +190,7 @@ difference, and it is worth understanding before picking a binding.
 | platform | mechanism | consumes the keystroke? | when the combination is already taken |
 |---|---|---|---|
 | Windows | `RegisterHotKey` | yes, exclusively | registration **fails**, and the sidecar log says so |
-| Linux/X11 | `XGrabKey` | yes, while the grab holds | the grab is refused and the sidecar reports success anyway, so the hotkey is silently dead |
+| Linux/X11 | `XGrabKey` | yes, while the grab holds | the grab is refused, and the sidecar log says so (see the caveat below) |
 | macOS | `NSEvent addGlobalMonitorForEventsMatchingMask` | **no** | nothing happens; both actions fire |
 
 `addGlobalMonitorForEventsMatchingMask` is a passive observer - its handler
@@ -228,11 +230,10 @@ platform that *cannot* consume a keystroke is, for this particular pair, the one
 with nothing to double-fire against.
 
 The asymmetry still matters the moment you choose your own binding, and it is
-the whole subject of #563: on macOS a combination that is already taken gives you
-both actions and no error at all, on Windows it gives you a loud registration
-failure, and on Linux it gives you a hotkey that silently does nothing.
-Whichever platform you are on, `pebble.summon_hotkey` /
-`pebble.palette_hotkey` is the answer.
+the whole subject of #563: on macOS a combination that is already taken gives
+you both actions and no error at all, while on Windows and Linux it gives you a
+loud registration failure. Whichever platform you are on,
+`pebble.summon_hotkey` / `pebble.palette_hotkey` is the answer.
 
 Consequences for choosing a macOS binding at all:
 
@@ -251,10 +252,53 @@ Consequences for choosing a macOS binding at all:
 `XGrabKey` is issued four times, for the plain modifier combination and for its
 `LockMask` / `Mod2Mask` (Caps Lock / Num Lock) variants, so the hotkey works
 whatever the lock state. A conflicting client may hold only some of those, which
-leaves a hotkey that works in some lock states and not others - harder to
-diagnose than one that is simply dead. The sidecar installs an X error handler
-that swallows `BadAccess` and then reports the registration as successful either
-way, so the log does not help; that is a known gap, not a decision.
+would leave a hotkey that works in some lock states and not others - harder to
+diagnose than one that is simply dead.
+
+So the four grabs are **all-or-nothing**: if any variant is refused, the ones
+that were granted are released again and the whole registration fails. When only
+some variants clashed the message names them; when all four did, the combination
+is simply taken and the list would add nothing. A partial grab is never kept.
+The alternative - keep what the server gave us and warn - was rejected because
+an intermittent, lock-state-dependent hotkey is the same silent failure one
+layer down, and because holding passive grabs we have just reported as
+unregistered would sit on those combinations for every other client while doing
+nothing with them.
+
+There is a cost to that choice, and it is worth being straight about it: if
+something on your desktop holds only the `Mod2Mask` variant, you previously had
+a hotkey that worked with Num Lock off, and now you have none. There is no
+plain-variant-only mode to fall back to. What the message gives you instead is
+the name of the variant that clashed, and the answer is to pick a different
+binding with `pebble.summon_hotkey` / `pebble.palette_hotkey`.
+
+Detecting the refusal at all takes a round trip. `XGrabKey` is asynchronous and
+has no useful return value; a refusal arrives later as a `BadAccess` error
+event. The sidecar therefore installs an X error handler that **records**
+rather than ignores, and forces the round trip with `XSync` after each variant.
+Until #574 that handler discarded everything it caught and the registration was
+reported as successful either way, so a taken combination was announced as
+`registered` and then never fired. The no-crash reason the handler existed in
+the first place is still honoured - XLib's default handler calls `exit(1)` - but
+it no longer costs the diagnosis.
+
+**The caveat, because it is not a guarantee.** `XSetErrorHandler` is
+process-global, and GTK rewrites it constantly: `gdk_x11_display_error_trap_push`
+installs GDK's own handler on every push and the matching pop puts back whatever
+it displaced. If one of those windows happens to straddle a grab's round trip,
+the `BadAccess` is delivered to GDK's handler, which does not recognise the
+sidecar's private connection and drops it - and the grab then looks granted. So
+detection is **reliable rather than certain**. The sidecar re-checks after every
+round trip that the handler is still its own and logs a warning when it was not,
+so the case is visible rather than silent, but the only real fix is to stop
+sharing the slot (xcb *checked* requests would return the error directly). See
+the KNOWN LIMIT note in `sidecar/hotkeys_linux.go`.
+
+One consequence worth knowing: `pebble.summon_hotkey` and
+`pebble.palette_hotkey` open separate X connections, so they are separate X
+clients. Setting them to the **same** keyspec now fails the second one with
+"already held", where it used to be silently accepted and dead. That is the
+same thing Windows has always done with a duplicate `RegisterHotKey`.
 
 `XGrabKey` also only reaches X11 and XWayland clients. Under a **native Wayland**
 session a global grab needs the compositor's own shortcuts protocol, which the

@@ -876,6 +876,24 @@ function resolveBrowserTarget(params: Record<string, unknown>, tool: string): st
   return resolveToolTarget(params.target, 'browser', tool);
 }
 
+/**
+ * ONE RULE for every browser tool below (#572): the site playbook is selected
+ * from `PageSnapshot.browserUrl` and from nothing else.
+ *
+ * Not from the rendered snapshot, which is a page. Not from the URL that was
+ * REQUESTED either, tempting as that looks -- it is the model's string rather
+ * than the page's, but a redirect makes it false, open redirects are ordinary on
+ * the very hosts templates are written for, and the trailer then states "You are
+ * now on <that host>" OUTSIDE the untrusted block over a page that is not it.
+ * Naming the wrong site with authority is worse than naming none.
+ *
+ * So every caller passes the browser's answer or null, and a sidecar-routed
+ * browser passes null always: it replies with formatted text and nothing beside
+ * it. That costs remote browsers their playbooks for now; the fix is for the RPC
+ * to carry the URL, which the sidecar already holds
+ * (docs/sidecar/SIDECAR_PROTOCOL.md, "the reply is text").
+ */
+
 export const browserNavigateTool: ToolDefinition = {
   name: 'browser_navigate',
   description: 'Navigate the browser to a URL. Returns page text content and a list of interactive elements with [id] numbers you can reference in browser_click and browser_type. Optionally specify a "target" sidecar to use a remote browser. By default the browser opens visibly so the user can watch and interact; set "headless" to true to run it hidden in the background (useful for research, or when the user is focused on something else and a popping browser window would be intrusive).',
@@ -910,13 +928,13 @@ export const browserNavigateTool: ToolDefinition = {
     const target = resolveBrowserTarget(params, 'browser_navigate');
     if (target) {
       const result = await routeToSidecar(target, 'browser_navigate', { url, headless: params.headless }, 'browser');
-      return globalWebappTemplateDelivery.withInstructions(result, params.url as string);
+      return globalWebappTemplateDelivery.withInstructions(result, null);
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
-      const snap = await browser.navigate(params.url as string);
-      return globalWebappTemplateDelivery.withInstructions(formatSnapshot(snap), params.url as string);
+      const snap = await browser.navigate(url);
+      return globalWebappTemplateDelivery.withInstructions(formatSnapshot(snap), snap.browserUrl);
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -938,13 +956,13 @@ export const browserSnapshotTool: ToolDefinition = {
     const target = resolveBrowserTarget(params, 'browser_snapshot');
     if (target) {
       const result = await routeToSidecar(target, 'browser_snapshot', {}, 'browser');
-      return globalWebappTemplateDelivery.withInstructions(result);
+      return globalWebappTemplateDelivery.withInstructions(result, null);
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
     try {
       const snap = await browser.snapshot();
-      return globalWebappTemplateDelivery.withInstructions(formatSnapshot(snap));
+      return globalWebappTemplateDelivery.withInstructions(formatSnapshot(snap), snap.browserUrl);
     } catch (err) {
       return `Error: ${err instanceof Error ? err.message : String(err)}`;
     }
@@ -1394,7 +1412,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       execute: async (params) => {
         try {
           const snap = await ctrl.navigate(params.url as string);
-          return templateDelivery.withInstructions(formatSnapshot(snap), params.url as string);
+          return templateDelivery.withInstructions(formatSnapshot(snap), snap.browserUrl);
         } catch (err) {
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
         }
@@ -1408,7 +1426,7 @@ export function createBrowserTools(ctrl: BrowserController): ToolDefinition[] {
       execute: async () => {
         try {
           const snap = await ctrl.snapshot();
-          return templateDelivery.withInstructions(formatSnapshot(snap));
+          return templateDelivery.withInstructions(formatSnapshot(snap), snap.browserUrl);
         } catch (err) {
           return `Error: ${err instanceof Error ? err.message : String(err)}`;
         }

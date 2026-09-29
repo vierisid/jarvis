@@ -48,6 +48,30 @@ describe('getWebappTemplateByDomain', () => {
     expect(getWebappTemplateByDomain('https://example.com')).toBeNull();
   });
 
+  /**
+   * #572. A path entry claims a path SEGMENT, not a string prefix: otherwise a
+   * page on a host that several templates share picks a sibling's playbook just
+   * by choosing a path, which `history.pushState` lets it do same-origin.
+   */
+  test('a path entry matches on a segment boundary, not a prefix', () => {
+    expect(getWebappTemplateByDomain('https://docs.google.com/document')?.app_name).toBe('Google Docs');
+    expect(getWebappTemplateByDomain('https://docs.google.com/document/d/x')?.app_name).toBe('Google Docs');
+    expect(getWebappTemplateByDomain('https://docs.google.com/documentation-of-evil')).toBeNull();
+    expect(getWebappTemplateByDomain('https://docs.google.com/spreadsheets-of-evil')).toBeNull();
+  });
+
+  /**
+   * #572. A URL that does not parse used to become "the hostname" and was then
+   * suffix-matched, so a document whose own bytes ended in ".web.whatsapp.com"
+   * resolved to WhatsApp. Naming a site is not being on it.
+   */
+  test('a URL that does not parse resolves to nothing, not to a hostname', () => {
+    expect(getWebappTemplateByDomain('data:text/html,<!--.web.whatsapp.com')).toBeNull();
+    expect(getWebappTemplateByDomain('not a url at all .web.whatsapp.com')).toBeNull();
+    // The legitimate bare-hostname argument still resolves; it parses once prefixed.
+    expect(getWebappTemplateByDomain('web.whatsapp.com')?.app_name).toBe('WhatsApp');
+  });
+
   test('disabled templates never resolve', () => {
     seed({ app_name: 'Ghost', domains: ['ghost.example.com'], enabled: false });
     expect(getWebappTemplateByDomain('https://ghost.example.com')).toBeNull();
