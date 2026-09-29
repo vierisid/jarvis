@@ -411,6 +411,41 @@ export class CommitmentExecutor {
       'BEGIN EXECUTION.',
     ].join('\n');
 
+    // The `commitments` scope gap (#561, #571), stated where it happens rather
+    // than only in a module doc.
+    //
+    // A commitment created in a project-scoped site chat now RECORDS that
+    // scope (`commitments.scope_id`, stamped by ws-service). This turn still
+    // does not run under it, and that is a decision rather than an oversight:
+    // the executor's agentService is the BackgroundAgentService, which owns a
+    // separate AgentOrchestrator and a separate tool registry built in its own
+    // `start()` -- and the site-builder tools are registered only into the
+    // MAIN orchestrator's registry (daemon/index.ts). So applying
+    // PROJECT_SITE_CHAT_SCOPE here would withhold the four generic file and
+    // shell tools with nothing to substitute: the pinned `site-builder`
+    // category is empty on this registry, so a due "deploy the site" would be
+    // handed no file tool of any kind. That is worse than the gap.
+    //
+    // Closing it properly needs one of: registering the site tools on the
+    // background registry (a real behaviour expansion -- those tools would
+    // become reachable from every background turn, under a different authority
+    // profile, and #570 rated a site build-file write as execution), or
+    // routing a scoped commitment through the main orchestrator instead. Both
+    // are their own change.
+    //
+    // What holds the line meanwhile is the background authority profile:
+    // `execute_command` and `write_data` are governed there, so a commitment
+    // that reaches for the shell stops for the user's approval. Logged loudly
+    // so a scoped commitment executing unscoped is visible rather than silent.
+    const commitmentScopeId = (() => {
+      try { return getCommitment(state.commitmentId)?.scope_id ?? null; } catch { return null; }
+    })();
+    if (commitmentScopeId) {
+      console.warn(`[Executor] commitment ${state.commitmentId} was created under tool scope `
+        + `"${commitmentScopeId}" but executes on the background agent, which does not carry it (#571). `
+        + 'The background authority profile is the control for this turn.');
+    }
+
     const response = await this.agentService!.handleMessage(prompt, 'system');
 
     // Broadcast the execution result

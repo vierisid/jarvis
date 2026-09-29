@@ -1207,6 +1207,12 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
         taskCommitment = createCommitment(taskLabel, {
           assigned_to: 'jarvis',
           created_from: 'user',
+          // Record which chat this came from (#571). A commitment is the one
+          // thing a turn can create whose whole effect is to schedule a LATER
+          // turn, and the tool scope is per-turn, so the executor's turn never
+          // inherited it. `projectId` is right here, so recording it costs
+          // nothing; commitment-executor.ts says why it is not yet ENFORCED.
+          ...(projectId ? { scope_id: PROJECT_SITE_CHAT_SCOPE.id } : {}),
         });
         updateCommitmentStatus(taskCommitment.id, 'active');
         taskCommitment.status = 'active';

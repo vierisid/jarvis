@@ -260,10 +260,18 @@ describe('the two things a future change could silently undo', () => {
   }
 
   test('no turn points the process-wide default cwd at a site project', async () => {
-    // This is the amplifier, not a detail: with the cwd set, a turn that still
-    // has the generic tools -- which the conv path does -- resolves them
-    // straight into the tree a pulled repo sits in, unframed and untainted.
-    // ws-service argues that at length in a comment, and a comment cannot fail.
+    // #570 added this as the guard on its amplifier fix, and #571 retired that
+    // argument -- the conv path is scoped now, so a site chat has no generic
+    // file or shell tool for a project-pointed cwd to aim. The guard stays,
+    // because its SURVIVING reason is the stronger one and #571 does not
+    // address it: `_defaultCwd` is a module-level global read by every tool
+    // resolution on the process (actions/tools/local-tools-guard.ts), not a
+    // per-turn value. Pointing it at a project aims the generic tools of every
+    // OTHER concurrent chat at that project's tree -- chats the site scope
+    // does not cover, because they carry no projectId. A per-turn control
+    // cannot close a process-wide one.
+    //
+    // ws-service argues this at length in a comment, and a comment cannot fail.
     const ws = await code('../../daemon/ws-service.ts');
     expect(ws).not.toContain('setDefaultCwd(');
     // Nothing else in the daemon may set one either.

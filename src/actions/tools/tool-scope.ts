@@ -115,11 +115,36 @@
  *    whose whole effect is to schedule a LATER turn whose entire text the
  *    model writes -- `authority-classes.ts` already singles it out for exactly
  *    that. The scope is per-turn, so the executor's turn does not carry it.
- *    Closing it properly means recording the originating scope on the
- *    commitment row and running the executor under it. Until then the taint
- *    profile is the control (`commitments` is `write_data`, which is governed
- *    on a tainted turn), and that control has the per-turn hole the #529 note
- *    describes: content read on the previous turn acts on a clean one.
+ *
+ *    #571 did the FIRST of the two things this needs and deliberately not the
+ *    second. The originating scope is now recorded: `commitments.scope_id`,
+ *    stamped by ws-service on the site chat's auto-created commitment, so the
+ *    fact is durable and auditable instead of lost at creation.
+ *
+ *    The executor still does not RUN under it, because measuring what that
+ *    would do says it is worse than the gap. A due commitment executes through
+ *    `BackgroundAgentService`, which owns a SEPARATE AgentOrchestrator and a
+ *    separate tool registry, and the site-builder tools are registered only
+ *    into the main orchestrator's registry (daemon/index.ts). Applying this
+ *    scope there withholds the four generic file and shell tools while the
+ *    pinned `site-builder` category is empty, so the substitution rule below
+ *    has nothing to substitute and "deploy the site tonight" gets no file tool
+ *    at all -- the exact starvation that rule exists to prevent, reintroduced
+ *    by enforcing the scope in the one place its replacement surface is
+ *    absent. Closing it means either registering the site tools on the
+ *    background registry (a behaviour expansion: they become reachable from
+ *    every background turn, under a different authority profile, and #570
+ *    rates a site build-file write as execution) or routing a scoped
+ *    commitment through the main orchestrator. Either is its own change.
+ *
+ *    The control meanwhile is the background authority profile --
+ *    `execute_command` and `write_data` are governed there, so a commitment
+ *    reaching for the shell stops for approval -- plus a loud log line in
+ *    commitment-executor.ts, so a scoped commitment running unscoped is
+ *    visible rather than silent. The taint profile is the other half
+ *    (`commitments` is `write_data`, governed on a tainted turn), with the
+ *    per-turn hole the #529 note describes: content read on the previous turn
+ *    acts on a clean one.
  *
  * 3. **`manage_workflow`.** It can compose and run a flow whose step names
  *    `run_command` or `write_file`, and the effect boundary dispatches through

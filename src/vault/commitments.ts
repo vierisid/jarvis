@@ -34,6 +34,16 @@ export type Commitment = {
   completed_at: number | null;
   result: string | null;
   sort_order: number;
+  /**
+   * Id of the tool scope the turn that created this commitment ran under
+   * (#571) - e.g. `project_site_chat` for a chat bound to one site-builder
+   * project. `null` for a commitment created outside any scope, and for every
+   * row written before the column existed.
+   *
+   * Recorded but NOT yet enforced on execution; daemon/commitment-executor.ts
+   * says exactly why and what closing it needs.
+   */
+  scope_id: string | null;
 };
 
 type CommitmentRow = {
@@ -50,6 +60,8 @@ type CommitmentRow = {
   completed_at: number | null;
   result: string | null;
   sort_order: number;
+  /** Absent on a row read from a database predating the column (#571). */
+  scope_id?: string | null;
 };
 
 /**
@@ -59,6 +71,7 @@ function parseCommitment(row: CommitmentRow): Commitment {
   return {
     ...row,
     retry_policy: row.retry_policy ? JSON.parse(row.retry_policy) : null,
+    scope_id: row.scope_id ?? null,
   };
 }
 
@@ -74,6 +87,8 @@ export function createCommitment(
     retry_policy?: RetryPolicy;
     created_from?: string;
     assigned_to?: string;
+    /** Tool scope of the creating turn; see Commitment.scope_id (#571). */
+    scope_id?: string;
   }
 ): Commitment {
   const db = getDb();
@@ -82,7 +97,7 @@ export function createCommitment(
   const priority = opts?.priority ?? 'normal';
 
   const stmt = db.prepare(
-    'INSERT INTO commitments (id, what, when_due, context, priority, status, retry_policy, created_from, assigned_to, created_at, completed_at, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    'INSERT INTO commitments (id, what, when_due, context, priority, status, retry_policy, created_from, assigned_to, created_at, completed_at, result, scope_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
 
   stmt.run(
@@ -97,7 +112,8 @@ export function createCommitment(
     opts?.assigned_to ?? null,
     now,
     null,
-    null
+    null,
+    opts?.scope_id ?? null
   );
 
   return {
@@ -110,6 +126,7 @@ export function createCommitment(
     retry_policy: opts?.retry_policy ?? null,
     created_from: opts?.created_from ?? null,
     assigned_to: opts?.assigned_to ?? null,
+    scope_id: opts?.scope_id ?? null,
     created_at: now,
     completed_at: null,
     result: null,

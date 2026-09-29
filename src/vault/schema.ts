@@ -198,6 +198,14 @@ function createTables(db: Database): void {
   // Migration: add sort_order to existing databases
   try { db.run('ALTER TABLE commitments ADD COLUMN sort_order INTEGER DEFAULT 0'); } catch {}
 
+  // Migration: the tool scope of the turn that created this commitment (#571).
+  // A commitment is the one in-scope tool whose whole effect is to schedule a
+  // LATER turn, and the scope is per-turn, so the executor's turn never
+  // carried it. Recording it is the half that can be done safely today; see
+  // daemon/commitment-executor.ts for why the executor does not yet RUN under
+  // it and what that would take.
+  try { db.run('ALTER TABLE commitments ADD COLUMN scope_id TEXT'); } catch {}
+
   db.run(`
     CREATE INDEX IF NOT EXISTS idx_commitments_status ON commitments(status)
   `);
