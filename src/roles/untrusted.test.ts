@@ -947,7 +947,10 @@ describe('the trusted trailer travels out of band, so nothing searches the paylo
     expect(splitToolReturn('just text')).toEqual({ outside: 'just text', trailer: '' });
     expect(toolReturnText('just text')).toBe('just text');
     // The collapse puts a real trailer back in band, which is the documented
-    // degradation on the approval path.
+    // degradation on the approval and workflow-DELEGATION paths (the latter via
+    // `toolReturnText` in workflows/runtime/service-backends.ts, where the
+    // sub-agent runner frames it as data with the rest). The workflow TOOL
+    // adapter takes the other branch and drops it; see `dropTrustedTrailer`.
     expect(toolReturnText(withTrustedTrailer('page', '\n\nplaybook'))).toBe('page\n\nplaybook');
   });
 

@@ -17,14 +17,29 @@
  * are derived from source here too, in the idiom of
  * roles/untrusted-import-guard.test.ts.
  *
- * The needles for premise 2 are the REPO ENTRY POINTS, not the field names, and
- * that is the whole trick. Field names do not work: `manage_workflow` leaks
- * `sample_data` without ever spelling it, because `actGet` returns whole
- * `FlowVersion` objects and the field rides along inside them -- so a
- * `sampleData` grep is green on the exact regression this guard cites. Matching
- * the accessors that hand the objects out (`getFlowRun`, `listRuns`,
- * `getFlowVersion`, `getLatestDraft`) is shape-agnostic and catches the
- * pass-through case. The field names are kept as a second, weaker net.
+ * The needle for premise 2 is the REPO IMPORT PATH, not the field names, and
+ * that is the whole trick.
+ *
+ * Field names do not work: `manage_workflow` leaks `sample_data` without ever
+ * spelling it, because `actGet` returns whole `FlowVersion` objects and the field
+ * rides along inside them -- so a `sampleData` grep is green on the exact
+ * regression this guard cites.
+ *
+ * Naming the accessors (`getFlowRun`, `getFlowVersion`, ...) does not work
+ * either: `flow-version.ts` also exports `listVersions`, `createDraftVersion`,
+ * `updateDraftVersion` and `lockVersion`, and `flow-run.ts` exports `updateRun`
+ * and `createFlowRun`, all returning the same objects. An accessor list is a list
+ * to forget to extend.
+ *
+ * Importing the repo module at all is the thing that cannot be done quietly, so
+ * that is what is matched. The field names are kept as a second, weaker net for
+ * a file that receives an object it did not fetch.
+ *
+ * Two limits, stated rather than implied. The grep is ONE HOP deep: a file that
+ * re-exports an object it got from a reviewed file is not seen here and has to be
+ * reviewed by hand (`goals/work-items.ts` is exactly that case -- see its row).
+ * And the walk is rooted at `src/`, so the `ui/` dashboard tree is outside it;
+ * that tree is person-facing, not a model boundary.
  *
  * If this file goes red, the fix is almost certainly NOT to update the expected
  * value until it passes. It is to decide whether the #573 argument still holds.
@@ -44,18 +59,27 @@ import { ToolRegistry, type ToolDefinition } from '../../actions/tools/registry.
 
 const SRC = join(import.meta.dir, '..', '..');
 
-const productionFiles = (): string[] =>
+/**
+ * Every production source file under src/, read once. Several tests below sweep
+ * the tree for a handful of needles each, and re-reading it per needle costs
+ * seconds for nothing.
+ *
+ * The vendored workflow engine is skipped: a separate tree with its own
+ * conventions, holding plenty of `sampleData`/`failedStep` of its own and
+ * importing none of the daemon's framing, so walking it finds only noise.
+ */
+const SOURCES: ReadonlyMap<string, string> = new Map(
   readdirSync(SRC, { recursive: true, encoding: 'utf8' })
     .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
-    // Vendored workflow engine: a separate tree with its own conventions. It
-    // holds plenty of `sampleData`/`failedStep` of its own and imports none of
-    // the daemon's framing, so walking it finds only noise.
-    .filter((f) => !f.startsWith('workflows/activepieces/'));
+    .filter((f) => !f.startsWith('workflows/activepieces/'))
+    .sort()
+    .map((rel) => [rel, readFileSync(join(SRC, rel), 'utf8')]),
+);
+
+const productionFiles = (): string[] => [...SOURCES.keys()];
 
 const filesContaining = (needle: string): string[] =>
-  productionFiles()
-    .filter((rel) => readFileSync(join(SRC, rel), 'utf8').includes(needle))
-    .sort();
+  [...SOURCES].filter(([, text]) => text.includes(needle)).map(([rel]) => rel);
 
 /**
  * PREMISE 1, the reviewed table.
@@ -99,43 +123,64 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
 /**
  * PREMISE 2, the reviewed readers.
  *
- * Files OUTSIDE src/workflows/ that read a run's captured step output. Inside
- * the workflow runtime such a read is ordinary plumbing; outside it, the value
- * has left the data plane and is on its way to a model or a person, which is
- * where framing belongs.
+ * Files OUTSIDE src/workflows/ that hold a run or a version object. The
+ * `workflows/` prefix is a PROXY for "has left the data plane", not a proof of
+ * one: `workflows/api/routes.ts` serves `sampleData` out over HTTP from inside
+ * the tree. It is a good enough proxy because that surface and the `ui/`
+ * dashboard are person-facing rather than model-facing, and this guard is about
+ * model boundaries; both are reviewed out of band.
  *
- * Each row is reviewed, which for two of them means "known-open boundary" rather
- * than "benign":
- *   actions/tools/manage-workflow.ts   OPEN. get_run's `steps`, list_runs'
+ * Exactly one row is a known-open MODEL boundary. The rest hold an object without
+ * handing captured step output to a model, and each says why:
+ *
+ *   actions/tools/manage-workflow.ts   OPEN, and the real exposure #573
+ *                                     surfaced. get_run's `steps`, list_runs'
  *                                     `failedStep` and `get`'s `sample_data`
- *                                     (inside the whole `FlowVersion` it
+ *                                     (riding inside the whole `FlowVersion` it
  *                                     returns) all reach the chat model
- *                                     unframed. The real exposure #573
- *                                     surfaced. Not yet filed as its own issue;
+ *                                     unframed. Not yet filed as its own issue;
  *                                     see docs/WORKFLOW_AUTOMATION.md.
- *   actions/tools/workflow-composer.ts OPEN-ish. Reads `sampleData` while
- *                                     composing, so captured step output can
- *                                     reach the composer's model.
- *   goals/work-items.ts                BENIGN. Copies `failedStep.errorMessage`
- *                                     into `blocker.reason` -- which
- *                                     goals/rhythm.ts then DOES frame at the
- *                                     prompt boundary. The precedent this whole
- *                                     decision follows.
- *   daemon/api-routes.ts               BENIGN today. Holds a whole `FlowVersion`
- *                                     (getFlowVersion/getLatestDraft) but reads
- *                                     only `displayName`/`schemaVersion` off it,
- *                                     and answers HTTP rather than a model.
- *   goals/workflow-bridge.ts           BENIGN today. Holds a whole
- *                                     `FlowVersion`/`FlowRun` but reads only
- *                                     ids and state.
+ *   goals/work-items.ts                OPEN-ish, and the one row the one-hop
+ *                                     limit bites on. It puts the WHOLE
+ *                                     `FlowRun` on `WorkItem.run`, `run.steps`
+ *                                     included, and `goals/work-item-routes.ts`
+ *                                     serves `listWorkItems`/`getWorkItem`
+ *                                     straight over HTTP -- a person-facing
+ *                                     surface, not a model, so it is accepted;
+ *                                     but that downstream file spells none of
+ *                                     these needles and is reviewed by hand.
+ *                                     Separately it copies
+ *                                     `failedStep.errorMessage` into
+ *                                     `blocker.reason`, which goals/rhythm.ts
+ *                                     then DOES frame at the prompt boundary --
+ *                                     the precedent this whole decision follows.
+ *   actions/tools/workflow-composer.ts BENIGN. It imports only the
+ *                                     `FlowTriggerNode` TYPE, so it holds no run
+ *                                     or version at all, and its `sampleData`
+ *                                     reads are `trigger.sampleData` off the
+ *                                     PIECE CATALOG -- a piece's own upstream
+ *                                     output sample, never a run's capture.
+ *   awareness/suggestion-composer.ts   BENIGN. Calls `createDraftVersion`, so it
+ *                                     holds a freshly created `FlowVersion`
+ *                                     whose `sampleData` is empty by
+ *                                     construction. It writes a draft; it reads
+ *                                     no run.
+ *   daemon/api-routes.ts               BENIGN. Holds a whole `FlowVersion` but
+ *                                     reads only `displayName`/`schemaVersion`
+ *                                     off it, and answers HTTP rather than a
+ *                                     model.
+ *   goals/workflow-bridge.ts           BENIGN. Holds a whole
+ *                                     `FlowVersion`/`FlowRun` but reads only ids
+ *                                     and state.
  *
- * A new entry here means a new route out of the workflow data plane. Decide what
- * frames it before adding it -- and note that "holds a whole object" is enough
- * to land here, because that is how the sample_data leak travelled.
+ * A new entry here means a new file holding a run or a version outside the
+ * workflow tree. Decide what frames it before adding it -- "holds a whole object"
+ * is enough to land here, because that is how the sample_data leak travelled.
  */
 const REVIEWED_STEP_OUTPUT_READERS = [
   'actions/tools/manage-workflow.ts',
   'actions/tools/workflow-composer.ts',
+  'awareness/suggestion-composer.ts',
   'daemon/api-routes.ts',
   'goals/work-items.ts',
   'goals/workflow-bridge.ts',
@@ -223,11 +268,14 @@ describe('#573 premise 1: the reachable tool set is closed and known', () => {
    * both have no production caller, and clear-then-register defeats the
    * duplicate throw exactly as well as unregister does.
    *
-   * The match is on a `...registry.unregister(` / `...registry.clear(` RECEIVER
-   * rather than on a bare method name: `TriggerManager.unregister` and any number
-   * of `Map.clear()` calls are unrelated, and matching the method alone drowns
-   * the signal in them. Case-insensitive on the receiver, so
-   * `deps.toolRegistry.clear()` is not missed for want of a capital T.
+   * The match is on the RECEIVER rather than on a bare method name, because
+   * `TriggerManager.unregister` and any number of `Map.clear()` calls are
+   * unrelated and matching the method alone drowns the signal in them. The
+   * receiver alternation covers the aliases the repo actually uses -- daemon/
+   * index.ts does `const toolReg = orchestrator.getToolRegistry()` -- and is
+   * case-insensitive so `deps.toolRegistry.clear()` is not missed for want of a
+   * capital T. An alias outside this list would evade it; that is the known limit
+   * of doing this textually.
    */
   test('a bounded tool name cannot be re-registered with different semantics', () => {
     const registry = new ToolRegistry();
@@ -237,29 +285,31 @@ describe('#573 premise 1: the reachable tool set is closed and known', () => {
   });
 
   test('nothing removes a tool from a registry in production', () => {
-    const removal = /registry\.(unregister|clear)\(/i;
+    const removal = /\b(registry|toolreg|toolregistry|reg)\.(unregister|clear)\(/i;
     const removing = productionFiles()
-      .filter((rel) => removal.test(readFileSync(join(SRC, rel), 'utf8')))
+      .filter((rel) => removal.test(SOURCES.get(rel)!))
       // registry.ts DEFINES the two methods; the point is that nobody calls them.
       .filter((rel) => rel !== 'actions/tools/registry.ts');
     expect(removing).toEqual([]);
 
     // Non-vacuous: the methods really do exist, so the hazard is real rather
     // than hypothetical, and this test is guarding something.
-    const registrySource = readFileSync(join(SRC, 'actions/tools/registry.ts'), 'utf8');
+    const registrySource = SOURCES.get('actions/tools/registry.ts')!;
     expect(registrySource).toContain('unregister(');
     expect(registrySource).toContain('clear(');
   });
 });
 
 describe('#573 premise 2: the routes out of the workflow data plane are enumerated', () => {
-  test('only the reviewed files outside src/workflows read a run\'s captured step output', () => {
+  test('only the reviewed files outside src/workflows hold a run or a version object', () => {
     const readers = new Set<string>();
     for (const needle of [
-      // The accessors that hand a whole run or version out. These are the ones
-      // that matter: a field can ride along inside the object unnamed.
-      'getFlowRun', 'listRuns', 'getFlowVersion', 'getLatestDraft',
-      // The field names, as a weaker second net.
+      // Importing either repo at all. Accessor-agnostic, so a newly added
+      // accessor cannot slip past, and it catches the whole-object pass-through
+      // that the field names miss.
+      'workflows/db/repos/flow-run', 'workflows/db/repos/flow-version',
+      // The field names, as a weaker second net for a file that receives an
+      // object it did not fetch itself.
       'sampleData', 'failedStep', 'run.steps',
     ]) {
       for (const rel of filesContaining(needle)) {

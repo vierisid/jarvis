@@ -157,10 +157,11 @@ parameters and prompts.
 **Corrections to #573's own premises**, since a reader coming from the issue will
 hit all four:
 
-- `ui_snapshot` and `ui_act` are listed there as reachable. They are not -- they
-  are in neither `BOUNDED_TOOLS` nor `GATED_TOOLS` and declare no
-  `workflowEffect`, so `toolEffectCapability` refuses them. The reachable set is
-  the 14 names in `untrusted-reach.test.ts`, of which 8 are untrusted sources.
+- `ui_snapshot` is listed there as reachable. It is not -- nor is `ui_act`, which
+  is an untrusted source in chat and would be the obvious next request. Neither is
+  in `BOUNDED_TOOLS` or `GATED_TOOLS` and neither declares a `workflowEffect`, so
+  `toolEffectCapability` refuses both. The reachable set is the 14 names in
+  `untrusted-reach.test.ts`, of which 8 are untrusted sources.
 - "Nothing in `src/workflows/` imports from `src/roles/untrusted.ts` at all" is
   stale: #567 added two importers, `adapters/tool-registry.ts` and
   `runtime/service-backends.ts`.
@@ -207,6 +208,13 @@ instructions with no boundary between them. It also removes #572's lever from th
 workflow data plane as a side effect: the template is chosen by regexing
 page-controlled text for a URL, so a page could influence *which* playbook was
 attached, and now none is.
+
+One upgrade wrinkle from that drop: a `sample_data` cell captured before this
+change still holds the old concatenated page-plus-playbook value, and
+`mergeRunOutputsIntoSampleData` only fills cells that are currently empty, so it
+is not backfilled. An existing flow's test-from-here run therefore replays the
+playbook-laden value as step input until that cell is cleared, while its live runs
+produce the page alone. Nothing is corrupted; the two just differ.
 
 ### `jarvis-ask` answers with a typed outcome
 
