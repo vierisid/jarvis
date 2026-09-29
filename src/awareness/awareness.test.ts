@@ -411,7 +411,8 @@ describe('SuggestionEngine', () => {
 
     const events: AwarenessEvent[] = [{
       type: 'context_changed',
-      data: { appName: 'VS Code', windowTitle: 'Phoenix roadmap' },
+      schemaVersion: 1,
+      data: { fromApp: 'Mail', fromWindow: 'Inbox', toApp: 'VS Code', toWindow: 'Phoenix roadmap' },
       timestamp: Date.now(),
     }];
 
@@ -467,7 +468,7 @@ describe('AwarenessIntelligence — escalation gate', () => {
     ...over,
   });
 
-  const ev = (type: AwarenessEvent['type']): AwarenessEvent => ({ type, data: {}, timestamp: Date.now() });
+  const ev = (type: 'struggle_detected' | 'error_detected' | 'stuck_detected'): AwarenessEvent => ({ type, data: {}, timestamp: Date.now() });
 
   // No LLM calls happen in claimEscalation, so the manager is never touched.
   const intel = (cooldownMs: number, ambientMs: number) =>

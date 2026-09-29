@@ -5536,11 +5536,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             // M16: Route awareness events to goal auto-detection
             if (goalService && (event.type === 'context_changed' || event.type === 'session_ended')) {
               try {
-                const { matchAwarenessToGoals, logAutoDetectedProgress } = require('../goals/awareness-bridge.ts');
-                const matches = matchAwarenessToGoals(event.data);
-                if (matches.length > 0) {
-                  logAutoDetectedProgress(matches, event.type);
-                }
+                const { recordGoalAwarenessActivity } = require('../goals/awareness-bridge.ts');
+                recordGoalAwarenessActivity(event);
               } catch (err) {
                 // Silently ignore — goal matching is best-effort
               }
