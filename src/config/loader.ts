@@ -4,6 +4,7 @@ import { homedir } from 'node:os';
 import type { JarvisConfig } from './types.ts';
 import { DEFAULT_CONFIG, USER_OWNED_SECTIONS, WORKFLOW_SYSTEM_KEYS } from './types.ts';
 import { requirePort } from './port.ts';
+import { resolveAllowProcessInspection } from './process-inspection.ts';
 
 function expandTilde(filepath: string): string {
   // YAML happily produces a boolean, a number or null for a key that LOOKS
@@ -65,6 +66,28 @@ function normalizeDaemonPort(config: JarvisConfig, path: string): void {
   // explicit `port:` with no value parses as null and lands here.
   if (port === undefined) config.daemon.port = DEFAULT_CONFIG.daemon.port;
   else config.daemon.port = port;
+}
+
+/**
+ * Make `daemon.allow_process_inspection` a real boolean, or leave the daemon
+ * hardened (#546).
+ *
+ * Written BACK into the config, not merely validated: the startup path tests
+ * the value with `=== true`, so `allow_process_inspection: yes` -- a STRING in
+ * the YAML 1.2 core schema the parser uses -- would otherwise leave the hatch
+ * silently shut for exactly the spelling the coercion exists to accept.
+ *
+ * Unlike normalizeDaemonPort this does not throw for a value it cannot read.
+ * There is one reader of this key and a malformed value has a safe reading
+ * (harden, which is the default), so a typo here warns rather than taking
+ * `jarvis devices`, `jarvis export` and the setup script down with it. See
+ * src/config/process-inspection.ts for the full reasoning.
+ */
+function normalizeAllowProcessInspection(config: JarvisConfig, path: string): void {
+  config.daemon.allow_process_inspection = resolveAllowProcessInspection(
+    config.daemon.allow_process_inspection as unknown,
+    `daemon.allow_process_inspection in ${path}`,
+  );
 }
 
 export function deepMerge(target: any, source: any): any {
@@ -196,6 +219,7 @@ export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
     // them gets expanded in only half the cases.
     normalizeLogFilePath(config);
     normalizeDaemonPort(config, path);
+    normalizeAllowProcessInspection(config, path);
     applyEnvOverrides(config);
     return config;
   }
@@ -224,6 +248,7 @@ export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
   config.daemon.db_path = expandTilde(config.daemon.db_path);
   normalizeLogFilePath(config);
   normalizeDaemonPort(config, path);
+  normalizeAllowProcessInspection(config, path);
 
   // Apply environment variable overrides
   applyEnvOverrides(config);

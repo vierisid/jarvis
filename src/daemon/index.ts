@@ -20,6 +20,7 @@ import { activeTurns } from "./active-turns.ts";
 import { writeLockedPort } from "./pid.ts";
 import { AgentService } from "./agent-service.ts";
 import { initDebugRpcGate, MIN_SECRET_LENGTH } from "./debug-rpc-gate.ts";
+import { hardenProcessInspection } from "./process-hardening.ts";
 import { modelExecDaemonWarning } from "../util/model-exec-marker.ts";
 import { getRecorder, parseInteractionEvent } from "../skills/recorder.ts";
 import { onRecordingStopped } from "../actions/tools/skills.ts";
@@ -537,6 +538,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       console.log(`[Daemon] Log file: ${logFilePath}`);
     }
   }
+
+  // Close this daemon's own /proc entries to every other process running as
+  // this user (#546): its environment, its open files, its memory, ptrace
+  // attach and core dumps. Linux only, a no-op elsewhere, and never fatal --
+  // see process-hardening.ts for what survives and why engine reaping does.
+  //
+  // HERE in the order, and not earlier, because it needs the config to know
+  // whether the operator turned it off, and not later because everything after
+  // this point boots services, opens the database and spawns subprocesses.
+  // Nothing between loadConfig() and this line reads /proc/self/environ,
+  // /proc/self/io or /proc/self/fd: the config is YAML, the debug-RPC gate and
+  // the model-exec marker read `process.env` in memory, and the log sink's
+  // "are we already writing to this file" test is fstat on fds 1 and 2. After
+  // the sink, so the outcome lands in the configured log file too.
+  hardenProcessInspection({ allowInspection: jarvisConfig.daemon.allow_process_inspection });
 
   // Started from a command the assistant ran (#514): its env was stripped of
   // the daemon's secrets. After the file sink, so the configured log has it.

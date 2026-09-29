@@ -704,6 +704,28 @@ export type JarvisConfig = {
      * compact, grow until the OOM killer arrives".
      */
     log_file_max_bytes?: number;
+    /**
+     * SYSTEM-owned escape hatch for #546. Let other processes running as this
+     * user inspect the daemon: read `/proc/<pid>/environ` (every secret it
+     * started with), list `/proc/<pid>/fd`, attach strace or gdb, and get a
+     * core dump out of it.
+     *
+     * Unset or false -- the default, and Linux only -- means the daemon calls
+     * `prctl(PR_SET_DUMPABLE, 0)` at startup and none of that is possible
+     * without root. Set it to true when you need to debug the daemon itself.
+     * macOS and Windows get nothing either way; prctl is Linux-only.
+     *
+     * Applied at startup, so changing it needs a restart. Read through
+     * src/config/process-inspection.ts, which is also where the accepted
+     * spellings live (`yes`/`no`/`on`/`off`/`1`/`0` as well as booleans) --
+     * anything else is reported and treated as false, because a typo must never
+     * silently switch a security control off.
+     *
+     * No DEFAULT_CONFIG entry, on the drain_deadline_ms and log_file_path
+     * precedent: absent stays distinguishable from "set to the default", and
+     * the fallback is applied where the value is consumed.
+     */
+    allow_process_inspection?: boolean;
   };
   auth?: AuthConfig;
   /**
