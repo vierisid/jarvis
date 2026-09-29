@@ -13,6 +13,10 @@ A new contributor should read these, in order:
 3. [`src/workflows/activepieces/UPSTREAM.md`](../src/workflows/activepieces/UPSTREAM.md) -- which upstream commit we vendor, the license posture, and what we deliberately exclude.
 4. [`src/workflows/pieces-library/README.md`](../src/workflows/pieces-library/README.md) -- how community pieces are curated, signed off, and installed at runtime.
 
+Looking for why a workflow step's tool result is not wrapped in the
+untrusted-content delimiters the way a chat turn's is? See
+[A step's tool result is NOT framed as untrusted content](#a-steps-tool-result-is-not-framed-as-untrusted-content).
+
 ## What this is
 
 The workflow runtime lets a user describe an automation (in natural language or visually), persist it as a versioned flow, and execute it on a schedule, on a webhook, or on demand. Every flow is a tree of steps. Every step is either an action or a trigger from a piece. A piece is a self-contained npm package that ships an action's `run()` function and the JSON-schema for its inputs.
@@ -92,6 +96,13 @@ Eight of the tools a step can name are untrusted sources: `read_file`,
 `desktop_find_element`, `desktop_list_windows` and `run_skill`. None is framed
 on this path.
 
+Worth knowing that framing them would have meant two entry points, not one:
+`browser_screenshot` returns text and image content blocks rather than a string,
+and `markUntrustedToolResult` is string-only -- the chat path frames that shape
+through `markUntrustedToolBlocks`. (`capture_screen` and `desktop_screenshot` are
+reachable and return blocks too, but are not untrusted sources even in chat.) The
+decision declines both entry points deliberately.
+
 **The rule is: frame where content enters a MODEL's context, not where it leaves
 a tool.** In a chat turn those are the same place, which is why the framing sits
 on the tool, and why reasoning across by analogy feels right. In a workflow they
@@ -124,8 +135,9 @@ Against that, the benefit is the weakest form of the chat benefit: there is no
 taint gate on this path, and the approval card that does exist reviews the frozen
 **arguments** before dispatch, so it never sees a result.
 
-**What is protected.** The other route from an untrusted source into a workflow
--- a delegated sub-agent (`jarvis-agent`) -- is fully covered: tool calls made
+**What is protected.** The other *tool-result* route from an untrusted source
+into a workflow -- a delegated sub-agent (`jarvis-agent`) -- is fully covered:
+tool calls made
 inside the sub-agent are framed by `sub-agent-runner.ts`, taint is recorded per
 call, carried across checkpoints by `m7-agent-delegator.ts` and persisted on the
 delegation row, and a taint-gated call in a workflow delegation becomes a durable
@@ -136,17 +148,50 @@ path; it is the agent path, and the unframed adapter path is the data path.
 opaque, but `run_skill` is admitted as a governed adapter and a recorded skill
 step may `navigate` with a caller-supplied value. A flow can therefore point the
 browser somewhere and read the page with a following `browser_snapshot`; it is
-gated by an approval card, not refused. And the webhook trigger ingress is public
-and unauthenticated by design, so `{{trigger.*}}` is attacker-influenceable and
-flows into tool parameters and prompts.
+gated rather than refused -- by an approval card when the resolved category is
+above the run's authority floor, so a permissive configuration may dispatch it
+with no card. And the webhook trigger ingress is public and unauthenticated by
+design, so `{{trigger.*}}` is attacker-influenceable and flows into tool
+parameters and prompts.
 
-**Still open, filed separately.** `manage_workflow` hands a run's captured step
-output to the *chat* model unframed -- `get_run`'s `steps`, `list_runs`'
-`failedStep` (which carries a failing skill's on-screen field text), and a plain
-`get` via `sample_data`. That is a larger real-world exposure than the thing #573
-was filed about, and its fix belongs to the chat tool: framing those fields at the
-model boundary needs no change to `UNTRUSTED_TOOL_NAMES`, and so leaves
-`outsideReach`, `FRAMED_ACTORS` and the I1 invariant alone.
+**Corrections to #573's own premises**, since a reader coming from the issue will
+hit all four:
+
+- `ui_snapshot` and `ui_act` are listed there as reachable. They are not -- they
+  are in neither `BOUNDED_TOOLS` nor `GATED_TOOLS` and declare no
+  `workflowEffect`, so `toolEffectCapability` refuses them. The reachable set is
+  the 14 names in `untrusted-reach.test.ts`, of which 8 are untrusted sources.
+- "Nothing in `src/workflows/` imports from `src/roles/untrusted.ts` at all" is
+  stale: #567 added two importers, `adapters/tool-registry.ts` and
+  `runtime/service-backends.ts`.
+- "A workflow has no approval card mid-run" is false: the effect boundary creates
+  a real approval request with `executionMode: 'workflow'` and a MANUAL
+  waitpoint, and `/v1/jarvis/tools/invoke` answers 202 while the step waits. The
+  true and narrower point is that the card reviews the frozen **arguments**
+  before dispatch, so it never sees a result -- framing still buys no gate, just
+  not for the stated reason.
+- "No taint gate" is true of this path only. The delegation path has a full one,
+  described above.
+
+**Still open, and NOT yet filed as their own issues** -- do that before relying on
+this section:
+
+- `manage_workflow` hands a run's captured step output to the *chat* model
+  unframed: `get_run`'s `steps`, `list_runs`' `failedStep` (which carries a
+  failing skill's on-screen field text), and a plain `get` via `sample_data`,
+  which rides along inside the whole `FlowVersion` it returns. That is a larger
+  real-world exposure than the thing #573 was filed about, and the fix belongs to
+  the chat tool -- framing those fields at the model boundary needs no change to
+  `UNTRUSTED_TOOL_NAMES`, so it leaves `outsideReach`, `FRAMED_ACTORS` and the I1
+  invariant alone. Cheap and surgical; deferred here on scope, not cost.
+- An author-composed `jarvis-ask` prompt interpolating `{{step.result}}` (or
+  `{{trigger.*}}`) sends outside content to a model unframed. The fix is at the
+  prompt boundary with provenance, and provenance does not survive the sandbox
+  today.
+- `withInstructions` burns its 30-minute redelivery TTL on a process-wide
+  singleton, so a workflow `browser_snapshot` suppresses the webapp playbook for
+  the *chat* model. Needs a per-context scope in
+  `actions/tools/webapp-template-injection.ts`.
 
 Both premises this decision rests on -- the reachable tool set, and the list of
 readers that carry step output out of the data plane -- are pinned by
@@ -158,7 +203,10 @@ rather than concatenating it. A trailer is repo-authored instructions to a model
 (the webapp template playbook, reachable here via `browser_snapshot`), and a flow
 has no model to read one, so concatenating would write the playbook into files by
 the same route as above and would put page text directly against repo-authored
-instructions with no boundary between them.
+instructions with no boundary between them. It also removes #572's lever from the
+workflow data plane as a side effect: the template is chosen by regexing
+page-controlled text for a URL, so a page could influence *which* playbook was
+attached, and now none is.
 
 ### `jarvis-ask` answers with a typed outcome
 

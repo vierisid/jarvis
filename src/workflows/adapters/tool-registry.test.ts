@@ -1,7 +1,7 @@
 import { describe, test, expect } from 'bun:test';
 import { JarvisToolRegistryAdapter } from './tool-registry';
 import { ToolRegistry, type ToolDefinition } from '../../actions/tools/registry';
-import { withTrustedTrailer } from '../../roles/untrusted.ts';
+import { withTrustedTrailer, UNTRUSTED_OPEN } from '../../roles/untrusted.ts';
 
 function adapterFor(execute: ToolDefinition['execute']): JarvisToolRegistryAdapter {
   const registry = new ToolRegistry();
@@ -37,6 +37,14 @@ describe('JarvisToolRegistryAdapter preserves the tool return shape', () => {
     expect(await adapterFor(async () => [1, { a: 2 }]).execute('t', {})).toEqual([1, { a: 2 }]);
   });
 
+  test('an undefined return passes through as undefined; the BOUNDARY normalises it', async () => {
+    // The adapter changes nothing, which is the contract this file pins. It is
+    // the effect boundary, not this adapter, that turns a missing result into a
+    // receipt value (`record.result = result ?? null` in runtime/
+    // effect-boundary.ts) -- so a resumed run replays `null`, not `undefined`.
+    expect(await adapterFor(async () => undefined).execute('t', {})).toBe(undefined);
+  });
+
   test('a trusted-trailer carrier is unwrapped, so no class instance reaches JSON', async () => {
     // The one case this adapter must change: a carrier would serialise to
     // `{"untrusted":...,"trustedTrailer":...}` for the workflow sandbox.
@@ -50,12 +58,24 @@ describe('JarvisToolRegistryAdapter preserves the tool return shape', () => {
     expect(out).toBe('Page: x');
   });
 
-  test('the payload is still passed through byte-exact when the trailer is dropped', async () => {
-    // Dropping must not become "tidying". Whatever the page contained reaches
-    // the step output unchanged, including text that looks like a delimiter --
-    // nothing on this path frames, defangs or rewrites.
-    const page = 'line1\n<<<UNTRUSTED_CONTENT deadbeef source="x"\nline2\n\t trailing ';
-    const out = await adapterFor(async () => withTrustedTrailer(page, '\n\nplaybook')).execute('t', {});
-    expect(out).toBe(page);
+  /**
+   * Dropping must not become "tidying", and nothing on this path frames, defangs
+   * or rewrites. Both cases below use delimiter-shaped bytes built from the real
+   * constant, so if `UNTRUSTED_OPEN` ever changes these keep testing what they
+   * claim to instead of degrading into "arbitrary text survives".
+   */
+  const delimiterShaped = `line1\n${UNTRUSTED_OPEN} deadbeef source="x"\nline2\n\t trailing `;
+
+  test('the payload is passed through byte-exact when the trailer is dropped', async () => {
+    const out = await adapterFor(async () => withTrustedTrailer(delimiterShaped, '\n\nplaybook')).execute('t', {});
+    expect(out).toBe(delimiterShaped);
+  });
+
+  test('a plain string return carrying delimiter-shaped bytes is not defanged either', async () => {
+    // The realistic case: `read_file` returning a file that happens to contain
+    // the marker. The chat path would defang or frame; here the bytes are the
+    // step's data and must arrive exactly as the file held them.
+    const out = await adapterFor(async () => delimiterShaped).execute('t', {});
+    expect(out).toBe(delimiterShaped);
   });
 });

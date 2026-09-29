@@ -233,8 +233,10 @@ export function toolReturnText(raw: unknown): string {
  * What this does NOT fix: `withInstructions` burns its 30-minute redelivery TTL
  * on a process-wide singleton inside the TOOL, before this function is reached,
  * so a workflow snapshot still suppresses the playbook for the chat model. That
- * is a missing per-context scope in webapp-template-injection.ts, filed
- * separately.
+ * is a missing per-context scope in webapp-template-injection.ts. It has no
+ * issue of its own yet; docs/WORKFLOW_AUTOMATION.md lists it as open. Dropping
+ * here makes that fix a pure win, since the playbook now reaches no consumer at
+ * all on this path.
  */
 export function dropTrustedTrailer(raw: unknown): unknown {
   if (raw instanceof TrailedToolReturn) return raw.untrusted;

@@ -17,6 +17,15 @@
  * are derived from source here too, in the idiom of
  * roles/untrusted-import-guard.test.ts.
  *
+ * The needles for premise 2 are the REPO ENTRY POINTS, not the field names, and
+ * that is the whole trick. Field names do not work: `manage_workflow` leaks
+ * `sample_data` without ever spelling it, because `actGet` returns whole
+ * `FlowVersion` objects and the field rides along inside them -- so a
+ * `sampleData` grep is green on the exact regression this guard cites. Matching
+ * the accessors that hand the objects out (`getFlowRun`, `listRuns`,
+ * `getFlowVersion`, `getLatestDraft`) is shape-agnostic and catches the
+ * pass-through case. The field names are kept as a second, weaker net.
+ *
  * If this file goes red, the fix is almost certainly NOT to update the expected
  * value until it passes. It is to decide whether the #573 argument still holds.
  */
@@ -52,8 +61,14 @@ const filesContaining = (needle: string): string[] =>
  * PREMISE 1, the reviewed table.
  *
  * Every tool a `jarvis-tool` step can name, and whether its result is content
- * from outside the conversation. The eight `true` rows are what framing would
- * have covered.
+ * from outside the conversation.
+ *
+ * The eight `true` rows are what framing would have had to cover -- but not all
+ * through one function. `browser_screenshot` returns a `ToolResult` with text and
+ * image content blocks, not a string, and `markUntrustedToolResult` is
+ * string-only; the chat path frames that shape through
+ * `markUntrustedToolBlocks` instead. So "frame at the adapter" would have meant
+ * both entry points, and the decision declines both.
  *
  * `toolEffectCapability` admits `BOUNDED_TOOLS`, `run_skill`, and anything
  * declaring `ToolDefinition.workflowEffect`; it refuses `OPAQUE_TOOLS`
@@ -89,24 +104,41 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  * has left the data plane and is on its way to a model or a person, which is
  * where framing belongs.
  *
- * Each of these is a known-open model boundary, not an endorsement:
- *   actions/tools/manage-workflow.ts  get_run's `steps`, list_runs' `failedStep`
- *                                    and `get`'s `sample_data` all reach the
- *                                    chat model unframed. The real exposure
- *                                    #573 surfaced; filed separately.
- *   actions/tools/workflow-composer.ts reads `sampleData` while composing.
- *   goals/work-items.ts               copies `failedStep.errorMessage` into
- *                                    `blocker.reason` -- which goals/rhythm.ts
- *                                    then DOES frame at the prompt boundary,
- *                                    the precedent this decision follows.
+ * Each row is reviewed, which for two of them means "known-open boundary" rather
+ * than "benign":
+ *   actions/tools/manage-workflow.ts   OPEN. get_run's `steps`, list_runs'
+ *                                     `failedStep` and `get`'s `sample_data`
+ *                                     (inside the whole `FlowVersion` it
+ *                                     returns) all reach the chat model
+ *                                     unframed. The real exposure #573
+ *                                     surfaced. Not yet filed as its own issue;
+ *                                     see docs/WORKFLOW_AUTOMATION.md.
+ *   actions/tools/workflow-composer.ts OPEN-ish. Reads `sampleData` while
+ *                                     composing, so captured step output can
+ *                                     reach the composer's model.
+ *   goals/work-items.ts                BENIGN. Copies `failedStep.errorMessage`
+ *                                     into `blocker.reason` -- which
+ *                                     goals/rhythm.ts then DOES frame at the
+ *                                     prompt boundary. The precedent this whole
+ *                                     decision follows.
+ *   daemon/api-routes.ts               BENIGN today. Holds a whole `FlowVersion`
+ *                                     (getFlowVersion/getLatestDraft) but reads
+ *                                     only `displayName`/`schemaVersion` off it,
+ *                                     and answers HTTP rather than a model.
+ *   goals/workflow-bridge.ts           BENIGN today. Holds a whole
+ *                                     `FlowVersion`/`FlowRun` but reads only
+ *                                     ids and state.
  *
  * A new entry here means a new route out of the workflow data plane. Decide what
- * frames it before adding it.
+ * frames it before adding it -- and note that "holds a whole object" is enough
+ * to land here, because that is how the sample_data leak travelled.
  */
 const REVIEWED_STEP_OUTPUT_READERS = [
   'actions/tools/manage-workflow.ts',
   'actions/tools/workflow-composer.ts',
+  'daemon/api-routes.ts',
   'goals/work-items.ts',
+  'goals/workflow-bridge.ts',
 ];
 
 describe('#573 premise 1: the reachable tool set is closed and known', () => {
@@ -156,6 +188,13 @@ describe('#573 premise 1: the reachable tool set is closed and known', () => {
       }
     }
     expect(drift).toEqual([]);
+
+    // The set is closed only while nothing declares `workflowEffect`: that field
+    // is the one route into `toolEffectCapability` (it sets the floor directly,
+    // effect-capabilities.ts) that no allowlist here watches. Asserted on the
+    // real objects rather than by grepping for `workflowEffect:`, because the
+    // grep misses shorthand, later assignment, and a space before the colon.
+    expect(tools.filter((t) => t.workflowEffect !== undefined).map((t) => t.name)).toEqual([]);
   });
 
   /** Non-vacuous: the decision would be trivial if nothing reachable were untrusted. */
@@ -165,13 +204,12 @@ describe('#573 premise 1: the reachable tool set is closed and known', () => {
   });
 
   /**
-   * The set is closed only while nothing declares `workflowEffect`: that field
-   * is the one route into `toolEffectCapability` that no allowlist in this file
-   * watches. `governedPieceToolDefinition` in runtime/piece-effects.ts mints the
-   * shape for pieces and is never registered in the ToolRegistry, so it is the
-   * one permitted producer.
+   * A cheap second net over the same route as the runtime assertion above, which
+   * is the one that actually closes it. `governedPieceToolDefinition` in
+   * runtime/piece-effects.ts mints the shape for pieces and is never registered
+   * in the ToolRegistry, so it is the one permitted producer.
    */
-  test('no tool outside the workflow runtime declares a workflowEffect', () => {
+  test('no source file outside the workflow runtime spells a workflowEffect declaration', () => {
     const declarers = filesContaining('workflowEffect:').filter((rel) => rel !== 'workflows/runtime/piece-effects.ts');
     expect(declarers).toEqual([]);
   });
@@ -181,9 +219,15 @@ describe('#573 premise 1: the reachable tool set is closed and known', () => {
    * a re-registration under a bounded name would inherit its admission with
    * different semantics. Two things stop that, and both are asserted rather than
    * assumed: `register` refuses a duplicate, and nothing that handles a
-   * ToolRegistry unregisters anything (the method exists and has no caller;
-   * `TriggerManager.unregister` is a different method on a different object, so
-   * the search is narrowed to files that hold a ToolRegistry at all).
+   * ToolRegistry removes a tool first -- `unregister` AND `clear` both exist and
+   * both have no production caller, and clear-then-register defeats the
+   * duplicate throw exactly as well as unregister does.
+   *
+   * The match is on a `...registry.unregister(` / `...registry.clear(` RECEIVER
+   * rather than on a bare method name: `TriggerManager.unregister` and any number
+   * of `Map.clear()` calls are unrelated, and matching the method alone drowns
+   * the signal in them. Case-insensitive on the receiver, so
+   * `deps.toolRegistry.clear()` is not missed for want of a capital T.
    */
   test('a bounded tool name cannot be re-registered with different semantics', () => {
     const registry = new ToolRegistry();
@@ -192,17 +236,32 @@ describe('#573 premise 1: the reachable tool set is closed and known', () => {
     expect(() => registry.register({ ...def, execute: async () => 'attacker' })).toThrow();
   });
 
-  test('nothing holding a ToolRegistry unregisters a tool in production', () => {
-    const holders = filesContaining('ToolRegistry');
-    const unregistering = holders.filter((rel) => readFileSync(join(SRC, rel), 'utf8').includes('.unregister('));
-    expect(unregistering).toEqual([]);
+  test('nothing removes a tool from a registry in production', () => {
+    const removal = /registry\.(unregister|clear)\(/i;
+    const removing = productionFiles()
+      .filter((rel) => removal.test(readFileSync(join(SRC, rel), 'utf8')))
+      // registry.ts DEFINES the two methods; the point is that nobody calls them.
+      .filter((rel) => rel !== 'actions/tools/registry.ts');
+    expect(removing).toEqual([]);
+
+    // Non-vacuous: the methods really do exist, so the hazard is real rather
+    // than hypothetical, and this test is guarding something.
+    const registrySource = readFileSync(join(SRC, 'actions/tools/registry.ts'), 'utf8');
+    expect(registrySource).toContain('unregister(');
+    expect(registrySource).toContain('clear(');
   });
 });
 
 describe('#573 premise 2: the routes out of the workflow data plane are enumerated', () => {
   test('only the reviewed files outside src/workflows read a run\'s captured step output', () => {
     const readers = new Set<string>();
-    for (const needle of ['sampleData', 'failedStep', 'run.steps']) {
+    for (const needle of [
+      // The accessors that hand a whole run or version out. These are the ones
+      // that matter: a field can ride along inside the object unnamed.
+      'getFlowRun', 'listRuns', 'getFlowVersion', 'getLatestDraft',
+      // The field names, as a weaker second net.
+      'sampleData', 'failedStep', 'run.steps',
+    ]) {
       for (const rel of filesContaining(needle)) {
         if (!rel.startsWith('workflows/')) readers.add(rel);
       }

@@ -57,13 +57,15 @@ export class JarvisToolRegistryAdapter implements PieceToolRegistry {
     // (runner/handler.ts) and replayed as step INPUT for test-from-here runs, so
     // a frame here would corrupt future runs' inputs too.
     //
-    // What remains open is the model boundaries, enumerated and owned rather
-    // than assumed away: a `manage_workflow` run listing hands captured step
-    // output to the chat model unframed (get_run's `steps`, list_runs'
+    // What remains open is the model boundaries, which have to be enumerated
+    // rather than assumed away: a `manage_workflow` run listing hands captured
+    // step output to the chat model unframed (get_run's `steps`, list_runs'
     // `failedStep`, and `get` via `sample_data`), and an author-composed
-    // `jarvis-ask` prompt can interpolate a step result. Both are filed. Keeping
-    // that list complete is what makes this decision safe, which is why
-    // untrusted-reach.test.ts pins the readers as well as the reachable tools.
+    // `jarvis-ask` prompt can interpolate a step result. NEITHER HAS ITS OWN
+    // ISSUE YET -- docs/WORKFLOW_AUTOMATION.md lists them and says so. Keeping
+    // that list complete is what makes this decision safe rather than merely
+    // convenient, which is why untrusted-reach.test.ts pins the READERS as well
+    // as the reachable tools.
     //
     // WHY THE VALUE MUST NOT BE STRINGIFIED. It becomes a durable EFFECT
     // RECEIPT: service-backends.ts passes it to `effects.invoke` as the result a

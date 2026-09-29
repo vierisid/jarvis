@@ -16,6 +16,7 @@ import {
   withTrustedTrailer,
   splitToolReturn,
   toolReturnText,
+  dropTrustedTrailer,
 } from './untrusted.ts';
 
 /**
@@ -946,8 +947,38 @@ describe('the trusted trailer travels out of band, so nothing searches the paylo
     expect(splitToolReturn('just text')).toEqual({ outside: 'just text', trailer: '' });
     expect(toolReturnText('just text')).toBe('just text');
     // The collapse puts a real trailer back in band, which is the documented
-    // degradation on the approval and workflow paths.
+    // degradation on the approval path.
     expect(toolReturnText(withTrustedTrailer('page', '\n\nplaybook'))).toBe('page\n\nplaybook');
+  });
+
+  /**
+   * `dropTrustedTrailer` is the workflow adapter's version of the same choice,
+   * and it goes the other way: the trailer is repo-authored instructions to a
+   * model, a workflow step's result is data read by code, so the trailer is
+   * discarded rather than concatenated (#573).
+   *
+   * The second half of that function's job is that it must not stringify --
+   * its return becomes a durable effect receipt -- so every non-carrier value
+   * has to come back identical, by reference where it is an object.
+   */
+  test('dropTrustedTrailer keeps the payload and discards the trailer', () => {
+    expect(dropTrustedTrailer(withTrustedTrailer('page', '\n\nplaybook'))).toBe('page');
+    // Byte-exact: dropping is not tidying.
+    const odd = `a\n${UNTRUSTED_OPEN} x\n\t b `;
+    expect(dropTrustedTrailer(withTrustedTrailer(odd, '\n\nplaybook'))).toBe(odd);
+  });
+
+  test('dropTrustedTrailer leaves every non-carrier value exactly as it was', () => {
+    const receipt = { remoteId: 'r', nested: { n: 1 } };
+    // Same object, not a copy: a receipt is compared and replayed.
+    expect(dropTrustedTrailer(receipt)).toBe(receipt);
+    const arr = [1, { a: 2 }];
+    expect(dropTrustedTrailer(arr)).toBe(arr);
+    expect(dropTrustedTrailer('plain')).toBe('plain');
+    expect(dropTrustedTrailer(42)).toBe(42);
+    expect(dropTrustedTrailer(true)).toBe(true);
+    expect(dropTrustedTrailer(null)).toBe(null);
+    expect(dropTrustedTrailer(undefined)).toBe(undefined);
   });
 
   /**
