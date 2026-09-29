@@ -218,17 +218,49 @@ const UNTRUSTED_TOOL_NAMES: ReadonlySet<string> = new Set([
   // site chat's own cwd, so it reads the same files); framing the site
   // variants closes the gap between the two routes (#529).
   //
-  // Not framed, and worth saying why, because they carry outside bytes on
-  // their error paths only: site_github_push returns git push stderr, which
-  // includes the remote server's `remote:` lines; site_git_commit returns
-  // local git stderr quoting repo paths; site_create_project returns the
-  // third-party scaffolder's stderr. Framing those flips three more tools to
-  // `framed`, which pulls in FRAMED_ACTORS membership (site_github_push moves
-  // local bytes off-device, the browser_upload_file shape) and taint, for an
-  // error string. site_github_push is the one to do first.
   'site_read_file',
   'site_list_files',
   'site_run_command',
+  // The three ACTORS, framed for their error paths (#559). They act rather than
+  // read, and their success strings are our own -- but every one of them can
+  // return bytes this machine did not author, and all three return that text as
+  // an ordinary result string rather than throwing, so it lands in the prompt
+  // with no cap of its own (the orchestrator's MAX_TOOL_RESULT_CHARS and the
+  // sub-agent runner's boundedResult are what bound it).
+  //
+  //   site_github_push  git push stderr. `github-manager.ts` surfaces
+  //                     `git push failed: ${stderr}`, which carries the remote
+  //                     server's `remote:` lines verbatim -- the only bytes in
+  //                     the whole site tool set authored OFF this machine. A
+  //                     GitHub Actions message, a branch-protection refusal or a
+  //                     pre-receive hook's output all arrive here, and a hosted
+  //                     git server is exactly the kind of thing an attacker who
+  //                     got a push URL into the project can control.
+  //   site_git_commit   local git stderr (`git commit failed: ${stderr}`), plus a
+  //                     SUCCESS string quoting `commit.message` read back out of
+  //                     `git log` -- repo bytes, not the model's own words. A
+  //                     repo-authored pre-commit hook's stderr comes through here
+  //                     too.
+  //   site_create_project  the template CLI's stderr
+  //                     (`Template scaffolding failed: ${stderr}`): npm/bunx
+  //                     output, registry messages, a third-party scaffolder's
+  //                     prose.
+  //
+  // Framing is by NAME, so the whole result is framed, success strings included.
+  // That is the same trade #529 made for site_read_file and it is the right one:
+  // a preamble on "Pushed to GitHub successfully" costs a line, while deciding
+  // per return path would mean the framing depended on which branch a tool took
+  // -- exactly the "moving a tool to typed failures quietly unframes it" hazard
+  // markUntrustedToolFailure exists to prevent.
+  //
+  // Framing them also moves them in the tool-relevance filter: `outsideReach`
+  // derives from this set, so all three flip from `fetch` to `framed`. Each one
+  // therefore needs a FRAMED_ACTORS entry (see authority-classes.ts) or the I1
+  // invariant repair would force-add it to every filtered turn. The taint
+  // decision is separate and is recorded on TAINT_EXEMPT_TOOLS below.
+  'site_github_push',
+  'site_git_commit',
+  'site_create_project',
 ]);
 
 export function isUntrustedSourceTool(name: string, category: string | undefined): boolean {
@@ -341,10 +373,47 @@ export function isUntrustedSourceTool(name: string, category: string | undefined
  * write_file already ship together; closing it belongs to the site builder's
  * write-then-execute contract, not to this list.
  */
+/**
+ * #559's taint decision, made per path rather than for the three together,
+ * because framing is cheap and taint is what carries the friction.
+ *
+ * site_github_push TAINTS. Its stderr is the one place in the site tool set
+ * where bytes authored off this machine reach the model, and a push is an
+ * explicit, low-frequency act -- the model does not push in a loop, and what a
+ * push taints is whatever governed call comes after it, which on a push turn is
+ * usually nothing. This is the strongest case for taint in the whole set and it
+ * costs almost nothing, which is why it went first.
+ *
+ * site_create_project TAINTS. Third-party scaffolder stderr, and the turn on
+ * which the largest body of unreviewed third-party code lands on disk (the
+ * template CLI plus `make install`). Once per project, so the friction is one
+ * card on a new project's first turn rather than a card per turn. It already
+ * forces a confirmation card of its own (`confirm: 'above_level'` in
+ * builder-tools.ts), so the model's own path here is already interactive.
+ *
+ * site_git_commit is EXEMPT -- framed, not tainting -- and it is the only one of
+ * the three where the frequency argument bites. `isTaintSourceTool` is a
+ * name-and-category predicate with no idea whether a call succeeded, so tainting
+ * it would taint every SUCCESSFUL commit too; with auto-commit on (see
+ * `autoCommitEnabled` in ws-service.ts) that is most site turns, and a gate that
+ * fires every turn teaches the owner to approve without reading. That is the
+ * failure #529's read exemption exists to avoid, not a safer default.
+ *
+ * What that gives up, stated rather than implied: a repo-authored pre-commit
+ * hook's stderr is genuinely attacker-controlled text on a cloned repo, and it
+ * arrives framed but untainted. Two things make it the right trade anyway. The
+ * bytes are the class the file readers are already exempt for -- local repo
+ * content -- and site_read_file is exempt for the very same project, so tainting
+ * the commit while the reader stays exempt would move the model one token
+ * sideways rather than close a route. And the tool that exists to run project
+ * scripts on purpose, site_run_command, is NOT exempt: a turn that wanted hook
+ * output is a turn that ran the shell.
+ */
 const TAINT_EXEMPT_TOOLS: ReadonlySet<string> = new Set([
   'read_file',
   'site_read_file',
   'site_list_files',
+  'site_git_commit',
 ]);
 const TAINT_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'delegate_task',

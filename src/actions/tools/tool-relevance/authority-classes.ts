@@ -317,6 +317,31 @@ const FRAMED_ACTORS: ReadonlySet<string> = new Set([
   // the site prompt tells the model to use, and unlike browser_evaluate this
   // tool is not the only way to read anything.
   'site_run_command',
+  // Framed since #559, for their error paths (git push stderr carrying the
+  // remote's `remote:` lines, local git stderr, the template CLI's stderr). All
+  // three ACT, and all three would otherwise become framed PERCEPTION the moment
+  // they were framed -- membership here is "framed, minus a named list", with no
+  // rank test -- so the I1 repair would force-add them to every filtered turn
+  // that retains any trigger.
+  //
+  // site_github_push is the browser_upload_file case exactly: it moves this
+  // machine's bytes off-device, and auto-adding an exfiltration path to a turn
+  // that asked for nothing of the kind is the accidental capability grant this
+  // list exists to prevent. site_create_project runs a third-party scaffolder and
+  // `make install`; site_git_commit writes history. None of them is a reading
+  // route a model substitutes toward, which is the test that keeps ui_act and
+  // browser_evaluate IN the union: the site surface already has framed eyes in
+  // site_read_file and site_list_files.
+  //
+  // Note what framing them does to `isInvariantTrigger` (`fetch || rank > 504`):
+  // site_git_commit and site_github_push are write_data (302), so they stop being
+  // triggers, while site_create_project is execute_command (506) and stays one.
+  // Losing trigger status is safe by the rule this whole invariant rests on and
+  // is the same move #529 made for site_read_file: a framed tool cannot be an
+  // unframed route to outside content, which is the only thing I1 protects.
+  'site_github_push',
+  'site_git_commit',
+  'site_create_project',
 ]);
 
 /**

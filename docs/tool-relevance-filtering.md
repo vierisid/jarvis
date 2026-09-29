@@ -39,15 +39,23 @@ Outside content reaches the model two ways:
 
 - **Framed tools.** `isUntrustedSourceTool(name, category)` is true
   (`src/roles/untrusted.ts`). The result is wrapped in
-  `<<<UNTRUSTED_CONTENT ... UNTRUSTED_CONTENT>>>`, run through
-  `defangDelimiters()` so the payload cannot forge the boundary, preceded by
+  `<<<UNTRUSTED_CONTENT <nonce> ... <nonce> UNTRUSTED_CONTENT>>>`, preceded by
   `untrustedPreamble()`, and - except the file readers `read_file`,
-  `site_read_file` and `site_list_files` - marks the turn tainted for
-  `isTaintSourceTool`, which the authority engine's taint gating consumes.
+  `site_read_file` and `site_list_files`, and `site_git_commit` - marks the
+  turn tainted for `isTaintSourceTool`, which the authority engine's taint
+  gating consumes.
+
+  Since #560 the delimiters carry a **per-block 128-bit nonce** and the payload
+  is passed through byte-exact. The payload is no longer rewritten:
+  `defangDelimiters()` used to rewrite any spelling of the marker inside it, and
+  that rewrite was the weakness rather than the defence - content cannot forge a
+  boundary it cannot predict, so there is nothing to rewrite. `defangDelimiters`
+  still guards `inlineUntrusted()`, where a short value sits in trusted prose
+  with no nonce around it.
 - **Unframed tools.** `run_command` above all: a shell is a general-purpose
   fetcher, it is not in `UNTRUSTED_TOOL_NAMES`, its category is `terminal`
-  not `browser`, so its output is neither wrapped, nor defanged, nor
-  taint-marking. It arrives as plain, trusted-looking context.
+  not `browser`, so its output is neither wrapped nor taint-marking. It
+  arrives as plain, trusted-looking context.
 
 `src/roles/untrusted.ts` already names this hazard class, in the comment that
 put `ui_snapshot` and `ui_act` in the set:
@@ -305,10 +313,24 @@ registered into the live orchestrator registry only when sites are enabled
 (`src/daemon/index.ts`). Since #503 each carries an explicit action
 (`site_run_command` and `site_create_project` are `execute_command`, the
 writes `write_data`, the two reads `read_data`), so the rank-infinity lock no
-longer applies to them. Being undeclared here they are class `fetch`, which
-is what keeps them out of the floor and makes them union triggers - and
-`coverage.test.ts` now pins that reach for all eight by name, because `reach`
-is the only lock left.
+longer applies to them. `coverage.test.ts` pins the reach of all eight by name,
+because `reach` is the only lock left.
+
+Six of the eight are now `framed`: the three readers since #529, and
+`site_github_push`, `site_git_commit` and `site_create_project` since #559,
+which framed them for their ERROR paths - push stderr carries the remote
+server's own lines, the only bytes in the set authored off this machine, and
+all three return that text as an ordinary result string rather than throwing,
+so no failure path would have framed it. Only `site_write_file` and
+`site_delete_file` remain `fetch`. None of the eight is floor-eligible, because
+the floor takes `inert` only.
+
+Framing changes trigger membership, and that is intended: `fetch || rank > 504`
+means `site_git_commit` and `site_github_push` (both `write_data`, 302) stop
+being union triggers, exactly as the two readers did in #529. Safe by the rule
+I1 rests on - a framed tool cannot be an unframed route to outside content.
+All six framed site tools also need a decision about `FRAMED_ACTORS`; see
+below.
 
 `ask_for_clarification` is not a registry tool - it is synthetic and appended
 after filtering; see §3.
@@ -402,13 +424,16 @@ delete `run_command` from a turn where the person genuinely asked to run a
 command: a steerable denial-of-capability, a new bug of the same family.
 
 **The union is `PERCEPTION`, not all of `FRAMED`** - the framed *readers*,
-excluding four named framed *actors*: `browser_upload_file`, `run_skill`,
-`record_skill` and `site_run_command`. Measured over the builtins: 11,384 B
-rather than 13,977 B. (#529 framed three site-builder tools, so on a
-`sites.enabled` install `site_read_file` and `site_list_files` join the union
-and `site_run_command` is the fourth actor kept out of it - a real `sh -c`
-that the repair must never force-add to a turn that asked for nothing of the
-kind. The byte figure above counts the builtin set only.)
+excluding seven named framed *actors*: `browser_upload_file`, `run_skill`,
+`record_skill`, `site_run_command`, `site_github_push`, `site_git_commit` and
+`site_create_project`. Measured over the builtins: 11,384 B rather than
+13,977 B. (#529 framed three site-builder tools and #559 framed three more, so
+on a `sites.enabled` install `site_read_file` and `site_list_files` join the
+union and the other four are actors kept out of it - a real `sh -c`, a push
+that moves local bytes off-device, a commit, and a scaffolder that runs
+`make install`, none of which the repair may force-add to a turn that asked for
+nothing of the kind. `site_github_push` is the `browser_upload_file` case
+exactly. The byte figure above counts the builtin set only.)
 
 Membership is **not** a rank test, and two earlier drafts got this wrong in
 opposite directions:

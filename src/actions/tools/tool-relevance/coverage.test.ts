@@ -215,14 +215,16 @@ describe('daemon-registered tool classification', () => {
     // `site_read_file` (read_data, rank 100) from being pinned into every turn
     // and removable by nothing. That is why all eight are pinned by name in
     // EXPECTED_SITE_BUILDER below.
-    for (const name of ['site_write_file', 'site_github_push']) {
+    for (const name of ['site_write_file', 'site_delete_file']) {
       const t = { name, description: 'x', category: 'site-builder', parameters: {}, execute: async () => '' };
       expect(`${name}:${outsideReach(t)}`).toBe(`${name}:fetch`);
       expect(`${name}:${isFloorEligible(t)}`).toBe(`${name}:false`);
     }
-    // Framed since #529, and still never floor-eligible: the floor takes only
-    // `inert`, so framing a reader cannot pin it into every turn.
-    for (const name of ['site_read_file', 'site_list_files', 'site_run_command']) {
+    // Framed since #529 (the readers) and #559 (the three whose error paths carry
+    // outside bytes), and still never floor-eligible: the floor takes only
+    // `inert`, so framing a tool cannot pin it into every turn.
+    for (const name of ['site_read_file', 'site_list_files', 'site_run_command',
+      'site_github_push', 'site_git_commit', 'site_create_project']) {
       const t = { name, description: 'x', category: 'site-builder', parameters: {}, execute: async () => '' };
       expect(`${name}:${outsideReach(t)}`).toBe(`${name}:framed`);
       expect(`${name}:${isFloorEligible(t)}`).toBe(`${name}:false`);
@@ -244,25 +246,36 @@ describe('daemon-registered tool classification', () => {
     site_read_file: 'framed',
     site_list_files: 'framed',
     site_run_command: 'framed',
-    // The rest act rather than read. Their results are our own status strings
-    // (plus stderr on an error path), and they are undeclared here, so `fetch`.
+    // These three act, but their ERROR paths carry bytes this machine did not
+    // author -- push stderr with the remote server's own lines, local VCS
+    // stderr, the template CLI's stderr -- and they return that text as an
+    // ordinary result string rather than throwing, so nothing else would frame
+    // it. Framed since #559, which is also why each has a FRAMED_ACTORS entry.
+    site_create_project: 'framed',
+    site_git_commit: 'framed',
+    site_github_push: 'framed',
+    // The rest act and return our own status strings on every path, and they are
+    // undeclared here, so `fetch`.
     site_write_file: 'fetch',
     site_delete_file: 'fetch',
-    site_create_project: 'fetch',
-    site_git_commit: 'fetch',
-    site_github_push: 'fetch',
   };
 
   /**
-   * Triggers: `fetch || rank > access_browser`. The five `fetch` tools qualify
-   * on the first clause and site_run_command (execute_command, 506) on the
-   * second, so selecting any of them still drags the framed readers in and the
-   * invariant is intact. site_read_file and site_list_files (read_data, 100)
-   * are framed and below the ceiling, so they stop being triggers -- safe by
-   * the rule I1 rests on: a framed tool cannot be an unframed route to outside
-   * content, which is the only thing the invariant protects.
+   * Triggers: `fetch || rank > access_browser`. The two remaining `fetch` tools
+   * qualify on the first clause; site_run_command and site_create_project
+   * (execute_command, 506) on the second.
+   *
+   * The non-triggers are the framed tools at or below the 504 ceiling:
+   * site_read_file and site_list_files (read_data, 100) since #529, and
+   * site_git_commit and site_github_push (write_data, 302) since #559 framed
+   * them. Dropping out of the trigger set is safe by the rule I1 rests on -- a
+   * framed tool cannot be an unframed route to outside content, which is the
+   * only thing the invariant protects -- and it is the same move #529 made.
+   * They remain selectable by their ordinary triggers.
    */
-  const NON_TRIGGERS: ReadonlySet<string> = new Set(['site_read_file', 'site_list_files']);
+  const NON_TRIGGERS: ReadonlySet<string> = new Set([
+    'site_read_file', 'site_list_files', 'site_git_commit', 'site_github_push',
+  ]);
 
   test('every site-builder tool has a pinned reach and stays out of the floor', () => {
     for (const [name, reach] of Object.entries(EXPECTED_SITE_BUILDER)) {
