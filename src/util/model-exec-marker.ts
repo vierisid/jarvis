@@ -59,9 +59,15 @@
  * and this flag is no longer a strictly redundant disclosure. What stands
  * without it: the check is 64 bits of a scrypt hash, it identifies a candidate
  * key rather than yielding one, a random 256-bit key is not guessable from it,
- * and a same-uid reader still has `~/.jarvis` on disk -- which holds the key
- * itself, not a hash of it. So the disclosure remains worth its purpose, but it
- * is now a real (small) one rather than free. An older parent set the flag to `1`,
+ * and a same-uid reader still has `~/.jarvis` on disk. Note that `~/.jarvis`
+ * holds the workflow key ITSELF only on a file-key install: this flag is set
+ * only when the daemon held the key in JARVIS_WORKFLOW_ENCRYPTION_KEY, and
+ * workflows/db/encryption.ts reads that env var first and writes no key file,
+ * so on exactly the install that sets this flag the key may be nowhere on disk
+ * (`.secrets.key` and the vault DB still are). So the disclosure remains worth
+ * its purpose, but it is now a real (small) one rather than free -- and on an
+ * env-key install it is no longer backstopped by the key being readable
+ * anyway. An older parent set the flag to `1`,
  * "an env key existed, check unknown": that refuses every file key and is
  * satisfied only by an env key.
  *

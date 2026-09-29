@@ -14,9 +14,11 @@
 #include <errno.h>
 
 /*
- * 0 on success, otherwise errno. The caller treats any failure as "hardening
- * unavailable" and carries on -- a daemon that will not start because a
- * defense-in-depth call failed is worse than one running without it.
+ * 0 on success, otherwise errno. Unambiguous: prctl only returns -1 with errno
+ * set, and errno is never 0 on a failure, so a 0 here always means the call
+ * went through. The caller treats any failure as "hardening unavailable" and
+ * carries on -- a daemon that will not start because a defense-in-depth call
+ * failed is worse than one running without it.
  */
 int do_set_dumpable(int value) {
     if (prctl(PR_SET_DUMPABLE, value, 0, 0, 0) == -1) return errno;

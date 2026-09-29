@@ -210,10 +210,13 @@ of it. Set it to `true` when you need to debug the daemon itself.
 
 All three keys live under `daemon:` rather than in a section of their own because
 `loadConfig` discards everything outside the system-owned sections - a
-top-level `logging:` block would be dropped on every load. Neither has an entry
-in `DEFAULT_CONFIG` (same as `drain_deadline_ms`): absent has to stay
-distinguishable from "set to the default", and the fallback is applied where
-the value is consumed.
+top-level `logging:` block would be dropped on every load. None has an entry in
+`DEFAULT_CONFIG`, but for two different reasons. For the two `log_file_*` keys
+it is the `drain_deadline_ms` rule: absent has to stay distinguishable from "set
+to the default", and the fallback is applied where the value is consumed. For
+`allow_process_inspection` there is simply nothing to default to - the loader
+resolves it to a real boolean on every load, so absent and an explicit `false`
+are the same thing by the time anything reads it.
 
 ### `llm`
 

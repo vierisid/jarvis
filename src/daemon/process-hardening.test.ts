@@ -144,6 +144,23 @@ describe('the decision', () => {
       expect(lines.join('\n')).toContain('Linux-only');
     }
   });
+
+  test('the platform verdict beats the hatch, so macOS is never told its /proc is open', () => {
+    // The hatch turns off something that never happened off Linux. Reporting
+    // `allowed-by-config` there would claim a change that did not apply, and
+    // its warning talks about /proc entries macOS does not have.
+    const lines: string[] = [];
+    const outcome = hardenProcessInspection({
+      platform: 'darwin',
+      log: log(lines),
+      warn: log(lines),
+      allowInspection: true,
+      symbols: { do_set_dumpable: () => 0, do_get_dumpable: () => 1 },
+    });
+    expect(outcome).toEqual({ kind: 'unsupported', platform: 'darwin' });
+    expect(lines.join('\n')).toContain('Linux-only');
+    expect(lines.join('\n')).not.toContain('readable by any process');
+  });
 });
 
 describe('nothing here can take the daemon down', () => {

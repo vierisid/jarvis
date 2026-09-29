@@ -23,6 +23,7 @@ import {
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  readlinkSync,
   rmSync,
   utimesSync,
   writeFileSync,
@@ -791,7 +792,22 @@ setTimeout(() => process.exit(0), 60000);
         expect(ownerStatNow.slice(ownerStatNow.lastIndexOf(')') + 2).split(' ')[19])
           .toBe(reported.ownerStart);
 
-        // ── While the owner lives: identified, and NOT orphaned. ──
+        // The CLI's reads of a running daemon, from a stranger process (this
+        // one): src/cli/systemd-unit.ts takes the ppid out of `stat` and the
+        // unit out of `cgroup` to route `jarvis restart` and `jarvis update`
+        // through systemd. Neither is ptrace-gated, so both must survive --
+        // and nothing else in the suite would notice if they stopped.
+        expect(readFileSync(`/proc/${ownerPid}/cgroup`, "utf8").length).toBeGreaterThan(0);
+        expect(ownerStatNow.slice(ownerStatNow.lastIndexOf(')') + 2).split(' ')[1])
+          .toMatch(/^\d+$/);
+
+        // And the positive half of what #546 buys, from the same stranger
+        // vantage point: the owner's descriptors are closed to us even though
+        // its own readlink of them still works (pinned in
+        // src/daemon/process-hardening.test.ts).
+        expect(() => readlinkSync(`/proc/${ownerPid}/fd/1`)).toThrow(/EACCES/);
+
+        // --- While the owner lives: identified, and NOT orphaned. ---
         // This is the assertion that catches the dangerous regression. Both
         // liveness probes (kill(owner, 0) and /proc/<owner>/stat field 22) run
         // against a non-dumpable owner here; if either returned EPERM or came
@@ -811,7 +827,7 @@ setTimeout(() => process.exit(0), 60000);
         expect(spared.live.map((e) => e.pid)).toEqual([enginePid]);
         expect(running(enginePid)).toBe(true);
 
-        // ── Now the owner dies, the way a daemon dies without teardown. ──
+        // --- Now the owner dies, the way a daemon dies without teardown. ---
         // Our own child, by handle.
         launcher.kill("SIGKILL");
         const orphanDeadline = Date.now() + 10_000;
@@ -824,7 +840,7 @@ setTimeout(() => process.exit(0), 60000);
         expect(seen[0]!.orphaned).toBe(true);
         expect(running(enginePid)).toBe(true);
 
-        // ── And it is reclaimed. ──
+        // --- And it is reclaimed. ---
         const { reaped, survived } = await reapOrphanedEngines({ graceMs: 2_000, only: [enginePid] });
         expect(survived).toEqual([]);
         expect(reaped.map((e) => e.pid)).toEqual([enginePid]);

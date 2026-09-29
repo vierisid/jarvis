@@ -15,15 +15,20 @@
  *
  * NO ENV OVERRIDE, deliberately, unlike `JARVIS_PORT`. This key turns a
  * security control OFF, so the way to set it has to be at least as hard to
- * reach as the thing it protects. The config file is: `~/.jarvis/config.yaml`
- * is classified `jarvis-config` and the file tools refuse to write it, so a
- * model-driven `write_file` cannot open the hatch. An environment variable
- * would be strictly weaker -- the daemon can be started from a command the
- * assistant ran (#514), and a stale `export` in a shell profile or a unit
- * drop-in would silently disable the hardening on the next boot with nothing
- * in the config to show for it. If an override is ever genuinely needed, route
- * it through this same function AND make the daemon log loudly that an
- * environment variable, not the config, is what opened the hatch.
+ * reach as the thing it protects, and the config file is.
+ * `~/.jarvis/config.yaml` is refused outright on READ (`jarvis-config`,
+ * #528/#551), and a `write_file` to it is rated exec-on-write (#522): it costs
+ * `execute_command` authority, and below that level it produces an approval
+ * card naming the file rather than going through. So a prompt-injected turn
+ * cannot quietly open the hatch.
+ *
+ * An environment variable would be strictly weaker. It needs no card at all;
+ * the daemon can be started from a command the assistant ran (#514); and a
+ * stale `export` in a shell profile or a unit drop-in would silently disable
+ * the hardening on the next boot with nothing in the config to show for it. If
+ * an override is ever genuinely needed, route it through this same function AND
+ * make the daemon log loudly that an environment variable, not the config, is
+ * what opened the hatch.
  *
  * WHY THE COERCION. `yaml` parses to the YAML 1.2 core schema, where only
  * `true`/`false` are booleans. The YAML 1.1 spellings people actually write --
@@ -48,6 +53,12 @@
  * the permissive one.
  */
 
+// How a rejected value is named back to the user: clamped and quoted, so a key
+// holding a megabyte of text is not reproduced in the daemon's log. Shared with
+// port.ts rather than copied -- the two warnings should read alike, and one
+// implementation cannot drift from the other.
+import { describeValue } from './port.ts';
+
 /** What `daemon.allow_process_inspection` says, once. */
 export type ProcessInspectionSetting =
   /** Not set at all: the caller applies its own default, which is "harden". */
@@ -70,21 +81,6 @@ export type ProcessInspectionSetting =
  */
 const TRUE_WORDS = new Set(['true', 'yes', 'on', '1']);
 const FALSE_WORDS = new Set(['false', 'no', 'off', '0']);
-
-/**
- * How a rejected value is named back to the user. Clamped and quoted like
- * port.ts's describeValue, so a key holding a megabyte of text does not get
- * reproduced in the daemon's log.
- */
-export function describeValue(value: unknown): string {
-  if (typeof value === 'string') {
-    return JSON.stringify(value.length > 37 ? `${value.slice(0, 37)}...` : value);
-  }
-  if (typeof value === 'number' || typeof value === 'boolean') return String(value);
-  if (Array.isArray(value)) return 'a list';
-  if (typeof value === 'object') return 'a mapping';
-  return typeof value;
-}
 
 function invalid(value: unknown): ProcessInspectionSetting {
   return {

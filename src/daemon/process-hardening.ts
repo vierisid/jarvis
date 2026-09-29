@@ -216,6 +216,23 @@ export function hardenProcessInspection(deps: HardeningDeps = {}): HardeningOutc
     return { kind: 'refused-engine-process' };
   }
 
+  // prctl is Linux-only. macOS has no equivalent that is worth pretending
+  // about (its task ports are guarded by the platform's own policy), and the
+  // daemon is unsupported on native Windows. Both get nothing, and say so
+  // once, so a reader of the log is never left guessing whether it worked.
+  //
+  // BEFORE the config check, not after: off Linux there is nothing for the
+  // hatch to turn off, so reporting `allowed-by-config` there would claim a
+  // change that never applied, and its warning talks about /proc entries that
+  // do not exist on the platform reading it.
+  if (platform !== 'linux') {
+    log(
+      `[Daemon] Process inspection hardening is Linux-only; on ${platform} the ` +
+        "daemon's /proc-equivalent state is left as the platform has it.",
+    );
+    return { kind: 'unsupported', platform };
+  }
+
   // Fail closed: only an explicit `true` from the config reader opens this.
   if (deps.allowInspection === true) {
     warn(
@@ -224,18 +241,6 @@ export function hardenProcessInspection(deps: HardeningDeps = {}): HardeningOutc
         'files, are readable by any process running as this user.',
     );
     return { kind: 'allowed-by-config' };
-  }
-
-  // prctl is Linux-only. macOS has no equivalent that is worth pretending
-  // about (its task ports are guarded by the platform's own policy), and the
-  // daemon is unsupported on native Windows. Both get nothing, and say so
-  // once, so a reader of the log is never left guessing whether it worked.
-  if (platform !== 'linux') {
-    log(
-      `[Daemon] Process inspection hardening is Linux-only; on ${platform} the ` +
-        "daemon's /proc-equivalent state is left as the platform has it.",
-    );
-    return { kind: 'unsupported', platform };
   }
 
   let set: (value: number) => number;
