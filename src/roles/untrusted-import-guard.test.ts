@@ -1,6 +1,7 @@
 import { test, expect, describe } from 'bun:test';
 import { readdirSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { isUntrustedSourceTool } from './untrusted.ts';
 
 /**
  * Two privileges in roles/untrusted.ts are safe only because of WHO calls them.
@@ -61,5 +62,42 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
   test('nothing searches tool results for a site-instructions separator', () => {
     expect(importersOf('SITE_INSTRUCTIONS_MARKER', [])).toEqual([]);
     expect(importersOf('SITE_INSTRUCTION_TOOLS', [])).toEqual([]);
+  });
+
+  /**
+   * #529's derived caller guard, restored and re-aimed.
+   *
+   * #529 derived the `withInstructions(` callers from source and compared them
+   * to `SITE_INSTRUCTION_TOOLS`. #560 deleted that list, and with it the guard --
+   * but the invariant underneath it was never about the list. It is: a tool that
+   * returns page content must be FRAMED. The trailer is repo-authored and
+   * harmless, so the hazard is not the trailer; it is that
+   * `markUntrustedToolResult` returns an unframed result for a tool it does not
+   * recognise, and the caller then appends a trailer to it, which reads as a
+   * page that was never disclaimed.
+   *
+   * So this asserts the thing that matters directly, for every tool that emits
+   * one. Attribution is "the nearest `name: '...'` above the call", exact for how
+   * these tools are declared but not a parser: a COMMENT mentioning
+   * `withInstructions(` under another tool would read as a caller and fail here.
+   * If that is why it went red, move the mention.
+   */
+  test('every tool that attaches template instructions is framed, derived from the source', () => {
+    const callers = new Set<string>();
+    for (const rel of sourceFiles()) {
+      const text = readFileSync(join(SRC, rel), 'utf8');
+      if (!text.includes('withInstructions(')) continue;
+      let current: string | null = null;
+      for (const line of text.split('\n')) {
+        const declared = /^\s*name: '([a-z_]+)',/.exec(line);
+        if (declared) current = declared[1]!;
+        if (line.includes('withInstructions(') && current) callers.add(current);
+      }
+    }
+    // Non-vacuous: the producers exist and are found.
+    expect([...callers].sort()).toEqual(['browser_navigate', 'browser_snapshot']);
+    for (const name of callers) {
+      expect(`${name}:${isUntrustedSourceTool(name, 'browser')}`).toBe(`${name}:true`);
+    }
   });
 });

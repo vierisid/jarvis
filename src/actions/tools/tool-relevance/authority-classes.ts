@@ -324,21 +324,38 @@ const FRAMED_ACTORS: ReadonlySet<string> = new Set([
   // rank test -- so the I1 repair would force-add them to every filtered turn
   // that retains any trigger.
   //
-  // site_github_push is the browser_upload_file case exactly: it moves this
-  // machine's bytes off-device, and auto-adding an exfiltration path to a turn
-  // that asked for nothing of the kind is the accidental capability grant this
-  // list exists to prevent. site_create_project runs a third-party scaffolder and
-  // `make install`; site_git_commit writes history. None of them is a reading
-  // route a model substitutes toward, which is the test that keeps ui_act and
-  // browser_evaluate IN the union: the site surface already has framed eyes in
-  // site_read_file and site_list_files.
+  // site_github_push has the same exfiltration SHAPE as browser_upload_file --
+  // it moves this machine's bytes off-device -- and auto-adding an exfiltration
+  // path to a turn that asked for nothing of the kind is the accidental
+  // capability grant this list exists to prevent. Not the same GATE, though:
+  // browser_upload_file is in REVIEWED_UI_TOOLS so rawUiGate forces
+  // `confirm: 'always'`, while site_github_push is write_data and auto-runs for
+  // an untainted agent (sites/builder-tools.ts says so at its declaration). The
+  // shape is what this list keys on. site_create_project runs a third-party
+  // scaffolder and `make install`; site_git_commit writes history. None is a
+  // reading route a model substitutes toward, which is the test that keeps
+  // ui_act and browser_evaluate IN the union: the site surface already has
+  // framed eyes in site_read_file and site_list_files.
   //
   // Note what framing them does to `isInvariantTrigger` (`fetch || rank > 504`):
   // site_git_commit and site_github_push are write_data (302), so they stop being
   // triggers, while site_create_project is execute_command (506) and stays one.
-  // Losing trigger status is safe by the rule this whole invariant rests on and
-  // is the same move #529 made for site_read_file: a framed tool cannot be an
-  // unframed route to outside content, which is the only thing I1 protects.
+  // Three things read that predicate, and dropping out of it is safe in all
+  // three:
+  //   invariant.ts    the I1 union -- safe by the rule the invariant rests on, a
+  //                   framed tool cannot be an unframed route to outside
+  //                   content, which is the same move #529 made for
+  //                   site_read_file.
+  //   discover.ts     the off-list refusal, which defers a trigger called while
+  //                   framed readers are hidden. These two no longer get that
+  //                   one-step deferral, so an off-list push now runs on its
+  //                   first attempt. The deferral exists to stop SUBSTITUTION
+  //                   toward an unframed reader; pushing is not reading, so
+  //                   there is nothing to substitute.
+  //   sub-agent-runner.ts  the legacy `offered`-less resume path treats a
+  //                   non-trigger as having been offered, so a queued push in a
+  //                   pre-`offered` checkpoint now runs rather than being
+  //                   refused. It is still gated by authority like any push.
   'site_github_push',
   'site_git_commit',
   'site_create_project',

@@ -1,6 +1,6 @@
 import type { RoleDefinition } from './types.ts';
 import { buildToolGuide, type ToolGuideMachine } from './tool-guide.ts';
-import { wrapUntrusted, UNTRUSTED_OPEN, UNTRUSTED_CLOSE } from './untrusted.ts';
+import { wrapUntrusted, inlineUntrusted, defangDelimiters, UNTRUSTED_OPEN, UNTRUSTED_CLOSE } from './untrusted.ts';
 
 export type PromptContext = {
   userName?: string;
@@ -292,19 +292,36 @@ export function buildSystemPromptParts(role: RoleDefinition, context?: PromptCon
       dynamicSections.push('');
       dynamicSections.push('## Relevant Knowledge');
       dynamicSections.push('The following is what you remember about entities mentioned in this conversation:');
-      dynamicSections.push(context.knowledgeContext);
+      // Defanged, not framed. Vault facts are extracted from outside content, so
+      // a planted fact could otherwise print a syntactically perfect OPEN
+      // delimiter here -- and since the rule above says a block ends only at its
+      // own tag, an open that nothing closes would pull every later section of
+      // this prompt inside it. That is the inverse of the attack the nonce
+      // stops: not smuggling data out of a block, but pulling trusted text in.
+      // A block of its own is wrong for this section (the model is meant to use
+      // these facts), so the marker token is what gets neutralised.
+      dynamicSections.push(defangDelimiters(context.knowledgeContext));
     }
 
     if (context.skillIndex) {
       dynamicSections.push('');
-      dynamicSections.push(context.skillIndex);
+      // Skill names and descriptions come from record_skill's arguments, i.e.
+      // the model's own writing on some earlier turn, and this index is rebuilt
+      // into the system prompt every turn -- so one injected turn would
+      // otherwise buy a durable delimiter in trusted position. Same treatment
+      // and same reason as knowledgeContext above.
+      dynamicSections.push(defangDelimiters(context.skillIndex));
     }
 
     if (context.activeCommitments && context.activeCommitments.length > 0) {
       dynamicSections.push('');
       dynamicSections.push('## Active Commitments');
       for (const commitment of context.activeCommitments) {
-        dynamicSections.push(`- ${commitment}`);
+        // One-line bullets by intent, so the full inline reduction applies:
+        // these are labels in trusted prose, the case inlineUntrusted exists
+        // for. Without it a commitment carrying a newline writes its own
+        // prompt sections.
+        dynamicSections.push(`- ${inlineUntrusted(commitment, 300)}`);
       }
     }
 
@@ -323,7 +340,9 @@ export function buildSystemPromptParts(role: RoleDefinition, context?: PromptCon
       dynamicSections.push('## Content Pipeline');
       dynamicSections.push('Active content items you are co-managing:');
       for (const item of context.contentPipeline) {
-        dynamicSections.push(`- ${item}`);
+        // Title and tags, model- and user-written; same reasoning as the
+        // commitments above.
+        dynamicSections.push(`- ${inlineUntrusted(item, 300)}`);
       }
     }
 

@@ -237,17 +237,24 @@ const UNTRUSTED_TOOL_NAMES: ReadonlySet<string> = new Set([
   //
   //   site_github_push  git push stderr. `github-manager.ts` surfaces
   //                     `git push failed: ${stderr}`, which carries the remote
-  //                     server's `remote:` lines verbatim -- the only bytes in
-  //                     the whole site tool set authored OFF this machine. A
-  //                     GitHub Actions message, a branch-protection refusal or a
-  //                     pre-receive hook's output all arrive here, and a hosted
-  //                     git server is exactly the kind of thing an attacker who
-  //                     got a push URL into the project can control.
-  //   site_git_commit   local git stderr (`git commit failed: ${stderr}`), plus a
-  //                     SUCCESS string quoting `commit.message` read back out of
-  //                     `git log` -- repo bytes, not the model's own words. A
-  //                     repo-authored pre-commit hook's stderr comes through here
-  //                     too.
+  //                     server's `remote:` lines verbatim. A GitHub Actions
+  //                     message, a branch-protection refusal or a pre-receive
+  //                     hook's output all arrive here, and a hosted git server
+  //                     is exactly the kind of thing an attacker who got a push
+  //                     URL into the project can control. The strongest case of
+  //                     the three -- bytes from a machine that is not this one
+  //                     and not the project either.
+  //   site_git_commit   local git stderr (`git commit failed: ${stderr}`): repo
+  //                     paths, index state, and the output of any clean/smudge
+  //                     FILTER the repository configures. Filters are the live
+  //                     residual here: PROJECT_GIT_PINS turns hooks off
+  //                     (`core.hooksPath=/dev/null` plus a per-event disable), so
+  //                     no pre-commit hook runs, but `github-manager.ts` says
+  //                     plainly that "filters and the like are not" pinned.
+  //                     NOT in this list: the success string's `commit.message`,
+  //                     which `getLog` reads back with `%s` immediately after
+  //                     committing -- that is the model's own message round
+  //                     tripped through git, not repo history.
   //   site_create_project  the template CLI's stderr
   //                     (`Template scaffolding failed: ${stderr}`): npm/bunx
   //                     output, registry messages, a third-party scaffolder's
@@ -263,8 +270,29 @@ const UNTRUSTED_TOOL_NAMES: ReadonlySet<string> = new Set([
   // Framing them also moves them in the tool-relevance filter: `outsideReach`
   // derives from this set, so all three flip from `fetch` to `framed`. Each one
   // therefore needs a FRAMED_ACTORS entry (see authority-classes.ts) or the I1
-  // invariant repair would force-add it to every filtered turn. The taint
-  // decision is separate and is recorded on TAINT_EXEMPT_TOOLS below.
+  // invariant repair would force-add it to every filtered turn.
+  //
+  // TAINT, decided per path as #559 asks, and all three come out the same way:
+  // they taint. None is added to TAINT_EXEMPT_TOOLS below.
+  //
+  // The exemption that list exists for is a FREQUENCY argument -- a gate that
+  // fires every turn teaches the owner to approve without reading -- and it does
+  // not apply to any of these. A push is explicit. Creating a project happens
+  // once. And a commit, which looks like the obvious candidate for an exemption,
+  // is explicit too: auto-commit does NOT go through this tool. It runs after the
+  // turn's tool loop, from ws-service.ts, straight into
+  // `SiteBuilderService.autoCommitIfEnabled` -> `gitManager.autoCommit`, so it is
+  // never a tool dispatch and never reaches isTaintSourceTool. The site prompt
+  // then tells the model not to call the tool when auto-commit is on, and to call
+  // it "only when the user asks" when it is off (sites/prompt-context.ts). So in
+  // both configurations site_git_commit fires on an explicit request, at which
+  // point taint costs a card on a turn the owner started.
+  //
+  // The other exemption argument -- that the reader tools are exempt for the same
+  // bytes, so tainting would move the model one token sideways -- does not hold
+  // here either. Git stderr is PRODUCED by running git; site_read_file cannot
+  // fetch a filter's output by reading a file, so there is no exempt equivalent
+  // to substitute toward.
   'site_github_push',
   'site_git_commit',
   'site_create_project',
@@ -380,47 +408,10 @@ export function isUntrustedSourceTool(name: string, category: string | undefined
  * write_file already ship together; closing it belongs to the site builder's
  * write-then-execute contract, not to this list.
  */
-/**
- * #559's taint decision, made per path rather than for the three together,
- * because framing is cheap and taint is what carries the friction.
- *
- * site_github_push TAINTS. Its stderr is the one place in the site tool set
- * where bytes authored off this machine reach the model, and a push is an
- * explicit, low-frequency act -- the model does not push in a loop, and what a
- * push taints is whatever governed call comes after it, which on a push turn is
- * usually nothing. This is the strongest case for taint in the whole set and it
- * costs almost nothing, which is why it went first.
- *
- * site_create_project TAINTS. Third-party scaffolder stderr, and the turn on
- * which the largest body of unreviewed third-party code lands on disk (the
- * template CLI plus `make install`). Once per project, so the friction is one
- * card on a new project's first turn rather than a card per turn. It already
- * forces a confirmation card of its own (`confirm: 'above_level'` in
- * builder-tools.ts), so the model's own path here is already interactive.
- *
- * site_git_commit is EXEMPT -- framed, not tainting -- and it is the only one of
- * the three where the frequency argument bites. `isTaintSourceTool` is a
- * name-and-category predicate with no idea whether a call succeeded, so tainting
- * it would taint every SUCCESSFUL commit too; with auto-commit on (see
- * `autoCommitEnabled` in ws-service.ts) that is most site turns, and a gate that
- * fires every turn teaches the owner to approve without reading. That is the
- * failure #529's read exemption exists to avoid, not a safer default.
- *
- * What that gives up, stated rather than implied: a repo-authored pre-commit
- * hook's stderr is genuinely attacker-controlled text on a cloned repo, and it
- * arrives framed but untainted. Two things make it the right trade anyway. The
- * bytes are the class the file readers are already exempt for -- local repo
- * content -- and site_read_file is exempt for the very same project, so tainting
- * the commit while the reader stays exempt would move the model one token
- * sideways rather than close a route. And the tool that exists to run project
- * scripts on purpose, site_run_command, is NOT exempt: a turn that wanted hook
- * output is a turn that ran the shell.
- */
 const TAINT_EXEMPT_TOOLS: ReadonlySet<string> = new Set([
   'read_file',
   'site_read_file',
   'site_list_files',
-  'site_git_commit',
 ]);
 const TAINT_ONLY_TOOLS: ReadonlySet<string> = new Set([
   'delegate_task',
@@ -490,12 +481,14 @@ const IGNORABLE_ALL = new RegExp(IGNORABLE, 'gu');
  * from content nobody vetted. Bounding the quantifier instead would trade the
  * stall for a bypass: any bound N is beaten by N+1 invisibles.
  *
- * Since #560 the only caller is `inlineUntrusted`, which cuts its input to
- * `maxChars * 4` before any regex runs, so no uncapped payload reaches this
- * pattern any more. The linear shape stays regardless: it is not paid for by
- * the cap, the cap could move, and a pattern that is quadratic on hostile input
- * has no business in this module whatever its callers look like today. The time
- * bound in the tests still covers it at multi-megabyte sizes for that reason.
+ * Since #560 no framed PAYLOAD reaches this pattern: the block path does not
+ * defang. The callers are `inlineUntrusted`, which cuts its input to
+ * `maxChars * 4` first, and prompt-builder's knowledge and skill sections, which
+ * are uncapped multi-line text in trusted position. So the linear shape is still
+ * load-bearing, not merely tidy -- and it would be kept regardless, because a
+ * pattern that is quadratic on hostile input has no business in this module
+ * whatever its callers look like today. The time bound in the tests covers it at
+ * multi-megabyte sizes for that reason.
  *
  * The cost of the replacement is transient MEMORY rather than time on the one
  * path that builds the span map: a clean copy plus an index per kept code unit,
@@ -504,11 +497,21 @@ const IGNORABLE_ALL = new RegExp(IGNORABLE, 'gu');
  * reached at all.
  *
  * Built from MARKER_TOKEN so the pattern cannot drift from the delimiters.
- * `g`-flagged and module-scoped, so it owns a mutable `lastIndex`: always
- * assign `lastIndex = 0` before a `.test()` or `.exec()`, or it answers wrongly
- * on every other call. (`.replace()` and `.matchAll()` handle it themselves.)
+ *
+ * Constructed PER CALL, not module-scoped. It was module-scoped, `g`-flagged and
+ * therefore carrying a mutable `lastIndex` across calls, which made three
+ * separate `lastIndex = 0` assignments load-bearing -- including one before a
+ * `matchAll`, because `RegExp.prototype[Symbol.matchAll]` copies `lastIndex` off
+ * the source regex rather than starting clean. Deleting any of the three was a
+ * silent correctness hole (a skipped first match on the span-map path), and the
+ * old comment here said `matchAll` "handles it itself", which is only half true.
+ * A fresh regex per call removes the hazard class instead of documenting it, and
+ * costs nothing: since #560 the only caller is `inlineUntrusted`, whose input is
+ * cut to `maxChars * 4` before any regex runs.
  */
-const MARKER_PLAIN = new RegExp(MARKER_TOKEN, 'giu');
+function markerPattern(): RegExp {
+  return new RegExp(MARKER_TOKEN, 'giu');
+}
 
 /**
  * Rewrite any spelling of the marker token inside a value that will sit in
@@ -611,12 +614,11 @@ export function defangDelimiters(raw: string): string {
   });
 
   // No marker means nothing to rewrite, and the input is returned untouched.
-  MARKER_PLAIN.lastIndex = 0;
-  if (!MARKER_PLAIN.test(clean)) return text;
+  // A fresh pattern per use, so no `lastIndex` survives between these steps.
+  if (!markerPattern().test(clean)) return text;
 
   // Nothing was dropped, so `clean` IS `text` and the offsets line up.
-  MARKER_PLAIN.lastIndex = 0;
-  if (dropped.length === 0) return text.replace(MARKER_PLAIN, (m) => m.replace(/_/g, '-'));
+  if (dropped.length === 0) return text.replace(markerPattern(), (m) => m.replace(/_/g, '-'));
 
   // Otherwise map each kept code unit back to where it started, by walking
   // `text` and stepping over the dropped spans in the order they were found.
@@ -633,7 +635,7 @@ export function defangDelimiters(raw: string): string {
 
   let out = '';
   let cursor = 0;
-  for (const m of clean.matchAll(MARKER_PLAIN)) {
+  for (const m of clean.matchAll(markerPattern())) {
     const start = at[m.index]!;
     const last = at[m.index + m[0].length - 1]!;
     // The span's own invisibles go with it; everything outside stays byte-exact.
@@ -731,7 +733,14 @@ export function wrapUntrusted(text: string, source: string): string {
   // returns '' for a non-string, an empty or whitespace-only value, or one made
   // entirely of control characters, and `[Content from . ...]` with `source=""`
   // would be a header that says nothing.
-  const label = inlineUntrusted(source, 80) || 'an outside source';
+  // Brackets go as well as everything inlineUntrusted already handles. The
+  // preamble is `[Content from <label>. ...]`, so a label of the form
+  // `x]. <prose>. [y` would close the qualifying sentence, emit its own, and
+  // reopen -- not a boundary escape (that is the nonce's job) but an attack on
+  // the sentence that says the block is data. inlineUntrusted maps `"` to `'`
+  // for the same reason one line down; `[` and `]` are the two characters this
+  // preamble is built from, and it does not know that.
+  const label = inlineUntrusted(source, 80).replace(/[[\]]/g, '') || 'an outside source';
   return [
     untrustedPreamble(label),
     `${UNTRUSTED_OPEN} ${nonce} source="${label}"`,

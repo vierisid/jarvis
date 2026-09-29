@@ -232,6 +232,30 @@ describe('daemon-registered tool classification', () => {
   });
 
   /**
+   * The FRAMED_ACTORS half, pinned by name in the same file as the rest of the
+   * site classification.
+   *
+   * `isFramedPerception` is `framed && !FRAMED_ACTORS.has(name)` with no rank
+   * test, and the I1 repair unions in every missing member on any turn that
+   * retains a trigger. So dropping an entry here would force-add that tool --
+   * a push, a commit, a scaffolder, a shell -- into every filtered turn.
+   * selection.test.ts catches that too, but indirectly, in another file, and it
+   * skips itself when a turn retains no trigger.
+   */
+  test('the framed site ACTORS are excluded from the perception union', () => {
+    for (const name of ['site_run_command', 'site_github_push', 'site_git_commit', 'site_create_project']) {
+      const t = { name, description: 'x', category: 'site-builder', parameters: {}, execute: async () => '' };
+      expect(`${name}:framed=${outsideReach(t)}`).toBe(`${name}:framed=framed`);
+      expect(`${name}:perception=${isFramedPerception(t)}`).toBe(`${name}:perception=false`);
+    }
+    // The readers are the union: excluding THEM would be the real regression.
+    for (const name of ['site_read_file', 'site_list_files']) {
+      const t = { name, description: 'x', category: 'site-builder', parameters: {}, execute: async () => '' };
+      expect(`${name}:perception=${isFramedPerception(t)}`).toBe(`${name}:perception=true`);
+    }
+  });
+
+  /**
    * All eight, pinned by name. The loop above covers five; this covers the
    * set, so adding a site tool forces a reach decision here the way
    * EXPECTED_RUNTIME does for the other daemon-registered tools -- and unlike

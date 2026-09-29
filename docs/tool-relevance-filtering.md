@@ -41,9 +41,8 @@ Outside content reaches the model two ways:
   (`src/roles/untrusted.ts`). The result is wrapped in
   `<<<UNTRUSTED_CONTENT <nonce> ... <nonce> UNTRUSTED_CONTENT>>>`, preceded by
   `untrustedPreamble()`, and - except the file readers `read_file`,
-  `site_read_file` and `site_list_files`, and `site_git_commit` - marks the
-  turn tainted for `isTaintSourceTool`, which the authority engine's taint
-  gating consumes.
+  `site_read_file` and `site_list_files` - marks the turn tainted for
+  `isTaintSourceTool`, which the authority engine's taint gating consumes.
 
   Since #560 the delimiters carry a **per-block 128-bit nonce** and the payload
   is passed through byte-exact. The payload is no longer rewritten:
