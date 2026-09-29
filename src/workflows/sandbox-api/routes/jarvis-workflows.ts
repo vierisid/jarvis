@@ -87,6 +87,7 @@ export function createJarvisWorkflowsStartRoute(
         const message = e instanceof Error ? e.message : String(e);
         if (code === "FLOW_NOT_FOUND") return err(message, 404);
         if (code === "SELF_RECURSION") return err(message, 409);
+        if (code === "WORKFLOW_NOT_READY") return err(message, 422);
         if (code === "VERSION_MISSING") return err(message, 422);
         if (code === "MISSING_REF") return err(message, 400);
         // The per-flow CODE opt-in is missing on the target flow. A permission

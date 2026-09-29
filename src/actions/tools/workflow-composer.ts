@@ -77,6 +77,7 @@ import {
 } from "../../util/execution-environment.ts";
 import type { FlowTriggerNode } from "../../workflows/db/repos/flow-version.ts";
 import { WORKFLOW_EVENT_TYPES } from "../../workflows/runtime/event-types.ts";
+import { compileWorkflow } from '../../workflows/runtime/workflow-readiness';
 
 export interface ComposedFlow {
   displayName: string;
@@ -1509,6 +1510,7 @@ function resolvePieceByName(
   return matches.length === 1 ? matches[0]! : null;
 }
 
+
 /* ------------------------------------------------------------- validation */
 
 interface ValidationOk { ok: true; flow: ComposedFlow }
@@ -1532,6 +1534,10 @@ function validateComposedFlow(
     return { ok: false, errors: ["missing or invalid 'trigger' object"] };
   }
   const errors: string[] = [];
+  // Bound raw graphs before the legacy normalizer recursively builds bodies.
+  // The complete shared pass runs on its canonicalized output below.
+  const limits = compileWorkflow(triggerRaw, { pieces: registry, phase: 'composition' }).issues.filter(i => i.code === 'LIMIT');
+  if (limits.length) return { ok: false, errors: limits.map(i => `${i.node}: ${i.message}`) };
   const knownNames = new Set<string>();
   const trigger = validateStep(triggerRaw as Record<string, unknown>, errors, knownNames, true, registry, validRoleIds, toolSpecs, osCheck);
   if (!trigger) return { ok: false, errors };
@@ -1555,6 +1561,8 @@ function validateComposedFlow(
   }
 
   if (errors.length > 0) return { ok: false, errors };
+  const readiness = compileWorkflow(trigger, { pieces: registry, phase: 'composition' });
+  if (!readiness.ready) return { ok: false, errors: readiness.issues.map(i => `step "${i.node}" (${i.path}): ${i.message}`) };
   return { ok: true, flow: { displayName, trigger } };
 }
 

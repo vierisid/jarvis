@@ -6,6 +6,7 @@
  * starts health monitoring, and handles graceful shutdown.
  */
 
+import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -4895,6 +4896,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // so the `onPieceLibraryChanged` callback can call `upsert()` / `remove()`
     // after runtime installs.
     const workflowPieceCatalog = engineBoot?.catalog ?? null;
+    configureWorkflowReadiness({
+      pieces: workflowPieceCatalog ?? undefined,
+      credentials: credentialResolver,
+      tool: name => {
+        const tool = agentService.getOrchestrator().getToolRegistry()?.list().find(t => t.name === name);
+        return tool ? { params: Object.entries(tool.parameters).map(([name, param]) => ({ name, ...param })) } : null;
+      },
+      roles: () => new Set(agentService.getSpecialists().keys()),
+    });
     const workflowEngineRuntime = engineBoot?.runtime ?? null;
     const workflowSandboxApi = engineBoot?.api ?? null;
 
@@ -4904,6 +4914,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // to direct event-bus subscription.
     triggerManager = new TriggerManager({
       eventBus: sharedEventBus,
+      onRegistrationBlocked: ({ runId, message }) => notifyAll({
+        id: `workflow-readiness:${runId}`, kind: 'workflow',
+        title: 'Workflow needs attention',
+        body: `A workflow could not start: ${message}. See its failed run for details.`,
+        actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
+      }),
       ...(workflowEngineRuntime ? { engineRuntime: workflowEngineRuntime } : {}),
     });
 

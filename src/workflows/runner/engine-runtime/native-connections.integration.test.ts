@@ -1,3 +1,5 @@
+import { configureWorkflowReadiness } from '../../db/repos/flow-readiness';
+import { metadataToCatalogEntry, PieceCatalog } from '../../runtime/piece-catalog';
 /** API save -> unmodified engine lookup -> installed native piece -> local provider. */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { dirname, join } from "node:path";
@@ -80,6 +82,11 @@ describe("native credential engine integration", () => {
       requests.push(auth);
       return Response.json({ accepted: auth === "Bearer " + TOKEN }, { status: auth === "Bearer " + TOKEN ? 200 : 401 });
     } });
+    const handle = await runtime.acquire({ runId: 'fixture-metadata', projectId: DEFAULT_IDS.project });
+    try {
+      const metadata = await handle.extractPieceMetadata({ pieceName: PIECE, pieceVersion: '0.0.1' });
+      configureWorkflowReadiness({ pieces: new PieceCatalog([metadataToCatalogEntry(metadata)]), credentials: resolver });
+    } finally { await handle.release(); }
   }, 120_000);
 
   afterAll(async () => {

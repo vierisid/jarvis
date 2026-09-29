@@ -1,3 +1,5 @@
+import { configureWorkflowReadiness } from '../db/repos/flow-readiness';
+import { PieceCatalog } from './piece-catalog';
 import { afterEach, beforeEach, expect, test } from 'bun:test';
 import { initWorkflowDb, closeWorkflowDb, getWorkflowDb, DEFAULT_IDS } from '../db';
 import { createFlow } from '../db/repos/flow';
@@ -57,6 +59,10 @@ function fixture() {
   const registry = new ToolRegistry();
   registry.register(desktopListWindowsTool);
   registry.register(desktopScreenshotTool);
+  configureWorkflowReadiness({
+    pieces: new PieceCatalog([{ name: '@jarvispieces/piece-jarvis-tool', displayName: '', description: '', actions: { invoke: { name: 'invoke', displayName: '', description: '' } } }]),
+    tool: name => { const tool = registry.get(name); return tool ? { params: Object.entries(tool.parameters).map(([name, p]) => ({ name, ...p })) } : null; },
+  });
   const authority = new AuthorityEngine({ default_level: 10, governed_categories: [], overrides: [],
     context_rules: [], learning: { enabled: false, suggest_threshold: 10 }, emergency_state: 'normal' });
   const approvals = new ApprovalManager();
@@ -307,7 +313,9 @@ test('API previews can repeat after auto-capture and with unrelated saved output
     // The same real API/engine path must still refuse an input that consumes
     // the earlier step's captured output in a new run.
     step.nextAction = { ...step, name: 'second', settings: { ...step.settings,
-      input: { toolName: 'desktop_list_windows', params: { target: '{{ first.result }}' } },
+      // Read the actual captured object. first.result is absent for this
+      // fixture and would now stop at reference resolution, before provenance.
+      input: { toolName: 'desktop_list_windows', params: { target: '{{ first }}' } },
     } };
     updateDraftVersion(f.version.id, { trigger: { name: 'trigger', type: 'EMPTY', nextAction: step } });
     const req = Object.assign(new Request(`http://localhost/api/workflows/${f.flow.id}/run`, {

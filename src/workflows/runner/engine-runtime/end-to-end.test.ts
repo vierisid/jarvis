@@ -1,3 +1,5 @@
+import { configureWorkflowReadiness } from '../../db/repos/flow-readiness';
+import { PieceCatalog, metadataToCatalogEntry } from '../../runtime/piece-catalog';
 /**
  * Phase F end-to-end smoke: spawn the engine, load Jarvis pieces from disk,
  * run a real flow with a manual trigger + echo action, assert SUCCEEDED.
@@ -19,6 +21,7 @@ import {
   getFlowVersion,
   lockVersion,
   updateDraftVersion,
+  setSampleInputEntry,
 } from "../../db/repos/flow-version";
 import type { FlowTriggerNode } from "../../db/repos/flow-version";
 import { createFlowRun, getFlowRun } from "../../db/repos/flow-run";
@@ -34,6 +37,10 @@ import type { WorkflowsStartFn } from "../../sandbox-api/routes/jarvis-workflows
 import { findCachedBundle, buildEngineBundle, ENGINE_BUILD_PATHS } from "./build";
 import { buildAllJarvisPieces } from "./build-pieces";
 import { EngineRuntime } from "./engine-runtime";
+import { EngineFlowExecutor } from './engine-flow-executor';
+import { Worker } from '../../queue/worker';
+import { createRunFlowHandler } from '../handler';
+import { createWorkflowRoutes } from '../../api/routes';
 
 const buildOptIn = process.env.JARVIS_TEST_ENGINE_BUILD === "1";
 const initialCached = findCachedBundle();
@@ -81,7 +88,13 @@ describe("Engine end-to-end (F gate)", () => {
       await buildAllJarvisPieces();
     }
     runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath });
-  });
+    const metadataHandle = await runtime.acquire({ runId: 'readiness-metadata', projectId: DEFAULT_IDS.project });
+    try {
+      const metadata = await metadataHandle.extractPieceMetadata({ pieceName: PIECE_TEST_NAME, pieceVersion: PIECE_VERSION });
+      const askMetadata = await metadataHandle.extractPieceMetadata({ pieceName: PIECE_ASK_NAME, pieceVersion: PIECE_VERSION });
+      configureWorkflowReadiness({ pieces: new PieceCatalog([metadataToCatalogEntry(metadata), metadataToCatalogEntry(askMetadata)]) });
+    } finally { await metadataHandle.release(); }
+  }, 30_000);
 
   afterAll(async () => {
     // Engines first: reclaim anything this runtime spawned while the
@@ -90,6 +103,54 @@ describe("Engine end-to-end (F gate)", () => {
     await api.stop();
     closeWorkflowDb();
   });
+
+  test.skipIf(skipE2eTests)('R3: API preview executes its saved override through the outer worker despite unfinished neighbors', async () => {
+    const before = llmCalls.length;
+    const flow = createFlow();
+    const version = createDraftVersion({ flowId: flow.id, displayName: 'Preview draft', trigger: {
+      name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: 'schedule', input: { cron_expression: 'unfinished schedule' } },
+      nextAction: { name: 'selected', type: 'PIECE', settings: { pieceName: PIECE_ASK_NAME, pieceVersion: PIECE_VERSION, actionName: 'ask', input: {} },
+        nextAction: { name: 'unfinished', type: 'PIECE', settings: { pieceName: PIECE_ASK_NAME, pieceVersion: PIECE_VERSION, actionName: 'ask', input: {} } },
+      },
+    } });
+    setSampleInputEntry(version.id, 'selected', { prompt: 'preview override' });
+    const request = Object.assign(new Request('http://local/run', { method: 'POST', body: JSON.stringify({ stepNameToTest: 'selected', environment: 'TESTING' }) }), { params: { id: flow.id } });
+    const response = await createWorkflowRoutes()['/api/workflows/:id/run']!.POST!(request);
+    expect(response.status).toBe(202);
+    const run = await response.json() as { id: string };
+    const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({ executor: new EngineFlowExecutor(runtime!) }) } });
+    await worker.drain();
+    expect(getFlowRun(run.id)?.status).toBe('SUCCEEDED');
+    expect(llmCalls.slice(before).map(c => c.prompt)).toEqual(['preview override']);
+    expect(getFlowRun(run.id)?.steps?.unfinished).toBeUndefined();
+    expect(getFlowVersion(version.id)!.trigger.nextAction!.settings!.input).toEqual({});
+    expect(() => publishFlowVersion(flow.id, version.id)).toThrow();
+  }, 30_000);
+
+  for (const left of [true, false]) {
+    test.skipIf(skipE2eTests)(`review: real engine joins the executed router branch (${left})`, async () => {
+      const before = llmCalls.length;
+      const echo = (name: string, value: unknown): FlowTriggerNode => ({ name, type: 'PIECE', settings: { pieceName: PIECE_TEST_NAME, actionName: 'echo', input: { value } } });
+      const flow = createFlow();
+      const trigger: FlowTriggerNode = { name: 'trigger', type: 'EMPTY', nextAction: { name: 'router', type: 'ROUTER', settings: {
+        executionType: 'EXECUTE_FIRST_MATCH', branches: [
+          { branchType: 'CONDITION', branchName: 'Left', conditions: [[{ operator: 'BOOLEAN_IS_TRUE', firstValue: '{{trigger.left}}' }]] },
+          { branchType: 'FALLBACK', branchName: 'Right' },
+        ],
+      }, children: [echo('a', { out: 'left' }), echo('b', { out: 'right' })], nextAction: { name: 'joined', type: 'PIECE', settings: { pieceName: PIECE_ASK_NAME, actionName: 'ask', input: { prompt: '{{a.echo.out ?? b.echo.out}}' } } } } };
+      createDraftVersion({ flowId: flow.id, displayName: 'Join', trigger });
+      const req = Object.assign(new Request('http://local/run', { method: 'POST', body: JSON.stringify({ payload: { left } }) }), { params: { id: flow.id } });
+      const response = await createWorkflowRoutes()['/api/workflows/:id/run']!.POST!(req);
+      expect(response.status).toBe(202);
+      const { id } = await response.json() as { id: string };
+      const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({ executor: new EngineFlowExecutor(runtime!) }) } });
+      await worker.drain();
+      const run = getFlowRun(id)!;
+      expect(run.failedStep).toBeNull();
+      expect(run.status).toBe('SUCCEEDED');
+      expect(llmCalls.slice(before).map(call => call.prompt)).toEqual([left ? 'left' : 'right']);
+    }, 30_000);
+  }
 
   test.skipIf(skipE2eTests)(
     "manual trigger + echo action runs to SUCCEEDED",
@@ -340,7 +401,12 @@ describe("Engine end-to-end (G+H pieces)", () => {
     if (!cached) return;
     if (buildOptIn) await buildAllJarvisPieces();
     runtime = new EngineRuntime({ api, bundlePath: cached.bundlePath });
-  });
+    const metadataHandle = await runtime.acquire({ runId: 'readiness-metadata', projectId: DEFAULT_IDS.project });
+    try {
+      const metadata = await metadataHandle.extractPieceMetadata({ pieceName: PIECE_TEST_NAME, pieceVersion: PIECE_VERSION });
+      configureWorkflowReadiness({ pieces: new PieceCatalog([metadataToCatalogEntry(metadata)]) });
+    } finally { await metadataHandle.release(); }
+  }, 30_000);
 
   afterAll(async () => {
     // Engines first: reclaim anything this runtime spawned while the

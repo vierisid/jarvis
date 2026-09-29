@@ -45,8 +45,10 @@ import {
   type EngineScheduleOptions,
   type FlowVersion,
 } from "../../db/repos/flow-version";
+import { getWorkflowDb } from '../../db';
+import { assertVersionReady, WorkflowReadinessError } from '../../db/repos/flow-readiness';
 import { ungrantedCodeSteps } from "../../db/repos/flow-code-steps";
-import { createFlowRun } from "../../db/repos/flow-run";
+import { createFlowRun, updateRun } from "../../db/repos/flow-run";
 import { enqueue, countQueued } from "../../db/repos/job-queue";
 import { RUN_FLOW } from "../handler";
 import { DEFAULT_IDS } from "../../db/schema";
@@ -102,6 +104,8 @@ export interface TriggerManagerDeps {
    * event-bus subscription.
    */
   engineRuntime?: EngineRuntime;
+  /** Startup/refresh refusal: notify the owner after its failed run is durable. */
+  onRegistrationBlocked?: (notice: { flowId: string; runId: string; message: string }) => void;
   /** Optional logger; defaults to console. */
   log?: (line: string) => void;
   /**
@@ -145,9 +149,12 @@ export class TriggerManager {
     { attempt: number; timer: ReturnType<typeof setTimeout> }
   > = new Map();
   private readonly enableRetryDelaysMs: number[];
+  private readonly onRegistrationBlocked: TriggerManagerDeps['onRegistrationBlocked'];
+  private readonly registrationFailures = new Map<string, string>();
 
   constructor(deps: TriggerManagerDeps) {
     this.bus = deps.eventBus;
+    this.onRegistrationBlocked = deps.onRegistrationBlocked;
     this.cron = deps.cronScheduler ?? new CronScheduler();
     this.webhooks = deps.webhookManager ?? new WebhookManager();
     // Public ingress answers 503 while the queue is backed up, so senders
@@ -200,6 +207,7 @@ export class TriggerManager {
       }
     }
     this.subs.clear();
+    this.registrationFailures.clear();
     this.cron.cancelAll();
     this.log("stopped");
   }
@@ -293,6 +301,9 @@ export class TriggerManager {
       return;
     }
 
+    if (!this.checkReadiness(flow.id, versionId, 'registration')) return;
+    this.registrationFailures.delete(flow.id);
+
     if (trigger.type === "EMPTY") return; // manual-run only
 
     if (trigger.type === "PIECE_TRIGGER") {
@@ -331,6 +342,7 @@ export class TriggerManager {
     // republished) must not be resurrected by a timer armed for the old
     // version.
     this.clearEnableRetry(flowId);
+    this.registrationFailures.delete(flowId);
     const sub = this.subs.get(flowId);
     if (!sub) return;
     try {
@@ -520,7 +532,7 @@ export class TriggerManager {
    * registers, so a flow that fails, recovers, and fails again next week gets
    * the full schedule again rather than the tail of the old one.
    */
-  private scheduleEnableRetry(flowId: string, reason: string): void {
+  private scheduleEnableRetry(flowId: string, reason: string, source = 'engine ON_ENABLE'): void {
     const prior = this.enableRetries.get(flowId);
     if (prior) clearTimeout(prior.timer);
     const attempt = prior ? prior.attempt + 1 : 0;
@@ -529,7 +541,7 @@ export class TriggerManager {
     if (delay === undefined) {
       this.enableRetries.delete(flowId);
       this.log(
-        `flow ${flowId}: engine ON_ENABLE failed: ${reason} -- giving up after ${total} ` +
+        `flow ${flowId}: ${source} failed: ${reason} -- giving up after ${total} ` +
           `retries; the flow is NOT firing. Re-enable it (or restart the daemon) once the engine is healthy`,
       );
       return;
@@ -543,7 +555,7 @@ export class TriggerManager {
     (timer as unknown as { unref?: () => void }).unref?.();
     this.enableRetries.set(flowId, { attempt, timer });
     this.log(
-      `flow ${flowId}: engine ON_ENABLE failed: ${reason} -- retrying in ${Math.round(delay / 1000)}s ` +
+      `flow ${flowId}: ${source} failed: ${reason} -- retrying in ${Math.round(delay / 1000)}s ` +
         `(attempt ${attempt + 1}/${total}); the flow will not fire until it registers`,
     );
   }
@@ -596,6 +608,34 @@ export class TriggerManager {
     }
   }
 
+  /** Persist refusals without creating runnable work or consuming trigger events. */
+  private checkReadiness(flowId: string, versionId: string, kind: SubscriptionKind | 'registration'): boolean {
+    try { assertVersionReady(flowId, versionId); return true; }
+    catch (error) {
+      if (!(error instanceof WorkflowReadinessError)) throw error;
+      const signature = JSON.stringify([versionId, error.readiness]);
+      if (kind !== 'registration' || this.registrationFailures.get(flowId) !== signature) {
+        const run = getWorkflowDb().transaction(() => {
+          const now = Date.now();
+          const created = createFlowRun({ flowId, flowVersionId: versionId,
+            projectId: getFlow(flowId)?.project_id, triggeredBy: `trigger:${kind}`,
+            status: 'FAILED', startTime: now, tags: ['workflow-readiness'] });
+          return updateRun(created.id, { finishTime: now, stepsCount: 0,
+            failedStep: { name: '<readiness>', displayName: 'Workflow readiness', errorMessage: error.message },
+            steps: { '<readiness>': { status: 'FAILED', output: { code: error.code, phase: kind, readiness: error.readiness } } } });
+        })();
+        if (kind === 'registration') {
+          this.registrationFailures.set(flowId, signature);
+          try { this.onRegistrationBlocked?.({ flowId, runId: run.id, message: error.message }); }
+          catch (notifyError) { this.log(`flow ${flowId}: readiness notification failed: ${String(notifyError)}`); }
+        }
+      }
+      this.log(`flow ${flowId}: readiness refused ${kind}: ${error.message}`);
+      if (kind === 'registration') this.scheduleEnableRetry(flowId, error.message, 'readiness');
+      return false;
+    }
+  }
+
   /**
    * Enqueue a RUN_FLOW. Used by every trigger fire path so `triggeredBy`
    * follows one convention -- `trigger:<kind>` -- across cron, webhook,
@@ -608,6 +648,7 @@ export class TriggerManager {
     payload?: Record<string, unknown>;
     executeTrigger?: boolean;
   }): void {
+    if (!this.checkReadiness(opts.flowId, opts.versionId, opts.kind)) return;
     const run = createFlowRun({
       flowId: opts.flowId,
       flowVersionId: opts.versionId,
@@ -662,6 +703,7 @@ export class TriggerManager {
       return;
     }
 
+    if (!this.checkReadiness(flowId, versionId, 'engine')) return;
     this.pollingInFlight.add(flowId);
     let items: unknown[];
     try {

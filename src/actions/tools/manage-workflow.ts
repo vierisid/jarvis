@@ -56,6 +56,7 @@ import {
   getLatestDraft,
 } from "../../workflows/db/repos/flow-version.ts";
 import { publishFlowVersion } from "../../workflows/db/repos/flow-publication.ts";
+import { assertVersionReady } from '../../workflows/db/repos/flow-readiness';
 import { assertCodeStepsAllowed } from "../../workflows/db/repos/flow-code-steps.ts";
 import {
   createFlowRun,
@@ -399,6 +400,7 @@ function actRun(flow: FlowRow, payload?: Record<string, unknown>): Record<string
   // model as the tool result, so it relays the opt-in instruction to the user
   // instead of retrying.
   assertCodeStepsAllowed(flow.id, versionId, "run");
+  assertVersionReady(flow.id, versionId);
   const run = createFlowRun({
     flowId: flow.id,
     flowVersionId: versionId,

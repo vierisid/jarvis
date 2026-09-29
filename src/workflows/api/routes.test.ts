@@ -1,3 +1,5 @@
+import { configureWorkflowReadiness } from '../db/repos/flow-readiness';
+import { PieceCatalog } from '../runtime/piece-catalog';
 /**
  * Tests for the workflow API route handlers. Invokes handlers directly with
  * synthesized Request objects so we don't need to bring up Bun.serve.
@@ -22,6 +24,9 @@ let routes: WorkflowRouteMap;
 // developer's real key file (and generates one into their live data dir).
 beforeEach(() => {
   initWorkflowDb(":memory:");
+  configureWorkflowReadiness({ tool: name => name === "run_command" ? { params: [{ name: "command", type: "string", required: true }] } : null, pieces: new PieceCatalog([...sampleCatalog().list(),
+    { name: 'jarvis-tool', displayName: '', description: '', actions: { invoke: { name: 'invoke', displayName: '', description: '' } } },
+  ]) });
   setEncryptionKey(Buffer.alloc(32, 0x12));
   routes = createWorkflowRoutes();
 });
@@ -274,7 +279,7 @@ describe("workflow API: flows", () => {
 });
 
 describe("workflow API: versions", () => {
-  test("PATCH a draft version updates trigger + valid", async () => {
+  test("PATCH saves an invalid draft but derives valid instead of trusting the client", async () => {
     const post = routes["/api/workflows"]?.POST;
     const created = await callJson(post, plainReq("POST", "http://x", { displayName: "x" }));
     const { id: flowId } = created.body.flow;
@@ -295,7 +300,7 @@ describe("workflow API: versions", () => {
       ),
     );
     expect(status).toBe(200);
-    expect(body.valid).toBe(true);
+    expect(body.valid).toBe(false);
     expect(body.connectionIds).toEqual(["conn-1"]);
     expect(body.trigger).toEqual({ type: "PIECE_TRIGGER", pieceName: "schedule" });
   });

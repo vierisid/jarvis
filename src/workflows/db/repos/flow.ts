@@ -9,6 +9,7 @@ import { getWorkflowDb, DEFAULT_IDS } from "../index";
 import { apId } from "../ids";
 import { withOwnedFlowVersion } from "./flow-version-ownership";
 import { assertFlowCodeStepsAllowed } from "./flow-code-steps";
+import { assertFlowReady, assertVersionReady } from './flow-readiness';
 
 export type FlowStatus = "ENABLED" | "DISABLED";
 
@@ -134,6 +135,7 @@ export function updateFlowStatus(id: string, status: FlowStatus): void {
   // inside `publishFlowVersion`'s transaction when publish is the caller --
   // by which point the same version has already cleared the same check.
   if (status === "ENABLED") assertFlowCodeStepsAllowed(id, "enable");
+  if (status === 'ENABLED') assertFlowReady(id);
   const res = db().run(
     `UPDATE flow SET status = ?, updated = ? WHERE id = ?`,
     [status, now(), id],
@@ -185,8 +187,13 @@ export function setPublishedVersion(id: string, versionId: string | null): void 
     );
     if (res.changes === 0) throw new Error(`setPublishedVersion: flow not found (id=${id})`);
   };
-  if (versionId === null) attach();
-  else withOwnedFlowVersion(id, versionId, attach);
+  if (versionId === null) db().transaction(() => {
+    attach();
+    // Clearing a publication on an enabled flow selects its latest draft.
+    // Roll back the pointer change if that fallback is not executable.
+    if (getFlow(id)?.status === 'ENABLED') assertFlowReady(id);
+  })();
+  else withOwnedFlowVersion(id, versionId, () => { assertVersionReady(id, versionId); attach(); });
 }
 
 export function updateFlowMetadata(id: string, metadata: Record<string, unknown> | null): void {

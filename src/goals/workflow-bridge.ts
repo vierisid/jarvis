@@ -11,6 +11,7 @@ import { getWorkItem, WorkItemError } from './work-items.ts';
 import { getFlow } from '../workflows/db/repos/flow.ts';
 import { getFlowVersion } from '../workflows/db/repos/flow-version.ts';
 import { createFlowRun, type FlowRun } from '../workflows/db/repos/flow-run.ts';
+import { assertVersionReady } from '../workflows/db/repos/flow-readiness';
 import { enqueue } from '../workflows/db/repos/job-queue.ts';
 
 /** The real plan-to-execution bridge. All writes share the vault transaction. */
@@ -32,6 +33,7 @@ export function startWorkItemRun(workItemId: string, workflowId: string): FlowRu
     if (!flow || !version || version.flowId !== workflowId || version.state !== 'LOCKED') {
       throw new WorkItemError('The accepted workflow version is unavailable', 409);
     }
+    assertVersionReady(workflowId, version.id);
     const run = createFlowRun({
       flowId: workflowId, flowVersionId: version.id, environment: 'PRODUCTION',
       triggeredBy: `work_item:${work.id}:decision:${work.decision.id}`, startTime: Date.now(),

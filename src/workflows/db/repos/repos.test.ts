@@ -64,9 +64,9 @@ describe("flow repo", () => {
 
   test("updateFlowStatus and setPublishedVersion mutate fields", () => {
     const flow = createFlow();
-    updateFlowStatus(flow.id, "ENABLED");
-    const version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: "Published" }).id);
+    const version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: "Published", trigger: { name: "trigger", type: "EMPTY" } }).id);
     setPublishedVersion(flow.id, version.id);
+    updateFlowStatus(flow.id, "ENABLED");
     const got = getFlow(flow.id);
     expect(got?.status).toBe("ENABLED");
     expect(got?.published_version_id).toBe(version.id);
@@ -106,13 +106,13 @@ describe("flow-version repo", () => {
     expect(draft.trigger).toEqual({ name: "trigger", type: "EMPTY" });
 
     const updated = updateDraftVersion(draft.id, {
-      trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule" } },
+      trigger: { name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule", input: { cron_expression: "0 9 * * *" } } },
       valid: true,
       connectionIds: ["conn1", "conn2"],
     });
     expect(updated.valid).toBe(true);
     expect(updated.connectionIds).toEqual(["conn1", "conn2"]);
-    expect(updated.trigger).toEqual({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule" } });
+    expect(updated.trigger).toEqual({ name: "trigger", type: "PIECE_TRIGGER", settings: { pieceName: "schedule", input: { cron_expression: "0 9 * * *" } } });
 
     const locked = lockVersion(draft.id);
     expect(locked.state).toBe("LOCKED");

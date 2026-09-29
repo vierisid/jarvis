@@ -27,6 +27,7 @@ import { createFlowRun, getFlowRun } from "../db/repos/flow-run";
 import { enqueue } from "../db/repos/job-queue";
 import { RUN_FLOW } from "../runner/handler";
 import { assertRunNotCanceled } from "../runtime/cancellation";
+import { assertVersionReady } from '../db/repos/flow-readiness';
 import { assertCodeStepsAllowed } from "../db/repos/flow-code-steps";
 
 /**
@@ -116,6 +117,7 @@ export class JarvisWorkflowRunnerAdapter implements PieceWorkflowRunner {
     // only ever refuse an unpublished draft: publish already requires the
     // grant, so a published child flow carries it and keeps running.
     assertCodeStepsAllowed(flow.id, versionId, "run");
+    assertVersionReady(flow.id, versionId);
     const run = createFlowRun({
       flowId: flow.id,
       flowVersionId: versionId,
