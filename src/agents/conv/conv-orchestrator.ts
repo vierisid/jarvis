@@ -374,6 +374,18 @@ export class ConvOrchestrator {
     yield { type: 'done', tasksRun };
   }
 
+  /**
+   * Whether a task record belongs to the same chat context as this turn.
+   *
+   * Compares scope IDS rather than resolved scopes, like
+   * `TaskDispatcher.resume`: a record carrying a scope id this build no longer
+   * defines matches no live turn and is treated as someone else's, where
+   * resolving it would yield "no scope" and make it look like a main-chat task.
+   */
+  private sameContext(record: TaskRecord, turn: ConvTurn): boolean {
+    return (record.scopeId ?? null) === (turn.scope?.id ?? null);
+  }
+
   private async handleToolCall(
     call: LLMToolCall,
     turn: ConvTurn,
@@ -439,6 +451,14 @@ export class ConvOrchestrator {
         if (!id) return { envelope: { error: 'check_task requires task_id' } };
         const rec = this.registry.get(id);
         if (!rec) return { envelope: { error: `task ${id} not found` } };
+        // Same rule as `resume_task`: the id is model-chosen against a
+        // process-global registry shared by every chat and channel, and the
+        // reply carries the task's intent and result summary. A site task's
+        // summary can hold project file content read through a framed tool, so
+        // "not found" is the right answer for another chat's task rather than a
+        // status line (#571). Indistinguishable from a genuinely unknown id, on
+        // purpose.
+        if (!this.sameContext(rec, turn)) return { envelope: { error: `task ${id} not found` } };
         return {
           envelope: {
             task_id: rec.id,
@@ -452,6 +472,11 @@ export class ConvOrchestrator {
       case CONV_TOOL_NAMES.cancel_task: {
         const id = (call.arguments as { task_id?: string }).task_id;
         if (!id) return { envelope: { error: 'cancel_task requires task_id' } };
+        // One chat's router must not be able to abort another chat's work.
+        const target = this.registry.get(id);
+        if (target && !this.sameContext(target, turn)) {
+          return { envelope: { error: `task ${id} not found` } };
+        }
         const ok = this.registry.abort(id);
         return { envelope: { task_id: id, cancelled: ok } };
       }
@@ -640,10 +665,12 @@ export class ConvOrchestrator {
     // carry the scope they were created under, matching it is the cheap half of
     // the fix. (The framing half is noted in actions/tools/tool-scope.ts and
     // is not this change.)
-    const sameContext = (t: TaskRecord) => (t.scopeId ?? null) === (turn.scope?.id ?? null);
+    // One rule, one definition: the same predicate `check_task`,
+    // `cancel_task` and `resume_task` use.
+    const mine = (t: TaskRecord) => this.sameContext(t, turn);
 
     // In-flight tasks
-    const inFlight = this.registry.inFlight().filter(sameContext);
+    const inFlight = this.registry.inFlight().filter(mine);
     if (inFlight.length > 0) {
       parts.push('# In-flight Tasks');
       for (const t of inFlight) {
@@ -657,7 +684,7 @@ export class ConvOrchestrator {
     // it needs to verbalize follow-ups. Even with the full summary, ANY
     // request for specifics not already in the summary MUST be delegated
     // (see "CRITICAL: You have NO direct knowledge" in the static half).
-    const recent = this.registry.recentResults(5).filter(sameContext);
+    const recent = this.registry.recentResults(5).filter(mine);
     if (recent.length > 0) {
       parts.push('# Recent Task Results');
       for (const t of recent) {

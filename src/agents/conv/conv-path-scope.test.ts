@@ -474,6 +474,34 @@ describe('#571 a resume cannot cross a chat boundary', () => {
     expect(out.error).toBe('scope_mismatch');
   });
 
+  it('another chat context\'s task is not visible to check_task or cancel_task', async () => {
+    // The router chooses these ids itself, against a process-global registry
+    // shared by every chat and channel, and the check_task reply carries the
+    // task's intent and full result summary. "not found" is the answer for
+    // someone else's task, indistinguishable from an unknown id.
+    const { stack, id } = await paused(null);
+    const handle = (stack.conversation as unknown as {
+      handleToolCall: (
+        call: { id: string; name: string; arguments: Record<string, unknown> },
+        turn: { userMessage: string; scope: TurnToolScope | null },
+      ) => Promise<{ envelope: unknown }>;
+    });
+    const siteTurn = { userMessage: 'x', scope: PROJECT_SITE_CHAT_SCOPE };
+
+    const checked = await handle.handleToolCall({ id: 'c', name: 'check_task', arguments: { task_id: id } }, siteTurn);
+    expect((checked.envelope as { error?: string }).error).toContain('not found');
+
+    const cancelled = await handle.handleToolCall({ id: 'c', name: 'cancel_task', arguments: { task_id: id } }, siteTurn);
+    expect((cancelled.envelope as { error?: string }).error).toContain('not found');
+    // Still alive: the abort never reached it.
+    expect(stack.taskRegistry.get(id)!.status).toBe('needs_input');
+
+    // ...and from its OWN context both work.
+    const ownTurn = { userMessage: 'x', scope: null };
+    const own = await handle.handleToolCall({ id: 'c', name: 'check_task', arguments: { task_id: id } }, ownTurn);
+    expect((own.envelope as { status?: string }).status).toBe('needs_input');
+  });
+
   it('the paused buffer carries no system messages, so the site block cannot outlive its turn', async () => {
     const { stack, id } = await paused(PROJECT_SITE_CHAT_SCOPE);
     const buffer = stack.taskRegistry.get(id)!.pausedConversation as { role: string }[];
