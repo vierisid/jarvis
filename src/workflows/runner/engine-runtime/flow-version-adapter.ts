@@ -7,7 +7,7 @@
  *   - Timestamps: we store epoch ms, upstream wants ISO strings on every node
  *     (`created`, `updated`, and `lastUpdatedDate` per action/trigger).
  *   - Per-node defaults: `valid` defaults to true if absent, `displayName`
- *     defaults to `name`, action `settings` are passed through as-is.
+ *     defaults to `name`; piece inputs and property schemas are preserved.
  *   - LOOP / ROUTER children stay nested; the engine walks them recursively.
  *
  * We do NOT validate against upstream's zod schemas at the adapter boundary.
@@ -155,7 +155,7 @@ function adaptTrigger(
         pieceVersion: DEFAULT_PIECE_VERSION,
         triggerName: settings.triggerName,
         input: settings.input ?? {},
-        propertySettings: {},
+        propertySettings: settings.propertySettings ?? {},
       },
       nextAction: trigger.nextAction
         ? adaptAction(trigger.nextAction, fallbackTimestamp)
@@ -189,7 +189,7 @@ function adaptAction(
         pieceVersion: DEFAULT_PIECE_VERSION,
         actionName: settings.actionName,
         input: settings.input ?? {},
-        propertySettings: {},
+        propertySettings: settings.propertySettings ?? {},
       },
       nextAction: next,
     };

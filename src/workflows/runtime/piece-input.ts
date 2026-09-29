@@ -44,6 +44,10 @@ export interface PieceInputField {
   /** Display label for the panel. */
   label: string;
   type: PieceInputType;
+  /** Original piece property type, when known (e.g. DYNAMIC needs a schema). */
+  sourceType?: string;
+  /** ARRAY properties with a row schema also accept the engine's column map. */
+  arrayHasProperties?: boolean;
   required: boolean;
   /** Optional inline help text below the widget. */
   description?: string;

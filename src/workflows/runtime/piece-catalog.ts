@@ -54,6 +54,7 @@ export interface PieceCatalogAction {
   name: string;
   displayName: string;
   description: string;
+  requireAuth?: boolean;
   inputSchema?: PieceInputSchema;
   /**
    * Optional declared output sample: the same JSON shape the action returns
@@ -292,7 +293,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "6";
+export const CATALOG_SCHEMA_VERSION = "7"; // v7: requireAuth and source property types for readiness
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -784,6 +785,7 @@ export interface RawPieceMetadata {
 }
 
 export interface RawActionOrTrigger {
+  requireAuth?: boolean;
   name?: string;
   displayName?: string;
   description?: string;
@@ -799,6 +801,7 @@ export interface RawProp {
   description?: string;
   placeholder?: string;
   required?: boolean;
+  properties?: Record<string, unknown>;
   defaultValue?: unknown;
   options?: { options?: Array<{ value: unknown; label?: string; description?: string }> };
 }
@@ -987,6 +990,7 @@ function rawActionToCatalogAction(
     displayName: typeof raw.displayName === "string" ? raw.displayName : fallbackName,
     description: typeof raw.description === "string" ? raw.description : "",
   };
+  if (typeof raw.requireAuth === 'boolean') out.requireAuth = raw.requireAuth;
   if (raw.props) {
     out.inputSchema = propsToInputSchema(raw.props);
   }
@@ -1020,6 +1024,7 @@ function mapProp(name: string, prop: RawProp): PieceInputField | null {
   if (type === null) return null; // auth fields, markdown -- not user inputs
   const out: PieceInputField = {
     name,
+    sourceType: prop.type,
     label:
       typeof prop.displayName === "string" && prop.displayName.length > 0
         ? prop.displayName
@@ -1034,6 +1039,7 @@ function mapProp(name: string, prop: RawProp): PieceInputField | null {
     out.placeholder = prop.placeholder;
   }
   if (prop.defaultValue !== undefined) out.default = prop.defaultValue;
+  if (prop.type === 'ARRAY') out.arrayHasProperties = !!prop.properties;
   if (
     (type === "enum" || type === "multi_enum") &&
     prop.options &&
