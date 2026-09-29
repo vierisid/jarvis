@@ -147,6 +147,118 @@ describe("Engine end-to-end (F gate)", () => {
     expect(() => publishFlowVersion(flow.id, version.id)).toThrow();
   }, 30_000);
 
+  test.skipIf(skipE2eTests)('R1: presence routers inspect missing outputs without relaxing other expressions', async () => {
+    const ask = (name: string, prompt: string): FlowTriggerNode => ({ name, type: 'PIECE', settings: { pieceName: PIECE_ASK_NAME, pieceVersion: PIECE_VERSION, actionName: 'ask', input: { prompt } } });
+    for (const [operand, operator, expected] of [
+      ['{{first.missing}}', 'DOES_NOT_EXIST', 'matched'],
+      ['{{first.missing}}', 'EXISTS', 'fallback'],
+      ['{{first}}', 'EXISTS', 'matched'],
+      ['{{first.missing}}', 'TEXT_EXACTLY_MATCHES', null],
+    ] as const) {
+      const before = llmCalls.length;
+      const first = ask('first', 'inspect output');
+      first.nextAction = { name: 'router', type: 'ROUTER', settings: { executionType: 'EXECUTE_FIRST_MATCH', branches: [
+        { branchType: 'CONDITION', branchName: 'Match', conditions: [[{ firstValue: operand, operator, ...(operator === 'TEXT_EXACTLY_MATCHES' ? { secondValue: '' } : {}) }]] },
+        { branchType: 'FALLBACK', branchName: 'Otherwise' },
+      ] }, children: [ask('matched', 'matched'), ask('fallback', 'fallback')] };
+      const flow = createFlow();
+      const version = createDraftVersion({ flowId: flow.id, displayName: 'Presence', trigger: { name: 'trigger', type: 'EMPTY', nextAction: first } });
+      const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, environment: 'TESTING' });
+      const handle = await runtime!.acquire({ runId: run.id, projectId: DEFAULT_IDS.project });
+      try {
+        if (expected) {
+          const result = await handle.executeFlow({ flowVersion: version });
+          expect(result.status).toBe('SUCCEEDED');
+        } else {
+          await expect(handle.executeFlow({ flowVersion: version })).rejects.toThrow('absent value');
+        }
+        expect(llmCalls.slice(before).map(c => c.prompt)).toEqual(expected ? ['inspect output', expected] : ['inspect output']);
+      } finally { await handle.release(); }
+    }
+  }, 60_000);
+
+  const optional = '{{trigger.optional}}';
+  const exists = { firstValue: optional, operator: 'EXISTS' };
+  const absent = { firstValue: optional, operator: 'DOES_NOT_EXIST' };
+  const contains = { firstValue: optional, operator: 'TEXT_CONTAINS', secondValue: 'approved' };
+  for (const executionType of ['EXECUTE_FIRST_MATCH', 'EXECUTE_ALL_MATCH'] as const) {
+    for (const fixture of [
+      { label: 'false AND guard skips comparison', conditions: [[exists, contains]], payload: {}, expected: 'fallback', evaluated: [1] },
+      { label: 'true OR group skips later group', conditions: [[absent], [contains]], payload: {}, expected: 'matched', evaluated: [1] },
+      { label: 'true guard evaluates a matching comparison', conditions: [[exists, contains]], payload: { optional: 'approved' }, expected: 'matched', evaluated: [2] },
+      { label: 'true guard evaluates a false comparison', conditions: [[exists, contains]], payload: { optional: 'rejected' }, expected: 'fallback', evaluated: [2] },
+      { label: 'false OR group proceeds to the next', conditions: [[absent], [contains]], payload: { optional: 'approved' }, expected: 'matched', evaluated: [1, 1] },
+      { label: 'evaluated absent comparison remains an error', conditions: [[absent, contains]], payload: {}, expected: null, evaluated: [] },
+      { label: 'false OR group cannot hide an absent comparison', conditions: [[exists], [contains]], payload: {}, expected: null, evaluated: [] },
+    ]) {
+      test.skipIf(skipE2eTests)(`R7: ${fixture.label} (${executionType})`, async () => {
+        const before = llmCalls.length;
+        const ask = (name: string): FlowTriggerNode => ({ name, type: 'PIECE', settings: { pieceName: PIECE_ASK_NAME, actionName: 'ask', input: { prompt: name } } });
+        const flow = createFlow();
+        const trigger: FlowTriggerNode = { name: 'trigger', type: 'EMPTY', nextAction: { name: 'router', type: 'ROUTER', settings: {
+          executionType, branches: [
+            { branchType: 'CONDITION', branchName: 'Match', conditions: fixture.conditions },
+            { branchType: 'FALLBACK', branchName: 'Otherwise' },
+          ],
+        }, children: [ask('matched'), ask('fallback')] } };
+        const version = createDraftVersion({ flowId: flow.id, displayName: fixture.label, trigger });
+        const req = Object.assign(new Request('http://local/run', { method: 'POST', body: JSON.stringify({ environment: 'TESTING', payload: fixture.payload }) }), { params: { id: flow.id } });
+        const response = await createWorkflowRoutes()['/api/workflows/:id/run']!.POST!(req);
+        expect(response.status).toBe(202);
+        const { id: runId } = await response.json() as { id: string };
+        const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({ executor: new EngineFlowExecutor(runtime!) }) } });
+        await worker.drain();
+        const run = getFlowRun(runId)!;
+        expect(run.status).toBe(fixture.expected ? 'SUCCEEDED' : 'FAILED');
+        expect(llmCalls.slice(before).map(call => call.prompt)).toEqual(fixture.expected ? [fixture.expected] : []);
+        if (fixture.expected) {
+          // The outer worker wraps each engine StepOutput in { output }.
+          const router = (run.steps!.router as { output: {
+            input: { branches: Array<{ conditions: unknown[][] }> };
+            output: { branches: Array<{ evaluation: boolean }> };
+          } }).output;
+          expect(router.input.branches[0]!.conditions.map(group => group.length)).toEqual(fixture.evaluated);
+          expect(router.output.branches.map(branch => branch.evaluation)).toEqual([fixture.expected === 'matched', fixture.expected === 'fallback']);
+        }
+        expect(getFlowVersion(version.id)!.trigger).toEqual(trigger);
+      }, 45_000);
+    }
+  }
+
+  for (const executionType of ['EXECUTE_FIRST_MATCH', 'EXECUTE_ALL_MATCH'] as const) {
+    for (const payload of [{}, { optional: 'approved' }]) {
+      test.skipIf(skipE2eTests)(`review: router evaluates only reachable branches (${executionType}, ${JSON.stringify(payload)})`, async () => {
+        const before = llmCalls.length;
+        const ask = (name: string): FlowTriggerNode => ({ name, type: 'PIECE', settings: { pieceName: PIECE_ASK_NAME, actionName: 'ask', input: { prompt: name } } });
+        const flow = createFlow();
+        const trigger: FlowTriggerNode = { name: 'trigger', type: 'EMPTY', nextAction: { name: 'router', type: 'ROUTER', settings: {
+          executionType, branches: [
+            { branchType: 'CONDITION', branchName: 'Missing', conditions: [[absent]] },
+            { branchType: 'CONDITION', branchName: 'Approved', conditions: [[contains]] },
+            { branchType: 'FALLBACK', branchName: 'Otherwise' },
+          ],
+        }, children: [ask('missing'), ask('approved'), ask('fallback')] } };
+        const version = createDraftVersion({ flowId: flow.id, displayName: 'Cross-branch short circuit', trigger });
+        const req = Object.assign(new Request('http://local/run', { method: 'POST', body: JSON.stringify({ environment: 'TESTING', payload }) }), { params: { id: flow.id } });
+        const response = await createWorkflowRoutes()['/api/workflows/:id/run']!.POST!(req);
+        expect(response.status).toBe(202);
+        const { id } = await response.json() as { id: string };
+        const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({ executor: new EngineFlowExecutor(runtime!) }) } });
+        await worker.drain();
+        const run = getFlowRun(id)!;
+        const fails = executionType === 'EXECUTE_ALL_MATCH' && !('optional' in payload);
+        expect(run.status).toBe(fails ? 'FAILED' : 'SUCCEEDED');
+        expect(llmCalls.slice(before).map(call => call.prompt)).toEqual(fails ? [] : ['optional' in payload ? 'approved' : 'missing']);
+        if (!fails && !('optional' in payload)) {
+          const router: any = (run.steps!.router as any).output;
+          expect(router.input.branches[1].conditions).toEqual([]);
+          expect(router.output.branches.map((b: any) => b.evaluation)).toEqual([true, false, false]);
+        }
+        expect(getFlowVersion(version.id)!.trigger).toEqual(trigger);
+      }, 45_000);
+    }
+  }
+
   for (const left of [true, false]) {
     test.skipIf(skipE2eTests)(`review: real engine joins the executed router branch (${left})`, async () => {
       const before = llmCalls.length;

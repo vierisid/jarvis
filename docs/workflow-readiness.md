@@ -57,6 +57,14 @@ node, path and enforcing guard. Piece input validation runs before dispatch;
 missing references fail before interpolation can turn them into ordinary text.
 Optional data needs an explicit fallback, for example
 `{{trigger.optionalNote ?? "No note"}}`. Loop items must resolve to an array.
+Router `EXISTS` / `DOES_NOT_EXIST` predicates intentionally inspect absence;
+their complete expression operands receive a null fallback during execution.
+Router conditions resolve in order: an AND group stops at its first false
+condition, and OR groups stop at their first match. Skipped operands are neither
+resolved nor included in the recorded router input; the saved graph is unchanged.
+First-match routers also stop before resolving any later branch. All-match
+routers evaluate each branch; unvisited branches retain empty condition lists. Other router
+operators still reject missing values when evaluated, as do ordinary action inputs.
 Known JSON, object and array inputs are checked before activation, using their
 source property type and the engine's supported conversions. A required collection
 must be present, but an empty array is valid; required does not imply a minimum

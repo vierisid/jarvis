@@ -211,6 +211,7 @@ export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/safe-expression.ts',
   '../../runtime/input-validation.ts',
   '../../runtime/resolved-input-guard.ts',
+  '../../runtime/router-presence.ts',
   // Jarvis: the governed-piece admission gate. The adapter table and the
   // engine-side client are daemon sources compiled INTO the bundle, so editing
   // either without registering them here would leave a cached engine running
