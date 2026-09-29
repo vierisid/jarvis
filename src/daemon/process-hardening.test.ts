@@ -311,6 +311,94 @@ console.log(JSON.stringify({
     expect(result.after.cgroup).toBe('ok');
   }, 30_000);
 
+  /**
+   * #551 reads a file through the descriptor it actually opened and asks
+   * `/proc/self/fd/<n>` where that descriptor landed, which is the only way on
+   * Linux to know what was really opened after the path was classified. That
+   * directory flips to root ownership when the daemon becomes non-dumpable, so
+   * if the kernel stopped admitting the owning thread group, `descriptorPath()`
+   * would start returning null and the TOCTOU close would quietly weaken.
+   * Driven through the REAL read_file tool inside a hardened process.
+   */
+  test("#551's read_file still refuses an aliased key and still reads through the descriptor", async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'jarvis-dumpable-551-'));
+    const probe = join(dir, 'probe.ts');
+    const builtin = resolve(import.meta.dir, '..', 'actions', 'tools', 'builtin.ts');
+    const policy = resolve(import.meta.dir, '..', 'actions', 'tools', 'file-path-policy.ts');
+    writeFileSync(
+      probe,
+      `
+import { mkdirSync, writeFileSync, linkSync, readlinkSync, openSync } from 'node:fs';
+import { join } from 'node:path';
+import { hardenProcessInspection } from ${JSON.stringify(MODULE.replace(/\.test\.ts$/, '.ts'))};
+import { readFileTool, setDefaultCwd } from ${JSON.stringify(builtin)};
+import { setDaemonDataRoots, setPolicyHome, setSiteProjectsDir } from ${JSON.stringify(policy)};
+
+const root = ${JSON.stringify(dir)};
+const home = join(root, 'home');
+const dataDir = join(home, '.jarvis');
+const projectsDir = join(dataDir, 'projects');
+mkdirSync(projectsDir, { recursive: true });
+mkdirSync(join(home, 'Documents'), { recursive: true });
+const MARKER = 'SYNTHETIC-KEY-MUST-NOT-APPEAR';
+writeFileSync(join(dataDir, '.secrets.key'), MARKER + '\\n');
+writeFileSync(join(home, 'Documents', 'cv.txt'), 'an ordinary document\\n');
+// The alias no path rule can see: a hard link that IS the key.
+const alias = join(home, 'Documents', 'notes.txt');
+linkSync(join(dataDir, '.secrets.key'), alias);
+setPolicyHome(home);
+setSiteProjectsDir(projectsDir);
+setDaemonDataRoots({ dataDirs: [dataDir], secretsDirs: [dataDir] });
+setDefaultCwd(null);
+
+// Harden AFTER the fixtures, BEFORE the reads: the reads are what must survive.
+const outcome = hardenProcessInspection({ log: () => {} });
+const fd = openSync(join(home, 'Documents', 'cv.txt'), 0);
+let fdPath = 'unreadable';
+try { fdPath = readlinkSync('/proc/self/fd/' + fd); } catch (e) { fdPath = e.code; }
+
+const read = async (p) => String(await readFileTool.execute({ path: p }));
+// Sentinel-prefixed: the policy logs its refusals to stdout too, so the
+// result has to be findable rather than "the last line with a brace in it".
+console.log('PROBE_RESULT ' + JSON.stringify({
+  outcome,
+  fdPath,
+  alias: await read(alias),
+  ordinary: await read(join(home, 'Documents', 'cv.txt')),
+  procfs: await read('/proc/self/status'),
+}));
+`,
+      'utf-8',
+    );
+
+    const run = Bun.spawnSync([process.execPath, probe], { stdout: 'pipe', stderr: 'pipe' });
+    const stdout = run.stdout.toString();
+    const line = stdout.split('\n').find((l) => l.startsWith('PROBE_RESULT '));
+    if (!line) {
+      throw new Error(`probe printed no result; stdout: ${stdout}\nstderr: ${run.stderr.toString()}`);
+    }
+    const result = JSON.parse(line.slice('PROBE_RESULT '.length)) as {
+      outcome: { kind: string };
+      fdPath: string;
+      alias: string;
+      ordinary: string;
+      procfs: string;
+    };
+
+    // The process really was hardened, so none of the below passes by accident.
+    expect(result.outcome.kind).toBe('hardened');
+    // The mechanism #551 depends on still answers.
+    expect(result.fdPath).toBe(join(dir, 'home', 'Documents', 'cv.txt'));
+    // The hard-linked key is still refused, and none of its bytes came back.
+    expect(result.alias).toContain('Access denied');
+    expect(result.alias).not.toContain('SYNTHETIC-KEY-MUST-NOT-APPEAR');
+    // An ordinary file still reads.
+    expect(result.ordinary).toContain('an ordinary document');
+    // And a size-0 procfs file still reads through the descriptor rather than
+    // by its reported size.
+    expect(result.procfs).toContain('Pid:');
+  }, 60_000);
+
   test('the escape hatch really leaves environ readable', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'jarvis-dumpable-off-'));
     const probe = join(dir, 'probe.ts');
