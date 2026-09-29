@@ -24,8 +24,31 @@ export type PageElement = {
 };
 
 export type PageSnapshot = {
+  /** The page's own `document.title`. Display only -- it can contain newlines. */
   title: string;
+  /**
+   * The page's own `location.href`. DISPLAY ONLY: this is what the page says it
+   * is, it is rendered into the snapshot text the model reads, and no decision
+   * may be made from it. Use `browserUrl`.
+   */
   url: string;
+  /**
+   * What Chrome reports for the top frame (`Page.getFrameTree`), or null when
+   * that read failed or the document changed under the snapshot. THE ONLY URL
+   * CODE MAY BRANCH ON (#572).
+   *
+   * The distinction is the same one `readTopFrameUrl` already documents for the
+   * upload gate: the frame tree is the browser's answer, `location.href` is the
+   * page's. Outside content either way -- a page still picks its own path with
+   * `history.pushState`, and the document can be a `data:` or `blob:` URL -- so
+   * "structural" here means unforgeable across origins, not trusted.
+   *
+   * Null rather than a stale fallback on purpose. A caller that gets null does
+   * less (no site playbook); one handed the PREVIOUS page's URL would act on
+   * the wrong site's instructions while believing it had the current one.
+   */
+  browserUrl: string | null;
+  /** Page text, truncated by the formatter. Outside content. */
   text: string;
   elements: PageElement[];
 };
@@ -469,8 +492,29 @@ export class BrowserController {
     await this.ensureConnected();
     // Refresh the browser-reported URL while we are here: a snapshot is what the
     // model takes after clicking through a site, so this is where an approval
-    // card's idea of the current origin comes from.
-    await this.readTopFrameUrl().catch(() => { /* advisory only */ });
+    // card's idea of the current origin comes from -- and, since #572, where the
+    // site-playbook lookup gets the URL it resolves. Kept non-fatal: a snapshot
+    // whose frame-tree read failed still shows the model the page, it just
+    // reports no browserUrl and so buys no decision.
+    //
+    // The loaderId comes with it, for the re-check after the evaluate below.
+    const before = await this.readTopFrame().catch(() => null);
+
+    // A refusal ADDED here, ahead of the page's own claim, not moved: until #572
+    // `snapshot()` refused on `data.url` alone, i.e. on what the page said it
+    // was. The frame-tree URL is now in hand anyway, and the Go port states the
+    // order outright (sidecar/browser_snapshot.go) -- there is no reason to run a
+    // local document's script and refuse afterwards.
+    //
+    // Belt and braces rather than the primary control: `location.href` is
+    // [LegacyUnforgeable], so a page cannot actually lie about it, and the
+    // loading guards are what keep `file:` out in the first place (#521). This
+    // catches the case where the page's claim is honest and the guards never saw
+    // the load.
+    const frameUrl = before?.url ?? '';
+    if (isLocalContentUrl(frameUrl)) {
+      throw new Error(`Refusing to read ${frameUrl.slice(0, 200)}: the browser does not show local files to the model.`);
+    }
 
     const result = await this.cdp.send('Runtime.evaluate', {
       expression: SNAPSHOT_SCRIPT,
@@ -482,15 +526,34 @@ export class BrowserController {
       throw new Error(`Snapshot failed: ${JSON.stringify(result.exceptionDetails)}`);
     }
 
-    const data = result.result.value as PageSnapshot & {
+    // The page's answer, and only that: SNAPSHOT_SCRIPT runs in the page's own
+    // world. Typed as its own shape rather than as PageSnapshot so nothing can
+    // read a `browserUrl` off it -- that field is ours to fill, not the page's.
+    const data = result.result.value as {
+      title: string;
+      url: string;
+      text: string;
       elements: Array<PageElement & { x: number; y: number }>;
     };
 
     // Backstop for the guards (#521): whatever got the tab here, local
-    // content is not handed to the model.
+    // content is not handed to the model. Both answers are checked -- this one
+    // is the page's claim, and the browser's was checked above, before the
+    // script ran. A page that wants its file: document read has to lie in the
+    // one Chrome does not let it touch.
     if (isLocalContentUrl(data.url ?? '')) {
       throw new Error(`Refusing to read ${String(data.url).slice(0, 200)}: the browser does not show local files to the model.`);
     }
+
+    // CHECK, READ, CHECK AGAIN, as browser_read_guard.go puts it. A document can
+    // commit between the frame-tree read and the evaluate -- a timer, a meta
+    // refresh -- and then the URL names one document while the text came from
+    // another, which is exactly the mismatch `browserUrl` promises not to be. The
+    // loaderId changes on every commit, so comparing it is what closes the
+    // window; `uploadFile` already gates on it the same way.
+    const after = await this.readTopFrame().catch(() => null);
+    const sameDocument = before !== null && after !== null
+      && before.loaderId !== '' && before.loaderId === after.loaderId;
 
     // Store coordinates locally, strip from LLM-facing data
     this.elementCoords.clear();
@@ -509,6 +572,10 @@ export class BrowserController {
     return {
       title: data.title,
       url: data.url,
+      // Null unless the document that answered is the one that was checked. A
+      // caller handed the PREVIOUS document's URL is the failure this field's
+      // docblock rules out, so a lost race costs a site playbook, not a wrong one.
+      browserUrl: sameDocument && before.url ? before.url : null,
       text: data.text,
       elements: cleanElements,
     };

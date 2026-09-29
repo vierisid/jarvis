@@ -220,10 +220,10 @@ Common `kind` values:
 
 ## Surface Limits
 
-Two of the structural-surface RPCs do not cover the same ground everywhere.
-Neither is a bug, and neither reports an error: in both cases the call succeeds
-and simply returns less than the caller expected, which is why the symptom
-reads as something else. Callers that depend on the missing part have to
+Three of the structural-surface RPCs do not cover the same ground everywhere.
+None of them is a bug, and none reports an error: in every case the call
+succeeds and simply returns less than the caller expected, which is why the
+symptom reads as something else. Callers that depend on the missing part have to
 recognise it themselves.
 
 ### `get_window_tree`: the `semantic` flag is Windows-only
@@ -295,6 +295,36 @@ to each, call `getFullAXTree` per session, and merge -- keeping the session
 alongside each `backend_node_id` so actions dispatch on the right one, and
 offsetting each frame's coordinates the way the DOM snapshot already does. That
 is deferred until the AX provider becomes the default path.
+
+### `browser_snapshot`: the reply is text, so the brain learns no page URL
+
+`makeBrowserSnapshotHandler` replies with `formatBrowserSnapshot`'s rendering
+and nothing beside it. The `pageSnapshot` it formatted -- URL included, already
+checked by `refuseLocalContent` and `assertSamePage` -- is dropped at the
+handler boundary.
+
+The brain used to recover the URL by matching a `URL:` line in that text. It no
+longer does (#572): the rendering is a page, its first line is the page's own
+`document.title`, and a page that prints its own `URL:` line was choosing which
+site playbook the model got handed.
+
+So a sidecar-routed browser resolves no webapp template at all, on either
+`browser_snapshot` or `browser_navigate`. The requested URL was considered for
+navigate and rejected: it is pre-redirect, open redirects are ordinary on the
+hosts templates are written for, and a playbook states "You are now on <host>"
+outside the untrusted block, so a redirect would put that sentence over a page
+that is not that host. Only a URL the browser confirms selects a playbook.
+
+Closing it is a reply-shape change, and the value is already in hand: the URL
+must come from the frame tree the handler checked, not from `location.href` (a
+page that wants a playbook is exactly the party that would lie about which site
+it is), and `takePageSnapshot` already has that -- `assertNotLocalContent`
+returns a `pageIdentity` carrying the checked `url`, `loaderID` and `origin`
+(`browser_read_guard.go`). So: return that `url` as its own field alongside the
+text (`RPCResult.Result` is `any`, so this is additive), and have the browser
+tools pass it to `WebappTemplateDelivery.withInstructions` the way the local path
+passes `PageSnapshot.browserUrl`. Carrying the `loaderID` too would let the brain
+make the same same-document check `BrowserController.snapshot` makes.
 
 ## RPC Lifecycle on the Brain
 

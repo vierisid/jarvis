@@ -135,15 +135,24 @@ export function getWebappTemplateByDomain(url: string): WebappTemplate | null {
     'SELECT * FROM webapp_templates WHERE enabled = 1'
   ).all() as WebappRow[];
 
-  // Extract hostname + path from URL
+  // Extract hostname + path from URL. A bare hostname ("web.whatsapp.com") is a
+  // supported argument, which is what the prefixing is for.
   let hostname: string;
   let path = '';
   try {
-    const parsed = new URL(url.startsWith('http') ? url : `https://${url}`);
+    // Tested for a SCHEME, not for the letters "http": `httpbin.org` is a bare
+    // hostname and needs the prefix like any other.
+    const parsed = new URL(/^https?:\/\//i.test(url) ? url : `https://${url}`);
     hostname = parsed.hostname;
     path = parsed.pathname;
   } catch {
-    hostname = url.toLowerCase();
+    // NOT `hostname = url` (#572). Treating a string that is not a URL as though
+    // it were a hostname, and then suffix-matching it below, made the whole
+    // argument the thing being matched: `data:text/html,x<!--.mail.google.com`
+    // does not parse, so it became "the hostname", and it ends with
+    // ".mail.google.com". A document whose own bytes name a site is not that
+    // site. No parse, no match.
+    return null;
   }
 
   let best: { template: WebappTemplate; specificity: number } | null = null;
@@ -154,7 +163,10 @@ export function getWebappTemplateByDomain(url: string): WebappTemplate | null {
       const [domainHost = '', ...pathParts] = domain.split('/');
       const domainPath = pathParts.length > 0 ? `/${pathParts.join('/')}` : '';
       const hostMatches = hostname === domainHost || hostname.endsWith(`.${domainHost}`);
-      const pathMatches = domainPath === '' || path.startsWith(domainPath);
+      // On a SEGMENT boundary, not a bare prefix: `docs.google.com/document`
+      // claimed `/documentation-of-anything` too, so a page could pick a sibling
+      // template on its own host just by choosing a path.
+      const pathMatches = domainPath === '' || path === domainPath || path.startsWith(`${domainPath}/`);
       if (hostMatches && pathMatches && (!best || domain.length > best.specificity)) {
         best = { template: rowToTemplate(row), specificity: domain.length };
       }

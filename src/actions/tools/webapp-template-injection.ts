@@ -11,6 +11,12 @@
  * conversation's tool set (the main agent's global tools and each background
  * agent's bound tools are separate conversations with separate histories — a
  * delivery into one must never suppress delivery into another).
+ *
+ * WHICH page it is, is the CALLER's to say (#572). This module is handed a URL;
+ * it never derives one from the tool result, because the tool result is a
+ * rendered page and a page would then be choosing its own playbook. Which URL a
+ * caller may pass, and why a sidecar-routed browser has none to give, is settled
+ * once above the browser tools in builtin.ts.
  */
 
 import { getWebappInstructionsForUrl } from '../../vault/webapp-templates.ts';
@@ -37,20 +43,42 @@ const SITE_INSTRUCTIONS_SEPARATOR = '\n\n---\nYou are now on ';
 const REDELIVER_AFTER_MS = 30 * 60_000;
 
 /**
- * A sidecar dispatch that went detached returns this prefix (sidecar-route.ts)
- * — the navigation outcome is unknown, so no template is delivered; the next
- * browser_snapshot will deliver it once the page is actually there.
+ * Longest URL this module will look up. Real page URLs are far shorter; the cap
+ * is here because a URL is OUTSIDE CONTENT even when it arrives structurally,
+ * and a megabyte of `data:` is not a page identity worth resolving.
  */
-const DETACHED_RESULT_PREFIX = 'Task dispatched to ';
+const MAX_LOOKUP_URL_LENGTH = 2048;
 
 /**
- * Pull the page URL out of a formatted snapshot ("Page: …\nURL: …"). Works on
- * both the local formatSnapshot output and the sidecar's parity-formatted
- * string, so delivery behaves the same for remote browsers.
+ * The page URL, if it is one this module is willing to resolve.
+ *
+ * `browserUrl` is Chrome's answer rather than the page's, so a page cannot claim
+ * another site's origin -- but it still chooses its own path (`history.pushState`),
+ * and the document itself can be `data:` or `blob:`. Structural is not trusted:
+ * so length is capped, and anything carrying a control character (a newline
+ * above all, which is what would let a value break a log line or a rendered
+ * field it later lands in) is refused outright rather than trimmed. Refusing
+ * costs at most one site playbook.
  */
-export function extractSnapshotUrl(result: string): string | null {
-  const match = result.match(/^URL: (\S+)$/m);
-  return match ? match[1]! : null;
+function usablePageUrl(url: string | null): string | null {
+  if (!url) return null;
+  if (url.length > MAX_LOOKUP_URL_LENGTH) return null;
+  if (/[\u0000-\u001f\u007f]/.test(url)) return null;
+  // And it must be a SITE. A playbook says "you are now on Gmail"; a `data:` or
+  // `blob:` document has no site to be on, and its bytes are the attacker's in
+  // full -- so `data:text/html,<!--.mail.google.com` was enough to be handed
+  // Gmail's playbook, because the matcher falls back to treating a URL it cannot
+  // parse as a bare hostname and then suffix-matches it. That fallback is gone
+  // too (vault/webapp-templates.ts); this is the half that belongs here, where
+  // the question is "is this a page identity at all".
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') return null;
+  return url;
 }
 
 export class WebappTemplateDelivery {
@@ -69,9 +97,20 @@ export class WebappTemplateDelivery {
 
   /**
    * Attach the site's template instructions to a browser tool result when the
-   * page URL resolves to a known webapp template that hasn't been delivered
-   * recently in this conversation. Error and detached-dispatch results, empty
-   * results and unknown URLs pass through untouched.
+   * page the browser is ON resolves to a known webapp template that hasn't been
+   * delivered recently in this conversation. Unknown and absent URLs, and empty
+   * results, pass through untouched.
+   *
+   * `pageUrl` is REQUIRED and structural (#572). It is the caller's answer to
+   * "which page is this?", and the caller is the only one who can answer it: a
+   * local snapshot has `PageSnapshot.browserUrl` from Chrome's frame tree, a
+   * sidecar navigate has the URL it asked for, and anything that did not land on
+   * a page -- an error, a detached dispatch -- passes null. Until #572 this
+   * function answered the question itself, by regexing a `URL:` line out of
+   * `result`. `result` is a RENDERED PAGE: its first line is `Page: <title>` and
+   * a page picks its own title, newlines included, so a page could print a
+   * second `URL:` line and (no `/g`, first match wins) choose the playbook it
+   * was handed. Nothing here reads `result` any more except to carry it.
    *
    * Returns either the result unchanged, or a CARRIER holding the page and the
    * instructions separately (#560). The caller frames the page and places the
@@ -80,19 +119,21 @@ export class WebappTemplateDelivery {
    * promises -- every consumer must go through `splitToolReturn` or
    * `toolReturnText`, never `JSON.stringify`.
    */
-  withInstructions(result: string, fallbackUrl?: string): unknown {
-    if (result.startsWith('Error')) return result;
-    if (result.startsWith(DETACHED_RESULT_PREFIX)) return result;
+  withInstructions(result: string, pageUrl: string | null): unknown {
     // An empty result is not a page, so it gets no playbook. Without this a
     // carrier could hold an empty payload and a non-empty trailer, which forces
     // every consumer to decide what "the tool returned nothing, but here is a
     // playbook" means -- and it would burn the redelivery TTL on a non-visit,
-    // losing the instructions for the next 30 minutes.
+    // losing the instructions for the next 30 minutes. A length check on the
+    // payload about to be carried, not a reading of it.
     if (result.length === 0) return result;
 
-    const url = extractSnapshotUrl(result) ?? fallbackUrl;
+    const url = usablePageUrl(pageUrl);
     if (!url) return result;
 
+    // Only `templateId`, `appName` and `instructions` come back, all of them
+    // vault-authored -- the URL itself goes no further than this lookup, and in
+    // particular never into the trailer the model reads.
     const resolved = getWebappInstructionsForUrl(url);
     if (!resolved) return result;
 
