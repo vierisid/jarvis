@@ -33,7 +33,7 @@ export class TaskRegistry {
   private readonly maxKeepCompleted: number;
   private resolveDb: DbResolver;
   /**
-   * Whether each database's `tasks` table has the `scope_id` column (#571).
+   * Whether each database's `tasks` table has the `context_key` column (#571).
    *
    * Keyed on the resolved handle, not a single flag on this registry: the DB
    * resolver is lazy precisely so it can tolerate a re-open between hot
@@ -52,7 +52,7 @@ export class TaskRegistry {
    * signal. Branching the statement instead degrades to "scope not
    * persisted", which `resume` then treats as a mismatch and refuses.
    */
-  private readonly scopeColumn = new WeakMap<Database, boolean>();
+  private readonly contextColumn = new WeakMap<Database, boolean>();
 
   constructor(opts?: { maxKeepCompleted?: number; db?: DbResolver | Database | null }) {
     // How many completed/failed/cancelled tasks to retain in-memory for the
@@ -119,15 +119,15 @@ export class TaskRegistry {
    * Create a fresh task record in `queued` state. Caller should attach an
    * AbortController and transition to `running` when the task tier starts.
    */
-  create(request: TaskRequest, subsystem: string, scopeId?: string): TaskRecord {
+  create(request: TaskRequest, subsystem: string, contextKey?: string): TaskRecord {
     const now = Date.now();
     const record: TaskRecord = {
       id: newTaskId(),
       request,
-      // The originating turn's tool scope. Set here, from the dispatcher's
-      // turn context, so it never passes through the model-shaped request
-      // object (#571; see TaskRecord.scopeId).
-      ...(scopeId ? { scopeId } : {}),
+      // Which chat this came from. Set here, from the dispatcher's turn
+      // context, so it never passes through the model-shaped request object
+      // (#571; see TaskRecord.contextKey).
+      ...(contextKey ? { contextKey } : {}),
       subsystem,
       status: 'queued',
       startedAt: now,
@@ -272,25 +272,25 @@ export class TaskRegistry {
     }
   }
 
-  /** Whether this database's `tasks` table carries `scope_id`. Memoized. */
-  private scopeColumnPresent(db: Database): boolean {
-    const cached = this.scopeColumn.get(db);
+  /** Whether this database's `tasks` table carries `context_key`. Memoized. */
+  private contextColumnPresent(db: Database): boolean {
+    const cached = this.contextColumn.get(db);
     if (cached !== undefined) return cached;
     let present: boolean;
     try {
       const cols = db.query<{ name: string }, []>('PRAGMA table_info(tasks)').all();
-      present = cols.some((c) => c.name === 'scope_id');
+      present = cols.some((c) => c.name === 'context_key');
     } catch {
       // Unknown means do not name the column: a persist that works without
       // the scope beats a persist that throws with it.
       present = false;
     }
-    this.scopeColumn.set(db, present);
+    this.contextColumn.set(db, present);
     if (!present) {
       // Once per database rather than once per process, so a re-open onto a
       // migrated database is not silently judged by the old one's answer.
-      console.warn('[TaskRegistry] tasks.scope_id is missing; a paused task will not '
-        + 'remember its originating tool scope and will refuse to resume under one (#571)');
+      console.warn('[TaskRegistry] tasks.context_key is missing; a paused task will not '
+        + 'remember which chat created it and will refuse to resume in a scoped one (#571)');
     }
     return present;
   }
@@ -302,13 +302,13 @@ export class TaskRegistry {
   private persist(record: TaskRecord): void {
     const db = this.resolveDb();
     if (!db) return;
-    const withScope = this.scopeColumnPresent(db);
+    const withContext = this.contextColumnPresent(db);
     try {
       db.run(
         `INSERT INTO tasks (
           id, status, tier, template, intent, original_message, subsystem,
-          started_at, updated_at, result_json, question, paused_conversation${withScope ? ',\n          scope_id' : ''}
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${withScope ? ', ?' : ''})
+          started_at, updated_at, result_json, question, paused_conversation${withContext ? ',\n          context_key' : ''}
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${withContext ? ', ?' : ''})
         ON CONFLICT(id) DO UPDATE SET
           status = excluded.status,
           tier = excluded.tier,
@@ -319,7 +319,7 @@ export class TaskRegistry {
           updated_at = excluded.updated_at,
           result_json = excluded.result_json,
           question = excluded.question,
-          paused_conversation = excluded.paused_conversation${withScope ? ',\n          scope_id = excluded.scope_id' : ''}`,
+          paused_conversation = excluded.paused_conversation${withContext ? ',\n          context_key = excluded.context_key' : ''}`,
         [
           record.id,
           record.status,
@@ -333,7 +333,7 @@ export class TaskRegistry {
           record.result ? JSON.stringify(record.result) : null,
           record.question ?? null,
           record.pausedConversation ? JSON.stringify(record.pausedConversation) : null,
-          ...(withScope ? [record.scopeId ?? null] : []),
+          ...(withContext ? [record.contextKey ?? null] : []),
         ],
       );
     } catch (err) {
@@ -355,8 +355,8 @@ type TaskRow = {
   result_json: string | null;
   question: string | null;
   paused_conversation: string | null;
-  /** Absent on a pre-migration database; see TaskRegistry.scopeColumnPresent. */
-  scope_id?: string | null;
+  /** Absent on a pre-migration database; see TaskRegistry.contextColumnPresent. */
+  context_key?: string | null;
 };
 
 function rowToRecord(row: TaskRow): TaskRecord {
@@ -375,11 +375,11 @@ function rowToRecord(row: TaskRow): TaskRecord {
       ...(row.original_message ? { original_message: row.original_message } : {}),
     },
     // Restored so a task resumed after a restart is still recognised as
-    // having come from a scoped turn (#571). Kept as the RAW id, not a
-    // resolved scope: `resume` compares ids, so an id this build no longer
-    // defines fails closed (it matches no live turn) instead of resolving to
-    // "no scope" and running with the full registry.
-    ...(row.scope_id ? { scopeId: row.scope_id } : {}),
+    // belonging to the chat that created it (#571). Kept as the RAW key and
+    // never resolved into a policy: `resume` compares keys, so a key this
+    // build no longer produces fails closed (it matches no live turn) instead
+    // of reading as "no scope" and running with the full registry.
+    ...(row.context_key ? { contextKey: row.context_key } : {}),
     subsystem: row.subsystem,
     status: row.status as TaskStatus,
     startedAt: row.started_at,

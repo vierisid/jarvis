@@ -205,6 +205,13 @@ const LOOPS = [
 const WITHHELD = ['run_command', 'read_file', 'write_file', 'list_directory', 'delegate_task', 'manage_agents'];
 
 describe('all three tool loops enforce the scope identically', () => {
+  // "All three" means all three loops that run an LLM TURN. There is a fourth
+  // route into `registry.execute` -- `executeRealtimeToolCall`, the realtime
+  // voice surface -- which takes no scope and which none of the drift guards
+  // can see, because it uses none of the helpers they grep for. It is
+  // unreachable from a site chat (a realtime session carries no projectId) and
+  // is listed in tool-scope.ts's "what this does NOT close". Named here too so
+  // this file is not read as a proof that every dispatch route is covered.
   beforeEach(() => {
     closeDb();
     initDatabase(':memory:');
@@ -225,8 +232,7 @@ describe('all three tool loops enforce the scope identically', () => {
         // Not run.
         expect(`${label}/${name}:ran=${out.ran.join(',')}`).toBe(`${label}/${name}:ran=`);
         // Same refusal text, byte for byte.
-        expect(`${label}/${name}`).toBe(`${label}/${name}`);
-        expect(out.toolResult).toBe(expected);
+        expect(`${label}/${name}:${out.toolResult}`).toBe(`${label}/${name}:${expected}`);
         // One audit row, same name.
         expect(`${label}/${name}:${out.outOfScopeRows.join(',')}`)
           .toBe(`${label}/${name}:out_of_scope(${name})`);

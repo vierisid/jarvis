@@ -296,7 +296,7 @@ describe('what a future change could silently undo', () => {
     const src = await code('../../daemon/agent-service.ts');
     const conv = /return this\.streamMessageConv\(([^)]*)\);/.exec(src);
     expect(conv).not.toBeNull();
-    expect(conv![1]).toBe('text, channel, siteContext, scope');
+    expect(conv![1]).toBe('text, channel, siteContext, scope, contextKey');
     // ...and the classic branch, unchanged.
     expect(src).toContain('this.orchestrator.streamMessage(systemPrompt, text, undefined, undefined, undefined, scope)');
     // The non-streaming fork too: `handleMessage` has the same conv/classic
@@ -313,12 +313,29 @@ describe('what a future change could silently undo', () => {
     const src = await code('../../daemon/agent-service.ts');
     for (const entry of ['streamMessage', 'streamMessageInner', 'streamMessageConv',
       'streamMessageWithImage', 'handleMessage', 'handleMessageConv']) {
-      // Each signature runs from the name to the closing paren of its parameter
-      // list; both parameter names must appear in it.
-      const sig = new RegExp(`\\b${entry}\\(([\\s\\S]*?)\\n?\\s*\\):`).exec(src)
-        ?? new RegExp(`\\b${entry}\\(([^)]*)\\):`).exec(src);
-      expect(`${entry}:found=${sig !== null}`).toBe(`${entry}:found=true`);
-      const params = sig![1]!;
+      // Anchored to the DECLARATION, at the start of a line and with its
+      // modifiers. An earlier version matched `\bNAME\(` anywhere, which for
+      // `streamMessageConv` and `handleMessageConv` hit their CALL sites --
+      // both of which precede the declaration -- so the lazy span ran on to the
+      // next `):` somewhere else entirely and the assertion passed on 400+
+      // characters of unrelated body. Deleting a parameter from the real
+      // signature would not have failed it: exactly the "asserts less than it
+      // appears" shape these guards exist to avoid.
+      const decl = new RegExp(
+        `^\\s*(?:private\\s+|public\\s+|protected\\s+)?(?:async\\s+)?\\*?${entry}\\(`, 'm',
+      ).exec(src);
+      expect(`${entry}:declared=${decl !== null}`).toBe(`${entry}:declared=true`);
+      // Walk to the matching close paren so nested types cannot end it early.
+      const open = decl!.index + decl![0].length - 1;
+      let depth = 0;
+      let close = open;
+      for (let i = open; i < src.length; i++) {
+        const ch = src[i]!;
+        if (ch === '(') depth++;
+        else if (ch === ')') { depth--; if (depth === 0) { close = i; break; } }
+      }
+      expect(`${entry}:balanced=${close > open}`).toBe(`${entry}:balanced=true`);
+      const params = src.slice(open + 1, close);
       expect(`${entry}:scope=${params.includes('scope')}`).toBe(`${entry}:scope=true`);
       expect(`${entry}:siteContext=${params.includes('siteContext')}`).toBe(`${entry}:siteContext=true`);
     }

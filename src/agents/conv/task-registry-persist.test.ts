@@ -294,11 +294,11 @@ describe('TaskRegistry persistence error resilience', () => {
     expect(reg.recentResults()[0]!.status).toBe('completed');
     // Both create + transition tried to persist and got swallowed. Counted by
     // message rather than by total, because the registry also warns once that
-    // this stub table has no `scope_id` column (#571) - that warning is the
+    // this stub table has no `context_key` column (#571) - that warning is the
     // column probe working, not a persist failure.
     const persistFailures = warnings.filter((w) => String(w[0]).includes('persist failed'));
     expect(persistFailures.length).toBe(2);
-    expect(warnings.filter((w) => String(w[0]).includes('tasks.scope_id is missing')).length).toBe(1);
+    expect(warnings.filter((w) => String(w[0]).includes('tasks.context_key is missing')).length).toBe(1);
   });
 });
 

@@ -91,6 +91,17 @@ export type TaskRunner = (args: {
 export type TurnContext = {
   /** Tools this kind of turn does not have. `null` is the explicit "none". */
   scope: TurnToolScope | null;
+  /**
+   * WHICH CHAT this turn is, for matching a paused task to the chat that
+   * created it. `site:<projectId>` for a project-scoped site chat, undefined
+   * for the ordinary main chat.
+   *
+   * Separate from `scope` because the scope is a POLICY and there is only one
+   * of it: every project-scoped chat shares `PROJECT_SITE_CHAT_SCOPE`, so
+   * comparing scopes would make two different projects' chats the same
+   * context. See TaskRecord.contextKey.
+   */
+  contextKey?: string;
   /** This turn's site prompt block, handed to the task tier that has the tools. */
   siteContext?: string;
 };
@@ -121,14 +132,17 @@ export class TaskDispatcher {
     // Failing is better than silently running a site task on text the user
     // never wrote.
     if (turn.scope && !request.original_message) {
+      // No task id at all, not a placeholder: no record was created, and a
+      // stand-in string is something the router can and will pass straight
+      // back to `check_task`.
       return {
-        task_id: 'unassigned',
+        task_id: '',
         status: 'failed',
         summary: 'This chat is scoped to one project, so a task has to run on your own words. Please say that again.',
         error: 'missing_original_message',
       };
     }
-    const record = this.registry.create(request, subsystem, turn.scope?.id);
+    const record = this.registry.create(request, subsystem, turn.contextKey);
     const abort = new AbortController();
     this.registry.setAbortController(record.id, abort);
     this.registry.transition(record.id, 'running');
@@ -190,14 +204,20 @@ export class TaskDispatcher {
     // apology, triggered by a model's choice of id rather than anything the
     // user did.
     //
-    // Comparing IDS, not resolved scopes, is deliberate: a row carrying a
-    // scope id this build no longer defines matches no live turn and is
-    // refused, where resolving it would yield `null` -- "no scope" -- and run
-    // the task with the full registry. The security-relevant direction fails
-    // closed.
-    const recordScopeId = record.scopeId ?? null;
-    const turnScopeId = turn.scope?.id ?? null;
-    if (recordScopeId !== turnScopeId) {
+    // Comparing the stored KEY as an opaque string, and never resolving it
+    // into a policy, is deliberate: a row carrying a key this build no longer
+    // produces matches no live turn and is refused, where resolving it would
+    // yield "no scope" and run the task with the full registry. The
+    // security-relevant direction fails closed.
+    //
+    // And the key carries the PROJECT, not just the scope kind. There is one
+    // scope object for every site chat, so comparing scopes would let a task
+    // paused in project A's chat be resumed from project B's -- replaying A's
+    // persisted tool results, which is the same disclosure with a narrower
+    // blast radius.
+    const recordContext = record.contextKey ?? null;
+    const turnContext = turn.contextKey ?? null;
+    if (recordContext !== turnContext) {
       return {
         task_id: taskId,
         status: 'failed',

@@ -1,3 +1,4 @@
+import type { Database } from 'bun:sqlite';
 import { getDb, generateId } from './schema.ts';
 import { currentTurnScopeId } from '../actions/tools/turn-scope-store.ts';
 
@@ -77,6 +78,32 @@ function parseCommitment(row: CommitmentRow): Commitment {
 }
 
 /**
+ * Whether this database's `commitments` table carries `scope_id` (#571).
+ *
+ * Keyed on the handle, not a module flag, so a DB re-open between hot reloads
+ * is not judged by the previous database's answer -- the same reasoning, and
+ * the same failure if it is got wrong, as `TaskRegistry.contextColumnPresent`.
+ */
+const scopeColumn = new WeakMap<Database, boolean>();
+function commitmentsHaveScopeColumn(db: Database): boolean {
+  const cached = scopeColumn.get(db);
+  if (cached !== undefined) return cached;
+  let present: boolean;
+  try {
+    present = db.query<{ name: string }, []>('PRAGMA table_info(commitments)')
+      .all().some((c) => c.name === 'scope_id');
+  } catch {
+    present = false;
+  }
+  scopeColumn.set(db, present);
+  if (!present) {
+    console.warn('[Commitments] commitments.scope_id is missing; the chat scope a '
+      + 'commitment was created under will not be recorded (#571)');
+  }
+  return present;
+}
+
+/**
  * Create a new commitment
  */
 export function createCommitment(
@@ -106,8 +133,22 @@ export function createCommitment(
   const priority = opts?.priority ?? 'normal';
   const scopeId = opts?.scope_id ?? currentTurnScopeId() ?? null;
 
+  // `scope_id` is named only when the column is really there (#571).
+  //
+  // The column arrives by `ALTER TABLE ... ADD COLUMN` in a swallowing
+  // try/catch (vault/schema.ts). If that ALTER were ever skipped on an
+  // existing database while this INSERT still named the column, EVERY
+  // commitment write would throw -- and unlike `TaskRegistry.persist`, which
+  // makes the same argument for the same reason, this call is NOT wrapped in
+  // a catch: the throw would surface as a failed chat turn, a failed HTTP
+  // create and a failed extraction. Probing costs one `PRAGMA` per process
+  // and degrades to "provenance not recorded", which the commitment executor
+  // already treats as an unscoped row.
+  const withScope = commitmentsHaveScopeColumn(db);
   const stmt = db.prepare(
-    'INSERT INTO commitments (id, what, when_due, context, priority, status, retry_policy, created_from, assigned_to, created_at, completed_at, result, scope_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+    withScope
+      ? 'INSERT INTO commitments (id, what, when_due, context, priority, status, retry_policy, created_from, assigned_to, created_at, completed_at, result, scope_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
+      : 'INSERT INTO commitments (id, what, when_due, context, priority, status, retry_policy, created_from, assigned_to, created_at, completed_at, result) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
   );
 
   stmt.run(
@@ -123,7 +164,7 @@ export function createCommitment(
     now,
     null,
     null,
-    scopeId
+    ...(withScope ? [scopeId] : [])
   );
 
   return {

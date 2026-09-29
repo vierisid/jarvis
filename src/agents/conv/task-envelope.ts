@@ -113,8 +113,21 @@ export type TaskRecord = {
   id: string;
   request: TaskRequest;
   /**
-   * Id of the tool scope the ORIGINATING turn ran under (#571), e.g. a chat
-   * bound to one site-builder project. `undefined` means the turn had none.
+   * Which CHAT CONTEXT this task was created in (#571). `undefined` means the
+   * ordinary main chat.
+   *
+   * A chat identity, not a policy id, and the distinction is the point. The
+   * product has exactly one tool scope (`PROJECT_SITE_CHAT_SCOPE`), so storing
+   * the scope's id here would make every site chat look like the same context
+   * and two different projects' chats indistinguishable -- project A's task
+   * summaries would render into project B's router prompt, and a task paused
+   * in A would be resumable from B, replaying A's persisted tool results. The
+   * key therefore carries the project too (`site:<projectId>`), which is what
+   * `sameContext` and `TaskDispatcher.resume` compare.
+   *
+   * It is never resolved back into a policy: the scope a turn RUNS under
+   * always comes from the live turn, never from this row, so an unrecognised
+   * or stale key can only fail to match and refuse.
    *
    * On the RECORD and not on `TaskRequest`, deliberately. `TaskRequest` is the
    * one object built from the conv LLM's tool-call arguments -- `handleToolCall`
@@ -122,16 +135,14 @@ export type TaskRecord = {
    * would be a type-valid thing for the model to send, and the only reason it
    * could not set one today is the convention that the request is assembled
    * field by field. A later refactor to `{ ...args }` would compile clean and
-   * hand the model its own scope. `TaskRecord` is constructed only by the
-   * registry and by `rowToRecord`, never from model output, so keeping it here
-   * makes that confused deputy structurally impossible rather than avoided by
-   * habit.
+   * hand the model its own context. `TaskRecord` is constructed only by the
+   * registry and by `rowToRecord`, never from model output.
    *
-   * Persisted (`tasks.scope_id`): a delegated task can pause on
+   * Persisted (`tasks.context_key`): a delegated task can pause on
    * `ask_for_clarification` and resume minutes later or after a daemon
-   * restart, and the resumed turn must run under the scope that created it.
+   * restart, and the resumed turn must be the same chat.
    */
-  scopeId?: string;
+  contextKey?: string;
   subsystem: string;          // attribution label for token tracking
   status: TaskStatus;
   startedAt: number;

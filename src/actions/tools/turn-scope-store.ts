@@ -10,10 +10,10 @@
  * visible, and for that the creating code has to be able to ask "what scope am
  * I inside".
  *
- * Only the ID is carried, not the scope object. Callers store it, and anything
- * that wants the policy resolves it through `scopeById`, so a stored id is
- * always interpreted by the build reading it rather than by the build that
- * wrote it.
+ * Only the scope's ID is carried, not the scope object: what a caller does
+ * with it is record it (`commitments.scope_id`), and a recorded id is only
+ * ever read back for logging and comparison, never resolved into a policy.
+ * The scope a turn RUNS under always comes from that turn.
  *
  * An AsyncLocalStorage rather than a parameter because the alternative is a
  * `scope` argument on `createCommitment` and on every one of its six callers,

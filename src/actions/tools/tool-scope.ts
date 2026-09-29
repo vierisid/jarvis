@@ -109,9 +109,15 @@
  *    TOOL boundary where no CONTEXT boundary exists. The Sites composer sends
  *    no `channel`, so it shares the conversation row, the primary agent's
  *    history, the primary exposure ledger and the global TaskRegistry with the
- *    main dashboard chat. #571 closed the ledger and the router's task list
- *    (records now carry `scopeId` and cross-context rows are not rendered);
- *    the shared conversation row and history are untouched.
+ *    main dashboard chat -- and with every OTHER project's chat. #571 closed
+ *    the ledger, and it closed the task registry by giving each record the
+ *    chat that created it (`TaskRecord.contextKey`, which carries the project
+ *    id, not just this scope's id -- there is one scope object for every site
+ *    chat, so comparing scopes would have made two projects' chats the same
+ *    context). `check_task`, `cancel_task`, `resume` and the router prompt's
+ *    task list all match on it. The shared conversation row and the primary
+ *    agent's history are untouched, so what a site task's VERBALIZED answer
+ *    carries into the other chats' dialogue window is still open.
  *
  * 2. **`commitments`.** It stays in scope, and it is the one in-scope tool
  *    whose whole effect is to schedule a LATER turn whose entire text the
@@ -180,6 +186,20 @@
  *    `toolsInScope` applied to the registry the delegator builds -- not just
  *    the flow record. #573 owns those files.
  *
+ * 4. **The realtime voice tool surface.** `executeRealtimeToolCall`
+ *    (agents/orchestrator.ts) is a FOURTH dispatch route: it calls
+ *    `toolRegistry.execute` directly, consults no scope, enters no turn-scope
+ *    store, and uses none of `decideTurnTools` / `executeTool` /
+ *    `noteToolUse` / the interceptors -- so none of the drift guards in
+ *    tool-scope.test.ts can see it, and `path-parity-scope.test.ts`'s "all
+ *    three tool loops" is exhaustive only over the loops that take an LLM
+ *    turn. It is unreachable from a site chat today: a realtime session has
+ *    no `projectId`, and the voice fall-through into `handleChat` builds a
+ *    payload without one (pinned by a guard in tool-scope.test.ts). Listed
+ *    here so the day voice gains a project context the scope is known to have
+ *    to ride along, rather than the parity test reading as a proof it already
+ *    does.
+ *
  * Also unfixed, and older than this change: the default cwd is a process-wide
  * global shared by every concurrent chat (actions/tools/local-tools-guard.ts).
  * Nothing in production sets it any more, which is why it is quiet rather than
@@ -191,19 +211,17 @@ import { NOT_RUN_MARKER } from './tool-relevance/ledger.ts';
 
 export type TurnToolScope = {
   /**
-   * Stable identifier, so a scope can survive a round trip through storage
-   * and be recovered by `scopeById` (#571).
+   * Stable identifier for this scope (#571).
    *
-   * Needed because the router-first path does not run the turn where it is
-   * decided: a delegated task is persisted to the `tasks` table and may be
-   * RESUMED minutes later, or after a daemon restart, from a row. Carrying
-   * the whole object would mean serialising a policy; carrying the id means
-   * the policy is always the one this build defines.
+   * Used to record WHICH POLICY a turn ran under on something outliving the
+   * turn -- today only `commitments.scope_id`, which the commitment executor
+   * reads to log that a scoped chat scheduled the work it is about to run
+   * unscoped. It is never resolved back into a policy object and never read
+   * from model output.
    *
-   * It is never read from model output. `scopeById` resolves only ids this
-   * module registers, and every call site unions the result with the CURRENT
-   * turn's scope (`mergeScopes`), so an id that is missing, stale or wrong
-   * can only ever leave the turn as restricted as it already was.
+   * Not what identifies a CHAT: there is one scope object for every
+   * project-scoped chat, so matching a paused task to the chat that created it
+   * uses a separate key that carries the project (TaskRecord.contextKey).
    */
   readonly id: string;
   /** Short phrase for the refusal the model sees, e.g. "a site project chat". */
@@ -280,58 +298,23 @@ export const PROJECT_SITE_CHAT_SCOPE: TurnToolScope = Object.freeze({
 });
 
 /**
- * Every scope this build defines, by id. A closed set, deliberately: a scope
- * is policy, and policy is not something a stored row or a model gets to
- * invent. An unknown id resolves to `null`, which `mergeScopes` then treats
- * as "adds no restriction" rather than "clears the restriction".
+ * Every scope this build defines.
+ *
+ * A closed list, so a test can quantify over all of them (the
+ * `request_approval` invariant in tool-scope.test.ts) rather than over the one
+ * that happened to be remembered.
+ *
+ * There is deliberately NO id -> scope lookup, and nothing resolves a stored
+ * id back into a policy. An earlier draft of #571 had one, together with a
+ * `mergeScopes` that unioned a stored scope with the live turn's; both went
+ * when `TaskDispatcher.resume` moved to match-or-refuse, and leaving them as
+ * unused exports with a doc block describing a fail-closed mechanism no call
+ * site performed would have been the exact defect this change exists to remove
+ * -- something threaded and then never consulted, in the file that is the
+ * design record. The scope a turn RUNS under always comes from that turn;
+ * stored keys are only ever compared for equality (see TaskRecord.contextKey).
  */
 export const ALL_SCOPES: readonly TurnToolScope[] = Object.freeze([PROJECT_SITE_CHAT_SCOPE]);
-
-const SCOPES_BY_ID: ReadonlyMap<string, TurnToolScope> =
-  new Map(ALL_SCOPES.map((s) => [s.id, s]));
-
-/**
- * Recover a scope from a stored id. `null` for anything this build does not
- * define, including undefined, so a row written by a newer build, or by a
- * build that had a scope this one dropped, degrades to "no extra
- * restriction from the row" and leaves the caller's own turn scope intact.
- */
-export function scopeById(id: string | null | undefined): TurnToolScope | null {
-  if (!id) return null;
-  return SCOPES_BY_ID.get(id) ?? null;
-}
-
-/**
- * The scope a turn runs under when two apply: the union of what each
- * withholds, and of what each pins.
- *
- * Union, not "the more recent one", because both inputs are restrictions and
- * the question a merge answers is "may this turn do MORE than one of them
- * allowed". It may not. The case that forces this is `TaskDispatcher.resume`:
- * a task created in a site chat can be resumed from a turn in the main chat
- * (and vice versa), possibly after a daemon restart, so neither side alone is
- * the right answer and taking either one alone would be a widening.
- *
- * The pins ride along with the withholding they stand in for -- a merged
- * scope that withheld the generic file tools but pinned nothing would be the
- * starved turn `scopeSubstitutes` exists to prevent.
- */
-export function mergeScopes(
-  a: TurnToolScope | null | undefined,
-  b: TurnToolScope | null | undefined,
-): TurnToolScope | null {
-  if (!a) return b ?? null;
-  if (!b) return a;
-  if (a === b || a.id === b.id) return a;
-  return Object.freeze({
-    id: [a.id, b.id].sort().join('+'),
-    // Both labels, because the refusal names where the tool went and a merged
-    // turn genuinely sits in both.
-    label: `${a.label} and ${b.label}`,
-    withheld: Object.freeze(new Set([...a.withheld, ...b.withheld])),
-    pinnedCategories: Object.freeze([...new Set([...a.pinnedCategories, ...b.pinnedCategories])]),
-  });
-}
 
 /** Whether a turn under `scope` has the named tool at all. */
 export function toolInScope(scope: TurnToolScope | null | undefined, name: string): boolean {

@@ -1049,15 +1049,17 @@ function createTables(db: Database): void {
       result_json TEXT,
       question TEXT,
       paused_conversation TEXT,
-      scope_id TEXT
+      context_key TEXT
     )
   `);
-  // Migration: the tool scope the originating turn ran under (#571). A task
-  // can pause on ask_for_clarification and be resumed after a daemon
-  // restart, at which point this row is the only memory it has of being a
-  // site-project turn. An id, not a serialized policy: the policy is always
-  // whatever this build defines (actions/tools/tool-scope.ts scopeById).
-  try { db.run('ALTER TABLE tasks ADD COLUMN scope_id TEXT'); } catch { /* already present */ }
+  // Migration: WHICH CHAT created this task (#571) -- `site:<projectId>` for a
+  // project-scoped site chat, null for the ordinary main chat. A task can
+  // pause on ask_for_clarification and be resumed after a daemon restart, at
+  // which point this row is the only memory it has of where it came from. A
+  // chat identity, not a policy: the scope a resumed task RUNS under always
+  // comes from the live turn, and this is only ever compared for equality, so
+  // an unrecognised key refuses rather than widening.
+  try { db.run('ALTER TABLE tasks ADD COLUMN context_key TEXT'); } catch { /* already present */ }
   db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_status_updated ON tasks(status, updated_at DESC)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated_at DESC)`);
   ensureSuggestionSchema(db);

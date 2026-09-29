@@ -25,7 +25,7 @@ import { ToolRegistry, type ToolDefinition } from '../../actions/tools/registry.
 import { AuthorityEngine, type AuthorityConfig } from '../../authority/engine.ts';
 import { ApprovalManager } from '../../authority/approval.ts';
 import { AuditTrail } from '../../authority/audit.ts';
-import { PROJECT_SITE_CHAT_SCOPE, scopeById, mergeScopes, scopeSystemNote, type TurnToolScope } from '../../actions/tools/tool-scope.ts';
+import { PROJECT_SITE_CHAT_SCOPE, scopeSystemNote, type TurnToolScope } from '../../actions/tools/tool-scope.ts';
 import { NOT_RUN_MARKER } from '../../actions/tools/tool-relevance/ledger.ts';
 import { resetToolFilterPolicy, setToolFilterPolicy } from '../../actions/tools/tool-relevance/policy.ts';
 import { currentTurnScopeId } from '../../actions/tools/turn-scope-store.ts';
@@ -179,10 +179,20 @@ function buildStack(conv: LLMResponse[], task: LLMResponse[]) {
 const DELEGATE = (intent: string) =>
   toolCall('delegate', { tier: 'medium', template: 'general', intent }, 'On it.');
 
-async function drain(stack: ReturnType<typeof buildStack>, message: string, scope: TurnToolScope | null, siteContext?: string) {
+/** The chat key ws-service builds for a project-scoped chat. */
+const SITE_CONTEXT_KEY = 'site:proj-a';
+
+async function drain(
+  stack: ReturnType<typeof buildStack>,
+  message: string,
+  scope: TurnToolScope | null,
+  siteContext?: string,
+  contextKey: string | undefined = scope ? SITE_CONTEXT_KEY : undefined,
+) {
   const out: string[] = [];
   for await (const ev of stack.conversation.streamTurn(message, {}, {
     scope,
+    ...(contextKey ? { contextKey } : {}),
     ...(siteContext ? { siteContext } : {}),
   })) {
     if (ev.type === 'text' && ev.text) out.push(ev.text);
@@ -385,6 +395,41 @@ describe('#571 what the two tiers are told', () => {
     }
   });
 
+  it('an UNSCOPED turn carrying a site context is not told it is a project chat', async () => {
+    // The combination that matters and was briefly broken: `siteContext` is
+    // not a "this is a project chat" signal. The MAIN dashboard chat passes
+    // the multi-project list block there and the pebble passes its panel
+    // context, both with `scope: null`. Keying the routing note on
+    // `scope || siteContext` therefore told every main-chat and every pebble
+    // turn on a hosted install that it was bound to a single Site Builder
+    // project -- a false statement that also names a routing decision.
+    const mainChatBlock = '# Site Builder\n\nYou have access to 3 project(s):\n- alpha\n- beta\n';
+    const stack = buildStack([textResponse('Sure.')], []);
+    const seen: string[] = [];
+    const original = stack.provider.chat.bind(stack.provider);
+    stack.provider.chat = async (messages: LLMMessage[], opts?: LLMOptions) => {
+      if ((opts?.tools ?? []).some((t) => t.name === 'delegate')) {
+        seen.push(messages.filter((m) => m.role === 'system').map((m) => String(m.content)).join('\n'));
+      }
+      return original(messages, opts);
+    };
+    await drain(stack, 'what projects do I have?', null, mainChatBlock);
+    expect(seen.length).toBeGreaterThan(0);
+    expect(seen[0]).not.toContain(SITE_CHAT_ROUTING_NOTE);
+    // ...and the same turn WITH a scope does get it.
+    const scoped = buildStack([textResponse('Sure.')], []);
+    const scopedSeen: string[] = [];
+    const orig2 = scoped.provider.chat.bind(scoped.provider);
+    scoped.provider.chat = async (messages: LLMMessage[], opts?: LLMOptions) => {
+      if ((opts?.tools ?? []).some((t) => t.name === 'delegate')) {
+        scopedSeen.push(messages.filter((m) => m.role === 'system').map((m) => String(m.content)).join('\n'));
+      }
+      return orig2(messages, opts);
+    };
+    await drain(scoped, 'fix the header', PROJECT_SITE_CHAT_SCOPE, mainChatBlock);
+    expect(scopedSeen[0]).toContain(SITE_CHAT_ROUTING_NOTE);
+  });
+
   it('an unscoped conv turn gets neither block', async () => {
     const stack = buildStack([DELEGATE('x'), textResponse('Done.')], [textResponse('ok')]);
     await drain(stack, 'what is the weather', null);
@@ -403,8 +448,9 @@ describe('#571 the scope survives persistence and resume', () => {
     await drain(stack, 'work on the project', PROJECT_SITE_CHAT_SCOPE);
     const records = stack.taskRegistry.recentResults(5);
     expect(records.length).toBeGreaterThan(0);
-    // On the RECORD, not on the model-shaped request object.
-    expect(records[0]!.scopeId).toBe(PROJECT_SITE_CHAT_SCOPE.id);
+    // On the RECORD, not on the model-shaped request object, and it is the
+    // CHAT key (project included), not the scope's id.
+    expect(records[0]!.contextKey).toBe('site:proj-a');
     expect((records[0]!.request as Record<string, unknown>).scope_id).toBeUndefined();
   });
 
@@ -417,25 +463,14 @@ describe('#571 the scope survives persistence and resume', () => {
     }, 'On it.');
     const stack = buildStack([forged, textResponse('Done.')], [textResponse('ok')]);
     await drain(stack, 'work on the project', PROJECT_SITE_CHAT_SCOPE);
-    expect(stack.taskRegistry.recentResults(5)[0]!.scopeId).toBe(PROJECT_SITE_CHAT_SCOPE.id);
+    expect(stack.taskRegistry.recentResults(5)[0]!.contextKey).toBe('site:proj-a');
 
     // And the reverse: a model trying to ADD a scope id on an unscoped turn
     // cannot invent one either (it would only ever narrow, but it must not
     // be model-driven at all).
     const stack2 = buildStack([forged, textResponse('Done.')], [textResponse('ok')]);
     await drain(stack2, 'what is the weather', null);
-    expect(stack2.taskRegistry.recentResults(5)[0]!.scopeId).toBeUndefined();
-  });
-
-  it('an unrecognised scope id resolves to null rather than throwing', () => {
-    expect(scopeById('project_site_chat')).toBe(PROJECT_SITE_CHAT_SCOPE);
-    expect(scopeById('invented')).toBeNull();
-    expect(scopeById(undefined)).toBeNull();
-    // mergeScopes keeps the union direction available for any future caller,
-    // and can never drop a restriction.
-    expect(mergeScopes(null, PROJECT_SITE_CHAT_SCOPE)).toBe(PROJECT_SITE_CHAT_SCOPE);
-    expect(mergeScopes(PROJECT_SITE_CHAT_SCOPE, null)).toBe(PROJECT_SITE_CHAT_SCOPE);
-    expect(mergeScopes(null, null)).toBeNull();
+    expect(stack2.taskRegistry.recentResults(5)[0]!.contextKey).toBeUndefined();
   });
 
   it('a dispatch in a site chat runs under the scope, not merely records it', async () => {
@@ -445,7 +480,7 @@ describe('#571 the scope survives persistence and resume', () => {
     );
     await stack.dispatcher.dispatch(
       { tier: 'medium', template: 'general', intent: 'x', original_message: 'install it' },
-      { scope: PROJECT_SITE_CHAT_SCOPE },
+      { scope: PROJECT_SITE_CHAT_SCOPE, contextKey: SITE_CONTEXT_KEY },
     );
     expect(stack.ran).toEqual([]);
   });
@@ -456,7 +491,7 @@ describe('#571 the scope survives persistence and resume', () => {
     const stack = buildStack([textResponse('')], [textResponse('done')]);
     const envelope = await stack.dispatcher.dispatch(
       { tier: 'medium', template: 'general', intent: 'Update the hero on the website' },
-      { scope: PROJECT_SITE_CHAT_SCOPE },
+      { scope: PROJECT_SITE_CHAT_SCOPE, contextKey: SITE_CONTEXT_KEY },
     );
     expect(envelope.status).toBe('failed');
     expect(envelope.error).toBe('missing_original_message');
@@ -482,7 +517,7 @@ describe('#571 a resume cannot cross a chat boundary', () => {
     );
     const envelope = await stack.dispatcher.dispatch(
       { tier: 'medium', template: 'general', intent: 'x', original_message: 'add a hero' },
-      { scope },
+      { scope, ...(scope ? { contextKey: SITE_CONTEXT_KEY } : {}) },
     );
     expect(envelope.status).toBe('needs_input');
     return { stack, id: envelope.task_id };
@@ -501,9 +536,38 @@ describe('#571 a resume cannot cross a chat boundary', () => {
     // generic tools, and resuming it under the site scope would withhold them
     // and then tell it to use site_* tools for a project that does not exist.
     const { stack, id } = await paused(null);
-    const out = await stack.dispatcher.resume(id, 'go ahead', { scope: PROJECT_SITE_CHAT_SCOPE });
+    const out = await stack.dispatcher.resume(id, 'go ahead', { scope: PROJECT_SITE_CHAT_SCOPE, contextKey: SITE_CONTEXT_KEY });
     expect(out.status).toBe('failed');
     expect(out.error).toBe('scope_mismatch');
+  });
+
+  it('two DIFFERENT site projects are different chats, not one "site" context', async () => {
+    // There is one `PROJECT_SITE_CHAT_SCOPE` object for every project-scoped
+    // chat, so a check that compared scopes would call project A's chat and
+    // project B's chat the same context: A's task summaries would render into
+    // B's router prompt, and a task paused in A would be resumable from B,
+    // replaying A's persisted tool results. The stored key carries the project
+    // for exactly this reason.
+    const { stack, id } = await paused(PROJECT_SITE_CHAT_SCOPE);
+    expect(stack.taskRegistry.get(id)!.contextKey).toBe(SITE_CONTEXT_KEY);
+
+    const otherProject = { scope: PROJECT_SITE_CHAT_SCOPE, contextKey: 'site:proj-b' };
+    const out = await stack.dispatcher.resume(id, 'go ahead', otherProject);
+    expect(out.status).toBe('failed');
+    expect(out.error).toBe('scope_mismatch');
+
+    // And project B's router prompt does not list project A's task.
+    const handle = (stack.conversation as unknown as {
+      handleToolCall: (
+        call: { id: string; name: string; arguments: Record<string, unknown> },
+        turn: { userMessage: string; scope: TurnToolScope | null; contextKey?: string },
+      ) => Promise<{ envelope: unknown }>;
+    });
+    const checked = await handle.handleToolCall(
+      { id: 'c', name: 'check_task', arguments: { task_id: id } },
+      { userMessage: 'x', ...otherProject },
+    );
+    expect((checked.envelope as { error?: string }).error).toContain('not found');
   });
 
   it('a resume in the chat that started it works, and is still scoped', async () => {
@@ -511,7 +575,7 @@ describe('#571 a resume cannot cross a chat boundary', () => {
     // Second run: the model now reaches for the generic shell.
     stack.provider.pushTask(toolCall('run_command', { command: 'npm i' }));
     stack.provider.pushTask(textResponse('done'));
-    const out = await stack.dispatcher.resume(id, 'the home page', { scope: PROJECT_SITE_CHAT_SCOPE });
+    const out = await stack.dispatcher.resume(id, 'the home page', { scope: PROJECT_SITE_CHAT_SCOPE, contextKey: SITE_CONTEXT_KEY });
     expect(out.status).toBe('completed');
     expect(stack.ran).toEqual([]);
   });
@@ -520,8 +584,8 @@ describe('#571 a resume cannot cross a chat boundary', () => {
     const { stack, id } = await paused(PROJECT_SITE_CHAT_SCOPE);
     // Simulate a renamed or removed scope constant.
     const record = stack.taskRegistry.get(id)!;
-    (record as { scopeId?: string }).scopeId = 'a_scope_this_build_dropped';
-    const out = await stack.dispatcher.resume(id, 'the home page', { scope: PROJECT_SITE_CHAT_SCOPE });
+    (record as { contextKey?: string }).contextKey = 'a_key_this_build_no_longer_produces';
+    const out = await stack.dispatcher.resume(id, 'the home page', { scope: PROJECT_SITE_CHAT_SCOPE, contextKey: SITE_CONTEXT_KEY });
     expect(out.status).toBe('failed');
     expect(out.error).toBe('scope_mismatch');
   });
@@ -535,10 +599,10 @@ describe('#571 a resume cannot cross a chat boundary', () => {
     const handle = (stack.conversation as unknown as {
       handleToolCall: (
         call: { id: string; name: string; arguments: Record<string, unknown> },
-        turn: { userMessage: string; scope: TurnToolScope | null },
+        turn: { userMessage: string; scope: TurnToolScope | null; contextKey?: string },
       ) => Promise<{ envelope: unknown }>;
     });
-    const siteTurn = { userMessage: 'x', scope: PROJECT_SITE_CHAT_SCOPE };
+    const siteTurn = { userMessage: 'x', scope: PROJECT_SITE_CHAT_SCOPE, contextKey: SITE_CONTEXT_KEY };
 
     const checked = await handle.handleToolCall({ id: 'c', name: 'check_task', arguments: { task_id: id } }, siteTurn);
     expect((checked.envelope as { error?: string }).error).toContain('not found');
@@ -574,7 +638,7 @@ describe('#571 a resume cannot cross a chat boundary', () => {
     const stack = buildStack([textResponse('')], [batch]);
     const envelope = await stack.dispatcher.dispatch(
       { tier: 'medium', template: 'general', intent: 'x', original_message: 'add a hero' },
-      { scope: PROJECT_SITE_CHAT_SCOPE },
+      { scope: PROJECT_SITE_CHAT_SCOPE, contextKey: SITE_CONTEXT_KEY },
     );
     expect(envelope.status).toBe('needs_input');
 
@@ -587,7 +651,7 @@ describe('#571 a resume cannot cross a chat boundary', () => {
     expect(answered).toEqual(asked);
     // And the resume replays it intact, with fresh system messages on the front.
     stack.provider.pushTask(textResponse('done'));
-    const resumed = await stack.dispatcher.resume(envelope.task_id, 'the home page', { scope: PROJECT_SITE_CHAT_SCOPE });
+    const resumed = await stack.dispatcher.resume(envelope.task_id, 'the home page', { scope: PROJECT_SITE_CHAT_SCOPE, contextKey: SITE_CONTEXT_KEY });
     expect(resumed.status).toBe('completed');
     const replayed = stack.provider.taskBuffers.at(-1)!;
     expect(replayed[0]!.role).toBe('system');

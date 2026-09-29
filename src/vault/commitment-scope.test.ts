@@ -56,12 +56,47 @@ describe('commitment scope provenance', () => {
     expect(row!.scope_id).toBeNull();
   });
 
-  test('a row written before the column existed reads as unscoped, not as a crash', () => {
-    // `parseCommitment` coalesces a missing column to null, so an older
-    // database degrades to "no recorded scope" -- which the executor already
-    // handles, since that was every row's state before this landed.
+  test('a NULL in the column reads as unscoped', () => {
     const c = createCommitment('legacy', { scope_id: PROJECT_SITE_CHAT_SCOPE.id });
     getDb().run('UPDATE commitments SET scope_id = NULL WHERE id = ?', [c.id]);
     expect(getCommitment(c.id)!.scope_id).toBeNull();
+  });
+
+  test('a table that never got the column still accepts writes', () => {
+    // The real pre-migration risk, and the reason `createCommitment` probes
+    // instead of assuming: the column arrives by an `ALTER TABLE` inside a
+    // swallowing try/catch, and unlike `TaskRegistry.persist` this INSERT is
+    // not wrapped in a catch of its own. If it named a column that was not
+    // there, every commitment write in the product would throw -- out of a
+    // chat turn, out of the HTTP create, out of the extractor.
+    //
+    // Rebuilt without the column rather than simulated, so this fails if the
+    // probe is removed.
+    const db = getDb();
+    db.run('DROP TABLE commitments');
+    db.run(`CREATE TABLE commitments (
+      id TEXT PRIMARY KEY, what TEXT NOT NULL, when_due INTEGER, context TEXT,
+      priority TEXT DEFAULT 'normal', status TEXT DEFAULT 'pending',
+      retry_policy TEXT, created_from TEXT, assigned_to TEXT,
+      created_at INTEGER NOT NULL, completed_at INTEGER, result TEXT,
+      sort_order INTEGER DEFAULT 0
+    )`);
+
+    const warnings: string[] = [];
+    const origWarn = console.warn;
+    console.warn = (...args: unknown[]) => { warnings.push(String(args[0])); };
+    let created: ReturnType<typeof createCommitment> | null = null;
+    try {
+      expect(() => {
+        created = withTurnScopeId(PROJECT_SITE_CHAT_SCOPE.id, () =>
+          createCommitment('deploy the site'));
+      }).not.toThrow();
+    } finally {
+      console.warn = origWarn;
+    }
+    // The write succeeded, the provenance is simply absent, and it said so.
+    expect(created!.what).toBe('deploy the site');
+    expect(getCommitment(created!.id)!.scope_id).toBeNull();
+    expect(warnings.some((w) => w.includes('commitments.scope_id is missing'))).toBe(true);
   });
 });

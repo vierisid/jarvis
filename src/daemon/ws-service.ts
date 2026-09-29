@@ -1243,6 +1243,15 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // file and shell tools pointed at the project directory.
       const scope = projectId ? PROJECT_SITE_CHAT_SCOPE : null;
 
+      // WHICH chat this is, as opposed to what it may do. There is one scope
+      // object for every project-scoped chat, so the scope alone cannot tell
+      // project A's chat from project B's -- and a delegated task's summary is
+      // rendered into its own chat's router prompt and resumable from it, so
+      // that distinction is a real boundary (#571). The project id is
+      // repo-/model-derived text used only as an opaque equality key here, so
+      // it needs no neutralising: it is never interpolated into a prompt.
+      const chatContextKey = projectId ? `site:${projectId}` : undefined;
+
       // This used to call setDefaultCwd(projectPath) whenever `projectId` was
       // present, so the generic tools "operate in the project directory
       // during site builder conversations". That is the mechanism #561 is
@@ -1274,7 +1283,7 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // scope reach the task tier: the model is told which project it is in
       // and hands the path to `site_read_file` with a `project_id`, which is
       // confined to the project instead of merely aimed at it.
-      const { stream, onComplete } = this.agentService.streamMessage(text, channel, siteContext, scope);
+      const { stream, onComplete } = this.agentService.streamMessage(text, channel, siteContext, scope, chatContextKey);
 
       // Set up streaming TTS: speak sentences as they arrive
       const ttsActive = !!(this.ttsProvider && ws);

@@ -289,7 +289,14 @@ export class AgentService implements Service, IAgentService {
    * result in a single text + done event so the WebSocket UI keeps working.
    * Token-level streaming through the conv path is a Phase 6 follow-up.
    */
-  streamMessage(text: string, channel: string = 'websocket', siteContext?: string, scope?: TurnToolScope | null): {
+  streamMessage(
+    text: string,
+    channel: string = 'websocket',
+    siteContext?: string,
+    scope?: TurnToolScope | null,
+    // Which chat this is, for matching a paused task back to it (#571).
+    contextKey?: string,
+  ): {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
   } {
@@ -298,7 +305,7 @@ export class AgentService implements Service, IAgentService {
     if (activeTurns.isDraining) throw new DrainingError();
     const endTurn = activeTurns.begin();
     try {
-      const inner = this.streamMessageInner(text, channel, siteContext, scope);
+      const inner = this.streamMessageInner(text, channel, siteContext, scope, contextKey);
       return { stream: trackTurnStream(inner.stream, endTurn), onComplete: inner.onComplete };
     } catch (err) {
       endTurn();
@@ -306,7 +313,13 @@ export class AgentService implements Service, IAgentService {
     }
   }
 
-  private streamMessageInner(text: string, channel: string = 'websocket', siteContext?: string, scope?: TurnToolScope | null): {
+  private streamMessageInner(
+    text: string,
+    channel: string = 'websocket',
+    siteContext?: string,
+    scope?: TurnToolScope | null,
+    contextKey?: string,
+  ): {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
   } {
@@ -315,7 +328,7 @@ export class AgentService implements Service, IAgentService {
       // AND `scope`, which made a project-scoped chat on every hosted install
       // the pre-#561 state exactly: the generic file and shell tools present,
       // and not even the prompt line that used to be their only restraint.
-      return this.streamMessageConv(text, channel, siteContext, scope);
+      return this.streamMessageConv(text, channel, siteContext, scope, contextKey);
     }
 
     const systemPrompt = this.buildFullSystemPromptParts(channel, text);
@@ -359,6 +372,7 @@ export class AgentService implements Service, IAgentService {
     channel: string,
     siteContext?: string,
     scope?: TurnToolScope | null,
+    contextKey?: string,
   ): {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
@@ -388,6 +402,7 @@ export class AgentService implements Service, IAgentService {
           ambientFacts: ambient,
         }, {
           scope: scope ?? null,
+          ...(contextKey ? { contextKey } : {}),
           ...(siteContext ? { siteContext } : {}),
         }, taskListener)) {
           if (event.type === 'text') {

@@ -27,7 +27,7 @@ import { CONV_TOOLS, CONV_TOOL_NAMES } from './conv-tools.ts';
 import { recoverSerializedConvTools, visibleStreamText } from './conv-tool-recovery.ts';
 import { TaskDispatcher } from './task-dispatcher.ts';
 import { TaskRegistry } from './task-registry.ts';
-import { isTaskTemplate, isTaskTier, TASK_TEMPLATES } from './task-envelope.ts';
+import { isTaskTemplate, isTaskTier, TASK_TEMPLATES, TASK_TIERS } from './task-envelope.ts';
 import type { TaskRecord, TaskRequest, TaskResultEnvelope } from './task-envelope.ts';
 
 const MAX_CONV_ITERATIONS = 8;
@@ -107,16 +107,29 @@ export type ConvTurn = {
    */
   scope: TurnToolScope | null;
   /**
-   * The site-builder prompt block for a project-scoped chat.
+   * WHICH CHAT this turn is, for matching a paused task to the chat that
+   * created it: `site:<projectId>` for a project chat, undefined for the main
+   * chat. Distinct from `scope`, which is one shared policy object and so
+   * cannot tell two projects' chats apart. See TaskRecord.contextKey.
+   */
+  contextKey?: string;
+  /**
+   * Extra system context for the TASK tier, whatever the caller has.
    *
-   * Handed to the TASK tier, not rendered into the conv prompt. Two reasons:
+   * Named for its original and main use -- the site-builder block for a
+   * project-scoped chat -- but it is NOT only that, and treating it as a
+   * "this is a project chat" signal is a mistake: the main dashboard chat
+   * passes the multi-project list here and the pebble passes its panel
+   * context, both with no scope. `scope` is the signal for a project chat;
+   * this is just text.
+   *
+   * Handed to the task tier, not rendered into the conv prompt. Two reasons:
    * it is ~2KB of per-turn text that would sit outside the conv tier's
-   * deliberately tight, cache-stable prompt, and it interpolates
-   * repo-written file names framed as untrusted data
+   * deliberately tight, cache-stable prompt, and in the site case it
+   * interpolates repo-written file names framed as untrusted data
    * (sites/prompt-context.ts) -- text the router has no tools to act on and
-   * no reason to read. What the router gets instead is one fixed sentence
-   * with no project data in it (`SITE_CHAT_ROUTING_NOTE`), which is all it
-   * needs to route.
+   * no reason to read. What the router gets for a project chat is one fixed
+   * sentence with no project data in it (`SITE_CHAT_ROUTING_NOTE`).
    */
   siteContext?: string;
 };
@@ -377,13 +390,16 @@ export class ConvOrchestrator {
   /**
    * Whether a task record belongs to the same chat context as this turn.
    *
-   * Compares scope IDS rather than resolved scopes, like
-   * `TaskDispatcher.resume`: a record carrying a scope id this build no longer
-   * defines matches no live turn and is treated as someone else's, where
-   * resolving it would yield "no scope" and make it look like a main-chat task.
+   * Compares the stored chat key as an opaque string, like
+   * `TaskDispatcher.resume`. Two consequences worth stating: a record carrying
+   * a key this build no longer produces matches no live turn and is treated as
+   * someone else's (rather than resolving to "no scope" and looking like a
+   * main-chat task), and because the key carries the PROJECT, two different
+   * site projects' chats are different contexts -- which comparing the one
+   * shared scope object could not express.
    */
   private sameContext(record: TaskRecord, turn: ConvTurn): boolean {
-    return (record.scopeId ?? null) === (turn.scope?.id ?? null);
+    return (record.contextKey ?? null) === (turn.contextKey ?? null);
   }
 
   private async handleToolCall(
@@ -404,7 +420,7 @@ export class ConvOrchestrator {
         // rendered back into the router's prompt on later turns. Reject rather
         // than coerce, so the router sees its own mistake.
         if (!isTaskTier(args.tier)) {
-          return { envelope: { error: `delegate: unknown tier "${String(args.tier)}"; use high, medium or low` } };
+          return { envelope: { error: `delegate: unknown tier "${String(args.tier)}"; use ${TASK_TIERS.join(', ')}` } };
         }
         if (!isTaskTemplate(args.template)) {
           return { envelope: { error: `delegate: unknown template "${String(args.template)}"; use ${TASK_TEMPLATES.join(', ')}` } };
@@ -664,10 +680,10 @@ export class ConvOrchestrator {
     // A site task's summary can contain project file content that was read
     // through the framed `site_read_file` and then passed through the low-tier
     // summarizer, which does not preserve the untrusted framing -- so it
-    // landed, unframed, in the telegram chat's router prompt. Now that records
-    // carry the scope they were created under, matching it is the cheap half of
-    // the fix. (The framing half is noted in actions/tools/tool-scope.ts and
-    // is not this change.)
+    // landed, unframed, in the telegram chat's router prompt, and in another
+    // PROJECT's chat too. Now that records carry the chat that created them,
+    // matching it is the cheap half of the fix. (The framing half is noted in
+    // actions/tools/tool-scope.ts and is not this change.)
     // One rule, one definition: the same predicate `check_task`,
     // `cancel_task` and `resume_task` use.
     const mine = (t: TaskRecord) => this.sameContext(t, turn);
@@ -708,17 +724,26 @@ export class ConvOrchestrator {
       parts.push('');
     }
 
-    // Keyed on EITHER signal. `scope` is set from `projectId` alone, even
-    // when the site service could not resolve the project and so produced no
-    // `siteContext` (#570): such a turn is still a project chat and the
-    // router still has to delegate rather than answer.
+    // Keyed on the SCOPE alone, and never on `siteContext`.
+    //
+    // `scope` is what means "this chat is bound to one project": it is set
+    // from `projectId` alone, even when the site service could not resolve the
+    // project and so produced no site block (#570), so it is both necessary
+    // and sufficient. `siteContext` is not -- it is whatever extra system
+    // context the caller has, and two production callers pass something that
+    // is not a project block at all: the MAIN dashboard chat passes the
+    // multi-project list (ws-service.ts) and the pebble passes its panel
+    // context (daemon/index.ts), both with no scope. Keying on it as well told
+    // every main-chat and every pebble turn on a hosted install that it was
+    // bound to a single Site Builder project, and the note names a routing
+    // decision, so it was a false instruction that also steered routing.
     //
     // Note for anyone later "fixing" routing by moving this into the user
     // message: `windowedParts` (tool-relevance/selection.ts) skips system
     // messages, so this sentence is invisible to the relevance filter. In a
     // user message it would not be, and its site vocabulary would start
     // matching trigger groups on every turn of the chat.
-    if (turn.scope || turn.siteContext) {
+    if (turn.scope) {
       parts.push('# This Chat');
       parts.push(SITE_CHAT_ROUTING_NOTE);
       parts.push('');
