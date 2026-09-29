@@ -17,7 +17,7 @@
  */
 
 import { afterEach, describe, expect, test } from "bun:test";
-import { spawn } from "node:child_process";
+import { spawn, type ChildProcess } from "node:child_process";
 import {
   existsSync,
   mkdirSync,
@@ -46,7 +46,25 @@ import {
 
 let tmp: string | null = null;
 
+/**
+ * Stand-in owners this file spawned, killed by HANDLE after each test. A
+ * launcher that never reports (a rejected await, a failed assertion) would
+ * otherwise outlive the test along with the watchdog-disabled engine it had
+ * already spawned, and the only thing left to clean them up would be their own
+ * self-destruct timers.
+ */
+const standIns: ChildProcess[] = [];
+
 afterEach(() => {
+  for (const child of standIns.splice(0)) {
+    if (child.exitCode === null && child.signalCode === null) {
+      try {
+        child.kill("SIGKILL");
+      } catch {
+        /* already gone */
+      }
+    }
+  }
   if (tmp) {
     rmSync(tmp, { recursive: true, force: true });
     tmp = null;
@@ -709,29 +727,39 @@ const child = spawn(process.execPath, ["--smol", ${JSON.stringify(bundlePath)}],
   detached: true,
 });
 child.unref();
-child.stdout.once("data", () => process.stdout.write(String(child.pid) + "\\n"));
+// The stamp goes out too: what the owner read of ITSELF while non-dumpable
+// must equal what a stranger reads back, or the recycled-pid check is blind.
+child.stdout.once("data", () => process.stdout.write(child.pid + " " + ownerStart + "\\n"));
 // Self-destruct, so a failed assertion cannot strand the owner either.
 setTimeout(() => process.exit(0), 60000);
 `,
       );
 
       const launcher = spawn(process.execPath, [launcherPath], { stdio: ["ignore", "pipe", "pipe"] });
+      // Registered BEFORE the await below: a rejection there (the launcher
+      // never reports) would otherwise leave it, and the watchdog-disabled
+      // engine it may already have spawned, running on this machine until
+      // their self-destruct timers fire.
+      standIns.push(launcher);
       let stderr = "";
       launcher.stderr?.on("data", (c: Buffer) => {
         stderr += c.toString("utf8");
       });
-      const enginePid = await new Promise<number>((res, rej) => {
+      const reported = await new Promise<{ pid: number; ownerStart: string }>((res, rej) => {
         let out = "";
         launcher.stdout?.on("data", (c: Buffer) => {
           out += c.toString("utf8");
-          const n = Number.parseInt(out.trim(), 10);
-          if (out.includes("\n") && Number.isInteger(n) && n > 0) res(n);
+          if (!out.includes("\n")) return;
+          const [pidText, startText] = out.trim().split(/\s+/);
+          const n = Number.parseInt(pidText ?? "", 10);
+          if (Number.isInteger(n) && n > 0 && startText) res({ pid: n, ownerStart: startText });
         });
         launcher.on("close", (code) =>
           rej(new Error(`hardened launcher exited ${code} before reporting: ${JSON.stringify(stderr)}`)),
         );
         setTimeout(() => rej(new Error("hardened launcher never reported an engine pid")), 20_000);
       });
+      const enginePid = reported.pid;
       const ownerPid = launcher.pid!;
 
       const running = (pid: number): boolean => {
@@ -752,6 +780,16 @@ setTimeout(() => process.exit(0), 60000);
         // The owner really is closed to us, so this test cannot pass by the
         // hardening having quietly not happened.
         expect(() => readFileSync(`/proc/${ownerPid}/environ`)).toThrow(/EACCES/);
+
+        // The recycled-pid check, pinned directly. `ownerIsAlive` compares the
+        // stamp the owner took of ITSELF while non-dumpable against field 22
+        // read back from outside, and it treats an unreadable read as "alive"
+        // -- so if that read closed, nothing else in this test would notice
+        // (verified by mutation: forcing it to null leaves this test green).
+        // Assert the equality the check depends on.
+        const ownerStatNow = readFileSync(`/proc/${ownerPid}/stat`, "utf8");
+        expect(ownerStatNow.slice(ownerStatNow.lastIndexOf(')') + 2).split(' ')[19])
+          .toBe(reported.ownerStart);
 
         // ── While the owner lives: identified, and NOT orphaned. ──
         // This is the assertion that catches the dangerous regression. Both

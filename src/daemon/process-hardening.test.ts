@@ -1,8 +1,12 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { readFileSync, readdirSync, rmSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { readFileSync, readdirSync, rmSync, statSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { hardenProcessInspection } from './process-hardening.ts';
+import {
+  ENGINE_MARKER_ENV,
+  ENGINE_MARKER_VALUE,
+} from '../workflows/runner/engine-runtime/engine-lifecycle.ts';
 
 /**
  * #546. Four things are pinned here: the call happens by default on Linux, the
@@ -230,17 +234,26 @@ describe('nothing here can take the daemon down', () => {
  * this module.
  */
 describe('who may import this module', () => {
-  test('only src/daemon/index.ts, plus this test', () => {
+  test('only src/daemon/index.ts, plus the tests that stand a hardened owner up', () => {
     const SRC = resolve(import.meta.dir, '..');
     const REPO = resolve(SRC, '..');
     /*
-     * Adding an entry here is a security decision, and the bar is narrow: the
-     * importer must be the daemon's own entry point, or a TEST that deliberately
-     * stands a non-dumpable owner up to prove the reaper and the #501 watchdog
-     * still work against one. Production code that an engine, a bundle or the
-     * CLI can reach never qualifies.
+     * Two separate bars, because the guard has to catch two different things.
+     *
+     * MAY IMPORT: pulls the module in and can call it. The bar is the daemon's
+     * own entry point, or a TEST that deliberately stands a non-dumpable owner
+     * up to prove the reaper and the #501 watchdog still work against one.
+     * Production code an engine, a bundle or the CLI can reach never qualifies
+     * -- a non-dumpable engine makes the reaper unable to identify it (#501).
+     *
+     * MAY MENTION: names the module without importing it, e.g. a comment
+     * pointing at the test that pins something. Harmless in itself, but it has
+     * to be listed, because "mentions it" is how this guard catches the import
+     * idiom a specifier regex cannot see: a path built from string parts and
+     * handed to a dynamic `import()`, which is exactly what the two engine
+     * tests do.
      */
-    const allowed = new Set([
+    const mayImport = new Set([
       join('src', 'daemon', 'index.ts'),
       join('src', 'daemon', 'process-hardening.ts'),
       join('src', 'daemon', 'process-hardening.test.ts'),
@@ -249,8 +262,20 @@ describe('who may import this module', () => {
       join('src', 'workflows', 'runner', 'engine-runtime', 'engine-reaper.test.ts'),
       join('src', 'workflows', 'runner', 'engine-runtime', 'engine-lifecycle.test.ts'),
     ]);
+    const mayMention = new Set([
+      ...mayImport,
+      // A comment on descriptorPath pointing at the test that pins it. Listed
+      // rather than exempted wholesale: an actual import from this file would
+      // still fail the import check below, which is the point -- builtin.ts is
+      // reachable from the tools.
+      join('src', 'actions', 'tools', 'builtin.ts'),
+    ]);
 
-    const importers: string[] = [];
+    /** A literal `from '...'` / `import('...')` / `require('...')` specifier. */
+    const IMPORTS = /(?:from|import|require)\s*\(?\s*['"][^'"]*process-hardening(?:\.[cm]?[jt]sx?)?['"]/;
+
+    const mentions: string[] = [];
+    const imports: string[] = [];
     const walk = (dir: string): void => {
       for (const entry of readdirSync(dir, { withFileTypes: true })) {
         const full = join(dir, entry.name);
@@ -261,12 +286,9 @@ describe('who may import this module', () => {
         }
         if (!/\.(ts|tsx|js|mjs|cjs)$/.test(entry.name)) continue;
         const text = readFileSync(full, 'utf-8');
-        // An import/require SPECIFIER, not any mention: a comment elsewhere
-        // that names this module is fine, a module that pulls it in is not.
-        // Any extension, because `./process-hardening.js` is the same import.
-        if (/(?:from|import|require)\s*\(?\s*['"][^'"]*process-hardening(?:\.[cm]?[jt]sx?)?['"]/.test(text)) {
-          importers.push(full.slice(REPO.length + 1));
-        }
+        const rel = full.slice(REPO.length + 1);
+        if (text.includes('process-hardening')) mentions.push(rel);
+        if (IMPORTS.test(text)) imports.push(rel);
       }
     };
     // Every code directory in the repo, derived rather than listed: a new
@@ -279,7 +301,11 @@ describe('who may import this module', () => {
       walk(join(REPO, entry.name));
     }
 
-    expect(importers.filter((f) => !allowed.has(f)).sort()).toEqual([]);
+    // Sanity: the walk actually found things, so an empty result can never be
+    // a silently broken scan passing as "nobody imports it".
+    expect(mentions.length).toBeGreaterThanOrEqual(mayImport.size);
+    expect(mentions.filter((f) => !mayMention.has(f)).sort()).toEqual([]);
+    expect(imports.filter((f) => !mayImport.has(f)).sort()).toEqual([]);
   });
 
   /*
@@ -288,6 +314,53 @@ describe('who may import this module', () => {
    * hard-coded `true`, or read the wrong key, would satisfy every other test
    * in this file. Source text, because the alternative is booting a daemon.
    */
+  /*
+   * And the runtime half, which no text scan can give you: whatever route
+   * reached this function, an ENGINE is never hardened. This is the failure
+   * that would undo #501 silently, so it is refused rather than trusted to
+   * the guard above.
+   */
+  test('refuses outright when the process carries the engine marker', () => {
+    const lines: string[] = [];
+    let called = false;
+    const outcome = hardenProcessInspection({
+      platform: 'linux',
+      log: log(lines),
+      warn: log(lines),
+      env: { [ENGINE_MARKER_ENV]: ENGINE_MARKER_VALUE },
+      symbols: {
+        do_set_dumpable: () => {
+          called = true;
+          return 0;
+        },
+        do_get_dumpable: () => 0,
+      },
+    });
+    expect(outcome).toEqual({ kind: 'refused-engine-process' });
+    expect(called).toBe(false);
+    expect(lines.join('\n')).toContain('REFUSING');
+    // Even with the hatch shut and everything else in order.
+    expect(
+      hardenProcessInspection({
+        platform: 'linux',
+        log: () => {},
+        warn: () => {},
+        env: { [ENGINE_MARKER_ENV]: ENGINE_MARKER_VALUE, OTHER: 'x' },
+        symbols: { do_set_dumpable: () => 0, do_get_dumpable: () => 0 },
+      }),
+    ).toEqual({ kind: 'refused-engine-process' });
+    // An unrelated env, or the marker with the wrong value, hardens as usual.
+    expect(
+      hardenProcessInspection({
+        platform: 'linux',
+        log: () => {},
+        warn: () => {},
+        env: { [ENGINE_MARKER_ENV]: 'some-other-value' },
+        symbols: { do_set_dumpable: () => 0, do_get_dumpable: () => 0 },
+      }),
+    ).toEqual({ kind: 'hardened' });
+  });
+
   test('the daemon passes the configured flag, not a literal', () => {
     const index = readFileSync(join(import.meta.dir, 'index.ts'), 'utf-8');
     expect(index).toContain(
@@ -325,9 +398,18 @@ const field22 = () => {
   const s = readFileSync('/proc/self/stat', 'utf8');
   return s.slice(s.lastIndexOf(')') + 2).split(' ')[19];
 };
+// A child spawned FROM the non-dumpable process, for the runner to inspect:
+// execve resets dumpable, which is the invariant the whole engine-reaping
+// argument rests on. It lives long enough to be looked at, then exits.
+const grandchild = Bun.spawn([process.execPath, '-e', 'await Bun.sleep(8000)'], {
+  stdout: 'ignore', stderr: 'ignore',
+  env: { ...process.env, GRANDCHILD_MARKER: 'visible-to-the-reaper' },
+});
+grandchild.unref();
 console.log(JSON.stringify({
   outcome,
   before,
+  grandchildPid: grandchild.pid,
   after: {
     environ: read('/proc/self/environ'),
     stat: read('/proc/self/stat'),
@@ -346,6 +428,7 @@ console.log(JSON.stringify({
     const result = JSON.parse(stdout) as {
       outcome: { kind: string };
       before: { environ: boolean; fd: string };
+      grandchildPid: number;
       after: { environ: string; stat: string; cgroup: string; field22: string; fd: string };
     };
 
@@ -364,26 +447,150 @@ console.log(JSON.stringify({
     expect(result.after.field22).toMatch(/^\d+$/);
     // Container detection reads this one.
     expect(result.after.cgroup).toBe('ok');
+
+    /*
+     * And the invariant the entire engine-reaping argument rests on: execve
+     * resets dumpable, so a child of the hardened daemon is readable. Asserted
+     * HERE, next to the other measurements, as well as in the reaper's own
+     * hardened test -- if that one file is ever skipped, this claim must not
+     * go unpinned with it.
+     *
+     * (It holds for a same-uid, non-secureexec execve, which is every child
+     * here: they are all this uid running `bun`. A setuid target or one the
+     * kernel marks non-dumpable at exec would not inherit it back.)
+     */
+    try {
+      const env = readFileSync(`/proc/${result.grandchildPid}/environ`, 'utf-8');
+      expect(env.split('\0')).toContain('GRANDCHILD_MARKER=visible-to-the-reaper');
+      expect(statSync(`/proc/${result.grandchildPid}`).uid).toBe(process.getuid!());
+    } finally {
+      try {
+        process.kill(result.grandchildPid, 'SIGKILL');
+      } catch {
+        /* already exited */
+      }
+    }
   }, 30_000);
 
   /**
    * #551 reads a file through the descriptor it actually opened and asks
    * `/proc/self/fd/<n>` where that descriptor landed, which is the only way on
    * Linux to know what was really opened after the path was classified. That
-   * directory flips to root ownership when the daemon becomes non-dumpable, so
+   * directory is reassigned to root when the daemon becomes non-dumpable, so
    * if the kernel stopped admitting the owning thread group, `descriptorPath()`
    * would start returning null and the TOCTOU close would quietly weaken.
-   * Driven through the REAL read_file tool inside a hardened process.
+   *
+   * `descriptorPath` is called DIRECTLY here, because no integration fixture
+   * can make it load-bearing: a hard-linked key gives `landed === filePath` by
+   * construction, and a symlinked one is resolved identically by the pre-open
+   * `resolveReal`, so both are refused by the inode pass in `secretRead()`
+   * before `readJudgedFile` opens anything. An earlier version of this test
+   * drove the tool against a hard link and believed it was covering the
+   * descriptor route; it was not -- verified by mutation, it passed unchanged
+   * with `descriptorPath()` stubbed to return null.
    */
-  test("#551's read_file still refuses an aliased key and still reads through the descriptor", async () => {
+  test('#551 descriptorPath still answers inside a non-dumpable process', async () => {
     const dir = probeDir('jarvis-dumpable-551-');
     const probe = join(dir, 'probe.ts');
     const builtin = resolve(import.meta.dir, '..', 'actions', 'tools', 'builtin.ts');
-    const policy = resolve(import.meta.dir, '..', 'actions', 'tools', 'file-path-policy.ts');
     writeFileSync(
       probe,
       `
-import { mkdirSync, writeFileSync, linkSync, readlinkSync, openSync } from 'node:fs';
+import { mkdirSync, writeFileSync, symlinkSync, openSync, unlinkSync, closeSync } from 'node:fs';
+import { join } from 'node:path';
+import { hardenProcessInspection } from ${JSON.stringify(MODULE.replace(/\.test\.ts$/, '.ts'))};
+import { descriptorPath } from ${JSON.stringify(builtin)};
+
+const root = ${JSON.stringify(dir)};
+mkdirSync(join(root, 'sub'), { recursive: true });
+const real = join(root, 'sub', 'real.txt');
+writeFileSync(real, 'contents\\n');
+const link = join(root, 'via-symlink.txt');
+symlinkSync(real, link);
+const doomed = join(root, 'doomed.txt');
+writeFileSync(doomed, 'gone soon\\n');
+
+// Harden FIRST: every descriptorPath call below runs non-dumpable.
+const outcome = hardenProcessInspection({ log: () => {} });
+
+const plainFd = openSync(real, 0);
+// Opened THROUGH a symlink: the kernel answers with the target, which is the
+// whole point of asking the descriptor instead of trusting the path.
+const symlinkFd = openSync(link, 0);
+const procFd = openSync('/proc/self/status', 0);
+const doomedFd = openSync(doomed, 0);
+unlinkSync(doomed); // now the link name carries " (deleted)"
+
+console.log('PROBE_RESULT ' + JSON.stringify({
+  outcome,
+  plain: descriptorPath(plainFd),
+  throughSymlink: descriptorPath(symlinkFd),
+  procfs: descriptorPath(procFd),
+  deleted: descriptorPath(doomedFd),
+  closed: descriptorPath(999999),
+}));
+closeSync(plainFd); closeSync(symlinkFd); closeSync(procFd); closeSync(doomedFd);
+`,
+      'utf-8',
+    );
+
+    // A minimal env: JARVIS_SECRETS_DIR and JARVIS_WORKFLOW_ENCRYPTION_KEY_FILE
+    // both feed the policy's candidate set, so a developer's shell must not be
+    // able to change what this measures.
+    const run = Bun.spawnSync([process.execPath, probe], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: { PATH: process.env['PATH'] ?? '', HOME: process.env['HOME'] ?? '' },
+    });
+    const stdout = run.stdout.toString();
+    const line = stdout.split('\n').find((l) => l.startsWith('PROBE_RESULT '));
+    if (!line) {
+      throw new Error(`probe printed no result; stdout: ${stdout}\nstderr: ${run.stderr.toString()}`);
+    }
+    expect(run.exitCode).toBe(0);
+    const result = JSON.parse(line.slice('PROBE_RESULT '.length)) as {
+      outcome: { kind: string };
+      plain: string | null;
+      throughSymlink: string | null;
+      procfs: string | null;
+      deleted: string | null;
+      closed: string | null;
+    };
+
+    // The process really was hardened, so none of the below passes by accident.
+    expect(result.outcome.kind).toBe('hardened');
+    // The production function, not a readlink the test did itself.
+    expect(result.plain).toBe(join(dir, 'sub', 'real.txt'));
+    // `landed !== filePath`: the branch that exists to catch a swapped path.
+    expect(result.throughSymlink).toBe(join(dir, 'sub', 'real.txt'));
+    // The numeric re-spelling that gets reclassified by secretRead(landed).
+    expect(result.procfs).toMatch(/^\/proc\/\d+\/status$/);
+    // The `" (deleted)"` strip, which nothing else in the repo covers: without
+    // it the suffix would be classified as part of the file name.
+    expect(result.deleted).toBe(join(dir, 'doomed.txt'));
+    expect(result.deleted).not.toContain('deleted');
+    // And a descriptor that is not open still answers null rather than throwing.
+    expect(result.closed).toBeNull();
+  }, 60_000);
+
+  /**
+   * And the tool on top of it: the refusals and the reads #551 ships still
+   * behave when the process serving them is non-dumpable. This does NOT cover
+   * the descriptor route (see the test above for why); it covers that nothing
+   * in the classifier degrades, and it names which control fired.
+   */
+  test('#551 read_file still refuses a key and still reads, inside a non-dumpable process', async () => {
+    const dir = probeDir('jarvis-dumpable-551-tool-');
+    const probe = join(dir, 'probe.ts');
+    const builtin = resolve(import.meta.dir, '..', 'actions', 'tools', 'builtin.ts');
+    const policy = resolve(import.meta.dir, '..', 'actions', 'tools', 'file-path-policy.ts');
+    // One definition, interpolated into the probe AND into the assertion, so
+    // an edit to either cannot leave `not.toContain` passing trivially.
+    const MARKER = 'SYNTHETIC-KEY-MUST-NOT-APPEAR';
+    writeFileSync(
+      probe,
+      `
+import { mkdirSync, writeFileSync, linkSync, readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { hardenProcessInspection } from ${JSON.stringify(MODULE.replace(/\.test\.ts$/, '.ts'))};
 import { readFileTool, setDefaultCwd } from ${JSON.stringify(builtin)};
@@ -395,10 +602,8 @@ const dataDir = join(home, '.jarvis');
 const projectsDir = join(dataDir, 'projects');
 mkdirSync(projectsDir, { recursive: true });
 mkdirSync(join(home, 'Documents'), { recursive: true });
-const MARKER = 'SYNTHETIC-KEY-MUST-NOT-APPEAR';
-writeFileSync(join(dataDir, '.secrets.key'), MARKER + '\\n');
+writeFileSync(join(dataDir, '.secrets.key'), ${JSON.stringify(MARKER)} + '\\n');
 writeFileSync(join(home, 'Documents', 'cv.txt'), 'an ordinary document\\n');
-// The alias no path rule can see: a hard link that IS the key.
 const alias = join(home, 'Documents', 'notes.txt');
 linkSync(join(dataDir, '.secrets.key'), alias);
 setPolicyHome(home);
@@ -406,18 +611,14 @@ setSiteProjectsDir(projectsDir);
 setDaemonDataRoots({ dataDirs: [dataDir], secretsDirs: [dataDir] });
 setDefaultCwd(null);
 
-// Harden AFTER the fixtures, BEFORE the reads: the reads are what must survive.
 const outcome = hardenProcessInspection({ log: () => {} });
-const fd = openSync(join(home, 'Documents', 'cv.txt'), 0);
-let fdPath = 'unreadable';
-try { fdPath = readlinkSync('/proc/self/fd/' + fd); } catch (e) { fdPath = e.code; }
-
 const read = async (p) => String(await readFileTool.execute({ path: p }));
-// Sentinel-prefixed: the policy logs its refusals to stdout too, so the
-// result has to be findable rather than "the last line with a brace in it".
+const status = readFileSync('/proc/self/status', 'utf8');
 console.log('PROBE_RESULT ' + JSON.stringify({
   outcome,
-  fdPath,
+  // The kernel's own word for "this process is non-dumpable", read through
+  // the tool's own process rather than inferred from the outcome.
+  coreDumping: /^CoreDumping:\\s*(\\d+)/m.exec(status)?.[1] ?? 'absent',
   alias: await read(alias),
   ordinary: await read(join(home, 'Documents', 'cv.txt')),
   procfs: await read('/proc/self/status'),
@@ -426,34 +627,41 @@ console.log('PROBE_RESULT ' + JSON.stringify({
       'utf-8',
     );
 
-    const run = Bun.spawnSync([process.execPath, probe], { stdout: 'pipe', stderr: 'pipe' });
+    const run = Bun.spawnSync([process.execPath, probe], {
+      stdout: 'pipe',
+      stderr: 'pipe',
+      env: { PATH: process.env['PATH'] ?? '', HOME: process.env['HOME'] ?? '' },
+    });
     const stdout = run.stdout.toString();
+    // The policy logs refusals with console.warn, i.e. stderr: that line is
+    // how we tell WHICH control refused, not just that something did.
+    const stderr = run.stderr.toString();
     const line = stdout.split('\n').find((l) => l.startsWith('PROBE_RESULT '));
-    if (!line) {
-      throw new Error(`probe printed no result; stdout: ${stdout}\nstderr: ${run.stderr.toString()}`);
-    }
+    if (!line) throw new Error(`probe printed no result; stdout: ${stdout}\nstderr: ${stderr}`);
+    expect(run.exitCode).toBe(0);
     const result = JSON.parse(line.slice('PROBE_RESULT '.length)) as {
       outcome: { kind: string };
-      fdPath: string;
+      coreDumping: string;
       alias: string;
       ordinary: string;
       procfs: string;
     };
 
-    // The process really was hardened, so none of the below passes by accident.
     expect(result.outcome.kind).toBe('hardened');
-    // The mechanism #551 depends on still answers.
-    expect(result.fdPath).toBe(join(dir, 'home', 'Documents', 'cv.txt'));
-    // The hard-linked key is still refused, and none of its bytes came back.
-    expect(result.alias).toContain('Access denied');
-    expect(result.alias).not.toContain('SYNTHETIC-KEY-MUST-NOT-APPEAR');
+    // Non-dumpable according to the kernel, in the very process that served
+    // the reads below.
+    expect(result.coreDumping).toBe('0');
+    // The key is refused, by the credential rule and not by some other
+    // "Access denied", and none of its bytes came back.
+    expect(result.alias).toContain("holds Jarvis's own credentials");
+    expect(result.alias).not.toContain(MARKER);
+    expect(stderr).toContain('read_file refused: jarvis-key');
     // An ordinary file still reads.
     expect(result.ordinary).toContain('an ordinary document');
     // And a size-0 procfs file still reads through the descriptor rather than
     // by its reported size.
     expect(result.procfs).toContain('Pid:');
   }, 60_000);
-
   test('the escape hatch really leaves environ readable', async () => {
     const dir = probeDir('jarvis-dumpable-off-');
     const probe = join(dir, 'probe.ts');

@@ -78,6 +78,10 @@
 
 import { cc } from 'bun:ffi';
 import setDumpableSource from './set-dumpable.c' with { type: 'file' };
+import {
+  ENGINE_MARKER_ENV,
+  ENGINE_MARKER_VALUE,
+} from '../workflows/runner/engine-runtime/engine-lifecycle.ts';
 
 /** What the hardening attempt did. Every case is logged; none throws. */
 export type HardeningOutcome =
@@ -96,7 +100,14 @@ export type HardeningOutcome =
   /** The helper could not be built or loaded (no headers, no symbol). */
   | { kind: 'unavailable'; reason: string }
   /** prctl itself refused. */
-  | { kind: 'refused'; errno: number };
+  | { kind: 'refused'; errno: number }
+  /**
+   * This process carries the engine marker, so it is an engine (or a child of
+   * one) rather than the daemon. Hardening it would make the reaper blind to
+   * it. Refused at runtime because no static check can cover every route to
+   * this function -- a dynamic import built from a path, for one.
+   */
+  | { kind: 'refused-engine-process' };
 
 type DumpableSymbols = {
   do_set_dumpable: (value: number) => number;
@@ -135,6 +146,8 @@ function load(): DumpableSymbols {
 export interface HardeningDeps {
   /** Defaults to `process.platform`. */
   platform?: string;
+  /** Defaults to `process.env`. Only read, to spot an engine process. */
+  env?: Record<string, string | undefined>;
   /**
    * The value of `daemon.allow_process_inspection` as the config loader
    * resolved it. Deliberately `unknown`: the hardening happens unless this is
@@ -177,6 +190,31 @@ export function hardenProcessInspection(deps: HardeningDeps = {}): HardeningOutc
   const platform = deps.platform ?? process.platform;
   const log = deps.log ?? ((line: string) => console.log(line));
   const warn = deps.warn ?? ((line: string) => console.warn(line));
+
+  /*
+   * Never harden an ENGINE. A non-dumpable engine is the one way this change
+   * could break #501 silently: identifyEngine() would catch the EACCES on its
+   * environ, return null, and the reaper would both stop reclaiming orphans
+   * and lose the protection that stops the bundle pruner deleting a `main.js`
+   * out from under a running engine.
+   *
+   * The import guard in the tests keeps this module out of everything but the
+   * daemon's entry point, but it can only see literal import specifiers, and a
+   * specifier built at runtime slips past it. This check does not care how the
+   * call was reached. It is deliberately the FIRST thing here: refusing to
+   * harden leaves the pre-#546 status quo, which is recoverable, while
+   * hardening an engine is not.
+   */
+  const env = deps.env ?? process.env;
+  if (env[ENGINE_MARKER_ENV] === ENGINE_MARKER_VALUE) {
+    warn(
+      '[Daemon] REFUSING to block process inspection: this process carries ' +
+        `${ENGINE_MARKER_ENV}, so it is a workflow engine, not the daemon. ` +
+        'Hardening it would make the engine reaper unable to identify it ' +
+        '(#501). Nothing was changed; this is a bug in the caller.',
+    );
+    return { kind: 'refused-engine-process' };
+  }
 
   // Fail closed: only an explicit `true` from the config reader opens this.
   if (deps.allowInspection === true) {

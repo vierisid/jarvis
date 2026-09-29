@@ -159,8 +159,18 @@ function formatBytes(bytes: number): string {
  * name. macOS needs `fcntl(F_GETPATH)`, which node does not expose, and Windows
  * has no equivalent; both fall back to the path-based verdict already taken,
  * plus the inode test, which needs no path at all.
+ *
+ * Exported ONLY so it can be asserted directly. There is no integration
+ * fixture that makes this function load-bearing: a hard link gives
+ * `landed === filePath` by construction, and a symlink is already resolved
+ * identically by the pre-open `resolveReal`, so every alias a test can build
+ * is refused by the inode pass before the descriptor is consulted. It is a
+ * TOCTOU backstop, and the only honest way to pin it is to call it. #546 made
+ * that necessary: it reads `/proc/self/fd`, whose directory the kernel
+ * reassigns to root when the daemon becomes non-dumpable, so a test has to
+ * prove it still answers. See src/daemon/process-hardening.test.ts.
  */
-function descriptorPath(fd: number): string | null {
+export function descriptorPath(fd: number): string | null {
   try {
     return readlinkSync(`/proc/self/fd/${fd}`).replace(/ \(deleted\)$/, '');
   } catch {
