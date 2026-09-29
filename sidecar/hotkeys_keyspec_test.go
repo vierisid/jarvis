@@ -276,9 +276,13 @@ func TestDarwinHotkeyMatches(t *testing.T) {
 // refused on Linux, and `command+k` was refused on Linux.
 func TestKeyNameParityAcrossBackends(t *testing.T) {
 	// linuxKeysymName cannot be checked against XStringToKeysym here (that
-	// needs cgo + XLib, so hotkeys_linux_test.go does it on Linux); what is
-	// checked here is that it produces a NON-EMPTY, non-lowercase-passthrough
-	// name for every key the other two resolve.
+	// needs cgo + XLib, so hotkeys_linux_test.go does it on Linux). What is
+	// checked here is that every key the other two resolve is RECOGNISED --
+	// either in the keysym table or a computed F<n> -- and not falling through
+	// the passthrough branch. A plain non-empty check would be tautological
+	// (linuxKeysymName never returns "" for a non-empty key), and deleting the
+	// `"tab": "Tab"` row would still pass it while breaking ctrl+tab on Linux,
+	// which is the exact regression #563 is about.
 	keys := []string{
 		"a", "k", "z", "0", "9",
 		"space", "return", "tab", "escape", "backspace", "delete",
@@ -297,8 +301,8 @@ func TestKeyNameParityAcrossBackends(t *testing.T) {
 		if _, ok := windowsVK(key); !ok {
 			t.Errorf("key %q has no Windows virtual-key code", key)
 		}
-		if name := linuxKeysymName(key); name == "" {
-			t.Errorf("key %q has no X11 keysym name", key)
+		if !linuxKeysymRecognised(key) {
+			t.Errorf("key %q falls through to the XStringToKeysym passthrough; it needs a linuxKeysymNames row", key)
 		}
 	}
 
@@ -315,9 +319,13 @@ func TestKeyNameParityAcrossBackends(t *testing.T) {
 	}
 
 	t.Run("the shipped defaults resolve on all three backends", func(t *testing.T) {
-		// Whatever the shipped defaults are, they must parse everywhere. These
-		// are the values in src/config/pebble-hotkeys.ts; if they change there,
-		// this list changes with them.
+		// Whatever the shipped defaults are, they must parse everywhere.
+		//
+		// KEEP IN SYNC WITH PEBBLE_DEFAULT_SUMMON_HOTKEY and
+		// PEBBLE_DEFAULT_PALETTE_HOTKEY in src/config/pebble-hotkeys.ts, which
+		// is the one place the shipped pair is decided. This copy and the one
+		// in hotkeys_linux_test.go exist because the Go side cannot import a
+		// TypeScript constant; grep for PEBBLE_DEFAULT_ to find them all.
 		for _, spec := range []string{"ctrl+shift+space", "ctrl+shift+k"} {
 			if _, _, err := parseDarwinKeyspec(spec); err != nil {
 				t.Errorf("macOS cannot parse the default %q: %v", spec, err)
@@ -330,8 +338,8 @@ func TestKeyNameParityAcrossBackends(t *testing.T) {
 				t.Errorf("shared parse of the default %q failed: %v", spec, err)
 				continue
 			}
-			if linuxKeysymName(parsed.Key) == "" {
-				t.Errorf("Linux has no keysym name for the default %q", spec)
+			if !linuxKeysymRecognised(parsed.Key) {
+				t.Errorf("Linux has no keysym row for the default %q", spec)
 			}
 		}
 	})
@@ -483,6 +491,136 @@ func TestLinuxKeysymNames(t *testing.T) {
 		for _, key := range []string{"a", "7", "yen", "mu", "sterling"} {
 			if got := linuxKeysymName(key); got != key {
 				t.Errorf("linuxKeysymName(%q) = %q, want it passed through", key, got)
+			}
+		}
+	})
+}
+
+// linuxKeysymRecognised reports whether linuxKeysymName resolved the key from
+// its table (or the computed F<n> branch) rather than passing it through
+// untouched. A passthrough is only correct for names that are already X keysym
+// names; for a key the other two backends know, it means a missing row.
+func linuxKeysymRecognised(key string) bool {
+	if _, ok := linuxKeysymNames[key]; ok {
+		return true
+	}
+	name := linuxKeysymName(key)
+	if name != key {
+		return true // computed, e.g. "f13" -> "F13"
+	}
+	// Unchanged: correct only where the canonical name IS the keysym name,
+	// which is true for the single-character letters and digits.
+	return len(key) == 1 && ((key[0] >= 'a' && key[0] <= 'z') || (key[0] >= '0' && key[0] <= '9'))
+}
+
+// The modifier tables are hand-transcribed from three OS headers and, unlike
+// the key codes, every other assertion about them is written in terms of the
+// constants themselves (`mods != modControl|modShift`), so swapping two values
+// would pass the whole suite and ship a hotkey registered on the wrong
+// modifier. Pinned by literal value here, the same way the NSEvent bits are.
+func TestModifierTableValues(t *testing.T) {
+	t.Run("Win32 MOD_ flags", func(t *testing.T) {
+		for name, got := range map[string]uint32{"MOD_ALT": modAlt, "MOD_CONTROL": modControl, "MOD_SHIFT": modShift, "MOD_WIN": modWin} {
+			want := map[string]uint32{"MOD_ALT": 0x0001, "MOD_CONTROL": 0x0002, "MOD_SHIFT": 0x0004, "MOD_WIN": 0x0008}[name]
+			if got != want {
+				t.Errorf("%s = 0x%X, want 0x%X", name, got, want)
+			}
+		}
+		if windowsModifierMask(hotkeyModControl|hotkeyModShift) != 0x0006 {
+			t.Error("ctrl|shift should be MOD_CONTROL|MOD_SHIFT = 0x0006")
+		}
+		if windowsModifierMask(hotkeyModOption) != 0x0001 {
+			t.Error("alt/option must map to MOD_ALT, not MOD_WIN")
+		}
+		if windowsModifierMask(hotkeyModCommand) != 0x0008 {
+			t.Error("cmd/super/win must map to MOD_WIN")
+		}
+	})
+
+	t.Run("X11 modifier masks", func(t *testing.T) {
+		for name, pair := range map[string][2]uint{
+			"ShiftMask": {hkShiftMask, 1 << 0}, "ControlMask": {hkControlMask, 1 << 2},
+			"Mod1Mask": {hkMod1Mask, 1 << 3}, "Mod4Mask": {hkMod4Mask, 1 << 6},
+		} {
+			if pair[0] != pair[1] {
+				t.Errorf("%s = %d, want %d", name, pair[0], pair[1])
+			}
+		}
+		if linuxModifierMask(hotkeyModControl|hotkeyModShift) != 5 {
+			t.Error("ctrl|shift should be ControlMask|ShiftMask = 5")
+		}
+		if linuxModifierMask(hotkeyModOption) != 8 {
+			t.Error("alt/option must map to Mod1Mask")
+		}
+		if linuxModifierMask(hotkeyModCommand) != 0x40 {
+			t.Error("cmd/super/win must map to Mod4Mask")
+		}
+	})
+
+	t.Run("NSEventModifierFlags", func(t *testing.T) {
+		for name, pair := range map[string][2]uint{
+			"Shift": {nsModShift, 1 << 17}, "Control": {nsModControl, 1 << 18},
+			"Option": {nsModOption, 1 << 19}, "Command": {nsModCommand, 1 << 20},
+		} {
+			if pair[0] != pair[1] {
+				t.Errorf("NSEventModifierFlag%s = 0x%X, want 0x%X", name, pair[0], pair[1])
+			}
+		}
+		if darwinModifierMask(hotkeyModControl|hotkeyModShift) != nsModControl|nsModShift {
+			t.Error("ctrl|shift should be Control|Shift")
+		}
+		if darwinModifierMask(hotkeyModOption) != nsModOption {
+			t.Error("alt/option must map to Option, not Command")
+		}
+	})
+}
+
+// The key codes a transcription error is most likely to hit: pairs that read
+// backwards or out of order in the source tables. Separate from
+// TestDarwinKeyCodeValues so the reason they are listed is on the record.
+func TestTranspositionProneKeyCodes(t *testing.T) {
+	t.Run("macOS digits 5 and 6 are inverted in Events.h", func(t *testing.T) {
+		// kVK_ANSI_5 = 0x17 (23), kVK_ANSI_6 = 0x16 (22). Not a typo.
+		if c, _ := darwinKeyCode("5"); c != 23 {
+			t.Errorf("5 = %d, want kVK_ANSI_5 23", c)
+		}
+		if c, _ := darwinKeyCode("6"); c != 22 {
+			t.Errorf("6 = %d, want kVK_ANSI_6 22", c)
+		}
+	})
+	t.Run("macOS h and g are inverted too", func(t *testing.T) {
+		if c, _ := darwinKeyCode("h"); c != 4 {
+			t.Errorf("h = %d, want 4", c)
+		}
+		if c, _ := darwinKeyCode("g"); c != 5 {
+			t.Errorf("g = %d, want 5", c)
+		}
+	})
+	t.Run("macOS brackets read backwards", func(t *testing.T) {
+		// kVK_ANSI_RightBracket (30) is LOWER than kVK_ANSI_LeftBracket (33).
+		if c, _ := darwinKeyCode("leftbracket"); c != 33 {
+			t.Errorf("leftbracket = %d, want 33", c)
+		}
+		if c, _ := darwinKeyCode("rightbracket"); c != 30 {
+			t.Errorf("rightbracket = %d, want 30", c)
+		}
+	})
+	t.Run("macOS remaining punctuation", func(t *testing.T) {
+		for key, want := range map[string]uint16{
+			"backslash": 42, "semicolon": 41, "quote": 39, "comma": 43, "period": 47,
+		} {
+			if c, _ := darwinKeyCode(key); c != want {
+				t.Errorf("%s = %d, want %d", key, c, want)
+			}
+		}
+	})
+	t.Run("Windows OEM punctuation", func(t *testing.T) {
+		for key, want := range map[string]uint32{
+			"leftbracket": 0xDB, "rightbracket": 0xDD, "backslash": 0xDC,
+			"quote": 0xDE, "comma": 0xBC, "period": 0xBE, "slash": 0xBF,
+		} {
+			if vk, _ := windowsVK(key); vk != want {
+				t.Errorf("%s = 0x%X, want 0x%X", key, vk, want)
 			}
 		}
 	})

@@ -73,7 +73,12 @@ var modifierNames = map[string]hotkeyMods{
 // keyAliases folds the spellings a user might write onto one canonical name.
 // The canonical names are the keys of the three code tables below.
 var keyAliases = map[string]string{
-	" ":        "space",
+	// No " " entry: parseKeyspec TrimSpaces every token, so a key token that is
+	// a literal space arrives here as "" and is rejected before the lookup.
+	// (The old Linux and macOS parsers trimmed only the whole string, so
+	// `summon_hotkey: "ctrl+ "` used to resolve to Space on those two. Nothing
+	// could send that value -- the keyspec was hardcoded -- and Windows already
+	// rejected it.)
 	"spacebar": "space",
 	"enter":    "return",
 	"esc":      "escape",
@@ -97,8 +102,13 @@ var keyAliases = map[string]string{
 
 // canonicalKeyName resolves one key token to its canonical name. Unknown tokens
 // come back unchanged: the Linux backend still hands anything it does not
-// recognise to `XStringToKeysym`, which knows far more key names than this file
-// does, and refusing them here would narrow what already works.
+// recognise to `XStringToKeysym`, and refusing them here would narrow what
+// already works.
+//
+// Only the LOWERCASE half of the keysym namespace is reachable that way, since
+// parseKeyspec lower-cases the whole spec first: `yen` and `mu` resolve, `Menu`
+// and `Hiragana_Katakana` do not. Pre-existing, and the table above is how a
+// key that needs a capitalised keysym name (`Tab`, `F13`, `Left`) is reached.
 func canonicalKeyName(token string) string {
 	if canon, ok := keyAliases[token]; ok {
 		return canon
@@ -146,9 +156,10 @@ const (
 //
 // `NSEventModifierFlagDeviceIndependentFlagsMask`, which the monitor used to
 // compare against, also carries CapsLock (1<<16), NumericPad (1<<21), Help
-// (1<<22) and Function (1<<23). macOS sets Function on every F-key AND on the
-// arrows, and NumericPad on the arrows too, so a literal `got == want` would
-// have made `f13` and `up` impossible to press -- and Caps Lock being on would
+// (1<<22) and Function (1<<23). macOS sets Function on every F-key, on the
+// arrows, and on Home/End/PageUp/PageDown/forward-Delete, plus NumericPad on
+// the arrows, so a literal `got == want` would have made `f13`, `up` and `home`
+// impossible to press -- and Caps Lock being on would
 // have silently disabled every hotkey on the machine. The raw flags also carry
 // device-DEPENDENT bits in the low byte (which physical Shift, which physical
 // Control), which are not part of what the user asked for either.
@@ -193,7 +204,13 @@ func darwinHotkeyMatches(gotFlags uint, gotKeyCode uint16, wantFlags uint, wantK
 	if gotKeyCode != wantKeyCode {
 		return false
 	}
-	return gotFlags&darwinModifierCompareMask == wantFlags&darwinModifierCompareMask
+	// wantFlags is NOT masked here, because the C block does not mask it either
+	// -- it compares `([e modifierFlags] & cmp) == want`. Masking it on this
+	// side would make this function forgiving where the monitor is not, and
+	// would hide exactly the failure the "a parsed mask never reaches outside
+	// the compare mask" test exists to catch: a want with a stray bit makes the
+	// hotkey silently DEAD, not over-firing.
+	return gotFlags&darwinModifierCompareMask == wantFlags
 }
 
 // darwinKeyCodes maps canonical key names to macOS HARDWARE key codes (the

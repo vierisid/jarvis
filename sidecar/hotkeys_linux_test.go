@@ -84,8 +84,10 @@ func TestLinuxKeyNameParity(t *testing.T) {
 	}
 }
 
-// The shipped defaults, resolved through the real X keysym table. If the pair in
-// src/config/pebble-hotkeys.ts changes, this list changes with it.
+// The shipped defaults, resolved through the real X keysym table.
+//
+// KEEP IN SYNC WITH PEBBLE_DEFAULT_SUMMON_HOTKEY and PEBBLE_DEFAULT_PALETTE_HOTKEY
+// in src/config/pebble-hotkeys.ts -- grep PEBBLE_DEFAULT_ for every copy.
 func TestLinuxResolvesTheShippedDefaults(t *testing.T) {
 	for _, spec := range []string{"ctrl+shift+space", "ctrl+shift+k"} {
 		mods, ks, err := parseLinuxKeyspec(spec)

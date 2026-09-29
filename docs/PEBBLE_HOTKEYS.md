@@ -82,7 +82,7 @@ key. A key with no modifier (`f13`) is allowed.
 
 Keys: `a`-`z`, `0`-`9`, `f1`-`f20`, `space`/`spacebar`, `enter`/`return`, `tab`,
 `esc`/`escape`, `backspace`, `delete`/`del`, `insert`/`ins`, `home`, `end`,
-`pageup`/`pgup`, `pagedown`/`pgdn`, `left`, `right`, `up`, `down`, and the
+`pageup`/`pgup`, `pagedown`/`pgdn`/`pagedn`, `left`, `right`, `up`, `down`, and the
 punctuation keys `minus`, `equal`, `leftbracket`, `rightbracket`, `backslash`,
 `semicolon`, `quote`, `comma`, `period`, `slash`, `grave` (with the obvious
 symbol aliases: `-`, `=`, `[`, `]`, `\`, `;`, `'`, `,`, `.`, `/`, `` ` ``).

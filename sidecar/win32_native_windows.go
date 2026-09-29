@@ -391,7 +391,9 @@ const (
 )
 
 // vkSpace, vkControl and vkF1 are deliberately not repeated here: they are
-// declared by hotkeys_windows.go and mouse_hook_windows.go, which are part of
+// declared by hotkeys_keyspec.go (vkSpace, vkF1 -- moved there from
+// hotkeys_windows.go in #563, since the key table is now shared with the macOS
+// and Linux backends) and mouse_hook_windows.go (vkControl), which are part of
 // the same package, so a second declaration is a build error rather than a
 // shadow. This file has already collided that way twice (namedKeys, then
 // vkF1), so borrow rather than redeclare.
