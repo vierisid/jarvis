@@ -643,3 +643,175 @@ child.stdout.once("data", () => {
     }
   }, 60_000);
 });
+
+/**
+ * #546, the outside view. The daemon now calls prctl(PR_SET_DUMPABLE, 0) at
+ * startup, so the OWNER of every engine on this machine is non-dumpable: the
+ * files under its /proc/<pid> belong to root and the ptrace-gated ones are
+ * closed. The reaper decides whether to kill an engine by asking about that
+ * owner, and both of its answers fail safe toward "assume alive" -- so a
+ * regression here leaks orphans silently and undoes #501 without a single
+ * error message. Hence a real engine, a real non-dumpable owner, and both
+ * verdicts asserted.
+ *
+ * The engine's own watchdog is disabled (poll 0), so the reaper is the only
+ * thing that can reclaim it: what is measured is the reaper, not the shim.
+ */
+describe.skipIf(process.platform !== "linux")(
+  "with the owner's process inspection blocked (#546)",
+  () => {
+    const HARDENING_MODULE = resolve(import.meta.dir, "..", "..", "..", "daemon", "process-hardening.ts");
+
+    test("an engine of a hardened owner is left alone while it lives, then reaped once it dies", async () => {
+      const dir = tmpDir();
+      const bundleDir = resolve(dir, "engine", "hardened");
+      mkdirSync(bundleDir, { recursive: true });
+      const bundlePath = resolve(bundleDir, "main.js");
+      writeFileSync(
+        bundlePath,
+        `setInterval(() => {}, 1000);\nsetTimeout(() => process.exit(3), 60000);\nconsole.log("up");\n`,
+      );
+
+      // The owner hardens itself exactly as startDaemon does, proves it took
+      // effect, stamps its own start time from /proc/self/stat while
+      // non-dumpable, spawns the engine, and STAYS ALIVE until killed.
+      const launcherPath = resolve(dir, "hardened-launcher.js");
+      writeFileSync(
+        launcherPath,
+        `
+const { spawn } = require("node:child_process");
+const { readFileSync } = require("node:fs");
+const { hardenProcessInspection } = await import(${JSON.stringify(HARDENING_MODULE)});
+const outcome = hardenProcessInspection({ log: () => {} });
+if (outcome.kind !== "hardened") {
+  process.stderr.write("HARDENING FAILED " + JSON.stringify(outcome));
+  process.exit(9);
+}
+let environ = "readable";
+try { readFileSync("/proc/self/environ"); } catch (e) { environ = e.code; }
+if (environ !== "EACCES") {
+  process.stderr.write("NOT ACTUALLY HARDENED: environ is " + environ);
+  process.exit(8);
+}
+const stat = readFileSync("/proc/self/stat", "utf8");
+const ownerStart = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+const child = spawn(process.execPath, ["--smol", ${JSON.stringify(bundlePath)}], {
+  env: {
+    PATH: process.env.PATH,
+    ${JSON.stringify(ENGINE_MARKER_ENV)}: ${JSON.stringify(ENGINE_MARKER_VALUE)},
+    ${JSON.stringify(ENGINE_BUNDLE_ENV)}: ${JSON.stringify(bundlePath)},
+    ${JSON.stringify(ENGINE_OWNER_PID_ENV)}: String(process.pid),
+    ${JSON.stringify(ENGINE_OWNER_START_ENV)}: ownerStart,
+    ${JSON.stringify(ENGINE_STARTED_AT_ENV)}: String(Date.now()),
+    ${JSON.stringify(ENGINE_ORPHAN_POLL_ENV)}: "0",
+  },
+  stdio: ["ignore", "pipe", "ignore"],
+  detached: true,
+});
+child.unref();
+child.stdout.once("data", () => process.stdout.write(String(child.pid) + "\\n"));
+// Self-destruct, so a failed assertion cannot strand the owner either.
+setTimeout(() => process.exit(0), 60000);
+`,
+      );
+
+      const launcher = spawn(process.execPath, [launcherPath], { stdio: ["ignore", "pipe", "pipe"] });
+      let stderr = "";
+      launcher.stderr?.on("data", (c: Buffer) => {
+        stderr += c.toString("utf8");
+      });
+      const enginePid = await new Promise<number>((res, rej) => {
+        let out = "";
+        launcher.stdout?.on("data", (c: Buffer) => {
+          out += c.toString("utf8");
+          const n = Number.parseInt(out.trim(), 10);
+          if (out.includes("\n") && Number.isInteger(n) && n > 0) res(n);
+        });
+        launcher.on("close", (code) =>
+          rej(new Error(`hardened launcher exited ${code} before reporting: ${JSON.stringify(stderr)}`)),
+        );
+        setTimeout(() => rej(new Error("hardened launcher never reported an engine pid")), 20_000);
+      });
+      const ownerPid = launcher.pid!;
+
+      const running = (pid: number): boolean => {
+        try {
+          process.kill(pid, 0);
+        } catch {
+          return false;
+        }
+        try {
+          const stat = readFileSync(`/proc/${pid}/stat`, "utf8");
+          return stat.slice(stat.lastIndexOf(")") + 2).split(" ")[0] !== "Z";
+        } catch {
+          return false;
+        }
+      };
+
+      try {
+        // The owner really is closed to us, so this test cannot pass by the
+        // hardening having quietly not happened.
+        expect(() => readFileSync(`/proc/${ownerPid}/environ`)).toThrow(/EACCES/);
+
+        // ── While the owner lives: identified, and NOT orphaned. ──
+        // This is the assertion that catches the dangerous regression. Both
+        // liveness probes (kill(owner, 0) and /proc/<owner>/stat field 22) run
+        // against a non-dumpable owner here; if either returned EPERM or came
+        // back empty, the reaper would read a recycled pid and SIGKILL the
+        // engine of a perfectly healthy daemon.
+        const live = findEngineProcesses().filter((e) => e.pid === enginePid);
+        expect(live).toHaveLength(1);
+        expect(live[0]!.orphaned).toBe(false);
+        expect(live[0]!.ownerPid).toBe(ownerPid);
+        expect(live[0]!.bundlePath).toBe(bundlePath);
+        expect(live[0]!.startTicks).toMatch(/^\d+$/);
+
+        // And a reap aimed straight at it does nothing, because it is not an
+        // orphan.
+        const spared = await reapOrphanedEngines({ graceMs: 500, only: [enginePid] });
+        expect(spared.reaped).toEqual([]);
+        expect(spared.live.map((e) => e.pid)).toEqual([enginePid]);
+        expect(running(enginePid)).toBe(true);
+
+        // ── Now the owner dies, the way a daemon dies without teardown. ──
+        // Our own child, by handle.
+        launcher.kill("SIGKILL");
+        const orphanDeadline = Date.now() + 10_000;
+        let seen = findEngineProcesses().filter((e) => e.pid === enginePid);
+        while ((seen.length !== 1 || !seen[0]!.orphaned) && Date.now() < orphanDeadline) {
+          await new Promise((r) => setTimeout(r, 100));
+          seen = findEngineProcesses().filter((e) => e.pid === enginePid);
+        }
+        expect(seen).toHaveLength(1);
+        expect(seen[0]!.orphaned).toBe(true);
+        expect(running(enginePid)).toBe(true);
+
+        // ── And it is reclaimed. ──
+        const { reaped, survived } = await reapOrphanedEngines({ graceMs: 2_000, only: [enginePid] });
+        expect(survived).toEqual([]);
+        expect(reaped.map((e) => e.pid)).toEqual([enginePid]);
+        expect(running(enginePid)).toBe(false);
+      } finally {
+        if (launcher.exitCode === null && launcher.signalCode === null) {
+          try {
+            launcher.kill("SIGKILL");
+          } catch {
+            /* gone */
+          }
+        }
+        // Its bundle path is unique to this temp dir, so this can only be our
+        // own stand-in; it also self-destructs.
+        if (
+          running(enginePid) &&
+          findEngineProcesses().some((e) => e.pid === enginePid && e.bundlePath === bundlePath)
+        ) {
+          try {
+            process.kill(enginePid, "SIGKILL");
+          } catch {
+            /* raced */
+          }
+        }
+      }
+    }, 90_000);
+  },
+);

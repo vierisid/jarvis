@@ -370,3 +370,194 @@ describe("real engine bundle", () => {
     30_000,
   );
 });
+
+/**
+ * #546: the daemon calls prctl(PR_SET_DUMPABLE, 0) at startup, which reassigns
+ * the files under its own /proc/<pid> to root and closes the ptrace-gated ones.
+ * The orphan watchdog lives INSIDE the engine and looks back at its owner --
+ * `kill(owner, 0)` plus `/proc/<owner>/stat` field 22 -- so if either of those
+ * broke, every engine would either stop noticing an owner that died (an orphan
+ * leaked, exactly what #501 fixed) or decide its live owner had been recycled
+ * and exit under a running daemon. Both failures are silent, so they are pinned
+ * here against a REAL non-dumpable owner rather than argued about.
+ */
+describe.skipIf(process.platform !== "linux")(
+  "orphan watchdog against an owner that blocked process inspection (#546)",
+  () => {
+    const HARDENING_MODULE = resolve(import.meta.dir, "..", "..", "..", "daemon", "process-hardening.ts");
+
+    /**
+     * A launcher that hardens ITSELF first, exactly as startDaemon does, then
+     * spawns the engine. It stamps ENGINE_OWNER_START from /proc/self/stat
+     * AFTER the prctl call -- the read spawn.ts makes on the daemon's boot path
+     * -- and refuses to continue unless the hardening demonstrably took effect,
+     * so this can never pass by quietly not hardening at all.
+     */
+    function hardenedLauncher(enginePath: string, afterBoot: string): string {
+      return `
+const { spawn } = require("node:child_process");
+const { readFileSync } = require("node:fs");
+const { hardenProcessInspection } = await import(${JSON.stringify(HARDENING_MODULE)});
+const outcome = hardenProcessInspection({ log: () => {} });
+if (outcome.kind !== "hardened") {
+  process.stderr.write("HARDENING FAILED " + JSON.stringify(outcome));
+  process.exit(9);
+}
+let environ = "readable";
+try { readFileSync("/proc/self/environ"); } catch (e) { environ = e.code; }
+if (environ !== "EACCES") {
+  process.stderr.write("NOT ACTUALLY HARDENED: environ is " + environ);
+  process.exit(8);
+}
+const stat = readFileSync("/proc/self/stat", "utf8");
+const ownerStart = stat.slice(stat.lastIndexOf(")") + 2).split(" ")[19];
+if (!/^[0-9]+$/.test(ownerStart)) {
+  process.stderr.write("OWNER START UNREADABLE " + JSON.stringify(ownerStart));
+  process.exit(7);
+}
+const child = spawn(process.execPath, [${JSON.stringify(enginePath)}], {
+  env: {
+    PATH: process.env.PATH,
+    ${JSON.stringify(ENGINE_OWNER_PID_ENV)}: String(process.pid),
+    ${JSON.stringify(ENGINE_OWNER_START_ENV)}: ownerStart,
+    ${JSON.stringify(ENGINE_ORPHAN_POLL_ENV)}: "100",
+  },
+  stdio: ["ignore", "pipe", "ignore"],
+  detached: true,
+});
+child.unref();
+${afterBoot}
+`;
+    }
+
+    /** Alive, by a probe that delivers nothing. */
+    function aliveFn(pid: number): () => boolean {
+      return () => {
+        try {
+          process.kill(pid, 0);
+          return true;
+        } catch {
+          return false;
+        }
+      };
+    }
+
+    test("the engine still notices when its non-dumpable owner dies", async () => {
+      const enginePath = writeScript(
+        "orphan-hardened.js",
+        `${ENGINE_LIFECYCLE_SHIM}\n${DEAF_ENGINE_BODY}\nsetTimeout(() => process.exit(3), 20000);\n`,
+      );
+      // Same shape as the unhardened test above: the owner stays alive past the
+      // engine's first polls, so what is exercised is the TRANSITION, not an
+      // engine that was born orphaned.
+      const launcherPath = writeScript(
+        "launcher-hardened.js",
+        hardenedLauncher(
+          enginePath,
+          `
+child.stdout.once("data", () => {
+  setTimeout(() => {
+    process.stdout.write(String(child.pid));
+    process.exit(0);
+  }, 1000);
+});
+`,
+        ),
+      );
+
+      const launcher = launch(launcherPath, {});
+      let stderr = "";
+      launcher.stderr?.on("data", (c: Buffer) => {
+        stderr += c.toString("utf8");
+      });
+      const pid = await new Promise<number>((res, rej) => {
+        let out = "";
+        launcher.stdout?.on("data", (c: Buffer) => {
+          out += c.toString("utf8");
+        });
+        launcher.on("close", (code) => {
+          const n = Number.parseInt(out.trim(), 10);
+          if (Number.isInteger(n) && n > 0) res(n);
+          else rej(new Error(`hardened launcher exited ${code} without a pid: ${JSON.stringify(stderr)}`));
+        });
+        setTimeout(() => rej(new Error("hardened launcher did not exit")), 15_000);
+      });
+
+      const alive = aliveFn(pid);
+      try {
+        const deadline = Date.now() + 10_000;
+        while (alive() && Date.now() < deadline) {
+          await new Promise((r) => setTimeout(r, 100));
+        }
+        // It reclaimed itself: the watchdog read a non-dumpable owner's stat
+        // and kill-probed it without either one failing shut.
+        expect(alive()).toBe(false);
+      } finally {
+        if (alive() && isOurProcess(pid, enginePath)) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+            /* raced with its own exit */
+          }
+        }
+      }
+    }, 40_000);
+
+    test("and stays up while that owner is alive", async () => {
+      // The other half, and the one that would fail LOUDLY in production: if
+      // kill(owner, 0) against a non-dumpable owner returned EPERM, or its stat
+      // read came back empty, every pooled engine would exit seconds after
+      // spawn under a perfectly healthy daemon.
+      const enginePath = writeScript(
+        "live-hardened.js",
+        `${ENGINE_LIFECYCLE_SHIM}\n${DEAF_ENGINE_BODY}\nsetTimeout(() => process.exit(3), 20000);\n`,
+      );
+      const launcherPath = writeScript(
+        "launcher-hardened-live.js",
+        hardenedLauncher(
+          enginePath,
+          `
+// Report the engine pid and STAY ALIVE, so the watchdog keeps finding its
+// owner where it left it.
+child.stdout.once("data", () => process.stdout.write(String(child.pid) + "\\n"));
+setTimeout(() => process.exit(0), 30000);
+`,
+        ),
+      );
+
+      const launcher = launch(launcherPath, {});
+      let stderr = "";
+      launcher.stderr?.on("data", (c: Buffer) => {
+        stderr += c.toString("utf8");
+      });
+      const pid = await new Promise<number>((res, rej) => {
+        let out = "";
+        launcher.stdout?.on("data", (c: Buffer) => {
+          out += c.toString("utf8");
+          const n = Number.parseInt(out.trim(), 10);
+          if (out.includes("\n") && Number.isInteger(n) && n > 0) res(n);
+        });
+        launcher.on("close", (code) =>
+          rej(new Error(`hardened launcher exited ${code} before reporting: ${JSON.stringify(stderr)}`)),
+        );
+        setTimeout(() => rej(new Error("hardened launcher never reported an engine pid")), 15_000);
+      });
+
+      const alive = aliveFn(pid);
+      try {
+        // Many watchdog polls (100ms each) with the owner present.
+        await new Promise((r) => setTimeout(r, 3_000));
+        expect(alive()).toBe(true);
+      } finally {
+        if (alive() && isOurProcess(pid, enginePath)) {
+          try {
+            process.kill(pid, "SIGKILL");
+          } catch {
+            /* raced */
+          }
+        }
+        // The launcher is our own child; afterEach kills it by handle.
+      }
+    }, 40_000);
+  },
+);

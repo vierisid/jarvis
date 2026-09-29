@@ -200,10 +200,21 @@ describe('who may import this module', () => {
   test('only src/daemon/index.ts, plus this test', () => {
     const SRC = resolve(import.meta.dir, '..');
     const REPO = resolve(SRC, '..');
+    /*
+     * Adding an entry here is a security decision, and the bar is narrow: the
+     * importer must be the daemon's own entry point, or a TEST that deliberately
+     * stands a non-dumpable owner up to prove the reaper and the #501 watchdog
+     * still work against one. Production code that an engine, a bundle or the
+     * CLI can reach never qualifies.
+     */
     const allowed = new Set([
       join('src', 'daemon', 'index.ts'),
       join('src', 'daemon', 'process-hardening.ts'),
       join('src', 'daemon', 'process-hardening.test.ts'),
+      // Stand-in daemons that harden themselves, then die, so the reap and the
+      // in-engine watchdog are measured against a real non-dumpable owner.
+      join('src', 'workflows', 'runner', 'engine-runtime', 'engine-reaper.test.ts'),
+      join('src', 'workflows', 'runner', 'engine-runtime', 'engine-lifecycle.test.ts'),
     ]);
 
     const importers: string[] = [];
