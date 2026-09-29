@@ -191,7 +191,8 @@ function createTables(db: Database): void {
       created_at INTEGER NOT NULL,
       completed_at INTEGER,
       result TEXT,
-      sort_order INTEGER DEFAULT 0
+      sort_order INTEGER DEFAULT 0,
+      scope_id TEXT
     )
   `);
 
