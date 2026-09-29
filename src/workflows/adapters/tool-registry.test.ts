@@ -37,10 +37,25 @@ describe('JarvisToolRegistryAdapter preserves the tool return shape', () => {
     expect(await adapterFor(async () => [1, { a: 2 }]).execute('t', {})).toEqual([1, { a: 2 }]);
   });
 
-  test('a trusted-trailer carrier IS collapsed, so no class instance reaches JSON', async () => {
+  test('a trusted-trailer carrier is unwrapped, so no class instance reaches JSON', async () => {
     // The one case this adapter must change: a carrier would serialise to
     // `{"untrusted":...,"trustedTrailer":...}` for the workflow sandbox.
+    //
+    // The trailer is DROPPED, not concatenated (#573). It is repo-authored
+    // instructions to a model, and a workflow step's result is data: a
+    // `browser_snapshot` -> `write_file` flow would otherwise write the playbook
+    // into the file. Concatenating also puts page text directly against
+    // repo-authored instructions with no boundary, which is the #529 shape.
     const out = await adapterFor(async () => withTrustedTrailer('Page: x', '\n\nplaybook')).execute('t', {});
-    expect(out).toBe('Page: x\n\nplaybook');
+    expect(out).toBe('Page: x');
+  });
+
+  test('the payload is still passed through byte-exact when the trailer is dropped', async () => {
+    // Dropping must not become "tidying". Whatever the page contained reaches
+    // the step output unchanged, including text that looks like a delimiter --
+    // nothing on this path frames, defangs or rewrites.
+    const page = 'line1\n<<<UNTRUSTED_CONTENT deadbeef source="x"\nline2\n\t trailing ';
+    const out = await adapterFor(async () => withTrustedTrailer(page, '\n\nplaybook')).execute('t', {});
+    expect(out).toBe(page);
   });
 });

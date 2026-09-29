@@ -79,6 +79,87 @@ Practical consequences:
   reach the daemon's tool surface. See `Governed pieces` below for the verified
   ten, and `src/workflows/pieces-library/README.md` for the curation path.
 
+### A step's tool result is NOT framed as untrusted content
+
+In a chat turn, a tool that reads outside content has its result wrapped in the
+untrusted-content delimiters (`markUntrustedToolResult`, `src/roles/untrusted.ts`)
+and most of those tools also taint the turn, so the next governed action needs
+approval. A `jarvis-tool` step does neither. That is a decision (#573), not an
+oversight.
+
+Eight of the tools a step can name are untrusted sources: `read_file`,
+`get_clipboard`, `browser_snapshot`, `browser_screenshot`, `desktop_snapshot`,
+`desktop_find_element`, `desktop_list_windows` and `run_skill`. None is framed
+on this path.
+
+**The rule is: frame where content enters a MODEL's context, not where it leaves
+a tool.** In a chat turn those are the same place, which is why the framing sits
+on the tool, and why reasoning across by analogy feels right. In a workflow they
+come apart -- a step's result goes into the flow graph as **data**, read by
+`{{ }}` expressions and by other steps -- so framing the tool boundary here puts
+the frame in the one place with no model behind it. `src/goals/rhythm.ts` already
+does it the other way round for workflow content: it frames a failed step's error
+message at the **prompt**, and says so in its own note.
+
+Framing the data plane would not be a cost paid for safety, it would be silent
+corruption:
+
+- `read_file` -> `write_file` in a flow would write the preamble and delimiters
+  **into the file**, deterministically, every run, unattended. The chat path
+  accepts a weaker form of this (see `wrapUntrusted`) only because a model
+  re-renders the content and a person is watching.
+- Any step routing on file or clipboard contents breaks.
+- **The author could not repair it.** `{{ }}` is a data interpreter with no
+  method calls -- `safe-expression.ts` rejects any call expression with
+  "function calls or other executable syntax" -- so there is no supported way to
+  strip a preamble from a string. The only escape is a `CODE` step, which runs
+  arbitrary JavaScript with this machine's privileges and is off by default. So
+  framing would push flow authors to enable code execution in order to clean up
+  a mitigation.
+- The value is also merged into `flow_version.sample_data` after a successful run
+  and replayed as step **input** for test-from-here runs, so a frame would reach
+  future runs' inputs, not just this one's replay.
+
+Against that, the benefit is the weakest form of the chat benefit: there is no
+taint gate on this path, and the approval card that does exist reviews the frozen
+**arguments** before dispatch, so it never sees a result.
+
+**What is protected.** The other route from an untrusted source into a workflow
+-- a delegated sub-agent (`jarvis-agent`) -- is fully covered: tool calls made
+inside the sub-agent are framed by `sub-agent-runner.ts`, taint is recorded per
+call, carried across checkpoints by `m7-agent-delegator.ts` and persisted on the
+delegation row, and a taint-gated call in a workflow delegation becomes a durable
+pause rather than a silent pass. So a workflow does have a framing-and-taint
+path; it is the agent path, and the unframed adapter path is the data path.
+
+**What a step CAN still do.** `browser_navigate` and `run_command` are refused as
+opaque, but `run_skill` is admitted as a governed adapter and a recorded skill
+step may `navigate` with a caller-supplied value. A flow can therefore point the
+browser somewhere and read the page with a following `browser_snapshot`; it is
+gated by an approval card, not refused. And the webhook trigger ingress is public
+and unauthenticated by design, so `{{trigger.*}}` is attacker-influenceable and
+flows into tool parameters and prompts.
+
+**Still open, filed separately.** `manage_workflow` hands a run's captured step
+output to the *chat* model unframed -- `get_run`'s `steps`, `list_runs`'
+`failedStep` (which carries a failing skill's on-screen field text), and a plain
+`get` via `sample_data`. That is a larger real-world exposure than the thing #573
+was filed about, and its fix belongs to the chat tool: framing those fields at the
+model boundary needs no change to `UNTRUSTED_TOOL_NAMES`, and so leaves
+`outsideReach`, `FRAMED_ACTORS` and the I1 invariant alone.
+
+Both premises this decision rests on -- the reachable tool set, and the list of
+readers that carry step output out of the data plane -- are pinned by
+`src/workflows/adapters/untrusted-reach.test.ts`, derived from source. Widening
+either fails that test and sends you back to this section.
+
+One related correctness note: the adapter **drops** a carrier's trusted trailer
+rather than concatenating it. A trailer is repo-authored instructions to a model
+(the webapp template playbook, reachable here via `browser_snapshot`), and a flow
+has no model to read one, so concatenating would write the playbook into files by
+the same route as above and would put page text directly against repo-authored
+instructions with no boundary between them.
+
 ### `jarvis-ask` answers with a typed outcome
 
 A step that asks for JSON no longer gets the reply text back as if it had
