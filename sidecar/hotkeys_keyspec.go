@@ -475,6 +475,83 @@ var linuxKeysymNames = map[string]string{
 	"grave":        "grave",
 }
 
+// hkGrab* are the outcomes jarvisHotkeyCreate reports.
+//
+// KEEP IN SYNC with the HK_* enum in the cgo preamble of hotkeys_linux.go.
+// They live here, away from the build tag, so the message wording below is a
+// pure function the table test can cover on any OS -- the grab itself is in
+// the cgo half and no test can reach it, which is exactly why the part that
+// CAN be tested was pulled out of it.
+const (
+	hkGrabOK        = 0
+	hkGrabNoDisplay = 1
+	hkGrabNoKeycode = 2
+	hkGrabRefused   = 3
+	hkGrabNoPipe    = 4
+)
+
+// X11 protocol constants (X.h / Xproto.h), repeated here so this file stays
+// cgo-free.
+const (
+	hkBadAccess   = 10 // BadAccess: someone else already holds this grab
+	hkOpcodeGrab  = 33 // X_GrabKey
+	hkAllVariants = 0xf
+)
+
+// hkVariantNames names the lock-key modifier variants by bit position, in the
+// order of HK_VARIANTS in hotkeys_linux.go.
+var hkVariantNames = [4]string{"plain", "CapsLock", "NumLock", "CapsLock+NumLock"}
+
+// hkFailedVariantList renders a failed_mask as "CapsLock, NumLock".
+func hkFailedVariantList(mask uint) string {
+	var names []string
+	for i := 0; i < 4; i++ {
+		if mask&(1<<uint(i)) != 0 {
+			names = append(names, hkVariantNames[i])
+		}
+	}
+	return strings.Join(names, ", ")
+}
+
+// linuxGrabError turns a create outcome into something a user can act on, the
+// way registerHotKeyError does on Windows -- same `Call(keyspec): reason`
+// shape, and the same refusal to name a culprit it cannot actually identify.
+//
+// The one thing it says that Windows does not is WHICH lock variants clashed,
+// because on X11 a combination can be refused for Caps Lock alone. That is not
+// naming a culprit, it is naming which of our own four requests was turned
+// down, and it is the difference between "the combination is taken" and "your
+// desktop holds the Caps Lock variant of it".
+//
+// The old message conflated "no display" with "no such key" into a single
+// `XGrabKey failed for %q (no display or key unavailable)`; they are now
+// separate, since one means the session cannot do global hotkeys at all and
+// the other means this particular keyspec is wrong for the active layout.
+func linuxGrabError(keyspec string, stage int, errorCode, requestCode uint8, failedMask uint) error {
+	switch stage {
+	case hkGrabOK:
+		return nil
+	case hkGrabNoDisplay:
+		return fmt.Errorf("XGrabKey(%s): no X display (DISPLAY unset, or a native Wayland session with no XWayland)", keyspec)
+	case hkGrabNoKeycode:
+		return fmt.Errorf("XGrabKey(%s): the active keyboard layout has no key for this keysym", keyspec)
+	case hkGrabNoPipe:
+		return fmt.Errorf("XGrabKey(%s): could not set up the listener's stop pipe", keyspec)
+	}
+
+	// Refused. Say which variants, unless it was all of them (in which case
+	// the combination is simply taken and the list adds nothing).
+	var scope string
+	if failedMask != hkAllVariants && failedMask != 0 {
+		scope = fmt.Sprintf("; only the %s variant(s) clashed, and the grab is refused as a whole rather than leave a hotkey that works in some lock states and not others",
+			hkFailedVariantList(failedMask))
+	}
+	if errorCode == hkBadAccess && requestCode == hkOpcodeGrab {
+		return fmt.Errorf("XGrabKey(%s): already held by another client (another app, your desktop, or a sidecar that has not exited)%s", keyspec, scope)
+	}
+	return fmt.Errorf("XGrabKey(%s): refused with X error %d on request %d%s", keyspec, errorCode, requestCode, scope)
+}
+
 // linuxKeysymName resolves a canonical key name to the string
 // `XStringToKeysym` wants. F-keys are computed (`f13` -> `F13`).
 func linuxKeysymName(key string) string {
