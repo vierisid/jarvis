@@ -102,7 +102,12 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 	mon := C.jarvisHotkeyAdd(C.ulong(mods), C.ulong(darwinModifierCompareMask), C.ushort(keyCode), C.ulonglong(id))
 	if mon == nil {
 		hotkeyRegDarwin.Delete(id)
-		return nil, fmt.Errorf("addGlobalMonitor failed for %q (Accessibility permission?)", keyspec)
+		// NOT "(Accessibility permission?)", which is what this used to guess:
+		// the monitor installs perfectly well without that trust and simply
+		// never fires, so a nil return means something else went wrong. The
+		// trust state is reported anyway, since it is the next thing anyone
+		// would ask, but it is stated rather than blamed.
+		return nil, fmt.Errorf("addGlobalMonitor returned nil for %q (trusted for Accessibility: %t)", keyspec, setupAXTrusted())
 	}
 	// sync.Once because jarvisHotkeyRemove consumes the single retain that
 	// jarvisHotkeyAdd handed to Go (__bridge_retained / __bridge_transfer): a
