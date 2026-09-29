@@ -45,20 +45,23 @@ the listed user-owned sections, so an unlisted top-level section survives - the
 same route the system-owned `tools:` section takes (see the note on
 `daemon.log_file_path` in `src/config/types.ts`).
 
-**When a change takes effect.** The keyspec is read at `pebble.spawn`, which the
-daemon sends when a sidecar connects, so:
+**When a change takes effect: restart the daemon** (`jarvis restart`). Nothing
+less will do, and it is worth knowing why, because two separate caches are
+involved:
 
-- Restarting the **sidecar** always applies it.
-- Restarting the **daemon** applies it too: the daemon sends `pebble.close`
-  before the first `pebble.spawn` it sends to each sidecar, so a sidecar that
-  outlived the daemon drops its old overlay and its old hotkeys instead of
-  keeping them. Without that, `Spawn` returns early on its idempotency latch,
-  the new keyspec is discarded, and the sidecar answers `{"spawned": true}` - the
-  user is told it worked and nothing changed.
-- A later **reconnect** does not close anything (the daemon remembers what it
-  last asked that sidecar for), so a network blip does not make the pebble blink.
-- `SIGHUP` does **not** pick it up. `pebble:` is not one of the sections the
-  daemon re-reads on a reload.
+- The **daemon** reads `config.yaml` once, at boot. Restarting only the sidecar
+  makes the daemon re-send the keyspec it resolved when it started, which is the
+  old one, so the edit appears to do nothing. `SIGHUP` does not help either -
+  `pebble:` is not one of the sections the daemon re-reads on a reload.
+- The **sidecar** reads the keyspec at `pebble.spawn`, and `Spawn` is idempotent:
+  it returns early on a `spawned` latch and discards the spec. So a sidecar that
+  outlived the daemon restart would keep its old hotkeys while answering
+  `{"spawned": true}` - the user told it worked while nothing changed. The daemon
+  therefore sends `pebble.close` before the first `pebble.spawn` it sends to each
+  sidecar, which drops the stale overlay and its hotkey registrations.
+- A later **reconnect** does not close anything, because the daemon remembers
+  what it last asked that sidecar for. A network blip does not make the pebble
+  blink.
 
 ### What a keyspec may not be
 
