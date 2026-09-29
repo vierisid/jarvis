@@ -141,12 +141,19 @@ typedef struct {
 //     own handler back as `prev` and delegating would recurse forever.
 //
 // This race predates the change (the old code did the same save/install/restore
-// with hk_ignore_error); what is new is that it can defeat the fix. Closing it
-// properly means not sharing the slot: install one recording handler for the
-// process lifetime before the GTK loop starts, or issue the grabs as xcb
-// CHECKED requests (xcb_grab_key_checked + xcb_request_check), which return the
-// error to the caller and never consult the global handler at all. Either is a
-// larger change than this fix, and is recorded as a follow-up.
+// with hk_ignore_error); what is new is that it can defeat the fix. The grab
+// loop below re-checks after EVERY round trip that the handler is still ours
+// and reports when it was not, which narrows the silent window to a single
+// grab, but does not close it.
+//
+// Closing it properly means not sharing the slot at all. The better of the two
+// options is to issue the grabs as xcb CHECKED requests
+// (xcb_grab_key_checked + xcb_request_check), which hand the error straight
+// back to the caller and never consult the global handler; the other is a
+// single recording handler installed for the process lifetime, though GDK
+// displaces even that on every trap push, so it fixes the corruption without
+// fixing the detection. Either is a bigger change than this fix should carry.
+// NOT yet filed as an issue -- do that before trusting this note to survive.
 typedef struct {
     Display* volatile      dpy;
     volatile XErrorHandler prev;
@@ -155,22 +162,39 @@ typedef struct {
     volatile int           armed;
 } HkGrabWatch;
 
-// Written only by a create, which the Go side serialises on hotkeyCreateMu, and
-// read by the GTK main thread whenever an X error of its own reaches
-// hk_grab_error.
+// Written by jarvisHotkeyCreate and by jarvisHotkeyGrabOne, both of which the
+// Go side serialises on hotkeyCreateMu, and read by the GTK main thread
+// whenever an X error of its own reaches hk_grab_error.
 //
-// `volatile` here buys exactly one thing: the compiler may not cache or elide
-// these accesses. It is NOT atomicity and NOT ordering, so this is not a
-// substitute for synchronisation. What makes it adequate rather than merely
-// conventional: all five fields are naturally aligned and word-sized or
-// smaller, so no read can tear; on the install side XSetErrorHandler is an
-// external call that takes libX11's global lock, which fences the arming stores
-// before the handler becomes reachable; and `armed` is cleared FIRST on the
-// retire side, so a reader that sees armed == 0 never goes on to test a
-// dpy that is about to be closed. The worst remaining outcome is a foreign
-// error delegated to a slightly stale `prev`, which is why `prev` is
-// deliberately NOT cleared on retire.
+// `volatile` here buys exactly one thing: the compiler may not cache, elide or
+// reorder these accesses relative to each other, nor hoist them across the
+// opaque XSetErrorHandler call that publishes the handler. It is NOT atomicity
+// and NOT a memory barrier. What makes that adequate here: all five fields are
+// naturally aligned and word-sized or smaller, so no read can tear; x86-64 is
+// store-ordered, so the arming stores are visible before the handler becomes
+// reachable; and `armed` is cleared FIRST on the retire side, so a reader that
+// gets past it never goes on to test a dpy we are about to close. The worst
+// remaining outcome is a foreign error delegated to a slightly stale `prev`,
+// which is why `prev` is deliberately NOT cleared on retire.
+//
+// Deliberately NOT claimed: that XSetErrorHandler's internal lock fences
+// anything. It takes libX11's global mutex only when XInitThreads has been
+// called, and nothing here calls it -- nor does the linked GTK3 stack import it
+// (checked with objdump on libgtk-3 and libgdk-3). On a weakly ordered target
+// this would want real acquire/release instead of volatile.
 static HkGrabWatch hk_watch;
+
+// hk_swallow_error is the fallback for the one case where there is no sane
+// handler to put back: the global slot already held hk_grab_error when we went
+// to install, meaning it was left there by a clobber (see KNOWN LIMIT).
+//
+// It exists because XSetErrorHandler(NULL) does NOT mean "leave the slot
+// alone" -- libX11 explicitly installs _XDefaultError, which calls exit(1). So
+// restoring NULL there would arm a process-wide crash on the next untrapped X
+// error anywhere in the sidecar, on precisely the path that is supposed to be
+// making things safer. Swallowing is what this code did before #574 when the
+// slot was clobbered, and a mute daemon beats a dead one.
+static int hk_swallow_error(Display* d, XErrorEvent* e) { (void)d; (void)e; return 0; }
 
 static int hk_grab_error(Display* d, XErrorEvent* e) {
     if (hk_watch.armed && d == hk_watch.dpy) {
@@ -267,8 +291,11 @@ static HotkeyResult jarvisHotkeyCreate(unsigned int mods, unsigned long keysym, 
         // purpose: the global slot has been clobbered (see KNOWN LIMIT above).
         // Storing it would make delegation infinitely recursive.
         r.slot_stolen = 1;
-        hk_watch.prev = NULL;
+        hk_watch.prev = hk_swallow_error;
     } else {
+        // May legitimately be NULL, meaning nothing was installed; restoring
+        // NULL then reinstates XLib's default, which is the state that was
+        // actually in effect, so that case is faithful rather than a new crash.
         hk_watch.prev = displaced;
     }
 
@@ -282,12 +309,23 @@ static HotkeyResult jarvisHotkeyCreate(unsigned int mods, unsigned long keysym, 
     // Four round trips on a unix socket, at startup, per hotkey. The latency is
     // irrelevant; what it does cost is holding the global handler slot about
     // four times longer, which widens the GDK window described above.
-    unsigned int granted = 0;
+    unsigned int  granted = 0;
+    int           stolen  = 0;
+    XErrorHandler thief   = NULL;
     for (int i = 0; i < HK_NVARIANTS; i++) {
         hk_watch.code    = 0;
         hk_watch.request = 0;
         XGrabKey(dpy, keycode, mods | HK_VARIANTS[i], root, False, GrabModeAsync, GrabModeAsync);
         XSync(dpy, False);
+        // Was the slot still ours for THIS round trip? A "no error recorded"
+        // verdict only means anything while our handler is the installed one.
+        // Checking per variant rather than once at the end narrows the window
+        // in which a refusal can go unnoticed from "any GDK trap overlapping
+        // the whole four-request sequence" to "a trap that opens and closes
+        // inside this single grab". Re-installing ours keeps the remaining
+        // variants observable; the displaced handler is put back at retire.
+        XErrorHandler current = XSetErrorHandler(hk_grab_error);
+        if (current != hk_grab_error) { r.slot_stolen = 1; stolen = 1; thief = current; }
         if (hk_watch.code != 0) {
             r.failed_mask |= (1u << i);
             if (r.error_code == 0) {
@@ -298,14 +336,6 @@ static HotkeyResult jarvisHotkeyCreate(unsigned int mods, unsigned long keysym, 
             granted |= (1u << i);
         }
     }
-
-    // Was the slot still ours for that whole sequence? If not, a "no error
-    // recorded" verdict cannot be trusted, and the caller says so in the log
-    // instead of quietly believing it. This catches a handler left installed
-    // over us; it cannot catch a push/pop that came and went entirely inside
-    // the window, which is the residual documented above.
-    XErrorHandler current = XSetErrorHandler(hk_grab_error);
-    if (current != hk_grab_error) r.slot_stolen = 1;
 
     if (r.failed_mask != 0) {
         // Release what we were given, while the watch is still armed and our
@@ -332,7 +362,11 @@ static HotkeyResult jarvisHotkeyCreate(unsigned int mods, unsigned long keysym, 
     // late-arriving foreign error where NULL would drop it.
     hk_watch.armed = 0;
     hk_watch.dpy   = NULL;
-    XSetErrorHandler(hk_watch.prev);
+    // If somebody installed over us mid-sequence, put THEIR handler back, not
+    // the one we displaced on the way in: they are presumably mid-trap and will
+    // restore what they saved. Reinstating our own `prev` would destroy the
+    // thief's handler and make the corruption worse than the theft.
+    XSetErrorHandler(stolen ? thief : hk_watch.prev);
 
     if (r.failed_mask != 0) {
         free(hk);
@@ -381,11 +415,14 @@ static int jarvisHotkeyRun(Hotkey* hk) {
         FD_SET(hk->stopfd[0], &fds);
         int maxfd = xfd > hk->stopfd[0] ? xfd : hk->stopfd[0];
         if (select(maxfd + 1, &fds, NULL, NULL, NULL) < 0) {
-            // EINTR is not an error, and it is not rare here: the Go runtime
-            // signals threads sitting in cgo (SIGURG for async preemption,
-            // SIGPROF under the profiler). Breaking on it would end the
-            // listener and leave the hotkey dead for the life of the process
-            // with nothing in the log -- the #574 symptom by another route.
+            // EINTR is not an error, and it is not rare here. select() is not
+            // restarted by SA_RESTART, and this process takes plenty of
+            // signals: SIGCHLD every time a spawned shell command exits
+            // (handlers.go runs them), SIGPROF under the profiler, SIGURG from
+            // the runtime. Any of them delivered to this thread interrupts the
+            // call. Breaking would end the listener and leave the hotkey dead
+            // for the life of the process with nothing in the log -- the #574
+            // symptom by another route.
             if (errno == EINTR) continue;
             return errno;
         }
@@ -446,7 +483,7 @@ static Display* jarvisHotkeyGrabOne(unsigned int mods, unsigned long keysym, int
     hk_watch.dpy = dpy; hk_watch.code = 0; hk_watch.request = 0; hk_watch.prev = NULL;
     hk_watch.armed = 1;
     XErrorHandler displaced = XSetErrorHandler(hk_grab_error);
-    hk_watch.prev = (displaced == hk_grab_error) ? NULL : displaced;
+    hk_watch.prev = (displaced == hk_grab_error) ? hk_swallow_error : displaced;
     XGrabKey(dpy, keycode, mods | HK_VARIANTS[variant], DefaultRootWindow(dpy), False,
              GrabModeAsync, GrabModeAsync);
     XSync(dpy, False);
@@ -542,11 +579,15 @@ var hotkeyCreateMu sync.Mutex
 //	after squatter releases       all four granted again
 //	unmapped keysym               HK_NO_KEYCODE, never an AnyKey grab
 //
-// Those five rows are now Go tests rather than a claim: see
+// The first four rows are now Go tests rather than a claim: see
 // TestLinuxRefusedGrabIsReported, TestLinuxPartialClashIsRefusedWholesale and
 // TestLinuxGrabIsReleasedOnStop, which skip when there is no display, so a
-// developer with a desktop re-runs the proof with `go test` and headless CI
-// skips it. Note CI's linux job sets no DISPLAY today, so CI skips all three.
+// developer with a desktop re-runs the proof with `go test`. The fifth is not
+// asserted through this function, because no keysym is reliably unmapped on
+// every machine; parseLinuxKeyspec's error cases cover the reachable half.
+//
+// Note CI's linux job sets no DISPLAY today, so CI skips all three X tests and
+// only the pure-layer table in hotkeys_keyspec_test.go actually runs there.
 //
 // NOT established from here, and needing a real desktop: whether a desktop
 // environment's own global shortcuts (GNOME/KDE) refuse in the same way. They
@@ -586,33 +627,33 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 		defer runtime.UnlockOSThread()
 
 		hotkeyCreateMu.Lock()
-		res := C.jarvisHotkeyCreate(C.uint(mods), C.ulong(keysym), C.ulonglong(id))
+		out := C.jarvisHotkeyCreate(C.uint(mods), C.ulong(keysym), C.ulonglong(id))
 		hotkeyCreateMu.Unlock()
 
-		if res.hk == nil || res.stage != C.HK_OK {
+		if out.hk == nil || out.stage != C.HK_OK {
 			ch <- created{nil, linuxGrabError(
 				keyspec,
-				int(res.stage),
-				uint8(res.error_code),
-				uint8(res.request_code),
-				uint(res.failed_mask),
-				res.hk == nil,
+				int(out.stage),
+				uint8(out.error_code),
+				uint8(out.request_code),
+				uint(out.failed_mask),
+				out.hk == nil,
 			)}
 			close(done)
 			return
 		}
-		if res.slot_stolen != 0 {
+		if out.slot_stolen != 0 {
 			// Not a failure: the grabs may well have been fine. But a "no error
 			// recorded" verdict is only trustworthy while our handler is the
 			// installed one, so say so rather than quietly believing it.
 			log.Printf("[hotkeys] %q: the process-wide X error handler was not ours during registration; "+
 				"a refused grab could have been missed (GTK/GDK rewrites it -- see hotkeys_linux.go)", keyspec)
 		}
-		ch <- created{res.hk, nil}
+		ch <- created{out.hk, nil}
 
 		<-started
-		C.jarvisHotkeyDrain(res.hk)
-		if rc := C.jarvisHotkeyRun(res.hk); rc != 0 {
+		C.jarvisHotkeyDrain(out.hk)
+		if rc := C.jarvisHotkeyRun(out.hk); rc != 0 {
 			// The listener is now deaf for the rest of the process's life.
 			// Said out loud, because a silent return here is exactly the class
 			// of bug #574 was.
@@ -620,7 +661,7 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 				keyspec, int(rc))
 		}
 		lifeMu.Lock()
-		C.jarvisHotkeyFree(res.hk)
+		C.jarvisHotkeyFree(out.hk)
 		freed = true
 		lifeMu.Unlock()
 		hotkeyReg.Delete(id)
@@ -669,7 +710,13 @@ func hotkeyHoldOneVariant(keyspec string, variant int) (release func(), ok bool)
 	if err != nil {
 		return nil, false
 	}
+	// Same lock as a create: this writes hk_watch and the process-global error
+	// handler, so it must not run beside jarvisHotkeyCreate. Harmless today
+	// (tests in a package run sequentially and none of these use t.Parallel),
+	// but the invariant is the file's, not the test's.
+	hotkeyCreateMu.Lock()
 	dpy := C.jarvisHotkeyGrabOne(C.uint(mods), C.ulong(keysym), C.int(variant))
+	hotkeyCreateMu.Unlock()
 	if dpy == nil {
 		return nil, false
 	}

@@ -502,12 +502,12 @@ const (
 
 // hkVariantNames names the lock-key modifier variants by bit position, in the
 // order of HK_VARIANTS in hotkeys_linux.go.
-var hkVariantNames = [4]string{"plain", "CapsLock", "NumLock", "CapsLock+NumLock"}
+var hkVariantNames = [hkNumVariants]string{"plain", "CapsLock", "NumLock", "CapsLock+NumLock"}
 
 // hkFailedVariantList renders a failed_mask as "CapsLock, NumLock".
 func hkFailedVariantList(mask uint) string {
 	var names []string
-	for i := 0; i < 4; i++ {
+	for i := range hkVariantNames {
 		if mask&(1<<uint(i)) != 0 {
 			names = append(names, hkVariantNames[i])
 		}

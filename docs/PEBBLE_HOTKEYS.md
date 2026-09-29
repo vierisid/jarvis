@@ -190,7 +190,7 @@ difference, and it is worth understanding before picking a binding.
 | platform | mechanism | consumes the keystroke? | when the combination is already taken |
 |---|---|---|---|
 | Windows | `RegisterHotKey` | yes, exclusively | registration **fails**, and the sidecar log says so |
-| Linux/X11 | `XGrabKey` | yes, while the grab holds | the grab is refused, and the sidecar log says so |
+| Linux/X11 | `XGrabKey` | yes, while the grab holds | the grab is refused, and the sidecar log says so (see the caveat below) |
 | macOS | `NSEvent addGlobalMonitorForEventsMatchingMask` | **no** | nothing happens; both actions fire |
 
 `addGlobalMonitorForEventsMatchingMask` is a passive observer - its handler
@@ -281,6 +281,18 @@ reported as successful either way, so a taken combination was announced as
 `registered` and then never fired. The no-crash reason the handler existed in
 the first place is still honoured - XLib's default handler calls `exit(1)` - but
 it no longer costs the diagnosis.
+
+**The caveat, because it is not a guarantee.** `XSetErrorHandler` is
+process-global, and GTK rewrites it constantly: `gdk_x11_display_error_trap_push`
+installs GDK's own handler on every push and the matching pop puts back whatever
+it displaced. If one of those windows happens to straddle a grab's round trip,
+the `BadAccess` is delivered to GDK's handler, which does not recognise the
+sidecar's private connection and drops it - and the grab then looks granted. So
+detection is **reliable rather than certain**. The sidecar re-checks after every
+round trip that the handler is still its own and logs a warning when it was not,
+so the case is visible rather than silent, but the only real fix is to stop
+sharing the slot (xcb *checked* requests would return the error directly). See
+the KNOWN LIMIT note in `sidecar/hotkeys_linux.go`.
 
 One consequence worth knowing: `pebble.summon_hotkey` and
 `pebble.palette_hotkey` open separate X connections, so they are separate X
