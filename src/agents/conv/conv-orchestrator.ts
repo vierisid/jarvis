@@ -413,11 +413,10 @@ export class ConvOrchestrator {
           tier: args.tier,
           template: args.template,
           intent: args.intent,
-          // Attach the user's verbatim message so the task tier sees what
-          // the user actually said, not the conv LLM's paraphrase.
-          // The turn's own verbatim message, not a field read an LLM stream
-          // later. The task tier must see what the user actually said, not
-          // the conv LLM's paraphrase and not another chat's text.
+          // The user's verbatim message so the task tier sees what the user
+          // actually said, not the conv LLM's paraphrase. Read from the TURN,
+          // not from a field written an LLM stream earlier: one
+          // ConvOrchestrator serves every chat, and that field raced.
           original_message: turn.userMessage || undefined,
         };
 
@@ -440,7 +439,11 @@ export class ConvOrchestrator {
               onTaskEvent?.({ type: 'task_cancelled', record: rec, envelope });
             }
           }
-          return { envelope, taskId: envelope.task_id };
+          // Only report an id the registry actually knows. A dispatch can be
+          // refused before a record exists (a scoped turn with no verbatim
+          // user message), and its placeholder id must not end up in
+          // `tasksRun` as though a task had run.
+          return rec ? { envelope, taskId: envelope.task_id } : { envelope };
         } finally {
           unsub();
         }

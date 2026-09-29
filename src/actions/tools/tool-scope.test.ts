@@ -250,7 +250,12 @@ describe('the substitution #561 measured', () => {
   });
 });
 
-describe('the two things a future change could silently undo', () => {
+describe('what a future change could silently undo', () => {
+  // #570 called this "the two things": the process-wide default cwd, and the
+  // conv path being unscoped. #571 fixed the second, so that guard is now its
+  // own inverse, and threading the scope through four more hops added four
+  // more ways to half-do it. Each test below is a spelling a correct change
+  // must keep, and each names the failure it exists to catch.
   /** Source with comment lines dropped, so a claim in a comment cannot satisfy a guard. */
   async function code(rel: string): Promise<string> {
     const text = await Bun.file(new URL(rel, import.meta.url)).text();
