@@ -11,6 +11,7 @@ import type { AuthorityLearner } from './learning.ts';
 import type { EmergencyController } from './emergency.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { TAINT_PROFILE_LABEL } from './taint-gating.ts';
+import { toolReturnText } from '../roles/untrusted.ts';
 
 // Defined next to substituteAboveLevel, which writes it; re-exported here,
 // where the approval learner reads it.
@@ -139,7 +140,14 @@ export class DeferredExecutor {
         return { claimed: true, result: blocked };
       }
       const raw = await registry.execute(request.tool_name, args);
-      const result = typeof raw === 'string' ? raw : JSON.stringify(raw);
+      // Collapsed to one string: this path records a DB receipt and returns a
+      // single value, so it cannot carry a trusted trailer separately. The
+      // trailer therefore goes back in band and is framed as data along with the
+      // page when the orchestrator frames this result. That loses a site
+      // playbook on an approved browser call; what it cannot do is put attacker
+      // text OUTSIDE a block, because only trusted code that received a trailer
+      // as a trailer ever places one there (roles/untrusted.ts).
+      const result = toolReturnText(raw);
 
       const executionTimeMs = Date.now() - startTime;
 

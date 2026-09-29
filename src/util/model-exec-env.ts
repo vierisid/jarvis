@@ -53,8 +53,12 @@
  * ENV HYGIENE, NOT ISOLATION. These children run as the daemon's uid, so a
  * single further command still reaches the same secrets:
  *   - /proc/<daemon pid>/environ holds the environment the daemon was STARTED
- *     with. For run_command the daemon is the shell's parent, so that is
- *     `cat /proc/$PPID/environ`. (The model-driven Chrome no longer opens
+ *     with. For run_command the daemon is the shell's parent, so that WAS
+ *     `cat /proc/$PPID/environ`. Since #546 the daemon marks itself
+ *     non-dumpable at startup and that read returns EACCES -- on Linux, with
+ *     the default config, and only while `daemon.allow_process_inspection` is
+ *     unset and the prctl helper loaded. Treat the read as open on macOS and
+ *     wherever that hardening is off. (The model-driven Chrome no longer opens
  *     file: URLs since #521, so it cannot read the file that way.)
  *     Nothing done to process.env changes it -- and, measured with Bun 1.3, a
  *     `delete process.env.X` does not even reach a Bun.spawn or node

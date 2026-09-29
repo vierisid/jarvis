@@ -8,7 +8,7 @@
 
 import type { ClassifiedEvent } from './event-classifier.ts';
 import type { IAgentService } from './agent-service-interface.ts';
-import { wrapUntrusted } from '../roles/untrusted.ts';
+import { wrapUntrusted, inlineUntrusted } from '../roles/untrusted.ts';
 
 export type ReactorConfig = {
   /** Max reactions per event type within the cooldown window */
@@ -156,7 +156,11 @@ export class EventReactor {
     return [
       `[PROACTIVE — ${priority.toUpperCase()}]`,
       '',
-      `Event type: ${event.type}`,
+      // Reduced, not interpolated raw: `ObserverEvent.type` is a free-form
+      // `string` (observers/index.ts), this line sits OUTSIDE the block, and a
+      // newline in it would let an event name open prompt structure of its own.
+      // The same value is reduced again on its way into wrapUntrusted's source.
+      `Event type: ${inlineUntrusted(event.type, 80)}`,
       wrapUntrusted(`${reason}\n\nEvent data: ${dataStr}`, `${event.type} observer event`),
       '',
       'Decide what, if anything, this event calls for. Research and reporting are yours to do autonomously.',

@@ -37,7 +37,7 @@ import type { AuditTrail } from '../authority/audit.ts';
 import type { EmergencyController } from '../authority/emergency.ts';
 import { freezeToolArguments, getActionForTool, resolveToolGate, substituteAboveLevel } from '../authority/tool-action-map.ts';
 import { combineDecisions } from '../authority/engine.ts';
-import { markUntrustedToolResult, markUntrustedToolFailure, isTaintSourceTool } from '../roles/untrusted.ts';
+import { markUntrustedToolResult, markUntrustedToolFailure, isTaintSourceTool, splitToolReturn } from '../roles/untrusted.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { mergeProfiles, taintProfile, type TaintGating } from '../authority/taint-gating.ts';
 
@@ -332,12 +332,21 @@ type ToolDispatch =
 const denialText = (name: string, reason: string) =>
   `[APPROVAL DENIED] ${name}: ${reason} Do not retry the action; report that it was not performed.`;
 
-function boundedResult(raw: unknown): string {
-  let result: string = typeof raw === 'string' ? raw : JSON.stringify(raw);
+/**
+ * The outside half of a tool return, capped. Any repo-authored trailer the tool
+ * handed over out of band comes back separately so the caller can place it after
+ * the closing delimiter -- see `splitToolReturn` in roles/untrusted.ts.
+ *
+ * The cap bounds the outside half only; a trailer is repo-authored and bounded
+ * by its template.
+ */
+function boundedResult(raw: unknown): { text: string; trailer: string } {
+  const { outside, trailer } = splitToolReturn(raw);
+  let result = outside;
   if (result.length > MAX_TOOL_RESULT_CHARS) {
     result = result.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${result.length} chars)`;
   }
-  return result;
+  return { text: result, trailer };
 }
 
 /** Turn the dispatch's answer for a governed call into the tool's result. */
@@ -345,7 +354,8 @@ function governedText(ctx: AuthorityContext, toolCall: LLMToolCall, toolCategory
   if (governed.kind === 'denied') return { text: denialText(toolCall.name, governed.reason), failed: true };
   if (governed.kind === 'failed') return { text: markUntrustedToolFailure(toolCall.name, toolCategory, governed.result, MAX_TOOL_RESULT_CHARS), failed: true };
   if (isTaintSourceTool(toolCall.name, toolCategory)) ctx.taint.add(toolCall.name);
-  return { text: markUntrustedToolResult(toolCall.name, toolCategory, boundedResult(governed.result)) };
+  const governedBounded = boundedResult(governed.result);
+  return { text: markUntrustedToolResult(toolCall.name, toolCategory, governedBounded.text) + governedBounded.trailer };
 }
 
 /**
@@ -470,7 +480,8 @@ async function executeTool(
     const category = registry.get(toolCall.name)?.category;
     if (authorityCtx && isTaintSourceTool(toolCall.name, category)) authorityCtx.taint.add(toolCall.name);
     audit?.('allowed', true);
-    return { text: markUntrustedToolResult(toolCall.name, category, boundedResult(raw)) };
+    const bounded = boundedResult(raw);
+    return { text: markUntrustedToolResult(toolCall.name, category, bounded.text) + bounded.trailer };
   } catch (err) {
     audit?.('allowed', false);
     // Same reasoning as the orchestrator: a typed failure is a tool result.

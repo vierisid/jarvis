@@ -34,6 +34,16 @@ daemon:
   # brought back into range with a warning.
   # log_file_path: "~/.jarvis/logs/jarvis.log"
   # log_file_max_bytes: 1048576
+  # Let other processes running as this user inspect the daemon. Unset or false
+  # (the default, Linux only) means the daemon calls prctl(PR_SET_DUMPABLE, 0)
+  # at startup, so its /proc entry stops handing out its environment - every API
+  # key and secret it started with - along with its open files and its memory,
+  # and strace, gdb and core dumps of it stop working without root. Set this to
+  # true when you need to debug the daemon itself. Takes effect at startup, so
+  # it needs a restart. yes/no, on/off and 1/0 are accepted; anything that is
+  # not a yes-or-no is reported and treated as false, because a typo must never
+  # switch this off quietly. macOS and Windows get nothing either way.
+  # allow_process_inspection: false
 
 # IANA timezone for cron triggers and morning/evening routines. Set this when
 # the server clock is not your local time (e.g. a UTC-hosted VPS).

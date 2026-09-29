@@ -109,8 +109,10 @@ apply.
 
 The secret protects against network callers, not against code running as the
 daemon's user. The daemon deletes it from its environment after reading it, but
-a process it spawns without an explicit environment still inherits it, and on
-Linux any same-user process can read it from `/proc/<daemon pid>/environ`. That
-includes commands the agent's terminal tool runs. Do not leave
+a process it spawns without an explicit environment still inherits it. Reading
+it out of `/proc/<daemon pid>/environ` is closed since #546 -- the daemon marks
+itself non-dumpable on Linux unless `daemon.allow_process_inspection` is set --
+but that removes one route, not the risk: the same user can still read the
+daemon's files and restart it with a secret of their own. Do not leave
 `JARVIS_DEBUG_RPC` set on a normally-running daemon, and do not let agents work
 on that daemon while the gate is open.

@@ -1,0 +1,103 @@
+import { test, expect, describe } from 'bun:test';
+import { readdirSync, readFileSync } from 'node:fs';
+import { join } from 'node:path';
+import { isUntrustedSourceTool } from './untrusted.ts';
+
+/**
+ * Two privileges in roles/untrusted.ts are safe only because of WHO calls them.
+ * A comment cannot hold that, because both failure modes are silent and both end
+ * with attacker-controlled text outside an untrusted block -- so the caller set
+ * is derived from the source here and asserted.
+ *
+ * This is the guard #529 wrote for SITE_INSTRUCTION_TOOLS, kept after #560
+ * deleted the thing it guarded and pointed at what replaced it.
+ */
+const SRC = join(import.meta.dir, '..');
+
+const sourceFiles = (): string[] =>
+  readdirSync(SRC, { recursive: true, encoding: 'utf8' })
+    .filter((f) => f.endsWith('.ts') && !f.endsWith('.test.ts'))
+    // Vendored workflow engine: a separate tree with its own conventions, and it
+    // imports none of this. Walking it costs seconds and finds nothing.
+    .filter((f) => !f.startsWith('workflows/activepieces/'));
+
+const importersOf = (needle: string, skip: readonly string[]): string[] =>
+  sourceFiles()
+    .filter((rel) => !skip.includes(rel))
+    .filter((rel) => readFileSync(join(SRC, rel), 'utf8').includes(needle))
+    .sort();
+
+describe('the privileges in roles/untrusted.ts stay where they were argued for', () => {
+  /**
+   * `unsafeUntrustedNoncesForTests` reads delimiter tags out of text. Since #560
+   * payloads reach the model byte-exact, so content CAN print a well-formed open
+   * line and appear in that list -- which makes this function a boundary locator
+   * over attacker-controlled text, the exact shape #560 was filed to remove.
+   *
+   * It is safe for a test, which already knows which block it built. Production
+   * never locates a boundary: it holds the tag because `wrapUntrusted` just drew
+   * it. If this test fails, the fix is almost certainly NOT to add the file to
+   * the skip list.
+   */
+  test('no production file locates a delimiter tag', () => {
+    expect(importersOf('unsafeUntrustedNoncesForTests', ['roles/untrusted.ts'])).toEqual([]);
+  });
+
+  /**
+   * `withTrustedTrailer` marks text as repo-authored, and its caller places that
+   * text OUTSIDE the untrusted block. Exactly one module has a reason to: the
+   * webapp template delivery, whose instructions come from
+   * vault/webapp-template-seeds.ts and are not writable by any tool.
+   */
+  test('only the webapp template delivery mints a trusted trailer', () => {
+    expect(importersOf('withTrustedTrailer(', ['roles/untrusted.ts'])).toEqual([
+      'actions/tools/webapp-template-injection.ts',
+    ]);
+  });
+
+  /**
+   * The seam constant is gone. A reintroduced one would mean something is again
+   * deciding a trust boundary by matching a string in a tool result.
+   */
+  test('nothing searches tool results for a site-instructions separator', () => {
+    expect(importersOf('SITE_INSTRUCTIONS_MARKER', [])).toEqual([]);
+    expect(importersOf('SITE_INSTRUCTION_TOOLS', [])).toEqual([]);
+  });
+
+  /**
+   * #529's derived caller guard, restored and re-aimed.
+   *
+   * #529 derived the `withInstructions(` callers from source and compared them
+   * to `SITE_INSTRUCTION_TOOLS`. #560 deleted that list, and with it the guard --
+   * but the invariant underneath it was never about the list. It is: a tool that
+   * returns page content must be FRAMED. The trailer is repo-authored and
+   * harmless, so the hazard is not the trailer; it is that
+   * `markUntrustedToolResult` returns an unframed result for a tool it does not
+   * recognise, and the caller then appends a trailer to it, which reads as a
+   * page that was never disclaimed.
+   *
+   * So this asserts the thing that matters directly, for every tool that emits
+   * one. Attribution is "the nearest `name: '...'` above the call", exact for how
+   * these tools are declared but not a parser: a COMMENT mentioning
+   * `withInstructions(` under another tool would read as a caller and fail here.
+   * If that is why it went red, move the mention.
+   */
+  test('every tool that attaches template instructions is framed, derived from the source', () => {
+    const callers = new Set<string>();
+    for (const rel of sourceFiles()) {
+      const text = readFileSync(join(SRC, rel), 'utf8');
+      if (!text.includes('withInstructions(')) continue;
+      let current: string | null = null;
+      for (const line of text.split('\n')) {
+        const declared = /^\s*name: '([a-z_]+)',/.exec(line);
+        if (declared) current = declared[1]!;
+        if (line.includes('withInstructions(') && current) callers.add(current);
+      }
+    }
+    // Non-vacuous: the producers exist and are found.
+    expect([...callers].sort()).toEqual(['browser_navigate', 'browser_snapshot']);
+    for (const name of callers) {
+      expect(`${name}:${isUntrustedSourceTool(name, 'browser')}`).toBe(`${name}:true`);
+    }
+  });
+});

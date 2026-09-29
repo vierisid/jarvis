@@ -20,6 +20,7 @@ import { activeTurns } from "./active-turns.ts";
 import { writeLockedPort } from "./pid.ts";
 import { AgentService } from "./agent-service.ts";
 import { initDebugRpcGate, MIN_SECRET_LENGTH } from "./debug-rpc-gate.ts";
+import { hardenProcessInspection } from "./process-hardening.ts";
 import { modelExecDaemonWarning } from "../util/model-exec-marker.ts";
 import { getRecorder, parseInteractionEvent } from "../skills/recorder.ts";
 import { onRecordingStopped } from "../actions/tools/skills.ts";
@@ -49,7 +50,7 @@ import { AuthorityEngine } from "../authority/engine.ts";
 import { ApprovalManager } from "../authority/approval.ts";
 import { AuditTrail } from "../authority/audit.ts";
 import { impactFromCategory } from "../roles/authority.ts";
-import { wrapUntrusted } from "../roles/untrusted.ts";
+import { wrapUntrusted, inlineUntrusted } from "../roles/untrusted.ts";
 import { SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
 import { containsWakePhrase, hasSpokenContent, wakeCommandFrom } from "../voice/wake-phrase.ts";
 import { AuthorityLearner } from "../authority/learning.ts";
@@ -538,6 +539,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       console.log(`[Daemon] Log file: ${logFilePath}`);
     }
   }
+
+  // Close this daemon's own /proc entries to every other process running as
+  // this user (#546): its environment, its open files, its memory, ptrace
+  // attach and core dumps. Linux only, a no-op elsewhere, and never fatal --
+  // see process-hardening.ts for what survives and why engine reaping does.
+  //
+  // HERE in the order, and not earlier, because it needs the config to know
+  // whether the operator turned it off, and not later because everything after
+  // this point boots services, opens the database and spawns subprocesses.
+  // Nothing between loadConfig() and this line reads /proc/self/environ,
+  // /proc/self/io or /proc/self/fd: the config is YAML, the debug-RPC gate and
+  // the model-exec marker read `process.env` in memory, and the log sink's
+  // "are we already writing to this file" test is fstat on fds 1 and 2. After
+  // the sink, so the outcome lands in the configured log file too.
+  hardenProcessInspection({ allowInspection: jarvisConfig.daemon.allow_process_inspection });
 
   // Started from a command the assistant ran (#514): its env was stripped of
   // the daemon's secrets. After the file sink, so the configured log has it.
@@ -5420,7 +5436,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               if (errorText.length > 5) {
                 console.log(`[Daemon] Auto-researching error: "${errorText.slice(0, 80)}"`);
                 bgAgent.handleMessage(
-                  `The user is seeing an error in ${appName}. The error text, read from their screen:\n` +
+                  // `appName` is the active window's app name, which a web page
+                  // controls through document.title -- the same actor that
+                  // supplies the framed errorText below. Framing the error text
+                  // and interpolating the app name raw would leave an unframed
+                  // channel in the sentence that introduces the block, complete
+                  // with newlines to open headings of its own.
+                  `The user is seeing an error in ${inlineUntrusted(appName, 60)}. The error text, read from their screen:\n` +
                   wrapUntrusted(errorText, 'screen text (OCR)') + '\n\n' +
                   `Search the web and vault for a solution. Be concise and actionable. ` +
                   `Start your response with the fix, not a question.`,
@@ -5471,7 +5493,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               if (compositeScore >= 0.7 && (appCategory === 'code_editor' || appCategory === 'terminal')) {
                 console.log(`[Daemon] Deep-researching struggle in ${sAppName} (score: ${compositeScore.toFixed(2)})`);
                 bgAgent.handleMessage(
-                  `The user has been struggling in ${sAppName} (${appCategory}) for several minutes. ` +
+                  // Same reasoning as the error path above: both of these come
+                  // from observer event data, so both are labels inside trusted
+                  // prose rather than trusted text.
+                  `The user has been struggling in ${inlineUntrusted(sAppName, 60)} (${inlineUntrusted(appCategory, 40)}) for several minutes. ` +
                   `Here's what's on their screen:\n` +
                   wrapUntrusted(ocrPreview.slice(0, 800), 'screen text (OCR)') + '\n\n' +
                   `Search for solutions to any errors visible. Check documentation for the relevant language/framework. ` +

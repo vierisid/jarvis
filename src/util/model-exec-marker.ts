@@ -51,8 +51,23 @@
  * protects (crash reports, logs, `env` in a transcript), so for a key derived
  * from a passphrase it is an offline guessing target: scrypt makes each guess
  * cost ~35ms instead of nanoseconds, and the docs say to generate the key at
- * random. Nothing a same-uid child could not read from
- * /proc/<daemon pid>/environ anyway. An older parent set the flag to `1`,
+ * random.
+ *
+ * This used to rest on "nothing a same-uid child could not read from
+ * /proc/<daemon pid>/environ anyway". Since #546 that premise is gone on Linux:
+ * the daemon is non-dumpable by default, so a same-uid child gets EACCES there
+ * and this flag is no longer a strictly redundant disclosure. What stands
+ * without it: the check is 64 bits of a scrypt hash, it identifies a candidate
+ * key rather than yielding one, a random 256-bit key is not guessable from it,
+ * and a same-uid reader still has `~/.jarvis` on disk. Note that `~/.jarvis`
+ * holds the workflow key ITSELF only on a file-key install: this flag is set
+ * only when the daemon held the key in JARVIS_WORKFLOW_ENCRYPTION_KEY, and
+ * workflows/db/encryption.ts reads that env var first and writes no key file,
+ * so on exactly the install that sets this flag the key may be nowhere on disk
+ * (`.secrets.key` and the vault DB still are). So the disclosure remains worth
+ * its purpose, but it is now a real (small) one rather than free -- and on an
+ * env-key install it is no longer backstopped by the key being readable
+ * anyway. An older parent set the flag to `1`,
  * "an env key existed, check unknown": that refuses every file key and is
  * satisfied only by an env key.
  *
