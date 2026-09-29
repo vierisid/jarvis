@@ -29,6 +29,7 @@ import { WebSocketService } from "./ws-service.ts";
 import { PebbleRealtimeManager, wireRealtimeReadvertisement } from "./pebble-realtime.ts";
 import { hostedRealtimeIncluded, warmRealtimeGateFor } from './realtime-gate.ts';
 import { resolveRealtimeVoice } from "../config/realtime.ts";
+import { resolvePebbleHotkeys } from "../config/pebble-hotkeys.ts";
 import { isHostedInstall, realtimeEnablement } from "./usejarvis-ai.ts";
 import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
@@ -1428,6 +1429,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
       };
 
+      // The hotkeys this daemon last ASKED each sidecar for, keyed by sidecar
+      // id. Deliberately NOT cleared on disconnect, unlike spawnedOn: it is the
+      // memory that lets a reconnect skip the close below (see there), and it
+      // has to outlive the sidecar going away and coming back.
+      const pebbleHotkeysRequested = new Map<string, string>();
+
       sidecarManager.onSidecarConnected(async (sidecar) => {
         if (!sidecar.capabilities.includes('pebble')) {
           console.log(`[ambient-ui] Sidecar ${sidecar.id} lacks 'pebble' capability — skipping native pebble spawn`);
@@ -1436,13 +1443,52 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (spawnedOn.has(sidecar.id)) return;
         spawnedOn.add(sidecar.id);
         try {
+          // Resolved against the SIDECAR's OS, not process.platform: a hosted
+          // brain runs on a Linux VPS while the machine with the keyboard is
+          // someone's Mac. The defaults are uniform today, so this only matters
+          // the day a platform override is added -- but by then the call site
+          // would have been wrong and nobody would have noticed.
+          const hotkeys = resolvePebbleHotkeys(jarvisConfig.pebble, sidecar.os);
+          for (const problem of hotkeys.problems) {
+            // An error, not a warning: the user edited config.yaml on purpose
+            // and the value is being ignored. (Unlike daemon.port, a bad
+            // hotkey must not stop the daemon booting -- see
+            // src/config/pebble-hotkeys.ts for why the policies differ.)
+            console.error(`[ambient-ui] ${problem}`);
+          }
+
+          // Close before the first spawn we send this sidecar, because
+          // PebbleService.Spawn is idempotent: it returns early on its
+          // `spawned` latch and DISCARDS the spec. A sidecar that outlived a
+          // daemon restart would otherwise keep its old hotkeys while
+          // answering {"spawned": true}, so someone who edited
+          // pebble.summon_hotkey and ran `jarvis restart` would be told it
+          // worked and see nothing change -- which is the whole escape hatch
+          // #563 adds, failing silently on first use.
+          //
+          // Only when what we are about to ask for differs from what we last
+          // asked this sidecar for, so an ordinary reconnect (a network blip)
+          // does not make the pebble blink. An empty map after our own restart
+          // counts as different, which is exactly the case above; on a
+          // freshly started sidecar the close is a no-op.
+          const requested = `${hotkeys.summon}\n${hotkeys.palette}`;
+          if (pebbleHotkeysRequested.get(sidecar.id) !== requested) {
+            await sidecarManager.dispatchRPC(sidecar.id, 'pebble.close', {})
+              .catch(() => { /* no pebble to close, or a sidecar too old to know the RPC */ });
+          }
+
           const result = await sidecarManager.dispatchRPC(sidecar.id, 'pebble.spawn', {
             cursor_offset_x: 34,
             cursor_offset_y: 40,
-            summon_hotkey: 'ctrl+space',
-            palette_hotkey: 'ctrl+k',
+            summon_hotkey: hotkeys.summon,
+            palette_hotkey: hotkeys.palette,
           });
-          console.log(`[ambient-ui] Native pebble spawned on ${sidecar.id}:`, result);
+          pebbleHotkeysRequested.set(sidecar.id, requested);
+          console.log(
+            `[ambient-ui] Native pebble spawned on ${sidecar.id}`
+            + ` (summon=${hotkeys.summon || 'off'}, palette=${hotkeys.palette || 'off'}):`,
+            result,
+          );
           // W6 — push initial blinded state so the eye-strike glyph
           // matches awareness.enabled across daemon restarts.
           const awarenessEnabled = (jarvisConfig.awareness as { enabled?: boolean })?.enabled ?? true;

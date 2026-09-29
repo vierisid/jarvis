@@ -1,0 +1,270 @@
+import { afterEach, beforeEach, describe, expect, test } from 'bun:test';
+import YAML from 'yaml';
+import {
+  PEBBLE_DEFAULT_PALETTE_HOTKEY,
+  PEBBLE_DEFAULT_SUMMON_HOTKEY,
+  readHotkeySetting,
+  resolvePebbleHotkeys,
+} from './pebble-hotkeys.ts';
+
+describe('readHotkeySetting', () => {
+  test('a keyspec is valid, normalised to lower case and trimmed', () => {
+    expect(readHotkeySetting('ctrl+shift+space')).toEqual({ kind: 'valid', keyspec: 'ctrl+shift+space' });
+    expect(readHotkeySetting('  Ctrl + Shift + K  ')).toEqual({ kind: 'valid', keyspec: 'ctrl+shift+k' });
+    // A key with no modifier is legal: f13 is a perfectly good binding.
+    expect(readHotkeySetting('f13')).toEqual({ kind: 'valid', keyspec: 'f13' });
+  });
+
+  test('every modifier the sidecar grammar accepts is accepted here', () => {
+    // Kept in step with `modifierNames` in sidecar/hotkeys_keyspec.go. A name
+    // accepted there and refused here would be reported to the user as broken
+    // config for a hotkey that works.
+    for (const modifier of ['ctrl', 'control', 'shift', 'alt', 'opt', 'option', 'cmd', 'command', 'super', 'win', 'meta']) {
+      expect(readHotkeySetting(`${modifier}+k`).kind).toBe('valid');
+    }
+  });
+
+  test('absent is not the same as disabled', () => {
+    expect(readHotkeySetting(undefined)).toEqual({ kind: 'absent' });
+    // YAML null: `summon_hotkey:` with nothing after it, and `summon_hotkey: ~`.
+    expect(readHotkeySetting(null)).toEqual({ kind: 'absent' });
+
+    for (const off of ['', '   ', 'none', 'off', 'None', 'OFF']) {
+      expect(readHotkeySetting(off)).toEqual({ kind: 'disabled' });
+    }
+  });
+
+  test('a value that is not a hotkey is invalid, never absent', () => {
+    // The distinction this whole module exists for: a caller that folds these
+    // into "not configured" reports nothing and the user never learns why
+    // their hotkey did not change.
+    for (const value of [3, true, ['ctrl', 'k'], { ctrl: true }, 'ctrl+', '+', 'hyper+a', 'ctrl+shift+']) {
+      const setting = readHotkeySetting(value);
+      expect(setting.kind).toBe('invalid');
+      if (setting.kind === 'invalid') expect(setting.problem).toBeTruthy();
+    }
+  });
+
+  test('the problem names the offending modifier and the value', () => {
+    const setting = readHotkeySetting('hyper+a');
+    expect(setting.kind).toBe('invalid');
+    if (setting.kind !== 'invalid') return;
+    expect(setting.problem).toContain('hyper');
+    expect(setting.problem).toContain('"hyper+a"');
+  });
+
+  test('a huge value is clamped rather than reproduced in the log line', () => {
+    const setting = readHotkeySetting(`ctrl+${'k'.repeat(5000)} oops`);
+    expect(setting.kind).toBe('invalid');
+    if (setting.kind !== 'invalid') return;
+    expect(setting.problem.length).toBeLessThan(200);
+  });
+
+  test('key names are NOT validated here', () => {
+    // On purpose: the three backends resolve names against three different
+    // tables, Linux additionally takes any keysym XStringToKeysym knows, and
+    // the daemon may be resolving for a platform it is not running on.
+    // The sidecar reports an unusable name at registration.
+    expect(readHotkeySetting('ctrl+eacute').kind).toBe('valid');
+    expect(readHotkeySetting('ctrl+f24').kind).toBe('valid');
+  });
+});
+
+describe('the YAML spellings behave as documented', () => {
+  // The disable sentinels only work if YAML leaves them as strings. Checked
+  // against the parser the loader actually uses rather than assumed.
+  test('off / none / no stay strings, and a bare key is null', () => {
+    const parsed = YAML.parse([
+      'pebble:',
+      '  a: off',
+      '  b: none',
+      '  c: no',
+      '  d:',
+      '  e: ~',
+      '  f: ""',
+    ].join('\n')).pebble;
+
+    expect(typeof parsed.a).toBe('string');
+    expect(typeof parsed.b).toBe('string');
+    expect(typeof parsed.c).toBe('string');
+    expect(parsed.d).toBeNull();
+    expect(parsed.e).toBeNull();
+    expect(parsed.f).toBe('');
+
+    expect(readHotkeySetting(parsed.a).kind).toBe('disabled');
+    expect(readHotkeySetting(parsed.b).kind).toBe('disabled');
+    expect(readHotkeySetting(parsed.f).kind).toBe('disabled');
+    // `no` is a string but not a disable spelling, so it is read as a key name
+    // and left for the sidecar to reject. Pinned so the asymmetry with `none`
+    // and `off` is deliberate rather than discovered.
+    expect(readHotkeySetting(parsed.c).kind).toBe('valid');
+    // A bare key is "use the default", NOT "off" -- documented in
+    // docs/PEBBLE_HOTKEYS.md because it is the obvious way to try to disable one.
+    expect(readHotkeySetting(parsed.d).kind).toBe('absent');
+    expect(readHotkeySetting(parsed.e).kind).toBe('absent');
+  });
+});
+
+describe('resolvePebbleHotkeys', () => {
+  test('the shipped defaults are the same on every platform', () => {
+    // The owner's requirement: ONE pair, not three. If a platform override is
+    // ever added, this test is the one that should fail first and be updated
+    // on purpose.
+    for (const os of ['darwin', 'windows', 'linux', 'unknown', undefined]) {
+      expect(resolvePebbleHotkeys(undefined, os)).toEqual({
+        summon: PEBBLE_DEFAULT_SUMMON_HOTKEY,
+        palette: PEBBLE_DEFAULT_PALETTE_HOTKEY,
+        problems: [],
+      });
+    }
+  });
+
+  test('the defaults are the pair the owner confirmed', () => {
+    // Pinned by value so changing them is a deliberate edit in two places
+    // rather than a drift. Both clear all three stock system shortcut
+    // namespaces; see the comment on the constants for what does not.
+    expect(PEBBLE_DEFAULT_SUMMON_HOTKEY).toBe('ctrl+shift+space');
+    expect(PEBBLE_DEFAULT_PALETTE_HOTKEY).toBe('ctrl+shift+k');
+  });
+
+  test('an empty pebble section is the same as no pebble section', () => {
+    expect(resolvePebbleHotkeys({}, 'darwin')).toEqual(resolvePebbleHotkeys(undefined, 'darwin'));
+  });
+
+  test('a configured keyspec wins on every platform', () => {
+    for (const os of ['darwin', 'windows', 'linux']) {
+      expect(resolvePebbleHotkeys({ summon_hotkey: 'alt+f13', palette_hotkey: 'cmd+shift+p' }, os)).toEqual({
+        summon: 'alt+f13',
+        palette: 'cmd+shift+p',
+        problems: [],
+      });
+    }
+  });
+
+  test('each key is resolved independently', () => {
+    const resolved = resolvePebbleHotkeys({ summon_hotkey: 'alt+f13' }, 'darwin');
+    expect(resolved.summon).toBe('alt+f13');
+    expect(resolved.palette).toBe(PEBBLE_DEFAULT_PALETTE_HOTKEY);
+    expect(resolved.problems).toEqual([]);
+  });
+
+  test('disabled resolves to "", which registers no hotkey', () => {
+    // "" is what PebbleSpec already reads as "no hotkey" -- every overlay gates
+    // its registration on `!= ""` -- so this needs no wire change.
+    expect(resolvePebbleHotkeys({ summon_hotkey: 'off', palette_hotkey: '' }, 'darwin')).toEqual({
+      summon: '',
+      palette: '',
+      problems: [],
+    });
+  });
+
+  test('an unusable value falls back to the default and SAYS SO', () => {
+    // The failure this module exists to prevent is the silent one: falling
+    // back with nothing reported is indistinguishable from the config having
+    // been ignored entirely.
+    const resolved = resolvePebbleHotkeys({ summon_hotkey: 'hyper+a', palette_hotkey: 42 }, 'darwin');
+    expect(resolved.summon).toBe(PEBBLE_DEFAULT_SUMMON_HOTKEY);
+    expect(resolved.palette).toBe(PEBBLE_DEFAULT_PALETTE_HOTKEY);
+    expect(resolved.problems).toHaveLength(2);
+    expect(resolved.problems[0]).toContain('pebble.summon_hotkey');
+    expect(resolved.problems[0]).toContain('hyper');
+    expect(resolved.problems[0]).toContain(PEBBLE_DEFAULT_SUMMON_HOTKEY);
+    expect(resolved.problems[1]).toContain('pebble.palette_hotkey');
+  });
+
+  test('a good value next to a bad one still applies', () => {
+    const resolved = resolvePebbleHotkeys({ summon_hotkey: 'ctrl+alt+j', palette_hotkey: 'ctrl+' }, 'linux');
+    expect(resolved.summon).toBe('ctrl+alt+j');
+    expect(resolved.palette).toBe(PEBBLE_DEFAULT_PALETTE_HOTKEY);
+    expect(resolved.problems).toHaveLength(1);
+  });
+
+  test('the resolved value is stable for the same input', () => {
+    // The daemon compares this string against what it last asked a sidecar for
+    // to decide whether to close the old overlay; an unstable normalisation
+    // would make it close and respawn the pebble on every reconnect.
+    const a = resolvePebbleHotkeys({ summon_hotkey: 'Ctrl + Shift + Space' }, 'darwin');
+    const b = resolvePebbleHotkeys({ summon_hotkey: 'ctrl+shift+space' }, 'darwin');
+    expect(a.summon).toBe(b.summon);
+  });
+});
+
+describe('the pebble section survives loadConfig', () => {
+  // The whole design rests on this: `pebble:` is SYSTEM-owned, so it must NOT
+  // be discarded the way the USER_OWNED_SECTIONS are. loadConfig deep-merges
+  // the file over DEFAULT_CONFIG and strips only the listed sections, but that
+  // is a property of code that can change, so it is pinned here rather than
+  // assumed.
+  let dir: string;
+
+  beforeEach(async () => {
+    const { mkdtemp } = await import('node:fs/promises');
+    const { tmpdir } = await import('node:os');
+    const { join } = await import('node:path');
+    dir = await mkdtemp(join(tmpdir(), 'jarvis-pebble-hotkeys-'));
+  });
+
+  afterEach(async () => {
+    const { rm } = await import('node:fs/promises');
+    await rm(dir, { recursive: true, force: true });
+  });
+
+  async function loadWith(lines: string[]) {
+    const { writeFile } = await import('node:fs/promises');
+    const { join } = await import('node:path');
+    const { loadConfig } = await import('./loader.ts');
+    const path = join(dir, 'config.yaml');
+    await writeFile(path, lines.join('\n'));
+    return loadConfig(path);
+  }
+
+  test('a configured pair reaches the resolver', async () => {
+    const config = await loadWith([
+      'daemon:',
+      '  port: 3142',
+      'pebble:',
+      '  summon_hotkey: "alt+f13"',
+      '  palette_hotkey: "off"',
+      '',
+    ]);
+
+    expect(config.pebble).toEqual({ summon_hotkey: 'alt+f13', palette_hotkey: 'off' });
+    expect(resolvePebbleHotkeys(config.pebble, 'darwin')).toEqual({
+      summon: 'alt+f13',
+      palette: '',
+      problems: [],
+    });
+  });
+
+  test('pebble is not a user-owned section', async () => {
+    const { USER_OWNED_SECTIONS } = await import('./types.ts');
+    // If it is ever added there, config.yaml stops being authoritative and the
+    // test above starts failing for a reason nobody would guess from it.
+    expect(USER_OWNED_SECTIONS as readonly string[]).not.toContain('pebble');
+  });
+
+  test('no pebble section leaves it undefined rather than defaulted in the config object', async () => {
+    // The daemon.drain_deadline_ms precedent: absent must stay distinguishable
+    // from "set to the default", so there is no DEFAULT_CONFIG entry and the
+    // default is applied where the value is consumed.
+    const config = await loadWith(['daemon:', '  port: 3142', '']);
+    expect(config.pebble).toBeUndefined();
+    expect(resolvePebbleHotkeys(config.pebble, 'linux').summon).toBe(PEBBLE_DEFAULT_SUMMON_HOTKEY);
+  });
+
+  test('an unusable value survives the load so the resolver can report it', async () => {
+    // Rather than being coerced or dropped by the loader, which would leave
+    // the resolver unable to tell it apart from "not set".
+    const config = await loadWith([
+      'daemon:',
+      '  port: 3142',
+      'pebble:',
+      '  summon_hotkey: 42',
+      '',
+    ]);
+    const resolved = resolvePebbleHotkeys(config.pebble, 'windows');
+    expect(resolved.summon).toBe(PEBBLE_DEFAULT_SUMMON_HOTKEY);
+    expect(resolved.problems).toHaveLength(1);
+    expect(resolved.problems[0]).toContain('pebble.summon_hotkey');
+  });
+});
