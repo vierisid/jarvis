@@ -8,6 +8,7 @@
  * via the existing flow / flow_version repos.
  */
 
+import { planningPrompt, type PlanningPolicy, type CompositionProvenance } from './composition-provenance';
 import type {
   PieceInputField,
   PieceInputSchema,
@@ -111,6 +112,7 @@ export interface ComposeRequest {
  * constraints, without asking another model or a heuristic to paraphrase it.
  */
 export interface WorkflowJobSpecification {
+  provenance?: CompositionProvenance;
   schemaVersion: 1;
   name: string;
   description: string;
@@ -167,6 +169,8 @@ export interface ComposerLibraryEntry {
 }
 
 export interface ComposeFail {
+  /** Explicit report_blocked decision, distinct from provider/validation failure. */
+  blocked?: boolean;
   ok: false;
   compositionRecordId?: string;
   /** One or more reasons the compose attempt failed. */
@@ -262,6 +266,8 @@ export interface ComposerToolSpec {
 }
 
 export interface ComposeDeps {
+  /** Baseline is retained for controlled before/after evaluation. */
+  planningPolicy?: PlanningPolicy;
   llm: ComposerLlmClient;
   pieceRegistry: PieceLookup;
   /** Synchronous checkpoint before another provider call. Production uses the
@@ -438,7 +444,7 @@ async function composeOneShot(
   const toolsText = renderTools(deps.tools, deps.toolNames);
   const rolesText = renderSpecialistRoles(deps.specialistRoles);
   const envText = renderExecutionEnvironment(deps.executionTargets ?? []).join("\n");
-  const system = buildSystemPrompt(catalogText, toolsText, rolesText, envText);
+  const system = planningPrompt(buildSystemPrompt(catalogText, toolsText, rolesText, envText), deps.planningPolicy);
   const toolSpecs = toolSpecMap(deps);
   const validRoleIds = validRoleIdSet(deps);
   const osCheck = osCheckContextFor(deps.executionTargets ?? []);
@@ -560,7 +566,7 @@ async function composeWithTools(
   const hasLibrary = (deps.library?.length ?? 0) > 0;
   const toolDefs = buildComposerToolDefs(toolSpecs !== null, hasLibrary);
   const envText = renderExecutionEnvironment(deps.executionTargets ?? []).join("\n");
-  const system = buildToolLoopSystemPrompt(rolesText, hasLibrary, envText);
+  const system = planningPrompt(buildToolLoopSystemPrompt(rolesText, hasLibrary, envText), deps.planningPolicy);
 
   const messages: ComposerChatMessage[] = [
     { role: "system", content: system },
@@ -751,7 +757,7 @@ function blockedResult(
     suggestedInstalls.push(sug);
   }
   logAttempt(1, "tool-loop-blocked", reason);
-  const fail: ComposeFail = { ok: false, errors: [reason], rawResponse: lastRaw };
+  const fail: ComposeFail = { ok: false, blocked: true, errors: [reason], rawResponse: lastRaw };
   if (suggestedInstalls.length > 0) fail.suggestedInstalls = suggestedInstalls;
   return fail;
 }
