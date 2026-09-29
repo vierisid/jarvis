@@ -284,10 +284,6 @@ export class AwarenessService implements Service {
       return;
     }
 
-    if (appName || windowTitle) {
-      this.contextTracker.updateWindowInfo(appName, windowTitle);
-    }
-
     await this.processCaptureEvent({
       sidecarId,
       captureId,
@@ -295,18 +291,19 @@ export class AwarenessService implements Service {
       pixelChangePct,
       imagePath,
       ocrText,
+      appName,
       windowTitle,
     });
   }
 
-  private handleContextChanged(_sidecarId: string, event: SidecarEvent): void {
+  private handleContextChanged(sidecarId: string, event: SidecarEvent): void {
     const payload = event.payload as Record<string, unknown>;
     const toApp = String(payload.to_app ?? '');
     const toWindow = String(payload.to_window ?? '');
 
-    // Feed context change to tracker (simulates what processCapture does for window changes)
+    // Metadata hint only. processCapture is the sole awareness transition producer.
     if (toApp || toWindow) {
-      this.contextTracker.updateWindowInfo(toApp, toWindow);
+      this.contextTracker.updateWindowInfo(toApp, toWindow, event.timestamp, sidecarId);
     }
   }
 
@@ -366,18 +363,21 @@ export class AwarenessService implements Service {
     pixelChangePct: number;
     imagePath: string;
     ocrText: string;
+    appName: string;
     windowTitle?: string;
   }): Promise<void> {
     try {
       const ocrText = data.ocrText;
 
-      const windowTitle = data.windowTitle || this.contextTracker.getLastWindowTitle();
-
+      // Retain this capture's predecessor even if another capture arrives while
+      // the image fetch or model call is pending.
+      const previousContext = this.contextTracker.getCurrentContext();
       const { context, events, isRedundant } = this.contextTracker.processCapture(
         data.captureId,
         ocrText,
-        windowTitle,
-        data.capturedAt
+        data.windowTitle,
+        data.capturedAt,
+        { appName: data.appName, sidecarId: data.sidecarId }
       );
 
       // The capture row itself is the activity ledger analytics measures time
@@ -452,7 +452,7 @@ export class AwarenessService implements Service {
             cloudAnalysis = await this.intelligence.analyzeDelta(
               base64,
               context,
-              this.contextTracker.getPreviousContext()
+              previousContext
             );
           } else {
             cloudAnalysis = await this.intelligence.analyzeGeneral(base64, context);
