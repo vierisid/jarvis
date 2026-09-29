@@ -314,13 +314,6 @@ export class ContextTracker {
   }
 
   /**
-   * Get the last captured window title. Unconfirmed hints do not change it.
-   */
-  getLastWindowTitle(): string | undefined {
-    return this.currentContext?.windowTitle ?? undefined;
-  }
-
-  /**
    * Cache an explicit context event until a capture confirms the observation.
    * Only processCapture compares/commits snapshots and emits context_changed;
    * repeating a hint before or after that capture cannot create a second event.

@@ -1,4 +1,4 @@
-# Capture transitions (C1)
+# Capture transitions
 
 `ContextTracker.processCapture` is the canonical producer of awareness
 `context_changed` events. It resolves the incoming capture's window metadata,
@@ -42,19 +42,6 @@ hints and fallback window information are scoped by sidecar here.
 `bun test src/awareness/capture-transitions.test.ts` exercises serialized sidecar
 payloads through the public service handler and real database/suggestion paths.
 It covers both explicit-event arrival orders, duplicates, real return transitions,
-native/legacy identity, stale/future/conflicting/cross-sidecar hints, title-only
-changes, session identity and an image fetch delayed across another capture.
-The initial 12 regressions failed before the fix. Review R1 added six cases for
-partial hints: four failed before the correction, and two guard against borrowing
-fields from a conflicting window. All 24 transition cases now pass, including
-session stability and restored native metadata after a partial observation.
-No live screen capture or hosted LLM call is used.
-
-Final affected run after R1: **134 tests passed**, zero failures, across awareness, sidecar
-subscriptions and workflow event mappings. `bunx tsc --noEmit` and
-`git diff --check` also passed. These checks were repeated before push. The
-pre-commit license, migration, template and packaging guards passed (packaging
-used its Bun fallback after npm returned no parseable file list). The full-suite
-attempt stopped after 187 tests when the real-package test exceeded its 60-second
-limit. A one-command hook override was used after these direct checks; the full
-repository suite is not established as passing for C1.
+native/legacy identity, stale/future/conflicting/cross-sidecar and partial hints,
+title-only changes, session identity and an image fetch delayed across another
+capture. No live screen capture or hosted LLM call is used.
