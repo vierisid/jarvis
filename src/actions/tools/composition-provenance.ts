@@ -4,7 +4,9 @@ import type { ComposeDeps } from './workflow-composer';
 
 export type PlanningPolicy = 'baseline-v1' | 'deterministic-first-v1';
 export const COMPOSER_PROMPT_VERSION = 'w8-1';
-export const DEFAULT_PLANNING_POLICY: PlanningPolicy = 'deterministic-first-v1';
+// Production keeps the baseline prompt until a hosted comparison measures
+// deterministic-first against it; the evaluation passes a policy explicitly.
+export const DEFAULT_PLANNING_POLICY: PlanningPolicy = 'baseline-v1';
 
 /** Object key order is not a version change; array order is. */
 export function fingerprint(value: unknown): string {

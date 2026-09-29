@@ -36,7 +36,7 @@ test("chat commits the specification and repair checkpoint before the next LLM c
     try {
       const row = reader.query<{ specification: string; previous_response: string | null }, []>(
         "SELECT specification, previous_response FROM workflow_composition").get()!;
-      expect(JSON.parse(row.specification)).toMatchObject(jobSpecification(request));
+      expect(JSON.parse(row.specification)).toEqual({ ...jobSpecification(request), provenance: expect.objectContaining({ schemaVersion: 1 }) });
       expect(row.previous_response).toBe(calls === 0 ? null : "{unfinished");
     } finally { reader.close(); }
     return { text: ++calls === 1 ? "{unfinished" : valid };
@@ -76,7 +76,7 @@ test("caller mutation cannot change the saved specification or repair prompt", a
     return { text: valid };
   } } }, input);
   expect(result.ok).toBe(true);
-  expect(getWorkflowComposition(result.compositionRecordId)!.specification).toMatchObject(jobSpecification(request));
+  expect(getWorkflowComposition(result.compositionRecordId)!.specification).toEqual({ ...jobSpecification(request), provenance: expect.objectContaining({ schemaVersion: 1 }) });
 });
 
 test("cancellation retains the checkpoint and never accepts the late candidate", async () => {
@@ -130,7 +130,7 @@ test("composition provenance is durable and catalog changes cannot alter a repai
   const catalog = sampleCatalog();
   const description = catalog.list()[0]!.description;
   let calls = 0;
-  const result = await composePersistedFlow({ pieceRegistry: catalog, llm: { async chat({ system }) {
+  const result = await composePersistedFlow({ pieceRegistry: catalog, planningPolicy: "deterministic-first-v1", llm: { async chat({ system }) {
     expect(system).toContain("Deterministic-first planning");
     if (++calls === 1) {
       catalog.list()[0]!.description = "UNEXPECTED CATALOG MUTATION";
@@ -146,4 +146,13 @@ test("composition provenance is durable and catalog changes cannot alter a repai
   expect(provenance).toMatchObject({ schemaVersion: 1, promptVersion: "w8-1", planningPolicy: "deterministic-first-v1" });
   expect(provenance.catalogSha256).toMatch(/^[a-f0-9]{64}$/);
   expect(provenance.environmentSha256).toMatch(/^[a-f0-9]{64}$/);
+});
+
+test("production composition keeps the baseline prompt unless a policy is chosen", async () => {
+  const result = await composePersistedFlow({ pieceRegistry: sampleCatalog(), llm: { async chat({ system }) {
+    expect(system).not.toContain("Deterministic-first planning");
+    return { text: valid };
+  } } }, request);
+  expect(result.ok).toBe(true);
+  expect(getWorkflowComposition(result.compositionRecordId)!.specification.provenance!.planningPolicy).toBe("baseline-v1");
 });

@@ -44,10 +44,11 @@ test('canonical fingerprints change with contracts, not object key order', () =>
   expect(snapshot.deps.pieceRegistry.list()[0]!.description).not.toBe(catalog.list()[0]!.description);
   expect(snapshot.provenance.catalogSha256).toBe(fingerprint(snapshot.deps.pieceRegistry.list()));
 });
-test('baseline prompt stays exact, default policy requires deterministic work and preserves constraints', () => {
+test('baseline is the exact default prompt; deterministic-first requires deterministic work and preserves constraints', () => {
   expect(planningPrompt('old', 'baseline-v1')).toBe('old');
-  expect(planningPrompt('old')).toContain('Do not add an LLM');
-  expect(planningPrompt('old')).toContain('negative constraints');
+  expect(planningPrompt('old')).toBe('old');
+  expect(planningPrompt('old', 'deterministic-first-v1')).toContain('Do not add an LLM');
+  expect(planningPrompt('old', 'deterministic-first-v1')).toContain('negative constraints');
 });
 test('task splits are frozen, disjoint and include boundaries and abstention', () => {
   const held = loadTasks('heldout');
