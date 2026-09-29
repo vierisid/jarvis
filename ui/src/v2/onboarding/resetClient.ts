@@ -15,6 +15,11 @@
  * gate semantics.
  */
 
+import {
+  createOnboardingBroadcastChannel,
+  type OnboardingBroadcastMessage,
+} from "./useOnboardingStatus";
+
 export type OnboardingResetScope = "all" | "setup" | "profile" | "tutorial";
 
 export interface OnboardingResetResponse {
@@ -65,14 +70,23 @@ export async function resetOnboarding(
   // immediately re-fetches its onboarding status and exits the live
   // shell back to the appropriate phase. Best-effort: if BroadcastChannel
   // isn't available (older Safari), peers stay until their next refresh.
-  if (typeof window !== "undefined" && typeof BroadcastChannel !== "undefined") {
-    try {
-      const ch = new BroadcastChannel("v2-onboarding-status");
-      ch.postMessage({ type: "reset", scope });
-      ch.close();
-    } catch {
-      /* best-effort; the local reload below still fires */
+  //
+  // A throwaway channel is the right shape here, unlike in the hook
+  // (#556): this module holds no listener of its own, so there is nothing
+  // for it to talk back to. This tab's own `useOnboardingStatus` does hear
+  // it, which is harmless -- moot under the default reload below, and the
+  // wanted behaviour for a caller that passes `reload: false` and stays.
+  try {
+    const ch = createOnboardingBroadcastChannel();
+    if (ch) {
+      try {
+        ch.postMessage({ type: "reset", scope } satisfies OnboardingBroadcastMessage);
+      } finally {
+        ch.close();
+      }
     }
+  } catch {
+    /* best-effort; the local reload below still fires */
   }
 
   if (reload && typeof window !== "undefined") {

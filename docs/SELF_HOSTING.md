@@ -481,9 +481,88 @@ morning/evening routines fire at your wall-clock time:
 timezone: "Europe/Rome"
 ```
 
+### Autostart: keeping the daemon running
+
+`jarvis autostart` writes and enables the service that starts JARVIS at login and
+brings it back after a crash. It is the only thing in JARVIS that installs one:
+
+| Platform | What it installs |
+| --- | --- |
+| Linux | a systemd **user** service, `~/.config/systemd/user/jarvis.service`, plus `loginctl enable-linger` so it also starts at boot rather than only at login. The install says so when lingering could not be enabled. |
+| macOS | a launchd **user** agent, `~/Library/LaunchAgents/ai.jarvis.daemon.plist`, which starts at login. There is no boot equivalent. |
+
+```bash
+jarvis autostart               # install or refresh the definition, and start it
+jarvis autostart --no-start    # install it, start nothing now
+jarvis autostart --force       # overwrite a definition that differs from this version's
+jarvis autostart --status      # manager, path, state, enablement, overrides, drift
+jarvis autostart --uninstall   # stop the service and remove the definition
+```
+
+`--status` also names any `jarvis.service.d/*.conf` drop-in, because everything
+else here reads the main unit file: the drift detector goes quiet entirely once a
+drop-in exists, and `systemctl --user cat jarvis.service` is the only thing that
+shows the merged result.
+
+A unit whose text is already current but which systemd will not start by itself
+is repaired without rewriting the file: `installSystemd` writes before it reloads
+and enables, so a failure at either of those steps leaves exactly that state, and
+re-running `jarvis autostart` enables it and says so.
+
+**It refuses to overwrite a definition it did not just write.** When the file on
+disk differs from the one this version would install, the command prints the
+differing lines, writes nothing and exits non-zero. There is no way for it to
+tell an install from an older JARVIS apart from an edit you made on purpose: the
+drift detector below is tolerant of extra keys by design, and the generated text
+depends on the shell that installs it (`bun` is resolved through `PATH`, and
+`JARVIS_HOME` is carried into the unit when it is set). So the decision is
+yours - `--force` to take this version's definition, or a drop-in to keep both:
+
+```bash
+systemctl --user edit jarvis.service   # Linux: a drop-in survives a reinstall
+```
+
+Differences in comments and blank lines are not differences: the comparison is
+over systemd directives (`[Service] Restart=on-failure`) and over plist key/value
+pairs (`KeepAlive.SuccessfulExit=<false/>`), so a note you added and a rationale
+this version reworded neither demand `--force` nor cause a rewrite. The flip side
+is that `--force` replaces the whole file, comments included, and the command
+counts the ones it would take with it before you decide.
+
+**What it starts, and what it leaves alone.** A fresh install is started
+immediately, but only when no daemon holds the lock file: the service's own
+`ExecStart` is `jarvis start --foreground`, which exits non-zero against a live
+lock, and under `Restart=on-failure` that would be five failed starts and a unit
+left **failed** - installing autostart would have taken down a daemon that was
+running perfectly well. When a daemon is already running the command says so and
+stops there. A refresh never restarts anything either, because the running daemon
+may not be the service's own; it prints the command that applies the new
+definition:
+
+```bash
+systemctl --user restart jarvis.service                       # Linux
+launchctl bootout gui/$(id -u)/ai.jarvis.daemon && \
+  launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.jarvis.daemon.plist   # macOS
+```
+
+**On macOS, a `jarvis restart` hands the daemon out of the agent.** systemd has
+`routeRestart` (#525) and restarts the unit itself; launchd has no counterpart, so
+`jarvis restart` and `jarvis update` stop the daemon, which now exits cleanly and
+is deliberately not relaunched, and start a new one as a child of your shell. It
+runs, but the agent is not supervising it until your next login. `jarvis restart`
+prints that, and the way back is:
+
+```bash
+jarvis stop && launchctl kickstart -k gui/$(id -u)/ai.jarvis.daemon
+```
+
+`jarvis autostart --uninstall` stops the service and removes the definition, and
+nothing else - `jarvis uninstall` is the one that removes JARVIS itself, and it
+removes autostart first so the daemon is not relaunched halfway through.
+
 ### Running under systemd
 
-When the daemon is the main process of a systemd **user** unit, such as the `jarvis.service` the old setup wizard installed, `jarvis restart` and `jarvis update` hand the work to systemd. Otherwise they stop and start the daemon themselves. They used to do that in every case, and it went wrong in two ways:
+When the daemon is the main process of a systemd **user** unit, such as the `jarvis.service` that `jarvis autostart` installs, `jarvis restart` and `jarvis update` hand the work to systemd. Otherwise they stop and start the daemon themselves. They used to do that in every case, and it went wrong in two ways:
 
 - Run from inside the service, for example by the assistant's `run_command`, the command was part of the unit. It stopped the daemon, and systemd then killed the command before it could start a new one. JARVIS stayed down.
 - Run from a terminal, the new daemon ran outside the unit, so systemd no longer supervised it.
@@ -521,18 +600,54 @@ The unit JARVIS writes (`~/.config/systemd/user/jarvis.service`) makes three cho
 - **`Restart=on-failure`, not `always`.** A crash exits non-zero (3 for an uncaught exception, 4 for an unhandled rejection), so systemd restarts it. A deliberate shutdown exits 0, and `jarvis stop` and `jarvis drain` signal the daemon directly rather than going through `systemctl`: under `Restart=always` systemd would bring JARVIS back five seconds after the CLI told you it had stopped.
 - **`StartLimitIntervalSec=120` with `StartLimitBurst=5`.** A daemon that dies the moment it boots is restarted five times, about twenty seconds apart in total, and then left alone: systemd marks the unit **failed** and will not start it again by itself, so `jarvis status` shows JARVIS stopped and `systemctl --user status jarvis.service` says why. Without a limit it would be relaunched every `RestartSec` for as long as the machine is up, which is worse than being down: nothing tells you, and the loop burns CPU and log space. systemd's own default limit (five starts in ten seconds) can never be reached at `RestartSec=5`, so the unit sets its own.
 
-  The limit counts **every** start in the window, deliberate ones included, so a unit that has hit it refuses the next start. JARVIS runs `systemctl --user reset-failed` before each restart, update and start it asks for, so its own commands never trip over it. If you hit it by hand:
+  The limit counts **every** start in the window, deliberate ones included, so a unit that has hit it refuses the next start. JARVIS runs `systemctl --user reset-failed` before each restart and update it asks for, so those never trip over it. `jarvis autostart` deliberately does not: its start is blocking, so systemd's own "Start request repeated too quickly" reaches you instead of being cleared behind your back. If you hit the limit:
 
   ```bash
   systemctl --user reset-failed jarvis.service
   systemctl --user start jarvis.service
   ```
 
+### What the generated launchd plist sets, and why
+
+The plist JARVIS writes (`~/Library/LaunchAgents/ai.jarvis.daemon.plist`) makes
+the same choices as the unit above, as far as launchd allows:
+
+- **`ProgramArguments` ends in `--no-open`,** for the reason the unit has it: the
+  agent starts at login and after a crash, and each of those would otherwise try
+  to open a browser.
+- **`KeepAlive` is a dictionary with `SuccessfulExit=false`,** not `<true/>`.
+  That is launchd's `Restart=on-failure`: a non-zero exit is relaunched, exit 0 is
+  left alone. With the plain `<true/>` earlier versions wrote, launchd relaunched
+  the daemon after **any** exit - `jarvis stop` signals the daemon directly and
+  never goes through `launchctl`, so a stop was undone under a new pid while the
+  CLI printed success (at once, not ten seconds later: `ThrottleInterval` only
+  bounds how often a job that has just started may respawn). `jarvis autostart --force`
+  replaces such a plist, and `jarvis status` names it in the meantime.
+
+  A death by signal is not exit 0 either, so it is relaunched too. That covers a
+  real kill, and also the `SIGKILL` `jarvis stop` falls back to when the drain
+  overruns its deadline: to stop a daemon that will not drain and keep it
+  stopped, remove autostart first (`jarvis autostart --uninstall`, or
+  `launchctl bootout gui/$(id -u)/ai.jarvis.daemon`).
+- **There is no crash-loop bound.** launchd throttles the respawns of a job that
+  keeps dying to about one per ten seconds (`ThrottleInterval`) and never gives
+  up, and it has no equivalent of `StartLimitBurst`. So a daemon that dies the moment it boots is retried for as
+  long as you stay logged in, where systemd would have left the unit failed. This
+  is the one asymmetry between the two platforms that JARVIS cannot close from
+  the definition; watch `~/.jarvis/logs/jarvis-error.log`, which the plist points
+  the agent's stderr at.
+
 ### Refreshing an autostart service
 
 A unit or launchd plist is only rewritten when autostart is installed again, so a service installed by an older version keeps whatever it was written with. `jarvis status` says so when it can tell, and names what the old definition still does.
 
-To fix an existing `jarvis.service` without replacing it, add an override:
+The fix is `jarvis autostart`: it prints how the definition on disk differs from
+this version's and writes nothing, and `jarvis autostart --force` replaces it.
+See [Autostart: keeping the daemon running](#autostart-keeping-the-daemon-running)
+for why the two steps are separate.
+
+To fix an existing `jarvis.service` without replacing it, keeping your own edits,
+add an override instead:
 
 ```bash
 systemctl --user edit jarvis.service
@@ -552,7 +667,27 @@ ExecStart=/home/you/.bun/bin/bun /path/to/jarvis/bin/jarvis.ts start --foregroun
 
 `systemctl --user daemon-reload` is run by `edit` itself; `systemctl --user restart jarvis.service` applies it. An override lives in `jarvis.service.d/override.conf` and survives a reinstall of the unit, which is also why `jarvis status` stops reporting drift once a drop-in exists: it cannot tell what the override changed.
 
-On macOS, add a `<string>--no-open</string>` entry after `<string>--foreground</string>` in the `ProgramArguments` array of `~/Library/LaunchAgents/ai.jarvis.daemon.plist`, then `launchctl unload` and `launchctl load` the plist. Note that `KeepAlive` there relaunches the daemon after a clean exit too, so a `jarvis stop` on macOS is undone about ten seconds later unless you remove autostart first (`jarvis uninstall` does that in the right order).
+On macOS there is no drop-in mechanism, so either let `jarvis autostart --force`
+write the plist and copy your own changes back into it, or edit it by hand: add a
+`<string>--no-open</string>` entry after `<string>--foreground</string>` in
+`ProgramArguments`, and replace
+
+```xml
+  <key>KeepAlive</key>
+  <true/>
+```
+
+with
+
+```xml
+  <key>KeepAlive</key>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
+```
+
+then `launchctl bootout gui/$(id -u)/ai.jarvis.daemon` and `launchctl bootstrap gui/$(id -u) ~/Library/LaunchAgents/ai.jarvis.daemon.plist` to load it. Until that `KeepAlive` is a dictionary, the plist relaunches the daemon after a clean exit too, so a `jarvis stop` on macOS is undone moments later unless you remove autostart first (`jarvis autostart --uninstall` does exactly that, and `jarvis uninstall` does it in the right order).
 
 ### Logs
 
@@ -660,8 +795,11 @@ them back.
 Under systemd, `jarvis restart` and `jarvis update` go through the unit even
 when the assistant runs them (see [Running under systemd](#running-under-systemd)),
 so the restarted Jarvis gets the unit's environment, secrets included. Under
-launchd, which relaunches Jarvis itself, the relaunched daemon gets launchd's
-environment.
+launchd there is no such routing: only a stop that ends in a SIGKILL is undone by
+the launch agent, so a `jarvis restart` normally starts the daemon from the
+calling shell's environment, and it stays a child of that shell until your next
+login. `jarvis restart` prints a line saying so, and the way back is
+`jarvis stop && launchctl kickstart -k gui/$(id -u)/ai.jarvis.daemon`.
 
 If your workflow encryption key lives only in `JARVIS_WORKFLOW_ENCRYPTION_KEY`,
 a daemon started from the assistant's shell uses a workflow key only if it is

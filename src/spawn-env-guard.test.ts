@@ -70,17 +70,19 @@ type Exemption = { reason: string; calls: Record<string, number> };
 
 const EXEMPT: Record<string, Exemption> = {
   'cli/autostart.ts': {
-    reason: USER_CLI + ' scheduleSystemdRestart and spawnDetachedShell (the launchd restart) are also reached from the daemon (api-routes), and run fixed systemctl/launchctl commands that restart the unit. scheduleSystemdRestart runs two: `reset-failed` clears the start rate-limit the generated unit sets (#543) before the restart it would otherwise refuse.',
+    reason: USER_CLI + ' scheduleSystemdRestart and spawnDetachedShell (the launchd restart) are also reached from the daemon (api-routes), and run fixed systemctl/launchctl commands that restart the unit. scheduleSystemdRestart runs two: `reset-failed` clears the start rate-limit the generated unit sets (#543) before the restart it would otherwise refuse. readAutostartEnabled runs one read-only `systemctl --user is-enabled jarvis.service` for `jarvis autostart --status`, enableAutostart the `daemon-reload` + `enable` pair that repairs a unit whose file is already current, and startLaunchdService a third: a `launchctl bootout` before the bootstrap, because bootstrapping an already-loaded agent would keep the plist launchd read last (#548). All three are fixed command lines, reached only from the CLI.',
     calls: {
       spawnDetachedShell: 1,
       defaultSpawnSync: 1,
+      readAutostartEnabled: 1,
+      enableAutostart: 2,
       probeSystemdUserService: 3,
       installSystemd: 3,
       startSystemdService: 1,
       scheduleSystemdRestart: 2,
       uninstallSystemd: 3,
-      startLaunchdService: 2,
-      uninstallLaunchd: 1,
+      startLaunchdService: 3,
+      uninstallLaunchd: 2,
     },
   },
   'cli/backup.ts': { reason: USER_CLI, calls: { runTar: 1 } },

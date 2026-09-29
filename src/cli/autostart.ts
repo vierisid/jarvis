@@ -108,7 +108,8 @@ export function canUseSystemdUserService(spawnSync: SpawnSyncFn = defaultSpawnSy
 // ── systemd (Linux) ──────────────────────────────────────────────────
 
 const SYSTEMD_DIR = join(homedir(), '.config', 'systemd', 'user');
-const SYSTEMD_SERVICE = join(SYSTEMD_DIR, 'jarvis.service');
+const SYSTEMD_UNIT_NAME = 'jarvis.service';
+const SYSTEMD_SERVICE = join(SYSTEMD_DIR, SYSTEMD_UNIT_NAME);
 
 /**
  * The #514 markers (util/model-exec-marker.ts) must never reach the service: a
@@ -217,12 +218,17 @@ async function installSystemd(): Promise<boolean> {
 
     // Enable lingering so the service runs even when not logged in
     const lingering = Bun.spawnSync(['loginctl', 'enable-linger', process.env.USER ?? '']);
-    if (lingering.exitCode !== 0) {
-      printWarn('Could not enable lingering. Service may stop when you log out.');
+    const lingers = lingering.exitCode === 0;
+    if (!lingers) {
+      printWarn('Could not enable lingering. The service will stop when you log out.');
     }
 
     printOk(`Installed systemd service: ${SYSTEMD_SERVICE}`);
-    printOk('Service will restart automatically and start on boot.');
+    // Said precisely, because Restart=on-failure is the whole point of #543: a
+    // clean `jarvis stop` is NOT undone, and "on boot" is true only with linger.
+    printOk(lingers
+      ? 'It starts JARVIS at boot and restarts it after a crash; a clean stop is left alone.'
+      : 'It starts JARVIS at login and restarts it after a crash; a clean stop is left alone.');
     return true;
   } catch (err) {
     printErr(`Failed to install systemd service: ${err}`);
@@ -273,12 +279,17 @@ async function uninstallSystemd(): Promise<boolean> {
     Bun.spawnSync(['systemctl', '--user', 'stop', 'jarvis.service']);
     Bun.spawnSync(['systemctl', '--user', 'disable', 'jarvis.service']);
 
-    if (existsSync(SYSTEMD_SERVICE)) {
+    const had = existsSync(SYSTEMD_SERVICE);
+    if (had) {
       unlinkSync(SYSTEMD_SERVICE);
     }
 
     Bun.spawnSync(['systemctl', '--user', 'daemon-reload']);
-    printOk('Uninstalled systemd service.');
+    // `jarvis autostart --uninstall` runs this even with no file on disk, since
+    // the unit can still be enabled and running then. Say which one happened.
+    printOk(had
+      ? 'Uninstalled systemd service.'
+      : `Stopped and disabled ${SYSTEMD_UNIT_NAME}; there was no unit file to remove.`);
     return true;
   } catch (err) {
     printErr(`Failed to uninstall systemd service: ${err}`);
@@ -299,7 +310,7 @@ function isSystemdInstalled(): boolean {
 // product reinstalls it, so the most it can honestly do is say so.
 
 /** A consequence of the installed definition, named by what the user sees. */
-export type AutostartProblem = 'opens-a-browser' | 'unbounded-restarts';
+export type AutostartProblem = 'opens-a-browser' | 'unbounded-restarts' | 'relaunches-after-a-clean-stop';
 
 export interface AutostartDrift {
   /** The file the problems were read from. */
@@ -437,13 +448,16 @@ export function describeAutostartProblem(problem: AutostartProblem): string {
       return 'it opens a browser on every start, including every restart after a crash';
     case 'unbounded-restarts':
       return 'a daemon that cannot boot is restarted forever, with no start limit';
+    case 'relaunches-after-a-clean-stop':
+      return 'a `jarvis stop` is undone moments later: it relaunches the daemon after a clean exit too';
   }
 }
 
 // ── launchd (macOS) ──────────────────────────────────────────────────
 
 const LAUNCHD_DIR = join(homedir(), 'Library', 'LaunchAgents');
-const LAUNCHD_PLIST = join(LAUNCHD_DIR, 'ai.jarvis.daemon.plist');
+const LAUNCHD_LABEL = 'ai.jarvis.daemon';
+const LAUNCHD_PLIST = join(LAUNCHD_DIR, `${LAUNCHD_LABEL}.plist`);
 
 export function generateLaunchdPlist(): string {
   const bunPath = getBunPath();
@@ -458,25 +472,45 @@ export function generateLaunchdPlist(): string {
   // by renaming a fresh file over the path, which would leave launchd's
   // descriptors appending to an unlinked inode that grows without bound.
   const logDir = getLogDir();
-  // --no-open for the same reason as the systemd unit (#544): KeepAlive=true
-  // relaunches the daemon, and every relaunch would otherwise pop a browser tab.
+  // --no-open for the same reason as the systemd unit (#544): the agent starts
+  // at login and is relaunched after a crash, and every one of those would
+  // otherwise pop a browser tab.
   //
-  // Two things the systemd half of #543 does that this does NOT, both
-  // pre-existing and both needing a macOS box to change safely:
-  //   - `KeepAlive=<true/>` relaunches on ANY exit, a clean one included, so a
-  //     `jarvis stop` here is undone about ThrottleInterval (10s) later. The
-  //     launchd equivalent of Restart=on-failure is a KeepAlive DICT with
-  //     `SuccessfulExit=false`. src/cli/uninstall.ts already works around the
-  //     current behavior by removing autostart before stopping the daemon.
-  //   - launchd throttles respawns to ~10s but never gives up, so the crash-loop
-  //     bound (StartLimitBurst) is Linux-only.
+  // `KeepAlive` is a DICT with `SuccessfulExit=false` -- the launchd equivalent
+  // of the unit's Restart=on-failure (#549). A bare `<true/>` relaunches after
+  // ANY exit, so the clean drain a `jarvis stop` triggers was undone under a new
+  // pid while the CLI printed success. (Not "ten seconds later", despite the
+  // issue text: ThrottleInterval only bounds how often a job that just started
+  // may respawn, so a daemon that had been up a while came back at once.)
+  // `jarvis stop` signals the daemon's pid and never goes through launchctl, so
+  // launchd cannot tell a requested stop from a crash by itself; the exit status
+  // is all it has, and the daemon's is 0 on a drain and 3/4 on a crash (#543).
+  //
+  // SuccessfulExit alone. `Crashed=true` could be ORed in -- a KeepAlive dict
+  // keeps the job alive while ANY of its conditions is met, and exit 0 satisfies
+  // neither -- but it would only restate what the man page already says about
+  // the inverse condition, and it cannot be verified from here. `Crashed=false`
+  // is the one that must never appear: it reads as "relaunch when it did NOT
+  // crash", which is the clean-exit relaunch all over again.
+  //
+  // Two things the systemd half of #543 still does that this cannot:
+  //   - launchd throttles respawns to ~10s but has no StartLimitBurst and never
+  //     gives up, so the crash-loop BOUND is Linux-only. A daemon that dies on
+  //     boot is relaunched every ~10s for as long as the Mac is up.
+  //   - a death by signal never "exited with status 0", so launchd's inverse
+  //     condition should relaunch it: a real kill, and also the SIGKILL `jarvis
+  //     stop` escalates to when the drain overruns its deadline. Reading the man
+  //     page, not measured -- src/cli/daemon-control.launchd.test.ts proves the
+  //     exit-status halves on the macOS runner and this one is left open, which
+  //     is also why src/cli/uninstall.ts still removes autostart BEFORE it stops
+  //     the daemon: that order is right either way.
 
   return `<?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
   <key>Label</key>
-  <string>ai.jarvis.daemon</string>
+  <string>${LAUNCHD_LABEL}</string>
   <key>ProgramArguments</key>
   <array>
     <string>${xmlEscape(bunPath)}</string>
@@ -488,7 +522,10 @@ export function generateLaunchdPlist(): string {
   <key>RunAtLoad</key>
   <true/>
   <key>KeepAlive</key>
-  <true/>
+  <dict>
+    <key>SuccessfulExit</key>
+    <false/>
+  </dict>
   <key>StandardOutPath</key>
   <string>${xmlEscape(logDir)}/jarvis.log</string>
   <key>StandardErrorPath</key>
@@ -524,7 +561,9 @@ async function installLaunchd(): Promise<boolean> {
     writeFileSync(LAUNCHD_PLIST, generateLaunchdPlist(), 'utf-8');
 
     printOk(`Installed launchd plist: ${LAUNCHD_PLIST}`);
-    printOk('Service will restart automatically and stay running after the terminal closes.');
+    // KeepAlive is {SuccessfulExit: false} since #549, so this is exactly what
+    // it does: a crash comes back, a clean `jarvis stop` does not.
+    printOk('It starts JARVIS at login and outlives the terminal; a crash is relaunched, a clean stop is not.');
     return true;
   } catch (err) {
     printErr(`Failed to install launchd plist: ${err}`);
@@ -560,22 +599,66 @@ export function isLaunchdAlreadyLoaded(result: SpawnResultLike): boolean {
   );
 }
 
+/**
+ * launchctl's way of saying the job was not loaded in the first place, which is
+ * the outcome a removal wanted. `bootout` exits non-zero for it, so without this
+ * an already-clean machine would look like a failure.
+ */
+export function isLaunchdNotLoaded(result: SpawnResultLike): boolean {
+  const combined = `${decodeLaunchctlOutput(result.stdout)}\n${decodeLaunchctlOutput(result.stderr)}`.toLowerCase();
+  return (
+    combined.includes('not loaded') ||
+    combined.includes('no such process') ||
+    combined.includes('no such file or directory') ||
+    combined.includes('could not find specified service') ||
+    combined.includes('service not found')
+  );
+}
+
 function launchctlReason(result: SpawnResultLike): string {
   const combined = `${decodeLaunchctlOutput(result.stderr)}\n${decodeLaunchctlOutput(result.stdout)}`.trim();
   const first = combined.split('\n').find((line) => line.trim().length > 0);
   return (first ?? `exit ${result.exitCode}`).slice(0, 200);
 }
 
-async function startLaunchdService(): Promise<boolean> {
+async function startLaunchdService(options: { replaceLoaded?: boolean } = {}): Promise<boolean> {
   try {
     const getuid = process.getuid;
     const uid = typeof getuid === 'function' ? getuid.call(process) : undefined;
 
+    // A rewritten plist only becomes live after the agent is booted out and
+    // bootstrapped again; bootstrap alone reports "already loaded" and keeps the
+    // definition launchd read last. The caller only asks for this when nothing
+    // holds the lock, so booting the agent out stops nothing that is in use.
+    if (options.replaceLoaded && typeof uid === 'number') {
+      Bun.spawnSync(['launchctl', 'bootout', `gui/${uid}/${LAUNCHD_LABEL}`]);
+    }
+
     let bootstrapReason: string | null = null;
     if (typeof uid === 'number') {
       const bootstrap = Bun.spawnSync(['launchctl', 'bootstrap', `gui/${uid}`, LAUNCHD_PLIST]);
-      if (bootstrap.exitCode === 0 || isLaunchdAlreadyLoaded(bootstrap)) {
-        printOk('JARVIS launch agent is running.');
+      // Two different outcomes, and only the first one started anything:
+      // bootstrap on an ALREADY loaded agent does not re-run RunAtLoad, so it
+      // leaves whatever definition launchd loaded before in place. Saying "is
+      // running" for both is how a refresh would report success while the daemon
+      // still ran the old plist.
+      if (bootstrap.exitCode === 0) {
+        printOk('Loaded the launch agent; RunAtLoad starts JARVIS now.');
+        return true;
+      }
+      if (isLaunchdAlreadyLoaded(bootstrap)) {
+        // After a bootout we asked for, "already loaded" means the teardown did
+        // not take (it can answer "Operation now in progress"), so the plist we
+        // just wrote is NOT live. Reporting success here is how `--force` would
+        // exit 0 with the old definition running -- the very thing replaceLoaded
+        // exists to prevent.
+        if (options.replaceLoaded) {
+          printErr('The launch agent is still loaded with its previous definition; the new plist is not live.');
+          printWarn(`Retry with: launchctl bootout gui/${uid}/${LAUNCHD_LABEL} && launchctl bootstrap gui/${uid} ${LAUNCHD_PLIST}`);
+          return false;
+        }
+        printOk('The launch agent was already loaded; launchd keeps the definition it loaded.');
+        printWarn(`Apply this plist now with: launchctl bootout gui/${uid}/${LAUNCHD_LABEL} && launchctl bootstrap gui/${uid} ${LAUNCHD_PLIST}`);
         return true;
       }
       bootstrapReason = launchctlReason(bootstrap);
@@ -594,7 +677,7 @@ async function startLaunchdService(): Promise<boolean> {
       return false;
     }
 
-    printOk('JARVIS launch agent is running.');
+    printOk('Loaded the launch agent.');
     return true;
   } catch (err) {
     printWarn(`Installed launchd plist, but could not start it immediately: ${err}`);
@@ -605,19 +688,52 @@ async function startLaunchdService(): Promise<boolean> {
 function scheduleLaunchdRestart(): boolean {
   const uid = process.getuid?.();
   const command = uid != null
-    ? `sleep 1; launchctl kickstart -k gui/${uid}/ai.jarvis.daemon >/dev/null 2>&1`
-    : `sleep 1; launchctl kickstart -k gui/$(id -u)/ai.jarvis.daemon >/dev/null 2>&1`;
+    ? `sleep 1; launchctl kickstart -k gui/${uid}/${LAUNCHD_LABEL} >/dev/null 2>&1`
+    : `sleep 1; launchctl kickstart -k gui/$(id -u)/${LAUNCHD_LABEL} >/dev/null 2>&1`;
   return spawnDetachedShell(command, ['bash', 'launchctl']);
 }
 
 async function uninstallLaunchd(): Promise<boolean> {
   try {
-    if (existsSync(LAUNCHD_PLIST)) {
-      Bun.spawnSync(['launchctl', 'unload', LAUNCHD_PLIST]);
-      unlinkSync(LAUNCHD_PLIST);
+    const had = existsSync(LAUNCHD_PLIST);
+    const getuid = process.getuid;
+    const uid = typeof getuid === 'function' ? getuid.call(process) : undefined;
+
+    // Unloading is the step that matters, and it runs whether or not the file is
+    // there: launchd keeps the job loaded from whatever it read at login, so a
+    // plist somebody deleted by hand leaves an agent that is still relaunching
+    // the daemon. `jarvis uninstall` depends on this to avoid the loop where the
+    // stop it does next is undone before it can finish (src/cli/uninstall.ts).
+    //
+    // `bootout` by LABEL, like the install's `bootstrap`, with the legacy
+    // `unload` (which needs the path) as the fallback -- and the result is
+    // CHECKED. Deleting the file after a failed unload is how an uninstall
+    // reports success while the agent stays loaded, with the plist that would
+    // have let the user retry now gone.
+    let reason = '';
+    let unloaded = false;
+    if (typeof uid === 'number') {
+      const bootout = Bun.spawnSync(['launchctl', 'bootout', `gui/${uid}/${LAUNCHD_LABEL}`]);
+      unloaded = bootout.exitCode === 0 || isLaunchdNotLoaded(bootout);
+      if (!unloaded) reason = `bootout: ${launchctlReason(bootout)}`;
+    } else {
+      reason = 'could not determine current user UID';
+    }
+    if (!unloaded && had) {
+      const unload = Bun.spawnSync(['launchctl', 'unload', LAUNCHD_PLIST]);
+      unloaded = unload.exitCode === 0 || isLaunchdNotLoaded(unload);
+      if (!unloaded) reason = `${reason}; unload: ${launchctlReason(unload)}`;
+    }
+    if (!unloaded) {
+      printErr(`Could not unload the launch agent (${reason}).`);
+      printWarn(`Leaving ${LAUNCHD_PLIST} in place, so it can be retried: launchctl bootout gui/$(id -u)/${LAUNCHD_LABEL}`);
+      return false;
     }
 
-    printOk('Uninstalled launchd plist.');
+    if (had) unlinkSync(LAUNCHD_PLIST);
+    printOk(had
+      ? 'Uninstalled launchd plist.'
+      : 'Unloaded the launch agent; there was no plist to remove.');
     return true;
   } catch (err) {
     printErr(`Failed to uninstall launchd plist: ${err}`);
@@ -629,9 +745,66 @@ function isLaunchdInstalled(): boolean {
   return existsSync(LAUNCHD_PLIST);
 }
 
+/** What the installed plist's `KeepAlive` amounts to, as far as this can tell. */
+export type PlistKeepAlive = 'absent' | 'always' | 'never' | 'on-failure' | 'unknown';
+
+/**
+ * The `KeepAlive` value of a plist, read from its text.
+ *
+ * Tolerant in the same direction as parseUnitDirectives: `unknown` for anything
+ * it cannot read with certainty, so the caller stays quiet rather than nagging
+ * about a plist somebody built themselves. Only three answers are definite:
+ * `<true/>` (relaunch after ANY exit, #549), `<false/>`/absent (no relaunch at
+ * all) and a dict whose only condition is `SuccessfulExit=false`, which is what
+ * generateLaunchdPlist writes. A dict with any other condition in it -- launchd
+ * ORs them, and PathState/OtherJobEnabled/Crashed all change the answer -- reads
+ * as `unknown`.
+ */
+export function readPlistKeepAlive(text: string): PlistKeepAlive {
+  // Comments first: a commented-out <true/> must not be read as the value.
+  const clean = text.replace(/<!--[\s\S]*?-->/g, '');
+  // A plist parser takes the LAST of a duplicated key, so reading the first
+  // would get both directions wrong: somebody who appended a corrected block
+  // would be nagged although they had fixed it, and somebody who appended
+  // `<true/>` after the dict would not be told. There is no reason to guess
+  // which one CFPropertyList picks -- more than one is `unknown`, i.e. quiet.
+  if (clean.split('<key>KeepAlive</key>').length > 2) return 'unknown';
+  const at = clean.indexOf('<key>KeepAlive</key>');
+  if (at === -1) return 'absent';
+  const rest = clean.slice(at + '<key>KeepAlive</key>'.length).trimStart();
+  if (/^<true\s*\/>|^<true\s*>\s*<\/true\s*>/.test(rest)) return 'always';
+  if (/^<false\s*\/>|^<false\s*>\s*<\/false\s*>/.test(rest)) return 'never';
+  if (!/^<dict\s*>/.test(rest)) return 'unknown';
+
+  // The dict's own extent, counting nested <dict> (PathState and friends are
+  // dicts). Defensive rather than load-bearing: the key scan below counts keys
+  // at any depth, so a nested dict already forces `unknown` through its own key.
+  // What this does decide is the unterminated case (end === -1).
+  let depth = 0;
+  let end = -1;
+  const tag = /<(\/?)dict\s*>/g;
+  let m: RegExpExecArray | null;
+  while ((m = tag.exec(rest)) !== null) {
+    depth += m[1] ? -1 : 1;
+    if (depth === 0) { end = m.index; break; }
+  }
+  if (end === -1) return 'unknown';
+  const body = rest.slice(rest.indexOf('>') + 1, end);
+
+  // Exactly one condition, and it is SuccessfulExit=false. Any extra key means
+  // launchd is ORing in something this cannot reason about.
+  const keys = [...body.matchAll(/<key>([^<]*)<\/key>/g)].map((k) => k[1]!.trim());
+  if (keys.length !== 1 || keys[0] !== 'SuccessfulExit') return 'unknown';
+  const value = body.slice(body.indexOf('</key>') + '</key>'.length).trim();
+  if (/^<false\s*\/>|^<false\s*>\s*<\/false\s*>/.test(value)) return 'on-failure';
+  if (/^<true\s*\/>|^<true\s*>\s*<\/true\s*>/.test(value)) return 'unknown';
+  return 'unknown';
+}
+
 /**
  * The stale-install question (see checkInstalledSystemdUnit) for the launchd
- * plist: KeepAlive=true relaunches the daemon just as often.
+ * plist: an older one opens a browser on every relaunch (#544) and relaunches
+ * the daemon after a clean `jarvis stop` (#549).
  */
 export function checkInstalledLaunchdPlist(plistPath = LAUNCHD_PLIST): AutostartDrift | null {
   let text: string;
@@ -647,7 +820,18 @@ export function checkInstalledLaunchdPlist(plistPath = LAUNCHD_PLIST): Autostart
   if (at === -1) return null;
   const end = text.indexOf('</array>', at);
   const argv = text.slice(at, end === -1 ? undefined : end);
-  return argv.includes('<string>--no-open</string>') ? null : { path: plistPath, problems: ['opens-a-browser'] };
+  // Only a plist shaped like the ones this file writes is judged at all, the
+  // same approximation checkInstalledSystemdUnit makes: an agent that runs
+  // something else entirely is left alone. It is an approximation -- a wrapper
+  // invoked as `wrap.sh start` passes it -- and, when the `</array>` is missing
+  // (so `argv` runs to the end of the file), it reads strings outside the array.
+  // Such a plist is not valid XML and launchd would not load it either.
+  if (!argv.includes('<string>start</string>')) return null;
+
+  const problems: AutostartProblem[] = [];
+  if (!argv.includes('<string>--no-open</string>')) problems.push('opens-a-browser');
+  if (readPlistKeepAlive(text) === 'always') problems.push('relaunches-after-a-clean-stop');
+  return problems.length > 0 ? { path: plistPath, problems } : null;
 }
 
 /**
@@ -663,6 +847,259 @@ export function checkInstalledAutostart(): AutostartDrift | null {
 
 // ── Public API ───────────────────────────────────────────────────────
 
+/** Which service manager this platform's autostart definition is written for. */
+export type AutostartKind = 'systemd' | 'launchd';
+
+/** systemd's unit name, or launchd's label: what `systemctl`/`launchctl` take. */
+export function getAutostartUnitName(): string {
+  return process.platform === 'darwin' ? LAUNCHD_LABEL : SYSTEMD_UNIT_NAME;
+}
+
+/**
+ * Where this platform's autostart definition lives, or null where there is no
+ * autostart at all (any platform other than Linux and macOS).
+ */
+export function getAutostartPath(): string | null {
+  if (process.platform === 'darwin') return LAUNCHD_PLIST;
+  if (process.platform === 'linux') return SYSTEMD_SERVICE;
+  return null;
+}
+
+/** The definition this version would install on this platform. */
+export function generateAutostartDefinition(): string {
+  return process.platform === 'darwin' ? generateLaunchdPlist() : generateSystemdUnit();
+}
+
+/**
+ * The definition currently on disk, or null when there is none (or it cannot be
+ * read -- a definition we cannot read must not be reported as differing, and
+ * must not be silently overwritten either; the caller treats null as absent and
+ * writing then fails loudly).
+ */
+export function readInstalledAutostart(path: string | null = getAutostartPath()): string | null {
+  if (path === null) return null;
+  try {
+    if (!existsSync(path)) return null;
+    return readFileSync(path, 'utf-8');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Override files that change the effective definition, i.e. systemd drop-ins in
+ * `<unit>.d/*.conf`. Always empty for launchd, which has no such mechanism.
+ *
+ * Worth surfacing because everything else here reads the main file only, and
+ * checkInstalledSystemdUnit goes silent entirely once a drop-in exists: without
+ * this, `jarvis autostart --status` would report a unit as current while an
+ * override quietly put `Restart=always` back.
+ */
+export function getAutostartDropIns(path: string | null = getAutostartPath()): string[] {
+  if (path === null || process.platform !== 'linux') return [];
+  try {
+    const dir = `${path}.d`;
+    if (!existsSync(dir)) return [];
+    return readdirSync(dir).filter((f) => f.endsWith('.conf')).sort().map((f) => join(dir, f));
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Whether the installed definition is enabled, i.e. whether the manager starts
+ * it by itself. `null` when that is not knowable: launchd has no equivalent of
+ * `systemctl is-enabled` (a plist in ~/Library/LaunchAgents is loaded at login
+ * by being there), and a systemctl that cannot answer must not be reported as a
+ * no.
+ */
+export function readAutostartEnabled(spawnSync: SpawnSyncFn = defaultSpawnSync): boolean | null {
+  if (process.platform !== 'linux') return null;
+  try {
+    const res = spawnSync(['systemctl', '--user', 'is-enabled', SYSTEMD_UNIT_NAME]);
+    // Every state that means "systemd starts this by itself" exits 0: enabled,
+    // enabled-runtime, static, indirect, generated, transient, alias.
+    if (res.exitCode === 0) return true;
+    // Non-zero covers two different things: a unit that really will not be
+    // started by itself (systemctl prints the state word on STDOUT and nothing
+    // else) and a user manager that could not be reached at all (an error on
+    // stderr, which says nothing about the unit). Only the first is a `false`.
+    // Matched against the whole first line of stdout rather than searched for
+    // anywhere in the output, so a state word inside an error message cannot
+    // turn "unknown" into "no".
+    const word = decodeLaunchctlOutput(res.stdout).trim().split('\n')[0]?.trim().toLowerCase() ?? '';
+    const OFF = ['disabled', 'masked', 'masked-runtime', 'linked', 'linked-runtime', 'bad', 'not-found'];
+    return OFF.includes(word) ? false : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Register an already-written definition with the service manager, without
+ * touching the file.
+ *
+ * `installSystemd` writes, reloads and enables in that order, so a failure at
+ * either of the last two steps leaves a byte-current unit that systemd will
+ * never start (#548's review). This is the repair for that state, and it must not
+ * go through the writer: the file is already the one we would write, and
+ * rewriting it would drop whatever comments its owner added.
+ *
+ * launchd has no equivalent -- a plist in ~/Library/LaunchAgents is loaded at
+ * login by being there -- so this is a no-op success off Linux, matching
+ * readAutostartEnabled's `null`.
+ */
+export function enableAutostart(spawnSync: SpawnSyncFn = defaultSpawnSync): boolean {
+  if (process.platform !== 'linux') return true;
+  try {
+    const reload = spawnSync(['systemctl', '--user', 'daemon-reload']);
+    if (reload.exitCode !== 0) {
+      printErr('Failed to reload systemd. You may need to run: systemctl --user daemon-reload');
+      return false;
+    }
+    const enable = spawnSync(['systemctl', '--user', 'enable', SYSTEMD_UNIT_NAME]);
+    if (enable.exitCode !== 0) {
+      printErr(`Failed to enable the service. You may need to run: systemctl --user enable ${SYSTEMD_UNIT_NAME}`);
+      return false;
+    }
+    printOk(`Enabled ${SYSTEMD_UNIT_NAME}.`);
+    return true;
+  } catch (err) {
+    printErr(`Failed to enable the service: ${err}`);
+    return false;
+  }
+}
+
+/**
+ * The lines of a definition that carry meaning, for comparing what is installed
+ * with what we would write (src/cli/autostart-command.ts).
+ *
+ * Comments and blank lines are dropped, and systemd directives are normalised to
+ * `[Section] KEY=value`, so indentation, ordering within a section and a
+ * reworded comment are not differences -- only the directives are. A user's own
+ * comment therefore never makes the command demand `--force`, and is never lost
+ * to a rewrite that would change nothing.
+ */
+export function meaningfulAutostartLines(text: string, kind: AutostartKind): string[] {
+  if (kind === 'systemd') {
+    return parseUnitDirectives(text).map((d) => `[${d.section}] ${d.key}=${d.value}`);
+  }
+  const pairs = plistPairs(text);
+  // A plist this cannot read at all falls back to its lines, which can only make
+  // the comparison say "differs" -- the safe answer, since that writes nothing.
+  return pairs.length > 0
+    ? pairs
+    : text.replace(/<!--[\s\S]*?-->/g, '').split('\n').map((line) => line.trim()).filter(Boolean);
+}
+
+/**
+ * A plist flattened to `Path=value` pairs, e.g.
+ * `KeepAlive.SuccessfulExit=<false/>` and `ProgramArguments[2]=start`.
+ *
+ * A bag of LINES cannot be used to compare two plists: key and value are
+ * separate nodes, so a plist with `RunAtLoad=<false/>` and
+ * `KeepAlive.SuccessfulExit=<true/>` -- an agent that never starts at login and
+ * relaunches only after a CLEAN exit, i.e. #549 inverted -- holds exactly the
+ * same lines as the correct one and compared equal (#548's review). Pairing each
+ * key with the node that follows it removes that whole class, and gives the
+ * diff `jarvis autostart` prints a name for each changed value instead of a
+ * bare `<true/>`.
+ *
+ * Deliberately small: enough of the format for the files this writes and for a
+ * hand-edited version of one. It never throws, and anything it cannot follow
+ * makes it return fewer pairs, which shows up as a difference rather than as a
+ * false "current".
+ */
+function plistPairs(text: string): string[] {
+  const body = text
+    .replace(/<!--[\s\S]*?-->/g, '')
+    .replace(/<\?[\s\S]*?\?>/g, '')
+    .replace(/<!DOCTYPE[^>]*>/g, '');
+
+  const out: string[] = [];
+  // One frame per open container. `key` is the key the next value belongs to in
+  // a dict; `index` numbers the values of an array.
+  const stack: { path: string; kind: 'dict' | 'array'; key: string | null; index: number }[] = [];
+  const token = /<(\/?)([A-Za-z]+)([^>]*?)(\/?)>/g;
+  let match: RegExpExecArray | null;
+
+  const nameFor = (frame: typeof stack[number] | undefined, tag: string): string | null => {
+    if (!frame) return tag === 'dict' || tag === 'array' ? '' : null;
+    if (frame.kind === 'array') return `${frame.path}[${frame.index++}]`;
+    if (frame.key === null) return null; // a value with no key before it
+    const name = frame.path ? `${frame.path}.${frame.key}` : frame.key;
+    frame.key = null;
+    return name;
+  };
+
+  while ((match = token.exec(body)) !== null) {
+    const closing = match[1] ?? '';
+    const tag = match[2] ?? '';
+    const selfClosing = match[4] ?? '';
+    const frame = stack[stack.length - 1];
+
+    if (closing) {
+      if ((tag === 'dict' || tag === 'array') && stack.length > 0) {
+        // Flush a key whose value never came before the container closed: the
+        // LAST entry of a dict losing its value is the same half-deleted edit as
+        // the two-keys-in-a-row case below, and must not compare equal to a file
+        // that never had the key.
+        if (frame && frame.kind === 'dict' && frame.key !== null) {
+          out.push(`${frame.path ? `${frame.path}.` : ''}${frame.key}=<missing/>`);
+        }
+        stack.pop();
+      }
+      continue;
+    }
+
+    if (tag === 'key') {
+      const end = body.indexOf('</key>', token.lastIndex);
+      if (end === -1) break;
+      if (frame && frame.kind === 'dict') {
+        // Two keys in a row: the first has no value. Not a plist launchd would
+        // load, but it has to be VISIBLE -- dropping it silently would let a
+        // half-deleted entry compare equal to a file that never had it.
+        if (frame.key !== null) out.push(`${frame.path ? `${frame.path}.` : ''}${frame.key}=<missing/>`);
+        frame.key = body.slice(token.lastIndex, end).trim();
+      }
+      token.lastIndex = end + '</key>'.length;
+      continue;
+    }
+
+    if (tag === 'plist') continue;
+
+    if (tag === 'dict' || tag === 'array') {
+      const name = nameFor(frame, tag);
+      if (selfClosing) {
+        if (name !== null) out.push(`${name}=<${tag}/>`);
+      } else {
+        stack.push({ path: name ?? '', kind: tag === 'dict' ? 'dict' : 'array', key: null, index: 0 });
+      }
+      continue;
+    }
+
+    // A scalar: <true/>, <false/>, <string>x</string>, <integer>1</integer>, ...
+    const name = nameFor(frame, tag);
+    let value = `<${tag}/>`;
+    if (!selfClosing) {
+      const end = body.indexOf(`</${tag}>`, token.lastIndex);
+      if (end === -1) break;
+      value = body.slice(token.lastIndex, end);
+      token.lastIndex = end + `</${tag}>`.length;
+    }
+    if (name !== null) out.push(`${name}=${value}`);
+  }
+
+  // ...and once more for a dict the text never closed at all.
+  for (const frame of stack) {
+    if (frame.kind === 'dict' && frame.key !== null) {
+      out.push(`${frame.path ? `${frame.path}.` : ''}${frame.key}=<missing/>`);
+    }
+  }
+
+  return out;
+}
+
 /**
  * Install autostart for the current platform.
  */
@@ -673,12 +1110,23 @@ export async function installAutostart(): Promise<boolean> {
   return installSystemd();
 }
 
+export interface StartAutostartOptions {
+  /**
+   * The definition on disk was just written. On macOS that matters: `launchctl
+   * bootstrap` on an agent launchd has already loaded is a no-op that keeps the
+   * PREVIOUS definition, so the refresh would look like it worked while the old
+   * plist stayed live (#548's review). Only pass true when nothing holds the
+   * daemon lock: it boots the agent out first.
+   */
+  replaceLoaded?: boolean;
+}
+
 /**
  * Start the installed autostart service for the current platform.
  */
-export async function startAutostartService(): Promise<boolean> {
+export async function startAutostartService(options: StartAutostartOptions = {}): Promise<boolean> {
   if (process.platform === 'darwin') {
-    return startLaunchdService();
+    return startLaunchdService(options);
   }
   return startSystemdService();
 }

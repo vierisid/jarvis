@@ -102,9 +102,11 @@ jobs:
   # ─── Daemon lifecycle on macOS (launchd) ───────────────────────
   # The ubuntu `test` job runs the same files, but every launchd assertion in
   # them skips there. The macOS-only behaviour is real and has already produced
-  # one bug: the plist installs with KeepAlive=true, so `jarvis uninstall`
-  # stopping the daemon BEFORE unloading the agent deadlocked — launchd kept
-  # relaunching it and the unload never ran.
+  # one bug: the plist used to install with KeepAlive=true, so `jarvis uninstall`
+  # stopping the daemon BEFORE unloading the agent deadlocked -- launchd kept
+  # relaunching it and the unload never ran. Since #549 the shipped plist
+  # relaunches only after an unsuccessful exit, which this job is also what
+  # proves (daemon-control.launchd.test.ts).
   #
   # Scoped to the daemon/CLI tests rather than the whole suite: macOS minutes
   # bill at 10x and the rest is already covered on ubuntu.
@@ -116,9 +118,9 @@ jobs:
       - uses: actions/checkout@v5
       - uses: ./.github/actions/bun-setup
       # Scoped to the lifecycle + service-definition files, not all of src/cli.
-      # This job exists for the macOS-only behaviour (launchd KeepAlive
-      # relaunch, plist generation); the rest of src/cli is already covered on
-      # ubuntu and would only add 10x-billed minutes.
+      # This job exists for the macOS-only behaviour (what launchd's KeepAlive
+      # does and does not relaunch, plist generation); the rest of src/cli is
+      # already covered on ubuntu and would only add 10x-billed minutes.
       #
       # (A wider `bun test src/cli/` run used to fail backup.test.ts here with
       # SQLITE_CANTOPEN. That turned out to be the test, not `jarvis restore` —
