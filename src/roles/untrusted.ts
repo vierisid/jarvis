@@ -162,6 +162,13 @@ export function withTrustedTrailer(untrusted: string, trustedTrailer: string): u
  */
 export function splitToolReturn(raw: unknown): { outside: string; trailer: string } {
   if (raw instanceof TrailedToolReturn) return { outside: raw.untrusted, trailer: raw.trustedTrailer };
+  // Deliberately the same expression the call sites used inline, including its
+  // one rough edge: `JSON.stringify(undefined)` is `undefined`, so a tool whose
+  // execute returns nothing yields a value that does not match this signature
+  // and throws on the caller's next `.length`. That is pre-existing, it is
+  // caught by the dispatch's try/catch and degrades to `Error executing <tool>`,
+  // and it is left alone on purpose: a tool returning undefined is a tool bug,
+  // and turning it into an empty result here would hide it.
   return { outside: typeof raw === 'string' ? raw : JSON.stringify(raw), trailer: '' };
 }
 
