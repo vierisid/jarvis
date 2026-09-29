@@ -24,11 +24,24 @@ const HOSTILE_TEXT = [
 ];
 
 // Legitimate text that happens to start with "-" is typed as is, never refused.
+// "" stays in this list: it is the one input that must NOT reach xdotool at all
+// (see TYPED_TEXT below and typeText in linux.ts), and dropping it from here
+// would drop the coverage rather than fix anything (#554). The batch test below
+// asserts it is still here, so that is a rule and not just a request.
 const ORDINARY_TEXT = ['- item', '-5 degrees', 'hello world', 'line one\nline two', ''];
+
+/**
+ * The texts that do reach xdotool. Empty text is a no-op that runs no xdotool
+ * at all, so it contributes an outcome but no call.
+ */
+const TYPED_TEXT = [...HOSTILE_TEXT, ...ORDINARY_TEXT].filter((text) => text !== '');
 
 const LINUX_TS = new URL('./linux.ts', import.meta.url).href;
 
-type Action = { op: 'type'; text: string } | { op: 'keys'; keys: string[] };
+type Action =
+  | { op: 'type'; text: string }
+  | { op: 'keys'; keys: string[] }
+  | { op: 'activeWindow' };
 type Outcome = { ok: boolean; error?: string; code?: string; effect?: string };
 
 /**
@@ -46,6 +59,7 @@ async function runController(binDir: string, actions: Action[], env: Record<stri
     for (const a of ${JSON.stringify(actions)}) {
       try {
         if (a.op === 'type') await ctrl.typeText(a.text);
+        else if (a.op === 'activeWindow') await ctrl.getActiveWindow();
         else await ctrl.pressKeys(a.keys);
         out.push({ ok: true });
       } catch (e) {
@@ -347,10 +361,43 @@ describe('LinuxAppController with a recording xdotool on PATH', () => {
     const outcomes = await runController(binDir, texts.map((text) => ({ op: 'type', text })));
 
     expect(outcomes).toEqual(texts.map(() => ({ ok: true })));
+    // Pins the comment on ORDINARY_TEXT: the batch still carries the empty
+    // string, and exactly one of these texts is missing from the calls below.
+    // Without this, deleting "" from the list -- the one fix #554 rules out --
+    // leaves everything here passing.
+    expect(texts).toContain('');
+    expect(TYPED_TEXT).toHaveLength(texts.length - 1);
+
     const calls = readCalls(binDir);
-    expect(calls.map((c) => c.argv)).toEqual(texts.map((text) => ['type', '--clearmodifiers', '--', text]));
+    // Every non-empty text arrives as ONE argument after "--". "" is absent
+    // from this list because it runs no xdotool (the next test pins that);
+    // asserting a call with an empty argument is what used to fail, since Bun's
+    // `$` drops an empty interpolation and cannot produce one (#554).
+    expect(calls.map((c) => c.argv)).toEqual(TYPED_TEXT.map((text) => ['type', '--clearmodifiers', '--', text]));
     // The text travels in argv after "--" and nowhere else.
-    expect(calls.map((c) => c.stdin)).toEqual(texts.map(() => ''));
+    expect(calls.map((c) => c.stdin)).toEqual(TYPED_TEXT.map(() => ''));
+  });
+
+  test('typeText with empty text succeeds without running xdotool at all', async () => {
+    rmSync(join(binDir, 'calls'), { force: true });
+    // Not just "does not fail": no xdotool call, because the only call `$`
+    // could make would be `type --clearmodifiers --` with the text operand
+    // dropped, which real xdotool answers with its usage and exit 1 (#554).
+    expect(await runController(binDir, [{ op: 'type', text: '' }])).toEqual([{ ok: true }]);
+    expect(readCalls(binDir)).toEqual([]);
+  });
+
+  test('typeText still reports a missing xdotool for empty text', async () => {
+    // The no-op returns AFTER the tool check, so an empty string does not
+    // quietly report success on a machine where typing anything real fails.
+    const emptyDir = mkdtempSync(join(tmpdir(), 'jarvis-noxdotool-'));
+    try {
+      const [outcome] = await runController(emptyDir, [{ op: 'type', text: '' }]);
+      expect(outcome).toMatchObject({ ok: false });
+      expect(outcome?.error).toMatch(/Required tool 'xdotool' not found/);
+    } finally {
+      rmSync(emptyDir, { recursive: true, force: true });
+    }
   });
 
   test('pressKeys passes the chord as one argument after "--", ending in "+"', async () => {
@@ -382,6 +429,41 @@ describe('LinuxAppController with a recording xdotool on PATH', () => {
       expect(o.error).toMatch(/Nothing was pressed\.$/);
     }
     expect(readCalls(binDir)).toEqual([]);
+  });
+});
+
+describe('an id that xdotool did not give us is never interpolated', () => {
+  test('getActiveWindow refuses an empty window id instead of measuring some other window', async () => {
+    // The same `$` argument-dropping as #554, with a worse ending: an empty id
+    // in `xdotool getwindowgeometry ${windowId}` is dropped rather than passed,
+    // the window operand is optional, and the geometry that comes back is not
+    // this window's -- and it becomes clickElement's mousemove coordinates.
+    const dir = mkdtempSync(join(tmpdir(), 'jarvis-noid-'));
+    try {
+      const log = join(dir, 'ran');
+      // Both stubs exit 0 and print nothing, so `xdotool getactivewindow`
+      // succeeds with no id at all. ensureTool goes through Bun's `which`
+      // builtin, so both tools have to exist for the code under test to run.
+      for (const tool of ['xdotool', 'xprop']) {
+        const path = join(dir, tool);
+        writeFileSync(path, ['#!/bin/sh', `printf '${tool} %s\\n' "$*" >> '${log}'`, 'exit 0', ''].join('\n'));
+        chmodSync(path, 0o755);
+      }
+
+      const [outcome] = await runController(dir, [{ op: 'activeWindow' }]);
+
+      expect(outcome).toMatchObject({ ok: false });
+      expect(outcome?.error).toMatch(/reported no window id/);
+      // It asked, and then stopped: nothing was measured or queried with an
+      // empty id. Asserting the first line too, so the test cannot pass by
+      // failing before xdotool ran at all.
+      const ran = existsSync(log) ? readFileSync(log, 'utf-8') : '';
+      expect(ran).toContain('xdotool getactivewindow');
+      expect(ran).not.toContain('getwindowgeometry');
+      expect(ran).not.toContain('xprop');
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 
@@ -512,6 +594,16 @@ describe.skipIf(!shim)('real xdotool argument parsing (libxdo stubbed, no displa
     const typed = readShimLog();
     expect(typed).toEqual(texts.map((t) => `TYPE ${t}`));
     expect(typed.join('\n')).not.toContain('TOP-SECRET');
+  });
+
+  test('empty text types nothing and does not make the real xdotool complain', async () => {
+    rmSync(log, { force: true });
+    // What the recording fake cannot show: with the text operand dropped, the
+    // real `xdotool type --clearmodifiers --` exits non-zero, which is where
+    // "Failed to type text" came from (#554). Nothing must be typed either --
+    // succeeding by typing some other argument would be far worse.
+    expect(await runController(join(dir, 'bin'), [{ op: 'type', text: '' }])).toEqual([{ ok: true }]);
+    expect(readShimLog()).toEqual([]);
   });
 
   test('presses the chord it was given, and a lone Help as a key rather than the help command', async () => {

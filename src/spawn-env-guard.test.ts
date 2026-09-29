@@ -128,11 +128,14 @@ const EXEMPT: Record<string, Exemption> = {
       'LinuxAppController.captureWindow': 2,
       'LinuxAppController.checkTool': 1,
       'LinuxAppController.clickElement': 4,
-      'LinuxAppController.findWindowByPid': 2,
+      'LinuxAppController.findWindowByPid': 1,
       'LinuxAppController.focusWindow': 1,
       'LinuxAppController.getActiveWindow': 3,
-      'LinuxAppController.listWindows': 5,
+      'LinuxAppController.listWindows': 4,
       'LinuxAppController.pressKeys': 1,
+      // The `xdotool search --name "."` that listWindows and findWindowByPid
+      // used to run one each: one copy now, so those two are down one apiece.
+      'LinuxAppController.searchWindowIds': 1,
       'LinuxAppController.typeText': 1,
     },
   },

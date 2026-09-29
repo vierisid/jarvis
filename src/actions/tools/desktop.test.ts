@@ -187,6 +187,17 @@ describe('DESKTOP_TOOLS', () => {
     expect(String(result)).toContain('Calculator');
   });
 
+  test('desktop_type reports typing nothing as typing nothing', async () => {
+    // `Typed "".` reads like a keystroke landed. Empty text is a no-op on the
+    // local path (typeText in app-control/linux.ts), so the model is told that
+    // rather than being told it typed an empty string (#554).
+    const tool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_type');
+
+    expect(await tool!.execute({ text: '' })).toBe('Nothing to type: the text was empty.');
+    // Ordinary text is unchanged.
+    expect(await tool!.execute({ text: 'hello' })).toBe('Typed "hello".');
+  });
+
   test('desktop_snapshot caches local elements for follow-up actions', async () => {
     const snapshotTool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_snapshot');
     const clickTool = DESKTOP_TOOLS.find((entry) => entry.name === 'desktop_click');

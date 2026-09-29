@@ -446,10 +446,18 @@ export const desktopTypeTool: ToolDefinition = {
         await controller.clickElement(ensureCachedElement(elementId));
         await Bun.sleep(100);
       }
-      await controller.typeText(params.text as string);
+      const text = params.text as string;
+      await controller.typeText(text);
+      // Empty text is a no-op (see typeText), and `Typed "".` reads like a
+      // keystroke landed. Say what happened instead (#554).
+      if (text === '') {
+        return elementId !== undefined
+          ? `Nothing to type: the text was empty. Element [${elementId}] was focused.`
+          : 'Nothing to type: the text was empty.';
+      }
       return elementId !== undefined
-        ? `Typed "${params.text as string}" into element [${elementId}].`
-        : `Typed "${params.text as string}".`;
+        ? `Typed "${text}" into element [${elementId}].`
+        : `Typed "${text}".`;
     });
   },
 };

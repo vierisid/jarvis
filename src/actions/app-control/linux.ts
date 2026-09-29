@@ -176,6 +176,16 @@ export class LinuxAppController implements AppController {
 
     try {
       const windowId = (await $`xdotool getactivewindow`.text()).trim();
+      // Never interpolate an empty id below: `$` drops an empty argument (see
+      // typeText), so `xdotool getwindowgeometry ${windowId}` would run with no
+      // window operand at all. xdotool's window operand is OPTIONAL -- it
+      // defaults to `%1`, the window stack -- so that call does not reliably
+      // fail, and whatever geometry it prints is not this window's. Those
+      // bounds are what clickElement turns into mousemove coordinates, so a
+      // missing id has to be an error rather than a plausible-looking rectangle.
+      if (!windowId) {
+        throw new Error('xdotool getactivewindow reported no window id');
+      }
 
       const xpropOutput = await $`xprop -id ${windowId}`.text();
 
@@ -222,8 +232,7 @@ export class LinuxAppController implements AppController {
           .filter(line => line.trim())
           .map(line => line.split(/\s+/)[0] || '');
       } else {
-        const xdotoolOutput = await $`xdotool search --name "."`.text();
-        windowIds = xdotoolOutput.split('\n').filter(id => id.trim());
+        windowIds = await this.searchWindowIds();
       }
 
       const windows: WindowInfo[] = [];
@@ -294,7 +303,29 @@ export class LinuxAppController implements AppController {
   }
 
   async typeText(text: string): Promise<void> {
+    // ensureTool first, so "xdotool is not installed" is still reported for an
+    // empty string rather than silently succeeding on a machine where typing
+    // anything real would fail.
     await this.ensureTool('xdotool');
+
+    // Nothing to type. Bun's `$` DROPS an empty interpolated argument instead
+    // of passing "" (Bun 1.3.8), so the call below would reach xdotool as
+    // `type --clearmodifiers --` with no text operand: it prints its usage,
+    // exits non-zero, and desktop_type_text reported "Failed to type text" for
+    // a request that asked for nothing (#554). Returning here makes it the
+    // no-op it should be, and does not depend on how `$` treats "".
+    //
+    // This DIVERGES from the sidecars, which reject "" as
+    // "missing required parameter: text" (handleTypeText in
+    // sidecar/desktop_linux.go, desktop_darwin.go and desktop_windows.go), so
+    // the same call is a no-op here and an error when routed to a `target`.
+    // Deliberate, and the local reading is the right one: "" was supplied, so
+    // it is not a missing parameter, and a request to type nothing is satisfied
+    // by typing nothing. Unlike the key-name mapping above, nothing here can
+    // press one key locally and another through a sidecar; the divergence is
+    // only in whether doing nothing is reported as success. Worth one Go
+    // one-liner per platform as a follow-up, not a reason to fail here.
+    if (text === '') return;
 
     try {
       // `--` ends xdotool's option parsing, so text such as "-h" or
@@ -416,10 +447,25 @@ export class LinuxAppController implements AppController {
     }
   }
 
-  private async findWindowByPid(pid: number): Promise<string> {
-    const windowIds = (await $`xdotool search --name "."`.text())
+  /**
+   * Every window id xdotool can see, trimmed and non-empty.
+   *
+   * One copy for both callers, which had the same parse written twice. Trimmed
+   * so a stray "\r" or space cannot travel as part of the id into `xprop -id`
+   * or `import -window`; `filter(Boolean)` then makes non-empty an invariant of
+   * what this returns, which `import -window ${windowId} ${tmpFile}` relies on
+   * -- an empty id is the one value `$` would DROP, sliding the temp path into
+   * the -window slot rather than passing an empty operand (see typeText).
+   */
+  private async searchWindowIds(): Promise<string[]> {
+    return (await $`xdotool search --name "."`.text())
       .split('\n')
-      .filter(id => id.trim());
+      .map(id => id.trim())
+      .filter(Boolean);
+  }
+
+  private async findWindowByPid(pid: number): Promise<string> {
+    const windowIds = await this.searchWindowIds();
 
     for (const windowId of windowIds) {
       try {
