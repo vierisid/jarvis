@@ -29,7 +29,7 @@ import { WebSocketService } from "./ws-service.ts";
 import { PebbleRealtimeManager, wireRealtimeReadvertisement } from "./pebble-realtime.ts";
 import { hostedRealtimeIncluded, warmRealtimeGateFor } from './realtime-gate.ts';
 import { resolveRealtimeVoice } from "../config/realtime.ts";
-import { resolvePebbleHotkeys } from "../config/pebble-hotkeys.ts";
+import { pebbleHotkeyRequestKey, resolvePebbleHotkeys, shouldCloseBeforeSpawn } from "../config/pebble-hotkeys.ts";
 import { isHostedInstall, realtimeEnablement } from "./usejarvis-ai.ts";
 import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
@@ -1432,7 +1432,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // The hotkeys this daemon last ASKED each sidecar for, keyed by sidecar
       // id. Deliberately NOT cleared on disconnect, unlike spawnedOn: it is the
       // memory that lets a reconnect skip the close below (see there), and it
-      // has to outlive the sidecar going away and coming back.
+      // has to outlive the sidecar going away and coming back. Bounded by the
+      // number of sidecars that enrol during one daemon lifetime, not by
+      // reconnects, since the ids are the stable enrolled ones.
       const pebbleHotkeysRequested = new Map<string, string>();
 
       sidecarManager.onSidecarConnected(async (sidecar) => {
@@ -1449,12 +1451,22 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           // the day a platform override is added -- but by then the call site
           // would have been wrong and nobody would have noticed.
           const hotkeys = resolvePebbleHotkeys(jarvisConfig.pebble, sidecar.os);
-          for (const problem of hotkeys.problems) {
-            // An error, not a warning: the user edited config.yaml on purpose
-            // and the value is being ignored. (Unlike daemon.port, a bad
-            // hotkey must not stop the daemon booting -- see
-            // src/config/pebble-hotkeys.ts for why the policies differ.)
-            console.error(`[ambient-ui] ${problem}`);
+          const requested = pebbleHotkeyRequestKey(hotkeys);
+          const closeFirst = shouldCloseBeforeSpawn(pebbleHotkeysRequested.get(sidecar.id), requested);
+
+          // Only alongside a change, so one config typo does not become a
+          // repeating error stream: this handler runs on every connect and once
+          // per connected sidecar, so three machines and a flapping link would
+          // otherwise reprint the same complaint indefinitely.
+          //
+          // An error rather than a warning: the user edited config.yaml on
+          // purpose and the value is being ignored. (Unlike daemon.port, a bad
+          // hotkey must not stop the daemon booting -- see
+          // src/config/pebble-hotkeys.ts for why the policies differ.)
+          if (closeFirst) {
+            for (const problem of hotkeys.problems) {
+              console.error(`[ambient-ui] ${problem}`);
+            }
           }
 
           // Close before the first spawn we send this sidecar, because
@@ -1468,22 +1480,41 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           //
           // Only when what we are about to ask for differs from what we last
           // asked this sidecar for, so an ordinary reconnect (a network blip)
-          // does not make the pebble blink. An empty map after our own restart
-          // counts as different, which is exactly the case above; on a
-          // freshly started sidecar the close is a no-op.
+          // does not make the pebble blink. See shouldCloseBeforeSpawn for what
+          // an empty map costs after our own restart: the overlay is closed and
+          // respawned even when nothing changed, because pebble.spawn does not
+          // report back which keyspec it is actually running.
           //
           // The `await` here is LOAD-BEARING, not stylistic. The sidecar runs
           // every RPC handler on its own goroutine, and its pebble service
           // guards Spawn/Close with an atomic latch that covers the entry and
-          // not the body -- so a close overlapping a spawn can skip the
-          // hotkey teardown and leave a system-wide key monitor installed that
-          // nothing can ever remove. Awaiting the close response, which the
-          // sidecar sends after Close() returns, keeps the two strictly
-          // ordered. Do not turn this into a fire-and-forget.
-          const requested = `${hotkeys.summon}\n${hotkeys.palette}`;
-          if (pebbleHotkeysRequested.get(sidecar.id) !== requested) {
-            await sidecarManager.dispatchRPC(sidecar.id, 'pebble.close', {})
-              .catch(() => { /* no pebble to close, or a sidecar too old to know the RPC */ });
+          // not the body -- so a close overlapping a spawn can skip the hotkey
+          // teardown and leave a system-wide key monitor installed that nothing
+          // can ever remove. Awaiting the close response, which the sidecar
+          // sends after Close() returns, keeps the two strictly ordered. Do not
+          // turn this into a fire-and-forget.
+          //
+          // One caveat on that ordering: dispatchRPC RESOLVES with 'detached'
+          // rather than throwing when its initial timeout expires, so a close
+          // that takes longer than that is not actually awaited. It is treated
+          // as a failed close below, and the keyspec is then reported as
+          // requested rather than applied.
+          let closed = true;
+          if (closeFirst) {
+            try {
+              const closeResult = await sidecarManager.dispatchRPC(sidecar.id, 'pebble.close', {});
+              closed = closeResult !== 'detached';
+              if (!closed) {
+                console.warn(`[ambient-ui] pebble.close on ${sidecar.id} detached; its old hotkeys may still be registered`);
+              }
+            } catch (err) {
+              // Not swallowed. If the close did not land, Spawn's latch will
+              // discard the new keyspec and still answer {"spawned": true}, so
+              // this is the only warning anyone gets that the hotkeys they
+              // edited are not the ones running.
+              closed = false;
+              console.warn(`[ambient-ui] pebble.close on ${sidecar.id} failed; its old hotkeys may still be registered:`, err);
+            }
           }
 
           const result = await sidecarManager.dispatchRPC(sidecar.id, 'pebble.spawn', {
@@ -1492,10 +1523,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             summon_hotkey: hotkeys.summon,
             palette_hotkey: hotkeys.palette,
           });
-          pebbleHotkeysRequested.set(sidecar.id, requested);
+          // Only remember it as asked-for when the close that makes the ask
+          // effective actually landed; otherwise the next connect retries.
+          if (closed) pebbleHotkeysRequested.set(sidecar.id, requested);
+          // "requested", not "running": pebble.spawn answers {"spawned": true}
+          // whether it applied the spec or discarded it on the latch, so the
+          // daemon cannot honestly claim more than what it asked for.
           console.log(
             `[ambient-ui] Native pebble spawned on ${sidecar.id}`
-            + ` (summon=${hotkeys.summon || 'off'}, palette=${hotkeys.palette || 'off'}):`,
+            + ` (requested summon=${hotkeys.summon || 'off'}, palette=${hotkeys.palette || 'off'}):`,
             result,
           );
           // W6 — push initial blinded state so the eye-strike glyph

@@ -37,13 +37,17 @@
  *   - F13-F19       - genuinely unbound everywhere, and absent from essentially
  *                     every laptop keyboard, so free and unreachable at once.
  *
- * What is NOT clear of `ctrl+shift+k`: browsers and editors bind it at the
- * APPLICATION level (the Firefox Web Console, Chrome, VS Code's delete-line).
- * On macOS the pebble's monitor is passive and cannot consume the keystroke, so
- * with a browser focused it opens devtools AND the palette. On Windows and
- * Linux the key is taken exclusively and the app never sees it. That asymmetry
- * is #563 itself, it is documented in docs/PEBBLE_HOTKEYS.md and in
- * config.example.yaml, and the override below is the answer to it.
+ * Neither is free of APPLICATION bindings, and the cost of that falls on
+ * Windows and Linux, NOT on macOS - the reverse of what the rest of #563 would
+ * lead you to expect. `Ctrl+Shift+K` is the Firefox Web Console and VS Code's
+ * delete-line, and `Ctrl+Shift+Space` is VS Code's parameter hints and Word's
+ * non-breaking space, on Windows and Linux; there `RegisterHotKey` / `XGrabKey`
+ * take the key exclusively, so Jarvis takes those shortcuts away from the app
+ * for as long as it runs. On macOS all four use Command instead
+ * (`Cmd+Opt+K`, `Cmd+Shift+K`, `Cmd+Shift+Space`, `Option+Space`), so nothing
+ * is taken - the platform that cannot consume a keystroke has nothing here to
+ * double-fire against. Documented in docs/PEBBLE_HOTKEYS.md and
+ * config.example.yaml, and these two values are overridable for exactly this.
  */
 export const PEBBLE_DEFAULT_SUMMON_HOTKEY = 'ctrl+shift+space';
 export const PEBBLE_DEFAULT_PALETTE_HOTKEY = 'ctrl+shift+k';
@@ -56,7 +60,7 @@ export const PEBBLE_DEFAULT_PALETTE_HOTKEY = 'ctrl+shift+k';
  * table exists so that a future platform-specific default is one entry rather
  * than new plumbing, and so the resolver's signature already carries the OS.
  */
-const PLATFORM_DEFAULT_OVERRIDES: Record<string, { summon?: string; palette?: string }> = {};
+const PLATFORM_DEFAULT_OVERRIDES = new Map<string, { summon?: string; palette?: string }>();
 
 /**
  * Spellings that mean "register no global hotkey at all", compared after
@@ -75,7 +79,7 @@ const DISABLED_SPELLINGS = new Set(['', 'none', 'off']);
  * a name accepted here and not there would be reported by the daemon as fine
  * and then refused by the sidecar.
  */
-const MODIFIER_NAMES = new Set([
+export const MODIFIER_NAMES = new Set([
   'ctrl', 'control',
   'shift',
   'alt', 'opt', 'option',
@@ -94,6 +98,14 @@ const MAX_KEYSPEC_LENGTH = 128;
  *
  * A bare key is a real requirement - `f13` is the whole reason F-keys are
  * interesting - but a bare ORDINARY key is a footgun with teeth on macOS.
+ *
+ * Note this allows `f1`-`f35`, which is right for Windows and Linux but more
+ * generous than macOS deserves: bare `f1`-`f12` drive brightness, Mission
+ * Control and the media keys there, so they carry the same double-fire problem
+ * as any other taken combination. Allowed rather than refused because the
+ * daemon may be resolving for a platform it is not running on, and because on
+ * Windows and Linux a bare `f8` is a perfectly ordinary choice; the macOS
+ * caveat is documented instead (docs/PEBBLE_HOTKEYS.md).
  * There the monitor is passive, so `summon_hotkey: "a"` does not break typing
  * the way an exclusive `RegisterHotKey`/`XGrabKey` grab would: the letter still
  * types perfectly, and the only symptom is the pebble waking up - and OPENING
@@ -153,8 +165,12 @@ export function readHotkeySetting(value: unknown): HotkeySetting {
     return { kind: 'invalid', problem: `must be a hotkey like "ctrl+shift+space", got ${describeValue(value)}` };
   }
 
-  if (value.length > MAX_KEYSPEC_LENGTH) {
-    return { kind: 'invalid', problem: `is ${value.length} characters; the limit is ${MAX_KEYSPEC_LENGTH}` };
+  // Byte length, because the sidecar's parser bounds bytes (`maxKeyspecLen` in
+  // sidecar/hotkeys_keyspec.go) and a string length would let a non-ASCII value
+  // between the two measurements pass here and be refused there.
+  const byteLength = Buffer.byteLength(value, 'utf8');
+  if (byteLength > MAX_KEYSPEC_LENGTH) {
+    return { kind: 'invalid', problem: `is ${byteLength} bytes; the limit is ${MAX_KEYSPEC_LENGTH}` };
   }
 
   const text = value.trim().toLowerCase();
@@ -206,6 +222,13 @@ export type PebbleHotkeyConfig = {
   palette_hotkey?: unknown;
 };
 
+/**
+ * The only keys `pebble:` recognises. Anything else in there is a typo, and a
+ * typo in the KEY NAME is likelier than one in the value: the value can be
+ * copied out of config.example.yaml, the name is typed from memory.
+ */
+const KNOWN_PEBBLE_KEYS = new Set(['summon_hotkey', 'palette_hotkey']);
+
 export type PebbleHotkeyResolution = {
   /** The keyspec to send as `summon_hotkey`; "" means register no hotkey. */
   summon: string;
@@ -250,10 +273,39 @@ export function resolvePebbleHotkeys(
   pebble: PebbleHotkeyConfig | undefined,
   sidecarOS?: string,
 ): PebbleHotkeyResolution {
-  const overrides = (sidecarOS && PLATFORM_DEFAULT_OVERRIDES[sidecarOS]) || {};
+  const overrides = (sidecarOS ? PLATFORM_DEFAULT_OVERRIDES.get(sidecarOS) : undefined) ?? {};
   const problems: string[] = [];
-  const summon = resolveOne('summon_hotkey', pebble?.summon_hotkey, overrides.summon ?? PEBBLE_DEFAULT_SUMMON_HOTKEY, problems);
-  let palette = resolveOne('palette_hotkey', pebble?.palette_hotkey, overrides.palette ?? PEBBLE_DEFAULT_PALETTE_HOTKEY, problems);
+
+  // The section itself, before its fields. Reading `pebble?.summon_hotkey` off a
+  // string or a list yields undefined, which `resolveOne` reads as "absent" and
+  // answers with the default and NO problem -- so `pebble: "ctrl+k"` used to be
+  // ignored in total silence. That is the same folding of "unusable" into "not
+  // set" that this module exists to prevent, one level up in the property
+  // access rather than in the reader.
+  let fields: Record<string, unknown> = {};
+  if (pebble !== undefined && pebble !== null) {
+    if (typeof pebble !== 'object' || Array.isArray(pebble)) {
+      problems.push(
+        `pebble must be a mapping with summon_hotkey and/or palette_hotkey under it, got ${describeValue(pebble)};`
+        + ` ignoring it and using the default hotkeys`,
+      );
+    } else {
+      fields = pebble as Record<string, unknown>;
+      // A misspelled key name is the likeliest mistake of all, and the one that
+      // is completely invisible otherwise: `summon_hotkeys` simply is not read.
+      for (const name of Object.keys(fields)) {
+        if (!KNOWN_PEBBLE_KEYS.has(name)) {
+          problems.push(
+            `pebble.${name} is not a setting; the pebble hotkeys are`
+            + ` summon_hotkey and palette_hotkey`,
+          );
+        }
+      }
+    }
+  }
+
+  const summon = resolveOne('summon_hotkey', fields.summon_hotkey, overrides.summon ?? PEBBLE_DEFAULT_SUMMON_HOTKEY, problems);
+  let palette = resolveOne('palette_hotkey', fields.palette_hotkey, overrides.palette ?? PEBBLE_DEFAULT_PALETTE_HOTKEY, problems);
 
   // One keystroke cannot drive both callbacks. Windows would refuse the second
   // RegisterHotKey and say so; macOS installs two monitors quite happily, and
@@ -270,4 +322,36 @@ export function resolvePebbleHotkeys(
   }
 
   return { summon, palette, problems };
+}
+
+/**
+ * The string the daemon remembers per sidecar so it can tell whether what it is
+ * about to ask for differs from what it last asked. `\n` is a safe separator
+ * because a resolved keyspec can never contain whitespace -- readHotkeySetting
+ * refuses a key with any in it, and every modifier has to be a table member.
+ */
+export function pebbleHotkeyRequestKey(resolution: Pick<PebbleHotkeyResolution, 'summon' | 'palette'>): string {
+  return `${resolution.summon}\n${resolution.palette}`;
+}
+
+/**
+ * Whether to send `pebble.close` before `pebble.spawn`.
+ *
+ * `Spawn` is idempotent on the sidecar: it returns early on a `spawned` latch
+ * and discards the spec, while still answering `{"spawned": true}`. So a sidecar
+ * that outlived a daemon restart would keep its old hotkeys and report success.
+ * Closing first drops the stale overlay and its registrations.
+ *
+ * `undefined` for `last` means this daemon has not asked this sidecar for
+ * anything yet, which is true both for a sidecar that just started (where the
+ * close is a harmless no-op) and for one that outlived our restart (where it is
+ * the whole point) -- and the daemon cannot tell those apart, because
+ * `pebble.spawn` does not report back what it is actually running. The cost is
+ * that a daemon restart closes and respawns the overlay even when the config did
+ * not change: one visible blink of the disc, and a brief window with no hotkey
+ * registered. That is a deliberate trade against silently keeping a stale
+ * binding, and it is documented in docs/PEBBLE_HOTKEYS.md.
+ */
+export function shouldCloseBeforeSpawn(last: string | undefined, next: string): boolean {
+  return last !== next;
 }

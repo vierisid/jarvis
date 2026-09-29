@@ -3,8 +3,11 @@ import YAML from 'yaml';
 import {
   PEBBLE_DEFAULT_PALETTE_HOTKEY,
   PEBBLE_DEFAULT_SUMMON_HOTKEY,
+  MODIFIER_NAMES,
+  pebbleHotkeyRequestKey,
   readHotkeySetting,
   resolvePebbleHotkeys,
+  shouldCloseBeforeSpawn,
 } from './pebble-hotkeys.ts';
 
 describe('readHotkeySetting', () => {
@@ -15,12 +18,20 @@ describe('readHotkeySetting', () => {
     expect(readHotkeySetting('f13')).toEqual({ kind: 'valid', keyspec: 'f13' });
   });
 
-  test('every modifier the sidecar grammar accepts is accepted here', () => {
-    // Kept in step with `modifierNames` in sidecar/hotkeys_keyspec.go. A name
-    // accepted there and refused here would be reported to the user as broken
-    // config for a hotkey that works.
-    for (const modifier of ['ctrl', 'control', 'shift', 'alt', 'opt', 'option', 'cmd', 'command', 'super', 'win', 'meta']) {
+  test('the modifier vocabulary matches the sidecar grammar exactly', () => {
+    // EXACT, in both directions. A name accepted in Go and refused here is
+    // reported to the user as broken config for a hotkey that works; a name
+    // accepted here and refused in Go is the reverse - the daemon says fine and
+    // the sidecar refuses it in a log nobody reads. Kept in step with
+    // `modifierNames` in sidecar/hotkeys_keyspec.go.
+    const inGo = ['ctrl', 'control', 'shift', 'alt', 'opt', 'option', 'cmd', 'command', 'super', 'win', 'meta'];
+    expect([...MODIFIER_NAMES].sort()).toEqual([...inGo].sort());
+    for (const modifier of inGo) {
       expect(readHotkeySetting(`${modifier}+k`).kind).toBe('valid');
+    }
+    // Plausible names that are NOT modifiers, so the set cannot quietly grow.
+    for (const notAModifier of ['fn', 'caps', 'hyper', 'mod4', 'ctl', 'altgr']) {
+      expect(readHotkeySetting(`${notAModifier}+k`).kind).toBe('invalid');
     }
   });
 
@@ -112,7 +123,7 @@ describe('the YAML spellings behave as documented', () => {
   // The disable sentinels only work if YAML leaves them as strings. Checked
   // against the parser the loader actually uses rather than assumed.
   test('off / none / no stay strings, and a bare key is null', () => {
-    const parsed = YAML.parse([
+    const parsed = YAML.parseDocument([
       'pebble:',
       '  a: off',
       '  b: none',
@@ -120,7 +131,7 @@ describe('the YAML spellings behave as documented', () => {
       '  d:',
       '  e: ~',
       '  f: ""',
-    ].join('\n')).pebble;
+    ].join('\n'), { merge: true }).toJS().pebble;
 
     expect(typeof parsed.a).toBe('string');
     expect(typeof parsed.b).toBe('string');
@@ -337,5 +348,87 @@ describe('the pebble section survives loadConfig', () => {
     expect(resolved.summon).toBe(PEBBLE_DEFAULT_SUMMON_HOTKEY);
     expect(resolved.problems).toHaveLength(1);
     expect(resolved.problems[0]).toContain('pebble.summon_hotkey');
+  });
+});
+
+describe('an unusable pebble section is reported, not ignored', () => {
+  // The hole the phase-4 review found: reading `pebble?.summon_hotkey` off a
+  // string or a list yields undefined, which reads as "absent" and answers with
+  // the default and NO problem. Silence is the one outcome this module exists
+  // to prevent, and a misspelled KEY NAME is the likeliest mistake of all --
+  // the value can be copy-pasted from config.example.yaml, the name is typed.
+  test('a section that is not a mapping is reported', () => {
+    for (const notAMapping of ['ctrl+k', ['ctrl+k'], 42, true]) {
+      const resolved = resolvePebbleHotkeys(notAMapping as never, 'darwin');
+      expect(resolved.summon).toBe(PEBBLE_DEFAULT_SUMMON_HOTKEY);
+      expect(resolved.palette).toBe(PEBBLE_DEFAULT_PALETTE_HOTKEY);
+      expect(resolved.problems).toHaveLength(1);
+      expect(resolved.problems[0]).toContain('must be a mapping');
+    }
+  });
+
+  test('a misspelled key name is reported and names the two real settings', () => {
+    const resolved = resolvePebbleHotkeys({ summon_hotkeys: 'alt+f13' } as never, 'darwin');
+    expect(resolved.summon).toBe(PEBBLE_DEFAULT_SUMMON_HOTKEY);
+    expect(resolved.problems).toHaveLength(1);
+    expect(resolved.problems[0]).toContain('summon_hotkeys');
+    expect(resolved.problems[0]).toContain('summon_hotkey and palette_hotkey');
+  });
+
+  test('a nested shape gets the same treatment', () => {
+    const resolved = resolvePebbleHotkeys({ hotkeys: { summon: 'alt+f13' } } as never, 'linux');
+    expect(resolved.problems).toHaveLength(1);
+    expect(resolved.problems[0]).toContain('pebble.hotkeys');
+  });
+
+  test('an unknown key alongside a good one reports the typo and keeps the good one', () => {
+    const resolved = resolvePebbleHotkeys(
+      { summon_hotkey: 'alt+f13', palette_hotkeys: 'alt+f14' } as never,
+      'windows',
+    );
+    expect(resolved.summon).toBe('alt+f13');
+    expect(resolved.palette).toBe(PEBBLE_DEFAULT_PALETTE_HOTKEY);
+    expect(resolved.problems).toHaveLength(1);
+    expect(resolved.problems[0]).toContain('palette_hotkeys');
+  });
+
+  test('null and an empty mapping stay silent', () => {
+    // Neither is a mistake: `pebble:` with nothing under it is null, and an
+    // empty mapping configures nothing.
+    for (const quiet of [undefined, null, {}]) {
+      expect(resolvePebbleHotkeys(quiet as never, 'darwin').problems).toEqual([]);
+    }
+  });
+});
+
+describe('the daemon decisions the call site used to inline', () => {
+  test('the request key round-trips both hotkeys', () => {
+    expect(pebbleHotkeyRequestKey({ summon: 'ctrl+shift+space', palette: 'ctrl+shift+k' }))
+      .toBe('ctrl+shift+space\nctrl+shift+k');
+    // Disabled is distinguishable from configured, in both slots.
+    expect(pebbleHotkeyRequestKey({ summon: '', palette: 'ctrl+shift+k' }))
+      .not.toBe(pebbleHotkeyRequestKey({ summon: 'ctrl+shift+k', palette: '' }));
+  });
+
+  test('the separator cannot collide with a keyspec', () => {
+    // A resolved keyspec can never contain whitespace, which is what makes the
+    // newline a safe separator. Pinned here rather than asserted in a comment.
+    const resolved = resolvePebbleHotkeys({ summon_hotkey: 'ctrl+shift+space' }, 'darwin');
+    expect(resolved.summon).not.toContain('\n');
+    expect(resolved.summon).not.toMatch(/\s/);
+  });
+
+  test('close before spawn only when the ask changed', () => {
+    const pair = pebbleHotkeyRequestKey({ summon: 'ctrl+shift+space', palette: 'ctrl+shift+k' });
+    // Nothing asked yet: this is both a fresh sidecar (where the close is a
+    // no-op) and one that outlived our restart (where it is the whole point),
+    // and the daemon cannot tell them apart.
+    expect(shouldCloseBeforeSpawn(undefined, pair)).toBe(true);
+    // Same ask: an ordinary reconnect must not blink the pebble.
+    expect(shouldCloseBeforeSpawn(pair, pair)).toBe(false);
+    // Changed ask: the stale registration has to go.
+    expect(shouldCloseBeforeSpawn(pair, pebbleHotkeyRequestKey({ summon: 'alt+f13', palette: 'ctrl+shift+k' }))).toBe(true);
+    // Turning one off is a change too.
+    expect(shouldCloseBeforeSpawn(pair, pebbleHotkeyRequestKey({ summon: 'ctrl+shift+space', palette: '' }))).toBe(true);
   });
 });
