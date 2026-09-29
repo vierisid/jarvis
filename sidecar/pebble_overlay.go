@@ -116,7 +116,7 @@ type PebbleService interface {
 	Close() error
 
 	// OnSummon registers a callback fired each time the user triggers the
-	// summon hotkey (Ctrl+Space). The callback runs on whatever goroutine
+	// summon hotkey. The callback runs on whatever goroutine
 	// the hotkey listener uses; receivers should not block.
 	//
 	// The pebble itself does NOT change state on summon — it leaves that
@@ -127,7 +127,7 @@ type PebbleService interface {
 	OnSummon(callback func())
 
 	// OnPalette registers a callback fired when the user triggers the
-	// palette hotkey (Ctrl+K). Same threading and non-blocking contract as
+	// palette hotkey. Same threading and non-blocking contract as
 	// OnSummon. The callback drives the daemon's palette open/close flow.
 	OnPalette(callback func())
 

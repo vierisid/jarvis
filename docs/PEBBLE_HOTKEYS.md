@@ -30,13 +30,24 @@ that is a reasonable thing to want - see "macOS cannot consume the key".
 
 Leaving a key **empty** is not the same as disabling it: a bare `summon_hotkey:`
 and `summon_hotkey: ~` both parse as YAML null, which counts as "not configured"
-and gets the default back. Use `""`, `none` or `off` to mean off.
+and gets the default back. Use `""`, `none` or `off` to mean off - and only
+those three. `no` is not one of them: YAML keeps it as the string `"no"`, which
+is read as a key name, and since it carries no modifier it is refused and
+reported like any other unusable value.
 
-> On **Windows** only, `palette_hotkey: ""` also switches off the Ctrl+middle-click
+> On **Windows** only, disabling the palette hotkey by any of the three
+> spellings also switches off the Ctrl+middle-click
 > palette trigger, because the overlay gates its mouse hook on the same value
 > (`pebble_overlay_windows.go`). That coupling predates #563 and is deliberate -
 > it is how a caller opts out of the global mouse hook - but it means a Windows
 > user who disables the palette hotkey loses the mouse gesture with it.
+
+**One setting, every machine.** There is a single `pebble:` section and it
+applies to every connected sidecar, so a Mac and a Windows box on the same brain
+cannot have different bindings. That matters here more than it usually would,
+because the app-level cost below lands on only one of them. If you need
+per-machine bindings, say so on the issue - the resolver is already handed the
+connecting sidecar's OS, so the hook exists.
 
 `pebble:` is a SYSTEM section: it is read from `config.yaml` and is not one of
 the `USER_OWNED_SECTIONS` the dashboard owns, so editing the file is how you
@@ -62,6 +73,14 @@ involved:
 - A later **reconnect** does not close anything, because the daemon remembers
   what it last asked that sidecar for. A network blip does not make the pebble
   blink.
+- That memory is per daemon *process*, so **every** daemon restart closes and
+  respawns the overlay, whether or not the config changed: the disc blinks once
+  and there is a brief window with no hotkey registered. That is deliberate -
+  `pebble.spawn` answers `{"spawned": true}` without saying which keyspec it is
+  actually running, so the daemon cannot tell a stale binding from a current one
+  and closes defensively rather than silently keeping the old key. Having the
+  sidecar echo the keyspec it registered would remove the need, and is the
+  obvious follow-up.
 
 ### What a keyspec may not be
 
@@ -78,11 +97,27 @@ reaches you rather than a sidecar log:
   registration; macOS installs two monitors and fires both callbacks on one
   press. If they collide, the summon hotkey wins, the palette hotkey is not
   registered, and it is reported.
-- **128 characters**, which no real keyspec approaches.
+- **128 bytes**, which no real keyspec approaches. Bytes, not characters, so
+  the daemon and the sidecar agree on the limit.
+
+On the F-key exception: it exists because a bare F-key is a normal binding on
+every platform, but only **F13 and above** are actually free on stock macOS.
+Bare `f1`-`f12` there drive brightness, Mission Control and the media keys, and
+since the macOS monitor cannot consume a keystroke you would get both. `f13` and
+`f16`-`f19` are the clean ones, and they need an external full-size keyboard.
 
 A keyspec that is not a hotkey at all (`summon_hotkey: 3`, `"ctrl+"`,
 `"hyper+k"`) is logged as an error naming the key and the problem, and the
-default is used instead. It is never silently swallowed. Note this is the
+default is used instead. It is never silently swallowed.
+
+A keyspec that is the right *shape* but names a key the platform does not have
+is a different case, and a quieter one. The daemon deliberately does not check
+key names - the three platforms resolve them against three different tables, and
+a hosted daemon may be resolving for a machine it is not running on - so
+`ctrl+shift+zzz`, or `ctrl+insert` on macOS, is passed through as valid. The
+**sidecar** then refuses it at registration with `unsupported key "..."`, and the
+result is no hotkey and no fall back to the default. If a hotkey is dead and the
+daemon log is clean, that message is in the *sidecar* log. Note this is the
 opposite policy to `daemon.port`, which aborts startup rather than guessing
 (`src/config/port.ts`): a mistyped hotkey must not stop the daemon booting. The
 error is emitted when a sidecar connects, not at boot, so look in the log around
@@ -113,16 +148,19 @@ Platform gaps, all of them the OS's and not ours:
   Help on an Apple Extended Keyboard and absent from every other Apple keyboard,
   so an `insert` binding is refused there rather than aimed at a key you do not
   have.
-- `f21`-`f24` work on Windows and Linux but not macOS, which has no key codes
-  above F20.
-- Linux accepts any X11 keysym name beyond this list (`bracketleft`, `eacute`,
-  `yen`, ...), because unknown names are passed straight to `XStringToKeysym`.
-  Those will not resolve on the other two.
+- Linux accepts other X11 keysym names beyond this list (`bracketleft`,
+  `eacute`, `yen`, ...), because unknown names are passed straight to
+  `XStringToKeysym`. Only the **lowercase** half of that namespace is reachable,
+  since the whole keyspec is lower-cased first - `Menu`, `Print` and
+  `Scroll_Lock` do not resolve. None of them resolve on the other two platforms.
+- `f21`-`f24` are Windows and Linux; `f25`-`f35` are Linux only.
 
 The same spelling means the same key on all three platforms. That was not true
-before #563: `ctrl+left`, `ctrl+f13` and `ctrl+tab` were accepted on Windows and
-refused on Linux and macOS, and `command+k` was accepted on macOS and Windows and
-refused on Linux.
+before #563: `ctrl+left` and `ctrl+f13` were accepted on Windows and refused on
+Linux and macOS, `ctrl+tab` was accepted on Windows and macOS and refused on
+Linux, and `command+k` was accepted on macOS and Windows and refused on Linux.
+All three Linux refusals were the same cause - `XStringToKeysym` is
+case-sensitive and the keyspec had already been lower-cased.
 
 ### What a key NAME addresses is not the same on every platform
 
@@ -160,26 +198,47 @@ same keystroke, and a clash produces no error at all. `ctrl+space`, the old
 default, both switched input source and summoned the pebble; `ctrl+k` both
 deleted to end of line in any text field and opened the palette.
 
-**This is why `Ctrl+Shift+K` is still worth knowing about.** Both defaults are
-free in all three stock *system* shortcut namespaces, which is why they were
-chosen - but `Ctrl+Shift+K` is an application binding in browsers and editors: it
-opens the Web Console in Firefox and is bound in Chrome and VS Code. On macOS,
-pressing it with a browser focused opens devtools **and** the palette, because
-the monitor cannot consume the keystroke. `Ctrl+Shift+Space` has the same shape
-of clash with Word and other Office apps, which insert a non-breaking space with
-it, and with VS Code's parameter hints.
+### The app-level cost, and which platform actually pays it
 
-On Windows and Linux none of that happens: `RegisterHotKey` and `XGrabKey` take
-the key exclusively, so the app never sees it. The app-level double-fire is a
-macOS-only problem, and it is the same asymmetry the whole issue is about. If it
-bothers you, change `pebble.palette_hotkey` - that is exactly what the setting is
-for.
+Both defaults are free in all three stock *system* shortcut namespaces, which is
+why they were chosen. Neither is free of **application** bindings, and because
+the three platforms grab keys differently the consequence is different on each -
+in the opposite direction to everything else on this page, so it is worth
+reading carefully.
+
+**On Windows and Linux you lose those app shortcuts.** `RegisterHotKey` and
+`XGrabKey` take the combination exclusively, so while the sidecar is running the
+focused application never sees it:
+
+| binding | what stops working |
+|---|---|
+| `Ctrl+Shift+K` | the Web Console in Firefox; delete-line in VS Code |
+| `Ctrl+Shift+Space` | parameter hints in VS Code; a non-breaking space in Word |
+
+That is a real cost, and it is silent in the worst way: the app stops responding
+to a shortcut its own menus still advertise. If you use any of them, change the
+binding.
+
+**On macOS those two combinations happen to be clean at the app level too**,
+because those apps use Command on the Mac: Firefox's Web Console is
+`Cmd+Opt+K`, VS Code's delete-line is `Cmd+Shift+K`, its parameter hints are
+`Cmd+Shift+Space`, and Word for Mac inserts a non-breaking space with
+`Option+Space` (`Ctrl+Shift+Space` does not do it there at all). So the one
+platform that *cannot* consume a keystroke is, for this particular pair, the one
+with nothing to double-fire against.
+
+The asymmetry still matters the moment you choose your own binding, and it is
+the whole subject of #563: on macOS a combination that is already taken gives you
+both actions and no error at all, on Windows it gives you a loud registration
+failure, and on Linux it gives you a hotkey that silently does nothing.
+Whichever platform you are on, `pebble.summon_hotkey` /
+`pebble.palette_hotkey` is the answer.
 
 Consequences for choosing a macOS binding at all:
 
 - avoid anything the system binds, because you will get both;
 - avoid anything that *inserts a character*: every `Control+<letter>` in the
-  Emacs-style set honoured by `NSTextView` (Ctrl+A/B/D/E/F/H/K/N/O/P/T/V/Y), and
+  Emacs-style set honoured by `NSTextView` (Ctrl+A/B/D/E/F/H/K/L/N/O/P/T/V/Y), and
   every `Option+<key>` that is a dead key or a special character (`Option+Space`
   is a non-breaking space);
 - F13 and F16-F19 are unbound on stock macOS and are the cleanest choice

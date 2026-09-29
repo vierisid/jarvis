@@ -397,7 +397,8 @@ func (s *pebbleServiceLinux) Spawn(spec PebbleSpec) error {
 	s.doneCh = make(chan struct{})
 	go runPebbleLoop(&s.pebbleCore, s)
 
-	// Global hotkeys (§5.4): summon (Ctrl+Space) + palette (Ctrl+K). X11 only;
+	// Global hotkeys (§5.4): summon + palette, whichever keyspecs the daemon
+	// asked for (pebble.summon_hotkey / pebble.palette_hotkey). X11 only;
 	// a failed grab logs and is non-fatal (the disc click is the fallback once
 	// pebble input wiring lands).
 	if s.spec.SummonHotkey != "" {

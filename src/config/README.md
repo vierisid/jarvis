@@ -187,8 +187,7 @@ continuity with the rest of the daemon's own settings, not because a top-level
 section would be dropped: `loadConfig` deep-merges the parsed file over
 `DEFAULT_CONFIG` and discards only the sections listed in
 `USER_OWNED_SECTIONS`, so an UNLISTED top-level key survives (that is how the
-system-owned `tools:` and `pebble:` sections reach the runtime). This paragraph
-used to say the opposite, which was wrong. Neither has an entry
+system-owned `tools:` and `pebble:` sections reach the runtime). Neither has an entry
 in `DEFAULT_CONFIG` (same as `drain_deadline_ms`): absent has to stay
 distinguishable from "set to the default", and the fallback is applied where
 the value is consumed.

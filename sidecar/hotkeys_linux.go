@@ -117,8 +117,13 @@ import (
 var hotkeyReg sync.Map // uint64 -> func()
 var hotkeyCounter atomic.Uint64
 
-// startHotkeyListener registers a single global hotkey (e.g. "ctrl+space",
-// "ctrl+k") and fires onFire on each press. Returns a stop function.
+// startHotkeyListener registers a single global hotkey (e.g. "ctrl+shift+space")
+// and fires onFire on each press. Returns a stop function.
+//
+// NOTE: a refused grab is NOT reported. hk_ignore_error swallows BadAccess and
+// jarvisHotkeyCreate returns a Hotkey either way, so a combination another
+// client already holds comes back as a success and then never fires. Known gap,
+// recorded in docs/PEBBLE_HOTKEYS.md.
 func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 	mods, keysym, err := parseLinuxKeyspec(keyspec)
 	if err != nil {
