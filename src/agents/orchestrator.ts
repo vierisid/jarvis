@@ -545,6 +545,13 @@ export class AgentOrchestrator {
     message: string,
     tier: Tier = 'medium',
     subsystem: string = 'chat_orchestrator',
+    // Tools this KIND of turn does not have, for the whole turn. Same
+    // contract as `streamMessage`: passed, never stored, because one
+    // orchestrator serves every caller. This is the loop a commitment
+    // executed later runs in (daemon/commitment-executor.ts via
+    // BackgroundAgentService), which is how a commitment written in a site
+    // chat gets its originating scope back (#571).
+    scope?: TurnToolScope | null,
   ): Promise<string> {
     const primary = this.getPrimary();
     if (!primary) {
@@ -554,6 +561,7 @@ export class AgentOrchestrator {
     // A message from the user is the turn boundary for taint gating: this
     // turn's reads gate this turn's later calls and nothing else.
     const turnTaint = new Set<string>();
+    const turnScope = scope ?? null;
 
     // Add user message to persistent history
     primary.addMessage('user', message);
@@ -575,7 +583,7 @@ export class AgentOrchestrator {
     // iteration would invalidate the provider's cached prefix every time,
     // because the tool list sits at the head of it.
     const ledger = this.ledgerFor(primary.id);
-    let decided = this.decideTurnTools(messages, tier, ledger, undefined, null);
+    let decided = this.decideTurnTools(messages, tier, ledger, undefined, turnScope);
     let tools = decided.llm;
     let finalText = '';
 
@@ -594,7 +602,7 @@ export class AgentOrchestrator {
         // Execute each tool and add results
         let widened = false;
         for (const tc of llmResponse.tool_calls) {
-          const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger, null);
+          const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger, turnScope);
           if (discovery) {
             widened ||= discovery.grew;
             messages.push({ role: 'tool', content: discovery.result, tool_call_id: tc.id });
@@ -603,7 +611,7 @@ export class AgentOrchestrator {
           // A tool the model was not offered: admitted and recomputed, and
           // not run at all if running it would strand outside content
           // unframed. See interceptOffList.
-          const offList = this.handleOffListCall(tc, decided.exposed, ledger, null);
+          const offList = this.handleOffListCall(tc, decided.exposed, ledger, turnScope);
           if (offList) widened = true;
           if (offList?.refusal) {
             messages.push({ role: 'tool', content: offList.refusal, tool_call_id: tc.id });
@@ -612,8 +620,8 @@ export class AgentOrchestrator {
           // Everything the model actually calls stays exposed for the rest
           // of the conversation, so a later turn cannot strip a tool an
           // in-flight task is using.
-          this.noteToolUse(ledger, tc.name);
-          const result = await this.executeTool(tc, undefined, turnTaint, null);
+          this.noteToolUse(ledger, tc.name, turnScope);
+          const result = await this.executeTool(tc, undefined, turnTaint, turnScope);
           messages.push({
             role: 'tool',
             content: result,
@@ -636,7 +644,7 @@ export class AgentOrchestrator {
         // tools only appeared on the next user turn), or a call to a tool
         // the model was not offered (see interceptOffList).
         if (widened) {
-          decided = this.decideTurnTools(messages, tier, ledger, undefined, null);
+          decided = this.decideTurnTools(messages, tier, ledger, undefined, turnScope);
           tools = decided.llm;
         }
 
@@ -691,10 +699,27 @@ export class AgentOrchestrator {
      * behaviour.
      */
     requireToolUse?: boolean;
+    /**
+     * Tools this KIND of turn does not have (#571). This is the ROUTER-FIRST
+     * path's tool executor: on a hosted install `streamMessage` never runs
+     * the loop that #570 threaded the scope through, and everything reaching
+     * the registry from a site chat arrives here instead.
+     *
+     * REQUIRED, like `scope` on `decideTurnTools` and `executeTool` below and
+     * for the same reason: this is a public method, and an optional control
+     * field means the next caller compiles clean and runs with the full
+     * registry. `null` is the explicit "this turn has no scope".
+     */
+    scope: TurnToolScope | null;
   }): Promise<TaskCallResult> {
     if (!this.llmManager) {
       return { kind: 'completed', text: '[No LLM configured]', conversation: [] };
     }
+
+    // Decided once, here, and passed down rather than stored: one
+    // orchestrator serves every chat, so a field would let a general turn
+    // clear a site turn's scope mid-loop (same reason as `streamMessage`).
+    const turnScope = opts.scope ?? null;
 
     // Fresh call or a resume with the user's reply. On a resume the earlier
     // tool results are still in the history, and a page could have said
@@ -706,15 +731,29 @@ export class AgentOrchestrator {
     // Build the running conversation buffer. On a fresh call: system + user
     // message. On resume: prior conversation + a new user message (the
     // clarification reply).
+    //
+    // On resume the system messages are REBUILT rather than replayed (#571).
+    // The saved buffer used to carry the ones captured at pause time, and this
+    // branch never called `toSystemMessages` at all, so everything per-turn in
+    // the prompt was frozen at the moment of the pause -- the site block with
+    // its repo-written file listing, the scope notice, the clock. The
+    // dispatcher now strips system messages before persisting, and they go
+    // back on here, in the same position, so the assistant/tool sequence the
+    // provider needs is unchanged and the per-turn material is actually per
+    // turn. `.filter` covers a buffer persisted by an older build.
+    const systemMessages: LLMMessage[] = [
+      ...toSystemMessages(opts.systemPrompt),
+      ...(opts.requireToolUse
+        ? [{ role: 'system', content: TASK_EXECUTOR_FRAMING } satisfies LLMMessage]
+        : []),
+    ];
     const messages: LLMMessage[] = opts.history
-      ? [...opts.history, { role: 'user', content: opts.userMessage }]
-      : [
-          ...toSystemMessages(opts.systemPrompt),
-          ...(opts.requireToolUse
-            ? [{ role: 'system', content: TASK_EXECUTOR_FRAMING } satisfies LLMMessage]
-            : []),
+      ? [
+          ...systemMessages,
+          ...opts.history.filter((m) => m.role !== 'system'),
           { role: 'user', content: opts.userMessage },
-        ];
+        ]
+      : [...systemMessages, { role: 'user', content: opts.userMessage }];
 
     // Include the standard tools plus the special clarification tool.
     //
@@ -734,9 +773,19 @@ export class AgentOrchestrator {
     // Seeding writes into the long-lived primary ledger, so it follows the
     // same rule as noteToolUse: nothing at all while the filter is off.
     if (getToolFilterPolicy().enabled) {
-      ledger.seedFromMessages(opts.history, (n) => this.toolRegistry?.has(n) ?? false);
+      // Scope-gated. `seedFromMessages` deliberately DOES seed a
+      // NOT_RUN_MARKER refusal -- for an off-list refusal that is right,
+      // because the live loop admitted and audited that name. An out-of-scope
+      // refusal is the opposite of an admission, and the ledger it would be
+      // written into is the PRIMARY's, shared process-wide by every chat, so
+      // seeding it would force-offer the tool in the next non-site turn with
+      // no audit row anywhere (#571).
+      ledger.seedFromMessages(
+        opts.history,
+        (n) => (this.toolRegistry?.has(n) ?? false) && toolInScope(turnScope, n),
+      );
     }
-    let decided = this.decideTurnTools(messages, opts.tier, ledger, undefined, null);
+    let decided = this.decideTurnTools(messages, opts.tier, ledger, undefined, turnScope);
     // ask_for_clarification is appended AFTER the filter, and is therefore
     // never part of its accounting. #475's fail-open guard counted it as
     // though it were a registry tool, which is half of why that guard could
@@ -812,20 +861,29 @@ export class AgentOrchestrator {
 
         let widened = false;
         for (const tc of llmResponse.tool_calls) {
-          const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger, null);
+          // Scope-filtered on both: the catalogue must not REVEAL a withheld
+          // tool, and the off-list interceptor must not ADMIT one -- an
+          // admission adds the name to the shared primary ledger, which
+          // force-offers it in every later turn including other chats' (#571).
+          const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger, turnScope);
           if (discovery) {
             widened ||= discovery.grew;
             messages.push({ role: 'tool', content: discovery.result, tool_call_id: tc.id });
             continue;
           }
-          const offList = this.handleOffListCall(tc, decided.exposed, ledger, null);
+          const offList = this.handleOffListCall(tc, decided.exposed, ledger, turnScope);
           if (offList) widened = true;
           if (offList?.refusal) {
             messages.push({ role: 'tool', content: offList.refusal, tool_call_id: tc.id });
             continue;
           }
-          this.noteToolUse(ledger, tc.name);
-          const result = await this.executeTool(tc, opts.signal, turnTaint, null);
+          this.noteToolUse(ledger, tc.name, turnScope);
+          // The enforcement point. The candidate set and the discovery
+          // catalogue below only decide what is OFFERED; an off-list call to
+          // a registered tool is otherwise admitted and RUN, and on a hosted
+          // install the filter does not engage at all (the tier models are
+          // frontier-vetoed), so this check is the only thing that refuses.
+          const result = await this.executeTool(tc, opts.signal, turnTaint, turnScope);
           toolsExecuted++;
           messages.push({
             role: 'tool',
@@ -1122,7 +1180,7 @@ export class AgentOrchestrator {
           messages.push({ role: 'tool', content: offList.refusal, tool_call_id: tc.id });
           continue;
         }
-        this.noteToolUse(ledger, tc.name);
+        this.noteToolUse(ledger, tc.name, turnScope);
         const result = await this.executeTool(tc, undefined, turnTaint, turnScope);
         messages.push({
           role: 'tool',
@@ -1367,9 +1425,19 @@ export class AgentOrchestrator {
    *   - nothing at all when the filter is off, so the default posture is a
    *     genuine no-op rather than "inert except for the bookkeeping".
    */
-  private noteToolUse(ledger: ToolExposureLedger, name: string): void {
+  private noteToolUse(ledger: ToolExposureLedger, name: string, scope: TurnToolScope | null): void {
     if (!getToolFilterPolicy().enabled) return;
     if (!this.toolRegistry?.has(name)) return;
+    // Not a tool this turn has, so not a use. Every loop calls this BEFORE
+    // dispatch, where the out-of-scope refusal lives, and the ledger is the
+    // PRIMARY agent's -- one set for the whole process, shared by every chat,
+    // and `decideTools` keeps anything in it unconditionally. Without this
+    // check a site chat's model reaching for `run_command` got refused and
+    // thereby pinned `run_command` into the next NON-site turn's offered set,
+    // permanently and with no audit row: the scope's own enforcement widening
+    // the neighbouring chat. `scope` is required for the same reason it is
+    // required on executeTool -- so the compiler catches a fourth loop (#571).
+    if (!toolInScope(scope, name)) return;
     ledger.add(name);
   }
 

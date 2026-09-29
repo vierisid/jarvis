@@ -20,15 +20,39 @@
  */
 
 import type { LLMManager } from '../../llm/manager.ts';
+import type { TurnToolScope } from '../../actions/tools/tool-scope.ts';
 import type { LLMMessage, LLMResponse, LLMToolCall } from '../../llm/provider.ts';
 import { progressAcknowledgement } from '../progress.ts';
 import { CONV_TOOLS, CONV_TOOL_NAMES } from './conv-tools.ts';
 import { recoverSerializedConvTools, visibleStreamText } from './conv-tool-recovery.ts';
 import { TaskDispatcher } from './task-dispatcher.ts';
 import { TaskRegistry } from './task-registry.ts';
+import { isTaskTemplate, isTaskTier, TASK_TEMPLATES } from './task-envelope.ts';
 import type { TaskRecord, TaskRequest, TaskResultEnvelope } from './task-envelope.ts';
 
 const MAX_CONV_ITERATIONS = 8;
+
+/**
+ * What the ROUTER is told when the chat is bound to one site-builder project.
+ *
+ * Deliberately a fixed string with no project data interpolated. The full
+ * site block (project id, name, branch, file listing) goes to the task tier,
+ * which has the tools; every field in it is written by the model or by a
+ * pulled repository (sites/prompt-context.ts), and putting it in front of the
+ * router would widen the injection surface of the one component whose job is
+ * to decide what runs, in exchange for nothing -- the router has no file
+ * tools and delegates either way.
+ *
+ * What it does need is the routing fact: in this composer, "fix the header"
+ * is project work and must be delegated rather than answered from the
+ * dialogue.
+ */
+export const SITE_CHAT_ROUTING_NOTE =
+  'This conversation is bound to a single Site Builder project. Anything about '
+  + 'its files, pages, dependencies, build, preview or repository is real state '
+  + 'you cannot see: delegate it (tier=medium, template=general) so the task tier '
+  + 'can use the project tools. The composer is still a general chat box, so '
+  + 'ordinary requests unrelated to the project are handled exactly as elsewhere.';
 
 export type ConvSystemContext = {
   /** User persona (name, timezone, role, etc.) - short identity block. */
@@ -44,6 +68,57 @@ export type ConvSystemContext = {
   recentDialogue?: LLMMessage[];
   /** Optional extra grounding the conv LLM should always see (e.g., active commitments count). */
   ambientFacts?: string;
+};
+
+/**
+ * The facts about THIS TURN that must reach the task tier, as opposed to the
+ * prompt material in `ConvSystemContext` (#571).
+ *
+ * A separate, REQUIRED parameter rather than a field on `ConvSystemContext`,
+ * and that distinction is the whole point. `ConvSystemContext` is consumed in
+ * exactly two places, both prompt construction, and the conv LLM cannot reach
+ * a registry tool at all -- its surface is the four synthetic router tools in
+ * `conv-tools.ts`. A scope placed on that type could only ever affect prose,
+ * while `handleToolCall`, the hop that actually dispatches, would still be
+ * unscoped. `git grep TurnToolScope` would then show the conv path covered
+ * with dispatch still open on hosted, which is the exact shape of the bug
+ * #571 exists to fix, one layer down.
+ *
+ * Required, so the compiler catches a call site that forgets it.
+ */
+export type ConvTurn = {
+  /**
+   * The user's verbatim message for this turn.
+   *
+   * Was a mutable field on the orchestrator (`currentUserMessage`), written
+   * at the top of `streamTurn` and read inside `handleToolCall` an entire
+   * LLM stream later. One ConvOrchestrator serves every chat and every
+   * channel in the process, so two concurrent turns -- a Sites-page turn and
+   * a telegram message -- raced: whichever wrote last supplied
+   * `original_message` for both, which then became the other task tier's
+   * user prompt AND the text the relevance filter selected on. Passed per
+   * turn, it cannot.
+   */
+  userMessage: string;
+  /**
+   * Tools this KIND of turn does not have -- today, a chat bound to one
+   * site-builder project. Carried through to the task tier, which is where
+   * the tool registry is.
+   */
+  scope: TurnToolScope | null;
+  /**
+   * The site-builder prompt block for a project-scoped chat.
+   *
+   * Handed to the TASK tier, not rendered into the conv prompt. Two reasons:
+   * it is ~2KB of per-turn text that would sit outside the conv tier's
+   * deliberately tight, cache-stable prompt, and it interpolates
+   * repo-written file names framed as untrusted data
+   * (sites/prompt-context.ts) -- text the router has no tools to act on and
+   * no reason to read. What the router gets instead is one fixed sentence
+   * with no project data in it (`SITE_CHAT_ROUTING_NOTE`), which is all it
+   * needs to route.
+   */
+  siteContext?: string;
 };
 
 export type ConvTaskEvent =
@@ -69,8 +144,6 @@ export type ConvStreamEvent =
   | { type: 'done'; tasksRun: string[] };
 
 export class ConvOrchestrator {
-  private currentUserMessage = '';
-
   constructor(
     private readonly llm: LLMManager,
     private readonly registry: TaskRegistry,
@@ -86,11 +159,12 @@ export class ConvOrchestrator {
   async processTurn(
     userMessage: string,
     context: ConvSystemContext,
+    turn: Omit<ConvTurn, 'userMessage'>,
     onTaskEvent?: (event: ConvTaskEvent) => void,
   ): Promise<ConvProcessResult> {
     let fullText = '';
     const tasksRun: string[] = [];
-    for await (const event of this.streamTurn(userMessage, context)) {
+    for await (const event of this.streamTurn(userMessage, context, turn)) {
       if (event.type === 'text') {
         // Skip segmentEnd-only events: they carry a TTS signal, not content.
         if (!event.text) continue;
@@ -116,6 +190,10 @@ export class ConvOrchestrator {
   async *streamTurn(
     userMessage: string,
     context: ConvSystemContext,
+    // Required: see ConvTurn. A turn that reaches the task tier without it
+    // is a turn running unscoped, and the compiler is the only thing that
+    // catches a caller which forgets (#571).
+    turnContext: Omit<ConvTurn, 'userMessage'>,
     onTaskEvent?: (event: ConvTaskEvent) => void,
   ): AsyncGenerator<ConvStreamEvent> {
     // System messages split at the prompt-cache boundary: the static
@@ -127,7 +205,14 @@ export class ConvOrchestrator {
     // some models' minimum cacheable prefix and silently not cache -
     // harmless (no premium is charged); the provider's last-message
     // breakpoint still caches system + dialogue as one growing prefix.
-    const dynamicPrompt = this.buildDynamicSystemPrompt(context);
+    // Everything this turn must carry to the task tier, assembled once and
+    // passed by argument. Never a field: one ConvOrchestrator serves every
+    // chat and channel in the process, so a field is a cross-chat race
+    // waiting for two concurrent turns -- which is what `currentUserMessage`
+    // was before #571 removed it.
+    const turn: ConvTurn = { ...turnContext, userMessage };
+
+    const dynamicPrompt = this.buildDynamicSystemPrompt(context, turn);
     const messages: LLMMessage[] = [
       { role: 'system', content: this.buildStaticSystemPrompt(), cache: true },
       ...(context.userProfile ? [{ role: 'system', content: context.userProfile, cache: true } satisfies LLMMessage] : []),
@@ -139,10 +224,6 @@ export class ConvOrchestrator {
     const tasksRun: string[] = [];
     let hasVisibleText = false;
     let acknowledgedWork = false;
-    // Remember the user's verbatim message so we can attach it to every
-    // delegate request - the task tier sees what the user actually said,
-    // not the conv LLM's paraphrase.
-    this.currentUserMessage = userMessage;
 
     for (let iteration = 0; iteration < MAX_CONV_ITERATIONS; iteration++) {
       let responseText = '';
@@ -267,7 +348,10 @@ export class ConvOrchestrator {
       };
 
       for (const call of response.tool_calls) {
-        const result = await this.handleToolCall(call, captureEvent);
+        // The turn's scope and site block travel as ARGUMENTS, read from the
+        // context this call was made under. Nothing about them comes from
+        // `call.arguments`, which is model output.
+        const result = await this.handleToolCall(call, turn, captureEvent);
         if (result.taskId) tasksRun.push(result.taskId);
         messages.push({
           role: 'tool',
@@ -292,6 +376,7 @@ export class ConvOrchestrator {
 
   private async handleToolCall(
     call: LLMToolCall,
+    turn: ConvTurn,
     onTaskEvent?: (event: ConvTaskEvent) => void,
   ): Promise<{ envelope: unknown; taskId?: string }> {
     switch (call.name) {
@@ -300,13 +385,28 @@ export class ConvOrchestrator {
         if (!args.tier || !args.template || !args.intent) {
           return { envelope: { error: 'delegate requires tier, template, and intent' } };
         }
+        // `args` is model output cast to a type; the cast does not validate.
+        // Both of these are narrow unions, and an invented template reaches
+        // `TEMPLATE_PROMPTS[template]` and puts the literal string "undefined"
+        // into the task tier's system prompt, where it is also persisted and
+        // rendered back into the router's prompt on later turns. Reject rather
+        // than coerce, so the router sees its own mistake.
+        if (!isTaskTier(args.tier)) {
+          return { envelope: { error: `delegate: unknown tier "${String(args.tier)}"; use high, medium or low` } };
+        }
+        if (!isTaskTemplate(args.template)) {
+          return { envelope: { error: `delegate: unknown template "${String(args.template)}"; use ${TASK_TEMPLATES.join(', ')}` } };
+        }
         const request: TaskRequest = {
           tier: args.tier,
           template: args.template,
           intent: args.intent,
           // Attach the user's verbatim message so the task tier sees what
           // the user actually said, not the conv LLM's paraphrase.
-          original_message: this.currentUserMessage || undefined,
+          // The turn's own verbatim message, not a field read an LLM stream
+          // later. The task tier must see what the user actually said, not
+          // the conv LLM's paraphrase and not another chat's text.
+          original_message: turn.userMessage || undefined,
         };
 
         // Dispatch produces a result envelope. We notify the caller as the
@@ -317,7 +417,7 @@ export class ConvOrchestrator {
           }
         });
         try {
-          const envelope = await this.dispatcher.dispatch(request);
+          const envelope = await this.dispatcher.dispatch(request, turn);
           const rec = this.registry.get(envelope.task_id);
           if (rec) {
             if (envelope.status === 'completed') {
@@ -372,7 +472,10 @@ export class ConvOrchestrator {
           }
         });
         try {
-          const envelope = await this.dispatcher.resume(targetId, args.input);
+          // The resuming turn's scope goes in too; the dispatcher unions it
+          // with the one recorded on the task, so resuming a site task from
+          // the main chat (or the reverse) cannot widen either.
+          const envelope = await this.dispatcher.resume(targetId, args.input, turn);
           const rec = this.registry.get(envelope.task_id);
           if (rec) {
             if (envelope.status === 'completed') {
@@ -516,7 +619,7 @@ export class ConvOrchestrator {
    * every turn, so it must be rendered AFTER the static half and never be
    * marked as a cache boundary.
    */
-  private buildDynamicSystemPrompt(context: ConvSystemContext): string {
+  private buildDynamicSystemPrompt(context: ConvSystemContext, turn: ConvTurn): string {
     const parts: string[] = [];
 
     if (context.userIdentity) {
@@ -525,8 +628,22 @@ export class ConvOrchestrator {
       parts.push('');
     }
 
+    // Tasks from ANOTHER chat context are left out entirely (#571).
+    //
+    // The TaskRegistry is a single process-global instance shared by every
+    // chat and channel, and both blocks below render `request.intent` and the
+    // FULL `result.summary` into the dynamic system prompt of every conv turn.
+    // A site task's summary can contain project file content that was read
+    // through the framed `site_read_file` and then passed through the low-tier
+    // summarizer, which does not preserve the untrusted framing -- so it
+    // landed, unframed, in the telegram chat's router prompt. Now that records
+    // carry the scope they were created under, matching it is the cheap half of
+    // the fix. (The framing half is noted in actions/tools/tool-scope.ts and
+    // is not this change.)
+    const sameContext = (t: TaskRecord) => (t.scopeId ?? null) === (turn.scope?.id ?? null);
+
     // In-flight tasks
-    const inFlight = this.registry.inFlight();
+    const inFlight = this.registry.inFlight().filter(sameContext);
     if (inFlight.length > 0) {
       parts.push('# In-flight Tasks');
       for (const t of inFlight) {
@@ -540,7 +657,7 @@ export class ConvOrchestrator {
     // it needs to verbalize follow-ups. Even with the full summary, ANY
     // request for specifics not already in the summary MUST be delegated
     // (see "CRITICAL: You have NO direct knowledge" in the static half).
-    const recent = this.registry.recentResults(5);
+    const recent = this.registry.recentResults(5).filter(sameContext);
     if (recent.length > 0) {
       parts.push('# Recent Task Results');
       for (const t of recent) {
@@ -556,6 +673,22 @@ export class ConvOrchestrator {
     if (context.ambientFacts) {
       parts.push('# Ambient State');
       parts.push(context.ambientFacts);
+      parts.push('');
+    }
+
+    // Keyed on EITHER signal. `scope` is set from `projectId` alone, even
+    // when the site service could not resolve the project and so produced no
+    // `siteContext` (#570): such a turn is still a project chat and the
+    // router still has to delegate rather than answer.
+    //
+    // Note for anyone later "fixing" routing by moving this into the user
+    // message: `windowedParts` (tool-relevance/selection.ts) skips system
+    // messages, so this sentence is invisible to the relevance filter. In a
+    // user message it would not be, and its site vocabulary would start
+    // matching trigger groups on every turn of the chat.
+    if (turn.scope || turn.siteContext) {
+      parts.push('# This Chat');
+      parts.push(SITE_CHAT_ROUTING_NOTE);
       parts.push('');
     }
 

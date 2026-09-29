@@ -76,17 +76,40 @@
  * Three routes, all found by review, all left open deliberately and none of
  * them silent:
  *
- * 1. **The router-first conv path.** When a conversation tier is configured --
- *    which is every hosted install, since the tier defaults are filled per
- *    slot -- `AgentService.streamMessage` takes the conv branch, which drops
- *    `siteContext` AND never reaches the orchestrator loop this scope threads
- *    through. Such a turn keeps the generic tools and loses the prompt line
- *    that used to be their only restraint, so it is the pre-#561 state exactly.
- *    What this change does about it is remove the amplifier: ws-service no
- *    longer points the process-wide default cwd at the project, so those tools
- *    resolve in the home dir rather than inside the tree a pulled repo sits in.
- *    Threading the scope and the site prompt through ConvOrchestrator and the
- *    task dispatcher is the real repair, and it is a separate change.
+ * 1. ~~**The router-first conv path.**~~ CLOSED by #571. The scope and the
+ *    site prompt block now travel `ws-service` -> `AgentService.streamMessage`
+ *    -> `streamMessageConv` -> `ConvOrchestrator.streamTurn` (as the required
+ *    `ConvTurn` argument) -> `TaskDispatcher.dispatch`/`resume` -> the task
+ *    runner -> `AgentOrchestrator.processTaskCall`, where all three checks
+ *    attach exactly as they do on the classic loop.
+ *
+ *    Worth keeping from the original note, because it is the reason dispatch
+ *    is the load-bearing check rather than one of three equals: on a REAL
+ *    hosted install the relevance filter never engages at all. Every empty
+ *    tier slot is filled with `usejarvis_ai:uj-*` (daemon/usejarvis-ai.ts) and
+ *    `usejarvis` is in `FRONTIER_VETO` (tool-relevance/model-class.ts), so
+ *    `decideTools` returns everything it was handed. Measured on the
+ *    production registry: 50 tools unscoped, 44 scoped, filter disengaged. The
+ *    candidate set still narrows, because `toolsInScope` is applied before
+ *    every early return, but the pin and the substitution never run, and
+ *    nothing except the dispatch check can refuse a call.
+ *
+ *    Three things #571 fixed alongside it, each a way the per-turn scope was
+ *    undone by a process-global data path: `noteToolUse`/`seedFromMessages`
+ *    wrote a refused tool into the shared primary ledger (see
+ *    `outOfScopeMessage`); `ConvOrchestrator` kept the turn's user message in
+ *    a mutable field two concurrent chats raced over; and the paused-task
+ *    buffer persisted its system messages, so a site prompt block with
+ *    repo-written file names in it outlived the turn, the conversation and the
+ *    daemon process.
+ *
+ *    Still open, and the shape every remaining item shares: the scope draws a
+ *    TOOL boundary where no CONTEXT boundary exists. The Sites composer sends
+ *    no `channel`, so it shares the conversation row, the primary agent's
+ *    history, the primary exposure ledger and the global TaskRegistry with the
+ *    main dashboard chat. #571 closed the ledger and the router's task list
+ *    (records now carry `scopeId` and cross-context rows are not rendered);
+ *    the shared conversation row and history are untouched.
  *
  * 2. **`commitments`.** It stays in scope, and it is the one in-scope tool
  *    whose whole effect is to schedule a LATER turn whose entire text the
@@ -122,6 +145,22 @@ import type { ToolDefinition } from './registry.ts';
 import { NOT_RUN_MARKER } from './tool-relevance/ledger.ts';
 
 export type TurnToolScope = {
+  /**
+   * Stable identifier, so a scope can survive a round trip through storage
+   * and be recovered by `scopeById` (#571).
+   *
+   * Needed because the router-first path does not run the turn where it is
+   * decided: a delegated task is persisted to the `tasks` table and may be
+   * RESUMED minutes later, or after a daemon restart, from a row. Carrying
+   * the whole object would mean serialising a policy; carrying the id means
+   * the policy is always the one this build defines.
+   *
+   * It is never read from model output. `scopeById` resolves only ids this
+   * module registers, and every call site unions the result with the CURRENT
+   * turn's scope (`mergeScopes`), so an id that is missing, stale or wrong
+   * can only ever leave the turn as restricted as it already was.
+   */
+  readonly id: string;
   /** Short phrase for the refusal the model sees, e.g. "a site project chat". */
   readonly label: string;
   /** Tool names this kind of turn does not have. */
@@ -176,6 +215,7 @@ export type TurnToolScope = {
  * carrying `projectId`; daemon/ws-service.ts).
  */
 export const PROJECT_SITE_CHAT_SCOPE: TurnToolScope = Object.freeze({
+  id: 'project_site_chat',
   label: 'a site project chat',
   withheld: Object.freeze(new Set([
     // The four the prompt already forbids, each with a site_* equivalent
@@ -193,6 +233,60 @@ export const PROJECT_SITE_CHAT_SCOPE: TurnToolScope = Object.freeze({
   // ninth site tool is pinned the day it is registered.
   pinnedCategories: Object.freeze(['site-builder']),
 });
+
+/**
+ * Every scope this build defines, by id. A closed set, deliberately: a scope
+ * is policy, and policy is not something a stored row or a model gets to
+ * invent. An unknown id resolves to `null`, which `mergeScopes` then treats
+ * as "adds no restriction" rather than "clears the restriction".
+ */
+export const ALL_SCOPES: readonly TurnToolScope[] = Object.freeze([PROJECT_SITE_CHAT_SCOPE]);
+
+const SCOPES_BY_ID: ReadonlyMap<string, TurnToolScope> =
+  new Map(ALL_SCOPES.map((s) => [s.id, s]));
+
+/**
+ * Recover a scope from a stored id. `null` for anything this build does not
+ * define, including undefined, so a row written by a newer build, or by a
+ * build that had a scope this one dropped, degrades to "no extra
+ * restriction from the row" and leaves the caller's own turn scope intact.
+ */
+export function scopeById(id: string | null | undefined): TurnToolScope | null {
+  if (!id) return null;
+  return SCOPES_BY_ID.get(id) ?? null;
+}
+
+/**
+ * The scope a turn runs under when two apply: the union of what each
+ * withholds, and of what each pins.
+ *
+ * Union, not "the more recent one", because both inputs are restrictions and
+ * the question a merge answers is "may this turn do MORE than one of them
+ * allowed". It may not. The case that forces this is `TaskDispatcher.resume`:
+ * a task created in a site chat can be resumed from a turn in the main chat
+ * (and vice versa), possibly after a daemon restart, so neither side alone is
+ * the right answer and taking either one alone would be a widening.
+ *
+ * The pins ride along with the withholding they stand in for -- a merged
+ * scope that withheld the generic file tools but pinned nothing would be the
+ * starved turn `scopeSubstitutes` exists to prevent.
+ */
+export function mergeScopes(
+  a: TurnToolScope | null | undefined,
+  b: TurnToolScope | null | undefined,
+): TurnToolScope | null {
+  if (!a) return b ?? null;
+  if (!b) return a;
+  if (a === b || a.id === b.id) return a;
+  return Object.freeze({
+    id: [a.id, b.id].sort().join('+'),
+    // Both labels, because the refusal names where the tool went and a merged
+    // turn genuinely sits in both.
+    label: `${a.label} and ${b.label}`,
+    withheld: Object.freeze(new Set([...a.withheld, ...b.withheld])),
+    pinnedCategories: Object.freeze([...new Set([...a.pinnedCategories, ...b.pinnedCategories])]),
+  });
+}
 
 /** Whether a turn under `scope` has the named tool at all. */
 export function toolInScope(scope: TurnToolScope | null | undefined, name: string): boolean {
@@ -243,6 +337,42 @@ export function toolsInScope(
 }
 
 /**
+ * The prompt block that tells the model, up front, what this turn does not
+ * have -- the other half of the `[NOT RUN]` refusal below (#571).
+ *
+ * The gap it closes: the cached tool guide in the system prompt
+ * (roles/tool-guide.ts, rendered by roles/prompt-builder.ts) documents every
+ * registered tool, including the withheld ones, and it says to use them.
+ * Without a correction the model is being instructed to call a tool that will
+ * be refused, and each attempt is a full billed turn plus an
+ * `out_of_scope(...)` audit row for something the prompt asked for.
+ *
+ * Why here and not in the guide itself: the guide sits in the STATIC half of
+ * the prompt, which is the provider's cache prefix. Varying it per chat would
+ * miss the cache on every turn of every hosted install, to save a few dozen
+ * tokens. This block goes in the DYNAMIC half instead, where per-turn text
+ * already lives, so the prefix is untouched.
+ *
+ * It states absence, like the refusal, rather than prohibition: "you do not
+ * have" and not "you must not", because the former is simply true and the
+ * latter is the kind of rule a model talks itself past.
+ */
+export function scopeSystemNote(scope: TurnToolScope): string {
+  const names = [...scope.withheld].sort().map((n) => `\`${n}\``).join(', ');
+  return [
+    '# Tools this chat does not have',
+    '',
+    `This is ${scope.label}. The tool guide above documents the whole registry, `
+    + 'but the following tools are not registered for this conversation and calling '
+    + `them does nothing: ${names}.`,
+    '',
+    'Use the `site_*` tools with the project\'s `project_id` for anything in the '
+    + 'project. They are path-confined to it, which the generic ones are not. '
+    + 'Everything else you have is unchanged.',
+  ].join('\n');
+}
+
+/**
  * What the model is told when it calls a tool this turn does not have.
  *
  * Phrased as absence, not as denial: this is not an authority decision, and
@@ -251,17 +381,33 @@ export function toolsInScope(
  * tool because it wanted the project's files, and the site tools are right
  * there.
  *
- * Two deliberate details. It says the tool will not become available, because
- * the cached tool guide in the system prompt still documents every registered
- * tool and will keep suggesting it: without that sentence the model has a
- * standing invitation to retry, and each retry is a full billed turn.
+ * Two deliberate details. It says the tool will not become available. The
+ * cached tool guide in the system prompt still documents every registered
+ * tool and will keep suggesting it; `scopeSystemNote` above now corrects that
+ * up front, but this sentence is the backstop for a turn that reached here
+ * anyway, and without it the model has a standing invitation to retry -- each
+ * retry a full billed turn.
  *
- * And it opens with NOT_RUN_MARKER, the same marker the off-list refusal uses.
- * A durable buffer that seeds a resumed turn from stored tool results skips
- * calls marked that way; a refusal that is not marked would come back as
- * though the tool had produced that string, seeding the withheld name into
- * the shared exposure ledger. The streaming chat loop persists nothing today,
- * so this is the latent half of the conv-path unification below.
+ * And it opens with NOT_RUN_MARKER, so a refusal reads as a refusal rather
+ * than as output the tool produced.
+ *
+ * An earlier version of this note claimed the marker also keeps the name out
+ * of the shared exposure ledger on a resume, because "a durable buffer that
+ * seeds a resumed turn from stored tool results skips calls marked that way".
+ * That was wrong in two ways and is worth recording rather than quietly
+ * deleting. `ledger.seedFromMessages` skips `SKIPPED_PREFIX` ('[Not run:'),
+ * which is a DIFFERENT string from NOT_RUN_MARKER ('[NOT RUN]'), and it
+ * deliberately DOES seed a marked off-list refusal -- correctly, because for
+ * an off-list call the live loop admitted and audited that name. An
+ * out-of-scope refusal is the opposite of an admission, so the marker was
+ * never going to be the control here.
+ *
+ * What is, since #571: `noteToolUse` and `seedFromMessages` are both gated on
+ * `toolInScope` (agents/orchestrator.ts). That matters because the ledger is
+ * the PRIMARY agent's, one set for the whole process shared by every chat, and
+ * `decideTools` keeps anything in it unconditionally -- so without the gate a
+ * site chat's refused `run_command` force-offered the shell in the next
+ * non-site turn, permanently and with no audit row anywhere.
  */
 export function outOfScopeMessage(scope: TurnToolScope, name: string): string {
   return `${NOT_RUN_MARKER} Error: no tool named "${name}" is available in ${scope.label}, `

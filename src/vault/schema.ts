@@ -1039,9 +1039,16 @@ function createTables(db: Database): void {
       updated_at INTEGER NOT NULL,
       result_json TEXT,
       question TEXT,
-      paused_conversation TEXT
+      paused_conversation TEXT,
+      scope_id TEXT
     )
   `);
+  // Migration: the tool scope the originating turn ran under (#571). A task
+  // can pause on ask_for_clarification and be resumed after a daemon
+  // restart, at which point this row is the only memory it has of being a
+  // site-project turn. An id, not a serialized policy: the policy is always
+  // whatever this build defines (actions/tools/tool-scope.ts scopeById).
+  try { db.run('ALTER TABLE tasks ADD COLUMN scope_id TEXT'); } catch { /* already present */ }
   db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_status_updated ON tasks(status, updated_at DESC)`);
   db.run(`CREATE INDEX IF NOT EXISTS idx_tasks_updated ON tasks(updated_at DESC)`);
   ensureSuggestionSchema(db);

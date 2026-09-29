@@ -100,7 +100,7 @@ describe('ConvOrchestrator', () => {
     const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
 
-    const result = await conv.processTurn('Hi', {});
+    const result = await conv.processTurn('Hi', {}, { scope: null });
     expect(result.text).toBe('Hello there!');
     expect(result.tasksRun).toEqual([]);
   });
@@ -128,7 +128,7 @@ describe('ConvOrchestrator', () => {
     const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
 
-    const result = await conv.processTurn('What is the capital of Italy?', {});
+    const result = await conv.processTurn('What is the capital of Italy?', {}, { scope: null });
     expect(result.text).toBe(
       'I’m looking into that now and I’ll report back.\nRome is the capital of Italy.',
     );
@@ -153,7 +153,7 @@ describe('ConvOrchestrator', () => {
     const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
 
-    const result = await conv.processTurn('Hello', {});
+    const result = await conv.processTurn('Hello', {}, { scope: null });
     expect(result.text).toBe('I’ll handle that.\nHi again, how is your day going?');
     expect(result.text).not.toContain('FALLBACK_OK');
     expect(result.text).not.toContain('/delegate');
@@ -175,7 +175,7 @@ describe('ConvOrchestrator', () => {
     const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
 
-    const result = await conv.processTurn('Check my last email', {});
+    const result = await conv.processTurn('Check my last email', {}, { scope: null });
     expect(result.text).toBe('Let me check your inbox now.\nYour latest email is from Alice.');
     expect(result.text).not.toContain('(delegate');
     expect(result.text).not.toContain('"template"');
@@ -199,7 +199,7 @@ describe('ConvOrchestrator', () => {
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
 
     const spoken: string[] = [];
-    for await (const event of conv.streamTurn('Check my email', {})) {
+    for await (const event of conv.streamTurn('Check my email', {}, { scope: null })) {
       if (event.type === 'text') spoken.push(event.text);
     }
     const streamed = spoken.join('');
@@ -225,7 +225,7 @@ describe('ConvOrchestrator', () => {
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
 
     let sawSegmentEnd = false;
-    for await (const event of conv.streamTurn('Check it', {})) {
+    for await (const event of conv.streamTurn('Check it', {}, { scope: null })) {
       if (event.type === 'text' && event.segmentEnd) {
         // The signal has to arrive while the task tier is still idle, or TTS
         // gains nothing over waiting for the answer.
@@ -249,7 +249,7 @@ describe('ConvOrchestrator', () => {
     const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
 
-    const result = await conv.processTurn('go', {});
+    const result = await conv.processTurn('go', {}, { scope: null });
     expect(result.text).toContain('I got stuck routing your request.');
     expect(result.text).not.toContain('it.I got stuck');
     expect(result.text.endsWith('\nI got stuck routing your request. Could you rephrase or try again?')).toBe(true);
@@ -272,7 +272,7 @@ describe('ConvOrchestrator', () => {
     const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
 
-    const stream = conv.streamTurn('Fix the route', {});
+    const stream = conv.streamTurn('Fix the route', {}, { scope: null });
     const first = await stream.next();
     expect(first.value).toMatchObject({
       type: 'text',
@@ -297,7 +297,7 @@ describe('ConvOrchestrator', () => {
     const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot.');
 
-    const result = await conv.processTurn('How is that task going?', {});
+    const result = await conv.processTurn('How is that task going?', {}, { scope: null });
     expect(result.text).toContain('isn\'t around');
   });
 
@@ -319,7 +319,7 @@ describe('ConvOrchestrator', () => {
     const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot.');
 
-    const result = await conv.processTurn('stuck', {});
+    const result = await conv.processTurn('stuck', {}, { scope: null });
     expect(result.text).toContain('stuck routing');
   });
 
@@ -341,8 +341,8 @@ describe('ConvOrchestrator', () => {
     const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
 
-    await conv.processTurn('Hi', { userIdentity: 'Name: Alice', ambientFacts: 'Weather: sunny' });
-    await conv.processTurn('Hi again', { userIdentity: 'Name: Alice', ambientFacts: 'Weather: rainy' });
+    await conv.processTurn('Hi', { userIdentity: 'Name: Alice', ambientFacts: 'Weather: sunny' }, { scope: null });
+    await conv.processTurn('Hi again', { userIdentity: 'Name: Alice', ambientFacts: 'Weather: rainy' }, { scope: null });
 
     expect(captured).toHaveLength(2);
     for (const messages of captured) {
@@ -388,8 +388,8 @@ describe('ConvOrchestrator', () => {
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot persona.');
 
     const profileBlock = '# User Profile\n- Preferred name: Alice';
-    await conv.processTurn('Hi', { userIdentity: 'Name: Alice', userProfile: profileBlock, ambientFacts: 'Weather: sunny' });
-    await conv.processTurn('Hi again', { userIdentity: 'Name: Alice', userProfile: profileBlock, ambientFacts: 'Weather: rainy' });
+    await conv.processTurn('Hi', { userIdentity: 'Name: Alice', userProfile: profileBlock, ambientFacts: 'Weather: sunny' }, { scope: null });
+    await conv.processTurn('Hi again', { userIdentity: 'Name: Alice', userProfile: profileBlock, ambientFacts: 'Weather: rainy' }, { scope: null });
 
     expect(captured).toHaveLength(2);
     for (const messages of captured) {
@@ -428,7 +428,7 @@ describe('ConvOrchestrator', () => {
     const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot.');
 
-    await conv.processTurn('Hi', { userIdentity: 'Name: Alice' });
+    await conv.processTurn('Hi', { userIdentity: 'Name: Alice' }, { scope: null });
     const messages = captured[0]!;
     // No profile block: the dynamic system prompt sits directly after the
     // static persona, and it alone carries the identity.
@@ -456,7 +456,7 @@ describe('ConvOrchestrator', () => {
     const dispatcher = new TaskDispatcher(llm, registry, runner as never);
     const conv = new ConvOrchestrator(llm, registry, dispatcher, 'TestBot.');
 
-    await conv.processTurn('Hi', {});
+    await conv.processTurn('Hi', {}, { scope: null });
     const messages = captured[0]!;
     expect(messages[0]!.role).toBe('system');
     expect(messages[1]!.role).toBe('user'); // no empty dynamic system message

@@ -292,9 +292,13 @@ describe('TaskRegistry persistence error resilience', () => {
     // Cache still reflects every transition.
     expect(reg.recentResults()).toHaveLength(1);
     expect(reg.recentResults()[0]!.status).toBe('completed');
-    // Both create + transition tried to persist and got swallowed.
-    expect(warnings.length).toBe(2);
-    expect(String(warnings[0]![0])).toContain('persist failed');
+    // Both create + transition tried to persist and got swallowed. Counted by
+    // message rather than by total, because the registry also warns once that
+    // this stub table has no `scope_id` column (#571) - that warning is the
+    // column probe working, not a persist failure.
+    const persistFailures = warnings.filter((w) => String(w[0]).includes('persist failed'));
+    expect(persistFailures.length).toBe(2);
+    expect(warnings.filter((w) => String(w[0]).includes('tasks.scope_id is missing')).length).toBe(1);
   });
 });
 
@@ -369,7 +373,7 @@ describe('Task durability end-to-end (pause -> restart -> resume)', () => {
     const dispatcher1 = new TaskDispatcher(llm1, reg1, runner1);
     const first = await dispatcher1.dispatch({
       tier: 'medium', template: 'general', intent: 'book a meeting with Sarah',
-    });
+    }, { scope: null });
     expect(first.status).toBe('needs_input');
     expect(first.needs_input?.question).toBe('Which Sarah?');
 
@@ -390,7 +394,7 @@ describe('Task durability end-to-end (pause -> restart -> resume)', () => {
       return { kind: 'completed', text: 'Booked with Sarah Chen.', conversation: [] };
     };
     const dispatcher2 = new TaskDispatcher(llm2, reg2, runner2);
-    const second = await dispatcher2.resume(first.task_id, 'Chen');
+    const second = await dispatcher2.resume(first.task_id, 'Chen', { scope: null });
 
     expect(second.status).toBe('completed');
     expect(second.summary).toContain('Sarah Chen');
@@ -398,7 +402,12 @@ describe('Task durability end-to-end (pause -> restart -> resume)', () => {
     // clarification reply - that's the durability promise.
     expect(receivedOriginal).toBe('Chen');
     expect(Array.isArray(receivedHistory)).toBe(true);
-    expect((receivedHistory as LLMMessage[]).map(m => m.role)).toEqual(['system', 'user']);
+    // No 'system' here any more: the dispatcher strips system messages before
+    // persisting the pause buffer and `processTaskCall` rebuilds them from the
+    // freshly built prompt on resume (#571). That is what keeps the site
+    // prompt block - which interpolates repo-written file names - per-turn
+    // instead of frozen at pause time in `tasks.paused_conversation`.
+    expect((receivedHistory as LLMMessage[]).map(m => m.role)).toEqual(['user']);
   });
 
   it('resume from a restarted registry roundtrips a buffer with tool calls + content blocks', async () => {
@@ -424,7 +433,7 @@ describe('Task durability end-to-end (pause -> restart -> resume)', () => {
       kind: 'paused', question: 'Which file?', conversation: richBuffer,
     });
     const d1 = new TaskDispatcher(llm1, reg1, runner1);
-    const first = await d1.dispatch({ tier: 'medium', template: 'general', intent: 'find file' });
+    const first = await d1.dispatch({ tier: 'medium', template: 'general', intent: 'find file' }, { scope: null });
 
     // Restart.
     const reg2 = new TaskRegistry({ db: dbResolver() });
@@ -436,11 +445,18 @@ describe('Task durability end-to-end (pause -> restart -> resume)', () => {
       return { kind: 'completed', text: 'done', conversation: [] };
     };
     const d2 = new TaskDispatcher(makeManager(), reg2, runner2);
-    await d2.resume(first.task_id, '/etc/hosts');
+    await d2.resume(first.task_id, '/etc/hosts', { scope: null });
 
-    // The buffer the post-restart runner sees must equal what was captured,
-    // including the tool_calls + tool message shapes.
-    expect(observed).toEqual(richBuffer);
+    // The buffer the post-restart runner sees must equal what was captured
+    // MINUS its system messages, which the dispatcher strips before persisting
+    // and `processTaskCall` rebuilds from the fresh prompt on resume (#571).
+    // The part that matters for round-tripping is unchanged: the assistant
+    // tool_calls and their paired tool outputs, in order.
+    expect(observed).toEqual(richBuffer.filter((m) => m.role !== 'system'));
+    // Spelled out, because the pairing is what a provider rejects if it breaks.
+    expect((observed as LLMMessage[]).map((m) => m.role)).toEqual(['user', 'assistant', 'tool']);
+    expect((observed as LLMMessage[])[1]!.tool_calls?.[0]?.id).toBe('call_1');
+    expect((observed as LLMMessage[])[2]!.tool_call_id).toBe('call_1');
   });
 
   it('a task that was running at restart is reconciled to failed and is NOT resumable', async () => {
@@ -459,7 +475,7 @@ describe('Task durability end-to-end (pause -> restart -> resume)', () => {
 
     const runner: TaskRunner = async () => ({ kind: 'completed', text: '', conversation: [] });
     const d = new TaskDispatcher(makeManager(), reg2, runner);
-    const env = await d.resume(rec.id, 'unsolicited');
+    const env = await d.resume(rec.id, 'unsolicited', { scope: null });
     expect(env.status).toBe('failed');
     expect(env.error).toBe('invalid_state');
   });

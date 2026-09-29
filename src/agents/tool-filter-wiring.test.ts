@@ -342,10 +342,12 @@ describe('across turns and off-list calls', () => {
     const orch = makeOrchestrator(provider, PROD);
     await orch.processTaskCall({
       systemPrompt: 'sys', userMessage: 'list the files in /tmp', tier: 'medium', subsystem: 'test',
+      scope: null,
     });
     expect(provider.names(0).has('list_directory')).toBe(true);
     await orch.processTaskCall({
       systemPrompt: 'sys', userMessage: 'set a goal to ship it this week', tier: 'medium', subsystem: 'test',
+      scope: null,
     });
     expect(provider.names(2).has('list_directory')).toBe(true);
   });
@@ -366,6 +368,7 @@ describe('across turns and off-list calls', () => {
     const orch = makeOrchestrator(provider, tools);
     const result = await orch.processTaskCall({
       systemPrompt: 'sys', userMessage: 'set a goal to ship the release this week', tier: 'medium', subsystem: 'test',
+      scope: null,
     });
     expect(ran).toEqual(['manage_goals']);
     const answered = new Map(result.conversation.filter((m) => m.role === 'tool').map((m) => [m.tool_call_id, String(m.content)]));
@@ -709,6 +712,7 @@ describe('processTaskCall with the filter off', () => {
       orch = makeOrchestrator(provider);
       const result = await orch.processTaskCall({
         systemPrompt: 'sys', userMessage: 'set a goal', tier: 'medium', subsystem: 'test',
+      scope: null,
         // A resumed buffer with calls and an admission that seeding would read.
         history: [
           { role: 'system', content: 'sys' },
@@ -776,6 +780,7 @@ describe('processTaskCall', () => {
     const orch = makeOrchestrator(provider);
     const result = await orch.processTaskCall({
       systemPrompt: 'sys', userMessage: 'do the thing', tier: 'medium', subsystem: 'test',
+      scope: null,
     });
     expect(result.kind).toBe('paused');
     if (result.kind !== 'paused') return;
@@ -793,6 +798,7 @@ describe('processTaskCall', () => {
     const orch = makeOrchestrator(provider);
     await orch.processTaskCall({
       systemPrompt: 'sys', userMessage: 'set a goal to ship the release', tier: 'medium', subsystem: 'test',
+      scope: null,
     });
     const offered = provider.names(0);
     expect(offered.has('ask_for_clarification')).toBe(true);

@@ -47,7 +47,7 @@ describe('TaskDispatcher pause/resume', () => {
       tier: 'medium',
       template: 'general',
       intent: 'book a meeting with Sarah',
-    });
+    }, { scope: null });
 
     expect(env.status).toBe('needs_input');
     expect(env.needs_input?.question).toBe('Which Sarah - Chen or Park?');
@@ -78,10 +78,10 @@ describe('TaskDispatcher pause/resume', () => {
     };
     const dispatcher = new TaskDispatcher(llm, registry, runner);
 
-    const first = await dispatcher.dispatch({ tier: 'medium', template: 'general', intent: 'book a meeting' });
+    const first = await dispatcher.dispatch({ tier: 'medium', template: 'general', intent: 'book a meeting' }, { scope: null });
     expect(first.status).toBe('needs_input');
 
-    const second = await dispatcher.resume(first.task_id, 'Chen');
+    const second = await dispatcher.resume(first.task_id, 'Chen', { scope: null });
     expect(second.status).toBe('completed');
     expect(second.summary).toContain('Sarah Chen');
 
@@ -102,15 +102,15 @@ describe('TaskDispatcher pause/resume', () => {
     };
     const dispatcher = new TaskDispatcher(llm, registry, runner);
 
-    const first = await dispatcher.dispatch({ tier: 'medium', template: 'general', intent: 'X' });
+    const first = await dispatcher.dispatch({ tier: 'medium', template: 'general', intent: 'X' }, { scope: null });
     expect(first.status).toBe('needs_input');
     expect(first.needs_input?.question).toBe('Q1');
 
-    const second = await dispatcher.resume(first.task_id, 'answer1');
+    const second = await dispatcher.resume(first.task_id, 'answer1', { scope: null });
     expect(second.status).toBe('needs_input');
     expect(second.needs_input?.question).toBe('Q2');
 
-    const third = await dispatcher.resume(second.task_id, 'answer2');
+    const third = await dispatcher.resume(second.task_id, 'answer2', { scope: null });
     expect(third.status).toBe('completed');
     expect(callCount).toBe(3);
   });
@@ -119,10 +119,10 @@ describe('TaskDispatcher pause/resume', () => {
     const runner: TaskRunner = async () => ({ kind: 'completed', text: 'Done', conversation: [] });
     const dispatcher = new TaskDispatcher(llm, registry, runner);
 
-    const env = await dispatcher.dispatch({ tier: 'medium', template: 'general', intent: 'X' });
+    const env = await dispatcher.dispatch({ tier: 'medium', template: 'general', intent: 'X' }, { scope: null });
     expect(env.status).toBe('completed');
 
-    const resumed = await dispatcher.resume(env.task_id, 'unsolicited');
+    const resumed = await dispatcher.resume(env.task_id, 'unsolicited', { scope: null });
     expect(resumed.status).toBe('failed');
     expect(resumed.error).toBe('invalid_state');
   });
@@ -131,7 +131,7 @@ describe('TaskDispatcher pause/resume', () => {
     const runner: TaskRunner = async () => ({ kind: 'completed', text: 'Done', conversation: [] });
     const dispatcher = new TaskDispatcher(llm, registry, runner);
 
-    const resumed = await dispatcher.resume('task_does_not_exist', 'reply');
+    const resumed = await dispatcher.resume('task_does_not_exist', 'reply', { scope: null });
     expect(resumed.status).toBe('failed');
     expect(resumed.error).toBe('not_found');
   });
@@ -140,7 +140,7 @@ describe('TaskDispatcher pause/resume', () => {
     const runner: TaskRunner = async () => ({ kind: 'paused', question: 'Q', conversation: [] });
     const dispatcher = new TaskDispatcher(llm, registry, runner);
 
-    const env = await dispatcher.dispatch({ tier: 'medium', template: 'general', intent: 'X' });
+    const env = await dispatcher.dispatch({ tier: 'medium', template: 'general', intent: 'X' }, { scope: null });
     expect(env.status).toBe('needs_input');
 
     // Aborting a paused task: registry.abort signals the abort controller,

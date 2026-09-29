@@ -1244,14 +1244,14 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // project with no containment, no framing and no taint, and it ran
       // before the branch below and regardless of which one was taken.
       //
-      // It is not set any more, and the reason it MUST not be is the
-      // router-first conv path: there the turn keeps the generic tools (the
-      // scope reaches only the classic path) and loses the site prompt block
-      // as well, so a project-scoped chat in the default hosted configuration
-      // was the pre-#561 state exactly, minus the prompt line that was its
-      // only control. Leaving the cwd pointed at the project is what turns
-      // that from "generic tools, resolving in the home dir" into "generic
-      // tools, aimed at the tree a pulled repo is sitting in".
+      // It is not set any more, and it must stay that way even now that the
+      // conv path is scoped too (#571). The default cwd is a PROCESS-WIDE
+      // global shared by every concurrent chat
+      // (actions/tools/local-tools-guard.ts), so pointing it at a project
+      // aims the generic tools of every OTHER chat in the daemon at that
+      // project's tree -- chats the site scope does not cover, because they
+      // carry no projectId. The scope closes the site chat's own use of
+      // those tools; nothing closes that one but leaving the cwd unset.
       //
       // The two `setDefaultCwd(null)` resets that used to end the turn went
       // with it: nothing in production sets a non-null default cwd any more
@@ -1262,12 +1262,12 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       // ProjectManager, not through the cwd; a card stored mid-turn already
       // freezes its path absolute at gate time (#522); and the git refusal
       // covers site projects through the projects dir, not through the cwd
-      // (siteRoots, file-path-policy.ts). What is genuinely lost is a
-      // conv-path turn resolving a bare "src/App.tsx" into the project, which
-      // only ever worked by accident: that path has no site prompt telling it
-      // the project exists. Threading scope and site context through the conv
-      // orchestrator is the real repair and is filed separately; until then
-      // the cwd does not do its work for it.
+      // (siteRoots, file-path-policy.ts). The one thing that was genuinely
+      // lost -- a conv-path turn resolving a bare "src/App.tsx" into the
+      // project -- is restored properly now that the site prompt and the
+      // scope reach the task tier: the model is told which project it is in
+      // and hands the path to `site_read_file` with a `project_id`, which is
+      // confined to the project instead of merely aimed at it.
       const { stream, onComplete } = this.agentService.streamMessage(text, channel, siteContext, scope);
 
       // Set up streaming TTS: speak sentences as they arrive

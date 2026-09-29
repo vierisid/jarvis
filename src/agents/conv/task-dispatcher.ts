@@ -13,6 +13,7 @@
  */
 
 import type { LLMManager } from '../../llm/manager.ts';
+import { type TurnToolScope } from '../../actions/tools/tool-scope.ts';
 import type { TaskRequest, TaskRecord, TaskResultEnvelope, TaskTemplate } from './task-envelope.ts';
 import type { TaskRegistry } from './task-registry.ts';
 
@@ -65,9 +66,33 @@ export type TaskRunner = (args: {
   signal: AbortSignal;
   /** When resuming, the conversation buffer captured at the previous pause. */
   history?: unknown[];
+  /**
+   * Tools this KIND of turn does not have (#571). Required, not optional:
+   * this is the only route from a hosted chat turn to the tool registry, and
+   * a runner that forgets it is a turn running unscoped. `null` is the
+   * explicit "no scope".
+   */
+  scope: TurnToolScope | null;
+  /**
+   * The site-builder prompt block for a project-scoped chat, if any. Rebuilt
+   * every turn and NOT persisted with the task: it carries repo-written file
+   * names framed as untrusted data (sites/prompt-context.ts), and a stale
+   * copy replayed onto a resume would describe a tree that has since moved.
+   */
+  siteContext?: string;
 }) => Promise<TaskRunResult>;
 
-export type DispatchOptions = {
+/**
+ * The facts about the dispatching TURN. Required on both `dispatch` and
+ * `resume`, not an optional options bag: a dispatch that does not say what
+ * scope its turn has is a task about to run unscoped, and the compiler is the
+ * only thing that catches the next call site (#571).
+ */
+export type TurnContext = {
+  /** Tools this kind of turn does not have. `null` is the explicit "none". */
+  scope: TurnToolScope | null;
+  /** This turn's site prompt block, handed to the task tier that has the tools. */
+  siteContext?: string;
   /** Optional channel hint for logging. */
   channel?: string;
 };
@@ -85,9 +110,27 @@ export class TaskDispatcher {
    * subscribers see each transition so the conv orchestrator can surface
    * UI events.
    */
-  async dispatch(request: TaskRequest, _opts?: DispatchOptions): Promise<TaskResultEnvelope> {
+  async dispatch(request: TaskRequest, turn: TurnContext): Promise<TaskResultEnvelope> {
     const subsystem = `task_${request.template}`;
-    const record = this.registry.create(request, subsystem);
+    // A scoped task must run on the USER's words. The fallback below
+    // (`original_message ?? intent`) would otherwise hand the task tier the
+    // router's paraphrase, and the paraphrase is what the relevance filter
+    // then selects on: "make the hero bigger" matches no trigger group and
+    // substitutes the site surface, while "update the hero section on the
+    // user's website" matches the BROWSE group (selection.ts puts "site" and
+    // "website" there, not in the site-build group), reaches for nothing
+    // withheld, and so gets the framed site readers but none of the actors.
+    // Failing is better than silently running a site task on text the user
+    // never wrote.
+    if (turn.scope && !request.original_message) {
+      return {
+        task_id: 'unassigned',
+        status: 'failed',
+        summary: 'This chat is scoped to one project, so a task has to run on your own words. Please say that again.',
+        error: 'missing_original_message',
+      };
+    }
+    const record = this.registry.create(request, subsystem, turn.scope?.id);
     const abort = new AbortController();
     this.registry.setAbortController(record.id, abort);
     this.registry.transition(record.id, 'running');
@@ -99,6 +142,10 @@ export class TaskDispatcher {
     return await this.runAndHandle(record, request, subsystem, abort, {
       originalMessage: request.original_message ?? request.intent,
       history: undefined,
+      // On a fresh dispatch the record's scope IS the turn's -- it was just
+      // written from it -- so there is nothing to reconcile.
+      scope: turn.scope,
+      ...(turn.siteContext ? { siteContext: turn.siteContext } : {}),
     });
   }
 
@@ -107,7 +154,7 @@ export class TaskDispatcher {
    * reply back into the task tier's conversation. Reuses the saved buffer
    * so the LLM continues from where it stopped instead of starting over.
    */
-  async resume(taskId: string, userInput: string): Promise<TaskResultEnvelope> {
+  async resume(taskId: string, userInput: string, turn: TurnContext): Promise<TaskResultEnvelope> {
     const record = this.registry.get(taskId);
     if (!record) {
       return {
@@ -126,6 +173,42 @@ export class TaskDispatcher {
       };
     }
 
+    // MATCH OR REFUSE, and not a union of the two scopes (#571).
+    //
+    // `resume_task` takes a task id the ROUTER chose, validated only for
+    // presence and existence, against a process-global TaskRegistry shared by
+    // every chat and channel. So the conv LLM in a site chat can resume a
+    // task that paused in the telegram chat, and vice versa.
+    //
+    // A union of the withheld sets is safe in the widening direction -- the
+    // resume can never do more than either context allowed -- but it is
+    // wrong in the narrowing one. A non-site task resumed from the Sites page
+    // would run under the site scope: its buffer already used `read_file`, the
+    // ledger is seeded from that buffer so the model believes it has it, the
+    // candidate set removes it, `discover_tools` cannot hand it back because
+    // the catalogue is scope-filtered too, and the refusal it finally gets
+    // says "use the site_* tools with the project_id" for a task that has no
+    // project. The user's paused work is burned on iteration cap or an
+    // apology, triggered by a model's choice of id rather than anything the
+    // user did.
+    //
+    // Comparing IDS, not resolved scopes, is deliberate: a row carrying a
+    // scope id this build no longer defines matches no live turn and is
+    // refused, where resolving it would yield `null` -- "no scope" -- and run
+    // the task with the full registry. The security-relevant direction fails
+    // closed.
+    const recordScopeId = record.scopeId ?? null;
+    const turnScopeId = turn.scope?.id ?? null;
+    if (recordScopeId !== turnScopeId) {
+      return {
+        task_id: taskId,
+        status: 'failed',
+        summary: `Task ${taskId} was started in a different chat and cannot be continued here. `
+          + 'Ask again in the chat it started in, or start it over here.',
+        error: 'scope_mismatch',
+      };
+    }
+
     const subsystem = record.subsystem;
     const abort = new AbortController();
     this.registry.setAbortController(taskId, abort);
@@ -139,6 +222,10 @@ export class TaskDispatcher {
     return await this.runAndHandle(record, record.request, subsystem, abort, {
       originalMessage: userInput,
       history,
+      // Identical to the record's by the check above, so either is correct;
+      // the turn's is the live object.
+      scope: turn.scope,
+      ...(turn.siteContext ? { siteContext: turn.siteContext } : {}),
     });
   }
 
@@ -152,7 +239,12 @@ export class TaskDispatcher {
     request: TaskRequest,
     subsystem: string,
     abort: AbortController,
-    callArgs: { originalMessage: string; history: unknown[] | undefined },
+    callArgs: {
+      originalMessage: string;
+      history: unknown[] | undefined;
+      scope: TurnToolScope | null;
+      siteContext?: string;
+    },
   ): Promise<TaskResultEnvelope> {
     try {
       const result = await this.runner({
@@ -163,6 +255,8 @@ export class TaskDispatcher {
         originalMessage: callArgs.originalMessage,
         signal: abort.signal,
         history: callArgs.history,
+        scope: callArgs.scope,
+        ...(callArgs.siteContext ? { siteContext: callArgs.siteContext } : {}),
       });
 
       if (abort.signal.aborted) {
@@ -172,11 +266,26 @@ export class TaskDispatcher {
       if (result.kind === 'paused') {
         // Record the pause state via the registry so it lands in the DB
         // (so a daemon restart doesn't drop the question + buffer).
-        this.registry.recordPauseState(
-          record.id,
-          result.question,
-          result.conversation as import('../../llm/provider.ts').LLMMessage[],
-        );
+        //
+        // System messages are dropped first (#571). They are rebuilt fresh by
+        // `processTaskCall` on resume, and persisting them was a real leak of
+        // the per-turn guarantee: the site prompt block interpolates
+        // repo-written file names framed as untrusted data, and
+        // sites/prompt-context.ts states the design intent as "rebuilt into
+        // the system prompt on EVERY later turn" precisely so planted text
+        // cannot outlive the turn that planted it. Serialized into
+        // `tasks.paused_conversation` it outlived the turn, the conversation
+        // and the daemon process. Dropping them also shrinks the blob and
+        // makes the scope notice live on the resume path instead of being
+        // shadowed by a stale copy.
+        //
+        // Safe for tool_use/tool_result pairing: these buffers only ever
+        // carry system messages at the head (processTaskCall builds them that
+        // way), so removing them leaves the assistant/tool sequence
+        // untouched, and the resume re-prepends them in the same position.
+        const buffer = (result.conversation as import('../../llm/provider.ts').LLMMessage[])
+          .filter((m) => m.role !== 'system');
+        this.registry.recordPauseState(record.id, result.question, buffer);
         const envelope: TaskResultEnvelope = {
           task_id: record.id,
           status: 'needs_input',

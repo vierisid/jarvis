@@ -32,6 +32,19 @@ export class TaskRegistry {
   private listeners: Set<Listener> = new Set();
   private readonly maxKeepCompleted: number;
   private resolveDb: DbResolver;
+  /**
+   * Whether the `tasks` table actually has the `scope_id` column (#571).
+   *
+   * Resolved from `PRAGMA table_info` rather than assumed, because the
+   * migration is an `ALTER TABLE` in a swallowing try/catch
+   * (vault/schema.ts). If the ALTER were skipped on an older database while
+   * `persist` still named the column, EVERY insert would throw and be
+   * warned-and-dropped -- task durability, the only reason this table
+   * exists, would stop for the whole product with one log line as the
+   * signal. Branching the statement instead degrades to "scope not
+   * persisted", which `resume` then treats as a mismatch and refuses.
+   */
+  private hasScopeColumn: boolean | null = null;
 
   constructor(opts?: { maxKeepCompleted?: number; db?: DbResolver | Database | null }) {
     // How many completed/failed/cancelled tasks to retain in-memory for the
@@ -98,11 +111,15 @@ export class TaskRegistry {
    * Create a fresh task record in `queued` state. Caller should attach an
    * AbortController and transition to `running` when the task tier starts.
    */
-  create(request: TaskRequest, subsystem: string): TaskRecord {
+  create(request: TaskRequest, subsystem: string, scopeId?: string): TaskRecord {
     const now = Date.now();
     const record: TaskRecord = {
       id: newTaskId(),
       request,
+      // The originating turn's tool scope. Set here, from the dispatcher's
+      // turn context, so it never passes through the model-shaped request
+      // object (#571; see TaskRecord.scopeId).
+      ...(scopeId ? { scopeId } : {}),
       subsystem,
       status: 'queued',
       startedAt: now,
@@ -236,6 +253,24 @@ export class TaskRegistry {
     }
   }
 
+  /** Whether this database's `tasks` table carries `scope_id`. Memoized. */
+  private scopeColumnPresent(db: Database): boolean {
+    if (this.hasScopeColumn !== null) return this.hasScopeColumn;
+    try {
+      const cols = db.query<{ name: string }, []>('PRAGMA table_info(tasks)').all();
+      this.hasScopeColumn = cols.some((c) => c.name === 'scope_id');
+    } catch {
+      // Unknown means do not name the column: a persist that works without
+      // the scope beats a persist that throws with it.
+      this.hasScopeColumn = false;
+    }
+    if (!this.hasScopeColumn) {
+      console.warn('[TaskRegistry] tasks.scope_id is missing; a paused task will not '
+        + 'remember its originating tool scope and will refuse to resume under one (#571)');
+    }
+    return this.hasScopeColumn;
+  }
+
   /**
    * Mirror a record to the `tasks` table. Best-effort: persistence failures
    * never break the live registry (caller has already mutated the cache).
@@ -243,12 +278,13 @@ export class TaskRegistry {
   private persist(record: TaskRecord): void {
     const db = this.resolveDb();
     if (!db) return;
+    const withScope = this.scopeColumnPresent(db);
     try {
       db.run(
         `INSERT INTO tasks (
           id, status, tier, template, intent, original_message, subsystem,
-          started_at, updated_at, result_json, question, paused_conversation
-        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+          started_at, updated_at, result_json, question, paused_conversation${withScope ? ',\n          scope_id' : ''}
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?${withScope ? ', ?' : ''})
         ON CONFLICT(id) DO UPDATE SET
           status = excluded.status,
           tier = excluded.tier,
@@ -259,7 +295,7 @@ export class TaskRegistry {
           updated_at = excluded.updated_at,
           result_json = excluded.result_json,
           question = excluded.question,
-          paused_conversation = excluded.paused_conversation`,
+          paused_conversation = excluded.paused_conversation${withScope ? ',\n          scope_id = excluded.scope_id' : ''}`,
         [
           record.id,
           record.status,
@@ -273,6 +309,7 @@ export class TaskRegistry {
           record.result ? JSON.stringify(record.result) : null,
           record.question ?? null,
           record.pausedConversation ? JSON.stringify(record.pausedConversation) : null,
+          ...(withScope ? [record.scopeId ?? null] : []),
         ],
       );
     } catch (err) {
@@ -294,6 +331,8 @@ type TaskRow = {
   result_json: string | null;
   question: string | null;
   paused_conversation: string | null;
+  /** Absent on a pre-migration database; see TaskRegistry.scopeColumnPresent. */
+  scope_id?: string | null;
 };
 
 function rowToRecord(row: TaskRow): TaskRecord {
@@ -305,6 +344,12 @@ function rowToRecord(row: TaskRow): TaskRecord {
       intent: row.intent,
       ...(row.original_message ? { original_message: row.original_message } : {}),
     },
+    // Restored so a task resumed after a restart is still recognised as
+    // having come from a scoped turn (#571). Kept as the RAW id, not a
+    // resolved scope: `resume` compares ids, so an id this build no longer
+    // defines fails closed (it matches no live turn) instead of resolving to
+    // "no scope" and running with the full registry.
+    ...(row.scope_id ? { scopeId: row.scope_id } : {}),
     subsystem: row.subsystem,
     status: row.status as TaskStatus,
     startedAt: row.started_at,

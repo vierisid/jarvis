@@ -99,6 +99,7 @@ describe('AgentOrchestrator.processTaskCall', () => {
       userMessage: 'find capital of Italy',
       tier: 'medium',
       subsystem: 'task_test',
+      scope: null,
     });
     expect(result.kind).toBe('completed');
     if (result.kind === 'completed') {
@@ -117,6 +118,7 @@ describe('AgentOrchestrator.processTaskCall', () => {
       userMessage: 'draft a thank-you note',
       tier: 'medium',
       subsystem: 'task_test',
+      scope: null,
     });
     expect(result.kind).toBe('completed');
     if (result.kind === 'completed') expect(result.text).toBe('done');
@@ -138,6 +140,7 @@ describe('AgentOrchestrator.processTaskCall', () => {
       userMessage: 'open notepad',
       tier: 'medium',
       subsystem: 'task_test',
+      scope: null,
       requireToolUse: true,
     });
 
@@ -163,6 +166,7 @@ describe('AgentOrchestrator.processTaskCall', () => {
       userMessage: 'open notepad',
       tier: 'medium',
       subsystem: 'task_test',
+      scope: null,
       requireToolUse: true,
     });
     expect(result.kind).toBe('completed');
@@ -182,6 +186,7 @@ describe('AgentOrchestrator.processTaskCall', () => {
       userMessage: 'yes, go ahead',
       tier: 'medium',
       subsystem: 'task_test',
+      scope: null,
       requireToolUse: true,
       history: [
         { role: 'system', content: 'task system' },
@@ -210,6 +215,7 @@ describe('AgentOrchestrator.processTaskCall', () => {
       userMessage: 'open notepad',
       tier: 'medium',
       subsystem: 'task_test',
+      scope: null,
       requireToolUse: true,
     });
     expect(result.kind).toBe('completed');
@@ -228,6 +234,7 @@ describe('AgentOrchestrator.processTaskCall', () => {
       userMessage: 'summarise the vault',
       tier: 'medium',
       subsystem: 'task_test',
+      scope: null,
       requireToolUse: true,
     });
     expect(result.kind).toBe('completed');
@@ -251,6 +258,7 @@ describe('AgentOrchestrator.processTaskCall', () => {
       userMessage: 'open notepad',
       tier: 'medium',
       subsystem: 'task_test',
+      scope: null,
       requireToolUse: true,
     });
     expect(result.kind).toBe('completed');
@@ -272,6 +280,7 @@ describe('AgentOrchestrator.processTaskCall', () => {
       userMessage: 'book a meeting with Sarah',
       tier: 'medium',
       subsystem: 'task_test',
+      scope: null,
     });
     expect(result.kind).toBe('paused');
     if (result.kind === 'paused') {
@@ -292,6 +301,7 @@ describe('AgentOrchestrator.processTaskCall', () => {
       userMessage: 'book Sarah',
       tier: 'medium',
       subsystem: 'task_test',
+      scope: null,
     });
     expect(first.kind).toBe('paused');
     if (first.kind !== 'paused') return;
@@ -305,6 +315,7 @@ describe('AgentOrchestrator.processTaskCall', () => {
       userMessage: 'Chen',
       tier: 'medium',
       subsystem: 'task_test',
+      scope: null,
       history: first.conversation,
     });
     expect(second.kind).toBe('completed');
@@ -323,6 +334,7 @@ describe('AgentOrchestrator.processTaskCall', () => {
       userMessage: 'X',
       tier: 'medium',
       subsystem: 'task_test',
+      scope: null,
     });
     expect(result.kind).toBe('paused');
     if (result.kind === 'paused') {

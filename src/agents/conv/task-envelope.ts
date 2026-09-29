@@ -57,6 +57,26 @@ export type TaskRequest = {
 };
 
 /**
+ * The templates a `delegate` call may name. `TaskTemplate` is a compile-time
+ * union and the conv LLM's arguments are runtime strings, so the two need a
+ * runtime bridge or an invented template reaches `TEMPLATE_PROMPTS[template]`
+ * and puts the literal string `undefined` into the task tier's system prompt.
+ */
+export const TASK_TEMPLATES: readonly TaskTemplate[] =
+  ['research', 'code', 'plan', 'write', 'general'] as const;
+
+/** The tiers a `delegate` call may name. `conversation` is the router itself. */
+export const TASK_TIERS: readonly TaskRequest['tier'][] = ['high', 'medium', 'low'] as const;
+
+export function isTaskTemplate(value: unknown): value is TaskTemplate {
+  return typeof value === 'string' && (TASK_TEMPLATES as readonly string[]).includes(value);
+}
+
+export function isTaskTier(value: unknown): value is TaskRequest['tier'] {
+  return typeof value === 'string' && (TASK_TIERS as readonly string[]).includes(value);
+}
+
+/**
  * What flows back into the conversation LLM's context after a task runs.
  * `summary` is what the conv LLM verbalizes; `details_ref` is a pointer to
  * fetch the full task transcript if the user drills in. `followup_hints`
@@ -81,6 +101,26 @@ export type TaskResultEnvelope = {
 export type TaskRecord = {
   id: string;
   request: TaskRequest;
+  /**
+   * Id of the tool scope the ORIGINATING turn ran under (#571), e.g. a chat
+   * bound to one site-builder project. `undefined` means the turn had none.
+   *
+   * On the RECORD and not on `TaskRequest`, deliberately. `TaskRequest` is the
+   * one object built from the conv LLM's tool-call arguments -- `handleToolCall`
+   * does `call.arguments as Partial<TaskRequest>` -- so a control field on it
+   * would be a type-valid thing for the model to send, and the only reason it
+   * could not set one today is the convention that the request is assembled
+   * field by field. A later refactor to `{ ...args }` would compile clean and
+   * hand the model its own scope. `TaskRecord` is constructed only by the
+   * registry and by `rowToRecord`, never from model output, so keeping it here
+   * makes that confused deputy structurally impossible rather than avoided by
+   * habit.
+   *
+   * Persisted (`tasks.scope_id`): a delegated task can pause on
+   * `ask_for_clarification` and resume minutes later or after a daemon
+   * restart, and the resumed turn must run under the scope that created it.
+   */
+  scopeId?: string;
   subsystem: string;          // attribution label for token tracking
   status: TaskStatus;
   startedAt: number;
