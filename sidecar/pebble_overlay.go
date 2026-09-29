@@ -42,12 +42,26 @@ type PebbleSpec struct {
 	CursorOffsetY int `json:"cursor_offset_y"`
 
 	// SummonHotkey, if non-empty, registers a global hotkey that toggles
-	// listening/idle and shows/hides the bubble. Default "ctrl+space".
+	// listening/idle and shows/hides the bubble.
+	//
+	// There is NO default here: the sidecar registers exactly what it is given
+	// and empty means "no global hotkey". The default lives on the daemon side
+	// (PEBBLE_DEFAULT_SUMMON_HOTKEY in src/config/pebble-hotkeys.ts, overridable
+	// via `pebble.summon_hotkey` in config.yaml), because that is where the
+	// user's config is read. Naming a default in this comment was wrong even
+	// before #563 moved it.
+	//
+	// Parsed by startHotkeyListener via the shared grammar in
+	// hotkeys_keyspec.go; see docs/PEBBLE_HOTKEYS.md.
 	SummonHotkey string `json:"summon_hotkey"`
 
 	// PaletteHotkey, if non-empty, registers a second global hotkey that
-	// fires the OnPalette callback. Used by the Cmd+K / Ctrl+K palette to
-	// open a fuzzy room picker at the cursor. Default "ctrl+k".
+	// fires the OnPalette callback, opening a fuzzy room picker at the cursor.
+	// Same "no default here" rule as SummonHotkey.
+	//
+	// NOTE: on Windows this value also gates the Ctrl+middle-click palette
+	// gesture (pebble_overlay_windows.go), so empty turns off the mouse hook
+	// too. Deliberate, and documented in docs/PEBBLE_HOTKEYS.md.
 	PaletteHotkey string `json:"palette_hotkey"`
 }
 

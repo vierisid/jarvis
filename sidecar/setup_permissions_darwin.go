@@ -138,6 +138,16 @@ func setupPermissionStatuses() (notif, mic, screen, ax string) {
 		permStatusString(C.setup_ax_status())
 }
 
+// setupAXTrusted reports whether this process is trusted for Accessibility,
+// without prompting for it (AXIsProcessTrusted, not AXIsProcessTrustedWithOptions
+// with kAXTrustedCheckOptionPrompt - that is setupRequestPermission's job).
+//
+// Here rather than as a second AX bridge of its own because there should be one
+// implementation of this question in the package. The macOS hotkey backend asks
+// it so a global key monitor that installed and can never fire is logged as such
+// instead of as "registered" (#563, hotkeyAccessibilityCaveat).
+func setupAXTrusted() bool { return C.setup_ax_status() == 1 }
+
 // setupRequestPermission triggers the OS prompt (or pane registration) for one
 // permission. All requests are async/fire-and-forget; the wizard's poll picks
 // up the outcome.
