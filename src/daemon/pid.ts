@@ -344,7 +344,16 @@ export function readLockedPort(): number | null {
  */
 export function writeLockedPort(port: number): void {
   if (lockFd === null) return;
-  if (!Number.isInteger(port) || port < 1 || port > 65535) return;
+  if (!Number.isInteger(port) || port < 1 || port > 65535) {
+    // Loudly, because this silence is half of #550: a quoted `daemon.port`
+    // reached here as the STRING "8080", nothing was recorded, and `jarvis
+    // stop` then fell back to 3142 and signalled an unrelated listener. The
+    // config loader coerces the port now, so reaching this is a bug upstream.
+    // String(), not JSON.stringify(): the latter renders NaN and Infinity as
+    // "null", which is exactly the wrong word for a value that was passed.
+    console.error(`[PID] Refusing to record ${typeof port === 'string' ? JSON.stringify(port) : String(port)} as the daemon's port: not a port number. \`jarvis stop\` will not know which port to verify.`);
+    return;
+  }
   try {
     const pid = process.pid;
     ftruncateSync(lockFd, 0);

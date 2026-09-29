@@ -297,13 +297,39 @@ describe('Process Lock Manager', () => {
       expect(readPid()).toBe(process.pid);
     });
 
-    test('ignores invalid ports', () => {
-      acquireLock(process.pid);
-      writeLockedPort(0);
-      writeLockedPort(70000);
-      writeLockedPort(Number.NaN);
+    test('refuses invalid ports, and says so', () => {
+      // Out loud, not silently. This no-op is half of #550: a quoted
+      // `daemon.port` arrived here as the STRING "8080", nothing was recorded,
+      // and `jarvis stop` then fell back to 3142 and signalled an unrelated
+      // listener. The config loader coerces the port now, so reaching this is a
+      // bug upstream and has to be visible in the daemon's log.
+      const refusals: string[] = [];
+      const realError = console.error;
+      console.error = (...args: unknown[]) => { refusals.push(args.map(String).join(' ')); };
+      try {
+        acquireLock(process.pid);
+        writeLockedPort(0);
+        writeLockedPort(70000);
+        writeLockedPort(Number.NaN);
+        // The string case the coercion exists to prevent, which TypeScript
+        // alone cannot: this value comes from YAML.
+        writeLockedPort('8080' as unknown as number);
+      } finally {
+        console.error = realError;
+      }
+
       expect(readLockedPort()).toBeNull();
       expect(readPid()).toBe(process.pid);
+      expect(refusals).toHaveLength(4);
+      for (const line of refusals) {
+        expect(line).toContain('Refusing to record');
+        expect(line).toContain('jarvis stop');
+      }
+      // Each names the value it refused, NaN as NaN rather than as "null".
+      expect(refusals[0]).toContain('record 0 as');
+      expect(refusals[1]).toContain('70000');
+      expect(refusals[2]).toContain('NaN');
+      expect(refusals[3]).toContain('"8080"');
     });
 
     test('overwrites an earlier recorded port', () => {

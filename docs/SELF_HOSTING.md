@@ -21,6 +21,23 @@ you put a reverse proxy (Caddy, nginx, traefik) in front. The daemon honors
 `X-Forwarded-Proto`, so cookies and redirects behave correctly behind a
 proxy.
 
+`daemon.port` must be a whole number from 1 to 65535. A quoted port
+(`port: "8080"`) is accepted and means the same as an unquoted one. Anything
+else - `0`, out of range, fractional, `"8080abc"` - aborts startup with a
+message naming the value, rather than quietly falling back to 3142. `0` is
+rejected on purpose: it means "bind any free port", which leaves nothing able
+to say afterwards which port that was. The same goes for a `daemon.listen` the
+daemon will not resolve, and for a file it cannot load at all.
+
+When the port cannot be determined, `jarvis stop` stops the daemon by PID only
+and skips port cleanup instead of clearing 3142, because on that machine 3142
+belongs to something else. A running daemon is always stoppable regardless: it
+records the port it bound in its lock file, which `jarvis stop` reads first. A
+`JARVIS_PORT` left over in your shell does not stand in for a broken
+`daemon.port` - the daemon rejects the file before it ever reads the env var, so
+that port is not Jarvis's either - but `jarvis stop --port N` is still honored,
+for stopping a daemon whose config was edited after it started.
+
 **Access is JWT-only by default.** There is no shared password or token. You
 enroll devices:
 

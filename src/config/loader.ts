@@ -3,6 +3,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import type { JarvisConfig } from './types.ts';
 import { DEFAULT_CONFIG, USER_OWNED_SECTIONS, WORKFLOW_SYSTEM_KEYS } from './types.ts';
+import { requirePort } from './port.ts';
 
 function expandTilde(filepath: string): string {
   // YAML happily produces a boolean, a number or null for a key that LOOKS
@@ -35,6 +36,35 @@ function normalizeLogFilePath(config: JarvisConfig): void {
   }
   // The sink opens this with openSync, which does not understand `~`.
   config.daemon.log_file_path = expandTilde(value);
+}
+
+/**
+ * Make `daemon.port` a number, or refuse to load the config.
+ *
+ * Here rather than at each call site because there is no single call site: the
+ * daemon binds this value and `jarvis stop` reads the same key out of the YAML
+ * separately (src/cli/lifecycle.ts). Both now go through `readPortSetting`, so
+ * `port: "8080"` and `port: 8080` resolve to the same 8080 on both paths -- a
+ * quoted port used to bind 8080 while `jarvis stop` targeted 3142 (#550).
+ *
+ * A value that is not a port at all throws, which makes `jarvis start` fail
+ * with the reason instead of binding somewhere unexpected. The file existing at
+ * all already makes its problems fatal (see the YAML errors above), and unlike
+ * `JARVIS_PORT` -- ignored when invalid, because a stale shell export must not
+ * stop the daemon -- a config file is edited on purpose.
+ *
+ * This runs BEFORE applyEnvOverrides: a broken `daemon.port` is reported even
+ * when `JARVIS_PORT` would have overridden it, so the typo gets fixed rather
+ * than lurking until the env var is gone. It applies in unix-socket mode too,
+ * where the port is never bound; a port-shaped key that is not a port is worth
+ * the same message wherever it is read from.
+ */
+function normalizeDaemonPort(config: JarvisConfig, path: string): void {
+  const port = requirePort(config.daemon.port as unknown, `daemon.port in ${path}`);
+  // `absent` cannot happen once DEFAULT_CONFIG has merged in its 3142, but an
+  // explicit `port:` with no value parses as null and lands here.
+  if (port === undefined) config.daemon.port = DEFAULT_CONFIG.daemon.port;
+  else config.daemon.port = port;
 }
 
 export function deepMerge(target: any, source: any): any {
@@ -165,6 +195,7 @@ export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
     // the two branches must stay symmetrical or the next key added to one of
     // them gets expanded in only half the cases.
     normalizeLogFilePath(config);
+    normalizeDaemonPort(config, path);
     applyEnvOverrides(config);
     return config;
   }
@@ -192,6 +223,7 @@ export async function loadConfig(configPath?: string): Promise<JarvisConfig> {
   config.daemon.data_dir = expandTilde(config.daemon.data_dir);
   config.daemon.db_path = expandTilde(config.daemon.db_path);
   normalizeLogFilePath(config);
+  normalizeDaemonPort(config, path);
 
   // Apply environment variable overrides
   applyEnvOverrides(config);

@@ -497,8 +497,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     jarvisConfig = await loadConfig();
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    console.error(`\n[Daemon] Failed to parse config file: ${message}`);
-    console.error('[Daemon] Fix the YAML syntax in ~/.jarvis/config.yaml or delete it to use defaults.\n');
+    // "Failed to load", not "Failed to parse": loadConfig also rejects a value
+    // it CAN parse but cannot honour, such as a daemon.port that is not a port
+    // (#550), and "fix the YAML syntax or delete it" is bad advice for a working
+    // config with one bad key. The message already says which one.
+    console.error(`\n[Daemon] Failed to load config file: ${message}`);
+    console.error('[Daemon] Fix the reported value in ~/.jarvis/config.yaml, or delete the file to use defaults.\n');
     process.exit(1);
   }
 

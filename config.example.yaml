@@ -2,6 +2,9 @@
 # Copy to ~/.jarvis/config.yaml and customize
 
 daemon:
+  # 1-65535. Quoting it ("8080") is fine and means the same number; anything
+  # that is not a port in range aborts startup instead of silently becoming
+  # 3142, so `jarvis stop` can never go after someone else's listener.
   port: 3142
   data_dir: "~/.jarvis"
   db_path: "~/.jarvis/jarvis.db"

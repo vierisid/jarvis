@@ -34,9 +34,14 @@ export async function runDoctor(): Promise<void> {
   // unix-socket mode there is no localhost URL at all (#544).
   const target = resolveDashboardTarget();
   const dashboard = describeDashboard(target);
-  const setupHint = dashboard.openUrl
+  // Branching on the REASON, not on openUrl being null: a config the daemon
+  // refuses also has no URL, and telling that user about a unix-socket proxy
+  // they do not have sends them somewhere there is nothing to find (#550).
+  const setupHint = dashboard.reason === 'url'
     ? `finish setup at ${dashboard.openUrl}`
-    : 'finish setup through the proxy in front of daemon.listen';
+    : dashboard.reason === 'invalid-config'
+      ? `fix your config first (${dashboard.problem}), then finish setup in the dashboard`
+      : 'finish setup through the proxy in front of daemon.listen';
 
   // ── Check 1: Bun Version ──────────────────────────────────────────
 

@@ -244,7 +244,14 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
     console.log(c.dim(`  Using port ${port} (from ${resolution.source})`));
   }
   if (port === null) {
-    console.log(c.dim('  Unix-socket mode (daemon.listen) — pid-only stop, no port cleanup'));
+    if (resolution.source === 'invalid-config') {
+      // Pid-only rather than "clean up 3142": that port is not ours, and the
+      // daemon will not boot from this config either (#550).
+      console.log(c.dim(`  ${resolution.problem}`));
+      console.log(c.dim('  Stopping by pid only, no port cleanup'));
+    } else {
+      console.log(c.dim('  Unix-socket mode (daemon.listen) -- pid-only stop, no port cleanup'));
+    }
   }
 
   if (!pid) {
@@ -383,6 +390,10 @@ async function cmdStatus(): Promise<void> {
     const resolution = resolveStopPort();
     const { label } = describeDashboard({
       url: resolution.port === null ? null : `http://localhost:${resolution.port}`,
+      // So a broken daemon.port is not reported as unix-socket mode, which is
+      // the other reason there is no URL.
+      source: resolution.source,
+      problem: resolution.source === 'invalid-config' ? resolution.problem : undefined,
     });
     console.log(c.dim(`  Dashboard: ${label}`));
 
@@ -594,10 +605,14 @@ switch (command) {
     console.log(c.yellow('The CLI onboarding wizard has been retired.'));
     console.log(c.dim('  First-time setup now happens in the dashboard:'));
     console.log(c.dim('    1. Run: jarvis start'));
-    const target = describeDashboard(resolveDashboardTarget());
-    console.log(c.dim(target.openUrl
-      ? `    2. Open: ${target.openUrl}`
-      : '    2. Reach the unix socket in daemon.listen through your proxy'));
+    const described = describeDashboard(resolveDashboardTarget());
+    // On the reason, not on openUrl being null: a config the daemon refuses
+    // also has no URL, and pointing that user at a proxy is a dead end (#550).
+    console.log(c.dim(described.reason === 'url'
+      ? `    2. Open: ${described.openUrl}`
+      : described.reason === 'invalid-config'
+        ? `    2. Fix your config first: ${described.problem}`
+        : '    2. Reach the unix socket in daemon.listen through your proxy'));
     console.log(c.dim('  The dashboard guides you through LLM, voice, and profile setup.'));
     break;
   }

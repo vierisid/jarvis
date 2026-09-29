@@ -654,3 +654,73 @@ describe('JARVIS_PORT agrees with the port the CLI resolves', () => {
     expect((await loadConfig(TEST_CONFIG_PATH)).daemon.port).toBe(8080);
   });
 });
+
+// The daemon binds whatever `daemon.port` resolves to, and `jarvis stop` reads
+// the same key out of the same file to decide which port to signal
+// (src/cli/lifecycle.ts). A value only one of them understands means the daemon
+// is on one port and the CLI aims SIGTERM then SIGKILL at another - which is not
+// Jarvis (#550). The shared reading lives in src/config/port.ts.
+describe('daemon.port is coerced, or the config is refused', () => {
+  beforeEach(async () => {
+    await createTestConfigPath();
+  });
+
+  afterEach(async () => {
+    await rm(TEST_CONFIG_DIR, { recursive: true, force: true });
+    delete process.env.JARVIS_PORT;
+  });
+
+  const write = async (body: string) => {
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(TEST_CONFIG_PATH, body);
+  };
+
+  const portOf = async () => (await loadConfig(TEST_CONFIG_PATH)).daemon.port;
+
+  test('a quoted port loads as the same number as an unquoted one', async () => {
+    await write('daemon:\n  port: "8080"\n');
+    const quoted = await portOf();
+    await write('daemon:\n  port: 8080\n');
+    expect(quoted).toBe(await portOf());
+    // A number, not the string YAML produced: writeLockedPort takes only a
+    // number, and its silent no-op is how the lockfile ended up empty.
+    expect(quoted).toBe(8080);
+    expect(typeof quoted).toBe('number');
+  });
+
+  test('an absent or empty daemon.port is the default, as before', async () => {
+    await write('daemon:\n  data_dir: /tmp/jarvis-test\n');
+    expect(await portOf()).toBe(DEFAULT_CONFIG.daemon.port);
+    // `port:` with nothing after it parses as null.
+    await write('daemon:\n  port:\n');
+    expect(await portOf()).toBe(DEFAULT_CONFIG.daemon.port);
+  });
+
+  test.each(['0', '65536', '-1', '8080.5', '"8080abc"', '""', 'true', '[8080]', '{ nope: true }'])(
+    'refuses daemon.port: %s rather than falling back to a port nobody asked for',
+    async (value) => {
+      await write(`daemon:\n  port: ${value}\n`);
+      await expect(loadConfig(TEST_CONFIG_PATH)).rejects.toThrow(/daemon\.port in .* must be a whole number between 1 and 65535/);
+    },
+  );
+
+  test('the refusal names the file, so the user knows which one to edit', async () => {
+    await write('daemon:\n  port: "8080abc"\n');
+    await expect(loadConfig(TEST_CONFIG_PATH)).rejects.toThrow(TEST_CONFIG_PATH);
+  });
+
+  test('a broken daemon.port is reported even when JARVIS_PORT would have covered it', async () => {
+    // Deliberate: the env var is a convenience a stale shell export can carry,
+    // the file is edited on purpose, and a typo that only surfaces once the
+    // export is gone is the worse of the two.
+    await write('daemon:\n  port: "8080abc"\n');
+    process.env.JARVIS_PORT = '7000';
+    await expect(loadConfig(TEST_CONFIG_PATH)).rejects.toThrow(/daemon\.port in /);
+  });
+
+  test('JARVIS_PORT still wins over a valid quoted port', async () => {
+    await write('daemon:\n  port: "8080"\n');
+    process.env.JARVIS_PORT = '7000';
+    expect(await portOf()).toBe(7000);
+  });
+});
