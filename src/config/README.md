@@ -182,12 +182,48 @@ file:
   descriptors from another process, so their output reaches the terminal and
   journald but not this file.
 
-Both keys live under `daemon:` rather than in a section of their own because
-`loadConfig` discards everything outside the system-owned sections - a
-top-level `logging:` block would be dropped on every load. Neither has an entry
+Both keys live under `daemon:` rather than in a section of their own for
+continuity with the rest of the daemon's own settings, not because a top-level
+section would be dropped: `loadConfig` deep-merges the parsed file over
+`DEFAULT_CONFIG` and discards only the sections listed in
+`USER_OWNED_SECTIONS`, so an UNLISTED top-level key survives (that is how the
+system-owned `tools:` and `pebble:` sections reach the runtime). This paragraph
+used to say the opposite, which was wrong. Neither has an entry
 in `DEFAULT_CONFIG` (same as `drain_deadline_ms`): absent has to stay
 distinguishable from "set to the default", and the fallback is applied where
 the value is consumed.
+
+### `pebble`
+
+The pebble overlay's two global hotkeys. SYSTEM-owned, so `config.yaml` is
+authoritative: `pebble` is deliberately absent from `USER_OWNED_SECTIONS`, and
+it survives the load as an unlisted top-level section (see the note above).
+
+```typescript
+pebble?: {
+  summon_hotkey?: unknown;   // e.g. "ctrl+shift+space"; "", "none" or "off" registers none
+  palette_hotkey?: unknown;  // e.g. "ctrl+shift+k"
+}
+```
+
+Both are typed `unknown` because they arrive straight from YAML, where
+`summon_hotkey: 3` is as legal as a string. Read them through
+`resolvePebbleHotkeys` in `src/config/pebble-hotkeys.ts`, never as
+`config.pebble?.summon_hotkey`: the reader returns a four-state verdict
+(`absent` / `valid` / `disabled` / `invalid`) so a value that is set to
+something unusable stays distinguishable from one that is not set, and gets
+reported instead of silently becoming the default.
+
+No `DEFAULT_CONFIG` entry, same reasoning as `drain_deadline_ms`. The shipped
+defaults live in exactly one place - `PEBBLE_DEFAULT_SUMMON_HOTKEY` and
+`PEBBLE_DEFAULT_PALETTE_HOTKEY` - and are the same on all three platforms;
+the resolver takes the connecting sidecar's OS so a per-platform default would
+be a table entry rather than new plumbing.
+
+Unlike `daemon.port`, an unusable value here does NOT abort startup: it is
+logged as an error and the default is used, because a mistyped hotkey must not
+stop the daemon booting. Full grammar and the macOS caveats:
+[docs/PEBBLE_HOTKEYS.md](../../docs/PEBBLE_HOTKEYS.md).
 
 ### `llm`
 

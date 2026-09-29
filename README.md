@@ -95,8 +95,10 @@ bun run start
 
 What you get:
 
-- **Pebble** — a small paper-toned disc that follows your cursor. Wake-word ("Hey Jarvis"), `Ctrl+Space`, or click summons it. Long-press the disc to blind awareness instantly (privacy toggle); the eye glyph next to it shows when JARVIS is actively reading your screen.
-- **Native windows** — every dashboard room (workflows, memory, settings, …) opens as a real Windows window via voice ("open settings", "show me workflows") or `Ctrl+K`. No browser tab.
+- **Pebble** — a small paper-toned disc that follows your cursor. Wake-word ("Hey Jarvis"), `Ctrl+Shift+Space`, or click summons it. Long-press the disc to blind awareness instantly (privacy toggle); the eye glyph next to it shows when JARVIS is actively reading your screen.
+- **Native windows** — every dashboard room (workflows, memory, settings, …) opens as a real Windows window via voice ("open settings", "show me workflows") or `Ctrl+Shift+K`. No browser tab.
+
+  Both hotkeys changed in #563: they used to be `Ctrl+Space` and `Ctrl+K`, which collide with macOS's "select the previous input source" and with the system-wide Emacs kill-line binding that every text field honours. Set `pebble.summon_hotkey` / `pebble.palette_hotkey` in `~/.jarvis/config.yaml` to change them, or to `off` to have none. One caveat worth knowing on **macOS**: `Ctrl+Shift+K` opens the Web Console in Firefox and is bound in Chrome and VS Code, and the macOS hotkey monitor cannot swallow a keystroke, so with one of those focused you get devtools *and* the palette. Windows and Linux take the key exclusively, so it does not happen there. See [docs/PEBBLE_HOTKEYS.md](docs/PEBBLE_HOTKEYS.md).
 - **Sub-pebble rail** — say "in the background, research X" and a colored sub-pebble flies to the right edge of your screen. Click it to see what the agent is doing; "open full ↗" pops a dedicated result panel.
 - **Voice-first** — "what's on my screen?", "close all background agents", "open the workflows window", "in the background, summarize today's meeting notes" — all routed inline, no LLM round-trip for the common verbs.
 

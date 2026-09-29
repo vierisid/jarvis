@@ -1169,7 +1169,12 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 				// back to idle. AFTER Stop, whose setState would otherwise
 				// paint over the nudge.
 				if state == "error" && wasActive {
-					flashPebbleNudge(c.pebble, PebbleIdle, "Live voice unavailable - press Ctrl+Space to talk")
+					// "Click the pebble", not a key name: the summon hotkey is
+					// configurable since #563 (pebble.summon_hotkey), and this
+					// code has no access to the spec the overlay was given, so
+					// naming a key here would eventually name the wrong one.
+					// Clicking the disc does the same thing and always works.
+					flashPebbleNudge(c.pebble, PebbleIdle, "Live voice unavailable - click the pebble to talk")
 				}
 			}
 			return &RPCResult{Result: map[string]any{"ok": true}}, nil

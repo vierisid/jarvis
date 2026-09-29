@@ -208,7 +208,7 @@ const onboardingWindowHTML = `<!doctype html>
       <div class="sv7"><span class="dot" data-dot="screen"></span><button class="sbtn" onclick="grantViaPane('screen')">Open Settings</button></div>
     </div>
     <div class="srow" id="row-accessibility">
-      <div class="sl7"><div class="a">Accessibility</div><div class="b">Global hotkeys (Ctrl+Space). Grant Jarvis in the Accessibility list.</div></div>
+      <div class="sl7"><div class="a">Accessibility</div><div class="b">Global hotkeys (Ctrl+Shift+Space). Without this they never fire. Grant Jarvis in the Accessibility list.</div></div>
       <div class="sv7"><span class="dot" data-dot="accessibility"></span><button class="sbtn" onclick="grantViaPane('accessibility')">Open Settings</button></div>
     </div>
   </div>

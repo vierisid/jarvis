@@ -889,7 +889,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     //
     // The daemon (brain) is the source of truth for pebble state. The
     // sidecar emits a `pebble.summon` event when the user presses the
-    // summon hotkey (Ctrl+Space); the daemon receives it and drives the
+    // summon hotkey (pebble.summon_hotkey); the daemon receives it and drives the
     // state machine via `pebble.set_state` RPC. For now this runs a fixed
     // demo cycle (listening → thinking → speaking → idle) so we can
     // verify all the state renderers end-to-end. Real voice/LLM
@@ -2109,7 +2109,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (!re.test(t)) return false;
 
         // The runResponseCycle caller already claimed the pendingSummons
-        // slot for this turn (Ctrl+Space → listening → audio.session_end
+        // slot for this turn (summon hotkey → listening → audio.session_end
         // → onComplete → here, OR wake-with-command → here). We just
         // hand control off to the region overlay and re-use the same
         // ctrl so a hotkey press still cancels cleanly.
@@ -2398,7 +2398,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       });
 
       // W4 — Cmd+K palette: cursor-anchored fuzzy room picker. The
-      // sidecar's Ctrl+K hotkey emits a `pebble.palette` event with the
+      // sidecar's palette hotkey emits a `pebble.palette` event with the
       // current cursor position; the daemon spawns a small `_palette`
       // panel near the cursor (or focuses the existing one). Picks
       // (room nav / object) come back via HTTP `/api/palette/pick`,
@@ -2549,7 +2549,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         },
       });
 
-      // W4 — Ctrl+K opens or refocuses the palette. Closing flows
+      // W4 — the palette hotkey opens or refocuses the palette. Closing flows
       // through user-driven paths (Esc / click / pick → /api/palette/close),
       // not the hotkey, because rapid hotkey-toggle close→spawn reliably
       // crashes webview_go's Bind path after the 3rd–4th cycle.
@@ -3820,7 +3820,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // close immediately — too fast to read the answer. Hold it open for
         // a text-length-derived reading window so no-TTS users get time
         // to actually read what JARVIS said. User can dismiss anytime by
-        // pressing the summon hotkey (Ctrl+Space).
+        // pressing the summon hotkey.
         let readingHoldMs = 0;
         if (totalAudioMs === 0 && fullText.length > 0) {
           // ~60 ms/char gives skim time; clamp 6–30 s so short answers
@@ -3914,7 +3914,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       sidecarManager.onEvent(async (sidecarId, event) => {
         if (event.event_type !== 'audio.wake_segment') return;
         // Suppress while an active summon is in flight — the user already
-        // got JARVIS's attention via Ctrl+Space (or a prior wake).
+        // got JARVIS's attention via the summon hotkey (or a prior wake).
         if (pendingSummons.has(sidecarId)) return;
         if (!pebbleSTT) return;
         // Claim a synchronous in-flight flag before the first await so a
@@ -3954,7 +3954,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         console.log(`[ambient-ui] wake-segment matched (${sttMs}ms STT, ${transcript.length} chars)`);
 
         const command = wakeCommandFrom(transcript);
-        // Re-check: a manual summon (Ctrl+Space) may have claimed the slot while
+        // Re-check: a manual summon may have claimed the slot while
         // we were transcribing (the entry guard at the top ran before the STT
         // await). The deliberate press wins, so bail rather than clobber its ctrl
         // and resolve its session_end against ours.

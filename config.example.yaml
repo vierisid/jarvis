@@ -145,6 +145,32 @@ authority:
 #   evening: "0 20 * * *"  # 8pm local
 #   hourly:  "37 * * * *"  # every hour at :37
 
+# Pebble overlay global hotkeys (#563). Registered by the sidecar, on the
+# machine with the keyboard. The defaults below are the shipped ones and are
+# the same on macOS, Windows and Linux; uncomment to change them.
+#
+# Set either to "" , "none" or "off" to register no global hotkey at all. A
+# BARE key (`summon_hotkey:`) is YAML null, which means "use the default" --
+# not "off".
+#
+# macOS caveat, worth reading before you decide: the macOS hotkey monitor is a
+# passive observer and CANNOT swallow the keystroke, so a binding that another
+# app already uses fires both. Ctrl+Shift+K in particular opens the Web Console
+# in Firefox and is bound in Chrome and VS Code, so on a Mac with a browser
+# focused it opens devtools AND the palette. Ctrl+Shift+Space has the milder
+# version of this with Word, which inserts a non-breaking space. Both are free
+# in all three platforms' own system shortcuts, which is why they were chosen,
+# and this setting is the answer if an app-level clash bothers you. On Windows
+# and Linux the key is taken exclusively and the app never sees it.
+#
+# NOTE on Windows: palette_hotkey: "" also turns off the Ctrl+middle-click
+# palette gesture, which is gated on the same value.
+#
+# Grammar and the full key list: docs/PEBBLE_HOTKEYS.md
+# pebble:
+#   summon_hotkey: "ctrl+shift+space"   # show the pebble / start listening
+#   palette_hotkey: "ctrl+shift+k"      # open the room picker at the cursor
+
 # Text-to-Speech (voice output)
 tts:
   enabled: false
