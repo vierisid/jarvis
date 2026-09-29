@@ -476,7 +476,12 @@ describe('generic file tools refuse a site project\'s git internals', () => {
     mkdirSync(join(project, 'node_modules'));
     const linked = join(project, 'node_modules', 'dep.js');
     linkSync(cache, linked);
-    expect(gateFor(linked).actionCategory).toBe('write_data');
+    // execute_command since #558, not write_data: this is installed package
+    // code inside a site project, which the daemon's `make dev` child imports
+    // on its next reload, and `write_file` now asks the site classifier about
+    // a path in the projects dir (sites/project-exec-paths.ts). The subject of
+    // this test is what follows -- the replace-by-rename -- which is unchanged.
+    expect(gateFor(linked).actionCategory).toBe('execute_command');
     expect(await write('node_modules/dep.js', 'module.exports = 2;\n')).toContain('File written successfully');
     expect(readFileSync(linked, 'utf-8')).toBe('module.exports = 2;\n');
     expect(readFileSync(cache, 'utf-8')).toBe('module.exports = 1;\n');

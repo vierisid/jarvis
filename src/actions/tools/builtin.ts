@@ -34,8 +34,10 @@ const terminal = new TerminalExecutor({ timeout: 30000 });
 export const browser = new BrowserController();
 
 import { isNoLocalTools, LOCAL_DISABLED_MSG, isLocalBrowserDisabled, LOCAL_BROWSER_DISABLED_MSG, getDefaultCwd } from './local-tools-guard.ts';
+import { siteProjectExecOnWrite } from '../../sites/project-exec-paths.ts';
 import {
-  execOnWrite, isSecretInode, policyHome, relativeBases, routedGitRefusal, scanForDaemonSecrets, secretInodeRefusal,
+  execOnWrite, getSiteProjectsDir, isSecretInode, policyHome, relativeBases, routedGitRefusal, scanForDaemonSecrets,
+  secretInodeRefusal,
   secretListRefusal, secretRead, secretReadRefusal, secretRefusalTextFor, secretScanRefusal, siteGitRefusal,
 } from './file-path-policy.ts';
 import { forCard } from '../../util/card-text.ts';
@@ -382,6 +384,23 @@ export const readFileTool: ToolDefinition = {
   },
 };
 
+/**
+ * The #558 site-project rating for a path this tool was handed, under every
+ * base it could resolve against. Null when there is no site projects dir, the
+ * path is outside it, or the site classifier says the file is ordinary content.
+ */
+function siteProjectHit(requested: unknown): { kind: string; path: string; lands?: string } | null {
+  if (!getSiteProjectsDir()) return null;
+  const spelled = String(requested ?? '');
+  if (!spelled) return null;
+  const candidates = isAbsolute(spelled) ? [spelled] : relativeBases().map((base) => resolve(base, spelled));
+  for (const candidate of candidates) {
+    const hit = siteProjectExecOnWrite(candidate);
+    if (hit) return { ...hit, path: candidate };
+  }
+  return null;
+}
+
 export const writeFileTool: ToolDefinition = {
   name: 'write_file',
   description: 'Write content to a file on disk. Creates the file if it does not exist, overwrites if it does. Optionally specify a "target" sidecar to write on a remote machine.',
@@ -413,7 +432,12 @@ export const writeFileTool: ToolDefinition = {
    * what counts and why the path is judged under more than one resolution.
    */
   authorityGate: (params) => {
-    const hit = execOnWrite(params.path);
+    // `execOnWrite` says nothing about a site project -- it calls that the
+    // site builder's contract (file-path-policy.ts). Since #558 that contract
+    // exists, so ask it: otherwise the same write to `<projects>/shop/Makefile`
+    // costs an approval card through `site_write_file` and nothing at all
+    // through this tool, and the model chooses the tool.
+    const hit = execOnWrite(params.path) ?? siteProjectHit(params.path);
     if (!hit) return null;
     // The card names the file that made this an exec-on-write, resolved: a
     // relative path is judged against more than one base, and `.bashrc` on a

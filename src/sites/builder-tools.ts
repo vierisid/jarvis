@@ -9,6 +9,7 @@ import type { ToolDefinition } from '../actions/tools/registry.ts';
 import type { ProjectManager } from './project-manager.ts';
 import type { GitManager } from './git-manager.ts';
 import type { GitHubManager } from './github-manager.ts';
+import { siteExecOnWrite } from './project-exec-paths.ts';
 import { sanitizedEnv } from '../util/subprocess-env.ts';
 import { modelExecMarkers } from '../util/model-exec-marker.ts';
 import { forCard as cardText } from '../util/card-text.ts';
@@ -42,6 +43,42 @@ function forCard(value: unknown, fallback = '', max = 80): string {
 
 /** A trailing free-text value: shown in full up to a card-sized budget. */
 const TRAILING = 600;
+
+/**
+ * A path for a card, ellipsized from the LEFT.
+ *
+ * `forCard` cuts the tail, which is the wrong end for a path: a 691-char path
+ * produced "write a file the project runs as code (a makefile the daemon
+ * runs): aaaa/aaaa/aaa..." and named neither the file asked for nor the file
+ * it runs. The basename is what identifies a file, so it is the part that must
+ * survive -- for the trailing value as much as for one in the middle, since a
+ * long LANDING path was being truncated to nothing useful too.
+ *
+ * The whitespace collapse and the invisible-character strip come from
+ * `cardText` with a budget nothing reaches, so its own right-truncation (and
+ * the `...` it appends) can never be what this then trims from the left.
+ */
+function pathForCard(value: unknown, max = 120): string {
+  const s = cardText(value, 1_000_000);
+  return s.length > max ? `...${s.slice(s.length - (max - 3))}` : s;
+}
+
+/**
+ * The project's path for a gate, or null.
+ *
+ * A gate must be total: `resolveToolGate` turns a throw into `confirm:
+ * 'always'` with "business effect unknown", which would replace the sentence
+ * that names the file with one that names nothing. An unresolvable project id
+ * is not a way to be rated lower either -- `siteExecOnWrite` still judges the
+ * spelling without a project path.
+ */
+function projectPathOrNull(projectManager: ProjectManager, projectId: unknown): string | null {
+  try {
+    return projectManager.getProjectPath(String(projectId ?? '')) ?? null;
+  } catch {
+    return null;
+  }
+}
 
 export function createSiteBuilderTools(
   projectManager: ProjectManager,
@@ -121,14 +158,60 @@ export function createSiteBuilderTools(
         path: { type: 'string', description: 'Relative path to the file (e.g., "src/App.tsx")', required: true },
         content: { type: 'string', description: 'The full file content to write', required: true },
       },
-      // Intent only: no category raise, no `confirm`, so gating is unchanged.
-      // It exists because the card is the whole review and, without a
-      // sentence, `synthesizeApprovalIntent` falls through to its default and
-      // renders the bare tool name -- "Site write file", with no path.
-      authorityGate: (params) => ({
-        actionCategory: 'write_data',
-        intent: `In site project "${forCard(params.project_id)}", write file: ${forCard(params.path, '', TRAILING)}`,
-      }),
+      /**
+       * `write_data` is the floor, and for most of a project it is honest:
+       * `src/App.tsx` is content the browser renders.
+       *
+       * It is not honest for the part of the tree the DAEMON runs. `make dev`
+       * runs the project's Makefile for the life of the preview, its recipe
+       * runs `bunx vite`, which loads `vite.config.ts` as a module, and
+       * `make install` runs `bun install`, which runs a `postinstall` hook. A
+       * write there is a command that runs later, so it is rated
+       * `execute_command` -- the same reading `execOnWrite` already applies to
+       * a write to `~/.bashrc` for the generic `write_file` (#558). See
+       * sites/project-exec-paths.ts for how that set is derived from what the
+       * daemon actually spawns, and for what is deliberately NOT in it (app
+       * source, so the rating discriminates instead of firing every turn).
+       *
+       * `confirm: 'above_level'`, as on `write_file`: an agent below level 5
+       * gets a card naming the file instead of a refusal.
+       *
+       * The un-raised branch is intent only -- no category raise, no
+       * `confirm`, so gating is unchanged. It exists because the card is the
+       * whole review and, without a sentence, `synthesizeApprovalIntent`
+       * falls through to its default and renders the bare tool name -- "Site
+       * write file", with no path.
+       */
+      authorityGate: (params) => {
+        const project = `In site project "${forCard(params.project_id)}"`;
+        const hit = siteExecOnWrite(projectPathOrNull(projectManager, params.project_id), params.path);
+        if (!hit) {
+          return {
+            actionCategory: 'write_data',
+            intent: `${project}, write file: ${forCard(params.path, '', TRAILING)}`,
+          };
+        }
+        // The file that will RUN goes LAST and in full (d1879828): it is the
+        // value being approved, and nothing after it can pose as the rest of
+        // the sentence. When a symlink or a `..` spelling sends the write
+        // somewhere else, that landing file is the one that matters, so it
+        // takes the trailing slot and the requested spelling moves into the
+        // middle -- kept short, and ellipsized from the left so its basename
+        // survives.
+        if (hit.lands) {
+          return {
+            actionCategory: 'execute_command',
+            confirm: 'above_level',
+            intent: `${project}, write "${pathForCard(hit.path)}", which lands on a file the project runs as code `
+              + `(${hit.kind}): ${pathForCard(hit.lands, TRAILING)}`,
+          };
+        }
+        return {
+          actionCategory: 'execute_command',
+          confirm: 'above_level',
+          intent: `${project}, write a file the project runs as code (${hit.kind}): ${pathForCard(hit.path, TRAILING)}`,
+        };
+      },
       execute: async (params) => {
         try {
           await projectManager.writeFile(params.project_id as string, params.path as string, params.content as string);

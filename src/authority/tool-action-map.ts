@@ -124,8 +124,15 @@ export const TOOL_ACTION_MAP: Readonly<Record<string, ActionCategory>> = Object.
   // unmapped and resolved to read_data (#503).
   site_read_file: 'read_data',
   site_list_files: 'read_data',
-  // Model-chosen content at a model-chosen in-project path. Same capability
-  // as the builtin write_file, so the same category.
+  // FLOOR only. Model-chosen content at a model-chosen in-project path: the
+  // same capability as the builtin write_file, so the same category -- and,
+  // since #558, the same per-call raise. The daemon runs part of every project
+  // tree unattended (`make dev` for the life of the preview, `make install`
+  // at create time), so a write to the makefile, a manifest, a build config
+  // or the dev-server entry is execution and its authorityGate rates it
+  // `execute_command` with confirm: 'above_level'. App source stays here at
+  // write_data, which is the point: a rating that escalated every write would
+  // be an always-fires gate, not a control. See sites/project-exec-paths.ts.
   site_write_file: 'write_data',
   // Fixed argv (`git add` / `git commit`); the message is an argv element,
   // never shell-interpolated.
