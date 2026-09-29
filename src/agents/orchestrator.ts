@@ -39,6 +39,7 @@ import {
   admissionAuditName, interceptDiscovery, interceptOffList, DISCOVER_TOOLS_LLM, type DiscoveryContext,
 } from '../actions/tools/tool-relevance/discover.ts';
 import { getToolFilterPolicy } from '../actions/tools/tool-relevance/policy.ts';
+import { toolsInScope, toolInScope, outOfScopeMessage, type TurnToolScope } from '../actions/tools/tool-scope.ts';
 import type { LLMProviderEntry } from '../config/types.ts';
 import { combineDecisions, type AuthorityDecision } from '../authority/engine.ts';
 import { progressAcknowledgement } from './progress.ts';
@@ -574,7 +575,7 @@ export class AgentOrchestrator {
     // iteration would invalidate the provider's cached prefix every time,
     // because the tool list sits at the head of it.
     const ledger = this.ledgerFor(primary.id);
-    let decided = this.decideTurnTools(messages, tier, ledger);
+    let decided = this.decideTurnTools(messages, tier, ledger, undefined, null);
     let tools = decided.llm;
     let finalText = '';
 
@@ -593,7 +594,7 @@ export class AgentOrchestrator {
         // Execute each tool and add results
         let widened = false;
         for (const tc of llmResponse.tool_calls) {
-          const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger);
+          const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger, null);
           if (discovery) {
             widened ||= discovery.grew;
             messages.push({ role: 'tool', content: discovery.result, tool_call_id: tc.id });
@@ -602,7 +603,7 @@ export class AgentOrchestrator {
           // A tool the model was not offered: admitted and recomputed, and
           // not run at all if running it would strand outside content
           // unframed. See interceptOffList.
-          const offList = this.handleOffListCall(tc, decided.exposed, ledger);
+          const offList = this.handleOffListCall(tc, decided.exposed, ledger, null);
           if (offList) widened = true;
           if (offList?.refusal) {
             messages.push({ role: 'tool', content: offList.refusal, tool_call_id: tc.id });
@@ -612,7 +613,7 @@ export class AgentOrchestrator {
           // of the conversation, so a later turn cannot strip a tool an
           // in-flight task is using.
           this.noteToolUse(ledger, tc.name);
-          const result = await this.executeTool(tc, undefined, turnTaint);
+          const result = await this.executeTool(tc, undefined, turnTaint, null);
           messages.push({
             role: 'tool',
             content: result,
@@ -635,7 +636,7 @@ export class AgentOrchestrator {
         // tools only appeared on the next user turn), or a call to a tool
         // the model was not offered (see interceptOffList).
         if (widened) {
-          decided = this.decideTurnTools(messages, tier, ledger);
+          decided = this.decideTurnTools(messages, tier, ledger, undefined, null);
           tools = decided.llm;
         }
 
@@ -735,7 +736,7 @@ export class AgentOrchestrator {
     if (getToolFilterPolicy().enabled) {
       ledger.seedFromMessages(opts.history, (n) => this.toolRegistry?.has(n) ?? false);
     }
-    let decided = this.decideTurnTools(messages, opts.tier, ledger);
+    let decided = this.decideTurnTools(messages, opts.tier, ledger, undefined, null);
     // ask_for_clarification is appended AFTER the filter, and is therefore
     // never part of its accounting. #475's fail-open guard counted it as
     // though it were a registry tool, which is half of why that guard could
@@ -811,20 +812,20 @@ export class AgentOrchestrator {
 
         let widened = false;
         for (const tc of llmResponse.tool_calls) {
-          const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger);
+          const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger, null);
           if (discovery) {
             widened ||= discovery.grew;
             messages.push({ role: 'tool', content: discovery.result, tool_call_id: tc.id });
             continue;
           }
-          const offList = this.handleOffListCall(tc, decided.exposed, ledger);
+          const offList = this.handleOffListCall(tc, decided.exposed, ledger, null);
           if (offList) widened = true;
           if (offList?.refusal) {
             messages.push({ role: 'tool', content: offList.refusal, tool_call_id: tc.id });
             continue;
           }
           this.noteToolUse(ledger, tc.name);
-          const result = await this.executeTool(tc, opts.signal, turnTaint);
+          const result = await this.executeTool(tc, opts.signal, turnTaint, null);
           toolsExecuted++;
           messages.push({
             role: 'tool',
@@ -833,7 +834,7 @@ export class AgentOrchestrator {
           });
         }
         if (widened) {
-          decided = this.decideTurnTools(messages, opts.tier, ledger);
+          decided = this.decideTurnTools(messages, opts.tier, ledger, undefined, null);
           tools = [...(decided.llm ?? []), ASK_FOR_CLARIFICATION_TOOL];
         }
         continue;
@@ -947,6 +948,12 @@ export class AgentOrchestrator {
     tier: Tier = 'medium',
     subsystem: string = 'chat_orchestrator_stream',
     fallbackTier?: Tier,
+    // Tools this KIND of turn does not have, for the whole turn: the
+    // candidate set, the discovery catalogue and dispatch all honour it.
+    // Passed rather than stored, like `turnTaint` below, because one
+    // orchestrator serves every chat and a field would let a general turn
+    // clear a site turn's scope mid-loop (#561).
+    scope?: TurnToolScope | null,
   ): AsyncIterable<LLMStreamEvent> {
     const primary = this.getPrimary();
     if (!primary) {
@@ -956,6 +963,9 @@ export class AgentOrchestrator {
     // A message from the user is the turn boundary for taint gating: this
     // turn's reads gate this turn's later calls and nothing else.
     const turnTaint = new Set<string>();
+    // The public entry point may leave the scope out; everything below it
+    // requires the decision to be explicit, so it is made once here.
+    const turnScope = scope ?? null;
 
     // Add user message to persistent history
     primary.addMessage('user', message);
@@ -992,7 +1002,7 @@ export class AgentOrchestrator {
     // conversation model and then hand the filtered list to the frontier
     // task model the instant the local one died before first output.
     const ledger = this.ledgerFor(primary.id);
-    let decided = this.decideTurnTools(messages, tier, ledger, fallbackTier);
+    let decided = this.decideTurnTools(messages, tier, ledger, fallbackTier, turnScope);
     let tools = decided.llm;
     const totalUsage = { input_tokens: 0, output_tokens: 0 };
     let finalText = '';
@@ -1100,20 +1110,20 @@ export class AgentOrchestrator {
       // Execute each tool and add results
       let widened = false;
       for (const tc of toolCalls) {
-        const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger);
+        const discovery = this.handleDiscoveryCall(tc, decided.exposed, ledger, turnScope);
         if (discovery) {
           widened ||= discovery.grew;
           messages.push({ role: 'tool', content: discovery.result, tool_call_id: tc.id });
           continue;
         }
-        const offList = this.handleOffListCall(tc, decided.exposed, ledger);
+        const offList = this.handleOffListCall(tc, decided.exposed, ledger, turnScope);
         if (offList) widened = true;
         if (offList?.refusal) {
           messages.push({ role: 'tool', content: offList.refusal, tool_call_id: tc.id });
           continue;
         }
         this.noteToolUse(ledger, tc.name);
-        const result = await this.executeTool(tc, undefined, turnTaint);
+        const result = await this.executeTool(tc, undefined, turnTaint, turnScope);
         messages.push({
           role: 'tool',
           content: result,
@@ -1132,7 +1142,7 @@ export class AgentOrchestrator {
       }
 
       if (widened) {
-        decided = this.decideTurnTools(messages, activeTier, ledger, fallbackTier);
+        decided = this.decideTurnTools(messages, activeTier, ledger, fallbackTier, turnScope);
         tools = decided.llm;
       }
 
@@ -1208,19 +1218,29 @@ export class AgentOrchestrator {
     messages: readonly LLMMessage[],
     tier: Tier,
     ledger: ToolExposureLedger,
-    fallbackTier?: Tier,
+    fallbackTier: Tier | undefined,
+    // Required, like `taint`: the compiler is the only thing that catches a
+    // tool loop which forgets it, and one that forgets it is a turn running
+    // unscoped. `null` is the explicit "this turn has no scope" (#561).
+    scope: TurnToolScope | null,
   ): { llm: LLMTool[] | undefined; exposed: ReadonlySet<string> } {
     if (!this.toolRegistry || this.toolRegistry.count() === 0) {
       // undefined, not []: the providers treat the two differently.
       return { llm: undefined, exposed: new Set() };
     }
-    const all = this.toolRegistry.list();
+    // The turn's scope narrows the CANDIDATES, not the offered set: a tool
+    // this kind of turn does not have must not be selectable, discoverable or
+    // admissible on an off-list call (#561). See actions/tools/tool-scope.ts.
+    const all = toolsInScope(this.toolRegistry.list(), scope);
     const decision = decideTools({
       all,
       messages,
       ledger,
       tier,
       fallbackTier,
+      // Also given to the filter, which uses it to keep the categories the
+      // turn cannot work without (a site chat's site tools).
+      scope,
       // Guarded: embedded and test callers pass a minimal LLM manager stub,
       // and the filter must never be the thing that breaks a call site. No
       // tier map means no tier resolves, which the gate reads as
@@ -1258,11 +1278,12 @@ export class AgentOrchestrator {
     tc: LLMToolCall,
     exposed: ReadonlySet<string>,
     ledger: ToolExposureLedger,
+    scope: TurnToolScope | null,
   ): { result: string; grew: boolean } | null {
     // Checked here, before the context is built, so the default-off path
     // allocates nothing per tool call.
     if (tc.name !== DISCOVER_TOOLS || !getToolFilterPolicy().enabled) return null;
-    return interceptDiscovery(tc.name, tc.arguments, this.discoveryContext(exposed, ledger));
+    return interceptDiscovery(tc.name, tc.arguments, this.discoveryContext(exposed, ledger, scope));
   }
 
   /**
@@ -1278,15 +1299,20 @@ export class AgentOrchestrator {
     tc: LLMToolCall,
     exposed: ReadonlySet<string>,
     ledger: ToolExposureLedger,
+    scope: TurnToolScope | null,
   ): { refusal: string | null; grew: boolean } | null {
     if (!getToolFilterPolicy().enabled || exposed.has(tc.name)) return null;
-    return interceptOffList(tc.name, this.discoveryContext(exposed, ledger));
+    return interceptOffList(tc.name, this.discoveryContext(exposed, ledger, scope));
   }
 
   /** What both interceptors need: the gate, the emergency check, the audit hook. */
-  private discoveryContext(exposed: ReadonlySet<string>, ledger: ToolExposureLedger): DiscoveryContext {
+  private discoveryContext(
+    exposed: ReadonlySet<string>,
+    ledger: ToolExposureLedger,
+    scope: TurnToolScope | null,
+  ): DiscoveryContext {
     return {
-      all: this.toolRegistry?.list() ?? [],
+      all: toolsInScope(this.toolRegistry?.list() ?? [], scope),
       ledger,
       exposed,
       filterEnabled: getToolFilterPolicy().enabled,
@@ -1359,13 +1385,22 @@ export class AgentOrchestrator {
    * `taint` is required so a tool loop cannot forget its turn set (tsc
    * catches a missed call site); the fallback only guards an untyped caller.
    */
-  private async executeTool(toolCall: LLMToolCall, signal: AbortSignal | undefined, taint: Set<string>): Promise<string | ContentBlock[]> {
+  private async executeTool(
+    toolCall: LLMToolCall,
+    signal: AbortSignal | undefined,
+    taint: Set<string>,
+    scope: TurnToolScope | null,
+  ): Promise<string | ContentBlock[]> {
     // Enter the turn's taint set for the duration of the call so noteTaint,
     // getEffectiveProfile and any sub-agent spawned by the tool see it.
-    return this.taintStore.run(taint ?? new Set<string>(), () => this.executeToolInner(toolCall, signal));
+    return this.taintStore.run(taint ?? new Set<string>(), () => this.executeToolInner(toolCall, signal, scope));
   }
 
-  private async executeToolInner(toolCall: LLMToolCall, signal?: AbortSignal): Promise<string | ContentBlock[]> {
+  private async executeToolInner(
+    toolCall: LLMToolCall,
+    signal: AbortSignal | undefined,
+    scope: TurnToolScope | null,
+  ): Promise<string | ContentBlock[]> {
     if (!this.toolRegistry) {
       return `Error: No tool registry configured`;
     }
@@ -1413,6 +1448,36 @@ export class AgentOrchestrator {
     // unmapped default is execute_command, a governed category under the
     // background and taint profiles -- a real approval card for an invented
     // tool. A model steered by injected page text can emit those at will.
+    // A tool this KIND of turn does not have is answered the same way, and
+    // here rather than at the gate for the same reason: it is not a
+    // governance decision, and "[AUTHORITY DENIED]" would read as "get this
+    // approved" and invite a retry. This is the enforcement point -- the
+    // filter and the discovery hatch only decide what is OFFERED, and an
+    // off-list call to a registered tool is otherwise admitted and run (#561).
+    if (scope && !toolInScope(scope, toolCall.name) && this.toolRegistry.has(toolCall.name)) {
+      // Audited. An off-list refusal and a discover_tools admission both
+      // leave a row, and this is the same class of event -- a model in the
+      // chat with the highest injection risk reaching for the generic shell.
+      // Without a row that attempt is the one thing in the turn that leaves
+      // no trace at all.
+      try {
+        const agent = this.getPrimary();
+        this.auditTrail?.log({
+          agent_id: agent?.id ?? 'unknown',
+          agent_name: this.auditAgentName(agent?.agent.role.name ?? 'unknown'),
+          tool_name: `out_of_scope(${toolCall.name})`,
+          action_category: getActionForTool(toolCall.name, this.toolRegistry.get(toolCall.name)?.category ?? 'unknown'),
+          authority_decision: 'denied',
+          executed: false,
+        });
+      } catch (err) {
+        // The refusal stands without its row; an audit failure must not take
+        // the turn down.
+        console.warn('[Orchestrator] could not audit an out-of-scope call:',
+          err instanceof Error ? err.message : err);
+      }
+      return outOfScopeMessage(scope, toolCall.name);
+    }
     if (!this.toolRegistry.has(toolCall.name)) {
       // Point at discover_tools only when it is answered. With the filter
       // off it is neither offered nor intercepted, so the hint sent the

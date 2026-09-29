@@ -24,13 +24,14 @@ import type { LLMMessage } from '../../../llm/provider.ts';
 import type { Tier, TierMap } from '../../../llm/tiers.ts';
 import type { LLMProviderEntry } from '../../../config/types.ts';
 import type { ToolDefinition } from '../registry.ts';
-import { isFloorEligible } from './authority-classes.ts';
+import { isFloorEligible, isFramedPerception } from './authority-classes.ts';
 import { DISCOVER_TOOLS_DEFINITION } from './discover.ts';
 import { normalizeToolSet, type InvariantFailure } from './invariant.ts';
 import { DISCOVER_TOOLS, type ToolExposureLedger } from './ledger.ts';
 import { isTierEligible } from './model-class.ts';
 import { getToolFilterPolicy, type ToolFilterPolicy } from './policy.ts';
-import { selectForConversation } from './selection.ts';
+import { conversationText, selectForConversation, selectRelevantNames } from './selection.ts';
+import { isScopePinned, toolsInScope, type TurnToolScope } from '../tool-scope.ts';
 
 export type FilterContext = {
   /** The tool list the call site would otherwise send. Registry tools only. */
@@ -52,6 +53,20 @@ export type FilterContext = {
   providers: Record<string, LLMProviderEntry | undefined> | undefined;
   /** Defaults to the process policy; injected in tests and the benchmark. */
   policy?: ToolFilterPolicy;
+  /**
+   * What KIND of turn this is, where that changes which tools exist at all
+   * (#561). Two effects, both applied here so every caller of the filter
+   * gets them: a withheld tool is removed from `all` before anything looks
+   * at it, and a pinned category survives selection the way a floor-eligible
+   * tool does.
+   *
+   * The pin is not a nicety. In a project-scoped site chat the site tools
+   * ARE the file and shell capability, and selection is driven by the user's
+   * words: "install react-router in the project" matches no site BUILD
+   * trigger, so with the generic tools withheld and no pin the turn is
+   * offered no file tool at all -- measured, not assumed.
+   */
+  scope?: TurnToolScope | null;
 };
 
 export type FilterDecision = {
@@ -112,6 +127,33 @@ const unfiltered = (all: readonly ToolDefinition[], reason: string, engaged = fa
   ({ tools: [...all], filtered: false, exposed: new Set(all.map((t) => t.name)), reason, failures: [], engaged });
 
 /**
+ * Whether this turn's ask should be handed the scope's pinned surface in
+ * place of the tools the scope withheld. See the candidate step below.
+ *
+ * On a throw it answers yes: the failure direction is the site chat keeping
+ * the tools it exists for, not a chat that silently cannot touch its project.
+ * Every one of them is still authority-gated.
+ */
+function scopeSubstitutes(scope: TurnToolScope | null | undefined, messages: readonly LLMMessage[]): boolean {
+  if (!scope) return false;
+  try {
+    // The LAST USER MESSAGE, not the window. `selectForConversation` applies
+    // its unmatched default per message for the same reason (selection.ts):
+    // judged over the window, one unrelated turn ("put this in a note") makes
+    // every later unclassifiable site ask look classified, so a mixed
+    // conversation lost `site_write_file` for asks that would get it on turn
+    // one. Monotonicity is not at risk -- the ledger keeps a tool once it has
+    // been used, and `discover_tools` is offered either way.
+    const last = [...messages].reverse().find((m) => m.role === 'user');
+    const text = conversationText(last ? [last] : messages);
+    if (selectRelevantNames(text, scope.withheld).size > 0) return true;
+    return selectRelevantNames(text).size === 0;
+  } catch {
+    return true;
+  }
+}
+
+/**
  * Decide the tool set for one turn.
  *
  * Call once per turn and hold the result across the tool loop; do NOT call
@@ -125,7 +167,11 @@ const unfiltered = (all: readonly ToolDefinition[], reason: string, engaged = fa
  * or a call to a tool the model was not offered (`interceptOffList`).
  */
 export function decideTools(ctx: FilterContext): FilterDecision {
-  const all = ctx.all;
+  // Withholding comes first: a tool this turn does not have must not be
+  // offered, counted, repaired in by an invariant, or listed by the hatch.
+  // Callers narrow their registry listing too (the discovery catalogue reads
+  // it directly); doing it here as well keeps the decision self-contained.
+  const all = toolsInScope(ctx.all, ctx.scope);
   if (all.length === 0) return unfiltered(all, 'empty tool list');
 
   const policy = ctx.policy ?? getToolFilterPolicy();
@@ -138,8 +184,28 @@ export function decideTools(ctx: FilterContext): FilterDecision {
     const wanted = selectForConversation(ctx.messages, all);
     const ledger = ctx.ledger.snapshot();
 
+    // A pinned surface STANDS IN for what the scope withheld; it is not
+    // simply always on. Pinning it unconditionally was measurably worse than
+    // the problem it solved: six of the eight site tools are invariant
+    // triggers, so I1's union repair fired on every project-scoped turn and
+    // force-added every framed perception tool in the registry -- "put this
+    // in a note" went from 4 tools to 27, among them browser_evaluate (the
+    // same authority rank as run_command), ui_act and the desktop actuators.
+    // Reaching those used to require a discover_tools admission or an
+    // off-list call, both of which leave an audit row; simply offering them
+    // leaves none.
+    //
+    // So the surface comes in when the ask reached for one of the withheld
+    // tools -- which is exactly the substitution #561 is about, and needs no
+    // new trigger vocabulary to maintain -- or when the ask matched no
+    // trigger group at all, since in a chat bound to one project an
+    // unclassifiable ask is most plausibly about that project. Its framed
+    // READERS are always in: they are read_data, path-confined, framed, and
+    // no invariant trigger, so they cost nothing and cannot pull the repair.
+    const substituting = scopeSubstitutes(ctx.scope, ctx.messages);
     const candidate = all.filter((t) =>
-      isFloorEligible(t) || wanted.has(t.name) || ledger.has(t.name));
+      isFloorEligible(t) || wanted.has(t.name) || ledger.has(t.name)
+      || (isScopePinned(t, ctx.scope) && (substituting || isFramedPerception(t))));
 
     const result = normalizeToolSet(all, candidate);
     if (result.failedOpen) {

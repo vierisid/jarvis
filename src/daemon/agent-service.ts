@@ -35,6 +35,7 @@ import { getDb } from '../vault/schema.ts';
 import { AgentOrchestrator } from '../agents/orchestrator.ts';
 import { loadRole } from '../roles/loader.ts';
 import { ToolRegistry } from '../actions/tools/registry.ts';
+import type { TurnToolScope } from '../actions/tools/tool-scope.ts';
 import { BUILTIN_TOOLS, browser } from '../actions/tools/builtin.ts';
 import { createDelegateTool, type DelegateToolDeps } from '../actions/tools/delegate.ts';
 import { createManageAgentsTool, type AgentToolDeps } from '../actions/tools/agents.ts';
@@ -288,7 +289,7 @@ export class AgentService implements Service, IAgentService {
    * result in a single text + done event so the WebSocket UI keeps working.
    * Token-level streaming through the conv path is a Phase 6 follow-up.
    */
-  streamMessage(text: string, channel: string = 'websocket', siteContext?: string): {
+  streamMessage(text: string, channel: string = 'websocket', siteContext?: string, scope?: TurnToolScope | null): {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
   } {
@@ -297,7 +298,7 @@ export class AgentService implements Service, IAgentService {
     if (activeTurns.isDraining) throw new DrainingError();
     const endTurn = activeTurns.begin();
     try {
-      const inner = this.streamMessageInner(text, channel, siteContext);
+      const inner = this.streamMessageInner(text, channel, siteContext, scope);
       return { stream: trackTurnStream(inner.stream, endTurn), onComplete: inner.onComplete };
     } catch (err) {
       endTurn();
@@ -305,11 +306,16 @@ export class AgentService implements Service, IAgentService {
     }
   }
 
-  private streamMessageInner(text: string, channel: string = 'websocket', siteContext?: string): {
+  private streamMessageInner(text: string, channel: string = 'websocket', siteContext?: string, scope?: TurnToolScope | null): {
     stream: AsyncIterable<LLMStreamEvent>;
     onComplete: (fullText: string) => Promise<void>;
   } {
     if (this.convOrchestrator) {
+      // Note: this path already drops `siteContext` -- a project-scoped chat
+      // gets no site prompt block at all when a conversation tier is
+      // configured -- so it is not a site chat in any sense the rest of the
+      // code would recognise, and the scope has nowhere to apply. Both halves
+      // of that want fixing together; see actions/tools/tool-scope.ts.
       return this.streamMessageConv(text, channel);
     }
 
@@ -318,7 +324,7 @@ export class AgentService implements Service, IAgentService {
       systemPrompt.dynamic += '\n\n' + siteContext;
     }
 
-    const stream = this.orchestrator.streamMessage(systemPrompt, text);
+    const stream = this.orchestrator.streamMessage(systemPrompt, text, undefined, undefined, undefined, scope);
 
     const onComplete = async (fullText: string): Promise<void> => {
       // Note: orchestrator already adds assistant response to history

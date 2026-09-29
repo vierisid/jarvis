@@ -16,7 +16,7 @@ import type { ChannelService } from './channel-service.ts';
 import type { Commitment } from '../vault/commitments.ts';
 import type { ContentItem } from '../vault/content-pipeline.ts';
 import type { STTProvider, TTSProvider } from '../comms/voice.ts';
-import { setDefaultCwd } from '../actions/tools/builtin.ts';
+import { PROJECT_SITE_CHAT_SCOPE } from '../actions/tools/tool-scope.ts';
 import { approvalIntentFromContext, approvalNeedsClick, type ApprovalRequest, type ApprovalManager } from '../authority/approval.ts';
 import type { DeferredExecutor } from '../authority/deferred-executor.ts';
 import type { EmergencyState } from '../authority/emergency.ts';
@@ -1229,14 +1229,46 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
       recordUserProfileTurn(text);
       addMessage(conversation.id, { role: 'user', content: text });
 
-      // Set default cwd for general tools (run_command, read_file, etc.)
-      // so they operate in the project directory during site builder conversations
-      if (projectId && this.siteBuilderService) {
-        const projectPath = this.siteBuilderService.projectManager.getProjectPath(projectId);
-        setDefaultCwd(projectPath);
-      }
+      // A chat bound to one project is held to the site tools, so the prompt's
+      // "do NOT use regular read_file, write_file, or run_command" is enforced
+      // by the registry instead of requested in prose (#561). Scoped on
+      // `projectId` alone, not on the site service being up: a project-scoped
+      // frame that found no project still must not fall back to the generic
+      // file and shell tools pointed at the project directory.
+      const scope = projectId ? PROJECT_SITE_CHAT_SCOPE : null;
 
-      const { stream, onComplete } = this.agentService.streamMessage(text, channel, siteContext);
+      // This used to call setDefaultCwd(projectPath) whenever `projectId` was
+      // present, so the generic tools "operate in the project directory
+      // during site builder conversations". That is the mechanism #561 is
+      // about: it is what made `read_file` and `run_command` resolve into the
+      // project with no containment, no framing and no taint, and it ran
+      // before the branch below and regardless of which one was taken.
+      //
+      // It is not set any more, and the reason it MUST not be is the
+      // router-first conv path: there the turn keeps the generic tools (the
+      // scope reaches only the classic path) and loses the site prompt block
+      // as well, so a project-scoped chat in the default hosted configuration
+      // was the pre-#561 state exactly, minus the prompt line that was its
+      // only control. Leaving the cwd pointed at the project is what turns
+      // that from "generic tools, resolving in the home dir" into "generic
+      // tools, aimed at the tree a pulled repo is sitting in".
+      //
+      // The two `setDefaultCwd(null)` resets that used to end the turn went
+      // with it: nothing in production sets a non-null default cwd any more
+      // (the only remaining callers of the setter are tests), so a reset here
+      // would read as though the mechanism were still live.
+      //
+      // Nothing needed it: the site tools resolve through `project_id` and
+      // ProjectManager, not through the cwd; a card stored mid-turn already
+      // freezes its path absolute at gate time (#522); and the git refusal
+      // covers site projects through the projects dir, not through the cwd
+      // (siteRoots, file-path-policy.ts). What is genuinely lost is a
+      // conv-path turn resolving a bare "src/App.tsx" into the project, which
+      // only ever worked by accident: that path has no site prompt telling it
+      // the project exists. Threading scope and site context through the conv
+      // orchestrator is the real repair and is filed separately; until then
+      // the cwd does not do its work for it.
+      const { stream, onComplete } = this.agentService.streamMessage(text, channel, siteContext, scope);
 
       // Set up streaming TTS: speak sentences as they arrive
       const ttsActive = !!(this.ttsProvider && ws);
@@ -1348,7 +1380,6 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
 
       if (activeChat?.controller.signal.aborted) {
         ttsSentenceQueue = [];
-        setDefaultCwd(null);
         if (taskCommitment) {
           try {
             const updated = updateCommitmentStatus(taskCommitment.id, 'failed', 'Stopped by user');
@@ -1400,9 +1431,6 @@ CRITICAL — when in genuine doubt between "make in a new project" vs "add to th
           this.activeTaskId = null;
         }
       }
-
-      // Clear site builder default cwd now that the turn is done
-      setDefaultCwd(null);
 
       // Fire-and-forget: run post-processing (extraction, personality)
       onComplete(fullText).catch((err) =>
