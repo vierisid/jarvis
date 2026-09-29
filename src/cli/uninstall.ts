@@ -227,15 +227,28 @@ try {
 // ── Side-effect cleanup (synchronous, parent process) ───────────────
 
 async function runSideEffectCleanup(plan: CleanupPlan): Promise<boolean> {
-  // Autostart FIRST, then the daemon. The launchd plist is installed with
-  // KeepAlive=true (and the systemd unit with Restart=), so stopping the daemon
-  // while the service is still registered just gets it relaunched under a new
-  // pid — the stop then reports `stopped: false`, we abort, and the unload that
-  // would have broken the cycle never runs. Every retry loops the same way.
+  // Autostart FIRST, then the daemon. Both service definitions relaunch a
+  // daemon that exits unsuccessfully (systemd Restart=on-failure, the launchd
+  // plist's KeepAlive={SuccessfulExit: false} since #549), and a stop that
+  // overruns the drain deadline escalates to SIGKILL, which is exactly that: the
+  // daemon comes back under a new pid, the stop reports `stopped: false`, we
+  // abort, and the unload that would have broken the cycle never runs. Every
+  // retry loops the same way. Removing the service first cannot loop.
+  //
+  // Before #549 this held for EVERY stop on macOS, clean drain included, because
+  // `KeepAlive=true` relaunched after any exit; a plist installed by an older
+  // version still behaves that way, which is another reason the order stands.
   if (plan.autostartInstalled) {
     console.log(c.dim(`Removing ${getAutostartName()}...`));
     try {
-      await uninstallAutostart();
+      // The result matters, not just an exception: a launchd agent that could not
+      // be unloaded is still there to relaunch the daemon the stop below is about
+      // to make exit, which is the loop this ordering exists to avoid. The
+      // uninstall still goes on -- the user asked for it -- but says so.
+      if (!await uninstallAutostart()) {
+        console.log(c.yellow('  ! The service could not be removed, so it may relaunch the daemon.'));
+        console.log(c.dim('    If the stop below fails, remove it by hand and re-run `jarvis uninstall`.'));
+      }
     } catch (err) {
       // Autostart removal can fail if systemd/launchd is in a weird state.
       // Surface the error but don't abort — the user still wants the rest
@@ -286,10 +299,11 @@ function printPlan(plan: CleanupPlan): void {
   console.log(c.dim(`  (${plan.methodReason})`));
   console.log('');
   console.log(c.dim('Planned cleanup:'));
-  console.log(c.dim(`  • Stop daemon (if running)`));
+  // In the order runSideEffectCleanup does it: autostart first, then the daemon.
   if (plan.autostartInstalled) {
     console.log(c.dim(`  • Remove autostart: ${getAutostartName()}`));
   }
+  console.log(c.dim(`  • Stop daemon (if running)`));
   for (const target of plan.removablePaths) {
     console.log(c.dim(`  • Remove: ${target}`));
   }

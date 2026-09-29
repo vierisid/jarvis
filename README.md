@@ -37,6 +37,7 @@ JARVIS is not a chatbot with tools. It is a persistent daemon that sees your scr
     - [One-liner](#one-liner)
     - [Manual](#manual)
   - [🚀 Usage](#-usage)
+    - [Keeping JARVIS running](#keeping-jarvis-running)
     - [Updating](#updating)
     - [Removing JARVIS](#removing-jarvis)
   - [🖥️ Sidecar Setup](#️-sidecar-setup)
@@ -213,6 +214,7 @@ jarvis stop             # Stop the daemon
 jarvis status           # Check if running
 jarvis doctor           # Verify environment & connectivity
 jarvis logs -f          # Follow live logs
+jarvis autostart        # Keep it running across logins (and boots, on Linux)
 ```
 
 The dashboard is available at `http://localhost:3142` once the daemon is running.
@@ -246,6 +248,52 @@ cap is enforced the file is replaced, so `tail` reopens it and reprints the
 whole window. At the default size that is ~1 MiB of already-seen lines about
 every 256 KiB of new output. That is inherent to capping one file in place, not
 a bug.
+
+### Keeping JARVIS running
+
+`jarvis autostart` installs the service that starts JARVIS at login and brings it
+back after a crash: a **systemd user service** on Linux, a **launchd user agent**
+on macOS. Nothing else in JARVIS installs one, so until you run it the daemon
+only runs for as long as you keep it running yourself.
+
+```bash
+jarvis autostart              # install or refresh the definition, and start it
+jarvis autostart --status     # what is installed, and whether it is current
+jarvis autostart --uninstall  # stop the service and remove the definition
+```
+
+What it will and will not do:
+
+- **It never overwrites a definition that differs from the one this version
+  writes.** It prints the differences and writes nothing; `jarvis autostart
+  --force` applies them. An install from an older JARVIS and an edit of your own
+  look the same from here, and even the `bun` path differs between shells. On
+  Linux, `systemctl --user edit jarvis.service` is the way to keep your changes:
+  a drop-in survives a reinstall.
+- **It starts the service only when no daemon is running already.** The service
+  starts the daemon itself, so a second one would fail on the lock file. Pass
+  `--no-start` to install the definition without starting anything.
+- **A refresh does not restart a running daemon.** It keeps the definition it was
+  started with until it restarts, and the command prints the one line that
+  applies the new one.
+- **`jarvis stop` stays stopped.** Both definitions bring JARVIS back after a
+  failure only, never after a clean exit. The exception is a stop whose drain
+  overruns its deadline and escalates to `SIGKILL`: that is not a clean exit, so
+  it is relaunched. Remove autostart first if you need such a daemon to stay
+  down.
+- **A crash loop is bounded on Linux only.** systemd gives up after five starts
+  in two minutes and leaves the unit failed, which `jarvis status` explains.
+  launchd has no equivalent, so on macOS a daemon that cannot boot is retried
+  about every ten seconds for as long as you are logged in. A `jarvis restart`
+  there also leaves the new daemon outside the agent until your next login, and
+  says so.
+
+`jarvis status` names a definition that still has what this version fixed - a
+browser opening on every start, an unbounded restart loop, a `jarvis stop` that
+gets undone - whenever it can tell, and `jarvis uninstall` removes autostart for
+you, in the order that does not get the daemon relaunched mid-uninstall. See
+[Running under systemd](docs/SELF_HOSTING.md#running-under-systemd) for what
+changes once JARVIS is a unit's main process.
 
 ### Updating
 

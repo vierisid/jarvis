@@ -7,6 +7,7 @@
  *   jarvis stop [--port N]                  Stop the running daemon (graceful drain)
  *   jarvis drain [--port N]                 Graceful drain + stop (finish in-flight work)
  *   jarvis status                           Show daemon status
+ *   jarvis autostart [--status|--uninstall] Install/refresh the service that keeps it running
  *   jarvis uninstall                        Remove JARVIS (detects install method)
  *   jarvis doctor                           Check environment & connectivity
  *   jarvis version                          Print version
@@ -47,6 +48,7 @@ ${c.bold('Commands:')}
   ${c.cyan('restart')}   Restart the daemon (stop + start)
   ${c.cyan('status')}    Show daemon status
   ${c.cyan('logs')}      Tail the daemon log file
+  ${c.cyan('autostart')} Install, refresh or remove the service that keeps JARVIS running
   ${c.cyan('update')}    Update JARVIS (dispatches based on install method)
   ${c.cyan('uninstall')} Remove JARVIS (dispatches based on install method)
   ${c.cyan('doctor')}    Check environment and connectivity
@@ -70,12 +72,21 @@ ${c.bold('Logs options:')}
   -f, --follow      Follow log output (like tail -f)
   -n, --lines <N>   Number of lines to show (default: 50)
 
+${c.bold('Autostart options:')}
+  --status          Show where the definition lives and whether it matches this
+                    version, and whether the service manager will start it
+  --force           Overwrite a definition that differs from this version's
+  --no-start        Install the definition without starting the service
+  --uninstall       Stop the service and remove the definition
+
 ${c.bold('Examples:')}
   jarvis start                  Start in foreground
   jarvis start -d               Start as background daemon
   jarvis start --port 8080      Start on custom port
   jarvis restart                Restart with same settings
   jarvis logs -f                Follow live log output
+  jarvis autostart              Keep JARVIS running across logins (and boots)
+  jarvis autostart --status     Show what autostart is installed
   jarvis update                 Update to latest version
   jarvis uninstall              Remove JARVIS from this machine
   jarvis enroll "desktop-NA23"  Mint an enrollment token for a device
@@ -311,7 +322,7 @@ async function cmdStop(args: string[] = [], opts: { verb?: string } = {}): Promi
       ));
       console.error(c.dim(
         relaunched
-          ? '  A service manager restarted it. Remove autostart first: jarvis uninstall (or disable the service).'
+          ? '  A service manager restarted it. Stop the service itself, or remove autostart: jarvis autostart --uninstall.'
           : '  Its lockfile was left in place. Stop it as its owner, or with root.',
       ));
       return false;
@@ -402,11 +413,11 @@ async function cmdStatus(): Promise<void> {
     console.log(c.dim(`  ${describeLastUpdate(lastUpdate)}`));
   }
 
-  // An autostart definition installed before #543/#544 keeps both bugs until
-  // autostart is reinstalled, and nothing reinstalls it by itself. Say so here
-  // rather than rewriting the file: it may have been edited by hand, and an
-  // offer to rewrite belongs to a command that installs autostart, which this
-  // CLI does not have. The detector stays quiet unless it is sure.
+  // An autostart definition installed before #543/#544/#549 keeps those bugs
+  // until autostart is installed again. Say so here rather than rewriting the
+  // file: it may have been edited by hand, and the rewrite belongs to `jarvis
+  // autostart`, which prints what would change before it writes anything. The
+  // detector stays quiet unless it is sure.
   // Wrapped: this is an extra on top of the status the user asked for, so a
   // module that fails to load here must not take the whole command down.
   try {
@@ -417,8 +428,7 @@ async function cmdStatus(): Promise<void> {
       for (const problem of drift.problems) {
         console.log(c.dim(`      ${describeAutostartProblem(problem)}`));
       }
-      // A global install has no docs/ on disk, so link it.
-      console.log(c.dim('    Fix: https://github.com/vierisid/jarvis/blob/main/docs/SELF_HOSTING.md#refreshing-an-autostart-service'));
+      console.log(c.dim('    Fix: jarvis autostart   (prints what would change; --force writes it)'));
     }
   } catch { /* the status above is what matters */ }
 }
@@ -449,10 +459,11 @@ async function cmdRestart(args: string[]): Promise<void> {
   const pid = isLocked();
   if (pid) {
     if (!await cmdStop()) {
-      // Under launchd KeepAlive / systemd Restart the daemon comes straight
-      // back under a new pid. That IS the restart the user asked for — report
-      // it rather than exiting, and never fall through to cmdStart, which would
-      // only fail acquireLock() against the live replacement.
+      // A service manager can bring the daemon back under a new pid before the
+      // stop finishes: systemd Restart=on-failure, or launchd's KeepAlive, when
+      // the stop escalated to SIGKILL. That IS the restart the user asked for --
+      // report it rather than exiting, and never fall through to cmdStart, which
+      // would only fail acquireLock() against the live replacement.
       const holder = isLocked();
       if (holder !== null && holder !== pid) {
         console.log(c.green(`✓ JARVIS restarted by its service manager (PID ${holder}).`));
@@ -463,7 +474,34 @@ async function cmdRestart(args: string[]): Promise<void> {
   }
 
   console.log('');
+  // Before the start, not after: with no -d, cmdStart does not return until the
+  // daemon exits, and a note printed then would arrive hours late.
+  await printLaunchdHandoffNote();
   await cmdStart(args);
+}
+
+/**
+ * The daemon cmdStart is about to start is a child of this shell, not of the
+ * launch agent, and on macOS nothing hands it back: there is no counterpart of
+ * routeRestart (#525), because telling whether the running daemon is the agent's
+ * own needs `launchctl print`, and kickstarting the agent against a lock some
+ * other daemon holds would spin it every ThrottleInterval.
+ *
+ * Before #549 a clean stop on macOS was undone by `KeepAlive=true`, so this
+ * never came up: the daemon always came back under launchd and the branch above
+ * reported it. Now that a clean exit is left alone, say plainly that supervision
+ * is only back at the next login, rather than letting a later crash go
+ * unrelaunched with nothing having said so.
+ */
+async function printLaunchdHandoffNote(): Promise<void> {
+  if (process.platform !== 'darwin') return;
+  try {
+    const { isAutostartInstalled, getAutostartUnitName } = await import('../src/cli/autostart.ts');
+    if (!isAutostartInstalled()) return;
+    console.log(c.yellow('  ! The daemon this starts is a child of your shell, not of the launch agent.'));
+    console.log(c.dim('    It will not be supervised until your next login. To hand it back:'));
+    console.log(c.dim(`      jarvis stop && launchctl kickstart -k gui/$(id -u)/${getAutostartUnitName()}`));
+  } catch { /* the restart above is what matters */ }
 }
 
 function cmdLogs(args: string[]): void {
@@ -623,6 +661,10 @@ switch (command) {
   case 'restore': {
     const { cmdRestore } = await import('../src/cli/backup.ts');
     process.exit(await cmdRestore(commandArgs));
+  }
+  case 'autostart': {
+    const { runAutostartCommand } = await import('../src/cli/autostart-command.ts');
+    process.exit(await runAutostartCommand(commandArgs));
   }
   case 'uninstall':
     await cmdUninstall();

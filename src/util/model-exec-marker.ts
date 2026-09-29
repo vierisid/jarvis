@@ -20,10 +20,12 @@
  * fire, and the default KillMode=control-group kills the CLI with the daemon
  * -- Jarvis stays DOWN, and an update is cut short (measured with a transient
  * user unit; a pre-existing limit, not #514's). If the stop escalates to
- * SIGKILL, systemd restarts the unit with the unit's env. launchd's KeepAlive
- * relaunches with launchd's env, and the CLI sees the new pid and stops there
- * (cmdRestart; update's "a daemon is still running"). `systemctl --user
- * restart jarvis` is the way to restart a systemd install.
+ * SIGKILL, systemd restarts the unit with the unit's env, and so does launchd's
+ * KeepAlive (SuccessfulExit=false since #549): the CLI then sees the new pid and
+ * stops there (cmdRestart; update's "a daemon is still running"). A CLEAN stop on
+ * macOS is no longer undone, so the daemon the CLI starts next is a child of that
+ * shell and keeps its env until the next login; cmdRestart says so.
+ * `systemctl --user restart jarvis` is the way to restart a systemd install.
  *
  * For JARVIS_WORKFLOW_ENCRYPTION_KEY a missing secret is worse than a missing
  * feature: with no key file, getKey() would mint one, credentials saved
