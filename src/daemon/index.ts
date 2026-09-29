@@ -48,7 +48,7 @@ import { AuthorityEngine } from "../authority/engine.ts";
 import { ApprovalManager } from "../authority/approval.ts";
 import { AuditTrail } from "../authority/audit.ts";
 import { impactFromCategory } from "../roles/authority.ts";
-import { wrapUntrusted } from "../roles/untrusted.ts";
+import { wrapUntrusted, inlineUntrusted } from "../roles/untrusted.ts";
 import { SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
 import { containsWakePhrase, hasSpokenContent, wakeCommandFrom } from "../voice/wake-phrase.ts";
 import { AuthorityLearner } from "../authority/learning.ts";
@@ -5329,7 +5329,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               if (errorText.length > 5) {
                 console.log(`[Daemon] Auto-researching error: "${errorText.slice(0, 80)}"`);
                 bgAgent.handleMessage(
-                  `The user is seeing an error in ${appName}. The error text, read from their screen:\n` +
+                  // `appName` is the active window's app name, which a web page
+                  // controls through document.title -- the same actor that
+                  // supplies the framed errorText below. Framing the error text
+                  // and interpolating the app name raw would leave an unframed
+                  // channel in the sentence that introduces the block, complete
+                  // with newlines to open headings of its own.
+                  `The user is seeing an error in ${inlineUntrusted(appName, 60)}. The error text, read from their screen:\n` +
                   wrapUntrusted(errorText, 'screen text (OCR)') + '\n\n' +
                   `Search the web and vault for a solution. Be concise and actionable. ` +
                   `Start your response with the fix, not a question.`,
@@ -5380,7 +5386,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               if (compositeScore >= 0.7 && (appCategory === 'code_editor' || appCategory === 'terminal')) {
                 console.log(`[Daemon] Deep-researching struggle in ${sAppName} (score: ${compositeScore.toFixed(2)})`);
                 bgAgent.handleMessage(
-                  `The user has been struggling in ${sAppName} (${appCategory}) for several minutes. ` +
+                  // Same reasoning as the error path above: both of these come
+                  // from observer event data, so both are labels inside trusted
+                  // prose rather than trusted text.
+                  `The user has been struggling in ${inlineUntrusted(sAppName, 60)} (${inlineUntrusted(appCategory, 40)}) for several minutes. ` +
                   `Here's what's on their screen:\n` +
                   wrapUntrusted(ocrPreview.slice(0, 800), 'screen text (OCR)') + '\n\n' +
                   `Search for solutions to any errors visible. Check documentation for the relevant language/framework. ` +

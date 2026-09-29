@@ -19,7 +19,7 @@ import type { EngineRuntime } from '../workflows/runner/engine-runtime/engine-ru
 import { createWorkflowRoutes } from '../workflows/api/routes.ts';
 import { createApiRoutes, type ApiContext } from '../daemon/api-routes.ts';
 import { DailyRhythm } from './rhythm.ts';
-import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN, untrustedClose, untrustedNonces } from '../roles/untrusted.ts';
+import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN, untrustedClose, unsafeUntrustedNoncesForTests } from '../roles/untrusted.ts';
 import { startWorkItemRun } from './workflow-bridge.ts';
 import { checkWorkResult, configureWorkItem, createPlannedWork, createWorkItem, decideWorkItem, getWorkItem, listWorkItems, setWorkBlocker } from './work-items.ts';
 
@@ -421,7 +421,7 @@ describe('Today work trace', () => {
     // Against the REAL boundary: since #560 the block is closed by a per-block
     // tag, and the step error's own copy of the marker token is left verbatim
     // inside the block rather than rewritten.
-    const nonces = untrustedNonces(prompt);
+    const nonces = unsafeUntrustedNoncesForTests(prompt);
     expect(nonces).toHaveLength(1);
     expect(prompt.split(untrustedClose(nonces[0]!))).toHaveLength(2);
     // The caller's own trusted instruction sits after the close, so the block

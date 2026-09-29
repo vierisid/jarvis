@@ -14,7 +14,20 @@
  */
 
 import { getWebappInstructionsForUrl } from '../../vault/webapp-templates.ts';
-import { SITE_INSTRUCTIONS_MARKER } from '../../roles/untrusted.ts';
+import { withTrustedTrailer } from '../../roles/untrusted.ts';
+
+/**
+ * The separator between the page and this module's own instructions.
+ *
+ * It lives here now, and it is FORMATTING rather than a protocol. Until #560 it
+ * was exported from roles/untrusted.ts because `markUntrustedToolResult` had to
+ * search the tool result for it to decide where the untrusted block ended --
+ * locating a trust boundary by searching attacker-controlled text. The
+ * instructions now travel beside the page in a carrier
+ * (`withTrustedTrailer`), so nothing looks for this string and it matters only
+ * to the reader.
+ */
+const SITE_INSTRUCTIONS_SEPARATOR = '\n\n---\nYou are now on ';
 
 /**
  * Re-deliver a template after this long. Long sessions can outlive context
@@ -55,14 +68,27 @@ export class WebappTemplateDelivery {
   }
 
   /**
-   * Append the site's template instructions to a browser tool result when the
+   * Attach the site's template instructions to a browser tool result when the
    * page URL resolves to a known webapp template that hasn't been delivered
-   * recently in this conversation. Error and detached-dispatch results and
-   * unknown URLs pass through untouched.
+   * recently in this conversation. Error and detached-dispatch results, empty
+   * results and unknown URLs pass through untouched.
+   *
+   * Returns either the result unchanged, or a CARRIER holding the page and the
+   * instructions separately (#560). The caller frames the page and places the
+   * instructions after the closing delimiter; nothing has to find a seam. The
+   * return type is `unknown` because that is what `ToolDefinition.execute`
+   * promises -- every consumer must go through `splitToolReturn` or
+   * `toolReturnText`, never `JSON.stringify`.
    */
-  withInstructions(result: string, fallbackUrl?: string): string {
+  withInstructions(result: string, fallbackUrl?: string): unknown {
     if (result.startsWith('Error')) return result;
     if (result.startsWith(DETACHED_RESULT_PREFIX)) return result;
+    // An empty result is not a page, so it gets no playbook. Without this a
+    // carrier could hold an empty payload and a non-empty trailer, which forces
+    // every consumer to decide what "the tool returned nothing, but here is a
+    // playbook" means -- and it would burn the redelivery TTL on a non-visit,
+    // losing the instructions for the next 30 minutes.
+    if (result.length === 0) return result;
 
     const url = extractSnapshotUrl(result) ?? fallbackUrl;
     if (!url) return result;
@@ -75,13 +101,16 @@ export class WebappTemplateDelivery {
     if (last !== undefined && now - last < REDELIVER_AFTER_MS) return result;
     this.delivered.set(resolved.templateId, now);
 
-    // Joined with the shared marker so untrusted-content wrapping (roles/untrusted.ts)
-    // can keep these repo-authored instructions outside the wrapped page text.
-    return [
-      `${result}${SITE_INSTRUCTIONS_MARKER}${resolved.appName}. Follow these site-specific instructions while operating it:`,
+    // Carried beside the page, not concatenated onto it: these are repo-authored
+    // instructions (seeded by vault/webapp-template-seeds.ts, not writable by any
+    // tool) and they must render OUTSIDE the untrusted block. Handing them over
+    // separately is what lets the framing layer place them there without
+    // searching the page for a boundary.
+    return withTrustedTrailer(result, [
+      `${SITE_INSTRUCTIONS_SEPARATOR}${resolved.appName}. Follow these site-specific instructions while operating it:`,
       '',
       resolved.instructions,
-    ].join('\n');
+    ].join('\n'));
   }
 }
 
