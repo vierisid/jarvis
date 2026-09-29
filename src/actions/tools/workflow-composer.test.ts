@@ -1829,3 +1829,27 @@ describe("tool-loop composer", () => {
     expect(sys.content.includes("input.message")).toBe(false);
   });
 });
+
+
+test('strict optional-data guidance reaches both composer paths and their repairs', async () => {
+  for (const mode of ['one-shot', 'tools']) {
+    const systems: string[] = [];
+    let calls = 0;
+    const candidate = () => ({ displayName: 'Optional note', trigger: { name: 'trigger', type: 'EMPTY', nextAction: { name: 'ask', type: 'PIECE', settings: { pieceName: 'jarvis-ask', actionName: 'ask', input: { prompt: ++calls === 1 ? '{{unknown.note}}' : '{{trigger.note ?? "No note"}}' } } } } });
+    const llm: ComposerLlmClient = mode === 'one-shot'
+      ? { chat: async ({ system }) => { systems.push(system!); return { text: JSON.stringify(candidate()) }; } }
+      : { chat: async () => { throw new Error('unexpected fallback'); }, chatTools: async messages => {
+        systems.push(messages.find(m => m.role === 'system')!.content as string);
+        return { content: '', tool_calls: [{ id: `call${calls}`, name: 'submit_flow', arguments: candidate() }] };
+      } };
+    const result = await composeFlow({ llm, pieceRegistry: makeRegistry() }, { name: 'Note', description: 'Format an optional note, using No note if absent' });
+    expect(result.ok).toBe(true);
+    expect(calls).toBe(2);
+    for (const system of systems) {
+      expect(system).toContain('An absent reference fails the step');
+      expect(system).toContain('{{trigger.body.note ?? "No note"}}');
+      expect(system).toContain('Never invent a fallback recipient');
+      expect(system).toContain('{{a.out ?? b.out}}');
+    }
+  }
+});

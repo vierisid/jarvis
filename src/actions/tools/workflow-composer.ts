@@ -1096,6 +1096,13 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
     "",
     "## Wiring data between steps",
     "  - Use {{trigger.field}} and {{step_N.field}} templates to wire data between steps.",
+    '  - An absent reference fails the step before dispatch; it is never silently replaced with an empty string.',
+    '    For optional data, use an explicit, meaningful fallback such as {{trigger.body.note ?? "No note"}}.',
+    '    An empty fallback still fails a required text input. Never invent a fallback recipient, destination, credential or business decision.',
+    '    If required data is absent, route to a missing-data outcome or ask for it. EXISTS / DOES_NOT_EXIST can guard optional comparisons.',
+    '  - After a router, merge alternative branch outputs with {{a.out ?? b.out}} (and a final default only if the job permits neither).',
+    '    A branch cannot reference a sibling; loop-body outputs stay inside their loop. Only the branches that ran have outputs.',
+
     "  - For jarvis-trigger:on_event, the trigger output is an event envelope shaped",
     "    { id, eventType, payload, timestamp } -- the actual event data lives under `payload`.",
     "    Reference payload fields as {{trigger.payload.<field>}}, NOT {{trigger.<field>}}.",

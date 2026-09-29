@@ -1,3 +1,4 @@
+import { resolvedInputIssues } from '../../../../../../../runtime/resolved-input-guard'
 import { getAuthPropertyForValue, InputPropertyMap, PieceAuthProperty, PieceProperty, PiecePropertyMap, PropertyType, StaticPropsValue } from '@activepieces/pieces-framework'
 import { AppConnectionValue, AUTHENTICATION_PROPERTY_NAME, isNil, isObject, PropertySettings } from '@activepieces/shared'
 import { z } from 'zod'
@@ -103,6 +104,7 @@ export const propsProcessor = {
             }
         }
 
+        Object.assign(errors, resolvedInputIssues(processedInput, props, requireAuth, !!auth, propertySettings, resolvedInput))
         return { processedInput, errors }
     },
 }

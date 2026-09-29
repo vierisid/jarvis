@@ -1,11 +1,14 @@
-import { configureWorkflowReadiness } from '../../db/repos/flow-readiness';
-import { metadataToCatalogEntry, PieceCatalog } from '../../runtime/piece-catalog';
 /** API save -> unmodified engine lookup -> installed native piece -> local provider. */
 import { afterAll, beforeAll, describe, expect, test } from "bun:test";
 import { dirname, join } from "node:path";
 import { existsSync, mkdtempSync, mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { createWorkflowRoutes } from "../../api/routes";
+import { configureWorkflowReadiness } from '../../db/repos/flow-readiness';
+import { metadataToCatalogEntry, PieceCatalog } from '../../runtime/piece-catalog';
+import { Worker } from '../../queue/worker';
+import { createRunFlowHandler } from '../handler';
+import { EngineFlowExecutor } from './engine-flow-executor';
 import { CredentialResolver } from "../../credentials/adapter";
 import { closeWorkflowDb, DEFAULT_IDS, initWorkflowDb } from "../../db";
 import { setEncryptionKey } from "../../db/encryption";
@@ -17,6 +20,7 @@ import { SandboxApi } from "../../sandbox-api/server";
 import { buildEngineBundle, ENGINE_BUILD_PATHS, findCachedBundle } from "./build";
 import { buildPiece } from "./build-pieces";
 import { EngineRuntime } from "./engine-runtime";
+import { toUpstreamFlowVersion } from "./flow-version-adapter";
 
 const PIECE = "@activepieces/piece-native-lookup-fixture";
 const TOKEN = "synthetic-native-engine-token";
@@ -27,7 +31,7 @@ const skip = process.env.JARVIS_TEST_ENGINE_BUILD !== "1" && (!cached
 // Bundled with the real framework and loaded by the engine's installed-piece
 // loader. Neither credential lookup nor the action executor is mocked.
 const fixtureSource = `
-import { createAction, createPiece, PieceAuth, Property } from "@activepieces/pieces-framework";
+import { createAction, createPiece, createTrigger, TriggerStrategy, PieceAuth, Property } from "@activepieces/pieces-framework";
 const auth = PieceAuth.OAuth2({
   description: "Local fixture only", required: true, scope: [],
   authUrl: "http://127.0.0.1/unused", tokenUrl: "http://127.0.0.1/unused",
@@ -43,9 +47,36 @@ const check = createAction({
     return response.json();
   },
 });
+const endpoint = Property.ShortText({ displayName: 'Endpoint', required: true });
+async function send(context) {
+  const response = await fetch(context.propsValue.endpoint, {
+    method: 'POST', headers: { Authorization: 'Bearer ' + context.auth.access_token, 'Content-Type': 'application/json' },
+    body: JSON.stringify(context.propsValue),
+  });
+  if (!response.ok) throw new Error('Local provider rejected payload');
+  return response.json();
+}
+const collections = createAction({
+  name: 'collections', displayName: 'Collections', description: '', auth,
+  props: { endpoint, rows: Property.Array({ displayName: 'Rows', required: true }), document: Property.Json({ displayName: 'Document', required: true }) },
+  run: send,
+});
+const form = createAction({
+  name: 'form', displayName: 'Form', description: '', auth,
+  props: { endpoint, form: Property.DynamicProperties({ displayName: 'Form', required: true, auth,
+    refreshers: [], props: async () => ({ recipient: Property.ShortText({ displayName: 'Recipient', required: true }), count: Property.Number({ displayName: 'Count', required: true }) }),
+  }) },
+  run: send,
+});
+const formTrigger = createTrigger({
+  name: 'form_trigger', displayName: 'Form trigger', description: '', auth,
+  type: TriggerStrategy.POLLING, sampleData: {}, props: form.props,
+  async onEnable() {}, async onDisable() {},
+  async run(context) { return [await send(context)]; },
+});
 export const nativeLookupFixture = createPiece({
   displayName: "Native lookup fixture", description: "Local tests only", auth,
-  minimumSupportedRelease: "0.82.0", logoUrl: "", authors: [], actions: [check], triggers: [],
+  minimumSupportedRelease: "0.82.0", logoUrl: "", authors: [], actions: [check, collections, form], triggers: [formTrigger],
 });
 `;
 
@@ -55,6 +86,7 @@ describe("native credential engine integration", () => {
   let runtime: EngineRuntime | undefined;
   let provider: ReturnType<typeof Bun.serve> | undefined;
   const requests: string[] = [];
+  const effects: Array<Record<string, unknown>> = [];
   const runIds: string[] = [];
 
   beforeAll(async () => {
@@ -77,9 +109,10 @@ describe("native credential engine integration", () => {
     await api.start({ port: 0 });
     runtime = new EngineRuntime({ api, bundlePath: (cached ?? await buildEngineBundle()).bundlePath,
       cwd: dir, customPiecesPaths: [dir], devPieces: [], baseCodeDir: join(dir, "code") });
-    provider = Bun.serve({ hostname: "127.0.0.1", port: 0, fetch(req) {
+    provider = Bun.serve({ hostname: "127.0.0.1", port: 0, async fetch(req) {
       const auth = req.headers.get("authorization") ?? "";
       requests.push(auth);
+      if (req.method === "POST") effects.push(await req.json() as Record<string, unknown>);
       return Response.json({ accepted: auth === "Bearer " + TOKEN }, { status: auth === "Bearer " + TOKEN ? 200 : 401 });
     } });
     const handle = await runtime.acquire({ runId: 'fixture-metadata', projectId: DEFAULT_IDS.project });
@@ -147,4 +180,87 @@ describe("native credential engine integration", () => {
     expect((await execute("jarvis:fixture")).status).toBe("SUCCEEDED");
     expect(requests.slice(count)).toEqual(["Bearer " + TOKEN]);
   }, 45_000);
+
+  async function runThroughWorker(actionName: string, input: Record<string, unknown>, payload: Record<string, unknown> = {}, propertySettings = {}) {
+    const flow = createFlow();
+    createDraftVersion({ flowId: flow.id, displayName: 'Readiness fixture', trigger: {
+      name: 'trigger', type: 'EMPTY', nextAction: { name: 'action', type: 'PIECE', settings: {
+        pieceName: PIECE, actionName, propertySettings,
+        input: { auth: "{{connections['jarvis:fixture']}}", endpoint: `http://127.0.0.1:${provider!.port}/check`, ...input },
+      } },
+    } });
+    const req = Object.assign(new Request('http://local/run', { method: 'POST', body: JSON.stringify({ environment: 'TESTING', payload }) }), { params: { id: flow.id } });
+    const response = await createWorkflowRoutes()['/api/workflows/:id/run']!.POST!(req);
+    expect(response.status).toBe(202);
+    const run = await response.json() as { id: string };
+    runIds.push(run.id);
+    const worker = new Worker({ log: () => {}, handlers: { RUN_FLOW: createRunFlowHandler({ executor: new EngineFlowExecutor(runtime!) }) } });
+    await worker.drain();
+    return getFlowRun(run.id)!;
+  }
+
+  for (const dynamic of [false, true]) {
+    test.skipIf(skip)(`R5: required empty collections reach the native action (${dynamic ? 'resolved' : 'literal'})`, async () => {
+      const before = effects.length;
+      const input = dynamic ? { rows: '{{trigger.rows}}', document: '{{trigger.document}}' } : { rows: [], document: [] };
+      const run = await runThroughWorker('collections', input, { rows: [], document: [] });
+      expect(run.status).toBe('SUCCEEDED');
+      expect(effects.slice(before)).toEqual([expect.objectContaining({ rows: [], document: [] })]);
+    }, 45_000);
+  }
+
+  for (const [label, value, allowed] of [
+    ['missing field', {}, false],
+    ['wrong type', { recipient: 'owner@example.test', count: 'wrong' }, false],
+    ['valid values', { recipient: 'owner@example.test', count: '2' }, true],
+  ] as const) {
+    test.skipIf(skip)(`R6: supplied dynamic schema is enforced before the native action (${label})`, async () => {
+      const before = effects.length;
+      const schema = { recipient: { type: 'SHORT_TEXT', required: true }, count: { type: 'NUMBER', required: true } };
+      const run = await runThroughWorker('form', { form: '{{trigger.form}}' }, { form: value }, { form: { schema } });
+      expect(run.status).toBe(allowed ? 'SUCCEEDED' : 'FAILED');
+      expect(effects.length - before).toBe(allowed ? 1 : 0);
+      if (allowed) expect(effects[before]!.form).toEqual({ recipient: 'owner@example.test', count: 2 });
+      else expect(run.failedStep?.errorMessage).toContain(label === 'missing field' ? 'recipient' : 'count');
+    }, 45_000);
+  }
+
+  for (const [label, value, propertySettings, allowed] of [
+    ['missing schema', {}, {}, false],
+    ['invalid shape', 42, { form: { schema: {} } }, false],
+    ['missing field', {}, { form: { schema: { count: { type: 'NUMBER', required: true } } } }, false],
+    ['valid values', { count: '2' }, { form: { schema: { count: { type: 'NUMBER', required: true } } } }, true],
+  ] as const) {
+    test.skipIf(skip)(`R6: trigger hooks enforce their saved dynamic schema (${label})`, async () => {
+      const before = effects.length;
+      const flow = createFlow();
+      const version = createDraftVersion({ flowId: flow.id, displayName: 'Dynamic trigger', trigger: {
+        name: 'trigger', type: 'PIECE_TRIGGER', settings: {
+          pieceName: PIECE, pieceVersion: '0.0.1', triggerName: 'form_trigger', propertySettings,
+          input: { auth: "{{connections['jarvis:fixture']}}", endpoint: `http://127.0.0.1:${provider!.port}/check`, form: value },
+        },
+      } });
+      const handle = await runtime!.acquire({ runId: version.id, projectId: DEFAULT_IDS.project });
+      try {
+        const execution = handle.executeTriggerHook('RUN', { flowVersion: toUpstreamFlowVersion(version), timeoutInSeconds: 15 });
+        if (allowed) {
+          await execution;
+          expect(effects.slice(before)).toEqual([expect.objectContaining({ form: { count: 2 } })]);
+        } else {
+          await expect(execution).rejects.toThrow(label === 'missing schema' ? 'schema' : label === 'invalid shape' ? 'object' : 'count');
+          expect(effects.length).toBe(before);
+        }
+      } finally { await handle.release(); }
+    }, 45_000);
+  }
+
+  test.skipIf(skip)('R5: processing cannot turn a missing required row collection into a valid empty list', async () => {
+    const before = effects.length;
+    const schema = { rows: { type: 'ARRAY', required: true, properties: { count: { type: 'NUMBER', required: true } } } };
+    const run = await runThroughWorker('form', { form: '{{trigger.form}}' }, { form: { rows: null } }, { form: { schema } });
+    expect(run.status).toBe('FAILED');
+    expect(effects.length).toBe(before);
+    expect(run.failedStep?.errorMessage).toContain('rows');
+  }, 45_000);
+
 });

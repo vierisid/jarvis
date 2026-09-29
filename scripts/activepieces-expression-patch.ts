@@ -36,8 +36,16 @@ export const expressionPatches = {
     ],
   ],
   'packages/server/engine/src/lib/variables/props-resolver.ts': [
+    ['        return result ?? \'\'\n    }))',
+      "        if (result === undefined) throw new Error('Workflow reference resolved to an absent value; supply a value or an explicit fallback')\n        return result\n    }))"],
     ["        console.warn('[evalInScope] Error evaluating variable', resultError)\n        return ''",
       '        // Jarvis: an unsupported expression must stop the step before any effect.\n        throw resultError'],
+  ],
+  'packages/server/engine/src/lib/variables/props-processor.ts': [
+    ["import { getAuthPropertyForValue,",
+      "import { resolvedInputIssues } from '../../../../../../../runtime/resolved-input-guard'\nimport { getAuthPropertyForValue,"],
+    ['        return { processedInput, errors }',
+      '        Object.assign(errors, resolvedInputIssues(processedInput, props, requireAuth, !!auth, propertySettings, resolvedInput))\n        return { processedInput, errors }'],
   ],
 } as const;
 

@@ -209,6 +209,8 @@ function buildStagingPackageJson(): string {
  */
 export const PATCHED_VENDOR_SOURCES = [
   '../../runtime/safe-expression.ts',
+  '../../runtime/input-validation.ts',
+  '../../runtime/resolved-input-guard.ts',
   // Jarvis: the governed-piece admission gate. The adapter table and the
   // engine-side client are daemon sources compiled INTO the bundle, so editing
   // either without registering them here would leave a cached engine running
@@ -224,6 +226,7 @@ export const PATCHED_VENDOR_SOURCES = [
   '../../../util/subprocess-env.ts',
   'server/engine/src/lib/core/code/no-op-code-sandbox.ts',
   'server/engine/src/lib/variables/props-resolver.ts',
+  'server/engine/src/lib/variables/props-processor.ts',
   'server/engine/src/lib/handler/piece-executor.ts',
   "server/engine/src/lib/helper/piece-loader.ts",
   // Jarvis-only `outputSample` extension on actions + the matching

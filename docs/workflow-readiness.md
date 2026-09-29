@@ -52,9 +52,17 @@ References may use earlier outputs, the trigger, and the containing loop's
 item/index. Router branch outputs are available in the router's continuation as
 runtime-dependent values, for example `{{a.out ?? b.out}}`. Sibling branches
 remain isolated. Loop-body outputs do not escape their loop. Output samples are examples, not authoritative schemas.
-Values whose shape depends on runtime data appear in runtimeChecks with their
-node, path and enforcing guard. These are not proofs of future input availability.
-The subsequent runtime-validation commit installs strict missing-value checks.
+Values whose shape depends on runtime data appear in `runtimeChecks`, with a
+node, path and enforcing guard. Piece input validation runs before dispatch;
+missing references fail before interpolation can turn them into ordinary text.
+Optional data needs an explicit fallback, for example
+`{{trigger.optionalNote ?? "No note"}}`. Loop items must resolve to an array.
+Known JSON, object and array inputs are checked before activation, using their
+source property type and the engine's supported conversions. A required collection
+must be present, but an empty array is valid; required does not imply a minimum
+length. Runtime-dependent values and file inputs retain their explicit runtime
+checks. Supplied dynamic schemas validate nested required fields and types after
+resolution, before a piece can call its provider.
 Connections are re-resolved at runtime, including managed sources, whose token
 availability can change after activation. Nested runs and tools validate again
 at their existing dispatch boundaries.
@@ -81,4 +89,5 @@ current graph. Flow enablement and existing published versions are not rewritten
 `GET /api/workflows/readiness?limit=100&offset=0` audits enabled workflows using
 the live inventory. It returns `items` with `flowId`, `versionId`, and `readiness`,
 plus `nextOffset` (null on the last page). Inspect both issues and runtime checks.
-This is read-only; it does not execute workflows or resolve secrets.
+This is read-only; it does not execute workflows or resolve secrets. See
+[upgrade guidance](workflow-readiness-upgrade.md) before deploying stricter runtime checks.

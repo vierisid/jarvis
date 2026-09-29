@@ -104,6 +104,26 @@ describe("Engine end-to-end (F gate)", () => {
     closeWorkflowDb();
   });
 
+  test.skipIf(skipE2eTests)('readiness runtime guards stop absent and empty inputs before a real piece calls its backend', async () => {
+    for (const prompt of [undefined, '{{trigger.missing}}', 'prefix {{trigger.missing}}', '{{trigger.missing ?? ""}}', '{{trigger.missing ?? "fallback"}}']) {
+      const before = llmCalls.length;
+      const flow = createFlow();
+      const version = createDraftVersion({ flowId: flow.id, displayName: 'Runtime readiness', trigger: {
+        name: 'trigger', type: 'EMPTY', nextAction: {
+          name: 'ask', type: 'PIECE', settings: { pieceName: PIECE_ASK_NAME, pieceVersion: PIECE_VERSION, actionName: 'ask', input: prompt === undefined ? {} : { prompt } },
+        },
+      } });
+      const run = createFlowRun({ flowId: flow.id, flowVersionId: version.id, environment: 'TESTING' });
+      const handle = await runtime!.acquire({ runId: run.id, projectId: DEFAULT_IDS.project });
+      try {
+        const result = await handle.executeFlow({ flowVersion: version });
+        const valid = prompt?.includes('"fallback"') === true;
+        expect(result.status).toBe(valid ? 'SUCCEEDED' : 'FAILED');
+        expect(llmCalls.length - before).toBe(valid ? 1 : 0);
+      } finally { await handle.release(); }
+    }
+  }, 45_000);
+
   test.skipIf(skipE2eTests)('R3: API preview executes its saved override through the outer worker despite unfinished neighbors', async () => {
     const before = llmCalls.length;
     const flow = createFlow();
