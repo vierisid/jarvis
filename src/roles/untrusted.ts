@@ -189,6 +189,28 @@ export function toolReturnText(raw: unknown): string {
 }
 
 /**
+ * Neutralise a carrier while leaving every other value EXACTLY as it was.
+ *
+ * For a path that must not stringify. `toolReturnText` and `splitToolReturn`
+ * both flatten a non-string return to JSON, which is right where the next step
+ * is prompt text -- and wrong where the value is structured data somebody stores
+ * or reads fields off.
+ *
+ * The workflow tool adapter is that path. Its return becomes a durable EFFECT
+ * RECEIPT (`effects.invoke` in workflows/runtime/service-backends.ts), which is
+ * replay and idempotency state: a resumed run reads it back instead of acting
+ * again. Stringifying there changed a receipt's `result` from the tool's own
+ * object to a JSON string of it, which
+ * `cancellation-authority.integration.test.ts` caught -- so the rule is that a
+ * carrier must be collapsed without touching anything else. A carrier cannot
+ * reach a receipt anyway once it is collapsed here, and nothing else moves.
+ */
+export function collapseTrustedTrailer(raw: unknown): unknown {
+  if (raw instanceof TrailedToolReturn) return raw.untrusted + raw.trustedTrailer;
+  return raw;
+}
+
+/**
  * Tools whose text result is content from outside the conversation. Browser
  * tools are matched by category because every one of them (navigate, click,
  * type, ...) returns a page snapshot.
