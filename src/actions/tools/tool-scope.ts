@@ -73,8 +73,10 @@
  *
  * ## What this does NOT close
  *
- * Three routes, all found by review, all left open deliberately and none of
- * them silent:
+ * Three routes #570 recorded. The first is closed as of #571; the other two are
+ * still open deliberately, and none of the three was ever silent. Each entry
+ * keeps its original text so the reasoning that was acted on stays readable
+ * next to what was done about it.
  *
  * 1. ~~**The router-first conv path.**~~ CLOSED by #571. The scope and the
  *    site prompt block now travel `ws-service` -> `AgentService.streamMessage`
