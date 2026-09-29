@@ -11,6 +11,7 @@ let OnboardingGate: typeof import("./OnboardingGate").OnboardingGate;
 let Composer: typeof import("../shell/Composer").Composer;
 let useTalkDraft: typeof import("../shell/useTalkDraft").useTalkDraft;
 let STATUS_RETRY: typeof import("./useOnboardingStatus").STATUS_RETRY;
+let ONBOARDING_BROADCAST_CHANNEL: typeof import("./useOnboardingStatus").ONBOARDING_BROADCAST_CHANNEL;
 let host: HTMLDivElement;
 let root: ReturnType<typeof createRoot> | null = null;
 
@@ -21,7 +22,7 @@ beforeAll(async () => {
   ({ OnboardingGate } = await import("./OnboardingGate"));
   ({ Composer } = await import("../shell/Composer"));
   ({ useTalkDraft } = await import("../shell/useTalkDraft"));
-  ({ STATUS_RETRY } = await import("./useOnboardingStatus"));
+  ({ STATUS_RETRY, ONBOARDING_BROADCAST_CHANNEL } = await import("./useOnboardingStatus"));
 });
 afterEach(async () => {
   if (root) await act(async () => root!.unmount());
@@ -89,25 +90,6 @@ async function click(text: string) {
   // and the assertion after it would then pass for an unrelated reason.
   await actUntil(`the "${text}" button`, () => find(text)?.disabled === false, 1_000);
   await act(async () => button(text).click());
-}
-/**
- * Quiet the gate's follow-up refresh before the test ends. Best effort only.
- *
- * A local refresh that flips a phase flag posts `status_changed` on a NEWLY
- * created channel, so the tab hears its own broadcast through its listener
- * channel and re-reads status -- redundant work `useOnboardingStatus` does in
- * production too, not just here. It lands in the gap between the last assertion
- * and `afterEach` (a drain in `afterEach` is already too late), where React
- * reports it as an update outside act.
- *
- * Three passes is what absorbs it at the 0ms mock latency above; at higher
- * latency the warning comes back, and no in-test predicate does better, because
- * the read counter can go quiet before the broadcast is even delivered. So this
- * suppresses noise rather than fixing anything: it gates no assertion, and the
- * warning reappearing is its only failure mode. The fix belongs in the hook.
- */
-async function settle() {
-  for (let i = 0; i < 3; i++) await act(async () => { await new Promise((resolve) => setTimeout(resolve, 5)); });
 }
 /** Wait for the activation screen's request box to paint, then hand it over. */
 async function requestBox(): Promise<HTMLTextAreaElement> {
@@ -234,7 +216,7 @@ test("the request survives the gate refresh, waits for connection, preserves edi
   await enter(input, "Draft a workflow for my Friday update. Ask me which notes to use; do not enable it.");
   // A peer tab/status broadcast and a restart-banner transition must not
   // remount the shell or overwrite an edited request after consumption.
-  const channel = new BroadcastChannel("v2-onboarding-status");
+  const channel = new BroadcastChannel(ONBOARDING_BROADCAST_CHANNEL);
   try {
     for (const ready of [false, true]) {
       servicesReady = ready;
@@ -291,7 +273,6 @@ test("a failed completion refresh retains the activation task and can be retried
   expect(host.querySelector('[aria-label="Shell"]')).not.toBeNull();
   expect((await composerBox()).value).toContain("Prepare my Friday update");
   expect(sent).toEqual([]);
-  await settle();
 });
 
 const NEW_INSTALL = {
@@ -334,7 +315,6 @@ test("a skip that saves but cannot load the dashboard says so, and retrying work
     await act(async () => later()!.click());
     await actUntil("the dashboard", () => host.querySelector('[aria-label="Shell"]') !== null);
     expect(skips).toEqual(["POST", "POST"]);
-    await settle();
   } finally {
     STATUS_RETRY.delayMs = retryDelay;
   }
