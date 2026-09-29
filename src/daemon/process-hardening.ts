@@ -19,7 +19,10 @@
  *
  * WHAT IT DOES NOT CLOSE, measured, because the tool layer still has to:
  * `/proc/<pid>/cmdline`, `stat`, `status`, `statm`, `cgroup`, `limits`, `comm`,
- * `wchan`, `mounts` and `mountinfo` stay readable to any same-uid process.
+ * `mounts` and `mountinfo` stay readable to any same-uid process. (`wchan`
+ * opens and reads too, but answers `0` to a stranger rather than the real
+ * symbol -- it is ptrace-gated in the kernel, so it is neither closed nor
+ * informative. Do not cite it either way.)
  * Three of those (`cmdline`, `mounts`, `mountinfo`) are in
  * PROC_REFUSED_LEAVES in src/actions/tools/file-path-policy.ts precisely
  * because they leak. So this does NOT make the path-level refusals redundant
@@ -140,17 +143,29 @@ export interface HardeningDeps {
    */
   allowInspection?: unknown;
   /**
+   * The native helper, BOTH functions or neither. Deliberately not two
+   * independent overrides: a caller that replaced only the getter would reach
+   * the real `prctl` through the setter and make its own process non-dumpable
+   * -- in a test runner that costs every later test in the process its
+   * /proc/self/environ, which is exactly the accident this module's tests are
+   * arranged to avoid.
+   */
+  symbols?: DumpableSymbols;
+  /**
    * Resolve the native helper. Defaults to compiling set-dumpable.c. A test
    * substitutes one that throws to stand in for the real failures: no system
    * headers, no TinyCC, a libc whose prctl is missing.
    */
   loadSymbols?: () => DumpableSymbols;
-  /** Set the flag; returns 0 or an errno. Throws when unavailable. */
-  setDumpable?: (value: number) => number;
-  /** Read the flag back; -1 when the kernel will not say. */
-  getDumpable?: () => number;
-  /** Defaults to console.log. */
+  /** Where the "it worked" line goes. Defaults to console.log. */
   log?: (line: string) => void;
+  /**
+   * Where every outcome that is NOT "hardened" goes. Defaults to console.warn,
+   * and separate from `log` on purpose: "a security control you believe in is
+   * not in effect" deserves journald's warning priority and should be findable
+   * by a log scanner, not buried at info level next to the boot chatter.
+   */
+  warn?: (line: string) => void;
 }
 
 /**
@@ -161,16 +176,16 @@ export interface HardeningDeps {
 export function hardenProcessInspection(deps: HardeningDeps = {}): HardeningOutcome {
   const platform = deps.platform ?? process.platform;
   const log = deps.log ?? ((line: string) => console.log(line));
+  const warn = deps.warn ?? ((line: string) => console.warn(line));
 
   // Fail closed: only an explicit `true` from the config reader opens this.
   if (deps.allowInspection === true) {
-    const outcome: HardeningOutcome = { kind: 'allowed-by-config' };
-    log(
+    warn(
       '[Daemon] Process inspection ALLOWED by daemon.allow_process_inspection: ' +
         "this daemon's /proc entries, including its environment and its open " +
         'files, are readable by any process running as this user.',
     );
-    return outcome;
+    return { kind: 'allowed-by-config' };
   }
 
   // prctl is Linux-only. macOS has no equivalent that is worth pretending
@@ -188,20 +203,15 @@ export function hardenProcessInspection(deps: HardeningDeps = {}): HardeningOutc
   let set: (value: number) => number;
   let get: () => number;
   try {
-    if (deps.setDumpable && deps.getDumpable) {
-      set = deps.setDumpable;
-      get = deps.getDumpable;
-    } else {
-      const loaded = (deps.loadSymbols ?? load)();
-      set = deps.setDumpable ?? loaded.do_set_dumpable;
-      get = deps.getDumpable ?? loaded.do_get_dumpable;
-    }
+    const resolved = deps.symbols ?? (deps.loadSymbols ?? load)();
+    set = resolved.do_set_dumpable;
+    get = resolved.do_get_dumpable;
   } catch (err) {
     // No system headers, no TinyCC, a missing symbol, a libc without prctl.
     // Log and carry on -- this is defense in depth, and the daemon not
     // starting is a worse outcome than the hardening being absent.
     const reason = err instanceof Error ? err.message : String(err);
-    log(
+    warn(
       `[Daemon] Could not load the process-hardening helper (${reason}); ` +
         "continuing WITHOUT it: this daemon's /proc entries stay readable to " +
         'processes running as this user.',
@@ -214,11 +224,11 @@ export function hardenProcessInspection(deps: HardeningDeps = {}): HardeningOutc
     rc = set(0);
   } catch (err) {
     const reason = err instanceof Error ? err.message : String(err);
-    log(`[Daemon] prctl(PR_SET_DUMPABLE, 0) could not be called (${reason}); continuing without it.`);
+    warn(`[Daemon] prctl(PR_SET_DUMPABLE, 0) could not be called (${reason}); continuing without it.`);
     return { kind: 'unavailable', reason };
   }
   if (rc !== 0) {
-    log(`[Daemon] prctl(PR_SET_DUMPABLE, 0) failed with errno ${rc}; continuing without it.`);
+    warn(`[Daemon] prctl(PR_SET_DUMPABLE, 0) failed with errno ${rc}; continuing without it.`);
     return { kind: 'refused', errno: rc };
   }
 
@@ -230,7 +240,7 @@ export function hardenProcessInspection(deps: HardeningDeps = {}): HardeningOutc
     dumpable = -1;
   }
   if (dumpable !== 0) {
-    log(
+    warn(
       `[Daemon] prctl(PR_SET_DUMPABLE, 0) reported success but the flag is ` +
         `${dumpable === -1 ? 'unreadable' : dumpable}; assume this daemon's ` +
         '/proc entries are still readable by this user.',

@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test';
-import { readFileSync, readdirSync, readlinkSync, openSync, closeSync, writeFileSync, mkdtempSync } from 'node:fs';
+import { afterEach, describe, expect, test } from 'bun:test';
+import { readFileSync, readdirSync, rmSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 import { hardenProcessInspection } from './process-hardening.ts';
@@ -17,6 +17,23 @@ import { hardenProcessInspection } from './process-hardening.ts';
 const IS_LINUX = process.platform === 'linux';
 const MODULE = import.meta.path;
 
+/** Temp dirs the child probes write into, reclaimed after each test. */
+const probeDirs: string[] = [];
+function probeDir(prefix: string): string {
+  const dir = mkdtempSync(join(tmpdir(), prefix));
+  probeDirs.push(dir);
+  return dir;
+}
+afterEach(() => {
+  for (const dir of probeDirs.splice(0)) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* already gone */
+    }
+  }
+});
+
 function log(lines: string[]): (line: string) => void {
   return (line: string) => {
     lines.push(line);
@@ -30,11 +47,14 @@ describe('the decision', () => {
     const outcome = hardenProcessInspection({
       platform: 'linux',
       log: log(lines),
-      setDumpable: (v) => {
-        calls.push(v);
-        return 0;
+      warn: log(lines),
+      symbols: {
+        do_set_dumpable: (v: number) => {
+          calls.push(v);
+          return 0;
+        },
+        do_get_dumpable: () => 0,
       },
-      getDumpable: () => 0,
     });
     expect(outcome).toEqual({ kind: 'hardened' });
     expect(calls).toEqual([0]);
@@ -45,9 +65,9 @@ describe('the decision', () => {
     const outcome = hardenProcessInspection({
       platform: 'linux',
       log: () => {},
+      warn: () => {},
       allowInspection: undefined,
-      setDumpable: () => 0,
-      getDumpable: () => 0,
+      symbols: { do_set_dumpable: () => 0, do_get_dumpable: () => 0 },
     });
     expect(outcome).toEqual({ kind: 'hardened' });
   });
@@ -58,12 +78,15 @@ describe('the decision', () => {
     const outcome = hardenProcessInspection({
       platform: 'linux',
       log: log(lines),
+      warn: log(lines),
       allowInspection: true,
-      setDumpable: () => {
-        called = true;
-        return 0;
+      symbols: {
+        do_set_dumpable: () => {
+          called = true;
+          return 0;
+        },
+        do_get_dumpable: () => 1,
       },
-      getDumpable: () => 1,
     });
     expect(outcome).toEqual({ kind: 'allowed-by-config' });
     expect(called).toBe(false);
@@ -89,9 +112,9 @@ describe('the decision', () => {
     const outcome = hardenProcessInspection({
       platform: 'linux',
       log: () => {},
+      warn: () => {},
       allowInspection,
-      setDumpable: () => 0,
-      getDumpable: () => 0,
+      symbols: { do_set_dumpable: () => 0, do_get_dumpable: () => 0 },
     });
     expect(outcome).toEqual({ kind: 'hardened' });
   });
@@ -103,11 +126,14 @@ describe('the decision', () => {
       const outcome = hardenProcessInspection({
         platform,
         log: log(lines),
-        setDumpable: () => {
-          called = true;
-          return 0;
+        warn: log(lines),
+        symbols: {
+          do_set_dumpable: () => {
+            called = true;
+            return 0;
+          },
+          do_get_dumpable: () => 1,
         },
-        getDumpable: () => 1,
       });
       expect(outcome).toEqual({ kind: 'unsupported', platform });
       expect(called).toBe(false);
@@ -124,6 +150,7 @@ describe('nothing here can take the daemon down', () => {
     const outcome = hardenProcessInspection({
       platform: 'linux',
       log: log(lines),
+      warn: log(lines),
       loadSymbols: () => {
         throw new Error('"do_set_dumpable" is missing from the compiled source');
       },
@@ -140,10 +167,13 @@ describe('nothing here can take the daemon down', () => {
     const outcome = hardenProcessInspection({
       platform: 'linux',
       log: log(lines),
-      setDumpable: () => {
-        throw new Error('bad ffi call');
+      warn: log(lines),
+      symbols: {
+        do_set_dumpable: () => {
+          throw new Error('bad ffi call');
+        },
+        do_get_dumpable: () => 1,
       },
-      getDumpable: () => 1,
     });
     expect(outcome.kind).toBe('unavailable');
     expect(lines.join('\n')).toContain('continuing without it');
@@ -154,8 +184,8 @@ describe('nothing here can take the daemon down', () => {
     const outcome = hardenProcessInspection({
       platform: 'linux',
       log: log(lines),
-      setDumpable: () => 22, // EINVAL
-      getDumpable: () => 1,
+      warn: log(lines),
+      symbols: { do_set_dumpable: () => 22, do_get_dumpable: () => 1 }, // 22 = EINVAL
     });
     expect(outcome).toEqual({ kind: 'refused', errno: 22 });
     expect(lines.join('\n')).toContain('errno 22');
@@ -168,8 +198,8 @@ describe('nothing here can take the daemon down', () => {
     const outcome = hardenProcessInspection({
       platform: 'linux',
       log: log(lines),
-      setDumpable: () => 0,
-      getDumpable: () => 1,
+      warn: log(lines),
+      symbols: { do_set_dumpable: () => 0, do_get_dumpable: () => 1 },
     });
     expect(outcome).toEqual({ kind: 'not-verified', dumpable: 1 });
     expect(lines.join('\n')).toContain('still readable');
@@ -179,9 +209,12 @@ describe('nothing here can take the daemon down', () => {
     const outcome = hardenProcessInspection({
       platform: 'linux',
       log: () => {},
-      setDumpable: () => 0,
-      getDumpable: () => {
-        throw new Error('no');
+      warn: () => {},
+      symbols: {
+        do_set_dumpable: () => 0,
+        do_get_dumpable: () => {
+          throw new Error('no');
+        },
       },
     });
     expect(outcome).toEqual({ kind: 'not-verified', dumpable: -1 });
@@ -230,14 +263,36 @@ describe('who may import this module', () => {
         const text = readFileSync(full, 'utf-8');
         // An import/require SPECIFIER, not any mention: a comment elsewhere
         // that names this module is fine, a module that pulls it in is not.
-        if (/(?:from|import|require)\s*\(?\s*['"][^'"]*process-hardening(?:\.ts)?['"]/.test(text)) {
+        // Any extension, because `./process-hardening.js` is the same import.
+        if (/(?:from|import|require)\s*\(?\s*['"][^'"]*process-hardening(?:\.[cm]?[jt]sx?)?['"]/.test(text)) {
           importers.push(full.slice(REPO.length + 1));
         }
       }
     };
-    for (const root of ['src', 'bin', 'scripts']) walk(join(REPO, root));
+    // Every code directory in the repo, derived rather than listed: a new
+    // top-level dir must not slip past this guard silently. The denylist is
+    // build output, dependencies and assets, none of which can import a
+    // module.
+    const skip = new Set(['node_modules', '.git', '.claude', 'dist', 'docs', 'ui', 'webapp-templates']);
+    for (const entry of readdirSync(REPO, { withFileTypes: true })) {
+      if (!entry.isDirectory() || skip.has(entry.name)) continue;
+      walk(join(REPO, entry.name));
+    }
 
     expect(importers.filter((f) => !allowed.has(f)).sort()).toEqual([]);
+  });
+
+  /*
+   * And that the daemon passes the CONFIG value rather than a literal. The
+   * guard above proves index.ts imports the module; an implementation that
+   * hard-coded `true`, or read the wrong key, would satisfy every other test
+   * in this file. Source text, because the alternative is booting a daemon.
+   */
+  test('the daemon passes the configured flag, not a literal', () => {
+    const index = readFileSync(join(import.meta.dir, 'index.ts'), 'utf-8');
+    expect(index).toContain(
+      'hardenProcessInspection({ allowInspection: jarvisConfig.daemon.allow_process_inspection })',
+    );
   });
 });
 
@@ -249,7 +304,7 @@ describe('who may import this module', () => {
  */
 describe.skipIf(!IS_LINUX)('against a real process', () => {
   test('environ closes while /proc/self/fd and /proc/self/stat keep working', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'jarvis-dumpable-'));
+    const dir = probeDir('jarvis-dumpable-');
     const target = join(dir, 'target.txt');
     writeFileSync(target, 'hello', 'utf-8');
     const probe = join(dir, 'probe.ts');
@@ -321,7 +376,7 @@ console.log(JSON.stringify({
    * Driven through the REAL read_file tool inside a hardened process.
    */
   test("#551's read_file still refuses an aliased key and still reads through the descriptor", async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'jarvis-dumpable-551-'));
+    const dir = probeDir('jarvis-dumpable-551-');
     const probe = join(dir, 'probe.ts');
     const builtin = resolve(import.meta.dir, '..', 'actions', 'tools', 'builtin.ts');
     const policy = resolve(import.meta.dir, '..', 'actions', 'tools', 'file-path-policy.ts');
@@ -400,7 +455,7 @@ console.log('PROBE_RESULT ' + JSON.stringify({
   }, 60_000);
 
   test('the escape hatch really leaves environ readable', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'jarvis-dumpable-off-'));
+    const dir = probeDir('jarvis-dumpable-off-');
     const probe = join(dir, 'probe.ts');
     writeFileSync(
       probe,

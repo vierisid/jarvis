@@ -437,10 +437,37 @@ them is worth looking at: a turn that keeps reaching for credentials is the
 clearest sign of a prompt injection you will get.
 
 This is containment for the file tools, not a sandbox. `run_command` and
-workflow code steps run as your user, so they can still read
-`/proc/<daemon pid>/environ`, and a core dump would still hold it. Both are
-addressed by making the daemon's process memory unreadable to same-uid
-processes, which is tracked separately.
+workflow code steps run as your user, so they do not go through the file
+tools at all.
+
+On Linux the daemon closes that route underneath them: at startup it calls
+`prctl(PR_SET_DUMPABLE, 0)`, which makes its own `/proc` entry unreadable to
+every other process running as the same user. `cat /proc/<daemon pid>/environ`
+returns "Permission denied" instead of the environment the daemon was started
+with, `/proc/<daemon pid>/fd` no longer lists its open files, and strace, gdb
+and core dumps of the daemon stop working without root. Nothing needs enabling;
+it is the default.
+
+What it does not do: it is Linux-only (macOS and Windows get nothing), it is not
+a boundary against the same user -- who can still read `~/.jarvis`, the keychain
+and the log file directly, and can restart the daemon -- and a few `/proc`
+entries stay readable by design, including `cmdline`, `mounts` and `mountinfo`.
+The file tools still refuse those by path, so both layers matter.
+
+To turn it off, when you need to strace, gdb or get a core dump out of the
+daemon itself:
+
+```yaml
+daemon:
+  allow_process_inspection: true
+```
+
+It takes effect at startup, so restart the daemon afterwards. `yes`/`no`,
+`on`/`off` and `1`/`0` work as well as `true`/`false`; anything that is not a
+yes-or-no is reported in the log and treated as `false`, so a typo cannot switch
+the hardening off quietly. Each boot logs which way it went, and says so too
+when the kernel refused the call or the helper could not be built -- the daemon
+starts either way rather than failing over a hardening step.
 
 ### `--no-local-tools` and the site builder
 
@@ -816,14 +843,15 @@ so generate `JARVIS_WORKFLOW_ENCRYPTION_KEY` at random (`openssl rand -hex 32`)
 rather than from a passphrase.
 
 Like the install sanitizing above, this is environment hygiene, not a
-sandbox. The commands run as the daemon's user, so they can still read
-`/proc/<daemon pid>/environ` and the daemon's `~/.jarvis` -- `read_file` and
-`list_directory` no longer will (see
+sandbox. The commands run as the daemon's user, so they can still read the
+daemon's `~/.jarvis` -- `read_file` and `list_directory` no longer will (see
 [What the assistant cannot read](#what-the-assistant-cannot-read)), but a shell
-is a shell. Keeping a secret
-out of the daemon's environment (the dashboard and keychain hold LLM keys)
-keeps it out of that file, but nothing short of a sandbox keeps the daemon's
-files from what it runs.
+is a shell. `/proc/<daemon pid>/environ` is the one route that IS closed, on
+Linux, by the process hardening described above; do not count on it off Linux or
+with `allow_process_inspection` set. Keeping a secret out of the daemon's
+environment (the dashboard and keychain hold LLM keys) keeps it out of that file
+either way, and nothing short of a sandbox keeps the daemon's files from what it
+runs.
 
 ## Quick reference
 

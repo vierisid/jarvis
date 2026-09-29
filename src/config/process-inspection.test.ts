@@ -106,6 +106,7 @@ describe('resolveAllowProcessInspection', () => {
     expect(warnings).toHaveLength(1);
     expect(warnings[0]).toContain('daemon.allow_process_inspection in /c.yaml');
     expect(warnings[0]).toContain('"maybe"');
-    expect(warnings[0]).toContain('blocked');
+    // Says which way it went, so the operator knows the hatch did not open.
+    expect(warnings[0]).toContain('keep blocking process inspection');
   });
 });

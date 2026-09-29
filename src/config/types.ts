@@ -721,9 +721,11 @@ export type JarvisConfig = {
      * anything else is reported and treated as false, because a typo must never
      * silently switch a security control off.
      *
-     * No DEFAULT_CONFIG entry, on the drain_deadline_ms and log_file_path
-     * precedent: absent stays distinguishable from "set to the default", and
-     * the fallback is applied where the value is consumed.
+     * No DEFAULT_CONFIG entry: there is nothing to default TO here, since the
+     * loader resolves this key to a real boolean on every load (absent and an
+     * explicit false both come out false, which is all the `=== true` reader
+     * needs). Optional on the type because the raw parsed file may not carry
+     * it and because a caller constructing a config by hand should not have to.
      */
     allow_process_inspection?: boolean;
   };

@@ -11,8 +11,19 @@
  * as `parsed?.daemon?.x` at each call site is how two readers end up
  * disagreeing about what the file says. There is one reader here, it names an
  * explicit `invalid` state, and no caller is allowed to mistake that state for
- * "nothing was configured". Any future `JARVIS_*` override of this key goes
- * through this function too.
+ * "nothing was configured".
+ *
+ * NO ENV OVERRIDE, deliberately, unlike `JARVIS_PORT`. This key turns a
+ * security control OFF, so the way to set it has to be at least as hard to
+ * reach as the thing it protects. The config file is: `~/.jarvis/config.yaml`
+ * is classified `jarvis-config` and the file tools refuse to write it, so a
+ * model-driven `write_file` cannot open the hatch. An environment variable
+ * would be strictly weaker -- the daemon can be started from a command the
+ * assistant ran (#514), and a stale `export` in a shell profile or a unit
+ * drop-in would silently disable the hardening on the next boot with nothing
+ * in the config to show for it. If an override is ever genuinely needed, route
+ * it through this same function AND make the daemon log loudly that an
+ * environment variable, not the config, is what opened the hatch.
  *
  * WHY THE COERCION. `yaml` parses to the YAML 1.2 core schema, where only
  * `true`/`false` are booleans. The YAML 1.1 spellings people actually write --
@@ -118,9 +129,13 @@ export function resolveAllowProcessInspection(
   const setting = readProcessInspectionSetting(value);
   if (setting.kind === 'valid') return setting.allow;
   if (setting.kind === 'invalid') {
+    // Names the subject, because loadConfig also runs in `jarvis devices`,
+    // `jarvis export`, `jarvis doctor` and scripts/setup-config.ts, where "is
+    // blocked" would be claiming something about the CLI process -- and on
+    // macOS, where nothing is ever blocked at all.
     warn(
-      `${label} ${setting.problem}; ignoring it and keeping process inspection blocked. ` +
-        'Write `true` if you meant to allow it.',
+      `${label} ${setting.problem}; ignoring it, so the daemon will keep blocking ` +
+        'process inspection on Linux. Write `true` if you meant to allow it.',
     );
   }
   return false;
