@@ -724,3 +724,58 @@ describe('daemon.port is coerced, or the config is refused', () => {
     expect(await portOf()).toBe(7000);
   });
 });
+
+// The escape hatch for #546's prctl(PR_SET_DUMPABLE, 0). The daemon tests the
+// resolved value with `=== true`, so what matters here is that the loader hands
+// it a real BOOLEAN: `allow_process_inspection: yes` is a string in the YAML
+// 1.2 core schema the parser uses, and a string would have left the hatch
+// silently shut for the spelling most people write.
+describe('daemon.allow_process_inspection is coerced to a boolean', () => {
+  beforeEach(async () => {
+    await createTestConfigPath();
+  });
+
+  afterEach(async () => {
+    await rm(TEST_CONFIG_DIR, { recursive: true, force: true });
+  });
+
+  const write = async (body: string) => {
+    const { writeFile } = await import('node:fs/promises');
+    await writeFile(TEST_CONFIG_PATH, body);
+  };
+
+  const allowOf = async () =>
+    (await loadConfig(TEST_CONFIG_PATH)).daemon.allow_process_inspection;
+
+  test.each(['true', 'yes', '"true"', 'on', '1'])('%s opens the hatch as a real boolean', async (value) => {
+    await write(`daemon:\n  allow_process_inspection: ${value}\n`);
+    expect(await allowOf()).toBe(true);
+  });
+
+  test.each(['false', 'no', 'off', '0', '"false"'])('%s leaves the daemon hardened', async (value) => {
+    await write(`daemon:\n  allow_process_inspection: ${value}\n`);
+    expect(await allowOf()).toBe(false);
+  });
+
+  test('absent is false, so the default is hardened', async () => {
+    await write('daemon:\n  port: 3142\n');
+    expect(await allowOf()).toBe(false);
+    // The key with no value parses as null.
+    await write('daemon:\n  allow_process_inspection:\n');
+    expect(await allowOf()).toBe(false);
+  });
+
+  test('a value nobody can read fails CLOSED instead of refusing the config', async () => {
+    // Unlike daemon.port this does NOT throw: one reader, and a safe reading.
+    // Half the CLI going down over a typo in a defense-in-depth knob costs
+    // more than it buys, so it warns and hardens.
+    for (const value of ['maybe', '[true]', '{ allow: true }', '2', '"enabled"']) {
+      await write(`daemon:\n  allow_process_inspection: ${value}\n`);
+      expect(await allowOf()).toBe(false);
+    }
+  });
+
+  test('a missing config file leaves it hardened too', async () => {
+    expect((await loadConfig(join(TEST_CONFIG_DIR, 'nope.yaml'))).daemon.allow_process_inspection).toBe(false);
+  });
+});

@@ -34,6 +34,16 @@ daemon:
   # brought back into range with a warning.
   # log_file_path: "~/.jarvis/logs/jarvis.log"
   # log_file_max_bytes: 1048576
+  # Let other processes running as this user inspect the daemon. Unset or false
+  # (the default, Linux only) means the daemon calls prctl(PR_SET_DUMPABLE, 0)
+  # at startup, so its /proc entry stops handing out its environment - every API
+  # key and secret it started with - along with its open files and its memory,
+  # and strace, gdb and core dumps of it stop working without root. Set this to
+  # true when you need to debug the daemon itself. Takes effect at startup, so
+  # it needs a restart. yes/no, on/off and 1/0 are accepted; anything that is
+  # not a yes-or-no is reported and treated as false, because a typo must never
+  # switch this off quietly. macOS and Windows get nothing either way.
+  # allow_process_inspection: false
 
 # IANA timezone for cron triggers and morning/evening routines. Set this when
 # the server clock is not your local time (e.g. a UTC-hosted VPS).
@@ -144,6 +154,48 @@ authority:
 #   morning: "0 7 * * *"   # 7am local
 #   evening: "0 20 * * *"  # 8pm local
 #   hourly:  "37 * * * *"  # every hour at :37
+
+# Pebble overlay global hotkeys (#563). Registered by the sidecar, on the
+# machine with the keyboard. The defaults below are the shipped ones and are
+# the same on macOS, Windows and Linux; uncomment to change them.
+#
+# Set either to "", "none" or "off" to register no global hotkey at all. A
+# BARE key (`summon_hotkey:`) is YAML null, which means "use the default" --
+# not "off".
+#
+# Both defaults are free in all three platforms' own SYSTEM shortcuts, which is
+# why they were chosen. They are not free of APPLICATION bindings, and the cost
+# of that lands on Windows and Linux rather than on macOS:
+#
+#   On Windows and Linux a hotkey is grabbed EXCLUSIVELY, so while Jarvis runs
+#   the focused app never sees it. Ctrl+Shift+K stops opening Firefox's Web
+#   Console and stops deleting a line in VS Code; Ctrl+Shift+Space stops showing
+#   VS Code's parameter hints and stops inserting a non-breaking space in Word.
+#   If you use any of those, change the binding here.
+#
+#   On macOS those same apps use Cmd (Firefox's console is Cmd+Opt+K, VS Code's
+#   delete-line is Cmd+Shift+K, Word's non-breaking space is Option+Space), so
+#   nothing is taken. Note though that the macOS monitor is a passive observer
+#   and CANNOT swallow a keystroke, so if YOU pick a combination that is already
+#   taken there, both actions fire and nothing reports it.
+#
+# NOTE on Windows: disabling palette_hotkey ("" , "none" or "off") also turns
+# off the Ctrl+middle-click palette gesture, which is gated on the same value.
+#
+# Each needs at least one modifier unless the key is an F-key (a bare "a" would
+# summon the pebble, and open the mic, every time you typed it), the two may not
+# be the same key, and the value is capped at 128 bytes. On macOS only F13 and
+# above are genuinely unbound -- bare F1-F12 drive brightness and Mission
+# Control there.
+#
+# One section applies to EVERY connected sidecar; there are no per-machine
+# bindings yet. Changing this needs a daemon restart (`jarvis restart`), which
+# also blinks the pebble once as it re-registers.
+#
+# Grammar and the full key list: docs/PEBBLE_HOTKEYS.md
+# pebble:
+#   summon_hotkey: "ctrl+shift+space"   # show the pebble / start listening
+#   palette_hotkey: "ctrl+shift+k"      # open the room picker at the cursor
 
 # Text-to-Speech (voice output)
 tts:

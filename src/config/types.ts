@@ -196,6 +196,35 @@ export type TTSConfig = {
   };
 };
 
+/**
+ * The pebble overlay's global hotkeys (#563).
+ *
+ * SYSTEM-owned: read from config.yaml and deliberately NOT in
+ * USER_OWNED_SECTIONS, so the file is authoritative (loadConfig deep-merges the
+ * file over DEFAULT_CONFIG and discards only the listed user-owned sections; an
+ * unlisted top-level section survives, the same way the system-owned `tools:`
+ * section does). There is no DEFAULT_CONFIG entry either, on the
+ * `daemon.drain_deadline_ms` precedent: absent must stay distinguishable from
+ * "set to the default", and the defaults are applied where the value is
+ * consumed - PEBBLE_DEFAULT_SUMMON_HOTKEY / PEBBLE_DEFAULT_PALETTE_HOTKEY in
+ * src/config/pebble-hotkeys.ts, which is the ONE place the shipped pair is
+ * decided.
+ *
+ * Both are read through `resolvePebbleHotkeys`, never as `config.pebble?.x`:
+ * a value that is set to something unusable has to be distinguishable from one
+ * that is not set, or a typo silently becomes the default with nothing said.
+ *
+ * `unknown` rather than `string` on purpose. These come straight out of YAML,
+ * where `summon_hotkey: 3` and `summon_hotkey: [a, b]` are as legal as a
+ * string, and the reader is what turns any of that into a verdict.
+ */
+export type PebbleConfig = {
+  /** Keyspec for the summon hotkey, e.g. "ctrl+shift+space". "", "none" or "off" registers none. */
+  summon_hotkey?: unknown;
+  /** Keyspec for the palette hotkey, e.g. "ctrl+shift+k". "", "none" or "off" registers none. */
+  palette_hotkey?: unknown;
+};
+
 export type DesktopConfig = {
   enabled: boolean;
   sidecar_port: number;
@@ -704,6 +733,30 @@ export type JarvisConfig = {
      * compact, grow until the OOM killer arrives".
      */
     log_file_max_bytes?: number;
+    /**
+     * SYSTEM-owned escape hatch for #546. Let other processes running as this
+     * user inspect the daemon: read `/proc/<pid>/environ` (every secret it
+     * started with), list `/proc/<pid>/fd`, attach strace or gdb, and get a
+     * core dump out of it.
+     *
+     * Unset or false -- the default, and Linux only -- means the daemon calls
+     * `prctl(PR_SET_DUMPABLE, 0)` at startup and none of that is possible
+     * without root. Set it to true when you need to debug the daemon itself.
+     * macOS and Windows get nothing either way; prctl is Linux-only.
+     *
+     * Applied at startup, so changing it needs a restart. Read through
+     * src/config/process-inspection.ts, which is also where the accepted
+     * spellings live (`yes`/`no`/`on`/`off`/`1`/`0` as well as booleans) --
+     * anything else is reported and treated as false, because a typo must never
+     * silently switch a security control off.
+     *
+     * No DEFAULT_CONFIG entry: there is nothing to default TO here, since the
+     * loader resolves this key to a real boolean on every load (absent and an
+     * explicit false both come out false, which is all the `=== true` reader
+     * needs). Optional on the type because the raw parsed file may not carry
+     * it and because a caller constructing a config by hand should not have to.
+     */
+    allow_process_inspection?: boolean;
   };
   auth?: AuthConfig;
   /**
@@ -737,6 +790,8 @@ export type JarvisConfig = {
   voice?: VoiceConfig;
   desktop?: DesktopConfig;
   awareness?: AwarenessConfig;
+  /** Pebble overlay hotkeys. SYSTEM-owned; absent means the shipped defaults. */
+  pebble?: PebbleConfig;
   llm: LLMConfig;
   personality: {
     core_traits: string[];

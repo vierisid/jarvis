@@ -735,11 +735,21 @@ export function execOnWriteClass(requested: unknown, opts: { bases?: string[]; h
  *    returned unless it actually assigns one of the daemon's secret names
  *    (`scanOnly`, resolved by the caller with scanForDaemonSecrets).
  *
- * What this does NOT close, stated so it is not mistaken for closed:
- * `run_command` and workflow code steps still read `/proc/$PPID/environ`, which
- * is the documented way round #536's env scrub, and a core dump still holds the
- * whole environment. Only `prctl(PR_SET_DUMPABLE, 0)` in the daemon closes
- * those, for every caller present and future; it is filed separately.
+ * What this does NOT close by itself: `run_command` and workflow code steps
+ * read `/proc/$PPID/environ` directly, which is the documented way round
+ * #536's env scrub, and a core dump holds the whole environment. Those are
+ * closed underneath this classifier by #546, which calls
+ * `prctl(PR_SET_DUMPABLE, 0)` in the daemon at startup -- for every caller,
+ * present and future, without going through a path rule at all.
+ *
+ * That does NOT make the refusals here redundant, and is no reason to relax
+ * them. #546 is Linux-only, it is skipped when `daemon.allow_process_inspection`
+ * is set, and it is skipped when its helper cannot be built, so on any of those
+ * this classifier is the only thing standing. And even where it IS in effect,
+ * measured: only the ptrace-gated and mode-0400 entries close.
+ * `/proc/<daemon pid>/cmdline`, `mounts` and `mountinfo` stay readable to every
+ * same-uid process -- all three are in PROC_REFUSED_LEAVES below precisely
+ * because they leak, so for those three this is still the ONLY refusal.
  */
 
 export type SecretReadKind =

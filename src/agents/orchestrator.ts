@@ -10,7 +10,7 @@ import { ToolRegistry, type ToolDefinition, isToolResult } from '../actions/tool
 import { toolDefToLLMTool } from '../actions/tools/builtin.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
-import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFailure, isTaintSourceTool } from '../roles/untrusted.ts';
+import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFailure, isTaintSourceTool, splitToolReturn, toolReturnText } from '../roles/untrusted.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { taintProfile, mergeProfiles, TAINT_PROFILE_LABEL, type TaintGating } from '../authority/taint-gating.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -1421,7 +1421,13 @@ export class AgentOrchestrator {
       try {
         const raw = await this.toolRegistry.execute(toolCall.name, toolCall.arguments);
         if (isToolResult(raw)) return raw.content.map(guardImageSize);
-        return typeof raw === 'string' ? raw : JSON.stringify(raw);
+        // `toolReturnText`, not `JSON.stringify`: request_approval cannot return
+        // a trusted-trailer carrier today, and this is the one dispatch that
+        // bypasses framing entirely, so it must not be the place where a carrier
+        // would silently serialise to `{"untrusted":...}`. Uniform handling
+        // everywhere a tool return becomes text is cheaper than a rule that only
+        // holds while this tool stays what it is.
+        return toolReturnText(raw);
       } catch (err) {
         return `Error executing request_approval: ${err instanceof Error ? err.message : String(err)}`;
       }
@@ -1677,16 +1683,23 @@ export class AgentOrchestrator {
         return markUntrustedToolBlocks(toolCall.name, category, raw.content.map(guardImageSize));
       }
 
-      // Plain text result
-      let result = typeof raw === 'string' ? raw : JSON.stringify(raw);
+      // Plain text result, plus any repo-authored trailer the tool handed over
+      // out of band (the webapp template's site instructions). The trailer is
+      // appended AFTER the block closes, by this trusted code -- which is what
+      // replaced searching the page for a seam (#560).
+      const { outside, trailer } = splitToolReturn(raw);
+      let result = outside;
 
-      // Cap tool result size to control context growth
+      // Cap tool result size to control context growth. The cap bounds the
+      // OUTSIDE half only; the trailer is repo-authored and bounded by the
+      // template, so it is added on top rather than competing with page text for
+      // the budget.
       if (result.length > MAX_TOOL_RESULT_CHARS) {
         result = result.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${result.length} chars)`;
       }
 
       // Outside content (pages, screen text, clipboard, files) is framed as data.
-      return markUntrustedToolResult(toolCall.name, category, result);
+      return markUntrustedToolResult(toolCall.name, category, result) + trailer;
     } catch (err) {
       // A typed failure carries the same text the tool used to RETURN, so it
       // gets the same treatment: an offline sidecar's message is harmless, a
@@ -1819,11 +1832,12 @@ export class AgentOrchestrator {
         const flat = raw.content.map((c) => (c.type === 'text' ? c.text : `[${c.type}]`)).join('\n');
         return markUntrustedToolResult(name, category, flat);
       }
-      let result = typeof raw === 'string' ? raw : JSON.stringify(raw);
+      const { outside, trailer } = splitToolReturn(raw);
+      let result = outside;
       if (result.length > MAX_TOOL_RESULT_CHARS) {
         result = result.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${result.length} chars)`;
       }
-      return markUntrustedToolResult(name, category, result);
+      return markUntrustedToolResult(name, category, result) + trailer;
     } catch (err) {
       if (err instanceof ActionOutcomeError) {
         this.noteTaint(name, tool?.category);

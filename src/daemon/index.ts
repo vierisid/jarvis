@@ -20,6 +20,7 @@ import { activeTurns } from "./active-turns.ts";
 import { writeLockedPort } from "./pid.ts";
 import { AgentService } from "./agent-service.ts";
 import { initDebugRpcGate, MIN_SECRET_LENGTH } from "./debug-rpc-gate.ts";
+import { hardenProcessInspection } from "./process-hardening.ts";
 import { modelExecDaemonWarning } from "../util/model-exec-marker.ts";
 import { getRecorder, parseInteractionEvent } from "../skills/recorder.ts";
 import { onRecordingStopped } from "../actions/tools/skills.ts";
@@ -29,6 +30,7 @@ import { WebSocketService } from "./ws-service.ts";
 import { PebbleRealtimeManager, wireRealtimeReadvertisement } from "./pebble-realtime.ts";
 import { hostedRealtimeIncluded, warmRealtimeGateFor } from './realtime-gate.ts';
 import { resolveRealtimeVoice } from "../config/realtime.ts";
+import { pebbleHotkeyRequestKey, resolvePebbleHotkeys, shouldCloseBeforeSpawn } from "../config/pebble-hotkeys.ts";
 import { isHostedInstall, realtimeEnablement } from "./usejarvis-ai.ts";
 import { REALTIME_NAV_TOOLS, REALTIME_NAV_TOOL_NAMES } from "./realtime-nav-tools.ts";
 import { EventReactor } from "./event-reactor.ts";
@@ -48,7 +50,7 @@ import { AuthorityEngine } from "../authority/engine.ts";
 import { ApprovalManager } from "../authority/approval.ts";
 import { AuditTrail } from "../authority/audit.ts";
 import { impactFromCategory } from "../roles/authority.ts";
-import { wrapUntrusted } from "../roles/untrusted.ts";
+import { wrapUntrusted, inlineUntrusted } from "../roles/untrusted.ts";
 import { SIDECAR_RECOMMENDED_VERSION } from "../sidecar/compat.ts";
 import { containsWakePhrase, hasSpokenContent, wakeCommandFrom } from "../voice/wake-phrase.ts";
 import { AuthorityLearner } from "../authority/learning.ts";
@@ -538,6 +540,21 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     }
   }
 
+  // Close this daemon's own /proc entries to every other process running as
+  // this user (#546): its environment, its open files, its memory, ptrace
+  // attach and core dumps. Linux only, a no-op elsewhere, and never fatal --
+  // see process-hardening.ts for what survives and why engine reaping does.
+  //
+  // HERE in the order, and not earlier, because it needs the config to know
+  // whether the operator turned it off, and not later because everything after
+  // this point boots services, opens the database and spawns subprocesses.
+  // Nothing between loadConfig() and this line reads /proc/self/environ,
+  // /proc/self/io or /proc/self/fd: the config is YAML, the debug-RPC gate and
+  // the model-exec marker read `process.env` in memory, and the log sink's
+  // "are we already writing to this file" test is fstat on fds 1 and 2. After
+  // the sink, so the outcome lands in the configured log file too.
+  hardenProcessInspection({ allowInspection: jarvisConfig.daemon.allow_process_inspection });
+
   // Started from a command the assistant ran (#514): its env was stripped of
   // the daemon's secrets. After the file sink, so the configured log has it.
   const modelExecWarning = modelExecDaemonWarning();
@@ -888,7 +905,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     //
     // The daemon (brain) is the source of truth for pebble state. The
     // sidecar emits a `pebble.summon` event when the user presses the
-    // summon hotkey (Ctrl+Space); the daemon receives it and drives the
+    // summon hotkey (pebble.summon_hotkey); the daemon receives it and drives the
     // state machine via `pebble.set_state` RPC. For now this runs a fixed
     // demo cycle (listening → thinking → speaking → idle) so we can
     // verify all the state renderers end-to-end. Real voice/LLM
@@ -1428,6 +1445,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
       };
 
+      // The hotkeys this daemon last ASKED each sidecar for, keyed by sidecar
+      // id. Deliberately NOT cleared on disconnect, unlike spawnedOn: it is the
+      // memory that lets a reconnect skip the close below (see there), and it
+      // has to outlive the sidecar going away and coming back. Bounded by the
+      // number of sidecars that enrol during one daemon lifetime, not by
+      // reconnects, since the ids are the stable enrolled ones.
+      const pebbleHotkeysRequested = new Map<string, string>();
+
       sidecarManager.onSidecarConnected(async (sidecar) => {
         if (!sidecar.capabilities.includes('pebble')) {
           console.log(`[ambient-ui] Sidecar ${sidecar.id} lacks 'pebble' capability — skipping native pebble spawn`);
@@ -1436,13 +1461,95 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (spawnedOn.has(sidecar.id)) return;
         spawnedOn.add(sidecar.id);
         try {
+          // Resolved against the SIDECAR's OS, not process.platform: a hosted
+          // brain runs on a Linux VPS while the machine with the keyboard is
+          // someone's Mac. The defaults are uniform today, so this only matters
+          // the day a platform override is added -- but by then the call site
+          // would have been wrong and nobody would have noticed.
+          const hotkeys = resolvePebbleHotkeys(jarvisConfig.pebble, sidecar.os);
+          const requested = pebbleHotkeyRequestKey(hotkeys);
+          const closeFirst = shouldCloseBeforeSpawn(pebbleHotkeysRequested.get(sidecar.id), requested);
+
+          // Only alongside a change, so one config typo does not become a
+          // repeating error stream: this handler runs on every connect and once
+          // per connected sidecar, so three machines and a flapping link would
+          // otherwise reprint the same complaint indefinitely.
+          //
+          // An error rather than a warning: the user edited config.yaml on
+          // purpose and the value is being ignored. (Unlike daemon.port, a bad
+          // hotkey must not stop the daemon booting -- see
+          // src/config/pebble-hotkeys.ts for why the policies differ.)
+          if (closeFirst) {
+            for (const problem of hotkeys.problems) {
+              console.error(`[ambient-ui] ${problem}`);
+            }
+          }
+
+          // Close before the first spawn we send this sidecar, because
+          // PebbleService.Spawn is idempotent: it returns early on its
+          // `spawned` latch and DISCARDS the spec. A sidecar that outlived a
+          // daemon restart would otherwise keep its old hotkeys while
+          // answering {"spawned": true}, so someone who edited
+          // pebble.summon_hotkey and ran `jarvis restart` would be told it
+          // worked and see nothing change -- which is the whole escape hatch
+          // #563 adds, failing silently on first use.
+          //
+          // Only when what we are about to ask for differs from what we last
+          // asked this sidecar for, so an ordinary reconnect (a network blip)
+          // does not make the pebble blink. See shouldCloseBeforeSpawn for what
+          // an empty map costs after our own restart: the overlay is closed and
+          // respawned even when nothing changed, because pebble.spawn does not
+          // report back which keyspec it is actually running.
+          //
+          // The `await` here is LOAD-BEARING, not stylistic. The sidecar runs
+          // every RPC handler on its own goroutine, and its pebble service
+          // guards Spawn/Close with an atomic latch that covers the entry and
+          // not the body -- so a close overlapping a spawn can skip the hotkey
+          // teardown and leave a system-wide key monitor installed that nothing
+          // can ever remove. Awaiting the close response, which the sidecar
+          // sends after Close() returns, keeps the two strictly ordered. Do not
+          // turn this into a fire-and-forget.
+          //
+          // One caveat on that ordering: dispatchRPC RESOLVES with 'detached'
+          // rather than throwing when its initial timeout expires, so a close
+          // that takes longer than that is not actually awaited. It is treated
+          // as a failed close below, and the keyspec is then reported as
+          // requested rather than applied.
+          let closed = true;
+          if (closeFirst) {
+            try {
+              const closeResult = await sidecarManager.dispatchRPC(sidecar.id, 'pebble.close', {});
+              closed = closeResult !== 'detached';
+              if (!closed) {
+                console.warn(`[ambient-ui] pebble.close on ${sidecar.id} detached; its old hotkeys may still be registered`);
+              }
+            } catch (err) {
+              // Not swallowed. If the close did not land, Spawn's latch will
+              // discard the new keyspec and still answer {"spawned": true}, so
+              // this is the only warning anyone gets that the hotkeys they
+              // edited are not the ones running.
+              closed = false;
+              console.warn(`[ambient-ui] pebble.close on ${sidecar.id} failed; its old hotkeys may still be registered:`, err);
+            }
+          }
+
           const result = await sidecarManager.dispatchRPC(sidecar.id, 'pebble.spawn', {
             cursor_offset_x: 34,
             cursor_offset_y: 40,
-            summon_hotkey: 'ctrl+space',
-            palette_hotkey: 'ctrl+k',
+            summon_hotkey: hotkeys.summon,
+            palette_hotkey: hotkeys.palette,
           });
-          console.log(`[ambient-ui] Native pebble spawned on ${sidecar.id}:`, result);
+          // Only remember it as asked-for when the close that makes the ask
+          // effective actually landed; otherwise the next connect retries.
+          if (closed) pebbleHotkeysRequested.set(sidecar.id, requested);
+          // "requested", not "running": pebble.spawn answers {"spawned": true}
+          // whether it applied the spec or discarded it on the latch, so the
+          // daemon cannot honestly claim more than what it asked for.
+          console.log(
+            `[ambient-ui] Native pebble spawned on ${sidecar.id}`
+            + ` (requested summon=${hotkeys.summon || 'off'}, palette=${hotkeys.palette || 'off'}):`,
+            result,
+          );
           // W6 — push initial blinded state so the eye-strike glyph
           // matches awareness.enabled across daemon restarts.
           const awarenessEnabled = (jarvisConfig.awareness as { enabled?: boolean })?.enabled ?? true;
@@ -2063,7 +2170,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (!re.test(t)) return false;
 
         // The runResponseCycle caller already claimed the pendingSummons
-        // slot for this turn (Ctrl+Space → listening → audio.session_end
+        // slot for this turn (summon hotkey → listening → audio.session_end
         // → onComplete → here, OR wake-with-command → here). We just
         // hand control off to the region overlay and re-use the same
         // ctrl so a hotkey press still cancels cleanly.
@@ -2352,7 +2459,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       });
 
       // W4 — Cmd+K palette: cursor-anchored fuzzy room picker. The
-      // sidecar's Ctrl+K hotkey emits a `pebble.palette` event with the
+      // sidecar's palette hotkey emits a `pebble.palette` event with the
       // current cursor position; the daemon spawns a small `_palette`
       // panel near the cursor (or focuses the existing one). Picks
       // (room nav / object) come back via HTTP `/api/palette/pick`,
@@ -2503,7 +2610,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         },
       });
 
-      // W4 — Ctrl+K opens or refocuses the palette. Closing flows
+      // W4 — the palette hotkey opens or refocuses the palette. Closing flows
       // through user-driven paths (Esc / click / pick → /api/palette/close),
       // not the hotkey, because rapid hotkey-toggle close→spawn reliably
       // crashes webview_go's Bind path after the 3rd–4th cycle.
@@ -3774,7 +3881,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // close immediately — too fast to read the answer. Hold it open for
         // a text-length-derived reading window so no-TTS users get time
         // to actually read what JARVIS said. User can dismiss anytime by
-        // pressing the summon hotkey (Ctrl+Space).
+        // pressing the summon hotkey.
         let readingHoldMs = 0;
         if (totalAudioMs === 0 && fullText.length > 0) {
           // ~60 ms/char gives skim time; clamp 6–30 s so short answers
@@ -3868,7 +3975,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       sidecarManager.onEvent(async (sidecarId, event) => {
         if (event.event_type !== 'audio.wake_segment') return;
         // Suppress while an active summon is in flight — the user already
-        // got JARVIS's attention via Ctrl+Space (or a prior wake).
+        // got JARVIS's attention via the summon hotkey (or a prior wake).
         if (pendingSummons.has(sidecarId)) return;
         if (!pebbleSTT) return;
         // Claim a synchronous in-flight flag before the first await so a
@@ -3908,7 +4015,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         console.log(`[ambient-ui] wake-segment matched (${sttMs}ms STT, ${transcript.length} chars)`);
 
         const command = wakeCommandFrom(transcript);
-        // Re-check: a manual summon (Ctrl+Space) may have claimed the slot while
+        // Re-check: a manual summon may have claimed the slot while
         // we were transcribing (the entry guard at the top ran before the STT
         // await). The deliberate press wins, so bail rather than clobber its ctrl
         // and resolve its session_end against ours.
@@ -5329,7 +5436,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               if (errorText.length > 5) {
                 console.log(`[Daemon] Auto-researching error: "${errorText.slice(0, 80)}"`);
                 bgAgent.handleMessage(
-                  `The user is seeing an error in ${appName}. The error text, read from their screen:\n` +
+                  // `appName` is the active window's app name, which a web page
+                  // controls through document.title -- the same actor that
+                  // supplies the framed errorText below. Framing the error text
+                  // and interpolating the app name raw would leave an unframed
+                  // channel in the sentence that introduces the block, complete
+                  // with newlines to open headings of its own.
+                  `The user is seeing an error in ${inlineUntrusted(appName, 60)}. The error text, read from their screen:\n` +
                   wrapUntrusted(errorText, 'screen text (OCR)') + '\n\n' +
                   `Search the web and vault for a solution. Be concise and actionable. ` +
                   `Start your response with the fix, not a question.`,
@@ -5380,7 +5493,10 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
               if (compositeScore >= 0.7 && (appCategory === 'code_editor' || appCategory === 'terminal')) {
                 console.log(`[Daemon] Deep-researching struggle in ${sAppName} (score: ${compositeScore.toFixed(2)})`);
                 bgAgent.handleMessage(
-                  `The user has been struggling in ${sAppName} (${appCategory}) for several minutes. ` +
+                  // Same reasoning as the error path above: both of these come
+                  // from observer event data, so both are labels inside trusted
+                  // prose rather than trusted text.
+                  `The user has been struggling in ${inlineUntrusted(sAppName, 60)} (${inlineUntrusted(appCategory, 40)}) for several minutes. ` +
                   `Here's what's on their screen:\n` +
                   wrapUntrusted(ocrPreview.slice(0, 800), 'screen text (OCR)') + '\n\n' +
                   `Search for solutions to any errors visible. Check documentation for the relevant language/framework. ` +

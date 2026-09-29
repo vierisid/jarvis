@@ -619,7 +619,7 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		// pebble is — no separate config gate, since the pebble is the
 		// whole reason wake-word matters. Emits one `audio.wake_segment`
 		// per VAD-detected utterance to the daemon, which transcribes +
-		// regex-matches "jarvis". Pauses around Ctrl+Space session
+		// regex-matches "jarvis". Pauses around summon-hotkey session
 		// captures so it doesn't fight for the mic device.
 		wakeListener := NewWakeListenerService(audioSvc, sendFn, DefaultWakeListenerOpts())
 		// Start() itself consults micMuted(), so a reconnect while muted comes up
@@ -652,7 +652,7 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		c.installPlayStateHook(c.playback)
 
 		// runSessionCapture handles one summon→capture→stream cycle. Used
-		// by both the Ctrl+Space hotkey path and the wake-word follow-up
+		// by both the summon-hotkey path and the wake-word follow-up
 		// path (when the daemon dispatches `pebble.start_listening` after
 		// matching a wake phrase that had no trailing command).
 		var sessionInFlight atomic.Bool
@@ -1090,7 +1090,7 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 		// pebble.summon event). Used by the wake-word path: when a wake
 		// phrase fires with no trailing command, the daemon transitions
 		// the bubble to listening and calls this so the user's next
-		// utterance gets captured + streamed just like Ctrl+Space.
+		// utterance gets captured + streamed just like the summon hotkey.
 		c.mu.Lock()
 		c.handlers["pebble.start_listening"] = func(_ map[string]any) (*RPCResult, error) {
 			sessionID := fmt.Sprintf("listen-%d", time.Now().UnixMilli())
@@ -1169,7 +1169,12 @@ func (c *SidecarClient) connectAndServe(ctx context.Context) error {
 				// back to idle. AFTER Stop, whose setState would otherwise
 				// paint over the nudge.
 				if state == "error" && wasActive {
-					flashPebbleNudge(c.pebble, PebbleIdle, "Live voice unavailable - press Ctrl+Space to talk")
+					// "Click the pebble", not a key name: the summon hotkey is
+					// configurable since #563 (pebble.summon_hotkey), and this
+					// code has no access to the spec the overlay was given, so
+					// naming a key here would eventually name the wrong one.
+					// Clicking the disc does the same thing and always works.
+					flashPebbleNudge(c.pebble, PebbleIdle, "Live voice unavailable - click the pebble to talk")
 				}
 			}
 			return &RPCResult{Result: map[string]any{"ok": true}}, nil

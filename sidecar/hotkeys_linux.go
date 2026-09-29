@@ -109,25 +109,21 @@ import "C"
 import (
 	"fmt"
 	"runtime"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"unsafe"
 )
 
-// X11 modifier masks (from X.h) we care about.
-const (
-	hkShiftMask   = 1 << 0 // ShiftMask
-	hkControlMask = 1 << 2 // ControlMask
-	hkMod1Mask    = 1 << 3 // Mod1Mask (Alt)
-	hkMod4Mask    = 1 << 6 // Mod4Mask (Super)
-)
-
 var hotkeyReg sync.Map // uint64 -> func()
 var hotkeyCounter atomic.Uint64
 
-// startHotkeyListener registers a single global hotkey (e.g. "ctrl+space",
-// "ctrl+k") and fires onFire on each press. Returns a stop function.
+// startHotkeyListener registers a single global hotkey (e.g. "ctrl+shift+space")
+// and fires onFire on each press. Returns a stop function.
+//
+// NOTE: a refused grab is NOT reported. hk_ignore_error swallows BadAccess and
+// jarvisHotkeyCreate returns a Hotkey either way, so a combination another
+// client already holds comes back as a success and then never fires. Known gap,
+// recorded in docs/PEBBLE_HOTKEYS.md.
 func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 	mods, keysym, err := parseLinuxKeyspec(keyspec)
 	if err != nil {
@@ -174,43 +170,24 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 }
 
 // parseLinuxKeyspec turns "ctrl+space" / "ctrl+shift+k" into an X11 modifier
-// mask + KeySym. The final token is the key; the rest are modifiers.
+// mask + KeySym.
+//
+// The grammar and the key names come from hotkeys_keyspec.go, shared with the
+// macOS and Windows backends. Only the keysym lookup is here, because it needs
+// XLib: linuxKeysymName maps a canonical name to the CASE-SENSITIVE X spelling
+// ("tab" -> "Tab", "pageup" -> "Prior", "f13" -> "F13"), and anything it does
+// not know is passed through unchanged, so every key name XStringToKeysym
+// already accepted still resolves.
 func parseLinuxKeyspec(spec string) (mods uint, keysym uint64, err error) {
-	parts := strings.Split(strings.ToLower(strings.TrimSpace(spec)), "+")
-	if len(parts) == 0 || parts[len(parts)-1] == "" {
-		return 0, 0, fmt.Errorf("empty hotkey spec")
+	parsed, err := parseKeyspec(spec)
+	if err != nil {
+		return 0, 0, err
 	}
-	keyTok := parts[len(parts)-1]
-	for _, m := range parts[:len(parts)-1] {
-		switch m {
-		case "ctrl", "control":
-			mods |= hkControlMask
-		case "shift":
-			mods |= hkShiftMask
-		case "alt", "option":
-			mods |= hkMod1Mask
-		case "super", "cmd", "win", "meta":
-			mods |= hkMod4Mask
-		default:
-			return 0, 0, fmt.Errorf("unknown modifier %q in %q", m, spec)
-		}
-	}
-	// Map a couple of friendly aliases to X key names; otherwise pass through
-	// (XStringToKeysym knows "space", "Return", single letters, etc.).
-	name := keyTok
-	switch keyTok {
-	case " ", "space", "spacebar":
-		name = "space"
-	case "enter", "return":
-		name = "Return"
-	case "esc", "escape":
-		name = "Escape"
-	}
-	cname := C.CString(name)
+	cname := C.CString(linuxKeysymName(parsed.Key))
 	defer C.free(unsafe.Pointer(cname))
 	ks := uint64(C.hk_keysym(cname))
 	if ks == 0 {
-		return 0, 0, fmt.Errorf("unknown key %q in %q", keyTok, spec)
+		return 0, 0, fmt.Errorf("unknown key %q in hotkey %q", parsed.Key, spec)
 	}
-	return mods, ks, nil
+	return linuxModifierMask(parsed.Mods), ks, nil
 }

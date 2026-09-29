@@ -11,6 +11,10 @@ import { chromiumExe, launchTestChromium, type TestChromium } from '../browser/f
 import { createBrowserTools } from './builtin.ts';
 import { initDatabase } from '../../vault/schema.ts';
 import { upsertWebappTemplate } from '../../vault/webapp-templates.ts';
+// The real tools hand the page and the template instructions back SEPARATELY
+// since #560, so a consumer has to collapse or split them rather than cast the
+// return to a string. This is the same call the approval and workflow paths make.
+import { toolReturnText } from '../../roles/untrusted.ts';
 
 function toolMap(ctrl: BrowserController) {
   return new Map(createBrowserTools(ctrl).map(t => [t.name, t.execute]));
@@ -66,21 +70,21 @@ describe.skipIf(!chromiumExe)('webapp template delivery via browser tools (integ
     const navigate = tools.get('browser_navigate')!;
     const snapshot = tools.get('browser_snapshot')!;
 
-    const first = await navigate({ url: `http://127.0.0.1:${server.port}/inbox` }) as string;
+    const first = toolReturnText(await navigate({ url: `http://127.0.0.1:${server.port}/inbox` }));
     expect(first).toContain('Page: Fixture');
     expect(first).toContain('You are now on LoopbackApp');
     expect(first).toContain('LoopbackApp playbook: verify before clicking.');
 
     // Same site again — snapshot and navigate both stay clean
-    const snap = await snapshot({}) as string;
+    const snap = toolReturnText(await snapshot({}));
     expect(snap).not.toContain('You are now on LoopbackApp');
-    const second = await navigate({ url: `http://127.0.0.1:${server.port}/other` }) as string;
+    const second = toolReturnText(await navigate({ url: `http://127.0.0.1:${server.port}/other` }));
     expect(second).not.toContain('You are now on LoopbackApp');
   }, 30_000);
 
   test('moving to a different known site delivers that site template', async () => {
     const navigate = tools.get('browser_navigate')!;
-    const result = await navigate({ url: `http://localhost:${server.port}/` }) as string;
+    const result = toolReturnText(await navigate({ url: `http://localhost:${server.port}/` }));
     expect(result).toContain('You are now on LocalhostApp');
     expect(result).toContain('LocalhostApp playbook: URL-first.');
     expect(result).not.toContain('LoopbackApp');
@@ -90,13 +94,13 @@ describe.skipIf(!chromiumExe)('webapp template delivery via browser tools (integ
     // Get on the page with the already-delivered tool set, then act through a
     // FRESH tool set (a new conversation): its first sight of the domain is
     // the snapshot after the click, which must deliver.
-    const nav = await tools.get('browser_navigate')!({ url: `http://127.0.0.1:${server.port}/start` }) as string;
+    const nav = toolReturnText(await tools.get('browser_navigate')!({ url: `http://127.0.0.1:${server.port}/start` }));
     const linkId = nav.match(/\[(\d+)\] a "Next page"/)?.[1];
     expect(linkId).toBeTruthy();
 
     const freshTools = toolMap(ctrl);
     await freshTools.get('browser_click')!({ element_id: Number(linkId) });
-    const snap = await freshTools.get('browser_snapshot')!({}) as string;
+    const snap = toolReturnText(await freshTools.get('browser_snapshot')!({}));
     expect(snap).toContain('You are now on LoopbackApp');
   }, 30_000);
 
@@ -104,7 +108,7 @@ describe.skipIf(!chromiumExe)('webapp template delivery via browser tools (integ
     // `tools` delivered LoopbackApp long ago in this file; a brand-new tool
     // set navigating to the same site must still get its own copy.
     const other = toolMap(ctrl);
-    const result = await other.get('browser_navigate')!({ url: `http://127.0.0.1:${server.port}/again` }) as string;
+    const result = toolReturnText(await other.get('browser_navigate')!({ url: `http://127.0.0.1:${server.port}/again` }));
     expect(result).toContain('You are now on LoopbackApp');
   }, 30_000);
 });

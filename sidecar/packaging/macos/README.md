@@ -72,7 +72,7 @@ them — grant these in System Settings › Privacy & Security:
 - **Notifications** — requested on launch (`requestAuthorization`).
 - **Microphone** — voice + wake word (`NSMicrophoneUsageDescription`).
 - **Screen Recording** — ambient screen awareness (prompted at runtime, no plist key).
-- **Accessibility** — global hotkeys (Ctrl+Space) (prompted at runtime).
+- **Accessibility** — the pebble's global hotkeys (prompted at runtime). Without it the key monitor installs and never fires; the sidecar log says so at registration. The bindings are configurable, so this file deliberately does not name them (see docs/PEBBLE_HOTKEYS.md).
 
 ## How it's launched
 

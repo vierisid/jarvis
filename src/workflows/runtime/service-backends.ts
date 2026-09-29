@@ -53,6 +53,7 @@ import { evaluateLlmOutput } from './llm-output-contract';
 import { withWorkflowMachineBinding } from './machine-binding';
 import { getMachineScope } from '../../actions/machine-scope';
 import type { SidecarCapability } from '../../sidecar/types';
+import { toolReturnText } from '../../roles/untrusted.ts';
 
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
   credentialResolver: CredentialResolver;
@@ -442,7 +443,12 @@ export function buildSandboxServiceBackends(
               checkpoint();
               try {
                 const raw = await registry.execute(call.toolCall.name, args);
-                return typeof raw === 'string' ? raw : JSON.stringify(raw);
+                // One string only: this crosses the durable effect boundary, so a
+                // carrier would not survive it anyway. Collapsing puts any
+                // repo-authored trailer back in band, where the sub-agent runner
+                // frames it as data with the rest -- see the note in
+                // authority/deferred-executor.ts for why that direction is safe.
+                return toolReturnText(raw);
               } catch (error) {
                 // A tool that failed under its approval is a typed failure, so
                 // the boundary records the outcome and answers the same way

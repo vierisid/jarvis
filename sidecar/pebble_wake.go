@@ -17,7 +17,7 @@ package main
 // later (T16b) if real-time hot-trigger feel becomes necessary.
 //
 // Suppression: WakeListener.Pause() releases the mic device entirely so
-// the Ctrl+Space-triggered session capture can grab it without contention.
+// the summon-hotkey session capture can grab it without contention.
 // Resume() restarts the continuous capture once the session ends. The
 // daemon also gates wake_segment processing during TTS playback so JARVIS
 // saying his own name doesn't re-trigger the loop.
@@ -68,7 +68,7 @@ func DefaultWakeListenerOpts() WakeListenerOpts {
 
 // WakeListenerService runs a continuous mic capture and emits one
 // `audio.wake_segment` event per detected utterance (speech bracketed by
-// silence). Single instance per sidecar; coexists with the Ctrl+Space-
+// silence). Single instance per sidecar; coexists with the summon-hotkey-
 // triggered session capture by releasing the audio device on Pause().
 type WakeListenerService struct {
 	audioSvc *AudioCaptureService

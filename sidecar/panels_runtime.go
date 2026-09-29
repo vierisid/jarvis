@@ -494,10 +494,10 @@ func (s *panelService) Spawn(spec PanelSpec) (PanelID, error) {
 			}
 			stop, err := startHotkeyListener(spec.SummonHotkey, onFire)
 			if err != nil {
-				log.Printf("[panels] spawn(%s): hotkey '%s' not registered: %v", spec.ID, spec.SummonHotkey, err)
+				log.Printf("[panels] spawn(%s): hotkey %q not registered: %v", spec.ID, spec.SummonHotkey, err)
 			} else {
 				impl.hotkeyStop = stop
-				log.Printf("[panels] spawn(%s): summon hotkey '%s' registered", spec.ID, spec.SummonHotkey)
+				log.Printf("[panels] spawn(%s): summon hotkey %q registered", spec.ID, spec.SummonHotkey)
 			}
 		}
 

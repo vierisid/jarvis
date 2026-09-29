@@ -6,55 +6,14 @@ import (
 	"fmt"
 	"log"
 	"runtime"
-	"strconv"
-	"strings"
 	"syscall"
 	"unsafe"
 )
 
-// Win32 hotkey modifiers + virtual-key codes.
-const (
-	modAlt      = 0x0001
-	modControl  = 0x0002
-	modShift    = 0x0004
-	modWin      = 0x0008
-	modNoRepeat = 0x4000
-)
-
-const (
-	vkSpace = 0x20
-	vkF1    = 0x70 // VK_F1; F2..F24 follow contiguously
-)
-
-// namedVKCodes covers the keys that have a name rather than a character.
-// Letters, digits and the function keys are computed in windowsVK.
-//
-// The names are the ones hotkeys_linux.go and hotkeys_darwin.go already accept,
-// so one keyspec in config means the same thing on all three platforms.
-var namedVKCodes = map[string]uint32{
-	"space":     vkSpace,
-	"spacebar":  vkSpace,
-	"enter":     0x0D, // VK_RETURN
-	"return":    0x0D,
-	"tab":       0x09,
-	"esc":       0x1B, // VK_ESCAPE
-	"escape":    0x1B,
-	"backspace": 0x08,
-	"del":       0x2E, // VK_DELETE
-	"delete":    0x2E,
-	"ins":       0x2D, // VK_INSERT
-	"insert":    0x2D,
-	"home":      0x24,
-	"end":       0x23,
-	"pageup":    0x21, // VK_PRIOR
-	"pgup":      0x21,
-	"pagedown":  0x22, // VK_NEXT
-	"pgdn":      0x22,
-	"left":      0x25,
-	"up":        0x26,
-	"right":     0x27,
-	"down":      0x28,
-}
+// MOD_NOREPEAT: one WM_HOTKEY per press, not one per auto-repeat tick. The
+// other MOD_* flags and the virtual-key table live in hotkeys_keyspec.go, which
+// carries no build tag so the key names are covered by a test on any OS.
+const modNoRepeat = 0x4000
 
 // Win32 message identifiers.
 const (
@@ -134,7 +93,7 @@ func startHotkeyListener(keyspec string, onFire func()) (stop func(), err error)
 		}
 		defer procUnregisterHotKey.Call(0, hotkeyID)
 		regCh <- registration{tid: uint32(tid)}
-		log.Printf("[hotkeys] registered %s (mods=0x%x, vk=0x%x)", keyspec, mods, vk)
+		log.Printf("[hotkeys] registered %q (mods=0x%x, vk=0x%x)", keyspec, mods, vk)
 
 		for {
 			select {
@@ -162,11 +121,11 @@ func startHotkeyListener(keyspec string, onFire func()) (stop func(), err error)
 			// straight back to the thing this file exists to stop: a hotkey
 			// that does nothing and a log with no trace of why.
 			if int32(r) == -1 {
-				log.Printf("[hotkeys] GetMessage failed for %s; listener stopping (hotkey is now dead)", keyspec)
+				log.Printf("[hotkeys] GetMessage failed for %q; listener stopping (hotkey is now dead)", keyspec)
 				return
 			}
 			if msg.Message == wmHotkey && msg.WParam == hotkeyID {
-				log.Printf("[hotkeys] WM_HOTKEY received for %s — firing", keyspec)
+				log.Printf("[hotkeys] WM_HOTKEY received for %q -- firing", keyspec)
 				go onFire()
 			}
 		}
@@ -204,67 +163,4 @@ func registerHotKeyError(keyspec string, e error) error {
 		return fmt.Errorf("RegisterHotKey(%s): refused", keyspec)
 	}
 	return fmt.Errorf("RegisterHotKey(%s): %w", keyspec, e)
-}
-
-// parseHotkey converts a spec like "ctrl+space", "Ctrl+Shift+K" or "alt+f4"
-// into Win32 modifier flags and a virtual-key code: the last "+"-separated
-// token is the key, everything before it is a modifier, and case does not
-// matter.
-//
-// Deliberately the same grammar as parseLinuxKeyspec and parseDarwinKeyspec.
-// This used to be a switch over six literal spellings of the two hotkeys the
-// daemon happens to send, which held only while the hotkey was hardcoded:
-// anything else -- "Ctrl+space" included, a spelling both other platforms
-// accept -- failed on Windows alone, and failed at the one call site whose
-// error the user experiences as a dead key.
-func parseHotkey(spec string) (mods, vk uint32, err error) {
-	parts := strings.Split(strings.ToLower(strings.TrimSpace(spec)), "+")
-	for i := range parts {
-		parts[i] = strings.TrimSpace(parts[i])
-	}
-	keyTok := parts[len(parts)-1]
-	if keyTok == "" {
-		return 0, 0, fmt.Errorf("hotkey %q names no key", spec)
-	}
-	for _, m := range parts[:len(parts)-1] {
-		switch m {
-		case "ctrl", "control":
-			mods |= modControl
-		case "shift":
-			mods |= modShift
-		case "alt", "option":
-			mods |= modAlt
-		case "super", "cmd", "command", "win", "meta":
-			mods |= modWin
-		default:
-			return 0, 0, fmt.Errorf("unknown modifier %q in hotkey %q", m, spec)
-		}
-	}
-	vk, ok := windowsVK(keyTok)
-	if !ok {
-		return 0, 0, fmt.Errorf("unsupported key %q in hotkey %q", keyTok, spec)
-	}
-	return mods, vk, nil
-}
-
-// windowsVK resolves one key name to a Win32 virtual-key code. Letters, digits
-// and F1-F24 are computed (the VK ranges are contiguous and match ASCII for the
-// first two); everything else comes from namedVKCodes.
-func windowsVK(name string) (uint32, bool) {
-	if len(name) == 1 {
-		switch c := name[0]; {
-		case c >= 'a' && c <= 'z':
-			return uint32(c-'a') + 0x41, true // VK_A..VK_Z are 'A'..'Z'
-		case c >= '0' && c <= '9':
-			return uint32(c-'0') + 0x30, true // VK_0..VK_9 are '0'..'9'
-		}
-	}
-	// Guarded by the single-character case above, so a bare "f" is the letter.
-	if len(name) > 1 && name[0] == 'f' {
-		if n, err := strconv.Atoi(name[1:]); err == nil && n >= 1 && n <= 24 {
-			return vkF1 + uint32(n) - 1, true
-		}
-	}
-	vk, ok := namedVKCodes[name]
-	return vk, ok
 }

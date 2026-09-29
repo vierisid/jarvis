@@ -27,9 +27,11 @@ describe('substitution scoring', () => {
     }
     // site_run_command was counted here until #529 framed it. It fetches
     // outside content, but the framing and the taint gate now cover it, which
-    // is exactly what this metric is asking about -- so it belongs below.
+    // is exactly what this metric is asking about -- so it belongs below. The
+    // three actors joined it in #559, framed for their error paths.
     for (const n of ['browser_navigate', 'ui_snapshot', 'discover_tools', 'manage_goals', 'no_such_tool',
-      'site_run_command', 'site_read_file', 'site_list_files']) {
+      'site_run_command', 'site_read_file', 'site_list_files',
+      'site_github_push', 'site_git_commit', 'site_create_project']) {
       expect(`${n}:${isUnframedFetch(n, ALL)}`).toBe(`${n}:false`);
     }
     expect(isUnframedFetch(null, ALL)).toBe(false);

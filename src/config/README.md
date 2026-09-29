@@ -142,6 +142,7 @@ daemon: {
   public_url?: string;   // Public HTTPS origin behind a reverse proxy
   log_file_path?: string;      // Mirror stdout/stderr to this file (unset = none)
   log_file_max_bytes?: number; // Ring size for that file (default: 1 MiB)
+  allow_process_inspection?: boolean; // Let same-uid processes read the daemon's /proc (default: false)
 }
 ```
 
@@ -182,12 +183,75 @@ file:
   descriptors from another process, so their output reaches the terminal and
   journald but not this file.
 
-Both keys live under `daemon:` rather than in a section of their own because
-`loadConfig` discards everything outside the system-owned sections - a
-top-level `logging:` block would be dropped on every load. Neither has an entry
-in `DEFAULT_CONFIG` (same as `drain_deadline_ms`): absent has to stay
-distinguishable from "set to the default", and the fallback is applied where
-the value is consumed.
+#### `allow_process_inspection`
+
+Unset or `false` - the default - means the daemon calls
+`prctl(PR_SET_DUMPABLE, 0)` at startup on Linux, so no other process running as
+the same user can read `/proc/<daemon pid>/environ` (every secret it started
+with), list `/proc/<daemon pid>/fd`, attach strace or gdb, or get a core dump out
+of it. Set it to `true` when you need to debug the daemon itself.
+
+- Linux only. macOS and Windows get nothing either way, and say so in the log.
+- Applied at startup, so a change needs a restart.
+- Read through `src/config/process-inspection.ts`, one shared reader with an
+  explicit "unusable value" state. `yes`/`no`, `on`/`off` and `1`/`0` are
+  accepted as well as booleans, because the YAML 1.2 core schema the parser uses
+  makes `allow_process_inspection: yes` the *string* `"yes"`. Anything that is
+  not a yes-or-no is reported and treated as `false`: unlike `daemon.port` a bad
+  value here does not refuse the config, because there is one reader and a safe
+  reading, but it never silently means "allowed".
+- If the prctl helper cannot be built or the kernel refuses the call, the daemon
+  logs it and starts anyway. Hardening that fails is not worth a daemon that
+  will not run.
+- What it does not close, measured: `cmdline`, `stat`, `status`, `statm`,
+  `cgroup`, `limits`, `mounts` and `mountinfo` stay readable to a same-uid
+  process, so the file tools' path refusals (`src/actions/tools/file-path-policy.ts`)
+  remain load-bearing.
+
+All three keys live under `daemon:` rather than in a section of their own for
+continuity with the rest of the daemon's own settings, not because a top-level
+section would be dropped: `loadConfig` deep-merges the parsed file over
+`DEFAULT_CONFIG` and discards only the sections listed in
+`USER_OWNED_SECTIONS`, so an UNLISTED top-level key survives (that is how the
+system-owned `tools:` and `pebble:` sections reach the runtime). None has an
+entry in `DEFAULT_CONFIG`, but for two different reasons. For the two
+`log_file_*` keys it is the `drain_deadline_ms` rule: absent has to stay
+distinguishable from "set to the default", and the fallback is applied where the
+value is consumed. For `allow_process_inspection` there is simply nothing to
+default to - the loader resolves it to a real boolean on every load, so absent
+and an explicit `false` are the same thing by the time anything reads it.
+
+### `pebble`
+
+The pebble overlay's two global hotkeys. SYSTEM-owned, so `config.yaml` is
+authoritative: `pebble` is deliberately absent from `USER_OWNED_SECTIONS`, and
+it survives the load as an unlisted top-level section (see the note above).
+
+```typescript
+pebble?: {
+  summon_hotkey?: unknown;   // e.g. "ctrl+shift+space"; "", "none" or "off" registers none
+  palette_hotkey?: unknown;  // e.g. "ctrl+shift+k"
+}
+```
+
+Both are typed `unknown` because they arrive straight from YAML, where
+`summon_hotkey: 3` is as legal as a string. Read them through
+`resolvePebbleHotkeys` in `src/config/pebble-hotkeys.ts`, never as
+`config.pebble?.summon_hotkey`: the reader returns a four-state verdict
+(`absent` / `valid` / `disabled` / `invalid`) so a value that is set to
+something unusable stays distinguishable from one that is not set, and gets
+reported instead of silently becoming the default.
+
+No `DEFAULT_CONFIG` entry, same reasoning as `drain_deadline_ms`. The shipped
+defaults live in exactly one place - `PEBBLE_DEFAULT_SUMMON_HOTKEY` and
+`PEBBLE_DEFAULT_PALETTE_HOTKEY` - and are the same on all three platforms;
+the resolver takes the connecting sidecar's OS so a per-platform default would
+be a table entry rather than new plumbing.
+
+Unlike `daemon.port`, an unusable value here does NOT abort startup: it is
+logged as an error and the default is used, because a mistyped hotkey must not
+stop the daemon booting. Full grammar and the macOS caveats:
+[docs/PEBBLE_HOTKEYS.md](../../docs/PEBBLE_HOTKEYS.md).
 
 ### `llm`
 

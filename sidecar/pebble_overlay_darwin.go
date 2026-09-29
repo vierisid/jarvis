@@ -405,7 +405,10 @@ func (s *pebbleServiceDarwin) Spawn(spec PebbleSpec) error {
 			log.Printf("[pebble] summon hotkey %q not registered: %v", s.spec.SummonHotkey, err)
 		} else {
 			s.hotkeyStop = stop
-			log.Printf("[pebble] summon hotkey %q registered", s.spec.SummonHotkey)
+			// hotkeyAccessibilityCaveat, because "registered" on its own is a
+			// lie when the process is not trusted for Accessibility: the
+			// monitor installs and never fires (#563).
+			log.Printf("[pebble] summon hotkey %q registered%s", s.spec.SummonHotkey, hotkeyAccessibilityCaveat())
 		}
 	}
 	if s.spec.PaletteHotkey != "" {
@@ -417,7 +420,7 @@ func (s *pebbleServiceDarwin) Spawn(spec PebbleSpec) error {
 			log.Printf("[pebble] palette hotkey %q not registered: %v", s.spec.PaletteHotkey, err)
 		} else {
 			s.paletteHotkeyStop = stop
-			log.Printf("[pebble] palette hotkey %q registered", s.spec.PaletteHotkey)
+			log.Printf("[pebble] palette hotkey %q registered%s", s.spec.PaletteHotkey, hotkeyAccessibilityCaveat())
 		}
 	}
 	return nil

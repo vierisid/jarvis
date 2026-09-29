@@ -9,10 +9,13 @@
  * in the `x-debug-rpc-token` header. A short or missing secret, or a hosted
  * install, leaves the route absent (404), never "open by mistake".
  *
- * The secret stops network callers, not local ones. Anything running as the
- * daemon's user can recover it (a command the terminal tool runs can read
- * /proc/<daemon pid>/environ on Linux), so an open gate hands every connected
- * sidecar to that user's local processes.
+ * The secret stops network callers, not local ones. An open gate hands every
+ * connected sidecar to that user's local processes: recovering the secret from
+ * /proc/<daemon pid>/environ is closed since #546 (the daemon is non-dumpable
+ * on Linux unless daemon.allow_process_inspection is set), but that is one
+ * channel of several -- the same user can read the daemon's files, and can
+ * simply restart it with a secret of their own choosing. Do not read the
+ * hardening as making an open gate safe.
  */
 
 import { timingSafeEqual } from 'node:crypto';
