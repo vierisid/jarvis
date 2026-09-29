@@ -488,14 +488,16 @@ const (
 	hkGrabNoKeycode = 2
 	hkGrabRefused   = 3
 	hkGrabNoPipe    = 4
+	hkGrabNoMem     = 5
 )
 
 // X11 protocol constants (X.h / Xproto.h), repeated here so this file stays
 // cgo-free.
 const (
-	hkBadAccess   = 10 // BadAccess: someone else already holds this grab
-	hkOpcodeGrab  = 33 // X_GrabKey
-	hkAllVariants = 0xf
+	hkBadAccess   = 10  // BadAccess: someone else already holds this grab
+	hkOpcodeGrab  = 33  // X_GrabKey
+	hkNumVariants = 4   // len(HK_VARIANTS)
+	hkAllVariants = 0xf // every variant bit set
 )
 
 // hkVariantNames names the lock-key modifier variants by bit position, in the
@@ -527,9 +529,17 @@ func hkFailedVariantList(mask uint) string {
 // `XGrabKey failed for %q (no display or key unavailable)`; they are now
 // separate, since one means the session cannot do global hotkeys at all and
 // the other means this particular keyspec is wrong for the active layout.
-func linuxGrabError(keyspec string, stage int, errorCode, requestCode uint8, failedMask uint) error {
+// nilHandle says the create produced no Hotkey. It is passed separately from
+// stage because the two can disagree, and when they do this function must NOT
+// fail open: returning nil for a create that handed back nothing would put the
+// caller straight back to logging "registered" for a hotkey that cannot fire,
+// which is #574 verbatim, reached through the guard that exists to prevent it.
+func linuxGrabError(keyspec string, stage int, errorCode, requestCode uint8, failedMask uint, nilHandle bool) error {
 	switch stage {
 	case hkGrabOK:
+		if nilHandle {
+			return fmt.Errorf("XGrabKey(%s): the grab reported success but produced no listener (internal inconsistency)", keyspec)
+		}
 		return nil
 	case hkGrabNoDisplay:
 		return fmt.Errorf("XGrabKey(%s): no X display (DISPLAY unset, or a native Wayland session with no XWayland)", keyspec)
@@ -537,19 +547,24 @@ func linuxGrabError(keyspec string, stage int, errorCode, requestCode uint8, fai
 		return fmt.Errorf("XGrabKey(%s): the active keyboard layout has no key for this keysym", keyspec)
 	case hkGrabNoPipe:
 		return fmt.Errorf("XGrabKey(%s): could not set up the listener's stop pipe", keyspec)
+	case hkGrabNoMem:
+		return fmt.Errorf("XGrabKey(%s): out of memory allocating the listener", keyspec)
+	case hkGrabRefused:
+		// Say which variants, unless it was all of them (in which case the
+		// combination is simply taken and the list adds nothing).
+		var scope string
+		if failedMask != hkAllVariants && failedMask != 0 {
+			scope = fmt.Sprintf("; only the %s variant(s) clashed, and the grab is refused as a whole rather than leave a hotkey that works in some lock states and not others",
+				hkFailedVariantList(failedMask))
+		}
+		if errorCode == hkBadAccess && requestCode == hkOpcodeGrab {
+			return fmt.Errorf("XGrabKey(%s): already held by another client (another app, your desktop, or a sidecar that has not exited)%s", keyspec, scope)
+		}
+		return fmt.Errorf("XGrabKey(%s): refused with X error %d on request %d%s", keyspec, errorCode, requestCode, scope)
 	}
-
-	// Refused. Say which variants, unless it was all of them (in which case
-	// the combination is simply taken and the list adds nothing).
-	var scope string
-	if failedMask != hkAllVariants && failedMask != 0 {
-		scope = fmt.Sprintf("; only the %s variant(s) clashed, and the grab is refused as a whole rather than leave a hotkey that works in some lock states and not others",
-			hkFailedVariantList(failedMask))
-	}
-	if errorCode == hkBadAccess && requestCode == hkOpcodeGrab {
-		return fmt.Errorf("XGrabKey(%s): already held by another client (another app, your desktop, or a sidecar that has not exited)%s", keyspec, scope)
-	}
-	return fmt.Errorf("XGrabKey(%s): refused with X error %d on request %d%s", keyspec, errorCode, requestCode, scope)
+	// An unrecognised stage is a code bug, not something the X server did, so
+	// it must not be dressed up as a refusal with a zero error code.
+	return fmt.Errorf("XGrabKey(%s): unknown create outcome %d (hotkeys_linux.go and hotkeys_keyspec.go have drifted)", keyspec, stage)
 }
 
 // linuxKeysymName resolves a canonical key name to the string

@@ -93,10 +93,12 @@ reaches you rather than a sidecar log:
   letter keeps typing normally and the only symptom is the pebble waking up -
   and opening the microphone - every time you press `a` in any application.
   `f13` is exactly the case the exception exists for.
-- **The two hotkeys may not be the same key.** Windows refuses the second
-  registration; macOS installs two monitors and fires both callbacks on one
-  press. If they collide, the summon hotkey wins, the palette hotkey is not
-  registered, and it is reported.
+- **The two hotkeys may not be the same key.** Windows and Linux both refuse the
+  second registration - on Linux because the two listeners are separate X
+  clients, so the second `XGrabKey` gets `BadAccess` (since #574; before that it
+  was refused and reported as success). macOS installs two monitors and fires
+  both callbacks on one press. If they collide, the summon hotkey wins, the
+  palette hotkey is not registered, and it is reported.
 - **128 bytes**, which no real keyspec approaches. Bytes, not characters, so
   the daemon and the sidecar agree on the limit.
 
@@ -254,13 +256,21 @@ would leave a hotkey that works in some lock states and not others - harder to
 diagnose than one that is simply dead.
 
 So the four grabs are **all-or-nothing**: if any variant is refused, the ones
-that were granted are released again and the whole registration fails with a
-message naming which variants clashed. A partial grab is never kept. The
-alternative - keep what the server gave us and warn - was rejected because an
-intermittent, lock-state-dependent hotkey is the same silent failure one layer
-down, and because holding passive grabs we have just reported as unregistered
-would sit on those combinations for every other client while doing nothing with
-them.
+that were granted are released again and the whole registration fails. When only
+some variants clashed the message names them; when all four did, the combination
+is simply taken and the list would add nothing. A partial grab is never kept.
+The alternative - keep what the server gave us and warn - was rejected because
+an intermittent, lock-state-dependent hotkey is the same silent failure one
+layer down, and because holding passive grabs we have just reported as
+unregistered would sit on those combinations for every other client while doing
+nothing with them.
+
+There is a cost to that choice, and it is worth being straight about it: if
+something on your desktop holds only the `Mod2Mask` variant, you previously had
+a hotkey that worked with Num Lock off, and now you have none. There is no
+plain-variant-only mode to fall back to. What the message gives you instead is
+the name of the variant that clashed, and the answer is to pick a different
+binding with `pebble.summon_hotkey` / `pebble.palette_hotkey`.
 
 Detecting the refusal at all takes a round trip. `XGrabKey` is asynchronous and
 has no useful return value; a refusal arrives later as a `BadAccess` error
