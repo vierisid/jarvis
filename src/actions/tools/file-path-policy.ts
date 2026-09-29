@@ -454,6 +454,30 @@ const DAEMON_ROOT: string | null = (() => {
 })();
 
 /**
+ * A component with its NTFS stream suffix and its ignored trailing dots and
+ * spaces removed, scanning rather than backtracking.
+ *
+ * This was `c.replace(/:.*$/, '').replace(/[. ]+$/, '')`, and the second
+ * pattern is quadratic when it fails: `[. ]+` matches from every start offset
+ * and then fails `$`. `write_file`'s authorityGate calls `execOnWrite` on the
+ * model-chosen path before any approval or refusal can happen, so a long
+ * enough path froze the daemon's only thread from a single tool call --
+ * measured on this code: 40k dots 1.2s, 100k 3.2s, 200k about 30s, clean
+ * 4x-per-doubling. Nothing upstream caps a tool argument's length.
+ */
+function trimIgnoredTail(component: string): string {
+  const colon = component.indexOf(':');
+  const cut = colon === -1 ? component : component.slice(0, colon);
+  let end = cut.length;
+  while (end > 0) {
+    const ch = cut[end - 1];
+    if (ch !== '.' && ch !== ' ') break;
+    end--;
+  }
+  return end === cut.length ? cut : cut.slice(0, end);
+}
+
+/**
  * One spelling per file, for matching: '/'-separated and rooted, lower-cased,
  * HFS-ignorable code points dropped, and each component stripped of what
  * Windows ignores -- an NTFS stream suffix (`.gitconfig::$DATA` writes the
@@ -464,7 +488,7 @@ const DAEMON_ROOT: string | null = (() => {
  */
 function normalize(path: string): string {
   const parts = stripHfsIgnorable(path).replace(/\\/g, '/').toLowerCase().split('/')
-    .map((c) => (c === '.' || c === '..' ? c : c.replace(/:.*$/, '').replace(/[. ]+$/, '')));
+    .map((c) => (c === '.' || c === '..' ? c : trimIgnoredTail(c)));
   let s = posix.normalize(`/${parts.join('/')}`);
   // macOS: /etc and /var are /private/etc and /private/var.
   if (s.startsWith('/private/etc/') || s.startsWith('/private/var/')) s = s.slice('/private'.length);

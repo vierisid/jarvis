@@ -496,6 +496,31 @@ function realProject(): string {
 
 // ── (b) exec-on-write paths are rated execute_command ────────────────────────
 
+describe('the gate does not stall on a hostile path', () => {
+  test('a path of 200k trailing dots or spaces is judged in milliseconds', () => {
+    // `write_file`'s authorityGate calls execOnWrite on the model-chosen path
+    // before any approval or refusal, on the daemon's only thread, and nothing
+    // upstream caps a tool argument's length. With `/[. ]+$/` doing the
+    // trailing trim this took about 30 seconds -- a whole-daemon freeze from
+    // one tool call, repeatable, and cheaper for the caller than a page load.
+    for (const pad of ['.'.repeat(200_000), ' '.repeat(200_000), './'.repeat(100_000)]) {
+      const started = Date.now();
+      gateFor(`${pad}a`);
+      gateFor(`/tmp/${pad}a`);
+      expect(Date.now() - started).toBeLessThan(1_000);
+    }
+  });
+
+  test('and still trims what it is supposed to trim', () => {
+    // The linear scan must not change the answer: these are the Windows
+    // spellings the trim exists for.
+    expect(execOnWriteClass('/home/u/.bashrc.')).not.toBeNull();
+    expect(execOnWriteClass('/home/u/.bashrc ')).not.toBeNull();
+    expect(execOnWriteClass('/home/u/.bashrc::$DATA')).not.toBeNull();
+    expect(execOnWriteClass('/home/u/notes.txt')).toBeNull();
+  });
+});
+
 describe('write_file is rated execute_command for paths that run as code', () => {
   const EXEC_PATHS = [
     '~/.bashrc', '/home/u/.bash_profile', '/home/u/.profile', '/home/u/.zshrc', '/home/u/.zshenv', '/root/.bashrc',
