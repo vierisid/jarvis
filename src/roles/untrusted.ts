@@ -9,6 +9,22 @@
  *   1. The system prompt carries a standing rule (see prompt-builder.ts).
  *   2. Every such payload is wrapped in explicit delimiters with a one-line
  *      preamble, so the boundary is visible in the context window.
+ *   3. Those delimiters carry a PER-BLOCK NONCE (#560). Content cannot forge a
+ *      boundary it cannot predict, so the payload is never rewritten.
+ *
+ * (3) is what makes (2) hold, and it replaced the opposite arrangement. Until
+ * #560 the boundary was a fixed string and `defangDelimiters` rewrote any
+ * occurrence of it inside the payload. That rewrite was the weakness rather
+ * than the defence: its own output, `UNTRUSTED-CONTENT`, is one character from
+ * the real marker, so #529 had to draw a line at the spellings that are
+ * indistinguishable once rendered and leave the visibly-different ones
+ * (homoglyphs, fullwidth forms, ligatures, a space separator) alone -- an
+ * enumeration that cannot be won, because a model loose enough to honour
+ * `UNTRUSTED CONTENT` is loose enough to honour what the defang manufactures
+ * itself. It also corrupted real content: a snake_case identifier, a JSON key,
+ * a file named `untrusted_content.py`, all rewritten inside a payload the model
+ * then writes back. A nonce removes the question instead of narrowing it, and
+ * the payload now reaches the model byte-exact.
  *
  * Framing is a mitigation, not the control. The authority engine remains the
  * control (see src/authority); this module only makes the boundary explicit.
@@ -16,8 +32,77 @@
 
 import type { ContentBlock } from '../llm/provider.ts';
 
+/**
+ * The FIXED half of the delimiters: the token the standing rule in
+ * prompt-builder.ts names, and what makes an open line recognisable before its
+ * tag is read. The other half is the per-block nonce.
+ *
+ * Deliberately unchanged by #560. A payload may now contain either of these
+ * strings verbatim -- nothing rewrites it -- and that is safe precisely because
+ * neither of them is a boundary on its own: a boundary is one of these PLUS
+ * this block's tag.
+ */
 export const UNTRUSTED_OPEN = '<<<UNTRUSTED_CONTENT';
 export const UNTRUSTED_CLOSE = 'UNTRUSTED_CONTENT>>>';
+
+/**
+ * Bytes of nonce per block. 16 is 128 bits, which is not a round number chosen
+ * for comfort: content gets ONE attempt at the tag of the block it is inside
+ * (it is fixed before the tag is drawn), a wrong guess produces no observable
+ * difference, so there is no oracle to iterate against, and 2^-128 is
+ * indistinguishable from impossible for a single attempt.
+ */
+const NONCE_BYTES = 16;
+
+/**
+ * A fresh tag for one block.
+ *
+ * `crypto.getRandomValues` is a CSPRNG and is global in Bun and Node. NOT
+ * `Math.random`, NOT a counter, NOT a timestamp, and NOT a hash of the payload:
+ * the tag must be unguessable from anything the attacker can see or influence,
+ * and a payload-derived tag would be computable by whoever wrote the payload.
+ *
+ * One draw per block, never cached and never reused. Reuse would be the whole
+ * bug back: a tag the model has already seen in one block is a tag content can
+ * carry in the next. Because a payload is fixed BEFORE its own block's tag
+ * exists, the only tag content can ever contain is an EARLIER block's -- and an
+ * earlier block is already closed, so nothing accepts it.
+ *
+ * Lowercase hex, so the tag cannot contain a quote, a newline, a delimiter
+ * character or anything else that could interact with the line it sits on.
+ */
+function freshNonce(): string {
+  const bytes = new Uint8Array(NONCE_BYTES);
+  crypto.getRandomValues(bytes);
+  let hex = '';
+  for (const b of bytes) hex += b.toString(16).padStart(2, '0');
+  return hex;
+}
+
+/**
+ * The close delimiter for a tag.
+ *
+ * Exported for the tests, which have to locate the real boundary of a block
+ * they just built. Production code never calls it except through
+ * `wrapUntrusted`, and nothing anywhere PARSES a framed block or COMPARES a
+ * nonce: the tag is model-facing only. That is deliberate -- a comparison is
+ * the one place a nonce could be matched loosely, so there is no comparison.
+ */
+export function untrustedClose(nonce: string): string {
+  return `${nonce} ${UNTRUSTED_CLOSE}`;
+}
+
+/**
+ * Every tag carried by an OPEN delimiter in `text`, in order.
+ *
+ * Test-facing, for the same reason as `untrustedClose`: a test that wants to
+ * assert "the payload could not close this block" needs to know which tag
+ * opened it. Never used to make a trust decision -- see the note above.
+ */
+export function untrustedNonces(text: string): string[] {
+  return [...text.matchAll(new RegExp(`${UNTRUSTED_OPEN} ([0-9a-f]{${NONCE_BYTES * 2}}) source="`, 'g'))]
+    .map((m) => m[1]!);
+}
 
 /**
  * The separator WebappTemplateDelivery.withInstructions() puts between a
@@ -282,18 +367,25 @@ const IGNORABLE_ALL = new RegExp(IGNORABLE, 'gu');
  * backtracking-free and is linear under V8 -- but JSC (Bun) is quadratic on
  * it. Measured with `'UNTRUSTED' + ZWSP.repeat(n) + '_CONTENX'`, which matches
  * nine letters and then fails on the last one: 8.6ms at n=5k, 33ms at 10k,
- * 135ms at 20k, 533ms at 40k -- 4x per doubling, so ~5 minutes at 1MB. Two
- * callers are uncapped (markUntrustedToolBlocks on a tool-result block, and
- * event-reactor's event JSON, which carries things like an email body), and
- * the daemon is one event loop, so that is a remote stall from content nobody
- * vetted. Bounding the quantifier instead would trade the stall for a bypass:
- * any bound N is beaten by N+1 invisibles.
+ * 135ms at 20k, 533ms at 40k -- 4x per doubling, so ~5 minutes at 1MB. When
+ * that was measured two callers were uncapped (markUntrustedToolBlocks on a
+ * tool-result block, and event-reactor's event JSON, which carries things like
+ * an email body), and the daemon is one event loop, so it was a remote stall
+ * from content nobody vetted. Bounding the quantifier instead would trade the
+ * stall for a bypass: any bound N is beaten by N+1 invisibles.
+ *
+ * Since #560 the only caller is `inlineUntrusted`, which cuts its input to
+ * `maxChars * 4` before any regex runs, so no uncapped payload reaches this
+ * pattern any more. The linear shape stays regardless: it is not paid for by
+ * the cap, the cap could move, and a pattern that is quadratic on hostile input
+ * has no business in this module whatever its callers look like today. The time
+ * bound in the tests still covers it at multi-megabyte sizes for that reason.
  *
  * The cost of the replacement is transient MEMORY rather than time on the one
  * path that builds the span map: a clean copy plus an index per kept code unit,
  * measured at roughly a dozen times the payload for a 2MB input with a marker
  * in it (~25ms). Linear, and it needs both a marker and an invisible to be
- * reached at all, but worth knowing given the uncapped callers above.
+ * reached at all.
  *
  * Built from MARKER_TOKEN so the pattern cannot drift from the delimiters.
  * `g`-flagged and module-scoped, so it owns a mutable `lastIndex`: always
@@ -303,30 +395,41 @@ const IGNORABLE_ALL = new RegExp(IGNORABLE, 'gu');
 const MARKER_PLAIN = new RegExp(MARKER_TOKEN, 'giu');
 
 /**
- * Content cannot be allowed to forge the boundary: a payload containing the
- * close marker followed by fake "trusted" text would end the block early.
- * The marker token itself is rewritten inside the payload (underscore to
- * hyphen), which is idempotent and cannot be reassembled by padding with
- * extra angle brackets the way stripping one bracket could.
+ * Rewrite any spelling of the marker token inside a value that will sit in
+ * TRUSTED prompt text with no delimiters of its own.
+ *
+ * Since #560 this serves `inlineUntrusted` and nothing else. The block wrapper
+ * does not call it: a block carries a nonce, so content cannot forge that
+ * boundary and the payload is left byte-exact. An inline value has no nonce
+ * protecting it -- it is interpolated into a trusted sentence (a project id,
+ * name, branch or file name; see sites/prompt-context.ts) -- so a value
+ * spelling the marker there could still pose as prompt structure, and this is
+ * what stops it.
+ *
+ * The rewrite is underscore to hyphen. It is idempotent and cannot be
+ * reassembled by padding with extra angle brackets the way stripping one
+ * bracket could.
  *
  * Three spellings survived the plain `/UNTRUSTED_CONTENT/g` this replaced
  * (#529): a lowercase or mixed-case marker, one split by a zero-width
- * character or a bidi override, and the two combined. The match now tolerates
- * both.
+ * character or a bidi override, and the two combined. The match tolerates all
+ * of them.
  *
- * What it deliberately does NOT do is strip invisible characters from the
- * payload the way inlineUntrusted does. That is right for a capped label,
- * where an invisible character can only hide something; it is data loss on a
- * block. The class covers U+200D (every joined emoji), U+200C (Persian and
- * Arabic), U+00AD, and the bidi marks that make a right-to-left paragraph
- * render, and a framed file is read by a model that then writes the file back
- * -- read_file into write_file is exactly that round trip -- so anything
- * dropped here is silently deleted from the owner's source. Instead the MATCH
- * is tolerant and only the matched span is rewritten: the invisibles inside
- * the marker go, everything around it stays byte-exact. The one exception is
- * ill-formed UTF-16, which is repaired unconditionally (see below); a file
- * decoded as UTF-8 cannot deliver a lone surrogate, so in practice that is the
- * empty case.
+ * The tolerance is still load-bearing on the inline path even though
+ * `inlineUntrusted` strips format characters before calling this: that strip is
+ * `\p{Cf}`, which misses half the zero-width set (see IGNORABLE above -- the
+ * variation selectors, the Hangul fillers, CGJ, the Mongolian FVS are not Cf),
+ * so a marker split by one of those reaches this function intact.
+ *
+ * What it deliberately does NOT do is strip invisible characters itself. The
+ * MATCH is tolerant and only the matched span is rewritten: the invisibles
+ * inside the marker go, everything around them stays byte-exact. Scoping the
+ * damage that way was necessary when this ran over whole file payloads, and it
+ * is kept now that it does not: the class covers U+200D (every joined emoji),
+ * U+200C (Persian and Arabic), U+00AD and the bidi marks that make a
+ * right-to-left label render, and a caller has no way to know a name needed
+ * them. The one exception is ill-formed UTF-16, which is repaired
+ * unconditionally (see below).
  *
  * The replacement preserves the case it found, so a document that merely
  * mentions the marker in prose stays readable, and the canonical spelling
@@ -348,17 +451,20 @@ const MARKER_PLAIN = new RegExp(MARKER_TOKEN, 'giu');
  * the authority engine is (see the module header). Chasing them costs real
  * corruption: matching a space separator would rewrite the ordinary English
  * phrase, which appears in this file, in docs/, and in any document
- * discussing this feature. The permanent fix is a per-message nonce in the
- * delimiter, which would remove payload rewriting altogether; that is a
- * design change, filed separately.
+ * discussing this feature.
  *
- * One accepted cost, now that the match is case-insensitive: `untrusted_
- * content` is a plausible snake_case identifier, JSON key or SQL column, and
- * it is rewritten. On a read-then-write turn the model propagates the
- * rewrite into the owner's file, and inlineUntrusted's callers pass file
- * names through here too, so a file really called `untrusted_content.py`
- * becomes unaddressable. Both are the same trade the uppercase spelling
- * already made, widened; the nonce design removes them.
+ * That argument is also why the line no longer has to be defended on the block
+ * path at all. #560 was the permanent fix, and it has landed: a block's
+ * boundary is unguessable, so there is nothing to spell. The line survives here
+ * only for inline values, where the nonce cannot help.
+ *
+ * One accepted cost, on the inline path alone: `untrusted_content` is a
+ * plausible snake_case identifier, JSON key or SQL column, and a project or
+ * file NAME spelling it is rewritten, which can leave it unaddressable. That
+ * used to be much worse -- the same rewrite landed inside file payloads, so a
+ * read-then-write turn propagated it into the owner's source. The nonce removed
+ * that half; what is left is bounded to a label, which is the one place the
+ * trade is clearly worth making.
  */
 export function defangDelimiters(raw: string): string {
   // Ill-formed UTF-16 is repaired first, for two reasons. A lone surrogate is
@@ -467,19 +573,49 @@ export function inlineUntrusted(value: unknown, maxChars = 100): string {
 }
 
 /**
- * Wrap a payload in the delimiters with the preamble. Empty input stays empty.
+ * Wrap a payload in the delimiters with the preamble.
  *
- * The payload comes back well-formed: defangDelimiters repairs ill-formed
- * UTF-16 itself, so a lone surrogate cannot make a provider reject the request
- * or be dropped by a serializer into a reassembled marker.
+ * The payload is passed through BYTE-EXACT apart from the UTF-16 repair below.
+ * Nothing is rewritten, because the boundary is this block's nonce and the
+ * payload was fixed before that nonce existed. What the model reads is what the
+ * file, page or clipboard actually contained -- which matters beyond fidelity:
+ * a framed file is read by a model that then writes it back (read_file into
+ * write_file, site_read_file into site_write_file), so a rewrite here was a
+ * silent edit to the owner's source.
+ *
+ * TOTAL by construction: there is no input for which this returns unframed or
+ * partially framed content, including the empty string and a single character.
+ * It used to return `''` for an empty payload, and that was not a harmless
+ * shortcut -- it is what made #529's bug reachable, because a caller that
+ * sliced a payload at index 0 got the whole thing back raw, with no preamble,
+ * no delimiters and no defang. The slicing caller is gone (see
+ * `markUntrustedToolResult`), and the shortcut goes with it so the invariant
+ * needs no caller to be careful. A tool result that is empty is still reported
+ * as empty, by `markUntrustedToolResult`'s own guard -- that is a policy about
+ * tool results, not about this wrapper.
+ *
+ * `toWellFormed()` stays, and is not a defang. #529's two reasons are
+ * independent of the nonce: a lone surrogate is legal in a JS string and in
+ * JSON (`"\ud800"`), a provider that rejects ill-formed UTF-16 would refuse
+ * every request carrying the payload, and a serializer that DROPPED the lone
+ * unit rather than replacing it could close up a gap. Well-formed text is
+ * returned unchanged, so nothing moves for ordinary content.
+ *
+ * The SOURCE is reduced with `inlineUntrusted` before it is interpolated. It is
+ * trusted today -- a registry tool name, a fixed literal -- but one caller
+ * passes `${event.type} observer event` and `ObserverEvent.type` is a free-form
+ * `string`, so a newline in it would open a second line inside the block's own
+ * header. The same reduced value goes in the preamble and the attribute, so the
+ * two cannot disagree about what the source is.
  */
 export function wrapUntrusted(text: string, source: string): string {
-  if (text.length === 0) return text;
+  const nonce = freshNonce();
+  const label = inlineUntrusted(source, 80);
   return [
-    untrustedPreamble(source),
-    `${UNTRUSTED_OPEN} source="${source.replace(/"/g, "'")}"`,
-    defangDelimiters(text),
-    UNTRUSTED_CLOSE,
+    untrustedPreamble(label),
+    `${UNTRUSTED_OPEN} ${nonce} source="${label}"`,
+    text.toWellFormed(),
+    untrustedClose(nonce),
   ].join('\n');
 }
 

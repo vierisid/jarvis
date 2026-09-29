@@ -57,7 +57,13 @@ describe('buildSystemPromptParts', () => {
     const context = makeContext();
     const parts = buildSystemPromptParts(role, context);
     const legacy = buildSystemPrompt(role, context);
-    expect(legacy).toBe(`${parts.static}\n${parts.dynamic}`);
+    // Each build draws its own untrusted-block tags (#560), so the two differ by
+    // exactly those and nothing else. Normalising them keeps what this test is
+    // for -- the legacy string is the joined parts -- while pinning that the
+    // only per-build difference IS the tag: any other drift still fails.
+    const stable = (s: string) => s.replace(/\b[0-9a-f]{32}\b/g, '<tag>');
+    expect(stable(legacy)).toBe(stable(`${parts.static}\n${parts.dynamic}`));
+    expect(legacy).not.toBe(`${parts.static}\n${parts.dynamic}`);
   });
 
   it('legacy buildSystemPrompt without context has no dynamic tail', () => {
