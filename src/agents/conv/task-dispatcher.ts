@@ -93,8 +93,6 @@ export type TurnContext = {
   scope: TurnToolScope | null;
   /** This turn's site prompt block, handed to the task tier that has the tools. */
   siteContext?: string;
-  /** Optional channel hint for logging. */
-  channel?: string;
 };
 
 export class TaskDispatcher {

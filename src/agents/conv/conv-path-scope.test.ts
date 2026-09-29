@@ -28,6 +28,7 @@ import { AuditTrail } from '../../authority/audit.ts';
 import { PROJECT_SITE_CHAT_SCOPE, scopeById, mergeScopes, scopeSystemNote, type TurnToolScope } from '../../actions/tools/tool-scope.ts';
 import { NOT_RUN_MARKER } from '../../actions/tools/tool-relevance/ledger.ts';
 import { resetToolFilterPolicy, setToolFilterPolicy } from '../../actions/tools/tool-relevance/policy.ts';
+import { currentTurnScopeId } from '../../actions/tools/turn-scope-store.ts';
 import { TaskRegistry } from './task-registry.ts';
 import { TaskDispatcher, type TaskRunner } from './task-dispatcher.ts';
 import { ConvOrchestrator, SITE_CHAT_ROUTING_NOTE } from './conv-orchestrator.ts';
@@ -38,6 +39,12 @@ class TieredProvider implements LLMProvider {
   name = 'scripted';
   /** Every system+user buffer the TASK tier was called with. */
   taskBuffers: LLMMessage[][] = [];
+  /**
+   * The tool NAMES offered on each task-tier call. This is how a mid-turn
+   * recompute is observed: the bug it catches is not a call that runs, it is a
+   * withheld tool reappearing in the list handed to the model.
+   */
+  toolListsSeen: string[][] = [];
   constructor(
     private conv: LLMResponse[],
     private task: LLMResponse[],
@@ -53,7 +60,10 @@ class TieredProvider implements LLMProvider {
 
   async chat(messages: LLMMessage[], opts?: LLMOptions): Promise<LLMResponse> {
     const queue = this.isConv(opts) ? this.conv : this.task;
-    if (!this.isConv(opts)) this.taskBuffers.push([...messages]);
+    if (!this.isConv(opts)) {
+      this.taskBuffers.push([...messages]);
+      this.toolListsSeen.push((opts?.tools ?? []).map((t) => t.name));
+    }
     return queue.shift() ?? {
       content: 'done', tool_calls: [], usage: { input_tokens: 0, output_tokens: 0 },
       model: 'scripted', finish_reason: 'stop',
@@ -99,6 +109,8 @@ const AUTHORITY = (): AuthorityConfig => ({
 /** The whole hosted chain, wired the way `AgentService.registerProviders` wires it. */
 function buildStack(conv: LLMResponse[], task: LLMResponse[]) {
   const ran: string[] = [];
+  /** The ambient turn scope id observed from inside a tool's own execution. */
+  const observed: { scopeId?: string } = {};
   const provider = new TieredProvider(conv, task);
   const llm = new LLMManager();
   llm.registerProvider(provider);
@@ -111,7 +123,12 @@ function buildStack(conv: LLMResponse[], task: LLMResponse[]) {
   const registry = new ToolRegistry();
   const tool = (name: string, category: string): ToolDefinition => ({
     name, description: 't', category, parameters: {},
-    execute: async () => { ran.push(name); return 'ok'; },
+    execute: async () => {
+      ran.push(name);
+      // What `createCommitment` reads to stamp its row.
+      observed.scopeId = currentTurnScopeId();
+      return 'ok';
+    },
   });
   for (const t of [
     tool('run_command', 'terminal'), tool('read_file', 'file-ops'),
@@ -153,7 +170,10 @@ function buildStack(conv: LLMResponse[], task: LLMResponse[]) {
   };
   const dispatcher = new TaskDispatcher(llm, taskRegistry, runner);
   const conversation = new ConvOrchestrator(llm, taskRegistry, dispatcher, 'persona');
-  return { conversation, dispatcher, taskRegistry, ran, audit, provider, orchestrator };
+  return {
+    conversation, dispatcher, taskRegistry, ran, audit, provider, orchestrator,
+    get scopeIdSeenByTool(): string | undefined { return observed.scopeId; },
+  };
 }
 
 const DELEGATE = (intent: string) =>
@@ -268,6 +288,38 @@ describe('#571 the conv path enforces the scope at dispatch', () => {
         ledgerFor: (id: string) => { has: (n: string) => boolean };
       }).ledgerFor(primary.id);
       expect(ledger.has('run_command')).toBe(false);
+    } finally {
+      resetToolFilterPolicy();
+    }
+  });
+
+  it('a widened turn does not re-offer the withheld tools for the rest of the turn', async () => {
+    // A `discover_tools` admission or an off-list call sets `widened`, which
+    // recomputes the turn's tool list mid-loop. That recompute was the last
+    // place on the hosted path still passing `null`, so one admission re-offered
+    // `read_file`/`write_file`/`list_directory` to a project-scoped site chat
+    // for every remaining iteration -- dispatch still refused them, but the
+    // candidate-set layer the module doc promises had collapsed, and each retry
+    // was a billed iteration plus an `out_of_scope` row for a call the tool list
+    // had just invited.
+    setToolFilterPolicy({ enabled: true, maxParamsB: 20, models: [] });
+    try {
+      const stack = buildStack(
+        [DELEGATE('read the app file'), textResponse('Done.')],
+        [
+          // Admit an IN-scope tool: enough to set `widened`.
+          toolCall('discover_tools', { names: ['commitments'] }),
+          toolCall('read_file', { path: 'src/App.tsx' }),
+          textResponse('done'),
+        ],
+      );
+      await drain(stack, 'read src/App.tsx and fix the button colour', PROJECT_SITE_CHAT_SCOPE);
+      // Nothing withheld ever appears in a tool list handed to the model.
+      const offeredNames = stack.provider.toolListsSeen.flat();
+      const leaked = [...PROJECT_SITE_CHAT_SCOPE.withheld].filter((n) => offeredNames.includes(n));
+      expect(leaked).toEqual([]);
+      // And the call still did not run.
+      expect(stack.ran).toEqual([]);
     } finally {
       resetToolFilterPolicy();
     }
@@ -507,5 +559,52 @@ describe('#571 a resume cannot cross a chat boundary', () => {
     const buffer = stack.taskRegistry.get(id)!.pausedConversation as { role: string }[];
     expect(buffer.length).toBeGreaterThan(0);
     expect(buffer.some((m) => m.role === 'system')).toBe(false);
+  });
+});
+
+describe('#571 what a scoped turn leaves behind for LATER turns', () => {
+  beforeEach(() => { closeDb(); initDatabase(':memory:'); });
+  afterEach(() => { closeDb(); });
+
+  it('a tool run in a site chat can see the originating scope, which is how a commitment records it', async () => {
+    // The route that matters for the `commitments` gap is not ws-service's
+    // heuristic auto-created row -- that comes from the user's own words and is
+    // stamped explicitly -- but the row the MODEL writes through the in-scope
+    // `commitments` tool. It is the one in-scope tool whose whole effect is to
+    // schedule a later turn, and that turn runs on the background agent, which
+    // does not carry this scope. `createCommitment` defaults `scope_id` from the
+    // ambient turn scope, so what has to hold is that the ambient scope is
+    // visible from inside the tool's own execution.
+    const stack = buildStack(
+      [DELEGATE('remind them'), textResponse('Done.')],
+      [toolCall('commitments', { action: 'create', what: 'deploy the site' }), textResponse('reminded')],
+    );
+    await drain(stack, 'remind me to deploy this tomorrow', PROJECT_SITE_CHAT_SCOPE);
+    // The tool ran: the scope deliberately leaves `commitments` alone.
+    expect(stack.ran).toEqual(['commitments']);
+    expect(stack.scopeIdSeenByTool).toBe(PROJECT_SITE_CHAT_SCOPE.id);
+  });
+
+  it('an unscoped turn leaves no ambient scope, so the row stays unstamped', async () => {
+    const stack = buildStack(
+      [DELEGATE('remind them'), textResponse('Done.')],
+      [toolCall('commitments', { action: 'create', what: 'deploy' }), textResponse('reminded')],
+    );
+    await drain(stack, 'remind me to deploy this tomorrow', null);
+    expect(stack.ran).toEqual(['commitments']);
+    expect(stack.scopeIdSeenByTool).toBeUndefined();
+  });
+
+  it('the ambient scope does not leak past the tool call that set it', async () => {
+    // It is entered per tool call, not per turn, and it is a module global, so
+    // the one thing that must not happen is it surviving into unrelated work.
+    const stack = buildStack(
+      [DELEGATE('x'), textResponse('Done.')],
+      [toolCall('commitments', {}), textResponse('ok')],
+    );
+    await drain(stack, 'remind me to deploy this tomorrow', PROJECT_SITE_CHAT_SCOPE);
+    expect(stack.scopeIdSeenByTool).toBe(PROJECT_SITE_CHAT_SCOPE.id);
+    // Outside any tool call there is no ambient scope.
+    expect(currentTurnScopeId()).toBeUndefined();
   });
 });

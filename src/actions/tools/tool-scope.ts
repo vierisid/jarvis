@@ -117,9 +117,14 @@
  *    that. The scope is per-turn, so the executor's turn does not carry it.
  *
  *    #571 did the FIRST of the two things this needs and deliberately not the
- *    second. The originating scope is now recorded: `commitments.scope_id`,
- *    stamped by ws-service on the site chat's auto-created commitment, so the
- *    fact is durable and auditable instead of lost at creation.
+ *    second. The originating scope is now recorded on `commitments.scope_id`,
+ *    for both routes that matter: ws-service stamps it explicitly on the
+ *    auto-created tracked task, and `createCommitment` otherwise defaults it
+ *    from the ambient turn scope (`turn-scope-store.ts`, entered per tool call
+ *    in `executeTool`), which is what covers the row the MODEL writes through
+ *    the `commitments` tool inside a scoped chat -- the route this note is
+ *    actually about. So the fact is durable and auditable instead of lost at
+ *    creation.
  *
  *    The executor still does not RUN under it, because measuring what that
  *    would do says it is worse than the gap. A due commitment executes through
@@ -137,14 +142,15 @@
  *    rates a site build-file write as execution) or routing a scoped
  *    commitment through the main orchestrator. Either is its own change.
  *
- *    The control meanwhile is the background authority profile --
- *    `execute_command` and `write_data` are governed there, so a commitment
- *    reaching for the shell stops for approval -- plus a loud log line in
- *    commitment-executor.ts, so a scoped commitment running unscoped is
- *    visible rather than silent. The taint profile is the other half
- *    (`commitments` is `write_data`, governed on a tainted turn), with the
- *    per-turn hole the #529 note describes: content read on the previous turn
- *    acts on a clean one.
+ *    The control meanwhile is PARTIAL, and commitment-executor.ts spells out
+ *    why: the background profile governs `execute_command` and `write_data`
+ *    but NOT `read_data`, and an explicit `governed_categories: []` opts out of
+ *    it altogether. So the unframed generic READ on a later turn -- consequence
+ *    one of #561 -- is ungated there. A loud log line makes a scoped commitment
+ *    running unscoped visible rather than silent; it is not a fix. The taint
+ *    profile is the other half (`commitments` is `write_data`, governed on a
+ *    tainted turn), with the per-turn hole the #529 note describes: content
+ *    read on the previous turn acts on a clean one.
  *
  * 3. **`manage_workflow`.** It can compose and run a flow whose step names
  *    `run_command` or `write_file`, and the effect boundary dispatches through
@@ -159,6 +165,18 @@
  *    honest fix is the one the boundary is already shaped for -- carry the
  *    composing turn's scope onto the flow record and refuse a step naming a
  *    tool that turn did not have.
+ *
+ *    CORRECTION (#571 review): that remediation is too narrow, and
+ *    implementing it would leave the route open while looking closed. A flow
+ *    can carry an AGENT step, and `workflows/adapters/m7-agent-delegator.ts`
+ *    delegates to `runSubAgent` with a category-scoped registry built from
+ *    `terminal` + `file-ops`; the effect boundary then executes
+ *    `call.toolCall.name`, chosen at RUN time by that sub-agent
+ *    (workflows/runtime/service-backends.ts). Such a step names no tool
+ *    statically, so "refuse a step naming a tool that turn did not have"
+ *    never fires for it. The scope has to reach the runtime registry itself --
+ *    `toolsInScope` applied to the registry the delegator builds -- not just
+ *    the flow record. #573 owns those files.
  *
  * Also unfixed, and older than this change: the default cwd is a process-wide
  * global shared by every concurrent chat (actions/tools/local-tools-guard.ts).

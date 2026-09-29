@@ -687,7 +687,9 @@ export class ConvOrchestrator {
     // it needs to verbalize follow-ups. Even with the full summary, ANY
     // request for specifics not already in the summary MUST be delegated
     // (see "CRITICAL: You have NO direct knowledge" in the static half).
-    const recent = this.registry.recentResults(5).filter(mine);
+    // Predicate BEFORE the limit: five of MY results, not the five newest
+    // across every chat with the other chats' then dropped.
+    const recent = this.registry.recentResults(5, mine);
     if (recent.length > 0) {
       parts.push('# Recent Task Results');
       for (const t of recent) {

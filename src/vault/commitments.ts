@@ -1,4 +1,5 @@
 import { getDb, generateId } from './schema.ts';
+import { currentTurnScopeId } from '../actions/tools/turn-scope-store.ts';
 
 export type CommitmentPriority = 'low' | 'normal' | 'high' | 'critical';
 export type CommitmentStatus = 'pending' | 'active' | 'completed' | 'failed' | 'escalated';
@@ -87,7 +88,15 @@ export function createCommitment(
     retry_policy?: RetryPolicy;
     created_from?: string;
     assigned_to?: string;
-    /** Tool scope of the creating turn; see Commitment.scope_id (#571). */
+    /**
+     * Tool scope of the creating turn; see Commitment.scope_id (#571).
+     *
+     * Defaults to the ambient turn scope, which is what covers the route that
+     * matters: the row the MODEL creates through the `commitments` tool inside
+     * a scoped chat. An explicit value still wins, for callers that know the
+     * scope but do not run inside the tool call (ws-service's auto-created
+     * tracked task).
+     */
     scope_id?: string;
   }
 ): Commitment {
@@ -95,6 +104,7 @@ export function createCommitment(
   const id = generateId();
   const now = Date.now();
   const priority = opts?.priority ?? 'normal';
+  const scopeId = opts?.scope_id ?? currentTurnScopeId() ?? null;
 
   const stmt = db.prepare(
     'INSERT INTO commitments (id, what, when_due, context, priority, status, retry_policy, created_from, assigned_to, created_at, completed_at, result, scope_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)'
@@ -113,7 +123,7 @@ export function createCommitment(
     now,
     null,
     null,
-    opts?.scope_id ?? null
+    scopeId
   );
 
   return {
@@ -126,7 +136,7 @@ export function createCommitment(
     retry_policy: opts?.retry_policy ?? null,
     created_from: opts?.created_from ?? null,
     assigned_to: opts?.assigned_to ?? null,
-    scope_id: opts?.scope_id ?? null,
+    scope_id: scopeId,
     created_at: now,
     completed_at: null,
     result: null,

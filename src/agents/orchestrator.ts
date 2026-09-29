@@ -40,6 +40,7 @@ import {
 } from '../actions/tools/tool-relevance/discover.ts';
 import { getToolFilterPolicy } from '../actions/tools/tool-relevance/policy.ts';
 import { toolsInScope, toolInScope, outOfScopeMessage, type TurnToolScope } from '../actions/tools/tool-scope.ts';
+import { withTurnScopeId } from '../actions/tools/turn-scope-store.ts';
 import type { LLMProviderEntry } from '../config/types.ts';
 import { combineDecisions, type AuthorityDecision } from '../authority/engine.ts';
 import { progressAcknowledgement } from './progress.ts';
@@ -892,7 +893,7 @@ export class AgentOrchestrator {
           });
         }
         if (widened) {
-          decided = this.decideTurnTools(messages, opts.tier, ledger, undefined, null);
+          decided = this.decideTurnTools(messages, opts.tier, ledger, undefined, turnScope);
           tools = [...(decided.llm ?? []), ASK_FOR_CLARIFICATION_TOOL];
         }
         continue;
@@ -1461,7 +1462,16 @@ export class AgentOrchestrator {
   ): Promise<string | ContentBlock[]> {
     // Enter the turn's taint set for the duration of the call so noteTaint,
     // getEffectiveProfile and any sub-agent spawned by the tool see it.
-    return this.taintStore.run(taint ?? new Set<string>(), () => this.executeToolInner(toolCall, signal, scope));
+    //
+    // And the turn's SCOPE ID, for the one thing that cannot be handed it as an
+    // argument: `commitments` writes a row the executor picks up on a later
+    // turn, and stamping the originating scope on that row is what keeps the
+    // escalation from a scoped chat to an unscoped background turn visible
+    // (#571, actions/tools/turn-scope-store.ts). Ambient rather than passed
+    // because `createCommitment` has six callers, four with no turn in hand.
+    // Nothing reads it to grant anything.
+    return withTurnScopeId(scope?.id, () =>
+      this.taintStore.run(taint ?? new Set<string>(), () => this.executeToolInner(toolCall, signal, scope)));
   }
 
   private async executeToolInner(

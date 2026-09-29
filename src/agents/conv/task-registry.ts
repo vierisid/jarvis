@@ -22,7 +22,7 @@
 import type { Database } from 'bun:sqlite';
 import type { LLMMessage } from '../../llm/provider.ts';
 import type { TaskRecord, TaskRequest, TaskResultEnvelope, TaskStatus } from './task-envelope.ts';
-import { newTaskId } from './task-envelope.ts';
+import { isTaskTemplate, isTaskTier, newTaskId } from './task-envelope.ts';
 
 type Listener = (record: TaskRecord) => void;
 type DbResolver = () => Database | null;
@@ -33,7 +33,15 @@ export class TaskRegistry {
   private readonly maxKeepCompleted: number;
   private resolveDb: DbResolver;
   /**
-   * Whether the `tasks` table actually has the `scope_id` column (#571).
+   * Whether each database's `tasks` table has the `scope_id` column (#571).
+   *
+   * Keyed on the resolved handle, not a single flag on this registry: the DB
+   * resolver is lazy precisely so it can tolerate a re-open between hot
+   * reloads, and a flag memoized against the old handle would be applied to
+   * the new one. Memoized `true` onto a database without the column makes
+   * EVERY insert throw into the swallowing catch -- the "durability stops for
+   * the whole product with one log line" failure this probe exists to prevent,
+   * relocated to the re-open case.
    *
    * Resolved from `PRAGMA table_info` rather than assumed, because the
    * migration is an `ALTER TABLE` in a swallowing try/catch
@@ -44,7 +52,7 @@ export class TaskRegistry {
    * signal. Branching the statement instead degrades to "scope not
    * persisted", which `resume` then treats as a mismatch and refuses.
    */
-  private hasScopeColumn: boolean | null = null;
+  private readonly scopeColumn = new WeakMap<Database, boolean>();
 
   constructor(opts?: { maxKeepCompleted?: number; db?: DbResolver | Database | null }) {
     // How many completed/failed/cancelled tasks to retain in-memory for the
@@ -142,10 +150,21 @@ export class TaskRegistry {
     );
   }
 
-  /** Most recently updated completed/failed/cancelled tasks (newest first). */
-  recentResults(limit: number = 5): TaskRecord[] {
+  /**
+   * Most recently updated completed/failed/cancelled tasks (newest first).
+   *
+   * `where` is applied BEFORE the limit, which matters because this registry is
+   * process-global and shared by every chat. The conv orchestrator asks for the
+   * five most recent results from ITS OWN chat context (#571); filtering after
+   * the slice let a busy site chat evict the main chat's own results from the
+   * main chat's router prompt, whereupon the router -- per its own instruction
+   * that the dialogue shows what was discussed, not what is true -- re-delegates
+   * work it had just done.
+   */
+  recentResults(limit: number = 5, where?: (record: TaskRecord) => boolean): TaskRecord[] {
     const done = Array.from(this.tasks.values()).filter(t =>
-      t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled',
+      (t.status === 'completed' || t.status === 'failed' || t.status === 'cancelled')
+      && (where ? where(t) : true),
     );
     return done.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, limit);
   }
@@ -255,20 +274,25 @@ export class TaskRegistry {
 
   /** Whether this database's `tasks` table carries `scope_id`. Memoized. */
   private scopeColumnPresent(db: Database): boolean {
-    if (this.hasScopeColumn !== null) return this.hasScopeColumn;
+    const cached = this.scopeColumn.get(db);
+    if (cached !== undefined) return cached;
+    let present: boolean;
     try {
       const cols = db.query<{ name: string }, []>('PRAGMA table_info(tasks)').all();
-      this.hasScopeColumn = cols.some((c) => c.name === 'scope_id');
+      present = cols.some((c) => c.name === 'scope_id');
     } catch {
       // Unknown means do not name the column: a persist that works without
       // the scope beats a persist that throws with it.
-      this.hasScopeColumn = false;
+      present = false;
     }
-    if (!this.hasScopeColumn) {
+    this.scopeColumn.set(db, present);
+    if (!present) {
+      // Once per database rather than once per process, so a re-open onto a
+      // migrated database is not silently judged by the old one's answer.
       console.warn('[TaskRegistry] tasks.scope_id is missing; a paused task will not '
         + 'remember its originating tool scope and will refuse to resume under one (#571)');
     }
-    return this.hasScopeColumn;
+    return present;
   }
 
   /**
@@ -339,8 +363,14 @@ function rowToRecord(row: TaskRow): TaskRecord {
   const record: TaskRecord = {
     id: row.id,
     request: {
-      tier: row.tier as TaskRecord['request']['tier'],
-      template: row.template as TaskRecord['request']['template'],
+      // Validated, not cast. A row from another build, a downgraded build or a
+      // tampered database otherwise reaches `TEMPLATE_PROMPTS[template]` on
+      // resume and puts the literal string "undefined" into the task tier's
+      // system prompt -- the same defect the `delegate` validators close on the
+      // live path (#571). Falling back keeps the task resumable with a sane
+      // prompt instead of dropping the user's paused work.
+      tier: isTaskTier(row.tier) ? row.tier : 'medium',
+      template: isTaskTemplate(row.template) ? row.template : 'general',
       intent: row.intent,
       ...(row.original_message ? { original_message: row.original_message } : {}),
     },

@@ -526,7 +526,18 @@ export class AgentService implements Service, IAgentService {
    *   - Otherwise the classic orchestrator runs (full role prompt, all tools,
    *     ReAct loop on the medium tier).
    */
-  async handleMessage(text: string, channel: string = 'websocket', scope?: TurnToolScope | null): Promise<string> {
+  async handleMessage(
+    text: string,
+    channel: string = 'websocket',
+    scope?: TurnToolScope | null,
+    // Travels WITH `scope`, always. A scoped turn without it withholds the
+    // generic file tools and then tells the model to "use the site_* tools with
+    // the project's project_id" without ever saying which project -- the
+    // starved turn, reached from the other direction (#571). No caller passes
+    // either today; the pair exists so the first one that does cannot pass one
+    // half.
+    siteContext?: string,
+  ): Promise<string> {
     // Non-streaming turn entry (external channels, etc). Background reactions go
     // through BackgroundAgentService.handleMessage, which is gated separately.
     if (activeTurns.isDraining) throw new DrainingError();
@@ -535,9 +546,10 @@ export class AgentService implements Service, IAgentService {
       let response: string;
 
       if (this.convOrchestrator) {
-        response = await this.handleMessageConv(text, channel, scope);
+        response = await this.handleMessageConv(text, channel, scope, siteContext);
       } else {
         const systemPrompt = this.buildFullSystemPromptParts(channel, text);
+        if (siteContext) systemPrompt.dynamic += '\n\n' + siteContext;
         if (scope) systemPrompt.dynamic += '\n\n' + scopeSystemNote(scope);
         response = await this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, scope ?? null);
       }
@@ -567,6 +579,7 @@ export class AgentService implements Service, IAgentService {
     text: string,
     channel: string = 'websocket',
     scope?: TurnToolScope | null,
+    siteContext?: string,
   ): Promise<string> {
     if (!this.convOrchestrator) {
       // Should be unreachable - caller checks this.convOrchestrator first.
@@ -582,7 +595,7 @@ export class AgentService implements Service, IAgentService {
         recentDialogue,
         ambientFacts: this.buildAmbientFactsBlock(text),
       },
-      { scope: scope ?? null },
+      { scope: scope ?? null, ...(siteContext ? { siteContext } : {}) },
       this.convTaskEventListener ?? undefined,
     );
     return result.text;

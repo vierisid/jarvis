@@ -433,10 +433,23 @@ export class CommitmentExecutor {
     // routing a scoped commitment through the main orchestrator instead. Both
     // are their own change.
     //
-    // What holds the line meanwhile is the background authority profile:
-    // `execute_command` and `write_data` are governed there, so a commitment
-    // that reaches for the shell stops for the user's approval. Logged loudly
-    // so a scoped commitment executing unscoped is visible rather than silent.
+    // What partly holds the line meanwhile is the background authority
+    // profile: `execute_command` and `write_data` are in
+    // DEFAULT_BACKGROUND_GOVERNED, so a commitment that reaches for the shell
+    // or writes a file stops for the user's approval.
+    //
+    // Two limits on that, stated because it would be easy to read the sentence
+    // above as "covered". First, `read_data` is NOT in that list
+    // (authority/background-profile.ts) and the background registry does
+    // register the generic readers, so a model-written commitment like "read
+    // the notes in ~/... and add them to the site tomorrow" performs an
+    // unframed, untainting read on a later turn with no gate at all -- which is
+    // consequence one of #561, the one this scope exists to remove. Second, an
+    // explicit `authority.background.governed_categories: []` is a valid
+    // opt-out, so the control can be configured away entirely.
+    //
+    // Hence the log line: a scoped commitment executing unscoped is visible
+    // rather than silent. It is not a substitute for either fix above.
     const commitmentScopeId = (() => {
       try { return getCommitment(state.commitmentId)?.scope_id ?? null; } catch { return null; }
     })();

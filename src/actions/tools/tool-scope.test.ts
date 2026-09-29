@@ -301,8 +301,43 @@ describe('what a future change could silently undo', () => {
     expect(src).toContain('this.orchestrator.streamMessage(systemPrompt, text, undefined, undefined, undefined, scope)');
     // The non-streaming fork too: `handleMessage` has the same conv/classic
     // split and the same way of quietly dropping half the turn.
-    expect(src).toContain('this.handleMessageConv(text, channel, scope)');
+    expect(src).toContain('this.handleMessageConv(text, channel, scope, siteContext)');
     expect(src).toContain('this.orchestrator.processMessage(systemPrompt, text, undefined, undefined, scope ?? null)');
+  });
+
+  test('every entry that takes a scope also takes a site context', async () => {
+    // The two halves must travel together on every turn entry. A scoped turn
+    // with no site block withholds the generic file tools and then tells the
+    // model to use the `site_*` tools with "the project's project_id" without
+    // saying which project -- the starved turn, reached from the other side.
+    const src = await code('../../daemon/agent-service.ts');
+    for (const entry of ['streamMessage', 'streamMessageInner', 'streamMessageConv',
+      'streamMessageWithImage', 'handleMessage', 'handleMessageConv']) {
+      // Each signature runs from the name to the closing paren of its parameter
+      // list; both parameter names must appear in it.
+      const sig = new RegExp(`\\b${entry}\\(([\\s\\S]*?)\\n?\\s*\\):`).exec(src)
+        ?? new RegExp(`\\b${entry}\\(([^)]*)\\):`).exec(src);
+      expect(`${entry}:found=${sig !== null}`).toBe(`${entry}:found=true`);
+      const params = sig![1]!;
+      expect(`${entry}:scope=${params.includes('scope')}`).toBe(`${entry}:scope=true`);
+      expect(`${entry}:siteContext=${params.includes('siteContext')}`).toBe(`${entry}:siteContext=true`);
+    }
+  });
+
+  test('the voice fall-through is still an unscoped main-chat turn, on purpose', async () => {
+    // Speaking on the Sites page re-enters `handleChat` with a freshly built
+    // payload that carries no `projectId`, so it is a main-chat turn with no
+    // site context and no scope. Correct today -- that payload has no project
+    // boundary to carry -- and harmless now nothing sets the default cwd. Pinned
+    // because the day the dashboard gives voice a room or project context, the
+    // scope has to ride along, and the failure would otherwise be silent.
+    const src = await code('../../daemon/ws-service.ts');
+    const payloads = [...src.matchAll(/handleChat\(\s*\{([^}]*)\}/g)].map((m) => m[1]!);
+    expect(payloads.length).toBeGreaterThanOrEqual(2);
+    for (const p of payloads) {
+      expect(`${p.replace(/\s+/g, ' ').trim()}|${p.includes('projectId')}`)
+        .toBe(`${p.replace(/\s+/g, ' ').trim()}|false`);
+    }
   });
 
   test('the conv task runner hands the scope to processTaskCall', async () => {
@@ -351,12 +386,23 @@ describe('what a future change could silently undo', () => {
     for (const args of execs) {
       expect(`${args}|${/,\s*(null|turnScope)\s*$/.test(args)}`).toBe(`${args}|true`);
     }
-    // ...and at least some of them must pass a REAL scope. Without this, a
-    // future edit could set every site back to `null` -- the exact #571 bug --
-    // and the "decided explicitly" assertion above would still pass.
-    const live = (xs: string[]) => xs.filter((a) => /,\s*turnScope\s*$/.test(a)).length;
-    expect(live(calls)).toBeGreaterThanOrEqual(4);
-    expect(live(execs)).toBeGreaterThanOrEqual(3);
+    // ...and NONE of them may pass `null`.
+    //
+    // This assertion started life as "at least four pass turnScope", which was
+    // useless: there are six `decideTurnTools` sites, so a threshold of four
+    // passed with two of them wrong -- and one of them WAS wrong. The
+    // post-widening recompute inside `processTaskCall` kept `null`, so on the
+    // one path a hosted site chat uses, any `discover_tools` admission or
+    // off-list call re-offered the withheld generic file tools for the rest of
+    // the turn. Dispatch still refused them, but the candidate-set layer
+    // collapsed, and the guard said nothing.
+    //
+    // Every loop in this file now has a `turnScope` in lexical scope, so the
+    // correct assertion is absolute. A future loop that genuinely has no scope
+    // should acquire one rather than weaken this.
+    const nulls = (xs: string[]) => xs.filter((a) => /,\s*null\s*$/.test(a));
+    expect(`decideTurnTools nulls: ${nulls(calls).join(' | ')}`).toBe('decideTurnTools nulls: ');
+    expect(`executeTool nulls: ${nulls(execs).join(' | ')}`).toBe('executeTool nulls: ');
     // The ledger is the other thing a loop must not do unscoped: it is shared
     // process-wide, so noting a refused tool widens every other chat.
     const notes = [...src.matchAll(/this\.noteToolUse\(([^)]*)\)/g)].map((m) => m[1]!);
@@ -372,9 +418,8 @@ describe('what a future change could silently undo', () => {
       const sites = [...src.matchAll(new RegExp(`this\\.${fn}\\(([^)]*)\\)`, 'g'))].map((m) => m[1]!);
       expect(`${fn}:${sites.length >= 3}`).toBe(`${fn}:true`);
       for (const args of sites) {
-        expect(`${fn}(${args})|${/,\s*(null|turnScope)\s*$/.test(args)}`).toBe(`${fn}(${args})|true`);
+        expect(`${fn}(${args})|${/,\s*turnScope\s*$/.test(args)}`).toBe(`${fn}(${args})|true`);
       }
-      expect(`${fn}:${sites.filter((a) => /,\s*turnScope\s*$/.test(a)).length >= 3}`).toBe(`${fn}:true`);
     }
   });
 

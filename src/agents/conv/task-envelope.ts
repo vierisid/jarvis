@@ -62,11 +62,22 @@ export type TaskRequest = {
  * runtime bridge or an invented template reaches `TEMPLATE_PROMPTS[template]`
  * and puts the literal string `undefined` into the task tier's system prompt.
  */
+const TEMPLATE_SET: Record<TaskTemplate, true> = {
+  research: true, code: true, plan: true, write: true, general: true,
+};
 export const TASK_TEMPLATES: readonly TaskTemplate[] =
-  ['research', 'code', 'plan', 'write', 'general'] as const;
+  Object.keys(TEMPLATE_SET) as TaskTemplate[];
 
-/** The tiers a `delegate` call may name. `conversation` is the router itself. */
-export const TASK_TIERS: readonly TaskRequest['tier'][] = ['high', 'medium', 'low'] as const;
+/**
+ * The tiers a `delegate` call may name. `conversation` is the router itself.
+ *
+ * Both lists are derived from a `Record<union, true>` rather than written out,
+ * so adding a member to `TaskTemplate` or `Tier` is a compile error here
+ * instead of a validator that silently rejects the new value at run time.
+ */
+const TIER_SET: Record<TaskRequest['tier'], true> = { high: true, medium: true, low: true };
+export const TASK_TIERS: readonly TaskRequest['tier'][] =
+  Object.keys(TIER_SET) as TaskRequest['tier'][];
 
 export function isTaskTemplate(value: unknown): value is TaskTemplate {
   return typeof value === 'string' && (TASK_TEMPLATES as readonly string[]).includes(value);

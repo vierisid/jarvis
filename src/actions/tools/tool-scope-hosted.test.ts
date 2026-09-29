@@ -256,13 +256,39 @@ describe('both shapes see the same thing the classic path sees', () => {
   });
 
   test('withholding survives on both shapes, engaged or not', () => {
-    // `toolsInScope` is applied to `ctx.all` on the first line of
-    // `decideTools`, BEFORE every early return, which is why the veto that
-    // disables the filter on hosted does not disable the withholding.
     for (const shape of ['hosted', 'local'] as const) {
       for (const ask of [...SITE_ASKS, ...UNRELATED_ASKS]) {
         const leaked = GENERIC.filter((n) => offered(ask, true, shape).names.has(n));
         expect(`${shape}/${ask}:${leaked.join(',')}`).toBe(`${shape}/${ask}:`);
+      }
+    }
+  });
+
+  test('decideTools narrows the list IT was given, not one narrowed for it', () => {
+    // The assertion the test above only appears to make. `offered()` passes
+    // `all: SCOPED`, already narrowed, so it would pass identically if
+    // `decideTools` stopped narrowing altogether -- there would be nothing
+    // left to narrow. Production narrows twice on purpose (`decideTurnTools`
+    // calls `toolsInScope` on the registry listing, and `decideTools` does it
+    // again on the first line so the decision is self-contained), and THIS is
+    // the test for the second one: hand it the UNSCOPED registry with a scope
+    // and require the withheld six to be gone anyway.
+    for (const shape of ['hosted', 'local'] as const) {
+      for (const tier of ['medium', 'high'] as const) {
+        const decision = decideTools({
+          all: ALL,
+          messages: taskBuffer('install react-router in the project'),
+          ledger: new ToolExposureLedger(),
+          tier,
+          tiers: shape === 'hosted' ? HOSTED_TIERS : LOCAL_TIERS,
+          providers: (shape === 'hosted' ? HOSTED_PROVIDERS : LOCAL_PROVIDERS) as never,
+          policy: ON,
+          scope: PROJECT_SITE_CHAT_SCOPE,
+        });
+        const names = new Set(decision.tools.map((t) => t.name));
+        expect(`${shape}/${tier}:${GENERIC.filter((n) => names.has(n)).join(',')}`).toBe(`${shape}/${tier}:`);
+        // And `exposed` too, which is what the off-list interceptor consults.
+        expect(`${shape}/${tier}:${GENERIC.filter((n) => decision.exposed.has(n)).join(',')}`).toBe(`${shape}/${tier}:`);
       }
     }
   });
