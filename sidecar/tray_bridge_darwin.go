@@ -93,3 +93,10 @@ func goTrayReopen() {
 		go trayOnReopenDarwin()
 	}
 }
+
+//export goTrayUpdate
+func goTrayUpdate() {
+	if trayOpenUpdate != nil {
+		go trayOpenUpdate()
+	}
+}

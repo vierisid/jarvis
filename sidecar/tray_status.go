@@ -3,6 +3,7 @@ package main
 import (
 	"sync"
 	"sync/atomic"
+	"time"
 )
 
 // TrayStatus is the live data the tray menu shows (design: usejarvis-tray.html
@@ -161,4 +162,54 @@ func trayStatusFromParams(params map[string]any) TrayStatus {
 		}
 	}
 	return s
+}
+
+// Self-update entry in the tray menu. Kept apart from TrayStatus: that one is
+// the brain's to push (tray.status replaces it), while the update offer is
+// the sidecar's own knowledge and must survive every push.
+var (
+	trayUpdateLabelV atomic.Value // string; "" hides the item
+	// trayOpenUpdate opens the update prompt; set by the client.
+	trayOpenUpdate func()
+	// trayReady is closed once the platform tray owns the UI loop, so a window
+	// opened from the startup offer cannot race its setup (macOS).
+	trayReady     = make(chan struct{})
+	trayReadyOnce sync.Once
+)
+
+// trayUpdateLabelFor is the menu text for an update offer ("" = no item).
+func trayUpdateLabelFor(o UpdateOffer) string {
+	switch {
+	case o.Blocked && o.Version != "":
+		return "Update required: v" + o.Version + "…"
+	case o.Blocked:
+		return "Update required…"
+	case o.Version != "":
+		return "Update to v" + o.Version + "…"
+	}
+	return ""
+}
+
+func setTrayUpdateOffer(o UpdateOffer) {
+	label := trayUpdateLabelFor(o)
+	if prev, _ := trayUpdateLabelV.Load().(string); prev == label {
+		return
+	}
+	trayUpdateLabelV.Store(label)
+	trayRefresh()
+}
+
+func trayUpdateLabel() string {
+	s, _ := trayUpdateLabelV.Load().(string)
+	return s
+}
+
+func markTrayReady() { trayReadyOnce.Do(func() { close(trayReady) }) }
+
+// waitTrayReady blocks until the tray is up, or timeout.
+func waitTrayReady(timeout time.Duration) {
+	select {
+	case <-trayReady:
+	case <-time.After(timeout):
+	}
 }

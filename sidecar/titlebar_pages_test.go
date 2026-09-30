@@ -13,7 +13,7 @@ import (
 
 // customChromePages are the local pages that draw their own title bar on
 // Windows, keyed by the name the QA dump uses. Their windows get there two
-// ways: settings, logs and onboarding pass winchrome.CustomTitleBar to their
+// ways: settings, logs, onboarding and update pass winchrome.CustomTitleBar to their
 // window host, while hosted and setup are shown by runFirstRunWindow, which
 // builds its webview itself and calls winchrome.Install directly.
 // brand_pages_dump_test.go dumps a chromed variant of exactly this set, so the
@@ -24,12 +24,13 @@ var customChromePages = map[string]string{
 	"hosted":     hostedShellHTML,
 	"setup":      setupWindowHTML,
 	"onboarding": onboardingWindowHTML,
+	"update":     updateWindowHTML,
 }
 
 // wrappedPages are the chromed pages that scroll an inner .pagebody. Logs is
 // the exception: its body is a flex column that never scrolls (its <pre> does),
 // and it was already designed flush to the window edge.
-var wrappedPages = []string{"settings", "hosted", "setup", "onboarding"}
+var wrappedPages = []string{"settings", "hosted", "setup", "onboarding", "update"}
 
 func TestCustomChromePagesCarryTheWholeTitlebar(t *testing.T) {
 	for name, html := range customChromePages {

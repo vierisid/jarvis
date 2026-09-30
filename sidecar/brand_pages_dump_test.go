@@ -46,6 +46,7 @@ func TestDumpBrandPages(t *testing.T) {
 		"settings.html":             settingsWindowHTML,
 		"logs.html":                 logViewerHTML,
 		"onboarding.html":           onboardingWindowHTML,
+		"update.html":               updateWindowHTML,
 	}
 	// Pages that draw their own title bar on Windows also dump a chromed
 	// variant: the strip is invisible without the marker winchrome.Install

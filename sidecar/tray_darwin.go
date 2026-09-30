@@ -41,6 +41,7 @@ extern void goTrayPause(void);
 extern void goTrayMute(void);
 extern void goTrayWaiting(void);
 extern void goTrayReopen(void);
+extern void goTrayUpdate(void);
 
 // Menu action target: forwards clicks back into Go. Also acts as the
 // NSApplication delegate (set in jarvisTraySetup) so that webview_go's panel
@@ -57,6 +58,7 @@ extern void goTrayReopen(void);
 - (void)onPause:(id)sender;
 - (void)onMute:(id)sender;
 - (void)onWaiting:(id)sender;
+- (void)onUpdate:(id)sender;
 - (BOOL)applicationShouldHandleReopen:(NSApplication*)sender hasVisibleWindows:(BOOL)flag;
 @end
 @implementation JarvisTrayTarget
@@ -68,6 +70,7 @@ extern void goTrayReopen(void);
 - (void)onPause:(id)sender    { (void)sender; goTrayPause(); }
 - (void)onMute:(id)sender     { (void)sender; goTrayMute(); }
 - (void)onWaiting:(id)sender  { (void)sender; goTrayWaiting(); }
+- (void)onUpdate:(id)sender   { (void)sender; goTrayUpdate(); }
 // A LSUIElement/Accessory app has no windows and no Dock icon, so when the user
 // re-launches Jarvis.app (or double-clicks it after "You're connected"),
 // LaunchServices sends this reopen event instead of starting a new process.
@@ -213,11 +216,13 @@ static void jarvisAddCheck(NSMenu* menu, NSString* title, SEL sel, int checked) 
 // jarvisTrayRebuild replaces the menu contents + status icon from the live model.
 // Safe to call from any goroutine — marshals onto the main queue. Strings are
 // UTF-8 C strings owned by the Go caller (copied here). recentJoined is the
-// recent-activity lines joined by "\n" (may be empty).
+// recent-activity lines joined by "\n" (may be empty). updateLabel is the
+// sidecar-update item's text ("" hides it).
 static void jarvisTrayRebuild(const char* header, int waiting, int paused, int muted,
                               const char* recentJoined, const char* footer,
-                              int online, int stateCode) {
+                              int online, int stateCode, const char* updateLabel) {
     NSString* headerS = [NSString stringWithUTF8String:header ? header : "Jarvis"];
+    NSString* updateS = [NSString stringWithUTF8String:updateLabel ? updateLabel : ""];
     NSString* recentS = [NSString stringWithUTF8String:recentJoined ? recentJoined : ""];
     NSString* footerS = [NSString stringWithUTF8String:footer ? footer : ""];
     (void)online;
@@ -230,6 +235,11 @@ static void jarvisTrayRebuild(const char* header, int waiting, int paused, int m
 
         jarvisAddDisabled(menu, headerS);
         [menu addItem:[NSMenuItem separatorItem]];
+
+        if (updateS.length > 0) {
+            jarvisAddItem(menu, updateS, @selector(onUpdate:));
+            [menu addItem:[NSMenuItem separatorItem]];
+        }
 
         if (waiting > 0) {
             jarvisAddItem(menu, [NSString stringWithFormat:@"Waiting on you (%d)", waiting], @selector(onWaiting:));
@@ -368,9 +378,11 @@ func darwinRebuildTray() {
 	cHeader := C.CString(header)
 	cRecent := C.CString(recentJoined)
 	cFooter := C.CString(footer)
+	cUpdate := C.CString(trayUpdateLabel())
 	defer C.free(unsafe.Pointer(cHeader))
 	defer C.free(unsafe.Pointer(cRecent))
 	defer C.free(unsafe.Pointer(cFooter))
+	defer C.free(unsafe.Pointer(cUpdate))
 
 	C.jarvisTrayRebuild(
 		cHeader,
@@ -381,6 +393,7 @@ func darwinRebuildTray() {
 		cFooter,
 		boolToCInt(online),
 		C.int(trayStateCode(ts.State)),
+		cUpdate,
 	)
 }
 
@@ -447,6 +460,13 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 
 	C.jarvisTraySetup()
 	darwinRebuildTray() // initial paint (offline, idle)
+	// The app delegate is set: a window opened from here on (the startup
+	// update prompt) no longer makes webview_go start a bootstrap loop of its
+	// own, and the main queue it dispatches to drains once jarvisTrayRun
+	// below enters the loop. The prompt closes its window with
+	// platformDestroyWindow, never Terminate, so it does not depend on the
+	// run-loop claim that follows.
+	markTrayReady()
 
 	// Poll the connection state and rebuild on change so the health footer + icon
 	// track connected / error.

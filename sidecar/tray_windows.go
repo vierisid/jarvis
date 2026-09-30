@@ -68,6 +68,7 @@ const (
 	trayMenuPauseID    = 6
 	trayMenuMuteID     = 7
 	trayMenuAccountID  = 8
+	trayMenuUpdateID   = 9
 	// Brand icon resources compiled into rsrc_windows_amd64.syso from jarvis.rc.
 	// ID 2 is also the .exe / taskbar application icon (lowest-numbered group
 	// icon). ID 3 is the vermilion drop shown when the connection drops.
@@ -183,6 +184,7 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 		runTrayMessageLoop()
 	}()
 	<-ready
+	markTrayReady()
 
 	client.Start(ctx) // blocks until client.Stop() (menu Close or signal)
 
@@ -395,6 +397,13 @@ func showTrayMenu(hwnd uintptr) {
 	appendTrayDisabled(hMenu, header)
 	procAppendMenuW.Call(hMenu, trayMfSeparator, 0, 0)
 
+	// Sidecar update — the sidecar's own offer (tray_status.go), not the
+	// brain's; opens the same prompt as the startup offer and the dashboard.
+	if label := trayUpdateLabel(); label != "" {
+		appendTrayItem(hMenu, label, trayMenuUpdateID)
+		procAppendMenuW.Call(hMenu, trayMfSeparator, 0, 0)
+	}
+
 	// Waiting on you — pending approvals; opens the dashboard (Authority).
 	if ts.Waiting > 0 {
 		appendTrayItem(hMenu, fmt.Sprintf("Waiting on you (%d)", ts.Waiting), trayMenuWaitingID)
@@ -472,6 +481,10 @@ func showTrayMenu(hwnd uintptr) {
 	case trayMenuWaitingID:
 		if trayOpenChat != nil {
 			go trayOpenChat() // into the dashboard to review the pending approval
+		}
+	case trayMenuUpdateID:
+		if trayOpenUpdate != nil {
+			go trayOpenUpdate()
 		}
 	case trayMenuPauseID:
 		ts := getTrayStatus()

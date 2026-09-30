@@ -37,6 +37,14 @@ func (c *SidecarClient) initUpdater() {
 	u.onFirstOffer = c.onFirstUpdateOffer
 	c.updater = u
 	activeUpdaterV.Store(u)
+	if updatePromptSupported() {
+		showUpdatePrompt = c.openUpdatePrompt
+		trayOpenUpdate = c.openUpdatePrompt
+		updateOfferChanged = func(o UpdateOffer) {
+			setTrayUpdateOffer(o)
+			c.pushUpdateWindow()
+		}
+	}
 	log.Printf("[update] install mode: %s %s%s", u.mode.Kind, u.mode.InstallDir, u.mode.Reason)
 }
 

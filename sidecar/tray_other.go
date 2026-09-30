@@ -12,5 +12,6 @@ func runWithTray(ctx context.Context, cancel context.CancelFunc, client *Sidecar
 		client.Stop()
 		cancel()
 	})
+	markTrayReady()
 	client.Start(ctx)
 }
