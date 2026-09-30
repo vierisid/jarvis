@@ -14,6 +14,7 @@ import { PieceCatalog } from '../../runtime/piece-catalog';
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { createManageWorkflowTool } from "../../../actions/tools/manage-workflow";
+import { UNTRUSTED_OPEN } from "../../../roles/untrusted";
 import { JarvisWorkflowRunnerAdapter } from "../../adapters/workflow-runner";
 import { createWorkflowRoutes, type WorkflowRouteMap } from "../../api/routes";
 import { closeWorkflowDb, getWorkflowDb, initWorkflowDb } from "../index";
@@ -176,8 +177,23 @@ async function call(path: string, method: "GET" | "POST" | "PATCH", id: string, 
 const silent = () => undefined;
 const tool = () => createManageWorkflowTool();
 
+/**
+ * #598: `manage_workflow` returns `publish` / `enable` (and the other
+ * `summarizeFlow`-carrying actions) as one untrusted-content block, so the JSON
+ * is the block's payload rather than the whole return.
+ *
+ * Lenient on purpose -- it strips a frame if there is one and passes anything
+ * else through, so it does not have to track which actions are framed. The
+ * strict version, which asserts the block is well formed and carries exactly
+ * one nonce, lives with the framing tests in
+ * `actions/tools/manage-workflow.test.ts` and stays the only copy that locates a
+ * boundary deliberately.
+ */
 async function runTool(action: string, params: Record<string, unknown> = {}) {
-  return JSON.parse(String(await tool().execute({ action, ...params }))) as Record<string, unknown>;
+  const result = String(await tool().execute({ action, ...params }));
+  const lines = result.split("\n");
+  const body = lines[1]?.startsWith(UNTRUSTED_OPEN) ? lines.slice(2, -1).join("\n") : result;
+  return JSON.parse(body) as Record<string, unknown>;
 }
 
 /* ------------------------------------------------------- CODE detection */

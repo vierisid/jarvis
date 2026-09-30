@@ -159,6 +159,187 @@ const ok = (data: unknown, status = 200): Response =>
 const err = (message: string, status = 400): Response =>
   ok({ error: message }, status);
 
+/**
+ * Ceiling on a flow's `metadata` document, in characters of serialized JSON
+ * (#598).
+ *
+ * The column used to be a verbatim caller-controlled document of unbounded
+ * size: both writers below cast the request body and passed `body.metadata`
+ * straight through to `JSON.stringify`, with no type check, no key whitelist and
+ * no size limit. `actions/tools/manage-workflow.ts` then read it back with a raw
+ * `JSON.parse` and put it in chat tool output, which is what #598 was filed
+ * about.
+ *
+ * 16 KB is a STORAGE bound, not a schema: it is ~85x the largest writer in the
+ * repo (`awareness/suggestion-composer.ts`, four ids at ~190 characters) and no
+ * shipped caller writes the field at all -- the dashboard POSTs
+ * `{ displayName }`, PATCHes `{ status }`, and keeps its editor state in
+ * `flow_version_ui_meta` behind its own routes. So this cannot break a client
+ * that exists; what it stops is an unbounded column.
+ *
+ * It is deliberately NOT the only control. Rows written before it are left
+ * exactly as they are -- there is no migration and no rewrite, and they are
+ * still served here in full -- so what keeps a legacy oversized row out of the
+ * prompt is the much tighter per-flow cap in `summarizeFlow`, which no consumer
+ * outside the chat tool goes through.
+ */
+const FLOW_METADATA_MAX_CHARS = 16_384;
+
+/**
+ * Ceiling on a FLOW-LEVEL write request body, checked BEFORE it is parsed.
+ *
+ * Scope, stated because the name does not carry it: this fronts
+ * `POST /api/workflows` and `PATCH /api/workflows/:id` only. The two version
+ * routes still parse unbounded, and they carry the bigger body -- the whole step
+ * graph plus `uiMeta`. They are deliberately left alone here rather than
+ * squeezed through a limit sized for `{ displayName, metadata }`: a cap that is
+ * generous for a flow row is a guess for a step graph, and breaking a large
+ * flow's save in the visual editor would be a worse outcome than the exposure
+ * it prevents. Worth its own issue, with a limit measured against real flows.
+ *
+ * The metadata cap below can only run after `req.json()` has already
+ * materialized the caller's object graph, and it then allocates a second
+ * full-size string to measure it. That is the wrong side of an unguarded parse:
+ * the daemon is one process serving this API, the dashboard and the agent
+ * runtime, so an OOM here is a full-availability event. This is the same guard
+ * `WAITPOINT_RESUME_MAX_BODY_BYTES` applies two routes up, for the same reason
+ * and in the same shape.
+ *
+ * 256 KB is enormous for these two routes -- the largest legitimate body is
+ * `{ displayName }` plus at most `FLOW_METADATA_MAX_CHARS` of metadata -- and it
+ * is deliberately well above the metadata cap so an oversized `metadata` is
+ * still refused by the specific, informative check rather than by this one.
+ */
+const FLOW_WRITE_MAX_BODY_BYTES = 262_144;
+
+/**
+ * Read and parse a flow-write body, refusing an oversized one before it costs
+ * anything to hold.
+ *
+ * Declared size first, so nothing is read off the socket for an obviously
+ * oversized request; then the actual text, because a chunked body declares no
+ * `content-length`. String length is compared against a BYTE cap on purpose:
+ * a string's UTF-8 encoding is never shorter than its UTF-16 code-unit count,
+ * so this never rejects a body that is within the byte cap, and an
+ * all-multibyte body is bounded within a small factor above it. Copied from the
+ * waitpoint ingress, including that reasoning.
+ */
+async function readFlowWriteBody(req: Request): Promise<{ body: Record<string, unknown> } | { error: Response }> {
+  const declared = Number(req.headers.get("content-length") ?? "0");
+  if (Number.isFinite(declared) && declared > FLOW_WRITE_MAX_BODY_BYTES) {
+    return { error: err("request body too large", 413) };
+  }
+  let text: string;
+  try {
+    text = await req.text();
+  } catch {
+    return { error: err("failed to read request body") };
+  }
+  if (text.length > FLOW_WRITE_MAX_BODY_BYTES) {
+    return { error: err("request body too large", 413) };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(text);
+  } catch {
+    return { error: err("body must be valid JSON") };
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { error: err("body must be a JSON object") };
+  }
+  return { body: parsed as Record<string, unknown> };
+}
+
+/**
+ * Ceiling on a version's `displayName`, which is what `manage_workflow`'s
+ * `summarizeFlow` reports as a flow's `name` (#598).
+ *
+ * `name` is the half of #598 that is easy to wave through, because a workflow
+ * name looks operator-written. It is not: this route family let a caller write
+ * any string of any length, `compose` sets it from the composer LLM's own
+ * output, and it reaches the chat model on nine actions. An uncapped one also
+ * overran the tool's own listing budget -- see `FLOW_NAME_MAX_CHARS` in
+ * `actions/tools/manage-workflow.ts`, which is the read-side bound that covers
+ * rows written before this check existed.
+ *
+ * 512 here against a 200-character read cap on purpose: the API and the
+ * dashboard may reasonably carry a longer name than the prompt wants to spend
+ * tokens on, and the two caps answer different questions.
+ */
+const FLOW_DISPLAY_NAME_MAX_CHARS = 512;
+
+/**
+ * The caller's `displayName`, or the refusal. Same shape as
+ * `readFlowWriteBody`, and it returns the NARROWED string so a caller cannot
+ * validate and then pass the unnarrowed value on.
+ */
+function validDisplayName(raw: unknown): { name: string } | { error: Response } {
+  if (typeof raw !== "string" || raw.length === 0) {
+    return { error: err("displayName is required and must be a non-empty string") };
+  }
+  if (raw.length > FLOW_DISPLAY_NAME_MAX_CHARS) {
+    return {
+      error: err(
+        `displayName is ${raw.length} characters; the limit is ${FLOW_DISPLAY_NAME_MAX_CHARS}`,
+        413,
+      ),
+    };
+  }
+  return { name: raw };
+}
+
+/**
+ * Why a caller's `metadata` is refused, or null when it is acceptable.
+ *
+ * The type check is not cosmetic: `body.metadata` was only ever CAST to
+ * `Record<string, unknown> | null`, so a string, a number or an array all
+ * reached the column and came back out of `parseFlowMetadata` as something that
+ * is not an object, in a field every reader treats as one.
+ *
+ * The prototype-key rejection is DEFENCE IN DEPTH and is not claimed to be more
+ * than that. `JSON.parse` defines `__proto__` as an ordinary own property
+ * rather than invoking the setter, and all three readers nest the value and
+ * re-serialize it rather than merging it, so such a key is inert in this repo
+ * today. It stops being inert if a consumer ever `Object.assign`s it -- and one
+ * consumer is outside this repo, since `workflows/sandbox-api/routes/flows.ts`
+ * hands the value to the vendored activepieces engine. Only TOP-LEVEL keys are
+ * refused, so this is a cheap narrowing of that surface and not a guarantee
+ * about nested ones. No writer in the repo uses these keys.
+ *
+ * Returns the HTTP status with the message because the two rejections are
+ * different answers: a wrong shape is the caller's bug (400), and an oversized
+ * document is a policy limit (413, as every other size refusal in this file
+ * returns).
+ */
+function metadataRejection(metadata: unknown): { message: string; status: number } | null {
+  if (metadata === null || metadata === undefined) return null;
+  if (typeof metadata !== "object" || Array.isArray(metadata)) {
+    return { message: "metadata must be a JSON object or null", status: 400 };
+  }
+  for (const key of ["__proto__", "constructor", "prototype"]) {
+    if (Object.prototype.hasOwnProperty.call(metadata, key)) {
+      return { message: `metadata must not carry a ${key} key`, status: 400 };
+    }
+  }
+  let serialized: string;
+  try {
+    serialized = JSON.stringify(metadata);
+  } catch {
+    // Catches a circular reference AND stack exhaustion from an extremely
+    // deeply nested document, which `JSON.stringify` raises as a RangeError
+    // where `JSON.parse` survives it. Either way the caller gets a 400 instead
+    // of the handler throwing into a 500.
+    return { message: "metadata must be JSON-serializable", status: 400 };
+  }
+  if (serialized.length > FLOW_METADATA_MAX_CHARS) {
+    return {
+      message: `metadata is ${serialized.length} characters; the limit is ${FLOW_METADATA_MAX_CHARS}`,
+      status: 413,
+    };
+  }
+  return null;
+}
+
 const trapErrors = async (fn: () => Promise<Response> | Response): Promise<Response> => {
   try {
     return await fn();
@@ -886,8 +1067,13 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         trapErrors(() => {
           const params = new URL(req.url).searchParams;
           const status = params.get("status");
-          const limit = numParam(params.get("limit")) ?? 100;
-          const offset = numParam(params.get("offset")) ?? 0;
+          // Clamped the way the `/readiness` sibling twelve lines up clamps,
+          // and for a reason #598 made concrete: `serializeFlow` emits each
+          // row's FULL metadata, including rows written before the cap existed
+          // and deliberately never migrated. An unclamped `limit` let one
+          // authenticated request pull every one of them at once.
+          const limit = Math.max(1, Math.min(100, Math.trunc(numParam(params.get("limit")) ?? 100)));
+          const offset = Math.max(0, Math.trunc(numParam(params.get("offset")) ?? 0));
           const opts: { status?: FlowStatus; limit: number; offset: number } = { limit, offset };
           if (status !== null) {
             if (!isStatus(status)) return err(`status must be ENABLED|DISABLED`, 400);
@@ -898,21 +1084,29 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
       POST: (req) =>
         trapErrors(async () => {
-          const body = (await req.json()) as {
+          const read = await readFlowWriteBody(req);
+          if ("error" in read) return read.error;
+          const body = read.body as {
             displayName?: string;
             externalId?: string;
             metadata?: Record<string, unknown> | null;
           };
-          if (!body.displayName || typeof body.displayName !== "string") {
-            return err("displayName is required");
-          }
+          const named = validDisplayName(body.displayName);
+          if ("error" in named) return named.error;
+          const rejected = metadataRejection(body.metadata);
+          if (rejected) return err(rejected.message, rejected.status);
+          // `externalId` is deliberately NOT validated here. #598's subject is
+          // the `flow` columns that reach the chat model through
+          // `summarizeFlow`, and `externalId` is not one of them -- it is
+          // guarded by `uq_flow_external` instead. Looked at and left, so the
+          // enumeration above is a decision rather than an oversight.
           const flow = createFlow({
             externalId: body.externalId,
             metadata: body.metadata ?? null,
           });
           const version = createDraftVersion({
             flowId: flow.id,
-            displayName: body.displayName,
+            displayName: named.name,
             // Seed an EMPTY (manual) trigger so the visual editor has a valid
             // FlowStepNode to render on a freshly created flow. Without this
             // the trigger defaults to `{}`, which the editor can't traverse
@@ -950,17 +1144,23 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       PATCH: (req) =>
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          const body = (await req.json()) as {
+          const read = await readFlowWriteBody(req);
+          if ("error" in read) return read.error;
+          const body = read.body as {
             status?: FlowStatus;
             metadata?: Record<string, unknown> | null;
           };
-          if (body.status !== undefined) {
-            if (!isStatus(body.status)) return err("status must be ENABLED|DISABLED");
-            updateFlowStatus(id, body.status);
+          // BOTH fields are validated before EITHER is written. They used to be
+          // checked one at a time as they were applied, so a request carrying a
+          // good `status` and a bad `metadata` changed the status and then
+          // failed -- a partial write the caller was never told about.
+          if (body.status !== undefined && !isStatus(body.status)) {
+            return err("status must be ENABLED|DISABLED");
           }
-          if (body.metadata !== undefined) {
-            updateFlowMetadata(id, body.metadata);
-          }
+          const rejected = metadataRejection(body.metadata);
+          if (rejected) return err(rejected.message, rejected.status);
+          if (body.status !== undefined) updateFlowStatus(id, body.status);
+          if (body.metadata !== undefined) updateFlowMetadata(id, body.metadata);
           if (body.status !== undefined) refreshTrigger(id);
           const flow = getFlow(id);
           return flow ? ok(serializeFlow(flow)) : err("flow not found", 404);
@@ -991,10 +1191,13 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             uiMeta?: FlowVersionUiMeta;
           };
           if (!getFlow(id)) return err("flow not found", 404);
-          if (!body.displayName) return err("displayName is required");
+          // Used to be a bare truthiness check, so a non-string of any length
+          // reached the column that becomes a flow's model-facing `name` (#598).
+          const named = validDisplayName(body.displayName);
+          if ("error" in named) return named.error;
           const version = createDraftVersion({
             flowId: id,
-            displayName: body.displayName,
+            displayName: named.name,
             trigger: body.trigger,
           });
           if (body.uiMeta) upsertFlowVersionUiMeta(version.id, body.uiMeta);
@@ -1021,7 +1224,21 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
             agentIds?: string[];
             uiMeta?: FlowVersionUiMeta;
           };
+          // `displayName` is OPTIONAL on a patch, so it is validated only when
+          // present -- but it used to reach `updateDraftVersion` with no
+          // validation at all, which made this the loosest of the three writers
+          // of a flow's model-facing `name` (#598). Checked before the
+          // transaction, so a bad name cannot half-apply a patch.
           const { uiMeta, ...versionPatch } = body;
+          if (body.displayName !== undefined) {
+            const named = validDisplayName(body.displayName);
+            if ("error" in named) return named.error;
+            // The NARROWED value goes on, so this cannot validate one string
+            // and forward another. Identical today because the validator
+            // transforms nothing; the point is that it stays true if it ever
+            // does.
+            versionPatch.displayName = named.name;
+          }
           const v = withOwnedFlowVersion(id, versionId, () => {
             const updated = updateDraftVersion(versionId, versionPatch);
             // The content and its editor layout must commit together.

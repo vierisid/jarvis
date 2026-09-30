@@ -71,6 +71,7 @@ function now(): number {
 }
 
 export function createFlow(input: CreateFlowInput = {}): FlowRow {
+  assertFlowMetadata(input.metadata);
   const id = apId();
   const externalId = input.externalId ?? id;
   const projectId = input.projectId ?? DEFAULT_IDS.project;
@@ -197,6 +198,7 @@ export function setPublishedVersion(id: string, versionId: string | null): void 
 }
 
 export function updateFlowMetadata(id: string, metadata: Record<string, unknown> | null): void {
+  assertFlowMetadata(metadata);
   const res = db().run(
     `UPDATE flow SET metadata = ?, updated = ? WHERE id = ?`,
     [metadata ? JSON.stringify(metadata) : null, now(), id],
@@ -208,7 +210,49 @@ export function deleteFlow(id: string): void {
   db().run(`DELETE FROM flow WHERE id = ?`, [id]);
 }
 
+/**
+ * The column's invariant, enforced at the sink rather than trusted (#598).
+ *
+ * `metadata` reaches a chat prompt through `manage_workflow`'s `summarizeFlow`,
+ * the dashboard through the API's `serializeFlow`, and the vendored engine
+ * through the sandbox API's flow listing -- and every one of those treats it as
+ * an object. #598 refuses a non-object at the two HTTP routes, which is where a
+ * caller gets a useful 400; this is the backstop, so a future writer (a restore
+ * path, a new route, an eval harness) cannot quietly reintroduce the problem
+ * one layer below the validation.
+ */
+function assertFlowMetadata(metadata: unknown): void {
+  if (metadata === null || metadata === undefined) return;
+  if (typeof metadata !== "object" || Array.isArray(metadata)) {
+    throw new Error("flow metadata must be a JSON object or null");
+  }
+}
+
+/**
+ * Read `metadata` back, defensively.
+ *
+ * This used to be a bare `JSON.parse(row.metadata) as Record<string, unknown>`
+ * -- an assertion with nothing behind it. Both halves now hold:
+ *
+ *   - the `try` covers a column that is not valid JSON. Only `JSON.stringify`
+ *     has ever written it, so that should be impossible; "should be impossible"
+ *     was also the argument for the cast below, and a throw here would take out
+ *     every `list` for one bad row.
+ *   - a value that parses to something that is NOT a plain object returns null.
+ *     #598 caps and type-checks the write path, but rows written before it
+ *     exists are deliberately not migrated, so a legacy row can still hold
+ *     `"just text"`, `7`, `true` or an array. Returning null turns an
+ *     open-ended type confusion into one known-safe value for all three readers
+ *     at once, and costs nothing for a correct row.
+ */
 export function parseFlowMetadata(row: FlowRow): Record<string, unknown> | null {
   if (!row.metadata) return null;
-  return JSON.parse(row.metadata) as Record<string, unknown>;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(row.metadata);
+  } catch {
+    return null;
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) return null;
+  return parsed as Record<string, unknown>;
 }

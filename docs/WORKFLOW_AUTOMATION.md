@@ -293,23 +293,111 @@ Four things about it are load bearing:
   and a card on every workflow read is exactly the frequency problem
   `TAINT_EXEMPT_TOOLS` exists for.
 
-Two model boundaries inside the same tool are **left unframed on purpose**, and
-neither is captured step output:
+### The other six actions frame the same way (#598)
 
-- `summarizeFlow`'s `metadata` and `name`, which ride on `list`, `create`,
-  `enable`, `disable`, `publish` and `compose`. `metadata` is a raw `JSON.parse`
-  of a column that `workflows/api/routes.ts` writes unvalidated and uncapped, as
-  are a run's `triggeredBy` and `environment` (those three reads now frame them
-  incidentally). Reachable only by a writer on the single-tenant localhost API;
-  worth its own issue rather than a silent widening of #582.
-- `publish`'s `warnings`, which interpolate sidecar-self-reported machine names
-  and step parameter values, and `compose`'s `errors` / `rawResponse`, which are
-  the composer LLM's own text.
+The two boundaries #582 enumerated and left open are now closed, and they were
+the more routine exposure of the two.
+
+`summarizeFlow`'s `metadata` and `name` ride on `list`, `create`, `enable`,
+`disable`, `publish` and `compose`. `metadata` is a raw `JSON.parse` of a column
+that `workflows/api/routes.ts` writes unvalidated and uncapped, as are a run's
+`triggeredBy` and `environment`, so whatever an API caller put there arrived as
+trusted-looking tool output on every `list` -- a far more frequent call than
+`get_run`. `name` is a `displayName`, and not simply operator-written either:
+two of its three writers are that same uncapped `POST /api/workflows` body and
+the composer LLM's own `displayName` on `compose`.
+
+All six now return **one framed block wrapping the action's JSON**, which is
+#582's shape unchanged and makes the per-field question moot -- the whole
+document is inside the block however each field was written. Nine of the eleven
+actions frame now. It subsumes, for free, the three lower-value boundaries #582
+deferred (`publish`'s `warnings`, `compose`'s `errors` / `rawResponse`) plus one
+it did not enumerate at all: `compose`'s `suggestedInstalls`, whose
+`displayName` is third-party package metadata from the community piece catalog.
+
+Taint stays **against** and `UNTRUSTED_TOOL_NAMES` is **unchanged**, for #582's
+reasons exactly; `manage_workflow` stays at reach `fetch`.
+
+Three things about #598 are load bearing beyond the frame itself:
+
+- **Both caller-written fields are capped at both ends.** On the way in, the
+  write routes reject a `metadata` that is not an object, carries a top-level
+  `__proto__` / `constructor` / `prototype` key, or exceeds 16 KB, and reject a
+  `displayName` that is not a non-empty string or exceeds 512 characters. All of
+  that is close to free, because no shipped caller writes `metadata` at all (the
+  dashboard POSTs `{ displayName }`, PATCHes `{ status }`, and keeps its editor
+  state in `flow_version_ui_meta`) and no real workflow name is that long. A
+  256 KB body cap sits in front of the two FLOW-LEVEL routes, checked on
+  `content-length` and then on the read text before anything is parsed, the way
+  the waitpoint ingress does it -- the two version routes still parse unbounded
+  and are left for their own issue, because they carry the whole step graph and a
+  limit sized for a flow row would be a guess there.
+  On the way out, `summarizeFlow` withholds a `metadata` over 512 characters
+  behind a **sibling** `metadataOmitted: { chars }`, and truncates a `name` over
+  200 characters behind a sibling `nameTruncated: { chars }`.
+
+  Both ends are needed: a write cap does nothing for a row already over it, and
+  the read cap is what keeps a legacy row out of the prompt. Rows already over
+  the write cap are left exactly as they are -- no migration -- and are still
+  served in full to the API, the dashboard and the flow engine, because the read
+  caps live in `summarizeFlow`, which nothing outside the chat tool calls.
+  `parseFlowMetadata` is also defensive now: a column that is not valid JSON, or
+  parses to something that is not an object, reads back as `null` instead of
+  being cast to an object it is not. The notices are siblings rather than keys
+  inside `metadata` because the writer controls that object's contents and could
+  otherwise forge them. `chars`, not `bytes`, because the comparison is against
+  a UTF-16 length.
+- **`list` is bounded by construction.** It emits whole rows until a character
+  budget is spent and returns `{ returned, total, truncated, flows }`. Without
+  it, framing would have sliced the listing MID-OBJECT at somewhere between 12
+  and 27 workflows and handed the model a severed JSON document.
+
+  Two details are load bearing, and both come from getting this wrong first.
+  Bounding a row needs BOTH caller-written fields capped: while `name` was
+  uncapped, a single 20,000-character `displayName` overran the budget on the
+  first row, and a version write bumps `flow.updated` through `touchFlow`, so one
+  request both set the long name and moved the row to the head of `ORDER BY
+  updated DESC`. And the counters are emitted BEFORE `flows`, because
+  `JSON.stringify` preserves insertion order -- counters after the array are the
+  first thing any truncation deletes.
+
+  `truncated` / `total` is what defuses a **listing-suppression** primitive:
+  `listFlows` is `ORDER BY updated DESC`, and both a metadata write and a version
+  write bump `updated`, so an API caller can push their own rows to the head of
+  the listing and shove legitimate flows off the end. That is true today at the
+  6000-char dispatch cap; being told rows were withheld is what stops it being
+  silent, which is exactly what a truncation that ate the counters would have
+  undone. The flow listing route's `limit` is clamped to 100 for the related
+  reason that `serializeFlow` emits every row's full, unmigrated metadata.
+- **The throw paths are the one thing left open**, and are now filed rather than
+  unlisted. `assertVersionReady` / `assertFlowReady` raise a
+  `WorkflowReadinessError` interpolating a step name, and
+  `assertCodeStepsAllowed` raises `refusalMessage(flowId, intent, stepNames)`;
+  step names come from the composer LLM or an uncapped
+  `POST /api/workflows/:id/versions` body, which is the same writer class as
+  `metadata`. They reach the model unframed because `markUntrustedToolFailure`
+  is inert for a tool outside `UNTRUSTED_TOOL_NAMES`. Deferred on blast radius,
+  not cost: framing a throw means catching it and returning the text, which
+  changes what `registry.execute` promises and contradicts a dozen deliberate
+  `rejects.toThrow` assertions.
 
 One residual worth knowing, and it is a **truncation** hazard rather than a
 boundary one. Two consumers persist a 2000-character prefix of a tool result,
 which lands *inside* a ~4300-character framed return: it keeps the open
 delimiter and drops the close.
+
+**#598 widens this, and says so rather than inheriting it quietly.** Block
+overhead is ~267-327 characters at these labels, so a 2000-character prefix
+holds a complete block only while the payload stays under ~1,700. For #582's
+three reads a half block was a large-payload edge case; for `list` it is the
+ordinary case on any real install (~1,700 characters is about 8 flow summaries).
+All nine framed actions travel that path, reads included -- the floor is
+`write_data`, which is taint-governed, and the gate returns null for the reads so
+they pay the floor -- so the taint floor is not a discriminator between them;
+`list`'s payload size is. Accepted with the trade stated: bounding `list` under ~1,650
+would show the model about 8 of its own workflows, and the alternative is the
+slice-site fix below. The cost stays the integrity nuisance described here and
+never a boundary escape.
 
 - `authority/deferred-executor.ts` writes `result.slice(0, 2000)` to
   `approval_requests.execution_result`, and `manage_workflow`'s floor

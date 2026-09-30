@@ -1,5 +1,5 @@
 import { describe, expect, test, beforeEach, afterEach } from "bun:test";
-import { closeWorkflowDb, DEFAULT_IDS, initWorkflowDb } from "../index";
+import { closeWorkflowDb, DEFAULT_IDS, getWorkflowDb, initWorkflowDb } from "../index";
 import { setEncryptionKey } from "../encryption";
 import {
   createFlow,
@@ -78,6 +78,46 @@ describe("flow repo", () => {
     updateFlowMetadata(flow.id, { tag: "evening", priority: 1 });
     const got = getFlow(flow.id);
     expect(got && parseFlowMetadata(got)).toEqual({ tag: "evening", priority: 1 });
+  });
+
+  /**
+   * #598. The column reaches a chat prompt through `manage_workflow`'s
+   * `summarizeFlow`, the dashboard through the API's `serializeFlow`, and the
+   * vendored engine through the sandbox API -- and all three treat it as an
+   * object. The HTTP routes refuse a non-object, which is where a caller gets a
+   * useful 400; these are the sink-level backstop and the defensive read, so a
+   * future writer cannot reintroduce the problem one layer below the validation.
+   */
+  test("both write sinks refuse a metadata that is not an object", () => {
+    // `createFlow` is a sink too, not just `updateFlowMetadata`: a restore path
+    // or an eval harness reaches for it directly.
+    expect(() => createFlow({ metadata: "just text" as never })).toThrow(/must be a JSON object or null/);
+    expect(() => createFlow({ metadata: [1, 2] as never })).toThrow(/must be a JSON object or null/);
+    const flow = createFlow();
+    expect(() => updateFlowMetadata(flow.id, "just text" as never)).toThrow(/must be a JSON object or null/);
+    expect(() => updateFlowMetadata(flow.id, 7 as never)).toThrow(/must be a JSON object or null/);
+    // null still clears, and an object still writes.
+    updateFlowMetadata(flow.id, null);
+    expect(parseFlowMetadata(getFlow(flow.id)!)).toBeNull();
+  });
+
+  /**
+   * The rows the defensive read exists for. Because the sinks now refuse a
+   * non-object, raw SQL is the only honest way to build the fixture -- which is
+   * exactly how a pre-#598 row got there.
+   */
+  test("a legacy row that is not a JSON object reads back as null, not as a lie", () => {
+    const flow = createFlow();
+    for (const stored of ['"just text"', "7", "true", "[1,2]", "not json at all", ""]) {
+      getWorkflowDb().run(`UPDATE flow SET metadata = ? WHERE id = ?`, [stored, flow.id]);
+      // The bare `JSON.parse(...) as Record<string, unknown>` this replaced
+      // either threw (unparseable) or handed every reader a non-object in a
+      // field they all treat as one.
+      expect(parseFlowMetadata(getFlow(flow.id)!)).toBeNull();
+    }
+    // Still not vacuous: a real object round-trips.
+    getWorkflowDb().run(`UPDATE flow SET metadata = ? WHERE id = ?`, ['{"ok":1}', flow.id]);
+    expect(parseFlowMetadata(getFlow(flow.id)!)).toEqual({ ok: 1 });
   });
 
   test("deleteFlow removes the row", () => {
