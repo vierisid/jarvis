@@ -69,9 +69,24 @@ export class JarvisToolRegistryAdapter implements PieceToolRegistry {
     //     framed block wrapping the action's JSON, capped inside the tool so
     //     the dispatch's own cap cannot slice the closing delimiter off. It did
     //     NOT join `UNTRUSTED_TOOL_NAMES`, so nothing here changes.
+    //   - CLOSED by #598, which was the follow-up #582 filed against itself and
+    //     the more routine of the two: `summarizeFlow`'s `metadata` (a raw
+    //     `JSON.parse` of a column the workflows API writes unvalidated and
+    //     uncapped) and `name` reached the chat model unframed on `list`,
+    //     `create`, `enable`, `disable`, `publish` and `compose`. Those six now
+    //     frame the same way, so nine of the eleven actions do, and `metadata`
+    //     is additionally capped on the way in AND bounded per flow on the way
+    //     out. Also NOT in `UNTRUSTED_TOOL_NAMES`, so again nothing here
+    //     changes.
     //   - STILL OPEN, and still without its own issue: an author-composed
     //     `jarvis-ask` prompt can interpolate a step result.
     //     docs/WORKFLOW_AUTOMATION.md lists it and says so.
+    //   - STILL OPEN, filed by #598 as the one thing it left: the THROW paths of
+    //     `manage_workflow`'s `run`, `enable` and `publish` carry step names
+    //     from `flow-readiness.ts` and `flow-code-steps.ts`, which the composer
+    //     LLM or an uncapped versions-API body wrote. Framing a throw means
+    //     catching it and returning the text, which changes what
+    //     `registry.execute` promises; see the enumeration on `framedForModel`.
     //
     // WHY THE VALUE MUST NOT BE STRINGIFIED. It becomes a durable EFFECT
     // RECEIPT: service-backends.ts passes it to `effects.invoke` as the result a

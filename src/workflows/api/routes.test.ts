@@ -9,6 +9,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { closeWorkflowDb, initWorkflowDb } from "../db/index";
 import { setEncryptionKey } from "../db/encryption";
 import { queueStats } from "../db/repos/job-queue";
+import { updateFlowMetadata } from "../db/repos/flow";
 import {
   createWorkflowRoutes,
   WAITPOINT_RESUME_MAX_BODY_BYTES,
@@ -66,6 +67,269 @@ async function callJson(handler: unknown, req: Request | (Request & { params: Re
   const res = await fn(req as Request);
   return { status: res.status, body: await res.json() };
 }
+
+/**
+ * #598. `flow.metadata` was a verbatim caller-controlled JSON document of
+ * unbounded size: both writers cast the request body and passed
+ * `body.metadata` straight to `JSON.stringify`, with no type check and no size
+ * limit, and `manage_workflow`'s `summarizeFlow` then read it back with a raw
+ * `JSON.parse` and put it in chat tool output.
+ *
+ * This is the write half. The read half -- a much tighter per-flow cap, which is
+ * what covers rows written before this existed -- is in
+ * `actions/tools/manage-workflow.test.ts`. Both halves are needed: a write cap
+ * does nothing for a row already over it.
+ */
+describe("#598: flow metadata is validated and bounded on the way in", () => {
+  const create = (body: unknown) =>
+    callJson(routes["/api/workflows"]?.POST, plainReq("POST", "http://x/api/workflows", body));
+  const patch = (id: string, body: unknown) =>
+    callJson(
+      routes["/api/workflows/:id"]?.PATCH,
+      reqWithParams("PATCH", `http://x/api/workflows/${id}`, { id }, body),
+    );
+
+  async function makeFlow(): Promise<string> {
+    const { body } = await create({ displayName: "host" });
+    return (body as { flow: { id: string } }).flow.id;
+  }
+
+  test("a small object is accepted on both writers, and round-trips", async () => {
+    const metadata = { opportunityId: "opp_1", compositionId: "cmp_1", feedbackId: "fbk_1" };
+    const created = await create({ displayName: "with metadata", metadata });
+    expect(created.status).toBe(201);
+    expect((created.body as { flow: { metadata: unknown } }).flow.metadata).toEqual(metadata);
+
+    const patched = await patch((created.body as { flow: { id: string } }).flow.id, { metadata: { tag: "x" } });
+    expect(patched.status).toBe(200);
+    expect((patched.body as { metadata: unknown }).metadata).toEqual({ tag: "x" });
+  });
+
+  test("null is accepted and clears the column", async () => {
+    const { body } = await create({ displayName: "clearable", metadata: { tag: "x" } });
+    const id = (body as { flow: { id: string } }).flow.id;
+    const cleared = await patch(id, { metadata: null });
+    expect(cleared.status).toBe(200);
+    expect((cleared.body as { metadata: unknown }).metadata).toBeNull();
+  });
+
+  /**
+   * The type check is not cosmetic. `body.metadata` was only ever CAST to
+   * `Record<string, unknown> | null`, so each of these reached the column and
+   * came back out of `parseFlowMetadata` as something that is not an object, in
+   * a field every reader treats as one.
+   */
+  test.each([
+    ["a string", "just text"],
+    ["a number", 7],
+    ["an array", [{ tag: "x" }]],
+    ["a boolean", true],
+  ])("%s is refused with 400 rather than stored", async (_label, metadata) => {
+    const created = await create({ displayName: "bad type", metadata });
+    expect(created.status).toBe(400);
+    expect((created.body as { error: string }).error).toMatch(/metadata must be a JSON object or null/);
+
+    const id = await makeFlow();
+    const patched = await patch(id, { metadata });
+    expect(patched.status).toBe(400);
+    expect((patched.body as { error: string }).error).toMatch(/metadata must be a JSON object or null/);
+  });
+
+  /**
+   * Prototype keys are DEFENCE IN DEPTH, not a claim. `JSON.parse` defines
+   * `__proto__` as an ordinary own property rather than invoking the setter, and
+   * all three readers nest the value and re-serialize it rather than merging it,
+   * so such a key is inert in this repo today. It stops being inert if a
+   * consumer ever `Object.assign`s it -- and one consumer is the vendored
+   * activepieces engine, via the sandbox API. Only TOP-LEVEL keys are refused.
+   */
+  test.each(["__proto__", "constructor", "prototype"])(
+    "a top-level %s key is refused",
+    async (key) => {
+      const { status, body } = await create({
+        displayName: "polluter",
+        metadata: JSON.parse(`{"${key}": {"polluted": true}}`),
+      });
+      expect(status).toBe(400);
+      expect((body as { error: string }).error).toMatch(new RegExp(`must not carry a ${key === "__proto__" ? "__proto__" : key} key`));
+    },
+  );
+
+  test("an oversized document is refused with 413, naming both sizes", async () => {
+    const metadata = { pad: "z".repeat(20_000) };
+    const created = await create({ displayName: "too big", metadata });
+    // 413, not 400: every other size refusal in this file is a 413, and a
+    // client should be able to tell "wrong shape" from "too big" by status.
+    expect(created.status).toBe(413);
+    expect((created.body as { error: string }).error).toMatch(/metadata is \d+ characters; the limit is 16384/);
+
+    const id = await makeFlow();
+    const patched = await patch(id, { metadata });
+    expect(patched.status).toBe(413);
+    expect((patched.body as { error: string }).error).toMatch(/metadata is \d+ characters; the limit is 16384/);
+  });
+
+  /**
+   * The boundary, pinned in both directions. Without this an off-by-one between
+   * `>` and `>=` is invisible, and nothing stops a future change tightening the
+   * constant -- the accept case is what makes 16 KB a real commitment rather
+   * than an upper bound nobody tests.
+   */
+  test("exactly at the limit is accepted; one character over is refused", async () => {
+    // `{"pad":""}` is 10 characters of envelope around the value.
+    const atLimit = { pad: "z".repeat(16_384 - 10) };
+    const accepted = await create({ displayName: "exact", metadata: atLimit });
+    expect(accepted.status).toBe(201);
+    expect(JSON.stringify((accepted.body as { flow: { metadata: unknown } }).flow.metadata).length).toBe(16_384);
+
+    const over = { pad: "z".repeat(16_384 - 9) };
+    const refused = await create({ displayName: "one over", metadata: over });
+    expect(refused.status).toBe(413);
+  });
+
+  test("an empty object is accepted and stored as an empty object", async () => {
+    const { status, body } = await create({ displayName: "empty meta", metadata: {} });
+    expect(status).toBe(201);
+    // `createFlow`'s truthiness check treats `{}` as a value, so it is stored
+    // as `{}` rather than collapsing to null.
+    expect((body as { flow: { metadata: unknown } }).flow.metadata).toEqual({});
+  });
+
+  /**
+   * Depth rather than size, which is the shape that gets past a byte check and
+   * then blows up somewhere else. `JSON.parse` survives far deeper nesting than
+   * `JSON.stringify`, which raises a RangeError.
+   *
+   * The body is built as RAW TEXT, because `JSON.stringify` cannot serialize it
+   * -- which is the point, and is also why the test helper cannot be used.
+   *
+   * The assertion is "refused, and never a 500", not a specific status: at ~5
+   * characters per level any document deep enough to overflow `JSON.stringify`
+   * is also past the 256 KB body cap, so in practice the body cap catches it
+   * first and the serializability branch in `metadataRejection` is defence in
+   * depth behind it. Pinning 413 here would be pinning which guard happens to
+   * fire.
+   */
+  test("a deeply nested body is refused, and never becomes a 500", async () => {
+    const depth = 100_000;
+    const raw = `{"displayName":"deep","metadata":${'{"n":'.repeat(depth)}1${"}".repeat(depth)}}`;
+    const res = await (routes["/api/workflows"]?.POST as (r: Request) => Promise<Response>)(
+      new Request("http://x/api/workflows", {
+        method: "POST",
+        body: raw,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+    expect(res.status).toBeGreaterThanOrEqual(400);
+    expect(res.status).toBeLessThan(500);
+  });
+
+  test("a body larger than the route cap is refused before it is parsed", async () => {
+    const huge = { displayName: "big body", metadata: { pad: "z".repeat(300_000) } };
+    const { status, body } = await create(huge);
+    expect(status).toBe(413);
+    expect((body as { error: string }).error).toMatch(/request body too large/);
+  });
+
+  /**
+   * The deliberate no-migration decision, pinned so a later "fix" to
+   * `serializeFlow` cannot quietly change it. A row written before the cap
+   * existed keeps being served IN FULL here; what keeps it out of the chat
+   * prompt is the much tighter per-flow cap in `summarizeFlow`, which is
+   * asserted in `actions/tools/manage-workflow.test.ts`.
+   */
+  test("a legacy oversized row is left alone and still served in full", async () => {
+    const id = await makeFlow();
+    const legacy = { pad: "L".repeat(40_000) };
+    // Straight past the route, the way a pre-#598 write landed.
+    updateFlowMetadata(id, legacy);
+    const { status, body } = await callJson(
+      routes["/api/workflows/:id"]?.GET,
+      reqWithParams("GET", `http://x/api/workflows/${id}`, { id }),
+    );
+    expect(status).toBe(200);
+    expect((body as { flow: { metadata: unknown } }).flow.metadata).toEqual(legacy);
+  });
+
+  /**
+   * `displayName` is the other caller-written field that reaches the model as a
+   * flow's `name`, and it was the looser of the two: this route checked only
+   * that it was a non-empty string, `POST .../versions` checked only
+   * truthiness, and `PATCH .../versions/:versionId` checked nothing at all.
+   */
+  test("displayName is type-checked and bounded on the flow create route", async () => {
+    expect((await create({ displayName: 42 })).status).toBe(400);
+    expect((await create({ displayName: "" })).status).toBe(400);
+    const long = await create({ displayName: "N".repeat(1000) });
+    expect(long.status).toBe(413);
+    expect((long.body as { error: string }).error).toMatch(/displayName is 1000 characters; the limit is 512/);
+    expect((await create({ displayName: "N".repeat(512) })).status).toBe(201);
+  });
+
+  test("displayName is bounded on both version write routes too", async () => {
+    const id = await makeFlow();
+    const postVersion = (b: unknown) =>
+      callJson(
+        routes["/api/workflows/:id/versions"]?.POST,
+        reqWithParams("POST", `http://x/api/workflows/${id}/versions`, { id }, b),
+      );
+    expect((await postVersion({ displayName: 42 })).status).toBe(400);
+    expect((await postVersion({ displayName: "N".repeat(1000) })).status).toBe(413);
+
+    const created = await postVersion({ displayName: "fine" });
+    const versionId = (created.body as { id: string }).id;
+    const patchVersion = (b: unknown) =>
+      callJson(
+        routes["/api/workflows/:id/versions/:versionId"]?.PATCH,
+        reqWithParams(
+          "PATCH",
+          `http://x/api/workflows/${id}/versions/${versionId}`,
+          { id, versionId },
+          b,
+        ),
+      );
+    expect((await patchVersion({ displayName: 42 })).status).toBe(400);
+    expect((await patchVersion({ displayName: "N".repeat(1000) })).status).toBe(413);
+    // Omitted is still a no-op, since displayName is optional on a patch.
+    expect((await patchVersion({ valid: true })).status).toBe(200);
+  });
+
+  test("the flow listing clamps limit, so one request cannot pull every row", async () => {
+    const { status, body } = await callJson(
+      routes["/api/workflows"]?.GET,
+      plainReq("GET", "http://x/api/workflows?limit=100000"),
+    );
+    expect(status).toBe(200);
+    expect((body as unknown[]).length).toBeLessThanOrEqual(100);
+  });
+
+  /**
+   * The atomicity half. `status` and `metadata` used to be checked one at a
+   * time AS they were applied, so a request carrying a good status and a bad
+   * metadata changed the status and then failed -- a partial write the caller
+   * was never told about.
+   */
+  test("a rejected metadata leaves a valid status in the same PATCH unapplied", async () => {
+    const id = await makeFlow();
+    const { status, body } = await patch(id, { status: "ENABLED", metadata: "not an object" });
+    expect(status).toBe(400);
+    expect((body as { error: string }).error).toMatch(/metadata must be a JSON object/);
+
+    const after = await callJson(
+      routes["/api/workflows/:id"]?.GET,
+      reqWithParams("GET", `http://x/api/workflows/${id}`, { id }),
+    );
+    expect((after.body as { flow: { status: string } }).flow.status).toBe("DISABLED");
+  });
+
+  test("an omitted metadata still leaves the column alone", async () => {
+    const { body } = await create({ displayName: "keeps", metadata: { keep: "me" } });
+    const id = (body as { flow: { id: string } }).flow.id;
+    const patched = await patch(id, { status: "ENABLED" });
+    expect(patched.status).toBe(200);
+    expect((patched.body as { metadata: unknown }).metadata).toEqual({ keep: "me" });
+  });
+});
 
 describe("workflow API: piece catalog", () => {
   test("returns [] when no registry is wired", async () => {

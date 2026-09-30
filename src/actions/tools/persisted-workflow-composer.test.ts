@@ -9,6 +9,7 @@ import { createCompositionJournal, getWorkflowComposition } from "../../workflow
 import { sampleCatalog } from "../../workflows/runtime/test-fixtures";
 import { composePersistedFlow } from "./persisted-workflow-composer";
 import { createManageWorkflowTool } from "./manage-workflow";
+import { UNTRUSTED_OPEN } from "../../roles/untrusted";
 import { jobSpecification, type ComposerLlmClient } from "./workflow-composer";
 
 let directory: string;
@@ -42,7 +43,12 @@ test("chat commits the specification and repair checkpoint before the next LLM c
     return { text: ++calls === 1 ? "{unfinished" : valid };
   } };
   const tool = createManageWorkflowTool({ llm, pieceRegistry: sampleCatalog() });
-  const result = JSON.parse(await tool.execute({ action: "compose", ...request }) as string);
+  // #598: `compose` returns one untrusted-content block wrapping its JSON, so
+  // the document is the block's payload. Lenient strip; the strict frame
+  // assertions live in `manage-workflow.test.ts`.
+  const returned = await tool.execute({ action: "compose", ...request }) as string;
+  const lines = returned.split("\n");
+  const result = JSON.parse(lines[1]?.startsWith(UNTRUSTED_OPEN) ? lines.slice(2, -1).join("\n") : returned);
   expect(result.ok).toBe(true);
   expect(calls).toBe(2);
   const metadata = JSON.parse(getFlow(result.flow.id)!.metadata!);
