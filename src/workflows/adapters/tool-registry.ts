@@ -10,6 +10,7 @@ import type {
 } from "../jarvis-pieces/types";
 import type { ToolRegistry } from "../../actions/tools/registry";
 import { dropTrustedTrailer } from "../../roles/untrusted.ts";
+import { withoutTemplateDelivery } from "../../actions/tools/template-delivery-scope.ts";
 
 export class JarvisToolRegistryAdapter implements PieceToolRegistry {
   constructor(private readonly registry: ToolRegistry) {}
@@ -83,7 +84,20 @@ export class JarvisToolRegistryAdapter implements PieceToolRegistry {
     // directly against repo-authored instructions with no boundary between them.
     // A flow has no model to read a playbook, so dropping it costs nothing here.
     // See `dropTrustedTrailer` for the full argument.
-    return dropTrustedTrailer(await this.registry.execute(name, params));
+    //
+    // AND THE STEP IS RUN WITH DELIVERY OFF (#586), which is the other half of
+    // the same sentence. Dropping the trailer stops the playbook reaching a
+    // consumer that cannot use it; it does not stop the delivery being RECORDED
+    // on the way here, and the tracker's 30-minute memory is shared with the
+    // chat model, whose next snapshot then got nothing. A path with no model to
+    // read a playbook must not spend one, so it does not resolve a template at
+    // all -- checked before the lookup and before the record, in
+    // `WebappTemplateDelivery.withInstructions`. It stays wrapped here, at the
+    // one boundary that has already reasoned about what this path is, rather
+    // than being inferred from an origin tag somewhere else.
+    return dropTrustedTrailer(
+      await withoutTemplateDelivery(() => this.registry.execute(name, params)),
+    );
   }
 
   describe(name: string): PieceToolDescription | null {

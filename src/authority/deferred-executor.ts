@@ -12,6 +12,7 @@ import type { EmergencyController } from './emergency.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { TAINT_PROFILE_LABEL } from './taint-gating.ts';
 import { toolReturnText } from '../roles/untrusted.ts';
+import { withoutTemplateDelivery } from '../actions/tools/template-delivery-scope.ts';
 
 // Defined next to substituteAboveLevel, which writes it; re-exported here,
 // where the approval learner reads it.
@@ -139,7 +140,22 @@ export class DeferredExecutor {
         this.onResult?.(requestId, request, blocked);
         return { claimed: true, result: blocked };
       }
-      const raw = await registry.execute(request.tool_name, args);
+      // Delivery off for the duration (#586). This path CANNOT place a trusted
+      // trailer outside the untrusted block -- see the collapse below -- and a
+      // delivery is recorded when the tool OFFERS one, not when a consumer
+      // places it. `browser_navigate` always takes a card (authority/
+      // ui-intent.ts) and an inline approval comes through here too
+      // (orchestrator.ts), so every approved navigation was recording a playbook
+      // it then disclaimed, and the chat model's own snapshot got nothing for
+      // the next 30 minutes.
+      //
+      // SAID PLAINLY, because it changes what the model sees: `browser_navigate`
+      // now delivers no playbook at all, and the playbook arrives with the first
+      // `browser_snapshot` instead (which takes no card, so it can place the
+      // trailer outside the block). What is given up is a copy the model was
+      // told to distrust; what is gained is that an authoritative copy is still
+      // available at all, which is what burning the slot used to cost.
+      const raw = await withoutTemplateDelivery(() => registry.execute(request.tool_name, args));
       // Collapsed to one string: this path records a DB receipt and returns a
       // single value, so it cannot carry a trusted trailer separately. The
       // trailer therefore goes back in band and is framed as data along with the

@@ -54,6 +54,7 @@ import { withWorkflowMachineBinding } from './machine-binding';
 import { getMachineScope } from '../../actions/machine-scope';
 import type { SidecarCapability } from '../../sidecar/types';
 import { toolReturnText } from '../../roles/untrusted.ts';
+import { withoutTemplateDelivery } from '../../actions/tools/template-delivery-scope.ts';
 
 export interface BuildServiceBackendsOptions extends WorkflowAuthorityDependencies {
   credentialResolver: CredentialResolver;
@@ -442,7 +443,15 @@ export function buildSandboxServiceBackends(
             execute: async (args, checkpoint) => {
               checkpoint();
               try {
-                const raw = await registry.execute(call.toolCall.name, args);
+                // Delivery off (#586): the collapse below cannot keep a trusted
+                // trailer out of band, and a delivery is recorded when the tool
+                // offers one. Recording here spent a playbook slot on a copy
+                // that arrives disclaimed -- and, because this dispatch belongs
+                // to the sub-agent whose scope the runner entered, it spent that
+                // sub-agent's. Suppressing nests inside that scope, which is the
+                // right way round: the innermost caller knows what happens to
+                // the value.
+                const raw = await withoutTemplateDelivery(() => registry.execute(call.toolCall.name, args));
                 // One string only: this crosses the durable effect boundary, so a
                 // carrier would not survive it anyway. Collapsing puts any
                 // repo-authored trailer back in band, where the sub-agent runner

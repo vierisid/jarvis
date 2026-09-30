@@ -1,7 +1,10 @@
 import { describe, test, expect } from 'bun:test';
 import { JarvisToolRegistryAdapter } from './tool-registry';
 import { ToolRegistry, type ToolDefinition } from '../../actions/tools/registry';
-import { withTrustedTrailer, UNTRUSTED_OPEN } from '../../roles/untrusted.ts';
+import { withTrustedTrailer, UNTRUSTED_OPEN, toolReturnText } from '../../roles/untrusted.ts';
+import { WebappTemplateDelivery } from '../../actions/tools/webapp-template-injection.ts';
+import { initDatabase } from '../../vault/schema.ts';
+import { upsertWebappTemplate } from '../../vault/webapp-templates.ts';
 
 function adapterFor(execute: ToolDefinition['execute']): JarvisToolRegistryAdapter {
   const registry = new ToolRegistry();
@@ -77,5 +80,65 @@ describe('JarvisToolRegistryAdapter preserves the tool return shape', () => {
     // step's data and must arrive exactly as the file held them.
     const out = await adapterFor(async () => delimiterShaped).execute('t', {});
     expect(out).toBe(delimiterShaped);
+  });
+});
+
+/**
+ * #586. Dropping the trailer was only half of it: a delivery is RECORDED when
+ * the tool offers one, and the tracker's 30-minute memory is shared with the
+ * chat model -- one ToolRegistry is built at daemon startup and the module-level
+ * browser tools go into it. So a step's snapshot used to leave the chat with no
+ * playbook for the next half hour.
+ *
+ * This drives the real adapter over a real `WebappTemplateDelivery` rather than
+ * a live browser, so the wrap stays pinned on a machine with no Chromium (the
+ * end-to-end version lives in actions/tools/browser-template-delivery.test.ts).
+ */
+describe('a workflow step does not spend the chat scope playbook (#586)', () => {
+  const URL = 'https://app.test.com/inbox';
+
+  /** A registry whose one tool delivers through `shared`, like the real ones. */
+  const registryOver = (shared: WebappTemplateDelivery) => {
+    const registry = new ToolRegistry();
+    registry.register({
+      name: 'browser_snapshot', description: 'd', category: 'browser', parameters: {},
+      execute: async () => shared.withInstructions('Page: Test App', URL),
+    });
+    return registry;
+  };
+
+  const seedTemplate = () => {
+    initDatabase(':memory:');
+    upsertWebappTemplate({
+      app_name: 'TestApp', domains: ['app.test.com'], description: '',
+      instructions: 'Always click carefully on TestApp.',
+    });
+  };
+
+  test('the step gets no playbook, and the chat still gets its own', async () => {
+    seedTemplate();
+    const shared = new WebappTemplateDelivery();
+    const registry = registryOver(shared);
+
+    // The workflow step first.
+    const step = await new JarvisToolRegistryAdapter(registry).execute('browser_snapshot', {});
+    expect(step).toBe('Page: Test App');
+
+    // Then the chat, on the SAME delivery state. Before the fix this was the
+    // bare page, because the step had recorded the delivery on its way past.
+    const chat = toolReturnText(await registry.execute('browser_snapshot', {}));
+    expect(chat).toContain('You are now on TestApp');
+    expect(chat).toContain('Always click carefully on TestApp.');
+  });
+
+  test('...and the TTL that the adapter dodges is real, so the test above can fail', async () => {
+    // The non-vacuous half. Two calls that do NOT go through the adapter share
+    // one scope, so the second gets nothing: the 30-minute memory is doing its
+    // job. That is precisely what the step used to consume, and it is why the
+    // assertion above discriminates rather than passing for free.
+    seedTemplate();
+    const registry = registryOver(new WebappTemplateDelivery());
+    expect(toolReturnText(await registry.execute('browser_snapshot', {}))).toContain('You are now on TestApp');
+    expect(toolReturnText(await registry.execute('browser_snapshot', {}))).toBe('Page: Test App');
   });
 });
