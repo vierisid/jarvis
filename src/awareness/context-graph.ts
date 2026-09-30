@@ -10,10 +10,11 @@ import type { ScreenContext } from './types.ts';
 import { searchEntitiesByName, createEntity } from '../vault/entities.ts';
 import { getSession, updateSession } from '../vault/awareness.ts';
 
-// Cache of known app names to avoid redundant entity creation
-const knownApps = new Set<string>();
-
 export class ContextGraph {
+  // Known app names, to avoid redundant entity creation. Per instance, so the
+  // cache lives exactly as long as the service and database it mirrors.
+  private readonly knownApps = new Set<string>();
+
   /**
    * Link a capture to vault entities.
    * Searches entity names against OCR text + window title.
@@ -48,14 +49,14 @@ export class ContextGraph {
    * Ensure an app has an entity in the vault.
    */
   private ensureAppEntity(appName: string): void {
-    if (knownApps.has(appName)) return;
+    if (this.knownApps.has(appName)) return;
 
     try {
       const existing = searchEntitiesByName(appName);
       if (existing.length === 0) {
         createEntity('tool', appName, { source: 'awareness_auto' }, 'awareness');
       }
-      knownApps.add(appName);
+      this.knownApps.add(appName);
     } catch { /* ignore — entity creation is best-effort */ }
   }
 

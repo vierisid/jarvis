@@ -31,6 +31,7 @@ import {
 import { getToolFilterPolicy } from '../actions/tools/tool-relevance/policy.ts';
 import { isInvariantTrigger } from '../actions/tools/tool-relevance/authority-classes.ts';
 import { toolDefToLLMTool, BUILTIN_TOOLS } from '../actions/tools/builtin.ts';
+import { withTemplateDeliveryScope } from '../actions/tools/template-delivery-scope.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
 import type { AuditTrail } from '../authority/audit.ts';
@@ -538,6 +539,31 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
 
   const agentName = agent.agent.role.name;
   const agentId = agent.id;
+
+  /**
+   * Run one tool dispatch inside this spawn's site-playbook delivery scope
+   * (#586).
+   *
+   * PER SPAWN, not per durable delegation: a delegation that pauses for approval
+   * comes back through a fresh `AgentInstance` with a fresh id, so the playbook
+   * can be delivered once more after the resume. That is the harmless direction
+   * (a repeat, not a loss) and it is not worth a durable key to avoid.
+   *
+   * A sub-agent is its own conversation with its own history, but it is NOT its
+   * own tool set: `createScopedToolRegistry` registers the same module-level
+   * BUILTIN_TOOLS objects the chat uses, so it shares the chat's
+   * `globalWebappTemplateDelivery` and its 30-minute memory. Unscoped, a
+   * delegated browse spent the chat model's playbook, and the chat's browse
+   * spent the sub-agent's.
+   *
+   * EVERY dispatch in this function goes through here, and there are two of
+   * them: the per-turn one below, and the resumed paused call, which calls
+   * `governedTools` directly rather than through `executeTool`. Missing the
+   * second would leave exactly the bug this closes, on the path nobody looks
+   * at -- an approved sub-agent call recording its delivery against the chat.
+   */
+  const inDeliveryScope = <T>(fn: () => Promise<T>): Promise<T> =>
+    withTemplateDeliveryScope(`sub-agent:${agentId}`, fn);
   const toolsUsed: string[] = resume ? [...resume.toolsUsed] : [];
   const totalUsage = resume ? { ...resume.tokensUsed } : { input: 0, output: 0 };
   const failedToolCalls: string[] = resume ? [...resume.failedToolCalls] : [];
@@ -708,7 +734,7 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       }
       noteToolCall(tc);
       sequence += 1;
-      const dispatched = await executeTool(toolRegistry, tc, sequence, authorityCtx);
+      const dispatched = await inDeliveryScope(() => executeTool(toolRegistry, tc, sequence, authorityCtx));
       if ('paused' in dispatched) {
         return { ...dispatched.paused, remaining: calls.slice(index + 1), iteration, offered: [...offered] };
       }
@@ -730,8 +756,9 @@ export async function runSubAgent(opts: RunSubAgentOptions): Promise<SubAgentRes
       fence();
       let governed: GovernedToolResult;
       try {
-        governed = await governedTools({ toolCall: pending.toolCall, sequence: pending.sequence, actionCategory: pending.actionCategory,
-          toolCategory: pending.toolCategory, principal: pending.principal, reason: pending.reason });
+        governed = await inDeliveryScope(() => governedTools({ toolCall: pending.toolCall, sequence: pending.sequence,
+          actionCategory: pending.actionCategory, toolCategory: pending.toolCategory, principal: pending.principal,
+          reason: pending.reason }));
       } catch (err) {
         throw new GovernedDispatchError(err instanceof Error ? err.message : String(err), err);
       }

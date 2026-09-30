@@ -744,11 +744,13 @@ func makeBrowserNavigateHandler(cfg *SidecarConfig) RPCHandler {
 		// Let JS settle (matches the daemon's post-load delay)
 		time.Sleep(800 * time.Millisecond)
 
-		formatted, err := takeFormattedSnapshot(cdp)
+		formatted, id, err := takeFormattedSnapshot(cdp)
 		if err != nil {
 			return nil, err
 		}
-		return &RPCResult{Result: formatted}, nil
+		// The identity of the page we LANDED on, which is not `target`: this is
+		// the whole reason a redirect cannot mis-select a site playbook (#583).
+		return browserPageResult(formatted, id, params), nil
 	}
 }
 
@@ -759,11 +761,11 @@ func makeBrowserSnapshotHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, err
 		}
 
-		formatted, err := takeFormattedSnapshot(cdp)
+		formatted, id, err := takeFormattedSnapshot(cdp)
 		if err != nil {
 			return nil, err
 		}
-		return &RPCResult{Result: formatted}, nil
+		return browserPageResult(formatted, id, params), nil
 	}
 }
 

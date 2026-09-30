@@ -67,6 +67,12 @@ static void* jarvisHotkeyAdd(unsigned long modMask, unsigned long modCompareMask
         // key-down, so it has to be filtered here. Each fire emits an event to
         // the brain BEFORE the in-flight guard in runSessionCapture, so a held
         // key was a burst on the wire, not just a wasted goroutine.
+        //
+        // NOTE the gap this does not cover: X11 has no MOD_NOREPEAT either, and
+        // hotkeys_linux.go's drain fires on every auto-repeat KeyPress, so a
+        // held hotkey there is still a burst. Pre-existing and untouched by
+        // #587 (the old `go fn()` did the same), but the phrasing above used to
+        // read as though macOS were the only platform needing the filter.
         if ([e keyCode] == keyCode && ![e isARepeat] && ([e modifierFlags] & cmp) == want) {
             goHotkeyFire(hotkeyID);
         }
@@ -85,23 +91,19 @@ import "C"
 
 import (
 	"fmt"
+	"log"
 	"sync"
-	"sync/atomic"
 )
-
-var hotkeyRegDarwin sync.Map // uint64 -> func()
-var hotkeyCounterDarwin atomic.Uint64
 
 func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 	mods, keyCode, err := parseDarwinKeyspec(keyspec)
 	if err != nil {
 		return nil, err
 	}
-	id := hotkeyCounterDarwin.Add(1)
-	hotkeyRegDarwin.Store(id, onFire)
+	id := hotkeyDispatcher.register(onFire)
 	mon := C.jarvisHotkeyAdd(C.ulong(mods), C.ulong(darwinModifierCompareMask), C.ushort(keyCode), C.ulonglong(id))
 	if mon == nil {
-		hotkeyRegDarwin.Delete(id)
+		hotkeyDispatcher.invalidate(id)
 		// NOT "(Accessibility permission?)", which is what this used to guess:
 		// the monitor installs perfectly well without that trust and simply
 		// never fires, so a nil return means something else went wrong. The
@@ -115,15 +117,26 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 	// deallocated object. No caller does that today -- Close nils the field,
 	// panels_runtime defers once -- but nothing at this return site said so.
 	//
-	// Delete BEFORE removing the monitor, not after. stop() runs on an RPC
+	// Invalidate BEFORE removing the monitor, not after. stop() runs on an RPC
 	// goroutine while the handler block runs on the main run loop, so a block
 	// invocation already in flight can reach goHotkeyFire after the removal;
-	// deleting first makes that a guaranteed no-op instead of a summon event
-	// arriving after the pebble was closed.
+	// invalidating first makes that a guaranteed no-op instead of a summon
+	// event arriving after the pebble was closed.
+	//
+	// That ordering predates #587 and is kept; on its own it only ever covered
+	// a block that had not yet reached goHotkeyFire. What #587 adds is the half
+	// it could not reach: a press whose goroutine has been started but has not
+	// entered the callback is now refused too, because the claim that gates the
+	// callback is taken inside that goroutine and contends with this
+	// invalidation. See hotkeys_dispatch.go for why this invalidates rather
+	// than waiting, and for exactly what it does and does not guarantee.
 	var once sync.Once
 	stop := func() {
 		once.Do(func() {
-			hotkeyRegDarwin.Delete(id)
+			if inFlight := hotkeyDispatcher.invalidate(id); inFlight > 0 {
+				log.Printf("[hotkeys] %q: stopped while %d callback(s) were dispatched and not yet finished; they will run to completion, so anything this hotkey drives must tolerate that",
+					keyspec, inFlight)
+			}
 			C.jarvisHotkeyRemove(mon)
 		})
 	}

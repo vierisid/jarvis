@@ -21,8 +21,11 @@ import { checkNavigationUrl } from '../browser/url-policy.ts';
 import { checkUploadPath, pageOrigin, uploadTargetRefusal } from '../browser/upload-policy.ts';
 import type { ToolDefinition, ToolResult } from './registry.ts';
 import type { LLMTool } from '../../llm/provider.ts';
-import { routeToSidecar, autoTargetForCapability, resolveToolTarget } from './sidecar-route.ts';
-import { WebappTemplateDelivery, globalWebappTemplateDelivery } from './webapp-template-injection.ts';
+import {
+  routeToSidecar, routeBrowserReadToSidecar, autoTargetForCapability, resolveToolTarget,
+  type SidecarPageRead,
+} from './sidecar-route.ts';
+import { WebappTemplateDelivery, globalWebappTemplateDelivery, usablePageUrl } from './webapp-template-injection.ts';
 import { listSidecarsTool } from './sidecar-list.ts';
 import { DESKTOP_TOOLS } from './desktop.ts';
 import { UI_TOOLS } from './ui.ts';
@@ -877,8 +880,47 @@ function resolveBrowserTarget(params: Record<string, unknown>, tool: string): st
 }
 
 /**
+ * Say when a remote read reached a page and still got no site playbook.
+ *
+ * #583 was invisible for exactly this reason: a sidecar-routed browser silently
+ * resolved no playbook at all, the tools looked fine, and the only way to learn
+ * it was to read the code -- the same class of quiet failure as #574, where a
+ * refused hotkey registration reported success.
+ *
+ * TWO reasons, because there are two ways to get here and they call for
+ * different actions. `no_page_identity` means the reply carried no confirmed URL
+ * at all, which for a working sidecar means one too old to send it: upgrade it.
+ * `url_refused` means a URL did arrive and this daemon's own policy would not
+ * resolve it -- a `data:` or `about:blank` document, one over the length cap, or
+ * one carrying a control character -- which is a page doing something odd, or a
+ * sidecar misbehaving, and is worth seeing rather than guessing at.
+ *
+ * The REASON is logged and the URL is NOT, on either branch. A refused URL is by
+ * definition the value that was over-long or carried a control character, so it
+ * is precisely the one that must not be pasted into a log line.
+ *
+ * Nothing is logged when the call never reached a page (`no_reply`): the
+ * dispatch already logged why, and the model is being handed that message, so a
+ * second line about a playbook would be noise. Nothing is logged either when the
+ * URL was fine and simply has no template -- that is almost every page.
+ */
+function reportSkippedPlaybook(tool: string, target: string, read: SidecarPageRead & {
+  why: 'confirmed' | 'no_reply' | 'no_page_identity';
+}): void {
+  if (read.why === 'no_reply') return;
+  // The same validator the delivery uses, asked the same question. Calling it
+  // twice is free and keeps the alternative -- a reason code plumbed back out of
+  // the delivery -- from existing.
+  const reason = read.pageUrl === null ? 'no confirmed page URL (an older sidecar does not send one)'
+    : usablePageUrl(read.pageUrl) === null ? 'a confirmed page URL this daemon will not resolve'
+    : null;
+  if (!reason) return;
+  console.log(`[browser] ${tool} on sidecar "${target}" returned ${reason}, so no site playbook was resolved.`);
+}
+
+/**
  * ONE RULE for every browser tool below (#572): the site playbook is selected
- * from `PageSnapshot.browserUrl` and from nothing else.
+ * from a URL THE BROWSER CONFIRMED, and from nothing else.
  *
  * Not from the rendered snapshot, which is a page. Not from the URL that was
  * REQUESTED either, tempting as that looks -- it is the model's string rather
@@ -887,11 +929,12 @@ function resolveBrowserTarget(params: Record<string, unknown>, tool: string): st
  * now on <that host>" OUTSIDE the untrusted block over a page that is not it.
  * Naming the wrong site with authority is worse than naming none.
  *
- * So every caller passes the browser's answer or null, and a sidecar-routed
- * browser passes null always: it replies with formatted text and nothing beside
- * it. That costs remote browsers their playbooks for now; the fix is for the RPC
- * to carry the URL, which the sidecar already holds
- * (docs/sidecar/SIDECAR_PROTOCOL.md, "the reply is text").
+ * Locally that URL is `PageSnapshot.browserUrl`, from Chrome's frame tree.
+ * Remotely it is the sidecar's `page_url` (#583), from the same frame tree on
+ * the other machine, and it arrives only with the `loader_id` that proves it
+ * names the document the text came from. Either one can still be absent -- a
+ * lost race locally, an older sidecar remotely -- and absent means null, which
+ * means no playbook and a log line saying so, never a fallback to the request.
  */
 
 export const browserNavigateTool: ToolDefinition = {
@@ -927,8 +970,10 @@ export const browserNavigateTool: ToolDefinition = {
     }
     const target = resolveBrowserTarget(params, 'browser_navigate');
     if (target) {
-      const result = await routeToSidecar(target, 'browser_navigate', { url, headless: params.headless }, 'browser');
-      return globalWebappTemplateDelivery.withInstructions(result, null);
+      const read = await routeBrowserReadToSidecar(target, 'browser_navigate',
+        { url, headless: params.headless });
+      reportSkippedPlaybook('browser_navigate', target, read);
+      return globalWebappTemplateDelivery.withInstructions(read.text, read.pageUrl);
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;
@@ -955,8 +1000,9 @@ export const browserSnapshotTool: ToolDefinition = {
   execute: async (params) => {
     const target = resolveBrowserTarget(params, 'browser_snapshot');
     if (target) {
-      const result = await routeToSidecar(target, 'browser_snapshot', {}, 'browser');
-      return globalWebappTemplateDelivery.withInstructions(result, null);
+      const read = await routeBrowserReadToSidecar(target, 'browser_snapshot', {});
+      reportSkippedPlaybook('browser_snapshot', target, read);
+      return globalWebappTemplateDelivery.withInstructions(read.text, read.pageUrl);
     }
     if (isLocalBrowserDisabled()) return LOCAL_BROWSER_DISABLED_MSG;
     if (isNoLocalTools()) return LOCAL_DISABLED_MSG;

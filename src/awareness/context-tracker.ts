@@ -5,6 +5,7 @@
  * error patterns, and manages activity sessions.
  */
 
+import { AWARENESS_ACTIVITY_SCHEMA_VERSION } from './activity-events.ts';
 import type { AwarenessConfig } from '../config/types.ts';
 import type { ScreenContext, AwarenessEvent } from './types.ts';
 import { createSession, endSession, incrementSessionCaptureCount, updateSession } from '../vault/awareness.ts';
@@ -125,6 +126,7 @@ export class ContextTracker {
         this.endCurrentSession();
         events.push({
           type: 'session_ended',
+          schemaVersion: AWARENESS_ACTIVITY_SCHEMA_VERSION,
           data: { sessionId, apps },
           timestamp: now,
         });
@@ -151,6 +153,7 @@ export class ContextTracker {
     if (isAppChange) {
       events.push({
         type: 'context_changed',
+        schemaVersion: AWARENESS_ACTIVITY_SCHEMA_VERSION,
         data: {
           fromApp: this.currentContext?.appName ?? 'unknown',
           toApp: appName,

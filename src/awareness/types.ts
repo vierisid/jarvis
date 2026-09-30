@@ -4,6 +4,8 @@
  * Type definitions for the continuous screen awareness system (M13).
  */
 
+import type { AwarenessActivityEvent } from './activity-events.ts';
+
 // ── Capture Layer ──
 
 // ── Context ──
@@ -34,8 +36,8 @@ export type AwarenessEventType =
   | 'session_ended'
   | 'suggestion_ready';
 
-export type AwarenessEvent = {
-  type: AwarenessEventType;
+export type AwarenessEvent = AwarenessActivityEvent | {
+  type: Exclude<AwarenessEventType, AwarenessActivityEvent['type']>;
   data: Record<string, unknown>;
   timestamp: number;
 };

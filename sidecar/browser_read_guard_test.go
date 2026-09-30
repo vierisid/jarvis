@@ -231,7 +231,7 @@ func TestSnapshotRefusesWhenThePageReportsLocalContent(t *testing.T) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		snap, err := takePageSnapshot(fb.client)
+		snap, _, err := takePageSnapshot(fb.client)
 		done <- outcome{snap, err}
 	}()
 
@@ -275,7 +275,7 @@ func TestSnapshotOfAnOrdinaryPageStillWorks(t *testing.T) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		snap, err := takePageSnapshot(fb.client)
+		snap, _, err := takePageSnapshot(fb.client)
 		done <- outcome{snap, err}
 	}()
 
@@ -378,7 +378,7 @@ func TestReadIsDiscardedWhenThePageNavigatedUnderIt(t *testing.T) {
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		snap, err := takePageSnapshot(fb.client)
+		snap, _, err := takePageSnapshot(fb.client)
 		done <- outcome{snap, err}
 	}()
 

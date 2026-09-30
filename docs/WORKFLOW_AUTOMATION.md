@@ -181,10 +181,11 @@ this section:
   `{{trigger.*}}`) sends outside content to a model unframed. The fix is at the
   prompt boundary with provenance, and provenance does not survive the sandbox
   today.
-- `withInstructions` burns its 30-minute redelivery TTL on a process-wide
-  singleton, so a workflow `browser_snapshot` suppresses the webapp playbook for
-  the *chat* model. Needs a per-context scope in
-  `actions/tools/webapp-template-injection.ts`.
+
+*(A third item stood here -- `withInstructions` burning its redelivery TTL on a
+process-wide singleton, so a workflow `browser_snapshot` suppressed the webapp
+playbook for the chat model. It was filed as #586 and is fixed; the delivery
+tracker is scoped, and this path runs with delivery off. See the note below.)*
 
 Both premises this decision rests on -- the reachable tool set, and the list of
 readers that carry step output out of the data plane -- are pinned by
@@ -200,6 +201,29 @@ instructions with no boundary between them. It also removes #572's lever from th
 workflow data plane as a side effect: the template is chosen by regexing
 page-controlled text for a URL, so a page could influence *which* playbook was
 attached, and now none is.
+
+And the step runs with site-playbook delivery **off** (#586), which is the other
+half of that same decision. Dropping the trailer keeps the playbook away from a
+consumer that cannot use it, but a delivery is recorded when the tool *offers*
+one, and the tracker's 30-minute memory is shared with the chat model: one
+`ToolRegistry` is built at daemon startup and the module-level browser tools go
+into it, so a workflow step, every chat conversation, the approval executor and
+every delegated sub-agent all held the same memory. A step's snapshot therefore
+used to leave the chat model with no playbook for the next half hour -- one
+context silently suppressing another's prompt content, which is the defect
+whichever way round it happens. A workflow step now counts as **no scope at
+all**: `actions/tools/template-delivery-scope.ts` is entered at the adapter, and
+`withInstructions` checks it before it resolves a template and before it records
+anything, so the step cannot spend a slot it was never going to use.
+
+A workflow AGENT step is not a workflow tool step: it is a sub-agent with its own
+model reading its own results, so its **non-governed** reads deliver under that
+run's own scope (`browser_snapshot` takes no approval card). A **governed**
+dispatch is different -- it crosses the durable effect boundary, which collapses
+the carrier into one string for the receipt, so it is suppressed there for the
+same reason the approval executor is. Since `browser_navigate` is always governed
+(`authority/ui-intent.ts`), a workflow agent step's playbook arrives with its
+first snapshot rather than with its navigation.
 
 One upgrade wrinkle from that drop: a `sample_data` cell captured before this
 change still holds the old concatenated page-plus-playbook value, and

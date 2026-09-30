@@ -220,11 +220,16 @@ Common `kind` values:
 
 ## Surface Limits
 
-Three of the structural-surface RPCs do not cover the same ground everywhere.
-None of them is a bug, and none reports an error: in every case the call
-succeeds and simply returns less than the caller expected, which is why the
-symptom reads as something else. Callers that depend on the missing part have to
+Two of the structural-surface RPCs do not cover the same ground everywhere.
+Neither is a bug, and neither reports an error: in both cases the call succeeds
+and simply returns less than the caller expected, which is why the symptom
+reads as something else. Callers that depend on the missing part have to
 recognise it themselves.
+
+A third one used to be listed here -- `browser_snapshot` replying with text and
+nothing structural, so the brain could not tell which page it was on and
+resolved no site playbook for a remote browser. That is closed (#583); the
+contract that replaced it is under [Browser Reads](#browser-reads-the-confirmed-page-identity).
 
 ### `get_window_tree`: the `semantic` flag is Windows-only
 
@@ -296,35 +301,118 @@ alongside each `backend_node_id` so actions dispatch on the right one, and
 offsetting each frame's coordinates the way the DOM snapshot already does. That
 is deferred until the AX provider becomes the default path.
 
-### `browser_snapshot`: the reply is text, so the brain learns no page URL
+## Browser Reads: the confirmed page identity
 
-`makeBrowserSnapshotHandler` replies with `formatBrowserSnapshot`'s rendering
-and nothing beside it. The `pageSnapshot` it formatted -- URL included, already
-checked by `refuseLocalContent` and `assertSamePage` -- is dropped at the
-handler boundary.
+`browser_navigate` and `browser_snapshot` can return the page's identity beside
+the formatted text, so the brain knows WHICH page the text came from. It needs
+that for one thing: choosing the site playbook (a webapp template) it hands the
+model. Nothing else reads it.
 
-The brain used to recover the URL by matching a `URL:` line in that text. It no
-longer does (#572): the rendering is a page, its first line is the page's own
-`document.title`, and a page that prints its own `URL:` line was choosing which
-site playbook the model got handed.
+### Why it cannot be read off anything else
 
-So a sidecar-routed browser resolves no webapp template at all, on either
-`browser_snapshot` or `browser_navigate`. The requested URL was considered for
-navigate and rejected: it is pre-redirect, open redirects are ordinary on the
-hosts templates are written for, and a playbook states "You are now on <host>"
-outside the untrusted block, so a redirect would put that sentence over a page
-that is not that host. Only a URL the browser confirms selects a playbook.
+The brain used to recover the URL by matching a `URL:` line in the reply text. It
+does not any more (#572): the rendering is a page, its first line is the page's
+own `document.title`, and a page that printed its own `URL:` line was choosing
+which playbook the model got handed.
 
-Closing it is a reply-shape change, and the value is already in hand: the URL
-must come from the frame tree the handler checked, not from `location.href` (a
-page that wants a playbook is exactly the party that would lie about which site
-it is), and `takePageSnapshot` already has that -- `assertNotLocalContent`
-returns a `pageIdentity` carrying the checked `url`, `loaderID` and `origin`
-(`browser_read_guard.go`). So: return that `url` as its own field alongside the
-text (`RPCResult.Result` is `any`, so this is additive), and have the browser
-tools pass it to `WebappTemplateDelivery.withInstructions` the way the local path
-passes `PageSnapshot.browserUrl`. Carrying the `loaderID` too would let the brain
-make the same same-document check `BrowserController.snapshot` makes.
+The URL the caller REQUESTED was considered and rejected (#579). It is
+pre-redirect, open redirects are ordinary on exactly the hosts templates are
+written for, and a playbook states "You are now on <host>" *outside* the
+untrusted block -- so a redirect would put that sentence over a page that is not
+that host. Naming the wrong site with authority is worse than naming none.
+
+So only a URL the browser confirms may select a playbook, and the sidecar takes
+it from the frame tree it already checked (`assertNotLocalContent` ->
+`pageIdentity`, `browser_read_guard.go`), never from `location.href`.
+
+### Request: `page_identity`
+
+```json
+{ "method": "browser_snapshot", "params": { "page_identity": true } }
+```
+
+Strict boolean, read the way `headless` is: `params["page_identity"].(bool)`, so
+a string or a number does not enable it. A brain that does not send it gets the
+bare string reply it always got, which is what makes the change additive in both
+directions rather than a flag day.
+
+The brain sets the flag itself, in trusted code
+(`routeBrowserReadToSidecar`). It is never taken from a tool's own parameters:
+nothing a model writes may decide the shape of a reply the brain reads
+structurally.
+
+### Reply
+
+Without the flag, `result` is the formatted snapshot string, byte for byte as
+before. With it, `result` is an object:
+
+```json
+{
+  "text": "Page: Inbox\nURL: https://mail.example.com/\n\n--- Page Text ---\n...",
+  "page_url": "https://mail.example.com/",
+  "loader_id": "3F2A1C9E..."
+}
+```
+
+| Field | Meaning |
+|---|---|
+| `text` | the formatted snapshot, identical to the string reply |
+| `page_url` | the main frame's URL as the BROWSER reported it, for the document the text came from |
+| `loader_id` | that document's loaderId, which changes on every commit |
+
+**`page_url` and `loader_id` travel as a pair, or not at all.** The sidecar omits
+both unless the frame tree named the document (a non-empty `loaderId`) and
+`assertSamePage` confirmed the same document after the read. The brain refuses a
+`page_url` that arrives without a `loader_id`, and requires both to be strings.
+That pair is what carries the guarantee across the wire: the brain cannot redo
+the same-document check itself -- that would be another round-trip, at a
+different instant, to the machine making the claim -- so it refuses what it
+cannot vouch for instead of trusting half an answer.
+
+### Two bounds, and which side owns what
+
+The sidecar drops the identity when `page_url` exceeds 4096 bytes or `loader_id`
+exceeds 64. Those are **wire-size guards, not URL policy**: a `data:` document's
+frame-tree URL can be megabytes, and one reply past the brain's 2 MB
+`MAX_JSON_SIZE` is dropped whole, which would lose the page text as well. An
+over-long value is omitted rather than truncated, because a truncated identity is
+a different page.
+
+**URL policy belongs to the brain**, in `usablePageUrl`
+(`src/actions/tools/webapp-template-injection.ts`): at most 2048 bytes, no
+control or line/bidi separator characters, and `http`/`https` only. Deliberately
+NOT the same number as the sidecar's, so the two are not read as a pair to keep
+in step. The sidecar passes `data:`, `about:blank` and `chrome-error://` through
+verbatim and lets the brain refuse them; a second validator in another language
+would drift, and it would drift silently.
+
+So: **structural is not trusted.** `page_url` cannot claim another origin,
+because it comes from the browser rather than the page -- but it can still be
+hostile, and a sidecar asserting one is a sidecar the brain now trusts for
+playbook selection, bounded by `usablePageUrl` and by the fact that the URL
+itself never reaches the model (only the template's `appName` and instructions
+do). Enrollment is the control there.
+
+### What a version pairing does
+
+| Brain | Sidecar | Result |
+|---|---|---|
+| new | new | identity travels; the playbook is resolved from the confirmed URL |
+| new | old | the flag is an unknown param and is ignored; the reply is the bare string, so `pageUrl` is null, no playbook is resolved, and the brain logs one line saying so |
+| old | new | the old brain never sends the flag, so it keeps receiving the bare string; nothing JSON-stringifies a snapshot into a model's context |
+| new | new, nameless document or over-long field | the identity is omitted; same as "new + old" |
+
+The failure direction is always the same one: no playbook, never a wrong one.
+
+And it is no longer silent. A read that reached a page and still got no playbook
+logs one line naming the tool, the target and which of the two reasons applies:
+no confirmed URL arrived at all (so the sidecar is older than this surface), or
+one arrived and the brain's own policy would not resolve it (a `data:` or
+`about:blank` document, over the cap, or carrying a control character). The URL
+itself is never logged -- in the refused case it is precisely the value carrying
+the characters that must not reach a log line. A call that never reached a page
+logs nothing here, because the dispatch already said why, and neither does a
+perfectly ordinary page that simply has no template.
 
 ## RPC Lifecycle on the Brain
 

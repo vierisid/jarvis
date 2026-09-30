@@ -147,12 +147,26 @@ jobs:
     needs: changes
     if: needs.changes.outputs.sidecar == 'true'
     runs-on: ubuntu-latest
-    # One literal for the `-skip`/`-run` pair below. They partition the package
-    # between an unretried step and a retried one, so they must stay in sync:
-    # drift would leave the flaky test running un-retried in the first step
-    # while the second matches nothing and passes vacuously.
     env:
+      # One literal for the `-skip`/`-run` pair below. They partition the
+      # package between an unretried step and a retried one, so they must stay
+      # in sync: drift would leave the flaky test running un-retried in the
+      # first step while the second matches nothing and passes vacuously.
       PARITY_TEST: '^TestBrowserHandlerParityIntegration$'
+      # The X-dependent hotkey tests, enforced as a set so a skip cannot pass
+      # for a run (#588).
+      #
+      # Matched by PREFIX, not by an allowlist of names, and that is the point.
+      # `TestLinuxX` is a reserved namespace for tests needing a real X server;
+      # the display-free ones beside them are plain `TestLinux`. An allowlist
+      # catches a rename or a removal (the count stops matching) and is
+      # structurally blind to an ADDITION -- a new X-dependent test would simply
+      # not match, `-list` would still say 8, and it would skip in CI exactly as
+      # the #578 tests did. Prefix plus an exact count fails loudly in BOTH
+      # directions, and it is the convention this file already states for the
+      # windows job below.
+      X_HOTKEY_TESTS: '^TestLinuxX'
+      X_HOTKEY_TEST_COUNT: '8'
     steps:
       - uses: actions/checkout@v5
       - uses: actions/setup-go@v6
@@ -167,7 +181,15 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
+          # libx11-dev/libx11-xcb-dev/libxcb1-dev are named explicitly for
+          # `#cgo pkg-config: x11 x11-xcb xcb` in hotkeys_linux.go (#577). They
+          # arrive transitively through the GTK stack today, so this is a no-op
+          # on the current runner image -- which is the reason to name them:
+          # a cgo build that fails because an indirect dependency was dropped
+          # upstream is an awful thing to debug.
           sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config build-essential \
+            libx11-dev libx11-xcb-dev libxcb1-dev \
+            xvfb x11-utils \
             gcc-mingw-w64-x86-64 g++-mingw-w64-x86-64
           for d in /usr/lib/*/pkgconfig; do
             [ -f "$d/webkit2gtk-4.1.pc" ] && sudo ln -sf "$d/webkit2gtk-4.1.pc" "$d/webkit2gtk-4.0.pc" || true
@@ -192,6 +214,161 @@ jobs:
           # The browser parity test is split out and retried; everything else
           # runs once so a real regression still fails fast.
           go test -skip "$PARITY_TEST" ./...
+
+      # ─── The X-dependent hotkey tests, which used to skip here ──────
+      # #578 added tests that contend two X connections for the same key and
+      # assert a refused XGrabKey is reported. They were the only coverage the
+      # cgo grab path had -- and this job set no DISPLAY, so all of them
+      # skipped, `go test` exited 0, and a regression in that path landed
+      # green. #588 is about closing that, and the important half is not Xvfb:
+      # it is that A SKIP MUST NOT BE A PASS.
+      #
+      # Xvfb rather than the runner's display, because there isn't one. :99 is
+      # started here and torn down at the end; DISPLAY is scoped to the step
+      # below rather than exported job-wide, so the earlier `go test ./...` is
+      # unaffected. These tests are therefore INVOKED twice per job -- as skips
+      # there, for real here -- and EXECUTED once, which is the cheaper of the
+      # two ways to keep the -skip/-run partition simple.
+      - name: Start Xvfb
+        run: |
+          set -euo pipefail
+          # Output redirected and the job disowned, not decoration: a
+          # backgrounded process that keeps the step's stdout pipe open can make
+          # the runner wait on the step until that process exits, which for a
+          # display server is forever. Its log goes to a file so a failure
+          # further down is still diagnosable.
+          Xvfb :99 -screen 0 1280x1024x24 -nolisten tcp \
+            > "${RUNNER_TEMP:-/tmp}/xvfb.log" 2>&1 &
+          xvfb_pid=$!
+          disown "$xvfb_pid" 2>/dev/null || true
+          echo "XVFB_PID=$xvfb_pid" >> "$GITHUB_ENV"
+          # Wait for the server to answer rather than sleeping a guessed
+          # interval: xdpyinfo returning 0 is the actual readiness signal, and
+          # a fixed sleep is the flake class this repo has been bitten by.
+          for _ in $(seq 1 50); do
+            if DISPLAY=:99 xdpyinfo >/dev/null 2>&1; then
+              echo "Xvfb :99 is up"
+              exit 0
+            fi
+            # Stop early if it died rather than waiting out the full timeout.
+            if ! kill -0 "$xvfb_pid" 2>/dev/null; then
+              echo "::error::Xvfb exited during startup"
+              cat "${RUNNER_TEMP:-/tmp}/xvfb.log" || true
+              exit 1
+            fi
+            sleep 0.2
+          done
+          echo "::error::Xvfb :99 did not become ready"
+          cat "${RUNNER_TEMP:-/tmp}/xvfb.log" || true
+          exit 1
+
+      - name: X-dependent hotkey tests (Xvfb, cgo)
+        working-directory: sidecar
+        env:
+          CGO_ENABLED: "1"
+          DISPLAY: ":99"
+          # Turns every skip inside these tests into a failure. Without it the
+          # step would go green the moment Xvfb broke.
+          JARVIS_REQUIRE_X_HOTKEY_TESTS: "1"
+          # FD_SETSIZE is only enforced by glibc when the build is fortified,
+          # and TestLinuxXListenerSurvivesAnFdAboveFdSetsize relies on that to
+          # catch a reintroduced select(): measured, an unfortified build of the
+          # OLD broken code passes that test. The test now reads the level back
+          # and FAILS here if it is 0, so this flag and that assertion are two
+          # halves of one guard.
+          #
+          # A FLOOR, not a match. Ubuntu's patched gcc defaults to level 3, so
+          # this lowers it to 2 for the cgo files in this step -- accepted
+          # because __fdelt_chk exists at any level above 0, and because the
+          # step is test-only, so no shipped artifact is built with it. The
+          # reason to name it at all is the toolchains that predefine NOTHING at
+          # -O2 (upstream gcc does not), where the guard would otherwise be
+          # silently unarmed. -U first so redefining is not a warning.
+          CGO_CFLAGS: "-O2 -g -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2"
+        run: |
+          set -euo pipefail
+          # The count has to be a sane number before it can guard anything.
+          # `[ "$a" -ne "$b" ]` exits 2 on a non-integer operand, and 2 is
+          # "false" to an `if`, so a blank or typo'd X_HOTKEY_TEST_COUNT would
+          # make BOTH count checks below silently evaporate -- and the step
+          # would then print its own success line reading "all 0 ... executed".
+          # Fails closed here instead.
+          case "$X_HOTKEY_TEST_COUNT" in
+            ''|*[!0-9]*)
+              echo "::error::X_HOTKEY_TEST_COUNT must be a positive integer, got '$X_HOTKEY_TEST_COUNT'"
+              exit 1 ;;
+          esac
+          if [ "$X_HOTKEY_TEST_COUNT" -lt 1 ]; then
+            echo "::error::X_HOTKEY_TEST_COUNT must be at least 1, got '$X_HOTKEY_TEST_COUNT'"
+            exit 1
+          fi
+
+          # Fail loudly if the prefix stops matching the expected number of
+          # tests -- a rename, a removal, or a NEW sibling nobody counted:
+          # `go test -run` with no match prints "no tests to run" and exits 0,
+          # which would make this whole step a no-op. Same guard the browser
+          # parity step uses.
+          #
+          # -list's own failure is separated out, because `|| true` on the
+          # pipeline would otherwise turn "the package does not compile" into
+          # listed=0 and blame a rename for it.
+          if ! listing=$(go test -list "$X_HOTKEY_TESTS" . 2>&1); then
+            echo "::error::go test -list failed; the package does not build:"
+            printf '%s\n' "$listing"
+            exit 1
+          fi
+          listed=$(printf '%s\n' "$listing" | grep -c '^Test' || true)
+          if [ "$listed" -ne "$X_HOTKEY_TEST_COUNT" ]; then
+            echo "::error::X_HOTKEY_TESTS ($X_HOTKEY_TESTS) matched $listed tests, expected $X_HOTKEY_TEST_COUNT -- a test was renamed, added or removed; update the count"
+            exit 1
+          fi
+
+          # Outside the source tree: this step runs from sidecar/, and a log
+          # dropped there is an untracked file in the checkout.
+          log="${RUNNER_TEMP:-/tmp}/x-hotkey.log"
+          # -count=1 below is load-bearing, not habit. DISPLAY is read by
+          # libX11's C getenv, which go test's cache cannot observe, so a cached
+          # SKIP from a run without a display can be replayed verbatim in a run
+          # where Xvfb is up -- reproduced locally. setup-go caches GOCACHE
+          # across runs, so that is not hypothetical.
+          set +e
+          go test -v -count=1 -run "$X_HOTKEY_TESTS" . 2>&1 | tee "$log"
+          status=${PIPESTATUS[0]}
+          set -e
+          if [ "$status" -ne 0 ]; then
+            echo "::error::the X-dependent hotkey tests failed"
+            exit "$status"
+          fi
+
+          # The belt to the env var's braces: assert on the outcomes directly,
+          # so dropping JARVIS_REQUIRE_X_HOTKEY_TESTS from this job cannot
+          # silently restore the old behaviour. Unanchored grep on purpose --
+          # a subtest skip prints indented.
+          if grep -q -- '--- SKIP' "$log"; then
+            echo "::error::an X-dependent hotkey test was SKIPPED. go test reports that as success, which is exactly the failure mode #588 exists to stop: the cgo grab path was not exercised."
+            grep -- '--- SKIP' "$log"
+            exit 1
+          fi
+          passed=$(grep -c '^--- PASS' "$log" || true)
+          if [ "$passed" -ne "$X_HOTKEY_TEST_COUNT" ]; then
+            echo "::error::expected $X_HOTKEY_TEST_COUNT X-dependent hotkey tests to PASS, saw $passed"
+            exit 1
+          fi
+          # Precise on purpose: this is the line a reader trusts on a green job,
+          # and one of the enforced tests is the meta-guard, which asserts the
+          # enforcement is switched on rather than opening a display itself.
+          echo "all $passed enforced hotkey tests executed (all but the meta-guard against DISPLAY=$DISPLAY)"
+
+      # always(), or a failing test above leaves Xvfb running and the job's
+      # cleanup to the runner.
+      - name: Stop Xvfb
+        if: always()
+        # kill -0 first: the PID is recorded before the readiness check, so on a
+        # startup failure it may already be dead and its number reusable.
+        run: |
+          if [ -n "${XVFB_PID:-}" ] && kill -0 "$XVFB_PID" 2>/dev/null; then
+            kill "$XVFB_PID" 2>/dev/null || true
+          fi
 
       # TestBrowserHandlerParityIntegration drives a real headless Chromium over
       # the CDP pipe, and on a loaded runner that races: the observed CI flakes
@@ -264,8 +441,8 @@ jobs:
   # They live here rather than on linux because the files are windows-tagged:
   # one hotkey test needs the real RegisterHotKey, since a refused
   # registration is exactly what has to surface as an error. Linux can produce
-  # one too as of #574, but its tests need a DISPLAY this job does not set, and the UIA and SendInput helpers do not exist
-  # in a linux build at all.
+  # one too as of #574, and since #588 the linux job does run those under Xvfb
+  # -- but the UIA and SendInput helpers do not exist in a linux build at all.
   sidecar-test-windows:
     runs-on: windows-latest
     steps:

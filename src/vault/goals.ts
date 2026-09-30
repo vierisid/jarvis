@@ -360,6 +360,13 @@ export function addProgressEntry(
   return { id, goal_id: goalId, type, score_before: scoreBefore, score_after: scoreAfter, note, source, created_at: now };
 }
 
+/** Activity throttling must not depend on how many other notes were added. */
+export function hasRecentAutoDetectedProgress(goalId: string, since: number): boolean {
+  return getDb().prepare(
+    "SELECT 1 FROM goal_progress WHERE goal_id = ? AND type = 'auto_detected' AND created_at > ? LIMIT 1"
+  ).get(goalId, since) !== null;
+}
+
 export function getProgressHistory(goalId: string, limit = 50): GoalProgressEntry[] {
   const db = getDb();
   const safeLimit = Math.max(1, Math.min(limit, 500));
