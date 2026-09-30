@@ -9,6 +9,57 @@ import (
 	"testing"
 )
 
+// requireXHotkeyTests is the env var CI sets to say "these tests must actually
+// run here". Named like JARVIS_REQUIRE_XDOTOOL_SHIM, which does the same job for
+// the xdotool-dependent tests in src/actions/app-control/linux.test.ts.
+const requireXHotkeyTests = "JARVIS_REQUIRE_X_HOTKEY_TESTS"
+
+// requireX skips, unless CI has said these tests are not allowed to skip -- in
+// which case it FAILS.
+//
+// The failure mode #588 exists to stop is a skip that CI reports as a pass. The
+// X-dependent tests here are the only coverage the cgo grab path has, and for
+// as long as the linux job set no DISPLAY they all skipped, so a regression in
+// that path landed green. Adding Xvfb alone would not have fixed that: if Xvfb
+// failed to start, or the runner image changed, they would go back to skipping
+// and the job would go back to passing.
+//
+// So this covers EVERY reason these tests bail, not just a missing display.
+// "Something already holds the combination" is also a hard failure under the
+// flag, because on a freshly started Xvfb nothing can be holding it -- if that
+// happens, the assumption is wrong and someone should know.
+func requireX(t *testing.T, format string, args ...any) {
+	t.Helper()
+	// Read through os.Getenv on purpose, and unconditionally. DISPLAY is
+	// normally consumed by libX11's C getenv, which go test's cache cannot see,
+	// so a cached "SKIP" from a run with no DISPLAY could be replayed verbatim
+	// in a run where Xvfb was up. Touching it here from Go puts it in the cache
+	// key. (The dedicated CI step also passes -count=1; this is the half that
+	// protects a developer running plain `go test`.)
+	display := os.Getenv("DISPLAY")
+	if os.Getenv(requireXHotkeyTests) == "1" {
+		t.Fatalf("%s=1 says this test must run here, but it could not: "+format+" (DISPLAY=%q)",
+			append(append([]any{requireXHotkeyTests}, args...), display)...)
+	}
+	t.Skipf(format, args...)
+}
+
+// The guard for the guard: if CI ever drops the env var or the display, say so
+// here rather than letting every X test quietly skip.
+//
+// It also exists to make DISPLAY part of go test's cache key for this package
+// even on the paths where requireX is never reached.
+func TestLinuxXHotkeyTestsAreEnforcedHere(t *testing.T) {
+	display := os.Getenv("DISPLAY")
+	if os.Getenv(requireXHotkeyTests) != "1" {
+		t.Skipf("%s is not set, so the X-dependent tests may skip (this is the developer default; CI sets it)", requireXHotkeyTests)
+	}
+	if display == "" {
+		t.Fatalf("%s=1 but DISPLAY is empty, so every X-dependent test below would skip and this job would pass without exercising the cgo grab path at all -- which is the whole of #588", requireXHotkeyTests)
+	}
+	t.Logf("X-dependent hotkey tests are enforced here, against DISPLAY=%q", display)
+}
+
 // parseLinuxKeyspec is pure Go for modifier/alias parsing; the final keysym
 // lookup goes through XStringToKeysym, which is a client-side table lookup and
 // needs no X display, so this runs headless in CI.
@@ -162,7 +213,7 @@ func TestLinuxRefusedGrabIsReported(t *testing.T) {
 	if err != nil {
 		// Either there is no X display, or something already holds this
 		// combination. Both mean there is no first grab to contend with.
-		t.Skipf("cannot grab %q here: %v", spec, err)
+		requireX(t, "cannot grab %q here: %v", spec, err)
 	}
 	if held == nil {
 		t.Fatal("a successful grab returned a nil stop function")
@@ -222,7 +273,7 @@ func TestLinuxGrabIsReleasedOnStop(t *testing.T) {
 	if err != nil {
 		// Includes the case where something else already holds it, which is not
 		// this test's subject.
-		t.Skipf("cannot grab %q here: %v", spec, err)
+		requireX(t, "cannot grab %q here: %v", spec, err)
 	}
 	first()
 
@@ -234,7 +285,7 @@ func TestLinuxGrabIsReleasedOnStop(t *testing.T) {
 		// usually does not.
 		retry, retryErr := startHotkeyListener(spec, func() {})
 		if retryErr != nil {
-			t.Skipf("%q is held by something else, so this cannot distinguish a leak: %v", spec, retryErr)
+			requireX(t, "%q is held by something else, so this cannot distinguish a leak: %v", spec, retryErr)
 		}
 		retry()
 		t.Fatalf("%q could not be grabbed immediately after stop() but was free on a retry; the release is not synchronous: %v", spec, err)
@@ -264,7 +315,7 @@ func TestLinuxRefusalSurvivesAStolenErrorHandler(t *testing.T) {
 
 	held, err := startHotkeyListener(spec, func() {})
 	if err != nil {
-		t.Skipf("cannot grab %q here: %v", spec, err)
+		requireX(t, "cannot grab %q here: %v", spec, err)
 	}
 	defer held()
 
@@ -325,13 +376,13 @@ func TestLinuxCheckedGrabKeepsItsRefusalFromTheGlobalHandler(t *testing.T) {
 	// A squatter on our own connection, so there is a refusal to lose.
 	held, err := startHotkeyListener(spec, func() {})
 	if err != nil {
-		t.Skipf("cannot grab %q here: %v", spec, err)
+		requireX(t, "cannot grab %q here: %v", spec, err)
 	}
 	defer held()
 
 	refused, errorCode, requestCode, handlerCalls, usable := hotkeyGrabUnderHijackedHandler(spec)
 	if !usable {
-		t.Skipf("no usable X connection for %q", spec)
+		requireX(t, "no usable X connection for %q", spec)
 	}
 
 	if !refused {
@@ -376,7 +427,7 @@ func TestLinuxADeadConnectionIsNotReportedAsAGrantedGrab(t *testing.T) {
 
 	stage, ok := hotkeyGrabOverBrokenConnection(spec)
 	if !ok {
-		t.Skipf("no usable X display for %q", spec)
+		requireX(t, "no usable X display for %q", spec)
 	}
 
 	if stage == hkGrabOK {
@@ -436,15 +487,15 @@ func TestLinuxListenerSurvivesAnFdAboveFdSetsize(t *testing.T) {
 	// Raise the soft limit so fds above FD_SETSIZE are obtainable at all.
 	var lim syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
-		t.Skipf("cannot read RLIMIT_NOFILE: %v", err)
+		requireX(t, "cannot read RLIMIT_NOFILE: %v", err)
 	}
 	if lim.Max <= uint64(hotkeyFdSetSize)+64 {
-		t.Skipf("the hard fd limit (%d) is too low to reach FD_SETSIZE (%d)", lim.Max, hotkeyFdSetSize)
+		requireX(t, "the hard fd limit (%d) is too low to reach FD_SETSIZE (%d)", lim.Max, hotkeyFdSetSize)
 	}
 	raised := lim
 	raised.Cur = lim.Max
 	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &raised); err != nil {
-		t.Skipf("cannot raise the soft fd limit: %v", err)
+		requireX(t, "cannot raise the soft fd limit: %v", err)
 	}
 	t.Cleanup(func() { _ = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim) })
 
@@ -477,7 +528,7 @@ func TestLinuxListenerSurvivesAnFdAboveFdSetsize(t *testing.T) {
 	// select() and must not report success.
 	probe := hotkeyProbeConnectionFd()
 	if probe < 0 {
-		t.Skipf("no X display, so the listener cannot be started at all")
+		requireX(t, "no X display, so the listener cannot be started at all")
 	}
 	if probe < hotkeyFdSetSize {
 		t.Fatalf("a fresh X connection got fd %d, below FD_SETSIZE (%d), so this test would pass against the broken select() code too; the fd pressure did not take",
@@ -513,7 +564,7 @@ func TestLinuxPartialClashIsRefusedWholesale(t *testing.T) {
 	// Variant 0 is the plain modifier mask; the lock variants stay free.
 	releaseSquatter, ok := hotkeyHoldOneVariant(spec, 0)
 	if !ok {
-		t.Skipf("could not hold one variant of %q (no display, or something already holds it)", spec)
+		requireX(t, "could not hold one variant of %q (no display, or something already holds it)", spec)
 	}
 	defer releaseSquatter()
 

@@ -321,9 +321,10 @@ the real grab sequence over a connection whose socket has been replaced.
 On that path the sidecar deliberately does **not** close the display.
 `XCloseDisplay` flushes, and flushing a dead socket takes XLib's *fatal-IO*
 route - `XIO: fatal IO error 88 ... exit status 1` - so tidying up would kill the
-sidecar over the condition it is trying to report. One leaked `Display` on a
-dying session is the better trade, and `jarvisHotkeyFree` now skips the close on
-an already-failed connection for the same reason, where before #577 it closed
+sidecar over the condition it is trying to report. One leaked `Display` **struct** on a
+dying session is the better trade - the socket descriptor is closed directly, so
+only the struct is given up - and `jarvisHotkeyFree` now skips the close on an
+already-failed connection for the same reason, where before #577 it closed
 unconditionally.
 
 **No X error handler is installed anywhere in the hotkey path now.** No error of
@@ -404,6 +405,38 @@ The monitor also ignores OS auto-repeat (`[e isARepeat]`), which is what
 Windows gets from `MOD_NOREPEAT`. Holding the summon key used to fire it about
 thirty times a second, and every fire put an event on the wire to the brain
 before the microphone's in-flight guard could stop it.
+
+## What `stop()` promises, and what it does not
+
+Since #587 the backends dispatch a press through one shared registry instead of
+a bare `go onFire()`, and `stop()` invalidates the registration **before** it
+signals the listener. The guarantee that buys, stated exactly:
+
+> after `stop()` returns, no callback invocation can begin.
+
+It is a real guarantee and not a narrowed window, because the claim a dispatch
+takes and the invalidation `stop()` performs contend for the same mutex - a
+press either claims before the invalidation and runs, or finds the registration
+gone and never calls the callback at all.
+
+What it does **not** promise: a callback already executing when `stop()` is
+called runs to completion. `stop()` deliberately does not wait for it, because
+waiting deadlocks - the summon and palette callbacks drive the pebble, whose
+teardown runs on the GTK main thread and is itself one of the callers of
+`stop()`, so waiting there is the GTK thread blocking on a goroutine that needs
+the GTK thread. Instead the in-flight count is logged, so anything a hotkey
+drives has to tolerate a callback finishing after teardown started rather than
+assume it cannot. Before #587 the situation was strictly worse: a callback could
+also *start* afterwards.
+
+The Linux listener also polls rather than selects. `select()` cannot watch a
+descriptor at or above `FD_SETSIZE` (1024) - `FD_SET` writes past the end of the
+`fd_set`, which aborts on a fortified build and corrupts the stack otherwise -
+and nothing chooses that number: the kernel hands out the lowest free one, and a
+long-lived sidecar holding browser pipes, a webview per panel, audio streams and
+its own socket reaches four figures on its own. Refusing to register above the
+limit was rejected as the cheap fix, because it turns "many panels open" into a
+hotkey that silently does not exist, which is #574 one layer up.
 
 ## Known gaps
 
