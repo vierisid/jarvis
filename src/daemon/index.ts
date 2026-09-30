@@ -3353,7 +3353,11 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         args: Record<string, unknown>,
       ): Promise<PebbleNarration | null> => {
         try {
-          if (toolName === 'desktop_click') {
+          if (toolName === 'desktop_click' || toolName === 'desktop_type') {
+            // desktop_type's element_id is optional: without one it types into
+            // whatever already has focus, so it addresses nothing and there is
+            // neither a pointer to show nor an absence to admit to.
+            if (toolName === 'desktop_type' && args.element_id === undefined) return null;
             const id = snapshotElementId(args.element_id);
             if (id === null) return { kind: 'unplaced', reason: 'element_id is not a snapshot id' };
             // That cache holds positions on THIS host's screen, so it is only
