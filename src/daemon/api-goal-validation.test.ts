@@ -114,6 +114,14 @@ test('decomposition through the real chat tool creates next-level children', asy
   expect(vault.getGoalTree(parent.id).map(g => g.level)).toEqual(['key_result', 'milestone', 'task']);
 });
 
+test('chat quick-create under a parent defaults to the next level', async () => {
+  const parent = vault.createGoal('Revenue', 'key_result');
+  const tool = createManageGoalsTool({ goalService: { createGoal: vault.createGoal } } as any);
+  expect(await tool.execute({ action: 'create', title: 'Pricing page', parent_id: parent.id })).toContain('Created milestone');
+  expect(vault.getGoalTree(parent.id).map(g => g.level)).toEqual(['key_result', 'milestone']);
+  expect(await tool.execute({ action: 'create', title: 'Standalone' })).toContain('Created task');
+});
+
 test('parent identity and level are rechecked at confirmation', async () => {
   const parent = vault.createGoal('Existing', 'key_result');
   const b = new NLGoalBuilder(llm);

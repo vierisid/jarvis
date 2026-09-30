@@ -1,4 +1,4 @@
-# Validated goal writes (C5)
+# Validated goal writes
 
 Goal proposals are validated after model generation and again at confirmation.
 The API, chat tool and vault creation boundary enforce the same field types and
@@ -9,6 +9,7 @@ parent-child order. This changes future writes; it does not rewrite legacy rows.
 The order is `objective -> key_result -> milestone -> task -> daily_action`.
 Standalone quick-created goals can still be at any level. An attached goal must
 be exactly one level below its existing parent; a daily action cannot have children.
+The chat tool's quick create uses that next level when `level` is omitted.
 
 The proposal wire fields remain `objective`, `key_results` and optional `milestones`.
 For root creation these mean their named levels. When a parent is supplied,
@@ -33,7 +34,7 @@ transaction. Parent lookup occurs in that transaction. Any later insert failure
 rolls back the whole tree and preserves existing goals. Model calls occur before
 the write transaction. Clarifying questions must be resolved/removed before
 confirmation. The operation does not add acceptance idempotency or route scoring
-and status transitions through the future C9 write contract.
+and status transitions through a shared write contract.
 
 ## Dates and timezone
 

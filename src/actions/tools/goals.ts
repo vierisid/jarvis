@@ -12,6 +12,7 @@ import type { GoalEstimator } from '../../goals/estimator.ts';
 import type { DailyRhythm } from '../../goals/rhythm.ts';
 import type { AccountabilityEngine } from '../../goals/accountability.ts';
 import * as vault from '../../vault/goals.ts';
+import { nextGoalLevel } from '../../goals/validation.ts';
 
 export type GoalToolDeps = {
   goalService: GoalService;
@@ -69,7 +70,7 @@ export function createManageGoalsTool(deps: GoalToolDeps): ToolDefinition {
       },
       level: {
         type: 'string',
-        description: 'Goal level: objective, key_result, milestone, task, daily_action.',
+        description: 'Goal level: objective, key_result, milestone, task, daily_action. A child is exactly one level below its parent; omit to use that level.',
         required: false,
       },
       parent_id: {
@@ -127,11 +128,13 @@ export function createManageGoalsTool(deps: GoalToolDeps): ToolDefinition {
 
           if (title) {
             // Quick creation
-            const level = (params.level as string) ?? 'task';
+            const parentId = params.parent_id as string | undefined;
             try {
-              const goal = deps.goalService.createGoal(title, level as any, {
-                parent_id: params.parent_id as string | undefined,
-              });
+              // Children sit exactly one level below their parent, so an
+              // omitted level under a parent means that next level.
+              const parent = parentId ? vault.getGoal(parentId) : null;
+              const level = (params.level as string) ?? (parent && nextGoalLevel(parent.level)) ?? 'task';
+              const goal = deps.goalService.createGoal(title, level as any, { parent_id: parentId });
               return `Created ${level}: "${goal.title}" (${goal.id})`;
             } catch (err) {
               return `Error creating goal: ${err instanceof Error ? err.message : err}`;
