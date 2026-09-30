@@ -147,6 +147,12 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 	registry["system.permissions"] = handleSystemPermissions
 	registry["system.request_permission"] = handleSystemRequestPermission
 
+	// Self-update (client_update.go). Ungated like the permissions pair: the
+	// update is about the sidecar itself, not a capability, and reloadConfig
+	// rebuilds this registry, so they must not live in the per-connection set.
+	registry["sidecar.update_prompt"] = handleUpdatePrompt
+	registry["sidecar.update_apply"] = handleUpdateApply
+
 	return registry
 }
 

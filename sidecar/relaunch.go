@@ -29,17 +29,13 @@ const (
 	restartRelaunchWait = 800 * time.Millisecond
 )
 
-// relaunchSidecar starts a fresh copy of the sidecar executable as an
+// relaunchSidecar starts a fresh copy of the sidecar executable exe as an
 // independent process (no args, so it reads the just-saved config) and returns
 // the command handle so the caller can detect an immediate crash. The
 // JARVIS_RELAUNCH marker makes the new process wait restartRelaunchWait on
 // startup so the old one releases devices first. The child keeps running after
 // this process exits (neither Windows nor Unix kills it on parent exit).
-func relaunchSidecar() (*exec.Cmd, error) {
-	exe, err := os.Executable()
-	if err != nil {
-		return nil, err
-	}
+func relaunchSidecar(exe string) (*exec.Cmd, error) {
 	cmd := exec.Command(exe)
 	cmd.Env = append(os.Environ(), "JARVIS_RELAUNCH=1")
 	if err := cmd.Start(); err != nil {

@@ -83,6 +83,10 @@ type SidecarClient struct {
 	streamPlayer atomic.Pointer[AudioStreamPlayer]
 	realtime     atomic.Pointer[realtimeVoice]
 
+	// updater owns self-update: what the brain advertised, whether it is
+	// installable, and the install itself (updater.go, client_update.go).
+	updater *Updater
+
 	// wakeSuppress is the current connection's wake-listener suppression hook,
 	// published here so the playback state hook can find it. The wake listener
 	// is per-connection but the playback service outlives a reconnect (and is
@@ -162,6 +166,7 @@ func NewSidecarClient(config *SidecarConfig) (*SidecarClient, error) {
 		client.regions = NewRegionSelectionService()
 	}
 	client.handlers = NewHandlerRegistry(config, &client.mu, client.availableCaps, client.panels, client.pebble, client.subPebble, client.playback, client.regions, client.reloadConfig, client.claims.Brain, client.tokenProvider.Token)
+	client.initUpdater()
 	return client, nil
 }
 
@@ -248,9 +253,11 @@ func (c *SidecarClient) Start(ctx context.Context) {
 		}
 		if c.incompatible {
 			// The brain refused us for being too old. Reconnecting would just be
-			// refused again, so stop hammering and leave the loud message up for
-			// the user running the sidecar in a terminal.
+			// refused again, so stop hammering — but stay alive: the update
+			// prompt and the tray's Update item are how this gets fixed, and
+			// returning here used to end the process on Windows and Linux.
 			log.Printf("[sidecar] Not reconnecting — update the sidecar and restart.")
+			<-ctx.Done()
 			return
 		}
 		var tokErr *tokenRejectedError
@@ -386,7 +393,19 @@ func (c *SidecarClient) SetShutdown(fn func()) { c.shutdown = fn }
 // (e.g. a broken build), the current process is kept alive and the error is
 // reported instead of leaving the user with no sidecar.
 func (c *SidecarClient) Restart() error {
-	cmd, err := relaunchSidecar()
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("could not launch a new instance: %v", err)
+	}
+	return c.handOff(exe)
+}
+
+// handOff is Restart with an explicit executable: a self-update relaunches
+// the binary it just installed, which after a swap is no longer what
+// os.Executable() resolves to (on Linux /proc/self/exe follows the renamed-
+// aside old file).
+func (c *SidecarClient) handOff(exe string) error {
+	cmd, err := relaunchSidecar(exe)
 	if err != nil {
 		return fmt.Errorf("could not launch a new instance: %v", err)
 	}
@@ -1273,6 +1292,7 @@ func (c *SidecarClient) sendRegistration(ctx context.Context) error {
 		OS:                      runtime.GOOS,
 		Platform:                runtime.GOARCH,
 		Version:                 sidecarVersion,
+		Features:                c.updater.Features(),
 		Capabilities:            c.availableCaps,
 		UnavailableCapabilities: c.unavailableCaps,
 		Timezone:                DetectIANATimezone(),
@@ -1290,28 +1310,34 @@ func (c *SidecarClient) handleRegisterRejected(data []byte) {
 		Reason      string `json:"reason"`
 		Min         string `json:"min"`
 		YourVersion string `json:"your_version"`
+		// Latest is the sidecar version this brain ships with ("" from brains
+		// that predate self-update).
+		Latest string `json:"latest"`
 	}
 	_ = json.Unmarshal(data, &msg)
 	c.incompatible = true
 	log.Printf("[sidecar] ====================================================================")
 	log.Printf("[sidecar] INCOMPATIBLE: this brain requires sidecar >= %s, but this is %s.", msg.Min, msg.YourVersion)
-	log.Printf("[sidecar] Update the sidecar (e.g. `bun install -g @usejarvis/sidecar` or")
-	log.Printf("[sidecar] grab the latest from GitHub Releases) and restart it.")
+	log.Printf("[sidecar] Update the sidecar and restart it: %s", c.updater.ManualCommand(msg.Latest))
 	log.Printf("[sidecar] ====================================================================")
+	c.updater.OnRejected(msg.Latest)
 }
 
-// handleRegisterAck processes a brain `register_ack`. The brain sends one only
-// when it wants to tell us something (currently: an optional update suggestion
-// when we're between RECOMMENDED and MIN); a plain accept needs no ack.
+// handleRegisterAck processes a brain `register_ack`. Brains with self-update
+// send one on every accepted registration, carrying the sidecar version they
+// ship with (`latest`); older brains send one only for an update suggestion
+// (between RECOMMENDED and MIN), and none on a plain accept.
 func (c *SidecarClient) handleRegisterAck(data []byte) {
 	var msg struct {
 		UpdateSuggested bool   `json:"update_suggested"`
 		Recommended     string `json:"recommended"`
+		Latest          string `json:"latest"`
 	}
 	_ = json.Unmarshal(data, &msg)
 	if msg.UpdateSuggested {
 		log.Printf("[sidecar] An update is available (this brain recommends sidecar >= %s; running %s). Still compatible.", msg.Recommended, sidecarVersion)
 	}
+	c.updater.OnAck(msg.Latest)
 }
 
 func (c *SidecarClient) sendCapabilitiesUpdate(ctx context.Context) error {

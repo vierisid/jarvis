@@ -113,7 +113,10 @@ type SidecarRegistration struct {
 	// Version is the sidecar's own semver (sidecarVersion, "dev" for unstamped
 	// local builds). The brain classifies it against its MIN/RECOMMENDED floors
 	// to accept / suggest-update / hard-block on register.
-	Version                 string                  `json:"version"`
+	Version string `json:"version"`
+	// Features lists optional protocol features this sidecar supports
+	// (update_prompt, update_apply — see updater.go). Older brains ignore it.
+	Features                []string                `json:"features,omitempty"`
 	Capabilities            []SidecarCapability     `json:"capabilities"`
 	UnavailableCapabilities []UnavailableCapability `json:"unavailable_capabilities,omitempty"`
 	// Timezone is the machine's IANA zone (e.g. "Europe/Rome"), best-effort
@@ -149,6 +152,15 @@ type SidecarConfig struct {
 	Awareness     AwarenessConfig     `yaml:"awareness"`
 	Preferences   PreferencesConfig   `yaml:"preferences"`
 	Telemetry     TelemetryConfig     `yaml:"telemetry"`
+	Update        UpdateConfig        `yaml:"update,omitempty"`
+}
+
+// UpdateConfig holds the self-update choices the user made.
+type UpdateConfig struct {
+	// SkippedVersion is the update the user chose "Skip this version" for: the
+	// startup prompt stays quiet about it (the tray and dashboard still offer
+	// it). A newer version prompts again.
+	SkippedVersion string `yaml:"skipped_version,omitempty"`
 }
 
 // TelemetryConfig controls anonymous sidecar usage metrics. Independent of the

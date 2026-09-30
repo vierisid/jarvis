@@ -117,3 +117,10 @@ func StrictlyNewer(candidate, current string) bool {
 	}
 	return compareSemver(cv, rv) > 0
 }
+
+// ValidVersion reports whether v parses as a release or prerelease version;
+// "dev" and other unstamped builds do not.
+func ValidVersion(v string) bool {
+	_, err := parseSemver(v)
+	return err == nil
+}
