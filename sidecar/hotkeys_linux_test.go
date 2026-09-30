@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -383,6 +384,113 @@ func TestLinuxADeadConnectionIsNotReportedAsAGrantedGrab(t *testing.T) {
 		t.Fatal("hkGrabConnLost produced no error")
 	}
 	t.Logf("dead connection reported as: %v", err)
+}
+
+// The listener must work when its X connection fd lands at or above
+// FD_SETSIZE (#587).
+//
+// The old run loop did FD_SET(fd) into a fixed 1024-bit fd_set. An fd at or
+// above that is undefined behaviour: measured on a real connection forced up
+// there, a fortified build aborts and an unfortified one writes out of bounds
+// silently:
+//
+//	X connection fd = 1067  (FD_SETSIZE = 1024)
+//	poll() on fd 1067 returned 0 (revents=0x0)
+//	FD_SET(1067) -> *** bit out of range 0 - FD_SETSIZE on fd_set ***: terminated
+//
+// Nothing chose that number. The kernel hands out the lowest free fd, and the
+// sidecar holds browser pipes, a panel webview per panel, audio streams and its
+// own socket, so an instance that has been up a while with many panels open
+// gets there on its own. This test manufactures the same pressure.
+//
+// Against the pre-#587 code this does not fail politely. FD_SET runs on the
+// listener goroutine, so the whole test binary goes down with SIGABRT:
+//
+//	a fresh X connection lands at fd 1070, above FD_SETSIZE (1024)
+//	[hotkeys] registered "ctrl+alt+shift+super+f"
+//	*** bit out of range 0 - FD_SETSIZE on fd_set ***: terminated
+//	SIGABRT: abort ... signal arrived during cgo execution
+//	github.com/jarvis/sidecar._Cfunc_jarvisHotkeyRun
+//
+// THE CATCH, measured rather than guessed: that abort is glibc's fortified
+// FD_SET. Built WITHOUT fortification the same broken select() code passes this
+// test, because the out-of-bounds write lands in adjacent stack memory that
+// select() then happens to read back. There is no portable observable
+// difference -- undefined behaviour that works by accident is still what it is.
+//
+// So two things carry the guard rather than one: the precondition assertion
+// below, which refuses to report success if the fd did not clear the ceiling,
+// and CI compiling this package with -D_FORTIFY_SOURCE=2 so the abort is
+// deterministic there. On a local unfortified toolchain this test confirms the
+// fix works; it cannot by itself condemn the old code.
+func TestLinuxListenerSurvivesAnFdAboveFdSetsize(t *testing.T) {
+	const spec = "ctrl+alt+shift+super+f"
+
+	// Raise the soft limit so fds above FD_SETSIZE are obtainable at all.
+	var lim syscall.Rlimit
+	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
+		t.Skipf("cannot read RLIMIT_NOFILE: %v", err)
+	}
+	if lim.Max <= uint64(hotkeyFdSetSize)+64 {
+		t.Skipf("the hard fd limit (%d) is too low to reach FD_SETSIZE (%d)", lim.Max, hotkeyFdSetSize)
+	}
+	raised := lim
+	raised.Cur = lim.Max
+	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &raised); err != nil {
+		t.Skipf("cannot raise the soft fd limit: %v", err)
+	}
+	t.Cleanup(func() { _ = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim) })
+
+	// Fill every fd number below the ceiling so the next socket the kernel
+	// hands out is above it.
+	//
+	// syscall.Open and raw ints on purpose, NOT os.OpenFile: an *os.File has a
+	// finaliser, and one of them being collected mid-test would close an fd
+	// below the ceiling and punch a hole for the X connection to fall into,
+	// silently making the test vacuous. O_CLOEXEC on purpose too -- this
+	// package spawns Chromium and shells in other tests, and 1100 inherited
+	// fds is a mess to debug.
+	filler := make([]int, 0, hotkeyFdSetSize+64)
+	t.Cleanup(func() {
+		for _, fd := range filler {
+			_ = syscall.Close(fd)
+		}
+	})
+	for i := 0; i < hotkeyFdSetSize+40; i++ {
+		fd, err := syscall.Open("/dev/null", syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
+		if err != nil {
+			t.Fatalf("could only open %d of the %d filler fds needed to push a connection past FD_SETSIZE: %v",
+				len(filler), hotkeyFdSetSize+40, err)
+		}
+		filler = append(filler, fd)
+	}
+
+	// THE PRECONDITION, asserted rather than assumed: if a fresh connection
+	// still lands below the ceiling, this test cannot distinguish poll() from
+	// select() and must not report success.
+	probe := hotkeyProbeConnectionFd()
+	if probe < 0 {
+		t.Skipf("no X display, so the listener cannot be started at all")
+	}
+	if probe < hotkeyFdSetSize {
+		t.Fatalf("a fresh X connection got fd %d, below FD_SETSIZE (%d), so this test would pass against the broken select() code too; the fd pressure did not take",
+			probe, hotkeyFdSetSize)
+	}
+	t.Logf("a fresh X connection lands at fd %d, above FD_SETSIZE (%d)", probe, hotkeyFdSetSize)
+
+	// The listener's own connection now gets a number in the same range, and
+	// its run loop has to cope. With select() this is where it dies.
+	stop, err := startHotkeyListener(spec, func() {})
+	if err != nil {
+		t.Fatalf("registering %q with a high-numbered connection fd failed: %v", spec, err)
+	}
+	if stop == nil {
+		t.Fatal("a successful registration returned a nil stop function")
+	}
+	// stop() writes the self-pipe and waits for the run loop to return, so this
+	// returning at all proves the loop reached its poll() and came back out of
+	// it rather than aborting or spinning.
+	stop()
 }
 
 // The partial clash is the case the all-or-nothing decision exists for, so it

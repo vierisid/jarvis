@@ -6,7 +6,7 @@ package main
 //
 // Each hotkey opens its own X display connection, grabs the key on the root
 // window (with the NumLock/CapsLock modifier variants so it fires regardless of
-// lock state), and runs a select() loop over the X connection fd + a self-pipe
+// lock state), and runs a poll() loop over the X connection fd + a self-pipe
 // so it can be stopped cleanly. KeyPress fires the Go callback.
 //
 // The grabs themselves go out as xcb CHECKED requests on the same connection,
@@ -32,9 +32,13 @@ package main
 #include <xcb/xcb.h>
 #include <errno.h>
 #include <fcntl.h>
+#include <poll.h>
 #include <unistd.h>
 #include <stdlib.h>
 #include <string.h>
+// sys/select.h is included for FD_SETSIZE ONLY, which the high-fd test
+// asserts against so the limit comes from the real header rather than a
+// comment. Nothing here calls select() any more -- see jarvisHotkeyRun.
 #include <sys/select.h>
 
 extern void goHotkeyFire(unsigned long long id);
@@ -457,7 +461,7 @@ static HotkeyResult jarvisHotkeyCreate(unsigned int mods, unsigned long keysym, 
 // grabs' verdicts, and any KeyPress that arrives in that window is queued (in
 // xcb's event queue, which XPending drains through -- the event queue still
 // belongs to XLib, so nothing is stranded) rather than dispatched. The run loop
-// blocks in select() BEFORE looking at the queue, so without this a key pressed
+// blocks in poll() BEFORE looking at the queue, so without this a key pressed
 // during startup would sit unread until the next unrelated socket wakeup.
 //
 // Separate from jarvisHotkeyRun so the caller can wait until it actually holds
@@ -471,18 +475,43 @@ static void jarvisHotkeyDrain(Hotkey* hk) {
 }
 
 // jarvisHotkeyRun blocks until stopped, firing the Go callback on each KeyPress.
-// Returns 0 for a clean stop and the errno of a failing select() otherwise, so
+// Returns 0 for a clean stop and the errno of a failing poll() otherwise, so
 // a listener that dies on its own does not die mutely.
+//
+// poll(), not select(), since #587. select() has a hard ceiling: an fd at or
+// above FD_SETSIZE (1024) is undefined behaviour. FD_SET then writes past the
+// end of the fd_set -- a silent out-of-bounds write on an unfortified build,
+// and on a fortified one an abort:
+//
+//	X connection fd = 1067  (FD_SETSIZE = 1024)
+//	poll() on fd 1067 returned 0 (revents=0x0)
+//	FD_SET(1067) -> *** bit out of range 0 - FD_SETSIZE on fd_set ***: terminated
+//
+// Nothing here chose that fd number: the kernel hands out the lowest free one,
+// and this sidecar holds browser pipes, a panel webview per panel, audio streams
+// and its own socket, so a long-lived instance with many panels genuinely
+// reaches four figures. It is not a theoretical limit, it is a hotkey that
+// corrupts the stack instead of registering.
+//
+// The cheap alternative -- refuse to install the listener when the fd is too
+// high -- was rejected: it converts "many panels open" into "your hotkey
+// silently does not exist", which is the #574 failure class one layer up.
+// poll() has no ceiling, needs no maxfd arithmetic, and is POSIX.
+//
+// Semantics are held identical to the select() version it replaces, including
+// the two conditions select() folded into "readable".
 static int jarvisHotkeyRun(Hotkey* hk) {
-    int xfd = ConnectionNumber(hk->dpy);
+    struct pollfd fds[2];
+    fds[0].fd = ConnectionNumber(hk->dpy);
+    fds[1].fd = hk->stopfd[0];
+    fds[0].events = POLLIN;
+    fds[1].events = POLLIN;
     for (;;) {
-        fd_set fds; FD_ZERO(&fds);
-        FD_SET(xfd, &fds);
-        FD_SET(hk->stopfd[0], &fds);
-        int maxfd = xfd > hk->stopfd[0] ? xfd : hk->stopfd[0];
-        if (select(maxfd + 1, &fds, NULL, NULL, NULL) < 0) {
-            // EINTR is not an error, and it is not rare here. select() is not
-            // restarted by SA_RESTART, and this process takes plenty of
+        fds[0].revents = 0;
+        fds[1].revents = 0;
+        if (poll(fds, 2, -1) < 0) {
+            // EINTR is not an error, and it is not rare here. poll() is not
+            // restarted by SA_RESTART either, and this process takes plenty of
             // signals: SIGCHLD every time a spawned shell command exits
             // (handlers.go runs them), SIGPROF under the profiler, SIGURG from
             // the runtime. Any of them delivered to this thread interrupts the
@@ -492,14 +521,54 @@ static int jarvisHotkeyRun(Hotkey* hk) {
             if (errno == EINTR) continue;
             return errno;
         }
-        if (FD_ISSET(hk->stopfd[0], &fds)) return 0;
-        while (XPending(hk->dpy)) {
-            XEvent ev;
-            XNextEvent(hk->dpy, &ev);
-            if (ev.type == KeyPress) goHotkeyFire(hk->id);
+        // POLLNVAL means the fd is closed. select() reported that by failing
+        // with EBADF and this loop returned it; poll() reports it per-fd and
+        // returns > 0, so without this branch the loop would spin at 100% CPU
+        // forever on a condition that cannot clear.
+        if ((fds[0].revents | fds[1].revents) & POLLNVAL) return EBADF;
+        // Stop pipe first, and on ANY event rather than POLLIN alone. This is
+        // the one place poll() and select() genuinely differ: select() reported
+        // a hung-up read end as READABLE, so a vanished write end ended the
+        // loop. Testing POLLIN only would leave POLLHUP set on every iteration
+        // and spin, and no stop byte could ever arrive to break out -- stop()
+        // would block forever on its done channel.
+        if (fds[1].revents != 0) return 0;
+        // Anything on the X fd goes to the queue drain, which is exactly what
+        // select() did: it reported a hung-up socket as readable, XPending then
+        // hit EOF and took XLib's fatal-IO path. Left unchanged on purpose;
+        // giving that its own return value is a separate decision from this
+        // one.
+        if (fds[0].revents != 0) {
+            while (XPending(hk->dpy)) {
+                XEvent ev;
+                XNextEvent(hk->dpy, &ev);
+                if (ev.type == KeyPress) goHotkeyFire(hk->id);
+            }
         }
     }
 }
+
+// jarvisHotkeyProbeConnectionFd opens a connection the way a create does,
+// reports the fd the kernel handed it, and closes it again. HK_FD_SETSIZE is
+// the select() ceiling that fd used to have to stay under.
+//
+// Both exist for TestLinuxListenerSurvivesAnFdAboveFdSetsize, which is only
+// meaningful if the fd really did land above the limit. Asserting that from Go
+// turns "the precondition was not met" into a visible failure instead of a test
+// that passes while proving nothing -- and that matters more than it sounds,
+// because FD_SET on an out-of-range fd only ABORTS on a fortified build. On an
+// unfortified one it writes out of bounds silently, so without this assertion a
+// developer on such a toolchain would watch the test pass against the BROKEN
+// select() code and conclude it was covered.
+static int jarvisHotkeyProbeConnectionFd(void) {
+    Display* dpy = XOpenDisplay(NULL);
+    if (!dpy) return -1;
+    int fd = ConnectionNumber(dpy);
+    XCloseDisplay(dpy);
+    return fd;
+}
+
+#define HK_FD_SETSIZE FD_SETSIZE
 
 // jarvisHotkeyStop unblocks the run loop (write to the self-pipe — thread-safe,
 // no XLib). Safe to call from a different goroutine than jarvisHotkeyRun, but
@@ -755,7 +824,6 @@ import (
 	"log"
 	"runtime"
 	"sync"
-	"sync/atomic"
 	"unsafe"
 )
 
@@ -780,9 +848,6 @@ const (
 	_ = uint(C.BadAccess-hkBadAccess) + uint(hkBadAccess-C.BadAccess)
 	_ = uint(C.X_GrabKey-hkOpcodeGrab) + uint(hkOpcodeGrab-C.X_GrabKey)
 )
-
-var hotkeyReg sync.Map // uint64 -> func()
-var hotkeyCounter atomic.Uint64
 
 // hotkeyCreateMu serialises jarvisHotkeyCreate.
 //
@@ -858,8 +923,7 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	id := hotkeyCounter.Add(1)
-	hotkeyReg.Store(id, onFire)
+	id := hotkeyDispatcher.register(onFire)
 
 	type created struct {
 		hk  *C.Hotkey
@@ -914,7 +978,7 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 			// The listener is now deaf for the rest of the process's life.
 			// Said out loud, because a silent return here is exactly the class
 			// of bug #574 was.
-			log.Printf("[hotkeys] %q: select() failed (errno %d); the listener has stopped and the hotkey is dead",
+			log.Printf("[hotkeys] %q: poll() failed (errno %d); the listener has stopped and the hotkey is dead",
 				keyspec, int(rc))
 		}
 		lifeMu.Lock()
@@ -927,13 +991,17 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 		hotkeyCreateMu.Unlock()
 		freed = true
 		lifeMu.Unlock()
-		hotkeyReg.Delete(id)
+		// invalidate here too, not just in stop(): this goroutine can exit on
+		// its own (a non-EINTR poll error), and without this the registration
+		// would outlive the listener and a late dispatch would still run the
+		// callback against whatever the caller has since torn down.
+		hotkeyDispatcher.invalidate(id)
 		close(done)
 	}()
 
 	res := <-ch
 	if res.err != nil {
-		hotkeyReg.Delete(id)
+		hotkeyDispatcher.invalidate(id)
 		return nil, res.err
 	}
 	hk := res.hk
@@ -944,6 +1012,19 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 	var stopOnce sync.Once
 	stop := func() {
 		stopOnce.Do(func() {
+			// Invalidate BEFORE asking the listener to stop, and before waiting
+			// on it (#587). The order is load-bearing: reversed, the run loop
+			// can drain a KeyPress that arrived just before the stop byte and
+			// dispatch it after stop() has returned. Done first, that dispatch
+			// finds the registration gone and never calls the callback.
+			//
+			// This does NOT wait for a callback already inside fn() -- see the
+			// header of hotkeys_dispatch.go for why waiting is the wrong
+			// trade here. It is reported instead of implied.
+			if inFlight := hotkeyDispatcher.invalidate(id); inFlight > 0 {
+				log.Printf("[hotkeys] %q: stopped while %d callback(s) were still running; they will finish, so anything this hotkey drives must tolerate that",
+					keyspec, inFlight)
+			}
 			lifeMu.Lock()
 			if !freed {
 				C.jarvisHotkeyStop(hk)
@@ -1034,6 +1115,25 @@ func stealHotkeyErrorHandler() (restore func() int) {
 		once.Do(func() { caught = int(C.jarvisHotkeyRestoreErrorHandler()) })
 		return caught
 	}
+}
+
+// hotkeyFdSetSize is FD_SETSIZE from the real header: the fd number at and
+// above which select() was undefined behaviour, which is what #587 replaced
+// select() to escape.
+const hotkeyFdSetSize = int(C.HK_FD_SETSIZE)
+
+// hotkeyProbeConnectionFd opens an X connection exactly as a create does,
+// reports the fd number the kernel gave it, and closes it again.
+//
+// For TestLinuxListenerSurvivesAnFdAboveFdSetsize, which has to establish that
+// its precondition actually held: under fd pressure the listener's own
+// connection gets a number in the same range, so if this comes back below
+// FD_SETSIZE the test is proving nothing and says so instead of passing.
+// Nothing in the product calls it. Returns -1 if the display will not open.
+func hotkeyProbeConnectionFd() int {
+	hotkeyCreateMu.Lock()
+	defer hotkeyCreateMu.Unlock()
+	return int(C.jarvisHotkeyProbeConnectionFd())
 }
 
 // hotkeyGrabOverBrokenConnection runs the real grab sequence over a connection

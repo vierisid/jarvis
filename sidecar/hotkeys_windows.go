@@ -68,6 +68,10 @@ func startHotkeyListener(keyspec string, onFire func()) (stop func(), err error)
 	if err != nil {
 		return nil, err
 	}
+	// Registered before the listener thread starts, so the message loop can
+	// dispatch through it from its first iteration. hotkeyID below is the Win32
+	// id (always 1, scoped to this thread); dispatchID is ours.
+	dispatchID := hotkeyDispatcher.register(onFire)
 
 	// The thread id is only useful once the hotkey is actually registered (it
 	// exists to unblock GetMessage in stop()), so it rides along with the
@@ -126,18 +130,36 @@ func startHotkeyListener(keyspec string, onFire func()) (stop func(), err error)
 			}
 			if msg.Message == wmHotkey && msg.WParam == hotkeyID {
 				log.Printf("[hotkeys] WM_HOTKEY received for %q -- firing", keyspec)
-				go onFire()
+				// Through the shared registry, not `go onFire()` (#587). The
+				// issue names linux and darwin, but this is the identical
+				// defect: stop() closes stopCh and posts WM_QUIT without
+				// waiting, so a WM_HOTKEY already dequeued here could launch a
+				// callback after stop() had returned and the caller had begun
+				// tearing down what it touches. Leaving one backend with the
+				// defect while fixing the class is worse than fixing all
+				// three, and the Linux and Windows halves of this file are
+				// deliberately kept aligned.
+				hotkeyDispatcher.dispatch(dispatchID)
 			}
 		}
 	}()
 
 	reg := <-regCh
 	if reg.err != nil {
+		hotkeyDispatcher.invalidate(dispatchID)
 		return nil, reg.err
 	}
 
 	tid := reg.tid
 	stop = func() {
+		// Invalidate FIRST, before the loop is asked to quit: a WM_HOTKEY the
+		// loop has already dequeued would otherwise still start a callback
+		// after this function returns (#587). See hotkeys_dispatch.go for why
+		// this invalidates rather than waiting.
+		if inFlight := hotkeyDispatcher.invalidate(dispatchID); inFlight > 0 {
+			log.Printf("[hotkeys] %q: stopped while %d callback(s) were still running; they will finish, so anything this hotkey drives must tolerate that",
+				keyspec, inFlight)
+		}
 		close(stopCh)
 		// Unblock GetMessage by posting WM_QUIT to the listener thread.
 		procPostThreadMsg.Call(uintptr(tid), wmQuit, 0, 0)

@@ -85,23 +85,19 @@ import "C"
 
 import (
 	"fmt"
+	"log"
 	"sync"
-	"sync/atomic"
 )
-
-var hotkeyRegDarwin sync.Map // uint64 -> func()
-var hotkeyCounterDarwin atomic.Uint64
 
 func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 	mods, keyCode, err := parseDarwinKeyspec(keyspec)
 	if err != nil {
 		return nil, err
 	}
-	id := hotkeyCounterDarwin.Add(1)
-	hotkeyRegDarwin.Store(id, onFire)
+	id := hotkeyDispatcher.register(onFire)
 	mon := C.jarvisHotkeyAdd(C.ulong(mods), C.ulong(darwinModifierCompareMask), C.ushort(keyCode), C.ulonglong(id))
 	if mon == nil {
-		hotkeyRegDarwin.Delete(id)
+		hotkeyDispatcher.invalidate(id)
 		// NOT "(Accessibility permission?)", which is what this used to guess:
 		// the monitor installs perfectly well without that trust and simply
 		// never fires, so a nil return means something else went wrong. The
@@ -115,15 +111,25 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 	// deallocated object. No caller does that today -- Close nils the field,
 	// panels_runtime defers once -- but nothing at this return site said so.
 	//
-	// Delete BEFORE removing the monitor, not after. stop() runs on an RPC
+	// Invalidate BEFORE removing the monitor, not after. stop() runs on an RPC
 	// goroutine while the handler block runs on the main run loop, so a block
 	// invocation already in flight can reach goHotkeyFire after the removal;
-	// deleting first makes that a guaranteed no-op instead of a summon event
-	// arriving after the pebble was closed.
+	// invalidating first makes that a guaranteed no-op instead of a summon
+	// event arriving after the pebble was closed.
+	//
+	// That ordering predates #587 and is kept. What #587 adds is that the
+	// invalidation now also stops the DISPATCHED GOROUTINE: the old code
+	// deleted from a sync.Map, which closed the window for a block that had not
+	// yet called goHotkeyFire but not for one that had already launched
+	// `go fn()`. See hotkeys_dispatch.go for why this invalidates rather than
+	// waiting, and for exactly what that guarantees.
 	var once sync.Once
 	stop := func() {
 		once.Do(func() {
-			hotkeyRegDarwin.Delete(id)
+			if inFlight := hotkeyDispatcher.invalidate(id); inFlight > 0 {
+				log.Printf("[hotkeys] %q: stopped while %d callback(s) were still running; they will finish, so anything this hotkey drives must tolerate that",
+					keyspec, inFlight)
+			}
 			C.jarvisHotkeyRemove(mon)
 		})
 	}
