@@ -7,6 +7,7 @@
  * Feeds the evening review with detected activity.
  */
 
+import { getGoalApplication } from './application-service.ts';
 import { normalizeAwarenessActivityEvent } from '../awareness/activity-events.ts';
 import type { AwarenessActivityEvent } from '../awareness/activity-events.ts';
 import * as vault from '../vault/goals.ts';
@@ -77,27 +78,10 @@ export function matchAwarenessToGoals(
 export function logAutoDetectedProgress(
   matches: AwarenessGoalMatch[],
 ): void {
-  const now = Date.now();
-  const thirtyMinutes = 30 * 60 * 1000;
-
   for (const match of matches) {
-    // Check for recent auto-detection to avoid spam
-    const hasRecentAutoDetect = vault.hasRecentAutoDetectedProgress(match.goalId, now - thirtyMinutes);
-
-    if (hasRecentAutoDetect) continue;
-
-    const goal = vault.getGoal(match.goalId);
-    if (!goal || goal.status !== 'active') continue;
-
-    // Log progress entry (no score change, just detection)
-    vault.addProgressEntry(
-      match.goalId,
-      'auto_detected',
-      goal.score,
-      goal.score, // no automatic score change
+    getGoalApplication().recordActivity(match.goalId,
       `Possible goal-related activity: ${match.eventType} via ${match.source} (matched: ${match.matchedTerms.join(', ')}; observed at ${new Date(match.observedAt).toISOString()}). This is an activity hint, not verified progress.`,
-      'awareness',
-    );
+      match.observedAt);
   }
 }
 

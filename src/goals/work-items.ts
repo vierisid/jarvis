@@ -1,3 +1,4 @@
+import { getGoalApplication } from './application-service.ts';
 /** Durable Today work, extending commitments instead of creating another task identity. */
 import { getDb, generateId } from '../vault/schema.ts';
 import { createCommitment, getCommitment } from '../vault/commitments.ts';
@@ -223,7 +224,7 @@ export function checkWorkResult(id: string, body: unknown): WorkItem {
     const e = object(entry);
     return { ref: requiredText(e.ref, 'evidence.ref'), description: requiredText(e.description, 'evidence.description') };
   });
-  return getDb().transaction(() => {
+  return getGoalApplication().transaction(() => {
     const work = getWorkItem(id);
     if (work.resultCheck) throw new WorkItemError('Result is already checked', 409);
     if (work.decision?.outcome !== 'accepted' || work.blocker?.kind === 'manual') throw new WorkItemError('Accept and unblock the work before checking its result', 409);
@@ -242,12 +243,11 @@ export function checkWorkResult(id: string, body: unknown): WorkItem {
       }
       const goal = goals.getGoal(work.goalId);
       if (!goal) throw new WorkItemError('Linked goal no longer exists', 409);
-      const progress = goals.addProgressEntry(goal.id, 'manual', goal.score, input.goalScore, summary, `work_item:${id}:check:${check.id}`);
-      check.goalProgressId = progress.id;
-      getDb().run('UPDATE goals SET score = ?, score_reason = ?, updated_at = ? WHERE id = ?', [input.goalScore, summary, check.checkedAt, goal.id]);
+      const scored = getGoalApplication().recordScore(goal.id, input.goalScore, summary, `work_item:${id}:check:${check.id}`)!;
+      check.goalProgressId = scored.progress.id;
     }
     getDb().run('UPDATE commitment_work SET result_check = ?, updated_at = ? WHERE work_id = ?', [JSON.stringify(check), check.checkedAt, id]);
     getDb().run('UPDATE commitments SET status = ?, completed_at = ?, result = ? WHERE id = ?', [check.verdict === 'passed' ? 'completed' : 'failed', check.checkedAt, summary, id]);
     return getWorkItem(id);
-  })();
+  });
 }

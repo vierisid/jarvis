@@ -10,10 +10,10 @@
 import type { Goal, GoalCheckIn } from './types.ts';
 import type { GoalEvent } from './events.ts';
 import * as vault from '../vault/goals.ts';
-import { getDb } from '../vault/schema.ts';
+import { getGoalApplication } from './application-service.ts';
 import { createPlannedWork, listWorkItems, type WorkItem } from './work-items.ts';
 import { wrapUntrusted } from '../roles/untrusted.ts';
-import { buildGoalReviewBundle, saveGoalReviewRecord, validateReviewScores, type GoalReviewRecord } from './review-evidence.ts';
+import { buildGoalReviewBundle, type GoalReviewRecord } from './review-evidence.ts';
 
 export type MorningPlanResult = {
   checkIn: GoalCheckIn;
@@ -34,7 +34,6 @@ export type EveningReviewResult = {
 
 export class DailyRhythm {
   private llmManager: any; // LLMManager
-  private eventCallback: ((event: GoalEvent) => void) | null = null;
   private accountabilityStyle: 'drill_sergeant' | 'supportive' | 'balanced';
 
   constructor(llmManager: unknown, style: 'drill_sergeant' | 'supportive' | 'balanced' = 'drill_sergeant') {
@@ -43,11 +42,7 @@ export class DailyRhythm {
   }
 
   setEventCallback(cb: (event: GoalEvent) => void): void {
-    this.eventCallback = cb;
-  }
-
-  private emit(event: GoalEvent): void {
-    if (this.eventCallback) this.eventCallback(event);
+    getGoalApplication().setEventCallback(cb);
   }
 
   /**
@@ -88,15 +83,7 @@ export class DailyRhythm {
       const json = text.match(/\{[\s\S]*\}/)?.[0];
       const plan = json ? JSON.parse(json) : this.fallbackMorningPlan(activeGoals);
 
-      const result = this.persistMorningPlan(plan, activeGoals);
-
-      this.emit({
-        type: 'check_in_morning',
-        data: { checkInId: result.checkIn.id, focusAreas: result.focusAreas, dailyActions: result.dailyActions, warnings: result.warnings, workItemIds: result.workItems.map(w => w.id) },
-        timestamp: Date.now(),
-      });
-
-      return result;
+      return this.persistMorningPlan(plan, activeGoals);
     } catch (err) {
       console.error('[DailyRhythm] Morning plan LLM error:', err);
       const fallback = this.fallbackMorningPlan(activeGoals);
@@ -116,12 +103,15 @@ export class DailyRhythm {
       return [{ title: a.title.trim(), goalId: typeof a.goal_id === 'string' && goalIds.has(a.goal_id) ? a.goal_id : null }];
     });
     const dailyActions = actions.map((a: { title: string }) => a.title);
-    return getDb().transaction(() => {
+    return getGoalApplication().transaction(() => {
       const checkIn = vault.createCheckIn('morning_plan', `Focus: ${focusAreas.join(', ')}`, [...goalIds], dailyActions);
       const workItems = createPlannedWork(checkIn.id, actions);
       checkIn.work_item_ids = workItems.map(w => w.id);
+      getGoalApplication().recordEvent({ type: 'check_in_morning',
+        data: { checkInId: checkIn.id, focusAreas, dailyActions, warnings, workItemIds: checkIn.work_item_ids },
+        timestamp: checkIn.created_at });
       return { checkIn, focusAreas, dailyActions, warnings, message, workItems };
-    })();
+    });
   }
 
   /**
@@ -188,30 +178,8 @@ export class DailyRhythm {
       console.error('[DailyRhythm] Evening review LLM error:', err);
     }
 
-    const reviewEvidence: GoalReviewRecord = { bundle, ...validateReviewScores(bundle, review.score_updates) };
-    const prose = (value: unknown, fallback: string) =>
-      typeof value === 'string' && value.trim() ? value.slice(0, 6000) : fallback;
-    const assessment = prose(review.assessment, 'No assessment available.');
-    const message = prose(review.message, 'Check your goals manually.');
-    const scoreUpdates: EveningReviewResult['scoreUpdates'] = [];
-    // Completed actions come from checked records, never invented model text.
-    // This is a snapshot as of bundle.window.end, not a new measurement.
-    const actionsCompleted = bundle.goals.flatMap(g => g.verifiedOutcomes)
-      .filter(o => o.verdict === 'passed').map(o => `[${o.id}] ${o.summary}`);
-    // Do not hold a database transaction across the LLM call. Persist the
-    // check-in and its exact evidence/validation together, including fallback.
-    const checkIn = getDb().transaction(() => {
-      const saved = vault.createCheckIn('evening_review', assessment, bundle.goals.map(g => g.goalId), [], actionsCompleted);
-      saveGoalReviewRecord(saved.id, reviewEvidence);
-      return { ...saved, review_evidence: reviewEvidence };
-    })();
-    this.emit({
-      type: 'check_in_evening',
-      data: { checkInId: checkIn.id, bundleId: bundle.id, scoreUpdates, assessment,
-        rejectedScoreUpdates: reviewEvidence.rejectedScoreUpdates, scorePolicy: bundle.scorePolicy },
-      timestamp: Date.now(),
-    });
-    return { checkIn, reviewEvidence, scoreUpdates, assessment, message };
+    // Recheck evidence and persist review plus event through the same application boundary.
+    return getGoalApplication().recordEveningReview(bundle, review);
   }
 
   // ── Prompts ──────────────────────────────────────────────────────

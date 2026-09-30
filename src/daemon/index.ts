@@ -5735,9 +5735,9 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // 10b. (legacy workflow engine deleted; the new runtime initialized above
     //       in step 10.1 owns all workflow execution.)
 
-    // 10f. Goal Service (M16)
+    // 10f. Goal service and durable event recovery, even when autonomous rhythms are disabled.
     const goalsConfig = jarvisConfig.goals;
-    if (goalsConfig?.enabled !== false) {
+    {
       try {
         const { GoalService } = await import('../goals/service.ts');
         const goalSvc = new GoalService(goalsConfig ?? {
@@ -5763,7 +5763,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         // Register manage_goals tool for chat agent
         try {
           const goalToolRegistry = orchestrator.getToolRegistry();
-          if (goalToolRegistry) {
+          if (goalToolRegistry && goalsConfig?.enabled !== false) {
             const { createManageGoalsTool } = await import('../actions/tools/goals.ts');
             const { NLGoalBuilder } = await import('../goals/nl-builder.ts');
             const { GoalEstimator } = await import('../goals/estimator.ts');
@@ -5787,7 +5787,6 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             console.log('[Daemon] manage_goals tool registered for chat agent');
 
             // Wire DailyRhythm + chat delivery into GoalService for proactive reminders
-            goalRhythm.setEventCallback((event) => wsService.broadcastGoalEvent(event));
             goalSvc.setRhythm(goalRhythm);
             goalSvc.setChatCallback((text) => wsService.broadcastHeartbeat(text));
           }
@@ -5795,7 +5794,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
           console.error('[Daemon] Failed to register manage_goals tool:', err instanceof Error ? err.message : err);
         }
 
-        console.log('[Daemon] Goal service started (autonomous goal pursuit)');
+        console.log('[Daemon] Goal application ready; autonomous rhythms', goalsConfig?.enabled === false ? 'disabled' : 'enabled');
       } catch (err) {
         console.error('[Daemon] Goal service failed to start:', err instanceof Error ? err.message : err);
         // Non-fatal — daemon continues without goals

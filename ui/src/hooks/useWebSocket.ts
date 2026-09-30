@@ -246,6 +246,8 @@ export type WorkflowEvent = {
 };
 
 export type GoalEvent = {
+  eventId?: string;
+  sequence?: number;
   type: string;
   goalId?: string;
   data: Record<string, unknown>;
@@ -919,7 +921,8 @@ export function useWebSocket() {
       setThinking(false);
     } else if (msg.type === "goal_event") {
       const goalEvent = msg.payload as GoalEvent;
-      setGoalEvents((prev) => [...prev.slice(-100), goalEvent]);
+      setGoalEvents((prev) => goalEvent.eventId && prev.some(event => event.eventId === goalEvent.eventId)
+        ? prev : [...prev.slice(-99), goalEvent]);
     } else if (msg.type === "workflow_event") {
       const wfEvent = msg.payload as WorkflowEvent;
       setWorkflowEvents((prev) => [...prev.slice(-100), wfEvent]);
