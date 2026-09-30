@@ -414,6 +414,138 @@ the characters that must not reach a log line. A call that never reached a page
 logs nothing here, because the dispatch already said why, and neither does a
 perfectly ordinary page that simply has no template.
 
+## Snapshot element references, and what an action may act on
+
+`browser_snapshot` mints 1-based element ids and keeps, per id, a viewport
+coordinate and a live DOM reference. Three rules govern them, and all three
+changed in #592.
+
+### The references live in an isolated world
+
+The refs used to be stashed on the page's own `window.__jarvis_elements`, which
+is a **page-writable main-world global**. A page that overwrote it had approved
+text typed into an element of its own choosing, while the snapshot, the approval
+card and the narration all still named the reviewed one -- reaching around
+#495's snapshot binding from inside the page.
+
+They now live in a per-document **isolated world** (`Page.createIsolatedWorld`,
+`worldName: "jarvis-elements"`), which has its own global object, so the array
+has no name the page can reach. The world is keyed on the document's `loaderId`,
+because `createIsolatedWorld` mints a fresh V8 context on every call however the
+name is reused and nothing disposes them.
+
+If no world can be created, **the snapshot refuses**. It does not fall back to a
+main-world evaluate: that would put the vulnerability back within reach of any
+page that can make the call fail. A dead context is likewise a refusal and never
+a re-mint-and-retry, which would silently re-target whatever document is there
+now.
+
+A world also has its own DOM prototypes, so a page that patches
+`Element.prototype.getAttribute` can no longer change how the snapshot
+*describes* it either. That was not asked for; it falls out.
+
+### Focus is verified, not assumed
+
+An isolated world is **not sufficient on its own**, and this is the part worth
+reading before changing any of it. Worlds share the DOM *and its events*, so a
+page's own `focus` listener still fires when the sidecar calls `el.focus()` and
+can move focus anywhere it likes.
+
+Worse, Chromium **defers** that event while the document itself is unfocused --
+the normal state for an automated browser -- so the listener fires late, after
+the focus has been checked and during the `Input.insertText` that finally gives
+the document focus. Measured: with only an immediate check, a page that stole
+focus in its listener received the approved text and the type reported success.
+
+So `browser_type` uses three layers:
+
+1. `Emulation.setFocusEmulationEnabled` when the browser connection is established, so the page behaves as
+   though focused and a steal becomes visible at once. Best-effort.
+2. In the focus script, in the isolated world: `isConnected`, a refusal for a
+   frame (`iframe`/`frame`/`object`/`embed`), then `el.focus()`, then
+   **exact** `activeElement` equality in the element's **own** document (for
+   anything inside an iframe the top document's `activeElement` is the iframe),
+   and a refusal when a shadow root has taken focus. Checked **before** the
+   value is cleared, so a refused focus cannot empty the reviewed field either.
+3. A re-verify immediately **before** `Input.insertText` and again **after**
+   it, which narrows the remaining window to one local round trip. A slip is
+   reported as a refusal -- nothing can un-type the text, so the one thing that
+   must not happen is reporting success.
+
+Statuses: `not_found`, `gone` (detached), `not_typable` (a frame),
+`not_focused` -- all refusals.
+
+**Three of those rules were added because the obvious predicate was wrong**, and
+each was measured against a real browser:
+
+- `el.contains(active)` -- "focusing a contenteditable can land on a child" --
+  is false. `activeElement` is the focusable *element*, not the caret's node,
+  and it equals the element for a plain input, a select, an anchor, a
+  contenteditable, and a contenteditable with element children. The allowance
+  bought nothing and was an attack: a page that appends its own input inside the
+  reviewed element and focuses it from that element's focus listener received
+  the approved text while the type reported success.
+- A **shadow root** defeats exact equality on its own, because `activeElement`
+  is the host when focus is inside its shadow tree.
+- A **frame** can enter the snapshot on `[data-testid]`, a role or a tabindex,
+  and focusing it sends the text into a document the snapshot never described --
+  in the measured case, one on an opaque origin the top page cannot read.
+
+Layer 3 is the weakest of the three and should not be read as a proof: it
+samples two instants, so a steal-and-restore only has to be absent at those
+samples. Layers 1 and 2 are what refuse a page-chosen destination with no race
+at all.
+
+**Scope.** All of the above is about `browser_type`. `browser_ax_set_value` is a
+second typing path with its own id space, reached only by `ui_act`; it still
+runs in the page's main world through a page-replaceable value setter and has no
+document guard. The #592 *reference* defect does not exist there
+(`backendNodeId` is browser-side and fails closed after a navigation), but it is
+not covered by any of this.
+
+**The coordinate-click fallback is gone.** Ask when `not_found` was reachable
+before: overwhelmingly when a navigation had replaced the document and wiped the
+page global, so the fallback then clicked and typed inside a document nobody had
+reviewed. That was the sibling bug below, not a recovery from it.
+
+### An action refuses once the document has changed
+
+`elementCoords` was never invalidated on a **page-initiated** navigation: it was
+dropped on the next snapshot, on disconnect and on a stale-CDP reconnect, and
+nowhere else. So a click after a meta refresh dispatched a trusted mouse event
+at the previous document's geometry, while `captureApprovalGuard` -- which binds
+the connection and the approval epoch, not the document -- still held. The read
+paths have checked their document since #526/#579; the action paths did not.
+
+`browser_click`, `browser_type` and `browser_hover` now all read the frame tree
+first and refuse unless the document matches. `browser_scroll` and
+`browser_press_key` take no element id and are unchanged, and
+`browser_upload_file` already gated on a `loaderId` and an origin of its own --
+it is the model the other three now follow.
+
+**The comparison is the `loaderId` alone, deliberately without the URL.**
+`history.pushState` rewrites `frameTree.frame.url` while the loaderId holds
+(measured), and that is how every SPA navigates -- so comparing the URL would
+refuse an ordinary click on Gmail, Linear, and the cell-to-cell moves
+`webapp-templates/gsheets.yaml` explicitly tells the model to reuse an id
+across. A fragment change does not even reach it: CDP reports the fragment
+separately as `urlFragment`. `assertSamePage` keeps its URL term, because it
+guards a *read* that hands a URL back; `confirmSameDocument` is the use-time
+sibling without it.
+
+An element the snapshot took from a same-origin **subframe** carries one more
+check, because a child document can commit while the main frame's loaderId never
+moves (measured): the snapshot records a digest of every frame's loaderId, and
+in-frame ids are refused when it changes. Scoped to in-frame ids so an unrelated
+advertising iframe reloading does not refuse a click on a main-document element.
+
+### What did not change
+
+The ids are still 1-based, minted in the same document order, and the snapshot's
+**rendered text is byte-identical** -- which is what keeps all 100 webapp
+templates and every formatter test valid. The daemon and the sidecar run the
+same script and the same checks; the two are required to stay identical.
+
 ## `browser_element_point`: where a snapshot element is on the screen
 
 A **read-only** answer to one question: for an element id the last snapshot

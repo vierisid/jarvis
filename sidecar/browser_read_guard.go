@@ -48,6 +48,12 @@ type pageIdentity struct {
 	url      string
 	loaderID string
 	origin   string
+	// The main frame's id, for the one caller that needs to address the frame
+	// rather than describe it: Page.createIsolatedWorld is per-frame (#592).
+	// Deliberately NOT part of what makes two identities equal -- the frame id
+	// is stable across navigations in the same tab, so comparing it would say
+	// "same page" about two different documents.
+	frameID string
 }
 
 // pageIdentityNow reads the attached page's main frame.
@@ -131,7 +137,7 @@ func (c *cdpClient) assertSamePage(before pageIdentity) error {
 	return refuseLocalIdentity(now)
 }
 
-// assertSameDocument refuses when the attached page has committed a different
+// confirmSameDocument refuses when the attached page has committed a different
 // DOCUMENT since `before` was taken. It is `assertSamePage` without the URL
 // term, and the difference is the whole reason it exists.
 //

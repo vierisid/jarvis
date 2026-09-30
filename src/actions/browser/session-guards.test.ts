@@ -53,6 +53,12 @@ type Fake = {
   browserSent: Sent[];
   pageSent: Sent[];
   created: string[];
+  /**
+   * The frame ids the snapshot minted an isolated world for, in order (#592).
+   * One per DOCUMENT, not one per snapshot: the world is cached on the
+   * loaderId, so a second snapshot of the same document adds nothing here.
+   */
+  worldsCreated: string[];
   /** Push an event on the browser socket (the request guard's). */
   browserEvent(method: string, params: Record<string, unknown>): void;
   /** Push an event on the page socket. */
@@ -72,6 +78,7 @@ function fakeChrome(opts: FakeOptions = {}): Fake {
     browserSent: [],
     pageSent: [],
     created: [],
+    worldsCreated: [],
     browserEvent: (method, params) => browserSock?.send(JSON.stringify({ method, params })),
     pageEvent: (method, params) => pageSock?.send(JSON.stringify({ method, params })),
     stop: () => server.stop(true),
@@ -82,20 +89,37 @@ function fakeChrome(opts: FakeOptions = {}): Fake {
       return {
         frameTree: {
           frame: {
+            // A frame `id`, like real Chrome's: the snapshot mints its isolated
+            // world per FRAME (#592), so a tree without one names no frame to
+            // create the world in and the read refuses.
+            id: 'FRAME-1',
             url: opts.frameUrl?.() ?? 'https://example.com/',
             loaderId: opts.loaderId?.() ?? 'LOADER-1',
           },
         },
       };
     }
+    // The isolated world the snapshot's element refs live in (#592). Answered
+    // with a real context id, because 0 is how the code spells "no world".
+    if (method === 'Page.createIsolatedWorld') {
+      fake.worldsCreated.push(String(params.frameId ?? ''));
+      return { executionContextId: 7 };
+    }
     if (method === 'Page.navigate') return opts.onNavigate ? opts.onNavigate(params.url, fake) : {};
     if (method === 'Page.captureScreenshot') return { data: 'SECRET-PIXELS' };
     if (method === 'Runtime.evaluate') {
       const expr = String(params.expression);
       if (expr.includes('readyState')) return { result: { value: 'complete:5' } };
-      if (expr.includes('__jarvis_elements')) {
+      // Dispatch on a marker only the SNAPSHOT script carries, not on
+      // `__jarvis_elements`: `type()`'s focus script names that global too, so
+      // matching it would answer a type() call with a snapshot payload. No test
+      // does that today, and keying on `collectFrames` -- the snapshot's frame
+      // walk, which the focus script has no equivalent of -- keeps it that way
+      // by construction.
+      if (expr.includes('collectFrames')) {
         return { result: { value: { title: 'SECRET-TITLE', url: opts.pageUrl?.() ?? opts.frameUrl?.() ?? 'https://example.com/', text: 'SECRET-TEXT', elements: [] } } };
       }
+      if (expr.includes('__jarvis_elements')) return { result: { value: 'ok' } };
       return { result: { value: 'SECRET-VALUE' } };
     }
     return {};
@@ -329,6 +353,26 @@ describe('BrowserController #521 guards (fake Chrome)', () => {
     expect(snap.browserUrl).toBe('https://real.example/inbox');
     // The page's claim still reaches the model, as text, in its own field.
     expect(snap.url).toBe('https://spoofed.example/');
+  }, 15_000);
+
+  test('the snapshot script runs in an isolated world, never the page\'s own', async () => {
+    // The cheap unit-level guard for #592: the real-browser test proves the
+    // page cannot reach the refs, and this proves the evaluate is world-scoped
+    // at all, which is the single thing the isolation rests on.
+    fake = fakeChrome();
+    ctrl = new BrowserController(fake.port);
+    await ctrl.navigate('https://example.com/');
+
+    // One world, for the frame the snapshot was taken in. One per DOCUMENT,
+    // not per snapshot -- navigate() snapshots once and the world is cached on
+    // the loaderId.
+    expect(fake.worldsCreated).toEqual(['FRAME-1']);
+
+    const snapshotEvaluates = fake.pageSent.filter(
+      (s) => s.method === 'Runtime.evaluate'
+        && String((s.params as Record<string, unknown>)?.expression ?? '').includes('collectFrames'));
+    expect(snapshotEvaluates).toHaveLength(1);
+    expect((snapshotEvaluates[0]!.params as Record<string, unknown>).contextId).toBe(7);
   }, 15_000);
 
   test('browserUrl is null when the document commits mid-snapshot', async () => {

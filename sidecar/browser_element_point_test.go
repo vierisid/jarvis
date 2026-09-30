@@ -847,9 +847,15 @@ func TestTakePageSnapshotRecordsTheDocumentGenerationAndFrameProvenance(t *testi
 	}
 	frameTree(c.ID, "L-child")
 
+	// The isolated world the element refs go in (#592).
+	fb.expectIsolatedWorld()
+
 	c = fb.nextCommand()
 	if c.Method != "Runtime.evaluate" {
-		t.Fatalf("second command = %q, want Runtime.evaluate", c.Method)
+		t.Fatalf("third command = %q, want Runtime.evaluate", c.Method)
+	}
+	if c.Params["contextId"] == nil {
+		t.Fatal("the snapshot script was evaluated with no contextId, i.e. in the page's main world")
 	}
 	// Element 2 carries the iframe marker the snapshot script sets for anything
 	// it collected from a subframe.

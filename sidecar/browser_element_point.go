@@ -306,7 +306,7 @@ func handleBrowserElementPoint(params map[string]any) (*RPCResult, error) {
 	// comparing it would refuse a pointer on every SPA pushState (see that
 	// function). The same reading gives the frame digest, so an in-frame
 	// element costs no extra send -- an earlier version called
-	// assertSameDocument and then re-read the very tree it had just thrown
+	// confirmSameDocument and then re-read the very tree it had just thrown
 	// away, at cdpDefaultTimeout's 30 seconds each, on a path the daemon
 	// abandons after 1200 ms.
 	after, afterStamp, err := cdp.confirmSameDocument(before, elementPointReadTimeout)
