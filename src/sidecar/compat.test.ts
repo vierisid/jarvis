@@ -2,7 +2,9 @@ import { describe, expect, test } from 'bun:test';
 import {
   classifySidecarVersion,
   compareSemver,
+  isUpdateAvailable,
   parseSemver,
+  SIDECAR_LATEST_VERSION,
   SIDECAR_RECOMMENDED_VERSION,
 } from './compat.ts';
 
@@ -60,5 +62,26 @@ describe('classifySidecarVersion', () => {
   test('below MIN is blocked', () => {
     // 0.0.0 is below any floor greater than 0.0.0 (the seeded floor is 0.1.0).
     expect(classifySidecarVersion('0.0.0')).toBe('blocked');
+  });
+});
+
+describe('isUpdateAvailable', () => {
+  test('a sidecar behind the version this brain ships with is behind', () => {
+    expect(isUpdateAvailable('0.9.7', '0.10.0')).toBe(true);
+    expect(isUpdateAvailable('0.10.0-rc.1', '0.10.0')).toBe(true);
+  });
+  test('an equal or newer sidecar is not', () => {
+    expect(isUpdateAvailable('0.10.0', '0.10.0')).toBe(false);
+    expect(isUpdateAvailable('0.11.0', '0.10.0')).toBe(false);
+  });
+  test('dev, unparseable and missing versions never are', () => {
+    expect(isUpdateAvailable('dev', '0.10.0')).toBe(false);
+    expect(isUpdateAvailable('', '0.10.0')).toBe(false);
+    expect(isUpdateAvailable(undefined, '0.10.0')).toBe(false);
+    expect(isUpdateAvailable(null, '0.10.0')).toBe(false);
+  });
+  test('defaults to SIDECAR_LATEST_VERSION', () => {
+    expect(isUpdateAvailable(SIDECAR_LATEST_VERSION)).toBe(false);
+    expect(isUpdateAvailable('0.0.1')).toBe(true);
   });
 });

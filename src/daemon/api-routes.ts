@@ -13,6 +13,8 @@ import { executionState } from '../authority/approval.ts';
 import { createWorkItemRoutes } from '../goals/work-item-routes.ts';
 import { isPermissionName, readSystemPermissions, requestSystemPermission } from './system-permissions.ts';
 import { PANEL_SESSION_COOKIE } from '../sidecar/panel-sessions.ts';
+import { SIDECAR_LATEST_VERSION } from '../sidecar/compat.ts';
+import { SidecarRPCError } from '../sidecar/rpc.ts';
 import { getCookie } from '../util/cookie.ts';
 import { SecretStorageError } from './section-secrets.ts';
 import type { AgentService } from './agent-service.ts';
@@ -343,6 +345,38 @@ function buildAgentSnapshots(ctx: ApiContext) {
  */
 export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
   const googleOAuthFlows = new GoogleOAuthFlowStore();
+
+  /**
+   * POST /api/sidecars/:id/{update-prompt,update}: forward to the sidecar's
+   * self-update RPC. 409 when the sidecar is offline, 422 when it does not
+   * advertise the feature (older sidecars), 409 with the sidecar's reason when
+   * it refuses (nothing to install, an update already running).
+   */
+  async function sidecarUpdateRoute(
+    req: Request,
+    feature: 'update_prompt' | 'update_apply',
+    method: string,
+    params: Record<string, unknown>,
+  ): Promise<Response> {
+    try {
+      if (!ctx.sidecarManager) return error('Sidecar manager not available', 503);
+      const parts = new URL(req.url).pathname.split('/');
+      const id = parts[parts.length - 2]!;
+      if (!ctx.sidecarManager.isConnected(id)) {
+        return error('Sidecar is not connected', 409);
+      }
+      const info = ctx.sidecarManager.getSidecar(id);
+      if (!info?.features?.includes(feature)) {
+        return error('This sidecar cannot do that; update it manually', 422);
+      }
+      const result = await ctx.sidecarManager.dispatchRPC(id, method, params);
+      return json({ ok: true, result });
+    } catch (err) {
+      if (err instanceof SidecarRPCError) return error(err.message, 409);
+      return error(`${err}`, 500);
+    }
+  }
+
   return {
     ...createOpportunityRoutes(json),
     // --- Health ---
@@ -4492,6 +4526,20 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           return json(ctx.sidecarManager.getJwks());
         } catch (err) { return error(`${err}`); }
       },
+    },
+
+    // Sidecar self-update. The dashboard's update hint opens the sidecar's own
+    // native prompt (update-prompt) where the sidecar has one, and installs
+    // directly (update) where it does not (Linux). Either way the sidecar
+    // decides what is installable: the version passed here is only checked
+    // against the one it confirmed itself.
+    '/api/sidecars/:id/update-prompt': {
+      POST: async (req: Request) => sidecarUpdateRoute(req, 'update_prompt', 'sidecar.update_prompt', {}),
+    },
+
+    '/api/sidecars/:id/update': {
+      POST: async (req: Request) =>
+        sidecarUpdateRoute(req, 'update_apply', 'sidecar.update_apply', { version: SIDECAR_LATEST_VERSION }),
     },
 
     '/api/sidecars/:id/config': {

@@ -2,15 +2,23 @@
  * Sidecar Compatibility
  *
  * The sidecar versions itself independently of the brain (see sidecar/VERSION).
- * This module holds the brain's compatibility *floors* and the classifier that
- * the register handshake runs against a connecting sidecar's reported version.
+ * This module holds the brain's compatibility *floors*, the classifier that
+ * the register handshake runs against a connecting sidecar's reported version,
+ * and the sidecar version this brain ships with.
  *
- * The floors are "the oldest sidecar this brain is happy with" — NOT "the latest
- * sidecar that exists". The brain never tracks the newest sidecar; it only bumps
- * these when the *brain itself* changes in a way that affects older sidecars, in
- * the brain release it is already cutting. That is what keeps the two release
- * cadences decoupled without a chicken-and-egg: a new sidecar release needs no
+ * The floors are "the oldest sidecar this brain is happy with". They are bumped
+ * only when the *brain itself* changes in a way that affects older sidecars, in
+ * the brain release it is already cutting, so a new sidecar release needs no
  * brain change to be considered "ok".
+ *
+ *   - SIDECAR_LATEST_VERSION      the sidecar released together with this
+ *                                 brain (it always equals sidecar/VERSION; a
+ *                                 test enforces it). Advertised to every
+ *                                 connecting sidecar, which offers to update
+ *                                 itself to it. It is the brain's version and
+ *                                 not npm's `latest` on purpose: a brain that
+ *                                 has not been upgraded yet must not push a
+ *                                 sidecar newer than it was released with.
  *
  *   - SIDECAR_MIN_VERSION         hard floor. Below this the brain refuses the
  *                                 connection ("update required"). Bump when a
@@ -24,12 +32,13 @@
  * events happen.
  */
 
-// During the current development phase the sidecar is frozen at a single
-// version (sidecar/VERSION = 0.1.0) and ships as one release, so both floors sit
-// at that value — nothing is incompatible yet. They only start to diverge once
-// the sidecar resumes independent, per-change versioning post-development.
+// Both floors still sit at the first release: nothing is incompatible yet.
+// They diverge only as real compat events happen.
 export const SIDECAR_MIN_VERSION = '0.1.0';
 export const SIDECAR_RECOMMENDED_VERSION = '0.1.0';
+
+/** The sidecar version released with this brain. Keep equal to sidecar/VERSION. */
+export const SIDECAR_LATEST_VERSION = '0.10.0';
 
 /**
  * Outcome of classifying a sidecar's reported version against the floors:
@@ -89,4 +98,16 @@ export function classifySidecarVersion(reported: string): SidecarUpdateStatus {
   if (compareSemver(v, min) < 0) return 'blocked';
   if (compareSemver(v, recommended) < 0) return 'suggested';
   return 'ok';
+}
+
+/**
+ * Whether a sidecar reporting `reported` is behind the version this brain
+ * ships with. Dev / unparseable builds never are: they are never offered an
+ * update (the sidecar refuses one too).
+ */
+export function isUpdateAvailable(reported: string | undefined | null, latest: string = SIDECAR_LATEST_VERSION): boolean {
+  const v = parseSemver(reported ?? '');
+  const l = parseSemver(latest);
+  if (!v || !l) return false;
+  return compareSemver(v, l) < 0;
 }

@@ -18,6 +18,8 @@ import type {
   ConnectedSidecar,
   SidecarCapability,
   UnavailableCapability,
+  SidecarUpdatePhase,
+  SidecarUpdateState,
 } from './types.ts';
 import type { RPCRequest, RPCTimeouts, SidecarEvent, RPCResultPayload, RPCErrorPayload, RPCProgressPayload } from './protocol.ts';
 import { DEFAULT_RPC_TIMEOUTS } from './protocol.ts';
@@ -29,7 +31,7 @@ import { SidecarConnection } from './connection.ts';
 import { assertMachineDispatch } from '../actions/machine-scope';
 import { checkpointExecution } from '../actions/execution-scope';
 import { PanelSessionStore, vaultPanelSessionSink, type PanelSession, type PanelSocket } from './panel-sessions.ts';
-import { classifySidecarVersion, SIDECAR_MIN_VERSION, SIDECAR_RECOMMENDED_VERSION } from './compat.ts';
+import { classifySidecarVersion, isUpdateAvailable, SIDECAR_LATEST_VERSION, SIDECAR_MIN_VERSION, SIDECAR_RECOMMENDED_VERSION } from './compat.ts';
 import { chmodWithWarning, secureDirectory, secureWriteFile } from '../util/fs-secure.ts';
 import { computeAnonId } from '../telemetry/anon-id.ts';
 import { loadOrGenerateSidecarKeys, enrollDevice, buildEnrollmentUrls, isLocalhostBrainUrl } from './enrollment.ts';
@@ -96,7 +98,48 @@ export const SIDECAR_EVENT_TYPES: readonly string[] = [
   // Skill recorder: one event per click/commit while a recording is live,
   // and one when the sidecar ends the recording (cap hit, RPC stop).
   'ui_interaction', 'ui_recording',
+  // Self-update progress (recorded on the connection by the manager itself).
+  'update_progress',
 ];
+
+/** Update phases a sidecar may report; anything else is dropped. */
+const UPDATE_PHASES: ReadonlySet<string> = new Set([
+  'available', 'checking', 'downloading', 'verifying', 'installing', 'restarting', 'failed', 'unavailable',
+]);
+
+/** Bounded copy of an untrusted string field, or undefined. */
+function boundedString(value: unknown, max: number): string | undefined {
+  if (typeof value !== 'string' || value.length === 0) return undefined;
+  return value.length > max ? `${value.slice(0, max)}…` : value;
+}
+
+/**
+ * The register `features` list, sanitized: it is untrusted sidecar input that
+ * reaches the dashboard, so keep only short identifier-like strings.
+ */
+export function sanitizeFeatures(raw: unknown): string[] {
+  if (!Array.isArray(raw)) return [];
+  const out: string[] = [];
+  for (const f of raw) {
+    if (typeof f === 'string' && /^[a-z][a-z0-9_.-]{0,63}$/.test(f) && !out.includes(f)) out.push(f);
+    if (out.length >= 32) break;
+  }
+  return out;
+}
+
+/** An update_progress payload, validated, or null when it is not one. */
+export function parseUpdateProgress(payload: unknown, now: Date = new Date()): SidecarUpdateState | null {
+  if (typeof payload !== 'object' || payload === null) return null;
+  const p = payload as Record<string, unknown>;
+  if (typeof p.phase !== 'string' || !UPDATE_PHASES.has(p.phase)) return null;
+  return {
+    phase: p.phase as SidecarUpdatePhase,
+    version: boundedString(p.version, 64),
+    error: boundedString(p.error, 1000),
+    manual_command: boundedString(p.manual_command, 500),
+    at: now.toISOString(),
+  };
+}
 
 export class SidecarManager implements Service {
   readonly name = 'sidecar-manager';
@@ -245,6 +288,7 @@ export class SidecarManager implements Service {
 
       // Register handlers for each sidecar event type the daemon listens to.
       const sidecarEventHandler = async (sidecarId: string, event: SidecarEvent) => {
+        if (event.event_type === 'update_progress') this.recordUpdateProgress(sidecarId, event.payload);
         for (const listener of this.eventListeners) {
           listener(sidecarId, event);
         }
@@ -812,21 +856,27 @@ export class SidecarManager implements Service {
                 reason: 'incompatible',
                 min: SIDECAR_MIN_VERSION,
                 your_version: reportedVersion,
+                // The version to update to: the sidecar offers to install it.
+                latest: SIDECAR_LATEST_VERSION,
               }));
             } catch { /* socket may already be gone */ }
             ws.close(4001, 'sidecar version incompatible');
             return;
           }
 
+          // Every accepted registration is acknowledged with the sidecar
+          // version this brain ships with, which a self-updating sidecar
+          // offers to install. Sidecars that predate self-update ignore the
+          // unknown fields (and only ever looked at update_suggested).
+          try {
+            ws.send(JSON.stringify({
+              type: 'register_ack',
+              update_status: verdict,
+              latest: SIDECAR_LATEST_VERSION,
+              ...(verdict === 'suggested' ? { update_suggested: true, recommended: SIDECAR_RECOMMENDED_VERSION } : {}),
+            }));
+          } catch { /* best-effort */ }
           if (verdict === 'suggested') {
-            // Compatible but below RECOMMENDED — accept and advise an update.
-            try {
-              ws.send(JSON.stringify({
-                type: 'register_ack',
-                update_suggested: true,
-                recommended: SIDECAR_RECOMMENDED_VERSION,
-              }));
-            } catch { /* best-effort */ }
             console.log(`[SidecarManager] Sidecar ${sidecarId} v${reportedVersion} is below recommended ${SIDECAR_RECOMMENDED_VERSION} — update suggested`);
           }
 
@@ -839,6 +889,7 @@ export class SidecarManager implements Service {
             platform: parsed.platform ?? 'unknown',
             version: reportedVersion,
             updateStatus: verdict,
+            features: sanitizeFeatures(parsed.features),
             capabilities: parsed.capabilities ?? [],
             unavailableCapabilities: parsed.unavailable_capabilities ?? [],
             timezone: typeof parsed.timezone === 'string' ? parsed.timezone : undefined,
@@ -997,6 +1048,22 @@ export class SidecarManager implements Service {
     };
   }
 
+  /**
+   * Record a sidecar's update_progress on its live connection (surfaced as
+   * `update_state` by the API). Malformed payloads are ignored.
+   */
+  recordUpdateProgress(sidecarId: string, payload: unknown): void {
+    const conn = this.connected.get(sidecarId);
+    const state = parseUpdateProgress(payload);
+    if (!conn || !state) return;
+    conn.updateState = state;
+    if (state.phase === 'failed') {
+      console.warn(`[SidecarManager] Sidecar ${sidecarId} update to ${state.version ?? '?'} failed: ${state.error ?? 'unknown error'}`);
+    } else {
+      console.log(`[SidecarManager] Sidecar ${sidecarId} update: ${state.phase} ${state.version ?? ''}`.trimEnd());
+    }
+  }
+
   /** Register a listener for sidecar connect events */
   onConnect(listener: (sidecarId: string) => void): void {
     this.connectListeners.add(listener);
@@ -1021,6 +1088,10 @@ export class SidecarManager implements Service {
       unavailable_capabilities: conn?.unavailableCapabilities,
       version: conn?.version ?? record.version ?? undefined,
       update_status: conn?.updateStatus,
+      features: conn?.features,
+      latest_version: SIDECAR_LATEST_VERSION,
+      update_available: isUpdateAvailable(conn?.version ?? record.version),
+      update_state: conn?.updateState,
     };
   }
 }

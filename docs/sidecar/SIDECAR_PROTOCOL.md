@@ -931,9 +931,78 @@ Currently all events are enqueued as `normal` and processed round-robin. When pr
 
 1. WebSocket handshake with JWT token
 2. Brain validates JWT, looks up sidecar in registry
-3. Sidecar sends `register` event with capabilities
-4. Brain's SidecarManager registers the connection
-5. Scheduler starts accepting events from this sidecar
+3. Sidecar sends `register` with its version, capabilities and features
+4. Brain classifies the version against its floors (`src/sidecar/compat.ts`) and answers `register_ack`, or `register_rejected` and closes
+5. Brain's SidecarManager registers the connection
+6. Scheduler starts accepting events from this sidecar
+
+### Registration and version handshake
+
+```json
+{
+  "type": "register",
+  "hostname": "laptop",
+  "os": "windows",
+  "platform": "amd64",
+  "version": "0.10.0",
+  "features": ["update_prompt", "update_apply"],
+  "capabilities": ["terminal", "filesystem"],
+  "unavailable_capabilities": [],
+  "timezone": "Europe/Rome"
+}
+```
+
+`version` is the sidecar's own semver (`"dev"` for unstamped builds). `features` lists optional protocol features; sidecars that predate it send none:
+
+| Feature | Meaning |
+|---|---|
+| `update_prompt` | the sidecar can show its native update prompt (`sidecar.update_prompt`); Windows and macOS |
+| `update_apply` | the sidecar can install an update on request (`sidecar.update_apply`) |
+
+The brain answers every accepted registration with an ack carrying the sidecar version it ships with (`SIDECAR_LATEST_VERSION`, always equal to `sidecar/VERSION` at the brain's release):
+
+```json
+{ "type": "register_ack", "update_status": "ok", "latest": "0.10.0" }
+```
+
+`update_status` is `ok`, `suggested` (below `SIDECAR_RECOMMENDED_VERSION`; the ack then also carries `update_suggested: true` and `recommended`) or `dev`. Brains older than self-update send an ack only for `suggested`.
+
+A sidecar below `SIDECAR_MIN_VERSION` is refused, told what to install, and the socket closes with code 4001:
+
+```json
+{ "type": "register_rejected", "reason": "incompatible", "min": "0.1.0", "your_version": "0.0.9", "latest": "0.10.0" }
+```
+
+### Self-update
+
+`latest` is a suggestion. The sidecar decides whether it is an update and enforces how it is installed (`sidecar/updater.go`, `sidecar/internal/update`):
+
+- only a version strictly newer than its own; a `dev` build never updates
+- only from the npm registry (a registry override exists in `-tags jarvisdebug` builds only), and only once that exact version is published there; until then it reports `unavailable` and retries hourly
+- the tarball's sha512 must match the registry's integrity value, and on Windows and macOS the payload must carry the pinned code signature
+- an installer-managed install is swapped in place and the new binary relaunched; if it does not start, the previous one is restored. A bun/npm global install runs that package manager. Anything else, or any failure, reports a command the user can run instead
+
+The offer reaches the user as a native prompt after the first registration of each process (Windows, macOS; "Skip this version" silences only this prompt), a tray item, and the dashboard. The dashboard uses two routes: `POST /api/sidecars/:id/update-prompt` opens the native prompt, and `POST /api/sidecars/:id/update` installs directly on sidecars without one (Linux).
+
+Brain → sidecar RPCs (ungated):
+
+| Method | Params | Result |
+|---|---|---|
+| `sidecar.update_prompt` | `{}` | `{ok: true}` once the prompt is opening; error `UNSUPPORTED` without a prompt |
+| `sidecar.update_apply` | `{version}` | `{started: true}`; errors `UPDATE_UNAVAILABLE` (nothing to install, or `version` is not the one the sidecar confirmed) and `UPDATE_BUSY` |
+
+Progress comes back as `sidecar_event`s with `event_type: "update_progress"`, which the brain keeps on the connection and exposes as `update_state` in `/api/sidecars`:
+
+```json
+{
+  "type": "sidecar_event",
+  "event_type": "update_progress",
+  "timestamp": 1790000000000,
+  "payload": { "phase": "failed", "version": "0.10.0", "error": "...", "manual_command": "npm install -g @usejarvis/sidecar@0.10.0" }
+}
+```
+
+`phase` is one of `checking`, `downloading`, `verifying`, `installing`, `restarting`, `failed`, `unavailable`.
 
 ### Sidecar disconnects
 

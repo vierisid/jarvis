@@ -104,11 +104,31 @@ export interface ConnectedSidecar {
   version: string;
   /** Compatibility verdict the brain reached at register (never 'blocked' here — blocked sidecars never register) */
   updateStatus: SidecarUpdateStatus;
+  /** Optional protocol features the sidecar advertised on register (e.g. 'update_prompt', 'update_apply'); [] for older sidecars */
+  features?: string[];
+  /** Last self-update progress the sidecar reported (update_progress events) */
+  updateState?: SidecarUpdateState;
   capabilities: SidecarCapability[];
   unavailableCapabilities: UnavailableCapability[];
   /** IANA timezone reported on register ("" = unknown) */
   timezone?: string;
   connectedAt: Date;
+}
+
+/** Sidecar self-update phases, as reported by update_progress events */
+export type SidecarUpdatePhase =
+  | 'available' | 'checking' | 'downloading' | 'verifying' | 'installing'
+  | 'restarting' | 'failed' | 'unavailable';
+
+/** A sidecar's last reported self-update progress */
+export interface SidecarUpdateState {
+  phase: SidecarUpdatePhase;
+  version?: string;
+  error?: string;
+  /** What the user can run themselves when the automatic update failed */
+  manual_command?: string;
+  /** ISO time the brain received it */
+  at: string;
 }
 
 /** Sidecar config as returned by get_config RPC (token excluded) */
@@ -137,4 +157,12 @@ export interface SidecarInfo {
   version?: string;
   /** Compatibility verdict (only while connected): 'ok' | 'suggested' | 'dev' */
   update_status?: SidecarUpdateStatus;
+  /** Optional protocol features (only while connected) */
+  features?: string[];
+  /** The sidecar version this brain ships with */
+  latest_version?: string;
+  /** Whether `version` is behind `latest_version` (never for dev builds) */
+  update_available?: boolean;
+  /** Last self-update progress (only while connected) */
+  update_state?: SidecarUpdateState;
 }
