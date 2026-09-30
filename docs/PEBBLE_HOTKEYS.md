@@ -302,7 +302,7 @@ trap occupies (request flushed, handler installed, verdict then collected):
 | `XGrabKey` + recording handler + `XSync` | **lost**, create would report success | 1 |
 | `xcb_grab_key_checked` + `xcb_request_check` | kept, `BadAccess(10)` on `X_GrabKey(33)` | 0 |
 
-`TestLinuxCheckedGrabKeepsItsRefusalFromTheGlobalHandler` is that experiment as
+`TestLinuxXCheckedGrabKeepsItsRefusalFromTheGlobalHandler` is that experiment as
 a Go test.
 
 **A checked request has one blind spot, and it is handled.**
@@ -315,7 +315,7 @@ and a hotkey that can never fire - so the create tests
 own outcome, separate from "no display" (the session *had* a display; the answer
 is to retry, not to go looking for `DISPLAY`). The window is narrow and it is
 where it matters: the sidecar re-registers hotkeys around session logout and X
-server restarts. `TestLinuxADeadConnectionIsNotReportedAsAGrantedGrab` drives
+server restarts. `TestLinuxXADeadConnectionIsNotReportedAsAGrantedGrab` drives
 the real grab sequence over a connection whose socket has been replaced.
 
 On that path the sidecar deliberately does **not** close the display.

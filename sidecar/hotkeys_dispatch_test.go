@@ -2,6 +2,7 @@ package main
 
 import (
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -56,6 +57,63 @@ func TestHotkeyDispatchDoesNotFireAfterInvalidate(t *testing.T) {
 	defer mu.Unlock()
 	if calls != 0 {
 		t.Errorf("the callback ran %d time(s) after invalidate; stop() promised the hotkey was gone", calls)
+	}
+}
+
+// THE guarantee, and the one a weaker design passes the tests above without
+// providing: after invalidate returns, no callback may BEGIN.
+//
+// "Begin", not "be dispatched". The defect in #587 is a callback starting after
+// stop() returned and the caller began tearing down what it touches, so a
+// design where the press is claimed but fn has merely been made runnable has
+// not fixed it -- it has moved the window from "a scheduling delay" to "a
+// scheduling delay", and nothing orders a fresh goroutine's first instruction
+// against invalidate returning.
+//
+// That is why the claim is taken INSIDE the dispatched goroutine. It makes the
+// guarantee structural: fn can only run behind a successful claim, a claim
+// contends for the same mutex as the invalidation, and a claim after the
+// invalidation is refused. So there is no interleaving in which fn begins late.
+//
+// This test fails against the claim-on-the-caller's-thread variant -- measured,
+// not assumed -- which is exactly why it is here.
+func TestHotkeyDispatchNoCallbackBeginsAfterInvalidateReturns(t *testing.T) {
+	// Many rounds: the bad variant loses this by a scheduling race, so one
+	// round would be a coin flip. A correct implementation cannot fail it at
+	// any count.
+	const rounds = 2000
+	var beganLate atomic.Int64
+
+	// Each round gets its own dispatcher and its own flag, so a straggler from
+	// round i is still measured against round i's invalidation. That is what
+	// lets the rounds run back to back with no per-round wait -- waiting for a
+	// callback that correctly never runs would cost a timeout every round.
+	for i := 0; i < rounds; i++ {
+		var d hotkeyDispatch
+		invalidated := new(atomic.Bool)
+		id := d.register(func() {
+			// If invalidate has already returned, this callback began too late
+			// and the guarantee is broken.
+			if invalidated.Load() {
+				beganLate.Add(1)
+			}
+		})
+
+		d.dispatch(id)
+		d.invalidate(id)
+		// Any fn that begins from here on is a violation. The flag is set with
+		// no work in between, so the observed window is as tight as it can be:
+		// a missed detection is possible, a false one is not.
+		invalidated.Store(true)
+	}
+
+	// Let every goroutine spawned above get its turn and be refused. Bounded
+	// and generous: a correct implementation has nothing to do here, and the
+	// broken variant is already caught by the flag rather than by timing.
+	time.Sleep(500 * time.Millisecond)
+
+	if n := beganLate.Load(); n != 0 {
+		t.Errorf("a callback began after invalidate() returned in %d of %d rounds; stop() told the caller the hotkey was gone and then ran it anyway, which is the #587 defect", n, rounds)
 	}
 }
 
@@ -172,7 +230,7 @@ func TestHotkeyDispatchInvalidateIsIdempotentAndIdsAreNotReused(t *testing.T) {
 		t.Errorf("first invalidate reported %d, want 0", n)
 	}
 	if n := d.invalidate(first); n != 0 {
-		t.Errorf("second invalidate reported %d, want 0 (it must be idempotent, since stop() is wrapped in sync.Once but nothing guarantees only one caller)", n)
+		t.Errorf("second invalidate reported %d, want 0 (every backend's stop() wraps this in a sync.Once, but the registry must not depend on that -- the self-exit paths invalidate the same id independently)", n)
 	}
 
 	second := d.register(func() {})

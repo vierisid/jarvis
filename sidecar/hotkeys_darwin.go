@@ -67,6 +67,12 @@ static void* jarvisHotkeyAdd(unsigned long modMask, unsigned long modCompareMask
         // key-down, so it has to be filtered here. Each fire emits an event to
         // the brain BEFORE the in-flight guard in runSessionCapture, so a held
         // key was a burst on the wire, not just a wasted goroutine.
+        //
+        // NOTE the gap this does not cover: X11 has no MOD_NOREPEAT either, and
+        // hotkeys_linux.go's drain fires on every auto-repeat KeyPress, so a
+        // held hotkey there is still a burst. Pre-existing and untouched by
+        // #587 (the old `go fn()` did the same), but the phrasing above used to
+        // read as though macOS were the only platform needing the filter.
         if ([e keyCode] == keyCode && ![e isARepeat] && ([e modifierFlags] & cmp) == want) {
             goHotkeyFire(hotkeyID);
         }
@@ -117,17 +123,18 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 	// invalidating first makes that a guaranteed no-op instead of a summon
 	// event arriving after the pebble was closed.
 	//
-	// That ordering predates #587 and is kept. What #587 adds is that the
-	// invalidation now also stops the DISPATCHED GOROUTINE: the old code
-	// deleted from a sync.Map, which closed the window for a block that had not
-	// yet called goHotkeyFire but not for one that had already launched
-	// `go fn()`. See hotkeys_dispatch.go for why this invalidates rather than
-	// waiting, and for exactly what that guarantees.
+	// That ordering predates #587 and is kept; on its own it only ever covered
+	// a block that had not yet reached goHotkeyFire. What #587 adds is the half
+	// it could not reach: a press whose goroutine has been started but has not
+	// entered the callback is now refused too, because the claim that gates the
+	// callback is taken inside that goroutine and contends with this
+	// invalidation. See hotkeys_dispatch.go for why this invalidates rather
+	// than waiting, and for exactly what it does and does not guarantee.
 	var once sync.Once
 	stop := func() {
 		once.Do(func() {
 			if inFlight := hotkeyDispatcher.invalidate(id); inFlight > 0 {
-				log.Printf("[hotkeys] %q: stopped while %d callback(s) were still running; they will finish, so anything this hotkey drives must tolerate that",
+				log.Printf("[hotkeys] %q: stopped while %d callback(s) were dispatched and not yet finished; they will run to completion, so anything this hotkey drives must tolerate that",
 					keyspec, inFlight)
 			}
 			C.jarvisHotkeyRemove(mon)

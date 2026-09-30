@@ -9,8 +9,8 @@ import "C"
 
 //export goHotkeyFire
 func goHotkeyFire(id C.ulonglong) {
-	// Same claim protocol as linux, and for the same defect (#587): this used
-	// to load the callback out of a sync.Map and launch `go fn()`, so a press
+	// Same dispatcher as linux, and for the same defect (#587): this used to
+	// load the callback out of a sync.Map and launch `go fn()`, so a press
 	// could start a callback after stop() had returned.
 	//
 	// It matters more here than it looks. The monitor block runs on the main

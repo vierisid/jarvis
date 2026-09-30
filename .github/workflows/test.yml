@@ -147,18 +147,25 @@ jobs:
     needs: changes
     if: needs.changes.outputs.sidecar == 'true'
     runs-on: ubuntu-latest
-    # One literal for the `-skip`/`-run` pair below. They partition the package
-    # between an unretried step and a retried one, so they must stay in sync:
-    # drift would leave the flaky test running un-retried in the first step
-    # while the second matches nothing and passes vacuously.
     env:
+      # One literal for the `-skip`/`-run` pair below. They partition the
+      # package between an unretried step and a retried one, so they must stay
+      # in sync: drift would leave the flaky test running un-retried in the
+      # first step while the second matches nothing and passes vacuously.
       PARITY_TEST: '^TestBrowserHandlerParityIntegration$'
-      # The X-dependent hotkey tests, enforced as a named set so a skip cannot
-      # pass for a run (#588). The COUNT is checked against `go test -list`, so
-      # adding or renaming one of these fails the job until both are updated --
-      # deliberately, because the alternative is a test quietly dropping out of
-      # the enforced set.
-      X_HOTKEY_TESTS: '^TestLinux(XHotkeyTestsAreEnforcedHere|RefusedGrabIsReported|GrabIsReleasedOnStop|PartialClashIsRefusedWholesale|RefusalSurvivesAStolenErrorHandler|CheckedGrabKeepsItsRefusalFromTheGlobalHandler|ADeadConnectionIsNotReportedAsAGrantedGrab|ListenerSurvivesAnFdAboveFdSetsize)$'
+      # The X-dependent hotkey tests, enforced as a set so a skip cannot pass
+      # for a run (#588).
+      #
+      # Matched by PREFIX, not by an allowlist of names, and that is the point.
+      # `TestLinuxX` is a reserved namespace for tests needing a real X server;
+      # the display-free ones beside them are plain `TestLinux`. An allowlist
+      # catches a rename or a removal (the count stops matching) and is
+      # structurally blind to an ADDITION -- a new X-dependent test would simply
+      # not match, `-list` would still say 8, and it would skip in CI exactly as
+      # the #578 tests did. Prefix plus an exact count fails loudly in BOTH
+      # directions, and it is the convention this file already states for the
+      # windows job below.
+      X_HOTKEY_TESTS: '^TestLinuxX'
       X_HOTKEY_TEST_COUNT: '8'
     steps:
       - uses: actions/checkout@v5
@@ -219,7 +226,9 @@ jobs:
       # Xvfb rather than the runner's display, because there isn't one. :99 is
       # started here and torn down at the end; DISPLAY is scoped to the step
       # below rather than exported job-wide, so the earlier `go test ./...` is
-      # unaffected and the X tests run exactly once, where they are enforced.
+      # unaffected. These tests are therefore INVOKED twice per job -- as skips
+      # there, for real here -- and EXECUTED once, which is the cheaper of the
+      # two ways to keep the -skip/-run partition simple.
       - name: Start Xvfb
         run: |
           set -euo pipefail
@@ -262,21 +271,55 @@ jobs:
           # step would go green the moment Xvfb broke.
           JARVIS_REQUIRE_X_HOTKEY_TESTS: "1"
           # FD_SETSIZE is only enforced by glibc when the build is fortified,
-          # and TestLinuxListenerSurvivesAnFdAboveFdSetsize relies on that to
+          # and TestLinuxXListenerSurvivesAnFdAboveFdSetsize relies on that to
           # catch a reintroduced select(): measured, an unfortified build of the
-          # OLD broken code passes that test. Ubuntu's gcc fortifies at -O2
-          # already; naming it means the guard does not depend on that staying
-          # true. -U first so redefining it is not a warning.
+          # OLD broken code passes that test. The test now reads the level back
+          # and FAILS here if it is 0, so this flag and that assertion are two
+          # halves of one guard.
+          #
+          # A FLOOR, not a match. Ubuntu's patched gcc defaults to level 3, so
+          # this lowers it to 2 for the cgo files in this step -- accepted
+          # because __fdelt_chk exists at any level above 0, and because the
+          # step is test-only, so no shipped artifact is built with it. The
+          # reason to name it at all is the toolchains that predefine NOTHING at
+          # -O2 (upstream gcc does not), where the guard would otherwise be
+          # silently unarmed. -U first so redefining is not a warning.
           CGO_CFLAGS: "-O2 -g -U_FORTIFY_SOURCE -D_FORTIFY_SOURCE=2"
         run: |
           set -euo pipefail
-          # Fail loudly if the pattern stops matching (a rename, or a new
-          # sibling test nobody added here): `go test -run` with no match
-          # prints "no tests to run" and exits 0, which would make this step a
-          # no-op. Same guard the browser parity step uses, for the same reason.
-          listed=$(go test -list "$X_HOTKEY_TESTS" . | grep -c '^Test' || true)
+          # The count has to be a sane number before it can guard anything.
+          # `[ "$a" -ne "$b" ]` exits 2 on a non-integer operand, and 2 is
+          # "false" to an `if`, so a blank or typo'd X_HOTKEY_TEST_COUNT would
+          # make BOTH count checks below silently evaporate -- and the step
+          # would then print its own success line reading "all 0 ... executed".
+          # Fails closed here instead.
+          case "$X_HOTKEY_TEST_COUNT" in
+            ''|*[!0-9]*)
+              echo "::error::X_HOTKEY_TEST_COUNT must be a positive integer, got '$X_HOTKEY_TEST_COUNT'"
+              exit 1 ;;
+          esac
+          if [ "$X_HOTKEY_TEST_COUNT" -lt 1 ]; then
+            echo "::error::X_HOTKEY_TEST_COUNT must be at least 1, got '$X_HOTKEY_TEST_COUNT'"
+            exit 1
+          fi
+
+          # Fail loudly if the prefix stops matching the expected number of
+          # tests -- a rename, a removal, or a NEW sibling nobody counted:
+          # `go test -run` with no match prints "no tests to run" and exits 0,
+          # which would make this whole step a no-op. Same guard the browser
+          # parity step uses.
+          #
+          # -list's own failure is separated out, because `|| true` on the
+          # pipeline would otherwise turn "the package does not compile" into
+          # listed=0 and blame a rename for it.
+          if ! listing=$(go test -list "$X_HOTKEY_TESTS" . 2>&1); then
+            echo "::error::go test -list failed; the package does not build:"
+            printf '%s\n' "$listing"
+            exit 1
+          fi
+          listed=$(printf '%s\n' "$listing" | grep -c '^Test' || true)
           if [ "$listed" -ne "$X_HOTKEY_TEST_COUNT" ]; then
-            echo "::error::X_HOTKEY_TESTS matched $listed tests, expected $X_HOTKEY_TEST_COUNT -- a test was renamed, added or removed; update the pattern and the count together"
+            echo "::error::X_HOTKEY_TESTS ($X_HOTKEY_TESTS) matched $listed tests, expected $X_HOTKEY_TEST_COUNT -- a test was renamed, added or removed; update the count"
             exit 1
           fi
 
@@ -311,13 +354,21 @@ jobs:
             echo "::error::expected $X_HOTKEY_TEST_COUNT X-dependent hotkey tests to PASS, saw $passed"
             exit 1
           fi
-          echo "all $passed X-dependent hotkey tests executed against DISPLAY=$DISPLAY"
+          # Precise on purpose: this is the line a reader trusts on a green job,
+          # and one of the enforced tests is the meta-guard, which asserts the
+          # enforcement is switched on rather than opening a display itself.
+          echo "all $passed enforced hotkey tests executed (all but the meta-guard against DISPLAY=$DISPLAY)"
 
       # always(), or a failing test above leaves Xvfb running and the job's
       # cleanup to the runner.
       - name: Stop Xvfb
         if: always()
-        run: kill "${XVFB_PID:-}" 2>/dev/null || true
+        # kill -0 first: the PID is recorded before the readiness check, so on a
+        # startup failure it may already be dead and its number reusable.
+        run: |
+          if [ -n "${XVFB_PID:-}" ] && kill -0 "$XVFB_PID" 2>/dev/null; then
+            kill "$XVFB_PID" 2>/dev/null || true
+          fi
 
       # TestBrowserHandlerParityIntegration drives a real headless Chromium over
       # the CDP pipe, and on a loaded runner that races: the observed CI flakes

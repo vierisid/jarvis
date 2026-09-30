@@ -140,8 +140,8 @@ typedef struct {
 //	xlib handler consulted            0 times
 //	third client takes mask 0x4f      granted, so the release was real
 //
-// The same three properties are Go tests -- TestLinuxRefusedGrabIsReported,
-// TestLinuxPartialClashIsRefusedWholesale and TestLinuxGrabIsReleasedOnStop --
+// The same three properties are Go tests -- TestLinuxXRefusedGrabIsReported,
+// TestLinuxXPartialClashIsRefusedWholesale and TestLinuxXGrabIsReleasedOnStop --
 // which CI now runs under Xvfb (#588) rather than skipping.
 //
 // NO ERROR HANDLER IS INSTALLED ANYWHERE IN THIS FILE, and that is a decision
@@ -549,17 +549,29 @@ static int jarvisHotkeyRun(Hotkey* hk) {
             if (errno == EINTR) continue;
             return errno;
         }
+        // A READABLE STOP PIPE WINS OVER EVERYTHING, and it is tested first for
+        // a reason: if the X fd happens to be invalid at the moment the stop
+        // byte lands, checking POLLNVAL first would return EBADF and the Go
+        // side would log "poll() failed ... the hotkey is dead" for a perfectly
+        // ordinary teardown.
+        if (fds[1].revents & POLLIN) return 0;
         // POLLNVAL means the fd is closed. select() reported that by failing
         // with EBADF and this loop returned it; poll() reports it per-fd and
         // returns > 0, so without this branch the loop would spin at 100% CPU
         // forever on a condition that cannot clear.
         if ((fds[0].revents | fds[1].revents) & POLLNVAL) return EBADF;
-        // Stop pipe first, and on ANY event rather than POLLIN alone. This is
-        // the one place poll() and select() genuinely differ: select() reported
-        // a hung-up read end as READABLE, so a vanished write end ended the
-        // loop. Testing POLLIN only would leave POLLHUP set on every iteration
-        // and spin, and no stop byte could ever arrive to break out -- stop()
-        // would block forever on its done channel.
+        // Any OTHER event on the stop pipe also ends the loop. This is where
+        // poll() and select() differ in principle: select() reported a hung-up
+        // read end as READABLE, so a vanished write end ended the loop, and
+        // testing POLLIN alone would leave POLLHUP set on every iteration and
+        // spin with no stop byte able to arrive.
+        //
+        // Not reachable today, and said so rather than implied: stopfd[1] is
+        // closed only by jarvisHotkeyFree, which by contract runs after this
+        // function has returned. The branch is deliberate insurance, and it
+        // treats an unexpected revent as a stop rather than an error because a
+        // listener whose stop pipe is broken cannot be stopped any other way --
+        // the alternative is stop() blocking on its done channel forever.
         if (fds[1].revents != 0) return 0;
         // Anything on the X fd goes to the queue drain, which is exactly what
         // select() did: it reported a hung-up socket as readable, XPending then
@@ -580,7 +592,7 @@ static int jarvisHotkeyRun(Hotkey* hk) {
 // reports the fd the kernel handed it, and closes it again. HK_FD_SETSIZE is
 // the select() ceiling that fd used to have to stay under.
 //
-// Both exist for TestLinuxListenerSurvivesAnFdAboveFdSetsize, which is only
+// Both exist for TestLinuxXListenerSurvivesAnFdAboveFdSetsize, which is only
 // meaningful if the fd really did land above the limit. Asserting that from Go
 // turns "the precondition was not met" into a visible failure instead of a test
 // that passes while proving nothing -- and that matters more than it sounds,
@@ -597,6 +609,27 @@ static int jarvisHotkeyProbeConnectionFd(void) {
 }
 
 #define HK_FD_SETSIZE FD_SETSIZE
+
+// hkFortifyLevel reports glibc's fortification level for this translation unit.
+//
+// TestLinuxXListenerSurvivesAnFdAboveFdSetsize needs it because its ability to
+// CONDEMN a reintroduced select() rests entirely on FD_SET being the fortified
+// macro: at level 0, FD_SET on an out-of-range fd writes out of bounds and
+// returns normally, so the OLD broken code passes that test too (measured).
+// Reading the level lets the test state whether it is armed instead of leaving
+// that to whoever reads the output -- otherwise dropping the flag that arms it
+// would quietly cost the guard, which is the #588 failure mode one level down.
+//
+// __USE_FORTIFY_LEVEL is what features.h derives from _FORTIFY_SOURCE together
+// with the optimisation level, so it reflects what the compiler actually did
+// rather than what was asked for.
+static int hkFortifyLevel(void) {
+#ifdef __USE_FORTIFY_LEVEL
+    return __USE_FORTIFY_LEVEL;
+#else
+    return 0;
+#endif
+}
 
 // jarvisHotkeyStop unblocks the run loop (write to the self-pipe — thread-safe,
 // no XLib). Safe to call from a different goroutine than jarvisHotkeyRun, but
@@ -683,7 +716,7 @@ static Display* jarvisHotkeyGrabOne(unsigned int mods, unsigned long keysym, int
     // Same blind spot as the create, and the same guard: on a dying server the
     // check comes back clean for a grab that never happened, so this would
     // return a Display holding nothing and hotkeyHoldOneVariant would report
-    // ok. TestLinuxPartialClashIsRefusedWholesale would then fail with "a
+    // ok. TestLinuxXPartialClashIsRefusedWholesale would then fail with "a
     // combination whose plain variant is held came back as SUCCESS" -- a
     // confusing false failure where a skip is the truth.
     if (xcb_connection_has_error(xcb)) { close(ConnectionNumber(dpy)); return NULL; }
@@ -961,8 +994,8 @@ var hotkeyCreateMu sync.Mutex
 //	unmapped keysym               HK_NO_KEYCODE, never an AnyKey grab
 //
 // The first four rows are now Go tests rather than a claim: see
-// TestLinuxRefusedGrabIsReported, TestLinuxPartialClashIsRefusedWholesale and
-// TestLinuxGrabIsReleasedOnStop. The fifth is not asserted through this
+// TestLinuxXRefusedGrabIsReported, TestLinuxXPartialClashIsRefusedWholesale and
+// TestLinuxXGrabIsReleasedOnStop. The fifth is not asserted through this
 // function, because no keysym is reliably unmapped on every machine;
 // parseLinuxKeyspec's error cases cover the reachable half.
 //
@@ -1053,7 +1086,13 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 		// its own (a non-EINTR poll error), and without this the registration
 		// would outlive the listener and a late dispatch would still run the
 		// callback against whatever the caller has since torn down.
-		hotkeyDispatcher.invalidate(id)
+		//
+		// Reported, not discarded. This is the path where the listener died
+		// unasked, so it is the one where a callback finishing against a
+		// half-torn-down object is most likely to be a mystery later.
+		if inFlight := hotkeyDispatcher.invalidate(id); inFlight > 0 {
+			log.Printf("[hotkeys] %q: the listener exited with %d callback(s) dispatched and not yet finished", keyspec, inFlight)
+		}
 		close(done)
 	}()
 
@@ -1080,7 +1119,7 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 			// header of hotkeys_dispatch.go for why waiting is the wrong
 			// trade here. It is reported instead of implied.
 			if inFlight := hotkeyDispatcher.invalidate(id); inFlight > 0 {
-				log.Printf("[hotkeys] %q: stopped while %d callback(s) were still running; they will finish, so anything this hotkey drives must tolerate that",
+				log.Printf("[hotkeys] %q: stopped while %d callback(s) were dispatched and not yet finished; they will run to completion, so anything this hotkey drives must tolerate that",
 					keyspec, inFlight)
 			}
 			lifeMu.Lock()
@@ -1098,7 +1137,7 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 // hotkeyHoldOneVariant grabs a SINGLE lock-modifier variant of keyspec on its
 // own X connection and returns a release function.
 //
-// This exists for TestLinuxPartialClashIsRefusedWholesale, which needs a
+// This exists for TestLinuxXPartialClashIsRefusedWholesale, which needs a
 // combination that is neither free nor fully taken -- the state the
 // all-or-nothing decision exists for, and the one a Go test cannot otherwise
 // manufacture. It is a Go wrapper rather than a direct C call because a
@@ -1162,7 +1201,7 @@ func parseLinuxKeyspec(spec string) (mods uint, keysym uint64, err error) {
 // everything, standing in for GDK, and returns a function that restores what
 // was there and reports how many errors the impostor caught.
 //
-// For TestLinuxRefusalSurvivesAStolenErrorHandler. A Go wrapper rather than a
+// For TestLinuxXRefusalSurvivesAStolenErrorHandler. A Go wrapper rather than a
 // direct C call because a _test.go file may not use cgo at all. Nothing in the
 // product calls it.
 func stealHotkeyErrorHandler() (restore func() int) {
@@ -1180,10 +1219,16 @@ func stealHotkeyErrorHandler() (restore func() int) {
 // select() to escape.
 const hotkeyFdSetSize = int(C.HK_FD_SETSIZE)
 
+// hotkeyFortifyLevel reports whether this package was compiled with glibc's
+// fortified FD_SET, which is what makes the high-fd test able to catch a
+// reintroduced select() rather than merely confirm that poll() works. 0 means
+// unarmed. See the C comment on hkFortifyLevel.
+func hotkeyFortifyLevel() int { return int(C.hkFortifyLevel()) }
+
 // hotkeyProbeConnectionFd opens an X connection exactly as a create does,
 // reports the fd number the kernel gave it, and closes it again.
 //
-// For TestLinuxListenerSurvivesAnFdAboveFdSetsize, which has to establish that
+// For TestLinuxXListenerSurvivesAnFdAboveFdSetsize, which has to establish that
 // its precondition actually held: under fd pressure the listener's own
 // connection gets a number in the same range, so if this comes back below
 // FD_SETSIZE the test is proving nothing and says so instead of passing.
@@ -1198,7 +1243,7 @@ func hotkeyProbeConnectionFd() int {
 // whose socket has been replaced by /dev/null and returns the stage it
 // produced, which must be hkGrabConnLost.
 //
-// For TestLinuxADeadConnectionIsNotReportedAsAGrantedGrab. See the C comment on
+// For TestLinuxXADeadConnectionIsNotReportedAsAGrantedGrab. See the C comment on
 // jarvisHotkeyGrabOverBrokenConnection. Nothing in the product calls it.
 // ok is false when there is no display or the layout has no such key.
 func hotkeyGrabOverBrokenConnection(keyspec string) (stage int, ok bool) {
@@ -1220,7 +1265,7 @@ func hotkeyGrabOverBrokenConnection(keyspec string) (stage int, ok bool) {
 // handler installed across the whole request-and-verdict window -- the GDK
 // error-trap window, manufactured rather than waited for.
 //
-// For TestLinuxCheckedGrabKeepsItsRefusalFromTheGlobalHandler. See the C
+// For TestLinuxXCheckedGrabKeepsItsRefusalFromTheGlobalHandler. See the C
 // comment on jarvisHotkeyGrabUnderHijackedHandler for why it has to drive the
 // real function rather than issue its own equivalent grab. Nothing in the
 // product calls it.

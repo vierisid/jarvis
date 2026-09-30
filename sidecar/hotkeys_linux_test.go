@@ -44,8 +44,14 @@ func requireX(t *testing.T, format string, args ...any) {
 	t.Skipf(format, args...)
 }
 
-// The guard for the guard: if CI ever drops the env var or the display, say so
-// here rather than letting every X test quietly skip.
+// The guard for the guard, and precisely scoped: this catches the flag being
+// SET while DISPLAY is empty -- Xvfb failing to start, say -- which would
+// otherwise make every X test below skip.
+//
+// It does NOT catch the flag being dropped from the job; it skips in that case,
+// like the JARVIS_REQUIRE_XDOTOOL_SHIM guard it is modelled on. What catches
+// that is the workflow's `--- SKIP` grep, which fails the step even though
+// `go test` itself reports PASS. Two mechanisms, each covering the other's gap.
 //
 // It also exists to make DISPLAY part of go test's cache key for this package
 // even on the paths where requireX is never reached.
@@ -202,7 +208,7 @@ func TestLinuxAcceptsEveryModifierSpelling(t *testing.T) {
 // with a desktop (or anything reaching an X server, including WSLg) gets the
 // real round trip. That is deliberate: the grab lives in the cgo half and this
 // is the only place it can be exercised at all.
-func TestLinuxRefusedGrabIsReported(t *testing.T) {
+func TestLinuxXRefusedGrabIsReported(t *testing.T) {
 	// Deliberately obscure: this really does grab the combination on the
 	// running desktop for the length of the test, so it must not be one
 	// anybody has bound. Four modifiers plus a letter is not a shipped
@@ -253,7 +259,7 @@ func TestLinuxRefusedGrabIsReported(t *testing.T) {
 // form of that proof -- a third client taking a lock variant while a squatter
 // still holds the base one -- needs a raw X client and was done in C against a
 // real server rather than from here; see the comment on startHotkeyListener.
-func TestLinuxGrabIsReleasedOnStop(t *testing.T) {
+func TestLinuxXGrabIsReleasedOnStop(t *testing.T) {
 	// Derived from the pid so two concurrent runs of this package against one X
 	// server do not hold the same combination and blame each other. This repo
 	// hits that class of phantom failure routinely when worktrees test in
@@ -306,9 +312,9 @@ func TestLinuxGrabIsReleasedOnStop(t *testing.T) {
 // regression test. The mechanism #577 replaced installed its OWN handler at
 // create entry, which displaced this impostor, so the old code passes this too
 // (measured, not assumed). The test that discriminates is
-// TestLinuxCheckedGrabKeepsItsRefusalFromTheGlobalHandler below, which opens
+// TestLinuxXCheckedGrabKeepsItsRefusalFromTheGlobalHandler below, which opens
 // the foreign handler's window where it actually matters.
-func TestLinuxRefusalSurvivesAStolenErrorHandler(t *testing.T) {
+func TestLinuxXRefusalSurvivesAStolenErrorHandler(t *testing.T) {
 	// Its own combination, so a parallel run of this package elsewhere cannot
 	// make the squatter grab below fail for an unrelated reason.
 	const spec = "ctrl+alt+shift+super+g"
@@ -370,7 +376,7 @@ func TestLinuxRefusalSurvivesAStolenErrorHandler(t *testing.T) {
 //
 // So this test fails on the old mechanism and passes on this one, which is the
 // property a mechanism swap has to demonstrate rather than assert.
-func TestLinuxCheckedGrabKeepsItsRefusalFromTheGlobalHandler(t *testing.T) {
+func TestLinuxXCheckedGrabKeepsItsRefusalFromTheGlobalHandler(t *testing.T) {
 	const spec = "ctrl+alt+shift+super+h"
 
 	// A squatter on our own connection, so there is a refusal to lose.
@@ -419,7 +425,7 @@ func TestLinuxCheckedGrabKeepsItsRefusalFromTheGlobalHandler(t *testing.T) {
 // and the verdict, and the sidecar re-registers its hotkeys around session
 // logout and X server restarts, which is exactly when a connection dies
 // mid-sequence.
-func TestLinuxADeadConnectionIsNotReportedAsAGrantedGrab(t *testing.T) {
+func TestLinuxXADeadConnectionIsNotReportedAsAGrantedGrab(t *testing.T) {
 	// A combination nothing else is asked to hold: the point is the dead
 	// socket, not contention, and this must not depend on whether the grab
 	// would have been granted.
@@ -481,23 +487,51 @@ func TestLinuxADeadConnectionIsNotReportedAsAGrantedGrab(t *testing.T) {
 // and CI compiling this package with -D_FORTIFY_SOURCE=2 so the abort is
 // deterministic there. On a local unfortified toolchain this test confirms the
 // fix works; it cannot by itself condemn the old code.
-func TestLinuxListenerSurvivesAnFdAboveFdSetsize(t *testing.T) {
+func TestLinuxXListenerSurvivesAnFdAboveFdSetsize(t *testing.T) {
 	const spec = "ctrl+alt+shift+super+f"
 
-	// Raise the soft limit so fds above FD_SETSIZE are obtainable at all.
+	// IS THE DETECTOR ARMED? Asked out loud, because the answer decides what a
+	// PASS from this test is worth, and the test cannot otherwise tell.
+	//
+	// Unfortified, FD_SET on an out-of-range fd writes out of bounds and
+	// returns, so the pre-#587 code passes everything below. Fortified, it
+	// aborts. Where the tests are enforced (CI) that is not allowed to be a
+	// matter of luck; locally it is worth a line of output rather than a
+	// failure, because the run still confirms poll() works.
+	if level := hotkeyFortifyLevel(); level == 0 {
+		if os.Getenv(requireXHotkeyTests) == "1" {
+			t.Fatalf("this package was compiled with no _FORTIFY_SOURCE, so FD_SET on an out-of-range fd would NOT abort and this test could not catch a reintroduced select() -- %s=1 means that guard has to be real here; check CGO_CFLAGS on this job's step",
+				requireXHotkeyTests)
+		}
+		t.Logf("compiled unfortified: this run confirms poll() copes with a high fd, but could NOT have caught a reintroduced select()")
+	} else {
+		t.Logf("compiled with _FORTIFY_SOURCE level %d, so a reintroduced FD_SET(fd >= FD_SETSIZE) would abort", level)
+	}
+
+	// The soft limit is READ, not raised, and that is a correctness point
+	// rather than a simplification.
+	//
+	// Two reasons, both from syscall/rlimit.go rather than from guessing:
+	//
+	//  1. Go's own init() already raises this soft limit towards the hard limit
+	//     at startup, precisely so Go programs are not bound by the select()
+	//     ceiling this test is about. There is nothing left to raise.
+	//  2. syscall.Setrlimit(RLIMIT_NOFILE, ...) does `origRlimitNofile.Store(nil)`,
+	//     which is the flag StartProcess reads to decide whether to put the
+	//     ORIGINAL soft limit back for a child. Setting the limit here therefore
+	//     changes what every subprocess started by any later test in this binary
+	//     inherits -- and a t.Cleanup restore cannot undo it, because the record
+	//     it would need has already been thrown away.
+	//
+	// This package spawns Chromium and shells in other tests, so that was a
+	// real side effect on unrelated code in exchange for nothing.
 	var lim syscall.Rlimit
 	if err := syscall.Getrlimit(syscall.RLIMIT_NOFILE, &lim); err != nil {
 		requireX(t, "cannot read RLIMIT_NOFILE: %v", err)
 	}
-	if lim.Max <= uint64(hotkeyFdSetSize)+64 {
-		requireX(t, "the hard fd limit (%d) is too low to reach FD_SETSIZE (%d)", lim.Max, hotkeyFdSetSize)
+	if lim.Cur <= uint64(hotkeyFdSetSize)+64 {
+		requireX(t, "the soft fd limit (%d) is too low to reach FD_SETSIZE (%d)", lim.Cur, hotkeyFdSetSize)
 	}
-	raised := lim
-	raised.Cur = lim.Max
-	if err := syscall.Setrlimit(syscall.RLIMIT_NOFILE, &raised); err != nil {
-		requireX(t, "cannot raise the soft fd limit: %v", err)
-	}
-	t.Cleanup(func() { _ = syscall.Setrlimit(syscall.RLIMIT_NOFILE, &lim) })
 
 	// Fill every fd number below the ceiling so the next socket the kernel
 	// hands out is above it.
@@ -508,33 +542,59 @@ func TestLinuxListenerSurvivesAnFdAboveFdSetsize(t *testing.T) {
 	// silently making the test vacuous. O_CLOEXEC on purpose too -- this
 	// package spawns Chromium and shells in other tests, and 1100 inherited
 	// fds is a mess to debug.
-	filler := make([]int, 0, hotkeyFdSetSize+64)
+	var filler []int
 	t.Cleanup(func() {
 		for _, fd := range filler {
 			_ = syscall.Close(fd)
 		}
 	})
-	for i := 0; i < hotkeyFdSetSize+40; i++ {
-		fd, err := syscall.Open("/dev/null", syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
-		if err != nil {
-			t.Fatalf("could only open %d of the %d filler fds needed to push a connection past FD_SETSIZE: %v",
-				len(filler), hotkeyFdSetSize+40, err)
+	fill := func(n int) bool {
+		for i := 0; i < n; i++ {
+			fd, err := syscall.Open("/dev/null", syscall.O_RDONLY|syscall.O_CLOEXEC, 0)
+			if err != nil {
+				return false
+			}
+			filler = append(filler, fd)
 		}
-		filler = append(filler, fd)
+		return true
+	}
+	if !fill(hotkeyFdSetSize + 40) {
+		t.Fatalf("could only open %d of the %d filler fds needed to push a connection past FD_SETSIZE",
+			len(filler), hotkeyFdSetSize+40)
 	}
 
 	// THE PRECONDITION, asserted rather than assumed: if a fresh connection
 	// still lands below the ceiling, this test cannot distinguish poll() from
 	// select() and must not report success.
-	probe := hotkeyProbeConnectionFd()
-	if probe < 0 {
-		requireX(t, "no X display, so the listener cannot be started at all")
+	//
+	// Adaptive, because the fill above only accounts for fds this test opened.
+	// Anything else in the process that frees a low fd -- a finalised *os.File
+	// or net.Conn from an earlier test, a goroutine closing a connection --
+	// punches a hole, and the probe lands in it -- the kernel hands out the
+	// LOWEST free descriptor, so a single hole anywhere below the ceiling beats
+	// a thousand correctly-held fds. Each iteration plugs the hole it just
+	// found (the next open takes that same lowest free fd by definition) and
+	// tries again, so a handful of holes costs a handful of descriptors instead
+	// of a red build. Without this the assertion below is a hard CI failure
+	// caused by an unrelated test's garbage collection.
+	probe := -1
+	for attempt := 0; attempt < 64; attempt++ {
+		probe = hotkeyProbeConnectionFd()
+		if probe < 0 {
+			requireX(t, "no X display, so the listener cannot be started at all")
+		}
+		if probe >= hotkeyFdSetSize {
+			break
+		}
+		if !fill(1) {
+			break
+		}
 	}
 	if probe < hotkeyFdSetSize {
-		t.Fatalf("a fresh X connection got fd %d, below FD_SETSIZE (%d), so this test would pass against the broken select() code too; the fd pressure did not take",
+		t.Fatalf("a fresh X connection still got fd %d, below FD_SETSIZE (%d), after plugging holes; this test would pass against the broken select() code too, so it must not report success",
 			probe, hotkeyFdSetSize)
 	}
-	t.Logf("a fresh X connection lands at fd %d, above FD_SETSIZE (%d)", probe, hotkeyFdSetSize)
+	t.Logf("a fresh X connection lands at fd %d, above FD_SETSIZE (%d), holding %d filler fds", probe, hotkeyFdSetSize, len(filler))
 
 	// The listener's own connection now gets a number in the same range, and
 	// its run loop has to cope. With select() this is where it dies.
@@ -558,7 +618,7 @@ func TestLinuxListenerSurvivesAnFdAboveFdSetsize(t *testing.T) {
 // neither free nor fully taken, which is exactly the state that used to produce
 // a hotkey working only in some lock states. startHotkeyListener must refuse the
 // whole thing, name the variant that clashed, and leave nothing grabbed.
-func TestLinuxPartialClashIsRefusedWholesale(t *testing.T) {
+func TestLinuxXPartialClashIsRefusedWholesale(t *testing.T) {
 	const spec = "ctrl+alt+shift+super+p"
 
 	// Variant 0 is the plain modifier mask; the lock variants stay free.
