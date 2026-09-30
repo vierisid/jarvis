@@ -37,6 +37,39 @@ window changes between captures or introduce a durable event replay protocol.
 The existing service still has one current activity/session stream; only metadata
 hints and fallback window information are scoped by sidecar here.
 
+## Ended sessions
+
+`ContextTracker.endCurrentSession` is the only producer of `session_ended`.
+It snapshots the nonempty session ID and app list before clearing either,
+persists the app list and end timestamp together, and returns a frozen event,
+frozen payload and frozen app array. Closing again returns null. The event keeps
+the C2 v1 wire shape; older null identities remain decodable but unattributed.
+App/window changes and returns after the existing five-minute capture gap use
+this same close operation before creating a new session. The closing timestamp
+is bounded by the latest observation accepted into that session (including its
+start), then used for both the event and stored end time. Late captures and a
+skewed clock at shutdown cannot shorten observed work or produce a negative
+duration. Source capture timestamps and processing order remain unchanged;
+each new session starts its own bound.
+
+The service delivers the end event before asynchronous capture enrichment, so
+later suggestion or vision failures cannot discard it. A listener failure does
+not prevent summary inference. Summary work uses the ended ID and a copied app
+list, suppresses concurrent work for that ID in this service, and skips a summary
+already stored in the database. Completed summaries survive service recreation;
+failed attempts release the in-flight claim. A later stored summary is not
+overwritten by a delayed result. These are activity summaries, not verified goal
+outcomes or changes to goal scores.
+
+The native `idle_detected` event means an unchanged window, not confirmed user
+absence. Repeated idle hints do not close sessions or create summaries. A later
+capture may cross the existing capture-gap boundary and close once. Shutdown
+also emits one final snapshot but does not start new model work.
+
+This does not add a durable event queue or guarantee exactly-once model calls
+across process crashes or multiple service processes. Existing session persistence
+remains best effort if the database is unavailable during close.
+
 ## Verification
 
 `bun test src/awareness/capture-transitions.test.ts` exercises serialized sidecar
@@ -45,3 +78,8 @@ It covers both explicit-event arrival orders, duplicates, real return transition
 native/legacy identity, stale/future/conflicting/cross-sidecar and partial hints,
 title-only changes, session identity and an image fetch delayed across another
 capture. No live screen capture or hosted LLM call is used.
+`bun test src/awareness/session-end.test.ts` covers immutable snapshots, same-app
+idle returns, repeated closes and idle messages, callback mutation/failure,
+failed enrichment, shutdown, concurrent/completed summary replay, and delayed
+captures/clock skew preserving session durations and summary eligibility. The tests
+use serialized sidecar events, real session rows and a synthetic summarizer.

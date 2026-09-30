@@ -10,7 +10,7 @@ const payloadSchema = {
   session_ended: { sessionId: 'nullableString', apps: 'strings' },
 } as const;
 
-type FieldType = { string: string; nullableString: string | null; strings: string[] };
+type FieldType = { string: string; nullableString: string | null; strings: readonly string[] };
 type Payload<K extends keyof typeof payloadSchema> = {
   [F in keyof typeof payloadSchema[K]]: FieldType[(typeof payloadSchema[K])[F] & keyof FieldType];
 } & Record<string, unknown>;
@@ -23,6 +23,11 @@ export type AwarenessActivityEvent<K extends keyof typeof payloadSchema = keyof 
     timestamp: number;
   }
 }[K];
+
+/** New producers always close an identified session and own a frozen snapshot. */
+export type SessionEndedEvent = Readonly<Omit<AwarenessActivityEvent<'session_ended'>, 'data'> & {
+  data: Readonly<{ sessionId: string; apps: readonly string[] }>;
+}>;
 
 const object = (value: unknown): value is Record<string, unknown> =>
   value !== null && typeof value === 'object' && !Array.isArray(value);
