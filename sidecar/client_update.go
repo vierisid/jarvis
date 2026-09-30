@@ -137,8 +137,11 @@ func handleUpdateApply(params map[string]any) (*RPCResult, error) {
 	version, _ := params["version"].(string)
 	if err := u.Start(version); err != nil {
 		code := "UPDATE_UNAVAILABLE"
-		if errors.Is(err, ErrUpdateBusy) {
+		switch {
+		case errors.Is(err, ErrUpdateBusy):
 			code = "UPDATE_BUSY"
+		case errors.Is(err, ErrUpdateCooldown):
+			code = "UPDATE_RETRY_LATER"
 		}
 		return nil, &codedError{code: code, err: err}
 	}

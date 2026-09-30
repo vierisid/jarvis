@@ -71,6 +71,8 @@ func newFakeUpdater(t *testing.T, running string, mode update.Mode) *fakeUpdater
 	u.verifyPM = func(string) error { return nil }
 	u.verBin = func(string) (string, error) { return "", errors.New("unset") }
 	u.now = time.Now
+	u.markPending = func(string, string, string) error { return nil }
+	u.clearPending = func() {}
 	u.handOff = func(exe string) error {
 		f.mu.Lock()
 		f.handedOff = append(f.handedOff, exe)
@@ -253,7 +255,7 @@ func TestUpdaterNativeApplyHandsOffToInstalledBinary(t *testing.T) {
 	for _, s := range f.emitted {
 		phases = append(phases, s.Phase)
 	}
-	if got := strings.Join(phases, ","); got != "downloading,verifying,installing,restarting" {
+	if got := strings.Join(phases, ","); got != "available,downloading,verifying,installing,restarting" {
 		t.Errorf("phases = %s", got)
 	}
 }
@@ -589,4 +591,75 @@ func TestHandleUpdateApplyCodes(t *testing.T) {
 	}
 	close(release)
 	f.waitSettled(t)
+}
+
+func (f *fakeUpdater) phases() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	var out []string
+	for _, s := range f.emitted {
+		out = append(out, s.Phase)
+	}
+	return out
+}
+
+// The brain (and the dashboard) must learn what the sidecar found on the
+// registry: "unavailable" while the version is not published, then
+// "available" once a retry finds it. Otherwise the dashboard offers an
+// update the sidecar cannot install yet.
+func TestUpdaterReportsRegistryOutcomes(t *testing.T) {
+	f := newFakeUpdater(t, "0.9.7", nativeMode(t))
+	f.OnAck("0.10.0")
+	waitUntil(t, func() bool { return len(f.phases()) == 1 })
+	if got := f.phases(); got[0] != updatePhaseUnavailable {
+		t.Fatalf("phases = %v, want unavailable first", got)
+	}
+	f.mu.Lock()
+	if e := f.emitted[0].Error; e != "" {
+		t.Errorf("not-published-yet carries an error %q; the prompt would call it a network problem", e)
+	}
+	f.published["0.10.0"] = true
+	retry := f.retries[0]
+	f.mu.Unlock()
+	retry()
+	if got := strings.Join(f.phases(), ","); got != "unavailable,available" {
+		t.Errorf("phases = %s, want unavailable,available", got)
+	}
+}
+
+// A click while the version is not confirmed (the check is still running,
+// or an hour-old miss has not been retried) checks right away instead of
+// refusing.
+func TestUpdaterStartRechecksUnconfirmedVersion(t *testing.T) {
+	f := newFakeUpdater(t, "0.9.7", nativeMode(t))
+	f.OnAck("0.10.0")
+	waitUntil(t, func() bool { return len(f.phases()) == 1 }) // unavailable
+	f.mu.Lock()
+	f.published["0.10.0"] = true // published since
+	f.mu.Unlock()
+	if err := f.Start("0.10.0"); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	f.waitSettled(t)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.installed) != 1 || f.installed[0] != "0.10.0" {
+		t.Errorf("installed = %v", f.installed)
+	}
+}
+
+// Blocked mid-session (a brain upgrade raised its floor) after the startup
+// offer was already shown: the prompt appears again.
+func TestUpdaterBlockedAfterStartupOfferPromptsAgain(t *testing.T) {
+	f := newFakeUpdater(t, "0.9.7", nativeMode(t))
+	f.published["0.10.0"] = true
+	f.OnAck("0.10.0")
+	f.waitSettled(t)
+	f.OnRejected("0.10.0")
+	f.waitSettled(t)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.offers) != 2 || !f.offers[1].Blocked {
+		t.Errorf("offers = %+v, want the startup offer then a blocked one", f.offers)
+	}
 }

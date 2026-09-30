@@ -310,7 +310,8 @@ const updateWindowHTML = `<!doctype html>
 
     var status = '';
     if (working) status = PHASES[v.phase];
-    else if (v.phase === 'unavailable') status = 'Version ' + v.version + ' is not published yet. Try again in a while, or update it yourself.';
+    else if (v.phase === 'unavailable' && v.error) status = 'Could not check version ' + v.version + ' on the registry (' + v.error + '). Jarvis tries again in a while.';
+    else if (v.phase === 'unavailable') status = 'Version ' + v.version + ' is not published yet. Jarvis checks again in a while, or you can update it yourself.';
     else if (!v.version && v.blocked) status = 'Your brain did not say which version to install.';
     else if (v.version && !v.canApply) status = 'This sidecar cannot update itself where it is installed.';
     $('status').textContent = status;

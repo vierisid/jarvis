@@ -980,7 +980,7 @@ A sidecar below `SIDECAR_MIN_VERSION` is refused, told what to install, and the 
 - only a version strictly newer than its own; a `dev` build never updates
 - only from the npm registry (a registry override exists in `-tags jarvisdebug` builds only), and only once that exact version is published there; until then it reports `unavailable` and retries hourly
 - the tarball's sha512 must match the registry's integrity value, and on Windows and macOS the payload must carry the pinned code signature
-- an installer-managed install is swapped in place and the new binary relaunched; if it does not start, the previous one is restored. A bun/npm global install runs that package manager. Anything else, or any failure, reports a command the user can run instead
+- an installer-managed install is swapped in place and the new binary relaunched. If it cannot be launched, the previous one is restored at once; if it launches but keeps failing to reach the brain (three starts without a `register_ack`), it restores the previous one on its next start (`sidecar/update_pending.go`). A bun/npm global install runs that package manager, pinned to the version and to the npm registry, and has its code signature checked before it runs. Anything else, or any failure, reports a command the user can run instead
 
 The offer reaches the user as a native prompt after the first registration of each process (Windows, macOS; "Skip this version" silences only this prompt), a tray item, and the dashboard. The dashboard uses two routes: `POST /api/sidecars/:id/update-prompt` opens the native prompt, and `POST /api/sidecars/:id/update` installs directly on sidecars without one (Linux).
 
@@ -989,7 +989,7 @@ Brain -> sidecar RPCs (ungated):
 | Method | Params | Result |
 |---|---|---|
 | `sidecar.update_prompt` | `{}` | `{ok: true}` once the prompt is opening; error `UNSUPPORTED` without a prompt |
-| `sidecar.update_apply` | `{version}` | `{started: true}`; errors `UPDATE_UNAVAILABLE` (nothing to install, or `version` is not the one the sidecar confirmed) and `UPDATE_BUSY` |
+| `sidecar.update_apply` | `{version}` | `{started: true}`; errors `UPDATE_UNAVAILABLE` (nothing to install, or `version` is not the one the sidecar confirmed), `UPDATE_BUSY`, `UPDATE_RETRY_LATER` (a few seconds after a failed attempt) |
 
 Progress comes back as `sidecar_event`s with `event_type: "update_progress"`, which the brain keeps on the connection and exposes as `update_state` in `/api/sidecars`:
 
@@ -1002,7 +1002,7 @@ Progress comes back as `sidecar_event`s with `event_type: "update_progress"`, wh
 }
 ```
 
-`phase` is one of `downloading`, `verifying`, `installing`, `restarting`, `failed` (with `error` and `manual_command`), `unavailable` (the advertised version is not published yet). A sidecar that predates self-update gets the brain's `notify.show` "Update Jarvis" notification instead, once per brain process.
+`phase` is one of `available` (the advertised version is published and installable), `unavailable` (not published yet, or the registry could not be reached, which `error` then says), `downloading`, `verifying`, `installing`, `restarting`, and `failed` (with `error` and `manual_command`). The sidecar reports `available`/`unavailable` after each registry check, so the dashboard only offers what it can install. A sidecar that predates self-update gets the brain's `notify.show` "Update Jarvis" notification instead, once per brain process.
 
 ### Sidecar disconnects
 

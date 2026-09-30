@@ -40,6 +40,14 @@ export function SidecarUpdatePill() {
     return () => window.removeEventListener(SIDECARS_CHANGED_EVENT, onChanged);
   }, [refresh]);
 
+  // Follow an install closely while one runs (the regular poll is slow).
+  const installing = (data ?? []).some((sc) => sc.connected && updateInProgress(sc.update_state));
+  useEffect(() => {
+    if (!installing) return;
+    const id = window.setInterval(() => { void refresh(); }, 3_000);
+    return () => window.clearInterval(id);
+  }, [installing, refresh]);
+
   const view = pillView(data ?? []);
 
   const onClick = async () => {

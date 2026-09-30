@@ -99,7 +99,7 @@ func VerifyPayloadSignature(stagedBin string) error {
 	}
 
 	if expectedPublisherCN == "" {
-		Logf("warning: no pinned publisher in this build — verifying signature chain only")
+		Logf("warning: no pinned publisher in this build; verifying the signature chain only")
 		return nil
 	}
 	// Publisher pin: chain validity alone would accept ANY signed executable,

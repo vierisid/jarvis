@@ -85,8 +85,24 @@ export function compareSemver(a: Semver, b: Semver): number {
   if (a.prerelease === b.prerelease) return 0;
   if (a.prerelease === '') return 1;
   if (b.prerelease === '') return -1;
-  // Both prerelease: lexical identifier comparison is good enough here.
-  return a.prerelease < b.prerelease ? -1 : 1;
+  // Both prerelease: identifier by identifier per semver 11 (numeric ones
+  // numerically and below alphanumeric ones; a shorter list sorts first), the
+  // same order the sidecar's updater uses, so both sides agree on rc.9 < rc.10.
+  const as = a.prerelease.split('.');
+  const bs = b.prerelease.split('.');
+  for (let i = 0; i < Math.min(as.length, bs.length); i++) {
+    const x = as[i]!, y = bs[i]!;
+    const xn = /^\d+$/.test(x), yn = /^\d+$/.test(y);
+    if (xn && yn) {
+      const d = Number(x) - Number(y);
+      if (d !== 0) return d;
+    } else if (xn !== yn) {
+      return xn ? -1 : 1;
+    } else if (x !== y) {
+      return x < y ? -1 : 1;
+    }
+  }
+  return as.length - bs.length;
 }
 
 /** Classify a sidecar's reported version against the brain's compatibility floors. */
@@ -115,5 +131,7 @@ export function isUpdateAvailable(reported: string | undefined | null, latest: s
   const v = parseSemver(reported ?? '');
   const l = parseSemver(latest);
   if (!v || !l) return false;
+  // Like the sidecar: a release build is never moved onto a prerelease.
+  if (l.prerelease !== '' && v.prerelease === '') return false;
   return compareSemver(v, l) < 0;
 }

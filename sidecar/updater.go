@@ -98,9 +98,13 @@ type Updater struct {
 	verifyPM  func(exe string) error // signature of what the package manager installed
 	verBin    func(exe string) (string, error)
 	handOff   func(exe string) error // relaunch exe and exit this process once it is up
-	schedule  func(d time.Duration, f func()) func()
-	now       func() time.Time
-	cooldown  time.Duration
+	// markPending / clearPending keep the startup-rollback marker
+	// (update_pending.go) for a native update.
+	markPending  func(installDir, from, to string) error
+	clearPending func()
+	schedule     func(d time.Duration, f func()) func()
+	now          func() time.Time
+	cooldown     time.Duration
 
 	// Hooks, set by the client / platform UI. All optional.
 	onChange     func(UpdateOffer) // tray item, open prompt
@@ -124,6 +128,10 @@ type Updater struct {
 	// rollback copy.
 	applying   atomic.Bool
 	firstOffer sync.Once
+	// blockedOffer is separate: a sidecar the brain starts refusing
+	// mid-session (a brain upgrade raised its floor) gets the prompt even if
+	// the startup offer was already shown and put off.
+	blockedOffer sync.Once
 }
 
 func newUpdater(running string) *Updater {
@@ -146,8 +154,10 @@ func newUpdater(running string) *Updater {
 			t := time.AfterFunc(d, f)
 			return func() { t.Stop() }
 		},
-		now:      time.Now,
-		cooldown: failureCooldown,
+		now:          time.Now,
+		cooldown:     failureCooldown,
+		markPending:  writePendingUpdate,
+		clearPending: clearPendingUpdate,
 	}
 	u.pmResolve = func(pm, version string) ([]string, string, error) {
 		_, args, pathEnv, err := update.PackageManagerInvocation(pm, version, u.registry, u.exe)
@@ -237,11 +247,22 @@ func (u *Updater) advertise(latest string, blocked bool) {
 		// A blocked sidecar with nothing installable still gets its prompt:
 		// it cannot work until updated, and the prompt says how.
 		if blocked && u.updatable() {
-			u.fireFirstOffer()
+			u.fireBlockedOffer()
 		}
 		return
 	}
 	go u.check(gen, latest, false)
+}
+
+// registryStateFor is the state a registry check leaves behind for version:
+// "unavailable" (with the error only when it was not simply "not published
+// yet", so the prompt can tell a network problem from a pending release).
+func registryStateFor(version string, err error) UpdateState {
+	s := UpdateState{Phase: updatePhaseUnavailable, Version: version}
+	if !errors.Is(err, update.ErrVersionNotFound) {
+		s.Error = err.Error()
+	}
+	return s
 }
 
 // check confirms the advertised version is really published before offering
@@ -267,10 +288,15 @@ func (u *Updater) check(gen int, version string, retry bool) {
 		log.Printf("[update] re-check of sidecar %s failed (%v); keeping the confirmed offer", version, err)
 		return
 	}
+	// The brain (and so the dashboard) learns the outcome too: without it,
+	// it would offer an update the sidecar cannot install yet.
+	var report *UpdateState
 	if err != nil {
 		u.available = ""
 		if !u.applying.Load() {
-			u.state = UpdateState{Phase: updatePhaseUnavailable, Version: version, Error: err.Error()}
+			s := registryStateFor(version, err)
+			u.state = s
+			report = &s
 		}
 		u.cancelRetry = u.schedule(updateRetryInterval, func() { u.check(gen, version, true) })
 		blocked := u.blocked
@@ -280,28 +306,49 @@ func (u *Updater) check(gen int, version string, retry bool) {
 		} else {
 			log.Printf("[update] sidecar %s is not published yet (retrying in %s)", version, updateRetryInterval)
 		}
+		u.report(report)
 		u.changed()
 		if blocked {
-			u.fireFirstOffer()
+			u.fireBlockedOffer()
 		}
 		return
 	}
 	u.available = version
 	keepFailure := u.state.Phase == updatePhaseFailed && u.state.Version == version
 	if !u.applying.Load() && !keepFailure {
-		u.state = UpdateState{Phase: updatePhaseAvailable, Version: version}
+		s := UpdateState{Phase: updatePhaseAvailable, Version: version}
+		u.state = s
+		report = &s
 	}
 	blocked := u.blocked
 	u.mu.Unlock()
 	log.Printf("[update] sidecar %s is available (running %s)", version, u.running)
+	u.report(report)
 	u.changed()
-	if startup || blocked {
+	switch {
+	case blocked:
+		u.fireBlockedOffer()
+	case startup:
 		u.fireFirstOffer()
+	}
+}
+
+func (u *Updater) report(s *UpdateState) {
+	if s != nil && u.emit != nil {
+		u.emit(*s)
 	}
 }
 
 func (u *Updater) fireFirstOffer() {
 	u.firstOffer.Do(func() {
+		if u.onFirstOffer != nil {
+			u.onFirstOffer(u.Offer())
+		}
+	})
+}
+
+func (u *Updater) fireBlockedOffer() {
+	u.blockedOffer.Do(func() {
 		if u.onFirstOffer != nil {
 			u.onFirstOffer(u.Offer())
 		}
@@ -345,6 +392,14 @@ func (u *Updater) ManualCommand(version string) string {
 		return update.PackageManagerHint(u.mode.PackageManager, version)
 	case runtime.GOOS == "windows" || runtime.GOOS == "darwin":
 		return "Download and run the installer: " + installerDownloadURL
+	case u.mode.Kind == update.ModeNative && update.ValidVersion(version):
+		// A binary copied into place by hand: `bun add -g` would install a
+		// second copy and leave this one (the one autostart runs) outdated.
+		if pkg, err := update.PlatformPackage(); err == nil {
+			return fmt.Sprintf("Replace %s with bin/jarvis from %s-%s@%s (npm pack %s-%s@%s)",
+				update.ExecutableIn(u.mode.InstallDir), update.PackageName, pkg, version, update.PackageName, pkg, version)
+		}
+		return update.PackageManagerHint("bun", version)
 	default:
 		return update.PackageManagerHint("bun", version)
 	}
@@ -359,8 +414,17 @@ var ErrUpdateBusy = errors.New("an update is already in progress")
 func (u *Updater) Start(version string) error {
 	u.mu.Lock()
 	target := u.available
+	latest := u.latest
 	sinceFailure := u.now().Sub(u.failedAt)
 	u.mu.Unlock()
+	// Not confirmed yet (the registry check is still running, or found
+	// nothing an hour ago and has not retried): check again right now rather
+	// than make the user wait for the retry.
+	recheck := target == "" && u.updatable() && update.StrictlyNewer(latest, u.running) &&
+		(!update.IsPrerelease(latest) || update.IsPrerelease(u.running))
+	if recheck {
+		target = latest
+	}
 	if target == "" {
 		return fmt.Errorf("no sidecar update is available")
 	}
@@ -368,13 +432,36 @@ func (u *Updater) Start(version string) error {
 		return fmt.Errorf("requested sidecar %s, but the available update is %s", version, target)
 	}
 	if sinceFailure < u.cooldown {
-		return fmt.Errorf("the last attempt just failed; try again in a few seconds")
+		return ErrUpdateCooldown
 	}
 	if !u.applying.CompareAndSwap(false, true) {
 		return ErrUpdateBusy
 	}
-	go u.apply(target)
+	if recheck {
+		go u.checkThenApply(target)
+	} else {
+		go u.apply(target)
+	}
 	return nil
+}
+
+// ErrUpdateCooldown refuses a retry right after a failed attempt.
+var ErrUpdateCooldown = errors.New("the last attempt just failed; try again in a few seconds")
+
+// checkThenApply confirms version on the registry, then installs it. Called
+// with applying already set.
+func (u *Updater) checkThenApply(version string) {
+	if _, err := u.resolve(u.registry, version); err != nil {
+		u.applying.Store(false)
+		u.setState(registryStateFor(version, err))
+		return
+	}
+	u.mu.Lock()
+	if u.latest == version {
+		u.available = version
+	}
+	u.mu.Unlock()
+	u.apply(version)
 }
 
 // apply runs one update attempt. On success the process hands off to the new
@@ -420,7 +507,11 @@ func (u *Updater) applyNative(ctx context.Context, version string) bool {
 		log.Printf("[update] could not refresh the uninstall entry: %v", err)
 	}
 	u.setState(UpdateState{Phase: updatePhaseRestarting, Version: version})
+	if err := u.markPending(dir, u.running, version); err != nil {
+		log.Printf("[update] could not record the pending update (no startup rollback): %v", err)
+	}
 	if err := u.handOff(update.ExecutableIn(dir)); err != nil {
+		u.clearPending()
 		rbErr := update.Rollback(dir)
 		if rbErr != nil {
 			err = fmt.Errorf("%w (and restoring the previous version failed: %v)", err, rbErr)
@@ -498,6 +589,8 @@ func (u *Updater) cleanupPrevious() {
 	}
 	u.cleaned = true
 	u.mu.Unlock()
+	// This process reached the brain: an update that installed it is proven.
+	u.clearPending()
 	if u.mode.Kind == update.ModePackageManager {
 		// Windows moved the running exe aside for the package manager.
 		cleanupMovedExe(u.exe)

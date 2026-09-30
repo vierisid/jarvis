@@ -101,6 +101,12 @@ Usage:
 		log.Printf("[sidecar] single-instance check failed, starting anyway: %v", instanceErr)
 	}
 
+	// A self-update that keeps failing to start is rolled back here, before
+	// anything that could be what crashes it (update_pending.go).
+	if checkPendingUpdate() {
+		return
+	}
+
 	// Register the AUMID + jarvis:// URI scheme notifications need (Windows-only;
 	// no-op elsewhere). Idempotent, cheap, safe to run every launch.
 	setupNotifications()

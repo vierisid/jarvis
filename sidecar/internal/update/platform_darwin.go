@@ -51,7 +51,7 @@ func VerifyPayloadSignature(stagedBin string) error {
 		req := fmt.Sprintf(`anchor apple generic and certificate leaf[subject.OU] = "%s"`, expectedTeamID)
 		args = []string{"--verify", "--deep", "--strict", "-R=" + req, app}
 	} else {
-		Logf("warning: no pinned team id in this build — verifying signature chain only")
+		Logf("warning: no pinned team id in this build; verifying the signature chain only")
 	}
 	if out, err := exec.Command("codesign", args...).CombinedOutput(); err != nil {
 		return fmt.Errorf("codesign: %v — %s", err, strings.TrimSpace(string(out)))

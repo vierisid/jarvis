@@ -75,6 +75,16 @@ describe('isUpdateAvailable', () => {
     expect(isUpdateAvailable('0.10.0', '0.10.0')).toBe(false);
     expect(isUpdateAvailable('0.11.0', '0.10.0')).toBe(false);
   });
+  test('a release build is never offered a prerelease', () => {
+    expect(isUpdateAvailable('0.9.7', '0.10.0-rc.1')).toBe(false);
+    expect(isUpdateAvailable('0.10.0-rc.1', '0.10.0-rc.2')).toBe(true);
+  });
+  test('prerelease identifiers compare numerically, as the sidecar does', () => {
+    expect(isUpdateAvailable('0.10.0-rc.9', '0.10.0-rc.10')).toBe(true);
+    expect(isUpdateAvailable('0.10.0-rc.10', '0.10.0-rc.9')).toBe(false);
+    expect(isUpdateAvailable('0.10.0-rc.1', '0.10.0-rc.1.1')).toBe(true);
+    expect(isUpdateAvailable('0.10.0-1', '0.10.0-alpha')).toBe(true);
+  });
   test('non-canonical stamps are not offered an update (the sidecar would refuse it)', () => {
     expect(isUpdateAvailable('v0.9.7', '0.10.0')).toBe(false);
     expect(isUpdateAvailable('0.9.7+local', '0.10.0')).toBe(false);

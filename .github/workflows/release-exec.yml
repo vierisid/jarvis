@@ -100,8 +100,12 @@ jobs:
       dry_run: ${{ inputs.dry_run || false }}
 
   # ─── Publish main brain package to npm ─────────────────────────
+  # After the sidecar: a published brain advertises the sidecar it ships with
+  # (SIDECAR_LATEST_VERSION) to every connecting sidecar, which offers to
+  # install it, so that sidecar has to be on npm first. The sidecar job is a
+  # no-op success when its version is already published.
   publish-brain:
-    needs: [test, build-docker]
+    needs: [test, build-docker, sidecar]
     runs-on: ubuntu-latest
     permissions:
       contents: read

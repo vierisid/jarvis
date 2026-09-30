@@ -130,3 +130,14 @@ describe("requestSidecarUpdate", () => {
     expect(await requestSidecarUpdate(sc(), "prompt", fake)).toEqual({ ok: false, message: "offline" });
   });
 });
+
+describe("manualUpdateHint: hand-copied Linux binary", () => {
+  test("the sidecar's replace instruction is shown", () => {
+    const cmd = "Replace /opt/jarvis/jarvis with bin/jarvis from @usejarvis/sidecar-linux-x64@0.10.0 (npm pack @usejarvis/sidecar-linux-x64@0.10.0)";
+    expect(manualUpdateHint(sc({ os: "linux", update_state: { phase: "failed", manual_command: cmd } }))).toBe(cmd);
+  });
+  test("a path smuggling shell syntax is not", () => {
+    const cmd = "Replace /x;curl${IFS}evil with bin/jarvis from @usejarvis/sidecar-linux-x64@0.10.0 (npm pack @usejarvis/sidecar-linux-x64@0.10.0)";
+    expect(manualUpdateHint(sc({ os: "linux", update_state: { phase: "failed", manual_command: cmd } }))).not.toContain("curl");
+  });
+});

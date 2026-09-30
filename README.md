@@ -378,15 +378,16 @@ Once connected, the sidecar appears as online in the Settings page where you can
 
 ### Versioning & updates
 
-The sidecar is versioned **independently of the brain** (`bun update -g @usejarvis/sidecar`, or grab a newer binary from [GitHub Releases](https://github.com/vierisid/jarvis/releases) -- the `sidecar-vX.Y.Z` releases). Run `jarvis --version` to see what you have.
+The sidecar is versioned **independently of the brain**, and every brain release ships with a specific sidecar version. Run `jarvis --version` to see what you have.
 
-On connect, the brain checks the sidecar's version against its compatibility floors and surfaces the result in **Settings -> Sidecar**:
+The sidecar updates itself to the version your brain ships with (never to anything newer than your brain knows about):
 
-- **OK** -- up to date enough; nothing to do.
-- **Update available** -- still compatible, but the brain recommends a newer sidecar; update when convenient.
-- **Update required** -- too old for this brain; the connection is refused and the sidecar logs an "update required" message. Update the sidecar and restart it.
+- **At startup**, if an update is available, the sidecar shows a prompt: *Update now*, *Later*, or *Skip this version* (Windows and macOS).
+- **While running**, the tray menu gets an *Update to vX.Y.Z* item, and the dashboard shows a *sidecar update* hint in the top bar and an *Update* button in **Settings -> Sidecar**. On Windows and macOS these open the same prompt on that machine; on Linux the dashboard installs the update directly after asking you.
+- The update is downloaded from npm, checked (sha512, plus the code signature on Windows and macOS) and swapped in place, and the sidecar restarts in a few seconds; the brain keeps working meanwhile. If the new version keeps failing to start, the previous one is restored.
+- A sidecar installed with bun or npm is updated with that package manager. If it cannot be updated automatically, you get the exact command to run instead (`bun add -g @usejarvis/sidecar@X.Y.Z`, or the installer from [GitHub Releases](https://github.com/vierisid/jarvis/releases/tag/installer-latest)).
 
-Local development builds report `dev` and are never blocked.
+If a sidecar is too old for the brain (**Update required**), the brain refuses the connection; the sidecar stays running, shows its update prompt (or a desktop notification on Linux) and tries the brain again every 30 minutes. Local development builds report `dev` and are never updated or blocked.
 
 ---
 

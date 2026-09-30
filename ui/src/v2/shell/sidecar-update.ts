@@ -105,7 +105,7 @@ export function updateInProgress(state: SidecarUpdateState | undefined): boolean
  * there.
  */
 const TRUSTED_MANUAL_COMMAND =
-  /^(Quit Jarvis first, then run: )?(bun add|npm install) -g @usejarvis\/sidecar@(latest|\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$|^Download and run the installer: https:\/\/github\.com\/vierisid\/jarvis\/releases\/tag\/installer-latest$/;
+  /^(Quit Jarvis first, then run: )?(bun add|npm install) -g @usejarvis\/sidecar@(latest|\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$|^Download and run the installer: https:\/\/github\.com\/vierisid\/jarvis\/releases\/tag\/installer-latest$|^Replace \/[^\s;&|`$<>]+ with bin\/jarvis from @usejarvis\/sidecar-linux-(x64|arm64)@\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)? \(npm pack @usejarvis\/sidecar-linux-(x64|arm64)@\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?\)$/;
 
 /**
  * How to update a sidecar that cannot do it itself (older sidecars, or an

@@ -20,7 +20,7 @@ func ExecutableIn(installDir string) string {
 // CheckPayloadLayout rejects a package missing the binary.
 func CheckPayloadLayout(stagedBin, version string) error {
 	if _, err := os.Stat(filepath.Join(stagedBin, payloadEntry)); err != nil {
-		return fmt.Errorf("sidecar %s should contain %s but does not — the published package looks malformed",
+		return fmt.Errorf("sidecar %s should contain %s but does not; the published package looks malformed",
 			version, payloadEntry)
 	}
 	return nil

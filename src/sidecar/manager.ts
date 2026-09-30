@@ -110,7 +110,7 @@ const UPDATE_PHASES: ReadonlySet<string> = new Set([
 /** Bounded copy of an untrusted string field, or undefined. */
 function boundedString(value: unknown, max: number): string | undefined {
   if (typeof value !== 'string' || value.length === 0) return undefined;
-  return value.length > max ? `${value.slice(0, max)}…` : value;
+  return value.length > max ? `${value.slice(0, max)}...` : value;
 }
 
 /**

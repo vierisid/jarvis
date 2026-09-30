@@ -13,7 +13,7 @@ describe('SIDECAR_LATEST_VERSION', () => {
     const file = readFileSync(new URL('../../sidecar/VERSION', import.meta.url), 'utf8').trim();
     expect(SIDECAR_LATEST_VERSION).toBe(file);
   });
-  test('is a release version', () => {
+  test('is a canonical version', () => {
     expect(parseSemver(SIDECAR_LATEST_VERSION)).not.toBeNull();
   });
 });

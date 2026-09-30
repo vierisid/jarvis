@@ -212,7 +212,7 @@ describe('parseUpdateProgress', () => {
     const p = parseUpdateProgress({ phase: 'downloading', version: '0.10.0', error: 'x'.repeat(5000) }, now)!;
     expect(p.phase).toBe('downloading');
     expect(p.at).toBe(now.toISOString());
-    expect(p.error!.length).toBeLessThanOrEqual(1001);
+    expect(p.error!.length).toBeLessThanOrEqual(1003);
   });
   test('rejects unknown phases and non-objects', () => {
     expect(parseUpdateProgress({ phase: 'nope' }, now)).toBeNull();
