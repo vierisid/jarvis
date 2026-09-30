@@ -130,16 +130,35 @@ const REVIEWED_REACHABLE: Record<string, boolean> = {
  * dashboard are person-facing rather than model-facing, and this guard is about
  * model boundaries; both are reviewed out of band.
  *
- * Exactly one row is a known-open MODEL boundary. The rest hold an object without
- * handing captured step output to a model, and each says why:
+ * Every row is either closed or person-facing. One FRAMES what it hands a
+ * model; the others hold an object without handing captured step output to a
+ * model at all, and each says why:
  *
- *   actions/tools/manage-workflow.ts   OPEN, and the real exposure #573
- *                                     surfaced. get_run's `steps`, list_runs'
- *                                     `failedStep` and `get`'s `sample_data`
- *                                     (riding inside the whole `FlowVersion` it
- *                                     returns) all reach the chat model
- *                                     unframed. Not yet filed as its own issue;
- *                                     see docs/WORKFLOW_AUTOMATION.md.
+ *   actions/tools/manage-workflow.ts   CLOSED by #582, and it was the real
+ *                                     exposure #573 surfaced. get_run's
+ *                                     `steps`, list_runs' `failedStep` and
+ *                                     `get`'s `sample_data` (riding inside the
+ *                                     whole `FlowVersion` it returns) reached
+ *                                     the chat model unframed. All three now
+ *                                     return one framed block wrapping the
+ *                                     action's JSON, with the payload capped
+ *                                     inside the tool so the dispatch's own
+ *                                     `MAX_TOOL_RESULT_CHARS` cap cannot slice
+ *                                     the closing delimiter off. Drawn at READ
+ *                                     time, so the run record and `sample_data`
+ *                                     never gain a per-message nonce -- which
+ *                                     is the claim that matters here, and NOT
+ *                                     the wider "nothing persists one": the
+ *                                     delegation effect record
+ *                                     (runtime/effect-boundary.ts) and
+ *                                     `tasks.paused_conversation` both do,
+ *                                     benignly, since each replays one complete
+ *                                     block with one nonce. It did NOT join
+ *                                     `UNTRUSTED_TOOL_NAMES`, so the reach
+ *                                     table and the I1 repair are untouched.
+ *                                     This row stays listed because the file
+ *                                     still HOLDS a run and a version, which is
+ *                                     what this guard tracks.
  *   goals/work-items.ts                OPEN-ish, and the one row the one-hop
  *                                     limit bites on. It puts the WHOLE
  *                                     `FlowRun` on `WorkItem.run`, `run.steps`

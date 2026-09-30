@@ -56,6 +56,37 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
   });
 
   /**
+   * A third privilege, created by #582: framing a TOOL RETURN rather than a
+   * prompt.
+   *
+   * Every dispatch caps a tool result at `MAX_TOOL_RESULT_CHARS` BEFORE calling
+   * `markUntrustedToolResult`, and that order is what makes `wrapUntrusted`'s
+   * "never partially framed" invariant hold there -- the payload is sliced, then
+   * the frame is drawn around the sliced text. A caller that frames its own
+   * return inverts it, so an upstream slice can drop the closing delimiter and
+   * leave the model a block that never ends.
+   *
+   * `wrapUntrusted` cannot enforce that; only the caller can, by capping its
+   * payload itself. `actions/tools/manage-workflow.ts` does
+   * (`FRAMED_PAYLOAD_MAX_CHARS`), and it is the only tool that frames a return.
+   * Every other caller frames into a PROMPT, where no cap follows. So the set is
+   * pinned here the same way the two above are: a second tool-return framer has
+   * to come with its own cap and its own line in this list.
+   */
+  test('only one framing caller is a tool return; the rest frame a prompt', () => {
+    expect(importersOf('wrapUntrusted(', ['roles/untrusted.ts'])).toEqual([
+      // TOOL RETURN. Owns its own payload cap -- see #582.
+      'actions/tools/manage-workflow.ts',
+      // Prompts, all of them: no dispatch cap applies after the frame.
+      'daemon/event-reactor.ts',
+      'daemon/index.ts',
+      'goals/rhythm.ts',
+      'roles/prompt-builder.ts',
+      'sites/prompt-context.ts',
+    ]);
+  });
+
+  /**
    * The seam constant is gone. A reintroduced one would mean something is again
    * deciding a trust boundary by matching a string in a tool result.
    */

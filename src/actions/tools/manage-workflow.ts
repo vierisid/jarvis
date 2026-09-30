@@ -78,6 +78,7 @@ import type {
   ComposerToolSpec,
 } from "./workflow-composer.ts";
 import { forCard } from "../../util/card-text.ts";
+import { wrapUntrusted } from "../../roles/untrusted.ts";
 
 export interface ManageWorkflowDeps {
   /** When provided, a refresh is fired after status / publish / delete so cron+webhook+event subs reconcile. */
@@ -264,7 +265,10 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
         case "list":
           return JSON.stringify(actList());
         case "get":
-          return JSON.stringify(actGet(requireFlowParam(params)));
+          return framedForModel(
+            actGet(requireFlowParam(params)),
+            "a workflow definition and its captured sample data",
+          );
         case "run":
           return JSON.stringify(actRun(requireFlowParam(params), params.payload as Record<string, unknown> | undefined));
         case "create": {
@@ -308,9 +312,15 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
         case "delete":
           return JSON.stringify(actDelete(requireFlowParam(params), deps));
         case "list_runs":
-          return JSON.stringify(actListRuns(params.flow as string | undefined, asLimit(params.limit)));
+          return framedForModel(
+            actListRuns(params.flow as string | undefined, asLimit(params.limit)),
+            "workflow run history",
+          );
         case "get_run":
-          return JSON.stringify(actGetRun(requireString(params, "run_id")));
+          return framedForModel(
+            actGetRun(requireString(params, "run_id")),
+            "a workflow run's captured step output",
+          );
         case "compose":
           return JSON.stringify(
             await actCompose(requireString(params, "name"), requireString(params, "description"), deps),
@@ -320,6 +330,181 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       }
     },
   };
+}
+
+/* --------------------------------------------------- the model boundary */
+
+/**
+ * Cap for the JSON payload that goes INSIDE a framed block, applied here
+ * rather than left to the dispatch.
+ *
+ * Every dispatch already caps a tool result at `MAX_TOOL_RESULT_CHARS` (6000,
+ * declared in agents/orchestrator.ts and agents/sub-agent-runner.ts), and it
+ * does that BEFORE `markUntrustedToolResult` runs -- which is exactly what keeps
+ * `wrapUntrusted`'s "never partially framed" invariant true at that boundary:
+ * the cap slices the payload, then the frame is drawn around the sliced text.
+ *
+ * Framing HERE inverts that order. This tool is not in `UNTRUSTED_TOOL_NAMES`
+ * (see the taint note below), so the dispatch's framing step is a no-op for it
+ * and the only thing left upstream is the cap -- which would now slice a string
+ * that already carries the open delimiter and drop the close line off the end.
+ * An unterminated block is worse than the bug this fixes: it tells the model
+ * everything after it is data and never says where that stops.
+ *
+ * So the payload is capped here, low enough that the whole framed return
+ * (preamble + open line + payload + truncation note + close line) stays well
+ * inside 6000 and no upstream slice can reach the close delimiter.
+ * `manage-workflow.test.ts` asserts the whole framed return stays within the
+ * smaller of the two `MAX_TOOL_RESULT_CHARS` copies, and it READS both
+ * constants out of the source rather than spelling 6000, so lowering or
+ * renaming either one fails that test instead of silently shipping
+ * unterminated blocks.
+ *
+ * KNOWN RESIDUAL, and it is a truncation hazard rather than a boundary one:
+ * two consumers persist a 2000-char prefix of a tool result, which lands INSIDE
+ * a ~4300-char framed return and keeps the open delimiter while dropping the
+ * close.
+ *
+ *   - `authority/deferred-executor.ts` writes `result.slice(0, 2000)` to
+ *     `approval_requests.execution_result`, and `manage_workflow`'s floor
+ *     (`write_data`) is taint-governed, so a read taken on a tainted turn goes
+ *     through the approval path and lands there.
+ *   - `runtime/effect-boundary.ts` writes `canonicalJson({ effectId, result })
+ *     .slice(0, 2000)` through the same `markExecuted`.
+ *
+ * What a dangling open delimiter costs is NOT the tail of its own payload --
+ * nothing of that payload survives the cut. It is whatever the CONSUMER
+ * concatenates afterwards: the receipt is replayed as a tool message
+ * (agents/orchestrator.ts), and `daemon/commitment-executor.ts` joins
+ * `execution_result` values into a commitment `result` that
+ * `actions/tools/commitments.ts` renders into a MULTI-ITEM listing, unframed,
+ * so one item's dangling open line disclaims the other items' text. That
+ * commitment path truncates a SECOND time -- `results.join('\n').slice(0, 500)`
+ * -- which makes a half block more likely there, not less.
+ *
+ * Be precise about what is new: the captured output in those rows is not, since
+ * they carry it today with no frame at all. The dangling open line IS new, and
+ * introduced here. What it costs is an integrity nuisance -- trusted text
+ * downstream reads as data -- and never a boundary escape: no attacker text
+ * lands outside a block, and a per-message nonce (#567) cannot be replayed into
+ * closing a fresh one.
+ *
+ * Two ways out, neither taken here, both wanting their own issue:
+ *
+ *   - Truncate without halving a block at the `slice` call sites. The helper
+ *     would have to LOCATE an open line, which `untrusted-import-guard.test.ts`
+ *     forbids in production code for good reason (#560), so it needs its own
+ *     argument -- that it only ever deletes a suffix and never treats the
+ *     located boundary as trustworthy.
+ *   - Or drop `FRAMED_PAYLOAD_MAX_CHARS` below `2000 - overhead` (~1,650), so
+ *     even the 2000-char prefix holds a complete block and no call site
+ *     changes. Rejected because ~1,650 characters is too small for a 25-run
+ *     listing, but it is the cheaper option if that trade ever flips.
+ */
+const FRAMED_PAYLOAD_MAX_CHARS = 4000;
+
+/**
+ * Render one of the three READ actions for the chat model, framed as data.
+ *
+ * #582. `get_run`'s `steps`, `list_runs`' `failedStep` and the `sample_data`
+ * riding inside the `FlowVersion` a plain `get` returns are all captured step
+ * output: a page's text, an app window's on-screen fields, a failing skill's
+ * error string. #581 decided with evidence that the frame does NOT belong at
+ * the workflow adapter -- in a flow the dominant consumer of a step result is
+ * code, so a frame there writes delimiters into files, every run, unattended,
+ * and `safe-expression.ts` gives the flow author no way to strip them. It
+ * belongs at each MODEL boundary instead, and these three are those boundaries:
+ * this tool's return IS the text the chat model reads.
+ *
+ * ONE BLOCK PER ACTION, wrapping the action's whole JSON, rather than
+ * `wrapUntrusted` on each field. Per-field framing reads like the cheaper
+ * option and is not:
+ *
+ *   1. `list_runs` returns up to `limit` runs (25 by default), each with its own
+ *      `failedStep`. An empty block costs 229 characters of preamble and
+ *      delimiters with a one-character source label, and 267 with the label
+ *      this action actually passes, so 25 of them come to ~6,675 before a
+ *      single character of payload -- past the 6000-char dispatch cap, which
+ *      then slices the last block in half. There is no per-field budget that
+ *      makes a 25-row listing work.
+ *   2. This tool's return is a JSON document. A framed block used as a field
+ *      VALUE is escaped by `JSON.stringify`, so the preamble and both
+ *      delimiters lose their own lines and the model reads one long run of
+ *      `\n`-escaped text. The nonce still holds, but the boundary stops being
+ *      visible, which is the whole point of drawing it.
+ *
+ * `goals/rhythm.ts` is the precedent #582 cites and it does exactly this: one
+ * block around `JSON.stringify(bundle)`, structural fields included. Framing
+ * ids and statuses along with the captured output costs a preamble and
+ * disclaims some of our own text; leaving the captured output unframed costs
+ * the mitigation. It also subsumes the other outside-derived fields these three
+ * actions carry, which is worth more than the precision: `triggeredBy` and
+ * `environment` are unvalidated caller strings written by
+ * `workflows/api/routes.ts`, and a `displayName` can carry page text into a flow
+ * composed from a snapshot.
+ *
+ * NOT FRAMED, enumerated on purpose -- this decision is only safe while the
+ * list of model boundaries is complete, the same standard #581 set:
+ *
+ *   - `list`, `create`, `enable`, `disable`, `publish` and `compose` (whose
+ *     success shape carries `flow: summarizeFlow(...)`) all return
+ *     `summarizeFlow`, whose `metadata` is a raw `JSON.parse` of a column that
+ *     `workflows/api/routes.ts` writes unvalidated and uncapped, and whose
+ *     `name` is a `displayName`. Neither is captured step output, so neither is
+ *     what #582 is about; both are reachable only by a writer on the
+ *     single-tenant localhost API. Worth its own issue, not a silent widening
+ *     of this one.
+ *   - `publish`'s `warnings` interpolate sidecar-self-reported machine names and
+ *     step parameter values (`util/execution-environment.ts`).
+ *   - `compose`'s `errors` and `rawResponse` are the composer LLM's own text,
+ *     capped at `RAW_RESPONSE_CAP`.
+ *   - `run`, `delete` return ids and statuses this code produced.
+ *
+ * TAINT: NO, decided separately and against, the way #581 asks. These are reads
+ * of stored data, and `isTaintSourceTool` keys on the tool NAME -- one name over
+ * `list / get / run / create / enable / disable / publish / delete / list_runs /
+ * get_run / compose` -- so there is no way to taint the reads without tainting
+ * `publish` and `delete` too. #581's point about the gate applies as well: the
+ * approval card reviews frozen ARGUMENTS before dispatch, so it never sees the
+ * result that would have made it fire. And the frequency argument
+ * `TAINT_EXEMPT_TOOLS` exists for lands hard here -- a workflow read is routine,
+ * and a card on every one teaches the owner to approve without reading.
+ *
+ * Consequently NO `UNTRUSTED_TOOL_NAMES` change either, so `outsideReach`,
+ * `FRAMED_ACTORS` and the tool filter's I1 union repair are untouched: none of
+ * the knock-on effects that made #529 and #559 delicate.
+ */
+function framedForModel(payload: unknown, source: string): string {
+  const json = JSON.stringify(payload);
+  const capped = json.length > FRAMED_PAYLOAD_MAX_CHARS
+    ? json.slice(0, FRAMED_PAYLOAD_MAX_CHARS) + `\n... (truncated, was ${json.length} chars)`
+    : json;
+  // Framed at READ time, and this file writes nothing back: `summarizeRun` and
+  // `actGet` read, and the framed string is built after the read and returned.
+  // That is what keeps a per-message nonce (#567) out of the run record and out
+  // of the version's `sample_data`, where a stale one would be replayed as step
+  // input forever.
+  //
+  // It does NOT mean no consumer stores one. Several do, benignly, and all are
+  // outside this file -- the list below is what was found, not a proof of
+  // exhaustiveness:
+  //
+  //   - the delegation effect record: a `jarvis-agent` step's sub-agent may
+  //     call this tool (`runtime/service-backends.ts` refuses only OPAQUE and
+  //     GATED names) and `runtime/effect-boundary.ts` saves the result for
+  //     replay;
+  //   - `tasks.paused_conversation`, which persists a task turn's tool results
+  //     verbatim (`agents/conv/task-dispatcher.ts` documents that it replays
+  //     framed content framed);
+  //   - indirectly, `sample_data` after all: a sub-agent that QUOTES a framed
+  //     block in its own answer puts a nonce in the step result, which
+  //     `runner/handler.ts` then merges in. Nothing this file did, and the
+  //     reason the claim above is about what THIS code writes.
+  //
+  // All of them replay ONE COMPLETE block with one nonce, so nothing is reused
+  // for a different block and the payload's author never learns the nonce drawn
+  // after it.
+  return wrapUntrusted(capped, source);
 }
 
 /* ------------------------------------------------------------ resolution */

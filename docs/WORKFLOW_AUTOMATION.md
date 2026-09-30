@@ -177,14 +177,6 @@ hit all four:
 **Still open, and NOT yet filed as their own issues** -- do that before relying on
 this section:
 
-- `manage_workflow` hands a run's captured step output to the *chat* model
-  unframed: `get_run`'s `steps`, `list_runs`' `failedStep` (which carries a
-  failing skill's on-screen field text), and a plain `get` via `sample_data`,
-  which rides along inside the whole `FlowVersion` it returns. That is a larger
-  real-world exposure than the thing #573 was filed about, and the fix belongs to
-  the chat tool -- framing those fields at the model boundary needs no change to
-  `UNTRUSTED_TOOL_NAMES`, so it leaves `outsideReach`, `FRAMED_ACTORS` and the I1
-  invariant alone. Cheap and surgical; deferred here on scope, not cost.
 - An author-composed `jarvis-ask` prompt interpolating `{{step.result}}` (or
   `{{trigger.*}}`) sends outside content to a model unframed. The fix is at the
   prompt boundary with provenance, and provenance does not survive the sandbox
@@ -215,6 +207,113 @@ change still holds the old concatenated page-plus-playbook value, and
 is not backfilled. An existing flow's test-from-here run therefore replays the
 playbook-laden value as step input until that cell is cleared, while its live runs
 produce the page alone. Nothing is corrupted; the two just differ.
+
+That wrinkle survives #582 and is now disclaimed rather than silent. A
+pre-#581 cell reaches the chat model inside a framed block like any other
+captured output, so the stale playbook it carries is presented as data -- the
+safe direction by this module's own polarity, since a disclaimed playbook only
+loses a playbook. It is still not backfilled.
+
+### The chat tool frames what it hands the model (#582)
+
+The three `manage_workflow` READ actions that carry captured step output --
+`get_run` (`steps`), `list_runs` (`failedStep`, which carries a failing skill's
+on-screen field text) and a plain `get` (`sample_data`, riding inside the whole
+`FlowVersion`) -- each return **one framed block wrapping that action's JSON**.
+This is the model boundary the decision above defers the frame to, and
+`goals/rhythm.ts` is the shape it follows.
+
+Four things about it are load bearing:
+
+- **One block per action, not `wrapUntrusted` per field.** `list_runs` returns up
+  to 25 runs, each with its own `failedStep`; an empty block costs 229
+  characters of preamble and delimiters with a one-character label, and 267 with
+  the label this action passes, so 25 of them come to ~6,675 before a single
+  character of payload -- past the 6000-character dispatch cap. And a framed
+  block used as a JSON field *value* is escaped by `JSON.stringify`, which costs
+  the delimiters their own lines -- the nonce still holds, but the boundary stops
+  being visible.
+- **The payload is capped inside the tool.** Every dispatch caps a tool result at
+  `MAX_TOOL_RESULT_CHARS` (6000) *before* framing it, which is what normally
+  keeps a block whole. A tool that frames its own return inverts that order, so
+  the cap would slice the closing delimiter off the end and leave the model an
+  unterminated block -- worse than the bug. `FRAMED_PAYLOAD_MAX_CHARS` in
+  `actions/tools/manage-workflow.ts` keeps the whole return clear of it, and a
+  test reads both copies of `MAX_TOOL_RESULT_CHARS` out of the source and
+  asserts the real return of each framed read stays within the smaller one --
+  so the dispatch never enters its slice branch at all, and lowering or
+  renaming either constant fails that test.
+
+  Two costs of capping here, worth knowing before raising it: the effective
+  budget for these reads drops from 6,000 to 4,000 characters, and a truncated
+  payload is no longer valid JSON. Capping the captured-output *fields* before
+  `JSON.stringify` (per-field *capping*, which is not the per-field *framing*
+  rejected above) would keep the document parseable inside one block; it is not
+  done today.
+- **Framed at read time, so the run record and `sample_data` never gain a
+  marker.** Markers carry a per-message nonce (#567), and a framed string
+  written into either would replay a stale nonce as step input forever. That is
+  the claim, and it is deliberately narrower than "nothing persists one": the
+  delegation effect record does (a `jarvis-agent` step's sub-agent may call this
+  tool, since `runtime/service-backends.ts` refuses only opaque and gated names,
+  and `runtime/effect-boundary.ts` saves the result for replay), and so does
+  `tasks.paused_conversation`. Both are benign -- each replays one complete
+  block with one nonce, so nothing is reused for a different block, and the
+  payload's author never learns the nonce drawn after it.
+- **No `UNTRUSTED_TOOL_NAMES` change**, so `outsideReach`, `FRAMED_ACTORS` and
+  the tool filter's I1 union repair are untouched, and `manage_workflow` stays at
+  reach `fetch`. Taint was decided separately and **against**: these are reads of
+  stored data, `isTaintSourceTool` keys on the tool NAME (one name over eleven
+  actions, so the reads cannot be tainted without tainting `publish` and
+  `delete`), the approval card reviews frozen arguments and never sees a result,
+  and a card on every workflow read is exactly the frequency problem
+  `TAINT_EXEMPT_TOOLS` exists for.
+
+Two model boundaries inside the same tool are **left unframed on purpose**, and
+neither is captured step output:
+
+- `summarizeFlow`'s `metadata` and `name`, which ride on `list`, `create`,
+  `enable`, `disable`, `publish` and `compose`. `metadata` is a raw `JSON.parse`
+  of a column that `workflows/api/routes.ts` writes unvalidated and uncapped, as
+  are a run's `triggeredBy` and `environment` (those three reads now frame them
+  incidentally). Reachable only by a writer on the single-tenant localhost API;
+  worth its own issue rather than a silent widening of #582.
+- `publish`'s `warnings`, which interpolate sidecar-self-reported machine names
+  and step parameter values, and `compose`'s `errors` / `rawResponse`, which are
+  the composer LLM's own text.
+
+One residual worth knowing, and it is a **truncation** hazard rather than a
+boundary one. Two consumers persist a 2000-character prefix of a tool result,
+which lands *inside* a ~4300-character framed return: it keeps the open
+delimiter and drops the close.
+
+- `authority/deferred-executor.ts` writes `result.slice(0, 2000)` to
+  `approval_requests.execution_result`, and `manage_workflow`'s floor
+  (`write_data`) is taint-governed, so a read taken on a tainted turn goes
+  through the approval path and lands there.
+- `runtime/effect-boundary.ts` writes
+  `canonicalJson({ effectId, result }).slice(0, 2000)` through the same
+  `markExecuted`.
+
+What a dangling open delimiter costs is *not* the tail of its own payload --
+nothing of that payload survives the cut. It is whatever the **consumer**
+concatenates afterwards: the receipt is replayed as a tool message, and
+`daemon/commitment-executor.ts` joins `execution_result` values into a
+commitment `result` that `actions/tools/commitments.ts` renders into a
+multi-item listing, unframed, so one item's dangling open line disclaims the
+other items' text. That is an integrity nuisance -- trusted text downstream
+reads as data -- and never a boundary escape: no attacker text lands outside a
+block, and a per-message nonce cannot be replayed into closing a fresh one. It
+is not a regression either, since those rows carry the same captured output
+today with no frame at all.
+
+Fixing it properly means truncating without halving a block at the two
+`slice(0, 2000)` call sites. That needs its own issue, because the helper would
+have to **locate** an open line, which `roles/untrusted-import-guard.test.ts`
+forbids in production code for good reason (#560) -- the argument for an
+exception is that it only ever deletes a suffix and never treats a located
+boundary as trustworthy, so a forged open line in a payload costs at most a
+truncated payload, never a moved boundary.
 
 ### `jarvis-ask` answers with a typed outcome
 

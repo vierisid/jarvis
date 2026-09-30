@@ -57,15 +57,20 @@ export class JarvisToolRegistryAdapter implements PieceToolRegistry {
     // (runner/handler.ts) and replayed as step INPUT for test-from-here runs, so
     // a frame here would corrupt future runs' inputs too.
     //
-    // What remains open is the model boundaries, which have to be enumerated
-    // rather than assumed away: a `manage_workflow` run listing hands captured
-    // step output to the chat model unframed (get_run's `steps`, list_runs'
-    // `failedStep`, and `get` via `sample_data`), and an author-composed
-    // `jarvis-ask` prompt can interpolate a step result. NEITHER HAS ITS OWN
-    // ISSUE YET -- docs/WORKFLOW_AUTOMATION.md lists them and says so. Keeping
-    // that list complete is what makes this decision safe rather than merely
-    // convenient, which is why untrusted-reach.test.ts pins the READERS as well
-    // as the reachable tools.
+    // The model boundaries are what this defers to, and they have to be
+    // enumerated rather than assumed away. Keeping that list complete is what
+    // makes this decision safe rather than merely convenient, which is why
+    // untrusted-reach.test.ts pins the READERS as well as the reachable tools.
+    //
+    //   - CLOSED by #582: a `manage_workflow` run listing used to hand captured
+    //     step output to the chat model unframed (get_run's `steps`, list_runs'
+    //     `failedStep`, and `get` via `sample_data`). All three now return one
+    //     framed block wrapping the action's JSON, capped inside the tool so
+    //     the dispatch's own cap cannot slice the closing delimiter off. It did
+    //     NOT join `UNTRUSTED_TOOL_NAMES`, so nothing here changes.
+    //   - STILL OPEN, and still without its own issue: an author-composed
+    //     `jarvis-ask` prompt can interpolate a step result.
+    //     docs/WORKFLOW_AUTOMATION.md lists it and says so.
     //
     // WHY THE VALUE MUST NOT BE STRINGIFIED. It becomes a durable EFFECT
     // RECEIPT: service-backends.ts passes it to `effects.invoke` as the result a
