@@ -43,13 +43,15 @@ hints and fallback window information are scoped by sidecar here.
 It snapshots the nonempty session ID and app list before clearing either,
 persists the app list and end timestamp together, and returns a frozen event,
 frozen payload and frozen app array. Closing again returns null. The event keeps
-the C2 v1 wire shape; older null identities remain decodable but unattributed.
+the v1 wire shape; older null identities remain decodable but unattributed.
 App/window changes and returns after the existing five-minute capture gap use
 this same close operation before creating a new session. The closing timestamp
 is bounded by the latest observation accepted into that session (including its
-start), then used for both the event and stored end time. Late captures and a
-skewed clock at shutdown cannot shorten observed work or produce a negative
-duration. Source capture timestamps and processing order remain unchanged;
+start), then used for both the event and stored end time. A return after a
+capture gap closes the old session at most five minutes (the idle threshold)
+after its last observation, so an overnight gap does not become session time.
+Late captures and a skewed clock at shutdown cannot shorten observed work or
+produce a negative duration. Source capture timestamps and processing order remain unchanged;
 each new session starts its own bound.
 
 The service delivers the end event before asynchronous capture enrichment, so

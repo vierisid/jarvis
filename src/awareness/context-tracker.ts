@@ -11,6 +11,9 @@ import type { ScreenContext, AwarenessEvent } from './types.ts';
 import { createSession, incrementSessionCaptureCount, updateSession } from '../vault/awareness.ts';
 import { StruggleDetector } from './struggle-detector.ts';
 
+// A capture gap longer than this starts a new session.
+const IDLE_RETURN_MS = 5 * 60 * 1000;
+
 // Strong error indicators — always trigger (rare in normal output)
 const STRONG_ERROR_PATTERN = /\b(traceback|segfault|SIGSEGV|SIGABRT|panic|undefined is not|cannot read prop|stack overflow|out of memory|unhandled rejection|uncaught exception|TypeError:|ReferenceError:|SyntaxError:|RangeError:|ModuleNotFoundError|ImportError|FileNotFoundError|PermissionError|ConnectionRefusedError|ECONNREFUSED|ENOTFOUND|EPERM|Build failed|Compilation error|npm ERR!)\b/i;
 
@@ -116,12 +119,16 @@ export class ContextTracker {
 
     // Session management
     const idleGap = this.lastActivityTimestamp > 0 ? (now - this.lastActivityTimestamp) : 0;
-    const isIdleReturn = idleGap > 5 * 60 * 1000; // 5 min idle
+    const isIdleReturn = idleGap > IDLE_RETURN_MS;
 
     if (isAppChange || isIdleReturn || !this.currentSessionId) {
       // Close before replacing the session, including a return to the same
       // window after a capture gap. A repeated close produces no second event.
-      const ended = this.endCurrentSession(now);
+      // After a capture gap the session ended somewhere inside the gap, so
+      // count at most the idle threshold of it (as activity analytics caps a
+      // long gap) instead of stretching it to the returning capture.
+      const closeAt = isIdleReturn ? Math.min(now, this.currentSessionLastObservedAt + IDLE_RETURN_MS) : now;
+      const ended = this.endCurrentSession(closeAt);
       if (ended) events.push(ended);
 
       // Start new session

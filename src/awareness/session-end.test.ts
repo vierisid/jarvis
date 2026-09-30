@@ -117,11 +117,24 @@ test('an idle return to the same app closes the old session exactly once', () =>
   const ends = returned.events.filter(event => event.type === 'session_ended');
   expect(ends).toHaveLength(1);
   expect(ends[0]!.data).toEqual({ sessionId: first.context.sessionId, apps: ['Editor'] });
-  expect(getSession(first.context.sessionId)!.ended_at).toBe(start + 360000);
+  // The six-minute gap counts only up to the five-minute idle threshold.
+  expect(ends[0]!.timestamp).toBe(start + 300000);
+  expect(getSession(first.context.sessionId)!.ended_at).toBe(start + 300000);
   expect(returned.context.sessionId).not.toBe(first.context.sessionId);
   const duplicate = tracker.processCapture('two', 'draft', 'Draft - Editor', start + 360000);
   expect(duplicate.events.filter(event => event.type === 'session_ended')).toEqual([]);
   expect(duplicate.context.sessionId).toBe(returned.context.sessionId);
+});
+
+test('an overnight capture gap does not stretch the ended session', () => {
+  const tracker = new ContextTracker(config);
+  const start = Date.now() - 12 * 3600000;
+  const first = tracker.processCapture('one', 'draft', 'Draft - Editor', start);
+  tracker.processCapture('two', 'draft', 'Draft - Editor', start + 120000);
+  const returned = tracker.processCapture('three', 'draft', 'Draft - Editor', start + 11 * 3600000);
+  const ended = returned.events.find(event => event.type === 'session_ended')!;
+  expect(ended.timestamp).toBe(start + 120000 + 300000);
+  expect(getSession(first.context.sessionId)!.ended_at).toBe(ended.timestamp);
 });
 
 test('explicit close returns one stable snapshot and a repeated close returns nothing', () => {
