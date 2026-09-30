@@ -1,6 +1,6 @@
 import { PiecePropertyMap, StaticPropsValue, TriggerStrategy } from '@activepieces/pieces-framework'
 import { assertEqual, AUTHENTICATION_PROPERTY_NAME, EngineGenericError, EventPayload, ExecuteTriggerOperation, ExecuteTriggerResponse, FlowTrigger, InvalidCronExpressionError, isNil, PieceTrigger, PropertySettings, ScheduleOptions, TriggerHookType, TriggerSourceScheduleType } from '@activepieces/shared'
-import { isValidCron } from 'cron-validator'
+import { validateCronExpression } from '../../../../../../../../lib/cron-scheduler'
 import { EngineConstants } from '../handler/context/engine-constants'
 import { FlowExecutorContext } from '../handler/context/flow-execution-context'
 import { createFileUploader } from '../piece-context/file-uploader'
@@ -111,7 +111,9 @@ export const triggerHelper = {
                 },
             },
             setSchedule(request: ScheduleOptions) {
-                if (!isValidCron(request.cronExpression)) {
+                try {
+                    validateCronExpression(request.cronExpression)
+                } catch {
                     throw new InvalidCronExpressionError(request.cronExpression)
                 }
                 scheduleOptions = {

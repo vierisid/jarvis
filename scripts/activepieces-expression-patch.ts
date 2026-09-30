@@ -35,6 +35,10 @@ export const expressionPatches = {
       '        return evaluateWorkflowExpression(script, scriptContext)',
     ],
   ],
+  'packages/server/engine/src/lib/helper/trigger-helper.ts': [
+    ["import { isValidCron } from 'cron-validator'", "import { validateCronExpression } from '../../../../../../../../lib/cron-scheduler'"],
+    ['                if (!isValidCron(request.cronExpression)) {', '                try {\n                    validateCronExpression(request.cronExpression)\n                } catch {'],
+  ],
   'packages/server/engine/src/lib/variables/props-resolver.ts': [
     ['        return result ?? \'\'\n    }))',
       "        if (result === undefined) throw new Error('Workflow reference resolved to an absent value; supply a value or an explicit fallback')\n        return result\n    }))"],

@@ -8,6 +8,9 @@ import { configureWorkflowReadiness } from '../../db/repos/flow-readiness';
 import { metadataToCatalogEntry, PieceCatalog } from '../../runtime/piece-catalog';
 import { Worker } from '../../queue/worker';
 import { createRunFlowHandler } from '../handler';
+import { TriggerManager } from '../triggers/manager';
+import { WorkflowEventBus } from '../../runtime/event-bus';
+import { getFlow } from '../../db/repos/flow';
 import { EngineFlowExecutor } from './engine-flow-executor';
 import { CredentialResolver } from "../../credentials/adapter";
 import { closeWorkflowDb, DEFAULT_IDS, initWorkflowDb } from "../../db";
@@ -23,6 +26,7 @@ import { EngineRuntime } from "./engine-runtime";
 import { toUpstreamFlowVersion } from "./flow-version-adapter";
 
 const PIECE = "@activepieces/piece-native-lookup-fixture";
+const SCHEDULE = '@activepieces/piece-schedule';
 const TOKEN = "synthetic-native-engine-token";
 const cached = findCachedBundle();
 const skip = process.env.JARVIS_TEST_ENGINE_BUILD !== "1" && (!cached
@@ -102,6 +106,11 @@ describe("native credential engine integration", () => {
     const installed = join(dir, "node_modules", PIECE);
     mkdirSync(dirname(installed), { recursive: true });
     symlinkSync(join(pieceDir, "dist"), installed, "dir");
+    const scheduleDir = join(ENGINE_BUILD_PATHS.VENDOR_PACKAGES, 'pieces/core/schedule');
+    await buildPiece(scheduleDir);
+    const scheduleInstalled = join(dir, 'node_modules', SCHEDULE);
+    mkdirSync(dirname(scheduleInstalled), { recursive: true });
+    symlinkSync(join(scheduleDir, 'dist'), scheduleInstalled, 'dir');
     const resolver = new CredentialResolver();
     resolver.register({ id: "fixture", canResolve: id => id === "jarvis:fixture",
       resolve: async () => ({ type: "OAUTH2", value: { access_token: TOKEN } }) });
@@ -118,7 +127,8 @@ describe("native credential engine integration", () => {
     const handle = await runtime.acquire({ runId: 'fixture-metadata', projectId: DEFAULT_IDS.project });
     try {
       const metadata = await handle.extractPieceMetadata({ pieceName: PIECE, pieceVersion: '0.0.1' });
-      configureWorkflowReadiness({ pieces: new PieceCatalog([metadataToCatalogEntry(metadata)]), credentials: resolver });
+      const schedule = await handle.extractPieceMetadata({ pieceName: SCHEDULE, pieceVersion: '0.0.1' });
+      configureWorkflowReadiness({ pieces: new PieceCatalog([metadataToCatalogEntry(metadata), metadataToCatalogEntry(schedule)]), credentials: resolver });
     } finally { await handle.release(); }
   }, 120_000);
 
@@ -262,5 +272,40 @@ describe("native credential engine integration", () => {
     expect(effects.length).toBe(before);
     expect(run.failedStep?.errorMessage).toContain('rows');
   }, 45_000);
+
+
+  for (const expression of ['0 9 * * 7', '0 9 * * 1-7/2', '@every 10s', '61 * * * *', '@every 0s']) {
+    test.skipIf(skip)(`review R1: native schedule publication and real ON_ENABLE agree (${expression})`, async () => {
+      const flow = createFlow();
+      const version = createDraftVersion({ flowId: flow.id, displayName: 'Native schedule', trigger: {
+        name: 'trigger', type: 'PIECE_TRIGGER', settings: { pieceName: SCHEDULE, triggerName: 'cron_expression', input: { cronExpression: expression, timezone: 'UTC' } },
+      } });
+      const req = Object.assign(new Request('http://local/publish', { method: 'POST', body: '{}' }), { params: { id: flow.id } });
+      const response = await createWorkflowRoutes()['/api/workflows/:id/publish']!.POST!(req);
+      const valid = !['61 * * * *', '@every 0s'].includes(expression);
+      expect(response.status).toBe(valid ? 200 : 422);
+      if (!valid) {
+        expect(getFlow(flow.id)!.status).toBe('DISABLED');
+        expect(getFlowVersion(version.id)!.state).toBe('DRAFT');
+        // Also verify the engine boundary for legacy/direct hook callers.
+        const handle = await runtime!.acquire({ runId: version.id, projectId: DEFAULT_IDS.project });
+        try { await expect(handle.executeTriggerHook('ON_ENABLE', { flowVersion: toUpstreamFlowVersion(version) })).rejects.toThrow(); }
+        finally { await handle.release(); }
+        return;
+      }
+      const scheduled: string[] = [];
+      const manager = new TriggerManager({ eventBus: new WorkflowEventBus(), engineRuntime: runtime!, log: () => {}, enableRetryDelaysMs: [],
+        cronScheduler: { schedule: (_id: string, expression: string) => scheduled.push(expression), cancel: () => {}, cancelAll: () => {} } as any });
+      try {
+        await manager.refresh(flow.id);
+        expect(manager.list()).toEqual([{ flowId: flow.id, kind: 'engine' }]);
+        expect(scheduled).toEqual([expression]);
+        expect(getFlowVersion(version.id)!.engineSchedule?.cronExpression).toBe(expression);
+      } finally { await manager.stop(); }
+    }, 45_000);
+  }
+
+
+
 
 });
