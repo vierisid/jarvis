@@ -5,11 +5,13 @@ import type { ConnectionState } from "./Header";
 import type { VoiceState } from "./VoiceRail";
 import { useTheme } from "./useTheme";
 import { altKey, modKey } from "../ui/platform";
+import { SidecarUpdatePill } from "./SidecarUpdatePill";
 
 /**
  * Top bar — 44px, never two rows. Left: room name + contextual actions
- * (Now contributes Arrange). Right: the daemon dot, the live state chip,
- * Quick open (⌘K), and the bell. The state chip is the only live colour.
+ * (Now contributes Arrange). Right: a sidecar-update hint when one is due,
+ * the daemon dot, the live state chip, Quick open (⌘K), and the bell. The
+ * state chip is the only live colour.
  */
 
 const ROOM_TITLES: Record<string, string> = Object.fromEntries(
@@ -76,6 +78,9 @@ export function TopBar({
       )}
 
       <div className="right">
+        {/* A connected sidecar behind the version this brain ships with. */}
+        {connection !== "offline" && <SidecarUpdatePill />}
+
         <span className={`rs-chip ${daemon.cls}`}>
           <span className="rs-dot" style={{ background: daemon.hue }} />
           {daemon.label}

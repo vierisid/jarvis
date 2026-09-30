@@ -8,6 +8,14 @@ import { confirmDialog } from "../../../ui/ConfirmDialog";
 // remaps --j-* → v2 tokens.
 import { SidecarConfigEditor } from "../../../../components/settings/SidecarConfigEditor";
 import { addDeviceMode, noDevicesCopy } from "./sidecar-add-device";
+import {
+  manualUpdateHint,
+  requestSidecarUpdate,
+  updateActionFor,
+  updateInProgress,
+  updateProgressLabel,
+} from "../../../shell/sidecar-update";
+import type { SidecarInfo } from "../useSettingsData";
 
 export function SidecarTab({
   data,
@@ -38,6 +46,20 @@ export function SidecarTab({
       onToast(r.message, "warn");
     }
     setEnrolling(false);
+  };
+
+  const [updating, setUpdating] = useState<string | null>(null);
+  const handleUpdate = async (sc: SidecarInfo) => {
+    const action = updateActionFor(sc);
+    if (action === "manual") return;
+    if (action === "apply" && !await confirmDialog(
+      `Update the sidecar on "${sc.name}" to ${sc.latest_version ?? "the latest version"}? It restarts for a few seconds; the brain keeps working.`,
+    )) return;
+    setUpdating(sc.id);
+    const r = await requestSidecarUpdate(sc, action);
+    setUpdating(null);
+    onToast(r.message, r.ok ? "ok" : "warn");
+    void data.refresh();
   };
 
   const handleRevoke = async (id: string, name: string) => {
@@ -173,11 +195,18 @@ export function SidecarTab({
                   {sc.version && (
                     <span>
                       · v{sc.version}
-                      {sc.update_status === "suggested" && (
-                        <span style={{ color: "var(--warn)" }} title="A newer sidecar is recommended for this brain">
-                          {" "}· update available
+                      {sc.connected && updateInProgress(sc.update_state) ? (
+                        <span style={{ color: "var(--warn)" }}>
+                          {" "}· updating to v{sc.update_state?.version ?? sc.latest_version}: {updateProgressLabel(sc.update_state)}
                         </span>
-                      )}
+                      ) : (sc.update_available || sc.update_status === "suggested") ? (
+                        <span
+                          style={{ color: "var(--warn)" }}
+                          title={sc.latest_version ? `This brain ships with sidecar ${sc.latest_version}` : "A newer sidecar is recommended for this brain"}
+                        >
+                          {" "}· update available{sc.latest_version ? ` (v${sc.latest_version})` : ""}
+                        </span>
+                      ) : null}
                       {sc.update_status === "dev" && (
                         <span style={{ opacity: 0.6 }} title="Unstamped local dev build — never version-blocked">
                           {" "}· dev build
@@ -202,8 +231,34 @@ export function SidecarTab({
                   {sc.last_seen_at && (
                     <span>· last seen {new Date(sc.last_seen_at).toLocaleString()}</span>
                   )}
+                  {sc.connected && sc.update_state?.phase === "failed" && (
+                    <span style={{ color: "var(--warn)" }}>
+                      · the last update failed: {sc.update_state.error ?? "unknown error"}
+                    </span>
+                  )}
+                  {sc.connected && sc.update_available && (
+                    updateActionFor(sc) === "manual" || sc.update_state?.phase === "failed"
+                  ) && (
+                    <span>
+                      · update it yourself:{" "}
+                      <code className="v2-set__code">{manualUpdateHint(sc)}</code>
+                    </span>
+                  )}
                 </div>
                 <div className="v2-set__sidecar-actions">
+                  {sc.connected && sc.update_available && updateActionFor(sc) !== "manual" && (
+                    <button
+                      type="button"
+                      className="v2-set__btn v2-set__btn--primary"
+                      onClick={() => handleUpdate(sc)}
+                      disabled={updating === sc.id || updateInProgress(sc.update_state)}
+                      title={updateActionFor(sc) === "prompt"
+                        ? `Opens the update prompt on ${sc.hostname ?? sc.name}`
+                        : `Installs sidecar ${sc.latest_version ?? ""} on ${sc.hostname ?? sc.name}`}
+                    >
+                      {updating === sc.id ? "Updating…" : "Update…"}
+                    </button>
+                  )}
                   {sc.connected && (
                     <button
                       type="button"

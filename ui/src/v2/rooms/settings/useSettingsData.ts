@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { SidecarUpdateState } from "../../shell/sidecar-update";
 
 const POLL_INTERVAL_MS = 10000;
 
@@ -370,6 +371,14 @@ export interface SidecarInfo {
   version?: string;
   /** Compatibility verdict while connected: 'ok' | 'suggested' | 'dev' */
   update_status?: "ok" | "suggested" | "blocked" | "dev";
+  /** Optional protocol features while connected (update_prompt, update_apply) */
+  features?: string[];
+  /** The sidecar version this brain ships with */
+  latest_version?: string;
+  /** Whether `version` is behind `latest_version` */
+  update_available?: boolean;
+  /** The sidecar's last reported self-update progress, while connected */
+  update_state?: SidecarUpdateState;
 }
 
 export interface UserProfileQuestion {
