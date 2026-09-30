@@ -358,10 +358,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     method: string,
     params: Record<string, unknown>,
   ): Promise<Response> {
+    const parts = new URL(req.url).pathname.split('/');
+    const id = parts[parts.length - 2]!;
     try {
       if (!ctx.sidecarManager) return error('Sidecar manager not available', 503);
-      const parts = new URL(req.url).pathname.split('/');
-      const id = parts[parts.length - 2]!;
       if (!ctx.sidecarManager.isConnected(id)) {
         return error('Sidecar is not connected', 409);
       }
@@ -372,7 +372,14 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       const result = await ctx.sidecarManager.dispatchRPC(id, method, params);
       return json({ ok: true, result });
     } catch (err) {
-      if (err instanceof SidecarRPCError) return error(err.message, 409);
+      // The sidecar's own refusal (nothing to install, already updating):
+      // its message, without the code prefix, for the dashboard to show.
+      if (err instanceof SidecarRPCError) {
+        return json({ error: err.message.replace(/^[A-Z_]+: /, ''), code: err.code }, 409);
+      }
+      if (ctx.sidecarManager && !ctx.sidecarManager.isConnected(id)) {
+        return error('Sidecar disconnected', 409);
+      }
       return error(`${err}`, 500);
     }
   }

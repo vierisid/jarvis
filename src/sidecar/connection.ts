@@ -47,6 +47,11 @@ export class SidecarConnection {
     this.binarySpool = binarySpool ?? null;
   }
 
+  /** Whether ws is this connection's socket (a newer one may have replaced it). */
+  ownsSocket(ws: ServerWebSocket<unknown>): boolean {
+    return this.ws === ws;
+  }
+
   /** Send an RPC request to the sidecar */
   sendRPC(request: RPCRequest): void {
     try {

@@ -1002,7 +1002,7 @@ Progress comes back as `sidecar_event`s with `event_type: "update_progress"`, wh
 }
 ```
 
-`phase` is one of `checking`, `downloading`, `verifying`, `installing`, `restarting`, `failed`, `unavailable`.
+`phase` is one of `downloading`, `verifying`, `installing`, `restarting`, `failed` (with `error` and `manual_command`), `unavailable` (the advertised version is not published yet). A sidecar that predates self-update gets the brain's `notify.show` "Update Jarvis" notification instead, once per brain process.
 
 ### Sidecar disconnects
 

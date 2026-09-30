@@ -4610,8 +4610,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // Jarvis" only; the founder opted to allow Approve/Deny on every approval
     // notification (the impact still shows in the body's meta as a risk cue).
     // All four reasons are wired: approval, done (an approved action finished),
-    // sidecar-offline, and update (a connecting sidecar below the recommended
-    // version — the compat verdict already on the ConnectedSidecar).
+    // sidecar-offline, and update (a connecting sidecar that is behind and
+    // cannot update itself; see the onSidecarConnected handler below).
     const notifyAll = (payload: Record<string, unknown>): void => {
       for (const sc of sidecarManager.getConnectedSidecars()) {
         void sidecarManager.dispatchRPC(sc.id, 'notify.show', payload).catch(() => {});
@@ -4690,16 +4690,18 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // the body can say which machine (the sidecar object is gone by disconnect).
     // On connect we also fire the "update" notification when the sidecar is
     // behind: below SIDECAR_RECOMMENDED_VERSION ('suggested'), or behind the
-    // sidecar this brain ships with. Only for sidecars WITHOUT their own
-    // update prompt (update_prompt feature): those offer the update natively
-    // at startup, and a second nudge would be noise. Sent only to that
-    // machine, deduped per (id, version) so a reconnect flap can't nag.
+    // sidecar this brain ships with. Only for sidecars that predate
+    // self-update (no update_* feature): newer ones prompt natively at
+    // startup or get the dashboard hint, and a second nudge would be noise.
+    // Sent only to that machine, deduped per (id, version) for this brain
+    // process so a reconnect flap can't nag.
     const sidecarNameById = new Map<string, string>();
     const notifiedUpdateKeys = new Set<string>();
     sidecarManager.onSidecarConnected((sc) => {
       sidecarNameById.set(sc.id, sc.name);
       const behind = sc.updateStatus === 'suggested' || isUpdateAvailable(sc.version);
-      if (behind && !sc.features?.includes('update_prompt')) {
+      const selfUpdating = sc.features?.some((f) => f === 'update_prompt' || f === 'update_apply') ?? false;
+      if (behind && !selfUpdating) {
         const key = `${sc.id}:${sc.version}`;
         if (!notifiedUpdateKeys.has(key)) {
           notifiedUpdateKeys.add(key);

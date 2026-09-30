@@ -708,7 +708,7 @@ export class WebSocketServer {
               self.sidecarManager.unregisterAudioChannel(sidecarId, ws);
               return;
             }
-            self.sidecarManager.handleSidecarDisconnect(sidecarId);
+            self.sidecarManager.handleSidecarDisconnect(sidecarId, ws);
             return;
           }
 

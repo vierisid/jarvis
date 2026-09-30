@@ -100,12 +100,18 @@ export function classifySidecarVersion(reported: string): SidecarUpdateStatus {
   return 'ok';
 }
 
+const CANONICAL_VERSION = /^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(-[0-9A-Za-z-]+(\.[0-9A-Za-z-]+)*)?$/;
+
 /**
  * Whether a sidecar reporting `reported` is behind the version this brain
  * ships with. Dev / unparseable builds never are: they are never offered an
  * update (the sidecar refuses one too).
  */
 export function isUpdateAvailable(reported: string | undefined | null, latest: string = SIDECAR_LATEST_VERSION): boolean {
+  // Canonical versions only, the same rule the sidecar's updater applies
+  // (sidecar/internal/update ValidVersion): a build stamped "v0.9.7" or
+  // "0.9.7+local" refuses to update itself, so it is not offered one.
+  if (!CANONICAL_VERSION.test(reported ?? '')) return false;
   const v = parseSemver(reported ?? '');
   const l = parseSemver(latest);
   if (!v || !l) return false;

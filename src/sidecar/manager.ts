@@ -300,7 +300,10 @@ export class SidecarManager implements Service {
       // open the session before mic frames arrive, and audio_frame streams at
       // ~25/s (faster than the queue drains). Direct dispatch keeps them
       // real-time and in receive order.
-      this.scheduler.setDirectTypes(['pebble.realtime_start', 'pebble.realtime_stop', 'pebble.audio_frame']);
+      // update_progress too: it is rare and carries state (a failure with the
+      // command to run by hand), so it must not be the event a full queue
+      // evicts.
+      this.scheduler.setDirectTypes(['pebble.realtime_start', 'pebble.realtime_stop', 'pebble.audio_frame', 'update_progress']);
 
       this.rpcTracker.onDetachedComplete((rpcId, result, error) => {
         if (error) {
@@ -822,11 +825,16 @@ export class SidecarManager implements Service {
       sidecarId,
       ws,
       this.scheduler,
-      () => this.handleSidecarDisconnect(sidecarId),
+      () => this.handleSidecarDisconnect(sidecarId, ws),
       this.binarySpool,
     );
     connection.startHeartbeat();
+    // A reconnect can land before the previous socket's close (a sidecar that
+    // restarted itself to update, a flaky network). Retire the old one
+    // quietly: its close is ignored below, since it no longer owns the id.
+    const previous = this.sidecarConnections.get(sidecarId);
     this.sidecarConnections.set(sidecarId, connection);
+    if (previous && !previous.ownsSocket(ws)) previous.close();
     this.touchSidecar(sidecarId);
     console.log(`[SidecarManager] Sidecar WS connected: ${sidecarId}`);
   }
@@ -939,8 +947,14 @@ export class SidecarManager implements Service {
    * Revocation is the event that closes panels -- see revokeSidecar and
    * sweepPanelSessions.
    */
-  handleSidecarDisconnect(sidecarId: string): void {
+  handleSidecarDisconnect(sidecarId: string, ws?: ServerWebSocket<unknown>): void {
     const conn = this.sidecarConnections.get(sidecarId);
+    // A socket that has already been replaced by a newer connection for the
+    // same sidecar closing late must not tear the newer one down.
+    if (ws && conn && !conn.ownsSocket(ws)) {
+      console.log(`[SidecarManager] Stale socket for ${sidecarId} closed; keeping the newer connection`);
+      return;
+    }
     if (conn) {
       conn.close();
       this.sidecarConnections.delete(sidecarId);
@@ -1057,10 +1071,12 @@ export class SidecarManager implements Service {
     const state = parseUpdateProgress(payload);
     if (!conn || !state) return;
     conn.updateState = state;
+    // JSON-quoted: the text comes from the sidecar and must not be able to
+    // forge extra log lines.
     if (state.phase === 'failed') {
-      console.warn(`[SidecarManager] Sidecar ${sidecarId} update to ${state.version ?? '?'} failed: ${state.error ?? 'unknown error'}`);
+      console.warn(`[SidecarManager] Sidecar ${sidecarId} update to ${JSON.stringify(state.version ?? '?')} failed: ${JSON.stringify(state.error ?? 'unknown error')}`);
     } else {
-      console.log(`[SidecarManager] Sidecar ${sidecarId} update: ${state.phase} ${state.version ?? ''}`.trimEnd());
+      console.log(`[SidecarManager] Sidecar ${sidecarId} update: ${state.phase} ${JSON.stringify(state.version ?? '')}`);
     }
   }
 

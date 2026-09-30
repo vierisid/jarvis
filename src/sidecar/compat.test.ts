@@ -5,6 +5,7 @@ import {
   isUpdateAvailable,
   parseSemver,
   SIDECAR_LATEST_VERSION,
+  SIDECAR_MIN_VERSION,
   SIDECAR_RECOMMENDED_VERSION,
 } from './compat.ts';
 
@@ -74,6 +75,10 @@ describe('isUpdateAvailable', () => {
     expect(isUpdateAvailable('0.10.0', '0.10.0')).toBe(false);
     expect(isUpdateAvailable('0.11.0', '0.10.0')).toBe(false);
   });
+  test('non-canonical stamps are not offered an update (the sidecar would refuse it)', () => {
+    expect(isUpdateAvailable('v0.9.7', '0.10.0')).toBe(false);
+    expect(isUpdateAvailable('0.9.7+local', '0.10.0')).toBe(false);
+  });
   test('dev, unparseable and missing versions never are', () => {
     expect(isUpdateAvailable('dev', '0.10.0')).toBe(false);
     expect(isUpdateAvailable('', '0.10.0')).toBe(false);
@@ -83,5 +88,16 @@ describe('isUpdateAvailable', () => {
   test('defaults to SIDECAR_LATEST_VERSION', () => {
     expect(isUpdateAvailable(SIDECAR_LATEST_VERSION)).toBe(false);
     expect(isUpdateAvailable('0.0.1')).toBe(true);
+  });
+});
+
+describe('floors and latest', () => {
+  // A rejected sidecar is told to update to SIDECAR_LATEST_VERSION; that
+  // version has to be one this brain accepts, or the update leads nowhere.
+  test('MIN <= RECOMMENDED <= LATEST', () => {
+    const v = (s: string) => parseSemver(s)!;
+    expect(compareSemver(v(SIDECAR_MIN_VERSION), v(SIDECAR_RECOMMENDED_VERSION))).toBeLessThanOrEqual(0);
+    expect(compareSemver(v(SIDECAR_RECOMMENDED_VERSION), v(SIDECAR_LATEST_VERSION))).toBeLessThanOrEqual(0);
+    expect(classifySidecarVersion(SIDECAR_LATEST_VERSION)).toBe('ok');
   });
 });

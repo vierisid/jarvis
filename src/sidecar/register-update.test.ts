@@ -124,6 +124,75 @@ describe('register handshake: self-update', () => {
   });
 });
 
+describe('update progress through the event pipeline', () => {
+  let started: SidecarManager | null = null;
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), 'jarvis-reg-update-'));
+    initDatabase(':memory:');
+    manager = new SidecarManager(dataDir);
+  });
+  afterEach(async () => {
+    if (started) await started.stop();
+    started = null;
+    closeDb();
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  // End to end through the socket: a sidecar_event frame, the validator, the
+  // scheduler (update_progress is a direct type) and the manager's handler.
+  // Dropping the type from SIDECAR_EVENT_TYPES would silently lose it.
+  test('an update_progress frame reaches the API view', async () => {
+    await manager.start();
+    started = manager;
+    const id = await enrolled();
+    const s = fakeSocket(id);
+    manager.handleSidecarConnect(s.ws, id);
+    register(s.ws, { version: '0.9.7', features: ['update_apply'] });
+    manager.handleSidecarMessage(s.ws, JSON.stringify({
+      type: 'sidecar_event', event_type: 'update_progress', timestamp: Date.now(),
+      payload: { phase: 'downloading', version: SIDECAR_LATEST_VERSION },
+    }));
+    for (let i = 0; i < 100 && !manager.getSidecar(id)!.update_state; i++) {
+      await new Promise((r) => setTimeout(r, 10));
+    }
+    expect(manager.getSidecar(id)!.update_state).toMatchObject({ phase: 'downloading', version: SIDECAR_LATEST_VERSION });
+  });
+});
+
+describe('reconnect overlap', () => {
+  beforeEach(async () => {
+    dataDir = await mkdtemp(join(tmpdir(), 'jarvis-reg-update-'));
+    initDatabase(':memory:');
+    manager = new SidecarManager(dataDir);
+  });
+  afterEach(async () => {
+    closeDb();
+    await rm(dataDir, { recursive: true, force: true });
+  });
+
+  // A sidecar that restarted itself (an update) can connect again before its
+  // old socket's close arrives. That late close must not drop the new one.
+  test("the old socket's late close keeps the newer connection", async () => {
+    const id = await enrolled();
+    const oldSock = fakeSocket(id);
+    manager.handleSidecarConnect(oldSock.ws, id);
+    register(oldSock.ws, { version: '0.9.7' });
+
+    const newSock = fakeSocket(id);
+    manager.handleSidecarConnect(newSock.ws, id);
+    register(newSock.ws, { version: SIDECAR_LATEST_VERSION });
+    expect(oldSock.closed()).not.toBeNull(); // retired when the new one arrived
+
+    manager.handleSidecarDisconnect(id, oldSock.ws);
+    expect(manager.isConnected(id)).toBe(true);
+    expect(manager.getSidecar(id)!.version).toBe(SIDECAR_LATEST_VERSION);
+    expect(newSock.closed()).toBeNull();
+
+    manager.handleSidecarDisconnect(id, newSock.ws);
+    expect(manager.isConnected(id)).toBe(false);
+  });
+});
+
 describe('sanitizeFeatures', () => {
   test('keeps identifier-like strings, once', () => {
     expect(sanitizeFeatures(['update_prompt', 'update_apply', 'update_prompt'])).toEqual(['update_prompt', 'update_apply']);
