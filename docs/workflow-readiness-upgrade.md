@@ -59,9 +59,8 @@ lifetime, and registration retries use bounded backoff. After repairing bindings
 or publishing a corrected draft, refresh/re-enable the flow or restart the daemon.
 Failure history remains available even if no desktop was connected.
 
-Deploy the focused commits in order. Reverting the strict-resolution commit
-restores the prior empty-string behavior while retaining static readiness gates;
-reverting the gate commit removes preflight admission and its refusal records.
-Neither rollback repairs invalid workflows, reverses committed remote effects,
-nor changes existing saved versions. Do not assume older silent failures were
-successful runs.
+This lands as a single change, so rolling back means reverting it as a whole:
+that restores the prior empty-string behavior and removes preflight admission
+and its refusal records together. A rollback does not repair invalid workflows,
+reverse committed remote effects, or change existing saved versions. Do not
+assume older silent failures were successful runs.
