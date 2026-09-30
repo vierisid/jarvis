@@ -237,11 +237,17 @@ func makeBrowserHoverHandler(cfg *SidecarConfig) RPCHandler {
 		}
 
 		id := int(elemID)
-		coords, found := cdp.elementCoordsFor(id)
-		if !found {
-			return &RPCResult{Result: fmt.Sprintf("Error: Element [%d] not found. Run browser_snapshot first.", id)}, nil
+		// Same document guard as click and type: a hover moves a trusted
+		// pointer, and doing it at the previous document's geometry can reveal
+		// or trigger UI nobody reviewed (#592).
+		el, _, refusal, err := refuseStaleElement(cdp, id)
+		if err != nil {
+			return nil, err
 		}
-		x, y := coords[0], coords[1]
+		if refusal != "" {
+			return &RPCResult{Result: refusal}, nil
+		}
+		x, y := el.x, el.y
 
 		// Approach from a nearby point so mouseenter/mouseover always fire
 		approachX, approachY := x-10, y-10

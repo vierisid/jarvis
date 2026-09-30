@@ -51,8 +51,76 @@ type cdpClient struct {
 	// Element centers from the last snapshot, keyed by 1-based element id.
 	// Click/hover resolve ids against THIS, not a fresh selector query, so a
 	// click lands where the snapshot said the element was.
-	elemMu     sync.Mutex
-	elemCoords map[int][2]float64
+	//
+	// Everything under elemMu is filled by ONE writer, takePageSnapshot, and
+	// replaced wholesale. The three fields beside the map are what make a
+	// coordinate answerable (#591) and usable (#592) rather than merely
+	// present:
+	//
+	//   elemIdentity  the document the coordinates describe, so a reader can
+	//                 refuse an id minted under a document the browser has
+	//                 since left. takePageSnapshot also refuses to fill the map
+	//                 at all when the browser named no document -- a map nobody
+	//                 can use is worse than no map, because the model can see
+	//                 the snapshot that produced it.
+	//
+	//                 EVERY reader checks it. browser_element_point does its
+	//                 own check inline (#591, browser_element_point.go); the
+	//                 three ACTION readers -- browser_click and browser_type
+	//                 here, browser_hover in browser_input.go -- go through
+	//                 refuseStaleElement (#592, browser_snapshot.go), which is
+	//                 also what hands them the isolated world below.
+	//
+	//                 That matters for a second reason: every early return in
+	//                 takePageSnapshot happens BEFORE this critical section, so
+	//                 a re-snapshot that FAILS leaves the previous fill intact
+	//                 and fully self-consistent. Before #592 that left live,
+	//                 clickable, stale coordinates; now the identity no longer
+	//                 matches the page, so every reader refuses.
+	//   elemGen       bumped on every fill. It closes a window an identity
+	//                 check cannot see: a snapshot of the SAME document
+	//                 refilling the map while a reader is mid-answer leaves the
+	//                 loaderId unchanged, so a reader that copied a coordinate
+	//                 out and then did more work would answer with the previous
+	//                 snapshot's number. It does NOT close the window after a
+	//                 reply is sent and before the click runs -- nothing
+	//                 sidecar-side can, and the daemon's own local path has the
+	//                 same property.
+	//   elemFrames    the ids that came from a same-origin SUBFRAME, and a
+	//                 digest of every frame's loaderId. A child document can
+	//                 navigate itself while the main frame's loaderId holds
+	//                 (measured), which leaves an in-frame coordinate pointing
+	//                 into a destroyed document. Checked only for subframe ids
+	//                 on purpose: an unrelated ad iframe reloading must not
+	//                 refuse a click on a main-document element.
+	elemMu         sync.Mutex
+	elemCoords     map[int][2]float64
+	elemIdentity   pageIdentity
+	elemGen        uint64
+	elemFrames     map[int]bool
+	elemFrameStamp string
+
+	// The isolated world the snapshot's element REFS live in, retired with its
+	// document (#592).
+	//
+	// The refs used to be stashed on the page's own `window.__jarvis_elements`,
+	// which the PAGE can write: a page that overwrote it had approved text typed
+	// into an element of its own choosing, while the snapshot, the approval card
+	// and the narration all still named the reviewed one. An isolated world has
+	// its own global object, so the array has no name the page can reach.
+	//
+	// Keyed on the loaderId because Page.createIsolatedWorld mints a fresh world
+	// and a fresh V8 context on every call however the name is reused, and
+	// nothing disposes them -- so without this a context would leak per
+	// snapshot. A world dies with its document, which is exactly the lifetime
+	// wanted.
+	//
+	// A dead context is a REFUSAL, never a re-mint-and-retry: re-minting inside
+	// one action would silently re-target whatever document is there now, which
+	// is the bug. Only a fresh snapshot may mint a world.
+	worldMu       sync.Mutex
+	worldLoaderID string
+	worldContext  float64
 
 	// One-shot waiters for CDP events (e.g. Page.loadEventFired).
 	eventMu      sync.Mutex
@@ -99,6 +167,33 @@ var activeCDP struct {
 	mu      sync.Mutex
 	client  *cdpClient
 	healthy bool
+}
+
+// existingCDP returns the live browser connection, or nil when there is none.
+//
+// The no-launch accessor, and the whole read-authority story of
+// browser_element_point (#591) rests on it. Every other browser handler calls
+// getCDPForParams, which LAUNCHES a Chromium -- headed by default -- on the
+// first browser call. A handler that exists to preview an action must not be
+// the thing that starts a browser: it runs on the tool_call event, before the
+// action it previews has been approved, and #585's review found the narration
+// it replaces doing exactly that through browser_evaluate.
+//
+// It deliberately takes no `headless` parameter, and that is a refusal rather
+// than an omission. getCDP tears the running browser down and relaunches it
+// when an explicit `headless` disagrees with it (see below), so honouring the
+// flag here would give a read-only call the power to kill a browser mid-session.
+// Ignoring it means that power is not reachable from this path at all.
+//
+// The two conditions are getCDP's own: the pointer under activeCDP.mu, and a
+// client that has not closed. Nothing here mutates activeCDP.
+func existingCDP() *cdpClient {
+	activeCDP.mu.Lock()
+	defer activeCDP.mu.Unlock()
+	if c := activeCDP.client; c != nil && !c.closed.Load() {
+		return c
+	}
+	return nil
 }
 
 // getCDP returns the live browser CDP client, launching the browser lazily on
@@ -311,6 +406,27 @@ func launchCDP(cfg *SidecarConfig, headless bool) (*cdpClient, error) {
 	// Non-fatal: navigation falls back to a fixed settle delay without it.
 	if _, err := c.send("Page.enable", nil); err != nil {
 		log.Printf("[browser] Page.enable failed (navigation uses fixed delay): %v", err)
+	}
+
+	// Make the page behave as though its window had focus (#592).
+	//
+	// A SECURITY control, not a convenience. Chromium DEFERS a page's `focus`
+	// event while the document itself is unfocused -- the normal state for an
+	// automated browser -- so a page's own focus listener fires late: after
+	// browser_type has focused the reviewed element and verified that focus,
+	// and during the Input.insertText that finally gives the document focus.
+	// Measured on the daemon's identical path: without this, a page that steals
+	// focus in its listener received the approved text while the pre-insert
+	// check saw nothing wrong; with it, the steal is visible at once and the
+	// type refuses before a character is sent.
+	//
+	// Best-effort, because it is one layer of three: the pre-insert check and
+	// the post-insert check (which turns a slip into an honest refusal rather
+	// than silent success) do not depend on it. Keep in step with
+	// src/actions/browser/session.ts.
+	if _, err := c.send("Emulation.setFocusEmulationEnabled", map[string]any{"enabled": true}); err != nil {
+		log.Printf("[browser] focus emulation unavailable; a focus steal will be reported "+
+			"after the fact rather than refused: %v", err)
 	}
 
 	// A freshly launched browser sits on the about:blank it was given, but the
@@ -787,12 +903,17 @@ func makeBrowserClickHandler(cfg *SidecarConfig) RPCHandler {
 		}
 
 		id := int(elemID)
-		coords, found := cdp.elementCoordsFor(id)
-		if !found {
-			return &RPCResult{Result: fmt.Sprintf("Error: Element [%d] not found. Run browser_snapshot first.", id)}, nil
+		// The coordinates are only this click's honest input while the document
+		// they were measured in is still the one on screen (#592).
+		el, _, refusal, err := refuseStaleElement(cdp, id)
+		if err != nil {
+			return nil, err
+		}
+		if refusal != "" {
+			return &RPCResult{Result: refusal}, nil
 		}
 
-		if err := dispatchClick(cdp, coords[0], coords[1], button, double); err != nil {
+		if err := dispatchClick(cdp, el.x, el.y, button, double); err != nil {
 			return nil, fmt.Errorf("click failed: %w", err)
 		}
 
@@ -828,21 +949,58 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 		}
 
 		id := int(elemID)
-		coords, found := cdp.elementCoordsFor(id)
-		if !found {
-			return &RPCResult{Result: fmt.Sprintf("Error: Element [%d] not found. Run browser_snapshot first.", id)}, nil
+		el, contextID, refusal, err := refuseStaleElement(cdp, id)
+		if err != nil {
+			return nil, err
 		}
+		if refusal != "" {
+			return &RPCResult{Result: refusal}, nil
+		}
+		_ = el // the identity comes from the ref below, not from a coordinate
 
-		// Focus via the DOM refs the snapshot stored, and clear or position the
-		// caret — same script as the daemon's local type (session.ts).
+		// Focus via the DOM refs the snapshot stored IN THE ISOLATED WORLD, and
+		// VERIFY where focus actually landed before touching the value — same
+		// script as the daemon's local type (session.ts), change both together.
+		//
+		// The verification is what closes #592, and the isolated world alone
+		// does not: worlds have their own globals and prototypes but share the
+		// DOM *and its events*, so a page's own `focus` listener still fires
+		// when this calls el.focus() and can move focus wherever it likes.
+		// Measured: the script returned 'ok', Input.insertText landed in the
+		// page's chosen input, and el.value = '' had meanwhile emptied the
+		// reviewed one. Hence isConnected (a detached node cannot take focus and
+		// the text would follow whatever still had it), activeElement in the
+		// element's OWN document (for anything framed, the top document's
+		// activeElement is the iframe), and all of it BEFORE the clear so a
+		// refused focus cannot empty the reviewed field either.
+		//
+		// EXACT equality, not el.contains(active). An earlier version allowed a
+		// descendant "since focusing a contenteditable can land on a child",
+		// which is measured FALSE: activeElement is the focusable ELEMENT, not
+		// the caret's node, and it equals el for a plain input, a select, an
+		// anchor, a contenteditable, and a contenteditable WITH element
+		// children. The allowance bought nothing and was an attack -- a page
+		// that appends its own input inside the reviewed element and focuses it
+		// from that element's own focus listener took the approved text while
+		// the type reported success. A shadow root that has taken focus is
+		// refused for the same reason (activeElement is the HOST when focus is
+		// inside its shadow tree), and a frame is never typed "into" at all: an
+		// iframe can enter the snapshot on [data-testid] or a role, and focusing
+		// it sends the text into a document the snapshot never described.
 		appendJS := "false"
 		if appendMode {
 			appendJS = "true"
 		}
 		script := fmt.Sprintf(`(() => {
-        const el = window.__jarvis_elements && window.__jarvis_elements[%d];
+        const el = globalThis.__jarvis_elements && globalThis.__jarvis_elements[%d];
         if (!el) return 'not_found';
+        if (!el.isConnected) return 'gone';
+        const tag = el.tagName;
+        if (tag === 'IFRAME' || tag === 'FRAME' || tag === 'OBJECT' || tag === 'EMBED') return 'not_typable';
         el.focus();
+        const ownerDoc = el.ownerDocument || document;
+        if (ownerDoc.activeElement !== el) return 'not_focused';
+        if (el.shadowRoot && el.shadowRoot.activeElement) return 'not_focused';
         const append = %s;
         if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
           if (append) {
@@ -872,6 +1030,7 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 		focusResult, err := cdp.send("Runtime.evaluate", map[string]any{
 			"expression":    script,
 			"returnByValue": true,
+			"contextId":     contextID,
 		})
 		if err != nil {
 			return nil, fmt.Errorf("type into element failed: %w", err)
@@ -883,30 +1042,72 @@ func makeBrowserTypeHandler(cfg *SidecarConfig) RPCHandler {
 		}
 		json.Unmarshal(focusResult, &focusParsed)
 
-		if focusParsed.Result.Value == "not_found" {
-			// Element refs lost (navigation happened) — coordinate-click
-			// fallback + Ctrl+A clearing, same as the daemon.
-			if err := dispatchClick(cdp, coords[0], coords[1], "left", false); err != nil {
-				return nil, fmt.Errorf("type focus fallback failed: %w", err)
-			}
+		// Anything but 'ok' REFUSES. The coordinate-click fallback that used to
+		// sit here is gone, and removing it is the fix rather than a casualty of
+		// it (#592) -- the daemon's local type does the same, change both
+		// together.
+		//
+		// Ask when 'not_found' was reachable before: overwhelmingly when a
+		// navigation had replaced the document and wiped the page-global the
+		// refs lived in, so the fallback then coordinate-clicked and typed
+		// inside a document nobody had reviewed. That IS the sibling bug, not a
+		// recovery from it. With the document guard above, a navigation refuses
+		// before this script runs; and 'gone' -- a re-render replacing the node
+		// -- used to succeed silently and deliver the approved text to whatever
+		// still held focus (measured), so refusing beats that rather than
+		// regressing from it. A coordinate fallback after 'gone' would re-open
+		// exactly that leak.
+		switch focusParsed.Result.Value {
+		case "ok":
 			time.Sleep(200 * time.Millisecond)
-			if !appendMode {
-				for _, evType := range []string{"keyDown", "keyUp"} {
-					if _, err := cdp.send("Input.dispatchKeyEvent", map[string]any{
-						"type": evType, "key": "a", "code": "KeyA",
-						"windowsVirtualKeyCode": 65, "nativeVirtualKeyCode": 65, "modifiers": 2,
-					}); err != nil {
-						return nil, fmt.Errorf("type clear fallback failed: %w", err)
-					}
-				}
-			}
-		} else {
-			time.Sleep(200 * time.Millisecond)
+		case "gone":
+			return &RPCResult{Result: fmt.Sprintf(
+				"Error: Element [%d] has been removed from the page, so nothing was typed. "+
+					"Run browser_snapshot first.", id)}, nil
+		case "not_typable":
+			return &RPCResult{Result: fmt.Sprintf(
+				"Error: Element [%d] is a frame, not a field, so nothing was typed. "+
+					"Run browser_snapshot and name an element inside it instead.", id)}, nil
+		case "not_focused":
+			return &RPCResult{Result: fmt.Sprintf(
+				"Error: Element [%d] did not take focus -- the page moved focus elsewhere -- so nothing was typed. "+
+					"Run browser_snapshot and check the page.", id)}, nil
+		default:
+			return &RPCResult{Result: fmt.Sprintf(
+				"Error: Element [%d] is no longer addressable, so nothing was typed. "+
+					"Run browser_snapshot first.", id)}, nil
 		}
 
-		// Insert text (paste-like — same as the daemon's Input.insertText)
+		// RE-VERIFY focus immediately before the insert, and again after it.
+		//
+		// The check inside the focus script is necessary but NOT sufficient:
+		// Chromium defers a page's focus event while the document is unfocused,
+		// so a listener can fire after el.focus() returned and during the
+		// insert. Focus emulation (set up in launchCDP) makes that prompt, and these
+		// two make the answer sound rather than merely nearer --
+		// Input.insertText goes to whatever holds focus at that instant, so if
+		// the reviewed element held it immediately before AND after, the text
+		// went there. Keep in step with the daemon's local type.
+		if !cdp.focusStillOnElement(id, contextID) {
+			return &RPCResult{Result: fmt.Sprintf(
+				"Error: Element [%d] lost focus before anything was typed -- the page moved focus "+
+					"elsewhere -- so nothing was typed. Run browser_snapshot and check the page.", id)}, nil
+		}
+
+		// Insert text (paste-like — same as the daemon's Input.insertText).
+		// Reached only with focus verified on the reviewed element, in the
+		// reviewed document, immediately beforehand.
 		if _, err := cdp.send("Input.insertText", map[string]any{"text": text}); err != nil {
 			return nil, fmt.Errorf("type failed: %w", err)
+		}
+
+		if !cdp.focusStillOnElement(id, contextID) {
+			// The text has already gone somewhere and nothing can un-type it, so
+			// the one thing that must not happen is reporting success: a silent
+			// wrong delivery is exactly what #592 is about.
+			return &RPCResult{Result: fmt.Sprintf(
+				"Error: Element [%d] lost focus while the text was being typed, so the text may have "+
+					"gone to another element. Run browser_snapshot and check the page before retrying.", id)}, nil
 		}
 
 		verb := "Typed"

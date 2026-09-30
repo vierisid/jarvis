@@ -59,7 +59,7 @@ instructions: |
 
   **Commit rule (once, applies everywhere)**: every `browser_type` that enters cell data must be committed — either `submit=true` (Enter: commits and moves DOWN) or a following `browser_press_key("Tab")` (commits and moves RIGHT). Uncommitted text sits in the edit buffer and is lost. After tabbing across a row, `browser_press_key("Enter")` commits the last cell and returns the cursor to the row's first column, one row down.
 
-  **Element ids**: ids come from the last snapshot and can change. The inline editor usually keeps its id across cell moves — reuse it optimistically; only take a new snapshot when a call fails with "element not found".
+  **Element ids**: ids come from the last snapshot and can change. The inline editor usually keeps its id across cell moves — reuse it optimistically; take a new snapshot as soon as a call is refused, whatever the wording. A refusal can say the element was not found, was removed from the page, did not take focus, or that the page navigated — all of them mean "your ids are stale", and none of them typed anything, so re-snapshot and retry rather than assuming the text went in.
 
   **Empty cells**: to leave a cell empty, press Tab past it (or navigate past it with the Name Box). NEVER type filler like a space — a cell containing `" "` is not empty and breaks ISBLANK, COUNTA, charts, and sorting.
 
@@ -120,6 +120,6 @@ instructions: |
   3. Commit every cell write (submit=true or Tab/Enter via browser_press_key) — see the commit rule.
   4. Never write filler characters into cells that should stay empty.
   5. Match dialog/menu items by label or aria shortcut hint, never by position; prefer URL patterns and keyboard over translated text.
-  6. Reuse element ids optimistically; snapshot only on failure or after a state change, once per write batch to verify.
+  6. Reuse element ids optimistically; snapshot on ANY refusal (not found, removed, did not take focus, page navigated) or after a state change, once per write batch to verify.
   7. Auto-save is on — never look for a Save button.
   8. Stop conditions: login wall, view-only, or the same step failing twice → report to the user instead of retrying further.

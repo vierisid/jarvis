@@ -74,6 +74,15 @@ func NewHandlerRegistry(cfg *SidecarConfig, cfgMu sync.Locker, availableCaps []S
 		registry["browser_scroll"] = makeBrowserScrollHandler(cfg)
 		registry["browser_evaluate"] = makeBrowserEvaluateHandler(cfg)
 		registry["browser_close"] = makeBrowserCloseHandler(cfg)
+		// Read-only, and note what is missing: no `cfg`. Every handler above
+		// takes one because it may need to find and launch a browser;
+		// browser_element_point answers from a browser that is already running
+		// or refuses, so the launch path is structurally out of its reach
+		// (#591, browser_element_point.go). There is one browser capability for
+		// all of these, so "read-only" cannot be expressed here -- it is
+		// enforced in the handler and asserted by
+		// TestBrowserElementPointSendsOnlyReads.
+		registry["browser_element_point"] = handleBrowserElementPoint
 		// Accessibility-tree provider (structural runtime, Phase 1 spike):
 		// element-addressed snapshot/actions over backendDOMNodeId + refs.
 		registry["browser_ax_snapshot"] = makeBrowserAXSnapshotHandler(cfg)

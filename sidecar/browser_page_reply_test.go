@@ -40,6 +40,10 @@ func TestSnapshotHandlerReportsTheFrameTreeUrlNotThePagesClaim(t *testing.T) {
 	}
 	fb.frameTreeReplyFull(frameTree.ID, "https://attacker.example/", "LOADER-A", "https://attacker.example")
 
+	// The isolated world the element refs go in (#592) -- minted before the
+	// script runs, because the script must not run in the page's own world.
+	fb.expectIsolatedWorld()
+
 	// READ: the page answers, and lies about which site it is.
 	script := fb.nextCommand()
 	if script.Method != "Runtime.evaluate" {
@@ -130,6 +134,8 @@ func TestNavigateHandlerReportsTheLandedUrlNotTheRequestedOne(t *testing.T) {
 	}
 	fb.frameTreeReplyFull(frameTree.ID, landed, "LOADER-L", "https://attacker.example")
 
+	fb.expectIsolatedWorld()
+
 	script := fb.nextCommand()
 	if script.Method != "Runtime.evaluate" {
 		t.Fatalf("command was %q, want Runtime.evaluate", script.Method)
@@ -181,6 +187,8 @@ func TestSnapshotHandlerRefusesWhenTheDocumentChangedUnderIt(t *testing.T) {
 
 	frameTree := fb.nextCommand()
 	fb.frameTreeReplyFull(frameTree.ID, "https://app.example.com/", "LOADER-A", "https://app.example.com")
+
+	fb.expectIsolatedWorld()
 
 	script := fb.nextCommand()
 	fb.write(map[string]any{

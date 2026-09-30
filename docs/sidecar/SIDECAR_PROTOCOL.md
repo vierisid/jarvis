@@ -414,6 +414,403 @@ the characters that must not reach a log line. A call that never reached a page
 logs nothing here, because the dispatch already said why, and neither does a
 perfectly ordinary page that simply has no template.
 
+## Snapshot element references, and what an action may act on
+
+`browser_snapshot` mints 1-based element ids and keeps, per id, a viewport
+coordinate and a live DOM reference. Three rules govern them, and all three
+changed in #592.
+
+### The references live in an isolated world
+
+The refs used to be stashed on the page's own `window.__jarvis_elements`, which
+is a **page-writable main-world global**. A page that overwrote it had approved
+text typed into an element of its own choosing, while the snapshot, the approval
+card and the narration all still named the reviewed one -- reaching around
+#495's snapshot binding from inside the page.
+
+They now live in a per-document **isolated world** (`Page.createIsolatedWorld`,
+`worldName: "jarvis-elements"`), which has its own global object, so the array
+has no name the page can reach. The world is keyed on the document's `loaderId`,
+because `createIsolatedWorld` mints a fresh V8 context on every call however the
+name is reused and nothing disposes them.
+
+If no world can be created, **the snapshot refuses**. It does not fall back to a
+main-world evaluate: that would put the vulnerability back within reach of any
+page that can make the call fail. A dead context is likewise a refusal and never
+a re-mint-and-retry, which would silently re-target whatever document is there
+now.
+
+A world also has its own DOM prototypes, so a page that patches
+`Element.prototype.getAttribute` can no longer change how the snapshot
+*describes* it either. That was not asked for; it falls out.
+
+### Focus is verified, not assumed
+
+An isolated world is **not sufficient on its own**, and this is the part worth
+reading before changing any of it. Worlds share the DOM *and its events*, so a
+page's own `focus` listener still fires when the sidecar calls `el.focus()` and
+can move focus anywhere it likes.
+
+Worse, Chromium **defers** that event while the document itself is unfocused --
+the normal state for an automated browser -- so the listener fires late, after
+the focus has been checked and during the `Input.insertText` that finally gives
+the document focus. Measured: with only an immediate check, a page that stole
+focus in its listener received the approved text and the type reported success.
+
+So `browser_type` uses three layers:
+
+1. `Emulation.setFocusEmulationEnabled` when the browser connection is established, so the page behaves as
+   though focused and a steal becomes visible at once. Best-effort.
+2. In the focus script, in the isolated world: `isConnected`, a refusal for a
+   frame (`iframe`/`frame`/`object`/`embed`), then `el.focus()`, then
+   **exact** `activeElement` equality in the element's **own** document (for
+   anything inside an iframe the top document's `activeElement` is the iframe),
+   and a refusal when a shadow root has taken focus. Checked **before** the
+   value is cleared, so a refused focus cannot empty the reviewed field either.
+3. A re-verify immediately **before** `Input.insertText` and again **after**
+   it, which narrows the remaining window to one local round trip. A slip is
+   reported as a refusal -- nothing can un-type the text, so the one thing that
+   must not happen is reporting success.
+
+Statuses: `not_found`, `gone` (detached), `not_typable` (a frame),
+`not_focused` -- all refusals.
+
+**Three of those rules were added because the obvious predicate was wrong**, and
+each was measured against a real browser:
+
+- `el.contains(active)` -- "focusing a contenteditable can land on a child" --
+  is false. `activeElement` is the focusable *element*, not the caret's node,
+  and it equals the element for a plain input, a select, an anchor, a
+  contenteditable, and a contenteditable with element children. The allowance
+  bought nothing and was an attack: a page that appends its own input inside the
+  reviewed element and focuses it from that element's focus listener received
+  the approved text while the type reported success.
+- A **shadow root** defeats exact equality on its own, because `activeElement`
+  is the host when focus is inside its shadow tree.
+- A **frame** can enter the snapshot on `[data-testid]`, a role or a tabindex,
+  and focusing it sends the text into a document the snapshot never described --
+  in the measured case, one on an opaque origin the top page cannot read.
+
+Layer 3 is the weakest of the three and should not be read as a proof: it
+samples two instants, so a steal-and-restore only has to be absent at those
+samples. Layers 1 and 2 are what refuse a page-chosen destination with no race
+at all.
+
+**Scope.** All of the above is about `browser_type`. `browser_ax_set_value` is a
+second typing path with its own id space, reached only by `ui_act`; it still
+runs in the page's main world through a page-replaceable value setter and has no
+document guard. The #592 *reference* defect does not exist there
+(`backendNodeId` is browser-side and fails closed after a navigation), but it is
+not covered by any of this.
+
+**The coordinate-click fallback is gone.** Ask when `not_found` was reachable
+before: overwhelmingly when a navigation had replaced the document and wiped the
+page global, so the fallback then clicked and typed inside a document nobody had
+reviewed. That was the sibling bug below, not a recovery from it.
+
+### An action refuses once the document has changed
+
+`elementCoords` was never invalidated on a **page-initiated** navigation: it was
+dropped on the next snapshot, on disconnect and on a stale-CDP reconnect, and
+nowhere else. So a click after a meta refresh dispatched a trusted mouse event
+at the previous document's geometry, while `captureApprovalGuard` -- which binds
+the connection and the approval epoch, not the document -- still held. The read
+paths have checked their document since #526/#579; the action paths did not.
+
+`browser_click`, `browser_type` and `browser_hover` now all read the frame tree
+first and refuse unless the document matches. `browser_scroll` and
+`browser_press_key` take no element id and are unchanged, and
+`browser_upload_file` already gated on a `loaderId` and an origin of its own --
+it is the model the other three now follow.
+
+**The comparison is the `loaderId` alone, deliberately without the URL.**
+`history.pushState` rewrites `frameTree.frame.url` while the loaderId holds
+(measured), and that is how every SPA navigates -- so comparing the URL would
+refuse an ordinary click on Gmail, Linear, and the cell-to-cell moves
+`webapp-templates/gsheets.yaml` explicitly tells the model to reuse an id
+across. A fragment change does not even reach it: CDP reports the fragment
+separately as `urlFragment`. `assertSamePage` keeps its URL term, because it
+guards a *read* that hands a URL back; `confirmSameDocument` is the use-time
+sibling without it.
+
+An element the snapshot took from a same-origin **subframe** carries one more
+check, because a child document can commit while the main frame's loaderId never
+moves (measured): the snapshot records a digest of every frame's loaderId, and
+in-frame ids are refused when it changes. Scoped to in-frame ids so an unrelated
+advertising iframe reloading does not refuse a click on a main-document element.
+
+### What did not change
+
+The ids are still 1-based, minted in the same document order, and the snapshot's
+**rendered text is byte-identical** -- which is what keeps all 100 webapp
+templates and every formatter test valid. The daemon and the sidecar run the
+same script and the same checks; the two are required to stay identical.
+
+## `browser_element_point`: where a snapshot element is on the screen
+
+A **read-only** answer to one question: for an element id the last snapshot
+minted, where would a click at that id land on the sidecar's screen? It exists
+so the pebble can point at the element a browser action is about to take (#591).
+
+### Why an RPC and not a calculation
+
+`browser_click` resolves an element id against a coordinate map that lives in
+the sidecar, filled by the snapshot. On a **default install every browser action
+goes there**: `CapBrowser` is in the default capability set (`sidecar/config.go`)
+and the pebble only exists for a connected sidecar. #585 made the narration read
+the click's own input and fail closed -- `(location unknown)`, the pebble does
+not move -- when no honest coordinate exists, so with no RPC carrying the
+coordinate back the pointer went quiet on most installs and PR #590 was held in
+draft. A local-cache hit instead would be a confident pointer into an unrelated
+page, which is the bug #585 removed.
+
+### Request
+
+```json
+{ "method": "browser_element_point", "params": { "element_id": 5 } }
+```
+
+`element_id` and nothing else. A whole number from 1, read strictly
+(`params["element_id"].(float64)` then an integral check), so a coerced `"5"` or
+a `5.5` is refused rather than rounded into something the click would not accept.
+
+There is **no `target`, no `headless` and no `expression`**. `headless` is
+ignored rather than accepted-and-unused, and that is deliberate: `getCDP` tears
+a running browser down and relaunches it when an explicit `headless` disagrees
+with it, so honouring the flag would let a read-only call kill a browser
+mid-session.
+
+### Reply
+
+```json
+{ "x": 437, "y": 484, "space": "screen_dip", "loader_id": "3F2A1C9E..." }
+```
+
+| Field | Meaning |
+|---|---|
+| `x`, `y` | the point to hand `pebble.point_at`, absolute on the sidecar's screen |
+| `space` | the coordinate space of `x`/`y`. Only `screen_dip` exists; the brain refuses any other value rather than assuming |
+| `loader_id` | the loaderId of the document the coordinate belongs to, re-read and re-confirmed by this call |
+
+**All four fields or an RPC error.** #594's rule is that a `page_url` never
+travels without a `loader_id`, because the loader id is what makes the URL name
+*this* document. Transposed here: **a coordinate never travels without the
+loader id of the document it belongs to.** There is no reply shape carrying a
+coordinate whose document is unnamed, so the brain has nothing to half-trust.
+`loader_id` is bounded by the same 64 bytes #594 uses, and an over-long one is a
+refusal rather than a truncation -- a truncated identity is a different
+document, and #594's own reason for the bound was that one oversized field
+exceeds the brain's 2 MB event cap and drops the whole event, so the RPC never
+resolves at all.
+
+**There is deliberately no `page_url`.** Nothing on this path reads a URL: the
+pebble needs two numbers, the guard needs a document token, and the brain's log
+line must not print a URL anyway. `browser_ax.go` already warns that once
+several object-shaped browser replies carry a URL-ish field, a brain-side
+decoder keying on "a url in an object reply" hands a page its own choice of site
+playbook again (#572). A coords reply cannot select a playbook, because it
+carries nothing a playbook could be selected from.
+
+### Refusals, and why they are coded
+
+Every refusal is an RPC **error** with a code, never a partial reply -- a
+coordinate field that can be absent is a coordinate field somebody reads as 0.
+
+| Code | Meaning |
+|---|---|
+| `BROWSER_BAD_ELEMENT_ID` | absent, or not a whole number from 1 |
+| `BROWSER_NOT_RUNNING` | no browser is running. **Nothing is launched** |
+| `BROWSER_ELEMENT_NOT_IN_SNAPSHOT` | no snapshot has run, or that id is not in the current map |
+| `BROWSER_SNAPSHOT_STALE` | the document committed, a subframe the element came from navigated, a new snapshot replaced the map, the frame tree names no document (or names it with an over-long loader id), or the page is showing local content (#526) |
+| `BROWSER_GEOMETRY_UNAVAILABLE` | **the browser is running headless or its window is minimized**, the element is **outside the visible viewport**, or the window bounds / viewport metrics were not usable |
+
+Three of those deserve spelling out, because each is a case where a
+well-formed-looking number would otherwise have been returned:
+
+- **A headless browser has no position on anyone's screen**, and only the
+  sidecar knows it is headless. `--headless=new` still reports ordinary window
+  bounds: `--window-position=137,91` comes back as `left: 137, top: 91` with
+  `windowState: "normal"` (measured). Without the refusal the pebble would fly
+  to that spot on the user's *real* desktop and sit over whatever application
+  occupies it, with a confident label and no `(location unknown)`. `headless` is
+  a model-settable parameter whose own tool description recommends it for
+  staying out of the user's way, so the considerate path was the misplacing one.
+- **A minimized window** reports the bounds it would be *restored* to.
+- **An element outside the viewport** has no screen position. The snapshot
+  filters on `display`, `visibility`, `opacity` and a 5x5 minimum size, but
+  *not* on viewport containment, and the coordinates are
+  `getBoundingClientRect` centres -- so a button 2500 CSS px below the fold sits
+  in the map with `y = 2500` and would have produced a point far below the
+  window. The bound is free: `cssLayoutViewport` carries `clientWidth` beside
+  `clientHeight`.
+
+The codes exist so the brain can classify **without reading the message**
+(#594's rule: classification never parses display text). There is a sharper
+reason too: some of these refusals come from `refuseLocalContent`, whose message
+embeds the page URL. The brain writes a log line about a skipped coordinate, and
+#594 refused to put a URL in one -- a refused URL is precisely the value that
+may carry the characters that must not reach a log. So the brain maps codes to
+its own strings and never interpolates the sidecar's message.
+
+### Read authority, and how it is enforced
+
+There is one `browser` capability for all 14 browser methods, so "read-only"
+cannot be expressed in the capability map. It is enforced in the handler:
+
+- **The handler takes no `SidecarConfig`.** Every other browser handler is given
+  one because it may need to find and launch a browser; this one is registered
+  as a bare function, so the launch path is not reachable from it. It uses a
+  no-launch accessor (`existingCDP`) and refuses when no browser is up.
+- **It cannot kill the browser either.** `shutdown()` is reachable only from
+  `getCDP`'s headless flip, `browser_close`, `launchCDP`'s own failure paths,
+  and `c.fail()`, which `readLoop` calls on a pipe error and `sendOn` never
+  does. Even a read that times out cannot take the browser down from here.
+- **It sends four commands, three distinct CDP methods, all getters:**
+  `Page.getFrameTree` (twice, as the check and the re-check),
+  `Browser.getWindowForTarget` and `Page.getLayoutMetrics`. Four on every path,
+  including an element taken from a subframe -- the frame digest rides along on
+  the re-check's reading rather than costing a read of its own. No `Runtime.*`,
+  so no script; no `Input.*`, no `DOM.focus`, no `Page.bringToFront`, no
+  `Target.activateTarget`; no `Page.navigate`; no `Browser.setWindowBounds`, no
+  `Emulation.*`. That list is prose, so
+  `TestBrowserElementPointSendsOnlyReads` asserts the sent sequence **exactly**,
+  for the main-document and in-frame paths both -- a later edit that adds a
+  fifth command fails a test rather than a review.
+- **Every read carries a sub-second budget**, not `cdpDefaultTimeout`'s 30
+  seconds. `Page.*` is answered by the renderer, so a long task or a modal
+  `alert()` blocks it; the narration upstream is abandoned after 1200 ms
+  anyway, so a read that sits for 30 seconds produces the same user-visible
+  outcome while holding a goroutine and a pending-reply slot for the other 29.
+- `Browser.getWindowForTarget` is a **browser-level** command, and it is scoped
+  to the attached page only because `send` tags it with the flat-mode session
+  id. An edit that sent it on `sendOn("")` with a caller-supplied `targetId`
+  would be reading another target's window.
+
+### Current generation only
+
+The snapshot records, beside the coordinate map, the document it was taken under
+and a generation counter. The handler refuses unless the map's document is the
+document the browser is showing now, re-checks the generation after reading the
+geometry, and re-reads the frame tree at the end.
+
+The generation is not redundant with the document check: a snapshot of the
+**same** document re-mints every coordinate and leaves the loaderId untouched,
+so without it the answer could be a previous snapshot's number for an id the
+click now resolves elsewhere.
+
+What it does **not** cover: the window between the reply and the click. One
+assistant message emitting `browser_snapshot` and then `browser_click` re-mints
+every id in between, so the guarantee is "the generation live when the RPC was
+answered", not "the generation the click will use". The brain's own local
+narration path has the identical property.
+
+An element the snapshot took from a same-origin **subframe** carries one more
+check. A child document can commit a new document on its own while the main
+frame's loaderId never moves, which leaves an in-frame coordinate pointing into
+a document that no longer exists, so the snapshot also records a digest of every
+frame's loaderId and in-frame ids are refused when it changes. Scoped to
+in-frame ids on purpose: an unrelated advertising iframe reloading must not cost
+a pointer for a main-document element.
+
+### The coordinate space
+
+**`screen_dip`: Chromium device-independent pixels, absolute on the sidecar's
+screen, top-left origin.** Measured against a real Chromium at
+`--force-device-scale-factor` 1, 1.5 and 2: `Browser.getWindowForTarget`'s
+bounds are DIP, invariant under the scale factor, and identical to the page's
+own `window.screenX`/`screenY`. That is why the geometry comes from the Browser
+and Page domains and the page is never asked -- a page can install a `screenX`
+getter, but it cannot install a frame tree.
+
+`pebble.point_at` has one unit contract and it is not written as a unit:
+`pebbleCore.PointAt` stores x/y and `advanceFrame` eases toward them in whatever
+space `platformGetCursorPos()` returns. So:
+
+| Platform | the pebble's space | equals `screen_dip`? |
+|---|---|---|
+| macOS | Cocoa points, already flipped to a top-left origin in `panels_darwin.go` | **yes** -- points are the 1x logical space |
+| Linux | GDK logical px, top-left (`panels_linux.go`) | **yes**, when Chromium's device scale factor matches GDK's, which is the ordinary case |
+| Windows | `GetCursorPos` under a PerMonitorV2 manifest, i.e. physical virtual-screen px | at 100% DPI **yes**; above it, off by the monitor's scale factor |
+
+A per-platform conversion is deliberately **not** done in the sidecar. #585
+removed a `devicePixelRatio` multiply that was wrong on two of three platforms;
+there is no scale-factor helper in this tree to reuse (the only backing-scale
+read is a C file-static in `region_select_darwin.go`, and
+`platformGetScreenSize` is a hardcoded stub on darwin and linux); and the
+brain's own local path has the identical Windows behaviour today, so this adds
+no new error anywhere. The `space` field is the hook for closing it later: a
+measured conversion ships a new space name, and a brain that does not recognise
+a space refuses rather than misplacing the pointer.
+
+**Known inexactness, y only.** `cssLayoutViewport.clientHeight` excludes
+scrollbars while the window height includes them, so on a page with a horizontal
+scrollbar the chrome height comes out one scrollbar too large and the point
+lands that far low -- measured 15 CSS px. No scrollbar-inclusive height exists
+anywhere in `getLayoutMetrics`, so recovering the term would need page script,
+which read authority forbids and 15 px does not justify; the pebble's own disc
+is 72x64, so it still covers the element. There is no viewport-width term, so x
+is unaffected.
+
+`cssVisualViewport` is **not** used for the viewport height, and that is
+load-bearing: it shrinks under pinch zoom (measured: 437 to 218.5 at scale 2)
+and would have thrown the pointer on every pinch-zoomed page. The layout
+viewport is unchanged there. The page-zoom factor is
+`cssVisualViewport.zoom`, the CSS-px-to-DIP ratio, measured *not* to be the
+pinch factor; it is dimensionally required rather than guessed, since without it
+a CSS-px offset is added to a DIP origin. A zoom outside `[0.1, 10]` is refused
+rather than clamped, because it multiplies every term and a silently corrected
+coordinate is a confident wrong pointer.
+
+Still unverified, and needing a real desktop: the three rows of the platform
+table, browser page zoom other than 1 (`--headless=new` ignores a profile's
+persisted zoom level), and the assumption that all window chrome is vertical --
+a Windows resizable border or a GTK client-side-decoration shadow would put
+`bounds.left` left of the client area.
+
+### What a version pairing does
+
+The method name is the feature probe; there is no flag and no version gate.
+Nothing in the brain compares a sidecar version to decide whether to call
+something, and a new method has no reply field to duck-type on.
+
+| Brain | Sidecar | Result |
+|---|---|---|
+| new | new, warm browser, id in the current map | a point arrives, the space is checked, the pebble flies |
+| new | new, no browser running | `BROWSER_NOT_RUNNING`; no pointer, one log line, **and nothing launched** |
+| new | new, stale document / stale frame / unknown id | a coded refusal; no pointer, one log line |
+| new | new, **browser running headless**, or its window minimized | `BROWSER_GEOMETRY_UNAVAILABLE`; no pointer. Only the sidecar can tell |
+| new | new, element outside the visible viewport | `BROWSER_GEOMETRY_UNAVAILABLE`; no pointer |
+| new | new, busy page (a long task or a modal `alert()` blocks the renderer) | every read carries a sub-second budget, so it gives up well inside the narration's own 1200 ms; no pointer |
+| new | **old** (no such method) | `METHOD_NOT_FOUND`; the brain reads the **code**, reports "sidecar too old", and keeps #585's fail-closed path. Nothing falls back to `browser_evaluate`, to the brain's local coordinate cache, or to a fresh DOM query |
+| new | new, but a future `space` value | refused. An unrecognised space is never trusted |
+| old | new | never calls the method; nothing changes for it |
+| new | new, but the pebble is not on the sidecar that serves the browser | the brain does not call at all -- the coordinate is a position on the browser sidecar's screen and the pebble is drawn on another |
+
+The failure direction is always the same: **no pointer rather than a pointer at
+the wrong element.** Every case above refuses instead of answering.
+
+### Two constants that must stay in step
+
+This contract is the only thing holding two pairs of constants together, one
+pair per language, and nothing fails on either side if they drift:
+
+| meaning | sidecar | brain |
+|---|---|---|
+| the space name | `elementPointSpace` (`sidecar/browser_element_point.go`) | `ELEMENT_POINT_SPACE` (`src/actions/tools/sidecar-route.ts`) |
+| the coordinate sanity bound | `maxElementPointCoord` (same file) | `MAX_ELEMENT_POINT_COORD` (same file) |
+
+Renaming the space string on one side alone makes every point
+`unusable_reply` -- which is the safe direction, and silent. Both ends check the
+bound on purpose (the sidecar computes the point, the brain is what hands it to
+`pebble.point_at`), so they are duplicated rather than shared; this table is
+where the next editor of either finds the other.
+
+The one place a point is returned that is not exactly right is the Windows
+DPI-scale row above, plus the horizontal-scrollbar offset -- both bounded, both
+measured, both stated, and both identical to what the brain's own local
+narration path does today. Neither can name a different element: they are
+off by a screen scale factor or by 15 CSS px, not by an element.
+
 ## RPC Lifecycle on the Brain
 
 Every RPC uses a **two-timeout mechanism**: an initial timeout (blocking phase) followed by a max timeout (detached phase). This provides a unified model — the difference between "fast" and "slow" RPCs is just the timeout values.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +26,16 @@ func (fb *fakeBrowser) frameTreeReplyFull(id int64, mainURL, loaderID, origin st
 	children := []any{}
 	for i, u := range childURLs {
 		children = append(children, map[string]any{
-			"frame": map[string]any{"id": "child", "url": u, "loaderId": i},
+			// A STRING loaderId, like Chrome's. It used to be the loop index,
+			// which was harmless while only `frameTree.frame` was ever decoded
+			// -- `childFrames` was skipped wholesale. `frameTreeState` now
+			// decodes the children too, so an int here would fail
+			// json.Unmarshal and surface as "could not check what the page is
+			// showing", a long way from the cause.
+			"frame": map[string]any{
+				"id": fmt.Sprintf("child-%d", i), "url": u,
+				"loaderId": fmt.Sprintf("child-loader-%d", i),
+			},
 		})
 	}
 	fb.write(map[string]any{
@@ -55,6 +65,33 @@ func originOf(u string) string {
 		return "://"
 	}
 }
+
+// expectIsolatedWorld answers the Page.createIsolatedWorld the snapshot mints
+// to hold the document's element refs (#592), and asserts that it IS one.
+//
+// Asserting rather than tolerating, deliberately: the snapshot script must
+// never run in the page's own main world again, and a fake that simply answered
+// whatever came next would let that regress silently. The snapshot refuses if
+// this is not answered, so a test that scripts a read must answer it.
+//
+// The world is cached per loaderId, so a SECOND snapshot of the same document
+// mints no new one and must not expect this.
+func (fb *fakeBrowser) expectIsolatedWorld() cdpCommand {
+	fb.t.Helper()
+	cmd := fb.nextCommand()
+	if cmd.Method != "Page.createIsolatedWorld" {
+		fb.t.Fatalf("expected Page.createIsolatedWorld (the snapshot's element refs must not go in the page's main world), got %q", cmd.Method)
+	}
+	fb.write(map[string]any{
+		"id":     cmd.ID,
+		"result": map[string]any{"executionContextId": isolatedWorldContextID},
+	})
+	return cmd
+}
+
+// The context id the fake hands back for its isolated world. Non-zero, because
+// zero is how the production code spells "the browser gave me no world".
+const isolatedWorldContextID = 7
 
 // answerFrameTree answers the next command, which must be a Page.getFrameTree.
 // The read paths check, read, then check again, so a test that scripts a read
@@ -241,6 +278,8 @@ func TestSnapshotRefusesWhenThePageReportsLocalContent(t *testing.T) {
 	}
 	fb.frameTreeReply(frameTree.ID, "https://example.com/")
 
+	fb.expectIsolatedWorld()
+
 	script := fb.nextCommand()
 	if script.Method != "Runtime.evaluate" {
 		t.Fatalf("snapshot's second command was %q, want Runtime.evaluate", script.Method)
@@ -282,7 +321,13 @@ func TestSnapshotOfAnOrdinaryPageStillWorks(t *testing.T) {
 	frameTree := fb.nextCommand()
 	fb.frameTreeReply(frameTree.ID, "https://example.com/")
 
+	fb.expectIsolatedWorld()
+
 	script := fb.nextCommand()
+	// The script runs in the isolated world, not the page's own (#592).
+	if script.Params["contextId"] == nil {
+		t.Fatal("the snapshot script was evaluated with no contextId, i.e. in the page's main world")
+	}
 	fb.write(map[string]any{
 		"id": script.ID,
 		"result": map[string]any{
@@ -304,8 +349,9 @@ func TestSnapshotOfAnOrdinaryPageStillWorks(t *testing.T) {
 	if got.snap.Title != "Example" || got.snap.URL != "https://example.com/" || len(got.snap.Elements) != 1 {
 		t.Fatalf("snapshot came back wrong: %+v", got.snap)
 	}
-	if coords, ok := fb.client.elementCoordsFor(1); !ok || coords != [2]float64{10, 20} {
-		t.Fatalf("element coordinates were not stored: %v %v", coords, ok)
+	el, ok := fb.client.snapshotElementFor(1)
+	if !ok || el.x != 10 || el.y != 20 {
+		t.Fatalf("element coordinates were not stored: %+v %v", el, ok)
 	}
 }
 
@@ -384,6 +430,8 @@ func TestReadIsDiscardedWhenThePageNavigatedUnderIt(t *testing.T) {
 
 	first := fb.nextCommand()
 	fb.frameTreeReplyFull(first.ID, "https://example.com/", "loader-1", "https://example.com")
+
+	fb.expectIsolatedWorld()
 
 	script := fb.nextCommand()
 	fb.write(map[string]any{
