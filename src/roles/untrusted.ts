@@ -136,42 +136,11 @@ export function unsafeUntrustedNoncesForTests(text: string): string[] {
  * instance, so the carrier cannot survive any serialization boundary an attacker
  * could reach.
  *
- * Not exported: only `withTrustedTrailer` and `withDocumentCard` construct one,
- * so every trailer and every card in the product has a named producer in
- * trusted code.
+ * Not exported: only `withTrustedTrailer` constructs one, so every trailer in
+ * the product has a named producer in trusted code.
  */
 class TrailedToolReturn {
-  constructor(
-    readonly untrusted: string,
-    readonly trustedTrailer: string,
-    readonly card: DocumentCard | null = null,
-  ) {}
-}
-
-/**
- * A download card a tool asks the chat UI to render, described STRUCTURALLY.
- *
- * #584. `create_document` used to render this into an HTML comment inside its
- * own result text and the orchestrator regexed it back out -- of the FRAMED
- * result, on purpose, because the marker had to be read from inside the block.
- * So a page whose text reached that result could forge a download card, and
- * framing was no defence: the delimiters were being read past deliberately.
- * Same bug class #567 removed from the site-instructions seam and #579 removed
- * from `extractSnapshotUrl`, and this was the last instance of it.
- *
- * The producer knows all four values structurally, so they travel beside the
- * result instead of being written into it and parsed back. Nothing searches a
- * tool result for a marker any more.
- *
- * Concrete rather than a one-member union on purpose: a SECOND kind of card
- * should widen this into a discriminated union, not add a second field to the
- * carrier, so that consumers keep switching on one thing.
- */
-export interface DocumentCard {
-  id: string;
-  title: string;
-  format: string;
-  size: number;
+  constructor(readonly untrusted: string, readonly trustedTrailer: string) {}
 }
 
 /**
@@ -186,35 +155,13 @@ export function withTrustedTrailer(untrusted: string, trustedTrailer: string): u
 }
 
 /**
- * Attach a download card to a tool's result (#584).
- *
- * The same carrier as a trusted trailer, and for the same reason: it is the
- * seam for "a tool result plus repo-authored metadata", matched with
- * `instanceof` rather than a shape check, so parsed JSON arriving from another
- * machine cannot declare a card of its own.
- *
- * The card is METADATA, never text. It is not concatenated into the result by
- * anything, so unlike a trailer it cannot reach the model as instructions --
- * the only consumer is the orchestrator's chat loop, which renders it for the
- * UI. Every other consumer (`toolReturnText`, `dropTrustedTrailer`, the
- * sub-agent runner, the realtime voice path) drops it, which is correct: a card
- * is a chat affordance and those paths have no chat to render it in.
- */
-export function withDocumentCard(untrusted: string, card: DocumentCard): unknown {
-  return new TrailedToolReturn(untrusted, '', card);
-}
-
-/**
- * Split a raw tool return into the outside content, any trusted trailer, and
- * any repo-authored card.
+ * Split a raw tool return into the outside content and any trusted trailer.
  *
  * The stringification of a plain return is exactly what each call site did
- * inline before, so nothing changes for the tools that carry neither.
+ * inline before, so nothing changes for the tools that carry no trailer.
  */
-export function splitToolReturn(raw: unknown): { outside: string; trailer: string; card: DocumentCard | null } {
-  if (raw instanceof TrailedToolReturn) {
-    return { outside: raw.untrusted, trailer: raw.trustedTrailer, card: raw.card };
-  }
+export function splitToolReturn(raw: unknown): { outside: string; trailer: string } {
+  if (raw instanceof TrailedToolReturn) return { outside: raw.untrusted, trailer: raw.trustedTrailer };
   // Deliberately the same expression the call sites used inline, including its
   // one rough edge: `JSON.stringify(undefined)` is `undefined`, so a tool whose
   // execute returns nothing yields a value that does not match this signature
@@ -222,7 +169,7 @@ export function splitToolReturn(raw: unknown): { outside: string; trailer: strin
   // caught by the dispatch's try/catch and degrades to `Error executing <tool>`,
   // and it is left alone on purpose: a tool returning undefined is a tool bug,
   // and turning it into an empty result here would hide it.
-  return { outside: typeof raw === 'string' ? raw : JSON.stringify(raw), trailer: '', card: null };
+  return { outside: typeof raw === 'string' ? raw : JSON.stringify(raw), trailer: '' };
 }
 
 /**
@@ -292,10 +239,6 @@ export function toolReturnText(raw: unknown): string {
  * all on this path.
  */
 export function dropTrustedTrailer(raw: unknown): unknown {
-  // A download card (#584) is dropped here for free, and rightly: it is a chat
-  // affordance and a flow has no chat. What matters for THIS path is that the
-  // carrier is unwrapped at all, so no class instance reaches the sandbox's
-  // JSON serialisation.
   if (raw instanceof TrailedToolReturn) return raw.untrusted;
   return raw;
 }

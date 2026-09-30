@@ -56,46 +56,6 @@ describe('the privileges in roles/untrusted.ts stay where they were argued for',
   });
 
   /**
-   * `withDocumentCard` asks the chat loop to render a download card naming a
-   * document (#584). The card is what the orchestrator used to recover with a
-   * regex over the framed tool result, which is what let a page forge one; the
-   * whole point of the carrier is that only a producer which knows the document
-   * STRUCTURALLY can mint it. One module does.
-   */
-  test('only the document tool mints a download card', () => {
-    expect(importersOf('withDocumentCard(', ['roles/untrusted.ts'])).toEqual([
-      'actions/tools/documents.ts',
-    ]);
-  });
-
-  /**
-   * And nothing goes looking for the rendered marker. `document-card.ts` spells
-   * it once, to WRITE it; a second speller would mean something is again
-   * deciding a trust boundary by matching a string in a tool result.
-   *
-   * This one walks `ui/` as well as `src/`, because `ui/` is where the only
-   * reader that ever existed lived (`components/chat/MarkdownContent.tsx`,
-   * deleted in f7f2eea0), and a restored consumer would land there. The needle
-   * is the loose `jarvis:doc` rather than the full comment so that a reader
-   * spelled as a pattern -- `/<!-- jarvis:doc[^>]*-->/` -- cannot slip past a
-   * literal match.
-   *
-   * NOTE the current answer is "no readers at all", which is a symptom and not
-   * a goal: see the header of actions/tools/document-card.ts.
-   */
-  test('the document marker has one producer and no readers, in src OR ui', () => {
-    const roots = [SRC, join(SRC, '..', 'ui', 'src')];
-    const spellers = roots.flatMap((root) =>
-      readdirSync(root, { recursive: true, encoding: 'utf8' })
-        .filter((f) => /\.(ts|tsx|js|jsx)$/.test(f) && !f.endsWith('.test.ts') && !f.endsWith('.test.tsx'))
-        .filter((f) => !f.startsWith('workflows/activepieces/'))
-        .filter((f) => readFileSync(join(root, f), 'utf8').includes('jarvis:doc'))
-        .map((f) => `${root === SRC ? 'src' : 'ui/src'}/${f}`),
-    ).sort();
-    expect(spellers).toEqual(['src/actions/tools/document-card.ts']);
-  });
-
-  /**
    * A third privilege, created by #582: framing a TOOL RETURN rather than a
    * prompt.
    *

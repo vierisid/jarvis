@@ -14,6 +14,28 @@ function escapeLike(s: string): string {
 
 export type DocumentFormat = 'markdown' | 'plain' | 'html' | 'json' | 'csv' | 'code';
 
+/**
+ * The same six values as a runtime list, for the tool schema to advertise.
+ *
+ * There were three independent copies of this set: the union above, the
+ * `create_document` tool's `enum`, and the `CHECK(format IN (...))` on the
+ * table in vault/schema.ts. The first two are now one, and `_exhaustive` below
+ * fails to compile if a seventh format joins the union without being added
+ * here -- which would otherwise leave the new format accepted by the column and
+ * un-callable through the tool.
+ *
+ * The schema CHECK is still a separate copy; it lives in a `CREATE TABLE`
+ * string and cannot be derived without rewriting that statement.
+ */
+export const DOCUMENT_FORMATS: readonly DocumentFormat[] =
+  ['markdown', 'plain', 'html', 'json', 'csv', 'code'];
+
+/** Compile-time only: every member of the union appears in the list above. */
+const _exhaustive: Record<DocumentFormat, true> = {
+  markdown: true, plain: true, html: true, json: true, csv: true, code: true,
+};
+void _exhaustive;
+
 export type Document = {
   id: string;
   title: string;

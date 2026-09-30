@@ -787,10 +787,8 @@ describe('the chat gate pins the path before it asks', () => {
     orch.setAuditTrail(new AuditTrail());
     orch.createPrimary({ id: 'personal-assistant', name: 'PA', description: 't', responsibilities: [], tools: ['file-ops'],
       authority_level: level } as never);
-    // `executeTool` answers `{ result, card }` as of #584; this is the result.
-    const call = async (args: Record<string, unknown>) =>
-      ((await (orch as unknown as { executeTool: (tc: unknown) => Promise<{ result: unknown }> })
-        .executeTool({ id: 'c', name: 'write_file', arguments: args }))).result;
+    const call = (args: Record<string, unknown>) =>
+      (orch as unknown as { executeTool: (tc: unknown) => Promise<unknown> }).executeTool({ id: 'c', name: 'write_file', arguments: args });
     return { approvals, registry, call };
   }
 

@@ -192,14 +192,14 @@ describe('AgentOrchestrator profile gate', () => {
 
   test('without a profile the tool runs', async () => {
     const { orch, calls } = makeOrchestrator(false);
-    const result = (await (orch as unknown as { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }) => Promise<{ result: unknown }> }).executeTool({ id: 't1', name: 'run_command', arguments: {} })).result;
+    const result = await (orch as unknown as { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }) => Promise<unknown> }).executeTool({ id: 't1', name: 'run_command', arguments: {} });
     expect(calls).toEqual(['ran']);
     expect(result).toBe('ok');
   });
 
   test('with the background profile and no approval manager the tool does not run (fail closed)', async () => {
     const { orch, calls } = makeOrchestrator(true);
-    const result = (await (orch as unknown as { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }) => Promise<{ result: unknown }> }).executeTool({ id: 't1', name: 'run_command', arguments: {} })).result;
+    const result = await (orch as unknown as { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }) => Promise<unknown> }).executeTool({ id: 't1', name: 'run_command', arguments: {} });
     expect(calls).toEqual([]);
     expect(String(result)).toContain('[APPROVAL UNAVAILABLE]');
   });
@@ -214,7 +214,7 @@ describe('AgentOrchestrator profile gate', () => {
     const orch = new AgentOrchestrator();
     orch.setToolRegistry(registry);
     orch.setAuthorityEngine(new AuthorityEngine(makeConfig()));
-    const result = (await (orch as unknown as { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }) => Promise<{ result: unknown }> }).executeTool({ id: 't1', name: 'run_command', arguments: {} })).result;
+    const result = await (orch as unknown as { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }) => Promise<unknown> }).executeTool({ id: 't1', name: 'run_command', arguments: {} });
     expect(String(result)).toContain('[AUTHORITY DENIED]');
   });
 });
@@ -248,7 +248,7 @@ describe('AgentOrchestrator profile gate with an approval manager (production pa
     orch.setApprovalCallback((r) => { delivered.push(r.id); });
     orch.createPrimary(role);
 
-    const result = (await (orch as unknown as { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }) => Promise<{ result: unknown }> }).executeTool({ id: 't1', name: 'run_command', arguments: { command: 'rm -rf /' } })).result;
+    const result = await (orch as unknown as { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }) => Promise<unknown> }).executeTool({ id: 't1', name: 'run_command', arguments: { command: 'rm -rf /' } });
 
     expect(calls).toEqual([]);
     expect(String(result)).toContain('[AWAITING_APPROVAL]');

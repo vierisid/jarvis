@@ -19,11 +19,9 @@ import { AuditTrail } from '../authority/audit.ts';
 import { runSubAgent } from './sub-agent-runner.ts';
 import type { RoleDefinition } from '../roles/types.ts';
 
-// `executeTool` answers `{ result, card }` as of #584; these tests are about
-// the result.
-type Exec = { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }, signal?: AbortSignal, taint?: Set<string>) => Promise<{ result: unknown }> };
-const exec = async (o: AgentOrchestrator, name: string, args: Record<string, unknown> = {}) =>
-  (await (o as unknown as Exec).executeTool({ id: 't', name, arguments: args }, undefined, new Set())).result;
+type Exec = { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }, signal?: AbortSignal, taint?: Set<string>) => Promise<unknown> };
+const exec = (o: AgentOrchestrator, name: string, args: Record<string, unknown> = {}) =>
+  (o as unknown as Exec).executeTool({ id: 't', name, arguments: args }, undefined, new Set());
 
 function roleAt(level: number): RoleDefinition {
   return {
