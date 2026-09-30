@@ -64,12 +64,4 @@ func VerifyPayloadSignature(stagedBin string) error {
 
 // installDirOf maps a running executable to its install directory: the
 // directory holding Jarvis.app, when exe is <dir>/Jarvis.app/Contents/MacOS/jarvis.
-func installDirOf(exe string) (string, error) {
-	macOS := filepath.Dir(exe)
-	contents := filepath.Dir(macOS)
-	bundle := filepath.Dir(contents)
-	if filepath.Base(macOS) != "MacOS" || filepath.Base(contents) != "Contents" || filepath.Base(bundle) != AppBundleName {
-		return "", fmt.Errorf("not running from %s (%s)", AppBundleName, exe)
-	}
-	return filepath.Dir(bundle), nil
-}
+func installDirOf(exe string) (string, error) { return bundleInstallDir(exe) }

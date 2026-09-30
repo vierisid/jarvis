@@ -111,3 +111,64 @@ func TestSwapRejectsPayloadWithoutEntry(t *testing.T) {
 		t.Errorf("failed Swap touched the live copy: %q", got)
 	}
 }
+
+// The macOS payload is a directory (Jarvis.app); run the same swap/rollback
+// cycle on that shape on every OS.
+func TestSwapAndRollbackDirectoryEntry(t *testing.T) {
+	install, staged := t.TempDir(), t.TempDir()
+	mk := func(root, body string) {
+		exe := filepath.Join(root, "Jarvis.app", "Contents", "MacOS", "jarvis")
+		if err := os.MkdirAll(filepath.Dir(exe), 0755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(exe, []byte(body), 0755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	mk(install, "old")
+	mk(staged, "new")
+	exe := filepath.Join(install, "Jarvis.app", "Contents", "MacOS", "jarvis")
+
+	if err := swapEntry(staged, install, "Jarvis.app"); err != nil {
+		t.Fatalf("swapEntry: %v", err)
+	}
+	if got := readEntry(t, exe); got != "new" {
+		t.Errorf("after swap = %q, want new", got)
+	}
+	if fi, err := os.Stat(exe); err != nil || fi.Mode().Perm()&0100 == 0 {
+		t.Errorf("exec bit lost in the copy: %v %v", fi, err)
+	}
+	if err := rollbackEntry(install, "Jarvis.app"); err != nil {
+		t.Fatalf("rollbackEntry: %v", err)
+	}
+	if got := readEntry(t, exe); got != "old" {
+		t.Errorf("after rollback = %q, want old", got)
+	}
+}
+
+// A .failed-* left by an earlier rollback (still executing on Windows) must
+// not block the next one, and CleanupOld sweeps them.
+func TestRollbackWithLeftoverFailedCopy(t *testing.T) {
+	install, staged := t.TempDir(), t.TempDir()
+	writeEntry(t, install, "old")
+	writeEntry(t, staged, "new")
+	leftover := livePath(install) + ".failed-1"
+	if err := os.WriteFile(leftover, []byte("stale"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := Swap(staged, install); err != nil {
+		t.Fatalf("Swap: %v", err)
+	}
+	if err := Rollback(install); err != nil {
+		t.Fatalf("Rollback: %v", err)
+	}
+	if got := readEntry(t, livePath(install)); got != "old" {
+		t.Errorf("live = %q, want old", got)
+	}
+	if err := CleanupOld(install); err != nil {
+		t.Fatalf("CleanupOld: %v", err)
+	}
+	if left, _ := filepath.Glob(livePath(install) + ".failed-*"); len(left) != 0 {
+		t.Errorf("CleanupOld left %v", left)
+	}
+}

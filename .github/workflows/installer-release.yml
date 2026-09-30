@@ -159,8 +159,13 @@ jobs:
           # to the linker.
           LDFLAGS="-s -w -H windowsgui -X main.installerVersion=$(cat installer/VERSION)"
           LDFLAGS="$LDFLAGS -X 'github.com/jarvis/sidecar/internal/update.expectedPublisherCN=${SIGNING_PUBLISHER_CN}'"
-          go build -ldflags "$LDFLAGS" -o Jarvis-Setup.exe ./installer/
-          if [ -n "${SIGNING_PUBLISHER_CN}" ] && ! strings Jarvis-Setup.exe | grep -qF "${SIGNING_PUBLISHER_CN}"; then
+          # -trimpath keeps -ldflags out of the embedded build info, so the
+          # check below sees the pin only when the -X target really exists.
+          go build -trimpath -ldflags "$LDFLAGS" -o Jarvis-Setup.exe ./installer/
+          # Via a file, not a pipe: `grep -q` exiting early SIGPIPEs strings,
+          # which pipefail would report as a missing pin.
+          strings Jarvis-Setup.exe > /tmp/installer-strings.txt
+          if [ -n "${SIGNING_PUBLISHER_CN}" ] && ! grep -qF "${SIGNING_PUBLISHER_CN}" /tmp/installer-strings.txt; then
             echo "::error::publisher pin '${SIGNING_PUBLISHER_CN}' is not present in Jarvis-Setup.exe — check the -ldflags quoting"
             exit 1
           fi
@@ -223,9 +228,16 @@ jobs:
           LDFLAGS="-s -w -X main.installerVersion=$(cat installer/VERSION)"
           LDFLAGS="$LDFLAGS -X 'github.com/jarvis/sidecar/internal/update.expectedTeamID=${APPLE_TEAM_ID}'"
           CC="clang -target arm64-apple-macos11"  CXX="clang++ -target arm64-apple-macos11" \
-            GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o /tmp/installer-arm64 ./installer/
+            GOOS=darwin GOARCH=arm64 go build -trimpath -ldflags "$LDFLAGS" -o /tmp/installer-arm64 ./installer/
           CC="clang -target x86_64-apple-macos11" CXX="clang++ -target x86_64-apple-macos11" \
-            GOOS=darwin GOARCH=amd64 go build -ldflags "$LDFLAGS" -o /tmp/installer-amd64 ./installer/
+            GOOS=darwin GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o /tmp/installer-amd64 ./installer/
+          for b in /tmp/installer-arm64 /tmp/installer-amd64; do
+            strings "$b" > /tmp/installer-strings.txt
+            if [ -n "${APPLE_TEAM_ID}" ] && ! grep -qF "${APPLE_TEAM_ID}" /tmp/installer-strings.txt; then
+              echo "::error::team id pin '${APPLE_TEAM_ID}' is not present in $b; check the -X path"
+              exit 1
+            fi
+          done
           lipo -create -output jarvis-setup /tmp/installer-arm64 /tmp/installer-amd64
           lipo -info jarvis-setup
           packaging/macos/make-icns.sh

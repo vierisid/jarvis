@@ -39,9 +39,4 @@ func VerifyPayloadSignature(string) error {
 
 // installDirOf maps a running executable to its install directory: the
 // directory the bare jarvis binary sits in.
-func installDirOf(exe string) (string, error) {
-	if filepath.Base(exe) != payloadEntry {
-		return "", fmt.Errorf("unexpected executable name %q", filepath.Base(exe))
-	}
-	return filepath.Dir(exe), nil
-}
+func installDirOf(exe string) (string, error) { return exeInstallDir(exe, payloadEntry, false) }

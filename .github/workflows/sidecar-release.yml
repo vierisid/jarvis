@@ -202,11 +202,19 @@ jobs:
           if [ "${{ matrix.setup }}" != "linux" ] && [ -z "${PIN}" ]; then
             echo "::warning::no signing pin for ${{ matrix.goos }} — self-updates from this build will accept any validly signed payload."
           fi
-          go build -ldflags "$LDFLAGS" \
+          # -trimpath keeps -ldflags out of the embedded build info: without it
+          # the pin text is in the binary even when the -X target is wrong
+          # (a renamed variable), and the check below could never fail.
+          go build -trimpath -ldflags "$LDFLAGS" \
             -o "${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}" .
-          if [ -n "${PIN}" ] && ! strings "${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}" | grep -qF "${PIN}"; then
-            echo "::error::signing pin '${PIN}' is not present in the sidecar binary — check the -ldflags quoting"
-            exit 1
+          if [ -n "${PIN}" ]; then
+            # Via a file, not a pipe: `grep -q` exiting early SIGPIPEs strings,
+            # which pipefail would report as a missing pin.
+            strings "${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}" > /tmp/sidecar-strings.txt
+            if ! grep -qF "${PIN}" /tmp/sidecar-strings.txt; then
+              echo "::error::signing pin '${PIN}' is not present in the sidecar binary; check the -X path and the -ldflags quoting"
+              exit 1
+            fi
           fi
 
       # Windows signing needs BOTH the KMS keyring variable AND the issued

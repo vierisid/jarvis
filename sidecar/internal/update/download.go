@@ -9,17 +9,23 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // maxTarballBytes caps the download — the sidecar packages are tens of MB; a
 // registry response claiming gigabytes is wrong or hostile.
 const maxTarballBytes = 512 << 20
 
+// downloadClient bounds the whole tarball transfer far more loosely than the
+// metadata client: tens of MB take minutes on a slow link, and a 60s cap
+// fails every update below roughly 5 Mbit/s. The size cap above bounds it too.
+var downloadClient = &http.Client{Timeout: 15 * time.Minute}
+
 // Download streams the package tarball into workDir, hashing while it
 // writes, and fails unless the sha512 matches the registry's integrity value.
 // ResolveRelease already required the tarball URL to be HTTPS.
 func Download(rel *Release, workDir string) (string, error) {
-	resp, err := httpClient.Get(rel.TarballURL)
+	resp, err := downloadClient.Get(rel.TarballURL)
 	if err != nil {
 		return "", fmt.Errorf("download failed: %w", err)
 	}

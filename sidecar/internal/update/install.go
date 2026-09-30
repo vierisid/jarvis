@@ -14,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const (
@@ -33,6 +34,10 @@ func livePath(installDir string) string    { return filepath.Join(installDir, pa
 func oldPath(installDir string) string     { return livePath(installDir) + ".old" }
 func stagingPath(installDir string) string { return livePath(installDir) + ".staging" }
 
+// Swap, Rollback and CleanupOld act on this platform's payloadEntry; the
+// entry-parameterised forms below let the tests drive the bundle (directory)
+// shape on any OS.
+
 // Swap replaces the install directory's payload entry with the staged one.
 // The copy lands next to the destination first (same volume, so the final
 // rename is atomic), the live entry is renamed to .old, and the staged one is
@@ -41,12 +46,17 @@ func stagingPath(installDir string) string { return livePath(installDir) + ".sta
 // running sidecar only once its replacement has proven healthy (Rollback
 // otherwise).
 func Swap(stagedBin, installDir string) error {
-	src := filepath.Join(stagedBin, payloadEntry)
+	return swapEntry(stagedBin, installDir, payloadEntry)
+}
+
+func swapEntry(stagedBin, installDir, entry string) error {
+	src := filepath.Join(stagedBin, entry)
 	fi, err := os.Stat(src)
 	if err != nil {
-		return fmt.Errorf("payload lacks %s: %w", payloadEntry, err)
+		return fmt.Errorf("payload lacks %s: %w", entry, err)
 	}
-	dst, old, staged := livePath(installDir), oldPath(installDir), stagingPath(installDir)
+	dst := filepath.Join(installDir, entry)
+	old, staged := dst+".old", dst+".staging"
 
 	os.RemoveAll(staged)
 	if fi.IsDir() {
@@ -85,12 +95,18 @@ func Swap(stagedBin, installDir string) error {
 // renamed back into place. It refuses when there is no .old to restore, so a
 // second call can never delete the only copy.
 func Rollback(installDir string) error {
-	dst, old := livePath(installDir), oldPath(installDir)
+	return rollbackEntry(installDir, payloadEntry)
+}
+
+func rollbackEntry(installDir, entry string) error {
+	dst := filepath.Join(installDir, entry)
+	old := dst + ".old"
 	if _, err := os.Stat(old); err != nil {
 		return fmt.Errorf("nothing to roll back to: %w", err)
 	}
-	failed := dst + ".failed"
-	os.RemoveAll(failed)
+	// A unique name: an earlier .failed may still be executing on Windows,
+	// and a rename can replace neither a running image nor a directory.
+	failed := fmt.Sprintf("%s.failed-%d", dst, time.Now().UnixNano())
 	// Rename rather than delete first: on Windows a just-crashed exe can stay
 	// locked for a moment, and a rename is still allowed then.
 	if _, err := os.Stat(dst); err == nil {
@@ -106,11 +122,15 @@ func Rollback(installDir string) error {
 	return nil
 }
 
-// CleanupOld removes the previous copy a Swap kept (and a .failed left by a
-// Rollback whose removal was refused). Nothing to clean is not an error; on
+// CleanupOld removes the previous copy a Swap kept (and any .failed-* left by
+// a Rollback whose removal was refused). Nothing to clean is not an error; on
 // Windows a copy that is still executing cannot go yet, and that is reported.
 func CleanupOld(installDir string) error {
-	os.RemoveAll(livePath(installDir) + ".failed")
+	if leftovers, err := filepath.Glob(livePath(installDir) + ".failed-*"); err == nil {
+		for _, f := range leftovers {
+			os.RemoveAll(f)
+		}
+	}
 	if err := os.RemoveAll(oldPath(installDir)); err != nil && !os.IsNotExist(err) {
 		return err
 	}

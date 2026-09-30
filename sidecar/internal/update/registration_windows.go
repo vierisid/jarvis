@@ -24,8 +24,21 @@ func RefreshRegistration(installDir, version string) error {
 	}
 	defer k.Close()
 	loc, _, err := k.GetStringValue("InstallLocation")
-	if err != nil || !strings.EqualFold(filepath.Clean(loc), filepath.Clean(installDir)) {
+	if err != nil || !samePath(loc, installDir) {
 		return nil
 	}
 	return k.SetStringValue("DisplayVersion", version)
+}
+
+// samePath compares two directories the way Windows does: case-insensitively,
+// after resolving junctions and redirected folders (DetectMode's installDir is
+// symlink-resolved; the registry holds whatever the installer wrote).
+func samePath(a, b string) bool {
+	resolve := func(p string) string {
+		if r, err := filepath.EvalSymlinks(p); err == nil {
+			p = r
+		}
+		return filepath.Clean(p)
+	}
+	return strings.EqualFold(resolve(a), resolve(b))
 }

@@ -280,11 +280,11 @@ func (u *Updater) ManualCommand(version string) string {
 	}
 	switch {
 	case u.mode.Kind == update.ModePackageManager:
-		return strings.Join(update.PackageManagerArgs(u.mode.PackageManager, version), " ")
+		return update.PackageManagerHint(u.mode.PackageManager, version)
 	case runtime.GOOS == "windows" || runtime.GOOS == "darwin":
 		return "Download and run the installer: " + installerDownloadURL
 	default:
-		return strings.Join(update.PackageManagerArgs("bun", version), " ")
+		return update.PackageManagerHint("bun", version)
 	}
 }
 
@@ -368,7 +368,12 @@ func (u *Updater) applyPackageManager(ctx context.Context, version string) {
 		u.fail(version, err)
 		return
 	}
-	args := update.PackageManagerArgs(u.mode.PackageManager, version)
+	args, err := update.PackageManagerArgs(u.mode.PackageManager, version)
+	if err != nil {
+		restore()
+		u.fail(version, err)
+		return
+	}
 	runCtx, cancel := context.WithTimeout(ctx, packageManagerTimeout)
 	err = u.pmRun(runCtx, args)
 	cancel()

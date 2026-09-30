@@ -5,6 +5,7 @@ package update
 // it: the installer defers to it, the sidecar runs it.
 
 import (
+	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -19,16 +20,11 @@ const PackageName = "@usejarvis/sidecar"
 // it). Which one matters: they keep separate global trees, so only the
 // owner's commands reach it.
 func InstalledPackageManager() string {
-	if home, err := os.UserHomeDir(); err == nil &&
-		hasSidecarPackage(filepath.Join(home, ".bun", "install", "global", "node_modules")) {
+	if root := bunGlobalModules(); root != "" && hasSidecarPackage(root) {
 		return "bun"
 	}
-	cmd := exec.Command("npm", "root", "-g")
-	hideSubprocessWindow(cmd)
-	if out, err := cmd.Output(); err == nil {
-		if root := strings.TrimSpace(string(out)); root != "" && hasSidecarPackage(root) {
-			return "npm"
-		}
+	if root := npmGlobalModules(); root != "" && hasSidecarPackage(root) {
+		return "npm"
 	}
 	return ""
 }
@@ -44,11 +40,54 @@ func hasSidecarPackage(nodeModules string) bool {
 
 // PackageManagerArgs is the command that installs version globally with pm
 // ("bun" or "npm"). It pins the exact version rather than updating to the
-// registry's latest, for the same reason the native path does.
-func PackageManagerArgs(pm, version string) []string {
+// registry's latest, for the same reason the native path does. The version
+// becomes part of a package spec, so only a canonical one is accepted (a URL
+// or git spec would install something else entirely).
+func PackageManagerArgs(pm, version string) ([]string, error) {
+	if !ValidVersion(version) {
+		return nil, fmt.Errorf("not a sidecar version: %q", version)
+	}
 	spec := PackageName + "@" + version
 	if pm == "bun" {
-		return []string{"bun", "add", "-g", spec}
+		return []string{"bun", "add", "-g", spec}, nil
 	}
-	return []string{"npm", "install", "-g", spec}
+	return []string{"npm", "install", "-g", spec}, nil
+}
+
+// PackageManagerHint is PackageManagerArgs for display: the command a user
+// can run themselves. A version that is not canonical is shown as "latest".
+func PackageManagerHint(pm, version string) string {
+	if !ValidVersion(version) {
+		version = "latest"
+	}
+	spec := PackageName + "@" + version
+	if pm == "bun" {
+		return "bun add -g " + spec
+	}
+	return "npm install -g " + spec
+}
+
+// bunGlobalModules is bun's global node_modules: $BUN_INSTALL/install/global
+// when BUN_INSTALL is set, else ~/.bun/install/global.
+func bunGlobalModules() string {
+	root := os.Getenv("BUN_INSTALL")
+	if root == "" {
+		home, err := os.UserHomeDir()
+		if err != nil {
+			return ""
+		}
+		root = filepath.Join(home, ".bun")
+	}
+	return filepath.Join(root, "install", "global", "node_modules")
+}
+
+// npmGlobalModules asks npm for its global node_modules. A seam for tests.
+var npmGlobalModules = func() string {
+	cmd := exec.Command("npm", "root", "-g")
+	hideSubprocessWindow(cmd)
+	out, err := cmd.Output()
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSpace(string(out))
 }

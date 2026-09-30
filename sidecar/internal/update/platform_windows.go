@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 )
 
 // payloadEntry is the only file the win32 package ships under bin/.
@@ -29,9 +28,4 @@ func CheckPayloadLayout(stagedBin, version string) error {
 
 // installDirOf maps a running executable to its install directory: the
 // directory jarvis.exe sits in.
-func installDirOf(exe string) (string, error) {
-	if !strings.EqualFold(filepath.Base(exe), WindowsExeName) {
-		return "", fmt.Errorf("unexpected executable name %q", filepath.Base(exe))
-	}
-	return filepath.Dir(exe), nil
-}
+func installDirOf(exe string) (string, error) { return exeInstallDir(exe, WindowsExeName, true) }

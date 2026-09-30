@@ -152,3 +152,15 @@ func TestResolveMissingExactVersion(t *testing.T) {
 		t.Fatalf("err = %v, want ErrVersionNotFound", err)
 	}
 }
+
+// Only a canonical version is looked up: "v1.2.3" or "1.2.3 " would miss the
+// registry key and read as "not published yet" forever.
+func TestResolveRejectsNonCanonicalVersion(t *testing.T) {
+	tgz := buildTgz(t, []tgzEntry{{name: "package/bin/jarvis", body: []byte("fake"), mode: 0755}})
+	srv := fakeRegistry(t, "1.2.3", tgz, false)
+	for _, v := range []string{"v1.2.3", "1.2.3 ", "1.2.3+b", ""} {
+		if _, err := ResolveRelease(srv.URL, v); err == nil || errors.Is(err, ErrVersionNotFound) {
+			t.Errorf("ResolveRelease(%q) = %v, want a validation error", v, err)
+		}
+	}
+}

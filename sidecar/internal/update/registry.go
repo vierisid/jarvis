@@ -78,6 +78,9 @@ func secureTarballURL(raw string) bool {
 // exact version. A version the registry does not carry wraps
 // ErrVersionNotFound.
 func ResolveRelease(registryBase, version string) (*Release, error) {
+	if version != LatestTag && !ValidVersion(version) {
+		return nil, fmt.Errorf("not a sidecar version: %q", version)
+	}
 	platform, err := PlatformPackage()
 	if err != nil {
 		return nil, err

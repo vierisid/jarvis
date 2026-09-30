@@ -7,9 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
-	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"github.com/jarvis/sidecar/internal/update"
 )
@@ -184,19 +182,6 @@ func runInstall(registryURL string, silent, noLaunch, autostartOn bool) int {
 		}
 	}
 	return exitOK
-}
-
-// execCommandOutput runs a command and returns its trimmed stdout. Console
-// windows are suppressed: the installer is built -H windowsgui, so an
-// unhidden child would flash a black console at the user.
-func execCommandOutput(name string, args ...string) (string, error) {
-	cmd := exec.Command(name, args...)
-	hideSubprocessWindow(cmd)
-	out, err := cmd.Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
 }
 
 // shouldApplyAutostart reports whether this run may touch the login-item
