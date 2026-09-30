@@ -79,6 +79,96 @@ export type BrowserNarrationDeps = {
   viewportScreenOrigin: () => Promise<{ x: number; y: number } | null>;
 };
 
+/** What the routing predicates need to know, with no daemon attached. */
+export type NarrationRouting = {
+  /** The sidecar drawing the pebble. */
+  pebbleSidecarId: string;
+  /** Every sidecar the manager knows, as it reports them. */
+  sidecars: ReadonlyArray<{
+    id: string;
+    connected: boolean;
+    hostname?: string | null;
+    capabilities?: readonly string[];
+  }>;
+  /** This process's own hostname. */
+  selfHostname: string;
+  /** Whether a workflow machine binding is in force. */
+  machineScoped: boolean;
+  /** The tool call's arguments, for an explicitly named target. */
+  args: Record<string, unknown>;
+};
+
+/** Hostnames from two runtimes on one box: same syscall, but do not bet on the case. */
+function sameHost(a: string | null | undefined, b: string | null | undefined): boolean {
+  const norm = (h: string | null | undefined) => (h ?? '').trim().toLowerCase().replace(/\.$/, '');
+  const x = norm(a);
+  return x !== '' && x === norm(b);
+}
+
+/**
+ * Whether the pebble is drawn on the machine this process runs on.
+ *
+ * Both narration sources are LOCAL caches -- the browser controller's
+ * `elementCoords` and the desktop tools' `localElementCache`, each filled only
+ * by a snapshot taken here. Their coordinates are positions on THIS host's
+ * screen, and the pebble flies on the sidecar's. Off-host, a pointer built
+ * from them is a confident mark at a position that means nothing where the
+ * user is looking.
+ *
+ * Fail-closed on a sidecar that reports no hostname: an unknown machine is not
+ * evidence of the same machine.
+ */
+export function pebbleIsOnThisHost(routing: NarrationRouting): boolean {
+  const pebble = routing.sidecars.find((s) => s.id === routing.pebbleSidecarId);
+  return sameHost(pebble?.hostname, routing.selfHostname);
+}
+
+/**
+ * Whether a browser_* call with these arguments will run on this process's own
+ * BrowserController, on the machine whose screen the pebble is drawn on.
+ *
+ * Deliberately more conservative than the router, and deliberately NOT the
+ * router: calling `resolveToolTarget` here would log a routing decision that
+ * is not happening, could throw on a machine-scope violation, and -- the
+ * reason that matters -- would read a live sidecar inventory at a different
+ * instant than the tool will. Narration fires on the tool_call event and the
+ * tool runs after the stream finishes, so a sidecar connecting in between
+ * would make the two answers differ, which is #585 again one level up. So this
+ * answers false on any hint of a browser somewhere else, and over-refusal is
+ * the only direction it can be wrong in.
+ *
+ * Note what that means in practice: a sidecar advertises `browser` in its
+ * DEFAULT capability set, and the pebble's own sidecar is in this list, so on
+ * an ordinary deployment this is false and browser actions narrate without a
+ * pointer. That is the honest end of the trade, not an oversight -- see
+ * BrowserNarrationDeps.localBrowserWillServe.
+ */
+export function localBrowserWillServe(routing: NarrationRouting): boolean {
+  const target = routing.args.target;
+  if (typeof target === 'string' && target.trim()) return false;
+  // Defensive rather than load-bearing: the machine binding is entered only by
+  // the workflow runtime, and narration runs on the ambient-UI stream. Checked
+  // anyway because a binding, where one exists, picks the machine whatever the
+  // inventory says.
+  if (routing.machineScoped) return false;
+  for (const s of routing.sidecars) {
+    if (s.connected && s.capabilities?.includes('browser')) return false;
+  }
+  return pebbleIsOnThisHost(routing);
+}
+
+/**
+ * The snapshot id in a tool call, or null if there is not one.
+ *
+ * Not coerced. Both `browser_click` and `desktop_click` pass `element_id`
+ * straight to a number-keyed Map, so the string "5" misses there and the
+ * action fails -- and a confident pointer for an action that will not happen
+ * is the same narration/action disagreement, in the harmless direction.
+ */
+export function snapshotElementId(value: unknown): number | null {
+  return typeof value === 'number' && Number.isInteger(value) && value >= 1 ? value : null;
+}
+
 /** Suffix a bubble label carries when we could not place the pointer. */
 const UNPLACED_SUFFIX = ' (location unknown)';
 
@@ -111,15 +201,11 @@ export async function browserElementNarration(
   elementId: unknown,
   deps: BrowserNarrationDeps,
 ): Promise<PebbleNarration> {
-  // Not coerced. The tool passes `element_id` straight to a number-keyed Map,
-  // so the string "5" misses there and the click fails -- narrating a
-  // confident pointer for an action that will not happen is the same
-  // disagreement in the harmless direction, and still worth not doing.
-  if (typeof elementId !== 'number' || !Number.isInteger(elementId) || elementId < 1) {
+  const id = snapshotElementId(elementId);
+  if (id === null) {
     // Snapshot ids are 1-based integers. Anything else was never minted.
     return { kind: 'unplaced', reason: 'element_id is not a snapshot id' };
   }
-  const id = elementId;
   if (!deps.localBrowserWillServe()) {
     return { kind: 'unplaced', reason: 'the browser serving this call is not the local one' };
   }

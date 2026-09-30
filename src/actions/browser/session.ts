@@ -628,8 +628,14 @@ export class BrowserController {
   /**
    * The isolated world `viewportScreenOrigin` evaluates in, retired with its
    * document. Only ever holds a geometry read, never an element lookup.
+   *
+   * The contextId is a PROMISE so that two narrations racing on a cache miss
+   * share one world. One message emitting two element-addressed tool calls is
+   * the ordinary parallel-tool shape, and each narration is a detached task;
+   * without this, both would mint a world and only the last would be kept,
+   * orphaning a V8 context for the life of the document every time.
    */
-  private narrationWorld: { loaderId: string; contextId: number } | null = null;
+  private narrationWorld: { loaderId: string; contextId: Promise<number | null> } | null = null;
 
   /**
    * The screen coordinate of the viewport's top-left corner. Null when nothing
@@ -656,7 +662,8 @@ export class BrowserController {
    * every pointer landed roughly a toolbar height above the element. The
    * subtraction is the chrome height at 100% page zoom: Chromium reports
    * `outerHeight` and `screenY` in device-independent pixels while
-   * `innerHeight` follows the page zoom, so a zoomed page over-reports it.
+   * `innerHeight` follows the page zoom, so a zoomed page over-reports it --
+   * as does devtools docked at the bottom of the window, for the same reason.
    * Verified at zoom 1 only; `Page.getLayoutMetrics` would give the ratio
    * outright and is the way to remove the guess.
    *
@@ -684,20 +691,28 @@ export class BrowserController {
       // name is reused, and nothing disposes them. The loaderId changes on
       // every commit, so keying on it retires the world with its document.
       if (this.narrationWorld?.loaderId !== loaderId) {
-        const world = await this.cdp.send('Page.createIsolatedWorld', {
-          frameId,
-          worldName: 'jarvis-narration',
-        });
-        const contextId = world?.executionContextId;
-        if (typeof contextId !== 'number') return null;
-        this.narrationWorld = { loaderId, contextId };
+        this.narrationWorld = {
+          loaderId,
+          contextId: this.cdp.send('Page.createIsolatedWorld', {
+            frameId,
+            worldName: 'jarvis-narration',
+          }).then((world) => {
+            const id = world?.executionContextId;
+            return typeof id === 'number' ? id : null;
+          }).catch(() => null),
+        };
+      }
+      const contextId = await this.narrationWorld.contextId;
+      if (contextId === null) {
+        this.narrationWorld = null;
+        return null;
       }
       const result = await this.cdp.send('Runtime.evaluate', {
         expression: `({
           x: window.screenX || 0,
           y: (window.screenY || 0) + Math.max(0, (window.outerHeight || 0) - (window.innerHeight || 0)),
         })`,
-        contextId: this.narrationWorld.contextId,
+        contextId,
         returnByValue: true,
       });
       if (result?.exceptionDetails) {
@@ -1127,6 +1142,7 @@ export class BrowserController {
       await this.cdp.close();
       this._connected = false;
       this.elementCoords.clear();
+      this.narrationWorld = null;
       console.log('[BrowserController] Disconnected');
     }
 
@@ -1159,6 +1175,7 @@ export class BrowserController {
       await this.cdp.close();
       this._connected = false;
       this.elementCoords.clear();
+      this.narrationWorld = null;
     }
 
     if (!this._connected) {

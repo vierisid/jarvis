@@ -34,8 +34,12 @@ type FakeOptions = {
    * snapshot and the narration is expressed.
    */
   snapshots: FakeElement[][];
-  /** What the isolated-world origin read returns, or null to make it fail. */
-  origin?: { x: number; y: number } | null;
+  /**
+   * The window the isolated-world origin expression is EVALUATED against, so
+   * the formula itself is under test and not just its text. Null makes the
+   * read fail.
+   */
+  window?: { screenX: number; screenY: number; outerHeight: number; innerHeight: number } | null;
   /** Refuse Page.createIsolatedWorld, as a page with no committed frame would. */
   noIsolatedWorld?: boolean;
 };
@@ -78,9 +82,11 @@ function fakeChrome(opts: FakeOptions): Fake {
       // The origin read: the only evaluate that carries a contextId.
       if (typeof params.contextId === 'number') {
         fake.isolatedEvals.push({ method, params });
-        return opts.origin === null
-          ? { result: { value: null } }
-          : { result: { value: opts.origin ?? { x: 100, y: 200 } } };
+        if (opts.window === null) return { result: { value: null } };
+        const win = opts.window ?? { screenX: 100, screenY: 150, outerHeight: 900, innerHeight: 850 };
+        // Run the real expression against that window, the way Chrome would.
+        const value = new Function('window', `return (${expr})`)(win);
+        return { result: { value } };
       }
       // The snapshot script itself.
       if (expr.includes('__jarvis_elements')) {
@@ -274,11 +280,12 @@ describe('#585 the viewport origin is read out of the page\'s reach', () => {
   });
 
   test('the read happens in an isolated world, so a page-installed getter cannot reach it', async () => {
-    fake = fakeChrome({ snapshots: [PAGE_A], origin: { x: 100, y: 200 } });
+    fake = fakeChrome({ snapshots: [PAGE_A] });
     ctrl = new BrowserController(fake.port);
     await ctrl.snapshot();
 
     const origin = await ctrl.viewportScreenOrigin();
+    // screenX, and screenY plus the 50px of chrome (900 outer - 850 inner).
     expect(origin).toEqual({ x: 100, y: 200 });
 
     // One isolated world created, and the evaluate ran inside it.
@@ -312,6 +319,48 @@ describe('#585 the viewport origin is read out of the page\'s reach', () => {
     expect(fake.isolatedEvals).toHaveLength(4);
   });
 
+  test('the origin clears the browser chrome instead of starting at the title bar', async () => {
+    // The formula is evaluated, not matched: `screenY` alone put every pointer
+    // a toolbar height above its element, and a sign flip or a Math.min would
+    // read as "contains outerHeight" just as happily.
+    fake = fakeChrome({
+      snapshots: [PAGE_A],
+      window: { screenX: 40, screenY: 60, outerHeight: 1000, innerHeight: 880 },
+    });
+    ctrl = new BrowserController(fake.port);
+    await ctrl.snapshot();
+    expect(await ctrl.viewportScreenOrigin()).toEqual({ x: 40, y: 180 });
+
+    // A window reporting an inner taller than its outer (devtools undocking
+    // mid-read, a stale value) must not drag the pointer above the screen.
+    fake.stop();
+    await ctrl.disconnect();
+    fake = fakeChrome({
+      snapshots: [PAGE_A],
+      window: { screenX: 40, screenY: 60, outerHeight: 800, innerHeight: 900 },
+    });
+    ctrl = new BrowserController(fake.port);
+    await ctrl.snapshot();
+    expect(await ctrl.viewportScreenOrigin()).toEqual({ x: 40, y: 60 });
+  });
+
+  test('narrations racing on a cache miss share one isolated world', async () => {
+    fake = fakeChrome({ snapshots: [PAGE_A] });
+    ctrl = new BrowserController(fake.port);
+    await ctrl.snapshot();
+
+    // One message emitting two element-addressed tool calls is the ordinary
+    // parallel-tool shape, and each narration is a detached task. Both miss the
+    // cache at once; only one world may be minted, or the loser is orphaned for
+    // the life of the document.
+    const all = await Promise.all([
+      ctrl.viewportScreenOrigin(), ctrl.viewportScreenOrigin(),
+      ctrl.viewportScreenOrigin(), ctrl.viewportScreenOrigin(),
+    ]);
+    for (const o of all) expect(o).toEqual({ x: 100, y: 200 });
+    expect(fake.pageSent.filter((s) => s.method === 'Page.createIsolatedWorld')).toHaveLength(1);
+  });
+
   test('an unreadable origin is null, never a partial coordinate', async () => {
     fake = fakeChrome({ snapshots: [PAGE_A], noIsolatedWorld: true });
     ctrl = new BrowserController(fake.port);
@@ -319,7 +368,7 @@ describe('#585 the viewport origin is read out of the page\'s reach', () => {
     expect(await ctrl.viewportScreenOrigin()).toBeNull();
 
     fake.stop();
-    fake = fakeChrome({ snapshots: [PAGE_A], origin: null });
+    fake = fakeChrome({ snapshots: [PAGE_A], window: null });
     await ctrl.disconnect();
     ctrl = new BrowserController(fake.port);
     await ctrl.snapshot();

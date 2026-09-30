@@ -99,7 +99,10 @@ import { EngineFlowExecutor } from "../workflows/runner/engine-runtime/engine-fl
 import { createLimiter } from "../util/concurrency.ts";
 import { runWithOrigin } from "../llm/origin.ts";
 import { getMachineScope } from "../actions/machine-scope.ts";
-import { browserElementNarration, unplacedLabel, type PebbleNarration } from "./pebble-narration.ts";
+import {
+  browserElementNarration, localBrowserWillServe, pebbleIsOnThisHost, snapshotElementId,
+  unplacedLabel, type NarrationRouting, type PebbleNarration,
+} from "./pebble-narration.ts";
 
 /** Sentences synthesized at once for one sidecar's Pebble speech (see runResponseCycle). */
 const PEBBLE_TTS_CONCURRENCY = 4;
@@ -3312,47 +3315,29 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       };
 
       /** The narrated tools that name an element, i.e. that owe the user a pointer. */
-      const ELEMENT_ADDRESSED_TOOLS = new Set(['desktop_click', 'browser_click', 'browser_type']);
+      const ELEMENT_ADDRESSED_TOOLS = new Set([
+        'desktop_click', 'desktop_type', 'browser_click', 'browser_type',
+      ]);
 
       /**
-       * Whether a browser_* call with these arguments will run on the daemon's
-       * own BrowserController, so that its cached snapshot coordinates are the
-       * ones the action will use.
-       *
-       * Deliberately more conservative than the router, and deliberately NOT
-       * the router: `resolveToolTarget` logs a routing decision that is not
-       * happening, can throw on a machine-scope violation, and -- the reason
-       * that matters -- reads a live sidecar inventory at a different instant
-       * than the tool will. Narration fires on the tool_call event and the
-       * tool runs after the stream finishes, so a sidecar connecting in
-       * between would make the two answers differ, which is #585 again one
-       * level up. Any hint of a remote browser is answered with false.
+       * The routing facts the narration predicates decide on, gathered once per
+       * call. They live in pebble-narration.ts as pure functions over this --
+       * `localBrowserWillServe` is the one security-relevant predicate here and
+       * it has to be testable without a daemon.
        */
-      const localBrowserWillServe = (sidecarId: string, args: Record<string, unknown>): boolean => {
-        if (typeof args.target === 'string' && args.target.trim()) return false;
-        // The local browser is on the DAEMON's screen. The pebble is drawn on
-        // the sidecar's. Pointing is only meaningful when those are the same
-        // machine -- otherwise we would fly the pebble on the user's display
-        // to a viewport position from the daemon host's.
-        const pebble = sidecarManager.listSidecars().find((s) => s.id === sidecarId);
-        if (!pebble?.hostname || pebble.hostname !== os.hostname()) return false;
-        // Defensive, not load-bearing today: the machine binding is entered
-        // only by the workflow runtime (workflows/runtime/machine-binding.ts)
-        // and this loop is the ambient-UI stream, so the store is normally
-        // empty here. It is checked anyway because a scope, if one is ever
-        // present, picks the machine regardless of what the inventory says.
-        if (getMachineScope()) return false;
-        for (const s of sidecarManager.listSidecars()) {
-          if (s.connected && s.capabilities?.includes('browser')) return false;
-        }
-        return true;
-      };
+      const narrationRouting = (sidecarId: string, args: Record<string, unknown>): NarrationRouting => ({
+        pebbleSidecarId: sidecarId,
+        sidecars: sidecarManager.listSidecars(),
+        selfHostname: os.hostname(),
+        machineScoped: !!getMachineScope(),
+        args,
+      });
 
-      // T26b — resolve WHERE the pebble should point for an action-class tool,
+      // T26b -- resolve WHERE the pebble should point for an action-class tool,
       // so the caller can fly it to the target before the click fires. The
       // orchestrator executes tools AFTER the LLM finishes streaming the
       // message, so resolving right when we see the tool_call event gives the
-      // pebble a head-start on the actual action — enough for the user to see
+      // pebble a head-start on the actual action -- enough for the user to see
       // it land at the button. The caller bounds the wait, because a pointer
       // that arrives after the click has fired previews nothing.
       //
@@ -3360,7 +3345,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       // element. An `unplaced` result means it does and we cannot honestly say
       // where, and the caller has to show that rather than leave a confident
       // label standing over a pebble that never moved. Nothing in here may
-      // query the page or send an action/evaluate RPC — pebble-narration.ts
+      // query the page or send an action/evaluate RPC -- pebble-narration.ts
       // carries the reasons.
       const resolveToolNarration = async (
         sidecarId: string,
@@ -3369,8 +3354,13 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
       ): Promise<PebbleNarration | null> => {
         try {
           if (toolName === 'desktop_click') {
-            const id = Number(args.element_id);
-            if (!Number.isFinite(id)) return { kind: 'unplaced', reason: 'element_id is not a number' };
+            const id = snapshotElementId(args.element_id);
+            if (id === null) return { kind: 'unplaced', reason: 'element_id is not a snapshot id' };
+            // That cache holds positions on THIS host's screen, so it is only
+            // a pointer when the pebble is drawn here.
+            if (!pebbleIsOnThisHost(narrationRouting(sidecarId, args))) {
+              return { kind: 'unplaced', reason: 'the pebble is not on this machine' };
+            }
             const { getCachedElementBounds } = await import('../actions/tools/desktop.ts');
             const bounds = getCachedElementBounds(id);
             // Only a LOCAL desktop_snapshot fills that cache, so a
@@ -3389,7 +3379,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             // snapshotElementPoint / viewportScreenOrigin for what they hold.
             const { browser } = await import('../actions/tools/builtin.ts');
             return browserElementNarration(args.element_id, {
-              localBrowserWillServe: () => localBrowserWillServe(sidecarId, args),
+              localBrowserWillServe: () => localBrowserWillServe(narrationRouting(sidecarId, args)),
               snapshotElementPoint: (id) => browser.snapshotElementPoint(id),
               viewportScreenOrigin: () => browser.viewportScreenOrigin(),
             });
@@ -3816,7 +3806,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 const label = describeToolCall(tcName, tcArgs);
                 console.log(`[ambient-ui] narrating tool: ${tcName} → "${label}"`);
 
-                // T26b — fly the pebble to the actual click target so the user
+                // T26b -- fly the pebble to the actual click target so the user
                 // SEES JARVIS reach for the button before it clicks, and say so
                 // when we cannot: a pebble that silently stays put looks just
                 // like one the user blinked past, and the label would then be
@@ -3841,9 +3831,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 const gen = ++pebbleBubbleGen;
                 void (async () => {
                   await setState(sidecarId, 'working', label);
-                  // Bounded on purpose: this exists to land BEFORE the action,
-                  // and the CDP reads behind it each carry a 30s timeout. A
-                  // pointer that arrives after the click is worse than none.
+                  // The RESOLUTION step is bounded on purpose: this exists to
+                  // land before the action, and the CDP reads behind it each
+                  // carry a 30s timeout. A pointer that arrives after the click
+                  // is worse than none. It does not bound the label write above
+                  // it, which is its own RPC; a write that late is suppressed by
+                  // the generation guard instead.
                   const narration = await Promise.race([
                     resolveToolNarration(sidecarId, tcName, tcArgs),
                     new Promise<PebbleNarration>((r) => setTimeout(
@@ -3853,10 +3846,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                   if (narration.kind === 'point') {
                     console.log(`[ambient-ui] fly pebble for ${tcName} @ (${narration.x},${narration.y})`);
                     try {
-                      await sidecarManager.dispatchRPC(sidecarId, 'pebble.point_at', {
+                      const sent = await sidecarManager.dispatchRPC(sidecarId, 'pebble.point_at', {
                         x: narration.x, y: narration.y, label, duration_ms: 2500,
                       });
-                      return;
+                      // 'detached' means the call timed out without the sidecar
+                      // running it, so the pebble may never have moved and the
+                      // confident label must not be left standing over it.
+                      if (sent !== 'detached') return;
+                      console.warn('[ambient-ui] pebble.point_at detached before the sidecar ran it');
                     } catch (err) {
                       // The pointer did not happen, so the confident label must
                       // not be left standing over a pebble that never moved.
@@ -3905,6 +3902,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         if (speakingFlipPending) await speakingFlipPending;
         // Make sure the bubble shows the final text (in case the last
         // setState lost a race).
+        pebbleBubbleGen++;
         await setState(sidecarId, 'speaking', fullText);
         try { wsService.broadcastHeartbeat(fullText); } catch { /* dashboard may not be open */ }
 
@@ -3971,6 +3969,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         }
         if (ctrl.cancelled) return;
 
+        pebbleBubbleGen++;
         await setState(sidecarId, 'idle', '');
         // Suppress unused-var warning if linting cared.
         void llmDone;

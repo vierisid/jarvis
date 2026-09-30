@@ -10,8 +10,12 @@
 import { describe, test, expect } from 'bun:test';
 import {
   browserElementNarration,
+  localBrowserWillServe,
+  pebbleIsOnThisHost,
+  snapshotElementId,
   unplacedLabel,
   type BrowserNarrationDeps,
+  type NarrationRouting,
 } from './pebble-narration.ts';
 
 /** Deps that would happily answer, so each test can break exactly one thing. */
@@ -34,14 +38,6 @@ describe('browserElementNarration', () => {
     const d = deps();
     expect(await browserElementNarration(4, d)).toEqual({ kind: 'point', x: 170, y: 342 });
     expect(d.reads).toEqual([4]);
-  });
-
-  test('does not scale the coordinate, because the pebble space is not one space', async () => {
-    // macOS reads the cursor in Cocoa points and Linux in GDK logical pixels,
-    // so a devicePixelRatio multiply would throw the pebble most of a screen
-    // away on both. The origin is returned and used unscaled.
-    const d = deps({ viewportScreenOrigin: async () => ({ x: 100, y: 200 }) });
-    expect(await browserElementNarration(4, d)).toEqual({ kind: 'point', x: 170, y: 342 });
   });
 
   test('a string element_id is unplaced: the tool would miss the number-keyed cache', async () => {
@@ -118,5 +114,102 @@ describe('unplacedLabel', () => {
   test('is idempotent, so a second amendment cannot stack the suffix', () => {
     const once = unplacedLabel('Clicking element [1]');
     expect(unplacedLabel(once)).toBe(once);
+  });
+});
+
+/**
+ * The routing predicate is the one security-relevant decision here: it is what
+ * stands between a narration and a confident pointer built from a cache that
+ * belongs to another browser or another machine. `PEBBLE` is the sidecar the
+ * pebble is drawn on, co-located with this process.
+ */
+const PEBBLE = { id: 'peb-1', connected: true, hostname: 'workbench', capabilities: ['pebble'] };
+
+function routing(over: Partial<NarrationRouting> = {}): NarrationRouting {
+  return {
+    pebbleSidecarId: 'peb-1',
+    sidecars: [PEBBLE],
+    selfHostname: 'workbench',
+    machineScoped: false,
+    args: {},
+    ...over,
+  };
+}
+
+describe('pebbleIsOnThisHost', () => {
+  test('true only when the pebble is drawn on this process\'s machine', () => {
+    expect(pebbleIsOnThisHost(routing())).toBe(true);
+    expect(pebbleIsOnThisHost(routing({ selfHostname: 'laptop' }))).toBe(false);
+  });
+
+  test('tolerates the case and trailing-dot differences two runtimes can report', () => {
+    expect(pebbleIsOnThisHost(routing({ selfHostname: 'WORKBENCH' }))).toBe(true);
+    expect(pebbleIsOnThisHost(routing({
+      sidecars: [{ ...PEBBLE, hostname: 'workbench.' }],
+    }))).toBe(true);
+  });
+
+  test('an unknown machine is not evidence of the same machine', () => {
+    for (const hostname of [null, undefined, '', '   ']) {
+      expect(pebbleIsOnThisHost(routing({ sidecars: [{ ...PEBBLE, hostname }] }))).toBe(false);
+    }
+    // A pebble sidecar missing from the inventory entirely.
+    expect(pebbleIsOnThisHost(routing({ sidecars: [] }))).toBe(false);
+    expect(pebbleIsOnThisHost(routing({ selfHostname: '' }))).toBe(false);
+  });
+});
+
+describe('localBrowserWillServe', () => {
+  test('true when nothing suggests a browser anywhere else', () => {
+    expect(localBrowserWillServe(routing())).toBe(true);
+  });
+
+  test('false when the model named a target explicitly', () => {
+    expect(localBrowserWillServe(routing({ args: { target: 'laptop' } }))).toBe(false);
+    // A blank target is no target at all, matching the router.
+    expect(localBrowserWillServe(routing({ args: { target: '  ' } }))).toBe(true);
+  });
+
+  test('false when any connected sidecar advertises a browser', () => {
+    // This is the DEFAULT deployment: a sidecar ships `browser` in its default
+    // capability set, so the pebble's own sidecar trips this and browser
+    // actions narrate without a pointer. The router really does send the click
+    // there, and its coordinates are not ours to read.
+    expect(localBrowserWillServe(routing({
+      sidecars: [{ ...PEBBLE, capabilities: ['pebble', 'browser'] }],
+    }))).toBe(false);
+    // Or some other sidecar entirely.
+    expect(localBrowserWillServe(routing({
+      sidecars: [PEBBLE, { id: 'other', connected: true, hostname: 'laptop', capabilities: ['browser'] }],
+    }))).toBe(false);
+  });
+
+  test('a disconnected browser sidecar is not a browser somewhere else', () => {
+    expect(localBrowserWillServe(routing({
+      sidecars: [PEBBLE, { id: 'other', connected: false, hostname: 'laptop', capabilities: ['browser'] }],
+    }))).toBe(true);
+  });
+
+  test('false under a workflow machine binding, which picks the machine itself', () => {
+    expect(localBrowserWillServe(routing({ machineScoped: true }))).toBe(false);
+  });
+
+  test('false when the pebble is on another machine, whatever the routing says', () => {
+    // The local cache holds positions on THIS host's screen. Off-host it would
+    // be a confident mark at coordinates that mean nothing where the user is.
+    expect(localBrowserWillServe(routing({ selfHostname: 'build-server' }))).toBe(false);
+  });
+});
+
+describe('snapshotElementId', () => {
+  test('accepts the 1-based integers a snapshot mints, and nothing else', () => {
+    expect(snapshotElementId(1)).toBe(1);
+    expect(snapshotElementId(42)).toBe(42);
+    // Not coerced: the tools key a number Map with this, so "5" misses there
+    // and the action fails. Narrating a pointer for it would be a confident
+    // preview of something that will not happen.
+    for (const bad of ['5', '', 0, -3, 2.5, Number.NaN, Infinity, null, undefined, {}, [4]]) {
+      expect(snapshotElementId(bad)).toBeNull();
+    }
   });
 });
