@@ -1,3 +1,6 @@
+import { mkdtempSync, rmSync } from 'node:fs';
+import { join } from 'node:path';
+import { tmpdir } from 'node:os';
 import { setEncryptionKey } from '../../db/encryption';
 import { listRuns } from '../../db/repos/flow-run';
 import { upsertConnection, deleteConnection } from '../../db/repos/app-connection';
@@ -986,4 +989,52 @@ describe('review: durable readiness refusals', () => {
       expect(queueStats().queued).toBe(1);
     } finally { await manager.stop(); }
   });
+
+  test('review R2: readiness lost during polling retains every consumed payload after restart without retrying it', async () => {
+    const directory = mkdtempSync(join(tmpdir(), 'jarvis-readiness-poll-'));
+    const path = join(directory, 'workflow.db');
+    closeWorkflowDb(); initWorkflowDb(path);
+    const { flowId, versionId, connection, save } = authenticatedFlow('jarvis-trigger');
+    const payloads = [{ id: 'evt-one', payload: { businessId: 'one' } }, { id: 'evt-two', payload: { businessId: 'two' } }];
+    let finishPoll!: () => void;
+    let started!: () => void;
+    let polls = 0;
+    const entered = new Promise<void>(resolve => { started = resolve; });
+    const pending = new Promise<void>(resolve => { finishPoll = resolve; });
+    const cron = new FakeCronScheduler();
+    const engine = { acquire: async () => ({ release: async () => {}, executeTriggerHook: async (hook: string) => {
+      if (hook === 'ON_ENABLE') return { listeners: [], scheduleOptions: { cronExpression: '* * * * *' } };
+      if (hook === 'RUN' && ++polls === 1) {
+        started(); await pending;
+        // A real polling hook advances its cursor before returning these items.
+        return { output: payloads };
+      }
+      return { output: [] };
+    } }) };
+    const manager = new TriggerManager({ eventBus: new WorkflowEventBus(), cronScheduler: cron as any, engineRuntime: engine as any, log: silent });
+    try {
+      await manager.start();
+      cron.fire(`flow:${flowId}`); await entered;
+      deleteConnection(connection.id);
+      finishPoll(); await settle();
+      const runs = listRuns({ flowId });
+      expect(runs).toHaveLength(2);
+      expect(queueStats().queued).toBe(0);
+      for (const run of runs) expect(run).toMatchObject({ status: 'FAILED', flowVersionId: versionId, triggeredBy: 'trigger:engine' });
+      save();
+      cron.fire(`flow:${flowId}`); await settle();
+      expect(listRuns({ flowId })).toHaveLength(2);
+      expect(queueStats().queued).toBe(0);
+      await manager.stop();
+      closeWorkflowDb(); initWorkflowDb(path);
+      const recoveries = listRuns({ flowId }).map(run => (run.steps!['<readiness>'] as any).output.recovery);
+      expect(recoveries).toEqual(expect.arrayContaining(payloads.map(payload => ({ payload, executeTrigger: false, requiresDecision: true }))));
+      expect(queueStats().queued).toBe(0);
+    } finally {
+      finishPoll(); await manager.stop(); closeWorkflowDb();
+      rmSync(directory, { recursive: true, force: true });
+      initWorkflowDb(':memory:');
+    }
+  });
+
 });

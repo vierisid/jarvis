@@ -608,8 +608,8 @@ export class TriggerManager {
     }
   }
 
-  /** Persist refusals without creating runnable work or consuming trigger events. */
-  private checkReadiness(flowId: string, versionId: string, kind: SubscriptionKind | 'registration'): boolean {
+  /** Persist refusals and any already-received input without creating runnable work. */
+  private checkReadiness(flowId: string, versionId: string, kind: SubscriptionKind | 'registration', recovery?: { payload: Record<string, unknown>; executeTrigger: boolean }): boolean {
     try { assertVersionReady(flowId, versionId); return true; }
     catch (error) {
       if (!(error instanceof WorkflowReadinessError)) throw error;
@@ -622,7 +622,11 @@ export class TriggerManager {
             status: 'FAILED', startTime: now, tags: ['workflow-readiness'] });
           return updateRun(created.id, { finishTime: now, stepsCount: 0,
             failedStep: { name: '<readiness>', displayName: 'Workflow readiness', errorMessage: error.message },
-            steps: { '<readiness>': { status: 'FAILED', output: { code: error.code, phase: kind, readiness: error.readiness } } } });
+            steps: { '<readiness>': { status: 'FAILED', output: { code: error.code, phase: kind, readiness: error.readiness,
+              // Polling may already have advanced its cursor while readiness
+              // changed. Keep every returned item, but never replay it silently.
+              ...(recovery ? { recovery: { ...recovery, requiresDecision: true } } : {}),
+            } } } });
         })();
         if (kind === 'registration') {
           this.registrationFailures.set(flowId, signature);
@@ -648,7 +652,7 @@ export class TriggerManager {
     payload?: Record<string, unknown>;
     executeTrigger?: boolean;
   }): void {
-    if (!this.checkReadiness(opts.flowId, opts.versionId, opts.kind)) return;
+    if (!this.checkReadiness(opts.flowId, opts.versionId, opts.kind, { payload: opts.payload ?? {}, executeTrigger: opts.executeTrigger ?? false })) return;
     const run = createFlowRun({
       flowId: opts.flowId,
       flowVersionId: opts.versionId,
