@@ -506,8 +506,12 @@ describe('enforcement at dispatch, not just selection', () => {
     closeDb();
   });
 
-  const exec = (name: string, scope: unknown) =>
-    (orch as unknown as Exec).executeTool({ id: 't', name, arguments: {} }, undefined, new Set<string>(), scope);
+  // `executeTool` answers `{ result, card }` as of #584 (a document's download
+  // card travels beside the result instead of being regexed out of it); these
+  // tests are about the result.
+  const exec = async (name: string, scope: unknown) =>
+    ((await (orch as unknown as Exec).executeTool({ id: 't', name, arguments: {} }, undefined, new Set<string>(), scope)) as
+      { result: unknown }).result;
 
   test('a withheld tool called anyway is not run', async () => {
     for (const name of GENERIC.filter((n) => n !== 'manage_agents')) {

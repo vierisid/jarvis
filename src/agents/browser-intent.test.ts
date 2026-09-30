@@ -25,9 +25,11 @@ const role = { id: 'personal-assistant', name: 'PA', description: 't', responsib
   tools: ['browser', 'desktop', 'ui'], authority_level: 10 } as unknown as RoleDefinition;
 const baseConfig: AuthorityConfig = { default_level: 10, governed_categories: [], overrides: [], context_rules: [],
   learning: { enabled: false, suggest_threshold: 5 }, emergency_state: 'normal' };
-type Exec = { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }, signal?: AbortSignal, taint?: Set<string>) => Promise<unknown> };
-const exec = (o: AgentOrchestrator, name: string, args: Record<string, unknown> = {}, taint = new Set<string>()) =>
-  (o as unknown as Exec).executeTool({ id: 'call', name, arguments: args }, undefined, taint);
+// `executeTool` answers `{ result, card }` as of #584; these tests are about
+// the result.
+type Exec = { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }, signal?: AbortSignal, taint?: Set<string>) => Promise<{ result: unknown }> };
+const exec = async (o: AgentOrchestrator, name: string, args: Record<string, unknown> = {}, taint = new Set<string>()) =>
+  (await (o as unknown as Exec).executeTool({ id: 'call', name, arguments: args }, undefined, taint)).result;
 
 function fixture(definitions: ToolDefinition[], config: Partial<AuthorityConfig> = {}, level = 10, realExecution = false) {
   const calls: string[] = [];

@@ -87,7 +87,7 @@ describe('WebappTemplateDelivery', () => {
     // Guards the one shape that would otherwise produce a carrier with an empty
     // untrusted half and a non-empty trailer, and would burn the redelivery TTL
     // on a non-visit.
-    expect(separately(delivery, '', 'https://app.test.com/inbox')).toEqual({ outside: '', trailer: '' });
+    expect(separately(delivery, '', 'https://app.test.com/inbox')).toEqual({ outside: '', trailer: '', card: null });
     // The template is still undelivered, so a real visit next still gets it.
     expect(delivered(delivery, SNAPSHOT('https://app.test.com/inbox'), 'https://app.test.com/inbox'))
       .toContain('You are now on TestApp');

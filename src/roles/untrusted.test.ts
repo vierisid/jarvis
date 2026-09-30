@@ -944,7 +944,7 @@ describe('the trusted trailer travels out of band, so nothing searches the paylo
   });
 
   test('a plain string return has no trailer and is unchanged', () => {
-    expect(splitToolReturn('just text')).toEqual({ outside: 'just text', trailer: '' });
+    expect(splitToolReturn('just text')).toEqual({ outside: 'just text', trailer: '', card: null });
     expect(toolReturnText('just text')).toBe('just text');
     // The collapse puts a real trailer back in band, which is the documented
     // degradation on the approval and workflow-DELEGATION paths (the latter via

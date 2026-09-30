@@ -10,7 +10,8 @@ import { ToolRegistry, type ToolDefinition, isToolResult } from '../actions/tool
 import { toolDefToLLMTool } from '../actions/tools/builtin.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import type { AuthorityEngine, AuthorityProfile } from '../authority/engine.ts';
-import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFailure, isTaintSourceTool, splitToolReturn, toolReturnText } from '../roles/untrusted.ts';
+import { markUntrustedToolResult, markUntrustedToolBlocks, markUntrustedToolFailure, isTaintSourceTool, splitToolReturn, toolReturnText, type DocumentCard } from '../roles/untrusted.ts';
+import { renderDocumentCard } from '../actions/tools/document-card.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 import { taintProfile, mergeProfiles, TAINT_PROFILE_LABEL, type TaintGating } from '../authority/taint-gating.ts';
 import { AsyncLocalStorage } from 'node:async_hooks';
@@ -69,6 +70,19 @@ function toSystemMessages(systemPrompt: string | SystemPromptParts): LLMMessage[
   }
   return messages;
 }
+
+/**
+ * What one tool dispatch produced: the result the model reads, plus any
+ * repo-authored download card the tool handed over beside it (#584).
+ *
+ * The card is a RETURN VALUE rather than a mutable out-parameter the loops
+ * share, so tsc catches a loop that forgets it and no card can outlive the
+ * dispatch that produced it.
+ */
+type ToolDispatch = { result: string | ContentBlock[]; card: DocumentCard | null };
+
+/** Per-dispatch collector, private to `executeTool`. See its note. */
+type DocumentCardSink = { card: DocumentCard | null };
 
 const MAX_TOOL_ITERATIONS = 200;
 const MAX_TOOL_RESULT_CHARS = 6000; // Cap individual tool results to control context size
@@ -622,7 +636,7 @@ export class AgentOrchestrator {
           // of the conversation, so a later turn cannot strip a tool an
           // in-flight task is using.
           this.noteToolUse(ledger, tc.name, turnScope);
-          const result = await this.executeTool(tc, undefined, turnTaint, turnScope);
+          const { result, card } = await this.executeTool(tc, undefined, turnTaint, turnScope);
           messages.push({
             role: 'tool',
             content: result,
@@ -631,13 +645,20 @@ export class AgentOrchestrator {
           const logStr = typeof result === 'string' ? result.slice(0, 100) : `[${result.length} content blocks]`;
           console.log(`[Orchestrator] Tool ${tc.name} → ${logStr}...`);
 
-          // Capture document markers so they appear in the final response
-          if (typeof result === 'string') {
-            const docMarker = result.match(/<!-- jarvis:document id="[^"]+" title="[^"]+" format="[^"]+" size="[^"]+" -->/);
-            if (docMarker) {
-              finalText += '\n' + docMarker[0] + '\n';
-            }
-          }
+          // A download card the tool handed over structurally, NOT recovered
+          // from the result text: that regex read the marker from inside the
+          // framed block on purpose, so a page could forge a card (#584).
+          //
+          // And on THIS path the write is dead: `finalText` is reassigned from
+          // `llmResponse.content` once the model stops calling tools (below),
+          // so nothing accumulated in the loop survives. The deleted regex was
+          // dead here in exactly the same way, so this is preserved rather than
+          // fixed -- it keeps the two loops symmetrical, and it is the
+          // streaming loop that actually delivers a card. Whoever gives the
+          // card a consumer again (see actions/tools/document-card.ts: it has
+          // none today) has to fix this assignment too, or only the streaming
+          // path will work.
+          if (card) finalText += '\n' + renderDocumentCard(card) + '\n';
         }
 
         // Only a widening justifies recomputing the tool list mid-turn: an
@@ -884,7 +905,9 @@ export class AgentOrchestrator {
           // a registered tool is otherwise admitted and RUN, and on a hosted
           // install the filter does not engage at all (the tier models are
           // frontier-vetoed), so this check is the only thing that refuses.
-          const result = await this.executeTool(tc, opts.signal, turnTaint, turnScope);
+          // `card` is deliberately discarded: a task tier turn has no chat
+          // stream to render a download card into, exactly as before #584.
+          const { result } = await this.executeTool(tc, opts.signal, turnTaint, turnScope);
           toolsExecuted++;
           messages.push({
             role: 'tool',
@@ -1182,7 +1205,7 @@ export class AgentOrchestrator {
           continue;
         }
         this.noteToolUse(ledger, tc.name, turnScope);
-        const result = await this.executeTool(tc, undefined, turnTaint, turnScope);
+        const { result, card } = await this.executeTool(tc, undefined, turnTaint, turnScope);
         messages.push({
           role: 'tool',
           content: result,
@@ -1191,13 +1214,9 @@ export class AgentOrchestrator {
         const logStr = typeof result === 'string' ? result.slice(0, 100) : `[${result.length} content blocks]`;
         console.log(`[Orchestrator] Tool ${tc.name} → ${logStr}...`);
 
-        // Inject document markers into the stream so the UI can render download cards
-        if (typeof result === 'string') {
-          const docMarker = result.match(/<!-- jarvis:document id="[^"]+" title="[^"]+" format="[^"]+" size="[^"]+" -->/);
-          if (docMarker) {
-            yield { type: 'text' as const, text: '\n' + docMarker[0] + '\n' };
-          }
-        }
+        // Same as the non-streaming loop: the card comes from the tool's own
+        // structural metadata, never from a regex over the result (#584).
+        if (card) yield { type: 'text' as const, text: '\n' + renderDocumentCard(card) + '\n' };
       }
 
       if (widened) {
@@ -1459,7 +1478,7 @@ export class AgentOrchestrator {
     signal: AbortSignal | undefined,
     taint: Set<string>,
     scope: TurnToolScope | null,
-  ): Promise<string | ContentBlock[]> {
+  ): Promise<ToolDispatch> {
     // Enter the turn's taint set for the duration of the call so noteTaint,
     // getEffectiveProfile and any sub-agent spawned by the tool see it.
     //
@@ -1470,14 +1489,23 @@ export class AgentOrchestrator {
     // (#571, actions/tools/turn-scope-store.ts). Ambient rather than passed
     // because `createCommitment` has six callers, four with no turn in hand.
     // Nothing reads it to grant anything.
-    return withTurnScopeId(scope?.id, () =>
-      this.taintStore.run(taint ?? new Set<string>(), () => this.executeToolInner(toolCall, signal, scope)));
+    //
+    // The card sink is allocated PER DISPATCH and never leaves this method: the
+    // loops get an immutable `{ result, card }` back. That is deliberate -- a
+    // sink owned by a loop instead would be reused across calls, and the
+    // discovery / off-list branches `continue` without dispatching at all, so a
+    // card from one call could be emitted again for the next (#584).
+    const sink: DocumentCardSink = { card: null };
+    const result = await withTurnScopeId(scope?.id, () =>
+      this.taintStore.run(taint ?? new Set<string>(), () => this.executeToolInner(toolCall, signal, scope, sink)));
+    return { result, card: sink.card };
   }
 
   private async executeToolInner(
     toolCall: LLMToolCall,
     signal: AbortSignal | undefined,
     scope: TurnToolScope | null,
+    cardSink: DocumentCardSink,
   ): Promise<string | ContentBlock[]> {
     if (!this.toolRegistry) {
       return `Error: No tool registry configured`;
@@ -1681,6 +1709,31 @@ export class AgentOrchestrator {
           return markUntrustedToolResult(toolCall.name, tool?.category, text);
         };
 
+        // NO DOWNLOAD CARD ON THIS BRANCH, and it is a real gap rather than an
+        // oversight (#584). Every return below is a single string, because
+        // `DeferredExecutor.executeApproved` collapses the tool's return with
+        // `toolReturnText` before it writes the approval receipt -- one string
+        // is all a receipt can hold, and a card is metadata, not text. So an
+        // APPROVED `create_document` emits no card, while an ungated one does.
+        //
+        // That branch is reached often, not rarely: `create_document`'s floor is
+        // `write_data` (authority/tool-action-map.ts), which is in
+        // `DEFAULT_TAINT_GOVERNED`, so "summarise this page into a document"
+        // takes it. Before #584 it did produce a card, by accident -- the marker
+        // was still sitting in the result text for the deleted regex to find.
+        //
+        // Keep the size of the loss in proportion, though: nothing renders a
+        // card on ANY path today, the non-streaming loop discards what it
+        // accumulates, and so the only live emission is a stream chunk the UI
+        // drops. So this is a gap in a dormant feature, not a broken one.
+        //
+        // Not plumbed through, deliberately: the card has no consumer at all
+        // today (see actions/tools/document-card.ts), so carrying it across the
+        // receipt boundary would be new machinery for a value nothing renders.
+        // Whoever restores a consumer should fix this at the same time, and
+        // `document-card.test.ts` pins the current behaviour so the gap is
+        // visible rather than silent.
+
         switch (resolved.status) {
           case 'approved':
             // The approve endpoints skip execution for inline requests; we
@@ -1765,7 +1818,7 @@ export class AgentOrchestrator {
       // out of band (the webapp template's site instructions). The trailer is
       // appended AFTER the block closes, by this trusted code -- which is what
       // replaced searching the page for a seam (#560).
-      const { outside, trailer } = splitToolReturn(raw);
+      const { outside, trailer, card } = splitToolReturn(raw);
       let result = outside;
 
       // Cap tool result size to control context growth. The cap bounds the
@@ -1776,6 +1829,12 @@ export class AgentOrchestrator {
         result = result.slice(0, MAX_TOOL_RESULT_CHARS) + `\n... (truncated, was ${result.length} chars)`;
       }
 
+      // Repo-authored metadata the tool handed over structurally, so the chat
+      // loop can render a download card without reading anything back out of
+      // the result text (#584). Set LAST, immediately before the return: a
+      // throw between the assignment and the return would otherwise leave a
+      // card attached to a dispatch that reported a failure.
+      cardSink.card = card;
       // Outside content (pages, screen text, clipboard, files) is framed as data.
       return markUntrustedToolResult(toolCall.name, category, result) + trailer;
     } catch (err) {

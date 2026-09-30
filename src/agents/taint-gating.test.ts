@@ -13,9 +13,12 @@ import type { RoleDefinition } from '../roles/types.ts';
 import type { LLMMessage } from '../llm/provider.ts';
 import { ActionOutcomeError } from '../actions/action-outcome.ts';
 
-type Exec = { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }, signal?: AbortSignal, taint?: Set<string>) => Promise<unknown> };
-const exec = (o: AgentOrchestrator, name: string, turn: Set<string>) =>
-  (o as unknown as Exec).executeTool({ id: 't', name, arguments: {} }, undefined, turn);
+// `executeTool` answers `{ result, card }` as of #584 (the download card
+// travels beside the result instead of being regexed out of it); these tests
+// are about the result.
+type Exec = { executeTool: (tc: { id: string; name: string; arguments: Record<string, unknown> }, signal?: AbortSignal, taint?: Set<string>) => Promise<{ result: unknown }> };
+const exec = async (o: AgentOrchestrator, name: string, turn: Set<string>) =>
+  (await (o as unknown as Exec).executeTool({ id: 't', name, arguments: {} }, undefined, turn)).result;
 
 const role = {
   id: 'personal-assistant', name: 'PA', description: 't', responsibilities: [], tools: ['terminal', 'browser', 'desktop'], authority_level: 5,
