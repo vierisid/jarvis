@@ -51,8 +51,59 @@ type cdpClient struct {
 	// Element centers from the last snapshot, keyed by 1-based element id.
 	// Click/hover resolve ids against THIS, not a fresh selector query, so a
 	// click lands where the snapshot said the element was.
-	elemMu     sync.Mutex
-	elemCoords map[int][2]float64
+	//
+	// Everything under elemMu is filled by ONE writer, takePageSnapshot, and
+	// replaced wholesale. The three fields beside the map are what make a
+	// coordinate answerable (#591) and usable (#592) rather than merely
+	// present:
+	//
+	//   elemIdentity  the document the coordinates describe, so a reader can
+	//                 refuse an id minted under a document the browser has
+	//                 since left. takePageSnapshot also refuses to fill the map
+	//                 at all when the browser named no document -- a map nobody
+	//                 can use is worse than no map, because the model can see
+	//                 the snapshot that produced it.
+	//
+	//                 WHICH READERS CHECK IT, precisely, because the current
+	//                 asymmetry is the opposite of intuitive: only
+	//                 browser_element_point does (#591). The three ACTION
+	//                 readers -- browser_click and browser_type here,
+	//                 browser_hover in browser_input.go -- still resolve an id
+	//                 through elementCoordsFor with no identity check, so they
+	//                 can still dispatch at the previous document's geometry.
+	//                 That is #592's sibling and it is fixed in #592's own
+	//                 commit; until then the cosmetic path refuses a stale
+	//                 document while the acting path does not.
+	//
+	//                 It has teeth for a second reason: every early return in
+	//                 takePageSnapshot happens BEFORE this critical section, so
+	//                 a re-snapshot that fails leaves the previous fill intact
+	//                 and fully self-consistent. For browser_element_point that
+	//                 is fail-closed, because the identity no longer matches.
+	//                 For click/type/hover it means a failed re-snapshot leaves
+	//                 live, clickable, stale coordinates.
+	//   elemGen       bumped on every fill. It closes a window an identity
+	//                 check cannot see: a snapshot of the SAME document
+	//                 refilling the map while a reader is mid-answer leaves the
+	//                 loaderId unchanged, so a reader that copied a coordinate
+	//                 out and then did more work would answer with the previous
+	//                 snapshot's number. It does NOT close the window after a
+	//                 reply is sent and before the click runs -- nothing
+	//                 sidecar-side can, and the daemon's own local path has the
+	//                 same property.
+	//   elemFrames    the ids that came from a same-origin SUBFRAME, and a
+	//                 digest of every frame's loaderId. A child document can
+	//                 navigate itself while the main frame's loaderId holds
+	//                 (measured), which leaves an in-frame coordinate pointing
+	//                 into a destroyed document. Checked only for subframe ids
+	//                 on purpose: an unrelated ad iframe reloading must not
+	//                 refuse a click on a main-document element.
+	elemMu         sync.Mutex
+	elemCoords     map[int][2]float64
+	elemIdentity   pageIdentity
+	elemGen        uint64
+	elemFrames     map[int]bool
+	elemFrameStamp string
 
 	// One-shot waiters for CDP events (e.g. Page.loadEventFired).
 	eventMu      sync.Mutex
@@ -99,6 +150,33 @@ var activeCDP struct {
 	mu      sync.Mutex
 	client  *cdpClient
 	healthy bool
+}
+
+// existingCDP returns the live browser connection, or nil when there is none.
+//
+// The no-launch accessor, and the whole read-authority story of
+// browser_element_point (#591) rests on it. Every other browser handler calls
+// getCDPForParams, which LAUNCHES a Chromium -- headed by default -- on the
+// first browser call. A handler that exists to preview an action must not be
+// the thing that starts a browser: it runs on the tool_call event, before the
+// action it previews has been approved, and #585's review found the narration
+// it replaces doing exactly that through browser_evaluate.
+//
+// It deliberately takes no `headless` parameter, and that is a refusal rather
+// than an omission. getCDP tears the running browser down and relaunches it
+// when an explicit `headless` disagrees with it (see below), so honouring the
+// flag here would give a read-only call the power to kill a browser mid-session.
+// Ignoring it means that power is not reachable from this path at all.
+//
+// The two conditions are getCDP's own: the pointer under activeCDP.mu, and a
+// client that has not closed. Nothing here mutates activeCDP.
+func existingCDP() *cdpClient {
+	activeCDP.mu.Lock()
+	defer activeCDP.mu.Unlock()
+	if c := activeCDP.client; c != nil && !c.closed.Load() {
+		return c
+	}
+	return nil
 }
 
 // getCDP returns the live browser CDP client, launching the browser lazily on

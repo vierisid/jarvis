@@ -39,6 +39,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 )
 
 // pageIdentity is which document the attached page was showing, as the BROWSER
@@ -128,6 +129,62 @@ func (c *cdpClient) assertSamePage(before pageIdentity) error {
 	// Same document, and it is still one we may read -- decided on the reading we
 	// just took, so this is one round-trip, not two.
 	return refuseLocalIdentity(now)
+}
+
+// assertSameDocument refuses when the attached page has committed a different
+// DOCUMENT since `before` was taken. It is `assertSamePage` without the URL
+// term, and the difference is the whole reason it exists.
+//
+// `assertSamePage` guards a READ: it hands a URL back, so a URL that changed
+// makes the answer wrong, and refusing costs one retry. This guards a use of
+// something minted under a document -- a cached element coordinate, an element
+// reference in an isolated world -- where the question is only "is this the
+// same document those were minted in".
+//
+// Dropping the URL term is not a relaxation, it is the correct question. A
+// same-document `history.pushState` CHANGES `frameTree.frame.url` while the
+// loaderId holds (measured), and that is how every SPA navigates -- Gmail,
+// Linear, Notion, and the cell-to-cell moves `webapp-templates/gsheets.yaml`
+// tells the model to reuse an element id across. Comparing the URL here would
+// refuse an ordinary click on exactly the sites the playbooks are written for,
+// to protect a field the caller is not given. A fragment change does not even
+// reach this: CDP reports it separately as `urlFragment`.
+//
+// The daemon already compares the loaderId alone for this purpose
+// (`sameDocument` in BrowserController.snapshot, src/actions/browser/session.ts),
+// so this is parity with the other half rather than a new rule.
+//
+// An EMPTY loaderId is refused outright. `assertSamePage` compares two empty
+// ids as equal, so a frame tree that named no document would pass it; a guard
+// that cannot tell which document it is looking at has nothing to offer.
+// It returns the fresh identity and the whole-tree frame digest from the SAME
+// round trip, and it takes its own timeout, for two reasons that both come from
+// being a use-time guard rather than a read-time one. A caller that also has to
+// check whether a subframe navigated would otherwise read the frame tree twice
+// to learn one thing, and a caller on a latency budget -- the pebble narration
+// is abandoned upstream after 1200 ms -- cannot inherit `cdpDefaultTimeout`'s
+// 30 seconds for a renderer-served read that an `alert()` can block.
+func (c *cdpClient) confirmSameDocument(before pageIdentity, timeout time.Duration) (pageIdentity, string, error) {
+	if before.loaderID == "" {
+		return pageIdentity{}, "", fmt.Errorf("the browser did not name the document these coordinates came from, so they cannot be used")
+	}
+	now, stamp, err := c.frameTreeState(timeout)
+	if err != nil {
+		return pageIdentity{}, "", fmt.Errorf("could not confirm the page is still the same document: %w", err)
+	}
+	if now.loaderID == "" {
+		return pageIdentity{}, "", fmt.Errorf("the browser no longer names the document, so the page cannot be confirmed")
+	}
+	if now.loaderID != before.loaderID {
+		return pageIdentity{}, "", fmt.Errorf("the page navigated to a new document, so the element from the previous " +
+			"snapshot no longer exists; take a new browser_snapshot")
+	}
+	// Same document, and it is still one we may touch -- decided on the reading
+	// just taken, so this is one round-trip and not two.
+	if err := refuseLocalIdentity(now); err != nil {
+		return pageIdentity{}, "", err
+	}
+	return now, stamp, nil
 }
 
 // refuseLocalContent is the shared refusal, so the frame-tree check and the

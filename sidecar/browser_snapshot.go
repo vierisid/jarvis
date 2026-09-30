@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strings"
+	"time"
 )
 
 // ── Snapshot parity with the daemon's local browser ──────────────────
@@ -138,9 +139,42 @@ func takePageSnapshot(cdp *cdpClient) (*pageSnapshot, pageIdentity, error) {
 	// Before running anything in the page: a page showing local content is not
 	// read back to the model (#526, browser_read_guard.go). Every snapshot
 	// path goes through here -- browser_snapshot and the one navigate returns.
-	checked, err := cdp.assertNotLocalContent()
+	//
+	// This is assertNotLocalContent spelled out, for ONE extra value off the
+	// SAME round trip: the whole frame tree's digest, which #592 needs so that
+	// an element taken from a same-origin subframe can later be refused when
+	// that subframe navigates itself. Taking it from the pre-read tree rather
+	// than a second read is not just cheaper, it fails in the safe direction --
+	// a subframe that commits while the script is running leaves the stored
+	// digest describing the older tree, so a later click compares unequal and
+	// refuses.
+	checked, frameStamp, err := cdp.frameTreeState(cdpDefaultTimeout)
 	if err != nil {
-		return nil, pageIdentity{}, err
+		return nil, checked, fmt.Errorf("could not check what the page is showing, so refusing to read it: %w", err)
+	}
+	if err := refuseLocalIdentity(checked); err != nil {
+		return nil, checked, err
+	}
+
+	// The document has to be NAMED before its script is run, let alone before
+	// its coordinates are kept.
+	//
+	// An unnamed frame tree (an empty loaderId) would fill the map with up to 80
+	// coordinates that every reader must then refuse for the life of the
+	// snapshot -- while the model can see the snapshot text and reasonably
+	// expects its ids to work. That is the worst of both: not fail-closed to the
+	// model, and not usable either. One legible failure here instead.
+	//
+	// Refused BEFORE the evaluate, for the reason this file already gives about
+	// local content: there is no point running a page's script and refusing
+	// afterwards.
+	//
+	// It costs nothing legitimate. Even `about:blank` reports a non-empty
+	// loaderId once it has committed (measured), so a nameless main frame is
+	// genuinely anomalous -- a pre-commit initial document, or a reply
+	// json.Unmarshal filled only partly.
+	if checked.loaderID == "" {
+		return nil, checked, fmt.Errorf("the browser did not name the document it is showing, so refusing to read it")
 	}
 
 	result, err := cdp.send("Runtime.evaluate", map[string]any{
@@ -187,12 +221,113 @@ func takePageSnapshot(cdp *cdpClient) (*pageSnapshot, pageIdentity, error) {
 
 	cdp.elemMu.Lock()
 	cdp.elemCoords = make(map[int][2]float64, len(snap.Elements))
+	cdp.elemFrames = make(map[int]bool, len(snap.Elements))
 	for _, el := range snap.Elements {
 		cdp.elemCoords[el.ID] = [2]float64{el.X, el.Y}
+		if el.Attrs["iframe"] == "true" {
+			cdp.elemFrames[el.ID] = true
+		}
 	}
+	cdp.elemIdentity = checked
+	cdp.elemFrameStamp = frameStamp
+	cdp.elemGen++
 	cdp.elemMu.Unlock()
 
 	return &snap, checked, nil
+}
+
+// snapshotElement is one id resolved against the live snapshot map, with
+// everything a caller needs to prove the answer belongs to the document the
+// snapshot described.
+type snapshotElement struct {
+	x, y     float64
+	identity pageIdentity
+	gen      uint64
+	inFrame  bool
+	stamp    string
+}
+
+// snapshotElementFor reads one element id out of the map in a single critical
+// section, so the coordinate, the document it belongs to and the generation it
+// was minted in cannot be torn apart by a concurrent snapshot.
+func (c *cdpClient) snapshotElementFor(id int) (snapshotElement, bool) {
+	c.elemMu.Lock()
+	defer c.elemMu.Unlock()
+	coords, ok := c.elemCoords[id]
+	if !ok {
+		return snapshotElement{}, false
+	}
+	return snapshotElement{
+		x: coords[0], y: coords[1],
+		identity: c.elemIdentity,
+		gen:      c.elemGen,
+		inFrame:  c.elemFrames[id],
+		stamp:    c.elemFrameStamp,
+	}, true
+}
+
+// snapshotGeneration is the generation the map is on right now, for a caller
+// that copied a coordinate out, did more work, and has to know the map was not
+// refilled underneath it. See the elemGen docblock on cdpClient.
+func (c *cdpClient) snapshotGeneration() uint64 {
+	c.elemMu.Lock()
+	defer c.elemMu.Unlock()
+	return c.elemGen
+}
+
+// frameTreeState reads the main frame's identity AND the whole-tree digest from
+// ONE Page.getFrameTree.
+//
+// The digest is one string rather than a set, because the only question asked of
+// it is "did ANY document in this page change", and a string compares in one
+// line at each call site. Frame ids are included so a frame appearing or
+// disappearing counts as a change too -- an iframe replaced by a new one with a
+// coincidentally equal loaderId is not the same page.
+//
+// Both halves out of one round trip because the callers need both and the
+// budget is tight: a narration's coordinate is raced against 1200 ms upstream
+// (src/daemon/index.ts), so a second frame-tree read to learn the same thing
+// twice would be a quarter of the budget spent on nothing. It also makes the
+// two values provably consistent -- an identity and a digest read a beat apart
+// could describe different moments, which is the class of bug this whole
+// change is about.
+func (c *cdpClient) frameTreeState(timeout time.Duration) (pageIdentity, string, error) {
+	raw, err := c.sendOnTimeout(c.sessionID, "Page.getFrameTree", nil, timeout)
+	if err != nil {
+		return pageIdentity{}, "", err
+	}
+	var tree struct {
+		FrameTree frameTreeNode `json:"frameTree"`
+	}
+	if err := json.Unmarshal(raw, &tree); err != nil {
+		return pageIdentity{}, "", fmt.Errorf("unexpected Page.getFrameTree reply: %w", err)
+	}
+	f := tree.FrameTree.Frame
+	id := pageIdentity{url: f.URL, loaderID: f.LoaderID, origin: f.SecurityOrigin}
+	var parts []string
+	collectFrameStamp(&tree.FrameTree, &parts)
+	sort.Strings(parts)
+	return id, strings.Join(parts, "|"), nil
+}
+
+type frameTreeNode struct {
+	Frame struct {
+		ID             string `json:"id"`
+		URL            string `json:"url"`
+		LoaderID       string `json:"loaderId"`
+		SecurityOrigin string `json:"securityOrigin"`
+	} `json:"frame"`
+	ChildFrames []frameTreeNode `json:"childFrames"`
+}
+
+// collectFrameStamp walks the tree depth-first. Bounded by what Chrome sends,
+// which is the page's own frame count; the snapshot script itself stops at 10
+// frames but this is the browser's tree, not the script's walk.
+func collectFrameStamp(node *frameTreeNode, out *[]string) {
+	*out = append(*out, node.Frame.ID+":"+node.Frame.LoaderID)
+	for i := range node.ChildFrames {
+		collectFrameStamp(&node.ChildFrames[i], out)
+	}
 }
 
 // elementCoords returns the stored viewport center for a snapshot element id.

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -25,7 +26,16 @@ func (fb *fakeBrowser) frameTreeReplyFull(id int64, mainURL, loaderID, origin st
 	children := []any{}
 	for i, u := range childURLs {
 		children = append(children, map[string]any{
-			"frame": map[string]any{"id": "child", "url": u, "loaderId": i},
+			// A STRING loaderId, like Chrome's. It used to be the loop index,
+			// which was harmless while only `frameTree.frame` was ever decoded
+			// -- `childFrames` was skipped wholesale. `frameTreeState` now
+			// decodes the children too, so an int here would fail
+			// json.Unmarshal and surface as "could not check what the page is
+			// showing", a long way from the cause.
+			"frame": map[string]any{
+				"id": fmt.Sprintf("child-%d", i), "url": u,
+				"loaderId": fmt.Sprintf("child-loader-%d", i),
+			},
 		})
 	}
 	fb.write(map[string]any{
