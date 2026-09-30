@@ -30,6 +30,7 @@ import { SidecarTab } from "./tabs/SidecarTab";
 import { BillingTab } from "./tabs/BillingTab";
 import { useBilling } from "../../billing/useBilling";
 import { billingTabVisible } from "../../billing/billing-view";
+import { SETTINGS_TAB_EVENT, takeRequestedSettingsTab } from "../../shell/settings-tab-request";
 import "./SettingsRoom.css";
 
 export type SettingsTab =
@@ -59,7 +60,17 @@ export type RoomBodyMode = "inline" | "expanded";
 
 export function SettingsRoomBody({ mode }: { mode: RoomBodyMode }) {
   const data = useSettingsData();
-  const [tab, setTab] = useState<SettingsTab>("general");
+  // Opened on a tab from outside the room (the sidecar update hint), or on
+  // General.
+  const [tab, setTab] = useState<SettingsTab>(() => takeRequestedSettingsTab() ?? "general");
+  useEffect(() => {
+    const onRequest = (e: Event) => {
+      const t = (e as CustomEvent<SettingsTab>).detail;
+      if (VALID_TABS.has(t)) setTab(t);
+    };
+    window.addEventListener(SETTINGS_TAB_EVENT, onRequest);
+    return () => window.removeEventListener(SETTINGS_TAB_EVENT, onRequest);
+  }, []);
   // A self-hosted install has no bill, so it gets no Billing tab. Same shared
   // store as the shell banner, and refreshOnMount: false so opening Settings
   // does not itself trigger a read; see billingTabVisible for why the tab stays

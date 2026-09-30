@@ -13,8 +13,10 @@ import {
   requestSidecarUpdate,
   updateActionFor,
   updateInProgress,
+  updatePending,
   updateProgressLabel,
 } from "../../../shell/sidecar-update";
+import { announceSidecarsChanged } from "../../../shell/settings-tab-request";
 import type { SidecarInfo } from "../useSettingsData";
 
 export function SidecarTab({
@@ -48,17 +50,20 @@ export function SidecarTab({
     setEnrolling(false);
   };
 
-  const [updating, setUpdating] = useState<string | null>(null);
+  // Rows with an update request in flight (one per row: two rows can be
+  // updated at once).
+  const [updating, setUpdating] = useState<ReadonlySet<string>>(() => new Set());
   const handleUpdate = async (sc: SidecarInfo) => {
     const action = updateActionFor(sc);
     if (action === "manual") return;
     if (action === "apply" && !await confirmDialog(
       `Update the sidecar on "${sc.name}" to ${sc.latest_version ?? "the latest version"}? It restarts for a few seconds; the brain keeps working.`,
     )) return;
-    setUpdating(sc.id);
+    setUpdating((s) => new Set(s).add(sc.id));
     const r = await requestSidecarUpdate(sc, action);
-    setUpdating(null);
+    setUpdating((s) => { const n = new Set(s); n.delete(sc.id); return n; });
     onToast(r.message, r.ok ? "ok" : "warn");
+    announceSidecarsChanged();
     void data.refresh();
   };
 
@@ -199,6 +204,10 @@ export function SidecarTab({
                         <span style={{ color: "var(--warn)" }}>
                           {" "}· updating to v{sc.update_state?.version ?? sc.latest_version}: {updateProgressLabel(sc.update_state)}
                         </span>
+                      ) : sc.connected && sc.update_available && updatePending(sc) ? (
+                        <span style={{ opacity: 0.7 }} title="The sidecar checks again on its own">
+                          {" "}· v{sc.latest_version} not published yet
+                        </span>
                       ) : (sc.update_available || sc.update_status === "suggested") ? (
                         <span
                           style={{ color: "var(--warn)" }}
@@ -246,17 +255,19 @@ export function SidecarTab({
                   )}
                 </div>
                 <div className="v2-set__sidecar-actions">
-                  {sc.connected && sc.update_available && updateActionFor(sc) !== "manual" && (
+                  {sc.connected && sc.update_available && !updatePending(sc) && updateActionFor(sc) !== "manual" && (
                     <button
                       type="button"
                       className="v2-set__btn v2-set__btn--primary"
                       onClick={() => handleUpdate(sc)}
-                      disabled={updating === sc.id || updateInProgress(sc.update_state)}
+                      disabled={updating.has(sc.id) || updateInProgress(sc.update_state)}
                       title={updateActionFor(sc) === "prompt"
                         ? `Opens the update prompt on ${sc.hostname ?? sc.name}`
                         : `Installs sidecar ${sc.latest_version ?? ""} on ${sc.hostname ?? sc.name}`}
                     >
-                      {updating === sc.id ? "Updating…" : "Update…"}
+                      {updating.has(sc.id)
+                        ? (updateActionFor(sc) === "prompt" ? "Opening…" : "Starting…")
+                        : "Update…"}
                     </button>
                   )}
                   {sc.connected && (

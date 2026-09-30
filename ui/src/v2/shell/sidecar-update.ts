@@ -54,6 +54,20 @@ export function outdatedSidecars(list: readonly SidecarUpdateInfo[]): SidecarUpd
   return list.filter((sc) => sc.connected && sc.update_available === true);
 }
 
+/**
+ * The advertised version is not on npm yet (the brain was published a little
+ * ahead of its sidecar, or runs from source). The sidecar retries on its own;
+ * nothing can be installed until then.
+ */
+export function updatePending(sc: SidecarUpdateInfo): boolean {
+  return sc.update_state?.phase === "unavailable";
+}
+
+/** Outdated sidecars that can be updated right now. */
+export function actionableSidecars(list: readonly SidecarUpdateInfo[]): SidecarUpdateInfo[] {
+  return outdatedSidecars(list).filter((sc) => !updatePending(sc));
+}
+
 const PHASE_LABEL: Partial<Record<SidecarUpdatePhase, string>> = {
   checking: "checking…",
   downloading: "downloading…",
@@ -62,9 +76,21 @@ const PHASE_LABEL: Partial<Record<SidecarUpdatePhase, string>> = {
   restarting: "restarting…",
 };
 
+/**
+ * An in-progress phase older than this is treated as stale: the sidecar
+ * stopped reporting (it would have restarted or failed well within it), so
+ * the actions come back instead of staying disabled for good.
+ */
+export const STALE_PROGRESS_MS = 10 * 60_000;
+
 /** A short in-progress label for an update the sidecar is installing, or null. */
-export function updateProgressLabel(state: SidecarUpdateState | undefined): string | null {
-  return state ? PHASE_LABEL[state.phase] ?? null : null;
+export function updateProgressLabel(state: SidecarUpdateState | undefined, now: number = Date.now()): string | null {
+  if (!state) return null;
+  const label = PHASE_LABEL[state.phase];
+  if (!label) return null;
+  const at = state.at ? Date.parse(state.at) : NaN;
+  if (Number.isFinite(at) && now - at > STALE_PROGRESS_MS) return null;
+  return label;
 }
 
 /** Whether an install is running on that sidecar right now. */
@@ -73,12 +99,22 @@ export function updateInProgress(state: SidecarUpdateState | undefined): boolean
 }
 
 /**
+ * The only shapes a sidecar's own manual command takes (sidecar/updater.go
+ * ManualCommand). Anything else is not shown: the user is invited to paste
+ * it into a terminal, so a sidecar must not be able to put arbitrary text
+ * there.
+ */
+const TRUSTED_MANUAL_COMMAND =
+  /^(Quit Jarvis first, then run: )?(bun add|npm install) -g @usejarvis\/sidecar@(latest|\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?)$|^Download and run the installer: https:\/\/github\.com\/vierisid\/jarvis\/releases\/tag\/installer-latest$/;
+
+/**
  * How to update a sidecar that cannot do it itself (older sidecars, or an
  * install it cannot swap). The sidecar's own failure message wins when it
  * sent one.
  */
 export function manualUpdateHint(sc: SidecarUpdateInfo): string {
-  if (sc.update_state?.manual_command) return sc.update_state.manual_command;
+  const own = sc.update_state?.manual_command;
+  if (own && TRUSTED_MANUAL_COMMAND.test(own)) return own;
   const v = sc.latest_version ? `@${sc.latest_version}` : "";
   const os = (sc.os ?? "").toLowerCase();
   if (os === "windows" || os === "darwin") {
@@ -98,7 +134,9 @@ export type PillView =
   | { show: true; label: string; title: string; target: "settings" };
 
 export function pillView(list: readonly SidecarUpdateInfo[]): PillView {
-  const outdated = outdatedSidecars(list);
+  // A version not published yet has nothing to install: no nagging until the
+  // sidecar finds it (Settings still shows it as pending).
+  const outdated = actionableSidecars(list);
   if (outdated.length === 0) return { show: false };
   if (outdated.length === 1) {
     const sc = outdated[0]!;

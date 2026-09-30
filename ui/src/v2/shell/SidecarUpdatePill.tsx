@@ -1,7 +1,6 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useEffect, useState } from "react";
 import { readArray, useRemoteData } from "../hooks/useRemoteData";
 import { openRoom } from "../router";
-import { useRoomActionDispatcher } from "../rooms/useRoomActionBus";
 import { confirmDialog } from "../ui/ConfirmDialog";
 import {
   pillView,
@@ -9,6 +8,7 @@ import {
   updateInProgress,
   type SidecarUpdateInfo,
 } from "./sidecar-update";
+import { SIDECARS_CHANGED_EVENT, announceSidecarsChanged, requestSettingsTab } from "./settings-tab-request";
 
 /**
  * Top-bar hint that a connected sidecar is behind the version this brain
@@ -23,7 +23,6 @@ const decode = (v: unknown) => readArray<SidecarUpdateInfo>(v);
 
 export function SidecarUpdatePill() {
   const { data, refresh } = useRemoteData<SidecarUpdateInfo[]>("/api/sidecars", decode, POLL_MS);
-  const { dispatch } = useRoomActionDispatcher();
   const [note, setNote] = useState<{ text: string; ok: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
 
@@ -33,13 +32,21 @@ export function SidecarUpdatePill() {
     return () => window.clearTimeout(id);
   }, [note]);
 
+  // An update started from Settings changes what this shows; don't wait for
+  // the next poll.
+  useEffect(() => {
+    const onChanged = () => { void refresh(); };
+    window.addEventListener(SIDECARS_CHANGED_EVENT, onChanged);
+    return () => window.removeEventListener(SIDECARS_CHANGED_EVENT, onChanged);
+  }, [refresh]);
+
   const view = pillView(data ?? []);
 
-  const onClick = useCallback(async () => {
+  const onClick = async () => {
     if (!view.show || busy) return;
     if (view.target === "settings") {
+      requestSettingsTab("sidecar");
       openRoom("settings");
-      dispatch({ room: "settings", action: "switch_tab", args: { tab: "sidecar" }, ts: Date.now() });
       return;
     }
     const sc = view.sidecar;
@@ -57,10 +64,9 @@ export function SidecarUpdatePill() {
     const r = await requestSidecarUpdate(sc, view.action);
     setBusy(false);
     setNote({ text: r.message, ok: r.ok });
-    void refresh();
-  }, [view, busy, dispatch, refresh]);
+    announceSidecarsChanged();
+  };
 
-  if (!view.show && !note) return null;
   return (
     <>
       {view.show && (
@@ -68,7 +74,7 @@ export function SidecarUpdatePill() {
           type="button"
           className="rs-chip"
           onClick={onClick}
-          disabled={busy}
+          aria-disabled={busy}
           title={view.title}
           aria-label={`${view.label}: ${view.title}`}
         >
@@ -76,9 +82,13 @@ export function SidecarUpdatePill() {
           {view.label}
         </button>
       )}
-      <span className={`rs-chip${note && !note.ok ? " bad" : ""}`} role="status" aria-live="polite" hidden={!note}>
-        {note?.text}
-      </span>
+      {note && (
+        <span className="rs-chip rs-note" title={note.text} aria-hidden="true">
+          {note.text}
+        </span>
+      )}
+      {/* Always mounted, so the result is announced reliably. */}
+      <span className="v2-sr-only" role="status" aria-live="polite">{note?.text ?? ""}</span>
     </>
   );
 }

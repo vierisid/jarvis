@@ -8,30 +8,42 @@ GlobalRegistrator.register();
 let act: typeof import("react").act;
 let createRoot: typeof import("react-dom/client").createRoot;
 let SidecarUpdatePill: typeof import("./SidecarUpdatePill").SidecarUpdatePill;
+let takeRequestedSettingsTab: typeof import("./settings-tab-request").takeRequestedSettingsTab;
 let root: ReturnType<typeof createRoot> | undefined;
 let host: HTMLDivElement;
+const originalConfirm = window.confirm;
 
 beforeAll(async () => {
   ({ act } = await import("react"));
   ({ createRoot } = await import("react-dom/client"));
   ({ SidecarUpdatePill } = await import("./SidecarUpdatePill"));
+  ({ takeRequestedSettingsTab } = await import("./settings-tab-request"));
 });
 afterEach(async () => {
   if (root) await act(async () => root!.unmount());
   root = undefined;
   host?.remove();
   globalThis.fetch = originalFetch;
+  window.confirm = originalConfirm;
   window.location.hash = "";
+  takeRequestedSettingsTab();
 });
 afterAll(() => GlobalRegistrator.unregister());
+
+/** Poll cond inside act until it holds (no fixed sleeps: CI can be slow). */
+async function waitFor(cond: () => boolean, what: string) {
+  for (let i = 0; i < 200; i++) {
+    if (cond()) return;
+    await act(async () => { await new Promise((r) => setTimeout(r, 5)); });
+  }
+  throw new Error(`timed out waiting for ${what}`);
+}
 
 async function mount() {
   host = document.createElement("div");
   document.body.append(host);
   root = createRoot(host);
   await act(async () => { root!.render(<SidecarUpdatePill />); });
-  // Let the first poll land.
-  await act(async () => { await new Promise((r) => setTimeout(r, 10)); });
 }
 
 const sidecar = {
@@ -39,31 +51,86 @@ const sidecar = {
   version: "0.9.7", latest_version: "0.10.0", update_available: true, features: ["update_prompt"],
 };
 
-test("hidden when every sidecar is current", async () => {
-  globalThis.fetch = (async () => NativeResponse.json([{ ...sidecar, update_available: false }])) as unknown as typeof fetch;
+function serve(list: unknown[], post?: (url: string) => Response) {
+  const posts: string[] = [];
+  const gets = { n: 0 };
+  globalThis.fetch = (async (url: string, init?: RequestInit) => {
+    if (init?.method === "POST") { posts.push(url); return post ? post(url) : NativeResponse.json({ ok: true }); }
+    gets.n++;
+    return NativeResponse.json(list);
+  }) as unknown as typeof fetch;
+  return { posts, gets };
+}
+
+const pill = () => host.querySelector("button");
+const status = () => host.querySelector('[role="status"]')?.textContent ?? "";
+
+test("hidden when every sidecar is current, and nothing else shows", async () => {
+  const { gets } = serve([{ ...sidecar, update_available: false }]);
   await mount();
-  expect(host.querySelector("button")).toBeNull();
+  await waitFor(() => gets.n > 0, "the first poll");
+  expect(pill()).toBeNull();
+  expect(host.querySelector(".rs-chip")).toBeNull();
 });
 
 test("opens the sidecar's own update prompt", async () => {
-  const posts: string[] = [];
-  globalThis.fetch = (async (url: string, init?: RequestInit) => {
-    if (init?.method === "POST") { posts.push(url); return NativeResponse.json({ ok: true }); }
-    return NativeResponse.json([sidecar]);
-  }) as unknown as typeof fetch;
+  const { posts } = serve([sidecar]);
   await mount();
-  const button = host.querySelector("button");
-  expect(button?.textContent).toContain("sidecar update");
-  await act(async () => { button!.click(); await new Promise((r) => setTimeout(r, 10)); });
+  await waitFor(() => pill() !== null, "the pill");
+  expect(pill()!.textContent).toContain("sidecar update");
+  // No empty note chip beside it.
+  expect(host.querySelectorAll(".rs-chip").length).toBe(1);
+  await act(async () => { pill()!.click(); });
+  await waitFor(() => status().includes("laptop.local"), "the result");
   expect(posts).toEqual(["/api/sidecars/sid-1/update-prompt"]);
-  expect(host.querySelector('[role="status"]')?.textContent).toContain("laptop.local");
 });
 
-test("several outdated sidecars go to Settings > Sidecar", async () => {
-  globalThis.fetch = (async () => NativeResponse.json([sidecar, { ...sidecar, id: "sid-2", name: "desktop" }])) as unknown as typeof fetch;
+test("a Linux sidecar is confirmed here, then installed", async () => {
+  const { posts } = serve([{ ...sidecar, os: "linux", features: ["update_apply"] }]);
+  let asked = "";
+  window.confirm = (m?: string) => { asked = String(m); return true; };
   await mount();
-  const button = host.querySelector("button");
-  expect(button?.textContent).toContain("2 sidecar updates");
-  await act(async () => { button!.click(); });
+  await waitFor(() => pill() !== null, "the pill");
+  await act(async () => { pill()!.click(); });
+  await waitFor(() => posts.length === 1, "the POST");
+  expect(asked).toContain("0.10.0");
+  expect(posts).toEqual(["/api/sidecars/sid-1/update"]);
+});
+
+test("declining the confirmation sends nothing", async () => {
+  const { posts } = serve([{ ...sidecar, os: "linux", features: ["update_apply"] }]);
+  window.confirm = () => false;
+  await mount();
+  await waitFor(() => pill() !== null, "the pill");
+  await act(async () => { pill()!.click(); });
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+  expect(posts).toEqual([]);
+});
+
+test("a refusal is announced", async () => {
+  serve([sidecar], () => NativeResponse.json({ error: "no sidecar update is available" }, { status: 409 }));
+  await mount();
+  await waitFor(() => pill() !== null, "the pill");
+  await act(async () => { pill()!.click(); });
+  await waitFor(() => status().includes("no sidecar update is available"), "the refusal");
+});
+
+test("an install already running is not started again", async () => {
+  const { posts } = serve([{ ...sidecar, update_state: { phase: "downloading", version: "0.10.0", at: new Date().toISOString() } }]);
+  await mount();
+  await waitFor(() => pill() !== null, "the pill");
+  expect(pill()!.textContent).toContain("downloading");
+  await act(async () => { pill()!.click(); });
+  await waitFor(() => status().includes("Already updating"), "the note");
+  expect(posts).toEqual([]);
+});
+
+test("several outdated sidecars open Settings on the Sidecar tab", async () => {
+  serve([sidecar, { ...sidecar, id: "sid-2", name: "desktop" }]);
+  await mount();
+  await waitFor(() => pill() !== null, "the pill");
+  expect(pill()!.textContent).toContain("2 sidecar updates");
+  await act(async () => { pill()!.click(); });
   expect(window.location.hash).toBe("#/_room_settings");
+  expect(takeRequestedSettingsTab()).toBe("sidecar");
 });

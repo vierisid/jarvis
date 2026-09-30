@@ -341,3 +341,11 @@ button.rs-chip:hover { color: var(--ink); border-color: var(--ink3); }
   .gdrop.live .in, .gdrop.live .ring { animation: none !important; opacity: 1; }
   .rs-peek { animation: none; }
 }
+
+/* Result of a sidecar-update click: a sentence, so no uppercase, and bounded
+   so a long hostname or error cannot push the bar onto two rows (full text in
+   the title). */
+.rs-chip.rs-note {
+  text-transform: none; letter-spacing: 0; font-size: 10.5px;
+  max-width: 320px; overflow: hidden; text-overflow: ellipsis; display: inline-block;
+}
