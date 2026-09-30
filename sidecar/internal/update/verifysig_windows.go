@@ -1,6 +1,6 @@
 //go:build windows
 
-package main
+package update
 
 // Authenticode verification of the staged jarvis.exe before it's installed:
 // WinVerifyTrust for chain validity + an optional publisher pin, because a
@@ -18,8 +18,8 @@ import (
 
 // expectedPublisherCN pins the Authenticode signer's subject CN (the company
 // name on the OV certificate); stamped at release with
-// -X main.expectedPublisherCN=<CN>. Empty (dev builds) verifies the chain
-// only, with a loud warning.
+// -X 'github.com/jarvis/sidecar/internal/update.expectedPublisherCN=<CN>'.
+// Empty (dev builds) verifies the chain only, with a loud warning.
 var expectedPublisherCN = ""
 
 var (
@@ -67,11 +67,11 @@ type winTrustData struct {
 	pSignatureSettings  uintptr
 }
 
-// verifyPayloadSignature validates the Authenticode signature on the staged
+// VerifyPayloadSignature validates the Authenticode signature on the staged
 // exe. Revocation is checked from cache only — the machine may be offline mid
 // install, and the sha512 pin against the registry already anchors freshness.
-func verifyPayloadSignature(stagedBin string) error {
-	exe := filepath.Join(stagedBin, sidecarExeName)
+func VerifyPayloadSignature(stagedBin string) error {
+	exe := filepath.Join(stagedBin, WindowsExeName)
 
 	pathW, err := windows.UTF16PtrFromString(exe)
 	if err != nil {
@@ -99,7 +99,7 @@ func verifyPayloadSignature(stagedBin string) error {
 	}
 
 	if expectedPublisherCN == "" {
-		logf("warning: no pinned publisher in this installer build — verifying signature chain only")
+		Logf("warning: no pinned publisher in this build — verifying signature chain only")
 		return nil
 	}
 	// Publisher pin: chain validity alone would accept ANY signed executable,

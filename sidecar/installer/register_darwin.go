@@ -12,6 +12,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"github.com/jarvis/sidecar/internal/update"
 )
 
 const retainedUninstallerName = "Uninstall Jarvis.app"
@@ -55,7 +57,7 @@ func registerInstall(_, _ string) error {
 		return err
 	}
 	os.RemoveAll(dst)
-	return copyTree(bundle, dst)
+	return update.CopyTree(bundle, dst)
 }
 
 // bundleRootOf walks up from an executable path to the enclosing .app bundle,

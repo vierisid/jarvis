@@ -16,13 +16,12 @@ import (
 	"golang.org/x/sys/windows/registry"
 
 	"github.com/jarvis/sidecar/internal/autostart"
+	"github.com/jarvis/sidecar/internal/update"
 )
 
 const (
-	sidecarExeName = "jarvis.exe"
-	// uninstallKeyPath is where the Windows-integration PR registers the app;
-	// detection reads it already so updates keep working once it exists.
-	uninstallKeyPath = `Software\Microsoft\Windows\CurrentVersion\Uninstall\Jarvis`
+	sidecarExeName   = update.WindowsExeName
+	uninstallKeyPath = update.UninstallKeyPath
 
 	trayWindowClass = "JarvisSidecarTray"
 	trayWmCopyData  = 0x004A
@@ -61,24 +60,13 @@ func detectInstalled() (installedSidecar, error) {
 	}
 	if base := os.Getenv("LOCALAPPDATA"); base != "" {
 		dir := filepath.Join(base, "Programs", "Jarvis")
-		if v, err := installedBinaryVersion(dir); err == nil {
+		if v, err := update.InstalledBinaryVersion(dir); err == nil {
 			inst.Version, inst.InstallDir = v, dir
 			return inst, nil
 		}
 	}
 	inst.PackageManager = sidecarPackageManager()
 	return inst, nil
-}
-
-// installedBinaryVersion works despite the sidecar's -H windowsgui subsystem:
-// os/exec wires pipes explicitly, so main.go's fmt.Println(sidecarVersion) is
-// capturable.
-func installedBinaryVersion(installDir string) (string, error) {
-	out, err := exec.Command(filepath.Join(installDir, sidecarExeName), "--version").Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
 }
 
 type copyDataStruct struct {
@@ -163,73 +151,6 @@ func findTrayWindow() uintptr {
 	}
 	hwnd, _, _ := procFindWindowW.Call(uintptr(unsafe.Pointer(cls)), 0)
 	return hwnd
-}
-
-// checkPayloadLayout rejects a package missing the executable we install, so
-// a malformed publish does not surface as a signature failure.
-func checkPayloadLayout(stagedBin, version string) error {
-	if _, err := os.Stat(filepath.Join(stagedBin, sidecarExeName)); err != nil {
-		return fmt.Errorf("sidecar %s should contain %s but does not — the published package looks malformed",
-			version, sidecarExeName)
-	}
-	return nil
-}
-
-// swapInstall replaces jarvis.exe in installDir (the only file the win32
-// package ships) with a rename-based rollback: the running instance was
-// already stopped, so the file lock is released.
-func swapInstall(stagedBin, installDir string) error {
-	src := filepath.Join(stagedBin, sidecarExeName)
-	if _, err := os.Stat(src); err != nil {
-		return fmt.Errorf("payload lacks %s: %w", sidecarExeName, err)
-	}
-	dst := filepath.Join(installDir, sidecarExeName)
-	old := dst + ".old"
-
-	staged := dst + ".staging"
-	os.Remove(staged)
-	if err := copyFilePreserve(src, staged); err != nil {
-		return err
-	}
-	os.Remove(old)
-	hadOld := false
-	if _, err := os.Stat(dst); err == nil {
-		if err := os.Rename(dst, old); err != nil {
-			os.Remove(staged)
-			return err
-		}
-		hadOld = true
-	}
-	if err := os.Rename(staged, dst); err != nil {
-		if hadOld {
-			_ = os.Rename(old, dst)
-		}
-		os.Remove(staged)
-		return err
-	}
-	os.Remove(old)
-	return nil
-}
-
-func copyFilePreserve(src, dst string) error {
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer in.Close()
-	fi, err := in.Stat()
-	if err != nil {
-		return err
-	}
-	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, fi.Mode().Perm())
-	if err != nil {
-		return err
-	}
-	if _, err := out.ReadFrom(in); err != nil {
-		out.Close()
-		return err
-	}
-	return out.Close()
 }
 
 // launchInstalled starts the installed sidecar. No --setup handoff on

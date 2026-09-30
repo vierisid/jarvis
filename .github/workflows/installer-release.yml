@@ -158,7 +158,7 @@ jobs:
           # name — always contains spaces) must carry its own quotes through
           # to the linker.
           LDFLAGS="-s -w -H windowsgui -X main.installerVersion=$(cat installer/VERSION)"
-          LDFLAGS="$LDFLAGS -X 'main.expectedPublisherCN=${SIGNING_PUBLISHER_CN}'"
+          LDFLAGS="$LDFLAGS -X 'github.com/jarvis/sidecar/internal/update.expectedPublisherCN=${SIGNING_PUBLISHER_CN}'"
           go build -ldflags "$LDFLAGS" -o Jarvis-Setup.exe ./installer/
           if [ -n "${SIGNING_PUBLISHER_CN}" ] && ! strings Jarvis-Setup.exe | grep -qF "${SIGNING_PUBLISHER_CN}"; then
             echo "::error::publisher pin '${SIGNING_PUBLISHER_CN}' is not present in Jarvis-Setup.exe — check the -ldflags quoting"
@@ -221,7 +221,7 @@ jobs:
             echo "::warning::APPLE_TEAM_ID repo variable is unset — the installer will accept any Apple-anchored payload."
           fi
           LDFLAGS="-s -w -X main.installerVersion=$(cat installer/VERSION)"
-          LDFLAGS="$LDFLAGS -X 'main.expectedTeamID=${APPLE_TEAM_ID}'"
+          LDFLAGS="$LDFLAGS -X 'github.com/jarvis/sidecar/internal/update.expectedTeamID=${APPLE_TEAM_ID}'"
           CC="clang -target arm64-apple-macos11"  CXX="clang++ -target arm64-apple-macos11" \
             GOOS=darwin GOARCH=arm64 go build -ldflags "$LDFLAGS" -o /tmp/installer-arm64 ./installer/
           CC="clang -target x86_64-apple-macos11" CXX="clang++ -target x86_64-apple-macos11" \

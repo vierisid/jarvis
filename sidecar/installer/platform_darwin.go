@@ -4,7 +4,6 @@ package main
 
 import (
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -15,14 +14,10 @@ import (
 	"time"
 
 	"github.com/jarvis/sidecar/internal/autostart"
+	"github.com/jarvis/sidecar/internal/update"
 )
 
-const appBundleName = "Jarvis.app"
-
-// expectedTeamID pins codesign verification to our Developer ID team; stamped
-// at release with -X main.expectedTeamID=<TEAMID>. Empty (dev builds) verifies
-// the signature chain only, with a loud warning.
-var expectedTeamID = ""
+const appBundleName = update.AppBundleName
 
 // installDirDefault prefers /Applications, falling back to ~/Applications for
 // non-admin users.
@@ -83,16 +78,6 @@ func detectInstalled() (installedSidecar, error) {
 	return inst, nil
 }
 
-// installedBinaryVersion asks the installed bundle's binary directly.
-func installedBinaryVersion(installDir string) (string, error) {
-	bin := filepath.Join(installDir, appBundleName, "Contents", "MacOS", "jarvis")
-	out, err := exec.Command(bin, "--version").Output()
-	if err != nil {
-		return "", err
-	}
-	return strings.TrimSpace(string(out)), nil
-}
-
 // stopRunningSidecar SIGTERMs any jarvis process running from the installed
 // bundle (main.go handles SIGTERM cleanly), waits up to 15s, then SIGKILLs.
 func stopRunningSidecar(inst installedSidecar, _ bool) error {
@@ -139,78 +124,6 @@ func pidsForExecutable(binPath string) ([]int, error) {
 		}
 	}
 	return pids, nil
-}
-
-// verifyPayloadSignature runs Gatekeeper's own checks on the staged bundle.
-// With expectedTeamID set (release builds) the codesign requirement pins the
-// Developer ID team, so a valid-but-foreign signature is refused.
-// checkPayloadLayout rejects a package that predates the Jarvis.app bundle.
-func checkPayloadLayout(stagedBin, version string) error {
-	if _, err := os.Stat(filepath.Join(stagedBin, appBundleName)); err == nil {
-		return nil
-	}
-	if versionLess(version, minBundledSidecarVersion) {
-		return fmt.Errorf(
-			"sidecar %s ships a bare binary, not the %s bundle this installer requires "+
-				"(macOS notifications and permission grants both need the bundle). "+
-				"The npm 'latest' tag has to reach %s or newer before this installer can be used",
-			version, appBundleName, minBundledSidecarVersion)
-	}
-	return fmt.Errorf("sidecar %s should contain %s but does not — the published package looks malformed",
-		version, appBundleName)
-}
-
-func verifyPayloadSignature(stagedBin string) error {
-	app := filepath.Join(stagedBin, appBundleName)
-	args := []string{"--verify", "--deep", "--strict", app}
-	if expectedTeamID != "" {
-		req := fmt.Sprintf(`anchor apple generic and certificate leaf[subject.OU] = "%s"`, expectedTeamID)
-		args = []string{"--verify", "--deep", "--strict", "-R=" + req, app}
-	} else {
-		logf("warning: no pinned team id in this installer build — verifying signature chain only")
-	}
-	if out, err := exec.Command("codesign", args...).CombinedOutput(); err != nil {
-		return fmt.Errorf("codesign: %v — %s", err, strings.TrimSpace(string(out)))
-	}
-	if out, err := exec.Command("spctl", "--assess", "--type", "execute", app).CombinedOutput(); err != nil {
-		return fmt.Errorf("spctl assessment refused the app: %v — %s", err, strings.TrimSpace(string(out)))
-	}
-	return nil
-}
-
-// swapInstall atomically replaces <installDir>/Jarvis.app with the staged one,
-// keeping the old bundle for rollback until the swap succeeds.
-func swapInstall(stagedBin, installDir string) error {
-	src := filepath.Join(stagedBin, appBundleName)
-	dst := filepath.Join(installDir, appBundleName)
-	old := dst + ".old"
-
-	// Stage on the destination volume so the final rename is atomic.
-	stagedOnVolume := dst + ".staging"
-	os.RemoveAll(stagedOnVolume)
-	if err := copyTree(src, stagedOnVolume); err != nil {
-		os.RemoveAll(stagedOnVolume)
-		return err
-	}
-
-	os.RemoveAll(old)
-	hadOld := false
-	if _, err := os.Stat(dst); err == nil {
-		if err := os.Rename(dst, old); err != nil {
-			os.RemoveAll(stagedOnVolume)
-			return err
-		}
-		hadOld = true
-	}
-	if err := os.Rename(stagedOnVolume, dst); err != nil {
-		if hadOld {
-			_ = os.Rename(old, dst) // roll back
-		}
-		os.RemoveAll(stagedOnVolume)
-		return err
-	}
-	os.RemoveAll(old)
-	return nil
 }
 
 // launchInstalled opens the installed app; on first install it hands off to
@@ -284,43 +197,3 @@ func runUninstall(silent bool) int {
 // applyAutostart is a no-op on macOS: the sidecar's --setup wizard owns the
 // login-item choice (launched on first install), keeping one decision point.
 func applyAutostart(string, bool) error { return nil }
-
-// copyTree copies a directory preserving modes and symlinks (the .app payload
-// has no symlinks post-extract, but Frameworks in future payloads might).
-func copyTree(src, dst string) error {
-	return filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-		rel, err := filepath.Rel(src, path)
-		if err != nil {
-			return err
-		}
-		target := filepath.Join(dst, rel)
-		switch {
-		case info.IsDir():
-			return os.MkdirAll(target, info.Mode().Perm())
-		case info.Mode()&os.ModeSymlink != 0:
-			link, err := os.Readlink(path)
-			if err != nil {
-				return err
-			}
-			return os.Symlink(link, target)
-		default:
-			in, err := os.Open(path)
-			if err != nil {
-				return err
-			}
-			defer in.Close()
-			out, err := os.OpenFile(target, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, info.Mode().Perm())
-			if err != nil {
-				return err
-			}
-			if _, err := io.Copy(out, in); err != nil {
-				out.Close()
-				return err
-			}
-			return out.Close()
-		}
-	})
-}

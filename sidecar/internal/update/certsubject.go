@@ -1,4 +1,4 @@
-package main
+package update
 
 // The platform-neutral pieces of the Windows publisher pin (the signer-subject
 // script and X.500 subject-DN parsing), kept here so they can be unit-tested on

@@ -1,4 +1,4 @@
-package main
+package update
 
 import (
 	"archive/tar"
@@ -17,25 +17,25 @@ import (
 // verification ever runs.
 const maxUncompressedBytes = 1 << 30 // 1 GiB
 
-// errPayloadRejected marks failures that mean "this payload is not
+// PayloadRejectedError marks failures that mean "this payload is not
 // acceptable" (guard violations, malformed archive) as opposed to local I/O
 // failures — the caller maps the two to different exit codes.
-type errPayloadRejected struct{ err error }
+type PayloadRejectedError struct{ err error }
 
-func (e errPayloadRejected) Error() string { return e.err.Error() }
-func (e errPayloadRejected) Unwrap() error { return e.err }
+func (e PayloadRejectedError) Error() string { return e.err.Error() }
+func (e PayloadRejectedError) Unwrap() error { return e.err }
 
 func rejected(format string, args ...any) error {
-	return errPayloadRejected{fmt.Errorf(format, args...)}
+	return PayloadRejectedError{fmt.Errorf(format, args...)}
 }
 
-// extractPayload unpacks the npm tarball into destDir, keeping only the
+// Extract unpacks the npm tarball into destDir, keeping only the
 // package's bin/ subtree (where the sidecar binary / Jarvis.app lives).
 // Guards: entries must stay under destDir (no absolute paths, no ..),
 // symlinks/hardlinks are rejected outright (nothing in our packages uses
 // them, so any occurrence is hostile), and the inflated size is bounded.
 // Exec bits are preserved (the .app's Mach-Os need them).
-func extractPayload(tgzPath, destDir string) error {
+func Extract(tgzPath, destDir string) error {
 	f, err := os.Open(tgzPath)
 	if err != nil {
 		return err

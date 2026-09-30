@@ -21,21 +21,7 @@ func detectInstalled() (installedSidecar, error) {
 	return inst, nil
 }
 
-func installedBinaryVersion(string) (string, error) {
-	return "", fmt.Errorf("unsupported platform")
-}
-
 func stopRunningSidecar(installedSidecar, bool) error { return nil }
-
-func checkPayloadLayout(string, string) error { return nil }
-
-func verifyPayloadSignature(string) error {
-	return fmt.Errorf("code-signature verification is not available on this platform")
-}
-
-func swapInstall(string, string) error {
-	return fmt.Errorf("unsupported platform")
-}
 
 func launchInstalled(string, string, bool) error {
 	return fmt.Errorf("unsupported platform")

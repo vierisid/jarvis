@@ -1,4 +1,4 @@
-package main
+package update
 
 import (
 	"fmt"
@@ -91,9 +91,9 @@ func compareSemver(a, b semver) int {
 	return 0
 }
 
-// versionLess reports a < b for two version strings; parse failures make the
+// VersionLess reports a < b for two version strings; parse failures make the
 // unparseable side lose (so a weird installed version still updates).
-func versionLess(a, b string) bool {
+func VersionLess(a, b string) bool {
 	av, aerr := parseSemver(a)
 	bv, berr := parseSemver(b)
 	if aerr != nil {
@@ -103,4 +103,17 @@ func versionLess(a, b string) bool {
 		return false
 	}
 	return compareSemver(av, bv) < 0
+}
+
+// StrictlyNewer reports candidate > current with BOTH sides parseable. It is
+// the self-update gate, so unlike VersionLess it never lets an unparseable
+// side through: a "dev" build is never updated, and a garbage candidate is
+// never installed.
+func StrictlyNewer(candidate, current string) bool {
+	cv, cerr := parseSemver(candidate)
+	rv, rerr := parseSemver(current)
+	if cerr != nil || rerr != nil {
+		return false
+	}
+	return compareSemver(cv, rv) > 0
 }

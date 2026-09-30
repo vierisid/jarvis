@@ -1,4 +1,4 @@
-package main
+package update
 
 import (
 	"archive/tar"
@@ -65,7 +65,7 @@ func TestExtractHappyPath(t *testing.T) {
 		{name: "package/bin/Jarvis.app/Contents/MacOS/jarvis", body: []byte("#!fake"), mode: 0755},
 	})
 	dest := t.TempDir()
-	if err := extractPayload(tgz, dest); err != nil {
+	if err := Extract(tgz, dest); err != nil {
 		t.Fatalf("extract: %v", err)
 	}
 	if _, err := os.Stat(filepath.Join(dest, "bin", "jarvis.exe")); err != nil {
@@ -87,7 +87,7 @@ func TestExtractRejectsTraversal(t *testing.T) {
 	tgz := writeTgz(t, []tgzEntry{
 		{name: "package/bin/../../evil", body: []byte("x")},
 	})
-	if err := extractPayload(tgz, t.TempDir()); err == nil {
+	if err := Extract(tgz, t.TempDir()); err == nil {
 		t.Fatal("path traversal accepted")
 	}
 }
@@ -97,7 +97,7 @@ func TestExtractRejectsSymlinks(t *testing.T) {
 		{name: "package/bin/jarvis", body: []byte("x"), mode: 0755},
 		{name: "package/bin/link", typeflag: tar.TypeSymlink, linkname: "/etc/passwd"},
 	})
-	if err := extractPayload(tgz, t.TempDir()); err == nil {
+	if err := Extract(tgz, t.TempDir()); err == nil {
 		t.Fatal("symlink entry accepted")
 	}
 }
@@ -106,7 +106,7 @@ func TestExtractRejectsEmptyPayload(t *testing.T) {
 	tgz := writeTgz(t, []tgzEntry{
 		{name: "package/package.json", body: []byte("{}")},
 	})
-	if err := extractPayload(tgz, t.TempDir()); err == nil {
+	if err := Extract(tgz, t.TempDir()); err == nil {
 		t.Fatal("payload without bin/** accepted")
 	}
 }

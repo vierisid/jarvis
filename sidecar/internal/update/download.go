@@ -1,4 +1,4 @@
-package main
+package update
 
 import (
 	"crypto/sha512"
@@ -15,10 +15,10 @@ import (
 // registry response claiming gigabytes is wrong or hostile.
 const maxTarballBytes = 512 << 20
 
-// downloadTarball streams the package tarball into workDir, hashing while it
+// Download streams the package tarball into workDir, hashing while it
 // writes, and fails unless the sha512 matches the registry's integrity value.
-// fetchLatestRelease already required the tarball URL to be HTTPS.
-func downloadTarball(rel *pkgRelease, workDir string) (string, error) {
+// ResolveRelease already required the tarball URL to be HTTPS.
+func Download(rel *Release, workDir string) (string, error) {
 	resp, err := httpClient.Get(rel.TarballURL)
 	if err != nil {
 		return "", fmt.Errorf("download failed: %w", err)

@@ -1,9 +1,10 @@
-package main
+package update
 
 import (
 	"crypto/sha512"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +15,7 @@ import (
 // platform's package name.
 func fakeRegistry(t *testing.T, version string, tgz []byte, tamperIntegrity bool) *httptest.Server {
 	t.Helper()
-	platform, err := npmPlatformPackage()
+	platform, err := PlatformPackage()
 	if err != nil {
 		t.Skipf("platform unsupported: %v", err)
 	}
@@ -54,18 +55,18 @@ func TestFetchAndDownloadHappyPath(t *testing.T) {
 	tgz := buildTgz(t, []tgzEntry{{name: "package/bin/jarvis", body: []byte("fake"), mode: 0755}})
 	srv := fakeRegistry(t, "1.2.3", tgz, false)
 
-	rel, err := fetchLatestRelease(srv.URL)
+	rel, err := ResolveRelease(srv.URL, LatestTag)
 	if err != nil {
-		t.Fatalf("fetchLatestRelease: %v", err)
+		t.Fatalf("ResolveRelease: %v", err)
 	}
 	if rel.Version != "1.2.3" {
 		t.Errorf("version = %q, want 1.2.3", rel.Version)
 	}
-	path, err := downloadTarball(rel, t.TempDir())
+	path, err := Download(rel, t.TempDir())
 	if err != nil {
-		t.Fatalf("downloadTarball: %v", err)
+		t.Fatalf("Download: %v", err)
 	}
-	if err := extractPayload(path, t.TempDir()); err != nil {
+	if err := Extract(path, t.TempDir()); err != nil {
 		t.Errorf("extract of downloaded payload: %v", err)
 	}
 }
@@ -74,17 +75,17 @@ func TestDownloadRejectsHashMismatch(t *testing.T) {
 	tgz := buildTgz(t, []tgzEntry{{name: "package/bin/jarvis", body: []byte("fake"), mode: 0755}})
 	srv := fakeRegistry(t, "1.2.3", tgz, true)
 
-	rel, err := fetchLatestRelease(srv.URL)
+	rel, err := ResolveRelease(srv.URL, LatestTag)
 	if err != nil {
-		t.Fatalf("fetchLatestRelease: %v", err)
+		t.Fatalf("ResolveRelease: %v", err)
 	}
-	if _, err := downloadTarball(rel, t.TempDir()); err == nil {
+	if _, err := Download(rel, t.TempDir()); err == nil {
 		t.Fatal("tampered integrity accepted")
 	}
 }
 
 func TestFetchRejectsMissingLatest(t *testing.T) {
-	platform, err := npmPlatformPackage()
+	platform, err := PlatformPackage()
 	if err != nil {
 		t.Skipf("platform unsupported: %v", err)
 	}
@@ -92,7 +93,7 @@ func TestFetchRejectsMissingLatest(t *testing.T) {
 		fmt.Fprint(w, `{"dist-tags":{},"versions":{}}`)
 	}))
 	t.Cleanup(srv.Close)
-	if _, err := fetchLatestRelease(srv.URL); err == nil {
+	if _, err := ResolveRelease(srv.URL, LatestTag); err == nil {
 		t.Fatalf("missing latest dist-tag accepted for %s", platform)
 	}
 }
@@ -102,7 +103,7 @@ func TestFetchRejectsRegistryError(t *testing.T) {
 		http.Error(w, "boom", http.StatusInternalServerError)
 	}))
 	t.Cleanup(srv.Close)
-	if _, err := fetchLatestRelease(srv.URL); err == nil {
+	if _, err := ResolveRelease(srv.URL, LatestTag); err == nil {
 		t.Fatal("HTTP 500 accepted")
 	}
 }
@@ -120,5 +121,34 @@ func TestSecureTarballURL(t *testing.T) {
 		if got := secureTarballURL(u); got != want {
 			t.Errorf("secureTarballURL(%q) = %v, want %v", u, got, want)
 		}
+	}
+}
+
+// A self-updating sidecar asks for the exact version its brain ships with,
+// not whatever `latest` says: a brain a few hours behind must not be handed a
+// sidecar newer than it knows.
+func TestResolveExactVersion(t *testing.T) {
+	tgz := buildTgz(t, []tgzEntry{{name: "package/bin/jarvis", body: []byte("fake"), mode: 0755}})
+	srv := fakeRegistry(t, "1.2.3", tgz, false)
+
+	rel, err := ResolveRelease(srv.URL, "1.2.3")
+	if err != nil {
+		t.Fatalf("ResolveRelease: %v", err)
+	}
+	if rel.Version != "1.2.3" {
+		t.Errorf("version = %q, want 1.2.3", rel.Version)
+	}
+}
+
+// A version the registry does not carry yet (the brain published before its
+// paired sidecar) is ErrVersionNotFound, which the updater treats as "retry
+// later" rather than as a failure.
+func TestResolveMissingExactVersion(t *testing.T) {
+	tgz := buildTgz(t, []tgzEntry{{name: "package/bin/jarvis", body: []byte("fake"), mode: 0755}})
+	srv := fakeRegistry(t, "1.2.3", tgz, false)
+
+	_, err := ResolveRelease(srv.URL, "1.3.0")
+	if !errors.Is(err, ErrVersionNotFound) {
+		t.Fatalf("err = %v, want ErrVersionNotFound", err)
 	}
 }

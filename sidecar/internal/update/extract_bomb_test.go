@@ -1,4 +1,4 @@
-package main
+package update
 
 import (
 	"archive/tar"
@@ -42,11 +42,11 @@ func TestExtractRejectsDecompressionBomb(t *testing.T) {
 	}
 	t.Logf("compressed bomb: %d bytes", buf.Len())
 
-	err := extractPayload(p, t.TempDir())
+	err := Extract(p, t.TempDir())
 	if err == nil {
 		t.Fatal("decompression bomb accepted")
 	}
-	var rej errPayloadRejected
+	var rej PayloadRejectedError
 	if !errors.As(err, &rej) {
 		t.Errorf("bomb should be classified as a payload rejection (exit 3), got %T: %v", err, err)
 	}
@@ -64,14 +64,14 @@ func TestGuardFailuresAreClassifiedAsRejections(t *testing.T) {
 		"empty": {{name: "package/package.json", body: []byte("{}")}},
 	}
 	for name, entries := range cases {
-		err := extractPayload(writeTgz(t, entries), t.TempDir())
+		err := Extract(writeTgz(t, entries), t.TempDir())
 		if err == nil {
 			t.Errorf("%s: accepted", name)
 			continue
 		}
-		var rej errPayloadRejected
+		var rej PayloadRejectedError
 		if !errors.As(err, &rej) {
-			t.Errorf("%s: got %T, want errPayloadRejected", name, err)
+			t.Errorf("%s: got %T, want PayloadRejectedError", name, err)
 		}
 	}
 }

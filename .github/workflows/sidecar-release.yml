@@ -171,23 +171,43 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "1"
+          # The self-updater verifies the payloads it installs exactly as
+          # Jarvis-Setup does (internal/update), so it carries the same pins:
+          # the Authenticode publisher on Windows, the Developer ID team on
+          # macOS. Empty means chain-only + a warning in sidecar.log.
+          SIGNING_PUBLISHER_CN: ${{ vars.SIGNING_PUBLISHER_CN }}
+          APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
         run: |
           set -euo pipefail
           LDFLAGS="-s -w -X main.sidecarVersion=$(cat VERSION)"
+          PIN=""
           case "${{ matrix.setup }}" in
             windows-cross)
               export CC=x86_64-w64-mingw32-gcc CXX=x86_64-w64-mingw32-g++
               export CGO_CFLAGS="-I$(pwd)/include" CGO_CXXFLAGS="-I$(pwd)/include"
               # GUI subsystem: no console window when the .exe is launched.
               LDFLAGS="$LDFLAGS -H windowsgui"
+              PIN="${SIGNING_PUBLISHER_CN}"
+              # The go tool splits -ldflags on whitespace, so the CN (a company
+              # name, always with spaces) carries its own quotes to the linker.
+              LDFLAGS="$LDFLAGS -X 'github.com/jarvis/sidecar/internal/update.expectedPublisherCN=${PIN}'"
               ;;
             darwin)
               if [ "${{ matrix.goarch }}" = "amd64" ]; then TARGET=x86_64-apple-macos11; else TARGET=arm64-apple-macos11; fi
               export CC="clang -target $TARGET" CXX="clang++ -target $TARGET"
+              PIN="${APPLE_TEAM_ID}"
+              LDFLAGS="$LDFLAGS -X 'github.com/jarvis/sidecar/internal/update.expectedTeamID=${PIN}'"
               ;;
           esac
+          if [ "${{ matrix.setup }}" != "linux" ] && [ -z "${PIN}" ]; then
+            echo "::warning::no signing pin for ${{ matrix.goos }} — self-updates from this build will accept any validly signed payload."
+          fi
           go build -ldflags "$LDFLAGS" \
             -o "${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}" .
+          if [ -n "${PIN}" ] && ! strings "${{ env.SIDECAR_BIN }}${{ matrix.ext || '' }}" | grep -qF "${PIN}"; then
+            echo "::error::signing pin '${PIN}' is not present in the sidecar binary — check the -ldflags quoting"
+            exit 1
+          fi
 
       # Windows signing needs BOTH the KMS keyring variable AND the issued
       # certificate chain in the repo. They arrive at DIFFERENT times: the

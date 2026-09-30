@@ -14,6 +14,8 @@ import (
 	"strings"
 
 	"golang.org/x/sys/windows/registry"
+
+	"github.com/jarvis/sidecar/internal/update"
 )
 
 const (
@@ -57,7 +59,7 @@ func registerInstall(installDir, version string) error {
 
 	var problems []string
 	if self, err := os.Executable(); err == nil {
-		if err := copyFilePreserve(self, uninstallPath); err != nil {
+		if err := update.CopyFilePreserve(self, uninstallPath); err != nil {
 			problems = append(problems, fmt.Sprintf("uninstaller copy: %v", err))
 		}
 	}
