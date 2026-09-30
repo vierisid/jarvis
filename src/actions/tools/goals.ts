@@ -104,7 +104,7 @@ export function createManageGoalsTool(deps: GoalToolDeps): ToolDefinition {
           if (text) {
             // NL goal creation
             try {
-              const proposal = await deps.nlBuilder.parseGoal(text);
+              const proposal = await deps.nlBuilder.parseGoal(text, params.parent_id as string | undefined);
 
               if (proposal.clarifying_questions?.length) {
                 return `Before creating this goal, I have some questions:\n${proposal.clarifying_questions.map((q, i) => `${i + 1}. ${q}`).join('\n')}\n\nPlease answer these and I'll create the full OKR breakdown.`;
@@ -128,10 +128,14 @@ export function createManageGoalsTool(deps: GoalToolDeps): ToolDefinition {
           if (title) {
             // Quick creation
             const level = (params.level as string) ?? 'task';
-            const goal = deps.goalService.createGoal(title, level as any, {
-              parent_id: params.parent_id as string | undefined,
-            });
-            return `Created ${level}: "${goal.title}" (${goal.id})`;
+            try {
+              const goal = deps.goalService.createGoal(title, level as any, {
+                parent_id: params.parent_id as string | undefined,
+              });
+              return `Created ${level}: "${goal.title}" (${goal.id})`;
+            } catch (err) {
+              return `Error creating goal: ${err instanceof Error ? err.message : err}`;
+            }
           }
 
           return 'Error: Provide either "text" (NL description) or "title" (quick create).';

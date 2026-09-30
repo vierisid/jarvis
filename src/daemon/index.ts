@@ -5756,7 +5756,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             const llm = agentService.getLLMManager();
             const style = goalsConfig?.accountability_style ?? 'drill_sergeant';
             const escWeeks = goalsConfig?.escalation_weeks ?? { pressure: 1, root_cause: 3, suggest_kill: 4 };
-            const goalNlBuilder = new NLGoalBuilder(llm);
+            const goalNlBuilder = new NLGoalBuilder(llm, { timezone: jarvisConfig.timezone });
             const goalEstimator = new GoalEstimator(llm);
             const goalRhythm = new DailyRhythm(llm, style);
             const goalAccountability = new AccountabilityEngine(llm, style, escWeeks);

@@ -5,6 +5,7 @@
 import type { SQLQueryBindings } from 'bun:sqlite';
 import { getDb, generateId } from './schema.ts';
 import { getGoalReviewRecord } from '../goals/review-evidence.ts';
+import { enumeration, GOAL_LEVELS, invalid, nextGoalLevel, text, validateGoalFields } from '../goals/validation.ts';
 import type {
   Goal, GoalProgressEntry, GoalCheckIn,
   GoalLevel, GoalStatus, GoalHealth, EscalationStage,
@@ -50,18 +51,31 @@ function parseCheckIn(row: CheckInRow): GoalCheckIn {
   };
 }
 
+/** Missing intermediate deadlines do not remove a dated ancestor's bound. */
+function assertAncestorDeadline(deadline: number | null | undefined, parentId: string | null | undefined): void {
+  const visited = new Set<string>();
+  while (parentId != null) {
+    if (visited.has(parentId)) invalid('goal.parent_id', 'contains a cycle');
+    visited.add(parentId);
+    const parent = getGoal(parentId);
+    if (!parent) invalid('goal.parent_id', 'goal does not exist');
+    if (deadline != null && parent.deadline !== null && deadline > parent.deadline) invalid('goal.deadline', 'cannot be after its ancestor deadline');
+    parentId = parent.parent_id;
+  }
+}
+
 // ── Goals CRUD ──────────────────────────────────────────────────────
 
 export function createGoal(
   title: string,
   level: GoalLevel,
   opts?: {
-    parent_id?: string;
+    parent_id?: string | null;
     description?: string;
     success_criteria?: string;
     time_horizon?: string;
-    deadline?: number;
-    estimated_hours?: number;
+    deadline?: number | null;
+    estimated_hours?: number | null;
     authority_level?: number;
     tags?: string[];
     dependencies?: string[];
@@ -69,36 +83,47 @@ export function createGoal(
     sort_order?: number;
   },
 ): Goal {
+  text(title, 'goal.title');
+  enumeration(level, GOAL_LEVELS, 'goal.level');
+  opts = validateGoalFields(opts ?? {}, 'create') as typeof opts;
   const db = getDb();
-  const id = generateId();
-  const now = Date.now();
+  return db.transaction(() => {
+    assertAncestorDeadline(opts?.deadline, opts?.parent_id);
+    if (opts?.parent_id != null) {
+      const parent = getGoal(opts.parent_id);
+      if (!parent) invalid('goal.parent_id', 'goal does not exist');
+      if (nextGoalLevel(parent.level) !== level) invalid('goal.level', `must be the next level below ${parent.level}`);
+    }
+    const id = generateId();
+    const now = Date.now();
 
-  db.prepare(
-    `INSERT INTO goals (id, parent_id, level, title, description, success_criteria,
-      time_horizon, score, score_reason, status, health, deadline, started_at,
-      estimated_hours, actual_hours, authority_level, tags, dependencies,
-      escalation_stage, escalation_started_at, sort_order, created_at, updated_at, completed_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, 0.0, NULL, ?, 'on_track', ?, ?, ?, 0, ?, ?, ?, 'none', NULL, ?, ?, ?, NULL)`
-  ).run(
-    id,
-    opts?.parent_id ?? null,
-    level,
-    title,
-    opts?.description ?? '',
-    opts?.success_criteria ?? '',
-    opts?.time_horizon ?? 'quarterly',
-    opts?.status ?? 'draft',
-    opts?.deadline ?? null,
-    opts?.status === 'active' ? now : null,
-    opts?.estimated_hours ?? null,
-    opts?.authority_level ?? 3,
-    opts?.tags ? JSON.stringify(opts.tags) : null,
-    opts?.dependencies ? JSON.stringify(opts.dependencies) : null,
-    opts?.sort_order ?? 0,
-    now, now,
-  );
+    db.prepare(
+      `INSERT INTO goals (id, parent_id, level, title, description, success_criteria,
+        time_horizon, score, score_reason, status, health, deadline, started_at,
+        estimated_hours, actual_hours, authority_level, tags, dependencies,
+        escalation_stage, escalation_started_at, sort_order, created_at, updated_at, completed_at)
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0.0, NULL, ?, 'on_track', ?, ?, ?, 0, ?, ?, ?, 'none', NULL, ?, ?, ?, NULL)`
+    ).run(
+      id,
+      opts?.parent_id ?? null,
+      level,
+      title,
+      opts?.description ?? '',
+      opts?.success_criteria ?? '',
+      opts?.time_horizon ?? 'quarterly',
+      opts?.status ?? 'draft',
+      opts?.deadline ?? null,
+      opts?.status === 'active' ? now : null,
+      opts?.estimated_hours ?? null,
+      opts?.authority_level ?? 3,
+      opts?.tags ? JSON.stringify(opts.tags) : null,
+      opts?.dependencies ? JSON.stringify(opts.dependencies) : null,
+      opts?.sort_order ?? 0,
+      now, now,
+    );
 
-  return getGoal(id)!;
+    return getGoal(id)!;
+  })();
 }
 
 export function getGoal(id: string): Goal | null {
@@ -179,33 +204,44 @@ export function getGoalTree(rootId: string): Goal[] {
 }
 
 export function updateGoal(id: string, updates: GoalUpdate): Goal | null {
+  updates = validateGoalFields(updates, 'update') as GoalUpdate;
   const db = getDb();
-  const existing = getGoal(id);
-  if (!existing) return null;
+  return db.transaction(() => {
+    const existing = getGoal(id);
+    if (!existing) return null;
+    if (updates.deadline != null) {
+      assertAncestorDeadline(updates.deadline, existing.parent_id);
+      const laterChild = db.query(`WITH RECURSIVE descendants(id) AS (
+        SELECT id FROM goals WHERE parent_id = ?
+        UNION SELECT g.id FROM goals g JOIN descendants d ON g.parent_id = d.id
+      ) SELECT id FROM goals WHERE id IN (SELECT id FROM descendants) AND deadline > ? LIMIT 1`).get(id, updates.deadline);
+      if (laterChild) invalid('goal.deadline', 'cannot precede an existing descendant deadline');
+    }
 
-  const sets: string[] = [];
-  const params: unknown[] = [];
+    const sets: string[] = [];
+    const params: unknown[] = [];
 
-  if (updates.title !== undefined) { sets.push('title = ?'); params.push(updates.title); }
-  if (updates.description !== undefined) { sets.push('description = ?'); params.push(updates.description); }
-  if (updates.success_criteria !== undefined) { sets.push('success_criteria = ?'); params.push(updates.success_criteria); }
-  if (updates.time_horizon !== undefined) { sets.push('time_horizon = ?'); params.push(updates.time_horizon); }
-  if (updates.deadline !== undefined) { sets.push('deadline = ?'); params.push(updates.deadline); }
-  if (updates.estimated_hours !== undefined) { sets.push('estimated_hours = ?'); params.push(updates.estimated_hours); }
-  if (updates.authority_level !== undefined) { sets.push('authority_level = ?'); params.push(updates.authority_level); }
-  if (updates.tags !== undefined) { sets.push('tags = ?'); params.push(JSON.stringify(updates.tags)); }
-  if (updates.dependencies !== undefined) { sets.push('dependencies = ?'); params.push(JSON.stringify(updates.dependencies)); }
-  if (updates.sort_order !== undefined) { sets.push('sort_order = ?'); params.push(updates.sort_order); }
+    if (updates.title !== undefined) { sets.push('title = ?'); params.push(updates.title); }
+    if (updates.description !== undefined) { sets.push('description = ?'); params.push(updates.description); }
+    if (updates.success_criteria !== undefined) { sets.push('success_criteria = ?'); params.push(updates.success_criteria); }
+    if (updates.time_horizon !== undefined) { sets.push('time_horizon = ?'); params.push(updates.time_horizon); }
+    if (updates.deadline !== undefined) { sets.push('deadline = ?'); params.push(updates.deadline); }
+    if (updates.estimated_hours !== undefined) { sets.push('estimated_hours = ?'); params.push(updates.estimated_hours); }
+    if (updates.authority_level !== undefined) { sets.push('authority_level = ?'); params.push(updates.authority_level); }
+    if (updates.tags !== undefined) { sets.push('tags = ?'); params.push(JSON.stringify(updates.tags)); }
+    if (updates.dependencies !== undefined) { sets.push('dependencies = ?'); params.push(JSON.stringify(updates.dependencies)); }
+    if (updates.sort_order !== undefined) { sets.push('sort_order = ?'); params.push(updates.sort_order); }
 
-  if (sets.length === 0) return existing;
+    if (sets.length === 0) return existing;
 
-  sets.push('updated_at = ?');
-  params.push(Date.now());
-  params.push(id);
+    sets.push('updated_at = ?');
+    params.push(Date.now());
+    params.push(id);
 
-  db.prepare(`UPDATE goals SET ${sets.join(', ')} WHERE id = ?`).run(...(params as SQLQueryBindings[]));
+    db.prepare(`UPDATE goals SET ${sets.join(', ')} WHERE id = ?`).run(...(params as SQLQueryBindings[]));
 
-  return getGoal(id);
+    return getGoal(id);
+  })();
 }
 
 export function updateGoalScore(id: string, score: number, reason: string, source = 'user'): Goal | null {
