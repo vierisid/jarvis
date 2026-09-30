@@ -129,6 +129,7 @@ import {
   scheduleAutostartRestart,
 } from '../cli/autostart.ts';
 import { runWithOrigin } from '../llm/origin.ts';
+import { GoalValidationError, keys as goalKeys, record as goalRecord } from '../goals/validation.ts';
 
 import { createSuggestionFeedbackRoutes } from '../awareness/suggestion-feedback-routes.ts';
 
@@ -4046,39 +4047,40 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       },
       POST: async (req: Request) => {
         try {
-          const body = await req.json() as Record<string, unknown>;
-          const mode = body.mode as string | undefined;
+          const body = goalRecord(await req.json(), 'request');
+          const { mode, title, level = 'task', ...options } = body;
+          if (mode !== undefined && mode !== 'quick' && mode !== 'propose' && mode !== 'create_from_proposal') return error('Unknown goal creation mode', 400);
 
           // Natural language → OKR proposal (uses LLM)
           if (mode === 'propose') {
-            const text = body.text as string;
-            if (!text?.trim()) return error('text is required for propose mode', 400);
+            goalKeys(body, ['mode', 'text', 'parent_id'], 'request');
+            const text = body.text;
+            if (typeof text !== 'string' || !text.trim()) return error('text is required for propose mode', 400);
             const { NLGoalBuilder } = await import('../goals/nl-builder.ts');
             const llmManager = ctx.agentService.getLLMManager();
-            const builder = new NLGoalBuilder(llmManager);
-            const proposal = await runWithOrigin('user', () => builder.parseGoal(text.trim()));
+            const builder = new NLGoalBuilder(llmManager, { timezone: ctx.config.timezone });
+            const proposal = await runWithOrigin('user', () => builder.parseGoal(text.trim(), body.parent_id as string | undefined));
             return json(proposal);
           }
 
           // Create goals from a confirmed proposal
           if (mode === 'create_from_proposal') {
-            const proposal = body.proposal as any;
-            if (!proposal?.objective?.title) return error('proposal with objective required', 400);
+            goalKeys(body, ['mode', 'proposal', 'parent_id'], 'request');
+            const proposal = body.proposal;
             const { NLGoalBuilder } = await import('../goals/nl-builder.ts');
-            const llmManager = ctx.agentService.getLLMManager();
-            const builder = new NLGoalBuilder(llmManager);
+            const builder = new NLGoalBuilder(undefined, { timezone: ctx.config.timezone });
             const created = builder.createFromProposal(proposal, body.parent_id as string | undefined);
             return json(created, 201);
           }
 
           // Quick create (direct)
-          const title = body.title as string;
-          const level = (body.level as string) ?? 'task';
-          if (!title) return error('title is required', 400);
           const goals = require('../vault/goals.ts');
-          const goal = goals.createGoal(title, level, body);
+          const goal = goals.createGoal(title, level, options);
           return json(goal, 201);
-        } catch (err) { return error(`${err}`); }
+        } catch (err) {
+          if (err instanceof GoalValidationError) return json({ error: err.message, code: 'INVALID_GOAL', path: err.path }, 400);
+          return error(`${err}`, err instanceof SyntaxError ? 400 : 500);
+        }
       },
     },
 
@@ -4164,7 +4166,10 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const updated = goals.updateGoal(id, body);
           if (!updated) return error('Goal not found', 404);
           return json(updated);
-        } catch (err) { return error(`${err}`); }
+        } catch (err) {
+          if (err instanceof GoalValidationError) return json({ error: err.message, code: 'INVALID_GOAL', path: err.path }, 400);
+          return error(`${err}`, err instanceof SyntaxError ? 400 : 500);
+        }
       },
       DELETE: (req: Request) => {
         try {

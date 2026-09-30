@@ -5,12 +5,14 @@
  * error patterns, and manages activity sessions.
  */
 
-import { AWARENESS_ACTIVITY_SCHEMA_VERSION } from './activity-events.ts';
+import { AWARENESS_ACTIVITY_SCHEMA_VERSION, type SessionEndedEvent } from './activity-events.ts';
 import type { AwarenessConfig } from '../config/types.ts';
 import type { ScreenContext, AwarenessEvent } from './types.ts';
-import { createSession, endSession, incrementSessionCaptureCount, updateSession } from '../vault/awareness.ts';
-import { generateId } from '../vault/schema.ts';
+import { createSession, incrementSessionCaptureCount, updateSession } from '../vault/awareness.ts';
 import { StruggleDetector } from './struggle-detector.ts';
+
+// A capture gap longer than this starts a new session.
+const IDLE_RETURN_MS = 5 * 60 * 1000;
 
 // Strong error indicators — always trigger (rare in normal output)
 const STRONG_ERROR_PATTERN = /\b(traceback|segfault|SIGSEGV|SIGABRT|panic|undefined is not|cannot read prop|stack overflow|out of memory|unhandled rejection|uncaught exception|TypeError:|ReferenceError:|SyntaxError:|RangeError:|ModuleNotFoundError|ImportError|FileNotFoundError|PermissionError|ConnectionRefusedError|ECONNREFUSED|ENOTFOUND|EPERM|Build failed|Compilation error|npm ERR!)\b/i;
@@ -36,6 +38,7 @@ export class ContextTracker {
   private previousContext: ScreenContext | null = null;
   private currentSessionId: string | null = null;
   private currentSessionApps: Set<string> = new Set();
+  private currentSessionLastObservedAt = 0;
   private sameWindowSince: number = 0;
   private lastOcrTextHash: string = '';
   private lastActivityTimestamp: number = 0;
@@ -116,32 +119,33 @@ export class ContextTracker {
 
     // Session management
     const idleGap = this.lastActivityTimestamp > 0 ? (now - this.lastActivityTimestamp) : 0;
-    const isIdleReturn = idleGap > 5 * 60 * 1000; // 5 min idle
+    const isIdleReturn = idleGap > IDLE_RETURN_MS;
 
     if (isAppChange || isIdleReturn || !this.currentSessionId) {
-      // End previous session if it exists
-      if (this.currentSessionId && isAppChange) {
-        const sessionId = this.currentSessionId;
-        const apps = Array.from(this.currentSessionApps);
-        this.endCurrentSession();
-        events.push({
-          type: 'session_ended',
-          schemaVersion: AWARENESS_ACTIVITY_SCHEMA_VERSION,
-          data: { sessionId, apps },
-          timestamp: now,
-        });
-      }
+      // Close before replacing the session, including a return to the same
+      // window after a capture gap. A repeated close produces no second event.
+      // After a capture gap the session ended somewhere inside the gap, so
+      // count at most the idle threshold of it (as activity analytics caps a
+      // long gap) instead of stretching it to the returning capture.
+      const closeAt = isIdleReturn ? Math.min(now, this.currentSessionLastObservedAt + IDLE_RETURN_MS) : now;
+      const ended = this.endCurrentSession(closeAt);
+      if (ended) events.push(ended);
 
       // Start new session
       const session = createSession({ startedAt: now, apps: [appName] });
       this.currentSessionId = session.id;
       this.currentSessionApps = new Set([appName]);
+      this.currentSessionLastObservedAt = now;
       events.push({
         type: 'session_started',
         data: { sessionId: session.id, appName },
         timestamp: now,
       });
     }
+
+    // Captures keep their source timestamps and processing order. A late
+    // observation must not move this session's end bound backward.
+    this.currentSessionLastObservedAt = Math.max(this.currentSessionLastObservedAt, now);
 
     // Track app in current session
     if (this.currentSessionId && appName) {
@@ -342,18 +346,27 @@ export class ContextTracker {
     }
   }
 
-  endCurrentSession(): void {
-    if (this.currentSessionId) {
-      try {
-        // Update session apps before ending
-        updateSession(this.currentSessionId, {
-          apps: Array.from(this.currentSessionApps),
-        });
-        endSession(this.currentSessionId);
-      } catch { /* session may not exist in test environments */ }
-      this.currentSessionId = null;
-      this.currentSessionApps.clear();
-    }
+  endCurrentSession(timestamp = Date.now()): SessionEndedEvent | null {
+    if (!this.currentSessionId) return null;
+    const endedAt = Math.max(timestamp, this.currentSessionLastObservedAt);
+    const event: SessionEndedEvent = Object.freeze({
+      type: 'session_ended',
+      schemaVersion: AWARENESS_ACTIVITY_SCHEMA_VERSION,
+      data: Object.freeze({
+        sessionId: this.currentSessionId,
+        apps: Object.freeze(Array.from(this.currentSessionApps)),
+      }),
+      timestamp: endedAt,
+    });
+    try {
+      // Persist the same snapshot in one write. Ending must not erase an
+      // already stored topic/summary, and event/row timestamps must agree.
+      updateSession(event.data.sessionId, { apps: [...event.data.apps], ended_at: endedAt });
+    } catch { /* DB may already be closed during shutdown */ }
+    this.currentSessionId = null;
+    this.currentSessionApps.clear();
+    this.currentSessionLastObservedAt = 0;
+    return event;
   }
 
   /**
