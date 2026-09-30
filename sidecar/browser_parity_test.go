@@ -264,7 +264,7 @@ func TestBrowserHandlerParityIntegration(t *testing.T) {
 	if err != nil {
 		t.Fatalf("get cdp for raw snapshot: %v", err)
 	}
-	raw, err := takePageSnapshot(cdp)
+	raw, _, err := takePageSnapshot(cdp)
 	if err != nil {
 		t.Fatalf("raw snapshot: %v", err)
 	}

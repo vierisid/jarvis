@@ -66,10 +66,22 @@ const MAX_LOOKUP_URL_LENGTH = 2048;
  * field it later lands in) is refused outright rather than trimmed. Refusing
  * costs at most one site playbook.
  */
-function usablePageUrl(url: string | null): string | null {
+export function usablePageUrl(url: string | null): string | null {
+  // A TYPE CHECK, not a cast, because the annotation above is erased at runtime
+  // and one caller is now a reply from another machine (#583). Every gate below
+  // coerces rather than rejects -- arrays have `.length`, `RegExp.test`
+  // stringifies, `new URL()` stringifies -- so `['https://mail.google.com/']`
+  // would pass all three and select Gmail's playbook. The decoder in
+  // sidecar-route.ts checks the wire types too; this makes the function's own
+  // contract true rather than dependent on its callers.
+  if (typeof url !== 'string') return null;
   if (!url) return null;
   if (url.length > MAX_LOOKUP_URL_LENGTH) return null;
-  if (/[\u0000-\u001f\u007f]/.test(url)) return null;
+  // C0, DEL, and the separators that are invisible or line-breaking outside
+  // ASCII: NEL, LS/PS (which end a line for a JavaScript reader), and the bidi
+  // overrides, which can make a logged or rendered URL read as another host
+  // entirely. A real page URL is percent-encoded and contains none of them.
+  if (/[\u0000-\u001f\u007f\u0085\u2028\u2029\u202a-\u202e]/.test(url)) return null;
   // And it must be a SITE. A playbook says "you are now on Gmail"; a `data:` or
   // `blob:` document has no site to be on, and its bytes are the attacker's in
   // full -- so `data:text/html,<!--.mail.google.com` was enough to be handed
@@ -166,8 +178,11 @@ export class WebappTemplateDelivery {
    * `pageUrl` is REQUIRED and structural (#572). It is the caller's answer to
    * "which page is this?", and the caller is the only one who can answer it: a
    * local snapshot has `PageSnapshot.browserUrl` from Chrome's frame tree, a
-   * sidecar navigate has the URL it asked for, and anything that did not land on
-   * a page -- an error, a detached dispatch -- passes null. Until #572 this
+   * sidecar-routed read has `page_url` from the frame tree on the other machine
+   * (#583), and anything that did not land on a page -- an error, a detached
+   * dispatch, a sidecar too old to report one -- passes null. Never the URL that
+   * was REQUESTED, on either path: see the rule above the browser tools in
+   * builtin.ts. Until #572 this
    * function answered the question itself, by regexing a `URL:` line out of
    * `result`. `result` is a RENDERED PAGE: its first line is `Page: <title>` and
    * a page picks its own title, newlines included, so a page could print a

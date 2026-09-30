@@ -1,7 +1,7 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { initDatabase } from '../../vault/schema.ts';
 import { upsertWebappTemplate } from '../../vault/webapp-templates.ts';
-import { WebappTemplateDelivery } from './webapp-template-injection.ts';
+import { WebappTemplateDelivery, usablePageUrl } from './webapp-template-injection.ts';
 import { splitToolReturn, toolReturnText } from '../../roles/untrusted.ts';
 import { withTemplateDeliveryScope, withoutTemplateDelivery } from './template-delivery-scope.ts';
 
@@ -306,6 +306,36 @@ describe('WebappTemplateDelivery', () => {
       expect(withTemplateDeliveryScope('sub-agent:fresh', () => delivered(delivery, snap, 'https://app.test.com/')))
         .toContain('You are now on TestApp');
       expect(delivery.scopeCountForTests()).toBe(1);
+    });
+  });
+
+  /**
+   * The validator's own contract, tested directly rather than through a caller.
+   *
+   * `usablePageUrl` is annotated `string | null`, and TypeScript erases that at
+   * runtime -- while one of its callers is now a reply from another machine
+   * (#583). Every gate inside it COERCES rather than rejects: arrays have
+   * `.length`, `RegExp.test` stringifies its argument, and so does `new URL()`.
+   * So `['https://app.test.com/']` would satisfy all three and select TestApp's
+   * playbook. The wire decoder in sidecar-route.ts checks the types too, but a
+   * validator that is only correct because of who calls it is not a validator.
+   */
+  describe('usablePageUrl refuses anything that is not a string', () => {
+    for (const [label, value] of [
+      ['an array holding a good URL', ['https://app.test.com/']],
+      ['an object that stringifies to one', { toString: () => 'https://app.test.com/' }],
+      ['a boxed string', new String('https://app.test.com/')],
+      ['a number', 12345],
+      ['a boolean', true],
+      ['an object', {}],
+    ] as const) {
+      test(label, () => {
+        expect(usablePageUrl(value as unknown as string)).toBeNull();
+      });
+    }
+
+    test('and still accepts the real thing, so the guard is not just refusing everything', () => {
+      expect(usablePageUrl('https://app.test.com/inbox')).toBe('https://app.test.com/inbox');
     });
   });
 
