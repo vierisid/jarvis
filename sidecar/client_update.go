@@ -54,7 +54,7 @@ func (c *SidecarClient) initUpdater() {
 // user chose to skip stays quiet here (tray and dashboard still offer it).
 func (c *SidecarClient) onFirstUpdateOffer(o UpdateOffer) {
 	if !o.Blocked && o.Version != "" && o.Version == c.skippedUpdateVersion() {
-		log.Printf("[update] sidecar %s is available but was skipped — not prompting", o.Version)
+		log.Printf("[update] sidecar %s is available but was skipped, not prompting", o.Version)
 		return
 	}
 	if showUpdatePrompt == nil {

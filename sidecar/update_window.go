@@ -1,9 +1,9 @@
 package main
 
 // The update prompt: a small local window offering the sidecar update the
-// brain advertised. The same window serves every entry point — the startup
+// brain advertised. The same window serves every entry point: the startup
 // offer (onFirstUpdateOffer), the tray's Update item and the dashboard hint
-// (the sidecar.update_prompt RPC) — and follows the install through its
+// (the sidecar.update_prompt RPC). It follows the install through its
 // phases, so a failure is explained where the user clicked. Windows and macOS
 // only: Linux has no local-window runner under the shared GTK loop, and its
 // dashboard installs the update directly instead.

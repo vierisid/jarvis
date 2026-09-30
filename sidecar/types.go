@@ -115,7 +115,7 @@ type SidecarRegistration struct {
 	// to accept / suggest-update / hard-block on register.
 	Version string `json:"version"`
 	// Features lists optional protocol features this sidecar supports
-	// (update_prompt, update_apply — see updater.go). Older brains ignore it.
+	// (update_prompt, update_apply; see updater.go). Older brains ignore it.
 	Features                []string                `json:"features,omitempty"`
 	Capabilities            []SidecarCapability     `json:"capabilities"`
 	UnavailableCapabilities []UnavailableCapability `json:"unavailable_capabilities,omitempty"`

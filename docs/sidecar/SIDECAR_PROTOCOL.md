@@ -984,7 +984,7 @@ A sidecar below `SIDECAR_MIN_VERSION` is refused, told what to install, and the 
 
 The offer reaches the user as a native prompt after the first registration of each process (Windows, macOS; "Skip this version" silences only this prompt), a tray item, and the dashboard. The dashboard uses two routes: `POST /api/sidecars/:id/update-prompt` opens the native prompt, and `POST /api/sidecars/:id/update` installs directly on sidecars without one (Linux).
 
-Brain → sidecar RPCs (ungated):
+Brain -> sidecar RPCs (ungated):
 
 | Method | Params | Result |
 |---|---|---|

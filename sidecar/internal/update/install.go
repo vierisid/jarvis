@@ -1,7 +1,7 @@
 package update
 
-// Install-directory operations shared by the installer (stop → swap → launch)
-// and the self-updating sidecar (swap while running → relaunch → clean up once
+// Install-directory operations shared by the installer (stop -> swap -> launch)
+// and the self-updating sidecar (swap while running -> relaunch -> clean up once
 // the new process is healthy). The live payload entry is renamed aside rather
 // than overwritten, which every platform allows even while it is executing,
 // and the previous copy is kept as <entry>.old until the caller is sure it no

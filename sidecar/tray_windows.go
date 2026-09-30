@@ -397,7 +397,7 @@ func showTrayMenu(hwnd uintptr) {
 	appendTrayDisabled(hMenu, header)
 	procAppendMenuW.Call(hMenu, trayMfSeparator, 0, 0)
 
-	// Sidecar update — the sidecar's own offer (tray_status.go), not the
+	// Sidecar update: the sidecar's own offer (tray_status.go), not the
 	// brain's; opens the same prompt as the startup offer and the dashboard.
 	if label := trayUpdateLabel(); label != "" {
 		appendTrayItem(hMenu, label, trayMenuUpdateID)

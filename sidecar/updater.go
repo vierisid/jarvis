@@ -3,8 +3,8 @@ package main
 // Self-update. The brain advertises the sidecar version it ships with
 // (register_ack / register_rejected `latest`); this file decides whether that
 // version is an update for this process, confirms it is actually published,
-// and installs it on request — swapping the payload in place for a native
-// install, or running bun/npm for a package-manager one — then hands off to
+// and installs it on request (swapping the payload in place for a native
+// install, or running bun/npm for a package-manager one), then hands off to
 // the new binary.
 //
 // The brain only ever SUGGESTS a version. Everything that makes installing it
@@ -562,7 +562,7 @@ func runPackageManager(ctx context.Context, args []string, pathEnv string) error
 	if err != nil {
 		tail := strings.TrimSpace(string(out))
 		if len(tail) > 600 {
-			tail = "…" + tail[len(tail)-600:]
+			tail = "..." + tail[len(tail)-600:]
 		}
 		if tail != "" {
 			return fmt.Errorf("%v: %s", err, tail)

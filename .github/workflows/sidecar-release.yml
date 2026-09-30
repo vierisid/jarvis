@@ -200,7 +200,7 @@ jobs:
               ;;
           esac
           if [ "${{ matrix.setup }}" != "linux" ] && [ -z "${PIN}" ]; then
-            echo "::warning::no signing pin for ${{ matrix.goos }} — self-updates from this build will accept any validly signed payload."
+            echo "::warning::no signing pin for ${{ matrix.goos }}; self-updates from this build will accept any validly signed payload."
           fi
           # -trimpath keeps -ldflags out of the embedded build info: without it
           # the pin text is in the binary even when the -X target is wrong

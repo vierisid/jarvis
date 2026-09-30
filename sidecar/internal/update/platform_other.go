@@ -28,7 +28,7 @@ func CheckPayloadLayout(stagedBin, version string) error {
 
 // VerifyPayloadSignature has nothing to check on Linux: the packages are not
 // code-signed, so the registry's sha512 (already enforced by Download) is the
-// trust anchor — the same one `npm install` relies on. Other platforms have
+// trust anchor, the same one `npm install` relies on. Other platforms have
 // no published package at all.
 func VerifyPayloadSignature(string) error {
 	if runtime.GOOS == "linux" {

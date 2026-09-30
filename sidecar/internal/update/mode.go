@@ -12,7 +12,7 @@ type ModeKind string
 
 const (
 	// ModeNative: installed by Jarvis-Setup (or copied by hand) into a
-	// directory this user can write — the payload is swapped in place.
+	// directory this user can write; the payload is swapped in place.
 	ModeNative ModeKind = "native"
 	// ModePackageManager: a bun/npm global install owns the binary, so the
 	// update runs that package manager.

@@ -25,7 +25,7 @@ const DefaultRegistryURL = "https://registry.npmjs.org"
 const LatestTag = "latest"
 
 // ErrVersionNotFound means the registry answered but does not (yet) carry
-// the requested version — e.g. a brain released moments before its paired
+// the requested version, e.g. a brain released moments before its paired
 // sidecar finished publishing. Callers treat it as "not available yet", not
 // as a failure.
 var ErrVersionNotFound = errors.New("version not published")
