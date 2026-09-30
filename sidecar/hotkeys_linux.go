@@ -9,21 +9,27 @@ package main
 // lock state), and runs a select() loop over the X connection fd + a self-pipe
 // so it can be stopped cleanly. KeyPress fires the Go callback.
 //
+// The grabs themselves go out as xcb CHECKED requests on the same connection,
+// which is how a refusal reaches the caller instead of the process-wide X error
+// handler (#577). See "Catching a refused grab" below.
+//
 // Wayland note: XGrabKey only reaches X11 (or XWayland) clients. Under a native
 // Wayland session global grabs need the compositor's shortcuts protocol; that
 // is a separate follow-up. On X11/XWayland this works.
 
 /*
-#cgo pkg-config: x11
+#cgo pkg-config: x11 x11-xcb xcb
 
 #ifndef _GNU_SOURCE
 #define _GNU_SOURCE
 #endif
 
 #include <X11/Xlib.h>
+#include <X11/Xlib-xcb.h>
 #include <X11/keysym.h>
 #include <X11/Xutil.h>
 #include <X11/Xproto.h>
+#include <xcb/xcb.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <unistd.h>
@@ -62,7 +68,9 @@ enum {
     HK_NO_KEYCODE  = 2,
     HK_REFUSED     = 3,
     HK_NO_PIPE     = 4,
-    HK_NO_MEM      = 5
+    HK_NO_MEM      = 5,
+    HK_NO_XCB      = 6,
+    HK_CONN_LOST   = 7
 };
 
 typedef struct {
@@ -71,158 +79,242 @@ typedef struct {
     unsigned char error_code;   // X error code, first one seen
     unsigned char request_code; // X opcode it was attributed to
     unsigned int  failed_mask;  // bit i = HK_VARIANTS[i] was refused
-    int           slot_stolen;  // the global handler was not ours when we checked
 } HotkeyResult;
 
 // ---------------------------------------------------------------------------
 // Catching a refused grab
 //
 // XGrabKey is asynchronous: it has no useful return value, and a refusal comes
-// back later as an X error event. So the only way to learn that a grab was
-// refused is to install an error handler, force a round trip with XSync, and
-// see what the handler caught. That is the whole reason this machinery exists
-// (issue #574: before it, a refused grab was reported as SUCCESS and the hotkey
-// was silently dead, with "registered" in the log).
+// back later as an X error event. So a plain XGrabKey cannot tell you whether
+// the grab took (issue #574: before this was addressed, a refused grab was
+// reported as SUCCESS and the hotkey was silently dead, with "registered" in
+// the log).
 //
-// The handler this replaces did `return 0` for everything. That was not
-// gratuitous: XLib's DEFAULT handler prints the error and calls exit(1), so
-// without a handler a contended hotkey would kill the sidecar. That no-crash
-// property is kept -- but only for this window, which is all it ever covered:
-// no handler is installed during jarvisHotkeyRun or jarvisHotkeyFree, so an X
-// error there still reaches XLib's default. True before this change too.
+// The grabs are therefore issued as xcb CHECKED requests. XLib and xcb share
+// one connection -- XGetXCBConnection hands back the xcb_connection_t behind
+// an open Display* -- so this borrows the connection for two request types and
+// ports nothing else: the event queue still belongs to XLib (the default
+// XSetEventQueueOwner), which is what keeps XPending/XNextEvent in the run
+// loop working unchanged.
 //
-// We claim an error only when it arrived on OUR display, which is freshly
-// opened by this create and touched by nothing else in the process. Two things
-// make the pointer test safe, and the ORDERING is the load-bearing one: disarm
-// (below) always happens before XCloseDisplay, so hk_watch.dpy is never a
-// dangling pointer while armed. Secondarily, hotkeyCreateMu guarantees exactly
-// one live create display at a time and XOpenDisplay cannot return an address
-// equal to another live Display*.
+// A checked request's error is returned to the caller by xcb_request_check,
+// keyed to that request's own cookie. It is never dispatched as an event and
+// never consulted the process-wide XLib error handler. That last part is the
+// whole point, and it is why #577 replaced the previous mechanism.
 //
-// We claim NON-XGrabKey errors on our own display too, and report them rather
-// than delegating, because nothing else issues requests on that connection
-// inside this window. linuxGrabError still gates the "already held" wording on
-// request_code == X_GrabKey, so an unrelated error is never described as a
-// clash.
+// WHAT THIS REPLACES, and why the old mechanism could not be fixed in place.
+// Until #577 the refusal was caught by installing a temporary process-wide
+// XErrorHandler around each grab and forcing a round trip with XSync. That
+// worked, but XSetErrorHandler is a single process-global word and GDK is a
+// second writer to it: disassembling the linked libgdk-3.so.0.2420.32 (GTK
+// 3.24.52) shows gdk_x11_display_error_trap_push calling
+// XSetErrorHandler(gdk_x_error) UNCONDITIONALLY at function entry, saving what
+// it displaced, with the matching pop restoring it. There are 55 trap-push
+// call sites in libgdk alone (event translation, WM protocol filters, window
+// move/focus, monitor geometry), all on the GTK main thread, and the library
+// even carries the string "XSetErrorHandler() called with a GDK error trap
+// pushed. Don't do that."
 //
-// ---------------------------------------------------------------------------
-// KNOWN LIMIT, verified rather than assumed: we do not own this slot
+// So a GDK trap straddling a grab's round trip delivered our BadAccess to
+// gdk_x_error, which walked its own GdkDisplay list, did not find our private
+// connection, and returned 0 -- the refusal was dropped and the grab looked
+// granted. Detection was reliable, not certain. A handler installed for the
+// process lifetime would not have helped either: GDK displaces even that on
+// every push. The only way to stop sharing the slot is not to use it, which is
+// what a checked request does.
 //
-// XSetErrorHandler is PROCESS-WIDE, and GDK writes it constantly. An earlier
-// version of this comment claimed GDK installs its handler once at gdk_init and
-// that GTK3's error traps use a private stack. That is FALSE. Disassembling the
-// linked libgdk-3.so.0.2420.32 (GTK 3.24.52) shows XSetErrorHandler has three
-// call sites, two of which are the error traps:
+// PROVEN BY EXECUTION, not by reading the xcb source. Against a real X.Org
+// server (X11 over WSLg, DISPLAY=:0), with a deliberately nosy XErrorHandler
+// installed for the whole run to catch the handler being consulted at all:
 //
-//	gdk_x11_display_error_trap_push       calls XSetErrorHandler(gdk_x_error)
-//	                                      unconditionally, on EVERY push, and
-//	                                      saves the old value it displaced
-//	gdk_x11_display_error_trap_pop_internal   restores that saved value
+//	squatter holds the base variant   (its own connection, checked grab)
+//	variant 0 (mask 0x4d)             REFUSED error_code=10 major=33 minor=0
+//	variant 1 (mask 0x4f)             granted
+//	variant 2 (mask 0x5d)             granted
+//	variant 3 (mask 0x5f)             granted
+//	failed_mask=0x1 granted_mask=0xe  BadAccess=10 X_GrabKey=33
+//	xlib handler consulted            0 times
+//	third client takes mask 0x4f      granted, so the release was real
 //
-// There are 55 trap-push call sites inside libgdk alone (event translation, WM
-// protocol filters, window move/focus, monitor geometry), all on the GTK main
-// thread, and libgdk even carries the string "XSetErrorHandler() called with a
-// GDK error trap pushed. Don't do that." So the save/install/restore below
-// shares a lock-free global word with a library that rewrites it many times a
-// second. hotkeyCreateMu serialises OUR creates against each other; it cannot
-// mediate GDK.
+// The same three properties are Go tests -- TestLinuxRefusedGrabIsReported,
+// TestLinuxPartialClashIsRefusedWholesale and TestLinuxGrabIsReleasedOnStop --
+// which CI now runs under Xvfb (#588) rather than skipping.
 //
-// Two consequences, both real:
+// NO ERROR HANDLER IS INSTALLED ANYWHERE IN THIS FILE, and that is a decision
+// rather than an omission -- but it is a TRADE, not a strict improvement, and
+// the limit is worth stating precisely because the old comment here overclaimed
+// in the other direction.
 //
-//   - If a GDK trap push/pop straddles a grab, our BadAccess is delivered to
-//     gdk_x_error, which walks its own GdkDisplay list, does not find our
-//     private connection, and returns 0. The refusal is dropped and the grab
-//     looks granted. So this fix is reliable, not certain: it reports a refusal
-//     unless a trap window overlaps that exact round trip. Still strictly
-//     better than before, when a refusal was reported as success every time.
-//   - If our restore lands between GDK's push and pop, GDK's pop can reinstall
-//     hk_grab_error as the process-wide steady state. Detected below rather
-//     than left to chance, because in that state a later create would get its
-//     own handler back as `prev` and delegating would recurse forever.
+// A handler existed only because XLib's DEFAULT handler prints the error and
+// calls exit(1), and the grab path deliberately provoked errors. Every request
+// this file issues on its own connection is now accounted for:
 //
-// This race predates the change (the old code did the same save/install/restore
-// with hk_ignore_error); what is new is that it can defeat the fix. The grab
-// loop below re-checks after EVERY round trip that the handler is still ours
-// and reports when it was not, which narrows the silent window to a single
-// grab, but does not close it.
+//	grab key (xN)                     ours, CHECKED   -> returned to us
+//	ungrab key (refusal cleanup)      ours, CHECKED   -> returned, discarded
+//	ungrab key (jarvisHotkeyFree)     ours, CHECKED   -> returned, discarded
+//	grab key (jarvisHotkeyGrabOne)    ours, CHECKED   -> returned to the test
+//	keyboard mapping + XKB setup      XLib, inside XKeysymToKeycode
+//	XCloseDisplay                     XLib, flushes; dispatches on the way out
 //
-// Closing it properly means not sharing the slot at all. The better of the two
-// options is to issue the grabs as xcb CHECKED requests
-// (xcb_grab_key_checked + xcb_request_check), which hand the error straight
-// back to the caller and never consult the global handler; the other is a
-// single recording handler installed for the process lifetime, though GDK
-// displaces even that on every trap push, so it fixes the corruption without
-// fixing the detection. Either is a bigger change than this fix should carry.
-// Filed as #577.
-typedef struct {
-    Display* volatile      dpy;
-    volatile XErrorHandler prev;
-    volatile unsigned char code;
-    volatile unsigned char request;
-    volatile int           armed;
-} HkGrabWatch;
-
-// Written by jarvisHotkeyCreate and by jarvisHotkeyGrabOne, both of which the
-// Go side serialises on hotkeyCreateMu, and read by the GTK main thread
-// whenever an X error of its own reaches hk_grab_error.
+// WHAT IS GAINED. No error OF OURS can reach a handler any more, which is the
+// point of #577, and jarvisHotkeyFree's ungrabs are no longer an exit(1) path:
+// they used to be plain XUngrabKey with no handler installed anywhere near
+// them.
 //
-// `volatile` here buys exactly one thing: the compiler may not cache, elide or
-// reorder these accesses relative to each other, nor hoist them across the
-// opaque XSetErrorHandler call that publishes the handler. It is NOT atomicity
-// and NOT a memory barrier. What makes that adequate here: all five fields are
-// naturally aligned and word-sized or smaller, so no read can tear; x86-64 is
-// store-ordered, so the arming stores are visible before the handler becomes
-// reachable; and `armed` is cleared FIRST on the retire side, so a reader that
-// gets past it never goes on to test a dpy we are about to close. The worst
-// remaining outcome is a foreign error delegated to a slightly stale `prev`,
-// which is why `prev` is deliberately NOT cleared on retire.
+// WHAT IS GIVEN UP, stated because it is real. The old handler, for the span it
+// was installed, swallowed AND recorded ANY error on this display, not just a
+// grab refusal -- so an unrelated error arriving mid-create was reported
+// through linuxGrabError's "refused with X error %d on request %d" branch
+// instead of killing the process. It is now neither swallowed nor reported: it
+// sits in XLib's event queue and is dispatched later by XPending in the drain
+// or the run loop, where there is no handler and _XDefaultError exits. Both of
+// those windows were ALREADY unprotected before #577 (the old code installed
+// nothing during jarvisHotkeyRun or jarvisHotkeyFree, and said so), so the
+// exposure is unchanged in kind; what is new is that a mid-create error reaches
+// it rather than being caught.
 //
-// Deliberately NOT claimed: that XSetErrorHandler's internal lock fences
-// anything. It takes libX11's global mutex only when XInitThreads has been
-// called, and nothing here calls it -- nor does the linked GTK3 stack import it
-// (checked with objdump on libgtk-3 and libgdk-3). On a weakly ordered target
-// this would want real acquire/release instead of volatile.
-static HkGrabWatch hk_watch;
-
-// hk_swallow_error is the fallback for the one case where there is no sane
-// handler to put back: the global slot already held hk_grab_error when we went
-// to install, meaning it was left there by a clobber (see KNOWN LIMIT).
+// Which errors can those even be? Only ones XLib issues for itself: the
+// keyboard-mapping fetch and XKB setup behind XKeysymToKeycode, and
+// XOpenDisplay's BIG-REQUESTS negotiation. XkbSelectEvents carries no reply, so
+// its error would be asynchronous. That is a claim about libX11's internals
+// rather than a property this file controls, which is exactly why it is written
+// down instead of being asserted away.
 //
-// It exists because XSetErrorHandler(NULL) does NOT mean "leave the slot
-// alone" -- libX11 explicitly installs _XDefaultError, which calls exit(1). So
-// restoring NULL there would arm a process-wide crash on the next untrapped X
-// error anywhere in the sidecar, on precisely the path that is supposed to be
-// making things safer. Swallowing is what this code did before #574 when the
-// slot was clobbered, and a mute daemon beats a dead one.
-static int hk_swallow_error(Display* d, XErrorEvent* e) { (void)d; (void)e; return 0; }
-
-static int hk_grab_error(Display* d, XErrorEvent* e) {
-    if (hk_watch.armed && d == hk_watch.dpy) {
-        // First error wins: a create that trips several variants should report
-        // the reason it first hit, not the last.
-        if (hk_watch.code == 0) {
-            hk_watch.code    = e->error_code;
-            hk_watch.request = e->request_code;
-        }
-        return 0;
-    }
-    XErrorHandler prev = hk_watch.prev;
-    // Never call ourselves. If the global slot was clobbered so that `prev` is
-    // this very function, delegating would recurse until the stack is gone --
-    // a SIGSEGV inside an X error handler, with no Go panic and no log line.
-    // The install below refuses to store that value, so this is belt and
-    // braces for the case where it is stored by some other route.
-    if (prev != NULL && prev != hk_grab_error) return prev(d, e);
-    // Nobody to delegate to. Swallowing is the status quo for this window and
-    // beats XLib's alternative, which is exit(1) over an error that is not even
-    // ours.
-    return 0;
-}
+// THE STRUCTURAL FIX, not taken here, and why. XSetEventQueueOwner(dpy,
+// XCBOwnsEventQueue) makes libX11 send its OWN requests as XCB_REQUEST_CHECKED
+// and set their errors aside, so an unchecked asynchronous error surfaces as an
+// ignorable response_type == 0 instead of reaching _XDefaultError; XLib round
+// trips and XCloseDisplay keep working. Measured to work. It costs the
+// XPending/XNextEvent event path -- both jarvisHotkeyDrain and jarvisHotkeyRun
+// would port to xcb_poll_for_event -- and #577 scoped itself to the grab, on
+// the grounds that sharing the connection "does not mean porting the rest of
+// the file". Changing how every KeyPress is delivered is a bigger decision than
+// this fix should make silently, and it wants a test that a hotkey actually
+// FIRES, which nothing here has yet.
+//
+// One more claim deliberately NOT made: that libX11's global lock fences any of
+// this. It is taken only when XInitThreads has been called, and neither this
+// repo nor the linked GTK3 stack calls it (checked with objdump on libgtk-3 and
+// libgdk-3). What actually makes the XLib/xcb mixing safe is that all of it --
+// create, drain, run, free -- happens on ONE goroutine with
+// runtime.LockOSThread held, so there is never a second thread interleaving
+// requests on this connection. 2000 interleaved checked-xcb and XLib round
+// trips on one connection produced no xcb_io.c sequence-lost assertion.
+// hotkeyCreateMu is not that argument; see its own comment for what it does do.
 
 // hk_keysym resolves a key name ("space", "k", "Return") to a KeySym without
 // needing an open display.
 static unsigned long hk_keysym(const char* name) {
     return (unsigned long)XStringToKeysym(name);
+}
+
+// hk_ungrab_checked releases the variants named by `mask` with CHECKED xcb
+// requests and discards whatever comes back.
+//
+// Checked, not because anyone reads the verdict, but because an UNCHECKED
+// ungrab error would be dispatched to the process-wide XLib error handler --
+// and with no handler installed (see above) that is _XDefaultError, which
+// calls exit(1). This is the only reason the old code needed a handler around
+// the failure path at all, and the reason jarvisHotkeyFree's ungrabs used to be
+// an exit(1) risk that nothing covered.
+//
+// One round trip for the whole batch: the cookies are collected first and the
+// first xcb_request_check reads through all of them.
+static void hk_ungrab_checked(xcb_connection_t* xcb, xcb_window_t root,
+                              int keycode, unsigned int mods, unsigned int mask) {
+    xcb_void_cookie_t cookies[HK_NVARIANTS];
+    int n = 0;
+    for (int i = 0; i < HK_NVARIANTS; i++) {
+        if (!(mask & (1u << i))) continue;
+        cookies[n++] = xcb_ungrab_key_checked(xcb, (xcb_keycode_t)keycode, root,
+                                              (uint16_t)(mods | HK_VARIANTS[i]));
+    }
+    for (int j = 0; j < n; j++) {
+        xcb_generic_error_t* e = xcb_request_check(xcb, cookies[j]);
+        if (e) free(e);
+    }
+}
+
+// hk_grab_variants issues the checked grab requests and collects the verdicts.
+//
+// Returns HK_OK when every variant was granted, HK_REFUSED when at least one
+// was turned down, or HK_CONN_LOST when the connection died under us. The
+// caller owns the cleanup either way; *out_granted always says what is
+// actually held, including on the failure paths, so nothing is left grabbed.
+//
+// Factored out of jarvisHotkeyCreate so the HK_CONN_LOST path can be tested
+// against a deliberately broken connection without a test hook inside the
+// create itself (see jarvisHotkeyGrabOverBrokenConnection).
+//
+// All HK_NVARIANTS requests are issued first, then all the cookies are checked.
+//
+// The XLib version could not do that: it had to XSync after every single grab,
+// because a recording error handler sees only "an error happened" and
+// attributing it to a variant would have meant matching request serials by
+// hand. A cookie IS that attribution, so batching is exact by construction
+// rather than a guess -- and it costs one round trip instead of four, since the
+// first xcb_request_check sends the sync and reads through it while the
+// remaining three find their verdicts already read.
+//
+// Checking cookies in issue order also means first-error-wins reports the
+// LOWEST failing variant, matching the old loop's ordering, so the message a
+// user sees is unchanged.
+static int hk_grab_variants(xcb_connection_t* xcb, xcb_window_t root, int keycode,
+                            unsigned int mods, unsigned int* out_granted,
+                            unsigned int* out_failed, unsigned char* out_code,
+                            unsigned char* out_request) {
+    xcb_void_cookie_t cookies[HK_NVARIANTS];
+    for (int i = 0; i < HK_NVARIANTS; i++) {
+        cookies[i] = xcb_grab_key_checked(
+            xcb,
+            0,                                      // owner_events = False
+            root,
+            (uint16_t)(mods | HK_VARIANTS[i]),
+            (xcb_keycode_t)keycode,
+            XCB_GRAB_MODE_ASYNC,                    // pointer_mode
+            XCB_GRAB_MODE_ASYNC);                   // keyboard_mode
+    }
+
+    unsigned int granted = 0, failed = 0;
+    for (int i = 0; i < HK_NVARIANTS; i++) {
+        xcb_generic_error_t* e = xcb_request_check(xcb, cookies[i]);
+        if (e == NULL) { granted |= (1u << i); continue; }
+        failed |= (1u << i);
+        // First error wins: a create that trips several variants should report
+        // the reason it first hit, not the last.
+        //
+        // major_code is the same opcode XErrorEvent.request_code carried
+        // (X_GrabKey == 33) and error_code is the same code (BadAccess == 10),
+        // so linuxGrabError's gating and wording are untouched. Verified
+        // against a real server; see the note above.
+        if (*out_code == 0) {
+            *out_code    = e->error_code;
+            *out_request = e->major_code;
+        }
+        free(e);   // xcb_request_check hands ownership of the error to us
+    }
+    *out_granted = granted;
+    *out_failed  = failed;
+
+    // A DEAD CONNECTION LOOKS EXACTLY LIKE EVERY GRAB BEING GRANTED, and that
+    // is the one way a checked request can lie to us.
+    //
+    // xcb_request_check returns NULL both for "the server said yes" and for
+    // "there is no server": once xcb_connection_has_error is set, every request
+    // is discarded and every check returns NULL. Without this test the create
+    // would come back failed_mask=0, granted=0xf, HK_OK -- a non-nil stop
+    // function and a "registered" log line for a hotkey that can never fire,
+    // which is #574 reached through the fix for it.
+    //
+    // The old XSync-based path could not produce this, because XSync on a dead
+    // connection takes libX11's fatal-IO route and is at least loud. So this is
+    // not defensive padding: it is a refusal path the mechanism swap would
+    // otherwise have dropped.
+    //
+    // Narrow but reachable, and reachable exactly when it matters: the sidecar
+    // re-registers hotkeys around session logout and X server restarts.
+    if (xcb_connection_has_error(xcb)) return HK_CONN_LOST;
+    return failed != 0 ? HK_REFUSED : HK_OK;
 }
 
 // jarvisHotkeyCreate grabs the key and every lock variant, or reports why it
@@ -274,75 +366,64 @@ static HotkeyResult jarvisHotkeyCreate(unsigned int mods, unsigned long keysym, 
         return r;
     }
 
-    hk_watch.dpy     = dpy;
-    hk_watch.code    = 0;
-    hk_watch.request = 0;
-    hk_watch.prev    = NULL;
-    hk_watch.armed   = 1;
-
-    // The handler becomes reachable inside XSetErrorHandler, one statement
-    // before `prev` is known; the API offers no way to avoid that. prev is
-    // pre-set to NULL above so the gap reads a defined value, and the cost of a
-    // foreign error landing inside it is that it is swallowed rather than
-    // delegated.
-    XErrorHandler displaced = XSetErrorHandler(hk_grab_error);
-    if (displaced == hk_grab_error) {
-        // We were already the installed handler, which we never leave behind on
-        // purpose: the global slot has been clobbered (see KNOWN LIMIT above).
-        // Storing it would make delegation infinitely recursive.
-        r.slot_stolen = 1;
-        hk_watch.prev = hk_swallow_error;
-    } else {
-        // May legitimately be NULL, meaning nothing was installed; restoring
-        // NULL then reinstates XLib's default, which is the state that was
-        // actually in effect, so that case is faithful rather than a new crash.
-        hk_watch.prev = displaced;
+    // Borrow the xcb connection behind this Display*. Not a second
+    // connection: same socket, same client, same grabs -- only the request
+    // encoding differs. Event-queue ownership is left with XLib (the default),
+    // so the run loop's XPending/XNextEvent are unaffected.
+    xcb_connection_t* xcb = XGetXCBConnection(dpy);
+    if (!xcb || xcb_connection_has_error(xcb)) {
+        // No xcb behind this Display (a libX11 built without it), or the
+        // connection is already broken. Either way the grab cannot be issued
+        // checked, and falling back to an unchecked XGrabKey would be the
+        // silent success #574 was.
+        int stage = xcb ? HK_CONN_LOST : HK_NO_XCB;
+        free(hk);
+        close(stopfd[0]);
+        close(stopfd[1]);
+        XCloseDisplay(dpy);
+        r.stage = stage;
+        return r;
     }
 
-    // One variant per round trip. Grabbing all four and syncing once would
-    // still DETECT a refusal, but could not say which variant caused it
-    // without matching request serial numbers by hand. X guarantees an error
-    // for request N is delivered before the reply to any later request, so the
-    // XSync's own reply cannot overtake the grab's error: attribution is exact
-    // and there is no race between the grab and the sync.
-    //
-    // Four round trips on a unix socket, at startup, per hotkey. The latency is
-    // irrelevant; what it does cost is holding the global handler slot about
-    // four times longer, which widens the GDK window described above.
-    unsigned int  granted = 0;
-    int           stolen  = 0;
-    XErrorHandler thief   = NULL;
-    for (int i = 0; i < HK_NVARIANTS; i++) {
-        hk_watch.code    = 0;
-        hk_watch.request = 0;
-        XGrabKey(dpy, keycode, mods | HK_VARIANTS[i], root, False, GrabModeAsync, GrabModeAsync);
-        XSync(dpy, False);
-        // Was the slot still ours for THIS round trip? A "no error recorded"
-        // verdict only means anything while our handler is the installed one.
-        // Checking per variant rather than once at the end narrows the window
-        // in which a refusal can go unnoticed from "any GDK trap overlapping
-        // the whole four-request sequence" to "a trap that opens and closes
-        // inside this single grab". Re-installing ours keeps the remaining
-        // variants observable; the displaced handler is put back at retire.
-        XErrorHandler current = XSetErrorHandler(hk_grab_error);
-        if (current != hk_grab_error) { r.slot_stolen = 1; stolen = 1; thief = current; }
-        if (hk_watch.code != 0) {
-            r.failed_mask |= (1u << i);
-            if (r.error_code == 0) {
-                r.error_code   = hk_watch.code;
-                r.request_code = hk_watch.request;
-            }
-        } else {
-            granted |= (1u << i);
-        }
+    unsigned int granted = 0;
+    int grab_stage = hk_grab_variants(xcb, (xcb_window_t)root, keycode, mods,
+                                      &granted, &r.failed_mask,
+                                      &r.error_code, &r.request_code);
+
+    if (grab_stage == HK_CONN_LOST) {
+        // NO XCloseDisplay, and NO ungrab, and both omissions are deliberate.
+        //
+        // XCloseDisplay flushes, and flushing a dead socket takes libX11's
+        // FATAL-IO path, which prints "XIO: fatal IO error" and calls exit().
+        // Measured, not feared:
+        //
+        //	has_error = 1
+        //	calling XCloseDisplay on the broken connection...
+        //	XIO:  fatal IO error 88 (Socket operation on non-socket) on X server ":0"
+        //	exit status 1
+        //
+        // So tidying up here would kill the sidecar over the exact condition
+        // this branch exists to REPORT. There is no error-handler trick worth
+        // taking either: the IO handler is process-global and libX11 exits
+        // anyway if it returns.
+        //
+        // The cost is one leaked Display (tens of KB) and its fd per
+        // occurrence. That is the right trade: the connection is already gone,
+        // the server has dropped every grab this client held, and a leak on a
+        // path that only fires when the X session is dying beats a daemon that
+        // exits when its session hiccups.
+        free(hk);
+        close(stopfd[0]);
+        close(stopfd[1]);
+        r.stage = HK_CONN_LOST;
+        return r;
     }
 
     if (r.failed_mask != 0) {
-        // Release what we were given, while the watch is still armed and our
-        // handler still installed: restoring first would expose an ungrab error
-        // to XLib's exit(1) default. An ungrab error is recorded rather than
-        // delegated (same display), which is harmless -- first-error-wins means
-        // it cannot overwrite the grab refusal we are about to report.
+        // Release what we were given. Checked, so an ungrab error comes back
+        // here instead of reaching XLib's exit(1) default -- and is discarded,
+        // because first-error-wins already holds the refusal we are about to
+        // report and an ungrab failure is not the user's problem.
         //
         // Honest note on redundancy: XCloseDisplay below already releases every
         // grab held by this connection, and that was verified against a real X
@@ -350,25 +431,8 @@ static HotkeyResult jarvisHotkeyCreate(unsigned int mods, unsigned long keysym, 
         // stays because it is nearly free, it says what it means, and it
         // becomes load-bearing the moment anyone keeps the connection open on
         // the failure path.
-        for (int i = 0; i < HK_NVARIANTS; i++) {
-            if (granted & (1u << i)) XUngrabKey(dpy, keycode, mods | HK_VARIANTS[i], root);
-        }
-        XSync(dpy, False);
-    }
+        hk_ungrab_checked(xcb, (xcb_window_t)root, keycode, mods, granted);
 
-    // Retire: clear `armed` FIRST, so a reader that gets past it cannot then
-    // look at a dpy we are about to close. `prev` is deliberately left alone --
-    // the next create overwrites it, and a stale non-NULL prev delegates a
-    // late-arriving foreign error where NULL would drop it.
-    hk_watch.armed = 0;
-    hk_watch.dpy   = NULL;
-    // If somebody installed over us mid-sequence, put THEIR handler back, not
-    // the one we displaced on the way in: they are presumably mid-trap and will
-    // restore what they saved. Reinstating our own `prev` would destroy the
-    // thief's handler and make the corruption worse than the theft.
-    XSetErrorHandler(stolen ? thief : hk_watch.prev);
-
-    if (r.failed_mask != 0) {
         free(hk);
         close(stopfd[0]);
         close(stopfd[1]);
@@ -385,14 +449,16 @@ static HotkeyResult jarvisHotkeyCreate(unsigned int mods, unsigned long keysym, 
     return r;
 }
 
-// jarvisHotkeyDrain dispatches whatever the create's XSync calls already pulled
+// jarvisHotkeyDrain dispatches whatever the create's round trip already pulled
 // into the client-side queue.
 //
-// XSync(dpy, False) reads events in while waiting for its reply but dispatches
-// nothing, and the run loop blocks in select() BEFORE looking at the queue -- so
-// without this a key pressed during startup would sit unread until the next
-// unrelated socket wakeup. (The `False` in those XSync calls is load-bearing for
-// the same reason: `True` would discard the queued KeyPress events outright.)
+// Still needed after the move to xcb, for the same reason and by the same
+// mechanism: xcb_request_check reads from the socket while waiting for the
+// grabs' verdicts, and any KeyPress that arrives in that window is queued (in
+// xcb's event queue, which XPending drains through -- the event queue still
+// belongs to XLib, so nothing is stranded) rather than dispatched. The run loop
+// blocks in select() BEFORE looking at the queue, so without this a key pressed
+// during startup would sit unread until the next unrelated socket wakeup.
 //
 // Separate from jarvisHotkeyRun so the caller can wait until it actually holds
 // the stop function before any callback can fire.
@@ -452,11 +518,29 @@ static void jarvisHotkeyFree(Hotkey* hk) {
         // too -- UngrabKey only ever touches the requesting client's own grabs,
         // and each hotkey owns its connection -- but naming what we hold says
         // what it means and pairs with hk->granted.
-        for (int i = 0; i < HK_NVARIANTS; i++) {
-            if (hk->granted & (1u << i))
-                XUngrabKey(hk->dpy, hk->keycode, hk->mods | HK_VARIANTS[i], hk->root);
+        //
+        // CHECKED since #577, which is a real fix and not tidiness: these used
+        // to be plain XUngrabKey with no error handler installed anywhere near
+        // them, so an error here went to _XDefaultError and took the whole
+        // sidecar down with exit(1) during teardown. Checked, it comes back to
+        // us and is dropped.
+        xcb_connection_t* xcb = XGetXCBConnection(hk->dpy);
+        if (xcb && !xcb_connection_has_error(xcb)) {
+            hk_ungrab_checked(xcb, (xcb_window_t)hk->root, hk->keycode, hk->mods, hk->granted);
+            XCloseDisplay(hk->dpy);
         }
-        XCloseDisplay(hk->dpy);
+        // A connection that has already failed is deliberately NOT closed:
+        // XCloseDisplay flushes, and flushing a dead socket takes libX11's
+        // fatal-IO path and exit()s the sidecar during its own teardown. The
+        // server has dropped this client's grabs already, so there is nothing
+        // to release; one leaked Display beats exiting. Base-commit behaviour
+        // here was to close unconditionally, so this is a crash removed rather
+        // than a leak introduced.
+        //
+        // Not the common path: if the connection dies while the listener is
+        // running, XPending hits EOF in the run loop and takes the same fatal
+        // route before ever reaching here. This covers the case where it broke
+        // without the loop noticing.
     }
     close(hk->stopfd[0]);
     close(hk->stopfd[1]);
@@ -480,24 +564,188 @@ static Display* jarvisHotkeyGrabOne(unsigned int mods, unsigned long keysym, int
     if (!dpy) return NULL;
     int keycode = XKeysymToKeycode(dpy, (KeySym)keysym);
     if (keycode == 0) { XCloseDisplay(dpy); return NULL; }
-    hk_watch.dpy = dpy; hk_watch.code = 0; hk_watch.request = 0; hk_watch.prev = NULL;
-    hk_watch.armed = 1;
-    XErrorHandler displaced = XSetErrorHandler(hk_grab_error);
-    hk_watch.prev = (displaced == hk_grab_error) ? hk_swallow_error : displaced;
-    XGrabKey(dpy, keycode, mods | HK_VARIANTS[variant], DefaultRootWindow(dpy), False,
-             GrabModeAsync, GrabModeAsync);
-    XSync(dpy, False);
-    unsigned char code = hk_watch.code;
-    hk_watch.armed = 0;
-    hk_watch.dpy   = NULL;
-    XSetErrorHandler(hk_watch.prev);
-    if (code != 0) { XCloseDisplay(dpy); return NULL; }
+    xcb_connection_t* xcb = XGetXCBConnection(dpy);
+    if (!xcb) { XCloseDisplay(dpy); return NULL; }
+    xcb_generic_error_t* e = xcb_request_check(xcb,
+        xcb_grab_key_checked(xcb, 0, (xcb_window_t)DefaultRootWindow(dpy),
+                             (uint16_t)(mods | HK_VARIANTS[variant]),
+                             (xcb_keycode_t)keycode,
+                             XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC));
+    if (e) { free(e); XCloseDisplay(dpy); return NULL; }
     return dpy;
 }
 
 // jarvisHotkeyUngrabOne releases what jarvisHotkeyGrabOne took.
 static void jarvisHotkeyUngrabOne(Display* dpy) {
     if (dpy) XCloseDisplay(dpy);
+}
+
+// jarvisHotkeyGrabOverBrokenConnection runs the REAL grab sequence
+// (hk_grab_variants, the same function jarvisHotkeyCreate calls) over a
+// connection whose socket has been replaced by /dev/null, and returns the stage
+// it produced.
+//
+// This is the regression guard for the one lie a checked request can tell:
+// xcb_request_check returns NULL for "granted" and for "there is no server"
+// alike, so without the xcb_connection_has_error test inside hk_grab_variants
+// this returns HK_OK with every variant "granted" -- a hotkey reported as
+// registered that can never fire. Must return HK_CONN_LOST.
+//
+// The break is done by dup2'ing /dev/null over the connection's fd: writes
+// then succeed and go nowhere, and the first read gets EOF, which is what sets
+// xcb's error flag. That is the same shape as the server going away mid-session,
+// which is when the sidecar re-registers hotkeys.
+//
+// Nothing in the product calls it. Returns -1 if the display would not open.
+static int jarvisHotkeyGrabOverBrokenConnection(unsigned int mods, unsigned long keysym) {
+    Display* dpy = XOpenDisplay(NULL);
+    if (!dpy) return -1;
+    int keycode = XKeysymToKeycode(dpy, (KeySym)keysym);
+    if (keycode == 0) { XCloseDisplay(dpy); return -1; }
+    xcb_connection_t* xcb = XGetXCBConnection(dpy);
+    if (!xcb) { XCloseDisplay(dpy); return -1; }
+
+    int nullfd = open("/dev/null", O_RDWR | O_CLOEXEC);
+    if (nullfd < 0) { XCloseDisplay(dpy); return -1; }
+    if (dup2(nullfd, ConnectionNumber(dpy)) < 0) { close(nullfd); XCloseDisplay(dpy); return -1; }
+    close(nullfd);
+
+    unsigned int  granted = 0, failed = 0;
+    unsigned char code = 0, request = 0;
+    int stage = hk_grab_variants(xcb, (xcb_window_t)DefaultRootWindow(dpy), keycode,
+                                 mods, &granted, &failed, &code, &request);
+
+    // Deliberately NOT XCloseDisplay: the connection is broken, and closing it
+    // would take libX11's fatal-IO path and kill the test binary. Leaking one
+    // Display and one fd in a test that has already proven its point is the
+    // better trade, and it is the same reason the create returns early here
+    // rather than trying to tidy up over a dead socket.
+    return stage;
+}
+
+// ---------------------------------------------------------------------------
+// Test scaffolding: standing in for GDK.
+//
+// #577 is about a refusal being stolen from us by whoever else owns the
+// process-wide error handler. The GDK race is probabilistic and needs a live
+// GTK loop under load, which no Go test can arrange -- but the CONSEQUENCE is
+// perfectly reproducible, because gdk_x_error's behaviour towards our errors
+// is simply "swallow it and return 0". So a test installs a handler that does
+// exactly that, for the whole grab, and asserts the refusal still reaches the
+// caller.
+//
+// That makes the race deterministic in the only direction that matters: on the
+// mechanism #577 replaced, this handler displaces ours and the BadAccess is
+// dropped, so the create reports SUCCESS and the test fails. On checked
+// requests it is never consulted, which the counter asserts directly.
+//
+// Nothing in the product calls these.
+static volatile int hk_test_swallowed = 0;
+
+static int hk_test_swallow_all(Display* d, XErrorEvent* e) {
+    (void)d; (void)e;
+    hk_test_swallowed++;
+    return 0;
+}
+
+static XErrorHandler hk_test_displaced     = NULL;
+static int           hk_test_displaced_set = 0;
+
+static void jarvisHotkeyStealErrorHandler(void) {
+    hk_test_swallowed = 0;
+    hk_test_displaced = XSetErrorHandler(hk_test_swallow_all);
+    hk_test_displaced_set = 1;
+}
+
+// Outcome of jarvisHotkeyGrabUnderHijackedHandler.
+typedef struct {
+    int           usable;        // 0 = no display / no keycode / no xcb, test should skip
+    int           refused;       // 1 = the checked request handed us an error
+    unsigned char error_code;
+    unsigned char request_code;
+    int           handler_calls; // what the impostor handler managed to swallow
+} HkHijackResult;
+
+// jarvisHotkeyGrabUnderHijackedHandler reproduces the GDK race DETERMINISTICALLY
+// instead of waiting for it.
+//
+// The race is not "a foreign handler is installed" -- the old mechanism
+// displaced any such handler at create entry, so merely installing one before
+// the create proves nothing. The race is a foreign handler installed INSIDE the
+// window between our request going on the wire and the reply being read, which
+// is exactly the span an error trap push/pop occupies. So that is what this
+// manufactures:
+//
+//	xcb_grab_key_checked(...)    request encoded
+//	xcb_flush(...)               on the wire; the server's error is now in flight
+//	XSetErrorHandler(impostor)   <-- gdk_x11_display_error_trap_push lands here
+//	xcb_request_check(...)       the error is READ here, and goes to the cookie
+//	XSetErrorHandler(restore)    <-- the matching trap pop
+//
+// Run side by side against the mechanism this replaced (XGrabKey + XFlush +
+// impostor + XSync), on a real X.Org server, same contended grab:
+//
+//	A  XGrabKey + handler + XSync
+//	A    refusal seen by our mechanism : NO -- LOST (recorded code=0)
+//	A    swallowed by the foreign handler: 1
+//	A    verdict: the create would report SUCCESS -- a dead hotkey logged as registered (#574)
+//	B  xcb_grab_key_checked + xcb_request_check
+//	B    refusal seen by our mechanism : YES (code=10 major=33)
+//	B    swallowed by the foreign handler: 0
+//	B    verdict: the create would report REFUSED (correct)
+//
+// The caller must already hold the base variant of `mods` on another
+// connection, or there is no refusal to lose.
+static HkHijackResult jarvisHotkeyGrabUnderHijackedHandler(unsigned int mods, unsigned long keysym) {
+    HkHijackResult r;
+    memset(&r, 0, sizeof(r));
+
+    Display* dpy = XOpenDisplay(NULL);
+    if (!dpy) return r;
+    int keycode = XKeysymToKeycode(dpy, (KeySym)keysym);
+    if (keycode == 0) { XCloseDisplay(dpy); return r; }
+    xcb_connection_t* xcb = XGetXCBConnection(dpy);
+    if (!xcb) { XCloseDisplay(dpy); return r; }
+    r.usable = 1;
+
+    Window root = DefaultRootWindow(dpy);
+    xcb_void_cookie_t ck = xcb_grab_key_checked(xcb, 0, (xcb_window_t)root,
+                                                (uint16_t)mods, (xcb_keycode_t)keycode,
+                                                XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
+    xcb_flush(xcb);
+
+    hk_test_swallowed = 0;
+    XErrorHandler saved = XSetErrorHandler(hk_test_swallow_all);
+
+    xcb_generic_error_t* e = xcb_request_check(xcb, ck);
+
+    r.handler_calls = hk_test_swallowed;
+    XSetErrorHandler(saved);
+
+    if (e) {
+        r.refused      = 1;
+        r.error_code   = e->error_code;
+        r.request_code = e->major_code;
+        free(e);
+    } else {
+        // We really did get the grab; release it so the test leaves the
+        // combination free for whatever runs next.
+        hk_ungrab_checked(xcb, (xcb_window_t)root, keycode, mods, 1u);
+    }
+    XCloseDisplay(dpy);
+    return r;
+}
+
+// Returns how many X errors the impostor handler caught -- which for a checked
+// grab must be zero. Restoring a NULL displaced value reinstates XLib's
+// default, which is genuinely the state that was in effect beforehand now that
+// this file installs no handler of its own.
+static int jarvisHotkeyRestoreErrorHandler(void) {
+    if (hk_test_displaced_set) {
+        XSetErrorHandler(hk_test_displaced);
+        hk_test_displaced_set = 0;
+    }
+    return hk_test_swallowed;
 }
 */
 import "C"
@@ -523,6 +771,8 @@ const (
 	_ = uint(C.HK_REFUSED-hkGrabRefused) + uint(hkGrabRefused-C.HK_REFUSED)
 	_ = uint(C.HK_NO_PIPE-hkGrabNoPipe) + uint(hkGrabNoPipe-C.HK_NO_PIPE)
 	_ = uint(C.HK_NO_MEM-hkGrabNoMem) + uint(hkGrabNoMem-C.HK_NO_MEM)
+	_ = uint(C.HK_NO_XCB-hkGrabNoXcb) + uint(hkGrabNoXcb-C.HK_NO_XCB)
+	_ = uint(C.HK_CONN_LOST-hkGrabConnLost) + uint(hkGrabConnLost-C.HK_CONN_LOST)
 	_ = uint(C.HK_NVARIANTS-hkNumVariants) + uint(hkNumVariants-C.HK_NVARIANTS)
 	_ = uint(C.HK_ALL_VARIANTS-hkAllVariants) + uint(hkAllVariants-C.HK_ALL_VARIANTS)
 	// The two X protocol constants linuxGrabError decides on, taken from the
@@ -536,21 +786,27 @@ var hotkeyCounter atomic.Uint64
 
 // hotkeyCreateMu serialises jarvisHotkeyCreate.
 //
-// Load-bearing, not decoration. XSetErrorHandler and the hk_watch slot it fills
-// are both process-global, and two of our creates racing would not merely
-// misread a refusal: each saves what it displaced and restores it afterwards, so
-// the second would save the FIRST one's hk_grab_error and reinstall it at the
-// end, leaving our handler as the process-wide steady state with nothing
-// arranged to remove it. Dropping this mutex does not cost a diagnosis, it
-// breaks X error handling for the whole process.
+// It used to be here for the process-global XSetErrorHandler slot. #577 removed
+// that slot from the picture entirely -- the grabs are checked xcb requests
+// now, and no handler is installed -- so the reason has changed, but the mutex
+// has NOT become decoration.
+//
+// What it still guards is the process-global display list. XOpenDisplay threads
+// a new Display onto _XHeadOfDisplayList and XCloseDisplay unlinks it, both
+// under a lock libX11 only creates when XInitThreads has been called. Nothing
+// in this repo calls it and neither does the linked GTK3 stack, so that lock is
+// a no-op and concurrent opens or closes race an unsynchronised linked-list
+// edit.
 //
 // They genuinely can race: pebble_overlay_linux.go registers summon and palette
 // back to back, but panels_runtime.go registers a panel's summon hotkey from
 // inside the panel spawn goroutine, which is ordered against neither.
 //
-// It does NOT serialise us against GDK, which writes the same slot from the GTK
-// main thread many times a second. See the KNOWN LIMIT note in the C preamble;
-// that is a design gap this mutex cannot close.
+// It covers the CLOSES as well as the opens, which it did not before #577 --
+// a create racing a free corrupts that list exactly as two creates would, so
+// guarding only one side named a property the mutex was not delivering. No
+// deadlock is introduced: a create never waits on a free, so the only new wait
+// is a teardown pausing for the couple of round trips a create takes.
 var hotkeyCreateMu sync.Mutex
 
 // startHotkeyListener registers a single global hotkey (e.g. "ctrl+shift+space")
@@ -569,7 +825,9 @@ var hotkeyCreateMu sync.Mutex
 // linuxGrabError in hotkeys_keyspec.go, which is cgo-free and table-tested on
 // any OS. The grab path itself was exercised against a real X.Org server (X11
 // over WSLg, DISPLAY=:0) with a second connection deliberately holding the
-// combination first:
+// combination first -- re-run after #577 swapped the detection mechanism for
+// xcb checked requests, so these rows describe the xcb path and not its
+// predecessor:
 //
 //	free combination              all four variants granted
 //	squatter holds base variant   BadAccess(10) on X_GrabKey(33), failed=0x1,
@@ -581,13 +839,14 @@ var hotkeyCreateMu sync.Mutex
 //
 // The first four rows are now Go tests rather than a claim: see
 // TestLinuxRefusedGrabIsReported, TestLinuxPartialClashIsRefusedWholesale and
-// TestLinuxGrabIsReleasedOnStop, which skip when there is no display, so a
-// developer with a desktop re-runs the proof with `go test`. The fifth is not
-// asserted through this function, because no keysym is reliably unmapped on
-// every machine; parseLinuxKeyspec's error cases cover the reachable half.
+// TestLinuxGrabIsReleasedOnStop. The fifth is not asserted through this
+// function, because no keysym is reliably unmapped on every machine;
+// parseLinuxKeyspec's error cases cover the reachable half.
 //
-// Note CI's linux job sets no DISPLAY today, so CI skips all three X tests and
-// only the pure-layer table in hotkeys_keyspec_test.go actually runs there.
+// Those three used to skip in CI for want of a DISPLAY, which meant a
+// regression in this path landed green. Since #588 the linux sidecar job runs
+// them under Xvfb and FAILS if they report as skipped -- see requireX in
+// hotkeys_linux_test.go.
 //
 // NOT established from here, and needing a real desktop: whether a desktop
 // environment's own global shortcuts (GNOME/KDE) refuse in the same way. They
@@ -642,13 +901,11 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 			close(done)
 			return
 		}
-		if out.slot_stolen != 0 {
-			// Not a failure: the grabs may well have been fine. But a "no error
-			// recorded" verdict is only trustworthy while our handler is the
-			// installed one, so say so rather than quietly believing it.
-			log.Printf("[hotkeys] %q: the process-wide X error handler was not ours during registration; "+
-				"a refused grab could have been missed (GTK/GDK rewrites it -- see hotkeys_linux.go)", keyspec)
-		}
+		// No "the error handler was not ours" warning any more, and nothing
+		// replaces it: #577 removed the shared slot from the path, so a "no
+		// error recorded" verdict is now unconditional rather than conditional
+		// on who owns a global word. That warning existed to admit the doubt;
+		// there is no doubt left to admit.
 		ch <- created{out.hk, nil}
 
 		<-started
@@ -661,7 +918,13 @@ func startHotkeyListener(keyspec string, onFire func()) (func(), error) {
 				keyspec, int(rc))
 		}
 		lifeMu.Lock()
+		// hotkeyCreateMu as well as lifeMu: Free's XCloseDisplay unlinks from
+		// the same process-global display list a concurrent create is linking
+		// into, and libX11 does not fence that without XInitThreads. Taking it
+		// here cannot deadlock -- a create never waits on a free.
+		hotkeyCreateMu.Lock()
 		C.jarvisHotkeyFree(out.hk)
+		hotkeyCreateMu.Unlock()
 		freed = true
 		lifeMu.Unlock()
 		hotkeyReg.Delete(id)
@@ -710,10 +973,11 @@ func hotkeyHoldOneVariant(keyspec string, variant int) (release func(), ok bool)
 	if err != nil {
 		return nil, false
 	}
-	// Same lock as a create: this writes hk_watch and the process-global error
-	// handler, so it must not run beside jarvisHotkeyCreate. Harmless today
-	// (tests in a package run sequentially and none of these use t.Parallel),
-	// but the invariant is the file's, not the test's.
+	// Same lock as a create, for the same reason it still exists: this calls
+	// XOpenDisplay, whose global display-list insert libX11 does not fence
+	// without XInitThreads. Harmless today (tests in a package run
+	// sequentially and none of these use t.Parallel), but the invariant is the
+	// file's, not the test's.
 	hotkeyCreateMu.Lock()
 	dpy := C.jarvisHotkeyGrabOne(C.uint(mods), C.ulong(keysym), C.int(variant))
 	hotkeyCreateMu.Unlock()
@@ -721,7 +985,15 @@ func hotkeyHoldOneVariant(keyspec string, variant int) (release func(), ok bool)
 		return nil, false
 	}
 	var once sync.Once
-	return func() { once.Do(func() { C.jarvisHotkeyUngrabOne(dpy) }) }, true
+	// Same lock on the way out: this is an XCloseDisplay, which unlinks from
+	// the display list a concurrent create is linking into.
+	return func() {
+		once.Do(func() {
+			hotkeyCreateMu.Lock()
+			C.jarvisHotkeyUngrabOne(dpy)
+			hotkeyCreateMu.Unlock()
+		})
+	}, true
 }
 
 // parseLinuxKeyspec turns "ctrl+space" / "ctrl+shift+k" into an X11 modifier
@@ -745,4 +1017,62 @@ func parseLinuxKeyspec(spec string) (mods uint, keysym uint64, err error) {
 		return 0, 0, fmt.Errorf("unknown key %q in hotkey %q", parsed.Key, spec)
 	}
 	return linuxModifierMask(parsed.Mods), ks, nil
+}
+
+// stealHotkeyErrorHandler installs a process-wide X error handler that swallows
+// everything, standing in for GDK, and returns a function that restores what
+// was there and reports how many errors the impostor caught.
+//
+// For TestLinuxRefusalSurvivesAStolenErrorHandler. A Go wrapper rather than a
+// direct C call because a _test.go file may not use cgo at all. Nothing in the
+// product calls it.
+func stealHotkeyErrorHandler() (restore func() int) {
+	C.jarvisHotkeyStealErrorHandler()
+	var once sync.Once
+	var caught int
+	return func() int {
+		once.Do(func() { caught = int(C.jarvisHotkeyRestoreErrorHandler()) })
+		return caught
+	}
+}
+
+// hotkeyGrabOverBrokenConnection runs the real grab sequence over a connection
+// whose socket has been replaced by /dev/null and returns the stage it
+// produced, which must be hkGrabConnLost.
+//
+// For TestLinuxADeadConnectionIsNotReportedAsAGrantedGrab. See the C comment on
+// jarvisHotkeyGrabOverBrokenConnection. Nothing in the product calls it.
+// ok is false when there is no display or the layout has no such key.
+func hotkeyGrabOverBrokenConnection(keyspec string) (stage int, ok bool) {
+	mods, keysym, err := parseLinuxKeyspec(keyspec)
+	if err != nil {
+		return 0, false
+	}
+	hotkeyCreateMu.Lock()
+	out := int(C.jarvisHotkeyGrabOverBrokenConnection(C.uint(mods), C.ulong(keysym)))
+	hotkeyCreateMu.Unlock()
+	if out < 0 {
+		return 0, false
+	}
+	return out, true
+}
+
+// hotkeyGrabUnderHijackedHandler asks for keyspec's base variant with a checked
+// request while a foreign X error handler is installed across the round trip --
+// the GDK error-trap window, manufactured rather than waited for.
+//
+// For TestLinuxCheckedGrabKeepsItsRefusalFromTheGlobalHandler. See the C
+// comment on jarvisHotkeyGrabUnderHijackedHandler for why the window has to be
+// opened at that exact point to mean anything. Nothing in the product calls it.
+//
+// usable is false when there is no display or the layout has no such key.
+func hotkeyGrabUnderHijackedHandler(keyspec string) (refused bool, errorCode, requestCode uint8, handlerCalls int, usable bool) {
+	mods, keysym, err := parseLinuxKeyspec(keyspec)
+	if err != nil {
+		return false, 0, 0, 0, false
+	}
+	hotkeyCreateMu.Lock()
+	out := C.jarvisHotkeyGrabUnderHijackedHandler(C.uint(mods), C.ulong(keysym))
+	hotkeyCreateMu.Unlock()
+	return out.refused != 0, uint8(out.error_code), uint8(out.request_code), int(out.handler_calls), out.usable != 0
 }

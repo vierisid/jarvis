@@ -241,6 +241,150 @@ func TestLinuxGrabIsReleasedOnStop(t *testing.T) {
 	second()
 }
 
+// The grab path must not touch the process-wide X error handler at all.
+//
+// This is the "nobody put a handler back" guard: a swallow-everything handler
+// is installed around a whole refused registration, and afterwards it must have
+// caught NOTHING, because a checked request's error goes to its cookie and is
+// never dispatched. If someone reintroduces an XSetErrorHandler install on this
+// path -- or adds an unchecked request to this connection -- the count goes
+// non-zero and this fails.
+//
+// Being straight about what it does NOT prove: it is not a base-commit
+// regression test. The mechanism #577 replaced installed its OWN handler at
+// create entry, which displaced this impostor, so the old code passes this too
+// (measured, not assumed). The test that discriminates is
+// TestLinuxCheckedGrabKeepsItsRefusalFromTheGlobalHandler below, which opens
+// the foreign handler's window where it actually matters.
+func TestLinuxRefusalSurvivesAStolenErrorHandler(t *testing.T) {
+	// Its own combination, so a parallel run of this package elsewhere cannot
+	// make the squatter grab below fail for an unrelated reason.
+	const spec = "ctrl+alt+shift+super+g"
+
+	held, err := startHotkeyListener(spec, func() {})
+	if err != nil {
+		t.Skipf("cannot grab %q here: %v", spec, err)
+	}
+	defer held()
+
+	// Stand in for GDK for exactly the window the grab occupies.
+	restore := stealHotkeyErrorHandler()
+	second, secondErr := startHotkeyListener(spec, func() {})
+	caught := restore()
+
+	if second != nil {
+		second()
+		t.Error("a refused grab handed back a stop function; callers read a non-nil stop as a live hotkey")
+	}
+	if secondErr == nil {
+		t.Fatal("with a foreign X error handler installed, a second grab of a held combination came back as SUCCESS; the refusal was swallowed by the global handler, which is exactly what #577 removed from the path")
+	}
+	if !strings.Contains(secondErr.Error(), "already held") {
+		t.Errorf("the refusal should still be reported as the combination being held, got: %v", secondErr)
+	}
+	// The positive half: a checked request's error is handed to the caller and
+	// never dispatched, so the global handler must not see it even once.
+	if caught != 0 {
+		t.Errorf("the process-wide X error handler was consulted %d time(s) during a checked grab; it must be 0, or the refusal is still something another library can steal", caught)
+	}
+	t.Logf("refusal reported as: %v (foreign handler consulted %d times)", secondErr, caught)
+}
+
+// The refusal must survive a foreign error handler installed in the exact
+// window a GDK error trap occupies. This is #577's reason to exist, and unlike
+// the test above it is a real discriminator.
+//
+// The window is between our request reaching the wire and its reply being read:
+// that is the span gdk_x11_display_error_trap_push/pop covers, and it is the
+// only span in which the global handler's owner decides where our BadAccess
+// goes. hotkeyGrabUnderHijackedHandler manufactures it exactly -- flush, then
+// install the impostor, then collect -- rather than waiting for a GTK loop to
+// produce it by chance.
+//
+// Measured side by side against the mechanism this replaced, same server, same
+// contended grab, in that same window:
+//
+//	XGrabKey + recording handler + XSync   refusal LOST, impostor swallowed 1,
+//	                                       create would report SUCCESS (#574)
+//	xcb checked + xcb_request_check        refusal KEPT (code=10 major=33),
+//	                                       impostor swallowed 0
+//
+// So this test fails on the old mechanism and passes on this one, which is the
+// property a mechanism swap has to demonstrate rather than assert.
+func TestLinuxCheckedGrabKeepsItsRefusalFromTheGlobalHandler(t *testing.T) {
+	const spec = "ctrl+alt+shift+super+h"
+
+	// A squatter on our own connection, so there is a refusal to lose.
+	held, err := startHotkeyListener(spec, func() {})
+	if err != nil {
+		t.Skipf("cannot grab %q here: %v", spec, err)
+	}
+	defer held()
+
+	refused, errorCode, requestCode, handlerCalls, usable := hotkeyGrabUnderHijackedHandler(spec)
+	if !usable {
+		t.Skipf("no usable X connection for %q", spec)
+	}
+
+	if !refused {
+		t.Fatal("a grab of a held combination came back GRANTED while a foreign X error handler owned the slot across the round trip; the refusal was stolen, which is the #577 hole")
+	}
+	if handlerCalls != 0 {
+		t.Errorf("the foreign handler swallowed %d error(s); a checked request's error must go to its cookie and never be dispatched", handlerCalls)
+	}
+	// The same two numbers linuxGrabError gates its "already held" wording on,
+	// asserted against the real X protocol constants rather than a comment.
+	if errorCode != hkBadAccess || requestCode != hkOpcodeGrab {
+		t.Errorf("refusal reported as error_code=%d request_code=%d, want BadAccess(%d) on X_GrabKey(%d); linuxGrabError's wording depends on both",
+			errorCode, requestCode, hkBadAccess, hkOpcodeGrab)
+	}
+	t.Logf("refusal kept: error_code=%d request_code=%d, foreign handler swallowed %d", errorCode, requestCode, handlerCalls)
+}
+
+// A dead X connection must not read as a granted grab.
+//
+// This is the one lie a checked request can tell, and it is the refusal path
+// the move from XSync to xcb would otherwise have dropped:
+// `xcb_request_check` returns NULL when the server said yes AND when there is
+// no server, because once the connection has an error every request is
+// discarded and every check comes back clean. Without the
+// xcb_connection_has_error test in hk_grab_variants, a create over a dying
+// connection returns failed_mask=0, granted=0xf and HK_OK -- a non-nil stop
+// function and a "registered" log line for a hotkey that can never fire, which
+// is #574 reached through the fix for it.
+//
+// The mechanism this replaced could not produce that: XSync on a dead
+// connection takes libX11's fatal-IO path, which is brutal but never silent.
+//
+// The window is narrow and it is not hypothetical: it is between XOpenDisplay
+// and the verdict, and the sidecar re-registers its hotkeys around session
+// logout and X server restarts, which is exactly when a connection dies
+// mid-sequence.
+func TestLinuxADeadConnectionIsNotReportedAsAGrantedGrab(t *testing.T) {
+	// A combination nothing else is asked to hold: the point is the dead
+	// socket, not contention, and this must not depend on whether the grab
+	// would have been granted.
+	const spec = "ctrl+alt+shift+super+d"
+
+	stage, ok := hotkeyGrabOverBrokenConnection(spec)
+	if !ok {
+		t.Skipf("no usable X display for %q", spec)
+	}
+
+	if stage == hkGrabOK {
+		t.Fatal("a grab over a connection whose socket had been replaced reported HK_OK with every variant granted; a dead hotkey would be logged as registered (#574 via #577's own mechanism)")
+	}
+	if stage != hkGrabConnLost {
+		t.Fatalf("stage = %d, want hkGrabConnLost (%d); a broken connection has to be its own outcome, not folded into a refusal or a missing display", stage, hkGrabConnLost)
+	}
+	// And the message a user would actually see.
+	err := linuxGrabError(spec, stage, 0, 0, 0, true)
+	if err == nil {
+		t.Fatal("hkGrabConnLost produced no error")
+	}
+	t.Logf("dead connection reported as: %v", err)
+}
+
 // The partial clash is the case the all-or-nothing decision exists for, so it
 // gets a real X round trip rather than a claim in a comment.
 //

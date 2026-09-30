@@ -274,25 +274,69 @@ binding with `pebble.summon_hotkey` / `pebble.palette_hotkey`.
 
 Detecting the refusal at all takes a round trip. `XGrabKey` is asynchronous and
 has no useful return value; a refusal arrives later as a `BadAccess` error
-event. The sidecar therefore installs an X error handler that **records**
-rather than ignores, and forces the round trip with `XSync` after each variant.
-Until #574 that handler discarded everything it caught and the registration was
-reported as successful either way, so a taken combination was announced as
-`registered` and then never fired. The no-crash reason the handler existed in
-the first place is still honoured - XLib's default handler calls `exit(1)` - but
-it no longer costs the diagnosis.
+event. So the grabs are issued as xcb **checked** requests instead -
+`xcb_grab_key_checked` plus `xcb_request_check` - on the xcb connection behind
+the same `Display*` (`XGetXCBConnection`). A checked request's error is handed
+back to the caller, keyed to that request's own cookie. Until #574 the
+registration was reported as successful either way, so a taken combination was
+announced as `registered` and then never fired.
 
-**The caveat, because it is not a guarantee.** `XSetErrorHandler` is
-process-global, and GTK rewrites it constantly: `gdk_x11_display_error_trap_push`
-installs GDK's own handler on every push and the matching pop puts back whatever
-it displaced. If one of those windows happens to straddle a grab's round trip,
-the `BadAccess` is delivered to GDK's handler, which does not recognise the
-sidecar's private connection and drops it - and the grab then looks granted. So
-detection is **reliable rather than certain**. The sidecar re-checks after every
-round trip that the handler is still its own and logs a warning when it was not,
-so the case is visible rather than silent, but the only real fix is to stop
-sharing the slot (xcb *checked* requests would return the error directly). See
-the KNOWN LIMIT note in `sidecar/hotkeys_linux.go`.
+**Why not an error handler, which is what #574 shipped.** That version installed
+a temporary process-wide `XErrorHandler` around each grab and forced the round
+trip with `XSync`. `XSetErrorHandler` is a single process-global word, and GTK
+rewrites it constantly: `gdk_x11_display_error_trap_push` installs GDK's own
+handler on **every** push - unconditionally, at function entry - and the matching
+pop puts back whatever it displaced, from 55 call sites in libgdk alone. A push
+straddling a grab's round trip delivered the `BadAccess` to GDK's handler, which
+did not recognise the sidecar's private connection and dropped it, and the grab
+then looked granted. Detection was reliable rather than certain. A handler
+installed for the process lifetime would not have helped either, since GDK
+displaces that too. #577 removed the slot from the path instead.
+
+That is measured rather than reasoned. Both mechanisms, run against the same
+contended grab with a foreign handler installed in exactly the window an error
+trap occupies (request flushed, handler installed, verdict then collected):
+
+| mechanism | refusal | swallowed by the foreign handler |
+|---|---|---|
+| `XGrabKey` + recording handler + `XSync` | **lost**, create would report success | 1 |
+| `xcb_grab_key_checked` + `xcb_request_check` | kept, `BadAccess(10)` on `X_GrabKey(33)` | 0 |
+
+`TestLinuxCheckedGrabKeepsItsRefusalFromTheGlobalHandler` is that experiment as
+a Go test.
+
+**A checked request has one blind spot, and it is handled.**
+`xcb_request_check` returns "no error" both when the server granted the grab and
+when there is no server: once the connection has failed, every request is
+discarded and every check comes back clean. Left alone that is #574 again -
+all variants "granted", a stop function handed back, `registered` in the log,
+and a hotkey that can never fire - so the create tests
+`xcb_connection_has_error` explicitly and reports the connection breaking as its
+own outcome, separate from "no display" (the session *had* a display; the answer
+is to retry, not to go looking for `DISPLAY`). The window is narrow and it is
+where it matters: the sidecar re-registers hotkeys around session logout and X
+server restarts. `TestLinuxADeadConnectionIsNotReportedAsAGrantedGrab` drives
+the real grab sequence over a connection whose socket has been replaced.
+
+On that path the sidecar deliberately does **not** close the display.
+`XCloseDisplay` flushes, and flushing a dead socket takes XLib's *fatal-IO*
+route - `XIO: fatal IO error 88 ... exit status 1` - so tidying up would kill the
+sidecar over the condition it is trying to report. One leaked `Display` on a
+dying session is the better trade, and `jarvisHotkeyFree` now skips the close on
+an already-failed connection for the same reason, where before #577 it closed
+unconditionally.
+
+**No X error handler is installed anywhere in the hotkey path now.** No error of
+*ours* can reach one, which is the point. Being straight about the limit: the
+old handler also swallowed and reported unrelated errors for the span it was
+installed, and those are now neither swallowed nor reported - they reach XLib's
+`exit(1)` default via the run loop, as they already did before #577 in the run
+and teardown windows, which installed no handler either. The only such errors
+are ones XLib issues for itself (XKB setup, BIG-REQUESTS negotiation). Making
+that structurally impossible means `XSetEventQueueOwner(XCBOwnsEventQueue)` and
+porting the event loop off `XPending`/`XNextEvent`, which #577 deliberately did
+not do - it scoped itself to the grab. See the note in
+`sidecar/hotkeys_linux.go`.
 
 One consequence worth knowing: `pebble.summon_hotkey` and
 `pebble.palette_hotkey` open separate X connections, so they are separate X

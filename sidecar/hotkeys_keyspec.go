@@ -489,6 +489,8 @@ const (
 	hkGrabRefused   = 3
 	hkGrabNoPipe    = 4
 	hkGrabNoMem     = 5
+	hkGrabNoXcb     = 6
+	hkGrabConnLost  = 7
 )
 
 // X11 protocol constants (X.h / Xproto.h), repeated here so this file stays
@@ -549,6 +551,16 @@ func linuxGrabError(keyspec string, stage int, errorCode, requestCode uint8, fai
 		return fmt.Errorf("XGrabKey(%s): could not set up the listener's stop pipe", keyspec)
 	case hkGrabNoMem:
 		return fmt.Errorf("XGrabKey(%s): out of memory allocating the listener", keyspec)
+	case hkGrabNoXcb:
+		// The grabs go out as xcb checked requests, so no xcb connection means
+		// no way to tell a granted grab from a refused one. Refusing beats
+		// falling back to a bare XGrabKey, which reports success either way.
+		return fmt.Errorf("XGrabKey(%s): this libX11 has no xcb connection, so a refused grab could not be told from a granted one", keyspec)
+	case hkGrabConnLost:
+		// Its own stage rather than folded into "no display", because the
+		// session DID have a display a moment ago and the answer is different:
+		// retry, do not go looking for DISPLAY or Wayland.
+		return fmt.Errorf("XGrabKey(%s): the X connection broke during registration (the server went away or the session ended), so the grab cannot be confirmed", keyspec)
 	case hkGrabRefused:
 		// Say which variants, unless it was all of them (in which case the
 		// combination is simply taken and the list adds nothing).

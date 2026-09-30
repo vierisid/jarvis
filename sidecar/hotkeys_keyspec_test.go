@@ -692,7 +692,7 @@ func TestLinuxGrabError(t *testing.T) {
 		// Whoever is reading the log has more than one hotkey registered, so a
 		// message that does not say which one failed is nearly useless. The
 		// Windows test asserts the same thing about its own path.
-		for _, stage := range []int{hkGrabNoDisplay, hkGrabNoKeycode, hkGrabNoPipe, hkGrabNoMem, hkGrabRefused} {
+		for _, stage := range []int{hkGrabNoDisplay, hkGrabNoKeycode, hkGrabNoPipe, hkGrabNoMem, hkGrabNoXcb, hkGrabConnLost, hkGrabRefused} {
 			err := linuxGrabError("ctrl+shift+k", stage, hkBadAccess, hkOpcodeGrab, hkAllVariants, false)
 			if err == nil {
 				t.Fatalf("stage %d produced no error", stage)
@@ -819,6 +819,43 @@ func TestLinuxGrabError(t *testing.T) {
 		}
 		if !strings.Contains(got, "drifted") {
 			t.Errorf("an unknown stage should say the two files have drifted: %s", got)
+		}
+	})
+
+	// The stage that exists because a checked request cannot tell "granted"
+	// from "there is no server": xcb_request_check returns NULL for both once
+	// the connection has an error, so the create has to test for that
+	// explicitly and report it as its own outcome (#577). Every stage below
+	// must be distinguishable, or the one message a user gets sends them
+	// somewhere else.
+	t.Run("a dead connection is not reported as success, a refusal or a missing display", func(t *testing.T) {
+		lost := linuxGrabError("ctrl+shift+space", hkGrabConnLost, 0, 0, 0, false)
+		if lost == nil {
+			t.Fatal("a connection that broke during registration produced no error; that is a hotkey logged as registered which can never fire")
+		}
+		got := lost.Error()
+		if strings.Contains(got, "already held") || strings.Contains(got, "refused with X error") {
+			t.Errorf("a dead connection must not be described as a clash with another client: %s", got)
+		}
+		// "no X display" would send the reader looking at DISPLAY and Wayland,
+		// when what actually happened is that a working session went away.
+		noDisplay := linuxGrabError("ctrl+shift+space", hkGrabNoDisplay, 0, 0, 0, false).Error()
+		if got == noDisplay {
+			t.Errorf("a broken connection and an absent display read identically: %s", got)
+		}
+		if !strings.Contains(got, "broke during registration") {
+			t.Errorf("the message should say the connection broke mid-registration: %s", got)
+		}
+	})
+
+	t.Run("a libX11 with no xcb is its own outcome", func(t *testing.T) {
+		got := linuxGrabError("ctrl+shift+space", hkGrabNoXcb, 0, 0, 0, false).Error()
+		if strings.Contains(got, "already held") {
+			t.Errorf("a missing xcb connection is not a clash: %s", got)
+		}
+		lost := linuxGrabError("ctrl+shift+space", hkGrabConnLost, 0, 0, 0, false).Error()
+		if got == lost {
+			t.Errorf("no xcb and a broken connection read identically, but the answers differ (rebuild vs retry): %s", got)
 		}
 	})
 
