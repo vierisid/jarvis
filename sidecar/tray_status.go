@@ -206,10 +206,12 @@ func trayUpdateLabel() string {
 
 func markTrayReady() { trayReadyOnce.Do(func() { close(trayReady) }) }
 
-// waitTrayReady blocks until the tray is up, or timeout.
-func waitTrayReady(timeout time.Duration) {
+// waitTrayReady blocks until the tray is up (true), or timeout (false).
+func waitTrayReady(timeout time.Duration) bool {
 	select {
 	case <-trayReady:
+		return true
 	case <-time.After(timeout):
+		return false
 	}
 }

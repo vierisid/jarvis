@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -21,6 +22,8 @@ type fakeUpdater struct {
 	*Updater
 	mu        sync.Mutex
 	published map[string]bool
+	resolved  []string
+	failNext  error // the next registry lookup fails with this
 	installed []string
 	handedOff []string
 	pmArgs    [][]string
@@ -37,6 +40,11 @@ func newFakeUpdater(t *testing.T, running string, mode update.Mode) *fakeUpdater
 	u.resolve = func(_, v string) (*update.Release, error) {
 		f.mu.Lock()
 		defer f.mu.Unlock()
+		f.resolved = append(f.resolved, v)
+		if err := f.failNext; err != nil {
+			f.failNext = nil
+			return nil, err
+		}
 		if !f.published[v] {
 			return nil, fmt.Errorf("x@%s: %w", v, update.ErrVersionNotFound)
 		}
@@ -50,13 +58,19 @@ func newFakeUpdater(t *testing.T, running string, mode update.Mode) *fakeUpdater
 		f.mu.Unlock()
 		return nil
 	}
-	u.pmRun = func(_ context.Context, args []string) error {
+	u.pmResolve = func(pm, version string) ([]string, string, error) {
+		args, err := update.PackageManagerArgs(pm, version)
+		return args, "", err
+	}
+	u.pmRun = func(_ context.Context, args []string, _ string) error {
 		f.mu.Lock()
 		f.pmArgs = append(f.pmArgs, args)
 		f.mu.Unlock()
 		return nil
 	}
+	u.verifyPM = func(string) error { return nil }
 	u.verBin = func(string) (string, error) { return "", errors.New("unset") }
+	u.now = time.Now
 	u.handOff = func(exe string) error {
 		f.mu.Lock()
 		f.handedOff = append(f.handedOff, exe)
@@ -142,7 +156,10 @@ func TestUpdaterIgnoresNonUpdates(t *testing.T) {
 		{"0.9.7", "0.9.6"},
 		{"0.9.7", ""},
 		{"0.9.7", "not-a-version"},
+		{"0.9.7", "v0.10.0"},
 		{"dev", "0.10.0"},
+		// A release build is never moved onto a prerelease.
+		{"0.9.7", "0.10.0-rc.1"},
 	}
 	for _, c := range cases {
 		f := newFakeUpdater(t, c.running, nativeMode(t))
@@ -151,6 +168,13 @@ func TestUpdaterIgnoresNonUpdates(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		if o := f.Offer(); o.Version != "" {
 			t.Errorf("running %s, latest %q: offered %q", c.running, c.latest, o.Version)
+		}
+		// Not a candidate at all: the registry is never even asked.
+		f.mu.Lock()
+		asked := len(f.resolved)
+		f.mu.Unlock()
+		if asked != 0 {
+			t.Errorf("running %s, latest %q: registry asked %d times", c.running, c.latest, asked)
 		}
 		if err := f.Start(c.latest); err == nil {
 			t.Errorf("running %s, latest %q: Start accepted", c.running, c.latest)
@@ -321,7 +345,7 @@ func TestUpdaterPackageManagerApply(t *testing.T) {
 func TestUpdaterPackageManagerFailureGivesCommand(t *testing.T) {
 	f := newFakeUpdater(t, "0.9.7", update.Mode{Kind: update.ModePackageManager, PackageManager: "npm"})
 	f.published["0.10.0"] = true
-	f.pmRun = func(context.Context, []string) error { return errors.New("EACCES: permission denied") }
+	f.pmRun = func(context.Context, []string, string) error { return errors.New("EACCES: permission denied") }
 	f.OnAck("0.10.0")
 	f.waitSettled(t)
 
@@ -379,4 +403,190 @@ func TestUpdaterFeatures(t *testing.T) {
 	if !found {
 		t.Error("native install does not advertise update_apply")
 	}
+}
+
+// A prerelease build does follow the brain onto a newer prerelease.
+func TestUpdaterPrereleaseFollowsPrerelease(t *testing.T) {
+	f := newFakeUpdater(t, "0.10.0-rc.1", nativeMode(t))
+	f.published["0.10.0-rc.2"] = true
+	f.OnAck("0.10.0-rc.2")
+	f.waitSettled(t)
+	if o := f.Offer(); o.Version != "0.10.0-rc.2" {
+		t.Fatalf("offer = %+v, want 0.10.0-rc.2", o)
+	}
+}
+
+// The startup prompt belongs to the process's first registration. An update
+// that only becomes known later (here: a retry that finally finds the
+// version) goes to the tray and dashboard without popping a window.
+func TestUpdaterLateOfferDoesNotPrompt(t *testing.T) {
+	f := newFakeUpdater(t, "0.9.7", nativeMode(t))
+	f.OnAck("0.10.0")
+	waitUntil(t, func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return len(f.retries) == 1
+	})
+	f.mu.Lock()
+	f.published["0.10.0"] = true
+	retry := f.retries[0]
+	f.mu.Unlock()
+	retry()
+	if o := f.Offer(); o.Version != "0.10.0" {
+		t.Fatalf("offer = %+v, want 0.10.0", o)
+	}
+	// A brain upgraded mid-session: a later advertise of a newer version.
+	f.published["0.11.0"] = true
+	f.OnAck("0.11.0")
+	waitUntil(t, func() bool { return f.Offer().Version == "0.11.0" })
+	time.Sleep(20 * time.Millisecond)
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if len(f.offers) != 0 {
+		t.Errorf("startup prompt fired %d times for late offers", len(f.offers))
+	}
+}
+
+// A result for an advertisement that has since been superseded is dropped.
+func TestUpdaterDropsStaleCheck(t *testing.T) {
+	f := newFakeUpdater(t, "0.9.7", nativeMode(t))
+	f.published["0.10.0"] = true
+	f.published["0.10.1"] = true
+	release := make(chan struct{})
+	var held atomic.Bool
+	base := f.resolve
+	f.resolve = func(r, v string) (*update.Release, error) {
+		if v == "0.10.0" && held.CompareAndSwap(false, true) {
+			<-release
+		}
+		return base(r, v)
+	}
+	f.OnAck("0.10.0")
+	time.Sleep(10 * time.Millisecond) // the 0.10.0 check is now blocked
+	f.OnAck("0.10.1")
+	waitUntil(t, func() bool { return f.Offer().Version == "0.10.1" })
+	close(release)
+	time.Sleep(20 * time.Millisecond)
+	if o := f.Offer(); o.Version != "0.10.1" {
+		t.Errorf("stale check overwrote the offer: %+v", o)
+	}
+}
+
+// A reconnect whose registry check fails transiently keeps an offer that was
+// already confirmed.
+func TestUpdaterKeepsConfirmedOfferOnTransientError(t *testing.T) {
+	f := newFakeUpdater(t, "0.9.7", nativeMode(t))
+	f.published["0.10.0"] = true
+	f.OnAck("0.10.0")
+	f.waitSettled(t)
+
+	f.mu.Lock()
+	f.failNext = errors.New("registry unreachable")
+	f.mu.Unlock()
+	f.OnAck("0.10.0")
+	waitUntil(t, func() bool {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		return len(f.resolved) == 2
+	})
+	time.Sleep(20 * time.Millisecond)
+	if o := f.Offer(); o.Version != "0.10.0" || o.State.Phase != updatePhaseAvailable {
+		t.Errorf("offer after a transient error = %+v", o)
+	}
+}
+
+// Once the process has handed off to the new binary it is about to exit: a
+// second request in that window must not start another install.
+func TestUpdaterStaysBusyAfterHandOff(t *testing.T) {
+	f := newFakeUpdater(t, "0.9.7", nativeMode(t))
+	f.published["0.10.0"] = true
+	f.OnAck("0.10.0")
+	f.waitSettled(t)
+	if err := f.Start(""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	f.waitSettled(t)
+	time.Sleep(20 * time.Millisecond)
+	if err := f.Start(""); !errors.Is(err, ErrUpdateBusy) {
+		t.Errorf("Start after hand-off = %v, want ErrUpdateBusy", err)
+	}
+}
+
+// After a failure, an immediate retry is refused for a short cooldown.
+func TestUpdaterCooldownAfterFailure(t *testing.T) {
+	f := newFakeUpdater(t, "0.9.7", update.Mode{Kind: update.ModePackageManager, PackageManager: "npm"})
+	f.published["0.10.0"] = true
+	clock := time.Unix(1_000_000, 0)
+	f.now = func() time.Time { return clock }
+	f.cooldown = 15 * time.Second
+	f.pmRun = func(context.Context, []string, string) error { return errors.New("boom") }
+	f.OnAck("0.10.0")
+	f.waitSettled(t)
+	if err := f.Start(""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	f.waitSettled(t)
+	if err := f.Start(""); err == nil {
+		t.Fatal("retry right after a failure was accepted")
+	}
+	clock = clock.Add(16 * time.Second)
+	if err := f.Start(""); err != nil {
+		t.Fatalf("retry after the cooldown: %v", err)
+	}
+	f.waitSettled(t)
+}
+
+// What the package manager installed is signature-checked before it runs.
+func TestUpdaterPackageManagerRefusesUnsignedPayload(t *testing.T) {
+	f := newFakeUpdater(t, "0.9.7", update.Mode{Kind: update.ModePackageManager, PackageManager: "bun"})
+	f.published["0.10.0"] = true
+	ran := false
+	f.verifyPM = func(string) error { return errors.New("not signed by us") }
+	f.verBin = func(string) (string, error) { ran = true; return "0.10.0", nil }
+	f.OnAck("0.10.0")
+	f.waitSettled(t)
+	if err := f.Start(""); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	f.waitSettled(t)
+	if s := f.Offer().State; s.Phase != updatePhaseFailed || !strings.Contains(s.Error, "signature") {
+		t.Fatalf("state = %+v, want a signature failure", s)
+	}
+	if ran {
+		t.Error("the unverified binary was executed")
+	}
+}
+
+// The update_apply RPC maps the updater's refusals onto codes the brain
+// passes back to the dashboard.
+func TestHandleUpdateApplyCodes(t *testing.T) {
+	f := newFakeUpdater(t, "0.9.7", nativeMode(t))
+	prev := activeUpdaterV.Load()
+	activeUpdaterV.Store(f.Updater)
+	t.Cleanup(func() { activeUpdaterV.Store(prev) })
+
+	code := func(err error) string {
+		var coded *codedError
+		if errors.As(err, &coded) {
+			return coded.code
+		}
+		return ""
+	}
+	if _, err := handleUpdateApply(map[string]any{"version": "0.10.0"}); code(err) != "UPDATE_UNAVAILABLE" {
+		t.Errorf("nothing available: err = %v", err)
+	}
+
+	f.published["0.10.0"] = true
+	f.OnAck("0.10.0")
+	f.waitSettled(t)
+	release := make(chan struct{})
+	f.install = func(context.Context, *update.Release, string, func(string)) error { <-release; return nil }
+	if res, err := handleUpdateApply(map[string]any{"version": "0.10.0"}); err != nil || res.Result.(map[string]any)["started"] != true {
+		t.Fatalf("first apply = %v, %v", res, err)
+	}
+	if _, err := handleUpdateApply(map[string]any{"version": "0.10.0"}); code(err) != "UPDATE_BUSY" {
+		t.Errorf("second apply: err = %v, want UPDATE_BUSY", err)
+	}
+	close(release)
+	f.waitSettled(t)
 }

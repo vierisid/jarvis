@@ -8,10 +8,13 @@ package main
 // the new binary.
 //
 // The brain only ever SUGGESTS a version. Everything that makes installing it
-// safe is enforced here and in internal/update: the version must be strictly
-// newer than this build, it is fetched only from the npm registry
-// (updateRegistryURL), its sha512 must match the registry's integrity value,
-// and on Windows/macOS the payload must carry our pinned code signature.
+// safe is enforced here and in internal/update: the version must be canonical
+// and strictly newer than this build (and a release build is never moved onto
+// a prerelease), it is fetched only from the npm registry (updateRegistryURL),
+// and on Windows/macOS the payload must carry our pinned code signature before
+// it is ever executed. The native path checks the tarball's sha512 itself; the
+// package-manager path pins bun/npm to the same registry and version and
+// leaves the integrity check to them, as a manual install would.
 
 import (
 	"context"
@@ -34,7 +37,6 @@ import (
 // prompt. "available" is local only: it is what the tray/prompt offer.
 const (
 	updatePhaseAvailable   = "available"
-	updatePhaseChecking    = "checking"
 	updatePhaseDownloading = "downloading"
 	updatePhaseVerifying   = "verifying"
 	updatePhaseInstalling  = "installing"
@@ -56,6 +58,9 @@ const (
 	updateRetryInterval = time.Hour
 	// packageManagerTimeout bounds `bun add -g` / `npm install -g`.
 	packageManagerTimeout = 5 * time.Minute
+	// failureCooldown spaces out retries after a failed attempt, so a looping
+	// caller cannot turn into back-to-back downloads.
+	failureCooldown = 15 * time.Second
 	// installerDownloadURL is where a native install that cannot update
 	// itself gets the current installer.
 	installerDownloadURL = "https://github.com/vierisid/jarvis/releases/tag/installer-latest"
@@ -86,12 +91,16 @@ type Updater struct {
 	mode     update.Mode // how this install can be updated
 
 	// Seams, replaced by tests.
-	resolve  func(registry, version string) (*update.Release, error)
-	install  func(ctx context.Context, rel *update.Release, installDir string, progress func(string)) error
-	pmRun    func(ctx context.Context, args []string) error
-	verBin   func(exe string) (string, error)
-	handOff  func(exe string) error // relaunch exe and exit this process once it is up
-	schedule func(d time.Duration, f func()) func()
+	resolve   func(registry, version string) (*update.Release, error)
+	install   func(ctx context.Context, rel *update.Release, installDir string, progress func(string)) error
+	pmResolve func(pm, version string) (args []string, pathEnv string, err error)
+	pmRun     func(ctx context.Context, args []string, pathEnv string) error
+	verifyPM  func(exe string) error // signature of what the package manager installed
+	verBin    func(exe string) (string, error)
+	handOff   func(exe string) error // relaunch exe and exit this process once it is up
+	schedule  func(d time.Duration, f func()) func()
+	now       func() time.Time
+	cooldown  time.Duration
 
 	// Hooks, set by the client / platform UI. All optional.
 	onChange     func(UpdateOffer) // tray item, open prompt
@@ -104,9 +113,15 @@ type Updater struct {
 	available   string // latest, confirmed published and newer than running
 	state       UpdateState
 	checkGen    int    // bumps on every advertise; stale checks drop their result
+	firstGen    int    // the process's first advertise: only it may prompt at startup
 	cancelRetry func() // pending unavailable-retry timer
 	cleaned     bool   // .old from a previous update already handled
+	failedAt    time.Time
 
+	// applying is set while an update installs, and STAYS set once the
+	// process has handed off to the new binary: a second apply in the few
+	// hundred ms before this process exits would swap again and delete the
+	// rollback copy.
 	applying   atomic.Bool
 	firstOffer sync.Once
 }
@@ -125,11 +140,18 @@ func newUpdater(running string) *Updater {
 		resolve:  update.ResolveRelease,
 		install:  installNative,
 		pmRun:    runPackageManager,
+		verifyPM: verifyInstalledPayload,
 		verBin:   binaryVersion,
 		schedule: func(d time.Duration, f func()) func() {
 			t := time.AfterFunc(d, f)
 			return func() { t.Stop() }
 		},
+		now:      time.Now,
+		cooldown: failureCooldown,
+	}
+	u.pmResolve = func(pm, version string) ([]string, string, error) {
+		_, args, pathEnv, err := update.PackageManagerInvocation(pm, version, u.registry, u.exe)
+		return args, pathEnv, err
 	}
 	if exe != "" {
 		u.mode = update.DetectMode(exe)
@@ -154,16 +176,30 @@ func (u *Updater) Features() []string {
 	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
 		f = append(f, featureUpdatePrompt)
 	}
-	if u.mode.Kind != update.ModeManual {
+	if u.canApply() {
 		f = append(f, featureUpdateApply)
 	}
 	return f
 }
 
+// canApply reports whether Start can install anything at all here. A
+// package-manager install whose tool cannot be found is not offered as a
+// one-click update (the dashboard shows the command instead).
+func (u *Updater) canApply() bool {
+	switch u.mode.Kind {
+	case update.ModeNative:
+		return true
+	case update.ModePackageManager:
+		_, _, err := u.pmResolve(u.mode.PackageManager, "0.0.0")
+		return err == nil
+	}
+	return false
+}
+
 // OnAck handles a register_ack. Called on the read loop: never blocks.
 func (u *Updater) OnAck(latest string) {
 	u.advertise(latest, false)
-	u.cleanupPrevious()
+	go u.cleanupPrevious()
 }
 
 // OnRejected handles a register_rejected. Called on the read loop: never
@@ -177,11 +213,17 @@ func (u *Updater) advertise(latest string, blocked bool) {
 	u.latest, u.blocked = latest, blocked
 	u.checkGen++
 	gen := u.checkGen
+	if u.firstGen == 0 {
+		u.firstGen = gen
+	}
 	if u.cancelRetry != nil {
 		u.cancelRetry()
 		u.cancelRetry = nil
 	}
-	candidate := u.updatable() && update.StrictlyNewer(latest, u.running)
+	// A release build is never moved onto a prerelease: only a sidecar that
+	// is itself running one follows the brain onto rc builds.
+	candidate := u.updatable() && update.StrictlyNewer(latest, u.running) &&
+		(!update.IsPrerelease(latest) || update.IsPrerelease(u.running))
 	if !candidate {
 		u.available = ""
 		if !u.applying.Load() {
@@ -199,12 +241,17 @@ func (u *Updater) advertise(latest string, blocked bool) {
 		}
 		return
 	}
-	go u.check(gen, latest)
+	go u.check(gen, latest, false)
 }
 
 // check confirms the advertised version is really published before offering
-// it; a version not there yet is retried on updateRetryInterval.
-func (u *Updater) check(gen int, version string) {
+// it; a version not there yet is retried on updateRetryInterval. Only the
+// process's first check may open the startup prompt: an update that becomes
+// known later (a brain upgraded mid-session, a retry that finally finds the
+// version) is offered by the tray and the dashboard instead of a window
+// popping up in the middle of work. A blocked sidecar is the exception: it
+// cannot work at all until updated.
+func (u *Updater) check(gen int, version string, retry bool) {
 	_, err := u.resolve(u.registry, version)
 
 	u.mu.Lock()
@@ -212,12 +259,20 @@ func (u *Updater) check(gen int, version string) {
 		u.mu.Unlock()
 		return
 	}
+	startup := gen == u.firstGen && !retry
+	if err != nil && u.available == version {
+		// Already confirmed on an earlier check (this is a reconnect): a
+		// transient registry error must not take the offer away.
+		u.mu.Unlock()
+		log.Printf("[update] re-check of sidecar %s failed (%v); keeping the confirmed offer", version, err)
+		return
+	}
 	if err != nil {
 		u.available = ""
 		if !u.applying.Load() {
 			u.state = UpdateState{Phase: updatePhaseUnavailable, Version: version, Error: err.Error()}
 		}
-		u.cancelRetry = u.schedule(updateRetryInterval, func() { u.check(gen, version) })
+		u.cancelRetry = u.schedule(updateRetryInterval, func() { u.check(gen, version, true) })
 		blocked := u.blocked
 		u.mu.Unlock()
 		if !errors.Is(err, update.ErrVersionNotFound) {
@@ -232,13 +287,17 @@ func (u *Updater) check(gen int, version string) {
 		return
 	}
 	u.available = version
-	if !u.applying.Load() {
+	keepFailure := u.state.Phase == updatePhaseFailed && u.state.Version == version
+	if !u.applying.Load() && !keepFailure {
 		u.state = UpdateState{Phase: updatePhaseAvailable, Version: version}
 	}
+	blocked := u.blocked
 	u.mu.Unlock()
 	log.Printf("[update] sidecar %s is available (running %s)", version, u.running)
 	u.changed()
-	u.fireFirstOffer()
+	if startup || blocked {
+		u.fireFirstOffer()
+	}
 }
 
 func (u *Updater) fireFirstOffer() {
@@ -279,6 +338,9 @@ func (u *Updater) ManualCommand(version string) string {
 		version = "latest"
 	}
 	switch {
+	case u.mode.Kind == update.ModePackageManager && runtime.GOOS == "windows":
+		// Windows keeps the running exe locked inside the package tree.
+		return "Quit Jarvis first, then run: " + update.PackageManagerHint(u.mode.PackageManager, version)
 	case u.mode.Kind == update.ModePackageManager:
 		return update.PackageManagerHint(u.mode.PackageManager, version)
 	case runtime.GOOS == "windows" || runtime.GOOS == "darwin":
@@ -297,12 +359,16 @@ var ErrUpdateBusy = errors.New("an update is already in progress")
 func (u *Updater) Start(version string) error {
 	u.mu.Lock()
 	target := u.available
+	sinceFailure := u.now().Sub(u.failedAt)
 	u.mu.Unlock()
 	if target == "" {
 		return fmt.Errorf("no sidecar update is available")
 	}
 	if version != "" && version != target {
 		return fmt.Errorf("requested sidecar %s, but the available update is %s", version, target)
+	}
+	if sinceFailure < u.cooldown {
+		return fmt.Errorf("the last attempt just failed; try again in a few seconds")
 	}
 	if !u.applying.CompareAndSwap(false, true) {
 		return ErrUpdateBusy
@@ -312,10 +378,15 @@ func (u *Updater) Start(version string) error {
 }
 
 // apply runs one update attempt. On success the process hands off to the new
-// binary and exits; on failure it keeps running the current version and
-// reports the failure with a manual command.
+// binary and exits (applying stays set until then); on failure it keeps
+// running the current version and reports the failure with a manual command.
 func (u *Updater) apply(version string) {
-	defer u.applying.Store(false)
+	handedOff := false
+	defer func() {
+		if !handedOff {
+			u.applying.Store(false)
+		}
+	}()
 	if !update.StrictlyNewer(version, u.running) {
 		u.fail(version, fmt.Errorf("sidecar %s is not newer than the running %s", version, u.running))
 		return
@@ -323,27 +394,27 @@ func (u *Updater) apply(version string) {
 	ctx := context.Background()
 	switch u.mode.Kind {
 	case update.ModeNative:
-		u.applyNative(ctx, version)
+		handedOff = u.applyNative(ctx, version)
 	case update.ModePackageManager:
-		u.applyPackageManager(ctx, version)
+		handedOff = u.applyPackageManager(ctx, version)
 	default:
 		u.fail(version, fmt.Errorf("this sidecar cannot update itself: %s", u.mode.Reason))
 	}
 }
 
-func (u *Updater) applyNative(ctx context.Context, version string) {
+func (u *Updater) applyNative(ctx context.Context, version string) bool {
 	u.setState(UpdateState{Phase: updatePhaseDownloading, Version: version})
 	rel, err := u.resolve(u.registry, version)
 	if err != nil {
 		u.fail(version, err)
-		return
+		return false
 	}
 	dir := u.mode.InstallDir
 	if err := u.install(ctx, rel, dir, func(phase string) {
 		u.setState(UpdateState{Phase: phase, Version: version})
 	}); err != nil {
 		u.fail(version, err)
-		return
+		return false
 	}
 	if err := update.RefreshRegistration(dir, version); err != nil {
 		log.Printf("[update] could not refresh the uninstall entry: %v", err)
@@ -356,28 +427,34 @@ func (u *Updater) applyNative(ctx context.Context, version string) {
 		}
 		_ = update.RefreshRegistration(dir, u.running)
 		u.fail(version, fmt.Errorf("the new sidecar did not start: %w", err))
+		return false
 	}
+	return true
 }
 
-func (u *Updater) applyPackageManager(ctx context.Context, version string) {
+func (u *Updater) applyPackageManager(ctx context.Context, version string) bool {
 	u.setState(UpdateState{Phase: updatePhaseInstalling, Version: version})
+	args, pathEnv, err := u.pmResolve(u.mode.PackageManager, version)
+	if err != nil {
+		u.fail(version, err)
+		return false
+	}
 	// Windows will not let a package manager overwrite the executable this
-	// process is running from, but it does allow renaming it aside.
+	// process is running from, but it does allow moving it aside.
 	restore, err := moveRunningExeAside(u.exe)
 	if err != nil {
 		u.fail(version, err)
-		return
-	}
-	args, err := update.PackageManagerArgs(u.mode.PackageManager, version)
-	if err != nil {
-		restore()
-		u.fail(version, err)
-		return
+		return false
 	}
 	runCtx, cancel := context.WithTimeout(ctx, packageManagerTimeout)
-	err = u.pmRun(runCtx, args)
+	err = u.pmRun(runCtx, args, pathEnv)
 	cancel()
-	if err == nil {
+	if err != nil {
+		err = fmt.Errorf("%s failed: %w", filepath.Base(args[0]), err)
+	} else if err = u.verifyPM(u.exe); err != nil {
+		// Before the new binary is executed at all, not even for --version.
+		err = fmt.Errorf("code-signature verification of the installed sidecar failed: %w", err)
+	} else {
 		var got string
 		got, err = u.verBin(u.exe)
 		if err == nil && got != version {
@@ -386,17 +463,23 @@ func (u *Updater) applyPackageManager(ctx context.Context, version string) {
 	}
 	if err != nil {
 		restore()
-		u.fail(version, fmt.Errorf("%s failed: %w", args[0], err))
-		return
+		u.fail(version, err)
+		return false
 	}
 	u.setState(UpdateState{Phase: updatePhaseRestarting, Version: version})
 	if err := u.handOff(u.exe); err != nil {
+		restore()
 		u.fail(version, fmt.Errorf("the new sidecar did not start: %w", err))
+		return false
 	}
+	return true
 }
 
 func (u *Updater) fail(version string, err error) {
 	log.Printf("[update] updating to sidecar %s failed: %v", version, err)
+	u.mu.Lock()
+	u.failedAt = u.now()
+	u.mu.Unlock()
 	u.setState(UpdateState{
 		Phase:         updatePhaseFailed,
 		Version:       version,
@@ -464,10 +547,17 @@ func installNative(_ context.Context, rel *update.Release, installDir string, pr
 	return nil
 }
 
-// runPackageManager runs args, folding the tail of its output into the error.
-func runPackageManager(ctx context.Context, args []string) error {
+// runPackageManager runs args (args[0] already resolved) with pathEnv as
+// PATH, folding the tail of its output into the error.
+func runPackageManager(ctx context.Context, args []string, pathEnv string) error {
 	cmd := exec.CommandContext(ctx, args[0], args[1:]...)
 	hideSubprocessWindow(cmd)
+	if pathEnv != "" {
+		cmd.Env = append(os.Environ(), "PATH="+pathEnv)
+	}
+	// npm on Windows is npm.cmd: the timeout kills cmd.exe, but node keeps
+	// the output pipe open. WaitDelay stops waiting on it.
+	cmd.WaitDelay = 10 * time.Second
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		tail := strings.TrimSpace(string(out))
@@ -480,6 +570,17 @@ func runPackageManager(ctx context.Context, args []string) error {
 		return err
 	}
 	return nil
+}
+
+// verifyInstalledPayload checks the code signature of what a package manager
+// just installed, exactly as the native path checks a downloaded payload
+// (no-op on Linux, whose packages are unsigned).
+func verifyInstalledPayload(exe string) error {
+	dir, err := update.PayloadDirOf(exe)
+	if err != nil {
+		return err
+	}
+	return update.VerifyPayloadSignature(dir)
 }
 
 func binaryVersion(exe string) (string, error) {

@@ -5,6 +5,7 @@ package update
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -120,5 +121,61 @@ func TestPackageManagerArgsRefuseNonVersions(t *testing.T) {
 		if got, err := PackageManagerArgs("npm", v); err == nil {
 			t.Errorf("PackageManagerArgs(npm, %q) = %v, want an error", v, got)
 		}
+	}
+}
+
+// A sidecar launched by autostart has a minimal PATH: the tool is found next
+// to the global tree that owns the binary, and the install is pinned to the
+// updater's registry.
+func TestPackageManagerInvocationFindsToolNextToTree(t *testing.T) {
+	t.Setenv("PATH", "/nonexistent")
+	root := t.TempDir()
+	bunBin := filepath.Join(root, "bin", "bun")
+	if err := os.MkdirAll(filepath.Dir(bunBin), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(bunBin, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	exe := filepath.Join(root, "install", "global", "node_modules", "@usejarvis", "sidecar-linux-x64", "bin", "jarvis")
+
+	tool, args, pathEnv, err := PackageManagerInvocation("bun", "0.10.0", "https://registry.npmjs.org", exe)
+	if err != nil {
+		t.Fatalf("PackageManagerInvocation: %v", err)
+	}
+	if tool != bunBin {
+		t.Errorf("tool = %q, want %q", tool, bunBin)
+	}
+	want := []string{bunBin, "add", "-g", "@usejarvis/sidecar@0.10.0", "--registry", "https://registry.npmjs.org"}
+	if strings.Join(args, " ") != strings.Join(want, " ") {
+		t.Errorf("args = %v, want %v", args, want)
+	}
+	if !strings.HasPrefix(pathEnv, filepath.Join(root, "bin")+string(os.PathListSeparator)) {
+		t.Errorf("PATH = %q, want the tree's bin first", pathEnv)
+	}
+}
+
+func TestPackageManagerInvocationNpmPrefix(t *testing.T) {
+	t.Setenv("PATH", "/nonexistent")
+	prefix := t.TempDir()
+	npmBin := filepath.Join(prefix, "bin", "npm")
+	if err := os.MkdirAll(filepath.Dir(npmBin), 0755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(npmBin, []byte("#!/bin/sh\n"), 0755); err != nil {
+		t.Fatal(err)
+	}
+	exe := filepath.Join(prefix, "lib", "node_modules", "@usejarvis", "sidecar-linux-x64", "bin", "jarvis")
+	tool, _, _, err := PackageManagerInvocation("npm", "0.10.0", "", exe)
+	if err != nil || tool != npmBin {
+		t.Fatalf("tool = %q, %v; want %q", tool, err, npmBin)
+	}
+}
+
+func TestPackageManagerInvocationToolMissing(t *testing.T) {
+	t.Setenv("PATH", "/nonexistent")
+	t.Setenv("HOME", t.TempDir())
+	if _, _, _, err := PackageManagerInvocation("bun", "0.10.0", "", "/x/install/global/node_modules/@usejarvis/sidecar-linux-x64/bin/jarvis"); err == nil {
+		t.Skip("a bun exists in a common location on this machine")
 	}
 }

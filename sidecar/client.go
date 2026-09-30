@@ -244,6 +244,10 @@ func normalizeBrainOverride(raw string) string {
 	return fmt.Sprintf("%s://%s/sidecar/connect", wsScheme, trimmed)
 }
 
+// blockedRetryInterval is how long a sidecar the brain refused as too old
+// waits before trying to connect again.
+const blockedRetryInterval = 30 * time.Minute
+
 func (c *SidecarClient) Start(ctx context.Context) {
 	c.stopped = false
 	for !c.stopped {
@@ -252,13 +256,20 @@ func (c *SidecarClient) Start(ctx context.Context) {
 			return
 		}
 		if c.incompatible {
-			// The brain refused us for being too old. Reconnecting would just be
-			// refused again, so stop hammering — but stay alive: the update
-			// prompt and the tray's Update item are how this gets fixed, and
-			// returning here used to end the process on Windows and Linux.
-			log.Printf("[sidecar] Not reconnecting — update the sidecar and restart.")
-			<-ctx.Done()
-			return
+			// The brain refused us for being too old. Reconnecting right away
+			// would just be refused again, but stay alive: the update prompt
+			// and the tray's Update item are how this gets fixed, and returning
+			// here used to end the process on Windows and Linux. Try again much
+			// later, in case the brain changed (rolled back, or lowered its
+			// floor) while this sidecar waited.
+			log.Printf("[sidecar] Not reconnecting for %s: update the sidecar and restart.", blockedRetryInterval)
+			select {
+			case <-time.After(blockedRetryInterval):
+			case <-ctx.Done():
+				return
+			}
+			c.incompatible = false
+			continue
 		}
 		var tokErr *tokenRejectedError
 		if errors.As(err, &tokErr) {

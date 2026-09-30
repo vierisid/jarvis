@@ -134,3 +134,9 @@ var canonicalVersionRe = regexp.MustCompile(`^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.
 func ValidVersion(v string) bool {
 	return canonicalVersionRe.MatchString(v)
 }
+
+// IsPrerelease reports whether v carries a prerelease tag (1.2.3-rc.1).
+func IsPrerelease(v string) bool {
+	sv, err := parseSemver(v)
+	return err == nil && sv.pre != ""
+}

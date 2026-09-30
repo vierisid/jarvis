@@ -25,8 +25,11 @@ var (
 	// updateWindowOpen guards against a second prompt: a later open focuses
 	// the existing window instead.
 	updateWindowOpen atomic.Bool
-	// updateWindowMu guards updateWindowWV and updateWindowTorndown, which the
-	// window goroutine publishes and offer changes read.
+	// updateWindowMu guards updateWindowWV and updateWindowTorndown, and is
+	// held across every Dispatch to the window: the window's cleanup takes it
+	// too, so it is the join point runLocalWebview requires (on Windows the
+	// engine is destroyed right after cleanup, and a Dispatch that had already
+	// read the pointer would land on freed memory).
 	updateWindowMu       sync.Mutex
 	updateWindowWV       webview.WebView
 	updateWindowTorndown bool
@@ -45,22 +48,34 @@ type updateWindowView struct {
 	Phase   string `json:"phase"`
 	Error   string `json:"error"`
 	Manual  string `json:"manual"`
+	// CanApply is false when this install cannot update itself (manual
+	// mode): the page then shows the command instead of "Update now".
+	CanApply bool `json:"canApply"`
 }
 
 func (c *SidecarClient) updateView() updateWindowView {
-	o := c.updater.Offer()
+	return updateViewOf(c.updater.Offer(), c.updater.canApply(), c.updater.ManualCommand)
+}
+
+// updateViewOf builds the page's view from an offer (pure, for the tests).
+func updateViewOf(o UpdateOffer, canApply bool, manual func(version string) string) updateWindowView {
 	v := updateWindowView{
-		Version: o.Version,
-		Current: o.Current,
-		Blocked: o.Blocked,
-		Phase:   o.State.Phase,
-		Error:   o.State.Error,
-		Manual:  o.State.ManualCommand,
+		Version:  o.Version,
+		Current:  o.Current,
+		Blocked:  o.Blocked,
+		Phase:    o.State.Phase,
+		Error:    o.State.Error,
+		Manual:   o.State.ManualCommand,
+		CanApply: canApply,
 	}
-	if v.Manual == "" && (v.Version == "" || v.Phase == updatePhaseUnavailable) {
-		// Nothing installable (an old brain rejected us, or the version is
-		// not published yet): the page still needs something to offer.
-		v.Manual = c.updater.ManualCommand(o.Version)
+	if v.Version == "" && v.Phase == updatePhaseUnavailable {
+		// Not published yet: the version is only known from the state.
+		v.Version = o.State.Version
+	}
+	if v.Manual == "" && (!canApply || o.Version == "" || v.Phase == updatePhaseUnavailable) {
+		// Nothing this sidecar can install right now: the page still needs
+		// something to offer.
+		v.Manual = manual(v.Version)
 	}
 	return v
 }
@@ -74,17 +89,25 @@ func (c *SidecarClient) openUpdatePrompt() {
 	go func() {
 		defer updateWindowOpen.Store(false)
 		// On macOS the window must not be created before the tray owns the
-		// Cocoa run loop (tray_darwin.go); the startup offer can race it.
-		waitTrayReady(15 * time.Second)
+		// Cocoa run loop (tray_darwin.go); the startup offer can race it. If
+		// the tray never comes up, skip the window rather than risk it: the
+		// tray item and the dashboard still offer the update.
+		if !waitTrayReady(15 * time.Second) {
+			log.Printf("[update] the tray is not ready; not opening the update prompt")
+			return
+		}
 		c.runUpdateWindow()
 	}()
 }
 
+// focusUpdateWindow brings an open prompt forward. A request that arrives
+// before the window has published itself (it is still being created) is
+// dropped: the window is about to appear anyway.
 func focusUpdateWindow() {
 	updateWindowMu.Lock()
-	w, gone := updateWindowWV, updateWindowTorndown
-	updateWindowMu.Unlock()
-	if w == nil || gone {
+	defer updateWindowMu.Unlock()
+	w := updateWindowWV
+	if w == nil || updateWindowTorndown {
 		return
 	}
 	w.Dispatch(func() {
@@ -95,23 +118,19 @@ func focusUpdateWindow() {
 }
 
 // pushUpdateWindow re-renders an open prompt after the offer changed (a
-// phase of the install, a failure).
+// phase of the install, a failure). The view is read when the dispatched
+// closure runs, not when it is queued, so pushes from different goroutines
+// can never render an older state last.
 func (c *SidecarClient) pushUpdateWindow() {
 	updateWindowMu.Lock()
-	w, gone := updateWindowWV, updateWindowTorndown
-	updateWindowMu.Unlock()
-	if w == nil || gone {
+	defer updateWindowMu.Unlock()
+	w := updateWindowWV
+	if w == nil || updateWindowTorndown {
 		return
 	}
-	b, _ := json.Marshal(c.updateView())
-	js := "window.__update && window.__update(" + string(b) + ")"
 	w.Dispatch(func() {
-		updateWindowMu.Lock()
-		gone := updateWindowTorndown || updateWindowWV != w
-		updateWindowMu.Unlock()
-		if !gone {
-			w.Eval(js)
-		}
+		b, _ := json.Marshal(c.updateView())
+		w.Eval("window.__update && window.__update(" + string(b) + ")")
 	})
 }
 
@@ -124,9 +143,10 @@ func (c *SidecarClient) runUpdateWindow() {
 		// Bindings run on the window's UI thread: nothing here may block.
 		_ = w.Bind("updateState", func() updateWindowView { return c.updateView() })
 		_ = w.Bind("updateReady", func() {
-			// The window is revealed on load; bring it forward then, since an
-			// unprompted window (startup, dashboard) otherwise opens behind
-			// whatever the user is in.
+			// Called by the page just after the reveal-on-load (it waits for
+			// the same load event, and longer): an unprompted window
+			// (startup, dashboard) otherwise opens behind whatever the user
+			// is in. Earlier would show the window before its first paint.
 			if h := w.Window(); h != nil {
 				_ = platformFocusWindow(h)
 			}
@@ -148,6 +168,9 @@ func (c *SidecarClient) runUpdateWindow() {
 		})
 
 		w.SetHtml(updateWindowHTML)
+		// The join: once this returns, no push or focus can reach w. (On
+		// macOS it runs after the close, and a Dispatch queued before it is
+		// harmless: the engine is leaked there and its window already nil.)
 		return func() {
 			updateWindowMu.Lock()
 			updateWindowTorndown = true
@@ -187,10 +210,8 @@ const updateWindowHTML = `<!doctype html>
   .status.err { color: var(--listen-tx); }
   .manual { display: none; margin-top: 12px; }
   .manual.on { display: block; }
-  .manual label { font-size: 11px; font-weight: 600; color: var(--ink2); display: block; margin-bottom: 6px; }
-  .cmd {
-    display: flex; gap: 8px; align-items: stretch;
-  }
+  .manual h2 { font-size: 11px; font-weight: 600; color: var(--ink2); margin: 0 0 6px; }
+  .cmd { display: flex; gap: 8px; align-items: stretch; }
   .cmd code {
     flex: 1; min-width: 0; padding: 8px 10px; border-radius: var(--corner-sm);
     border: 1px solid var(--rule); background: var(--panel2); color: var(--ink);
@@ -223,8 +244,9 @@ const updateWindowHTML = `<!doctype html>
   <h1 id="title">A new sidecar is available</h1>
   <p class="sub" id="sub"></p>
   <div class="status" id="status" role="status" aria-live="polite"></div>
-  <div class="manual" id="manual">
-    <label>Update it yourself</label>
+  <div class="status err" id="error" role="alert" hidden></div>
+  <div class="manual" id="manual" role="group" aria-labelledby="manual-h">
+    <h2 id="manual-h">Update it yourself</h2>
     <div class="cmd"><code id="cmd"></code><button class="copy" id="copy" type="button">Copy</button></div>
   </div>
   <div class="spacer"></div>
@@ -239,7 +261,6 @@ const updateWindowHTML = `<!doctype html>
   var $ = function (id) { return document.getElementById(id); };
   var view = null;
   var PHASES = {
-    checking: 'Checking the update…',
     downloading: 'Downloading…',
     verifying: 'Verifying the download…',
     installing: 'Installing…',
@@ -247,35 +268,54 @@ const updateWindowHTML = `<!doctype html>
   };
   function busy(p) { return !!PHASES[p]; }
 
+  // Keep keyboard focus on something useful: the first visible, enabled
+  // action when the focused button just vanished or was disabled.
+  function settleFocus() {
+    var a = document.activeElement;
+    if (a && a.tagName === 'BUTTON' && !a.hidden && !a.disabled) return;
+    var order = ['go', 'later', 'quit', 'copy'];
+    for (var i = 0; i < order.length; i++) {
+      var b = $(order[i]);
+      if (!b.hidden && !b.disabled && b.offsetParent !== null) { b.focus(); return; }
+    }
+  }
+
   function render(v) {
     view = v;
-    var installable = !!v.version && v.phase !== 'unavailable';
+    var installable = !!v.version && v.phase !== 'unavailable' && v.canApply;
     var working = busy(v.phase);
     var failed = v.phase === 'failed';
 
     $('eyebrow').textContent = v.blocked ? 'Update required' : 'Sidecar update';
     $('eyebrow').className = 'eyebrow' + (v.blocked ? ' warn' : '');
+    var sub = $('sub');
+    sub.textContent = '';
+    var add = function (text, bold) {
+      var n = bold ? document.createElement('b') : document.createTextNode(text);
+      if (bold) n.textContent = text;
+      sub.appendChild(n);
+    };
     if (v.blocked) {
       $('title').textContent = 'This sidecar needs an update';
-      $('sub').innerHTML = 'Your brain no longer accepts sidecar <b></b>. Jarvis on this machine stays offline until it is updated.';
-      $('sub').querySelector('b').textContent = v.current;
+      add('Your brain no longer accepts sidecar '); add(v.current, true);
+      add('. Jarvis on this machine stays offline until it is updated.');
+    } else if (v.version) {
+      $('title').textContent = 'A new sidecar is available';
+      add('Version '); add(v.version, true); add(' is available (this is '); add(v.current, true);
+      add(installable ? '). The sidecar restarts for a few seconds; your brain keeps working.' : ').');
     } else {
-      $('title').textContent = installable ? 'A new sidecar is available' : 'Sidecar update';
-      $('sub').innerHTML = installable
-        ? 'Version <b></b> is ready to install (this is <b></b>). The sidecar restarts for a few seconds; your brain keeps working.'
-        : 'This is sidecar <b></b>.';
-      var bs = $('sub').querySelectorAll('b');
-      if (installable) { bs[0].textContent = v.version; bs[1].textContent = v.current; }
-      else { bs[0].textContent = v.current; }
+      $('title').textContent = 'Sidecar update';
+      add('This is sidecar '); add(v.current, true); add('.');
     }
 
     var status = '';
     if (working) status = PHASES[v.phase];
-    else if (failed) status = 'The update did not complete: ' + (v.error || 'unknown error') + '. Nothing changed; you are still on ' + v.current + '.';
     else if (v.phase === 'unavailable') status = 'Version ' + v.version + ' is not published yet. Try again in a while, or update it yourself.';
-    else if (!installable && v.blocked) status = 'This brain did not say which version to install.';
+    else if (!v.version && v.blocked) status = 'Your brain did not say which version to install.';
+    else if (v.version && !v.canApply) status = 'This sidecar cannot update itself where it is installed.';
     $('status').textContent = status;
-    $('status').className = 'status' + (failed ? ' err' : '');
+    $('error').hidden = !failed;
+    $('error').textContent = failed ? 'The update did not complete: ' + (v.error || 'unknown error') : '';
 
     var showManual = !!v.manual && (failed || !installable);
     $('manual').className = 'manual' + (showManual ? ' on' : '');
@@ -286,22 +326,36 @@ const updateWindowHTML = `<!doctype html>
     $('go').textContent = failed ? 'Try again' : 'Update now';
     $('skip').hidden = v.blocked || !installable || working;
     $('later').hidden = v.blocked;
-    $('later').disabled = working;
     $('later').textContent = installable ? 'Later' : 'Close';
     $('quit').hidden = !v.blocked;
     $('quit').disabled = working;
+    settleFocus();
   }
   window.__update = render;
+
+  function refresh() { return window.updateState().then(render); }
 
   $('go').onclick = async function () {
     $('go').disabled = true;
     try {
       await window.updateNow();
-      render(Object.assign({}, view, { phase: 'checking', error: '' }));
     } catch (e) {
-      render(Object.assign({}, view, { phase: 'failed', error: (e && e.message) ? e.message : String(e) }));
+      // Refused (nothing to install, a cooldown, already running): show the
+      // reason, then the real state, which the updater owns.
+      $('error').hidden = false;
+      $('error').textContent = (e && e.message) ? e.message : String(e);
+    }
+    // Progress arrives through __update; this only covers a refusal and a
+    // push that raced the call. Never render a phase the updater did not set.
+    var msg = $('error').hidden ? '' : $('error').textContent;
+    await refresh();
+    if (msg && view && view.phase !== 'failed' && !busy(view.phase)) {
+      $('error').hidden = false;
+      $('error').textContent = msg;
     }
   };
+  // Closing is always allowed, also mid-install: the install carries on, and
+  // the tray and dashboard follow it.
   $('later').onclick = function () { window.updateClose(); };
   $('skip').onclick = function () { window.updateSkip(view ? view.version : ''); };
   $('quit').onclick = function () { window.updateQuit(); };
@@ -320,10 +374,13 @@ const updateWindowHTML = `<!doctype html>
     }
   };
   document.addEventListener('keydown', function (e) {
-    if (e.key === 'Escape' && view && !view.blocked && !busy(view.phase)) window.updateClose();
+    if (e.key === 'Escape' && view && !view.blocked) window.updateClose();
   });
 
-  window.updateState().then(function (v) { render(v); window.updateReady(); });
+  refresh();
+  // After the reveal-on-load (load + a short settle): focus the window then,
+  // not before its first paint.
+  window.addEventListener('load', function () { setTimeout(function () { window.updateReady(); }, 150); });
 ` + brandTitlebarJS + brandPageBodyJS + `
 </script>
 </body>

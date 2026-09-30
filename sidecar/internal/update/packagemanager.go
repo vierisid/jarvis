@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -91,3 +92,112 @@ var npmGlobalModules = func() string {
 	}
 	return strings.TrimSpace(string(out))
 }
+
+// PackageManagerInvocation is how a running sidecar runs pm to install
+// version: the resolved tool, its arguments (pinned to the exact version and
+// to registry, so a user's .npmrc / bunfig cannot redirect the install), and
+// the PATH to run it with.
+//
+// A sidecar started by launchd, a login item or XDG autostart inherits a
+// minimal PATH (/usr/bin:/bin:...) without ~/.bun/bin, nvm or Homebrew, so
+// the tool is looked up first next to the global tree that owns exe (the
+// package manager that installed this copy), then on the inherited PATH, then
+// in the usual install locations. npm is a node script, so the same PATH is
+// what lets its `#!/usr/bin/env node` find node.
+func PackageManagerInvocation(pm, version, registry, exe string) (tool string, args []string, pathEnv string, err error) {
+	base, err := PackageManagerArgs(pm, version)
+	if err != nil {
+		return "", nil, "", err
+	}
+	dirs := packageManagerDirs(pm, exe)
+	dirs = append(dirs, filepath.SplitList(os.Getenv("PATH"))...)
+	dirs = append(dirs, commonToolDirs()...)
+	dirs = dedupe(dirs)
+	tool = lookPathIn(base[0], dirs)
+	if tool == "" {
+		return "", nil, "", fmt.Errorf("could not find %s (looked next to this install, on PATH and in the usual locations)", base[0])
+	}
+	args = append([]string{tool}, base[1:]...)
+	if registry != "" {
+		args = append(args, "--registry", registry)
+	}
+	return tool, args, strings.Join(dirs, string(os.PathListSeparator)), nil
+}
+
+// packageManagerDirs are the tool directories implied by where exe lives:
+// <BUN_INSTALL>/bin for bun's global tree, and for npm's the prefix that
+// holds lib/node_modules (Unix: <prefix>/bin) or node_modules (Windows:
+// <prefix> itself, e.g. nvm-windows).
+func packageManagerDirs(pm, exe string) []string {
+	slashed := filepath.ToSlash(exe)
+	switch pm {
+	case "bun":
+		if i := strings.Index(slashed, "/install/global/node_modules/"); i > 0 {
+			return []string{filepath.FromSlash(slashed[:i] + "/bin")}
+		}
+	case "npm":
+		if i := strings.Index(slashed, "/node_modules/"); i > 0 {
+			modulesParent := slashed[:i]
+			if strings.HasSuffix(modulesParent, "/lib") {
+				return []string{filepath.FromSlash(strings.TrimSuffix(modulesParent, "/lib") + "/bin")}
+			}
+			return []string{filepath.FromSlash(modulesParent)}
+		}
+	}
+	return nil
+}
+
+func commonToolDirs() []string {
+	dirs := []string{"/opt/homebrew/bin", "/usr/local/bin"}
+	if home, err := os.UserHomeDir(); err == nil {
+		dirs = append(dirs, filepath.Join(home, ".bun", "bin"), filepath.Join(home, ".volta", "bin"))
+	}
+	if runtime.GOOS == "windows" {
+		if pf := os.Getenv("ProgramFiles"); pf != "" {
+			dirs = append(dirs, filepath.Join(pf, "nodejs"))
+		}
+		if ad := os.Getenv("APPDATA"); ad != "" {
+			dirs = append(dirs, filepath.Join(ad, "npm"))
+		}
+	}
+	return dirs
+}
+
+// lookPathIn finds an executable named name in dirs (with the Windows
+// extensions npm and bun actually ship as).
+func lookPathIn(name string, dirs []string) string {
+	names := []string{name}
+	if runtime.GOOS == "windows" {
+		names = []string{name + ".cmd", name + ".exe", name}
+	}
+	for _, d := range dirs {
+		if d == "" {
+			continue
+		}
+		for _, n := range names {
+			p := filepath.Join(d, n)
+			if fi, err := os.Stat(p); err == nil && !fi.IsDir() && (runtime.GOOS == "windows" || fi.Mode()&0111 != 0) {
+				return p
+			}
+		}
+	}
+	return ""
+}
+
+func dedupe(in []string) []string {
+	seen := make(map[string]bool, len(in))
+	out := in[:0]
+	for _, s := range in {
+		if s == "" || seen[s] {
+			continue
+		}
+		seen[s] = true
+		out = append(out, s)
+	}
+	return out
+}
+
+// PayloadDirOf is the directory holding the payload entry the running exe
+// belongs to (what VerifyPayloadSignature takes): the bin/ of a package
+// manager's platform package, or a native install directory.
+func PayloadDirOf(exe string) (string, error) { return installDirOf(exe) }

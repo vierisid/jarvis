@@ -5,6 +5,7 @@ package main
 // prompt, tray item) attaches to.
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log"
@@ -97,6 +98,10 @@ func (c *SidecarClient) emitUpdateProgress(s UpdateState) {
 	if s.ManualCommand != "" {
 		payload["manual_command"] = s.ManualCommand
 	}
+	// Bounded: a stalled socket must not hold up the install (this runs
+	// between the swap and the hand-off).
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
 	if err := c.sendEvent(ctx, SidecarEvent{
 		Type:      "sidecar_event",
 		EventType: "update_progress",
