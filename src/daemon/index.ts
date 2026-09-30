@@ -3830,11 +3830,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 // generation guard below is what actually keeps a stale write
                 // off the bubble; the await only removes the common race.
                 //
-                // `gen` claims the bubble for this narration. Anything that
-                // writes it afterwards -- the next streamed token, the next
-                // tool's label -- bumps the counter, and a late narration then
-                // stays quiet rather than overwriting what the user is reading
-                // with a sentence about an element from two actions ago.
+                // `gen` claims the bubble's TEXT for this narration. Streamed
+                // tokens and the next tool's label bump the counter, and a late
+                // amendment then stays quiet rather than writing a sentence
+                // about an element from two actions ago over what the user is
+                // now reading. The flight itself is not gated on it: pointing
+                // at the button is the narration, it is what this path exists
+                // for, and taking the bubble while it points is the behaviour
+                // the pebble already restores from afterwards.
                 const gen = ++pebbleBubbleGen;
                 void (async () => {
                   await setState(sidecarId, 'working', label);
@@ -3846,9 +3849,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                     new Promise<PebbleNarration>((r) => setTimeout(
                       () => r({ kind: 'unplaced', reason: 'resolving the element took too long' }), 1200)),
                   ]);
-                  if (!narration) return;
-                  // The turn was dismissed, or something else owns the bubble.
-                  if (ctrl.cancelled || gen !== pebbleBubbleGen) return;
+                  if (!narration || ctrl.cancelled) return; // the turn was dismissed
                   if (narration.kind === 'point') {
                     console.log(`[ambient-ui] fly pebble for ${tcName} @ (${narration.x},${narration.y})`);
                     try {
