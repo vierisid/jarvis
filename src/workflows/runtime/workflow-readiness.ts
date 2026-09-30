@@ -42,7 +42,7 @@ const OPERATORS = new Set([
 ]);
 // Nested DYNAMIC fields need their own resolved schemas; the engine's saved
 // property settings only address top-level dynamic properties.
-const DYNAMIC_SCHEMA_TYPES = new Set(['SHORT_TEXT', 'LONG_TEXT', 'NUMBER', 'CHECKBOX', 'DATE_TIME', 'COLOR', 'STATIC_DROPDOWN', 'DROPDOWN', 'STATIC_MULTI_SELECT_DROPDOWN', 'MULTI_SELECT_DROPDOWN', 'JSON', 'OBJECT', 'ARRAY', 'FILE', 'MARKDOWN']);
+const ROW_SCHEMA_TYPES = new Set(['SHORT_TEXT', 'LONG_TEXT', 'NUMBER', 'CHECKBOX', 'DATE_TIME', 'COLOR', 'STATIC_DROPDOWN', 'DROPDOWN', 'STATIC_MULTI_SELECT_DROPDOWN', 'MULTI_SELECT_DROPDOWN', 'JSON', 'OBJECT', 'ARRAY', 'FILE', 'MARKDOWN']);
 const UNKNOWN_INPUT = Symbol('runtime input');
 const CONNECTION_SOURCE = /^connections(?:\.([\w:-]+)|\['([^']+)'\])$/;
 const UNARY = new Set(['BOOLEAN_IS_TRUE', 'BOOLEAN_IS_FALSE', 'LIST_IS_EMPTY', 'LIST_IS_NOT_EMPTY', 'EXISTS', 'DOES_NOT_EXIST']);
@@ -119,20 +119,20 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
   // A saved dynamic schema is an engine input contract. Check known data
   // now; for runtime data validate the schema and leave value checks to the
   // same schema in propsProcessor. Bound schemas and array rows like graphs.
-  function dynamicProperties(schema: unknown, value: unknown, node: string, path: string, depth = 0): void {
+  function propertyObject(schema: unknown, value: unknown, node: string, path: string, depth = 0): void {
     if (++schemaVisits > 20_000 || depth > 64) {
-      issue(node, path, 'LIMIT', 'Dynamic property validation exceeds its traversal budget'); return;
+      issue(node, path, 'LIMIT', 'Property schema validation exceeds its traversal budget'); return;
     }
-    if (!object(schema)) { issue(node, path, 'UNRESOLVED_CHECK', 'Dynamic properties need a resolved property schema'); return; }
+    if (!object(schema)) { issue(node, path, 'UNRESOLVED_CHECK', 'Expected a resolved property schema'); return; }
     const resolved = value === UNKNOWN_INPUT ? { known: false, value } : staticInput(value);
     if (resolved.known && !object(resolved.value)) {
-      issue(node, path, 'INPUT_TYPE', 'Expected a dynamic property object');
+      issue(node, path, 'INPUT_TYPE', 'Expected a property object');
     }
     for (const [name, prop] of Object.entries(schema)) {
-      if (++schemaVisits > 20_000) { issue(node, path, 'LIMIT', 'Dynamic property validation exceeds its traversal budget'); return; }
+      if (++schemaVisits > 20_000) { issue(node, path, 'LIMIT', 'Property schema validation exceeds its traversal budget'); return; }
       const childPath = `${path}.${name}`;
-      if (!object(prop) || !DYNAMIC_SCHEMA_TYPES.has(prop.type) || (prop.required !== undefined && typeof prop.required !== 'boolean')) {
-        issue(node, childPath, 'UNRESOLVED_CHECK', 'Unsupported or unresolved dynamic property schema'); continue;
+      if (!object(prop) || !ROW_SCHEMA_TYPES.has(prop.type) || (prop.required !== undefined && typeof prop.required !== 'boolean')) {
+        issue(node, childPath, 'UNRESOLVED_CHECK', 'Unsupported or unresolved property schema'); continue;
       }
       const field = propsToInputSchema({ [name]: prop }).fields[0];
       if (!field) continue; // Display-only markdown.
@@ -142,20 +142,29 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
         if (reason) issue(node, childPath, 'INPUT_TYPE', reason);
       }
       if (prop.type === 'ARRAY' && prop.properties !== undefined) {
-        let rows: unknown[] = [];
-        if (input.known && Array.isArray(input.value)) rows = input.value;
-        else if (input.known && object(input.value)) {
-          // Mirror arrayZipperProcessor's column map without executing any
-          // dynamic expression. Actual resolved rows are rechecked by it.
-          const columns = Object.entries(input.value);
-          const length = columns.reduce((n, [, v]) => Math.max(n, Array.isArray(v) ? v.length : 1), 0);
-          if (length * Math.max(1, columns.length) > 20_000 - schemaVisits) { issue(node, childPath, 'LIMIT', 'Dynamic property rows exceed the validation budget'); continue; }
-          rows = Array.from({ length }, (_, i) => Object.fromEntries(columns.map(([key, v]) => [key, Array.isArray(v) ? v[i] : v])));
-        }
-        if (!rows.length) dynamicProperties(prop.properties, UNKNOWN_INPUT, node, `${childPath}[]`, depth + 1);
-        else for (let i = 0; i < rows.length && schemaVisits <= 20_000; i++) dynamicProperties(prop.properties, rows[i], node, `${childPath}.${i}`, depth + 1);
+        arrayProperties(prop.properties, input.known ? input.value : UNKNOWN_INPUT, node, childPath, depth + 1);
       }
     }
+  }
+
+  /** The same row validation for declared ARRAY properties and dynamic schemas. */
+  function arrayProperties(schema: unknown, value: unknown, node: string, path: string, depth = 0): void {
+    const input = value === UNKNOWN_INPUT ? { known: false, value } : staticInput(value);
+    let rows: unknown[] = [];
+    if (input.known && Array.isArray(input.value)) rows = input.value;
+    else if (input.known && object(input.value)) {
+      // Mirror arrayZipperProcessor's column map without executing expressions.
+      const columns = Object.entries(input.value);
+      const length = columns.reduce((n, [, v]) => Math.max(n, Array.isArray(v) ? v.length : 1), 0);
+      if (length * Math.max(1, columns.length) > 20_000 - schemaVisits) {
+        issue(node, path, 'LIMIT', 'Property rows exceed the validation budget'); return;
+      }
+      rows = Array.from({ length }, (_, i) => Object.fromEntries(columns.map(([key, v]) => [key, Array.isArray(v) ? v[i] : v])));
+    }
+    // Empty and runtime-dependent collections still need a supported schema,
+    // but their absent rows must not fabricate missing required cell errors.
+    if (!rows.length) propertyObject(schema, UNKNOWN_INPUT, node, `${path}[]`, depth + 1);
+    else for (let i = 0; i < rows.length && schemaVisits <= 20_000; i++) propertyObject(schema, rows[i], node, `${path}.${i}`, depth + 1);
   }
 
   function visit(raw: unknown, scope: Set<string>, root: boolean, depth = 0): Set<string> {
@@ -251,7 +260,10 @@ export function compileWorkflow(trigger: unknown, context: ReadinessContext = {}
               const value = input[field.name];
               const path = `settings.input.${field.name}`;
               if (field.sourceType === 'DYNAMIC' && (field.required || !emptyInput(value))) {
-                dynamicProperties(settings.propertySettings?.[field.name]?.schema, value, node, path);
+                propertyObject(settings.propertySettings?.[field.name]?.schema, value, node, path);
+              }
+              if (field.sourceType === 'ARRAY' && field.arrayHasProperties && (field.required || !emptyInput(value))) {
+                arrayProperties(field.arrayProperties, value, node, path);
               }
               if (field.type === 'json' && !emptyInput(value)) runtime(node, path, 'piece-input', 'Validate the actual piece property schema after input resolution');
               const resolved = staticInput(value);

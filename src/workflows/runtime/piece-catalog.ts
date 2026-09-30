@@ -293,7 +293,7 @@ export function discoverPieces(rootDirs: string[]): {
  *         pair on the piece source. Editor renders flow_ref as a
  *         searchable workflow picker.
  */
-export const CATALOG_SCHEMA_VERSION = "7"; // v7: requireAuth and source property types for readiness
+export const CATALOG_SCHEMA_VERSION = "8"; // v8: retain ARRAY row contracts for readiness
 
 /**
  * GLOBAL cache invalidators only — the projection schema, the engine bundle,
@@ -1039,7 +1039,10 @@ function mapProp(name: string, prop: RawProp): PieceInputField | null {
     out.placeholder = prop.placeholder;
   }
   if (prop.defaultValue !== undefined) out.default = prop.defaultValue;
-  if (prop.type === 'ARRAY') out.arrayHasProperties = !!prop.properties;
+  if (prop.type === 'ARRAY') {
+    out.arrayHasProperties = !!prop.properties;
+    if (prop.properties !== undefined) out.arrayProperties = prop.properties;
+  }
   if (
     (type === "enum" || type === "multi_enum") &&
     prop.options &&

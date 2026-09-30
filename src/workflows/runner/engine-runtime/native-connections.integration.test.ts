@@ -65,6 +65,14 @@ const collections = createAction({
   props: { endpoint, rows: Property.Array({ displayName: 'Rows', required: true }), document: Property.Json({ displayName: 'Document', required: true }) },
   run: send,
 });
+const rows = createAction({
+  name: 'rows', displayName: 'Rows', description: '', auth,
+  props: { endpoint, rows: Property.Array({ displayName: 'Rows', required: true, properties: {
+    recipient: Property.ShortText({ displayName: 'Recipient', required: true }),
+    count: Property.Number({ displayName: 'Count', required: true }),
+  } }) },
+  run: send,
+});
 const form = createAction({
   name: 'form', displayName: 'Form', description: '', auth,
   props: { endpoint, form: Property.DynamicProperties({ displayName: 'Form', required: true, auth,
@@ -80,7 +88,7 @@ const formTrigger = createTrigger({
 });
 export const nativeLookupFixture = createPiece({
   displayName: "Native lookup fixture", description: "Local tests only", auth,
-  minimumSupportedRelease: "0.82.0", logoUrl: "", authors: [], actions: [check, collections, form], triggers: [formTrigger],
+  minimumSupportedRelease: "0.82.0", logoUrl: "", authors: [], actions: [check, collections, rows, form], triggers: [formTrigger],
 });
 `;
 
@@ -306,6 +314,31 @@ describe("native credential engine integration", () => {
   }
 
 
-
+  test.skipIf(skip)('review R3: extracted ordinary row contracts block invalid publication before provider work', async () => {
+    const before = effects.length;
+    for (const rows of [[{}], [{ recipient: 'owner', count: 'wrong' }]]) {
+      const flow = createFlow();
+      const version = createDraftVersion({ flowId: flow.id, displayName: 'Known rows', trigger: {
+        name: 'trigger', type: 'EMPTY', nextAction: { name: 'rows', type: 'PIECE', settings: {
+          pieceName: PIECE, actionName: 'rows', input: { auth: "{{connections['jarvis:fixture']}}", endpoint: `http://127.0.0.1:${provider!.port}/check`, rows },
+        } },
+      } });
+      const req = Object.assign(new Request('http://local/publish', { method: 'POST', body: '{}' }), { params: { id: flow.id } });
+      const response = await createWorkflowRoutes()['/api/workflows/:id/publish']!.POST!(req);
+      expect(response.status).toBe(422);
+      expect((await response.json()).issues).toContainEqual(expect.objectContaining({ node: 'rows', code: 'INPUT_TYPE', path: expect.stringContaining('settings.input.rows.0.') }));
+      expect(getFlowVersion(version.id)!.state).toBe('DRAFT');
+    }
+    expect(effects.length).toBe(before);
+    for (const rows of [[], [{ recipient: 'owner', count: '2' }], { recipient: ['{{trigger.recipient}}'], count: ['{{trigger.count}}'] }]) {
+      const run = await runThroughWorker('rows', { rows }, { recipient: 'owner', count: 2 });
+      expect(run.status).toBe('SUCCEEDED');
+    }
+    expect(effects.length - before).toBe(3);
+    expect(effects.slice(before).map(effect => effect.rows)).toEqual([[], [{ recipient: 'owner', count: 2 }], [{ recipient: 'owner', count: 2 }]]);
+    const invalid = await runThroughWorker('rows', { rows: [{ recipient: '{{trigger.recipient}}', count: '{{trigger.count}}' }] }, { recipient: 'owner', count: 'bad' });
+    expect(invalid.status).toBe('FAILED');
+    expect(effects.length - before).toBe(3);
+  }, 45_000);
 
 });

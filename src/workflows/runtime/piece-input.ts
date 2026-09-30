@@ -48,6 +48,8 @@ export interface PieceInputField {
   sourceType?: string;
   /** ARRAY properties with a row schema also accept the engine's column map. */
   arrayHasProperties?: boolean;
+  /** Original row contract, validated recursively before activation. */
+  arrayProperties?: unknown;
   required: boolean;
   /** Optional inline help text below the widget. */
   description?: string;

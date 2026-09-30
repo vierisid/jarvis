@@ -398,3 +398,26 @@ test('enabled-flow audit includes static refusals and runtime checks without cha
   expect(page.items).toHaveLength(1);
   expect(page.nextOffset).toBe(1);
 });
+
+
+test('review R3: ordinary array row contracts reject known missing and invalid fields before publication', async () => {
+  const properties = { file: { type: 'FILE', required: true }, count: { type: 'NUMBER', required: true }, nested: { type: 'ARRAY', required: false, properties: { label: { type: 'SHORT_TEXT', required: true } } } };
+  const catalog = new PieceCatalog([{ name: 'rows', displayName: '', description: '', actions: {
+    zip: { name: 'zip', displayName: '', description: '', inputSchema: propsToInputSchema({ files: { type: 'ARRAY', required: true, properties } }) },
+  } }]);
+  configureWorkflowReadiness({ pieces: catalog });
+  for (const files of [[{}], [{ file: 'https://example.test/file', count: 'bad' }], [{ file: 'https://example.test/file', count: 2, nested: [{}] }], { file: ['https://example.test/file'], count: ['bad'] }]) {
+    const action = step(); action.settings = { pieceName: 'rows', actionName: 'zip', input: { files } };
+    const { flow, version } = draft(graph(action));
+    const response = await request('/api/workflows/:id/publish', 'POST', { id: flow.id }, {});
+    expect(response.status).toBe(422);
+    expect((await response.json()).issues).toContainEqual(expect.objectContaining({ node: 'send', code: 'INPUT_TYPE', path: expect.stringContaining('settings.input.files.0.') }));
+    expect(getFlowVersion(version.id)!.state).toBe('DRAFT');
+  }
+  for (const files of [[], [{ file: 'https://example.test/file', count: '2', nested: [] }], { file: ['https://example.test/file'], count: [2] }, '{{trigger.files}}', [{ file: '{{trigger.file}}', count: '{{trigger.count}}' }]]) {
+    const action = step(); action.settings = { pieceName: 'rows', actionName: 'zip', input: { files } };
+    const result = compileWorkflow(graph(action), { pieces: catalog });
+    expect(result.issues).toEqual([]);
+    expect(result.runtimeChecks.some(c => c.guard === 'piece-input')).toBe(true);
+  }
+});
