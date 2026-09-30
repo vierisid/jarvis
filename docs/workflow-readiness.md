@@ -38,6 +38,8 @@ The compiler checks node identity and supported types, bounded graph shape,
 lexical reference scope, expression syntax, known input types and choices,
 router conditions, cron syntax/ranges, authenticated connection bindings,
 tool identities/parameters, specialist roles and nested workflow bindings.
+Native trigger `setSchedule`, preflight and the daemon scheduler use the same
+parser, including Sunday 7 and the bounded `@every` interval extension.
 Connection IDs must be unique within the flow's project and match the piece.
 The editor's connection IDs are opaque: `my-gmail`, numeric IDs and managed
 `jarvis:` IDs are parsed as bindings before ordinary workflow expressions.
@@ -66,7 +68,10 @@ First-match routers also stop before resolving any later branch. All-match
 routers evaluate each branch; unvisited branches retain empty condition lists. Other router
 operators still reject missing values when evaluated, as do ordinary action inputs.
 Known JSON, object and array inputs are checked before activation, using their
-source property type and the engine's supported conversions. A required collection
+source property type and the engine's supported conversions. Catalog schema v8
+retains ordinary ARRAY row contracts. Required fields, known types and nested
+rows are checked for both row arrays and the engine's column-map representation;
+runtime-dependent values keep their dispatch checks. A required collection
 must be present, but an empty array is valid; required does not imply a minimum
 length. Runtime-dependent values and file inputs retain their explicit runtime
 checks. Supplied dynamic schemas validate nested required fields and types after
@@ -87,7 +92,11 @@ engine execution stopping before the backend on unresolved/empty inputs.
 
 Live trigger readiness refusals create a finished FAILED run containing the
 structured readiness report, without enqueuing work. Polling triggers check
-before their RUN hook, so refusal does not consume events. Subscriptions remain
+before their RUN hook. If readiness changes during an in-flight poll, the
+returned items have already been consumed by the trigger; each failed run keeps
+its input in `steps["<readiness>"].output.recovery` with `payload`, `executeTrigger`
+and `requiresDecision: true`. This record survives restart and permits inspection
+and an explicit recovery decision; it never schedules a retry. Subscriptions remain
 active and the next fire rechecks readiness. Startup/refresh refusals create a
 FAILED registration run and notify the connected desktop; identical registration
 refusals are deduplicated per manager lifetime. Registration retries use the
