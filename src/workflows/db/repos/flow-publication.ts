@@ -3,6 +3,7 @@ import { getFlow, setPublishedVersion, updateFlowStatus, type FlowRow } from "./
 import { getFlowVersion, getLatestDraft, lockVersion, type FlowVersion } from "./flow-version";
 import { assertFlowVersionOwnership, FlowVersionRequestError } from "./flow-version-ownership";
 import { assertCodeStepsAllowed } from "./flow-code-steps";
+import { assertVersionReady } from './flow-readiness';
 
 /**
  * Publish an owned explicit version, or the latest draft. Selection, locking,
@@ -27,6 +28,7 @@ export function publishFlowVersion(flowId: string, versionId?: string): { flow: 
     // rather than per execution, where the refusal would land on a cron tick
     // with nobody reading it.
     assertCodeStepsAllowed(flowId, target.id, "publish");
+    assertVersionReady(flowId, target.id);
     if (target.state !== "LOCKED") target = lockVersion(target.id);
     setPublishedVersion(flowId, target.id);
     updateFlowStatus(flowId, "ENABLED");

@@ -7,54 +7,41 @@
 
 import type { Goal, GoalLevel } from './types.ts';
 import * as vault from '../vault/goals.ts';
+import { getDb } from '../vault/schema.ts';
+import { planProposal, validateProposal, type GoalProposal } from './proposal.ts';
+import { enumeration, GOAL_LEVELS, invalid, nextGoalLevel, text as goalText, timezone } from './validation.ts';
+export type { GoalProposal } from './proposal.ts';
 
 type ChatMessage = { role: 'user' | 'assistant'; content: string };
-
-export type GoalProposal = {
-  objective: {
-    title: string;
-    description: string;
-    success_criteria: string;
-    time_horizon: string;
-    deadline_days?: number;
-    tags?: string[];
-  };
-  key_results: {
-    title: string;
-    description: string;
-    success_criteria: string;
-    deadline_days?: number;
-  }[];
-  milestones?: {
-    key_result_index: number;
-    title: string;
-    description: string;
-    deadline_days?: number;
-  }[];
-  clarifying_questions?: string[];
-};
 
 export class NLGoalBuilder {
   private llmManager: any; // LLMManager
 
-  constructor(llmManager: unknown) {
+  private readonly timeZone: string;
+
+  constructor(llmManager: unknown, options: { timezone?: string } = {}) {
     this.llmManager = llmManager;
+    this.timeZone = timezone(options.timezone ?? Intl.DateTimeFormat().resolvedOptions().timeZone);
   }
 
   /**
    * Parse a natural language goal description into a structured OKR proposal.
    */
-  async parseGoal(text: string): Promise<GoalProposal> {
+  async parseGoal(text: string, parentId?: string): Promise<GoalProposal> {
+    goalText(text, 'text');
+    const parent = this.resolveParent(parentId);
+    if (parent && !nextGoalLevel(parent.level)) invalid('parent_id', 'a daily_action cannot have children');
+    const reference = Date.now();
     const existingGoals = vault.getRootGoals().slice(0, 10);
     const existingContext = existingGoals.length > 0
       ? `\n\nExisting goals for context (avoid duplicates):\n${existingGoals.map(g => `- ${g.title} (${g.level}, ${g.status})`).join('\n')}`
       : '';
 
     const prompt = [
-      { role: 'system' as const, content: this.buildSystemPrompt() },
+      { role: 'system' as const, content: this.buildSystemPrompt(reference) },
       {
         role: 'user' as const,
-        content: `Convert this into an OKR goal hierarchy:\n\n"${text}"${existingContext}\n\nRespond with ONLY valid JSON matching the GoalProposal schema. No explanation.`,
+        content: `Convert this into an OKR goal hierarchy:\n\n"${text}"${existingContext}\n\nRespond with ONLY valid JSON matching the GoalProposal schema. ${parent ? `Use objective only as context for existing ${parent.level} ${parent.id} (${parent.title}; ${parent.description}; deadline ${parent.deadline === null ? 'none' : new Date(parent.deadline).toISOString()}); key_results are its ${nextGoalLevel(parent.level)} children.` : 'Create one new root objective.'} No explanation.`,
       },
     ];
 
@@ -63,13 +50,13 @@ export class NLGoalBuilder {
       max_tokens: 4000,
     });
 
-    return this.parseResponse(response.content);
+    return this.parseResponse(response.content, parent, reference);
   }
 
   /**
    * Decompose an existing goal into child goals at the next level.
    */
-  async decompose(goalId: string, depth: GoalLevel = 'task'): Promise<GoalProposal | null> {
+  async decompose(goalId: string, depth: GoalLevel = 'daily_action'): Promise<GoalProposal | null> {
     const goal = vault.getGoal(goalId);
     if (!goal) return null;
 
@@ -78,14 +65,17 @@ export class NLGoalBuilder {
       ? `\nExisting children:\n${children.map(c => `- ${c.title} (${c.level})`).join('\n')}`
       : '';
 
-    const nextLevel = this.getNextLevel(goal.level);
+    const nextLevel = nextGoalLevel(goal.level);
     if (!nextLevel) return null;
+    enumeration(depth, GOAL_LEVELS, 'depth');
+    if (GOAL_LEVELS.indexOf(depth) < GOAL_LEVELS.indexOf(nextLevel)) invalid('depth', 'must be below the parent');
+    const reference = Date.now();
 
     const prompt = [
-      { role: 'system' as const, content: this.buildSystemPrompt() },
+      { role: 'system' as const, content: this.buildSystemPrompt(reference) },
       {
         role: 'user' as const,
-        content: `Decompose this ${goal.level} into ${nextLevel}s:\n\nTitle: ${goal.title}\nDescription: ${goal.description}\nSuccess criteria: ${goal.success_criteria}\nTime horizon: ${goal.time_horizon}${childContext}\n\nTarget depth: ${depth}\n\nRespond with ONLY valid JSON matching the GoalProposal schema (use key_results array for the sub-goals regardless of level). No explanation.`,
+        content: `Decompose this ${goal.level} into ${nextLevel}s:\n\nTitle: ${goal.title}\nDescription: ${goal.description}\nSuccess criteria: ${goal.success_criteria}\nTime horizon: ${goal.time_horizon}\nDeadline: ${goal.deadline === null ? 'none' : new Date(goal.deadline).toISOString()}${childContext}\n\nTarget depth: ${depth}\n\nRespond with ONLY valid JSON matching the GoalProposal schema (use key_results array for the sub-goals regardless of level). No explanation.`,
       },
     ];
 
@@ -94,7 +84,9 @@ export class NLGoalBuilder {
       max_tokens: 4000,
     });
 
-    return this.parseResponse(response.content);
+    const proposal = this.parseResponse(response.content, goal, reference);
+    if (depth === nextLevel && proposal.milestones?.length) invalid('milestones', 'exceeds the requested depth');
+    return proposal;
   }
 
   /**
@@ -106,6 +98,7 @@ export class NLGoalBuilder {
     history: ChatMessage[],
   ): Promise<{ reply: string; proposal?: GoalProposal }> {
     const goal = vault.getGoal(goalId);
+    const reference = Date.now();
     const tree = goal ? vault.getGoalTree(goalId) : [];
 
     const treeContext = tree.length > 0
@@ -113,7 +106,7 @@ export class NLGoalBuilder {
       : '';
 
     const messages = [
-      { role: 'system' as const, content: this.buildChatPrompt(treeContext) },
+      { role: 'system' as const, content: this.buildSystemPrompt(reference, false) + '\n\n' + this.buildChatPrompt(treeContext) },
       ...history.map(h => ({ role: h.role as 'user' | 'assistant', content: h.content })),
       { role: 'user' as const, content: message },
     ];
@@ -129,7 +122,7 @@ export class NLGoalBuilder {
     const jsonMatch = content.match(/```json\n([\s\S]*?)\n```/);
     if (jsonMatch) {
       try {
-        const proposal = JSON.parse(jsonMatch[1]) as GoalProposal;
+        const proposal = this.parseResponse(jsonMatch[1], goal, reference);
         const textBefore = content.slice(0, content.indexOf('```json')).trim();
         return { reply: textBefore || 'Here is the updated proposal:', proposal };
       } catch { /* not valid JSON, treat as text */ }
@@ -141,57 +134,37 @@ export class NLGoalBuilder {
   /**
    * Create goal hierarchy from a confirmed proposal.
    */
-  createFromProposal(proposal: GoalProposal, parentId?: string): Goal[] {
-    const created: Goal[] = [];
-
-    const objective = vault.createGoal(proposal.objective.title, 'objective', {
-      parent_id: parentId,
-      description: proposal.objective.description,
-      success_criteria: proposal.objective.success_criteria,
-      time_horizon: proposal.objective.time_horizon as any,
-      deadline: proposal.objective.deadline_days
-        ? Date.now() + proposal.objective.deadline_days * 86400000
-        : undefined,
-      tags: proposal.objective.tags,
-    });
-    created.push(objective);
-
-    for (let i = 0; i < proposal.key_results.length; i++) {
-      const kr = proposal.key_results[i]!;
-      const keyResult = vault.createGoal(kr.title, 'key_result', {
-        parent_id: objective.id,
-        description: kr.description,
-        success_criteria: kr.success_criteria,
-        deadline: kr.deadline_days
-          ? Date.now() + kr.deadline_days * 86400000
-          : undefined,
-      });
-      created.push(keyResult);
-
-      // Add milestones under their key results
-      if (proposal.milestones) {
-        for (const ms of proposal.milestones) {
-          if (ms.key_result_index === i) {
-            const milestone = vault.createGoal(ms.title, 'milestone', {
-              parent_id: keyResult.id,
-              description: ms.description,
-              deadline: ms.deadline_days
-                ? Date.now() + ms.deadline_days * 86400000
-                : undefined,
-            });
-            created.push(milestone);
-          }
-        }
+  createFromProposal(input: unknown, parentId?: string): Goal[] {
+    const proposal = validateProposal(input);
+    if (parentId !== undefined) goalText(parentId, 'parent_id', true, 512);
+    return getDb().transaction(() => {
+      const parent = this.resolveParent(parentId ?? proposal.parent_id);
+      const plan = planProposal(proposal, parent, Date.now());
+      const created: Goal[] = [];
+      for (const node of plan) {
+        const parent_id = node.parentIndex === null ? parent?.id : created[node.parentIndex]!.id;
+        created.push(vault.createGoal(node.title, node.level, { ...node.options, parent_id }));
       }
-    }
+      return created;
+    }).immediate();
+  }
 
-    return created;
+  private resolveParent(parentId?: string): Goal | null {
+    if (parentId === undefined) return null;
+    goalText(parentId, 'parent_id', true, 512);
+    const parent = vault.getGoal(parentId);
+    if (!parent) invalid('parent_id', 'goal does not exist');
+    return parent;
   }
 
   // ── Helpers ──────────────────────────────────────────────────────
 
-  private buildSystemPrompt(): string {
+  private buildSystemPrompt(reference: number, jsonOnly = true): string {
     return `You are an OKR (Objectives and Key Results) expert using Google-style scoring (0.0-1.0 scale, where 0.7 = good, 1.0 = aimed too low).
+
+Reference instant: ${new Date(reference).toISOString()}. User timezone: ${this.timeZone}.
+Dates: deadline_days is a nonnegative integer of elapsed 24-hour periods from this reference (0 means this instant), not calendar days. For a calendar date/local deadline, use deadline_at as a real RFC3339 timestamp with seconds and explicit Z/offset in the user's timezone. Do not output date-only or timezone-less timestamps. Use only one deadline field per goal. Children cannot be due after their ancestors. Jarvis attaches the reference/timezone and parent identity; do not invent those metadata fields.
+For decomposition, objective is context only, key_results holds the next level, and milestones holds the following level. Never put children below daily_action. The schema represents at most two child levels per request.
 
 Rules:
 - Objectives are qualitative, ambitious, and inspiring
@@ -205,12 +178,13 @@ Rules:
 - Create 2-5 Key Results per Objective
 - Create 1-3 Milestones per Key Result when appropriate
 
-Respond with ONLY valid JSON matching this schema:
+${jsonOnly ? 'Respond with ONLY valid JSON matching this schema.' : 'When proposing goals, use this schema in a json code block.'}
+Optional fields: deadline_days, deadline_at, tags, milestones, clarifying_questions. Omit optional fields when unused.
 {
-  "objective": { "title": string, "description": string, "success_criteria": string, "time_horizon": string, "deadline_days?": number, "tags?": string[] },
-  "key_results": [{ "title": string, "description": string, "success_criteria": string, "deadline_days?": number }],
-  "milestones?": [{ "key_result_index": number, "title": string, "description": string, "deadline_days?": number }],
-  "clarifying_questions?": string[]
+  "objective": { "title": string, "description": string, "success_criteria": string, "time_horizon": string, "deadline_days": number, "deadline_at": string, "tags": string[] },
+  "key_results": [{ "title": string, "description": string, "success_criteria": string, "deadline_days": number, "deadline_at": string }],
+  "milestones": [{ "key_result_index": number, "title": string, "description": string, "deadline_days": number, "deadline_at": string }],
+  "clarifying_questions": string[]
 }`;
   }
 
@@ -220,10 +194,20 @@ Respond with ONLY valid JSON matching this schema:
 When the user wants to change goals, include a JSON proposal in a \`\`\`json code block. Otherwise, respond conversationally with advice and questions.`;
   }
 
-  private parseResponse(content: string | unknown): GoalProposal {
-    const text = typeof content === 'string' ? content : JSON.stringify(content);
-    const json = this.extractJson(text);
-    return JSON.parse(json) as GoalProposal;
+  private parseResponse(content: unknown, parent: Goal | null, reference: number): GoalProposal {
+    let raw = content;
+    if (typeof content === 'string') {
+      try { raw = JSON.parse(content); }
+      catch { raw = JSON.parse(this.extractJson(content)); }
+    }
+    const proposal = validateProposal(raw);
+    if (proposal.parent_id !== undefined && (proposal.parent_id !== parent?.id || proposal.parent_level !== parent?.level)) invalid('parent_id', 'model proposal does not match the requested parent');
+    proposal.deadline_reference_at = new Date(reference).toISOString();
+    proposal.timezone = this.timeZone;
+    if (parent) { proposal.parent_id = parent.id; proposal.parent_level = parent.level; }
+    // Questions can be displayed, but createFromProposal refuses to write until resolved.
+    planProposal({ ...proposal, clarifying_questions: [] }, parent, reference);
+    return proposal;
   }
 
   private extractJson(text: string): string {
@@ -239,12 +223,6 @@ When the user wants to change goals, include a JSON proposal in a \`\`\`json cod
     }
 
     return text;
-  }
-
-  private getNextLevel(level: GoalLevel): GoalLevel | null {
-    const order: GoalLevel[] = ['objective', 'key_result', 'milestone', 'task', 'daily_action'];
-    const idx = order.indexOf(level);
-    return idx < order.length - 1 ? order[idx + 1]! : null;
   }
 
   private levelDepth(level: GoalLevel): number {

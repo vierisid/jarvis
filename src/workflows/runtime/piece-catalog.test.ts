@@ -64,6 +64,7 @@ describe("PieceCatalog (unit)", () => {
       description: "x desc",
       actions: {
         do_thing: {
+          requireAuth: false,
           name: "do_thing",
           displayName: "Do Thing",
           description: "does",
@@ -84,6 +85,8 @@ describe("PieceCatalog (unit)", () => {
     expect(entry.name).toBe("@jarvispieces/piece-x");
     const goal = entry.actions["do_thing"]?.inputSchema?.fields[0];
     expect(goal?.name).toBe("goal");
+    expect(entry.actions.do_thing?.requireAuth).toBe(false);
+    expect(goal?.sourceType).toBe('SHORT_TEXT');
     expect(goal?.required).toBe(true);
     expect(goal?.placeholder).toBe("what to do");
     expect(entry.triggers?.["on_event"]?.displayName).toBe("On");

@@ -9,6 +9,10 @@ import { describe, test, expect, beforeAll, afterAll } from 'bun:test';
 import { BrowserController } from '../browser/session.ts';
 import { chromiumExe, launchTestChromium, type TestChromium } from '../browser/fixtures/headless-chromium.ts';
 import { createBrowserTools } from './builtin.ts';
+import { ToolRegistry } from './registry.ts';
+// The workflow boundary itself, not a stand-in: #586 is about one consumer
+// spending another's delivery, so the test has to be the real adapter.
+import { JarvisToolRegistryAdapter } from '../../workflows/adapters/tool-registry.ts';
 import { initDatabase } from '../../vault/schema.ts';
 import { upsertWebappTemplate } from '../../vault/webapp-templates.ts';
 // The real tools hand the page and the template instructions back SEPARATELY
@@ -133,6 +137,37 @@ describe.skipIf(!chromiumExe)('webapp template delivery via browser tools (integ
     expect(out).toContain('You are now on LoopbackApp');
     expect(out).not.toContain('You are now on LocalhostApp');
     expect(out).not.toContain('LocalhostApp playbook');
+  }, 30_000);
+
+  /**
+   * #586, end to end through the real workflow boundary. ONE tool set stands in
+   * for the shared global one: the daemon registers the module-level browser
+   * tools into a single ToolRegistry, so a workflow step and the chat model
+   * genuinely do share a delivery instance.
+   *
+   * The workflow step runs through `JarvisToolRegistryAdapter`, which is the
+   * only path a step's tool call takes. Before this, its snapshot recorded the
+   * template as delivered and then dropped the trailer (#581), so the playbook
+   * reached nobody and the chat model got nothing for the next 30 minutes.
+   */
+  test('a workflow-path snapshot does not consume the chat scope delivery', async () => {
+    const shared = new ToolRegistry();
+    for (const tool of createBrowserTools(ctrl)) shared.register(tool);
+    const workflow = new JarvisToolRegistryAdapter(shared);
+
+    // Get on the site through the workflow path first.
+    const stepResult = await workflow.execute('browser_navigate',
+      { url: `http://127.0.0.1:${server.port}/step` });
+    // The step's own value carries the page and NO playbook: the adapter drops
+    // the trailer, and nothing was recorded on the way.
+    expect(typeof stepResult).toBe('string');
+    expect(stepResult as string).toContain('Page: Fixture');
+    expect(stepResult as string).not.toContain('You are now on LoopbackApp');
+
+    // The chat model, on the same tool set, still gets its copy.
+    const chat = toolReturnText(await shared.execute('browser_snapshot', {}));
+    expect(chat).toContain('You are now on LoopbackApp');
+    expect(chat).toContain('LoopbackApp playbook: verify before clicking.');
   }, 30_000);
 
   test('separate tool sets deliver independently (main vs background agent)', async () => {

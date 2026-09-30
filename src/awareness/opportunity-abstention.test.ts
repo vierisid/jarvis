@@ -14,7 +14,7 @@ test('ordinary app switching cannot substantiate a recurring business job', asyn
       ocrText: '', sessionId: 'session', url: null, filePath: null,
       isSignificantChange: true, isAppSwitch: true,
     };
-    suggestions.push(await engine.evaluate(context, [{ type: 'context_changed', data: {
+    suggestions.push(await engine.evaluate(context, [{ type: 'context_changed', schemaVersion: 1, data: {
       fromApp: i % 2 ? 'Spreadsheet' : 'Browser', toApp: context.appName,
       fromWindow: 'Untitled', toWindow: 'Untitled',
     }, timestamp: context.timestamp }]));

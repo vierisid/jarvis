@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log"
 	"runtime"
+	"sync"
 	"syscall"
 	"unsafe"
 )
@@ -68,6 +69,10 @@ func startHotkeyListener(keyspec string, onFire func()) (stop func(), err error)
 	if err != nil {
 		return nil, err
 	}
+	// Registered before the listener thread starts, so the message loop can
+	// dispatch through it from its first iteration. hotkeyID below is the Win32
+	// id (always 1, scoped to this thread); dispatchID is ours.
+	dispatchID := hotkeyDispatcher.register(onFire)
 
 	// The thread id is only useful once the hotkey is actually registered (it
 	// exists to unblock GetMessage in stop()), so it rides along with the
@@ -122,25 +127,59 @@ func startHotkeyListener(keyspec string, onFire func()) (stop func(), err error)
 			// that does nothing and a log with no trace of why.
 			if int32(r) == -1 {
 				log.Printf("[hotkeys] GetMessage failed for %q; listener stopping (hotkey is now dead)", keyspec)
+				// Unregister on the way out, the way the linux listener does
+				// when it exits on its own. Nothing can dispatch afterwards --
+				// the message loop is gone -- so this is an entry leak rather
+				// than a live callback, but a registration that outlives its
+				// listener is exactly the kind of thing that is load-bearing
+				// the moment someone adds a second dispatch route.
+				hotkeyDispatcher.invalidate(dispatchID)
 				return
 			}
 			if msg.Message == wmHotkey && msg.WParam == hotkeyID {
 				log.Printf("[hotkeys] WM_HOTKEY received for %q -- firing", keyspec)
-				go onFire()
+				// Through the shared registry, not `go onFire()` (#587). The
+				// issue names linux and darwin, but this is the identical
+				// defect: stop() closes stopCh and posts WM_QUIT without
+				// waiting, so a WM_HOTKEY already dequeued here could launch a
+				// callback after stop() had returned and the caller had begun
+				// tearing down what it touches. Leaving one backend with the
+				// defect while fixing the class is worse than fixing all
+				// three, and the user-visible strings here were already
+				// deliberately aligned with the Linux ones.
+				hotkeyDispatcher.dispatch(dispatchID)
 			}
 		}
 	}()
 
 	reg := <-regCh
 	if reg.err != nil {
+		hotkeyDispatcher.invalidate(dispatchID)
 		return nil, reg.err
 	}
 
 	tid := reg.tid
+	// sync.Once so this actually matches the linux and darwin stops, which have
+	// always had one. Without it a second call panics on `close(stopCh)` -- not
+	// reachable today (both callers are single-shot: pebble_overlay_windows.go
+	// guards with a CompareAndSwap and nils the field, panels_runtime.go defers
+	// once), but "the three backends behave the same" was being asserted in a
+	// comment while one of them did not.
+	var once sync.Once
 	stop = func() {
-		close(stopCh)
-		// Unblock GetMessage by posting WM_QUIT to the listener thread.
-		procPostThreadMsg.Call(uintptr(tid), wmQuit, 0, 0)
+		once.Do(func() {
+			// Invalidate FIRST, before the loop is asked to quit: a WM_HOTKEY
+			// the loop has already dequeued would otherwise still start a
+			// callback after this function returns (#587). See
+			// hotkeys_dispatch.go for why this invalidates rather than waiting.
+			if inFlight := hotkeyDispatcher.invalidate(dispatchID); inFlight > 0 {
+				log.Printf("[hotkeys] %q: stopped while %d callback(s) were dispatched and not yet finished; they will run to completion, so anything this hotkey drives must tolerate that",
+					keyspec, inFlight)
+			}
+			close(stopCh)
+			// Unblock GetMessage by posting WM_QUIT to the listener thread.
+			procPostThreadMsg.Call(uintptr(tid), wmQuit, 0, 0)
+		})
 	}
 	return stop, nil
 }

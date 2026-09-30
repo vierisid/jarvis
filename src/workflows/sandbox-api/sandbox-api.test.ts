@@ -1275,6 +1275,12 @@ describe("SandboxApi routes (workflows/start error mapping)", () => {
     expect(r.status).toBe(422);
   });
 
+  test("WORKFLOW_NOT_READY -> 422", async () => {
+    throwError = { code: "WORKFLOW_NOT_READY", message: "trigger (cron): Invalid cron expression" };
+    const r = await start();
+    expect(r.status).toBe(422);
+  });
+
   test("unknown / untyped error falls through to 500", async () => {
     throwError = { code: "OTHER", message: "boom" };
     const r = await start();

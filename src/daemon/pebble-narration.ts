@@ -61,22 +61,63 @@ export type BrowserNarrationDeps = {
    *
    * A sidecar-routed browser keeps its snapshot coordinates in the sidecar
    * (sidecar/browser_snapshot.go holds the same map, read by its own click
-   * handler) and no RPC carries them back, so there is no honest point to
-   * give -- and pointing at the local browser's idea of element 5 instead
-   * would be the worst answer available: a confident pointer into an
-   * unrelated page.
-   *
-   * The unblock is a read-only coords RPC on the sidecar, mapped at read
-   * authority rather than routed through `browser_evaluate`. Until then remote
-   * browsers narrate without a pointer, the same way a sidecar-routed
-   * `desktop_click` already does -- its cache is only ever filled by a local
-   * snapshot, so its narration has always failed closed here.
+   * handler), so the local coordinates are not the click's input and pointing
+   * at the local browser's idea of element 5 would be the worst answer
+   * available: a confident pointer into an unrelated page. False here does NOT
+   * mean "no pointer" any more -- it means "not from this process's cache", and
+   * `remoteElementPoint` is where the answer comes from instead.
    */
   localBrowserWillServe: () => boolean;
+  /**
+   * Where the element is, asked of the machine that actually holds the
+   * coordinates, for the case `localBrowserWillServe` just refused (#591).
+   *
+   * This is what unparked #585. `CapBrowser` is in the sidecar's DEFAULT
+   * capability set, so on an ordinary install the predicate above is false and
+   * the branch it guards was the only one browser actions ever reached --
+   * correct, and quiet on almost every deployment. #591 added a read-only
+   * `browser_element_point` RPC, so the coordinates can now be read FROM the
+   * process that holds them rather than re-derived here.
+   *
+   * INJECTED, and optional, for two reasons that are the same reason: this file
+   * must stay a pure decision over its inputs, testable with no daemon and no
+   * sidecar, and the one rule above ("a narration reads the coordinates the
+   * ACTION will use, and never re-derives them") has to be enforceable by
+   * reading this file alone. So the RPC, the routing and the refusal wording
+   * live in `src/actions/browser/remote-element-point.ts`, and when the dep is
+   * absent the answer is the same fail-closed `unplaced` as before.
+   *
+   * It must NEVER be a fallback to a re-query. It answers `unplaced` for an
+   * old sidecar (`METHOD_NOT_FOUND`), a stale snapshot, an ambiguous inventory
+   * or a pebble on another machine, and nothing downstream of it may then try
+   * `snapshotElementPoint`, `browser_evaluate` or a fresh DOM lookup -- see
+   * `browserElementNarration` for why that is structural rather than a
+   * convention.
+   */
+  remoteElementPoint?: (elementId: number) => Promise<PebbleNarration>;
   /** The controller's cached centre for that snapshot id (its click's input). */
   snapshotElementPoint: (elementId: number) => { x: number; y: number } | null;
-  /** Element-independent viewport origin on screen, read out of the page's reach. */
-  viewportScreenOrigin: () => Promise<{ x: number; y: number } | null>;
+  /**
+   * The viewport's origin on screen, read out of the page's reach, and
+   * `'moved'` when the document the snapshot's ids were minted under is no
+   * longer the one on screen.
+   *
+   * That third answer is not a geometry failure and does not share a reason
+   * with one: #592 made the action itself refuse on a document change, so
+   * `'moved'` is the case where a point exists in the cache and previewing it
+   * would be a confident pointer at an action that is about to refuse. The
+   * controller answers it from the frame-tree read this same call already
+   * makes, so there is one reading rather than two that can disagree, and it
+   * mirrors every one of the action's document terms -- including a FRAME
+   * digest change for an id that came from a subframe, which a main-frame
+   * check alone misses.
+   *
+   * It takes the id only to ask whether that id was minted in a frame. That is
+   * a membership test over ids this process already minted, so it cannot become
+   * a second answer about WHICH element -- re-deriving is the #585 bug,
+   * re-checking is not.
+   */
+  viewportScreenOrigin: (elementId: number) => Promise<{ x: number; y: number } | 'moved' | null>;
 };
 
 /** What the routing predicates need to know, with no daemon attached. */
@@ -89,9 +130,37 @@ export type NarrationRouting = {
     connected: boolean;
     hostname?: string | null;
     capabilities?: readonly string[];
+    /**
+     * Capabilities the sidecar advertises but cannot currently serve -- no
+     * Chromium installed, a missing dependency. `SidecarInfo` has carried this
+     * since before either PR.
+     *
+     * DECLARED, not merely passed through. `remote-element-point.ts` filters on
+     * this field and the filter was sound only because `narrationRouting` hands
+     * `listSidecars()` over verbatim, which TypeScript could not see: any caller
+     * building this object from a narrower literal -- a test, a future call site
+     * -- silently disabled the filter and got a pointer aimed by an inventory
+     * entry the router would have skipped. Type-invisible soundness is one
+     * unrelated edit away from being unsound, so the shape says it now.
+     */
+    unavailable_capabilities?: ReadonlyArray<{ name: string }>;
   }>;
   /** This process's own hostname. */
   selfHostname: string;
+  /**
+   * Whether this process's own browser is allowed to serve a call at all --
+   * false under `--no-local-tools` or a hosted install's `browser.local: false`.
+   *
+   * Part of the routing facts rather than read here, so this file stays a pure
+   * decision over its inputs. Without it `localBrowserWillServe` could answer
+   * true on a host where `browser_click` refuses outright, which contradicts
+   * the predicate's own contract ("will run on this process's own
+   * BrowserController"). Inert today, because the same guards keep
+   * `elementCoords` empty on such a host so the answer is `unplaced` either
+   * way -- but with the wrong cause, and it stops being inert the moment any
+   * path populates that cache.
+   */
+  localBrowserEnabled: boolean;
   /** Whether a workflow machine binding is in force. */
   machineScoped: boolean;
   /** The tool call's arguments, for an explicitly named target. */
@@ -124,6 +193,33 @@ export function pebbleIsOnThisHost(routing: NarrationRouting): boolean {
 }
 
 /**
+ * Whether the sidecar can actually serve `browser` right now.
+ *
+ * Advertised AND not listed unavailable, term for term what
+ * `autoTargetForCapability` asks before it routes a browser call
+ * (src/actions/tools/sidecar-route.ts) and what `remoteBrowserPebbleTarget`
+ * filters on (src/actions/browser/remote-element-point.ts). When this predicate
+ * matched on the advertisement alone it refused a pointer for a click that was
+ * about to run locally with honest coordinates sitting in the local cache --
+ * see `localBrowserWillServe`.
+ *
+ * STILL A THIRD COPY of those three terms rather than a shared one, and that is
+ * known debt, not an oversight: what this file imports is nothing at all, which
+ * is what makes the security-relevant decision testable with no daemon, no
+ * sidecar and no browser. Sharing the terms needs a new leaf module that the
+ * router, `remote-element-point.ts` and this file all import -- a refactor
+ * across two files this change does not own. If the copies ever drift so that
+ * this one is WEAKER than the router's, the narration reads a local cache for a
+ * sidecar-served click and #585 is back, so an edit to any one of the three
+ * belongs in all three.
+ */
+function servesBrowser(sidecar: NarrationRouting['sidecars'][number]): boolean {
+  return !!sidecar.connected
+    && !!sidecar.capabilities?.includes('browser')
+    && !sidecar.unavailable_capabilities?.some((u) => u.name === 'browser');
+}
+
+/**
  * Whether a browser_* call with these arguments will run on this process's own
  * BrowserController, on the machine whose screen the pebble is drawn on.
  *
@@ -139,11 +235,16 @@ export function pebbleIsOnThisHost(routing: NarrationRouting): boolean {
  *
  * Note what that means in practice: a sidecar advertises `browser` in its
  * DEFAULT capability set, and the pebble's own sidecar is in this list, so on
- * an ordinary deployment this is false and browser actions narrate without a
- * pointer. That is the honest end of the trade, not an oversight -- see
- * BrowserNarrationDeps.localBrowserWillServe.
+ * an ordinary deployment this is false. That no longer means "no pointer" --
+ * `BrowserNarrationDeps.remoteElementPoint` asks the machine that holds the
+ * coordinates instead (#591). What this predicate answers is narrower than it
+ * once was: not "can we point" but "are the coordinates in THIS process".
  */
 export function localBrowserWillServe(routing: NarrationRouting): boolean {
+  // A host that refuses local browser calls has no local browser to serve one,
+  // whatever the inventory says. First, because it is the most absolute of the
+  // terms and the cheapest.
+  if (!routing.localBrowserEnabled) return false;
   const target = routing.args.target;
   if (typeof target === 'string' && target.trim()) return false;
   // Defensive rather than load-bearing: the machine binding is entered only by
@@ -151,8 +252,17 @@ export function localBrowserWillServe(routing: NarrationRouting): boolean {
   // anyway because a binding, where one exists, picks the machine whatever the
   // inventory says.
   if (routing.machineScoped) return false;
+  // UNAVAILABLE COUNTS AS ABSENT, matching the router. Advertising `browser`
+  // is not the same as being able to serve it: a sidecar with no Chromium
+  // reports the capability and lists it unavailable, `autoTargetForCapability`
+  // skips it, and the call falls back to THIS process's browser. Matching on
+  // the advertisement alone made this the one case where the two narration
+  // predicates disagreed -- this one said "a browser lives elsewhere" while
+  // `remoteBrowserPebbleTarget` filtered the same sidecar out and found nothing
+  // to ask, so the user got "(location unknown)" for a click that really did
+  // run here with honest coordinates already in the local cache.
   for (const s of routing.sidecars) {
-    if (s.connected && s.capabilities?.includes('browser')) return false;
+    if (servesBrowser(s)) return false;
   }
   return pebbleIsOnThisHost(routing);
 }
@@ -207,13 +317,32 @@ export async function browserElementNarration(
     return { kind: 'unplaced', reason: 'element_id is not a snapshot id' };
   }
   if (!deps.localBrowserWillServe()) {
-    return { kind: 'unplaced', reason: 'the browser serving this call is not the local one' };
+    // INSIDE the check, and it RETURNS. That placement is the whole guarantee:
+    // a remote browser's answer is this branch's answer, so `deps` below --
+    // `snapshotElementPoint`, this process's own cache -- is unreachable for
+    // one, whether the remote answered a point, refused, or was never asked.
+    // Placed after the check instead, an old sidecar's `unplaced` would fall
+    // through to a local cache that may hold a live snapshot of some OTHER page
+    // the model visited locally, and a hit there would look exactly as
+    // authoritative as a real answer. #591's version matrix requires that
+    // nothing falls back to `browser_evaluate`, to the local coordinates, or to
+    // a DOM re-query; this is where that is enforced rather than promised.
+    return deps.remoteElementPoint
+      ? await deps.remoteElementPoint(id)
+      : { kind: 'unplaced', reason: 'the browser serving this call is not the local one' };
   }
   const point = deps.snapshotElementPoint(id);
   if (!point) {
     return { kind: 'unplaced', reason: `no live snapshot minted element [${id}]` };
   }
-  const origin = await deps.viewportScreenOrigin();
+  const origin = await deps.viewportScreenOrigin(id);
+  if (origin === 'moved') {
+    // Its own reason, not the geometry one: this is the case the user most
+    // needs distinguished in a log line, because the coordinate WAS there and
+    // pointing at it is precisely what would have previewed an action that is
+    // about to refuse.
+    return { kind: 'unplaced', reason: `the page left the document element [${id}] came from` };
+  }
   if (!origin) {
     return { kind: 'unplaced', reason: 'could not read the viewport position on screen' };
   }

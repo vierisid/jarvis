@@ -23,8 +23,15 @@ type SockData = { path: string; n: number };
 type Sock = ServerWebSocket<SockData>;
 type Sent = { method: string; params: Record<string, any> };
 
-/** One interactive element as the in-page snapshot script would report it. */
-type FakeElement = { id: number; tag: string; text: string; x: number; y: number };
+/**
+ * One interactive element as the in-page snapshot script would report it.
+ *
+ * `inFrame` sets the `iframe` marker the snapshot script writes, which is what
+ * fills the controller's `elementInFrame` set.
+ */
+type FakeElement = {
+  id: number; tag: string; text: string; x: number; y: number; inFrame?: boolean;
+};
 
 type FakeOptions = {
   /**
@@ -40,27 +47,70 @@ type FakeOptions = {
    * read fail.
    */
   window?: { screenX: number; screenY: number; outerHeight: number; innerHeight: number } | null;
-  /** Refuse Page.createIsolatedWorld, as a page with no committed frame would. */
+  /**
+   * A loaderId the main frame reports once `navigate()` is called on the fake,
+   * standing in for a page that replaced its own document between the snapshot
+   * and the narration.
+   */
+  loaderIdAfterNavigation?: string;
+  /**
+   * A loaderId the CHILD frame reports once `navigateChildFrame()` is called.
+   * A subframe can commit a new document while the main frame's loaderId never
+   * moves, which is the case a main-frame-only check misses.
+   */
+  childLoaderIdAfterNavigation?: string;
+  /** The main frame's URL, for the local-content refusal. */
+  url?: string;
+  /**
+   * Refuse the NARRATION world only, as a page with no committed frame would.
+   * Scoped to that world because #592 made the snapshot mint one of its own and
+   * refuse outright when it cannot, so refusing both would leave nothing
+   * snapshotted to narrate about.
+   */
   noIsolatedWorld?: boolean;
 };
+
+/**
+ * The two isolated worlds this controller mints, kept apart so the fake can
+ * tell a narration read from a snapshot read.
+ *
+ * #592 put the snapshot's element refs in `jarvis-elements`, so BOTH worlds
+ * exist on a snapshotted page and both evaluate with a contextId. A fake that
+ * routed on "has a contextId" alone would hand the origin formula the snapshot
+ * script, which is how this file failed when #592 landed.
+ */
+const NARRATION_CONTEXT = 77;
+const ELEMENTS_CONTEXT = 78;
+const NARRATION_WORLD = 'jarvis-narration';
 
 type Fake = {
   port: number;
   pageSent: Sent[];
+  /** Commit `loaderIdAfterNavigation`, the way a page-initiated load would. */
+  navigate(): void;
+  /** Commit `childLoaderIdAfterNavigation` on the subframe only. */
+  navigateChildFrame(): void;
+  /** Change the main frame's reported URL without changing its loaderId. */
+  setUrl(url: string): void;
   /** How many times the in-page snapshot script has been evaluated. */
   snapshotEvals: number;
-  /** Runtime.evaluate calls that carried an isolated-world contextId. */
+  /** Runtime.evaluate calls that ran in the NARRATION isolated world. */
   isolatedEvals: Sent[];
   stop(): void;
 };
 
 function fakeChrome(opts: FakeOptions): Fake {
-  let snapshotsTaken = 0;
+  let navigated = false;
+  let childNavigated = false;
+  let currentUrl = opts.url ?? 'https://bank.example/confirm';
   const fake: Fake = {
     port: 0,
     pageSent: [],
     snapshotEvals: 0,
     isolatedEvals: [],
+    navigate: () => { navigated = true; },
+    navigateChildFrame: () => { childNavigated = true; },
+    setUrl: (u: string) => { currentUrl = u; },
     stop: () => server.stop(true),
   };
 
@@ -69,18 +119,31 @@ function fakeChrome(opts: FakeOptions): Fake {
 
   const pageResult = async (method: string, params: Record<string, any>): Promise<Record<string, unknown>> => {
     if (method === 'Page.getFrameTree') {
-      return { frameTree: { frame: { id: 'FRAME-1', url: 'https://bank.example/confirm', loaderId: 'LOADER-1' } } };
+      const loaderId = navigated ? (opts.loaderIdAfterNavigation ?? 'LOADER-2') : 'LOADER-1';
+      const childLoaderId = childNavigated
+        ? (opts.childLoaderIdAfterNavigation ?? 'CHILD-LOADER-2')
+        : 'CHILD-LOADER-1';
+      return {
+        frameTree: {
+          frame: { id: 'FRAME-1', url: currentUrl, loaderId },
+          // A same-origin subframe, so the tree digest has something to move.
+          childFrames: [{ frame: { id: 'FRAME-2', url: 'https://bank.example/widget', loaderId: childLoaderId } }],
+        },
+      };
     }
     if (method === 'Page.createIsolatedWorld') {
-      if (opts.noIsolatedWorld) throw new Error('No frame for given id found');
-      return { executionContextId: 77 };
+      const narration = params.worldName === NARRATION_WORLD;
+      if (narration && opts.noIsolatedWorld) throw new Error('No frame for given id found');
+      return { executionContextId: narration ? NARRATION_CONTEXT : ELEMENTS_CONTEXT };
     }
     if (method === 'Runtime.evaluate') {
       const expr = String(params.expression);
       // The settle probe that runs before the snapshot script.
       if (expr.includes('readyState')) return { result: { value: 'complete:3' } };
-      // The origin read: the only evaluate that carries a contextId.
-      if (typeof params.contextId === 'number') {
+      // The origin read: the evaluate in the NARRATION world. Routed on the
+      // world it ran in rather than on "carries a contextId", because #592's
+      // snapshot carries one too.
+      if (params.contextId === NARRATION_CONTEXT) {
         fake.isolatedEvals.push({ method, params });
         if (opts.window === null) return { result: { value: null } };
         const win = opts.window ?? { screenX: 100, screenY: 150, outerHeight: 900, innerHeight: 850 };
@@ -88,23 +151,34 @@ function fakeChrome(opts: FakeOptions): Fake {
         const value = new Function('window', `return (${expr})`)(win);
         return { result: { value } };
       }
-      // The snapshot script itself.
-      if (expr.includes('__jarvis_elements')) {
+      // The snapshot script itself -- it ASSIGNS the ref array, where the focus
+      // and focus-verification reads only index it.
+      if (expr.includes('__jarvis_elements =')) {
         const elements = elementsFor(fake.snapshotEvals);
         fake.snapshotEvals++;
-        snapshotsTaken++;
         return {
           result: {
             value: {
               title: 'Confirm transfer',
               url: 'https://bank.example/confirm',
               text: 'Confirm transfer',
-              elements: elements.map((e) => ({ id: e.id, tag: e.tag, text: e.text, attrs: {}, x: e.x, y: e.y })),
+              elements: elements.map((e) => ({
+              id: e.id, tag: e.tag, text: e.text,
+              attrs: e.inFrame ? { iframe: 'true' } : {},
+              x: e.x, y: e.y,
+            })),
             },
           },
         };
       }
-      return { result: { value: null } };
+      // Nothing routed it. Naming itself rather than answering null: an
+      // unrouted evaluate used to surface ten files away as
+      // `TypeError: null is not an object (evaluating 'data.url')` inside
+      // production code, when the actual cause is a reworded marker here.
+      throw new Error(
+        "fake: unrouted Runtime.evaluate -- did SNAPSHOT_SCRIPT's '__jarvis_elements =' "
+        + `assignment get reworded? expr: ${expr.slice(0, 120)}`,
+      );
     }
     return {};
   };
@@ -146,7 +220,6 @@ function fakeChrome(opts: FakeOptions): Fake {
     },
   });
   fake.port = server.port!;
-  void snapshotsTaken;
   return fake;
 }
 
@@ -164,6 +237,10 @@ const PAGE_A: FakeElement[] = [
   { id: 4, tag: 'button', text: 'Cancel', x: 70, y: 142 },
   { id: 5, tag: 'button', text: 'Send $5,000', x: 70, y: 172 },
   { id: 6, tag: 'input', text: '', x: 70, y: 232 },
+  // Minted inside a same-origin subframe. The old narration could not resolve
+  // a framed id at all, and its document identity needs the frame digest
+  // rather than the main frame's loaderId.
+  { id: 7, tag: 'button', text: 'Pay now', x: 300, y: 400, inFrame: true },
 ];
 
 /**
@@ -193,7 +270,7 @@ describe('#585 a snapshot id names one element for the life of the snapshot', ()
     ctrl = new BrowserController(fake.port);
     const snap = await ctrl.snapshot();
     expect(snap.elements.map((e) => e.text)).toEqual(
-      ['More options', 'LC', 'Home', 'Cancel', 'Send $5,000', ''],
+      ['More options', 'LC', 'Home', 'Cancel', 'Send $5,000', '', 'Pay now'],
     );
 
     // The page shifts to PAGE_B. Nothing re-snapshots, which is exactly the
@@ -236,9 +313,9 @@ describe('#585 a snapshot id names one element for the life of the snapshot', ()
     ctrl = new BrowserController(fake.port);
     await ctrl.snapshot();
 
-    // PAGE_A minted 1..6. The old resolver would have handed back element
-    // [7]'s live position for any of these; there is no element 7.
-    expect(ctrl.snapshotElementPoint(7)).toBeNull();
+    // PAGE_A minted 1..7. The old resolver would have handed back element
+    // [8]'s live position for any of these; there is no element 8.
+    expect(ctrl.snapshotElementPoint(8)).toBeNull();
     expect(ctrl.snapshotElementPoint(0)).toBeNull();
     expect(ctrl.snapshotElementPoint(-1)).toBeNull();
     expect(ctrl.snapshotElementPoint(1.5)).toBeNull();
@@ -284,16 +361,20 @@ describe('#585 the viewport origin is read out of the page\'s reach', () => {
     ctrl = new BrowserController(fake.port);
     await ctrl.snapshot();
 
-    const origin = await ctrl.viewportScreenOrigin();
+    const origin = await ctrl.viewportScreenOrigin(4);
     // screenX, and screenY plus the 50px of chrome (900 outer - 850 inner).
     expect(origin).toEqual({ x: 100, y: 200 });
 
-    // One isolated world created, and the evaluate ran inside it.
-    const worlds = fake.pageSent.filter((s) => s.method === 'Page.createIsolatedWorld');
+    // One narration world created, and the evaluate ran inside it. Scoped to
+    // that world by name: the snapshot mints `jarvis-elements` of its own
+    // (#592), which is not this read's and must not be counted as it.
+    const worlds = fake.pageSent.filter(
+      (s) => s.method === 'Page.createIsolatedWorld' && s.params.worldName === NARRATION_WORLD,
+    );
     expect(worlds).toHaveLength(1);
     expect(worlds[0]!.params.frameId).toBe('FRAME-1');
     expect(fake.isolatedEvals).toHaveLength(1);
-    expect(fake.isolatedEvals[0]!.params.contextId).toBe(77);
+    expect(fake.isolatedEvals[0]!.params.contextId).toBe(NARRATION_CONTEXT);
 
     // And it asked about the window, not about any element.
     const expr = String(fake.isolatedEvals[0]!.params.expression);
@@ -304,6 +385,16 @@ describe('#585 the viewport origin is read out of the page\'s reach', () => {
     expect(expr).not.toContain('devicePixelRatio');
     expect(expr).not.toContain('querySelector');
     expect(expr).not.toContain('__jarvis_elements');
+
+    // And it asked in ITS world only. Routing `isolatedEvals` by world name
+    // means an evaluate the narration sent into the ELEMENTS world would not
+    // appear above, so it is constrained here instead: the snapshot's own
+    // script is the only thing that may ever run in there.
+    const elementsEvals = fake.pageSent.filter(
+      (s) => s.method === 'Runtime.evaluate' && s.params.contextId === ELEMENTS_CONTEXT,
+    );
+    expect(elementsEvals).toHaveLength(1);
+    expect(String(elementsEvals[0]!.params.expression)).toContain('__jarvis_elements =');
   });
 
   test('one isolated world per document, not one per narration', async () => {
@@ -314,8 +405,10 @@ describe('#585 the viewport origin is read out of the page\'s reach', () => {
     // createIsolatedWorld mints a fresh world (and V8 context) on every call
     // however the name is reused, and nothing disposes them, so a page driven
     // through many narrations would accumulate contexts.
-    for (let i = 0; i < 4; i++) expect(await ctrl.viewportScreenOrigin()).toEqual({ x: 100, y: 200 });
-    expect(fake.pageSent.filter((s) => s.method === 'Page.createIsolatedWorld')).toHaveLength(1);
+    for (let i = 0; i < 4; i++) expect(await ctrl.viewportScreenOrigin(4)).toEqual({ x: 100, y: 200 });
+    expect(fake.pageSent.filter(
+      (s) => s.method === 'Page.createIsolatedWorld' && s.params.worldName === NARRATION_WORLD,
+    )).toHaveLength(1);
     expect(fake.isolatedEvals).toHaveLength(4);
   });
 
@@ -329,7 +422,7 @@ describe('#585 the viewport origin is read out of the page\'s reach', () => {
     });
     ctrl = new BrowserController(fake.port);
     await ctrl.snapshot();
-    expect(await ctrl.viewportScreenOrigin()).toEqual({ x: 40, y: 180 });
+    expect(await ctrl.viewportScreenOrigin(4)).toEqual({ x: 40, y: 180 });
 
     // A window reporting an inner taller than its outer (devtools undocking
     // mid-read, a stale value) must not drag the pointer above the screen.
@@ -341,7 +434,7 @@ describe('#585 the viewport origin is read out of the page\'s reach', () => {
     });
     ctrl = new BrowserController(fake.port);
     await ctrl.snapshot();
-    expect(await ctrl.viewportScreenOrigin()).toEqual({ x: 40, y: 60 });
+    expect(await ctrl.viewportScreenOrigin(4)).toEqual({ x: 40, y: 60 });
   });
 
   test('narrations racing on a cache miss share one isolated world', async () => {
@@ -354,25 +447,115 @@ describe('#585 the viewport origin is read out of the page\'s reach', () => {
     // cache at once; only one world may be minted, or the loser is orphaned for
     // the life of the document.
     const all = await Promise.all([
-      ctrl.viewportScreenOrigin(), ctrl.viewportScreenOrigin(),
-      ctrl.viewportScreenOrigin(), ctrl.viewportScreenOrigin(),
+      ctrl.viewportScreenOrigin(4), ctrl.viewportScreenOrigin(4),
+      ctrl.viewportScreenOrigin(4), ctrl.viewportScreenOrigin(4),
     ]);
     for (const o of all) expect(o).toEqual({ x: 100, y: 200 });
-    expect(fake.pageSent.filter((s) => s.method === 'Page.createIsolatedWorld')).toHaveLength(1);
+    expect(fake.pageSent.filter(
+      (s) => s.method === 'Page.createIsolatedWorld' && s.params.worldName === NARRATION_WORLD,
+    )).toHaveLength(1);
   });
 
   test('an unreadable origin is null, never a partial coordinate', async () => {
     fake = fakeChrome({ snapshots: [PAGE_A], noIsolatedWorld: true });
     ctrl = new BrowserController(fake.port);
     await ctrl.snapshot();
-    expect(await ctrl.viewportScreenOrigin()).toBeNull();
+    expect(await ctrl.viewportScreenOrigin(4)).toBeNull();
 
     fake.stop();
     fake = fakeChrome({ snapshots: [PAGE_A], window: null });
     await ctrl.disconnect();
     ctrl = new BrowserController(fake.port);
     await ctrl.snapshot();
-    expect(await ctrl.viewportScreenOrigin()).toBeNull();
+    expect(await ctrl.viewportScreenOrigin(4)).toBeNull();
+  });
+
+  test('a page that replaced its own document gets no origin, and the click agrees', async () => {
+    // #592 made click/hover/type refuse once the main frame's loaderId has
+    // moved on. The narration resolves on the tool_call event, BEFORE the tool
+    // runs, so the coordinate map is still populated at that moment -- and
+    // without the document check the pebble would fly confidently to a stale
+    // point for an action that is about to refuse. The two halves have to reach
+    // the same verdict about the same page, which is #585's whole subject.
+    fake = fakeChrome({ snapshots: [PAGE_A] });
+    ctrl = new BrowserController(fake.port);
+    await ctrl.snapshot();
+    // Still the reviewed document: a real origin.
+    expect(await ctrl.viewportScreenOrigin(4)).toEqual({ x: 100, y: 200 });
+
+    fake.navigate();
+
+    // The narration declines, and says so in a way distinguishable from a
+    // geometry read that merely failed.
+    expect(await ctrl.viewportScreenOrigin(4)).toBe('moved');
+
+    // And the action it was previewing really does refuse, dispatching nothing
+    // -- so this is the honest verdict and not an over-refusal.
+    const before = fake.pageSent.filter((s) => s.method === 'Input.dispatchMouseEvent').length;
+    const result = await ctrl.click(5);
+    expect(result).toContain('navigated to a new document');
+    expect(fake.pageSent.filter((s) => s.method === 'Input.dispatchMouseEvent')).toHaveLength(before);
+  });
+
+  test('a dropped element map is "moved", not a confident origin', async () => {
+    // Nothing reviewed is on screen, so there is no point to preview. Reached
+    // by a narration racing a `forgetSnapshotElements()` -- a refused click or a
+    // failed snapshot drops the map (#592) while the pebble task is in flight.
+    //
+    // Both clauses of the document check hold here at once (the map is empty
+    // AND the frame reports a new loaderId), so this pins the OUTCOME rather
+    // than isolating the empty-map clause; the clause itself is what makes the
+    // answer 'moved' instead of a crash once `elementDoc` is blank.
+    fake = fakeChrome({ snapshots: [PAGE_A] });
+    ctrl = new BrowserController(fake.port);
+    await ctrl.snapshot();
+    fake.navigate();
+    // The refused click is what clears `elementDoc`.
+    await ctrl.click(5);
+    expect(ctrl.snapshotElementPoint(5)).toBeNull();
+    expect(await ctrl.viewportScreenOrigin(4)).toBe('moved');
+  });
+
+  test('a FRAMED element loses its pointer when its frame navigates, main frame or not', async () => {
+    // The term a main-frame-only check misses, and the reason it matters: a
+    // child document can commit on its own while the main frame's loaderId
+    // never moves, so an in-frame coordinate describes a document that is gone.
+    // #592's `refuseIfDocumentMoved` refuses the click for exactly this, so a
+    // narration without the term would fly the pebble confidently to a stale
+    // point for an action about to refuse.
+    fake = fakeChrome({ snapshots: [PAGE_A] });
+    ctrl = new BrowserController(fake.port);
+    await ctrl.snapshot();
+    // Id 7 came from the subframe; id 4 is main-document.
+    expect(await ctrl.viewportScreenOrigin(7)).toEqual({ x: 100, y: 200 });
+
+    fake.navigateChildFrame();
+
+    // The framed id is refused...
+    expect(await ctrl.viewportScreenOrigin(7)).toBe('moved');
+    // ...and the main-document id is NOT, because an unrelated iframe
+    // reloading must not cost every element its pointer.
+    expect(await ctrl.viewportScreenOrigin(4)).toEqual({ x: 100, y: 200 });
+
+    // And the action really does refuse the framed id, so this is the honest
+    // verdict rather than an over-refusal.
+    const before = fake.pageSent.filter((s) => s.method === 'Input.dispatchMouseEvent').length;
+    expect(await ctrl.click(7)).toContain('came from a frame');
+    expect(fake.pageSent.filter((s) => s.method === 'Input.dispatchMouseEvent')).toHaveLength(before);
+  });
+
+  test('a page showing local content gets no origin, like the action gets no click', async () => {
+    // The browser does not drive local files (#521/#526), so the action refuses
+    // here too. Mirrored so the narration cannot preview it -- and the URL is
+    // never returned or logged from this path (#594).
+    fake = fakeChrome({ snapshots: [PAGE_A] });
+    ctrl = new BrowserController(fake.port);
+    await ctrl.snapshot();
+    expect(await ctrl.viewportScreenOrigin(4)).toEqual({ x: 100, y: 200 });
+
+    // The tab is now on a file: document, same loaderId.
+    fake.setUrl('file:///home/someone/secret-plans.html');
+    expect(await ctrl.viewportScreenOrigin(4)).toBe('moved');
   });
 
   test('it never connects a browser to answer', async () => {
@@ -380,7 +563,7 @@ describe('#585 the viewport origin is read out of the page\'s reach', () => {
     ctrl = new BrowserController(fake.port);
     // Nothing connected yet: a narration must not be what launches Chrome,
     // since it runs before the action it previews has even executed.
-    expect(await ctrl.viewportScreenOrigin()).toBeNull();
+    expect(await ctrl.viewportScreenOrigin(4)).toBeNull();
     expect(fake.pageSent).toHaveLength(0);
     expect(ctrl.connected).toBe(false);
   });

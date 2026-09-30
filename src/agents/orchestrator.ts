@@ -630,14 +630,13 @@ export class AgentOrchestrator {
           });
           const logStr = typeof result === 'string' ? result.slice(0, 100) : `[${result.length} content blocks]`;
           console.log(`[Orchestrator] Tool ${tc.name} → ${logStr}...`);
-
-          // Capture document markers so they appear in the final response
-          if (typeof result === 'string') {
-            const docMarker = result.match(/<!-- jarvis:document id="[^"]+" title="[^"]+" format="[^"]+" size="[^"]+" -->/);
-            if (docMarker) {
-              finalText += '\n' + docMarker[0] + '\n';
-            }
-          }
+          // No document-marker scan here any more. This loop used to regex an
+          // HTML comment carrying a document id out of the framed tool result,
+          // which read past the untrusted delimiters on purpose and let any
+          // page text in a tool result forge a download card (#584). The marker
+          // is gone entirely -- see actions/tools/documents.ts for why it was
+          // deleted rather than made structural, and for how to add the
+          // affordance back (a typed stream event, not a marker in prose).
         }
 
         // Only a widening justifies recomputing the tool list mid-turn: an
@@ -1190,14 +1189,8 @@ export class AgentOrchestrator {
         });
         const logStr = typeof result === 'string' ? result.slice(0, 100) : `[${result.length} content blocks]`;
         console.log(`[Orchestrator] Tool ${tc.name} → ${logStr}...`);
-
-        // Inject document markers into the stream so the UI can render download cards
-        if (typeof result === 'string') {
-          const docMarker = result.match(/<!-- jarvis:document id="[^"]+" title="[^"]+" format="[^"]+" size="[^"]+" -->/);
-          if (docMarker) {
-            yield { type: 'text' as const, text: '\n' + docMarker[0] + '\n' };
-          }
-        }
+        // The second of the two deleted document-marker scans (#584); see the
+        // note in the non-streaming loop above.
       }
 
       if (widened) {
@@ -1680,6 +1673,16 @@ export class AgentOrchestrator {
           this.noteTaint(toolCall.name, tool?.category);
           return markUntrustedToolResult(toolCall.name, tool?.category, text);
         };
+
+        // Every return below is a single string, and that is no longer a
+        // limitation worth noting for documents: `DeferredExecution` collapses
+        // the tool's return with `toolReturnText` before writing its receipt,
+        // which would drop any out-of-band metadata a tool tried to hand over
+        // here. #584 briefly made that a gap -- an approved `create_document`
+        // would have lost its download card while an ungated one kept it -- and
+        // then removed the card entirely, so there is nothing left to lose. If
+        // a tool ever does need to hand structured metadata to the chat loop,
+        // this branch is where it would have to be plumbed through.
 
         switch (resolved.status) {
           case 'approved':

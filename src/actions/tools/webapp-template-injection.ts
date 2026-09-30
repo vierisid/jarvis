@@ -10,7 +10,12 @@
  * Delivery state is scoped per WebappTemplateDelivery instance, one per LLM
  * conversation's tool set (the main agent's global tools and each background
  * agent's bound tools are separate conversations with separate histories — a
- * delivery into one must never suppress delivery into another).
+ * delivery into one must never suppress delivery into another), and WITHIN an
+ * instance by the ambient delivery scope (#586). The instance alone was not
+ * enough: one ToolRegistry is built at daemon startup and the module-level
+ * browser tools go into it, so the global instance is shared by every chat
+ * conversation, by the approval executor, by every workflow step and by every
+ * delegated sub-agent. See `template-delivery-scope.ts` for who enters what.
  *
  * WHICH page it is, is the CALLER's to say (#572). This module is handed a URL;
  * it never derives one from the tool result, because the tool result is a
@@ -21,6 +26,7 @@
 
 import { getWebappInstructionsForUrl } from '../../vault/webapp-templates.ts';
 import { withTrustedTrailer } from '../../roles/untrusted.ts';
+import { currentTemplateDeliveryScope } from './template-delivery-scope.ts';
 
 /**
  * The separator between the page and this module's own instructions.
@@ -60,10 +66,22 @@ const MAX_LOOKUP_URL_LENGTH = 2048;
  * field it later lands in) is refused outright rather than trimmed. Refusing
  * costs at most one site playbook.
  */
-function usablePageUrl(url: string | null): string | null {
+export function usablePageUrl(url: string | null): string | null {
+  // A TYPE CHECK, not a cast, because the annotation above is erased at runtime
+  // and one caller is now a reply from another machine (#583). Every gate below
+  // coerces rather than rejects -- arrays have `.length`, `RegExp.test`
+  // stringifies, `new URL()` stringifies -- so `['https://mail.google.com/']`
+  // would pass all three and select Gmail's playbook. The decoder in
+  // sidecar-route.ts checks the wire types too; this makes the function's own
+  // contract true rather than dependent on its callers.
+  if (typeof url !== 'string') return null;
   if (!url) return null;
   if (url.length > MAX_LOOKUP_URL_LENGTH) return null;
-  if (/[\u0000-\u001f\u007f]/.test(url)) return null;
+  // C0, DEL, and the separators that are invisible or line-breaking outside
+  // ASCII: NEL, LS/PS (which end a line for a JavaScript reader), and the bidi
+  // overrides, which can make a logged or rendered URL read as another host
+  // entirely. A real page URL is percent-encoded and contains none of them.
+  if (/[\u0000-\u001f\u007f\u0085\u2028\u2029\u202a-\u202e]/.test(url)) return null;
   // And it must be a SITE. A playbook says "you are now on Gmail"; a `data:` or
   // `blob:` document has no site to be on, and its bytes are the attacker's in
   // full -- so `data:text/html,<!--.mail.google.com` was enough to be handed
@@ -81,31 +99,90 @@ function usablePageUrl(url: string | null): string | null {
   return url;
 }
 
+/**
+ * The scope a delivery is recorded against when no caller named one (#586).
+ *
+ * A named scope cannot spell it, because a named scope's key is its id under
+ * `NAMED_SCOPE_PREFIX` and this one carries no prefix. That is worth a line of
+ * code rather than a line of prose: the ids are `crypto.randomUUID()` today, and
+ * the whole reason this module grew a scope is that a later one may not be.
+ */
+const DEFAULT_SCOPE = 'default';
+
+/** Namespaces a caller-supplied scope id away from `DEFAULT_SCOPE`. */
+const NAMED_SCOPE_PREFIX = 'named:';
+
 export class WebappTemplateDelivery {
-  /** templateId → last delivery timestamp. */
-  private delivered = new Map<string, number>();
+  /**
+   * scope -> templateId -> last delivery timestamp (#586).
+   *
+   * NESTED rather than one map under a `${scope}|${templateId}` string key.
+   * There is no delimiter, so no id can be spelled to reach another scope's
+   * entry, and forgetting a whole scope is one `delete`. Both matter more than
+   * they look: the scope ids in play are UUIDs today, and the reason this
+   * module has a scope at all is that a future one may be human-readable.
+   */
+  private delivered = new Map<string, Map<string, number>>();
 
   /** Test hook: forget all deliveries. */
   reset(): void {
     this.delivered.clear();
   }
 
-  /** Test hook: backdate a delivery to exercise the TTL. */
+  /**
+   * Test hook: backdate a delivery to exercise the TTL.
+   *
+   * Every scope's entry for the template, because a test that backdates asks
+   * "what happens once this has expired", and which scope recorded it is the
+   * business of the code under test rather than of the test.
+   */
   backdate(templateId: string, deliveredAt: number): void {
-    if (this.delivered.has(templateId)) this.delivered.set(templateId, deliveredAt);
+    for (const perTemplate of this.delivered.values()) {
+      if (perTemplate.has(templateId)) perTemplate.set(templateId, deliveredAt);
+    }
+  }
+
+  /** Test hook: how many scopes are being remembered, for the prune. */
+  scopeCountForTests(): number {
+    return this.delivered.size;
+  }
+
+  /**
+   * Note a delivery, and drop everything that has outlived the TTL.
+   *
+   * The prune is here rather than on a timer because an entry past its TTL
+   * carries no information -- `withInstructions` would re-deliver on sight of
+   * it -- so dropping it changes no behaviour and costs one pass over a map
+   * that is at most (scopes x templates) long. Without it the scope dimension
+   * is unbounded in the number of sub-agent runs, and this daemon is expected
+   * to stay up for weeks.
+   */
+  private record(scope: string, templateId: string, now: number): void {
+    for (const [key, perTemplate] of this.delivered) {
+      for (const [id, at] of perTemplate) {
+        if (now - at >= REDELIVER_AFTER_MS) perTemplate.delete(id);
+      }
+      if (perTemplate.size === 0 && key !== scope) this.delivered.delete(key);
+    }
+    const perTemplate = this.delivered.get(scope) ?? new Map<string, number>();
+    perTemplate.set(templateId, now);
+    this.delivered.set(scope, perTemplate);
   }
 
   /**
    * Attach the site's template instructions to a browser tool result when the
    * page the browser is ON resolves to a known webapp template that hasn't been
-   * delivered recently in this conversation. Unknown and absent URLs, and empty
-   * results, pass through untouched.
+   * delivered recently in this conversation. Unknown and absent URLs, empty
+   * results, and calls from a suppressed delivery scope pass through untouched.
    *
    * `pageUrl` is REQUIRED and structural (#572). It is the caller's answer to
    * "which page is this?", and the caller is the only one who can answer it: a
    * local snapshot has `PageSnapshot.browserUrl` from Chrome's frame tree, a
-   * sidecar navigate has the URL it asked for, and anything that did not land on
-   * a page -- an error, a detached dispatch -- passes null. Until #572 this
+   * sidecar-routed read has `page_url` from the frame tree on the other machine
+   * (#583), and anything that did not land on a page -- an error, a detached
+   * dispatch, a sidecar too old to report one -- passes null. Never the URL that
+   * was REQUESTED, on either path: see the rule above the browser tools in
+   * builtin.ts. Until #572 this
    * function answered the question itself, by regexing a `URL:` line out of
    * `result`. `result` is a RENDERED PAGE: its first line is `Page: <title>` and
    * a page picks its own title, newlines included, so a page could print a
@@ -128,6 +205,14 @@ export class WebappTemplateDelivery {
     // payload about to be carried, not a reading of it.
     if (result.length === 0) return result;
 
+    // Before the lookup and before anything is recorded (#586): a context that
+    // cannot use a playbook must not spend one. The workflow tool adapter is
+    // the case that named the bug -- it drops the trailer (#581), so resolving
+    // a template there could only take the delivery away from the chat model.
+    const scope = currentTemplateDeliveryScope();
+    if (scope?.kind === 'suppressed') return result;
+    const scopeKey = scope?.kind === 'named' ? `${NAMED_SCOPE_PREFIX}${scope.id}` : DEFAULT_SCOPE;
+
     const url = usablePageUrl(pageUrl);
     if (!url) return result;
 
@@ -137,10 +222,10 @@ export class WebappTemplateDelivery {
     const resolved = getWebappInstructionsForUrl(url);
     if (!resolved) return result;
 
-    const last = this.delivered.get(resolved.templateId);
+    const last = this.delivered.get(scopeKey)?.get(resolved.templateId);
     const now = Date.now();
     if (last !== undefined && now - last < REDELIVER_AFTER_MS) return result;
-    this.delivered.set(resolved.templateId, now);
+    this.record(scopeKey, resolved.templateId, now);
 
     // Carried beside the page, not concatenated onto it: these are repo-authored
     // instructions (seeded by vault/webapp-template-seeds.ts, not writable by any

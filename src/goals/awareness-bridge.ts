@@ -2,12 +2,13 @@
  * Awareness → Goals Bridge
  *
  * Subscribes to awareness events and fuzzy-matches detected context
- * (apps, windows, files, text) against active goal descriptions.
- * Auto-logs progress entries as 'auto_detected' when matches are found.
+ * (destination apps/windows and ended-session apps) against active goals.
+ * Records possible activity as 'auto_detected'; never measures business progress.
  * Feeds the evening review with detected activity.
  */
 
-import type { Goal } from './types.ts';
+import { normalizeAwarenessActivityEvent } from '../awareness/activity-events.ts';
+import type { AwarenessActivityEvent } from '../awareness/activity-events.ts';
 import * as vault from '../vault/goals.ts';
 
 export type AwarenessGoalMatch = {
@@ -16,6 +17,8 @@ export type AwarenessGoalMatch = {
   matchScore: number;
   matchedTerms: string[];
   source: string;
+  eventType: AwarenessActivityEvent['type'];
+  observedAt: number;
 };
 
 /**
@@ -23,13 +26,17 @@ export type AwarenessGoalMatch = {
  * Returns any matches found so the caller can log them.
  */
 export function matchAwarenessToGoals(
-  eventData: Record<string, unknown>,
+  event: unknown,
 ): AwarenessGoalMatch[] {
+  const observation = normalizeAwarenessActivityEvent(event);
+  if (!observation) return [];
+  const activity = extractActivity(observation);
+  if (!activity) return [];
   const activeGoals = vault.findGoals({ status: 'active' });
   if (activeGoals.length === 0) return [];
 
   // Extract searchable text from awareness event
-  const eventText = extractEventText(eventData);
+  const eventText = activity.text;
   if (!eventText) return [];
 
   const eventWords = tokenize(eventText);
@@ -50,7 +57,9 @@ export function matchAwarenessToGoals(
         goalTitle: goal.title,
         matchScore: score,
         matchedTerms: matched,
-        source: String(eventData.app_name ?? eventData.window_title ?? 'awareness'),
+        source: activity.source,
+        eventType: observation.type,
+        observedAt: observation.timestamp,
       });
     }
   }
@@ -62,27 +71,23 @@ export function matchAwarenessToGoals(
 }
 
 /**
- * Log auto-detected progress for matched goals.
+ * Log a possible activity note for matched goals, without changing scores.
  * Only logs if the goal hasn't had a recent auto-detection (within 30 min).
  */
 export function logAutoDetectedProgress(
   matches: AwarenessGoalMatch[],
-  eventType: string,
 ): void {
   const now = Date.now();
   const thirtyMinutes = 30 * 60 * 1000;
 
   for (const match of matches) {
     // Check for recent auto-detection to avoid spam
-    const recentProgress = vault.getProgressHistory(match.goalId, 5);
-    const hasRecentAutoDetect = recentProgress.some(
-      p => p.type === 'auto_detected' && (now - p.created_at) < thirtyMinutes
-    );
+    const hasRecentAutoDetect = vault.hasRecentAutoDetectedProgress(match.goalId, now - thirtyMinutes);
 
     if (hasRecentAutoDetect) continue;
 
     const goal = vault.getGoal(match.goalId);
-    if (!goal) continue;
+    if (!goal || goal.status !== 'active') continue;
 
     // Log progress entry (no score change, just detection)
     vault.addProgressEntry(
@@ -90,40 +95,34 @@ export function logAutoDetectedProgress(
       'auto_detected',
       goal.score,
       goal.score, // no automatic score change
-      `Activity detected: ${eventType} via ${match.source} (matched: ${match.matchedTerms.join(', ')})`,
+      `Possible goal-related activity: ${match.eventType} via ${match.source} (matched: ${match.matchedTerms.join(', ')}; observed at ${new Date(match.observedAt).toISOString()}). This is an activity hint, not verified progress.`,
       'awareness',
     );
   }
 }
 
-/**
- * Extract searchable text from an awareness event's data payload.
- */
-function extractEventText(data: Record<string, unknown>): string {
-  const parts: string[] = [];
+/** Entry point shared by the daemon and serialized-producer integration tests. */
+export function recordGoalAwarenessActivity(event: unknown): AwarenessGoalMatch[] {
+  const matches = matchAwarenessToGoals(event);
+  logAutoDetectedProgress(matches);
+  return matches;
+}
 
-  // Common awareness event fields
-  if (data.app_name) parts.push(String(data.app_name));
-  if (data.window_title) parts.push(String(data.window_title));
-  if (data.ocr_text) parts.push(String(data.ocr_text));
-  if (data.file_path) parts.push(String(data.file_path));
-  if (data.url) parts.push(String(data.url));
-  if (data.title) parts.push(String(data.title));
-  if (data.body) parts.push(String(data.body));
-  if (data.description) parts.push(String(data.description));
-  if (data.context) parts.push(String(data.context));
-
-  // Session data
-  if (data.dominant_app) parts.push(String(data.dominant_app));
-  if (data.summary) parts.push(String(data.summary));
-  if (data.activities && Array.isArray(data.activities)) {
-    for (const a of data.activities) {
-      if (typeof a === 'string') parts.push(a);
-      else if (a && typeof a === 'object' && 'description' in a) parts.push(String(a.description));
+function extractActivity(event: AwarenessActivityEvent): { text: string; source: string } | null {
+  switch (event.type) {
+    case 'context_changed': {
+      // The departed app/window is history, not evidence of the new activity.
+      const app = event.data.toApp.trim();
+      const window = event.data.toWindow.trim();
+      return { text: `${app} ${window}`, source: app || window || 'awareness' };
+    }
+    case 'session_ended': {
+      if (!event.data.sessionId?.trim()) return null;
+      // A session-end payload has apps, not a generated summary or OCR text.
+      const apps = event.data.apps.map(app => app.trim()).filter(Boolean);
+      return { text: apps.join(' '), source: apps.join(', ') || 'awareness' };
     }
   }
-
-  return parts.join(' ');
 }
 
 // Common words to filter from matching

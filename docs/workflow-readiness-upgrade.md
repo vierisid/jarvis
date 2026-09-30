@@ -1,0 +1,66 @@
+# Upgrading workflow readiness and missing-value checks
+
+This release changes execution of already published workflows as well as new
+drafts. Publication, enablement and run admission refuse invalid graphs. An
+expression that evaluates to undefined now fails the step before dispatch;
+previously it silently became an empty string, including inside larger text.
+Existing versions and business data are not automatically rewritten.
+
+Before rollout, audit enabled workflows through the running Jarvis API with
+`GET /api/workflows/readiness?limit=100&offset=0`, following `nextOffset` until null.
+The response retains stable flow/version IDs, node-level issues and runtime checks.
+The audit needs the real catalog and connection inventory configured by daemon
+startup. It reads connection metadata only and never refreshes credentials.
+A ready report does not prove optional data will exist on a future trigger.
+Review its runtime checks and test representative missing-data payloads.
+
+Graphs now refused include invalid schedules, unknown/forward/sibling references,
+missing required inputs, missing/ambiguous/wrong-piece connections, invalid child
+workflow bindings and supplied/required DYNAMIC inputs without a saved supported
+property schema. The current Jarvis editor exposes these fields as JSON inputs;
+it does not resolve or save their property schemas. Reopening the field will not
+repair this refusal. Leave the workflow disabled until its actual piece schema
+is available. A maintainer can save a verified schema in the draft graph at
+`settings.propertySettings.<field>.schema` through
+`PATCH /api/workflows/:id/versions/:versionId` with the complete updated `trigger`,
+then inspect that version's readiness report before publishing. Preserve the
+piece's required fields and types; an invented empty schema or a `valid` flag is
+not a repair. Dynamic-schema discovery and editing remain an editor limitation.
+
+Sunday accepts both 0 and 7, including ranges and steps. Native schedule hooks
+use the same parser as preflight and the daemon scheduler, including bounded
+`@every` intervals. Loop-body outputs remain local to the loop.
+Router branch outputs can be merged in the continuation with `{{a.out ?? b.out}}`.
+
+For optional text, replace `{{trigger.body.note}}` with an explicit job-appropriate
+fallback such as `{{trigger.body.note ?? "No note"}}`. Use a meaningful fallback
+for required text; `?? ""` still fails a required input. Never default a missing
+recipient, connection, destination or business decision to invented data. Route
+to an explicit missing-data outcome or collect the required input instead.
+Presence predicates EXISTS/DOES_NOT_EXIST and router short-circuiting support
+intentional absence checks. Both composer paths and every repair receive this
+guidance; prompt provenance advances from `w8-1` to `w8-2`.
+
+A live trigger refusal is visible as a FAILED run with a readiness report and
+no dispatched actions. The next fire rechecks. Readiness is checked before
+polling; if it changes while a poll is in flight, each returned event is retained
+in its failed run under `steps["<readiness>"].output.recovery`, with its `payload`,
+`executeTrigger` mode and `requiresDecision: true`. Read it through
+`GET /api/workflow-runs/:runId`; no automatic retry is created. After repairing
+the binding, inspect the payload and the failed run's version before deciding
+whether to start new work. The manual run API selects the current executable
+version, so verify that version before resubmitting a polled payload. A raw
+webhook payload (`executeTrigger: true`) must still pass through its trigger;
+do not substitute it for an already transformed trigger output.
+
+An enabled graph refused at startup/refresh records a FAILED registration run
+and sends a desktop notification when a sidecar is connected. Identical registration refusals are suppressed within that manager
+lifetime, and registration retries use bounded backoff. After repairing bindings
+or publishing a corrected draft, refresh/re-enable the flow or restart the daemon.
+Failure history remains available even if no desktop was connected.
+
+This lands as a single change, so rolling back means reverting it as a whole:
+that restores the prior empty-string behavior and removes preflight admission
+and its refusal records together. A rollback does not repair invalid workflows,
+reverse committed remote effects, or change existing saved versions. Do not
+assume older silent failures were successful runs.

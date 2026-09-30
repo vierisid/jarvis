@@ -6,6 +6,7 @@
  * starts health monitoring, and handles graceful shutdown.
  */
 
+import { configureWorkflowReadiness } from '../workflows/db/repos/flow-readiness';
 import { mkdirSync, existsSync } from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -103,6 +104,8 @@ import {
   browserElementNarration, localBrowserWillServe, pebbleIsOnThisHost, snapshotElementId,
   unplacedLabel, type NarrationRouting, type PebbleNarration,
 } from "./pebble-narration.ts";
+import { remoteBrowserNarration } from "../actions/browser/remote-element-point.ts";
+import { isLocalBrowserDisabled, isNoLocalTools } from "../actions/tools/local-tools-guard.ts";
 
 /** Sentences synthesized at once for one sidecar's Pebble speech (see runResponseCycle). */
 const PEBBLE_TTS_CONCURRENCY = 4;
@@ -3327,9 +3330,27 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
        */
       const narrationRouting = (sidecarId: string, args: Record<string, unknown>): NarrationRouting => ({
         pebbleSidecarId: sidecarId,
-        sidecars: sidecarManager.listSidecars(),
+        // `listSidecars` is a synchronous DB query and CAN throw -- a closed or
+        // locked registry during a shutdown overlap, which
+        // `collectExecutionTargets` already guards for the same reason. An
+        // EMPTY inventory rather than a throw, because empty fails closed
+        // through both predicates that read this: `pebbleIsOnThisHost` finds no
+        // pebble sidecar and `remoteBrowserPebbleTarget` finds no browser one,
+        // so the narration goes quiet instead of taking the turn down.
+        sidecars: (() => {
+          try {
+            return sidecarManager.listSidecars();
+          } catch (err) {
+            console.warn('[ambient-ui] sidecar inventory unavailable for narration:', err);
+            return [];
+          }
+        })(),
         selfHostname: os.hostname(),
         machineScoped: !!getMachineScope(),
+        // A host that refuses local browser calls cannot be the machine that
+        // serves one, whatever the inventory says. Read here rather than in
+        // pebble-narration.ts, which imports nothing on purpose.
+        localBrowserEnabled: !isLocalBrowserDisabled() && !isNoLocalTools(),
         args,
       });
 
@@ -3382,10 +3403,30 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             // pebble-narration.ts for why, and BrowserController's
             // snapshotElementPoint / viewportScreenOrigin for what they hold.
             const { browser } = await import('../actions/tools/builtin.ts');
-            return browserElementNarration(args.element_id, {
-              localBrowserWillServe: () => localBrowserWillServe(narrationRouting(sidecarId, args)),
+            // ONE routing object for the whole narration. Both deps below read
+            // it, and building it twice would be two inventory reads: identical
+            // today, since `localBrowserWillServe` is synchronous and the remote
+            // dep is invoked in the same turn, but any `await` inserted between
+            // them would open a gap between "the coordinates are not local" and
+            // "which sidecar to ask" -- a pointer aimed with one machine's
+            // geometry for a click the router sends to another.
+            const routing = narrationRouting(sidecarId, args);
+            // `return await`, not `return`: a bare `return <promise>` completes
+            // the try block BEFORE the promise is adopted, so the catch below
+            // would never see a rejection from here. It would instead reach
+            // `unhandledRejection` -- which shuts the daemon down -- and leave
+            // the confident label standing over a pebble that never moved,
+            // which is the one outcome this whole path exists to prevent.
+            return await browserElementNarration(args.element_id, {
+              localBrowserWillServe: () => localBrowserWillServe(routing),
               snapshotElementPoint: (id) => browser.snapshotElementPoint(id),
-              viewportScreenOrigin: () => browser.viewportScreenOrigin(),
+              viewportScreenOrigin: (id) => browser.viewportScreenOrigin(id),
+              // The sidecar-served case, which is the DEFAULT install: the
+              // click runs in the sidecar's browser and the coordinates live in
+              // that process, so they are read from it over #591's read-only
+              // RPC instead of re-derived here. The same `routing` object feeds
+              // both predicates, so "which machine" is answered once per call.
+              remoteElementPoint: (id) => remoteBrowserNarration(routing, id),
             });
           }
           // Every other narrated tool (run_command, write_file, launch_app...)
@@ -3418,8 +3459,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
         switch (name) {
           // Browser
           case 'browser_navigate':    return `Opening ${trim(args.url, 60)}`;
-          // Both of these address the element by its snapshot id and nothing
-          // else -- there is no `text` or `selector` parameter to fall back on,
+          // The id is what cross-references the snapshot the user read.
+          // `browser_click` has no `text` or `selector` parameter at all, which
+          // is why the old label was the bare constant "Clicking element".
+          // `browser_type` DOES take a required `text`, and it is deliberately
+          // not echoed: the bubble is a persistent on-screen label, so naming
+          // the typed value would put a password or a secret on screen,
           // so the id is the only thing that can tie the bubble to the list the
           // user read. It also has to be there for the "(location unknown)"
           // amendment to say anything: "Clicking element (location unknown)"
@@ -3820,9 +3865,16 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                 // below is sent after it -- provided it completed. setState
                 // swallows its own failures and an RPC that detaches resolves
                 // without the sidecar having run it, and handlers there run one
-                // per goroutine, so send order is not apply order. The
-                // generation guard below is what actually keeps a stale write
-                // off the bubble; the await only removes the common race.
+                // per goroutine, so send order is not apply order; the await
+                // only removes the common race.
+                //
+                // The label write itself is NOT generation-gated, and does not
+                // need to be: the IIFE runs synchronously to its first await,
+                // so the label is issued at the `tool_call` event exactly as
+                // the unconditional `void setState(...)` it replaces was, and
+                // its ordering against a later writer's is unchanged by this
+                // PR. Only the amendment is gated, because only the amendment
+                // can arrive after a resolution that took up to 1200ms.
                 //
                 // `gen` claims the bubble's TEXT for this narration. Streamed
                 // tokens and the next tool's label bump the counter, and a late
@@ -3841,11 +3893,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                   // is worse than none. It does not bound the label write above
                   // it, which is its own RPC; a write that late is suppressed by
                   // the generation guard instead.
+                  let budget: ReturnType<typeof setTimeout> | undefined;
                   const narration = await Promise.race([
                     resolveToolNarration(sidecarId, tcName, tcArgs),
-                    new Promise<PebbleNarration>((r) => setTimeout(
-                      () => r({ kind: 'unplaced', reason: 'resolving the element took too long' }), 1200)),
-                  ]);
+                    new Promise<PebbleNarration>((r) => { budget = setTimeout(
+                      () => r({ kind: 'unplaced', reason: 'resolving the element took too long' }), 1200); }),
+                  ]).finally(() => clearTimeout(budget));
                   if (!narration || ctrl.cancelled) return; // the turn was dismissed
                   if (narration.kind === 'point') {
                     console.log(`[ambient-ui] fly pebble for ${tcName} @ (${narration.x},${narration.y})`);
@@ -3868,7 +3921,14 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
                   }
                   if (ctrl.cancelled || gen !== pebbleBubbleGen) return;
                   await setState(sidecarId, 'working', unplacedLabel(label));
-                })();
+                })().catch((err) => {
+                  // Defence in depth behind `resolveToolNarration`'s own catch:
+                  // a detached task with no handler reaches
+                  // `unhandledRejection`, which shuts the daemon down. A
+                  // narration is cosmetic and runs before the action it previews
+                  // has been approved, so nothing in here may end the process.
+                  console.warn('[ambient-ui] narration task failed:', err);
+                });
               }
             } else if (event.type === 'done') {
               llmDone = true;
@@ -4965,6 +5025,15 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // so the `onPieceLibraryChanged` callback can call `upsert()` / `remove()`
     // after runtime installs.
     const workflowPieceCatalog = engineBoot?.catalog ?? null;
+    configureWorkflowReadiness({
+      pieces: workflowPieceCatalog ?? undefined,
+      credentials: credentialResolver,
+      tool: name => {
+        const tool = agentService.getOrchestrator().getToolRegistry()?.list().find(t => t.name === name);
+        return tool ? { params: Object.entries(tool.parameters).map(([name, param]) => ({ name, ...param })) } : null;
+      },
+      roles: () => new Set(agentService.getSpecialists().keys()),
+    });
     const workflowEngineRuntime = engineBoot?.runtime ?? null;
     const workflowSandboxApi = engineBoot?.api ?? null;
 
@@ -4974,6 +5043,12 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
     // to direct event-bus subscription.
     triggerManager = new TriggerManager({
       eventBus: sharedEventBus,
+      onRegistrationBlocked: ({ runId, message }) => notifyAll({
+        id: `workflow-readiness:${runId}`, kind: 'workflow',
+        title: 'Workflow needs attention',
+        body: `A workflow could not start: ${message}. See its failed run for details.`,
+        actions: [{ id: 'review', label: 'Open Jarvis', primary: true }, { id: 'dismiss', label: 'Dismiss' }],
+      }),
       ...(workflowEngineRuntime ? { engineRuntime: workflowEngineRuntime } : {}),
     });
 
@@ -5606,11 +5681,8 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             // M16: Route awareness events to goal auto-detection
             if (goalService && (event.type === 'context_changed' || event.type === 'session_ended')) {
               try {
-                const { matchAwarenessToGoals, logAutoDetectedProgress } = require('../goals/awareness-bridge.ts');
-                const matches = matchAwarenessToGoals(event.data);
-                if (matches.length > 0) {
-                  logAutoDetectedProgress(matches, event.type);
-                }
+                const { recordGoalAwarenessActivity } = require('../goals/awareness-bridge.ts');
+                recordGoalAwarenessActivity(event);
               } catch (err) {
                 // Silently ignore — goal matching is best-effort
               }
@@ -5829,7 +5901,7 @@ export async function startDaemon(userConfig?: Partial<DaemonConfig>): Promise<v
             const llm = agentService.getLLMManager();
             const style = goalsConfig?.accountability_style ?? 'drill_sergeant';
             const escWeeks = goalsConfig?.escalation_weeks ?? { pressure: 1, root_cause: 3, suggest_kill: 4 };
-            const goalNlBuilder = new NLGoalBuilder(llm);
+            const goalNlBuilder = new NLGoalBuilder(llm, { timezone: jarvisConfig.timezone });
             const goalEstimator = new GoalEstimator(llm);
             const goalRhythm = new DailyRhythm(llm, style);
             const goalAccountability = new AccountabilityEngine(llm, style, escWeeks);

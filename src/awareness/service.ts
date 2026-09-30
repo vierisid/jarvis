@@ -14,6 +14,7 @@ import type { LLMManager } from '../llm/manager.ts';
 import type { AwarenessEvent, LiveContext, DailyReport, Suggestion, SessionSummary, WeeklyReport, BehavioralInsight } from './types.ts';
 import type { SuggestionType, SuggestionRow } from './types.ts';
 import type { SidecarEvent } from '../sidecar/protocol.ts';
+import type { AwarenessActivityEvent } from './activity-events.ts';
 
 import { ContextTracker } from './context-tracker.ts';
 import { AwarenessIntelligence } from './intelligence.ts';
@@ -57,6 +58,7 @@ export class AwarenessService implements Service {
   private opportunityDelivery: OpportunityDelivery | null;
   private runRequested = false;
   private lifecycle: Promise<void> = Promise.resolve();
+  private sessionSummariesInFlight = new Set<string>();
 
   constructor(
     jarvisConfig: JarvisConfig,
@@ -148,7 +150,9 @@ export class AwarenessService implements Service {
     this._status = 'stopping';
     await this.opportunityDelivery?.stop();
 
-    this.contextTracker.endCurrentSession();
+    const ended = this.contextTracker.endCurrentSession();
+    // Report the final session once, without starting model work during stop.
+    if (ended) this.handleSessionEnd(ended, false);
 
     // Blinding awareness must not freeze the ledger at whatever it held: this
     // is the last prune until awareness runs again.
@@ -396,6 +400,12 @@ export class AwarenessService implements Service {
         filePath: context.filePath ?? undefined,
       });
 
+      // Deliver the ended snapshot before any
+      // asynchronous enrichment can fail, lag behind another capture or stop.
+      for (const event of events) {
+        if (event.type === 'session_ended') this.handleSessionEnd(event);
+      }
+
       // Per-capture bookkeeping derived from the capture's *content*. A
       // redundant capture repeats content we already indexed and logged, and
       // this is what dominates awareness's write volume, so it is skipped.
@@ -481,37 +491,39 @@ export class AwarenessService implements Service {
         events.push(suggestionEvent);
       }
 
-      // 8. Emit all events
+      // 8. Emit the remaining events (session end was delivered above)
       for (const event of events) {
-        this.eventCallback?.(event);
+        if (event.type !== 'session_ended') this.eventCallback?.(event);
       }
       if (suggestion?.context?.opportunity) void this.opportunityDelivery?.flush();
-
-      // 9. Session topic inference (async, non-blocking)
-      const sessionEnd = events.find(e => e.type === 'session_ended');
-      if (sessionEnd) {
-        this.inferSessionTopic(sessionEnd.data as { sessionId: string; apps: string[] }).catch(err =>
-          console.error('[Awareness] Session topic inference failed:', err instanceof Error ? err.message : err)
-        );
-      }
     } catch (err) {
       console.error('[Awareness] Pipeline error:', err instanceof Error ? err.message : err);
     }
   }
 
+  private handleSessionEnd(event: AwarenessActivityEvent<'session_ended'>, summarize = true): void {
+    try { this.eventCallback?.(event); }
+    catch (err) {
+      console.error('[Awareness] Session-end listener failed:', err instanceof Error ? err.message : err);
+    }
+    if (summarize) void this.inferSessionTopic(event.data);
+  }
+
   /**
    * Asynchronously infer topic and summary for a completed session via LLM.
    */
-  private async inferSessionTopic(data: { sessionId: string; apps: string[] }): Promise<void> {
+  private async inferSessionTopic(data: { sessionId: string | null; apps: readonly string[] }): Promise<void> {
     const { sessionId, apps } = data;
-    if (!sessionId) return;
-
+    if (!sessionId || this.sessionSummariesInFlight.has(sessionId)) return;
+    // Claim before the first await. Persisted summaries also suppress a replay
+    // after service recreation; a failed attempt releases its in-flight claim.
+    this.sessionSummariesInFlight.add(sessionId);
     try {
       const session = getSession(sessionId);
-      if (!session) return;
+      if (!session || session.ended_at === null || session.summary !== null) return;
 
       const startedAt = session.started_at;
-      const endedAt = session.ended_at ?? Date.now();
+      const endedAt = session.ended_at;
       const durationMinutes = Math.round((endedAt - startedAt) / 60000);
 
       if (durationMinutes < 2) return;
@@ -525,16 +537,20 @@ export class AwarenessService implements Service {
       if (sampleOcrTexts.length === 0) return;
 
       const { topic, summary } = await this.intelligence.summarizeSession(
-        apps,
+        [...apps],
         session.capture_count,
         durationMinutes,
         sampleOcrTexts
       );
 
+      // A later writer may have supplied a summary while the model was busy.
+      if (getSession(sessionId)?.summary !== null) return;
       updateSession(sessionId, { topic, summary });
       console.log(`[Awareness] Session topic: "${topic}" (${durationMinutes}min, ${apps.join(', ')})`);
     } catch (err) {
       console.error('[Awareness] Topic inference error:', err instanceof Error ? err.message : err);
+    } finally {
+      this.sessionSummariesInFlight.delete(sessionId);
     }
   }
 }

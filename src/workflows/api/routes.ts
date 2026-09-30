@@ -51,6 +51,7 @@ import {
   updateDraftVersion,
 } from "../db/repos/flow-version";
 import { publishFlowVersion } from "../db/repos/flow-publication";
+import { assertVersionReady, versionReadiness, WorkflowReadinessError } from '../db/repos/flow-readiness';
 import { assertCodeStepsAllowed, CodeStepsRefusedError } from "../db/repos/flow-code-steps";
 import { FlowVersionRequestError, withOwnedFlowVersion } from "../db/repos/flow-version-ownership";
 import {
@@ -162,6 +163,7 @@ const trapErrors = async (fn: () => Promise<Response> | Response): Promise<Respo
   try {
     return await fn();
   } catch (e) {
+    if (e instanceof WorkflowReadinessError) return ok({ error: e.message, code: e.code, ...e.readiness }, e.status);
     if (e instanceof FlowVersionRequestError) return err(e.message, e.status);
     // A refused CODE step is a permission answer, not a bad request: the flow
     // is well-formed and the caller is told exactly which grant is missing.
@@ -862,6 +864,22 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    // Read-only upgrade audit using the same inventory and compiler as activation.
+    "/api/workflows/readiness": {
+      GET: (req) => trapErrors(() => {
+        const params = new URL(req.url).searchParams;
+        const limit = Math.max(1, Math.min(100, Math.trunc(numParam(params.get('limit')) ?? 100)));
+        const offset = Math.max(0, Math.trunc(numParam(params.get('offset')) ?? 0));
+        const flows = listFlows(undefined, { status: 'ENABLED', limit, offset });
+        return ok({ items: flows.map(flow => {
+          const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
+          return { flowId: flow.id, versionId, readiness: versionId ? versionReadiness(flow.id, versionId) : {
+            ready: false, runtimeChecks: [], issues: [{ node: 'trigger', path: 'graph', code: 'VERSION', message: 'No executable version' }],
+          } };
+        }), nextOffset: flows.length === limit ? offset + limit : null });
+      }),
+    },
+
     // ------------------------------------------------------------------ flows
     "/api/workflows": {
       GET: (req) =>
@@ -1014,6 +1032,13 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
     },
 
+    "/api/workflows/:id/versions/:versionId/readiness": {
+      GET: (req) => trapErrors(() => {
+        const { id, versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
+        return ok(versionReadiness(id, versionId));
+      }),
+    },
+
     "/api/workflows/:id/versions/:versionId/lock": {
       POST: (req) =>
         trapErrors(() => {
@@ -1021,7 +1046,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // Lock mutates the same row state DRAFT -> LOCKED, so the sidecar
           // (keyed on versionId) already follows. No copy needed; mentioned
           // here so future readers know that's by design.
-          const locked = withOwnedFlowVersion(id, versionId, () => lockVersion(versionId));
+          const locked = withOwnedFlowVersion(id, versionId, () => { assertVersionReady(id, versionId); return lockVersion(versionId); });
           const osWarnings = lockOsWarnings(locked.trigger);
           return ok(osWarnings.length > 0 ? { ...locked, osWarnings } : locked);
         }),
@@ -1216,15 +1241,6 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // unpublished draft asked to run once, which is still an authoring
           // moment with someone reading the reply.
           assertCodeStepsAllowed(id, versionId, "run");
-
-          const run = createFlowRun({
-            flowId: id,
-            flowVersionId: versionId,
-            environment: body.environment ?? "PRODUCTION",
-            triggeredBy: body.triggeredBy,
-            stepNameToTest: body.stepNameToTest,
-            startTime: Date.now(),
-          });
           // For test-from-here runs, fetch the version's persisted sampleData
           // so the engine can populate preceding steps' outputs without
           // re-running them. The map is shared by all runs of this version --
@@ -1248,6 +1264,18 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
               sampleInputOverride = { [body.stepNameToTest]: override as Record<string, unknown> };
             }
           }
+          assertVersionReady(id, versionId, body.stepNameToTest ? {
+            stepName: body.stepNameToTest,
+            inputOverride: sampleInputOverride?.[body.stepNameToTest] as Record<string, unknown> | undefined,
+          } : undefined);
+          const run = createFlowRun({
+            flowId: id,
+            flowVersionId: versionId,
+            environment: body.environment ?? "PRODUCTION",
+            triggeredBy: body.triggeredBy,
+            stepNameToTest: body.stepNameToTest,
+            startTime: Date.now(),
+          });
           enqueue({
             jobType: "RUN_FLOW",
             payload: {

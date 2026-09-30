@@ -14,7 +14,8 @@ import { extractGoalCompletion } from '../vault/extractor.ts';
 import { getActiveGoalsSummary } from '../vault/retrieval.ts';
 import { findEntities } from '../vault/entities.ts';
 import { findFacts } from '../vault/facts.ts';
-import type { GoalConfig } from '../config/types.ts';
+import { DEFAULT_CONFIG, type GoalConfig } from '../config/types.ts';
+import { ContextTracker } from '../awareness/context-tracker.ts';
 
 beforeEach(() => {
   initDatabase(':memory:');
@@ -22,31 +23,24 @@ beforeEach(() => {
 
 // ── Awareness Bridge Tests ──────────────────────────────────────────
 
+function producerTransition(windowTitle: string) {
+  const tracker = new ContextTracker(DEFAULT_CONFIG.awareness!);
+  tracker.processCapture('before', '', 'Inbox - Mail');
+  const event = tracker.processCapture('after', '', windowTitle).events.find(e => e.type === 'context_changed');
+  expect(event).toBeDefined();
+  return JSON.parse(JSON.stringify(event));
+}
+
 test('matchAwarenessToGoals returns empty when no active goals', () => {
-  const matches = matchAwarenessToGoals({
-    app_name: 'VS Code',
-    window_title: 'index.ts - project',
-  });
-  expect(matches).toEqual([]);
+  expect(matchAwarenessToGoals(producerTransition('index.ts - project'))).toEqual([]);
 });
 
 test('matchAwarenessToGoals finds matches for active goals', () => {
   createGoal('Learn TypeScript fundamentals', 'task', {
-    description: 'Complete TypeScript tutorial covering generics, interfaces, and type guards',
-    status: 'active',
+    description: 'Complete TypeScript tutorial covering generics, interfaces, and type guards', status: 'active',
   });
-  createGoal('Exercise daily', 'daily_action', {
-    description: 'Run or gym workout every day',
-    status: 'active',
-  });
-
-  // Event related to TypeScript
-  const matches = matchAwarenessToGoals({
-    app_name: 'VS Code',
-    window_title: 'TypeScript Tutorial - generics.ts',
-    ocr_text: 'interface UserProfile extends BaseInterface',
-  });
-
+  createGoal('Exercise daily', 'daily_action', { description: 'Run or gym workout every day', status: 'active' });
+  const matches = matchAwarenessToGoals(producerTransition('TypeScript Tutorial generics.ts - VS Code'));
   expect(matches.length).toBeGreaterThanOrEqual(1);
   expect(matches[0]!.goalTitle).toBe('Learn TypeScript fundamentals');
   expect(matches[0]!.matchedTerms.length).toBeGreaterThanOrEqual(2);
@@ -54,47 +48,16 @@ test('matchAwarenessToGoals finds matches for active goals', () => {
 
 test('matchAwarenessToGoals does not match unrelated events', () => {
   createGoal('Learn Python machine learning', 'task', {
-    description: 'Complete scikit-learn and tensorflow courses',
-    status: 'active',
+    description: 'Complete scikit-learn and tensorflow courses', status: 'active',
   });
-
-  // Unrelated event
-  const matches = matchAwarenessToGoals({
-    app_name: 'Spotify',
-    window_title: 'Playing: Jazz Classics',
-  });
-
-  expect(matches).toEqual([]);
+  expect(matchAwarenessToGoals(producerTransition('Jazz Classics - Spotify'))).toEqual([]);
 });
 
 test('matchAwarenessToGoals ignores non-active goals', () => {
   createGoal('Learn TypeScript fundamentals', 'task', {
-    description: 'Complete TypeScript tutorial covering generics and interfaces',
-    status: 'completed', // not active
+    description: 'Complete TypeScript tutorial covering generics and interfaces', status: 'completed',
   });
-
-  const matches = matchAwarenessToGoals({
-    app_name: 'VS Code',
-    window_title: 'TypeScript generics tutorial',
-  });
-
-  expect(matches).toEqual([]);
-});
-
-test('matchAwarenessToGoals handles session_ended data', () => {
-  createGoal('Build web application with React', 'milestone', {
-    description: 'Develop a React web application with components and hooks',
-    status: 'active',
-  });
-
-  const matches = matchAwarenessToGoals({
-    dominant_app: 'VS Code',
-    summary: 'Worked on React application components and hooks',
-    activities: ['Edited React component files', 'Debugged hooks issue'],
-  });
-
-  expect(matches.length).toBeGreaterThanOrEqual(1);
-  expect(matches[0]!.matchedTerms.length).toBeGreaterThanOrEqual(2);
+  expect(matchAwarenessToGoals(producerTransition('TypeScript generics tutorial - VS Code'))).toEqual([]);
 });
 
 test('logAutoDetectedProgress creates progress entries', () => {
@@ -109,9 +72,11 @@ test('logAutoDetectedProgress creates progress entries', () => {
     matchScore: 0.5,
     matchedTerms: ['typescript', 'tutorial'],
     source: 'VS Code',
+    eventType: 'context_changed' as const,
+    observedAt: Date.now(),
   }];
 
-  logAutoDetectedProgress(matches, 'context_changed');
+  logAutoDetectedProgress(matches);
 
   // Check progress was logged
   const { getProgressHistory } = require('../vault/goals.ts');
@@ -134,13 +99,15 @@ test('logAutoDetectedProgress deduplicates within 30 minutes', () => {
     matchScore: 0.5,
     matchedTerms: ['typescript', 'tutorial'],
     source: 'VS Code',
+    eventType: 'context_changed' as const,
+    observedAt: Date.now(),
   }];
 
   // First call logs progress
-  logAutoDetectedProgress(matches, 'context_changed');
+  logAutoDetectedProgress(matches);
 
   // Second call within 30min should not log again
-  logAutoDetectedProgress(matches, 'context_changed');
+  logAutoDetectedProgress(matches);
 
   const { getProgressHistory } = require('../vault/goals.ts');
   const progress = getProgressHistory(goal.id, 10);

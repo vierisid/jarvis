@@ -1,4 +1,5 @@
 import { LATEST_CONTEXT_VERSION } from '@activepieces/pieces-framework'
+import { withPresenceFallbacks } from '../../../../../../../runtime/router-presence'
 import { BranchCondition, BranchExecutionType, BranchOperator, EngineGenericError, FlowRunStatus, isNil, RouterAction, RouterActionSettings, RouterExecutionType, RouterStepOutput, StepOutputStatus } from '@activepieces/shared'
 import dayjs from 'dayjs'
 import { utils } from '../utils'
@@ -13,12 +14,47 @@ export const routerExecuter: BaseExecutor<RouterAction> = {
         executionState,
         constants,
     }) {
-        const { censoredInput, resolvedInput } = await constants.getPropsResolver(LATEST_CONTEXT_VERSION).resolve<RouterActionSettings>({
+        const resolver = constants.getPropsResolver(LATEST_CONTEXT_VERSION)
+        const settings = withPresenceFallbacks(action.settings) as RouterActionSettings
+        // Resolve metadata first, leaving condition operands untouched until
+        // their AND/OR group actually needs them. A presence guard must be
+        // able to stop an absent comparison before strict input resolution.
+        const { censoredInput, resolvedInput } = await resolver.resolve<RouterActionSettings>({
             unresolvedInput: {
-                ...action.settings,
+                ...settings,
+                branches: settings.branches.map(branch => branch.branchType === BranchExecutionType.CONDITION
+                    ? { ...branch, conditions: [] } : branch),
             },
             executionState,
         })
+        for (const [index, branch] of settings.branches.entries()) {
+            if (branch.branchType !== BranchExecutionType.CONDITION) continue
+            const resolvedGroups: BranchCondition[][] = []
+            const censoredGroups: BranchCondition[][] = []
+            resolvedInput.branches[index] = { ...resolvedInput.branches[index], branchType: BranchExecutionType.CONDITION, conditions: resolvedGroups }
+            const censoredSettings = censoredInput as RouterActionSettings
+            censoredSettings.branches[index] = { ...censoredSettings.branches[index], branchType: BranchExecutionType.CONDITION, conditions: censoredGroups }
+            for (const group of branch.conditions) {
+                const resolvedGroup: BranchCondition[] = []
+                const censoredGroup: BranchCondition[] = []
+                resolvedGroups.push(resolvedGroup)
+                censoredGroups.push(censoredGroup)
+                let matched = true
+                for (const condition of group) {
+                    const result = await resolver.resolve<BranchCondition>({ unresolvedInput: condition, executionState })
+                    resolvedGroup.push(result.resolvedInput)
+                    censoredGroup.push(result.censoredInput as BranchCondition)
+                    matched = evaluateConditions([[result.resolvedInput]])
+                    if (!matched) break
+                }
+                if (matched) break
+            }
+            // FIRST_MATCH must not resolve operands in later branches. Their
+            // condition lists remain empty in the recorded input.
+            if (resolvedInput.executionType === RouterExecutionType.EXECUTE_FIRST_MATCH && evaluateConditions(resolvedGroups)) break
+        }
+        // Each retained group is its evaluated prefix. The existing boolean
+        // evaluator yields the same result; logs contain only evaluated data.
 
         switch (resolvedInput.executionType) {
             case RouterExecutionType.EXECUTE_ALL_MATCH:

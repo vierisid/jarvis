@@ -265,9 +265,19 @@ func (s *pebbleServiceWindows) Spawn(spec PebbleSpec) error {
 // purely visual now — state changes flow exclusively from the daemon via
 // SetState() so the brain stays the source of truth (wake-word, LLM
 // lifecycle, manual hotkey all funnel through the same path).
+// Called INLINE, not `go cb()` (#587). The hotkey dispatcher already runs this
+// on its own goroutine, and it holds a claim across the call -- that claim is
+// what lets stop() promise no callback begins after it returns, and what makes
+// the in-flight count in its log mean anything. Re-spawning here handed the
+// real callback to an unclaimed goroutine, so the gate only ever suppressed
+// this two-line trampoline while cb ran on regardless, and the count was
+// structurally zero by the time stop() read it.
+//
+// Linux and darwin have always called cb() inline for this reason
+// (pebble_overlay_linux.go, pebble_overlay_darwin.go); this was the odd one out.
 func (s *pebbleServiceWindows) onSummonHotkey() {
 	if cb, ok := s.summonCallback.Load().(func()); ok && cb != nil {
-		go cb()
+		cb()
 	}
 }
 
@@ -276,8 +286,9 @@ func (s *pebbleServiceWindows) OnSummon(callback func()) {
 }
 
 // onPaletteHotkey fires the user-supplied palette callback. Like the summon
-// callback, this runs on whatever goroutine the hotkey listener used; the
-// daemon owns the open/close lifecycle of the palette panel itself.
+// callback, this runs on the goroutine the hotkey dispatcher gave it, inline
+// and not re-spawned -- see onSummonHotkey for why that matters. The daemon
+// owns the open/close lifecycle of the palette panel itself.
 func (s *pebbleServiceWindows) onPaletteHotkey() {
 	cb, ok := s.paletteCallback.Load().(func())
 	if !ok || cb == nil {
@@ -285,7 +296,7 @@ func (s *pebbleServiceWindows) onPaletteHotkey() {
 		return
 	}
 	log.Printf("[pebble] palette hotkey fired — invoking callback")
-	go cb()
+	cb()
 }
 
 func (s *pebbleServiceWindows) OnPalette(callback func()) {

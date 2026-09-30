@@ -77,6 +77,7 @@ import {
 } from "../../util/execution-environment.ts";
 import type { FlowTriggerNode } from "../../workflows/db/repos/flow-version.ts";
 import { WORKFLOW_EVENT_TYPES } from "../../workflows/runtime/event-types.ts";
+import { compileWorkflow } from '../../workflows/runtime/workflow-readiness';
 
 export interface ComposedFlow {
   displayName: string;
@@ -1095,6 +1096,13 @@ function sharedRuleSections(mode: "one-shot" | "tools", hasRoles: boolean): stri
     "",
     "## Wiring data between steps",
     "  - Use {{trigger.field}} and {{step_N.field}} templates to wire data between steps.",
+    '  - An absent reference fails the step before dispatch; it is never silently replaced with an empty string.',
+    '    For optional data, use an explicit, meaningful fallback such as {{trigger.body.note ?? "No note"}}.',
+    '    An empty fallback still fails a required text input. Never invent a fallback recipient, destination, credential or business decision.',
+    '    If required data is absent, route to a missing-data outcome or ask for it. EXISTS / DOES_NOT_EXIST can guard optional comparisons.',
+    '  - After a router, merge alternative branch outputs with {{a.out ?? b.out}} (and a final default only if the job permits neither).',
+    '    A branch cannot reference a sibling; loop-body outputs stay inside their loop. Only the branches that ran have outputs.',
+
     "  - For jarvis-trigger:on_event, the trigger output is an event envelope shaped",
     "    { id, eventType, payload, timestamp } -- the actual event data lives under `payload`.",
     "    Reference payload fields as {{trigger.payload.<field>}}, NOT {{trigger.<field>}}.",
@@ -1509,6 +1517,7 @@ function resolvePieceByName(
   return matches.length === 1 ? matches[0]! : null;
 }
 
+
 /* ------------------------------------------------------------- validation */
 
 interface ValidationOk { ok: true; flow: ComposedFlow }
@@ -1532,6 +1541,10 @@ function validateComposedFlow(
     return { ok: false, errors: ["missing or invalid 'trigger' object"] };
   }
   const errors: string[] = [];
+  // Bound raw graphs before the legacy normalizer recursively builds bodies.
+  // The complete shared pass runs on its canonicalized output below.
+  const limits = compileWorkflow(triggerRaw, { pieces: registry, phase: 'composition' }).issues.filter(i => i.code === 'LIMIT');
+  if (limits.length) return { ok: false, errors: limits.map(i => `${i.node}: ${i.message}`) };
   const knownNames = new Set<string>();
   const trigger = validateStep(triggerRaw as Record<string, unknown>, errors, knownNames, true, registry, validRoleIds, toolSpecs, osCheck);
   if (!trigger) return { ok: false, errors };
@@ -1555,6 +1568,8 @@ function validateComposedFlow(
   }
 
   if (errors.length > 0) return { ok: false, errors };
+  const readiness = compileWorkflow(trigger, { pieces: registry, phase: 'composition' });
+  if (!readiness.ready) return { ok: false, errors: readiness.issues.map(i => `step "${i.node}" (${i.path}): ${i.message}`) };
   return { ok: true, flow: { displayName, trigger } };
 }
 

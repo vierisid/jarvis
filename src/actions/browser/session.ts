@@ -131,8 +131,19 @@ const SNAPSHOT_SCRIPT = `(() => {
     });
   }
 
-  // Assign sequential IDs and store DOM refs for later direct focus
-  window.__jarvis_elements = els.map(e => e._el);
+  // Assign sequential IDs and store DOM refs for later direct focus.
+  //
+  // This script runs in an ISOLATED WORLD (#592). It used to run in the page's
+  // own main world, where this array was window.__jarvis_elements -- a global
+  // the PAGE can write, so a page that overwrote it had approved text typed
+  // into an element of its own choosing while the snapshot, the approval card
+  // and the narration all still named the reviewed one.
+  //
+  // The isolation is the contextId on the evaluate, NOT this spelling: inside a
+  // world "window" is that world's own global proxy and expandos are
+  // per-context. globalThis is here to tell a reader the script is not meant
+  // for the page's world.
+  globalThis.__jarvis_elements = els.map(e => e._el);
   els.forEach((el, i) => { el.id = i + 1; delete el._el; });
 
   // Get visible text (top document first, then same-origin frames), clean up whitespace.
@@ -154,6 +165,33 @@ const SNAPSHOT_SCRIPT = `(() => {
     elements: els
   };
 })()`;
+
+/**
+ * A digest of every frame's loaderId in a `Page.getFrameTree` reply (#592).
+ *
+ * One string rather than a set, because the only question asked of it is "did
+ * ANY document in this page change", which a string answers in one comparison.
+ * Frame ids are included so a frame appearing or disappearing counts as a
+ * change too -- an iframe replaced by a new one with a coincidentally equal
+ * loaderId is not the same page. Sorted, so sibling order cannot make two
+ * readings of one tree differ.
+ *
+ * The twin of `collectFrameStamp` in sidecar/browser_snapshot.go. Same format,
+ * but the two never compare digests with each other -- each guards its own
+ * browser -- so this is parity of behaviour, not a wire contract.
+ */
+function frameTreeStamp(node: unknown): string {
+  const parts: string[] = [];
+  const walk = (n: unknown): void => {
+    const f = n as { frame?: { id?: unknown; loaderId?: unknown }; childFrames?: unknown[] } | null;
+    if (!f || typeof f !== 'object') return;
+    parts.push(`${String(f.frame?.id ?? '')}:${String(f.frame?.loaderId ?? '')}`);
+    for (const child of f.childFrames ?? []) walk(child);
+  };
+  walk(node);
+  parts.sort();
+  return parts.join('|');
+}
 
 export class BrowserController {
   private cdp: CDPClient;
@@ -179,6 +217,55 @@ export class BrowserController {
   private runningBrowser: RunningBrowser | null = null;
   // Coordinates stored from last snapshot — not sent to LLM
   private elementCoords = new Map<number, { x: number; y: number }>();
+
+  /**
+   * Which DOCUMENT the coordinates and element refs above were minted in, and
+   * what every frame in the page was showing at the time (#592).
+   *
+   * Nothing used to record this, so nothing could notice a PAGE-INITIATED
+   * navigation: `elementCoords` was dropped on the next snapshot, on disconnect
+   * and on a stale-CDP reconnect, and nowhere else. A click after a meta
+   * refresh therefore dispatched a trusted mouse event at the previous
+   * document's geometry, while `captureApprovalGuard` — which binds the
+   * connection and the approval epoch, not the document — still held.
+   *
+   * `loaderId` alone is the document check, deliberately without the URL:
+   * `history.pushState` rewrites `frameTree.frame.url` while the loaderId holds
+   * (measured), and that is how every SPA navigates, so comparing the URL would
+   * refuse an ordinary click on Gmail, Linear and the cell-to-cell moves
+   * `webapp-templates/gsheets.yaml` tells the model to reuse an id across.
+   * `readTopFrame`'s own docblock already says this, and `snapshot()`'s
+   * `sameDocument` already compares the loaderId alone.
+   *
+   * `frameStamp` is the whole tree's digest, because a same-origin SUBFRAME can
+   * commit a document of its own while the main frame's loaderId never moves
+   * (measured) — and the snapshot walks subframes, so an in-frame coordinate
+   * would then point into a destroyed document. Only ids the snapshot marked as
+   * coming from a subframe are held to it: an unrelated advertising iframe
+   * reloading must not refuse a click on a main-document element.
+   *
+   * Empty `loaderId` means "no usable snapshot", and every reader refuses.
+   */
+  private elementDoc: { loaderId: string; frameStamp: string } = { loaderId: '', frameStamp: '' };
+  /** The ids the snapshot took from a same-origin subframe. */
+  private elementInFrame = new Set<number>();
+
+  /**
+   * The isolated world the snapshot's element refs live in, retired with its
+   * document (#592).
+   *
+   * One world per document, keyed on the loaderId: `Page.createIsolatedWorld`
+   * mints a fresh world and a fresh V8 context on every call however the name
+   * is reused, and nothing disposes them, so keying on the loaderId is what
+   * stops a context leaking per snapshot. The contextId is a PROMISE so two
+   * callers racing on a cache miss share one world rather than orphaning one.
+   *
+   * A dead contextId is a REFUSAL, never a re-mint-and-retry. That is the
+   * ergonomic "fix" to avoid: re-minting inside one action would silently
+   * re-target whatever document is there now, which is the whole bug. Only a
+   * fresh `snapshot()` may mint a world for a new document.
+   */
+  private elementWorld: { loaderId: string; contextId: Promise<number | null> } | null = null;
 
   private autoLaunch: boolean;
 
@@ -291,6 +378,29 @@ export class BrowserController {
     await this.cdp.send('Page.enable');
     await this.cdp.send('Runtime.enable');
     await this.cdp.send('DOM.enable');
+
+    // Make the page behave as though its window had focus (#592).
+    //
+    // This is a SECURITY control here, not a convenience. Chromium DEFERS a
+    // page's `focus` event while the document itself is unfocused -- the normal
+    // state for an automated browser -- so a page's own focus listener fires
+    // late: after `type()` has focused the reviewed element and verified that
+    // focus, and during the `Input.insertText` that finally gives the document
+    // focus. Measured: without this, a page that steals focus in its listener
+    // received the approved text and `type()`'s pre-insert check saw nothing
+    // wrong; with it, the steal is visible immediately and the type refuses
+    // before a character is sent.
+    //
+    // Best-effort on purpose. It is one layer of three -- the pre-insert check
+    // and the post-insert check (which turns a slip into an honest error rather
+    // than silent success) do not depend on it -- so a browser that does not
+    // support it degrades to detection rather than failing to connect.
+    try {
+      await this.cdp.send('Emulation.setFocusEmulationEnabled', { enabled: true });
+    } catch (err) {
+      console.warn('[BrowserController] focus emulation unavailable; a focus steal will be '
+        + 'reported after the fact rather than refused:', err);
+    }
 
     // Inject stealth scripts for all future navigations
     await this.cdp.send('Page.addScriptToEvaluateOnNewDocument', {
@@ -476,6 +586,157 @@ export class BrowserController {
   }
 
   /**
+   * The main frame's identity AND a digest of every frame's loaderId, from ONE
+   * `Page.getFrameTree` (#592).
+   *
+   * Both halves out of one round trip because the callers need both and reading
+   * them a beat apart would let the identity and the digest describe different
+   * moments -- which is the class of bug this whole change is about. Frame ids
+   * are in the digest too, so a frame appearing or disappearing counts: an
+   * iframe replaced by a new one with a coincidentally equal loaderId is not
+   * the same page.
+   *
+   * Mirrors `frameTreeState` in sidecar/browser_snapshot.go; the two guard the
+   * same contract on the two browsers.
+   */
+  private async readFrameState(): Promise<{ url: string; loaderId: string; frameStamp: string }> {
+    const tree = await this.cdp.send('Page.getFrameTree');
+    const url = String(tree?.frameTree?.frame?.url ?? '');
+    const loaderId = String(tree?.frameTree?.frame?.loaderId ?? '');
+    if (url) this.lastReportedUrl = url;
+    return { url, loaderId, frameStamp: frameTreeStamp(tree?.frameTree) };
+  }
+
+  /**
+   * Refuse when the element an action names was minted in a document the
+   * browser has since left (#592).
+   *
+   * Returns an error message for the caller to hand back, or null to proceed.
+   * Called by every method that reads `elementCoords` -- `click`, `hover` and
+   * `type` -- before it dispatches anything. `uploadFile` is not in that list
+   * and needs no change: it resolves a CSS selector and already gates on the
+   * reviewed origin and a loaderId of its own, which is the model these three
+   * now follow.
+   *
+   * CHECKED AT USE TIME rather than invalidated on a navigation event. The CDP
+   * client does support events and `Page.enable` is already armed, so a
+   * `Page.frameNavigated` subscription was possible -- and rejected: it is racy
+   * by construction (the event need not have arrived when the click fires, so a
+   * check would still be needed here), and the sidecar's half cannot have one
+   * at all, because its event waiters are one-shot and params-less and its
+   * `Page.enable` is best-effort, so an event guard there could silently never
+   * fire. One mechanism that fails closed beats two that disagree.
+   *
+   * Fails closed on a read that throws: an action whose document cannot be
+   * confirmed does not happen.
+   */
+  private async refuseIfDocumentMoved(elementId: number): Promise<string | null> {
+    if (!this.elementDoc.loaderId) {
+      return `Error: Element [${elementId}] not found. Run browser_snapshot first.`;
+    }
+    let now: { url: string; loaderId: string; frameStamp: string };
+    try {
+      now = await this.readFrameState();
+    } catch {
+      return `Error: Could not confirm the browser is still on the page element [${elementId}] came from, so nothing was done. Take a browser_snapshot and try again.`;
+    }
+    // Local content is not acted on either, decided on the reading just taken
+    // so it costs no extra round trip. The sidecar's `refuseStaleElement` does
+    // the same; without it this half would be the only action path that will
+    // click on a `file:` page, with only the request guard behind it (#526).
+    if (isLocalContentUrl(now.url)) {
+      this.forgetSnapshotElements();
+      return `Error: Refusing to act on ${now.url.slice(0, 200)}: the browser does not drive local files.`;
+    }
+    if (!now.loaderId || now.loaderId !== this.elementDoc.loaderId) {
+      // Drop the map on the way out, so the next call fails the same way
+      // without another round trip, and nothing stale is left clickable.
+      this.forgetSnapshotElements();
+      return `Error: The page navigated to a new document, so element [${elementId}] from the previous snapshot no longer exists. Take a browser_snapshot first.`;
+    }
+    if (this.elementInFrame.has(elementId) && now.frameStamp !== this.elementDoc.frameStamp) {
+      return `Error: Element [${elementId}] came from a frame, and a frame in this page has since navigated, so its position can no longer be trusted. Take a browser_snapshot first.`;
+    }
+    return null;
+  }
+
+  /**
+   * Whether the element the snapshot called `elementId` holds focus right now,
+   * asked in the isolated world (#592).
+   *
+   * Resolves the id through the same stored ref the focus used, so this cannot
+   * become a second opinion about WHICH element -- it asks only about focus.
+   *
+   * EXACT equality, and a shadow root that has taken focus is not focus on the
+   * element: `activeElement` is the host when focus is inside its shadow tree.
+   * Same predicate as the focus script, and for the same measured reasons.
+   *
+   * Fails closed: a read that throws, or a world that has gone, is not 'ok'.
+   */
+  private async verifyFocus(elementId: number, contextId: number): Promise<'ok' | 'no'> {
+    try {
+      const result = await this.cdp.send('Runtime.evaluate', {
+        contextId,
+        expression: `(() => {
+          const el = globalThis.__jarvis_elements && globalThis.__jarvis_elements[${elementId - 1}];
+          if (!el || !el.isConnected) return 'no';
+          const ownerDoc = el.ownerDocument || document;
+          if (ownerDoc.activeElement !== el) return 'no';
+          if (el.shadowRoot && el.shadowRoot.activeElement) return 'no';
+          return 'ok';
+        })()`,
+        returnByValue: true,
+      });
+      return result?.result?.value === 'ok' ? 'ok' : 'no';
+    } catch {
+      return 'no';
+    }
+  }
+
+  /**
+   * Forget the last snapshot's elements, coordinates, document and ELEMENT
+   * world.
+   *
+   * Not the narration world: that one holds a geometry read and no element ref,
+   * it is keyed on its own loaderId and replaced on the next read, and it is
+   * not a snapshot artifact -- `forgetNarrationWorld` is its counterpart.
+   */
+  private forgetSnapshotElements(): void {
+    this.elementCoords.clear();
+    this.elementInFrame.clear();
+    this.elementDoc = { loaderId: '', frameStamp: '' };
+    this.elementWorld = null;
+  }
+
+  /**
+   * The execution context of the isolated world holding this document's element
+   * refs, or null when there is none (#592).
+   *
+   * Never falls back to the main world. Re-adding a main-world read as a
+   * fallback would make the vulnerability reachable by any page that can make
+   * `createIsolatedWorld` fail, which is the design's own argument for the
+   * snapshot refusing rather than degrading.
+   */
+  private async elementWorldContext(loaderId: string, frameId: string): Promise<number | null> {
+    if (this.elementWorld?.loaderId !== loaderId) {
+      this.elementWorld = {
+        loaderId,
+        contextId: this.cdp.send('Page.createIsolatedWorld', {
+          frameId,
+          worldName: 'jarvis-elements',
+          grantUniveralAccess: false,
+        }).then((world) => {
+          const id = world?.executionContextId;
+          return typeof id === 'number' ? id : null;
+        }).catch(() => null),
+      };
+    }
+    const contextId = await this.elementWorld.contextId;
+    if (contextId === null) this.elementWorld = null;
+    return contextId;
+  }
+
+  /**
    * The last URL Chrome reported, for a synchronous approval gate. Null when
    * nothing has been reported yet. May be stale: a page that navigated itself
    * since the last navigate or snapshot is not reflected, which is why the
@@ -497,8 +758,19 @@ export class BrowserController {
     // whose frame-tree read failed still shows the model the page, it just
     // reports no browserUrl and so buys no decision.
     //
-    // The loaderId comes with it, for the re-check after the evaluate below.
-    const before = await this.readTopFrame().catch(() => null);
+    // The loaderId comes with it, for the re-check after the evaluate below,
+    // and the frame digest for #592's subframe check. The frame id comes with
+    // it too, because the isolated world is minted per frame.
+    const beforeTree = await this.cdp.send('Page.getFrameTree').catch(() => null);
+    const beforeFrameId = String(beforeTree?.frameTree?.frame?.id ?? '');
+    const before = beforeTree
+      ? (() => {
+        const url = String(beforeTree?.frameTree?.frame?.url ?? '');
+        if (url) this.lastReportedUrl = url;
+        return { url, loaderId: String(beforeTree?.frameTree?.frame?.loaderId ?? '') };
+      })()
+      : null;
+    const beforeStamp = beforeTree ? frameTreeStamp(beforeTree.frameTree) : '';
 
     // A refusal ADDED here, ahead of the page's own claim, not moved: until #572
     // `snapshot()` refused on `data.url` alone, i.e. on what the page said it
@@ -516,19 +788,68 @@ export class BrowserController {
       throw new Error(`Refusing to read ${frameUrl.slice(0, 200)}: the browser does not show local files to the model.`);
     }
 
+    // The document has to be NAMED before its coordinates are worth keeping,
+    // and before the isolated world can be keyed on it (#592). An unnamed frame
+    // tree would fill the map with coordinates every reader must then refuse,
+    // while the model can see the snapshot text and reasonably expects its ids
+    // to work -- not fail-closed to the model, and not usable either. Even
+    // `about:blank` reports a non-empty loaderId once it has committed
+    // (measured), so a nameless main frame is genuinely anomalous.
+    if (!before?.loaderId || !beforeFrameId) {
+      throw new Error('Refusing to read the page: the browser did not name the document it is showing.');
+    }
+
+    // The element refs go in an ISOLATED WORLD, so the page cannot reach them
+    // (#592). REFUSED rather than degraded when no world can be minted: falling
+    // back to a main-world evaluate would put the page-writable global straight
+    // back, reachable by any page that can make createIsolatedWorld fail.
+    const contextId = await this.elementWorldContext(before.loaderId, beforeFrameId);
+    if (contextId === null) {
+      throw new Error('Snapshot failed: could not create the isolated world the element references live in.');
+    }
+
+    // From here on the world may already hold a fresh set of refs -- the
+    // snapshot script arms it as its last statement -- so ANY failure below
+    // must forget BOTH halves rather than leave the world and the coordinate
+    // map describing different readings. A `finally` rather than a clear at
+    // each throw site, so a throw added later cannot skip it.
+    let committed = false;
+    try {
+      return await this.completeSnapshot(contextId, before, beforeStamp, () => { committed = true; });
+    } finally {
+      if (!committed) this.forgetSnapshotElements();
+    }
+  }
+
+  /**
+   * The rest of `snapshot()`, split out only so the caller can wrap it in the
+   * one `finally` that keeps the isolated world and the coordinate map from
+   * describing different readings (#592). `commit` is called once both halves
+   * agree.
+   */
+  private async completeSnapshot(
+    contextId: number,
+    before: { url: string; loaderId: string },
+    beforeStamp: string,
+    commit: () => void,
+  ): Promise<PageSnapshot> {
     const result = await this.cdp.send('Runtime.evaluate', {
       expression: SNAPSHOT_SCRIPT,
       returnByValue: true,
       awaitPromise: true,
+      contextId,
     });
 
     if (result.exceptionDetails) {
       throw new Error(`Snapshot failed: ${JSON.stringify(result.exceptionDetails)}`);
     }
 
-    // The page's answer, and only that: SNAPSHOT_SCRIPT runs in the page's own
-    // world. Typed as its own shape rather than as PageSnapshot so nothing can
-    // read a `browserUrl` off it -- that field is ours to fill, not the page's.
+    // The page's answer, and only that: SNAPSHOT_SCRIPT reads the page's DOM.
+    // The isolated world keeps the page from tampering with the element REFS
+    // and, because a world has its own builtins, with the DOM prototypes the
+    // script reads through -- but the values below still describe a page, and
+    // are typed as their own shape rather than as PageSnapshot so nothing can
+    // read a `browserUrl` off them. That field is ours to fill, not the page's.
     const data = result.result.value as {
       title: string;
       url: string;
@@ -557,10 +878,17 @@ export class BrowserController {
 
     // Store coordinates locally, strip from LLM-facing data
     this.elementCoords.clear();
+    this.elementInFrame.clear();
     const cleanElements: PageElement[] = [];
 
     for (const el of data.elements) {
       this.elementCoords.set(el.id, { x: el.x, y: el.y });
+      // Which frame the element came from, from the marker the snapshot script
+      // already sets. Not forgeable by the page: `iframe` is not in the
+      // script's attribute allowlist, and the marker is written after that loop
+      // (see SNAPSHOT_SCRIPT), so a page can neither suppress it on a framed
+      // element nor add it to a main-document one.
+      if (el.attrs?.iframe === 'true') this.elementInFrame.add(el.id);
       cleanElements.push({
         id: el.id,
         tag: el.tag,
@@ -568,6 +896,15 @@ export class BrowserController {
         attrs: el.attrs,
       });
     }
+    // The document these belong to, so click/hover/type can refuse an id minted
+    // under a document the browser has since left (#592). Recorded from the
+    // PRE-read tree: a subframe that commits while the script is running leaves
+    // the stored digest describing the older tree, so a later action compares
+    // unequal and refuses -- the safe direction.
+    this.elementDoc = { loaderId: before.loaderId, frameStamp: beforeStamp };
+    // Both halves now describe this same reading, so the caller's cleanup must
+    // not undo it.
+    commit();
 
     return {
       title: data.title,
@@ -603,22 +940,27 @@ export class BrowserController {
    * element get the same single point the mouse event goes to, so there is no
    * second centre to compute and disagree over.
    *
-   * These coordinates go stale exactly the way the click's do: nothing clears
-   * them when the PAGE navigates itself (they are dropped on the next
-   * snapshot, on disconnect, and on a stale-CDP reconnect, and nowhere else).
-   * That is deliberate here -- a narration drawn from the same stale numbers
-   * still previews where the click will land, which is the invariant this
-   * accessor exists to hold. Refusing a click on a document nobody reviewed is
-   * a click-path change and belongs in its own issue.
+   * NOT A COMPLETE ANSWER ON ITS OWN, and that changed under this PR: #592 put
+   * `refuseIfDocumentMoved` in front of `click`, `hover` and `type`, so those
+   * now refuse outright once the browser has left the document the ids were
+   * minted under, and `forgetSnapshotElements` drops the map on that path and
+   * on a failed snapshot. The map is still populated while a narration runs,
+   * because a narration resolves on the `tool_call` stream event and the tool
+   * runs after the stream finishes -- so reading this alone would fly the
+   * pebble confidently to a stale coordinate for an action that is about to
+   * refuse. `viewportScreenOrigin` is what closes that: it compares the
+   * document these ids belong to against the one on screen, in the frame-tree
+   * read it already performs, and answers 'moved' instead of an origin. The
+   * pair is the honest answer; this half is the coordinate only.
    *
-   * `type()` is the one reader that goes further: it focuses through the DOM
-   * ref the same snapshot stashed (`__jarvis_elements[id - 1]`) and only falls
-   * back to these coordinates when that ref is gone. Both were minted from the
-   * same kept list in the same pass, so they are the SAME element and the
-   * identity #585 is about holds -- but after a reflow the typing reaches that
-   * element wherever it now is while this point marks where it was. So a
-   * `browser_type` pointer is exact on identity and stale on position, which
-   * is the same trade the click makes and no worse than it.
+   * `type()` reads this map too, but only as a MEMBERSHIP test -- the
+   * coordinate itself is unused there and the element's identity comes from the
+   * isolated-world ref the same snapshot stashed (`__jarvis_elements[id - 1]`).
+   * The coordinate-click fallback that used to make `type` a second reader of
+   * these numbers was deleted by #592, so a `browser_type` pointer marks where
+   * the reviewed element was while the typing reaches it through its ref; after
+   * a reflow within the same document those differ, which is the same trade the
+   * click makes and no worse than it.
    */
   snapshotElementPoint(elementId: number): { x: number; y: number } | null {
     const coords = this.elementCoords.get(elementId);
@@ -638,12 +980,56 @@ export class BrowserController {
   private narrationWorld: { loaderId: string; contextId: Promise<number | null> } | null = null;
 
   /**
+   * Drop the cached narration world, so the next read mints one.
+   *
+   * A counterpart to `forgetSnapshotElements` rather than a line inside it: the
+   * narration world is not a snapshot artifact, and the two are cleared
+   * together only where the CDP session itself goes away. Named so that the two
+   * cleanup sites call a pair of methods instead of repeating a pair of
+   * statements -- that duplication is what made this file conflict on the
+   * merge that landed #592.
+   */
+  private forgetNarrationWorld(): void {
+    this.narrationWorld = null;
+  }
+
+  /**
    * The screen coordinate of the viewport's top-left corner. Null when nothing
-   * is connected or the read fails.
+   * is connected or the read fails, and `'moved'` when the browser has left the
+   * document the last snapshot's ids were minted under.
    *
    * Only `snapshotElementPoint` says WHICH element; this says where the
-   * viewport is on the screen, and it is deliberately element-independent so
-   * that no part of choosing the element can come back through it.
+   * viewport is on the screen. It takes an `elementId` for ONE purpose -- to
+   * ask whether that id was minted inside a frame -- and `elementInFrame` is a
+   * membership test over the ids this controller already minted, exactly as
+   * `type()` uses the coordinate map. So nothing here can pick an element, pick
+   * a different one, or answer anything but yes or no; the geometry it returns
+   * is still the window's and never an element's.
+   *
+   * WHY THE DOCUMENT CHECK LIVES HERE. #592 made `click`, `hover` and `type`
+   * refuse once the document an id was minted under is no longer the one on
+   * screen, so a narration that only read the coordinate map would preview an
+   * action that is about to refuse -- the pebble flying confidently to a stale
+   * point under an unamended label. The sidecar's half already refuses the same
+   * cases (`BROWSER_SNAPSHOT_STALE`, sidecar/browser_element_point.go), so
+   * without this the local and remote narrations would disagree about the same
+   * page, which is #585's own complaint one level down.
+   *
+   * ALL THREE of `refuseIfDocumentMoved`'s document terms are mirrored, not
+   * just the main-frame one: an empty map, a main-frame loaderId change, a
+   * `file:` page, and -- the one most easily missed -- a FRAME digest change
+   * for an id that came from a subframe. A child document can commit while the
+   * main frame's loaderId never moves, so without that term a framed element
+   * after its frame reloaded would still get a confident pointer for a click
+   * that refuses. The fourth term, a frame-tree read that throws, is covered by
+   * this function's own catch returning null.
+   *
+   * Checked in THIS read rather than in a second one, because the read is
+   * already being made for the isolated world's frameId, and
+   * `refuseIfDocumentMoved`'s own rule applies: one mechanism that fails closed
+   * beats two that can disagree. The residual window between this read and the
+   * click is the one #592 already accepts, and its error direction is
+   * over-refusal.
    *
    * Read in an ISOLATED WORLD. The values are the browser's, but a page can
    * install its own `screenX` getter on its main-world `window`, and this
@@ -679,13 +1065,34 @@ export class BrowserController {
    * the code it replaces effectively did, and the CSS-to-platform conversion
    * stays an open, measurable question rather than an unverified multiply.
    */
-  async viewportScreenOrigin(): Promise<{ x: number; y: number } | null> {
+  async viewportScreenOrigin(elementId: number): Promise<{ x: number; y: number } | 'moved' | null> {
     if (!this._connected) return null;
     try {
       const tree = await this.cdp.send('Page.getFrameTree');
       const frameId = tree?.frameTree?.frame?.id;
       const loaderId = String(tree?.frameTree?.frame?.loaderId ?? '');
       if (typeof frameId !== 'string' || !frameId || !loaderId) return null;
+      // Read off the SAME tree, so the three checks below cannot disagree with
+      // each other. `readFrameState` is not reused here on purpose: it writes
+      // `lastReportedUrl`, and a cosmetic narration must not move state the
+      // action path reads.
+      const url = String(tree?.frameTree?.frame?.url ?? '');
+      const frameStamp = frameTreeStamp(tree?.frameTree);
+      // The snapshot's ids describe one document. An empty `elementDoc` is the
+      // same answer as a mismatched one: nothing reviewed is on screen, so
+      // there is no point to preview.
+      if (!this.elementDoc.loaderId || loaderId !== this.elementDoc.loaderId) return 'moved';
+      // The browser does not drive local files, so the action will refuse here
+      // too. The URL itself is never returned or logged from this path.
+      if (isLocalContentUrl(url)) return 'moved';
+      // A subframe can commit a new document while the main frame's loaderId
+      // never moves, which leaves an in-frame coordinate describing a document
+      // that no longer exists. Scoped to in-frame ids, matching the action: an
+      // unrelated advertising iframe reloading must not cost a main-document
+      // element its pointer.
+      if (this.elementInFrame.has(elementId) && frameStamp !== this.elementDoc.frameStamp) {
+        return 'moved';
+      }
       // One isolated world per document, not per narration: createIsolatedWorld
       // mints a fresh world (and a fresh V8 context) on every call however the
       // name is reused, and nothing disposes them. The loaderId changes on
@@ -749,6 +1156,10 @@ export class BrowserController {
     if (!coords) {
       return `Error: Element [${elementId}] not found. Run browser_snapshot first.`;
     }
+    // The coordinates are only the click's input while the document they were
+    // measured in is still the one on screen (#592).
+    const moved = await this.refuseIfDocumentMoved(elementId);
+    if (moved) return moved;
 
     const button = options.button === 'right' ? 'right' : 'left';
 
@@ -801,6 +1212,8 @@ export class BrowserController {
     if (!coords) {
       return `Error: Element [${elementId}] not found. Run browser_snapshot first.`;
     }
+    const moved = await this.refuseIfDocumentMoved(elementId);
+    if (moved) return moved;
 
     // Approach from a nearby point so mouseenter/mouseover always fire,
     // even if the pointer already sat on the target coordinates.
@@ -879,13 +1292,84 @@ export class BrowserController {
     if (!coords) {
       return `Error: Element [${elementId}] not found. Run browser_snapshot first.`;
     }
+    // That lookup is the MEMBERSHIP test and is load-bearing even though the
+    // coordinate itself is unused here: `refuseIfDocumentMoved` never consults
+    // `elementCoords`, so without it `type(9999)` would fall through to the
+    // focus script. Only the element's IDENTITY comes from the ref below, not
+    // from any coordinate.
+    void coords;
+    const moved = await this.refuseIfDocumentMoved(elementId);
+    if (moved) return moved;
 
-    // Focus the element via DOM (more reliable than coordinate click for typing)
+    // The world the refs live in, and it must be THIS document's world. No
+    // world, no typing -- never a main-world read (#592).
+    //
+    // The loaderId comparison is not redundant with the guard above: the world
+    // and the coordinate map are armed at different moments (the snapshot
+    // script arms the world as its last statement, the map is committed after
+    // the re-check), so a snapshot that failed in between could otherwise leave
+    // a world for document B while `elementDoc` still names A.
+    const world = this.elementWorld;
+    const contextId = world && world.loaderId === this.elementDoc.loaderId
+      ? await world.contextId
+      : null;
+    if (contextId === null) {
+      return `Error: Element [${elementId}] cannot be addressed any more. Take a browser_snapshot first.`;
+    }
+
+    // Focus the element via the DOM ref the snapshot stored, in the isolated
+    // world, and VERIFY where focus actually landed before touching the value.
+    //
+    // The verification is the part that closes #592, and an isolated world
+    // alone does not: worlds have their own globals and prototypes but share
+    // the DOM *and its events*, so a page's own `focus` listener still fires
+    // when this calls `el.focus()` and can move focus wherever it likes. That
+    // was measured -- the script returned 'ok', `Input.insertText` landed in the
+    // page's chosen input, and `el.value = ''` had meanwhile emptied the
+    // reviewed one. Hence:
+    //
+    //   - `isConnected` first: focusing a node the page has detached is a no-op
+    //     and the text would follow whatever still had focus (also measured);
+    //   - `activeElement` in the element's OWN document, because for anything
+    //     inside an iframe the top document's activeElement is the iframe;
+    //   - EXACT equality, not `el.contains(active)`. An earlier version allowed
+    //     a descendant "since focusing a contenteditable can land on a child",
+    //     which is measured FALSE -- `activeElement` is the focusable ELEMENT,
+    //     not the caret's node, and it equals `el` for a plain input, a select,
+    //     an anchor, a contenteditable, and a contenteditable WITH element
+    //     children. The allowance bought nothing and was an attack: a page that
+    //     appends its own input inside the reviewed element and focuses it from
+    //     that element's own focus listener received the approved text while
+    //     `type()` reported success (measured);
+    //   - a shadow root that has taken focus is refused, because
+    //     `activeElement` is the HOST when focus is inside its shadow tree, so
+    //     exact equality alone cannot tell "the reviewed element" from "an
+    //     input the page put in its shadow root" (also measured);
+    //   - a frame is never typed "into" at all. An `iframe` can enter the
+    //     snapshot on `[data-testid]`, `[tabindex="0"]` or a role, and focusing
+    //     it sends the text into a document the snapshot never described -- in
+    //     the measured case, one on an opaque origin the top page cannot even
+    //     read;
+    //   - checked BEFORE the clear, so a refused focus cannot empty the field
+    //     the user reviewed either.
+    //
+    // Measured not to cost the legitimate cases: a plain input, a select, a
+    // top-level contenteditable, an input in a same-origin iframe, and a
+    // contenteditable in a 1x1 clipped iframe -- the Google Docs pattern this
+    // suite and sidecar/browser_parity_test.go both assert on -- all pass, and
+    // typing still reaches that editor.
     const focusResult = await this.cdp.send('Runtime.evaluate', {
+      contextId,
       expression: `(() => {
-        const el = window.__jarvis_elements && window.__jarvis_elements[${elementId - 1}];
+        const el = globalThis.__jarvis_elements && globalThis.__jarvis_elements[${elementId - 1}];
         if (!el) return 'not_found';
+        if (!el.isConnected) return 'gone';
+        const tag = el.tagName;
+        if (tag === 'IFRAME' || tag === 'FRAME' || tag === 'OBJECT' || tag === 'EMBED') return 'not_typable';
         el.focus();
+        const ownerDoc = el.ownerDocument || document;
+        if (ownerDoc.activeElement !== el) return 'not_focused';
+        if (el.shadowRoot && el.shadowRoot.activeElement) return 'not_focused';
         const append = ${append};
         if (el.tagName === 'INPUT' || el.tagName === 'TEXTAREA' || el.tagName === 'SELECT') {
           if (append) {
@@ -920,29 +1404,85 @@ export class BrowserController {
       returnByValue: true,
     });
 
+    // Anything but 'ok' REFUSES. The coordinate-click fallback that used to sit
+    // here is gone, and removing it is the fix rather than a casualty of it
+    // (#592).
+    //
+    // Ask when `not_found` was reachable before: overwhelmingly when a
+    // navigation had replaced the document and wiped the page-global the refs
+    // lived in -- so the fallback then coordinate-clicked and typed inside a
+    // document nobody had reviewed, which IS the sibling bug this change is
+    // about, not a recovery from it. With the document guard above, a
+    // navigation refuses before this script runs at all, and with the world
+    // keyed on the loaderId a same-document world is never re-minted, so
+    // `not_found` is very nearly unreachable now.
+    //
+    // `gone` -- a re-render replacing the node -- used to succeed silently and
+    // deliver the approved text to whatever still held focus (measured), so
+    // refusing is strictly better than that, not a regression from working
+    // behaviour. And a coordinate fallback after `gone` would re-open exactly
+    // that leak: the click lands where an element no longer is, focus stays
+    // where it was, and the text follows it.
+    //
+    // The cost is that the model re-snapshots after a re-render, which is what
+    // 83 of the 100 webapp templates already instruct.
     const focusStatus = focusResult?.result?.value;
-    if (focusStatus === 'not_found') {
-      // Fallback: coordinate-based click (element refs may have been lost on navigation)
-      const clickResult = await this.click(elementId);
-      if (clickResult.startsWith('Error:')) return clickResult;
-      await Bun.sleep(200);
-      if (!append) {
-        // Use Ctrl+A as fallback clearing (old behavior)
-        await this.cdp.send('Input.dispatchKeyEvent', {
-          type: 'keyDown', key: 'a', code: 'KeyA',
-          windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: 2,
-        });
-        await this.cdp.send('Input.dispatchKeyEvent', {
-          type: 'keyUp', key: 'a', code: 'KeyA',
-          windowsVirtualKeyCode: 65, nativeVirtualKeyCode: 65, modifiers: 2,
-        });
+    if (focusStatus !== 'ok') {
+      switch (focusStatus) {
+        case 'gone':
+          return `Error: Element [${elementId}] has been removed from the page, so nothing was typed. Take a browser_snapshot first.`;
+        case 'not_typable':
+          return `Error: Element [${elementId}] is a frame, not a field, so nothing was typed. Take a browser_snapshot and name an element inside it instead.`;
+        case 'not_focused':
+          return `Error: Element [${elementId}] did not take focus -- the page moved focus elsewhere -- so nothing was typed. Take a browser_snapshot and check the page.`;
+        default:
+          return `Error: Element [${elementId}] is no longer addressable, so nothing was typed. Take a browser_snapshot first.`;
       }
-    } else {
-      await Bun.sleep(200);
+    }
+    await Bun.sleep(200);
+
+    // RE-VERIFY focus immediately before the insert, and again after it.
+    //
+    // The check inside the focus script is necessary but NOT sufficient, and
+    // this is the part that was measured rather than reasoned about: Chromium
+    // DEFERS the focus event when the document itself is not focused -- which
+    // is the normal state for an automated browser -- so a page's `focus`
+    // listener can fire after `el.focus()` has returned. With only the
+    // in-script check, the reviewed element was still `activeElement` at check
+    // time, the script said 'ok', the steal landed during the settle, and the
+    // approved text went to the page's chosen input while `type()` reported
+    // success. That is #592's own sentence, so the window has to be closed
+    // where it actually is: around the insert.
+    //
+    // Bracketing NARROWS the window to a single local CDP round trip; it does
+    // not eliminate it, and it should not be read as doing so. The bracket
+    // samples two instants, so a page that steals focus and restores it only
+    // has to be absent at those two samples -- and it has a usable clock (the
+    // focus event it received, then this fixed settle) and a completion signal
+    // (the `input` event on its own element). That race is narrow and needs
+    // precise timing; what it is NOT is impossible.
+    //
+    // The checks that do not depend on timing are the ones in the focus script:
+    // exact `activeElement` equality, no shadow tree holding focus, and no
+    // frame. Those refuse a page-chosen destination without any race at all,
+    // which is why they matter more than this bracket.
+    const stillFocused = await this.verifyFocus(elementId, contextId);
+    if (stillFocused !== 'ok') {
+      return `Error: Element [${elementId}] lost focus before anything was typed -- the page moved focus elsewhere -- so nothing was typed. Take a browser_snapshot and check the page.`;
     }
 
-    // Insert text (like paste — much more reliable than char-by-char)
+    // Insert text (like paste — much more reliable than char-by-char).
+    // Reached only with focus verified on the reviewed element, in the reviewed
+    // document, immediately beforehand.
     await this.cdp.send('Input.insertText', { text });
+
+    const heldFocus = await this.verifyFocus(elementId, contextId);
+    if (heldFocus !== 'ok') {
+      // The text has already gone somewhere. Nothing can un-type it, so the one
+      // thing that must not happen is reporting success: a silent wrong
+      // delivery is exactly what #592 is about.
+      return `Error: Element [${elementId}] lost focus while the text was being typed, so the text may have gone to another element. Take a browser_snapshot and check the page before retrying.`;
+    }
 
     let result = `${append ? 'Appended' : 'Typed'} "${text}" into element [${elementId}]`;
 
@@ -1141,8 +1681,8 @@ export class BrowserController {
     if (this._connected) {
       await this.cdp.close();
       this._connected = false;
-      this.elementCoords.clear();
-      this.narrationWorld = null;
+      this.forgetSnapshotElements();
+      this.forgetNarrationWorld();
       console.log('[BrowserController] Disconnected');
     }
 
@@ -1174,8 +1714,8 @@ export class BrowserController {
       console.warn('[BrowserController] CDP connection stale, reconnecting...');
       await this.cdp.close();
       this._connected = false;
-      this.elementCoords.clear();
-      this.narrationWorld = null;
+      this.forgetSnapshotElements();
+      this.forgetNarrationWorld();
     }
 
     if (!this._connected) {

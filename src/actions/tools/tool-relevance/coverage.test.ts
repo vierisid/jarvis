@@ -133,6 +133,13 @@ describe('daemon-registered tool classification', () => {
   const EXPECTED_RUNTIME: Record<string, { category: string; reach: OutsideReach }> = {
     // fetch: `run` executes a composed workflow that can hold an HTTP step,
     // and `get_run` returns those step outputs. The model picks the workflow.
+    //
+    // `get_run`, `list_runs` and `get` now FRAME what they return (#582), but
+    // the reach stays `fetch` and that is the point: `outsideReach` derives
+    // `framed` from `isUntrustedSourceTool`, and #582 deliberately framed at
+    // the tool's own model boundary instead of joining `UNTRUSTED_TOOL_NAMES`,
+    // so `FRAMED_ACTORS` and the I1 union repair stay out of it. This entry
+    // changing would mean that decision was reversed.
     manage_workflow: { category: 'automation', reach: 'fetch' },
     // fetch: a sub-agent browses and reports in its own unwrapped words, and
     // the model writes the task, so it aims it. Authority level is 1

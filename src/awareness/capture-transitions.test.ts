@@ -52,7 +52,7 @@ test('serialized captures preserve a real transition and the ended session ident
   await capture(1, 'Editor', 'Draft - Editor');
   const firstSession = service.getCurrentSession()!.id;
   await capture(2, 'Browser', 'Inbox - Browser');
-  expect(transitions()).toEqual([{ type: 'context_changed', timestamp: time + 200,
+  expect(transitions()).toEqual([{ type: 'context_changed', schemaVersion: 1, timestamp: time + 200,
     data: { fromApp: 'Editor', toApp: 'Browser', fromWindow: 'Draft - Editor', toWindow: 'Inbox - Browser' } }]);
   expect(service.getCurrentSession()!.id).not.toBe(firstSession);
   expect(getSession(firstSession)!.ended_at).not.toBeNull();

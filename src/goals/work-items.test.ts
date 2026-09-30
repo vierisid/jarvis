@@ -35,7 +35,7 @@ afterEach(() => { closeDb(); rmSync(directory, { recursive: true, force: true })
 function restart() { closeDb(); initDatabase(dbPath); ensureWorkflowSchema(); }
 function workflow() {
   const flow = createFlow();
-  const version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: 'Deliver report' }).id);
+  const version = lockVersion(createDraftVersion({ flowId: flow.id, displayName: 'Deliver report', trigger: { name: 'trigger', type: 'EMPTY' } }).id);
   setPublishedVersion(flow.id, version.id);
   return { flow, version };
 }
@@ -301,7 +301,7 @@ describe('Today work trace', () => {
     expect(decision.status).toBe(200);
     const decisionId = decision.body.decision.id;
     // Publishing a newer definition must never change what was accepted.
-    const newer = lockVersion(createDraftVersion({ flowId: flow.id, displayName: 'New report' }).id);
+    const newer = lockVersion(createDraftVersion({ flowId: flow.id, displayName: 'New report', trigger: { name: 'trigger', type: 'EMPTY' } }).id);
     setPublishedVersion(flow.id, newer.id);
     const started = await runRoute(flow.id, { workItemId: id });
     expect(started.status).toBe(202);

@@ -118,6 +118,14 @@ func makeBrowserAXSnapshotHandler(cfg *SidecarConfig) RPCHandler {
 
 		elements := buildAXElements(tree.Nodes)
 
+		// `url` here is the PAGE'S CLAIM (`location.href`), not the browser's
+		// answer, and it is NOT eligible to select a site playbook -- that is
+		// `page_url` on the snapshot reply, which comes from the frame tree
+		// (#583, browser_snapshot.go). Two object-shaped browser replies now
+		// carry a URL-ish field, and a daemon-side decoder that keys on "a url
+		// in an object reply" instead of on `page_url` plus a non-empty
+		// `loader_id` would hand a page its own choice of playbook again (#572).
+		// `checked.url` is in scope here if this path ever needs the real thing.
 		return &RPCResult{Result: map[string]any{
 			"provider":      "cdp",
 			"url":           pageInfo["url"],

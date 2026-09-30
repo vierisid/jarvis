@@ -201,7 +201,8 @@ async function evalInScope(js: string, contextAsScope: Record<string, unknown>, 
             scriptContext: contextAsScope,
             functions,
         })
-        return result ?? ''
+        if (result === undefined) throw new Error('Workflow reference resolved to an absent value; supply a value or an explicit fallback')
+        return result
     }))
 
     if (resultError) {

@@ -141,7 +141,14 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config build-essential
+          # libx11-dev/libx11-xcb-dev/libxcb1-dev are named explicitly for
+          # `#cgo pkg-config: x11 x11-xcb xcb` in hotkeys_linux.go (#577). They
+          # arrive transitively through the GTK stack today, so this is a no-op
+          # on the current runner image -- which is the reason to name them:
+          # a cgo build that fails because an indirect dependency was dropped
+          # upstream is an awful thing to debug.
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev pkg-config build-essential \
+            libx11-dev libx11-xcb-dev libxcb1-dev
           for d in /usr/lib/*/pkgconfig; do
             [ -f "$d/webkit2gtk-4.1.pc" ] && sudo ln -sf "$d/webkit2gtk-4.1.pc" "$d/webkit2gtk-4.0.pc" || true
             [ -f "$d/javascriptcoregtk-4.1.pc" ] && sudo ln -sf "$d/javascriptcoregtk-4.1.pc" "$d/javascriptcoregtk-4.0.pc" || true

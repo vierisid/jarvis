@@ -134,7 +134,7 @@ describe("atomic workflow publication", () => {
     test(`rejects another flow's ${state} version without mutating either flow`, async () => {
       const a = fixture("A");
       const b = fixture();
-      const published = lockVersion(createDraftVersion({ flowId: a.flow.id, displayName: "Previous publication" }).id);
+      const published = lockVersion(createDraftVersion({ flowId: a.flow.id, displayName: "Previous publication", trigger: { name: "trigger", type: "EMPTY" } }).id);
       setPublishedVersion(a.flow.id, published.id);
       if (state === "LOCKED") lockVersion(b.version.id);
       const before = snapshot();
@@ -181,7 +181,7 @@ describe("atomic workflow publication", () => {
 
   test("empty object selects the newest owned draft even when another flow was edited later", async () => {
     const a = fixture("A");
-    const newer = createDraftVersion({ flowId: a.flow.id, displayName: "Newer A" });
+    const newer = createDraftVersion({ flowId: a.flow.id, displayName: "Newer A", trigger: { name: "trigger", type: "EMPTY" } });
     const b = fixture();
     getWorkflowDb().run("UPDATE flow_version SET updated = 1 WHERE id = ?", [a.version.id]);
     getWorkflowDb().run("UPDATE flow_version SET updated = 2 WHERE id = ?", [newer.id]);

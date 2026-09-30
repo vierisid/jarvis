@@ -12,6 +12,7 @@ import type { Database } from "bun:sqlite";
 import { getWorkflowDb } from "../index";
 import { apId } from "../ids";
 import { touchFlow } from "./flow";
+import { assertLiveDraftReady, graphReadiness } from './flow-readiness';
 import { assertCodeStepsAllowedForLiveDraft } from "./flow-code-steps";
 
 export type FlowVersionState = "DRAFT" | "LOCKED";
@@ -224,6 +225,7 @@ export function createDraftVersion(input: CreateDraftVersionInput): FlowVersion 
   // A new draft becomes the LATEST draft, which is the version an ENABLED
   // flow with nothing published actually runs. See the gate's own comment.
   assertCodeStepsAllowedForLiveDraft(input.flowId, trigger);
+  assertLiveDraftReady(input.flowId, trigger);
   db().run(
     `INSERT INTO flow_version (
       id, flow_id, display_name, trigger, state, valid, schema_version, updated_by,
@@ -284,12 +286,16 @@ export function updateDraftVersion(id: string, patch: UpdateDraftVersionInput): 
   // A draft is mutated in place, so writing a CODE step into the draft an
   // ENABLED flow is already running would deploy it without passing publish.
   if (patch.trigger !== undefined) assertCodeStepsAllowedForLiveDraft(existing.flow_id, patch.trigger);
+  // Even a rename can make an older draft the latest live version.
+  assertLiveDraftReady(existing.flow_id, patch.trigger ?? JSON.parse(existing.trigger));
 
   const next: FlowVersionRow = {
     ...existing,
     display_name: patch.displayName ?? existing.display_name,
     trigger: patch.trigger ? JSON.stringify(patch.trigger) : existing.trigger,
-    valid: patch.valid !== undefined ? (patch.valid ? 1 : 0) : existing.valid,
+    // A client-supplied valid=true is not evidence. This is a cached authoring
+    // result only; activation always recompiles against current bindings.
+    valid: graphReadiness(existing.flow_id, patch.trigger ?? JSON.parse(existing.trigger)).ready ? 1 : 0,
     agent_ids: patch.agentIds ? JSON.stringify(patch.agentIds) : existing.agent_ids,
     connection_ids: patch.connectionIds
       ? JSON.stringify(patch.connectionIds)

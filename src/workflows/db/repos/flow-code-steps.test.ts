@@ -1,3 +1,5 @@
+import { configureWorkflowReadiness } from './flow-readiness';
+import { PieceCatalog } from '../../runtime/piece-catalog';
 /**
  * The CODE-step gate: item 3 of #467.
  *
@@ -148,6 +150,10 @@ let refreshed: string[];
 
 beforeEach(() => {
   initWorkflowDb(":memory:");
+  configureWorkflowReadiness({ pieces: new PieceCatalog([
+    { name: 'p', displayName: '', description: '', actions: { a: { name: 'a', displayName: '', description: '' } } },
+    { name: '@activepieces/piece-slack', displayName: '', description: '', actions: { send_channel_message: { name: 'send_channel_message', displayName: '', description: '' } } },
+  ]) });
   refreshed = [];
   routes = createWorkflowRoutes({
     triggerManager: {
@@ -568,6 +574,10 @@ describe("existing flows are grandfathered on upgrade", () => {
     const path = join(directory, "legacy.db");
     try {
       initWorkflowDb(path);
+  configureWorkflowReadiness({ pieces: new PieceCatalog([
+    { name: 'p', displayName: '', description: '', actions: { a: { name: 'a', displayName: '', description: '' } } },
+    { name: '@activepieces/piece-slack', displayName: '', description: '', actions: { send_channel_message: { name: 'send_channel_message', displayName: '', description: '' } } },
+  ]) });
       const seeded = seed();
       // Rewind to the pre-gate shape, then upgrade on a fresh connection the
       // way daemon startup does (Bun caches a `SELECT *` column map per
@@ -578,6 +588,10 @@ describe("existing flows are grandfathered on upgrade", () => {
       db.exec("ALTER TABLE flow DROP COLUMN code_steps_enabled");
       closeWorkflowDb();
       initWorkflowDb(path);
+  configureWorkflowReadiness({ pieces: new PieceCatalog([
+    { name: 'p', displayName: '', description: '', actions: { a: { name: 'a', displayName: '', description: '' } } },
+    { name: '@activepieces/piece-slack', displayName: '', description: '', actions: { send_channel_message: { name: 'send_channel_message', displayName: '', description: '' } } },
+  ]) });
       createSchema(getWorkflowDb());
       assert(seeded);
     } finally {

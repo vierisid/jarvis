@@ -71,54 +71,26 @@ export function parseEveryExpression(expression: string): number | null {
  */
 function parseField(field: string, min: number, max: number): number[] {
   const values = new Set<number>();
-
   for (const part of field.split(',')) {
-    const trimmed = part.trim();
-
-    // Wildcard: *
-    if (trimmed === '*') {
-      for (let i = min; i <= max; i++) values.add(i);
-      continue;
+    const match = /^(\*|\d+(?:-\d+)?)(?:\/(\d+))?$/.exec(part);
+    if (!match) throw new Error(`Invalid cron field: "${part}"`);
+    const range = match[1]!;
+    const step = match[2] === undefined ? 1 : Number(match[2]);
+    const [a, b] = range.split('-').map(Number);
+    const start = range === '*' ? min : a!;
+    const end = range === '*' ? max : b ?? (match[2] === undefined ? start : max);
+    if (!Number.isSafeInteger(step) || step <= 0 || start < min || end > max || start > end) {
+      throw new Error(`Invalid cron field: "${part}" (expected ${min}-${max}, ascending ranges and positive steps)`);
     }
-
-    // Step: */n or start/n
-    if (trimmed.includes('/')) {
-      const [rangeStr, stepStr] = trimmed.split('/');
-      const step = parseInt(stepStr!, 10);
-      if (isNaN(step) || step <= 0) throw new Error(`Invalid step in cron field: "${trimmed}"`);
-
-      let rangeMin = min;
-      let rangeMax = max;
-
-      if (rangeStr !== '*') {
-        if (rangeStr!.includes('-')) {
-          const [a, b] = rangeStr!.split('-').map(s => parseInt(s, 10));
-          rangeMin = a!;
-          rangeMax = b!;
-        } else {
-          rangeMin = parseInt(rangeStr!, 10);
-        }
-      }
-
-      for (let i = rangeMin; i <= rangeMax; i += step) values.add(i);
-      continue;
-    }
-
-    // Range: a-b
-    if (trimmed.includes('-')) {
-      const [a, b] = trimmed.split('-').map(s => parseInt(s, 10));
-      if (isNaN(a!) || isNaN(b!)) throw new Error(`Invalid range in cron field: "${trimmed}"`);
-      for (let i = a!; i <= b!; i += 1) values.add(i);
-      continue;
-    }
-
-    // Literal value
-    const val = parseInt(trimmed, 10);
-    if (isNaN(val)) throw new Error(`Invalid value in cron field: "${trimmed}"`);
-    values.add(val);
+    for (let i = start; i <= end; i += step) values.add(i);
   }
 
   return Array.from(values).sort((a, b) => a - b);
+}
+
+/** The same parser used by scheduling, without registering a timer. */
+export function validateCronExpression(expression: string): void {
+  if (parseEveryExpression(expression) === null) parseExpression(expression);
 }
 
 /**
@@ -138,13 +110,22 @@ function parseExpression(expression: string): {
 
   const [minField, hourField, domField, monthField, dowField] = parts;
 
-  return {
+  const parsed = {
     minutes: parseField(minField!, 0, 59),
     hours: parseField(hourField!, 0, 23),
     daysOfMonth: parseField(domField!, 1, 31),
     months: parseField(monthField!, 1, 12),
-    daysOfWeek: parseField(dowField!, 0, 6),  // 0 = Sunday
+    // Expand ranges/steps before folding the Sunday alias, so 1-7 and
+    // 1-7/2 retain their ordinary cron meaning.
+    daysOfWeek: [...new Set(parseField(dowField!, 0, 7).map(day => day % 7))].sort((a, b) => a - b),
   };
+  // Include leap-day schedules, but refuse impossible dates such as February
+  // 31. The runtime matches DOM and month together, just like this check.
+  const maxDays = [31, 29, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
+  if (!parsed.months.some(month => parsed.daysOfMonth.some(day => day <= maxDays[month - 1]!))) {
+    throw new Error('Invalid cron expression: selected days do not exist in the selected months');
+  }
+  return parsed;
 }
 
 // ── Timezone support ──

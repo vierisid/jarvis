@@ -17,19 +17,10 @@
  * Latency: the polling cadence is once a minute (`* * * * *`). Events surface
  * within ~60 seconds of being published to the daemon's event buffer.
  *
- * Why not sub-minute: Jarvis's own CronScheduler supports an `@every <n>(s|m|h)`
- * extension, BUT the engine validates a trigger's cron with `cron-validator`'s
- * `isValidCron` inside `setSchedule` BEFORE Jarvis's scheduler ever sees it --
- * and that validator only accepts standard 5-field cron, so `@every 10s` throws
- * InvalidCronExpressionError and the whole ON_ENABLE hook fails with
- * USER_FAILURE (the trigger never registers). A standard 5-field cron is the
- * only expression both validators accept, and its finest granularity is one
- * minute. Going sub-minute would require teaching the engine validator about
- * the `@every` extension (a vendored-engine patch).
- *
- * If 60s is too slow for a use case (voice intents, sub-second reactions), the
- * alternative is bypassing the polling-trigger machinery entirely and having
- * the daemon push events directly into RUN_FLOW jobs -- bigger lift.
+ * The native trigger hook and daemon scheduler share Jarvis's cron validator,
+ * including Sunday 7 and the bounded @every extension. This trigger retains
+ * its existing one-minute cadence; changing validation does not change polling
+ * frequency for existing workflows.
  */
 
 import {
@@ -40,10 +31,7 @@ import {
 } from "@activepieces/pieces-framework";
 
 const CURSOR_KEY = "jarvis-trigger:on-event:since";
-// Standard 5-field cron (every minute). MUST stay standard cron: the engine's
-// setSchedule rejects non-standard syntax (e.g. `@every 10s`) via isValidCron,
-// which fails ON_ENABLE and prevents the trigger from registering. See the
-// file header for the full rationale.
+// Keep the existing one-minute event polling cadence.
 const POLL_CADENCE_CRON = "* * * * *";
 
 interface PollResponse {

@@ -1,8 +1,9 @@
 import { describe, test, expect, beforeEach } from 'bun:test';
 import { initDatabase } from '../../vault/schema.ts';
 import { upsertWebappTemplate } from '../../vault/webapp-templates.ts';
-import { WebappTemplateDelivery } from './webapp-template-injection.ts';
+import { WebappTemplateDelivery, usablePageUrl } from './webapp-template-injection.ts';
 import { splitToolReturn, toolReturnText } from '../../roles/untrusted.ts';
+import { withTemplateDeliveryScope, withoutTemplateDelivery } from './template-delivery-scope.ts';
 
 /**
  * The delivery's output as ONE string.
@@ -222,6 +223,120 @@ describe('WebappTemplateDelivery', () => {
       .toContain('You are now on TestApp');
     expect(delivered(backgroundAgent, SNAPSHOT('https://app.test.com/'), 'https://app.test.com/'))
       .toContain('You are now on TestApp');
+  });
+
+  /**
+   * #586. The instance was the only scope, and one instance serves nearly
+   * everything: the daemon registers the module-level browser tools into a
+   * single ToolRegistry, so chat, the approval executor, every workflow step and
+   * every delegated sub-agent shared one 30-minute memory. A snapshot taken by
+   * any of them silently suppressed the chat model's playbook.
+   */
+  describe('delivery scopes (#586)', () => {
+    test('a suppressed scope never delivers and never spends the slot', () => {
+      const snap = SNAPSHOT('https://app.test.com/inbox');
+      expect(withoutTemplateDelivery(() => delivered(delivery, snap, 'https://app.test.com/inbox'))).toBe(snap);
+      // The chat, which CAN place the trailer outside the block, still gets it.
+      expect(delivered(delivery, snap, 'https://app.test.com/inbox')).toContain('You are now on TestApp');
+    });
+
+    test('a suppressed scope records nothing at all, not even a scope', () => {
+      // Stronger than "the chat still gets its copy": a suppressed call leaves
+      // NO trace, so it cannot spend a slot and cannot grow the map either.
+      // An implementation that resolved the template and returned late would
+      // pass the test above; it fails this one.
+      const snap = SNAPSHOT('https://app.test.com/inbox');
+      withoutTemplateDelivery(() => delivered(delivery, snap, 'https://app.test.com/inbox'));
+      withoutTemplateDelivery(() =>
+        withTemplateDeliveryScope('sub-agent:a', () =>
+          withoutTemplateDelivery(() => delivered(delivery, snap, 'https://app.test.com/inbox'))));
+      expect(delivery.scopeCountForTests()).toBe(0);
+      expect(delivered(delivery, snap, 'https://app.test.com/inbox')).toContain('You are now on TestApp');
+    });
+
+    test('a named scope cannot be spelled to reach the default scope', () => {
+      // The key a named scope lands under is namespaced, so an id that happens
+      // to read like the default one does not suppress the chat's copy. Not
+      // reachable today (the ids are generated), which is exactly when to fix
+      // it -- the reason this module has scopes is that a later id may be a
+      // name somebody chose.
+      const snap = SNAPSHOT('https://app.test.com/');
+      expect(withTemplateDeliveryScope('default', () => delivered(delivery, snap, 'https://app.test.com/')))
+        .toContain('You are now on TestApp');
+      expect(delivered(delivery, snap, 'https://app.test.com/')).toContain('You are now on TestApp');
+    });
+
+    test('a named scope neither suppresses the default scope nor is suppressed by it', () => {
+      const snap = SNAPSHOT('https://app.test.com/');
+      // The sub-agent browses first...
+      expect(withTemplateDeliveryScope('sub-agent:a', () => delivered(delivery, snap, 'https://app.test.com/')))
+        .toContain('You are now on TestApp');
+      // ...and the chat still gets its own copy.
+      expect(delivered(delivery, snap, 'https://app.test.com/')).toContain('You are now on TestApp');
+      // A second sub-agent is its own conversation too.
+      expect(withTemplateDeliveryScope('sub-agent:b', () => delivered(delivery, snap, 'https://app.test.com/')))
+        .toContain('You are now on TestApp');
+      // And within one scope the TTL still holds -- the point of scoping is not
+      // to re-stuff a model with the same playbook every snapshot.
+      expect(withTemplateDeliveryScope('sub-agent:a', () => delivered(delivery, snap, 'https://app.test.com/')))
+        .not.toContain('You are now on TestApp');
+    });
+
+    test('suppression nests inside a named scope', () => {
+      // The durable effect boundary suppresses within a sub-agent's run: the
+      // innermost caller is the one that knows the trailer will be collapsed.
+      const snap = SNAPSHOT('https://app.test.com/');
+      expect(withTemplateDeliveryScope('sub-agent:a',
+        () => withoutTemplateDelivery(() => delivered(delivery, snap, 'https://app.test.com/')))).toBe(snap);
+      // Nothing was spent, so the sub-agent's own next read still delivers.
+      expect(withTemplateDeliveryScope('sub-agent:a', () => delivered(delivery, snap, 'https://app.test.com/')))
+        .toContain('You are now on TestApp');
+    });
+
+    test('an expired entry is dropped rather than accumulating per scope', () => {
+      // The scope dimension is unbounded in the number of sub-agent runs, and
+      // the daemon stays up for weeks. An entry past its TTL would re-deliver
+      // on sight anyway, so pruning it on write changes no behaviour.
+      const snap = SNAPSHOT('https://app.test.com/');
+      for (let i = 0; i < 50; i++) {
+        withTemplateDeliveryScope(`sub-agent:${i}`, () => delivered(delivery, snap, 'https://app.test.com/'));
+      }
+      delivery.backdate(templateId, Date.now() - 31 * 60_000);
+      // One more write prunes every expired entry, including its own scope's.
+      expect(withTemplateDeliveryScope('sub-agent:fresh', () => delivered(delivery, snap, 'https://app.test.com/')))
+        .toContain('You are now on TestApp');
+      expect(delivery.scopeCountForTests()).toBe(1);
+    });
+  });
+
+  /**
+   * The validator's own contract, tested directly rather than through a caller.
+   *
+   * `usablePageUrl` is annotated `string | null`, and TypeScript erases that at
+   * runtime -- while one of its callers is now a reply from another machine
+   * (#583). Every gate inside it COERCES rather than rejects: arrays have
+   * `.length`, `RegExp.test` stringifies its argument, and so does `new URL()`.
+   * So `['https://app.test.com/']` would satisfy all three and select TestApp's
+   * playbook. The wire decoder in sidecar-route.ts checks the types too, but a
+   * validator that is only correct because of who calls it is not a validator.
+   */
+  describe('usablePageUrl refuses anything that is not a string', () => {
+    for (const [label, value] of [
+      ['an array holding a good URL', ['https://app.test.com/']],
+      ['an object that stringifies to one', { toString: () => 'https://app.test.com/' }],
+      ['a boxed string', new String('https://app.test.com/')],
+      ['a number', 12345],
+      ['a boolean', true],
+      ['an object', {}],
+    ] as const) {
+      test(label, () => {
+        expect(usablePageUrl(value as unknown as string)).toBeNull();
+      });
+    }
+
+    test('and still accepts the real thing, so the guard is not just refusing everything', () => {
+      expect(usablePageUrl('https://app.test.com/inbox')).toBe('https://app.test.com/inbox');
+    });
   });
 
   test('reset forgets deliveries', () => {
