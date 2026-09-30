@@ -58,6 +58,7 @@ test('serialized producer transition adds one attributed activity note without c
   expect(notes[0]).toMatchObject({ goal_id: target.id, source: 'awareness',
     score_before: 0.35, score_after: 0.35 });
   expect(notes[0]!.note).toContain('Editor');
+  expect(notes[0]!.note).toContain(`observed at ${new Date(event.timestamp).toISOString()}`);
   expect(vault.getGoal(target.id)).toEqual(before);
   const bundle = buildGoalReviewBundle([before], null);
   expect(bundle.goals[0]!.activity.map(note => note.id)).toContain(`goal_progress:${notes[0]!.id}`);

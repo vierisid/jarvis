@@ -1,4 +1,4 @@
-# Awareness activity to Goals (C2)
+# Awareness activity to Goals
 
 The daemon sends the complete awareness envelope to
 `recordGoalAwarenessActivity`. `src/awareness/activity-events.ts` defines the
@@ -13,9 +13,7 @@ emits `schemaVersion: 1` on the two events consumed by Goals.
 Both envelopes require a finite, nonnegative numeric timestamp. Unversioned
 producer envelopes with those same fields normalize to v1. Unknown versions,
 malformed payloads, unrelated event types and bare payload objects are ignored.
-The old snake-case goal test fixtures were not tracker events and are no longer
-accepted as an implicit alternate contract. Extra summary/OCR/body fields are
-not searched. Departed windows do not count as current activity.
+Extra summary/OCR/body fields are not searched. Departed windows do not count as current activity.
 
 Matching still uses the existing keyword heuristic and active-goal threshold.
 A match is a possible activity association, not proof that work was completed.
@@ -49,12 +47,3 @@ payloads and no hosted model or live desktop.
 bun test src/goals src/awareness src/sidecar/event-types.test.ts src/workflows/runtime/event-types.test.ts
 bunx tsc --noEmit
 ```
-
-## Capture ordering integration
-
-C1's capture ingress ordering and session-identity fixes are included in the
-branch's main base (`841e0bf8`, PR #576). The tracker retains that implementation
-and adds the version field. The capture transition test's exact event assertion
-includes `schemaVersion: 1`; native integration tests are part of this branch,
-not a separate local checkout. The full path can therefore be verified using the
-commands above.

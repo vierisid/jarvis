@@ -95,7 +95,7 @@ export function logAutoDetectedProgress(
       'auto_detected',
       goal.score,
       goal.score, // no automatic score change
-      `Possible goal-related activity: ${match.eventType} via ${match.source} (matched: ${match.matchedTerms.join(', ')}; observed at ${match.observedAt}). This is an activity hint, not verified progress.`,
+      `Possible goal-related activity: ${match.eventType} via ${match.source} (matched: ${match.matchedTerms.join(', ')}; observed at ${new Date(match.observedAt).toISOString()}). This is an activity hint, not verified progress.`,
       'awareness',
     );
   }
