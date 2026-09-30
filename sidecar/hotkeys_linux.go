@@ -243,8 +243,15 @@ static void hk_ungrab_checked(xcb_connection_t* xcb, xcb_window_t root,
 //
 // Returns HK_OK when every variant was granted, HK_REFUSED when at least one
 // was turned down, or HK_CONN_LOST when the connection died under us. The
-// caller owns the cleanup either way; *out_granted always says what is
-// actually held, including on the failure paths, so nothing is left grabbed.
+// caller owns the cleanup either way. On HK_OK and HK_REFUSED, *out_granted
+// says what is actually held, so the caller can release exactly that and leave
+// nothing grabbed.
+//
+// On HK_CONN_LOST it is forced to 0, because nothing is held: every request was
+// discarded and every check came back clean, so the raw value would have read
+// as "all granted" while the server had in fact dropped this client entirely.
+// Left as-is that sentence would invite a future reader to write an ungrab loop
+// over grabs that do not exist.
 //
 // Factored out of jarvisHotkeyCreate so the HK_CONN_LOST path can be tested
 // against a deliberately broken connection without a test hook inside the
@@ -267,6 +274,15 @@ static int hk_grab_variants(xcb_connection_t* xcb, xcb_window_t root, int keycod
                             unsigned int mods, unsigned int* out_granted,
                             unsigned int* out_failed, unsigned char* out_code,
                             unsigned char* out_request) {
+    // Own every out-param rather than relying on the caller to have zeroed
+    // them. The first-error-wins test below READS *out_code, so a caller that
+    // forgot would get a garbage error code reported as an X refusal. Both
+    // current callers do zero them; nothing said they had to.
+    *out_granted = 0;
+    *out_failed  = 0;
+    *out_code    = 0;
+    *out_request = 0;
+
     xcb_void_cookie_t cookies[HK_NVARIANTS];
     for (int i = 0; i < HK_NVARIANTS; i++) {
         cookies[i] = xcb_grab_key_checked(
@@ -317,7 +333,11 @@ static int hk_grab_variants(xcb_connection_t* xcb, xcb_window_t root, int keycod
     //
     // Narrow but reachable, and reachable exactly when it matters: the sidecar
     // re-registers hotkeys around session logout and X server restarts.
-    if (xcb_connection_has_error(xcb)) return HK_CONN_LOST;
+    if (xcb_connection_has_error(xcb)) {
+        // Nothing is held, whatever the checks said -- see the contract above.
+        *out_granted = 0;
+        return HK_CONN_LOST;
+    }
     return failed != 0 ? HK_REFUSED : HK_OK;
 }
 
@@ -348,7 +368,9 @@ static HotkeyResult jarvisHotkeyCreate(unsigned int mods, unsigned long keysym, 
     if (keycode == 0) { XCloseDisplay(dpy); r.stage = HK_NO_KEYCODE; return r; }
 
     // Both allocations happen BEFORE the grabs, so neither failure needs an
-    // ungrab path and neither runs while the error handler is installed.
+    // ungrab path. (This used to add "and neither runs while the error handler
+    // is installed", which stopped meaning anything when #577 removed the
+    // handler.)
     //
     // O_CLOEXEC matters: Go sets it on every fd it opens itself, but a raw
     // pipe() from cgo leaks both ends into every child process. The sidecar
@@ -411,11 +433,17 @@ static HotkeyResult jarvisHotkeyCreate(unsigned int mods, unsigned long keysym, 
         // taking either: the IO handler is process-global and libX11 exits
         // anyway if it returns.
         //
-        // The cost is one leaked Display (tens of KB) and its fd per
-        // occurrence. That is the right trade: the connection is already gone,
-        // the server has dropped every grab this client held, and a leak on a
-        // path that only fires when the X session is dying beats a daemon that
-        // exits when its session hiccups.
+        // The cost is one leaked Display struct (tens of KB) per occurrence.
+        // That is the right trade: the connection is already gone, the server
+        // has dropped every grab this client held, and a leak on a path that
+        // only fires when the X session is dying beats a daemon that exits when
+        // its session hiccups.
+        //
+        // The DESCRIPTOR is not leaked with it, though. Nothing will touch this
+        // Display again, so closing its socket directly is safe, and an fd leak
+        // on a long-lived daemon is worse than the struct: this path fires
+        // exactly when something may be retrying registration in a loop.
+        close(ConnectionNumber(dpy));
         free(hk);
         close(stopfd[0]);
         close(stopfd[1]);
@@ -595,21 +623,32 @@ static void jarvisHotkeyFree(Hotkey* hk) {
         // us and is dropped.
         xcb_connection_t* xcb = XGetXCBConnection(hk->dpy);
         if (xcb && !xcb_connection_has_error(xcb)) {
+            // Checked, and therefore a round trip. Accepted deliberately:
+            // teardown already waits on the server here (XCloseDisplay flushes
+            // on the next line), the measured cost is tens of microseconds, and
+            // the alternative is an unchecked ungrab whose error reaches
+            // _XDefaultError and exits the process. If teardown latency ever
+            // matters, xcb_discard_reply on the cookies would keep the checked
+            // filing without the wait.
             hk_ungrab_checked(xcb, (xcb_window_t)hk->root, hk->keycode, hk->mods, hk->granted);
             XCloseDisplay(hk->dpy);
+        } else {
+            // A connection that has already failed -- or, unreachably now that
+            // the create refuses HK_NO_XCB, one with no xcb at all -- is
+            // deliberately NOT closed. XCloseDisplay flushes, and flushing a
+            // dead socket takes libX11's fatal-IO path and exit()s the sidecar
+            // during its own teardown. The server has dropped this client's
+            // grabs already, so there is nothing to release. Base-commit
+            // behaviour here was to close unconditionally, so this is a crash
+            // removed rather than a leak introduced -- and the descriptor is
+            // reclaimed below, so only the struct is given up.
+            //
+            // Not the common path: if the connection dies while the listener is
+            // running, XPending hits EOF in the run loop and takes the same
+            // fatal route before ever reaching here. This covers the case where
+            // it broke without the loop noticing.
+            close(ConnectionNumber(hk->dpy));
         }
-        // A connection that has already failed is deliberately NOT closed:
-        // XCloseDisplay flushes, and flushing a dead socket takes libX11's
-        // fatal-IO path and exit()s the sidecar during its own teardown. The
-        // server has dropped this client's grabs already, so there is nothing
-        // to release; one leaked Display beats exiting. Base-commit behaviour
-        // here was to close unconditionally, so this is a crash removed rather
-        // than a leak introduced.
-        //
-        // Not the common path: if the connection dies while the listener is
-        // running, XPending hits EOF in the run loop and takes the same fatal
-        // route before ever reaching here. This covers the case where it broke
-        // without the loop noticing.
     }
     close(hk->stopfd[0]);
     close(hk->stopfd[1]);
@@ -641,6 +680,13 @@ static Display* jarvisHotkeyGrabOne(unsigned int mods, unsigned long keysym, int
                              (xcb_keycode_t)keycode,
                              XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC));
     if (e) { free(e); XCloseDisplay(dpy); return NULL; }
+    // Same blind spot as the create, and the same guard: on a dying server the
+    // check comes back clean for a grab that never happened, so this would
+    // return a Display holding nothing and hotkeyHoldOneVariant would report
+    // ok. TestLinuxPartialClashIsRefusedWholesale would then fail with "a
+    // combination whose plain variant is held came back as SUCCESS" -- a
+    // confusing false failure where a skip is the truth.
+    if (xcb_connection_has_error(xcb)) { close(ConnectionNumber(dpy)); return NULL; }
     return dpy;
 }
 
@@ -763,6 +809,13 @@ typedef struct {
 //	B    swallowed by the foreign handler: 0
 //	B    verdict: the create would report REFUSED (correct)
 //
+// It drives hk_grab_variants -- THE FUNCTION jarvisHotkeyCreate CALLS -- and not
+// a copy of it. That matters: a helper that issued its own grab would still pass
+// if the create regressed to XGrabKey plus its own handler tomorrow, so it would
+// guard the mechanism in the abstract while leaving the product path unguarded.
+// The foreign handler is installed around the whole call, which covers the
+// verdict-collection window inside it.
+//
 // The caller must already hold the base variant of `mods` on another
 // connection, or there is no refusal to lose.
 static HkHijackResult jarvisHotkeyGrabUnderHijackedHandler(unsigned int mods, unsigned long keysym) {
@@ -778,29 +831,34 @@ static HkHijackResult jarvisHotkeyGrabUnderHijackedHandler(unsigned int mods, un
     r.usable = 1;
 
     Window root = DefaultRootWindow(dpy);
-    xcb_void_cookie_t ck = xcb_grab_key_checked(xcb, 0, (xcb_window_t)root,
-                                                (uint16_t)mods, (xcb_keycode_t)keycode,
-                                                XCB_GRAB_MODE_ASYNC, XCB_GRAB_MODE_ASYNC);
-    xcb_flush(xcb);
 
+    // Open the trap window BEFORE the requests go out and keep it open across
+    // the verdict, so it spans both the wire and the read. hk_grab_variants
+    // flushes and waits internally; installing the impostor first is what puts
+    // it in place for the read, which is the only moment that decides where the
+    // error goes.
     hk_test_swallowed = 0;
     XErrorHandler saved = XSetErrorHandler(hk_test_swallow_all);
 
-    xcb_generic_error_t* e = xcb_request_check(xcb, ck);
+    unsigned int  granted = 0, failed = 0;
+    unsigned char code = 0, request = 0;
+    int stage = hk_grab_variants(xcb, (xcb_window_t)root, keycode, mods,
+                                 &granted, &failed, &code, &request);
 
     r.handler_calls = hk_test_swallowed;
     XSetErrorHandler(saved);
 
-    if (e) {
+    if (stage == HK_CONN_LOST) { r.usable = 0; close(ConnectionNumber(dpy)); return r; }
+
+    if (failed != 0) {
         r.refused      = 1;
-        r.error_code   = e->error_code;
-        r.request_code = e->major_code;
-        free(e);
-    } else {
-        // We really did get the grab; release it so the test leaves the
-        // combination free for whatever runs next.
-        hk_ungrab_checked(xcb, (xcb_window_t)root, keycode, mods, 1u);
+        r.error_code   = code;
+        r.request_code = request;
     }
+    // Release whatever was granted so the test leaves the combination free for
+    // whatever runs next. On the refusal path this is the lock variants; on the
+    // all-granted path it is everything.
+    hk_ungrab_checked(xcb, (xcb_window_t)root, keycode, mods, granted);
     XCloseDisplay(dpy);
     return r;
 }
@@ -1157,15 +1215,18 @@ func hotkeyGrabOverBrokenConnection(keyspec string) (stage int, ok bool) {
 	return out, true
 }
 
-// hotkeyGrabUnderHijackedHandler asks for keyspec's base variant with a checked
-// request while a foreign X error handler is installed across the round trip --
-// the GDK error-trap window, manufactured rather than waited for.
+// hotkeyGrabUnderHijackedHandler runs the product's own grab function
+// (hk_grab_variants, the one jarvisHotkeyCreate calls) with a foreign X error
+// handler installed across the whole request-and-verdict window -- the GDK
+// error-trap window, manufactured rather than waited for.
 //
 // For TestLinuxCheckedGrabKeepsItsRefusalFromTheGlobalHandler. See the C
-// comment on jarvisHotkeyGrabUnderHijackedHandler for why the window has to be
-// opened at that exact point to mean anything. Nothing in the product calls it.
+// comment on jarvisHotkeyGrabUnderHijackedHandler for why it has to drive the
+// real function rather than issue its own equivalent grab. Nothing in the
+// product calls it.
 //
-// usable is false when there is no display or the layout has no such key.
+// usable is false when there is no display, the layout has no such key, or the
+// connection died (in which case there is no verdict to judge).
 func hotkeyGrabUnderHijackedHandler(keyspec string) (refused bool, errorCode, requestCode uint8, handlerCalls int, usable bool) {
 	mods, keysym, err := parseLinuxKeyspec(keyspec)
 	if err != nil {

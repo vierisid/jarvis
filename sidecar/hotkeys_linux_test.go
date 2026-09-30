@@ -269,7 +269,14 @@ func TestLinuxRefusalSurvivesAStolenErrorHandler(t *testing.T) {
 	defer held()
 
 	// Stand in for GDK for exactly the window the grab occupies.
+	//
+	// t.Cleanup as well as the straight-line call: a panic or a t.Fatal between
+	// the steal and the restore would otherwise leave a swallow-all
+	// XErrorHandler installed process-wide for every later test in this binary,
+	// all of them feeding one shared counter. restore is idempotent, so calling
+	// it twice is free.
 	restore := stealHotkeyErrorHandler()
+	t.Cleanup(func() { restore() })
 	second, secondErr := startHotkeyListener(spec, func() {})
 	caught := restore()
 
