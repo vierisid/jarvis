@@ -14,7 +14,9 @@ import { describe, test, expect, afterEach } from 'bun:test';
 import {
   browserClickTool, browserTypeTool, browserHoverTool,
   browserNavigateTool, browserScrollTool, browserPressKeyTool, browserEvaluateTool,
+  createBrowserTools,
 } from './builtin.ts';
+import { BrowserController } from '../browser/session.ts';
 import { getSidecarManager, setSidecarManagerRef } from './sidecar-route.ts';
 import type { SidecarManager } from '../../sidecar/manager.ts';
 
@@ -49,6 +51,56 @@ describe('#602 the main registry binds a reviewed browser call', () => {
     for (const tool of [browserClickTool, browserTypeTool, browserHoverTool]) {
       const guard = tool.captureApprovalGuard!({ element_id: 2 });
       expect(guard()).toBe(false);
+    }
+  });
+
+  test('an element-addressed tool refuses review against a connected browser with no snapshot', async () => {
+    // The case the cold-browser test above does NOT cover, because that one
+    // fails on the connection term: a browser that IS connected but holds no
+    // ids, which is the state `browser_scroll` leaves behind. An empty surface
+    // would otherwise compare equal to itself and pass.
+    const fake = Bun.serve({
+      port: 0,
+      fetch(req, srv) {
+        const { pathname } = new URL(req.url);
+        if (pathname === '/browser' || pathname === '/page') {
+          if (srv.upgrade(req)) return;
+          return new Response('upgrade failed', { status: 400 });
+        }
+        if (pathname === '/json/version') {
+          return Response.json({ webSocketDebuggerUrl: `ws://127.0.0.1:${srv.port}/browser` });
+        }
+        if (pathname === '/json/list') {
+          return Response.json([{ type: 'page', url: 'about:blank', webSocketDebuggerUrl: `ws://127.0.0.1:${srv.port}/page` }]);
+        }
+        return new Response('not found', { status: 404 });
+      },
+      websocket: { message(ws, raw) { ws.send(JSON.stringify({ id: JSON.parse(String(raw)).id, result: {} })); } },
+    });
+    const ctrl = new BrowserController(fake.port!, undefined, { autoLaunch: false });
+    try {
+      await ctrl.connect();
+      // Connected, never snapshotted: the element-addressed guard must refuse,
+      // and a tool that binds no surface must not.
+      expect(ctrl.captureApprovalGuard(false, { bindDocument: true })()).toBe(false);
+      expect(ctrl.captureApprovalGuard()()).toBe(true);
+    } finally {
+      await ctrl.disconnect();
+      fake.stop(true);
+    }
+  });
+
+  test('the background agent set binds the same way', () => {
+    // createBrowserTools is the sub-agent's set. #602 gave its click/type/hover
+    // the surface binding and let the rest connect lazily, so the two
+    // registries now answer the same question the same way.
+    const tools = createBrowserTools(new BrowserController(1, undefined, { autoLaunch: false }) as never);
+    const guardFor = (name: string) => tools.find((t) => t.name === name)!.captureApprovalGuard!({});
+    for (const name of ['browser_click', 'browser_type', 'browser_hover']) {
+      expect(guardFor(name)()).toBe(false);
+    }
+    for (const name of ['browser_navigate', 'browser_scroll', 'browser_press_key', 'browser_evaluate']) {
+      expect(guardFor(name)()).toBe(true);
     }
   });
 

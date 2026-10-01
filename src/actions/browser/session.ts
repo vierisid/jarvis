@@ -2075,6 +2075,14 @@ export class BrowserController {
     const surface = opts.bindDocument
       ? { loaderId: this.elementDoc.loaderId, gen: this.snapshotGen }
       : null;
+    // AN EMPTY SURFACE IS NOT A SURFACE, and the same rule this change puts in
+    // `assertSamePage` and `documentMovedReason` applies to the thing that
+    // CAPTURES one. Reachable in two ordinary calls: snapshot, then
+    // `browser_scroll` (which drops the ids), then a `browser_click` card --
+    // which would otherwise capture an empty loaderId, match it against itself
+    // at execution, pass, and spend the user's click on "Element [5] not
+    // found". Nothing was reviewed, so there is nothing to approve.
+    if (surface && !surface.loaderId) return () => false;
     return () => {
       if (this.approvalEpoch !== epoch) return false;
       const live = connected
