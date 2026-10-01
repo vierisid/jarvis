@@ -761,19 +761,156 @@ export const getSystemInfoTool: ToolDefinition = {
 
 // --- Browser Tool Helpers ---
 
+// Formatter limits — keep in sync with sidecar/browser_snapshot.go.
+//
+// EVERY limit here counts CODE POINTS (`Array.from`), not UTF-16 units and not
+// bytes (#597). `.slice`/`.length` are UTF-16 units while the sidecar's port
+// sliced the same fields by BYTES, so the two formatters disagreed about the
+// same page the moment it was not ASCII -- and either counting can cut a
+// character in half, which reaches the model as a lone surrogate or a U+FFFD.
+// sidecar/testdata/snapshot_parity_expected.txt is the golden rendering both
+// sides are held to, by a Go test and by snapshot-format-parity.test.ts.
 const MAX_PAGE_TEXT = 2000;   // chars of visible page text
 const MAX_ELEMENTS = 80;      // interactive elements shown to LLM
 const MAX_SAME_ROLE = 15;     // max elements with the same role (e.g., gridcell)
+const MAX_ELEMENT_TEXT = 50;  // chars of an element's own text
+const MAX_ELEMENT_HREF = 80;  // chars of an href
+// Attribute values, and the Key Elements labels built from them. The snapshot
+// script already cuts every attribute at 200 UTF-16 units (never more than 200
+// code points), so this is a bound the formatter holds on its own rather than a
+// second cut of the same value.
+const MAX_ELEMENT_ATTR = 200;
 
-function formatSnapshot(snap: PageSnapshot): string {
+/**
+ * Caps for the two lines a PAGE writes into the rendered snapshot (#597).
+ *
+ * `Page:` is `document.title` and `URL:` is `location.href`, both chosen by the
+ * page and both previously uncapped. Remotely that dropped the whole read at
+ * the brain's 2 MB event cap with no error anywhere; locally it spent the
+ * model's context on a page's choice of padding. Everything else rendered here
+ * is already bounded (page text, 80 elements, 200 chars per attribute from the
+ * snapshot script), so these two lines were the whole exposure.
+ *
+ * Truncated, not refused -- the opposite of what #594 does to the identity
+ * fields, and for the opposite reason: those are branched on, where a shortened
+ * URL names a different page; these are prose the model reads, where a
+ * shortened title beats a dropped snapshot. Marked visibly either way.
+ *
+ * Two numbers: 2048 is generous for a title and too small for a URL the model
+ * copies back into browser_navigate (Maps polylines, OAuth callbacks). The URL
+ * cap matches the sidecar's `maxWirePageURL`, so a URL that survives the wire
+ * is not cut in the text.
+ */
+const MAX_RENDERED_TITLE = 2048;
+const MAX_RENDERED_URL = 4096;
+/**
+ * Everything else a page chooses that a browser reply then carries: a
+ * `browser_evaluate` result and the message a thrown Error fills. Same failure,
+ * same marker, a bigger number because the model asks `browser_evaluate` for a
+ * value rather than for prose. `maxPageControlledReply` in the sidecar.
+ */
+const MAX_PAGE_CONTROLLED_REPLY = 20000;
+
+/**
+ * Cut a page-controlled line for the rendering and say so in place.
+ *
+ * The marker joins the SAME line, directly after the value, with no leading
+ * space, and reuses the grammar and quantity the page-text cut already uses
+ * (characters REMOVED). `truncateRendered` in sidecar/browser_snapshot.go is
+ * this function; the golden parity test fails if the two ever word it
+ * differently.
+ */
+function truncateMarked(value: string, limit: number): string {
+  if (limit <= 0) return '';
+  const chars = Array.from(value);
+  if (chars.length <= limit) return value;
+  return `${chars.slice(0, limit).join('')}... (${chars.length - limit} chars truncated)`;
+}
+
+/**
+ * `truncateMarked` for a value that must also be ONE LINE: the `Page:` and
+ * `URL:` lines. The count is taken after the strip, so it reports what was cut
+ * from the one-line value rather than from the page's original.
+ *
+ * Deliberately NOT used for a `browser_evaluate` result or an error blob: those
+ * are legitimately multi-line, and stripping them would glue every line of a
+ * document together - a change to what the model reads with nothing to do with
+ * capping it.
+ */
+function truncateRendered(value: string, limit: number): string {
+  return truncateMarked(stripControlChars(value), limit);
+}
+
+/**
+ * Prepare a page-controlled value for a single LINE of the rendering: control
+ * characters out, then cut to `limit` code points.
+ *
+ * The strip is the rule the sidecar's `truncateURL` applies, for the same
+ * reason. These fields are single-line BY CONSTRUCTION - a title, a label, an
+ * element's collapsed text - so a newline in one is a page writing a line of
+ * the rendering: a title containing a newline plus "URL: ..." produced a
+ * second, forged `URL:` line, and an `aria-label` carrying a newline forged an
+ * element line, inside a block whose every line the model reads as ours.
+ *
+ * SCOPE, stated because it is easy to over-read: this covers the title, the URL
+ * line, the attributes and the element text. The `--- Page Text ---` block is
+ * legitimately multi-line and is NOT stripped, so a page can still put
+ * something that reads like a section header or an `[id]` line into its own
+ * body text. Nothing escapes the untrusted block either way; what this buys is
+ * that the lines the FORMATTER writes are the formatter's.
+ *
+ * `renderedValue` in sidecar/browser_snapshot.go is this function.
+ */
+function renderedValue(value: string, limit: number): string {
+  const chars = Array.from(stripControlChars(value));
+  return chars.length <= limit ? chars.join('') : chars.slice(0, limit).join('');
+}
+
+/**
+ * Replace every run of C0 controls and DEL with ONE space.
+ *
+ * Replaced rather than deleted, and that matters: a multi-line
+ * `aria-label="Send\nnow"` is ordinary authoring, and deleting the newline
+ * glues the words into "Sendnow". A space is also what the snapshot script
+ * already does to the whitespace it collapses, so this is the same rule
+ * reaching the characters that rule does not match. Only runs of CONTROL
+ * characters collapse: a value with no control character comes back unchanged.
+ *
+ * `stripControlChars` in sidecar/browser_snapshot.go is this function.
+ */
+function stripControlChars(value: string): string {
+  let out = '';
+  let inRun = false;
+  for (const ch of value) {
+    const code = ch.codePointAt(0)!;
+    if (code < 0x20 || code === 0x7f) {
+      if (!inRun) { out += ' '; inRun = true; }
+      continue;
+    }
+    inRun = false;
+    out += ch;
+  }
+  return out;
+}
+
+/**
+ * The LLM-facing rendering of a snapshot.
+ *
+ * Exported for `snapshot-format-parity.test.ts` only, which renders the same
+ * input through this and through the Go formatter's golden output and compares
+ * them byte for byte. #592 kept this text byte-identical because all 100
+ * webapp-templates are written against it; nothing but a test should call this.
+ */
+export function formatSnapshot(snap: PageSnapshot): string {
   const lines: string[] = [];
-  lines.push(`Page: ${snap.title}`);
-  lines.push(`URL: ${snap.url}`);
+  lines.push(`Page: ${truncateRendered(snap.title, MAX_RENDERED_TITLE)}`);
+  lines.push(`URL: ${truncateRendered(snap.url, MAX_RENDERED_URL)}`);
   lines.push('');
   lines.push('--- Page Text ---');
-  lines.push(snap.text.slice(0, MAX_PAGE_TEXT));
-  if (snap.text.length > MAX_PAGE_TEXT) {
-    lines.push(`... (${snap.text.length - MAX_PAGE_TEXT} chars truncated)`);
+  const text = Array.from(snap.text);
+  lines.push(text.length > MAX_PAGE_TEXT ? text.slice(0, MAX_PAGE_TEXT).join('') : snap.text);
+  if (text.length > MAX_PAGE_TEXT) {
+    lines.push(`... (${text.length - MAX_PAGE_TEXT} chars truncated)`);
   }
   lines.push('');
 
@@ -834,10 +971,10 @@ function formatSnapshot(snap: PageSnapshot): string {
       lines.push('--- Key Elements ---');
       for (const el of keyInputs) {
         const label = el.attrs['aria-label'] || el.attrs.placeholder || el.attrs.name || el.tag;
-        lines.push(`[${el.id}] INPUT: ${label}${el.attrs.contenteditable ? ' (contenteditable)' : ''}`);
+        lines.push(`[${el.id}] INPUT: ${renderedValue(label, MAX_ELEMENT_ATTR)}${el.attrs.contenteditable ? ' (contenteditable)' : ''}`);
       }
       for (const el of keyButtons) {
-        lines.push(`[${el.id}] BUTTON: ${el.attrs['aria-label']}`);
+        lines.push(`[${el.id}] BUTTON: ${renderedValue(el.attrs['aria-label']!, MAX_ELEMENT_ATTR)}`);
       }
       lines.push('');
     }
@@ -845,17 +982,18 @@ function formatSnapshot(snap: PageSnapshot): string {
     lines.push(`--- Interactive Elements (${shown.length}/${snap.elements.length}) ---`);
     for (const el of shown) {
       const attrParts: string[] = [];
-      if (el.attrs.name) attrParts.push(`name="${el.attrs.name}"`);
-      if (el.attrs.placeholder) attrParts.push(`placeholder="${el.attrs.placeholder}"`);
-      if (el.attrs.type) attrParts.push(`type="${el.attrs.type}"`);
-      if (el.attrs.href) attrParts.push(`href="${el.attrs.href.slice(0, 80)}"`);
-      if (el.attrs['aria-label']) attrParts.push(`aria-label="${el.attrs['aria-label']}"`);
-      if (el.attrs.role) attrParts.push(`role="${el.attrs.role}"`);
-      if (el.attrs.contenteditable) attrParts.push(`contenteditable="${el.attrs.contenteditable}"`);
-      if (el.attrs['data-testid']) attrParts.push(`data-testid="${el.attrs['data-testid']}"`);
-      if (el.attrs.iframe) attrParts.push(`iframe="${el.attrs.iframe}"`);
+      const attr = (key: string) => renderedValue(el.attrs[key]!, MAX_ELEMENT_ATTR);
+      if (el.attrs.name) attrParts.push(`name="${attr('name')}"`);
+      if (el.attrs.placeholder) attrParts.push(`placeholder="${attr('placeholder')}"`);
+      if (el.attrs.type) attrParts.push(`type="${attr('type')}"`);
+      if (el.attrs.href) attrParts.push(`href="${renderedValue(el.attrs.href, MAX_ELEMENT_HREF)}"`);
+      if (el.attrs['aria-label']) attrParts.push(`aria-label="${attr('aria-label')}"`);
+      if (el.attrs.role) attrParts.push(`role="${attr('role')}"`);
+      if (el.attrs.contenteditable) attrParts.push(`contenteditable="${attr('contenteditable')}"`);
+      if (el.attrs['data-testid']) attrParts.push(`data-testid="${attr('data-testid')}"`);
+      if (el.attrs.iframe) attrParts.push(`iframe="${attr('iframe')}"`);
 
-      const textStr = el.text ? ` "${el.text.slice(0, 50)}"` : '';
+      const textStr = el.text ? ` ${JSON.stringify(renderedValue(el.text, MAX_ELEMENT_TEXT))}` : '';
       const attrStr = attrParts.length > 0 ? ' ' + attrParts.join(' ') : '';
       lines.push(`[${el.id}] ${el.tag}${textStr}${attrStr}`);
     }
@@ -1395,9 +1533,17 @@ export const browserEvaluateTool: ToolDefinition = {
     try {
       const result = await browser.evaluate(params.expression as string);
       if (result === undefined || result === null) return '(no return value)';
-      return typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+      // Capped for the reason the snapshot's title line is (#597): the VALUE is
+      // the page's and was unbounded, so a megabyte return filled the model's
+      // context here and, on the sidecar's identical path, got the whole reply
+      // dropped at the 2 MB cap with no error. Marked but NOT stripped: an
+      // evaluate result is routinely `innerText` or pretty-printed JSON, and
+      // flattening those would mangle every ordinary answer.
+      const text = typeof result === 'string' ? result : JSON.stringify(result, null, 2);
+      return truncateMarked(text, MAX_PAGE_CONTROLLED_REPLY);
     } catch (err) {
-      return `Error: ${err instanceof Error ? err.message : String(err)}`;
+      const message = err instanceof Error ? err.message : String(err);
+      return `Error: ${truncateMarked(message, MAX_PAGE_CONTROLLED_REPLY)}`;
     }
   },
 };

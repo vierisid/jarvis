@@ -8,6 +8,8 @@ package main
 // after the DOM shifts, and stored refs survive relayouts.
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"time"
@@ -68,6 +70,21 @@ var axIgnoredRoles = map[string]bool{
 const axMaxElements = 300
 const axMaxPathDepth = 6
 
+// Page-controlled bounds on one AX reply (#597). See buildAXElements' tail for
+// why a per-value cap alone was not a bound, and the use site for axMaxValue.
+//
+// axReplyBudget is the estimated JSON size of the emitted element list. 900 KB
+// leaves room for Go's encoder escaping `<`, `>` and `&` to six bytes each and
+// still sits comfortably under the brain's 2 MB cap. It is reached only by a
+// page with thousands of controls, where the alternative is the whole reply
+// being dropped.
+const (
+	axMaxValue           = 1000
+	axReplyBudget        = 900000
+	axElementFixedCost   = 400
+	axPathEntryFixedCost = 40
+)
+
 // makeBrowserAXSnapshotHandler returns the accessibility-tree snapshot:
 // a filtered, interactable-first element list with durable refs.
 func makeBrowserAXSnapshotHandler(cfg *SidecarConfig) RPCHandler {
@@ -126,15 +143,55 @@ func makeBrowserAXSnapshotHandler(cfg *SidecarConfig) RPCHandler {
 		// in an object reply" instead of on `page_url` plus a non-empty
 		// `loader_id` would hand a page its own choice of playbook again (#572).
 		// `checked.url` is in scope here if this path ever needs the real thing.
+		// Both fields are bounded, for the reason the DOM snapshot's `Page:` and
+		// `URL:` lines are (#597): they are `document.title` and
+		// `location.href`, a page chooses them, and an uncapped one pushes this
+		// whole reply past the brain's 2 MB cap -- at which point the AX read is
+		// dropped silently and the model gets no elements and no reason.
+		//
+		// NOT a plain truncation, because these two are COMPARED and not only
+		// displayed: `ui_act` refuses to act when the surface it re-reads has a
+		// different url or title than the one that was reviewed
+		// (src/actions/tools/ui.ts), and on this path that comparison is the
+		// only document check there is -- `browser_ax_click` and
+		// `browser_ax_set_value` have no frame-tree check of their own. Two cut
+		// values compare EQUAL as soon as their first 4096 characters agree, so
+		// a plain cut would have switched that guard off for any page willing to
+		// pad its URL. That is #594's mistake inverted: truncate what is
+		// RENDERED, never what is BRANCHED ON. See axIdentityField.
+		axURL, _ := pageInfo["url"].(string)
+		axTitle, _ := pageInfo["title"].(string)
 		return &RPCResult{Result: map[string]any{
 			"provider":      "cdp",
-			"url":           pageInfo["url"],
-			"title":         pageInfo["title"],
+			"url":           axIdentityField(axURL, maxRenderedURL),
+			"title":         axIdentityField(axTitle, maxRenderedTitle),
 			"element_count": len(elements),
 			"elements":      elements,
 			"captured_at":   time.Now().UnixMilli(),
 		}}, nil
 	}
+}
+
+// axIdentityField bounds a page-controlled value that a CALLER COMPARES.
+//
+// Under the cap it is the value, byte for byte. Over it, the cut carries a
+// digest of the whole value, so two documents that share a long prefix still
+// differ here -- which is what keeps `ui_act`'s staleness check working on a
+// padded URL. The digest is short because it only has to make the strings
+// unequal, not to be a secret; it is of the FULL value, so it cannot be
+// reproduced from the cut.
+//
+// A comparison is all it is for. A keyword past the cut no longer reaches
+// `uiEffectHints`' context match, which is a heuristic over untrusted UI text
+// either way (src/authority/ui-intent.ts says so), and 4096 characters of URL
+// before the first mention of "mail" is not a page a hint was going to classify.
+func axIdentityField(s string, limit int) string {
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	sum := sha256.Sum256([]byte(s))
+	return string(r[:limit]) + "...#" + hex.EncodeToString(sum[:8])
 }
 
 // buildAXElements converts the flat AX node list into emitted elements with
@@ -222,8 +279,15 @@ func buildAXElements(nodes []axNode) []map[string]any {
 			"sig":             semanticSig(role, name, "", path, ord),
 			"stable_id":       stableID,
 		}
+		// An element's VALUE comes from the same place its name does -- the
+		// page -- and `name` has been cut at 100 since this file was written
+		// while this was not (#597). One textarea holding a megabyte was enough
+		// to get every element in the reply dropped at the brain's 2 MB cap.
+		// Generous, because a value is read back for verification (ui_act's
+		// `value_equals`) where a name is not; the whole-reply bound at the end
+		// of this function is what actually holds the total.
 		if v := n.Value.str(); v != "" {
-			el["value"] = v
+			el["value"] = truncateRunes(v, axMaxValue)
 		}
 		for _, p := range n.Properties {
 			if p.Value == nil || p.Value.Value == nil {
@@ -241,7 +305,7 @@ func buildAXElements(nodes []axNode) []map[string]any {
 		}
 	}
 
-	// All interactive elements, plus as much named-text context as fits.
+	// Interactive elements first, then as much named-text context as fits.
 	out := interactiveEls
 	if out == nil {
 		out = []map[string]any{}
@@ -252,7 +316,53 @@ func buildAXElements(nodes []axNode) []map[string]any {
 		}
 		out = append(out, contextEls[:budget]...)
 	}
+	// AND A LAST-RESORT BOUND ON THE WHOLE REPLY (#597).
+	//
+	// `axMaxElements` budgets only the CONTEXT elements: every interactive
+	// element is kept however many there are, deliberately, because capping in
+	// tree order made the agent "open compose but not find the To field" (see
+	// above, and TestBuildAXElementsKeepsInteractiveElementsPastTheCap). That
+	// priority is right and is NOT a bound: a page with a few thousand links or
+	// one textarea holding a megabyte -- an ordinary big page, not an
+	// adversarial one -- built a reply past the brain's 2 MB cap
+	// (MAX_JSON_SIZE), at which point the whole AX read was dropped silently
+	// and the model got NO elements at all, To and Subject included. Capping
+	// `value` moved that threshold; it did not create one.
+	//
+	// So the bound is on the reply's SIZE, not on a count, and it is set far
+	// above any honest page: it exists to turn "the model gets nothing" into
+	// "the model gets the first several hundred elements", which strictly
+	// dominates. The cost per element is an estimate, not an exact byte count --
+	// an order-of-magnitude bound well under the cap is all that is wanted, and
+	// an exact one would mean marshalling the reply twice.
+	//
+	// Fail SOFT, unlike the identity fields: a shortened element list is still
+	// a usable surface where a dropped reply is nothing at all.
+	spent := 0
+	for i, el := range out {
+		spent += axElementCost(el)
+		if spent > axReplyBudget {
+			out = out[:i]
+			break
+		}
+	}
 	return out
+}
+
+// axElementCost estimates the JSON bytes one emitted element costs. The fixed
+// term covers the keys and the id/role/sig/ordinal values; the rest is the
+// page-controlled text, counted in bytes because that is what the cap counts.
+func axElementCost(el map[string]any) int {
+	name, _ := el["name"].(string)
+	value, _ := el["value"].(string)
+	cost := axElementFixedCost + len(name) + len(value)
+	if path, ok := el["path"].([]map[string]any); ok {
+		for _, p := range path {
+			pathName, _ := p["name"].(string)
+			cost += axPathEntryFixedCost + len(pathName)
+		}
+	}
+	return cost
 }
 
 // makeBrowserAXClickHandler clicks an element by backend_node_id: scroll it
@@ -375,10 +485,20 @@ func makeBrowserAXSetValueHandler(cfg *SidecarConfig) RPCHandler {
 		}
 		_ = json.Unmarshal(fnRaw, &fnRes)
 		if fnRes.ExceptionDetails != nil {
-			return nil, fmt.Errorf("set_value threw in page: %s", fnRes.ExceptionDetails.Text)
+			// The page writes this text, so it is capped like every other
+			// page-controlled reply (#597).
+			return nil, fmt.Errorf("set_value threw in page: %s",
+				truncateMarked(fnRes.ExceptionDetails.Text, maxPageControlledReply))
 		}
 		verify := map[string]any{}
 		_ = json.Unmarshal([]byte(fnRes.Result.Value), &verify)
+		// The readback is read AFTER the page's own `input`/`change` listeners
+		// have run, so a listener chooses what comes back here -- and it was
+		// unbounded, which is the dropped-reply bug again on the path that
+		// confirms a write happened (#597). Capped like the snapshot's values.
+		if v, ok := verify["value"].(string); ok {
+			verify["value"] = truncateRunes(v, axMaxValue)
+		}
 
 		return &RPCResult{Result: map[string]any{
 			"success":         true,

@@ -234,7 +234,12 @@ func takePageSnapshot(cdp *cdpClient) (*pageSnapshot, pageIdentity, error) {
 		return nil, checked, fmt.Errorf("parse snapshot reply: %w", err)
 	}
 	if wrapper.ExceptionDetails != nil {
-		return nil, checked, fmt.Errorf("snapshot failed: %s", string(wrapper.ExceptionDetails))
+		// Capped: `exceptionDetails` carries the page's own message and stack,
+		// so an uncapped interpolation here is the same dropped-reply bug as the
+		// title line was (#597) -- a page that throws a multi-megabyte Error
+		// would lose its own snapshot's error to the 2 MB event cap.
+		return nil, checked, fmt.Errorf("snapshot failed: %s",
+			truncateMarked(string(wrapper.ExceptionDetails), maxPageControlledReply))
 	}
 
 	var snap pageSnapshot
@@ -584,22 +589,195 @@ func collectFrameStamp(node *frameTreeNode, out *[]string) {
 }
 
 // Formatter limits — keep in sync with src/actions/tools/builtin.ts.
+//
+// EVERY limit here counts CODE POINTS, not bytes and not UTF-16 units (#597).
+// The two formatters have to produce the same text for the same page, and they
+// used to disagree the moment a page was not ASCII: Go sliced `snap.Text` by
+// BYTES while the daemon sliced the same field by UTF-16 units, so a CJK page
+// showed roughly 666 characters here against the daemon's 2000 and the two
+// "(N chars truncated)" numbers differed by about three times for one page.
+// Byte slicing also cuts a multi-byte character in half, and the half then
+// reaches the model as U+FFFD. `snapshot_parity_expected.txt` in testdata is
+// the golden rendering both sides are held to, deliberately full of characters
+// that make the three countings disagree.
 const (
 	maxPageText = 2000
 	maxElements = 80
 	maxSameRole = 15
+	// Element fields, cut again here because the snapshot script's own cuts are
+	// UTF-16 units in both scripts and these are code points.
+	maxElementText = 50
+	maxElementHref = 80
+	// Attribute values and the Key Elements labels built from them. The
+	// snapshot script already cuts every attribute at 200 (UTF-16 units, so
+	// never more than 200 code points), which makes this a bound the formatter
+	// holds on its own rather than a second cut of the same value.
+	maxElementAttr = 200
 )
+
+// Caps for the two lines a PAGE writes into the rendered snapshot (#597).
+//
+// `Page:` is `document.title` and `URL:` is `location.href`, both chosen by the
+// page and both previously uncapped -- so a multi-megabyte title pushed the
+// whole reply past the brain's 2 MB event cap (MAX_JSON_SIZE in
+// src/sidecar/validator.ts) and the read was DROPPED: no text, no error, and
+// nothing pointing at the cause. Everything else in this rendering is already
+// bounded (page text above, 80 elements, each attribute cut at 200 by the
+// snapshot script), so these two lines were the whole exposure.
+//
+// TRUNCATED rather than refused, which is the opposite of what #594 does to the
+// identity fields on the wire, and deliberately: those are a value code BRANCHES
+// on, where a shortened URL names a different page and a wrong site playbook is
+// worse than none, while these are prose the model READS, and a shortened title
+// beats a dropped snapshot. Marked visibly so the model can tell.
+//
+// Two numbers, not one. 2048 is generous for a title (a real one is under 200)
+// and far too small for a URL: a Maps link with an encoded polyline, a Looker
+// Studio report state, or an OAuth callback carrying an id_token all exceed it
+// routinely, and this is the line the model copies back into browser_navigate.
+// So the URL line tracks `maxWirePageURL` below instead -- keep the two equal,
+// so a URL that arrives intact as `page_url` is not truncated in the text.
+const (
+	maxRenderedTitle = 2048
+	maxRenderedURL   = maxWirePageURL
+	// Everything else a PAGE chooses and a browser reply then carries: a
+	// `browser_evaluate` result, and the `exceptionDetails` a thrown Error
+	// fills. Same failure, same marker, a bigger number because a model asks
+	// `browser_evaluate` for a value rather than for prose (#597).
+	maxPageControlledReply = 20000
+)
+
+// renderedValue prepares a page-controlled value for a single LINE of the
+// rendering: control characters out, then cut to `limit` code points.
+//
+// The strip is the same rule `truncateURL` applies, for the same reason. These
+// fields are single-line BY CONSTRUCTION -- a title, a label, an element's
+// collapsed text -- so a newline in one is a page writing a line of the
+// rendering: `document.title = "x\nURL: https://bank.example"` produced a
+// second, forged `URL:` line, and an `aria-label` carrying a newline forged an
+// element line, inside a block whose every line the model reads as ours.
+//
+// SCOPE, stated because it is easy to over-read: this covers the title, the URL
+// line, the attributes and the element text. The `--- Page Text ---` block is
+// legitimately multi-line and is NOT stripped, so a page can still put
+// something that reads like a section header or an `[id]` line into its own
+// body text. Nothing escapes the untrusted block either way; what this buys is
+// that the lines the FORMATTER writes are the formatter's.
+//
+// `renderedValue` in src/actions/tools/builtin.ts is this function.
+func renderedValue(s string, limit int) string {
+	return truncateRunes(stripControlChars(s), limit)
+}
+
+// stripControlChars replaces every run of C0 controls and DEL with ONE space.
+//
+// Replaced rather than deleted, and that matters: a multi-line
+// `aria-label="Send\nnow"` is ordinary authoring, and deleting the newline
+// glues the words into "Sendnow". A space is also what the snapshot scripts
+// already do to the whitespace they collapse (`.replace(/\s+/g, ' ')`), so this
+// is the same rule reaching the characters that rule does not match.
+//
+// Only runs of CONTROL characters collapse. Ordinary runs of spaces in an
+// attribute are left exactly as they are, so a value with no control character
+// in it is returned byte for byte.
+//
+// `stripControlChars` in src/actions/tools/builtin.ts is this function.
+func stripControlChars(s string) string {
+	if !strings.ContainsFunc(s, isControlChar) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	inRun := false
+	for _, r := range s {
+		if isControlChar(r) {
+			if !inRun {
+				b.WriteByte(' ')
+				inRun = true
+			}
+			continue
+		}
+		inRun = false
+		b.WriteRune(r)
+	}
+	return b.String()
+}
+
+func isControlChar(r rune) bool {
+	return r < 0x20 || r == 0x7f
+}
+
+// quoteElementText renders an element's own text as a quoted string.
+//
+// NOT `%q`, which is why this exists. `%q` escapes every rune Go calls
+// non-printable, and the daemon's `JSON.stringify` escapes only `"`, `\` and
+// the C0 range -- so the two formatters disagreed about any code point that is
+// unprintable to Go but ordinary to JSON: a Material Icons or Font Awesome
+// LIGATURE GLYPH in a button's text (private-use, and common), a zero-width
+// space, a soft hyphen, a bidi mark, a C1 byte off a mis-decoded
+// windows-1252 page. Go rendered `""` where the daemon rendered the
+// glyph, on exactly the kind of button a template tells the model to click.
+//
+// So both sides quote the same way: the C0 range is already gone (see
+// stripControlChars), and what is left needs `"` and `\` escaped and nothing
+// else. This is `JSON.stringify` for that input, implemented here rather than
+// relied upon through a formatting verb that answers a different question.
+func quoteElementText(s string) string {
+	var b strings.Builder
+	b.Grow(len(s) + 2)
+	b.WriteByte('"')
+	for _, r := range s {
+		if r == '"' || r == '\\' {
+			b.WriteByte('\\')
+		}
+		b.WriteRune(r)
+	}
+	b.WriteByte('"')
+	return b.String()
+}
+
+// truncateMarked cuts a page-controlled value to `limit` code points and says
+// so in place. No strip: this is for a value that is legitimately MULTI-LINE --
+// a `browser_evaluate` result, which is routinely `innerText` or
+// pretty-printed JSON, and an `exceptionDetails` blob. Stripping those would
+// glue every line of a document together, which is a change to what the model
+// reads that has nothing to do with capping it.
+//
+// The marker is appended directly after the value with no leading space, and it
+// reuses the grammar and the quantity the page-text cut above already uses
+// ("chars truncated" = characters REMOVED). One marker grammar across both
+// formatters; `truncateMarked` in src/actions/tools/builtin.ts is this function.
+func truncateMarked(s string, limit int) string {
+	if limit <= 0 {
+		return ""
+	}
+	r := []rune(s)
+	if len(r) <= limit {
+		return s
+	}
+	return fmt.Sprintf("%s... (%d chars truncated)", string(r[:limit]), len(r)-limit)
+}
+
+// truncateRendered is truncateMarked for a value that must also be ONE LINE:
+// the `Page:` and `URL:` lines, where the cut is the difference between a short
+// title and a dropped snapshot.
+//
+// The count is taken AFTER the strip, so it reports the characters removed from
+// the one-line value, not from the page's original.
+func truncateRendered(s string, limit int) string {
+	return truncateMarked(stripControlChars(s), limit)
+}
 
 // formatBrowserSnapshot is a faithful port of the daemon's formatSnapshot.
 func formatBrowserSnapshot(snap *pageSnapshot) string {
 	var lines []string
-	lines = append(lines, fmt.Sprintf("Page: %s", snap.Title))
-	lines = append(lines, fmt.Sprintf("URL: %s", snap.URL))
+	lines = append(lines, fmt.Sprintf("Page: %s", truncateRendered(snap.Title, maxRenderedTitle)))
+	lines = append(lines, fmt.Sprintf("URL: %s", truncateRendered(snap.URL, maxRenderedURL)))
 	lines = append(lines, "")
 	lines = append(lines, "--- Page Text ---")
-	if len(snap.Text) > maxPageText {
-		lines = append(lines, snap.Text[:maxPageText])
-		lines = append(lines, fmt.Sprintf("... (%d chars truncated)", len(snap.Text)-maxPageText))
+	if text := []rune(snap.Text); len(text) > maxPageText {
+		lines = append(lines, string(text[:maxPageText]))
+		lines = append(lines, fmt.Sprintf("... (%d chars truncated)", len(text)-maxPageText))
 	} else {
 		lines = append(lines, snap.Text)
 	}
@@ -671,12 +849,12 @@ func formatBrowserSnapshot(snap *pageSnapshot) string {
 			if el.Attrs["contenteditable"] != "" {
 				suffix = " (contenteditable)"
 			}
-			keyLines = append(keyLines, fmt.Sprintf("[%d] INPUT: %s%s", el.ID, label, suffix))
+			keyLines = append(keyLines, fmt.Sprintf("[%d] INPUT: %s%s", el.ID, renderedValue(label, maxElementAttr), suffix))
 		}
 	}
 	for _, el := range shown {
 		if (el.Tag == "button" || el.Attrs["role"] == "button") && el.Attrs["aria-label"] != "" {
-			keyLines = append(keyLines, fmt.Sprintf("[%d] BUTTON: %s", el.ID, el.Attrs["aria-label"]))
+			keyLines = append(keyLines, fmt.Sprintf("[%d] BUTTON: %s", el.ID, renderedValue(el.Attrs["aria-label"], maxElementAttr)))
 		}
 	}
 	if len(keyLines) > 0 {
@@ -690,17 +868,14 @@ func formatBrowserSnapshot(snap *pageSnapshot) string {
 		var attrParts []string
 		addAttr := func(key, format string) {
 			if v := el.Attrs[key]; v != "" {
-				attrParts = append(attrParts, fmt.Sprintf(format, v))
+				attrParts = append(attrParts, fmt.Sprintf(format, renderedValue(v, maxElementAttr)))
 			}
 		}
 		addAttr("name", `name="%s"`)
 		addAttr("placeholder", `placeholder="%s"`)
 		addAttr("type", `type="%s"`)
 		if href := el.Attrs["href"]; href != "" {
-			if len(href) > 80 {
-				href = href[:80]
-			}
-			attrParts = append(attrParts, fmt.Sprintf(`href="%s"`, href))
+			attrParts = append(attrParts, fmt.Sprintf(`href="%s"`, renderedValue(href, maxElementHref)))
 		}
 		addAttr("aria-label", `aria-label="%s"`)
 		addAttr("role", `role="%s"`)
@@ -710,11 +885,7 @@ func formatBrowserSnapshot(snap *pageSnapshot) string {
 
 		textStr := ""
 		if el.Text != "" {
-			text := el.Text
-			if len(text) > 50 {
-				text = text[:50]
-			}
-			textStr = fmt.Sprintf(" %q", text)
+			textStr = " " + quoteElementText(renderedValue(el.Text, maxElementText))
 		}
 		attrStr := ""
 		if len(attrParts) > 0 {
@@ -776,17 +947,20 @@ type pageReply struct {
 // megabytes on its own, so an unbounded field here would be the cheapest way to
 // deny a read.
 //
-// It does NOT make the reply as a whole safe, and the comment used to imply that.
-// `formatBrowserSnapshot` renders `Page: <document.title>` and `URL:
-// <location.href>` with no cap of their own, so a page with a multi-megabyte
-// title can still get its own reads dropped. That predates this change, the
-// daemon's local `formatSnapshot` has the same shape, and capping it is a
-// formatter parity change on both sides rather than part of #583.
+// It does NOT by itself make the reply as a whole safe. The rendered text used
+// to be the other half of that exposure -- `Page: <document.title>` and `URL:
+// <location.href>` had no cap of their own, so a page with a multi-megabyte
+// title got its own reads dropped. #597 closed that in both formatters
+// (`maxRenderedTitle` / `maxRenderedURL` above), so the whole rendering is now
+// bounded; these two fields are bounded here because they travel BESIDE it.
 //
 // Deliberately NOT the daemon's 2048, so nobody reads the two numbers as a
 // coupling to keep in step. An over-long URL is omitted rather than truncated --
 // a truncated identity is a different page, and a wrong playbook is worse than
-// none.
+// none. Note the units differ from the rendered cap this number is also used
+// for: the check below is BYTES of the frame-tree URL, while `maxRenderedURL`
+// is code points of the page's `location.href`. Same number, different unit,
+// different value -- they are not a pair to keep equal.
 const (
 	maxWirePageURL  = 4096
 	maxWireLoaderID = 64

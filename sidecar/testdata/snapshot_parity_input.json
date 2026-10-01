@@ -1,0 +1,1201 @@
+[
+  {
+    "name": "typical",
+    "snapshot": {
+      "title": "Inbox (3) - Mail",
+      "url": "https://mail.example.com/u/0/#inbox",
+      "text": "Hello world\nSecond line",
+      "elements": [
+        {
+          "id": 1,
+          "tag": "input",
+          "text": "",
+          "attrs": {
+            "aria-label": "Search mail",
+            "type": "text"
+          },
+          "x": 10,
+          "y": 20
+        },
+        {
+          "id": 2,
+          "tag": "button",
+          "text": "Send now",
+          "attrs": {
+            "aria-label": "Send"
+          },
+          "x": 10,
+          "y": 40
+        },
+        {
+          "id": 3,
+          "tag": "div",
+          "text": "row one",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 10,
+          "y": 60
+        },
+        {
+          "id": 4,
+          "tag": "a",
+          "text": "Cafe ☕ crème",
+          "attrs": {
+            "href": "https://example.com/café"
+          },
+          "x": 10,
+          "y": 80
+        },
+        {
+          "id": 5,
+          "tag": "button",
+          "text": "Say \"hello\" \\ goodbye",
+          "attrs": {},
+          "x": 10,
+          "y": 100
+        }
+      ]
+    }
+  },
+  {
+    "name": "page-controlled values over every cap",
+    "snapshot": {
+      "title": "éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé",
+      "url": "https://example.com/?q=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "text": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "elements": [
+        {
+          "id": 1,
+          "tag": "a",
+          "text": "🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀",
+          "attrs": {
+            "href": "https://example.com/éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé"
+          },
+          "x": 1,
+          "y": 2
+        },
+        {
+          "id": 2,
+          "tag": "button",
+          "text": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "attrs": {
+            "aria-label": "Send"
+          },
+          "x": 1,
+          "y": 4
+        }
+      ]
+    }
+  },
+  {
+    "name": "control characters a page put in its own fields",
+    "snapshot": {
+      "title": "Inbox\r\nURL: https://bank.example/transfer\u0000",
+      "url": "https://real.example/\u0007?a=1",
+      "text": "line one\nline two\ttabbed",
+      "elements": [
+        {
+          "id": 1,
+          "tag": "button",
+          "text": "Send\u0000\u001b[31m now",
+          "attrs": {
+            "aria-label": "Send\nnow"
+          },
+          "x": 1,
+          "y": 2
+        },
+        {
+          "id": 2,
+          "tag": "input",
+          "text": "",
+          "attrs": {
+            "placeholder": "Search",
+            "data-testid": "q\u0001"
+          },
+          "x": 1,
+          "y": 4
+        }
+      ]
+    }
+  },
+  {
+    "name": "non-printable code points Go and JSON quote differently",
+    "snapshot": {
+      "title": "Icons  and ​ spaces",
+      "url": "https://example.com/­",
+      "text": "body  text",
+      "elements": [
+        {
+          "id": 1,
+          "tag": "button",
+          "text": " Back​",
+          "attrs": {
+            "aria-label": "Nav­igate"
+          },
+          "x": 1,
+          "y": 2
+        },
+        {
+          "id": 2,
+          "tag": "button",
+          "text": "AB‮C",
+          "attrs": {},
+          "x": 1,
+          "y": 4
+        }
+      ]
+    }
+  },
+  {
+    "name": "no interactive elements",
+    "snapshot": {
+      "title": "Empty",
+      "url": "https://empty.test/",
+      "text": "nothing here",
+      "elements": []
+    }
+  },
+  {
+    "name": "key element fallbacks and unrendered attributes",
+    "snapshot": {
+      "title": "Fallbacks",
+      "url": "https://fallback.test/",
+      "text": "",
+      "elements": [
+        {
+          "id": 1,
+          "tag": "input",
+          "text": "",
+          "attrs": {
+            "aria-label": "By label"
+          },
+          "x": 1,
+          "y": 1
+        },
+        {
+          "id": 2,
+          "tag": "input",
+          "text": "",
+          "attrs": {
+            "placeholder": "By placeholder"
+          },
+          "x": 1,
+          "y": 2
+        },
+        {
+          "id": 3,
+          "tag": "input",
+          "text": "",
+          "attrs": {
+            "name": "by-name"
+          },
+          "x": 1,
+          "y": 3
+        },
+        {
+          "id": 4,
+          "tag": "textarea",
+          "text": "",
+          "attrs": {},
+          "x": 1,
+          "y": 4
+        },
+        {
+          "id": 5,
+          "tag": "div",
+          "text": "editor",
+          "attrs": {
+            "contenteditable": "true",
+            "role": "textbox"
+          },
+          "x": 1,
+          "y": 5
+        },
+        {
+          "id": 6,
+          "tag": "button",
+          "text": "In frame",
+          "attrs": {
+            "aria-label": "Framed",
+            "iframe": "true"
+          },
+          "x": 1,
+          "y": 6
+        },
+        {
+          "id": 7,
+          "tag": "a",
+          "text": "Link",
+          "attrs": {
+            "title": "tooltip",
+            "id": "dom-id",
+            "href": "https://e.test/x"
+          },
+          "x": 1,
+          "y": 7
+        }
+      ]
+    }
+  },
+  {
+    "name": "more elements than the budget, with same-role deferral",
+    "snapshot": {
+      "title": "Big list",
+      "url": "https://big.test/",
+      "text": "rows",
+      "elements": [
+        {
+          "id": 1,
+          "tag": "div",
+          "text": "cell 0",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 0
+        },
+        {
+          "id": 2,
+          "tag": "div",
+          "text": "cell 1",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 1
+        },
+        {
+          "id": 3,
+          "tag": "div",
+          "text": "cell 2",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 2
+        },
+        {
+          "id": 4,
+          "tag": "div",
+          "text": "cell 3",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 3
+        },
+        {
+          "id": 5,
+          "tag": "div",
+          "text": "cell 4",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 4
+        },
+        {
+          "id": 6,
+          "tag": "div",
+          "text": "cell 5",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 5
+        },
+        {
+          "id": 7,
+          "tag": "div",
+          "text": "cell 6",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 6
+        },
+        {
+          "id": 8,
+          "tag": "div",
+          "text": "cell 7",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 7
+        },
+        {
+          "id": 9,
+          "tag": "div",
+          "text": "cell 8",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 8
+        },
+        {
+          "id": 10,
+          "tag": "div",
+          "text": "cell 9",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 9
+        },
+        {
+          "id": 11,
+          "tag": "div",
+          "text": "cell 10",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 10
+        },
+        {
+          "id": 12,
+          "tag": "div",
+          "text": "cell 11",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 11
+        },
+        {
+          "id": 13,
+          "tag": "div",
+          "text": "cell 12",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 12
+        },
+        {
+          "id": 14,
+          "tag": "div",
+          "text": "cell 13",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 13
+        },
+        {
+          "id": 15,
+          "tag": "div",
+          "text": "cell 14",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 14
+        },
+        {
+          "id": 16,
+          "tag": "div",
+          "text": "cell 15",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 15
+        },
+        {
+          "id": 17,
+          "tag": "div",
+          "text": "cell 16",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 16
+        },
+        {
+          "id": 18,
+          "tag": "div",
+          "text": "cell 17",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 17
+        },
+        {
+          "id": 19,
+          "tag": "div",
+          "text": "cell 18",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 18
+        },
+        {
+          "id": 20,
+          "tag": "div",
+          "text": "cell 19",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 19
+        },
+        {
+          "id": 21,
+          "tag": "div",
+          "text": "cell 20",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 20
+        },
+        {
+          "id": 22,
+          "tag": "div",
+          "text": "cell 21",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 21
+        },
+        {
+          "id": 23,
+          "tag": "div",
+          "text": "cell 22",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 22
+        },
+        {
+          "id": 24,
+          "tag": "div",
+          "text": "cell 23",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 23
+        },
+        {
+          "id": 25,
+          "tag": "div",
+          "text": "cell 24",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 24
+        },
+        {
+          "id": 26,
+          "tag": "div",
+          "text": "cell 25",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 25
+        },
+        {
+          "id": 27,
+          "tag": "div",
+          "text": "cell 26",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 26
+        },
+        {
+          "id": 28,
+          "tag": "div",
+          "text": "cell 27",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 27
+        },
+        {
+          "id": 29,
+          "tag": "div",
+          "text": "cell 28",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 28
+        },
+        {
+          "id": 30,
+          "tag": "div",
+          "text": "cell 29",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 29
+        },
+        {
+          "id": 31,
+          "tag": "div",
+          "text": "cell 30",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 30
+        },
+        {
+          "id": 32,
+          "tag": "div",
+          "text": "cell 31",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 31
+        },
+        {
+          "id": 33,
+          "tag": "div",
+          "text": "cell 32",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 32
+        },
+        {
+          "id": 34,
+          "tag": "div",
+          "text": "cell 33",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 33
+        },
+        {
+          "id": 35,
+          "tag": "div",
+          "text": "cell 34",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 34
+        },
+        {
+          "id": 36,
+          "tag": "div",
+          "text": "cell 35",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 35
+        },
+        {
+          "id": 37,
+          "tag": "div",
+          "text": "cell 36",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 36
+        },
+        {
+          "id": 38,
+          "tag": "div",
+          "text": "cell 37",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 37
+        },
+        {
+          "id": 39,
+          "tag": "div",
+          "text": "cell 38",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 38
+        },
+        {
+          "id": 40,
+          "tag": "div",
+          "text": "cell 39",
+          "attrs": {
+            "role": "gridcell"
+          },
+          "x": 1,
+          "y": 39
+        },
+        {
+          "id": 41,
+          "tag": "a",
+          "text": "link 0",
+          "attrs": {
+            "href": "https://big.test/0"
+          },
+          "x": 2,
+          "y": 0
+        },
+        {
+          "id": 42,
+          "tag": "a",
+          "text": "link 1",
+          "attrs": {
+            "href": "https://big.test/1"
+          },
+          "x": 2,
+          "y": 1
+        },
+        {
+          "id": 43,
+          "tag": "a",
+          "text": "link 2",
+          "attrs": {
+            "href": "https://big.test/2"
+          },
+          "x": 2,
+          "y": 2
+        },
+        {
+          "id": 44,
+          "tag": "a",
+          "text": "link 3",
+          "attrs": {
+            "href": "https://big.test/3"
+          },
+          "x": 2,
+          "y": 3
+        },
+        {
+          "id": 45,
+          "tag": "a",
+          "text": "link 4",
+          "attrs": {
+            "href": "https://big.test/4"
+          },
+          "x": 2,
+          "y": 4
+        },
+        {
+          "id": 46,
+          "tag": "a",
+          "text": "link 5",
+          "attrs": {
+            "href": "https://big.test/5"
+          },
+          "x": 2,
+          "y": 5
+        },
+        {
+          "id": 47,
+          "tag": "a",
+          "text": "link 6",
+          "attrs": {
+            "href": "https://big.test/6"
+          },
+          "x": 2,
+          "y": 6
+        },
+        {
+          "id": 48,
+          "tag": "a",
+          "text": "link 7",
+          "attrs": {
+            "href": "https://big.test/7"
+          },
+          "x": 2,
+          "y": 7
+        },
+        {
+          "id": 49,
+          "tag": "a",
+          "text": "link 8",
+          "attrs": {
+            "href": "https://big.test/8"
+          },
+          "x": 2,
+          "y": 8
+        },
+        {
+          "id": 50,
+          "tag": "a",
+          "text": "link 9",
+          "attrs": {
+            "href": "https://big.test/9"
+          },
+          "x": 2,
+          "y": 9
+        },
+        {
+          "id": 51,
+          "tag": "a",
+          "text": "link 10",
+          "attrs": {
+            "href": "https://big.test/10"
+          },
+          "x": 2,
+          "y": 10
+        },
+        {
+          "id": 52,
+          "tag": "a",
+          "text": "link 11",
+          "attrs": {
+            "href": "https://big.test/11"
+          },
+          "x": 2,
+          "y": 11
+        },
+        {
+          "id": 53,
+          "tag": "a",
+          "text": "link 12",
+          "attrs": {
+            "href": "https://big.test/12"
+          },
+          "x": 2,
+          "y": 12
+        },
+        {
+          "id": 54,
+          "tag": "a",
+          "text": "link 13",
+          "attrs": {
+            "href": "https://big.test/13"
+          },
+          "x": 2,
+          "y": 13
+        },
+        {
+          "id": 55,
+          "tag": "a",
+          "text": "link 14",
+          "attrs": {
+            "href": "https://big.test/14"
+          },
+          "x": 2,
+          "y": 14
+        },
+        {
+          "id": 56,
+          "tag": "a",
+          "text": "link 15",
+          "attrs": {
+            "href": "https://big.test/15"
+          },
+          "x": 2,
+          "y": 15
+        },
+        {
+          "id": 57,
+          "tag": "a",
+          "text": "link 16",
+          "attrs": {
+            "href": "https://big.test/16"
+          },
+          "x": 2,
+          "y": 16
+        },
+        {
+          "id": 58,
+          "tag": "a",
+          "text": "link 17",
+          "attrs": {
+            "href": "https://big.test/17"
+          },
+          "x": 2,
+          "y": 17
+        },
+        {
+          "id": 59,
+          "tag": "a",
+          "text": "link 18",
+          "attrs": {
+            "href": "https://big.test/18"
+          },
+          "x": 2,
+          "y": 18
+        },
+        {
+          "id": 60,
+          "tag": "a",
+          "text": "link 19",
+          "attrs": {
+            "href": "https://big.test/19"
+          },
+          "x": 2,
+          "y": 19
+        },
+        {
+          "id": 61,
+          "tag": "a",
+          "text": "link 20",
+          "attrs": {
+            "href": "https://big.test/20"
+          },
+          "x": 2,
+          "y": 20
+        },
+        {
+          "id": 62,
+          "tag": "a",
+          "text": "link 21",
+          "attrs": {
+            "href": "https://big.test/21"
+          },
+          "x": 2,
+          "y": 21
+        },
+        {
+          "id": 63,
+          "tag": "a",
+          "text": "link 22",
+          "attrs": {
+            "href": "https://big.test/22"
+          },
+          "x": 2,
+          "y": 22
+        },
+        {
+          "id": 64,
+          "tag": "a",
+          "text": "link 23",
+          "attrs": {
+            "href": "https://big.test/23"
+          },
+          "x": 2,
+          "y": 23
+        },
+        {
+          "id": 65,
+          "tag": "a",
+          "text": "link 24",
+          "attrs": {
+            "href": "https://big.test/24"
+          },
+          "x": 2,
+          "y": 24
+        },
+        {
+          "id": 66,
+          "tag": "a",
+          "text": "link 25",
+          "attrs": {
+            "href": "https://big.test/25"
+          },
+          "x": 2,
+          "y": 25
+        },
+        {
+          "id": 67,
+          "tag": "a",
+          "text": "link 26",
+          "attrs": {
+            "href": "https://big.test/26"
+          },
+          "x": 2,
+          "y": 26
+        },
+        {
+          "id": 68,
+          "tag": "a",
+          "text": "link 27",
+          "attrs": {
+            "href": "https://big.test/27"
+          },
+          "x": 2,
+          "y": 27
+        },
+        {
+          "id": 69,
+          "tag": "a",
+          "text": "link 28",
+          "attrs": {
+            "href": "https://big.test/28"
+          },
+          "x": 2,
+          "y": 28
+        },
+        {
+          "id": 70,
+          "tag": "a",
+          "text": "link 29",
+          "attrs": {
+            "href": "https://big.test/29"
+          },
+          "x": 2,
+          "y": 29
+        },
+        {
+          "id": 71,
+          "tag": "a",
+          "text": "link 30",
+          "attrs": {
+            "href": "https://big.test/30"
+          },
+          "x": 2,
+          "y": 30
+        },
+        {
+          "id": 72,
+          "tag": "a",
+          "text": "link 31",
+          "attrs": {
+            "href": "https://big.test/31"
+          },
+          "x": 2,
+          "y": 31
+        },
+        {
+          "id": 73,
+          "tag": "a",
+          "text": "link 32",
+          "attrs": {
+            "href": "https://big.test/32"
+          },
+          "x": 2,
+          "y": 32
+        },
+        {
+          "id": 74,
+          "tag": "a",
+          "text": "link 33",
+          "attrs": {
+            "href": "https://big.test/33"
+          },
+          "x": 2,
+          "y": 33
+        },
+        {
+          "id": 75,
+          "tag": "a",
+          "text": "link 34",
+          "attrs": {
+            "href": "https://big.test/34"
+          },
+          "x": 2,
+          "y": 34
+        },
+        {
+          "id": 76,
+          "tag": "a",
+          "text": "link 35",
+          "attrs": {
+            "href": "https://big.test/35"
+          },
+          "x": 2,
+          "y": 35
+        },
+        {
+          "id": 77,
+          "tag": "a",
+          "text": "link 36",
+          "attrs": {
+            "href": "https://big.test/36"
+          },
+          "x": 2,
+          "y": 36
+        },
+        {
+          "id": 78,
+          "tag": "a",
+          "text": "link 37",
+          "attrs": {
+            "href": "https://big.test/37"
+          },
+          "x": 2,
+          "y": 37
+        },
+        {
+          "id": 79,
+          "tag": "a",
+          "text": "link 38",
+          "attrs": {
+            "href": "https://big.test/38"
+          },
+          "x": 2,
+          "y": 38
+        },
+        {
+          "id": 80,
+          "tag": "a",
+          "text": "link 39",
+          "attrs": {
+            "href": "https://big.test/39"
+          },
+          "x": 2,
+          "y": 39
+        },
+        {
+          "id": 81,
+          "tag": "a",
+          "text": "link 40",
+          "attrs": {
+            "href": "https://big.test/40"
+          },
+          "x": 2,
+          "y": 40
+        },
+        {
+          "id": 82,
+          "tag": "a",
+          "text": "link 41",
+          "attrs": {
+            "href": "https://big.test/41"
+          },
+          "x": 2,
+          "y": 41
+        },
+        {
+          "id": 83,
+          "tag": "a",
+          "text": "link 42",
+          "attrs": {
+            "href": "https://big.test/42"
+          },
+          "x": 2,
+          "y": 42
+        },
+        {
+          "id": 84,
+          "tag": "a",
+          "text": "link 43",
+          "attrs": {
+            "href": "https://big.test/43"
+          },
+          "x": 2,
+          "y": 43
+        },
+        {
+          "id": 85,
+          "tag": "a",
+          "text": "link 44",
+          "attrs": {
+            "href": "https://big.test/44"
+          },
+          "x": 2,
+          "y": 44
+        },
+        {
+          "id": 86,
+          "tag": "a",
+          "text": "link 45",
+          "attrs": {
+            "href": "https://big.test/45"
+          },
+          "x": 2,
+          "y": 45
+        },
+        {
+          "id": 87,
+          "tag": "a",
+          "text": "link 46",
+          "attrs": {
+            "href": "https://big.test/46"
+          },
+          "x": 2,
+          "y": 46
+        },
+        {
+          "id": 88,
+          "tag": "a",
+          "text": "link 47",
+          "attrs": {
+            "href": "https://big.test/47"
+          },
+          "x": 2,
+          "y": 47
+        },
+        {
+          "id": 89,
+          "tag": "a",
+          "text": "link 48",
+          "attrs": {
+            "href": "https://big.test/48"
+          },
+          "x": 2,
+          "y": 48
+        },
+        {
+          "id": 90,
+          "tag": "a",
+          "text": "link 49",
+          "attrs": {
+            "href": "https://big.test/49"
+          },
+          "x": 2,
+          "y": 49
+        },
+        {
+          "id": 91,
+          "tag": "button",
+          "text": "Act 0",
+          "attrs": {
+            "aria-label": "Act 0"
+          },
+          "x": 3,
+          "y": 0
+        },
+        {
+          "id": 92,
+          "tag": "button",
+          "text": "Act 1",
+          "attrs": {
+            "aria-label": "Act 1"
+          },
+          "x": 3,
+          "y": 1
+        },
+        {
+          "id": 93,
+          "tag": "button",
+          "text": "Act 2",
+          "attrs": {
+            "aria-label": "Act 2"
+          },
+          "x": 3,
+          "y": 2
+        },
+        {
+          "id": 94,
+          "tag": "button",
+          "text": "Act 3",
+          "attrs": {
+            "aria-label": "Act 3"
+          },
+          "x": 3,
+          "y": 3
+        },
+        {
+          "id": 95,
+          "tag": "button",
+          "text": "Act 4",
+          "attrs": {
+            "aria-label": "Act 4"
+          },
+          "x": 3,
+          "y": 4
+        }
+      ]
+    }
+  }
+]

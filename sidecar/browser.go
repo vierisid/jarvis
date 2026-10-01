@@ -1284,22 +1284,36 @@ func makeBrowserEvaluateHandler(cfg *SidecarConfig) RPCHandler {
 			return nil, fmt.Errorf("evaluate: parse reply: %w", err)
 		}
 		if parsed.ExceptionDetails != nil {
-			return nil, fmt.Errorf("JS error: %s", string(parsed.ExceptionDetails))
+			// Capped like every other page-controlled reply (#597): the page
+			// writes this message, and an uncapped one gets the whole reply
+			// dropped at the brain's 2 MB cap instead of reaching the model.
+			return nil, fmt.Errorf("JS error: %s",
+				truncateMarked(string(parsed.ExceptionDetails), maxPageControlledReply))
 		}
 		if parsed.Result.Value == nil || string(parsed.Result.Value) == "null" {
 			return &RPCResult{Result: "(no return value)"}, nil
 		}
+		// The VALUE is the page's too, and was just as unbounded as its title
+		// (#597): one `document.body.innerHTML` gets this reply dropped whole at
+		// the brain's 2 MB cap, so the model sees neither the value nor a
+		// reason. EVERY branch is capped, starting with the string one -- it is
+		// the overwhelmingly common return (`innerText`, `innerHTML`, a
+		// `JSON.stringify` inside the expression), so capping only the other two
+		// would have left the issue open on the path that is actually used.
+		//
+		// truncateMarked, not truncateRendered: an evaluate result is
+		// legitimately multi-line and must not be flattened.
 		var asString string
 		if json.Unmarshal(parsed.Result.Value, &asString) == nil {
-			return &RPCResult{Result: asString}, nil
+			return &RPCResult{Result: truncateMarked(asString, maxPageControlledReply)}, nil
 		}
 		var pretty any
 		if json.Unmarshal(parsed.Result.Value, &pretty) == nil {
 			if out, err := json.MarshalIndent(pretty, "", "  "); err == nil {
-				return &RPCResult{Result: string(out)}, nil
+				return &RPCResult{Result: truncateMarked(string(out), maxPageControlledReply)}, nil
 			}
 		}
-		return &RPCResult{Result: string(parsed.Result.Value)}, nil
+		return &RPCResult{Result: truncateMarked(string(parsed.Result.Value), maxPageControlledReply)}, nil
 	}
 }
 
