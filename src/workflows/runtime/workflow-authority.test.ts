@@ -17,6 +17,7 @@ import { updateDraftVersion, setSampleDataEntry, setSampleInputEntry } from '../
 import { resumeResolvedWorkflowEffects } from './effect-approval-scheduler';
 import { cancelFlowRun } from '../db/repos/run-cancellation';
 import { WorkflowCancellationError } from './cancellation';
+import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN, wrapUntrusted } from '../../roles/untrusted';
 import { checkpointExecution } from '../../actions/execution-scope';
 import { SandboxApi } from '../sandbox-api/server';
 import { EngineRuntime } from '../runner/engine-runtime/engine-runtime';
@@ -103,6 +104,39 @@ describe('workflow effect boundary', () => {
     expect((await f.invoke()).result).toBe('saved');
     expect((await f.invoke()).result).toBe('saved');
     expect(f.calls).toHaveLength(1);
+  });
+
+  /**
+   * #609. The boundary's own receipt. A tool that frames its own return
+   * (`actions/tools/manage-workflow.ts` is the one) hands this path a delimited
+   * block, `canonicalJson` escapes it onto a single line, and the 2000-char
+   * prefix that used to be stored kept the open delimiter and dropped the close
+   * -- a boundary that disclaims whatever a later consumer renders after it.
+   *
+   * `record.result` is deliberately NOT bounded (replay state, shape pinned by
+   * #567), so the assertion is specifically about the receipt string beside it.
+   */
+  test('the effect receipt stores no delimiter, while the effect result keeps its shape', async () => {
+    const f = fixture();
+    // The shape a self-framing tool returns, too long for the receipt budget.
+    const framed = wrapUntrusted(
+      JSON.stringify({ flows: Array.from({ length: 60 }, (_, i) => ({ id: `f${i}`, name: 'N'.repeat(40) })) }),
+      'a workflow definition and its captured sample data');
+    expect(framed.length).toBeGreaterThan(2000);
+    f.registry.get('write_file')!.execute = async () => framed;
+    f.authority.setGovernedCategories(['write_data']);
+
+    const pending = await f.invoke();
+    const approvalId = pending.approval.approvalId as string;
+    f.approvals.approve(approvalId, 'user');
+    expect((await f.invoke()).result).toBe(framed);
+
+    const receipt = f.approvals.getRequest(approvalId)!.execution_result!;
+    expect(receipt.length).toBeLessThanOrEqual(2000);
+    expect(receipt).not.toContain(UNTRUSTED_OPEN);
+    expect(receipt).not.toContain(UNTRUSTED_CLOSE);
+    // Replay state is untouched: the effect still holds the tool's own value.
+    expect(listWorkflowEffects(f.run.id)[0]).toMatchObject({ status: 'succeeded', result: framed });
   });
 
   test('an explicit UI review never turns a policy denial into an approval', async () => {
