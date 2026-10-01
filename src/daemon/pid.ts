@@ -341,6 +341,12 @@ export function readLockedPort(): number | null {
  * var, config file, or default).
  *
  * No-op if the lock isn't held by this process.
+ *
+ * Second reader, outside this file: the Docker image's HEALTHCHECK reads the
+ * port off line two to probe `/health` (#614). It tolerates a missing file
+ * and falls back to JARVIS_PORT, then 3142, but it does assume the port is
+ * the second run of digits. Inserting a line before it would send the probe
+ * to the wrong port, so keep the two in step.
  */
 export function writeLockedPort(port: number): void {
   if (lockFd === null) return;

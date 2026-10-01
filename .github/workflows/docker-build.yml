@@ -18,6 +18,21 @@ on:
       - "bun.lock"
       - "package.json"
       - ".github/workflows/docker-build.yml"
+      # The image now prebuilds the workflow runtime, so a source change can
+      # fail the image build without touching the Dockerfile. Deliberately
+      # the whole tree rather than a hand list: the prebuild's cache key
+      # reaches outside src/workflows (PATCHED_VENDOR_SOURCES escapes into
+      # src/workflows/runtime, src/lib and src/util, and pieceHash() reads
+      # src/actions/action-outcome.ts). The rest is simply every path the
+      # image copies or compiles: src/, bin/, roles/ and tsconfig.json into
+      # the runtime layer, scripts/ into the build stages, and ui/, which
+      # `bun build` compiles during the build.
+      - "src/**"
+      - "scripts/**"
+      - "ui/**"
+      - "bin/**"
+      - "roles/**"
+      - "tsconfig.json"
   pull_request:
     paths:
       - "Dockerfile"
@@ -25,6 +40,21 @@ on:
       - "bun.lock"
       - "package.json"
       - ".github/workflows/docker-build.yml"
+      # The image now prebuilds the workflow runtime, so a source change can
+      # fail the image build without touching the Dockerfile. Deliberately
+      # the whole tree rather than a hand list: the prebuild's cache key
+      # reaches outside src/workflows (PATCHED_VENDOR_SOURCES escapes into
+      # src/workflows/runtime, src/lib and src/util, and pieceHash() reads
+      # src/actions/action-outcome.ts). The rest is simply every path the
+      # image copies or compiles: src/, bin/, roles/ and tsconfig.json into
+      # the runtime layer, scripts/ into the build stages, and ui/, which
+      # `bun build` compiles during the build.
+      - "src/**"
+      - "scripts/**"
+      - "ui/**"
+      - "bin/**"
+      - "roles/**"
+      - "tsconfig.json"
 
 # One in-flight image build per ref; never cancel main, whose run is the
 # post-merge verdict on the Dockerfile.

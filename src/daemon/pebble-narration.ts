@@ -36,7 +36,16 @@
  * bubble says so. A pebble that quietly does not move looks exactly like a
  * pebble the user blinked past, so "we could not tell you" has to read
  * differently from "here it is".
+ *
+ * THIS FILE IMPORTS ONE THING, and that is still the point of it. It imported
+ * nothing until #611 shared the capability predicate, and the module it now
+ * imports has no imports of its own -- so every decision here remains a pure
+ * function of its arguments, assertable by reading this file, with no daemon,
+ * no sidecar and no browser stood up. That is what makes #590's fail-closed
+ * branch testable. Anything with a dependency of its own does not belong here.
  */
+
+import { servesCapability } from '../sidecar/capability-predicate.ts';
 
 /** Where the pebble should fly, or why it is not flying. */
 export type PebbleNarration =
@@ -195,28 +204,25 @@ export function pebbleIsOnThisHost(routing: NarrationRouting): boolean {
 /**
  * Whether the sidecar can actually serve `browser` right now.
  *
- * Advertised AND not listed unavailable, term for term what
- * `autoTargetForCapability` asks before it routes a browser call
- * (src/actions/tools/sidecar-route.ts) and what `remoteBrowserPebbleTarget`
- * filters on (src/actions/browser/remote-element-point.ts). When this predicate
- * matched on the advertisement alone it refused a pointer for a click that was
- * about to run locally with honest coordinates sitting in the local cache --
- * see `localBrowserWillServe`.
+ * NO LONGER A COPY (#611). The three terms -- connected, advertised, not
+ * listed unavailable -- are `servesCapability` in
+ * src/sidecar/capability-predicate.ts, which every account of why they belong
+ * together now lives in, including which other call sites still hold their own
+ * version and which one of them does NOT agree.
  *
- * STILL A THIRD COPY of those three terms rather than a shared one, and that is
- * known debt, not an oversight: what this file imports is nothing at all, which
- * is what makes the security-relevant decision testable with no daemon, no
- * sidecar and no browser. Sharing the terms needs a new leaf module that the
- * router, `remote-element-point.ts` and this file all import -- a refactor
- * across two files this change does not own. If the copies ever drift so that
- * this one is WEAKER than the router's, the narration reads a local cache for a
- * sidecar-served click and #585 is back, so an edit to any one of the three
- * belongs in all three.
+ * That module is the only thing this file imports, and it imports nothing
+ * itself, so the property that matters here is intact: the routing decision
+ * below is still assertable by reading this file, with no daemon, no sidecar
+ * and no browser to stand up. `capability-predicate.test.ts` pins that rather
+ * than asking a reader to preserve it.
+ *
+ * Why the predicate must keep the unavailability term: matching on the
+ * advertisement alone refused a pointer for a click that was about to run
+ * locally with honest coordinates sitting in the local cache -- see
+ * `localBrowserWillServe`.
  */
 function servesBrowser(sidecar: NarrationRouting['sidecars'][number]): boolean {
-  return !!sidecar.connected
-    && !!sidecar.capabilities?.includes('browser')
-    && !sidecar.unavailable_capabilities?.some((u) => u.name === 'browser');
+  return servesCapability(sidecar, 'browser');
 }
 
 /**
@@ -346,6 +352,21 @@ export async function browserElementNarration(
   if (!origin) {
     return { kind: 'unplaced', reason: 'could not read the viewport position on screen' };
   }
+  // THE SPACE, named rather than left to the reader (#604). Both terms are
+  // Chromium device-independent pixels -- `viewportScreenOrigin` reads the
+  // window's screen position and `snapshotElementPoint` holds a CSS-px centre
+  // within it -- so the sum is `screen_dip`, the same space the sidecar names
+  // on the wire for the remote branch above. That equals the pebble's own
+  // space (`PEBBLE_SCREEN_SPACE` in pebble-point-prompt.ts) on macOS and
+  // Linux, and on Windows at 100% DPI. Spelled out in words rather than
+  // imported: this file's zero-dependency property is the point of it.
+  //
+  // No scale term here, and that is load-bearing: #590's first version
+  // multiplied by `devicePixelRatio`, which was wrong on two of three
+  // platforms and threw the pebble most of a screen away. (The in-tree prose
+  // at sidecar/browser_element_point.go credits that removal to #585; `git
+  // log -S devicePixelRatio` says it was #590. Noted rather than silently
+  // picked, since the two files sit beside each other.)
   return {
     kind: 'point',
     x: Math.round(origin.x + point.x),
