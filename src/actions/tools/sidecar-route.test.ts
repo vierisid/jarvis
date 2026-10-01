@@ -90,6 +90,167 @@ describe('typed desktop outcomes', () => {
   });
 });
 
+/**
+ * #605. These three refusals used to be two sentences between them, and the
+ * model acted on the wrong one: an old sidecar was reported as a disabled
+ * capability, so the user was sent to a config file that was fine.
+ *
+ * The assertions are on the REMEDY, not on phrasing, because the remedy is what
+ * the model acts on. Each test also asserts the absence of the OTHER remedy:
+ * a message that names both is as useless as one that names the wrong one.
+ */
+describe('an old sidecar and a disabled capability are different conditions (#605)', () => {
+  /** The text a model-facing tool gets. Legacy text path, which is what builtin.ts uses. */
+  const refusalFor = async (sidecars: SidecarInfo[],
+    dispatch?: (id: string, method: string, params: Record<string, unknown>) => Promise<unknown>) => {
+    setSidecarManagerRef(stubManager(sidecars, dispatch));
+    return routeToSidecar(mac.id, 'browser_element_point', {}, 'browser');
+  };
+  const missingMethod = async () => { throw new SidecarRPCError('METHOD_NOT_FOUND', 'Unknown method: browser_element_point'); };
+  const withBrowser = { ...mac, capabilities: ['browser'] as SidecarInfo['capabilities'] };
+  /** The two remedies that must never both appear, and never swap. */
+  const SETTING = /ask the user to enable it in the sidecar's config/;
+  const UPDATE = /ask the user to (update the sidecar|make sure that machine is running the newest sidecar build)/;
+
+  test('a capability the operator turned off names the setting, and never an update', async () => {
+    const text = await refusalFor([{ ...mac, capabilities: ['terminal'], version: '0.10.0', latest_version: '0.10.0' }]);
+    expect(text).toMatch(SETTING);
+    // A sidecar that is not behind rules age out, so the message must not hedge.
+    expect(text).not.toMatch(UPDATE);
+    expect(text).not.toContain('too old');
+  });
+
+  test('a missing method names a sidecar update, and never the config', async () => {
+    const text = await refusalFor([{ ...withBrowser, version: '0.9.6', latest_version: '0.10.0' }], missingMethod);
+    expect(text).toMatch(UPDATE);
+    expect(text).toContain('older than this brain');
+    // The whole bug: this used to tell the user to go and enable a capability.
+    expect(text).not.toMatch(SETTING);
+    expect(text).not.toContain('enable the capability');
+    // And it says the capability is fine rather than leaving that to be guessed.
+    expect(text).toContain('does advertise the "browser" capability');
+  });
+
+  test('a missing method names both versions, so the user knows what to update to', async () => {
+    const text = await refusalFor([{ ...withBrowser, version: '0.9.6', latest_version: '0.10.0' }], missingMethod);
+    expect(text).toContain('0.9.6');
+    expect(text).toContain('0.10.0');
+  });
+
+  test('a sidecar already at the newest version is NOT told to update to it', async () => {
+    // #605 inverted, and the normal state of main: a method lands in the brain
+    // and sidecar/VERSION is bumped later, so a user on the newest released
+    // sidecar has no method and no update to install. "Update the sidecar" is
+    // then as unactionable as "check your config".
+    const text = await refusalFor([{ ...withBrowser, version: '0.10.0', latest_version: '0.10.0' }], missingMethod);
+    expect(text).not.toContain('older than this brain');
+    expect(text).toContain('the newest sidecar this brain knows of');
+    expect(text).toContain('stale jarvis-sidecar process');
+    expect(text).not.toMatch(SETTING);
+  });
+
+  test('a sidecar AHEAD of the brain is not called too old', async () => {
+    // A newer sidecar against an older brain is supported (compat.ts: "a new
+    // sidecar release needs no brain change to be considered ok"), so an
+    // ordered comparison is required -- equality would call this one too old.
+    const ahead: SidecarInfo = { ...mac, capabilities: ['terminal'], version: '0.11.0', latest_version: '0.10.0' };
+    const text = await refusalFor([ahead]);
+    expect(text).toMatch(SETTING);
+    expect(text).not.toContain('too old');
+    expect(text).not.toMatch(UPDATE);
+  });
+
+  test('a local build is compared on its core version, not refused as unparseable', async () => {
+    // parseSemver tolerates +local where isUpdateAvailable refuses it, and for
+    // a DIAGNOSIS that build is perfectly comparable.
+    const text = await refusalFor([{ ...mac, capabilities: ['terminal'], version: '0.10.0+local', latest_version: '0.10.0' }]);
+    expect(text).toMatch(SETTING);
+    expect(text).not.toContain('too old');
+  });
+
+  test('a dev build reads as unknown age, so the remedy still names an update', async () => {
+    // manager.ts defaults a missing reported version to the string 'dev', so
+    // this is the real production shape of "the brain cannot tell".
+    const text = await refusalFor([{ ...withBrowser, version: 'dev', latest_version: '0.10.0' }], missingMethod);
+    expect(text).toContain('older than this brain');
+    expect(text).toContain('(it reports dev)');
+    // Not a false pair: the brain cannot order 'dev' against 0.10.0.
+    expect(text).not.toContain('this brain ships');
+    expect(text).toMatch(UPDATE);
+  });
+
+  test('no version at all reads as absent, never as current', async () => {
+    const text = await refusalFor([{ ...withBrowser, version: undefined, latest_version: undefined }], missingMethod);
+    expect(text).toMatch(UPDATE);
+    expect(text).toContain('older than this brain');
+    expect(text).not.toContain('undefined');
+    expect(text).not.toContain('it reports');
+  });
+
+  test('a known version with no latest to compare against stays unknown', async () => {
+    const text = await refusalFor([{ ...withBrowser, version: '0.9.6', latest_version: undefined }], missingMethod);
+    expect(text).toContain('(it reports 0.9.6)');
+    expect(text).not.toContain('this brain ships');
+    expect(text).toMatch(UPDATE);
+  });
+
+  test('a capability that is on but unavailable names neither of the other remedies', async () => {
+    // The third condition, and the reason the other two have to be explicit:
+    // a missing host dependency is fixed by neither a setting nor an update.
+    const text = await refusalFor([{ ...mac, capabilities: ['browser'],
+      unavailable_capabilities: [{ name: 'browser', reason: 'no Chromium on PATH' }] }]);
+    expect(text).toContain('no Chromium on PATH');
+    expect(text).toContain('not a capability setting');
+    // It points at the reason instead of predicting that an update cannot help,
+    // which the brain has no way to know.
+    expect(text).toContain('install what the reason names');
+    expect(text).not.toMatch(SETTING);
+    expect(text).not.toMatch(UPDATE);
+  });
+
+  test('each of the three conditions names a different remedy', async () => {
+    // The property that matters is the REMEDY, not that three strings differ:
+    // the old code also produced three distinct strings while two of them gave
+    // the same (wrong) instruction.
+    const remedies = async (sidecars: SidecarInfo[], dispatch?: () => Promise<unknown>) => {
+      const text = await refusalFor(sidecars, dispatch);
+      return { setting: SETTING.test(text), update: UPDATE.test(text) };
+    };
+    expect(await remedies([{ ...mac, capabilities: ['terminal'], version: '0.10.0', latest_version: '0.10.0' }]))
+      .toEqual({ setting: true, update: false });
+    expect(await remedies([{ ...withBrowser, version: '0.9.6', latest_version: '0.10.0' }], missingMethod))
+      .toEqual({ setting: false, update: true });
+    expect(await remedies([{ ...mac, capabilities: ['browser'],
+      unavailable_capabilities: [{ name: 'browser', reason: 'no Chromium' }] }]))
+      .toEqual({ setting: false, update: false });
+  });
+
+  test('a sidecar of unknown age names both remedies rather than guessing', async () => {
+    // Its neighbour's share of the same conflation: an operator who turned the
+    // capability off and a sidecar too old to have heard of the name both leave
+    // it out of the advertised list, and the brain cannot tell them apart
+    // without a version pair that says which.
+    const text = await refusalFor([{ ...mac, capabilities: ['terminal'], version: '0.9.6', latest_version: '0.10.0' }]);
+    expect(text).toMatch(SETTING);
+    expect(text).toContain('too old to offer it');
+    expect(text).toContain('ask the user to update it');
+  });
+
+  test('an empty capability list reads as none rather than a dangling colon', async () => {
+    const text = await refusalFor([{ ...mac, capabilities: [] }]);
+    expect(text).toContain('Available capabilities: none.');
+  });
+
+  test('the code and the status are unchanged, so nothing downstream reclassifies', async () => {
+    // A PIN, not a regression test: #591's probe switches on the CODE, and
+    // rewording the text must never move it.
+    setSidecarManagerRef(stubManager([withBrowser], missingMethod));
+    await expect(routeToSidecarAction(mac.id, 'browser_element_point', {}, 'browser')).rejects.toMatchObject({
+      outcome: { status: 'blocked', code: 'METHOD_NOT_FOUND', effect: 'not_started' },
+    });
+  });
+});
+
 /** Minimal manager stub: only the two methods these paths touch. */
 function stubManager(
   sidecars: SidecarInfo[],

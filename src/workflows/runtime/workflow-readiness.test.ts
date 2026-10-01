@@ -15,6 +15,10 @@ import { WorkflowEventBus } from './event-bus';
 import { setEncryptionKey } from '../db/encryption';
 import { upsertConnection } from '../db/repos/app-connection';
 import { CredentialResolver } from '../credentials/adapter';
+import { UNTRUSTED_CLOSE, UNTRUSTED_OPEN } from '../../roles/untrusted';
+import { ToolRegistry } from '../../actions/tools/registry';
+import { AgentOrchestrator } from '../../agents/orchestrator';
+import type { RoleDefinition } from '../../roles/types';
 
 const pieces = new PieceCatalog([
   { name: 'test', displayName: 'Test', description: '', actions: {
@@ -143,6 +147,43 @@ test('chat publish, enable and direct run use the same validator', async () => {
   const tool = createManageWorkflowTool();
   for (const action of ['publish', 'enable', 'run']) await expect(tool.execute({ action, flow: flow.id })).rejects.toThrow('Reference "missing"');
   expect((await request('/api/workflows/:id/run', 'POST', { id: flow.id }, {})).status).toBe(422);
+});
+
+/**
+ * #608, end to end on the REAL vector: a readiness refusal whose message
+ * interpolates `i.node`, a step name read back out of the stored graph, which
+ * the composer LLM or a versions-API body wrote.
+ *
+ * Both halves in one test, because they are one decision. The THROW is raw --
+ * which is what keeps the assertions above, `trapErrors`' 422 and the workflow
+ * runtime's "a rejection means the step failed" all true -- and the MODEL reads
+ * it framed, because the tool declares `failureIsOutsideContent` and the
+ * dispatch honours that.
+ */
+test('a readiness refusal throws raw and reaches the model framed', async () => {
+  const { flow } = draft(graph(step('send', '{{missing.email}}')));
+  const tool = createManageWorkflowTool();
+
+  const thrown = await tool.execute({ action: 'run', flow: flow.id }).then(() => null, (e: Error) => e.message);
+  expect(thrown).toContain('Reference "missing"');
+  expect(thrown).not.toContain(UNTRUSTED_OPEN);
+  expect(thrown).not.toContain(UNTRUSTED_CLOSE);
+
+  const registry = new ToolRegistry();
+  registry.register(tool);
+  const orch = new AgentOrchestrator();
+  orch.setToolRegistry(registry);
+  orch.createPrimary({ id: 'personal-assistant', name: 'PA', description: 't', responsibilities: [],
+    tools: ['automation'], authority_level: 10 } as unknown as RoleDefinition);
+  const seen = String(await (orch as unknown as { executeTool: (tc: unknown) => Promise<unknown> })
+    .executeTool({ id: '1', name: 'manage_workflow', arguments: { action: 'run', flow: flow.id } }));
+
+  expect(seen).toContain('Reference "missing"');
+  expect(seen).toContain(UNTRUSTED_OPEN);
+  expect(seen.trimEnd().endsWith(UNTRUSTED_CLOSE)).toBe(true);
+  // The step name is inside the block, and the only text outside it is ours.
+  expect(seen.indexOf('send')).toBeGreaterThan(seen.indexOf(UNTRUSTED_OPEN));
+  expect(seen.startsWith('Error executing manage_workflow: [Content from manage_workflow failure')).toBe(true);
 });
 test('correct explicit and latest draft publication work; invalid republish is atomic', () => {
   const { flow, version } = draft(cron());

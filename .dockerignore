@@ -35,6 +35,15 @@ out/
 # UI build output (rebuilt in Docker)
 ui/dist/
 
+# Compiled bundles under src/ (rebuilt in Docker by the `workflows` stage).
+# These are untracked build output, so a developer's working tree may hold
+# them, and excluding them keeps `docker build` from shipping locally built
+# bytes when their content hash happens to match. Deliberately every dist/
+# under src/, not just the jarvis pieces: the engine's piece loader walks
+# packages/pieces/** for any dist/package.json, so a stray local build under
+# a sibling package would ship and be loadable.
+src/**/dist/
+
 # ONNX/WASM assets (copied from node_modules in Docker)
 ui/public/openwakeword/
 ui/public/ort/

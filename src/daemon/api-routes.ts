@@ -131,7 +131,9 @@ import {
   scheduleAutostartRestart,
 } from '../cli/autostart.ts';
 import { runWithOrigin } from '../llm/origin.ts';
-import { GoalValidationError, keys as goalKeys, record as goalRecord } from '../goals/validation.ts';
+import { getGoalApplication } from '../goals/application-service.ts';
+import { readGoalEvents } from '../goals/event-delivery.ts';
+import { GoalValidationError, number as goalNumber, keys as goalKeys, record as goalRecord } from '../goals/validation.ts';
 
 import { createSuggestionFeedbackRoutes } from '../awareness/suggestion-feedback-routes.ts';
 
@@ -4115,12 +4117,31 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           }
 
           // Quick create (direct)
-          const goals = require('../vault/goals.ts');
-          const goal = goals.createGoal(title, level, options);
+          const goal = getGoalApplication().createGoal(title, level, options);
           return json(goal, 201);
         } catch (err) {
           if (err instanceof GoalValidationError) return json({ error: err.message, code: 'INVALID_GOAL', path: err.path }, 400);
           return error(`${err}`, err instanceof SyntaxError ? 400 : 500);
+        }
+      },
+    },
+
+    '/api/goals/events': {
+      GET: (req: Request) => {
+        try {
+          const params = new URL(req.url).searchParams;
+          // An absent parameter takes its default; a present but blank one is invalid, not 0.
+          const param = (name: string, fallback: number) => {
+            const raw = params.get(name);
+            return raw === null ? fallback : raw.trim() ? Number(raw) : NaN;
+          };
+          const after = goalNumber(param('after', 0), 'after', 0, Number.MAX_SAFE_INTEGER, true);
+          const limit = goalNumber(param('limit', 100), 'limit', 1, 100, true);
+          const events = readGoalEvents(after, limit);
+          return json({ events, nextCursor: events.at(-1)?.sequence ?? after });
+        } catch (err) {
+          if (err instanceof GoalValidationError) return json({ error: err.message, code: 'INVALID_GOAL', path: err.path }, 400);
+          return error('Goal event history unavailable', 503);
         }
       },
     },
@@ -4156,8 +4177,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
       POST: async (req: Request) => {
         try {
           const body = await req.json() as { id: string; sort_order: number }[];
-          const goals = require('../vault/goals.ts');
-          goals.reorderGoals(body);
+          getGoalApplication().reorderGoals(body);
           return json({ ok: true });
         } catch (err) { return error(`${err}`); }
       },
@@ -4203,8 +4223,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
           const url = new URL(req.url);
           const id = url.pathname.split('/').pop()!;
           const body = await req.json() as Record<string, unknown>;
-          const goals = require('../vault/goals.ts');
-          const updated = goals.updateGoal(id, body);
+          const updated = getGoalApplication().updateGoal(id, body);
           if (!updated) return error('Goal not found', 404);
           return json(updated);
         } catch (err) {
@@ -4216,8 +4235,7 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
         try {
           const url = new URL(req.url);
           const id = url.pathname.split('/').pop()!;
-          const goals = require('../vault/goals.ts');
-          const deleted = goals.deleteGoal(id);
+          const deleted = getGoalApplication().deleteGoal(id);
           if (!deleted) return error('Goal not found', 404);
           return json({ ok: true });
         } catch (err) { return error(`${err}`); }
@@ -4251,51 +4269,50 @@ export function createApiRoutes(ctx: ApiContext): Record<string, unknown> {
     '/api/goals/:id/score': {
       POST: async (req: Request) => {
         try {
-          const url = new URL(req.url);
-          const parts = url.pathname.split('/');
-          const id = parts[parts.length - 2]!;
-          const body = await req.json() as { score: number; reason: string; source?: string };
-          if (body.source === 'daily_review') {
-            return error('Automatic goal reviews require a verified measurement-to-score mapping', 400);
-          }
-          if (typeof body.score !== 'number' || !Number.isFinite(body.score)) {
-            return error('Score must be a finite number', 400);
-          }
-          const goals = require('../vault/goals.ts');
-          const updated = goals.updateGoalScore(id, body.score, body.reason, body.source ?? 'user');
+          const id = new URL(req.url).pathname.split('/').at(-2)!;
+          const body = goalRecord(await req.json(), 'request');
+          goalKeys(body, ['score', 'reason', 'source'], 'request');
+          if (body.source === 'daily_review') throw new GoalValidationError('source', 'Automatic goal reviews require a verified measurement-to-score mapping');
+          if (body.source !== undefined && body.source !== 'user') throw new GoalValidationError('source', 'Manual score requests must use source user');
+          const updated = getGoalApplication().scoreGoal(id, body.score as number, (body.reason === undefined ? '' : body.reason) as string);
           if (!updated) return error('Goal not found', 404);
           return json(updated);
-        } catch (err) { return error(`${err}`); }
+        } catch (err) {
+          if (err instanceof GoalValidationError) return json({ error: err.message, code: 'INVALID_GOAL', path: err.path }, 400);
+          return error(`${err}`, err instanceof SyntaxError ? 400 : 500);
+        }
       },
     },
 
     '/api/goals/:id/status': {
       POST: async (req: Request) => {
         try {
-          const url = new URL(req.url);
-          const parts = url.pathname.split('/');
-          const id = parts[parts.length - 2]!;
-          const body = await req.json() as { status: string };
-          const goals = require('../vault/goals.ts');
-          const updated = goals.updateGoalStatus(id, body.status as any);
+          const id = new URL(req.url).pathname.split('/').at(-2)!;
+          const body = goalRecord(await req.json(), 'request');
+          goalKeys(body, ['status'], 'request');
+          const updated = getGoalApplication().updateStatus(id, body.status as any);
           if (!updated) return error('Goal not found', 404);
           return json(updated);
-        } catch (err) { return error(`${err}`); }
+        } catch (err) {
+          if (err instanceof GoalValidationError) return json({ error: err.message, code: 'INVALID_GOAL', path: err.path }, 400);
+          return error(`${err}`, err instanceof SyntaxError ? 400 : 500);
+        }
       },
     },
 
     '/api/goals/:id/health': {
       POST: async (req: Request) => {
         try {
-          const url = new URL(req.url);
-          const parts = url.pathname.split('/');
-          const id = parts[parts.length - 2]!;
-          const body = await req.json() as { health: string };
-          const goals = require('../vault/goals.ts');
-          const updated = goals.updateGoalHealth(id, body.health as any);
+          const id = new URL(req.url).pathname.split('/').at(-2)!;
+          const body = goalRecord(await req.json(), 'request');
+          goalKeys(body, ['health'], 'request');
+          const updated = getGoalApplication().updateHealth(id, body.health as any);
           if (!updated) return error('Goal not found', 404);
           return json(updated);
-        } catch (err) { return error(`${err}`); }
+        } catch (err) {
+          if (err instanceof GoalValidationError) return json({ error: err.message, code: 'INVALID_GOAL', path: err.path }, 400);
+          return error(`${err}`, err instanceof SyntaxError ? 400 : 500);
+        }
       },
     },
 

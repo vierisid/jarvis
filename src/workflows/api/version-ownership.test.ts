@@ -111,9 +111,14 @@ describe("nested workflow version ownership", () => {
     const { flow, version } = fixture();
     const req = new Request("http://localhost", { method: "PATCH" }) as Request & { params: Record<string, string> };
     req.params = { id: flow.id, versionId: version.id };
-    req.json = async () => {
+    // The seam is `text`, not `json`: since #609 this route bounds the body
+    // before parsing it, so it reads the text and parses that itself. The
+    // property under test is unchanged -- the body is fully consumed before
+    // ownership is checked, so a body that mutates state while being read
+    // cannot slip past the check.
+    req.text = async () => {
       getWorkflowDb().run("DELETE FROM flow_version WHERE id = ?", [version.id]);
-      return { displayName: "Too late", uiMeta: { positions: {}, orphans: [] } };
+      return JSON.stringify({ displayName: "Too late", uiMeta: { positions: {}, orphans: [] } });
     };
     const result = await routes[VERSION]!.PATCH!(req);
     expect(result.status).toBe(404);

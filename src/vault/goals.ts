@@ -102,7 +102,7 @@ export function createGoal(
         time_horizon, score, score_reason, status, health, deadline, started_at,
         estimated_hours, actual_hours, authority_level, tags, dependencies,
         escalation_stage, escalation_started_at, sort_order, created_at, updated_at, completed_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?, 0.0, NULL, ?, 'on_track', ?, ?, ?, 0, ?, ?, ?, 'none', NULL, ?, ?, ?, NULL)`
+       VALUES (?, ?, ?, ?, ?, ?, ?, 0.0, NULL, ?, 'on_track', ?, ?, ?, 0, ?, ?, ?, 'none', NULL, ?, ?, ?, ?)`
     ).run(
       id,
       opts?.parent_id ?? null,
@@ -120,6 +120,7 @@ export function createGoal(
       opts?.dependencies ? JSON.stringify(opts.dependencies) : null,
       opts?.sort_order ?? 0,
       now, now,
+      ['completed', 'failed', 'killed'].includes(opts?.status ?? 'draft') ? now : null,
     );
 
     return getGoal(id)!;
@@ -282,10 +283,8 @@ export function updateGoalStatus(id: string, status: GoalStatus): Goal | null {
     params.push(now);
   }
 
-  if (isTerminal) {
-    sets.push('completed_at = ?');
-    params.push(now);
-  }
+  sets.push('completed_at = ?');
+  params.push(isTerminal ? now : null);
 
   params.push(id);
   db.prepare(`UPDATE goals SET ${sets.join(', ')} WHERE id = ?`).run(...(params as SQLQueryBindings[]));

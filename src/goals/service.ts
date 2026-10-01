@@ -14,13 +14,15 @@ import type { DailyRhythm } from './rhythm.ts';
 import type { WorkflowEventBus } from '../workflows/runtime/event-bus.ts';
 import { CronScheduler } from '../lib/cron-scheduler.ts';
 import * as vault from '../vault/goals.ts';
+import { getGoalApplication } from './application-service.ts';
+import { calculateGoalHealth } from './health.ts';
 import { runWithOrigin } from '../llm/origin.ts';
 
 export class GoalService implements Service {
   name = 'goals';
   private _status: ServiceStatus = 'stopped';
   private config: GoalConfig;
-  private eventCallback: ((event: GoalEvent) => void) | null = null;
+  private get application() { return getGoalApplication(); }
   private chatCallback: ((text: string) => void) | null = null;
   private rhythm: DailyRhythm | null = null;
   private eventBus: WorkflowEventBus | null = null;
@@ -51,7 +53,7 @@ export class GoalService implements Service {
    * Set callback for broadcasting goal events via WebSocket.
    */
   setEventCallback(cb: (event: GoalEvent) => void): void {
-    this.eventCallback = cb;
+    this.application.setEventCallback(cb);
   }
 
   /**
@@ -68,13 +70,8 @@ export class GoalService implements Service {
     this.rhythm = rhythm;
   }
 
-  private emit(event: GoalEvent): void {
-    if (this.eventCallback) {
-      this.eventCallback(event);
-    }
-  }
-
   async start(): Promise<void> {
+    this.application.startDelivery();
     if (!this.config.enabled) {
       this._status = 'stopped';
       console.log('[GoalService] Disabled by config');
@@ -153,6 +150,7 @@ export class GoalService implements Service {
 
   async stop(): Promise<void> {
     this._status = 'stopping';
+    this.application.stopDelivery();
 
     this.cron.cancelAll();
     for (const unsub of this.unsubscribers) unsub();
@@ -169,107 +167,19 @@ export class GoalService implements Service {
   // ── Goal CRUD with events ─────────────────────────────────────────
 
   createGoal(title: string, level: GoalLevel, opts?: Parameters<typeof vault.createGoal>[2]): Goal {
-    const goal = vault.createGoal(title, level, opts);
-    this.emit({
-      type: 'goal_created',
-      goalId: goal.id,
-      data: { title, level, parent_id: goal.parent_id },
-      timestamp: Date.now(),
-    });
-    return goal;
+    return this.application.createGoal(title, level, opts);
   }
-
-  getGoal(id: string): Goal | null {
-    return vault.getGoal(id);
-  }
-
+  getGoal(id: string): Goal | null { return vault.getGoal(id); }
   updateGoal(id: string, updates: Parameters<typeof vault.updateGoal>[1]): Goal | null {
-    const goal = vault.updateGoal(id, updates);
-    if (goal) {
-      this.emit({
-        type: 'goal_updated',
-        goalId: id,
-        data: { updates },
-        timestamp: Date.now(),
-      });
-    }
-    return goal;
+    return this.application.updateGoal(id, updates);
   }
-
   scoreGoal(id: string, score: number, reason: string, source = 'user'): Goal | null {
-    const goal = vault.updateGoalScore(id, score, reason, source);
-    if (goal) {
-      this.emit({
-        type: 'goal_scored',
-        goalId: id,
-        data: { score: goal.score, reason, source },
-        timestamp: Date.now(),
-      });
-      // Health depends on score+deadline, so a score change can change health
-      // immediately. Previously this was caught by the 15-min healthTimer; now
-      // we recalc just this goal on the score-change event.
-      const newHealth = this.calculateHealth(goal);
-      if (newHealth !== goal.health) {
-        this.updateHealth(goal.id, newHealth);
-      }
-    }
-    return goal;
+    return this.application.scoreGoal(id, score, reason, source);
   }
-
-  updateStatus(id: string, status: GoalStatus): Goal | null {
-    const goal = vault.updateGoalStatus(id, status);
-    if (!goal) return null;
-
-    const eventType = status === 'completed' ? 'goal_completed'
-      : status === 'failed' ? 'goal_failed'
-      : status === 'killed' ? 'goal_killed'
-      : 'goal_status_changed';
-
-    this.emit({
-      type: eventType,
-      goalId: id,
-      data: { status },
-      timestamp: Date.now(),
-    });
-
-    // Extract goal completion data for vault knowledge
-    if (status === 'completed' || status === 'failed' || status === 'killed') {
-      try {
-        const { extractGoalCompletion } = require('../vault/extractor.ts');
-        extractGoalCompletion(goal);
-      } catch {
-        // Extractor may not be available — ignore
-      }
-    }
-
-    return goal;
-  }
-
-  updateHealth(id: string, health: GoalHealth): Goal | null {
-    const goal = vault.updateGoalHealth(id, health);
-    if (goal) {
-      this.emit({
-        type: 'goal_health_changed',
-        goalId: id,
-        data: { health },
-        timestamp: Date.now(),
-      });
-    }
-    return goal;
-  }
-
-  deleteGoal(id: string): boolean {
-    const result = vault.deleteGoal(id);
-    if (result) {
-      this.emit({
-        type: 'goal_deleted',
-        goalId: id,
-        data: {},
-        timestamp: Date.now(),
-      });
-    }
-    return result;
-  }
+  updateStatus(id: string, status: GoalStatus): Goal | null { return this.application.updateStatus(id, status); }
+  updateHealth(id: string, health: GoalHealth): Goal | null { return this.application.updateHealth(id, health); }
+  deleteGoal(id: string): boolean { return this.application.deleteGoal(id); }
+  flushEvents(): void { this.application.flushEvents(); }
 
   // ── Daily Rhythm ──────────────────────────────────────────────────
 
@@ -361,13 +271,7 @@ export class GoalService implements Service {
         const weeksBehind = (Date.now() - behindSince) / (7 * 24 * 60 * 60 * 1000);
 
         if (weeksBehind >= escalationWeeks.pressure) {
-          vault.updateGoalEscalation(goal.id, 'pressure');
-          this.emit({
-            type: 'goal_escalated',
-            goalId: goal.id,
-            data: { stage: 'pressure', weeksBehind },
-            timestamp: Date.now(),
-          });
+          this.application.updateEscalation(goal.id, 'pressure', { weeksBehind });
         }
       } else if (goal.escalation_stage === 'pressure') {
         const escalationWeeks = this.config.escalation_weeks ?? { pressure: 1, root_cause: 3, suggest_kill: 4 };
@@ -375,13 +279,7 @@ export class GoalService implements Service {
         const weeksSinceEscalation = (Date.now() - startedAt) / (7 * 24 * 60 * 60 * 1000);
 
         if (weeksSinceEscalation >= escalationWeeks.root_cause) {
-          vault.updateGoalEscalation(goal.id, 'root_cause');
-          this.emit({
-            type: 'goal_escalated',
-            goalId: goal.id,
-            data: { stage: 'root_cause', weeksSinceEscalation },
-            timestamp: Date.now(),
-          });
+          this.application.updateEscalation(goal.id, 'root_cause', { weeksSinceEscalation });
         }
       } else if (goal.escalation_stage === 'root_cause') {
         const escalationWeeks = this.config.escalation_weeks ?? { pressure: 1, root_cause: 3, suggest_kill: 4 };
@@ -389,13 +287,7 @@ export class GoalService implements Service {
         const weeksSinceEscalation = (Date.now() - startedAt) / (7 * 24 * 60 * 60 * 1000);
 
         if (weeksSinceEscalation >= escalationWeeks.suggest_kill) {
-          vault.updateGoalEscalation(goal.id, 'suggest_kill');
-          this.emit({
-            type: 'goal_escalated',
-            goalId: goal.id,
-            data: { stage: 'suggest_kill', weeksSinceEscalation },
-            timestamp: Date.now(),
-          });
+          this.application.updateEscalation(goal.id, 'suggest_kill', { weeksSinceEscalation });
         }
       }
     }
@@ -416,7 +308,7 @@ export class GoalService implements Service {
     let changed = 0;
 
     for (const goal of activeGoals) {
-      const newHealth = this.calculateHealth(goal);
+      const newHealth = calculateGoalHealth(goal);
       if (newHealth !== goal.health) {
         this.updateHealth(goal.id, newHealth);
         changed++;
@@ -426,41 +318,6 @@ export class GoalService implements Service {
     if (changed > 0) {
       console.log(`[GoalService] Health recalculated: ${changed} goal(s) changed`);
     }
-  }
-
-  /**
-   * Calculate health for a single goal based on score progress vs time elapsed.
-   */
-  private calculateHealth(goal: Goal): GoalHealth {
-    // If no deadline, base purely on score
-    if (!goal.deadline) {
-      if (goal.score >= 0.6) return 'on_track';
-      if (goal.score >= 0.3) return 'at_risk';
-      return 'behind';
-    }
-
-    const now = Date.now();
-    const startTime = goal.started_at ?? goal.created_at;
-    const totalDuration = goal.deadline - startTime;
-    const elapsed = now - startTime;
-
-    // If past deadline
-    if (now > goal.deadline) {
-      if (goal.score >= 0.7) return 'on_track'; // nearly done
-      if (goal.score >= 0.4) return 'behind';
-      return 'critical';
-    }
-
-    // Ratio: how far along are we in time vs score
-    const timeRatio = totalDuration > 0 ? elapsed / totalDuration : 0;
-    const expectedScore = timeRatio * 0.7; // expecting 0.7 = good at deadline
-
-    const gap = expectedScore - goal.score;
-
-    if (gap <= 0) return 'on_track';      // ahead of pace
-    if (gap <= 0.15) return 'at_risk';     // slightly behind
-    if (gap <= 0.3) return 'behind';       // significantly behind
-    return 'critical';                      // way behind
   }
 
   // ── Metrics ───────────────────────────────────────────────────────

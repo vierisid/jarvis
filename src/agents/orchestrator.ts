@@ -1674,6 +1674,27 @@ export class AgentOrchestrator {
           return markUntrustedToolResult(toolCall.name, tool?.category, text);
         };
 
+        /**
+         * Run the approved call and frame what comes back, which for a FAILURE
+         * is not the same question (#608).
+         *
+         * `frame` above frames by tool NAME, which is a no-op for the tool whose
+         * failures carry outside content -- it is deliberately outside
+         * `UNTRUSTED_TOOL_NAMES` (#595). So this is the fourth model boundary,
+         * and the frame is drawn HERE rather than inside the executor because
+         * the executor's one string also feeds the dashboard notification, a
+         * chat-channel relay and the execute route's HTTP body. A frame carries
+         * a per-message nonce; those three must never be handed one.
+         */
+        const runApproved = async (): Promise<string> => {
+          const receipt = await this.deferredExecutor!.executeApprovedWithReceipt(request.id, 'inline-gate');
+          if (receipt.failed && tool?.failureIsOutsideContent === true) {
+            this.noteTaint(toolCall.name, tool?.category);
+            return markUntrustedToolFailure(toolCall.name, tool?.category, receipt.result, MAX_TOOL_RESULT_CHARS, true);
+          }
+          return frame(receipt.result);
+        };
+
         // Every return below is a single string, and that is no longer a
         // limitation worth noting for documents: `DeferredExecution` collapses
         // the tool's return with `toolReturnText` before writing its receipt,
@@ -1689,7 +1710,7 @@ export class AgentOrchestrator {
             // The approve endpoints skip execution for inline requests; we
             // are the single executor. executeApproved handles markExecuted,
             // audit, and approval learning.
-            return frame(await this.deferredExecutor!.executeApproved(request.id, 'inline-gate'));
+            return runApproved();
           case 'executed':
             // Another path already ran it (shouldn't happen for inline
             // requests; tolerated for robustness). Surface its result.
@@ -1711,7 +1732,7 @@ export class AgentOrchestrator {
             if (!this.approvalManager.demoteToDeferred(request.id)) {
               const recheck = this.approvalManager.getRequest(request.id);
               if (recheck?.status === 'approved') {
-                return frame(await this.deferredExecutor!.executeApproved(request.id, 'inline-gate'));
+                return runApproved();
               }
               if (recheck?.status === 'executed') {
                 return frame(recheck.execution_result ?? `[EXECUTED] ${toolCall.name} completed.`);
@@ -1785,12 +1806,27 @@ export class AgentOrchestrator {
       // A typed failure carries the same text the tool used to RETURN, so it
       // gets the same treatment: an offline sidecar's message is harmless, a
       // remote handler's rejection is content from the other trust domain.
+      const failing = this.toolRegistry.get(toolCall.name);
       if (err instanceof ActionOutcomeError) {
-        const category = this.toolRegistry.get(toolCall.name)?.category;
+        const category = failing?.category;
         this.noteTaint(toolCall.name, category);
-        return markUntrustedToolFailure(toolCall.name, category, err.message, MAX_TOOL_RESULT_CHARS);
+        return markUntrustedToolFailure(toolCall.name, category, err.message, MAX_TOOL_RESULT_CHARS,
+          failing?.failureIsOutsideContent === true);
       }
-      return `Error executing ${toolCall.name}: ${err instanceof Error ? err.message : String(err)}`;
+      const message = err instanceof Error ? err.message : String(err);
+      // A PLAIN Error never reached the framing step at all: this branch is the
+      // one `markUntrustedToolFailure` was never called on, so a tool whose
+      // refusal quotes stored or remote text handed the model that text
+      // unframed AND uncapped -- the cap lives on the typed branch above
+      // (#608). A tool that declares its failures as outside content now takes
+      // the same capped-then-framed path; one that does not keeps this branch
+      // byte for byte, including its absence of a cap, because capping 49 other
+      // tools' errors is a separate decision from framing this one's.
+      if (failing?.failureIsOutsideContent === true) {
+        return `Error executing ${toolCall.name}: `
+          + markUntrustedToolFailure(toolCall.name, failing.category, message, MAX_TOOL_RESULT_CHARS, true);
+      }
+      return `Error executing ${toolCall.name}: ${message}`;
     }
   }
 
@@ -1922,9 +1958,17 @@ export class AgentOrchestrator {
     } catch (err) {
       if (err instanceof ActionOutcomeError) {
         this.noteTaint(name, tool?.category);
-        return markUntrustedToolFailure(name, tool?.category, err.message, MAX_TOOL_RESULT_CHARS);
+        return markUntrustedToolFailure(name, tool?.category, err.message, MAX_TOOL_RESULT_CHARS,
+          tool?.failureIsOutsideContent === true);
       }
-      return `Error executing ${name}: ${err instanceof Error ? err.message : String(err)}`;
+      const message = err instanceof Error ? err.message : String(err);
+      // The realtime path, same shape and the same reasoning as the text path's
+      // plain-Error branch above (#608).
+      if (tool?.failureIsOutsideContent === true) {
+        return `Error executing ${name}: `
+          + markUntrustedToolFailure(name, tool.category, message, MAX_TOOL_RESULT_CHARS, true);
+      }
+      return `Error executing ${name}: ${message}`;
     }
   }
 

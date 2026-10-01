@@ -50,6 +50,7 @@ import type { AuditTrail } from "../../authority/audit";
 import type { EmergencyController } from "../../authority/emergency";
 import type { ActionCategory } from "../../roles/authority";
 import type { RoleDefinition } from "../../roles/types";
+import { boundedReceiptText } from "../../roles/untrusted";
 import type { ToolRegistry } from "../../actions/tools/registry";
 import type { ActionOutcome } from "../../actions/action-outcome";
 import type { DelegationCheckpoint } from "../db/repos/delegation";
@@ -127,6 +128,21 @@ export interface M7AgentDelegatorOptions {
 const DEFAULT_ROLE_ID = "workflow-default";
 const DEFAULT_MAX_ITERATIONS = 50;
 const DEFAULT_TRACE_RESULT_MAX_CHARS = 1000;
+
+/**
+ * One field of a delegation's tool trace, cut to the cap and left carrying no
+ * delimiter (#609).
+ *
+ * Defang-then-cut rather than cut-then-defang: neither order can CREATE a
+ * marker, and this one keeps the `... (truncated, ...)` note OUTSIDE the bounded
+ * text, where it belongs -- the note is repo-authored, so it should never be
+ * subject to the cut, and the field's length is then exactly the cap plus the
+ * note rather than the cap plus an unexplained allowance.
+ */
+function boundedTraceText(text: string, maxChars: number): string {
+  const safe = boundedReceiptText(text, maxChars);
+  return text.length > maxChars ? safe + `... (truncated, was ${text.length} chars)` : safe;
+}
 
 const errorResult = (error: string, toolCalls: PieceAgentToolCall[] = []): PieceAgentDelegateResult =>
   ({ finalMessage: "", toolCalls, status: "error", error });
@@ -359,7 +375,14 @@ export function extractToolCallsTrace(
       // Stringify args defensively -- sub-agents shouldn't see the raw object
       // round-trip in step output, just a stable JSON blob.
       try {
-        entry.args = JSON.stringify(call.arguments);
+        // Bounded and defanged like the result below (#609). A sub-agent can
+        // pass one tool's framed return as another tool's argument -- writing it
+        // to a file, posting it, re-querying on it -- so this field could carry
+        // a complete block with a live nonce into the step output, and from
+        // there into the version's `sample_data`. It also had no cap at all,
+        // while being the bigger half of a `write_file` call, which is the cost
+        // the cap below exists to control.
+        entry.args = boundedTraceText(JSON.stringify(call.arguments), maxResultChars);
       } catch {
         entry.args = "<unserializable>";
       }
@@ -368,13 +391,27 @@ export function extractToolCallsTrace(
         // The LLM-side already truncates long tool results to ~6KB inside
         // `runSubAgent`; we apply a tighter cap here so a row of 50 tool
         // calls with multi-KB results doesn't bloat the workflow step.
-        entry.result =
-          result.length > maxResultChars
-            ? result.slice(0, maxResultChars) + `... (truncated, was ${result.length} chars)`
-            : result;
+        //
+        // Bounded through `boundedReceiptText` rather than sliced (#609). A
+        // sub-agent can call a tool that frames its own return
+        // (`actions/tools/manage-workflow.ts`), and a frame costs ~270-330
+        // characters of preamble and delimiters, so at this cap ANY framed
+        // payload past roughly 700 characters was cut between the open
+        // delimiter and the close -- a block that never terminates, disclaiming
+        // whatever is rendered after it. Tighter than the two approval receipts,
+        // so it fired more often, and the destination is worse: this trace is
+        // the delegation step's output, which a successful run merges into the
+        // version's `sample_data` and replays as step INPUT.
+        entry.result = boundedTraceText(result, maxResultChars);
         // The runner marks which calls failed, were denied or refused; the
         // text of a result is never read for it.
-        if (failed.has(call.id)) entry.error = result;
+        //
+        // The SAME value as `result`, which it was not: it stored the result
+        // UNTRUNCATED, so it was the one field where a whole framed block landed
+        // in a step's output intact, nonce and all -- and an operator reading a
+        // failed step's trace got a silently uncut copy beside a cut one. Now
+        // they agree, and the truncation note says the text was cut.
+        if (failed.has(call.id)) entry.error = entry.result;
       }
       trace.push(entry);
     }

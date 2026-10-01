@@ -11,7 +11,7 @@ import type { AuthorityLearner } from './learning.ts';
 import type { EmergencyController } from './emergency.ts';
 import type { ActionCategory } from '../roles/authority.ts';
 import { TAINT_PROFILE_LABEL } from './taint-gating.ts';
-import { toolReturnText } from '../roles/untrusted.ts';
+import { boundedReceiptText, toolReturnText } from '../roles/untrusted.ts';
 import { withoutTemplateDelivery } from '../actions/tools/template-delivery-scope.ts';
 
 // Defined next to substituteAboveLevel, which writes it; re-exported here,
@@ -19,6 +19,30 @@ import { withoutTemplateDelivery } from '../actions/tools/template-delivery-scop
 export { ABOVE_LEVEL_SUBSTITUTION };
 
 export type ExecutionResultCallback = (requestId: string, request: ApprovalRequest, result: string) => void;
+
+/**
+ * Budget for what `approval_requests.execution_result` stores. 2000 characters,
+ * unchanged from the slice it replaces on the success path; the other six
+ * writers in this file had no bound at all before (#609).
+ *
+ * EVERY `markExecuted` below goes through it, including the five `blocked`
+ * branches whose strings are repo-authored. For those it is byte-identity, and
+ * that is the point: a bound that only some branches apply is a bound the next
+ * branch forgets. Two of them do interpolate outside-derived text -- a
+ * per-call gate's `intent`, which for `ui_act` is built from an accessibility
+ * element's name (`actions/tools/ui.ts`, which does not reduce it through
+ * `forCard` the way other intents do) -- so this is not only hygiene.
+ *
+ * It belongs on `ApprovalManager.markExecuted`, which owns the column, rather
+ * than on each caller. That is a coordination cost and not a design preference:
+ * `authority/approval.ts` is being changed by another worktree this cycle. Noted
+ * so the move is an obvious follow-up instead of a rediscovery.
+ *
+ * Exported so `workflows/runtime/effect-boundary.ts`, the one writer outside
+ * this file that stores a tool's output in this column, uses the same number
+ * rather than a second constant that can drift from it.
+ */
+export const RECEIPT_MAX_CHARS = 2000;
 
 export class DeferredExecutor {
   private toolRegistry: ToolRegistry | null = null;
@@ -62,8 +86,13 @@ export class DeferredExecutor {
    * The same execution, reporting whether this call held the claim. A caller
    * that must not report a lost claim as a run (the execute route) reads
    * `claimed`; `result` is the receipt text, or why nothing ran.
+   *
+   * `failed` is set only when the TOOL threw, and exists so a caller with a
+   * model in front of it can frame that text as data without re-reading the row
+   * (#608). It is deliberately not set for the `blocked` branches: those strings
+   * are repo-authored, so there is nothing to disclaim.
    */
-  async executeApprovedWithReceipt(requestId: string, claimedBy = 'deferred-executor'): Promise<{ claimed: boolean; result: string }> {
+  async executeApprovedWithReceipt(requestId: string, claimedBy = 'deferred-executor'): Promise<{ claimed: boolean; result: string; failed?: boolean }> {
     const request = this.approvalManager.getRequest(requestId);
     if (!request || request.status !== 'approved') {
       return { claimed: false, result: `Error: Request ${requestId} not found or not in approved state` };
@@ -91,7 +120,7 @@ export class DeferredExecutor {
     if (this.emergencyController && !this.emergencyController.canExecute()) {
       const state = this.emergencyController.getState();
       const blocked = `[SYSTEM ${state.toUpperCase()}] Approved action ${request.tool_name} was NOT executed: all tool execution is suspended because the user has ${state} the system.`;
-      this.approvalManager.markExecuted(requestId, blocked, 'blocked');
+      this.approvalManager.markExecuted(requestId, boundedReceiptText(blocked, RECEIPT_MAX_CHARS), 'blocked');
       this.onResult?.(requestId, request, blocked);
       return { claimed: true, result: blocked };
     }
@@ -105,13 +134,13 @@ export class DeferredExecutor {
       const gate = resolveToolGate(registry?.get(request.tool_name), request.tool_name, args);
       if (gate.confirm === 'always' && !approvalNeedsClick(request)) {
         const blocked = `Approved action ${request.tool_name} was NOT executed: this approval predates the required UI review. Request a fresh dashboard review.`;
-        this.approvalManager.markExecuted(requestId, blocked, 'blocked');
+        this.approvalManager.markExecuted(requestId, boundedReceiptText(blocked, RECEIPT_MAX_CHARS), 'blocked');
         this.onResult?.(requestId, request, blocked);
         return { claimed: true, result: blocked };
       }
       if (!registry) {
         const blocked = `Approved action ${request.tool_name} was NOT executed: its original UI session or reviewed subject is no longer available. Take a fresh snapshot and request a fresh review.`;
-        this.approvalManager.markExecuted(requestId, blocked, 'blocked');
+        this.approvalManager.markExecuted(requestId, boundedReceiptText(blocked, RECEIPT_MAX_CHARS), 'blocked');
         this.onResult?.(requestId, request, blocked);
         return { claimed: true, result: blocked };
       }
@@ -123,7 +152,7 @@ export class DeferredExecutor {
       if (gate.intent && !approvalIntentFromContext(request)
         && severityRank(gate.actionCategory) > severityRank(request.action_category)) {
         const blocked = `Approved action ${request.tool_name} was NOT executed: it was approved as ${request.action_category}, but it now reaches ${gate.actionCategory} (${gate.intent}). Request a fresh approval.`;
-        this.approvalManager.markExecuted(requestId, blocked, 'blocked');
+        this.approvalManager.markExecuted(requestId, boundedReceiptText(blocked, RECEIPT_MAX_CHARS), 'blocked');
         this.onResult?.(requestId, request, blocked);
         return { claimed: true, result: blocked };
       }
@@ -136,7 +165,7 @@ export class DeferredExecutor {
       const approvedIntent = approvalIntentFromContext(request);
       if (!uiCall && approvedIntent && gate.intent && gate.intent.trim() !== approvedIntent) {
         const blocked = `Approved action ${request.tool_name} was NOT executed: what it would do changed after approval (approved: "${approvedIntent}"; now: "${gate.intent}"). Request a fresh approval.`;
-        this.approvalManager.markExecuted(requestId, blocked, 'blocked');
+        this.approvalManager.markExecuted(requestId, boundedReceiptText(blocked, RECEIPT_MAX_CHARS), 'blocked');
         this.onResult?.(requestId, request, blocked);
         return { claimed: true, result: blocked };
       }
@@ -168,7 +197,16 @@ export class DeferredExecutor {
       const executionTimeMs = Date.now() - startTime;
 
       // The receipt: the tool returned.
-      this.approvalManager.markExecuted(requestId, result.slice(0, 2000), 'committed');
+      //
+      // Bounded through `boundedReceiptText` rather than sliced (#609). A tool
+      // that frames its own return (`actions/tools/manage-workflow.ts`) hands
+      // this path a string whose first lines open a delimited block, and a bare
+      // prefix kept the open line while dropping the close -- a block that never
+      // terminates, which disclaims whatever the consumer appends after it
+      // rather than only its own payload. The helper rewrites the delimiters to
+      // their inert spelling instead, so the row keeps the preamble that says
+      // the payload is data and carries no boundary at all.
+      this.approvalManager.markExecuted(requestId, boundedReceiptText(result, RECEIPT_MAX_CHARS), 'committed');
 
       // Log to audit trail
       this.auditTrail.log({
@@ -213,12 +251,29 @@ export class DeferredExecutor {
 
       return { claimed: true, result };
     } catch (err) {
+      // RAW, and framed nowhere in this method (#608). This one string has six
+      // consumers and only two of them are a model: the row below, the
+      // `onResult` notification (which `daemon/index.ts` broadcasts over the
+      // dashboard WS and relays to a chat channel), the HTTP body of
+      // `/api/authority/approvals/:id/execute`, and the value returned to the
+      // orchestrator's inline gate. Framing here put a live per-message nonce
+      // and an unterminated block into the first three -- the HTTP route
+      // reachably, since `applyExecutionResolution` resolves a restart-orphaned
+      // INLINE approval without checking `execution_mode`.
+      //
+      // So the frame is drawn by the consumer that has a model, and this stays
+      // the raw text every other consumer wants. `failed` below is what lets
+      // that consumer tell a failure from a success without re-reading the row.
       const errorStr = `Error executing ${request.tool_name}: ${err instanceof Error ? err.message : String(err)}`;
       // The receipt: the tool threw. The call was dispatched, so a partial
       // effect is possible; the row is executed with a failed outcome.
-      this.approvalManager.markExecuted(requestId, errorStr, 'failed');
+      //
+      // Bounded through the same helper as the success receipt above, which also
+      // gives this branch a size bound it never had: a thrown message can carry
+      // a step name, a remote error or a stderr tail of unbounded length.
+      this.approvalManager.markExecuted(requestId, boundedReceiptText(errorStr, RECEIPT_MAX_CHARS), 'failed');
       this.onResult?.(requestId, request, errorStr);
-      return { claimed: true, result: errorStr };
+      return { claimed: true, result: errorStr, failed: true };
     }
   }
 

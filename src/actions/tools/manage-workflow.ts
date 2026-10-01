@@ -169,6 +169,38 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
       "that grants the permission, by design.",
     ].join("\n"),
     category: "automation",
+    /**
+     * This tool's THROW paths carry outside text, so the dispatch frames a
+     * failure as data before the model reads it (#608). The matching half of
+     * `framedForModel` below, which frames the nine actions that RETURN.
+     *
+     * The three that matter are `run`, `enable` and `publish`:
+     * `assertVersionReady` raises a `WorkflowReadinessError` whose message
+     * interpolates `i.node`, a step name read back out of the stored graph
+     * (`workflows/db/repos/flow-readiness.ts`), and `assertCodeStepsAllowed`
+     * raises `refusalMessage(flowId, intent, stepNames)` from the same graph
+     * (`workflows/db/repos/flow-code-steps.ts`). Those names are written by the
+     * composer LLM or by a `POST /api/workflows/:id/versions` body -- the same
+     * writer class as the `metadata` #598 capped.
+     *
+     * Declared for the WHOLE tool rather than for those three actions, which is
+     * the same rule #559 set and #598 followed for the returns: framing that
+     * depends on which branch a tool took is the hazard, not the fix. A
+     * parameter error pays a preamble it does not need; that is the cost of not
+     * having the frame depend on a code path.
+     *
+     * WHAT THIS DOES NOT DO: it does not make the tool throw anything different.
+     * The message is byte-identical, which is why the ~15 `rejects.toThrow`
+     * assertions across `manage-workflow.test.ts`, `flow-code-steps.test.ts` and
+     * `workflow-readiness.test.ts` are untouched, and why `trapErrors` in
+     * `workflows/api/routes.ts` still maps a `WorkflowReadinessError` to its own
+     * 4xx with the raw `e.message`. Framing a throw by catching it and returning
+     * the text -- the shape #607 assumed this fix would take -- would have turned
+     * a failure into a success value for every caller, including the workflow
+     * runtime, where a rejection is how a step is marked failed. Framing at the
+     * model boundary instead costs none of that.
+     */
+    failureIsOutsideContent: true,
     parameters: {
       action: {
         type: "string",
@@ -388,69 +420,52 @@ export function createManageWorkflowTool(deps: ManageWorkflowDeps = {}): ToolDef
  * renaming either one fails that test instead of silently shipping
  * unterminated blocks.
  *
- * KNOWN RESIDUAL, and it is a truncation hazard rather than a boundary one:
- * two consumers persist a 2000-char prefix of a tool result, which lands INSIDE
- * a ~4300-char framed return and keeps the open delimiter while dropping the
- * close.
+ * RESIDUAL, NOW CLOSED (#609). Three consumers persisted a PREFIX of a tool
+ * result, which lands inside a ~4300-char framed return and keeps the open
+ * delimiter while dropping the close: `authority/deferred-executor.ts` and
+ * `runtime/effect-boundary.ts` at 2000 characters, and
+ * `workflows/adapters/m7-agent-delegator.ts` at 1000 -- which this comment did
+ * not know about, and which therefore fired more often than either site it did
+ * name. Block overhead is ~267-327 characters at these labels, so a 2000-char
+ * prefix held a COMPLETE block only while the payload stayed under ~1,700, and
+ * for `list` that is the ordinary case on any real install: ~1,700 characters is
+ * about 8 flow summaries.
  *
- *   - `authority/deferred-executor.ts` writes `result.slice(0, 2000)` to
- *     `approval_requests.execution_result`, and `manage_workflow`'s floor
- *     (`write_data`) is taint-governed, so a read taken on a tainted turn goes
- *     through the approval path and lands there.
- *   - `runtime/effect-boundary.ts` writes `canonicalJson({ effectId, result })
- *     .slice(0, 2000)` through the same `markExecuted`.
- *
- * What a dangling open delimiter costs is NOT the tail of its own payload --
- * nothing of that payload survives the cut. It is whatever the CONSUMER
+ * What a dangling open delimiter cost was NOT the tail of its own payload --
+ * nothing of that payload survives the cut. It was whatever the CONSUMER
  * concatenates afterwards: the receipt is replayed as a tool message
- * (agents/orchestrator.ts), and `daemon/commitment-executor.ts` joins
+ * (`agents/orchestrator.ts`), and `daemon/commitment-executor.ts` joins
  * `execution_result` values into a commitment `result` that
- * `actions/tools/commitments.ts` renders into a MULTI-ITEM listing, unframed,
- * so one item's dangling open line disclaims the other items' text. That
- * commitment path truncates a SECOND time -- `results.join('\n').slice(0, 500)`
- * -- which makes a half block more likely there, not less.
+ * `actions/tools/commitments.ts` renders into a MULTI-ITEM listing, unframed, so
+ * one item's dangling open line disclaimed the other items' text -- and that
+ * path truncates a SECOND time, which made a half block more likely there rather
+ * than less.
  *
- * Be precise about what is new: the captured output in those rows is not, since
- * they carry it today with no frame at all. The dangling open line IS new, and
- * introduced here. What it costs is an integrity nuisance -- trusted text
- * downstream reads as data -- and never a boundary escape: no attacker text
- * lands outside a block, and a per-message nonce (#567) cannot be replayed into
- * closing a fresh one.
+ * Fixed AT THE SLICE, which is the option this comment used to argue against.
+ * `roles/untrusted.ts`'s `boundedReceiptText` rewrites the marker to its inert
+ * spelling before the cut, so a stored prefix carries no delimiter at all while
+ * keeping the preamble line that says the payload is data. The objection
+ * recorded here was that such a helper "would have to LOCATE an open line",
+ * which `untrusted-import-guard.test.ts` forbids in production for good reason
+ * (#560). It does not: it rewrites a token wherever it appears and never decides
+ * where a boundary is -- which is also why it still works on
+ * `effect-boundary`'s value, where `canonicalJson` has escaped the block onto a
+ * single line and there are no lines left to match.
  *
- * #598 WIDENS that residual, and says so rather than inheriting it quietly.
- * Block overhead is ~267-327 characters at these labels, so a 2000-char prefix
- * holds a COMPLETE block only while the payload stays under ~1,700. For the
- * three #582 reads a half block was a large-payload edge case. For `list` it is
- * the ordinary case on any real install -- ~1,700 characters is about 8 flow
- * summaries.
+ * So `FRAMED_PAYLOAD_MAX_CHARS` no longer has a second constituency, and the
+ * other way out this comment offered is now a mistake to make: do NOT lower it
+ * toward ~1,650 so that a 2000-char prefix holds a whole block. That trade is
+ * gone, and paying it would cost the model roughly two thirds of its own
+ * workflow listing for nothing.
  *
- * All NINE framed actions travel that path, reads included, so the taint floor
- * is not a discriminator between them: `manage_workflow`'s floor is
- * `write_data`, which is taint-governed, and `authorityGate` returns null for
- * the reads so they pay the floor -- which is #582's own point one paragraph
- * up, that a read taken on a tainted turn goes through the approval path and
- * lands in `execution_result`. What singles `list` out is only that its payload
- * is the one that routinely exceeds ~1,700 characters.
- *
- * Accepted, with the trade stated. The two ways out are bounding `list` under
- * ~1,650 -- which buys the model about 8 workflows out of its own inventory,
- * too high a price -- or fixing the two `slice(0, 2000)` call sites, which is
- * the issue the paragraph above already scopes and which has to argue for a
- * boundary locator in production code. Neither is worth blocking a boundary fix
- * on, because the cost of the half block is bounded to the integrity nuisance
- * described above and those same rows carry the same data unframed today.
- *
- * Two ways out, neither taken here, both wanting their own issue:
- *
- *   - Truncate without halving a block at the `slice` call sites. The helper
- *     would have to LOCATE an open line, which `untrusted-import-guard.test.ts`
- *     forbids in production code for good reason (#560), so it needs its own
- *     argument -- that it only ever deletes a suffix and never treats the
- *     located boundary as trustworthy.
- *   - Or drop `FRAMED_PAYLOAD_MAX_CHARS` below `2000 - overhead` (~1,650), so
- *     even the 2000-char prefix holds a complete block and no call site
- *     changes. Rejected because ~1,650 characters is too small for a 25-run
- *     listing, but it is the cheaper option if that trade ever flips.
+ * What is left, deliberately. Two operator-facing cuts read the RAW result and
+ * are not model boundaries, so they keep a dangling open line and that is the
+ * right call: `daemon/index.ts`'s `[EXECUTED]` notification and the approval
+ * execute route in `daemon/api-routes.ts`. And `runtime/piece-effects.ts`'s
+ * `bound()` cuts a governed piece's input strings to 512 for review -- a flow
+ * author can wire this tool's framed result into one with `{{ }}` -- but that
+ * projection feeds the re-authorize digest, so changing it invalidates
+ * in-flight approvals and wants its own issue rather than a change here.
  */
 const FRAMED_PAYLOAD_MAX_CHARS = 4000;
 
@@ -634,9 +649,31 @@ function requireString(params: Record<string, unknown>, key: string): string {
   return v;
 }
 
-function asLimit(raw: unknown): number {
+/**
+ * `list_runs`' row cap, clamped at BOTH ends (#609).
+ *
+ * The floor and the finite check were already here; the ceiling was not, so
+ * `list_runs { limit: 1e9 }` asked `listRuns` for every run the install has
+ * ever recorded, each row carrying its `steps`. The framed payload cap meant the
+ * model never SAW more than a few, which is exactly why this was easy to miss:
+ * the cost was the query and the result in memory, not the prompt.
+ *
+ * 100 is the same ceiling `/api/workflows/:id/runs` clamps to, so the model and
+ * the HTTP caller cannot ask for different amounts of work. Nothing enforces
+ * that equality across the two files; if one moves, move the other.
+ */
+const LIST_RUNS_MAX_LIMIT = 100;
+
+/**
+ * Exported for its test, which cannot reach the ceiling through the tool: a
+ * 100-run listing is past `FRAMED_PAYLOAD_MAX_CHARS`, so `list_runs` truncates
+ * it and the model-facing JSON cannot be parsed to count rows. The clamp's
+ * effect is on how much the DATABASE is asked for, which only the function
+ * itself shows.
+ */
+export function asLimit(raw: unknown): number {
   if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return 25;
-  return Math.floor(raw);
+  return Math.min(LIST_RUNS_MAX_LIMIT, Math.floor(raw));
 }
 
 /* --------------------------------------------------------------- actions */

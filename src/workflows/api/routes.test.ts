@@ -15,6 +15,7 @@ import {
   WAITPOINT_RESUME_MAX_BODY_BYTES,
   WAITPOINT_RESUME_PER_ID_PER_MINUTE,
   WAITPOINT_RESUME_UNKNOWN_ID_PER_MINUTE,
+  VERSION_WRITE_MAX_BODY_BYTES,
   type WorkflowRouteMap,
 } from "./routes";
 import { sampleCatalog } from "../runtime/test-fixtures";
@@ -1687,5 +1688,205 @@ describe("workflow API: pieces library", () => {
       else process.env.JARVIS_PIECES_DIR = prev;
       rmSync(tempDir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * #609. #598 capped the two FLOW-level write routes and deliberately left the
+ * two VERSION routes unbounded, because they carry the whole step graph and a
+ * flow-row-sized limit would have been a guess that could break a large flow's
+ * save. These are the two halves of that: the cap refuses an oversized body
+ * before it is parsed, and a legitimately large flow still saves.
+ */
+describe("#609: the version write routes bound their body", () => {
+  const VERSION_CAP = VERSION_WRITE_MAX_BODY_BYTES;
+
+  async function makeFlow(): Promise<string> {
+    const { body } = await callJson(
+      routes["/api/workflows"]?.POST,
+      plainReq("POST", "http://x/api/workflows", { displayName: "host" }),
+    );
+    return (body as { flow: { id: string } }).flow.id;
+  }
+  const postVersion = (id: string, b: unknown) =>
+    callJson(
+      routes["/api/workflows/:id/versions"]?.POST,
+      reqWithParams("POST", `http://x/api/workflows/${id}/versions`, { id }, b),
+    );
+  const patchVersion = (id: string, versionId: string, b: unknown) =>
+    callJson(
+      routes["/api/workflows/:id/versions/:versionId"]?.PATCH,
+      reqWithParams("PATCH", `http://x/api/workflows/${id}/versions/${versionId}`, { id, versionId }, b),
+    );
+
+  /** A chain of `nodes` PIECE steps, each carrying `pad` characters of input. */
+  function graph(nodes: number, pad: number): Record<string, unknown> {
+    let tail: Record<string, unknown> | undefined;
+    for (let i = nodes - 1; i >= 1; i--) {
+      tail = {
+        name: `step_${i}`, type: "PIECE",
+        settings: { pieceName: "@jarvispieces/piece-jarvis-tool", pieceVersion: "0.0.1",
+          actionName: "invoke", input: { toolName: "run_command", params: { command: "P".repeat(pad) } } },
+        ...(tail ? { nextAction: tail } : {}),
+      };
+    }
+    return { name: "trigger", type: "EMPTY", displayName: "Manual", settings: {}, ...(tail ? { nextAction: tail } : {}) };
+  }
+
+  test("a body over the cap is refused before it is parsed, and the refusal names the limit", async () => {
+    const id = await makeFlow();
+    // Padding inside the graph, so the body is oversized for the reason a real
+    // one would be rather than by a field nothing reads.
+    const over = { displayName: "too big", trigger: graph(2, VERSION_CAP) };
+    const refused = await postVersion(id, over);
+    expect(refused.status).toBe(413);
+    // Named, because the likeliest legitimate way to hit this is a large CODE
+    // step and a bare "too large" gives the author nothing to act on.
+    expect((refused.body as { error: string }).error).toBe(`request body too large; the limit is ${VERSION_CAP} bytes`);
+
+    const created = await postVersion(id, { displayName: "fine" });
+    expect(created.status).toBe(201);
+    const versionId = (created.body as { id: string }).id;
+    const patched = await patchVersion(id, versionId, over);
+    expect(patched.status).toBe(413);
+  });
+
+  test("a declared content-length over the cap is refused without reading the body", async () => {
+    const id = await makeFlow();
+    const req = new Request(`http://x/api/workflows/${id}/versions`, {
+      method: "POST",
+      body: JSON.stringify({ displayName: "lying" }),
+      headers: { "Content-Type": "application/json", "content-length": String(VERSION_CAP + 1) },
+    }) as Request & { params: { id: string } };
+    req.params = { id };
+    let read = 0;
+    req.text = async () => { read++; return "{}"; };
+    const { status } = await callJson(routes["/api/workflows/:id/versions"]?.POST, req);
+    expect(status).toBe(413);
+    // The point of checking the declared size first: nothing is pulled off the
+    // socket for an obviously oversized request.
+    expect(read).toBe(0);
+  });
+
+  /**
+   * The half that matters more than the refusal: the cap was derived so it
+   * cannot break a legitimate save, and #598 left these routes alone precisely
+   * because breaking one is worse than the exposure.
+   *
+   * 100 nodes is the ceiling on a RUNNABLE flow (workflow-readiness raises a
+   * LIMIT past it). The term that is NOT bounded by that is `uiMeta.orphans`:
+   * the editor sends every detached node with its whole `nextAction` subtree,
+   * so a canvas with a 100-node chain pulled off the trigger carries a second
+   * full graph. That is what this test has to include -- an earlier version
+   * passed `orphans: []` and exercised less than half the body the derivation
+   * is sized against.
+   */
+  test("a 100-node flow with multi-KB steps and a full orphan twin still saves", async () => {
+    const id = await makeFlow();
+    const big = graph(100, 4_000);
+    const positions = Object.fromEntries(
+      Array.from({ length: 100 }, (_, i) => [i === 0 ? "trigger" : `step_${i}`, { x: i * 10, y: i * 20 }]),
+    );
+    // The whole request body, measured the way the cap measures it.
+    const withTwin = { trigger: big, uiMeta: { schema: 1, positions, orphans: [graph(100, 4_000)] } };
+    const size = JSON.stringify({ displayName: "large but legitimate", ...withTwin }).length;
+    expect(size).toBeGreaterThan(800_000);
+    // Stated as a ratio rather than "an order of magnitude", which it is not.
+    expect(size * 4).toBeLessThan(VERSION_CAP);
+
+    const created = await postVersion(id, { displayName: "large but legitimate", trigger: big });
+    expect(created.status).toBe(201);
+    const versionId = (created.body as { id: string }).id;
+    // And again through the route the visual editor actually saves with.
+    const patched = await patchVersion(id, versionId, withTwin);
+    expect(patched.status).toBe(200);
+  });
+
+  /**
+   * The construction a 1 MB cap would have refused, which is why this one is
+   * 4 MB: 100 code steps with ~10 KB of hand-written JavaScript each.
+   * `settings.sourceCode` lives inside the graph JSON and nothing caps it.
+   */
+  test("a 100-node flow of CODE steps with real source still saves", async () => {
+    const id = await makeFlow();
+    let tail: Record<string, unknown> | undefined;
+    for (let i = 99; i >= 1; i--) {
+      tail = {
+        name: `step_${i}`, type: "CODE",
+        settings: {
+          sourceCode: { code: "// line of a bundled module\n".repeat(360), packageJson: '{"dependencies":{}}' },
+          input: {},
+        },
+        ...(tail ? { nextAction: tail } : {}),
+      };
+    }
+    const codeGraph = { name: "trigger", type: "EMPTY", displayName: "Manual", settings: {}, nextAction: tail };
+    expect(JSON.stringify(codeGraph).length).toBeGreaterThan(1_000_000);
+    const created = await postVersion(id, { displayName: "code heavy", trigger: codeGraph });
+    expect(created.status).toBe(201);
+  });
+
+  test("a body that is not a JSON object is refused instead of half-applied", async () => {
+    const id = await makeFlow();
+    const created = await postVersion(id, { displayName: "fine" });
+    const versionId = (created.body as { id: string }).id;
+    // Was a 500 (invalid JSON) and a 200 (an array spread into the patch as
+    // index keys). Both are now the caller's bug, reported as one.
+    expect((await postVersion(id, [1, 2, 3])).status).toBe(400);
+    expect((await patchVersion(id, versionId, "a string")).status).toBe(400);
+    expect((await patchVersion(id, versionId, 42)).status).toBe(400);
+
+    const malformed = new Request(`http://x/api/workflows/${id}/versions`, {
+      method: "POST", body: "{not json", headers: { "Content-Type": "application/json" },
+    }) as Request & { params: { id: string } };
+    malformed.params = { id };
+    expect((await callJson(routes["/api/workflows/:id/versions"]?.POST, malformed)).status).toBe(400);
+  });
+});
+
+/**
+ * #609. #598 clamped the listing it touched and left this one as a separate
+ * subject. It is the more expensive one to leave open: listRuns has no bound of
+ * its own and a run row carries `steps`, the whole captured output of every step.
+ */
+describe("#609: the runs listing clamps its limit", () => {
+  async function flowWithRuns(count: number): Promise<string> {
+    const { createFlow } = await import("../db/repos/flow");
+    const { createDraftVersion } = await import("../db/repos/flow-version");
+    const { createFlowRun } = await import("../db/repos/flow-run");
+    const flow = createFlow();
+    const version = createDraftVersion({
+      flowId: flow.id, displayName: "runs",
+      trigger: { name: "trigger", type: "EMPTY" } as unknown as Record<string, unknown>,
+    });
+    for (let i = 0; i < count; i++) {
+      createFlowRun({ flowId: flow.id, flowVersionId: version.id, triggeredBy: "test", startTime: Date.now() + i });
+    }
+    return flow.id;
+  }
+  const list = (id: string, query: string) =>
+    callJson(
+      routes["/api/workflows/:id/runs"]?.GET,
+      reqWithParams("GET", `http://x/api/workflows/${id}/runs${query}`, { id }),
+    );
+
+  test("one request cannot pull every run, and the default is unchanged", async () => {
+    const id = await flowWithRuns(105);
+    // Non-vacuous: there are more rows than either the clamp or the default.
+    const huge = await list(id, "?limit=100000");
+    expect(huge.status).toBe(200);
+    expect((huge.body as unknown[]).length).toBe(100);
+    // At the boundary, and below it, the caller gets what it asked for.
+    expect(((await list(id, "?limit=100")).body as unknown[]).length).toBe(100);
+    expect(((await list(id, "?limit=7")).body as unknown[]).length).toBe(7);
+    expect(((await list(id, "")).body as unknown[]).length).toBe(50);
+  });
+
+  test("a negative or non-numeric limit lands somewhere sane instead of reaching SQLite", async () => {
+    const id = await flowWithRuns(3);
+    expect(((await list(id, "?limit=-1")).body as unknown[]).length).toBe(1);
+    expect(((await list(id, "?limit=abc")).body as unknown[]).length).toBe(3);
+    expect(((await list(id, "?limit=2.9")).body as unknown[]).length).toBe(2);
+    expect(((await list(id, "?offset=-5&limit=2")).body as unknown[]).length).toBe(2);
   });
 });

@@ -17,6 +17,7 @@ import {
 import { isNoLocalTools } from './local-tools-guard.ts';
 import { ActionOutcomeError, type ActionFailure } from '../action-outcome.ts';
 import { SidecarRPCError } from '../../sidecar/rpc.ts';
+import { compareSemver, parseSemver } from '../../sidecar/compat.ts';
 import { getMachineScope } from '../machine-scope.ts';
 
 let sidecarManager: SidecarManager | null = null;
@@ -177,15 +178,13 @@ type SidecarDispatch =
        * Which refusal this was, for a caller that must tell them apart (#591),
        * and why it is not read off the text.
        *
-       * `METHOD_NOT_FOUND` is the case that forces it. That code arrives for
-       * two entirely different situations -- a sidecar whose `browser`
-       * capability is off, and a sidecar simply older than a method that did
-       * not exist yet -- and the message the catch block below writes for it
-       * asserts the first: "the capability is not enabled on this sidecar. Do
-       * NOT retry". For a model-facing browser tool that is the right sentence
-       * and it is not changed here. For #591's coordinate probe, where the
-       * method NAME is the feature probe, it is the wrong diagnosis, and the
-       * caller needs to say "that sidecar predates this RPC" instead.
+       * `METHOD_NOT_FOUND` is the case that forces it. The code means the
+       * sidecar does not HAVE the method, which in practice means it is older
+       * than this brain -- a different condition from a capability the operator
+       * turned off, and since #605 the two carry different messages naming
+       * different remedies. The text is still not what a caller classifies on:
+       * display text is written for the model and may be reworded, while a
+       * caller like #591's coordinate probe needs the condition itself.
        *
        * OPTIONAL because not every message has one: the still-running
        * `run_command` note and a rethrown `ActionOutcomeError` are written as
@@ -206,9 +205,61 @@ type SidecarDispatch =
     };
 
 /**
+ * Where a sidecar's version sits against the newest one this brain ships, for
+ * the refusals whose remedy depends on it (#605), plus the parenthetical that
+ * says so in the message.
+ *
+ * THREE-WAY, and ORDERED rather than compared for identity. Both obligations
+ * matter and they are mirrors of each other: an absent version must read as
+ * absent and never as current, and a current version must never read as skew.
+ * Getting the second wrong is #605's own bug inverted -- telling the user to
+ * update a sidecar that is already the newest one available is exactly as
+ * unactionable as telling them to check a config file that is fine. A sidecar
+ * AHEAD of the brain is a supported configuration (src/sidecar/compat.ts: "a
+ * new sidecar release needs no brain change to be considered ok"), so it counts
+ * as 'current', not as a mismatch.
+ *
+ * `latest_version` is the sidecar version THIS BRAIN SHIPS
+ * (SIDECAR_LATEST_VERSION), which is the number the user can actually reach.
+ * The daemon's own version is deliberately not used: it is a different series,
+ * and naming it would send the user looking for a sidecar release that does not
+ * exist.
+ *
+ * 'unknown' covers a dev build, an unparseable stamp and a sidecar that
+ * reported nothing. `parseSemver` is used rather than `isUpdateAvailable`
+ * because the latter answers a different question -- it refuses a
+ * non-canonical stamp like `0.10.0+local` outright, where for a diagnosis that
+ * build is perfectly comparable.
+ *
+ * Versions are printed as stored, with no "v" prefix added, because some are
+ * already prefixed and some carry a `+local` suffix.
+ */
+function sidecarStanding(sidecar: SidecarInfo): {
+  readonly age: 'behind' | 'current' | 'unknown';
+  readonly note: string;
+} {
+  const reported = sidecar.version;
+  if (!reported) return { age: 'unknown', note: '' };
+  const v = parseSemver(reported);
+  const latest = sidecar.latest_version ? parseSemver(sidecar.latest_version) : null;
+  if (!v || !latest) return { age: 'unknown', note: ` (it reports ${reported})` };
+  return compareSemver(v, latest) < 0
+    ? { age: 'behind', note: ` (it reports ${reported}; this brain ships ${sidecar.latest_version})` }
+    : { age: 'current', note: ` (it reports ${reported}, the newest sidecar this brain knows of)` };
+}
+
+/**
  * One dispatch, with every check and every refusal the two public wrappers
  * share. Only the success path yields `kind: 'reply'`, so a caller that reads a
  * field off the reply is looking at something a sidecar actually sent.
+ *
+ * The refusals below are the ones a tool called DIRECTLY gets. Inside a
+ * workflow, `scope.assertDispatch` refuses first and more coarsely:
+ * `WORKFLOW_CAPABILITY_UNAVAILABLE` covers "the operator turned it off" and
+ * "the host cannot provide it" with one code and one message
+ * (src/workflows/runtime/machine-binding.ts), so the distinctions this function
+ * draws do not reach a model running a bound flow. Noted because it is easy to
+ * read the list below as the whole story.
  */
 async function dispatchToSidecar(
   target: string,
@@ -247,14 +298,25 @@ async function dispatchToSidecar(
     return fail('blocked', 'SIDECAR_OFFLINE', `Error: Sidecar "${describeMachine(sidecar)}" is offline.`);
   }
 
-  // Check if capability is enabled but unavailable (missing system dependencies)
+  // A capability the operator ENABLED that the host cannot provide. Named as
+  // neither of the other two so the three cannot be read for each other: not a
+  // setting to flip, and not a version to raise.
   const unavail = sidecar.unavailable_capabilities?.find(u => u.name === requiredCapability);
   if (unavail) {
-    return fail('blocked', 'CAPABILITY_UNAVAILABLE', `Error: Sidecar "${sidecar.name}" has "${requiredCapability}" enabled but it is unavailable: ${unavail.reason}. Do NOT retry.`);
+    return fail('blocked', 'CAPABILITY_UNAVAILABLE', `Error: Sidecar "${sidecar.name}" has "${requiredCapability}" enabled but it is unavailable: ${unavail.reason}. That is something missing on that machine, not a capability setting - ask the user to install what the reason names. Do NOT retry.`);
   }
 
   if (sidecar.capabilities && !sidecar.capabilities.includes(requiredCapability)) {
-    return fail('blocked', 'CAPABILITY_DISABLED', `Error: Sidecar "${sidecar.name}" does not have the "${requiredCapability}" capability enabled. Available capabilities: ${sidecar.capabilities.join(', ')}. Do NOT retry — ask the user to enable it in the sidecar's config if needed.`);
+    // #605's neighbour. An operator who turned the capability off and a sidecar
+    // too old to have heard of the name BOTH leave it out of this list, and the
+    // remedies are opposites. A sidecar that is not behind rules age out, so
+    // only the setting is named; otherwise both are, and the message says so
+    // rather than picking one and being confidently wrong half the time.
+    const standing = sidecarStanding(sidecar);
+    const remedy = standing.age === 'current'
+      ? `Do NOT retry - ask the user to enable it in the sidecar's config.`
+      : `Do NOT retry. Either the operator turned it off, in which case ask the user to enable it in the sidecar's config, or this sidecar is too old to offer it at all${standing.note}, in which case ask the user to update it.`;
+    return fail('blocked', 'CAPABILITY_DISABLED', `Error: Sidecar "${sidecar.name}" does not advertise the "${requiredCapability}" capability. Available capabilities: ${sidecar.capabilities.join(', ') || 'none'}. ${remedy}`);
   }
 
   try {
@@ -297,9 +359,40 @@ async function dispatchToSidecar(
     }
     const msg = err instanceof Error ? err.message : String(err);
 
-    // METHOD_NOT_FOUND means the capability is disabled — tell the LLM not to retry
+    // METHOD_NOT_FOUND means the sidecar does not HAVE the method, so it is
+    // older than this brain -- NOT a capability the operator turned off (#605).
+    // The two used to share one message, and it was the wrong one: the
+    // capability check above has already run and PASSED, so by the time control
+    // reaches here this sidecar has positively advertised the capability. The
+    // old sentence sent the user to a config file that is fine while the real
+    // remedy, a sidecar update, went unsaid (#442: a Mac on 0.9.6).
+    //
+    // There is ALWAYS a sidecar-side remedy, and it is never the config. What
+    // it is depends on the version standing, and that is read with an ORDERED
+    // comparison, not from `update_available` -- which is false for a
+    // non-canonical version and for `dev` builds (src/sidecar/compat.ts),
+    // precisely the sidecars most likely to be missing a method.
+    //
+    // The 'current' case is the one worth spelling out, because it is the
+    // normal state of `main`: a method lands in the brain and `sidecar/VERSION`
+    // is bumped in a later commit (browser_element_point did exactly that), so
+    // a user on the newest released sidecar legitimately has no method and no
+    // update to install. Telling them to update then is as useless as telling
+    // them to check a config file, which is the whole complaint in #605.
     if (err instanceof SidecarRPCError && err.code === 'METHOD_NOT_FOUND' || !typedErrors && msg.includes('METHOD_NOT_FOUND')) {
-      return fail('blocked', 'METHOD_NOT_FOUND', `Error [${describeMachine(sidecar)}]: Method "${method}" is not available. The "${requiredCapability}" capability is not enabled on this sidecar. Do NOT retry this call — ask the user to enable the capability in the sidecar's config if needed.`);
+      const standing = sidecarStanding(sidecar);
+      // Claimed only where the check above actually established it: that guard
+      // is skipped when `capabilities` is undefined, and an emphatic "this is
+      // not a configuration problem" is not something to assert on a hunch.
+      const advertised = sidecar.capabilities?.includes(requiredCapability)
+        ? ` It does advertise the "${requiredCapability}" capability, so this is NOT a configuration problem and nothing in the sidecar's config will fix it.`
+        : '';
+      const [diagnosis, remedy] = standing.age === 'current'
+        ? [`so its build predates that method${standing.note} -- which means there may be nothing newer to install: if a fresh sidecar was just built, a stale jarvis-sidecar process has probably reconnected in its place.`,
+           `Do NOT retry this call - ask the user to make sure that machine is running the newest sidecar build.`]
+        : [`so it is older than this brain${standing.note}.`,
+           `Do NOT retry this call - ask the user to update the sidecar on that machine.`];
+      return fail('blocked', 'METHOD_NOT_FOUND', `Error [${describeMachine(sidecar)}]: this sidecar has no "${method}" method, ${diagnosis}${advertised} ${remedy}`);
     }
 
     // The OS goes in the message on purpose: the commonest remote failure is
@@ -558,9 +651,12 @@ function readSidecarElementPoint(result: unknown): SidecarElementPoint {
  *
  * AN OLDER SIDECAR DOES NOT ANSWER, and that is detected from the dispatch's
  * `code`. A method that does not exist leaves no reply field to duck-type on,
- * so `METHOD_NOT_FOUND` is the signal -- read as a code rather than as text,
- * because the text asserts the browser capability is disabled and for a merely
- * older sidecar that is the wrong diagnosis.
+ * so `METHOD_NOT_FOUND` is the signal -- read as a code rather than as text.
+ * Since #605 that text says "older than this brain" and no longer asserts the
+ * capability is disabled, which removes the mismatch this classification was
+ * working around; it does NOT make the text safe to classify on. Display text
+ * is written for the model and gets reworded, and some of the refusals on this
+ * path come from `refuseLocalContent`, whose message embeds the page URL.
  *
  * One honest caveat: `dispatchToSidecar`'s catch ALSO matches that literal as a
  * substring of the error message, which predates typed codes and is left alone

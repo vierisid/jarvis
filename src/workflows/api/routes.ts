@@ -119,9 +119,23 @@ export type WorkflowRouteMap = Record<string, RouteMethods>;
 
 /**
  * Per-step sample-data entry size cap, in bytes of serialized JSON. 256KB.
- * Big enough for typical fixtures (Gmail message, Notion page block) and
- * small enough that 100 entries still fit under SQLite's default 1MB TEXT
- * limit comfortably with room for the map's JSON overhead.
+ * Big enough for typical fixtures (Gmail message, Notion page block).
+ *
+ * The second half of this comment used to read "and small enough that 100
+ * entries still fit under SQLite's default 1MB TEXT limit". Both halves of that
+ * were wrong and it is corrected rather than left, because #609 nearly derived
+ * a request-body cap from it: `SQLITE_MAX_LENGTH` defaults to 1e9 and not 1MB,
+ * and 100 x 256KB is 25.6MB either way. The cap is a PER-ENTRY bound on what
+ * one fixture may cost; nothing bounds the map's total, which is a real gap and
+ * not something this number was ever sized for.
+ *
+ * The two sample-data routes also still `req.json()` an unbounded body and only
+ * then apply this per-entry cap -- the same "the cap can only run after the
+ * caller's object graph is already materialized" problem `readWriteBody` exists
+ * to avoid, and a one-line fix now that the reader takes its cap as an argument.
+ * Seen and left on purpose: #609's subject is the two VERSION routes, and a
+ * sample-data body deserves the same measurement this one got rather than an
+ * inherited number.
  */
 const SAMPLE_DATA_ENTRY_MAX_BYTES = 256 * 1024;
 
@@ -190,12 +204,12 @@ const FLOW_METADATA_MAX_CHARS = 16_384;
  *
  * Scope, stated because the name does not carry it: this fronts
  * `POST /api/workflows` and `PATCH /api/workflows/:id` only. The two version
- * routes still parse unbounded, and they carry the bigger body -- the whole step
- * graph plus `uiMeta`. They are deliberately left alone here rather than
+ * routes carry the bigger body -- the whole step graph plus `uiMeta` -- and have
+ * their own, larger ceiling (`VERSION_WRITE_MAX_BODY_BYTES`), rather than being
  * squeezed through a limit sized for `{ displayName, metadata }`: a cap that is
  * generous for a flow row is a guess for a step graph, and breaking a large
  * flow's save in the visual editor would be a worse outcome than the exposure
- * it prevents. Worth its own issue, with a limit measured against real flows.
+ * it prevents.
  *
  * The metadata cap below can only run after `req.json()` has already
  * materialized the caller's object graph, and it then allocates a second
@@ -213,7 +227,87 @@ const FLOW_METADATA_MAX_CHARS = 16_384;
 const FLOW_WRITE_MAX_BODY_BYTES = 262_144;
 
 /**
- * Read and parse a flow-write body, refusing an oversized one before it costs
+ * Ceiling on a VERSION write request body -- `POST /api/workflows/:id/versions`
+ * and `PATCH /api/workflows/:id/versions/:versionId` (#609).
+ *
+ * #598 capped the two flow-level routes and left these two on purpose, because
+ * they carry the whole step graph and a flow-row-sized limit would be a guess
+ * that could break a large flow's save. So this one is MEASURED, against each
+ * construction the product can legitimately produce, and it is a PARSE-COST
+ * bound: not a storage ceiling, because there is no 1 MB SQLite TEXT limit to
+ * derive one from (see the note on `SAMPLE_DATA_ENTRY_MAX_BYTES`).
+ *
+ * WHAT RIDES IN THE BODY: `displayName` (already bounded at 512 by
+ * `validDisplayName`, on both routes), `trigger` (the step graph), `uiMeta`, and
+ * -- because the body is a cast rather than a schema -- whatever else
+ * `updateDraftVersion` accepts, including `backupFiles`, a filename ->
+ * file-CONTENT map that no shipped caller writes and that nothing else bounds.
+ * `sample_data` does NOT: it has its own routes and its own per-entry cap.
+ *
+ * WHAT BOUNDS A LEGITIMATE GRAPH: 100 nodes. `runtime/workflow-readiness.ts`
+ * raises a `LIMIT` issue past it and `assertVersionReady` gates publish, enable
+ * and run on readiness -- so a graph above 100 nodes can be SAVED but can never
+ * run, which makes 100 the ceiling on a legitimately runnable flow.
+ *
+ * WHAT DOES NOT: `uiMeta.orphans`. They are full `FlowStepNode`s that are not in
+ * the `trigger` graph, so the 100-node walk never sees them, and the editor
+ * sends each one with its whole `nextAction` subtree. Detaching a 99-node chain
+ * on the canvas therefore produces a body of about TWICE the graph. That is the
+ * term that decides this number, and the one an earlier draft of this comment
+ * got wrong by attributing the doubling to `positions` (~40 characters a node,
+ * which is negligible).
+ *
+ * MEASURED, as a whole request body including `uiMeta`:
+ *
+ *   100 PIECE nodes, composer-sized settings            45 KB
+ *   100 PIECE nodes, 1 KB of input each                138 KB
+ *   100 PIECE nodes, 4 KB of input each                435 KB
+ *   100 PIECE nodes, 4 KB each + a full orphan twin    868 KB
+ *   100 CODE nodes, 4 KB of source each                441 KB
+ *   100 CODE nodes, 10 KB of source each              1.06 MB
+ *   100 CODE nodes, 10 KB each + a full orphan twin   2.12 MB
+ *   100 CODE nodes, 20 KB each + a full orphan twin   4.17 MB
+ *
+ * The measured POPULATION is one flow: 600 characters over 3 nodes, 200 a node,
+ * with `flow_version_ui_meta` empty. n=1, so that is an anchor and the table
+ * above is what the cap is actually sized against.
+ *
+ * WHY 4 MB AND NOT 1. A megabyte refuses the fifth row -- 100 code steps with
+ * 10 KB of source each, which is ordinary hand-written JavaScript and not an
+ * abuse -- and leaves the fourth row 13% of margin. `sourceCode` is
+ * `{ packageJson, code }` stored inside the graph JSON and nothing caps it
+ * anywhere (readiness only checks both are strings), so a code-bearing flow is
+ * the realistic large case and a megabyte sits inside it. 4 MB clears the worst
+ * realistic construction (row seven) by about 2x and refuses only row eight,
+ * which is past anything authored in a browser editor.
+ *
+ * WHY A BIGGER NUMBER IS STILL A BOUND. What this guard exists to stop is an
+ * UNBOUNDED body materializing a caller's object graph in the one process that
+ * serves this API, the dashboard and the agent runtime. Measured on this
+ * runtime, `JSON.parse` costs 0.6 ms at 1 MB, 2.5 ms at 4 MB and 5.1 ms at
+ * 8 MB -- linear, and nothing like the cost of no limit at all. So the choice
+ * between 1 MB and 4 MB does not trade availability for anything; it only
+ * decides which legitimate flows are refused.
+ *
+ * NOT the same number as `WAITPOINT_RESUME_MAX_BODY_BYTES` (1 MB), and that is
+ * deliberate rather than drift. The file's "one set of ingress budgets" argument
+ * is for budgets that answer the same question, and these do not: a resume
+ * payload is one step's input, while this is a whole step graph plus its editor
+ * layout. Reusing the waitpoint's figure here would have been exactly the guess
+ * #598 refused to make.
+ *
+ * ROWS ALREADY OVER IT are untouched -- no migration, and they are still served
+ * in full, with the read-side caps in `actions/tools/manage-workflow.ts` keeping
+ * an oversized one out of the prompt. But say the write half plainly: the editor
+ * loads a draft and PATCHes it straight back, so a pre-existing draft above this
+ * cap is readable and no longer SAVEABLE, and its author's only way out is to
+ * shrink the graph. That is the failure mode #598 was worried about, which is
+ * why the number is measured against the table above rather than chosen.
+ */
+export const VERSION_WRITE_MAX_BODY_BYTES = 4_000_000;
+
+/**
+ * Read and parse a write body, refusing an oversized one before it costs
  * anything to hold.
  *
  * Declared size first, so nothing is read off the socket for an obviously
@@ -223,11 +317,19 @@ const FLOW_WRITE_MAX_BODY_BYTES = 262_144;
  * so this never rejects a body that is within the byte cap, and an
  * all-multibyte body is bounded within a small factor above it. Copied from the
  * waitpoint ingress, including that reasoning.
+ *
+ * `maxBytes` is a parameter rather than a constant so the flow routes and the
+ * version routes share one reader: the version body is four times the size and
+ * answering "which guard fired" should not depend on which of two near-identical
+ * readers a route happened to call. The refusal NAMES the limit, because the
+ * likeliest legitimate way to hit it is a large CODE step and a bare "too large"
+ * gives the author nothing to act on.
  */
-async function readFlowWriteBody(req: Request): Promise<{ body: Record<string, unknown> } | { error: Response }> {
+async function readWriteBody(req: Request, maxBytes: number): Promise<{ body: Record<string, unknown> } | { error: Response }> {
+  const tooLarge = () => err(`request body too large; the limit is ${maxBytes} bytes`, 413);
   const declared = Number(req.headers.get("content-length") ?? "0");
-  if (Number.isFinite(declared) && declared > FLOW_WRITE_MAX_BODY_BYTES) {
-    return { error: err("request body too large", 413) };
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    return { error: tooLarge() };
   }
   let text: string;
   try {
@@ -235,8 +337,8 @@ async function readFlowWriteBody(req: Request): Promise<{ body: Record<string, u
   } catch {
     return { error: err("failed to read request body") };
   }
-  if (text.length > FLOW_WRITE_MAX_BODY_BYTES) {
-    return { error: err("request body too large", 413) };
+  if (text.length > maxBytes) {
+    return { error: tooLarge() };
   }
   let parsed: unknown;
   try {
@@ -270,7 +372,7 @@ const FLOW_DISPLAY_NAME_MAX_CHARS = 512;
 
 /**
  * The caller's `displayName`, or the refusal. Same shape as
- * `readFlowWriteBody`, and it returns the NARROWED string so a caller cannot
+ * `readWriteBody`, and it returns the NARROWED string so a caller cannot
  * validate and then pass the unnarrowed value on.
  */
 function validDisplayName(raw: unknown): { name: string } | { error: Response } {
@@ -1049,8 +1151,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
     "/api/workflows/readiness": {
       GET: (req) => trapErrors(() => {
         const params = new URL(req.url).searchParams;
-        const limit = Math.max(1, Math.min(100, Math.trunc(numParam(params.get('limit')) ?? 100)));
-        const offset = Math.max(0, Math.trunc(numParam(params.get('offset')) ?? 0));
+        const { limit, offset } = clampPage(params, 100);
         const flows = listFlows(undefined, { status: 'ENABLED', limit, offset });
         return ok({ items: flows.map(flow => {
           const versionId = flow.published_version_id ?? getLatestDraft(flow.id)?.id ?? null;
@@ -1072,8 +1173,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           // row's FULL metadata, including rows written before the cap existed
           // and deliberately never migrated. An unclamped `limit` let one
           // authenticated request pull every one of them at once.
-          const limit = Math.max(1, Math.min(100, Math.trunc(numParam(params.get("limit")) ?? 100)));
-          const offset = Math.max(0, Math.trunc(numParam(params.get("offset")) ?? 0));
+          const { limit, offset } = clampPage(params, 100);
           const opts: { status?: FlowStatus; limit: number; offset: number } = { limit, offset };
           if (status !== null) {
             if (!isStatus(status)) return err(`status must be ENABLED|DISABLED`, 400);
@@ -1084,7 +1184,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
         }),
       POST: (req) =>
         trapErrors(async () => {
-          const read = await readFlowWriteBody(req);
+          const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES);
           if ("error" in read) return read.error;
           const body = read.body as {
             displayName?: string;
@@ -1144,7 +1244,7 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       PATCH: (req) =>
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          const read = await readFlowWriteBody(req);
+          const read = await readWriteBody(req, FLOW_WRITE_MAX_BODY_BYTES);
           if ("error" in read) return read.error;
           const body = read.body as {
             status?: FlowStatus;
@@ -1185,7 +1285,13 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       POST: (req) =>
         trapErrors(async () => {
           const { id } = (req as RequestWithParams<{ id: string }>).params;
-          const body = (await req.json()) as {
+          // Bounded BEFORE the parse (#609). This body carries the whole step
+          // graph plus `uiMeta`, so an unguarded `req.json()` materialized a
+          // caller's object graph of any size in the one process that serves
+          // this API, the dashboard and the agent runtime.
+          const read = await readWriteBody(req, VERSION_WRITE_MAX_BODY_BYTES);
+          if ("error" in read) return read.error;
+          const body = read.body as {
             displayName?: string;
             trigger?: Record<string, unknown>;
             uiMeta?: FlowVersionUiMeta;
@@ -1216,7 +1322,12 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
       PATCH: (req) =>
         trapErrors(async () => {
           const { id, versionId } = (req as RequestWithParams<{ id: string; versionId: string }>).params;
-          const body = (await req.json()) as {
+          // Bounded before the parse, same reason as the POST above (#609). This
+          // is the route the visual editor saves through, so it is the one that
+          // carries a real graph on every keystroke-driven save.
+          const read = await readWriteBody(req, VERSION_WRITE_MAX_BODY_BYTES);
+          if ("error" in read) return read.error;
+          const body = read.body as {
             displayName?: string;
             trigger?: Record<string, unknown>;
             valid?: boolean;
@@ -1520,8 +1631,22 @@ export function createWorkflowRoutes(opts: CreateWorkflowRoutesOptions = {}): Wo
           const { id } = (req as RequestWithParams<{ id: string }>).params;
           const params = new URL(req.url).searchParams;
           const status = params.get("status") as FlowRunStatus | null;
-          const limit = numParam(params.get("limit")) ?? 50;
-          const offset = numParam(params.get("offset")) ?? 0;
+          // Clamped the way the two listings above clamp (#609). #598 clamped
+          // the listing it touched and left this one as a separate subject, and
+          // it is the more expensive of the two to leave open: `listRuns` has no
+          // bound of its own, and `rowToRun` parses each row's `steps` blob --
+          // the whole captured output of every step -- and then runs two more
+          // queries per row for its machine binding and cancellation. So
+          // `limit=1e9` was an unbounded N+1, not one large SELECT. Before the
+          // clamp a negative `limit` reached SQLite verbatim as well, where
+          // `LIMIT -1` means no limit at all.
+          //
+          // Paging past the ceiling works -- `offset` has no upper bound -- but
+          // `listRuns` orders by `created DESC`, a millisecond timestamp with no
+          // tiebreak, so two runs created in the same millisecond can be skipped
+          // or repeated across pages. Pre-existing, and now reachable because
+          // paging is the only way past 100; filed rather than fixed here.
+          const { limit, offset } = clampPage(params, 50);
           const opts: { flowId: string; status?: FlowRunStatus; limit: number; offset: number } = {
             flowId: id,
             limit,
@@ -1644,6 +1769,31 @@ function numParam(raw: string | null): number | null {
   if (raw === null) return null;
   const n = Number(raw);
   return Number.isFinite(n) ? n : null;
+}
+
+/**
+ * Ceiling every listing in this file clamps its `limit` to.
+ *
+ * `actions/tools/manage-workflow.ts` clamps `list_runs` to the same number so a
+ * model and an HTTP caller cannot ask for different amounts of work. It keeps
+ * its own copy rather than importing this one: that tool has no business
+ * importing the route module, and nothing enforces the equality -- so if this
+ * moves, move `LIST_RUNS_MAX_LIMIT` with it.
+ */
+const LISTING_MAX_LIMIT = 100;
+
+/**
+ * A listing's `limit` and `offset`, clamped. Three listings were doing this
+ * inline with the same expression and a different default, which is three
+ * chances for them to drift apart (#609 found the third had not been done at
+ * all). `Math.trunc` is what absorbs a fractional, negative or `NaN` parameter
+ * before it reaches SQLite, where `LIMIT -1` means no limit.
+ */
+function clampPage(params: URLSearchParams, defaultLimit: number): { limit: number; offset: number } {
+  return {
+    limit: Math.max(1, Math.min(LISTING_MAX_LIMIT, Math.trunc(numParam(params.get("limit")) ?? defaultLimit))),
+    offset: Math.max(0, Math.trunc(numParam(params.get("offset")) ?? 0)),
+  };
 }
 
 /**

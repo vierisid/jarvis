@@ -3,7 +3,11 @@ import type { AuditTrail } from '../../authority/audit';
 import type { EmergencyController } from '../../authority/emergency';
 import type { ApprovalManager, ApprovalRequest } from '../../authority/approval';
 import { approvalNeedsClick } from '../../authority/approval';
+// The same budget the column's primary writer uses, imported rather than
+// restated so the two cannot drift.
+import { RECEIPT_MAX_CHARS } from '../../authority/deferred-executor';
 import type { ActionCategory } from '../../roles/authority';
+import { boundedReceiptText } from '../../roles/untrusted';
 import { getWorkflowDb } from '../db';
 import { assertRunNotCanceled } from './cancellation';
 import { withExecutionScope } from '../../actions/execution-scope';
@@ -248,9 +252,34 @@ export class WorkflowEffectBoundary {
       // this adds to the run's cancellation fence rather than replacing it.
       const result = await withExecutionScope(checkpoint,
         () => input.execute(JSON.parse(canonicalJson(record.arguments)), checkpoint));
+      // NOT bounded and NOT defanged, deliberately: this is replay and
+      // idempotency state that a resumed run reads back instead of acting again,
+      // its shape is pinned by #567 (`cancellation-authority.integration.test.ts`),
+      // and a tool's own framed return can therefore be stored here whole, nonce
+      // and all. That is the one place the rule stated on `boundedReceiptText`
+      // -- a frame belongs where a model reads, drawn fresh -- is knowingly
+      // broken, and `actions/tools/manage-workflow.ts` already enumerates this
+      // record as a consumer that replays one complete block with one nonce.
       record.result = result ?? null; record.status = 'succeeded'; record.finishedAt = Date.now();
       saveWorkflowEffect(record);
-      if (record.approvalId) approvals!.markExecuted(record.approvalId, canonicalJson({ effectId: id, result: record.result }).slice(0, 2000));
+      // `record.result` is untouched -- it is replay and idempotency state, and
+      // #567 already broke that contract once by stringifying it. What is bounded
+      // is only the RECEIPT string beside it, and through `boundedReceiptText`
+      // rather than a bare slice (#609): a tool that frames its own return hands
+      // this path a delimited block, `canonicalJson` escapes it onto one line, and
+      // a prefix then kept an open delimiter with no close. The helper rewrites
+      // the delimiters to their inert spelling, so no cut of this row can be half
+      // of a block. This site is also why the fix cannot be a structural unwrap:
+      // the block is JSON-escaped here, so there are no lines left to match.
+      //
+      // One assumption, stated because it is invisible: JSON escaping can also
+      // put a marker beyond the defang's reach -- a marker split by a CONTROL
+      // character becomes the six-character text `\u0000`, which is no longer the
+      // token. Harmless only because nothing parses this column: the row is a
+      // truncated, unparseable JSON prefix read as text, so the decoded form
+      // never materialises. A consumer that ever `JSON.parse`d a receipt would
+      // reopen it.
+      if (record.approvalId) approvals!.markExecuted(record.approvalId, boundedReceiptText(canonicalJson({ effectId: id, result: record.result }), RECEIPT_MAX_CHARS));
       log(true);
       return { result: record.result };
     } catch (error) {

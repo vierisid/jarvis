@@ -35,9 +35,14 @@ import (
 //     would let a read-only call tear a running browser down.
 //   - It sends four commands and three distinct CDP methods, all of them
 //     getters: Page.getFrameTree (twice, as the check and the re-check),
-//     Browser.getWindowForTarget and Page.getLayoutMetrics. Four on every path,
-//     including an in-frame element -- the frame digest rides along on the
-//     re-check's reading rather than costing a read of its own. No Runtime.*,
+//     Browser.getWindowForTarget and Page.getLayoutMetrics. Four on every path
+//     that answers, including an in-frame element -- the frame digest rides
+//     along on the re-check's reading rather than costing a read of its own. A
+//     refusal sends THE SAME NUMBER OR FEWER, never more: it stops where it
+//     refuses, and a read with too little budget left is refused before it is
+//     issued -- while the last two staleness checks sit after the fourth send
+//     and so refuse having sent all four. "Never more" is the half that bounds
+//     authority, and it is the half the test pins. No Runtime.*,
 //     so no script; no Input.*, no DOM.focus, no Page.bringToFront, no
 //     Target.activateTarget, so no focus move; no Page.navigate/reload; no
 //     Browser.setWindowBounds, no Emulation.*, no Page.setDeviceMetricsOverride.
@@ -116,17 +121,144 @@ const (
 	maxElementPointZoom = 10.0
 )
 
-// The renderer-served reads get a short budget of their own instead of
-// inheriting cdpDefaultTimeout's 30 seconds.
+// The caller's race, duplicated here as a REFERENCE so this handler's own
+// budget can be checked against it instead of described in prose.
 //
-// Upstream, #590 races the whole resolution against 1200 ms and shows
-// "(location unknown)" when it loses -- so a read that sits for 30 seconds
-// produces the same user-visible outcome as a read that fails in one, while
-// holding a goroutine and a pending-reply slot for the other 29. Page.* is
-// answered by the renderer, so a long task, a janked page or a modal alert()
-// blocks it; that is a page being busy, not a sidecar being broken, and the
-// honest answer is to give up quickly.
+// Not a timeout: nothing here waits on it. #590 races the whole resolution
+// against it in src/daemon/index.ts and shows "(location unknown)" when it
+// loses. It is an inline literal on that side rather than an exported
+// constant, so nothing fails if the two drift -- which is why
+// TestElementPointBudgetFitsTheNarrationRace asserts the one relationship this
+// file actually depends on.
+const pebbleNarrationRace = 1200 * time.Millisecond
+
+// The budget for ALL FOUR of this handler's reads together, taken once at
+// entry and shared between them (#610).
+//
+// This used to be a PER-READ bound, and the arithmetic did not hold: four
+// sequential reads at elementPointReadTimeout each is a 2800 ms worst case
+// against a 1200 ms race, while the comment claimed the reads fitted inside it.
+// A comment that overstates a bound invites the next person to rely on it, so
+// the bound is now real: one deadline, taken at entry, and a read that cannot
+// finish inside it is never issued.
+//
+// Sizing the sidecar's budget below the caller's is the property that comment
+// always claimed. A reply arriving after the race is pure waste -- the brain has
+// already resolved "unplaced", and the losing promise is never cancelled, so the
+// only place that waste can be removed is here.
+//
+// 900 is derived, not picked: it is elementPointReadTimeout plus 200 ms, so one
+// ceiling-length read can still complete and the three healthy reads after it --
+// single-digit milliseconds each on a responsive renderer -- still fit. The
+// remaining 300 ms of the caller's race is not spare change: that race starts
+// after the bubble's label write and also covers a possibly-cold dynamic import
+// of the brain's tool module, two sidecar-inventory reads, the RPC tracker, and
+// two websocket legs to a machine that may be across a slow link.
+//
+// TWO THINGS THIS DOES NOT CLAIM, stated rather than left to be discovered,
+// because overstating this bound is the bug being fixed:
+//
+//   - Not that the brain always HEARS the answer. The handler bounds its own
+//     work; transport is not the sidecar's to bound.
+//   - Not that the handler's total wall time is 900 ms. What is bounded is the
+//     waiting it chooses to do: every read's timeout is cut to what the budget
+//     has left, and a read it cannot afford is not issued. sendOnTimeout writes
+//     to the browser's pipe BEFORE arming its timer, so a browser process that
+//     stops draining that pipe stalls a read outside its own timeout -- a
+//     pre-existing property of every CDP send in this tree, not something this
+//     budget introduces or can fix from here. It is unreachable from the page:
+//     an alert()-blocked renderer still leaves the browser process draining.
+//
+// What it does guarantee is that the sidecar never spends longer WAITING on the
+// question than the caller is willing to wait for the whole of it.
+const elementPointBudget = 900 * time.Millisecond
+
+// The ceiling on any ONE renderer-served read, inside elementPointBudget.
+//
+// Page.* is answered by the renderer, so a long task, a janked page or a modal
+// alert() blocks it; that is a page being busy, not a sidecar being broken, and
+// the honest answer is to give up quickly rather than inherit
+// cdpDefaultTimeout's 30 seconds and hold a goroutine and a pending-reply slot
+// for the other 29.
+//
+// This is NOT the handler's bound and must not be read as one -- that is
+// elementPointBudget. Its job is to stop a single blocked read from eating the
+// whole budget before the checks that make the answer safe have run.
 const elementPointReadTimeout = 700 * time.Millisecond
+
+// The least budget worth issuing a read with.
+//
+// Without a floor, a budget down to its last nanosecond still hands out a
+// nanosecond, and the command is WRITTEN to the browser and then abandoned
+// immediately -- a wasted round trip, and the one thing this budget exists to
+// stop. A healthy CDP getter on a responsive renderer answers in single-digit
+// milliseconds, so anything under this is not a read that might just make it;
+// it is a read that is certain to fail after costing a send.
+const elementPointMinRead = 20 * time.Millisecond
+
+// The clock the budget reads. Swappable so the tests need not race a real one.
+//
+// The handler's four reads are driven in lock-step by the tests over a fake
+// pipe, so a budget read straight from the wall clock would make them depend on
+// how quickly the Go scheduler runs a test goroutine across four round trips --
+// the shape of timing flake this tree has already paid for. Production never
+// assigns this; only the tests do, and they restore it.
+var elementPointNow = time.Now
+
+// elementPointClock reads that clock, tolerating a nil one.
+//
+// The nil guard is not defensive habit, it is proportionate to the blast
+// radius: the RPC dispatch runs a handler in a bare goroutine with no
+// recover() (sidecar/client.go), so a nil deref here would take the whole
+// sidecar process down rather than fail one narration -- for a decorative
+// pointer. The only writer is a test, and a test that mis-restores the var
+// should cost a wrong clock, not the process.
+func elementPointClock() time.Time {
+	if elementPointNow == nil {
+		return time.Now()
+	}
+	return elementPointNow()
+}
+
+// elementPointDeadline hands each read its timeout out of one shared budget.
+type elementPointDeadline struct{ at time.Time }
+
+func newElementPointDeadline() elementPointDeadline {
+	return elementPointDeadline{at: elementPointClock().Add(elementPointBudget)}
+}
+
+// next is the timeout for the read about to be issued: whatever is left of the
+// handler's budget, capped at the per-read ceiling.
+//
+// Too little budget to be worth a send ERRORS instead of handing back a tiny
+// timeout, so the command is never written to the browser at all: there is not
+// enough time left to hear its answer, and a read whose reply nobody is waiting
+// for is exactly the waste this budget exists to remove. It also keeps the
+// handler's command sequence honest -- it can only ever shorten that sequence,
+// never extend it.
+//
+// Each call site wraps this error in the code of the read it was ABOUT to
+// issue, because running out of budget is that read timing out, pre-emptively.
+// No new wire code is minted for it: a new BROWSER_* code would widen the
+// protocol contract and the version-pairing matrix for a condition the brain
+// already maps to "refused".
+//
+// time.Time.Sub SATURATES rather than wrapping, which is what makes this safe
+// against a clock that jumps: a large backward jump yields the maximum duration
+// and is capped to the ceiling, a large forward jump yields the minimum and is
+// refused. Neither can produce a zero or negative timeout with a nil error, so
+// no caller can hand sendOnTimeout a duration that fires instantly.
+func (d elementPointDeadline) next() (time.Duration, error) {
+	left := d.at.Sub(elementPointClock())
+	if left < elementPointMinRead {
+		return 0, fmt.Errorf("less than %s of the %s this answer had to be ready in was left",
+			elementPointMinRead, elementPointBudget)
+	}
+	if left > elementPointReadTimeout {
+		return elementPointReadTimeout, nil
+	}
+	return left, nil
+}
 
 // RPC error codes for this handler.
 //
@@ -155,6 +287,10 @@ func codedRefusal(code string, format string, args ...any) error {
 // Registered as a bare handler (no *SidecarConfig) so that the browser-launch
 // path is structurally out of reach. See the file header.
 func handleBrowserElementPoint(params map[string]any) (*RPCResult, error) {
+	// ONE deadline for the whole handler, taken before anything else, and
+	// shared by all four reads below (#610). No read may start a fresh budget.
+	budget := newElementPointDeadline()
+
 	// Strictly, and the same way every other browser handler reads it: JSON
 	// numbers arrive as float64, and a 1-based integer is the only thing the
 	// snapshot ever minted. A coerced "5" or a 5.5 names nothing, and answering
@@ -207,7 +343,11 @@ func handleBrowserElementPoint(params map[string]any) (*RPCResult, error) {
 	// (#526) -- a coordinate is not page text, but there is no reason for this
 	// path to be the one exception to "we do not read a file: page", and the
 	// frame-tree read is needed anyway.
-	before, beforeStamp, err := cdp.frameTreeState(elementPointReadTimeout)
+	read, err := budget.next()
+	if err != nil {
+		return nil, &codedError{code: errStalePage, err: err}
+	}
+	before, beforeStamp, err := cdp.frameTreeState(read)
 	if err != nil {
 		return nil, codedRefusal(errStalePage, "could not check which page the browser is showing: %w", err)
 	}
@@ -257,7 +397,7 @@ func handleBrowserElementPoint(params map[string]any) (*RPCResult, error) {
 			"element [%d] came from a frame that has since navigated", id)
 	}
 
-	origin, err := cdp.viewportScreenOrigin()
+	origin, err := cdp.viewportScreenOrigin(budget)
 	if err != nil {
 		return nil, &codedError{code: errNoGeometry, err: err}
 	}
@@ -308,8 +448,18 @@ func handleBrowserElementPoint(params map[string]any) (*RPCResult, error) {
 	// element costs no extra send -- an earlier version called
 	// confirmSameDocument and then re-read the very tree it had just thrown
 	// away, at cdpDefaultTimeout's 30 seconds each, on a path the daemon
-	// abandons after 1200 ms.
-	after, afterStamp, err := cdp.confirmSameDocument(before, elementPointReadTimeout)
+	// abandons after pebbleNarrationRace.
+	//
+	// Last in, so it gets what the first three reads left of the budget rather
+	// than a fresh ceiling. On a healthy page that is nearly all of it; on a
+	// page that has already spent the budget this refuses without sending,
+	// which is the right trade -- a re-check whose answer arrives after the
+	// race proves nothing to anybody.
+	read, err = budget.next()
+	if err != nil {
+		return nil, &codedError{code: errStalePage, err: err}
+	}
+	after, afterStamp, err := cdp.confirmSameDocument(before, read)
 	if err != nil {
 		return nil, &codedError{code: errStalePage, err: err}
 	}
@@ -416,8 +566,14 @@ type viewportOrigin struct {
 // window chrome is vertical -- true for Chromium's own frame, but a Windows
 // resizable border or a GTK client-side-decoration shadow would make
 // bounds.left sit left of the client area. Both need a real desktop.
-func (c *cdpClient) viewportScreenOrigin() (viewportOrigin, error) {
-	raw, err := c.sendOnTimeout(c.sessionID, "Browser.getWindowForTarget", nil, elementPointReadTimeout)
+// Both of its reads come out of the CALLER's budget rather than carrying one
+// each, so the two of them together cannot outlast the handler (#610).
+func (c *cdpClient) viewportScreenOrigin(budget elementPointDeadline) (viewportOrigin, error) {
+	read, err := budget.next()
+	if err != nil {
+		return viewportOrigin{}, err
+	}
+	raw, err := c.sendOnTimeout(c.sessionID, "Browser.getWindowForTarget", nil, read)
 	if err != nil {
 		return viewportOrigin{}, fmt.Errorf("could not read the browser window's position: %w", err)
 	}
@@ -448,7 +604,11 @@ func (c *cdpClient) viewportScreenOrigin() (viewportOrigin, error) {
 		return viewportOrigin{}, fmt.Errorf("the browser window is minimized, so it has no position on the screen")
 	}
 
-	raw, err = c.sendOnTimeout(c.sessionID, "Page.getLayoutMetrics", nil, elementPointReadTimeout)
+	read, err = budget.next()
+	if err != nil {
+		return viewportOrigin{}, err
+	}
+	raw, err = c.sendOnTimeout(c.sessionID, "Page.getLayoutMetrics", nil, read)
 	if err != nil {
 		return viewportOrigin{}, fmt.Errorf("could not read the page's viewport metrics: %w", err)
 	}

@@ -11,6 +11,7 @@ import type { NLGoalBuilder } from '../../goals/nl-builder.ts';
 import type { GoalEstimator } from '../../goals/estimator.ts';
 import type { DailyRhythm } from '../../goals/rhythm.ts';
 import type { AccountabilityEngine } from '../../goals/accountability.ts';
+import { GoalValidationError } from '../../goals/validation.ts';
 import * as vault from '../../vault/goals.ts';
 import { nextGoalLevel } from '../../goals/validation.ts';
 
@@ -97,6 +98,7 @@ export function createManageGoalsTool(deps: GoalToolDeps): ToolDefinition {
     execute: async (params) => {
       const action = String(params.action ?? '').toLowerCase();
 
+      try {
       switch (action) {
         case 'create': {
           const text = params.text as string | undefined;
@@ -197,7 +199,7 @@ export function createManageGoalsTool(deps: GoalToolDeps): ToolDefinition {
         case 'score': {
           const goalId = params.goal_id as string;
           const score = params.score as number;
-          const reason = (params.reason as string) ?? '';
+          const reason = (params.reason === undefined ? '' : params.reason) as string;
           if (!goalId) return 'Error: "goal_id" is required.';
           if (score === undefined || score === null) return 'Error: "score" is required (0.0-1.0).';
 
@@ -369,6 +371,10 @@ export function createManageGoalsTool(deps: GoalToolDeps): ToolDefinition {
 
         default:
           return `Unknown action "${action}". Available: create, list, get, score, update_status, update, decompose, replan, estimate, morning_plan, evening_review, metrics, delete, tree, overdue, escalations`;
+      }
+      } catch (error) {
+        if (error instanceof GoalValidationError) return `Error: ${error.message}`;
+        throw error;
       }
     },
   };

@@ -536,10 +536,13 @@ const IGNORABLE_ALL = new RegExp(IGNORABLE, 'gu');
  * from content nobody vetted. Bounding the quantifier instead would trade the
  * stall for a bypass: any bound N is beaten by N+1 invisibles.
  *
- * Since #560 no framed PAYLOAD reaches this pattern: the block path does not
- * defang. The callers are `inlineUntrusted`, which cuts its input to
- * `maxChars * 4` first, and prompt-builder's knowledge and skill sections, which
- * are uncapped multi-line text in trusted position. So the linear shape is still
+ * A framed payload DOES reach this pattern, since #609: `boundedReceiptText`
+ * defangs a tool return on its way into a durable record, and the frame is
+ * exactly what it is there to neutralise. (It is still true that the block path
+ * does not defang -- `wrapUntrusted` leaves its payload byte-exact.) The other
+ * callers are `inlineUntrusted`, which cuts its input to `maxChars * 4` first,
+ * and prompt-builder's knowledge and skill sections, which are uncapped
+ * multi-line text in trusted position. So the linear shape is still
  * load-bearing, not merely tidy -- and it would be kept regardless, because a
  * pattern that is quadratic on hostile input has no business in this module
  * whatever its callers look like today. The time bound in the tests covers it at
@@ -561,21 +564,44 @@ const IGNORABLE_ALL = new RegExp(IGNORABLE, 'gu');
  * silent correctness hole (a skipped first match on the span-map path), and the
  * old comment here said `matchAll` "handles it itself", which is only half true.
  * A fresh regex per call removes the hazard class instead of documenting it, and
- * costs nothing: since #560 the only caller is `inlineUntrusted`, whose input is
- * cut to `maxChars * 4` before any regex runs.
+ * costs nothing: the two callers that hand it outside content (`inlineUntrusted`
+ * and `boundedReceiptText`) both cut their input to `maxChars * 4` before any
+ * regex runs.
  */
 function markerPattern(): RegExp {
   return new RegExp(MARKER_TOKEN, 'giu');
 }
 
 /**
- * Rewrite any spelling of the marker token inside a value that will sit in
- * TRUSTED prompt text with no delimiters of its own.
+ * Rewrite any spelling of the marker token inside a value that will sit
+ * somewhere no delimiter of its own can protect it: TRUSTED prompt text, or a
+ * durable record.
  *
- * Since #560 this serves `inlineUntrusted` and nothing else. The block wrapper
- * does not call it: a block carries a nonce, so content cannot forge that
- * boundary and the payload is left byte-exact. An inline value has no nonce
- * protecting it -- it is interpolated into a trusted sentence (a project id,
+ * PRECONDITION, stated because a caller cannot infer it from the signature:
+ * cut the input to a few times the length you need BEFORE calling this. The
+ * span-map path below allocates a clean copy plus an index per kept code unit,
+ * roughly a dozen times the payload, and the daemon is one event loop. Both
+ * callers that hand it outside content do cut first (`inlineUntrusted` to
+ * `maxChars * 4`, `boundedReceiptText` the same); a third that does not would
+ * reintroduce a remote allocation spike from content nobody vetted.
+ *
+ * TWO CALLER CLASSES, and the second is why this function is load bearing for
+ * more than labels now.
+ *
+ *   - An INLINE value, interpolated into a trusted sentence (a project id,
+ *     name, branch or file name; see sites/prompt-context.ts). It has no nonce
+ *     protecting it, so a value spelling the marker there could pose as prompt
+ *     structure.
+ *   - A value on its way into a DURABLE RECORD (`boundedReceiptText`, #609).
+ *     There the marker to neutralise is usually a REAL one: a tool that frames
+ *     its own return hands a receipt a complete block, and a stored prefix of it
+ *     would keep the open delimiter and drop the close. This is the sole control
+ *     on that path, so the tolerance below is not a legacy of #529 that inline
+ *     labels are the last users of -- see the note where that line is drawn.
+ *
+ * The block wrapper still does not call this: a block carries a nonce, so
+ * content cannot forge that boundary and the payload is left byte-exact. An
+ * inline value has no nonce protecting it -- it is interpolated into a trusted sentence (a project id,
  * name, branch or file name; see sites/prompt-context.ts) -- so a value
  * spelling the marker there could still pose as prompt structure, and this is
  * what stops it.
@@ -627,18 +653,30 @@ function markerPattern(): RegExp {
  * phrase, which appears in this file, in docs/, and in any document
  * discussing this feature.
  *
- * That argument is also why the line no longer has to be defended on the block
- * path at all. #560 was the permanent fix, and it has landed: a block's
- * boundary is unguessable, so there is nothing to spell. The line survives here
- * only for inline values, where the nonce cannot help.
+ * That argument is also why the line no longer has to be defended on the
+ * PROMPT's block path. #560 was the permanent fix there, and it has landed: a
+ * block's boundary is unguessable, so there is nothing to spell.
  *
- * One accepted cost, on the inline path alone: `untrusted_content` is a
- * plausible snake_case identifier, JSON key or SQL column, and a project or
- * file NAME spelling it is rewritten, which can leave it unaddressable. That
- * used to be much worse -- the same rewrite landed inside file payloads, so a
- * read-then-write turn propagated it into the owner's source. The nonce removed
- * that half; what is left is bounded to a label, which is the one place the
- * trade is clearly worth making.
+ * It does still have to be defended on the RECEIPT path, and the tolerance is
+ * the whole control there rather than a backstop (#609). So this line is NOT a
+ * leftover to retire once inline labels stop needing it: a case-folded or
+ * invisible-split marker that slipped past it would be a half-open block back in
+ * `approval_requests.execution_result`, with every test green, because what the
+ * receipt tests assert is the OUTPUT of `boundedReceiptText` and not the
+ * tolerance underneath it.
+ *
+ * The accepted cost, which #609 widened: `untrusted_content` is a plausible
+ * snake_case identifier, JSON key or SQL column, and a value spelling it is
+ * rewritten. For an inline label that can leave a project or file name
+ * unaddressable. For a receipt it means `approval_requests.execution_result` --
+ * the only durable copy of what a gated tool returned, since `auditTrail.log`
+ * records no result -- is no longer byte-exact: a tool output that legitimately
+ * mentions the marker is stored with a hyphen. Still worth making, because the
+ * alternative on that path is a stored boundary that disclaims whatever is
+ * rendered after it, and because what is lost is one character in a diagnostic
+ * row rather than anything a consumer resolves by. It used to be much worse --
+ * the same rewrite landed inside file payloads, so a read-then-write turn
+ * propagated it into the owner's source. The nonce removed that half.
  */
 export function defangDelimiters(raw: string): string {
   // Ill-formed UTF-16 is repaired first, for two reasons. A lone surrogate is
@@ -838,17 +876,130 @@ export function markUntrustedToolResult(name: string, category: string | undefin
  * error string, a rejected reply echoed back. Cap and frame it exactly as the
  * same text was framed when it was returned instead of thrown, so moving a
  * tool to typed failures cannot quietly hand the model unframed content.
+ *
+ * CAP THEN FRAME, which is the whole reason this function exists rather than
+ * each dispatch slicing and then calling the wrapper itself. The frame is drawn
+ * around text that has already been cut, so the result is never a block whose
+ * close delimiter was truncated off the end. #608's first design inverted that
+ * -- it framed inside the thrown message, leaving the cap downstream -- and an
+ * inverted order is how a half-open block reaches a model.
+ *
+ * `outsideFailure` is the declaration-gated half, added by #608. Framing here is
+ * normally decided by `isUntrustedSourceTool`, i.e. by the tool's NAME, and that
+ * test is false for `manage_workflow` on purpose: #595 argued against adding it
+ * to `UNTRUSTED_TOOL_NAMES` because the set also drives `outsideReach`,
+ * `FRAMED_ACTORS` and the tool filter's I1 union repair. But its throw paths DO
+ * carry outside text -- `assertVersionReady` and `assertCodeStepsAllowed`
+ * interpolate step names written by the composer LLM or by the versions API --
+ * so the tool declares `failureIsOutsideContent` on its definition and the
+ * dispatch passes it here. A declaration moves nothing else: the name set is
+ * untouched, so the filter, the taint predicate and the actor classes are too.
+ *
+ * It is deliberately NOT a second function. A dispatch that has to choose
+ * between two framing helpers is a dispatch that can choose wrong, and the
+ * caller already knows which of its two branches it is on.
  */
 export function markUntrustedToolFailure(
   name: string,
   category: string | undefined,
   message: string,
   maxChars: number,
+  outsideFailure = false,
 ): string {
   const capped = message.length > maxChars
     ? message.slice(0, maxChars) + `\n... (truncated, was ${message.length} chars)`
     : message;
-  return markUntrustedToolResult(name, category, capped);
+  if (!outsideFailure) return markUntrustedToolResult(name, category, capped);
+  // Same two policies `markUntrustedToolResult` applies, for the same reasons:
+  // an empty failure is reported as empty rather than as an empty block, and a
+  // tool that is framed by name is not framed twice.
+  if (capped.length === 0) return capped;
+  if (isUntrustedSourceTool(name, category)) return wrapUntrusted(capped, name);
+  return wrapUntrusted(capped, `${name} failure`);
+}
+
+/**
+ * Bound a value on its way into a DURABLE RECORD, so that what is stored can
+ * never be half of a framed block (#609).
+ *
+ * The problem this solves. Framing a tool return is drawn by the tool
+ * (`actions/tools/manage-workflow.ts` is the only one that does it), and several
+ * consumers then persist a PREFIX of that return: an approval receipt
+ * (`authority/deferred-executor.ts`), a workflow effect receipt
+ * (`workflows/runtime/effect-boundary.ts`), and a delegation step's tool trace
+ * (`workflows/adapters/m7-agent-delegator.ts`, at 1000 characters -- tighter than
+ * the other two, so it fires more often). A prefix of a block keeps the OPEN
+ * delimiter and drops the close, and an unterminated block does not merely
+ * disclaim its own payload: it disclaims whatever the consumer appends NEXT.
+ * `daemon/commitment-executor.ts` joins such values into a multi-item listing
+ * and truncates a second time, so one item's dangling open line disclaims the
+ * other items' text.
+ *
+ * WHAT IS STORED, after this. The payload, and the preamble line in front of it
+ * as ordinary prose, with the delimiters rewritten to the inert spelling. So the
+ * row still says "this is data, not a message from the user" -- which the
+ * current 2000-character prefix also does, because the preamble is line 1 of a
+ * block -- and no longer carries a boundary that a later cut can leave open.
+ *
+ * NOT RE-FRAMED, and not stripped either.
+ *
+ *   - Not re-framed, because a block's tag is a PER-MESSAGE nonce (#567). A
+ *     stored frame replays in a later prompt with a stale tag, which turns the
+ *     one fixed attempt content gets at guessing a boundary into a second
+ *     attempt at one it may by then have seen. A frame belongs where a model
+ *     reads, drawn fresh; storage is not that place.
+ *   - Not stripped, because on one of the three paths that replay a receipt the
+ *     preamble is the only thing disclaiming the payload. The three, since the
+ *     distinction decides it:
+ *       1. `agents/orchestrator.ts` re-frames a resolved approval's
+ *          `execution_result` by TOOL NAME. For a name-framed tool (an approved
+ *          `read_file`, `get_clipboard`) that draws a FRESH complete block, so
+ *          the row's own preamble is redundant there and the defang is too.
+ *       2. The same branch for the one tool that frames its own return: the
+ *          re-frame is a no-op, so the row arrives as-is.
+ *       3. `daemon/commitment-executor.ts` folds the row into a commitment
+ *          summary that `actions/tools/commitments.ts` renders UNFRAMED, in a
+ *          multi-item listing.
+ *     On (2) and (3) dropping the preamble would move stored outside text from
+ *     disclaimed to not disclaimed, and (3) is the one with no boundary of any
+ *     kind. That is what the preamble is kept for.
+ *
+ * WHAT THE GUARANTEE IS, stated at the strength it holds. `defangDelimiters`
+ * rewrites every case-folded and invisible-split spelling of the marker token,
+ * wherever it appears, so no exact `UNTRUSTED_CONTENT` survives and therefore
+ * neither delimiter does -- whatever the input was, and however the result is
+ * cut afterwards. It does NOT chase #529's visibly-different near-misses
+ * (homoglyphs, fullwidth forms, a space separator); that line is argued on
+ * `defangDelimiters` itself, and its own output is one of them. The nonce HEX
+ * survives beside a defanged marker, which is inert: nothing in the product
+ * compares a nonce, and a payload's author cannot have known a tag drawn after
+ * the payload was fixed.
+ *
+ * Note that this LOCATES NOTHING. It is not a boundary finder with a safety
+ * argument attached -- the rewrite does not care where a boundary is, which is
+ * why it stays correct on `effect-boundary`'s value, where the block arrives
+ * JSON-escaped onto a single line and no structural check could match it.
+ *
+ * THE ORDER IS LOAD BEARING, both ways.
+ *
+ *   - Coarse cut FIRST, which is `defangDelimiters`' stated precondition: its
+ *     span-map path costs roughly a dozen times the payload in transient memory
+ *     and the daemon is one event loop. Every site below hands this function an
+ *     UNCAPPED string -- a whole tool return, a whole thrown message -- so the
+ *     cut is what keeps that scan bounded. Cutting first cannot CREATE a marker
+ *     (a cut can only split one), so the guarantee is unchanged by it.
+ *   - `toWellFormed` LAST. The final cut can land between a surrogate pair, and
+ *     a lone surrogate in a row that later reaches a provider request is the
+ *     failure the frame wrapper's own comment names. Defang repairs its input,
+ *     which is one step too early to cover the cut after it.
+ *
+ * Length: defang is never LONGER than its input (the marker rewrite is 1:1, and
+ * the invisible-split path drops a matched span's interior invisibles), so the
+ * final cut still honours `maxChars`.
+ */
+export function boundedReceiptText(text: string, maxChars: number): string {
+  const coarse = text.length > maxChars * 4 ? text.slice(0, maxChars * 4) : text;
+  return defangDelimiters(coarse).slice(0, maxChars).toWellFormed();
 }
 
 /** Same for multi-modal results: text blocks are wrapped, images untouched. */
