@@ -3,6 +3,7 @@ package main
 import (
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -17,14 +18,63 @@ import (
 // was measured directly instead (see the docblocks in
 // browser_element_point.go).
 
+// fakeElementPointClock is the clock the handler's budget reads during a test.
+//
+// Installed by every fixture, and by default it NEVER ADVANCES, so the lock-step
+// tests below cannot run out of elementPointBudget however slowly the Go
+// scheduler gets round to them. The budget tests advance it deliberately.
+//
+// Backed by an atomic because the test goroutine advances it while the handler's
+// own goroutine reads it, and the pipe write between the two is not a
+// happens-before edge the race detector models.
+type fakeElementPointClock struct {
+	nanos atomic.Int64
+	// Added AFTER every reading, so time can pass inside the handler at points
+	// a test cannot otherwise reach -- between the deadline being taken at
+	// entry and the first read being gated, for one. Zero (frozen) by default.
+	step atomic.Int64
+}
+
+// A fixed instant, so a failure message reads the same on every run.
+var fakeElementPointEpoch = time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+
+func useFakeElementPointClock(t *testing.T) *fakeElementPointClock {
+	t.Helper()
+	c := &fakeElementPointClock{}
+	c.nanos.Store(fakeElementPointEpoch.UnixNano())
+	previous := elementPointNow
+	elementPointNow = func() time.Time {
+		now := c.nanos.Load()
+		if s := c.step.Load(); s != 0 {
+			c.nanos.Add(s)
+		}
+		return time.Unix(0, now)
+	}
+	t.Cleanup(func() { elementPointNow = previous })
+	return c
+}
+
+func (c *fakeElementPointClock) advance(d time.Duration) { c.nanos.Add(int64(d)) }
+
+// advanceEveryReading makes every subsequent clock reading move time on by d.
+//
+// For the refusals that happen where a test has no seam to advance the clock
+// by hand: the deadline is taken at the very top of the handler, so the only
+// way to starve the FIRST read is for time to pass between that reading and
+// the next one.
+func (c *fakeElementPointClock) advanceEveryReading(d time.Duration) { c.step.Store(int64(d)) }
+
 // elementPointFixture is a fake browser with one element already in the
 // snapshot map, as a snapshot would have left it.
 type elementPointFixture struct {
 	fb *fakeBrowser
+	// The handler's budget clock, frozen unless a test advances it.
+	clock *fakeElementPointClock
 }
 
 func newElementPointFixture(t *testing.T, loaderID string) *elementPointFixture {
 	t.Helper()
+	clock := useFakeElementPointClock(t)
 	fb := newFakeBrowser(t)
 	useFakeBrowserAsActiveCDP(t, fb.client)
 	// Exactly what takePageSnapshot leaves behind, written directly so the test
@@ -36,7 +86,7 @@ func newElementPointFixture(t *testing.T, loaderID string) *elementPointFixture 
 	}
 	fb.client.elemFrameStamp = "child:L-child|main:" + loaderID
 	fb.client.elemGen = 7
-	return &elementPointFixture{fb: fb}
+	return &elementPointFixture{fb: fb, clock: clock}
 }
 
 // answerFrameTreeWithChild answers one Page.getFrameTree with a main frame and
@@ -254,6 +304,176 @@ func TestBrowserElementPointSendsOnlyReads(t *testing.T) {
 	}
 	// And nothing more afterwards: no input, no focus, no navigation.
 	f.fb.noCommandWithin(300 * time.Millisecond)
+}
+
+// #610. The handler's budget has to be smaller than the race it is sized
+// against, and the per-read ceiling has to fit inside the budget.
+//
+// This is the arithmetic the three prose sites (this file's two docblocks and
+// the two in docs/sidecar/SIDECAR_PROTOCOL.md) all assert. It used to be false:
+// four reads at the ceiling each is a 2800 ms worst case against a 1200 ms
+// race, which is the bug -- a comment that overstated a bound. Asserted here so
+// a later edit to either constant cannot quietly make the prose wrong again.
+func TestElementPointBudgetFitsTheNarrationRace(t *testing.T) {
+	if elementPointBudget >= pebbleNarrationRace {
+		t.Fatalf("elementPointBudget (%s) must be under the narration race (%s), or the sidecar "+
+			"can still answer after the brain stopped listening", elementPointBudget, pebbleNarrationRace)
+	}
+	if elementPointReadTimeout > elementPointBudget {
+		t.Fatalf("the per-read ceiling (%s) exceeds the whole handler's budget (%s), so the ceiling "+
+			"is not a sub-bound of it", elementPointReadTimeout, elementPointBudget)
+	}
+}
+
+// One budget, handed out in slices -- not a fresh ceiling per read.
+func TestElementPointDeadlineSharesOneBudget(t *testing.T) {
+	clock := useFakeElementPointClock(t)
+	d := newElementPointDeadline()
+
+	// A fresh deadline has more left than one read may take, so it hands out
+	// the ceiling rather than the whole budget.
+	got, err := d.next()
+	if err != nil {
+		t.Fatalf("a fresh deadline refused a read: %v", err)
+	}
+	if got != elementPointReadTimeout {
+		t.Fatalf("first read got %s, want the per-read ceiling %s", got, elementPointReadTimeout)
+	}
+
+	// Once most of the budget is gone, a read gets ONLY what is left. This is
+	// the whole fix: before it, every read started its own ceiling.
+	clock.advance(elementPointBudget - 100*time.Millisecond)
+	got, err = d.next()
+	if err != nil {
+		t.Fatalf("a deadline with 100ms left refused a read: %v", err)
+	}
+	if got != 100*time.Millisecond {
+		t.Fatalf("read got %s, want the 100ms remaining; a fresh ceiling would be %s",
+			got, elementPointReadTimeout)
+	}
+
+	// Too little to be worth a send: refused, with no timeout handed out, BEFORE
+	// the budget is literally gone. A read certain to fail still costs a round
+	// trip, which is the waste the budget exists to remove.
+	clock.advance(100*time.Millisecond - elementPointMinRead/2)
+	left, err := d.next()
+	if err == nil {
+		t.Fatalf("a budget of %s handed out a read timeout; anything under %s must refuse",
+			elementPointMinRead/2, elementPointMinRead)
+	}
+	if left != 0 {
+		t.Fatalf("a refused read still got a timeout of %s, which sendOnTimeout would send on", left)
+	}
+
+	// And still refused once it is properly exhausted.
+	clock.advance(elementPointBudget)
+	if _, err = d.next(); err == nil {
+		t.Fatal("an exhausted budget handed out a read timeout; it must refuse instead")
+	}
+}
+
+// The deadline is threaded through every read, which a unit test of the
+// deadline alone cannot show: the handler could hold four of them.
+//
+// Each case burns the whole budget while one read is in flight, then checks the
+// handler refused and sent NOTHING further -- a read it has no time to hear the
+// answer to is never written to the browser.
+func TestBrowserElementPointStopsReadingWhenItsBudgetIsGone(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		// How many commands the handler should get through before the budget
+		// is burned, and the code the refusal must carry.
+		sent int
+		code string
+	}{
+		// Burned before the first read, so the handler refuses having touched
+		// the browser ZERO times. errStalePage because that read is the one
+		// that establishes which document we are looking at, and the code of a
+		// starved read is the code that read's failure already carries -- "we
+		// could not establish the page", which is true whether the read failed
+		// or never ran.
+		{"before the first read", 0, errStalePage},
+		// Burned during read 1, so the geometry read is the one with nothing
+		// left: refused as a geometry failure, which is the read it was about
+		// to issue.
+		{"during the first frame-tree read", 1, errNoGeometry},
+		// Burned during the window read, so the layout read finds nothing left.
+		{"during the window read", 2, errNoGeometry},
+		// Burned during the layout read, so the final re-check is starved --
+		// and a re-check that cannot run refuses rather than answering.
+		{"during the layout read", 3, errStalePage},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newElementPointFixture(t, "L1")
+			if tc.sent == 0 {
+				// Burned before the handler got as far as its first read. Not
+				// unreachable: existingCDP() can sit behind a concurrent
+				// getCDP that holds activeCDP.mu across a Chromium launch. The
+				// deadline is taken BEFORE that wait on purpose, so the wait
+				// eats the budget instead of adding to it -- which is what
+				// makes this case possible, and is why the clock has to move
+				// between the handler's own two readings.
+				f.clock.advanceEveryReading(elementPointBudget)
+			}
+			res, errs := callElementPoint(t, map[string]any{"element_id": float64(1)})
+
+			for i := 0; i < tc.sent; i++ {
+				c := f.fb.nextCommand()
+				// The handler is blocked on this reply, so it cannot read the
+				// clock until after the advance: no race, and no real sleeping.
+				if i == tc.sent-1 {
+					f.clock.advance(elementPointBudget)
+				}
+				switch c.Method {
+				case "Page.getFrameTree":
+					f.answerFrameTreeWithChild(c.ID, "L1", "L-child")
+				case "Browser.getWindowForTarget":
+					f.answerWindowBounds(c.ID, 137, 91, 800)
+				case "Page.getLayoutMetrics":
+					f.answerLayoutMetrics(c.ID, 657, 1.0)
+				default:
+					t.Fatalf("unexpected command %q", c.Method)
+				}
+			}
+
+			err := awaitRefusal(t, res, errs)
+			if code := refusalCode(t, err); code != tc.code {
+				t.Fatalf("refusal code = %q, want %q", code, tc.code)
+			}
+			// A refusal the daemon turns into a log line, so still no URL.
+			refusalMentionsNoURL(t, err)
+			// The read it had no budget for was never issued.
+			f.fb.noCommandWithin(300 * time.Millisecond)
+		})
+	}
+}
+
+// The budget costs a pointer, never produces a wrong one: an exhausted budget
+// must refuse, never fall back to answering with what it already has.
+func TestBrowserElementPointNeverAnswersOnAnExhaustedBudget(t *testing.T) {
+	f := newElementPointFixture(t, "L1")
+	res, errs := callElementPoint(t, map[string]any{"element_id": float64(1)})
+
+	// Answer the three reads that produce the coordinate, so by the final
+	// re-check the handler holds a complete, well-formed point -- and then has
+	// no budget left to confirm the document it belongs to.
+	for i := 0; i < 3; i++ {
+		c := f.fb.nextCommand()
+		switch c.Method {
+		case "Page.getFrameTree":
+			f.answerFrameTreeWithChild(c.ID, "L1", "L-child")
+		case "Browser.getWindowForTarget":
+			f.answerWindowBounds(c.ID, 137, 91, 800)
+		case "Page.getLayoutMetrics":
+			f.clock.advance(elementPointBudget)
+			f.answerLayoutMetrics(c.ID, 657, 1.0)
+		}
+	}
+
+	err := awaitRefusal(t, res, errs)
+	if code := refusalCode(t, err); code != errStalePage {
+		t.Fatalf("refusal code = %q, want %q: an unconfirmed document is a stale one", code, errStalePage)
+	}
 }
 
 // The pebble's coordinate must never be the reason a browser appears.
