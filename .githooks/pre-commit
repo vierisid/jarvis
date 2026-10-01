@@ -13,40 +13,67 @@ bun run scripts/lint-webapp-templates.ts
 echo "[pre-commit] Checking the published tarball still ships what consumers read..."
 bun run scripts/check-package-files.ts
 
-# Bound the test step with a wall-clock timeout. What this guards is not a
-# slow test -- bun's own per-test timeout already fails those -- but a runner
-# that never exits after the last test because something spawned a child and
-# never reaped it (observed once in late-May 2026; the engine case was fixed
-# in #501). Unbounded, that hangs the terminal instead of failing the commit.
+# Run the tests that belong to what is being committed, not the whole suite.
 #
-# The suite measured 206s on a developer machine, idle, in 2026-09 (#505), so
-# the cap is roughly 1.75x steady state. Loose on purpose: a cold cache or a
-# loaded machine must not trip it, and much past this a human reaches for
-# Ctrl-C first, which throws away the diagnostic the cap exists to print.
-# Two full suites sharing a machine can still exceed this (nearer 2x): that
-# case is accepted rather than covered, which is why the message below leads
-# with slowness instead of blaming a leak.
+# The blanket `bun test` ran for 206s when #505 set a 360s cap, 443s a week
+# later and 539s by 2026-09-30 -- so the cap stopped being a guard against a
+# hang and became the thing that failed every commit. Raising it again is a
+# treadmill: the suite grows, and a hook that costs nine minutes gets
+# bypassed by hand, which is strictly worse than a hook that runs less.
 #
-# --kill-after bounds shutdown, not runtime, so it does NOT scale with the
-# cap: `bun test` runs no `exit` handlers when signalled (measured -- see the
-# installExitNet() note in engine-runtime/spawn.ts), and nothing in the test
-# process registers a SIGTERM listener, so it dies on the cap's signal and 124
-# is the normal outcome (the 124 path was measured; a test that one day
-# imports daemon/index.ts would turn it into 137, which is handled below). The
-# 15s also has to cover the engine shim's own post-SIGTERM grace
-# (ENGINE_SHUTDOWN_GRACE_DEFAULT_MS, 1s, or the 1.6s spawn.ts derives from the
-# owner's 2s kill grace), since timeout signals the whole process group and
-# any child is in it.
+# CI runs the full suite on every PR and is the real gate; it has caught
+# regressions this hook never would (a stringified effect receipt, a stale
+# benchmark assertion). What a pre-commit hook is actually good at is the
+# fast, local "you broke the thing you just edited" case, so that is what
+# this now does: every staged test file, plus the sibling test of every
+# staged source file.
 #
-# Keep the cap in one variable: it is quoted in the message too, and four
-# hand-maintained copies is how the old comment came to claim "4x" about a cap
-# that was 1.17x.
-TEST_TIMEOUT_S=360
-echo "[pre-commit] Running tests (${TEST_TIMEOUT_S}s timeout)..."
-set +e
-timeout --kill-after=15s "${TEST_TIMEOUT_S}s" bun test --bail
-rc=$?
-set -e
+# The honest cost: a change that breaks a test in ANOTHER file is not caught
+# here. #595 hit exactly that -- a signature change broke six test files that
+# `tsc` could not see, because they drove it through `as unknown as` casts.
+# CI catches it; a developer who wants the old behaviour locally can run
+# `bun test` directly.
+#
+# The timeout stays, for the reason it was added: not a slow test -- bun's
+# own per-test timeout fails those -- but a runner that never exits because
+# something spawned a child and never reaped it (#501). 180s is far above a
+# related-tests run and still bounds a hang. --kill-after bounds shutdown,
+# not runtime, so it does not scale with the cap; the 15s covers the engine
+# shim's own post-SIGTERM grace, since timeout signals the whole group.
+TEST_TIMEOUT_S=180
+
+# Staged, still-present files: A/C/M/R only, so a deletion contributes
+# nothing. NUL-delimited, so a path with a space cannot split into two.
+related_tests=()
+while IFS= read -r -d '' f; do
+  case "$f" in
+    *.test.ts|*.test.tsx)
+      [ -f "$f" ] && related_tests+=("$f")
+      ;;
+    *.ts|*.tsx)
+      base="${f%.*}"
+      for cand in "${base}.test.ts" "${base}.test.tsx"; do
+        [ -f "$cand" ] && related_tests+=("$cand")
+      done
+      ;;
+  esac
+done < <(git diff --cached --name-only --diff-filter=ACMR -z)
+
+# Deduplicate: a staged foo.test.ts and a staged foo.ts both name it.
+if [ "${#related_tests[@]}" -gt 0 ]; then
+  mapfile -t related_tests < <(printf '%s\n' "${related_tests[@]}" | sort -u)
+fi
+
+if [ "${#related_tests[@]}" -eq 0 ]; then
+  echo "[pre-commit] No test files relate to the staged changes; skipping tests (CI runs the full suite)."
+  rc=0
+else
+  echo "[pre-commit] Running ${#related_tests[@]} related test file(s) (${TEST_TIMEOUT_S}s timeout)..."
+  set +e
+  timeout --kill-after=15s "${TEST_TIMEOUT_S}s" bun test --bail "${related_tests[@]}"
+  rc=$?
+  set -e
+fi
 if [ "$rc" != "0" ]; then
   # 124: the cap fired and SIGTERM worked. 137: killed outright, which the cap
   # causes only when SIGTERM was ignored -- the OOM killer produces it too, so
@@ -56,19 +83,17 @@ if [ "$rc" != "0" ]; then
     # not abort the hook before the sweep below and `exit "$rc"`.
     {
       if [ "$rc" = "124" ]; then
-        echo "[pre-commit] FAILED: the test step did not finish inside the ${TEST_TIMEOUT_S}s cap."
+        echo "[pre-commit] FAILED: the related tests did not finish inside the ${TEST_TIMEOUT_S}s cap."
       else
         echo "[pre-commit] FAILED: the test step was killed (SIGKILL). Either it ignored"
         echo "  the ${TEST_TIMEOUT_S}s cap's SIGTERM, or something else killed it: check dmesg for"
         echo "  the OOM killer before reading on."
       fi
       cat <<'EOF'
-  Most likely the suite was simply slow here: a cold cache, a loaded machine,
-  or another checkout running its tests at the same time. The cap sits well
-  above the recorded steady-state runtime, so re-run the suite on an idle
-  machine before assuming a bug.
-  Failing that, a test may have leaked a child (engine bundle) and left the
-  runner unable to exit -- the signature is every test passing, then nothing.
+  This step now runs only the tests related to the staged files, so the cap is
+  far above a normal run and slowness is an unlikely explanation. The usual
+  cause is a test that leaked a child (engine bundle) and left the runner
+  unable to exit -- the signature is every test passing, then nothing.
   The sweep below (scripts/reap-engines.ts) names any engine still alive with
   its pid and owner, and an orphan with its bundle too. Absence there is not
   evidence: the cap signals the whole process group, so a leaked child is
