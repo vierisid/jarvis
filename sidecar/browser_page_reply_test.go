@@ -287,9 +287,11 @@ func TestPageResultCarriesTheConfirmedIdentity(t *testing.T) {
 // resolve a playbook from.
 func TestPageResultOmitsAnIdentityItCannotVouchFor(t *testing.T) {
 	cases := map[string]pageIdentity{
-		// No loaderID: `assertSamePage` compares two empty ids as equal, so an
-		// unnamed document would pass its check. The daemon's local path refuses
-		// this too (`before.loaderId !== ''`), and the two must agree.
+		// No loaderID: an unnamed document cannot be vouched for. #603 also
+		// made `assertSamePage` refuse an empty id, so a read no longer gets
+		// this far -- this holds the REPLY to the same rule independently of
+		// which guard ran. The daemon's local path refuses it too
+		// (`before.loaderId !== ''`), and the three must agree.
 		"no loader id": {url: "https://app.example.com/", loaderID: ""},
 		// Over the wire bound: a `data:` document's frame-tree URL can be
 		// megabytes and would push the event past the brain's 2 MB cap, which

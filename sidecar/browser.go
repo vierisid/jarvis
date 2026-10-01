@@ -77,7 +77,9 @@ type cdpClient struct {
 	//                 and fully self-consistent. Before #592 that left live,
 	//                 clickable, stale coordinates; now the identity no longer
 	//                 matches the page, so every reader refuses.
-	//   elemGen       bumped on every fill. It closes a window an identity
+	//   elemGen       bumped on every fill, and on every DROP (#603 added three
+	//                 geometry-moving tools to the one snapshot-failure path).
+	//                 It closes a window an identity
 	//                 check cannot see: a snapshot of the SAME document
 	//                 refilling the map while a reader is mid-answer leaves the
 	//                 loaderId unchanged, so a reader that copied a coordinate
@@ -128,9 +130,13 @@ type cdpClient struct {
 	// bites immediately if they are merged: `elementWorldFor` hands the DOM
 	// action paths a world they expect to hold `__jarvis_elements`. A world
 	// minted for an AX call holds no refs, and overwriting `worldContext` with
-	// it would make every `browser_type` refuse until the next DOM snapshot --
-	// a live break from interleaving two tools that have nothing to do with
-	// each other.
+	// it would make every `browser_type` refuse with "cannot be addressed any
+	// more" until the next DOM snapshot.
+	//
+	// Note that browser_ax_click DOES retire the DOM snapshot's ids, since
+	// #603 -- it scrolls, so their coordinates have moved -- but it says so
+	// through the ordinary "run browser_snapshot first" path rather than by
+	// breaking the world out from under a ref.
 	//
 	// axIdentity is the document `browser_ax_snapshot` last read, axIDs are the
 	// ids it actually emitted, and axGen counts the fills. Before this,
@@ -1309,9 +1315,8 @@ func makeBrowserScrollHandler(cfg *SidecarConfig) RPCHandler {
 		// Wait for lazy-loaded content (matches the daemon)
 		time.Sleep(500 * time.Millisecond)
 
-		return &RPCResult{Result: fmt.Sprintf("Scrolled %s by %dpx. Element ids from the previous snapshot "+
-			"no longer apply -- take a browser_snapshot before acting on one.",
-			direction, int(scrollAmount))}, nil
+		return &RPCResult{Result: fmt.Sprintf("Scrolled %s by %dpx. %s",
+			direction, int(scrollAmount), retiredIDsNotice)}, nil
 	}
 }
 

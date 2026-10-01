@@ -89,11 +89,18 @@ const documentIdentityPage = `<!DOCTYPE html>
     <button id="row" aria-label="row button" style="width:140px;height:30px">Row</button>
     <div style="height:2000px">inner tall</div>
   </div>
+  <!-- A same-origin child frame, which is where a Google Docs or Gmail
+       compose editor lives. The app's own frames churn constantly, so one
+       rewriting itself must not retire ids from anywhere else. -->
+  <iframe id="kid" style="width:300px;height:80px;border:0;display:block"></iframe>
   <div style="height:4000px">tall</div>
   <script>window.__clicks = 0;
     for (const id of ['act', 'fixed', 'row']) {
       document.getElementById(id).addEventListener('click', () => { window.__clicks++; });
     }
+    const kid = document.getElementById('kid');
+    kid.contentDocument.write('<button id="inner" aria-label="inner button" style="width:140px;height:30px">Inner</button>');
+    kid.contentDocument.close();
   </script>
 </body></html>`
 
@@ -203,9 +210,12 @@ func TestBrowserDocumentIdentityIntegration(t *testing.T) {
 	// Typing reaches its element through the ref the snapshot stashed, and
 	// typing itself scrolls the caret into view -- so a scroll must not refuse
 	// it, or the second type into one field would refuse itself.
+	// "has moved" is the refusal the coordinate paths give; nothing emits
+	// "scrolled", so matching that word would pass however `usesCoordinates`
+	// were wired and would prove nothing.
 	if out := callHandler(t, typeText, withHeadless(map[string]any{
 		"element_id": float64(fieldID), "text": "hello",
-	})); strings.Contains(out, "scrolled") {
+	})); strings.Contains(out, "has moved") || strings.Contains(out, "Error:") {
 		t.Fatalf("a type after a scroll was refused: %s", out)
 	}
 
@@ -218,6 +228,28 @@ func TestBrowserDocumentIdentityIntegration(t *testing.T) {
 	}
 	if out := callHandler(t, click, withHeadless(map[string]any{"element_id": float64(actID)})); !strings.Contains(out, "not found") {
 		t.Fatalf("a click after browser_scroll should find no id, got: %s", out)
+	}
+
+	// ── A CHILD FRAME rewriting itself retires ITS ids and nothing else ──
+	//
+	// The sentinel answers per element for exactly this: the app's own
+	// same-origin frames churn, and a coarser scope would refuse typing into a
+	// Docs editor because a sibling frame reloaded -- or hand any page with an
+	// iframe a way to deny every click.
+	snapOut = callHandler(t, snapshot, withHeadless(nil))
+	actID = findElementID(t, snapOut, "act button")
+	innerID := findElementID(t, snapOut, "inner button")
+	if _, err := evaluate(withHeadless(map[string]any{
+		"expression": `const k = document.getElementById('kid').contentDocument;
+			k.open(); k.write('<button id="inner" aria-label="inner button" style="width:140px;height:30px">Fresh</button>'); k.close(); 'ok'`,
+	})); err != nil {
+		t.Fatalf("rewrite the child frame: %v", err)
+	}
+	if out := callHandler(t, click, withHeadless(map[string]any{"element_id": float64(innerID)})); !strings.Contains(out, "replaced the document") {
+		t.Fatalf("an in-frame id should be retired by its own frame's rewrite, got: %s", out)
+	}
+	if out := callHandler(t, click, withHeadless(map[string]any{"element_id": float64(actID)})); !strings.Contains(out, "Clicked") {
+		t.Fatalf("a main-document click was refused because a CHILD frame rewrote itself: %s", out)
 	}
 
 	// ── document.write replaces the DOM with no loaderId and no URL change ──

@@ -38,6 +38,8 @@ type Fake = {
   presses(): Array<{ x: number; y: number }>;
   /** Did the in-page scroll actually run? */
   scrolled(): boolean;
+  /** Never answer the sentinel, as a blocked renderer would not. */
+  stallSentinel(): void;
   stop(): void;
 };
 
@@ -45,6 +47,7 @@ function fakeChrome(): Fake {
   let frameUrl = 'https://app.example/inbox';
   let generation = 'ok';
   let didScroll = false;
+  let stalled = false;
   const presses: Array<{ x: number; y: number }> = [];
 
   const pageResult = async (method: string, params: Record<string, any>): Promise<Record<string, unknown>> => {
@@ -59,7 +62,10 @@ function fakeChrome(): Fake {
     if (method === 'Runtime.evaluate') {
       const expr = String(params.expression);
       if (expr.includes('readyState')) return { result: { value: 'complete:3' } };
-      if (expr.includes('globalThis.__jarvis_dom;')) return { result: { value: generation } };
+      if (expr.includes('globalThis.__jarvis_dom;')) {
+        if (stalled) await new Promise<void>(() => { /* never resolves */ });
+        return { result: { value: generation } };
+      }
       if (expr.includes('window.innerHeight')) return { result: { value: 800 } };
       if (expr.includes('window.scrollBy')) { didScroll = true; return { result: { value: null } }; }
       if (expr.includes('__jarvis_elements =')) {
@@ -122,6 +128,7 @@ function fakeChrome(): Fake {
     setGeneration: (value) => { generation = value; },
     presses: () => presses,
     scrolled: () => didScroll,
+    stallSentinel: () => { stalled = true; },
     stop: () => server.stop(true),
   };
 }
@@ -171,18 +178,32 @@ describe('#603 what the document identity has to mean', () => {
     expect(fake.presses()).toEqual([]);
   });
 
-  test('a frame rewriting itself does not refuse an element from another frame', async () => {
+  // NOT TESTED HERE: that a frame rewriting itself retires only its own ids.
+  // That property lives inside the in-page sentinel, which this fake replaces
+  // wholesale, so a test here could only assert the canned answer it was just
+  // given. It is proved against real Chromium in
+  // sidecar/browser_document_identity_test.go, and the TypeScript sentinel
+  // inherits it by being byte-identical to the Go one (checked by extracting
+  // and diffing both scripts).
+
+  test('a renderer that will not answer is reported as retryable', async () => {
     const { fake, ctrl } = await connected();
 
-    // The sentinel answers per element: one of the app's own same-origin
-    // iframes rewriting itself leaves every element outside it alone. Scoping
-    // it any coarser would refuse typing into a Google Docs editor because a
-    // sibling frame reloaded, and hand any page with an iframe a way to deny
-    // the whole action path.
-    fake.setGeneration('ok');
+    // A long task, or a modal dialog nothing has dismissed: the sentinel's own
+    // read never comes back. The click must refuse -- a coordinate nobody
+    // could confirm is not dispatched -- but it must say TRY AGAIN, because
+    // telling the model to take a snapshot sends it at a renderer that will
+    // not serve that either. This is also why the sentinel does not inherit
+    // the CDP client's 30-second budget.
+    fake.stallSentinel();
 
-    expect(await ctrl.click(2)).toBe('Clicked element [2]');
-    expect(fake.presses()).toEqual([{ x: 10, y: 60 }]);
+    const started = Date.now();
+    const result = await ctrl.click(2);
+    expect(result).toContain('too busy');
+    expect(result).toContain('Try again');
+    expect(fake.presses()).toEqual([]);
+    // It gave up on its own budget rather than the client's 30 seconds.
+    expect(Date.now() - started).toBeLessThan(20_000);
   });
 
   test('a scroll refuses a click but not a type', async () => {
@@ -219,6 +240,25 @@ describe('#603 what the document identity has to mean', () => {
     expect(await ctrl.viewportScreenOrigin(2)).toBe('moved');
     expect(await ctrl.click(2)).toContain('not found');
     expect(fake.presses()).toEqual([]);
+  });
+
+  test('a paging key retires the ids it moved, and says so', async () => {
+    const { fake, ctrl } = await connected();
+
+    // PageDown scrolls, which moves every coordinate with nothing any
+    // document check can see. Unlike browser_scroll it was silent, so the
+    // model's next error read as "that id was never valid".
+    const pressed = await ctrl.pressKey('PageDown');
+    expect(pressed).toContain('no longer apply');
+    expect(ctrl.snapshotElementPoint(2)).toBeNull();
+
+    // Enter is not a paging key: a model works through a list it has already
+    // snapshotted with Enter and the arrows, and retiring the ids there would
+    // break "press Enter, then click [5]" for a cosmetic pointer.
+    await ctrl.snapshot();
+    const enter = await ctrl.pressKey('Enter');
+    expect(enter).not.toContain('no longer apply');
+    expect(ctrl.snapshotElementPoint(2)).toEqual({ x: 10, y: 60 });
   });
 
   test('a sentinel that cannot be read refuses rather than guessing', async () => {

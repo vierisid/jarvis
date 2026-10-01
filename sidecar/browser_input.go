@@ -228,20 +228,41 @@ func makeBrowserPressKeyHandler(cfg *SidecarConfig) RPCHandler {
 		// presses while working through a list it has already snapshotted, and
 		// clearing on those would break "press Enter, then click [5]" for the
 		// sake of a cosmetic pointer.
-		if scrollsThePage(pk.Key) {
+		retiredIDs := scrollsThePage(pk.Key)
+		if retiredIDs {
 			cdp.forgetSnapshotElements()
 		}
 
 		// Let the app react (menu open, mode switch, etc.)
 		time.Sleep(300 * time.Millisecond)
 
+		// SAID, not just done, exactly as browser_scroll says it: the model is
+		// the one that has to take a fresh snapshot, and "Element [5] not
+		// found" on the next call reads as "that id was never valid".
+		if retiredIDs {
+			return &RPCResult{Result: fmt.Sprintf("Pressed %s. %s", pk.Display, retiredIDsNotice)}, nil
+		}
 		return &RPCResult{Result: fmt.Sprintf("Pressed %s", pk.Display)}, nil
 	}
 }
 
+// retiredIDsNotice is what every tool that drops the coordinate map tells the
+// model (#603). One string, so browser_scroll and browser_press_key cannot
+// word it differently; `RETIRED_IDS_NOTICE` in src/actions/browser/session.ts
+// is the same sentence, and browser_parity_test.go compares it exactly.
+const retiredIDsNotice = "Element ids from the previous snapshot no longer apply " +
+	"-- take a browser_snapshot before acting on one."
+
 // scrollsThePage reports whether a key moves the viewport when the page has not
 // taken it for something else (#603). Keep in step with `scrollsThePage` in
 // src/actions/browser/session.ts.
+//
+// The key NAME alone, which over-refuses: `End` and `Home` move the caret
+// rather than the viewport when a text field has focus, and then the ids were
+// retired for nothing. Accepted, in that direction only -- it costs a snapshot
+// the templates already take (every editor recipe that presses End
+// re-snapshots before reusing an id), where the other direction costs a click
+// at a coordinate that has moved.
 func scrollsThePage(key string) bool {
 	switch key {
 	case "PageDown", "PageUp", "Home", "End":

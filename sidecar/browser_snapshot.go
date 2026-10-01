@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -422,6 +423,14 @@ func (c *cdpClient) elementWorldFor(loaderID string) (float64, bool) {
 // Called from a deferred cleanup in takePageSnapshot so that EVERY failure path
 // clears, including ones added later -- the alternative, clearing at each
 // `return`, is one new return away from regressing.
+//
+// AND, since #603, from the three tools that move the page's geometry without
+// navigating: browser_scroll, a paging key through browser_press_key, and
+// browser_ax_click's scrollIntoViewIfNeeded. Their reason is different -- the
+// coordinates describe where an element used to be -- and the action paths
+// would refuse at use time anyway; what the drop buys is the readers that
+// deliberately do not run that check, the pebble's coordinate and screen
+// origin, which would otherwise keep pointing at a pre-scroll position.
 func (c *cdpClient) forgetSnapshotElements() {
 	c.elemMu.Lock()
 	c.elemCoords = nil
@@ -579,8 +588,8 @@ func refuseStaleElement(cdp *cdpClient, id int, usesCoordinates bool) (snapshotE
 	return el, ctx, "", nil
 }
 
-// domGenerationScript asks the isolated world what has changed for ONE element
-// since the snapshot handed out its id (#603).
+// domGenerationScriptFor asks the isolated world what has changed for ONE
+// element since the snapshot handed out its id (#603).
 //
 // PER ELEMENT, not per page, because the answer differs per element and the
 // coarse version was wrong in both directions: a page-wide scroll comparison
@@ -663,18 +672,6 @@ func domGenerationScriptFor(index int) string {
 })()`, index)
 }
 
-// domGeneration runs that script in the world the element refs live in.
-//
-// Fails CLOSED: a read that errors, a world that has gone, or an unexpected
-// answer all come back as 'gone', which every caller treats as a refusal. A
-// renderer blocked by an `alert()` therefore costs an action rather than
-// allowing a stale one.
-//
-// DELIBERATELY NOT inside `confirmSameDocument`. That function is
-// browser-process-only (`Page.getFrameTree`), which is what makes it safe
-// under `browser_element_point`'s 700 ms budget; this is renderer-served and
-// an `alert()` can block it, so it belongs to the ACTION paths, which have no
-// such budget, and not to the coordinate reply that a narration races.
 // domSentinelTimeout bounds the sentinel's own read.
 //
 // It is RENDERER-SERVED, which is new for the click and hover paths: before
@@ -690,9 +687,15 @@ const domSentinelTimeout = 4 * time.Second
 // one element index.
 //
 // Fails CLOSED in two distinguishable ways: "gone" (the world holds no reading
-// for this id) and "busy" (the renderer did not answer in time, which is
-// RETRYABLE and must not tell the model to take a snapshot the same renderer
-// will not serve either).
+// for this id, or the read failed in a way a retry will not mend) and "busy"
+// (the renderer did not answer in time, which is RETRYABLE and must not tell
+// the model to take a snapshot the same renderer will not serve either).
+//
+// DELIBERATELY NOT inside `confirmSameDocument`. That function is
+// browser-process-only (`Page.getFrameTree`), which is what makes it safe under
+// `browser_element_point`'s 700 ms budget; this is renderer-served and an
+// `alert()` can block it, so it belongs to the ACTION paths, which have no such
+// budget, and not to the coordinate reply that a narration races.
 func (c *cdpClient) domGeneration(contextID float64, index int) string {
 	raw, err := c.sendOnTimeout(c.sessionID, "Runtime.evaluate", map[string]any{
 		"contextId":     contextID,
@@ -700,7 +703,16 @@ func (c *cdpClient) domGeneration(contextID float64, index int) string {
 		"expression":    domGenerationScriptFor(index),
 	}, domSentinelTimeout)
 	if err != nil {
-		return "busy"
+		// ONLY a timeout is retryable. `sendOnTimeout` also errors for a closed
+		// pipe and for a CDP error reply -- and "Cannot find context with
+		// specified id", which is what a destroyed world answers, is the
+		// commonest one here. Calling that "busy" would tell the model to try
+		// again forever instead of to take a fresh snapshot, and would disagree
+		// with the daemon's half, which answers 'gone' for the same condition.
+		if errors.Is(err, errCDPTimeout) {
+			return "busy"
+		}
+		return "gone"
 	}
 	var parsed struct {
 		Result struct {
@@ -868,8 +880,12 @@ const (
 // and far too small for a URL: a Maps link with an encoded polyline, a Looker
 // Studio report state, or an OAuth callback carrying an id_token all exceed it
 // routinely, and this is the line the model copies back into browser_navigate.
-// So the URL line tracks `maxWirePageURL` below instead -- keep the two equal,
-// so a URL that arrives intact as `page_url` is not truncated in the text.
+// So the URL line takes `maxWirePageURL`'s NUMBER instead, so that a URL which
+// survives the wire is not cut in the text. One number, two units and two
+// different values: this one counts code points of the page's `location.href`,
+// the wire check counts bytes of the frame tree's URL. They are not a coupling
+// to maintain -- if either side ever needs its own figure, give it a literal
+// and say so here.
 const (
 	maxRenderedTitle = 2048
 	maxRenderedURL   = maxWirePageURL
@@ -890,12 +906,17 @@ const (
 // second, forged `URL:` line, and an `aria-label` carrying a newline forged an
 // element line, inside a block whose every line the model reads as ours.
 //
-// SCOPE, stated because it is easy to over-read: this covers the title, the URL
-// line, the attributes and the element text. The `--- Page Text ---` block is
-// legitimately multi-line and is NOT stripped, so a page can still put
-// something that reads like a section header or an `[id]` line into its own
-// body text. Nothing escapes the untrusted block either way; what this buys is
-// that the lines the FORMATTER writes are the formatter's.
+// SCOPE, stated because it is easy to over-read. It covers the title, the URL
+// line, the attributes and the element text, and only the C0 range plus DEL:
+// U+0085, U+2028 and U+2029 survive, so a consumer that treats those as line
+// breaks sees more lines than the formatter wrote. That is deliberate -- both
+// formatters emit them identically (see quoteElementText), so removing them
+// would be a second rule to keep in step for a reader nothing here has -- and
+// the `--- Page Text ---` block is legitimately multi-line and is not stripped
+// at all, so a page can still put something that reads like a section header
+// or an `[id]` line into its own body text. Nothing escapes the untrusted
+// block either way; what this buys is that the lines the FORMATTER writes are
+// the formatter's.
 //
 // `renderedValue` in src/actions/tools/builtin.ts is this function.
 func renderedValue(s string, limit int) string {
@@ -1190,10 +1211,9 @@ type pageReply struct {
 // Deliberately NOT the daemon's 2048, so nobody reads the two numbers as a
 // coupling to keep in step. An over-long URL is omitted rather than truncated --
 // a truncated identity is a different page, and a wrong playbook is worse than
-// none. Note the units differ from the rendered cap this number is also used
-// for: the check below is BYTES of the frame-tree URL, while `maxRenderedURL`
-// is code points of the page's `location.href`. Same number, different unit,
-// different value -- they are not a pair to keep equal.
+// none. `maxRenderedURL` reuses this NUMBER (see it for why), but the two are
+// not the same quantity: the check below counts BYTES of the frame-tree URL
+// where the renderer counts code points of the page's `location.href`.
 const (
 	maxWirePageURL  = 4096
 	maxWireLoaderID = 64
@@ -1212,14 +1232,14 @@ func wantsPageIdentity(params map[string]any) bool {
 
 // browserPageResult packages a formatted read for whichever brain asked for it.
 //
-// The identity is dropped unless the browser actually named the document. An
-// empty loaderID is the one asymmetry with the daemon's local path: the daemon
-// nulls `browserUrl` unless the loaderId it read is non-empty AND unchanged
-// after the read, while `assertSamePage` compares two empty ids as equal and
-// would let an unnamed document through. A frame tree can be nameless -- a
+// The identity is dropped unless the browser actually named the document. This
+// check predates #603, which made the same rule a property of `assertSamePage`
+// itself -- so an unnamed document no longer reaches here at all on a read that
+// goes through that guard. It stays because this function does not: it packages
+// whatever identity its caller hands it, a frame tree can be nameless (a
 // pre-commit initial document, or a reply whose shape `json.Unmarshal` fills
-// only partly. Refusing here keeps the guarantee the same on both sides, and
-// costs at most one site playbook.
+// only partly), and a field this cheap to re-check should not depend on which
+// guard the caller happened to run. It costs at most one site playbook.
 func browserPageResult(formatted string, id pageIdentity, params map[string]any) *RPCResult {
 	if !wantsPageIdentity(params) {
 		return &RPCResult{Result: formatted}

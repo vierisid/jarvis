@@ -143,7 +143,7 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('1. `browser_navigate` to a URL — returns page text + interactive elements with [id] numbers');
   lines.push('2. `browser_click` / `browser_type` to interact using element [id]s');
   lines.push('3. `browser_snapshot` to see the page after an action');
-  lines.push('4. `browser_scroll` to reveal content below the fold');
+  lines.push('4. `browser_scroll` to reveal content below the fold — this RETIRES every element [id]; snapshot again before using one');
   lines.push('5. `browser_evaluate` for advanced JavaScript interactions');
   lines.push('6. `browser_screenshot` for visual capture');
   lines.push('');
@@ -156,7 +156,7 @@ export function buildToolGuide({ hasSidecars, piecesManaged, machines }: ToolGui
   lines.push('- For READ-ONLY tasks, `browser_navigate` already returns content. Don\'t snapshot just to read.');
   lines.push('- For INTERACTIVE tasks, snapshot after each action to verify.');
   lines.push('- Fill forms FIRST, verify in snapshot, THEN submit.');
-  lines.push('- If an element isn\'t visible, scroll down first.');
+  lines.push('- If an element isn\'t visible, scroll down and then SNAPSHOT AGAIN: scrolling (and PageUp/PageDown/Home/End) retires the previous [id]s, and so does the page moving under you.');
   lines.push('- Modern SPAs may need `browser_evaluate` for custom components.');
   lines.push('');
 

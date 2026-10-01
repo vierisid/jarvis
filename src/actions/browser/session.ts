@@ -319,7 +319,21 @@ const DOM_SENTINEL_TIMEOUT_MS = 4000;
 /**
  * Whether a key moves the viewport when the page has not taken it for something
  * else (#603). Keep in step with `scrollsThePage` in sidecar/browser_input.go.
+ *
+ * The key NAME alone, which over-refuses: End and Home move the caret rather
+ * than the viewport when a text field has focus, and then the ids were retired
+ * for nothing. Accepted in that direction only -- it costs a snapshot the
+ * templates already take, where the other direction costs a click at a
+ * coordinate that has moved.
  */
+/**
+ * What every tool that drops the coordinate map tells the model (#603). One
+ * string, so `scroll()` and `pressKey()` cannot word it differently;
+ * `retiredIDsNotice` in sidecar/browser_input.go is the same sentence.
+ */
+const RETIRED_IDS_NOTICE = 'Element ids from the previous snapshot no longer apply '
+  + '-- take a browser_snapshot before acting on one.';
+
 function scrollsThePage(key: string): boolean {
   return key === 'PageDown' || key === 'PageUp' || key === 'Home' || key === 'End';
 }
@@ -1565,13 +1579,17 @@ export class BrowserController {
     // Only the paging keys: Enter, Tab and the arrows are what a model presses
     // while working through a list it has already snapshotted, and clearing on
     // those would break "press Enter, then click [5]" for a cosmetic pointer.
-    if (scrollsThePage(parsed.key)) this.forgetSnapshotElements();
+    const retiredIDs = scrollsThePage(parsed.key);
+    if (retiredIDs) this.forgetSnapshotElements();
 
     // Let the app react (menu open, mode switch, etc.)
     await Bun.sleep(300);
     await this.noteCurrentPage();
 
-    return `Pressed ${parsed.display}`;
+    // SAID, not just done, exactly as scroll() says it: the model is the one
+    // that has to take a fresh snapshot, and "Element [5] not found" on the
+    // next call reads as "that id was never valid".
+    return retiredIDs ? `Pressed ${parsed.display}. ${RETIRED_IDS_NOTICE}` : `Pressed ${parsed.display}`;
   }
 
   /**
@@ -1874,8 +1892,7 @@ export class BrowserController {
 
     await Bun.sleep(500); // Wait for lazy-loaded content
 
-    return `Scrolled ${direction} by ${scrollAmount}px. Element ids from the previous snapshot no longer apply `
-      + '-- take a browser_snapshot before acting on one.';
+    return `Scrolled ${direction} by ${scrollAmount}px. ${RETIRED_IDS_NOTICE}`;
   }
 
   /**

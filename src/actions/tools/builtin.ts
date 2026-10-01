@@ -852,12 +852,16 @@ function truncateRendered(value: string, limit: number): string {
  * second, forged `URL:` line, and an `aria-label` carrying a newline forged an
  * element line, inside a block whose every line the model reads as ours.
  *
- * SCOPE, stated because it is easy to over-read: this covers the title, the URL
- * line, the attributes and the element text. The `--- Page Text ---` block is
- * legitimately multi-line and is NOT stripped, so a page can still put
- * something that reads like a section header or an `[id]` line into its own
- * body text. Nothing escapes the untrusted block either way; what this buys is
- * that the lines the FORMATTER writes are the formatter's.
+ * SCOPE, stated because it is easy to over-read. It covers the title, the URL
+ * line, the attributes and the element text, and only the C0 range plus DEL:
+ * U+0085, U+2028 and U+2029 survive, so a consumer that treats those as line
+ * breaks sees more lines than the formatter wrote. That is deliberate - both
+ * formatters emit them identically, so removing them would be a second rule to
+ * keep in step for a reader nothing here has - and the `--- Page Text ---`
+ * block is legitimately multi-line and is not stripped at all, so a page can
+ * still put something that reads like a section header or an `[id]` line into
+ * its own body text. Nothing escapes the untrusted block either way; what this
+ * buys is that the lines the FORMATTER writes are the formatter's.
  *
  * `renderedValue` in sidecar/browser_snapshot.go is this function.
  */
@@ -1245,7 +1249,7 @@ export const browserSnapshotTool: ToolDefinition = {
 export const browserClickTool: ToolDefinition = {
   name: 'browser_click',
   captureApprovalGuard: browserCallGuard('browser_click', { bindDocument: true }),
-  description: 'Click an interactive element on the page by its [id] from the last browser_navigate or browser_snapshot. Supports right-click (button: "right", opens context menus) and double-click (double: true).',
+  description: 'Click an interactive element on the page by its [id] from the last browser_navigate or browser_snapshot. The [id]s expire: scrolling, a paging key, or the page replacing or moving the element retires them, and this refuses rather than clicking the wrong place - take a fresh browser_snapshot when it says so. Supports right-click (button: "right", opens context menus) and double-click (double: true).',
   category: 'browser',
   parameters: {
     element_id: {
@@ -1326,7 +1330,7 @@ export const browserHoverTool: ToolDefinition = {
 export const browserPressKeyTool: ToolDefinition = {
   name: 'browser_press_key',
   captureApprovalGuard: browserCallGuard('browser_press_key'),
-  description: 'Press a key or key combination in the browser page (sent to the focused element). Examples: "Enter", "Escape", "Tab", "ArrowDown", "Ctrl+K", "Shift+Enter", "Ctrl+Shift+M". Use for in-app keyboard shortcuts, menu navigation, and committing edits. Note: browser-reserved shortcuts (Ctrl+N, Ctrl+T, Ctrl+1-9) are intercepted by Chrome and never reach the page — use in-page UI for those actions instead.',
+  description: 'Press a key or key combination in the browser page (sent to the focused element). Examples: "Enter", "Escape", "Tab", "ArrowDown", "Ctrl+K", "Shift+Enter", "Ctrl+Shift+M". Use for in-app keyboard shortcuts, menu navigation, and committing edits. Note: browser-reserved shortcuts (Ctrl+N, Ctrl+T, Ctrl+1-9) are intercepted by Chrome and never reach the page — use in-page UI for those actions instead. PageUp, PageDown, Home and End scroll the page, which retires every element [id]: snapshot again before using one.',
   category: 'browser',
   parameters: {
     key: {
@@ -1562,7 +1566,7 @@ export const browserUploadFileTool: ToolDefinition = {
 export const browserScrollTool: ToolDefinition = {
   name: 'browser_scroll',
   captureApprovalGuard: browserCallGuard('browser_scroll'),
-  description: 'Scroll the page up or down. Use this when you need to see content below the fold. After scrolling, use browser_snapshot to see the new content.',
+  description: 'Scroll the page up or down. Use this when you need to see content below the fold. Scrolling RETIRES every element [id] from the last snapshot, because their positions have moved: take a browser_snapshot afterwards and use the fresh [id]s.',
   category: 'browser',
   parameters: {
     direction: {
@@ -1604,7 +1608,7 @@ export const browserScrollTool: ToolDefinition = {
 export const browserEvaluateTool: ToolDefinition = {
   name: 'browser_evaluate',
   captureApprovalGuard: browserCallGuard('browser_evaluate'),
-  description: 'Execute JavaScript in the browser page context. Use this for advanced interactions when the standard tools are not enough.',
+  description: 'Execute JavaScript in the browser page context. Use this for advanced interactions when the standard tools are not enough. Long results are truncated, so return the value you need rather than a whole document.',
   category: 'browser',
   parameters: {
     expression: {
