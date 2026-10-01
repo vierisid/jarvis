@@ -9,7 +9,7 @@ import { getFlowRun } from "../../workflows/db/repos/flow-run.ts";
 import { getFlow, updateFlowMetadata } from "../../workflows/db/repos/flow.ts";
 import { Worker } from "../../workflows/queue/worker.ts";
 import { createRunFlowHandler, FlowExecutionError, RUN_FLOW } from "../../workflows/runner/handler.ts";
-import { createManageWorkflowTool } from "./manage-workflow.ts";
+import { asLimit, createManageWorkflowTool } from "./manage-workflow.ts";
 import type { ToolDefinition } from "./registry.ts";
 import { getFlowVersion, getLatestDraft, setSampleDataEntry } from "../../workflows/db/repos/flow-version.ts";
 import { updateRun } from "../../workflows/db/repos/flow-run.ts";
@@ -273,6 +273,32 @@ describe("manage_workflow tool", () => {
     expect(all).toHaveLength(3);
     const capped = (await call("list_runs", { limit: 1 })) as unknown[];
     expect(capped).toHaveLength(1);
+  });
+
+  /**
+   * #609. `asLimit` floored and defaulted but had no ceiling, so the model could
+   * ask `listRuns` for every run the install has ever recorded -- each row
+   * carrying its `steps` blob and two more queries of its own. The framed
+   * payload cap meant the model never SAW more than a few, which is why this was
+   * easy to miss: the cost was the query, not the prompt. That is also why this
+   * is asserted on the function rather than through the tool -- a 100-run
+   * listing is past the payload cap, so the returned JSON is truncated and
+   * cannot be parsed to count rows.
+   */
+  test("the list_runs limit is clamped at both ends", () => {
+    expect(asLimit(1_000_000_000)).toBe(100);
+    expect(asLimit(101)).toBe(100);
+    // At and below the ceiling, the caller gets what it asked for.
+    expect(asLimit(100)).toBe(100);
+    expect(asLimit(7)).toBe(7);
+    expect(asLimit(2.9)).toBe(2);
+    // The default and the floor are unchanged.
+    expect(asLimit(undefined)).toBe(25);
+    expect(asLimit(0)).toBe(25);
+    expect(asLimit(-1)).toBe(25);
+    expect(asLimit(Number.NaN)).toBe(25);
+    expect(asLimit(Number.POSITIVE_INFINITY)).toBe(25);
+    expect(asLimit("50")).toBe(25);
   });
 
   test("get_run returns step output", async () => {

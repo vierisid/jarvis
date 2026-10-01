@@ -617,9 +617,31 @@ function requireString(params: Record<string, unknown>, key: string): string {
   return v;
 }
 
-function asLimit(raw: unknown): number {
+/**
+ * `list_runs`' row cap, clamped at BOTH ends (#609).
+ *
+ * The floor and the finite check were already here; the ceiling was not, so
+ * `list_runs { limit: 1e9 }` asked `listRuns` for every run the install has
+ * ever recorded, each row carrying its `steps`. The framed payload cap meant the
+ * model never SAW more than a few, which is exactly why this was easy to miss:
+ * the cost was the query and the result in memory, not the prompt.
+ *
+ * 100 is the same ceiling `/api/workflows/:id/runs` clamps to, so the model and
+ * the HTTP caller cannot ask for different amounts of work. Nothing enforces
+ * that equality across the two files; if one moves, move the other.
+ */
+const LIST_RUNS_MAX_LIMIT = 100;
+
+/**
+ * Exported for its test, which cannot reach the ceiling through the tool: a
+ * 100-run listing is past `FRAMED_PAYLOAD_MAX_CHARS`, so `list_runs` truncates
+ * it and the model-facing JSON cannot be parsed to count rows. The clamp's
+ * effect is on how much the DATABASE is asked for, which only the function
+ * itself shows.
+ */
+export function asLimit(raw: unknown): number {
   if (typeof raw !== "number" || !Number.isFinite(raw) || raw <= 0) return 25;
-  return Math.floor(raw);
+  return Math.min(LIST_RUNS_MAX_LIMIT, Math.floor(raw));
 }
 
 /* --------------------------------------------------------------- actions */
