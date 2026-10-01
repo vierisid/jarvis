@@ -363,11 +363,99 @@ assert_reaches_healthy() {
 
 # --- assertion 2: the HEALTHCHECK's own endpoint is public -----------
 #
-# Checked from OUTSIDE the container, against the URL the image itself declares.
-# That is what stops this passing the way the shipped probe "passed": #614's
-# check fetched an authenticated route, got 401 and exited 1 forever, and a
-# probe rewritten to exit 0 unconditionally satisfies assertion 1 but fails here
-# (verified against an image built exactly that way).
+# Checked from OUTSIDE the container, against the endpoint the image's own probe
+# requests. That is what stops this passing the way the shipped probe "passed":
+# #614's check fetched an authenticated route, got 401 and exited 1 forever, and
+# a probe rewritten to exit 0 unconditionally satisfies assertion 1 but fails
+# here (verified against images built exactly those ways).
+#
+# Since #618 the probe resolves its port at probe time instead of carrying a
+# literal: JARVIS_PORT, then the bound port recorded on line 2 of
+# $JARVIS_HOME/jarvis.pid (which wins), then 3142. So "the port the probe uses"
+# is no longer a string in the Dockerfile, and asserting string equality against
+# a literal is not the equivalence we need any more.
+#
+# What the guard has to guarantee is unchanged: the socket this check reaches
+# over the published host mapping must be the socket the probe reaches inside
+# the container. So resolve the port from the SAME source the probe reads, in
+# the container, and require it to equal the container port published here. A
+# probe pointing anywhere else still fails -- re-proven with an image whose
+# probe hardcodes a different port.
+
+# Reconstruct the URL the probe requests, into PROBE_PATH and PROBE_PORT.
+#
+# PROBE_PORT is left empty when the probe builds it dynamically; the caller
+# resolves it from the container in that case.
+parse_probe_target() {
+  probe_cmd="$1"
+  PROBE_PATH=""
+  PROBE_PORT=""
+
+  # Isolate the fetch() argument, so quoted strings elsewhere in the probe
+  # (JARVIS_HOME's '/data' default, the '/jarvis.pid' filename) cannot be
+  # mistaken for the request path.
+  fetch_region="$(printf '%s' "$probe_cmd" | grep -oE "fetch\([^)]*\)" | head -n1 || true)"
+
+  # Concatenate the single-quoted string literals inside it, which is how a
+  # dynamic URL is assembled: 'http://127.0.0.1:' + port + '/health'. Dropping
+  # the non-literal parts leaves "http://127.0.0.1:/health" -- an empty port,
+  # which is the signal to resolve it from the container. A fully literal URL
+  # ('http://localhost:3142/api/health') survives this unchanged.
+  url_template=""
+  if [ -n "$fetch_region" ]; then
+    url_template="$(printf '%s' "$fetch_region" | grep -oE "'[^']*'" | tr -d "'" | tr -d '\n' || true)"
+  fi
+  # Fall back to a plain full URL anywhere in the command, which covers a
+  # curl/wget style probe with no fetch() call at all.
+  case "$url_template" in
+    *://*) : ;;
+    *) url_template="$(printf '%s' "$probe_cmd" | grep -oE 'https?://[^"'"'"'\\ )]+' | head -n1 || true)" ;;
+  esac
+  [ -n "$url_template" ] || return 1
+  case "$url_template" in *://*) : ;; *) return 1 ;; esac
+
+  rest="${url_template#*://}"
+  case "$rest" in
+    */*) PROBE_PATH="/${rest#*/}" ;;
+    *)   PROBE_PATH="/" ;;
+  esac
+  authority="${rest%%/*}"
+  PROBE_PORT="${authority##*:}"
+  if [ "$PROBE_PORT" = "$authority" ]; then
+    # No colon at all: an implicit scheme default, not a dynamic port.
+    case "$url_template" in
+      https://*) PROBE_PORT=443 ;;
+      *)         PROBE_PORT=80 ;;
+    esac
+  fi
+  return 0
+}
+
+# Mirror the probe's own resolution order, reading the same lock file it reads.
+# Sets PROBE_PORT.
+resolve_probe_port_from_container() {
+  c="$1"
+  # Line 2 of the lock file is the port the daemon actually bound
+  # (`${pid}\n${port}\n`, src/daemon/pid.ts). The probe takes the second
+  # integer group of the file, so take the same one.
+  lock_port="$(docker exec "$c" sh -c 'f="${JARVIS_HOME:-/data}/jarvis.pid"; [ -f "$f" ] && cat "$f" || true' 2>/dev/null | grep -oE '[0-9]+' | sed -n '2p' || true)"
+  env_port="$(docker exec "$c" sh -c 'printf "%s" "${JARVIS_PORT:-}"' 2>/dev/null || true)"
+
+  # The probe's precedence: the lock file wins, then JARVIS_PORT, then 3142.
+  # Each rung is validated the way the probe's vp() validates it.
+  PROBE_PORT=""
+  PROBE_PORT_SOURCE=""
+  for candidate in "lock:${lock_port}" "env:${env_port}" "default:3142"; do
+    value="${candidate#*:}"
+    case "$value" in ''|*[!0-9]*) continue ;; esac
+    [ "$value" -gt 0 ] && [ "$value" -lt 65536 ] || continue
+    PROBE_PORT="$value"
+    PROBE_PORT_SOURCE="${candidate%%:*}"
+    break
+  done
+  [ -n "$PROBE_PORT" ] || fail "could not resolve the port the HEALTHCHECK probes for ${c}: the lock file, JARVIS_PORT and the 3142 default all failed validation"
+}
+
 assert_healthcheck_endpoint_is_public() {
   c="$1"; phase="$2"
 
@@ -376,41 +464,39 @@ assert_healthcheck_endpoint_is_public() {
   # Same {{if}} guard as the health poll: on an image with no HEALTHCHECK a bare
   # reference is a template error and docker exits non-zero. Unreachable today
   # because assertion 1 fails first, mirrored so the two cannot drift.
-  test_json="$(docker inspect -f '{{if .Config.Healthcheck}}{{json .Config.Healthcheck.Test}}{{else}}none{{end}}' "$c" 2>/dev/null || echo none)"
-  [ -n "$test_json" ] && [ "$test_json" != "none" ] && [ "$test_json" != "null" ] \
+  #
+  # `range` rather than `json` so the command arrives unescaped: the probe's
+  # own quoting is what has to be parsed, not JSON's rendering of it.
+  probe_cmd="$(docker inspect -f '{{if .Config.Healthcheck}}{{range .Config.Healthcheck.Test}}{{.}} {{end}}{{else}}none{{end}}' "$c" 2>/dev/null || echo none)"
+  [ -n "$probe_cmd" ] && [ "$probe_cmd" != "none" ] && [ "$probe_cmd" != "none " ] \
     || fail "container ${c} has no HEALTHCHECK test to inspect"
 
-  # Pull the http(s) URL out of the probe command. Stops at a quote, a paren, a
-  # backslash or whitespace, which is what delimits it in both the shipped
-  # `bun -e "fetch('http://...')"` form and a plain curl form.
-  hc_url="$(printf '%s' "$test_json" | grep -oE 'https?://[^"'"'"'\\ )]+' | head -n1 || true)"
-  [ -n "$hc_url" ] || fail "could not extract an http URL from the HEALTHCHECK test, so its endpoint cannot be verified from outside: ${test_json}"
+  parse_probe_target "$probe_cmd" \
+    || fail "could not work out which URL the HEALTHCHECK requests, so its endpoint cannot be verified from outside. Probe: ${probe_cmd}"
 
-  authority="${hc_url#*://}"
-  case "$authority" in
-    */*) hc_path="/${authority#*/}" ;;
-    *)   hc_path="/" ;;
-  esac
-  authority="${authority%%/*}"
-  hc_port="${authority##*:}"
-  if [ "$hc_port" = "$authority" ]; then
-    case "$hc_url" in
-      https://*) hc_port=443 ;;
-      *)         hc_port=80 ;;
-    esac
+  [ -n "$PROBE_PATH" ] || fail "extracted an empty request path from the HEALTHCHECK. Probe: ${probe_cmd}"
+  case "$PROBE_PATH" in /*) : ;; *) fail "extracted a request path that is not absolute ('${PROBE_PATH}') from the HEALTHCHECK. Probe: ${probe_cmd}" ;; esac
+
+  if [ -z "$PROBE_PORT" ]; then
+    resolve_probe_port_from_container "$c"
+    echo "    healthcheck resolves its port at probe time; resolved to ${PROBE_PORT} from the ${PROBE_PORT_SOURCE}"
+  else
+    case "$PROBE_PORT" in ''|*[!0-9]*) fail "extracted a non-numeric port ('${PROBE_PORT}') from the HEALTHCHECK. Probe: ${probe_cmd}" ;; esac
+    echo "    healthcheck probes port ${PROBE_PORT} literally"
   fi
 
-  # If the probe targets a different port than the one published, rewriting it
-  # to the host mapping would silently assert against a different endpoint.
-  [ "$hc_port" = "$CPORT" ] || fail "the HEALTHCHECK probes port ${hc_port} but this check published container port ${CPORT}; refusing to assert against a different endpoint than the probe uses"
+  # The guard. If the probe reaches a different socket than the one published
+  # here, then hitting the published mapping would prove nothing about the
+  # probe's endpoint.
+  [ "$PROBE_PORT" = "$CPORT" ] \
+    || fail "the HEALTHCHECK probes port ${PROBE_PORT} but this check published container port ${CPORT}; refusing to assert against a different endpoint than the probe uses"
 
-  echo "    healthcheck probes: ${hc_url}"
-  echo "    asserting from host: http://${ENDPOINT}${hc_path}"
+  echo "    asserting from host: http://${ENDPOINT}${PROBE_PATH}"
 
   # No cookie, no token, no header: exactly what the in-container probe has.
-  http_get "http://${ENDPOINT}${hc_path}"
-  [ "$HTTP_CODE" = "200" ] || fail "the endpoint the HEALTHCHECK probes (${hc_path}) returned HTTP ${HTTP_CODE} without credentials, so the probe can never succeed. This is the #614 shape -- 401 means the route requires an enrolled device token."
-  pass "${hc_path} returned HTTP 200 unauthenticated"
+  http_get "http://${ENDPOINT}${PROBE_PATH}"
+  [ "$HTTP_CODE" = "200" ] || fail "the endpoint the HEALTHCHECK probes (${PROBE_PATH}) returned HTTP ${HTTP_CODE} without credentials, so the probe can never succeed. This is the #614 shape -- 401 means the route requires an enrolled device token."
+  pass "${PROBE_PATH} returned HTTP 200 unauthenticated"
 }
 
 # --- assertion 3: no service reports a startup failure ---------------
@@ -541,6 +627,12 @@ assert_phase_end_log_clean() {
 # targets whatever URL the HEALTHCHECK declares. When those diverge -- as they
 # did in #614 -- this one passes while assertion 2 fails, and the two failures
 # mean different things.
+#
+# Since #618 the probe also requests /health, so the two assertions happen to
+# hit the same path today. They are still not redundant: this one is pinned to
+# the route the daemon documents as public, assertion 2 follows the probe
+# wherever it points. Collapsing them would mean a probe moved back to an
+# authenticated route had nothing checking it.
 assert_public_port_answers() {
   c="$1"; phase="$2"
 
