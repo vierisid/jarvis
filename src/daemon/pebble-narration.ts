@@ -346,6 +346,21 @@ export async function browserElementNarration(
   if (!origin) {
     return { kind: 'unplaced', reason: 'could not read the viewport position on screen' };
   }
+  // THE SPACE, named rather than left to the reader (#604). Both terms are
+  // Chromium device-independent pixels -- `viewportScreenOrigin` reads the
+  // window's screen position and `snapshotElementPoint` holds a CSS-px centre
+  // within it -- so the sum is `screen_dip`, the same space the sidecar names
+  // on the wire for the remote branch above. That equals the pebble's own
+  // space (`PEBBLE_SCREEN_SPACE` in pebble-point-prompt.ts) on macOS and
+  // Linux, and on Windows at 100% DPI. Spelled out in words rather than
+  // imported: this file's zero-dependency property is the point of it.
+  //
+  // No scale term here, and that is load-bearing: #590's first version
+  // multiplied by `devicePixelRatio`, which was wrong on two of three
+  // platforms and threw the pebble most of a screen away. (The in-tree prose
+  // at sidecar/browser_element_point.go credits that removal to #585; `git
+  // log -S devicePixelRatio` says it was #590. Noted rather than silently
+  // picked, since the two files sit beside each other.)
   return {
     kind: 'point',
     x: Math.round(origin.x + point.x),
